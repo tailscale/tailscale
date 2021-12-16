@@ -121,24 +121,10 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	switch st.BackendState {
-	default:
-		fmt.Fprintf(Stderr, "unexpected state: %s\n", st.BackendState)
+	description, ok := isRunningOrStarting(st)
+	if !ok {
+		outln(description)
 		os.Exit(1)
-	case ipn.Stopped.String():
-		outln("Tailscale is stopped.")
-		os.Exit(1)
-	case ipn.NeedsLogin.String():
-		outln("Logged out.")
-		if st.AuthURL != "" {
-			printf("\nLog in at: %s\n", st.AuthURL)
-		}
-		os.Exit(1)
-	case ipn.NeedsMachineAuth.String():
-		outln("Machine is not yet authorized by tailnet admin.")
-		os.Exit(1)
-	case ipn.Running.String(), ipn.Starting.String():
-		// Run below.
 	}
 
 	if len(st.Health) > 0 {
@@ -220,6 +206,27 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 	Stdout.Write(buf.Bytes())
 	return nil
+}
+
+// isRunningOrStarting reports whether st is in state Running or Starting.
+// It also returns a description of the status suitable to display to a user.
+func isRunningOrStarting(st *ipnstate.Status) (description string, ok bool) {
+	switch st.BackendState {
+	default:
+		return fmt.Sprintf("unexpected state: %s", st.BackendState), false
+	case ipn.Stopped.String():
+		return "Tailscale is stopped.", false
+	case ipn.NeedsLogin.String():
+		s := "Logged out."
+		if st.AuthURL != "" {
+			s += fmt.Sprintf("\nLog in at: %s", st.AuthURL)
+		}
+		return s, false
+	case ipn.NeedsMachineAuth.String():
+		return "Machine is not yet authorized by tailnet admin.", false
+	case ipn.Running.String(), ipn.Starting.String():
+		return st.BackendState, true
+	}
 }
 
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
