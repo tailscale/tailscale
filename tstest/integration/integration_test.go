@@ -68,12 +68,12 @@ func TestOneNodeUpNoAuth(t *testing.T) {
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
-	d1 := n1.StartDaemon(t)
-	n1.AwaitResponding(t)
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
 	n1.MustUp()
 
-	t.Logf("Got IP: %v", n1.AwaitIP(t))
-	n1.AwaitRunning(t)
+	t.Logf("Got IP: %v", n1.AwaitIP())
+	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
 
@@ -85,10 +85,10 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
-	d1 := n1.StartDaemon(t)
-	n1.AwaitResponding(t)
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
 	n1.MustUp()
-	n1.AwaitRunning(t)
+	n1.AwaitRunning()
 
 	nodes := env.Control.AllNodes()
 	if len(nodes) != 1 {
@@ -103,7 +103,7 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	cancel()
 
 	env.Control.SetExpireAllNodes(true)
-	n1.AwaitNeedsLogin(t)
+	n1.AwaitNeedsLogin()
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	if err := env.Control.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	cancel()
 
 	env.Control.SetExpireAllNodes(false)
-	n1.AwaitRunning(t)
+	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
 }
@@ -152,14 +152,14 @@ func TestStateSavedOnStart(t *testing.T) {
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
-	d1 := n1.StartDaemon(t)
-	n1.AwaitResponding(t)
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
 	n1.MustUp()
 
-	t.Logf("Got IP: %v", n1.AwaitIP(t))
-	n1.AwaitRunning(t)
+	t.Logf("Got IP: %v", n1.AwaitIP())
+	n1.AwaitRunning()
 
-	p1 := n1.diskPrefs(t)
+	p1 := n1.diskPrefs()
 	t.Logf("Prefs1: %v", p1.Pretty())
 
 	// Bring it down, to prevent an EditPrefs call in the
@@ -172,7 +172,7 @@ func TestStateSavedOnStart(t *testing.T) {
 		t.Fatalf("up: %v", err)
 	}
 
-	p2 := n1.diskPrefs(t)
+	p2 := n1.diskPrefs()
 	if pretty := p1.Pretty(); pretty == p2.Pretty() {
 		t.Errorf("Prefs didn't change on disk after 'up', still: %s", pretty)
 	}
@@ -190,11 +190,11 @@ func TestOneNodeUpAuth(t *testing.T) {
 	}))
 
 	n1 := newTestNode(t, env)
-	d1 := n1.StartDaemon(t)
+	d1 := n1.StartDaemon()
 
-	n1.AwaitListening(t)
+	n1.AwaitListening()
 
-	st := n1.MustStatus(t)
+	st := n1.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
 	t.Logf("Running up --login-server=%s ...", env.ControlServer.URL)
@@ -215,9 +215,9 @@ func TestOneNodeUpAuth(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	t.Logf("Got IP: %v", n1.AwaitIP(t))
+	t.Logf("Got IP: %v", n1.AwaitIP())
 
-	n1.AwaitRunning(t)
+	n1.AwaitRunning()
 
 	if n := atomic.LoadInt32(&authCountAtomic); n != 1 {
 		t.Errorf("Auth URLs completed = %d; want 1", n)
@@ -233,26 +233,26 @@ func TestTwoNodes(t *testing.T) {
 	// Create two nodes:
 	n1 := newTestNode(t, env)
 	n1SocksAddrCh := n1.socks5AddrChan()
-	d1 := n1.StartDaemon(t)
+	d1 := n1.StartDaemon()
 
 	n2 := newTestNode(t, env)
 	n2SocksAddrCh := n2.socks5AddrChan()
-	d2 := n2.StartDaemon(t)
+	d2 := n2.StartDaemon()
 
-	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
-	n2Socks := n1.AwaitSocksAddr(t, n2SocksAddrCh)
+	n1Socks := n1.AwaitSocksAddr(n1SocksAddrCh)
+	n2Socks := n1.AwaitSocksAddr(n2SocksAddrCh)
 	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
 	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
 
-	n1.AwaitListening(t)
-	n2.AwaitListening(t)
+	n1.AwaitListening()
+	n2.AwaitListening()
 	n1.MustUp()
 	n2.MustUp()
-	n1.AwaitRunning(t)
-	n2.AwaitRunning(t)
+	n1.AwaitRunning()
+	n2.AwaitRunning()
 
 	if err := tstest.WaitFor(2*time.Second, func() error {
-		st := n1.MustStatus(t)
+		st := n1.MustStatus()
 		if len(st.Peer) == 0 {
 			return errors.New("no peers")
 		}
@@ -276,11 +276,11 @@ func TestNodeAddressIPFields(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
-	d1 := n1.StartDaemon(t)
+	d1 := n1.StartDaemon()
 
-	n1.AwaitListening(t)
+	n1.AwaitListening()
 	n1.MustUp()
-	n1.AwaitRunning(t)
+	n1.AwaitRunning()
 
 	testNodes := env.Control.AllNodes()
 
@@ -302,11 +302,11 @@ func TestAddPingRequest(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
-	n1.StartDaemon(t)
+	n1.StartDaemon()
 
-	n1.AwaitListening(t)
+	n1.AwaitListening()
 	n1.MustUp()
-	n1.AwaitRunning(t)
+	n1.AwaitRunning()
 
 	gotPing := make(chan bool, 1)
 	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -357,28 +357,28 @@ func TestNoControlConnWhenDown(t *testing.T) {
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
 
-	d1 := n1.StartDaemon(t)
-	n1.AwaitResponding(t)
+	d1 := n1.StartDaemon()
+	n1.AwaitResponding()
 
 	// Come up the first time.
 	n1.MustUp()
-	ip1 := n1.AwaitIP(t)
-	n1.AwaitRunning(t)
+	ip1 := n1.AwaitIP()
+	n1.AwaitRunning()
 
 	// Then bring it down and stop the daemon.
 	n1.MustDown()
 	d1.MustCleanShutdown(t)
 
 	env.LogCatcher.Reset()
-	d2 := n1.StartDaemon(t)
-	n1.AwaitResponding(t)
+	d2 := n1.StartDaemon()
+	n1.AwaitResponding()
 
-	st := n1.MustStatus(t)
+	st := n1.MustStatus()
 	if got, want := st.BackendState, "Stopped"; got != want {
 		t.Fatalf("after restart, state = %q; want %q", got, want)
 	}
 
-	ip2 := n1.AwaitIP(t)
+	ip2 := n1.AwaitIP()
 	if ip1 != ip2 {
 		t.Errorf("IPs different: %q vs %q", ip1, ip2)
 	}
@@ -399,12 +399,12 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	n1 := newTestNode(t, env)
 	n1.upFlagGOOS = "windows"
 
-	d1 := n1.StartDaemonAsIPNGOOS(t, "windows")
-	n1.AwaitResponding(t)
+	d1 := n1.StartDaemonAsIPNGOOS("windows")
+	n1.AwaitResponding()
 	n1.MustUp("--unattended")
 
-	t.Logf("Got IP: %v", n1.AwaitIP(t))
-	n1.AwaitRunning(t)
+	t.Logf("Got IP: %v", n1.AwaitIP())
+	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
 }
@@ -416,11 +416,11 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	nodes := make([]*testNode, 2)
 	for i := range nodes {
 		nodes[i] = newTestNode(t, env)
-		nodes[i].StartDaemon(t)
-		nodes[i].AwaitResponding(t)
+		nodes[i].StartDaemon()
+		nodes[i].AwaitResponding()
 		nodes[i].MustUp()
-		nodes[i].AwaitIP(t)
-		nodes[i].AwaitRunning(t)
+		nodes[i].AwaitIP()
+		nodes[i].AwaitRunning()
 	}
 
 	// Make every node ping every other node.
@@ -433,7 +433,7 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 			if err := tstest.WaitFor(20*time.Second, func() error {
 				return nodes[i].Ping(nodes[j])
 			}); err != nil {
-				t.Fatalf("ping %v -> %v: %v", nodes[i].AwaitIP(t), nodes[j].AwaitIP(t), err)
+				t.Fatalf("ping %v -> %v: %v", nodes[i].AwaitIP(), nodes[j].AwaitIP(), err)
 			}
 		}
 	}
@@ -441,7 +441,7 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	// wantNode0PeerCount waits until node[0] status includes exactly want peers.
 	wantNode0PeerCount := func(want int) {
 		if err := tstest.WaitFor(20*time.Second, func() error {
-			s := nodes[0].MustStatus(t)
+			s := nodes[0].MustStatus()
 			if peers := s.Peers(); len(peers) != want {
 				return fmt.Errorf("want %d peer(s) in status, got %v", want, peers)
 			}
@@ -455,7 +455,7 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	nodes[0].MustLogOut()
 	wantNode0PeerCount(0) // node[0] is logged out, so it should not have any peers
 	nodes[0].MustUp()
-	nodes[0].AwaitIP(t)
+	nodes[0].AwaitIP()
 	wantNode0PeerCount(len(nodes) - 1) // all other nodes are peers again
 }
 
@@ -558,7 +558,8 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	}
 }
 
-func (n *testNode) diskPrefs(t testing.TB) *ipn.Prefs {
+func (n *testNode) diskPrefs() *ipn.Prefs {
+	t := n.env.t
 	t.Helper()
 	if _, err := ioutil.ReadFile(n.stateFile); err != nil {
 		t.Fatalf("reading prefs: %v", err)
@@ -580,11 +581,12 @@ func (n *testNode) diskPrefs(t testing.TB) *ipn.Prefs {
 
 // AwaitResponding waits for n's tailscaled to be up enough to be
 // responding, but doesn't wait for any particular state.
-func (n *testNode) AwaitResponding(t testing.TB) {
+func (n *testNode) AwaitResponding() {
+	t := n.env.t
 	t.Helper()
-	n.AwaitListening(t)
+	n.AwaitListening()
 
-	st := n.MustStatus(t)
+	st := n.MustStatus()
 	t.Logf("Status: %s", st.BackendState)
 
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -625,7 +627,8 @@ func (n *testNode) socks5AddrChan() <-chan string {
 	return ch
 }
 
-func (n *testNode) AwaitSocksAddr(t testing.TB, ch <-chan string) string {
+func (n *testNode) AwaitSocksAddr(ch <-chan string) string {
+	t := n.env.t
 	t.Helper()
 	timer := time.NewTimer(10 * time.Second)
 	defer timer.Stop()
@@ -694,11 +697,12 @@ func (d *Daemon) MustCleanShutdown(t testing.TB) {
 
 // StartDaemon starts the node's tailscaled, failing if it fails to start.
 // StartDaemon ensures that the process will exit when the test completes.
-func (n *testNode) StartDaemon(t testing.TB) *Daemon {
-	return n.StartDaemonAsIPNGOOS(t, runtime.GOOS)
+func (n *testNode) StartDaemon() *Daemon {
+	return n.StartDaemonAsIPNGOOS(runtime.GOOS)
 }
 
-func (n *testNode) StartDaemonAsIPNGOOS(t testing.TB, ipnGOOS string) *Daemon {
+func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
+	t := n.env.t
 	cmd := exec.Command(n.env.daemon,
 		"--tun=userspace-networking",
 		"--state="+n.stateFile,
@@ -763,14 +767,15 @@ func (n *testNode) MustLogOut() {
 
 func (n *testNode) Ping(otherNode *testNode) error {
 	t := n.env.t
-	ip := otherNode.AwaitIP(t).String()
-	t.Logf("Running ping %v (from %v)...", ip, n.AwaitIP(t))
+	ip := otherNode.AwaitIP().String()
+	t.Logf("Running ping %v (from %v)...", ip, n.AwaitIP())
 	return n.Tailscale("ping", ip).Run()
 }
 
 // AwaitListening waits for the tailscaled to be serving local clients
 // over its localhost IPC mechanism. (Unix socket, etc)
-func (n *testNode) AwaitListening(t testing.TB) {
+func (n *testNode) AwaitListening() {
+	t := n.env.t
 	s := safesocket.DefaultConnectionStrategy(n.sockFile)
 	s.UseFallback(false) // connect only to the tailscaled that we started
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
@@ -785,7 +790,8 @@ func (n *testNode) AwaitListening(t testing.TB) {
 	}
 }
 
-func (n *testNode) AwaitIPs(t testing.TB) []netaddr.IP {
+func (n *testNode) AwaitIPs() []netaddr.IP {
+	t := n.env.t
 	t.Helper()
 	var addrs []netaddr.IP
 	if err := tstest.WaitFor(20*time.Second, func() error {
@@ -818,14 +824,16 @@ func (n *testNode) AwaitIPs(t testing.TB) []netaddr.IP {
 }
 
 // AwaitIP returns the IP address of n.
-func (n *testNode) AwaitIP(t testing.TB) netaddr.IP {
+func (n *testNode) AwaitIP() netaddr.IP {
+	t := n.env.t
 	t.Helper()
-	ips := n.AwaitIPs(t)
+	ips := n.AwaitIPs()
 	return ips[0]
 }
 
 // AwaitRunning waits for n to reach the IPN state "Running".
-func (n *testNode) AwaitRunning(t testing.TB) {
+func (n *testNode) AwaitRunning() {
+	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		st, err := n.Status()
@@ -842,7 +850,8 @@ func (n *testNode) AwaitRunning(t testing.TB) {
 }
 
 // AwaitNeedsLogin waits for n to reach the IPN state "NeedsLogin".
-func (n *testNode) AwaitNeedsLogin(t testing.TB) {
+func (n *testNode) AwaitNeedsLogin() {
+	t := n.env.t
 	t.Helper()
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		st, err := n.Status()
@@ -890,7 +899,8 @@ func (n *testNode) Status() (*ipnstate.Status, error) {
 	return st, nil
 }
 
-func (n *testNode) MustStatus(tb testing.TB) *ipnstate.Status {
+func (n *testNode) MustStatus() *ipnstate.Status {
+	tb := n.env.t
 	tb.Helper()
 	st, err := n.Status()
 	if err != nil {
