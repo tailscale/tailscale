@@ -380,6 +380,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		ss.Online = health.GetInPollNetMap()
 		if b.netMap != nil {
 			ss.HostName = b.netMap.Hostinfo.Hostname
 			ss.DNSName = b.netMap.Name
