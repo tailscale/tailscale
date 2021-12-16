@@ -178,9 +178,31 @@ func TestShrinkDefaultRoute(t *testing.T) {
 		},
 	}
 
+	// Construct a fake local network environment to make this test hermetic.
+	// localInterfaceRoutes and hostIPs would normally come from calling interfaceRoutes,
+	// and localAddresses would normally come from calling interfaces.LocalAddresses.
+	var b netaddr.IPSetBuilder
+	for _, c := range []string{"127.0.0.0/8", "192.168.9.0/24", "fe80::/32"} {
+		p := netaddr.MustParseIPPrefix(c)
+		b.AddPrefix(p)
+	}
+	localInterfaceRoutes, err := b.IPSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostIPs := []netaddr.IP{
+		netaddr.MustParseIP("127.0.0.1"),
+		netaddr.MustParseIP("192.168.9.39"),
+		netaddr.MustParseIP("fe80::1"),
+		netaddr.MustParseIP("fe80::437d:feff:feca:49a7"),
+	}
+	localAddresses := []netaddr.IP{
+		netaddr.MustParseIP("192.168.9.39"),
+	}
+
 	for _, test := range tests {
 		def := netaddr.MustParseIPPrefix(test.route)
-		got, err := shrinkDefaultRoute(def)
+		got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs)
 		if err != nil {
 			t.Fatalf("shrinkDefaultRoute(%q): %v", test.route, err)
 		}
@@ -194,11 +216,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 				t.Errorf("shrink(%q).Contains(%v) = true, want false", test.route, ip)
 			}
 		}
-		ips, _, err := interfaces.LocalAddresses()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, ip := range ips {
+		for _, ip := range localAddresses {
 			want := test.localIPFn(ip)
 			if gotContains := got.Contains(ip); gotContains != want {
 				t.Errorf("shrink(%q).Contains(%v) = %v, want %v", test.route, ip, gotContains, want)
