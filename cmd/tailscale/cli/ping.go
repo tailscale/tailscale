@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -64,6 +65,16 @@ var pingArgs struct {
 }
 
 func runPing(ctx context.Context, args []string) error {
+	st, err := tailscale.Status(ctx)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	description, ok := isRunningOrStarting(st)
+	if !ok {
+		printf("%s\n", description)
+		os.Exit(1)
+	}
+
 	c, bc, ctx, cancel := connect(ctx)
 	defer cancel()
 
