@@ -1020,7 +1020,12 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 				// wifi": you get internet access, but to additionally
 				// get LAN access the LAN(s) need to be offered
 				// explicitly as well.
-				s, err := shrinkDefaultRoute(r)
+				localInterfaceRoutes, hostIPs, err := interfaceRoutes()
+				if err != nil {
+					b.logf("getting local interface routes: %v", err)
+					continue
+				}
+				s, err := shrinkDefaultRoute(r, localInterfaceRoutes, hostIPs)
 				if err != nil {
 					b.logf("computing default route filter: %v", err)
 					continue
@@ -1164,17 +1169,14 @@ func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
 }
 
 // shrinkDefaultRoute returns an IPSet representing the IPs in route,
-// minus those in removeFromDefaultRoute and local interface subnets.
-func shrinkDefaultRoute(route netaddr.IPPrefix) (*netaddr.IPSet, error) {
-	interfaceRoutes, hostIPs, err := interfaceRoutes()
-	if err != nil {
-		return nil, err
-	}
+// minus those in removeFromDefaultRoute and localInterfaceRoutes,
+// plus the IPs in hostIPs.
+func shrinkDefaultRoute(route netaddr.IPPrefix, localInterfaceRoutes *netaddr.IPSet, hostIPs []netaddr.IP) (*netaddr.IPSet, error) {
 	var b netaddr.IPSetBuilder
 	// Add the default route.
 	b.AddPrefix(route)
 	// Remove the local interface routes.
-	b.RemoveSet(interfaceRoutes)
+	b.RemoveSet(localInterfaceRoutes)
 
 	// Having removed all the LAN subnets, re-add the hosts's own
 	// IPs. It's fine for clients to connect to an exit node's public
