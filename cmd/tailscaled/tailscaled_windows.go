@@ -55,6 +55,11 @@ func isWindowsService() bool {
 	return v
 }
 
+// runWindowsService starts running Tailscale under the Windows
+// Service environment.
+//
+// At this point we're still the parent process that
+// Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
 	return svc.Run(serviceName, &ipnService{Policy: pol})
 }
@@ -93,6 +98,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 		select {
 		case <-doneCh:
 		case cmd := <-r:
+			log.Printf("Got Windows Service event: %v", cmdName(cmd.Cmd))
 			switch cmd.Cmd {
 			case svc.Stop:
 				cancel()
@@ -107,6 +113,42 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 
 	changes <- svc.Status{State: svc.StopPending}
 	return false, windows.NO_ERROR
+}
+
+func cmdName(c svc.Cmd) string {
+	switch c {
+	case svc.Stop:
+		return "Stop"
+	case svc.Pause:
+		return "Pause"
+	case svc.Continue:
+		return "Continue"
+	case svc.Interrogate:
+		return "Interrogate"
+	case svc.Shutdown:
+		return "Shutdown"
+	case svc.ParamChange:
+		return "ParamChange"
+	case svc.NetBindAdd:
+		return "NetBindAdd"
+	case svc.NetBindRemove:
+		return "NetBindRemove"
+	case svc.NetBindEnable:
+		return "NetBindEnable"
+	case svc.NetBindDisable:
+		return "NetBindDisable"
+	case svc.DeviceEvent:
+		return "DeviceEvent"
+	case svc.HardwareProfileChange:
+		return "HardwareProfileChange"
+	case svc.PowerEvent:
+		return "PowerEvent"
+	case svc.SessionChange:
+		return "SessionChange"
+	case svc.PreShutdown:
+		return "PreShutdown"
+	}
+	return fmt.Sprintf("Unknown-Service-Cmd-%d", c)
 }
 
 func beWindowsSubprocess() bool {
