@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -29,6 +30,7 @@ import (
 
 	"golang.org/x/term"
 	"tailscale.com/atomicfile"
+	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/dnscache"
@@ -524,8 +526,20 @@ func New(collection string) *Policy {
 		}
 	}
 	lw := logtail.NewLogger(c, log.Printf)
+
+	var logOutput io.Writer = lw
+
+	if runtime.GOOS == "windows" && c.Collection == logtail.CollectionNode {
+		logID := newc.PublicID.String()
+		exe, _ := os.Executable()
+		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {
+			diskLogf := filelogger.New("tailscale-service", logID, lw.Logf)
+			logOutput = logger.FuncWriter(diskLogf)
+		}
+	}
+
 	log.SetFlags(0) // other logflags are set on console, not here
-	log.SetOutput(lw)
+	log.SetOutput(logOutput)
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
 		version.Long,
