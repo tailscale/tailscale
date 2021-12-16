@@ -24,6 +24,7 @@ main() {
 	VERSION=""
 	PACKAGETYPE=""
 	APT_KEY_TYPE="" # Only for apt-based distros
+	APT_SYSTEMCTL_START=false # Only needs to be true for Kali
 
 	if [ -f /etc/os-release ]; then
 		# /etc/os-release populates a number of shell variables. We care about the following:
