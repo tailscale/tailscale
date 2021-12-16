@@ -229,12 +229,21 @@ func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
 	}
 }
 
+var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
+
 func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
-		oldIPs[protocolAddr.AddressWithPrefix] = true
+		ap := protocolAddr.AddressWithPrefix
+		ip := netaddrIPFromNetstackIP(ap.Address)
+		if ip == v4broadcast && ap.PrefixLen == 32 {
+			// Don't delete this one later. It seems to be important.
+			// Related to Issue 2642? Likely.
+			continue
+		}
+		oldIPs[ap] = true
 	}
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
