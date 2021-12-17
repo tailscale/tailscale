@@ -62,3 +62,13 @@ func IsMacSysExt() bool {
 	isMacSysExt.Store(v)
 	return v
 }
+
+// IsWindowsGUI reports whether the current process is the Windows GUI.
+func IsWindowsGUI() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	exe, _ := os.Executable()
+	exe = filepath.Base(exe)
+	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+}
