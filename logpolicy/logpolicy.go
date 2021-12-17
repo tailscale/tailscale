@@ -8,10 +8,12 @@
 package logpolicy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -40,6 +42,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
+	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -65,6 +68,15 @@ func getLogTarget() string {
 	})
 
 	return getLogTargetOnce.v
+}
+
+// LogHost returns the hostname only (without port) of the configured
+// logtail server, or the default.
+func LogHost() string {
+	if v := getLogTarget(); v != "" {
+		return v
+	}
+	return logtail.DefaultHost
 }
 
 // Config represents an instance of logs in a collection.
@@ -614,6 +626,24 @@ func NewLogtailTransport(host string) *http.Transport {
 		if err == nil {
 			log.Printf("logtail: dialed %q in %v", addr, d)
 			return c, nil
+		}
+
+		if version.IsWindowsGUI() && strings.HasPrefix(netw, "tcp") {
+			if c, err := safesocket.Connect(safesocket.DefaultConnectionStrategy("")); err == nil {
+				fmt.Fprintf(c, "CONNECT %s HTTP/1.0\r\n\r\n", addr)
+				br := bufio.NewReader(c)
+				res, err := http.ReadResponse(br, nil)
+				if err == nil && res.StatusCode != 200 {
+					err = errors.New(res.Status)
+				}
+				if err != nil {
+					log.Printf("logtail: CONNECT response from tailscaled: %v", err)
+					c.Close()
+				} else {
+					log.Printf("logtail: connected via tailscaled")
+					return c, nil
+				}
+			}
 		}
 
 		// If we failed to dial, try again with bootstrap DNS.

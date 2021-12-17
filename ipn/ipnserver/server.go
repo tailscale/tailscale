@@ -238,12 +238,28 @@ func bufferHasHTTPRequest(br *bufio.Reader) bool {
 		mem.Contains(mem.B(peek), mem.S(" HTTP/"))
 }
 
+// bufferIsConnect reports whether br looks like it's likely an HTTP
+// CONNECT request.
+//
+// Invariant: br has already had at least 4 bytes Peek'ed.
+func bufferIsConnect(br *bufio.Reader) bool {
+	peek, _ := br.Peek(br.Buffered())
+	return mem.HasPrefix(mem.B(peek), mem.S("CONN"))
+}
+
 func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	// First see if it's an HTTP request.
 	br := bufio.NewReader(c)
 	c.SetReadDeadline(time.Now().Add(time.Second))
 	br.Peek(4)
 	c.SetReadDeadline(time.Time{})
+
+	// Handle logtail CONNECT requests early. (See docs on handleProxyConnectConn)
+	if bufferIsConnect(br) {
+		s.handleProxyConnectConn(ctx, br, c, logf)
+		return
+	}
+
 	isHTTPReq := bufferHasHTTPRequest(br)
 
 	ci, err := s.addConn(c, isHTTPReq)
