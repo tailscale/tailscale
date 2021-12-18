@@ -576,8 +576,8 @@ func (f *forwarder) forward(query packet) error {
 	return f.forwardWithDestChan(ctx, query, f.responses)
 }
 
-// forward forwards the query to all upstream nameservers and waits
-// for the first response.
+// forwardWithDestChan forwards the query to all upstream nameservers
+// and waits for the first response.
 //
 // It either sends to responseChan and returns nil, or returns a
 // non-nil error (without sending to the channel).
