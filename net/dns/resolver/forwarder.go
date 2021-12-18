@@ -598,7 +598,17 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	// out, playing on Sonos still works.
 	if hasRDNSBonjourPrefix(domain) {
 		metricDNSFwdDropBonjour.Add(1)
-		return nil
+		res, err := nxDomainResponse(query)
+		if err != nil {
+			f.logf("error parsing bonjour query: %v", err)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case responseChan <- res:
+			return nil
+		}
 	}
 
 	clampEDNSSize(query.bs, maxResponseBytes)
@@ -694,6 +704,28 @@ func nameFromQuery(bs []byte) (dnsname.FQDN, error) {
 
 	n := q.Name.Data[:q.Name.Length]
 	return dnsname.ToFQDN(rawNameToLower(n))
+}
+
+// nxDomainResponse returns an NXDomain DNS reply for the provided request.
+func nxDomainResponse(req packet) (res packet, err error) {
+	p := dnsParserPool.Get().(*dnsParser)
+	defer dnsParserPool.Put(p)
+
+	if err := p.parseQuery(req.bs); err != nil {
+		return packet{}, err
+	}
+
+	h := p.Header
+	h.Response = true
+	h.RecursionAvailable = h.RecursionDesired
+	h.RCode = dns.RCodeNameError
+	b := dns.NewBuilder(nil, h)
+	// TODO(bradfitz): should we add an SOA record in the Authority
+	// section too? (for the nxdomain negative caching TTL)
+	// For which zone? Does iOS care?
+	res.bs, err = b.Finish()
+	res.addr = req.addr
+	return res, err
 }
 
 // closePool is a dynamic set of io.Closers to close as a group.
