@@ -1087,11 +1087,13 @@ func rdnsNameToIPv6(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
 // It is assumed that resp.Question is populated by respond before this is called.
 func (r *Resolver) respondReverse(query []byte, name dnsname.FQDN, resp *response) ([]byte, error) {
 	if hasRDNSBonjourPrefix(name) {
+		metricDNSReverseMissBonjour.Add(1)
 		return nil, errNotOurName
 	}
 
 	resp.Name, resp.Header.RCode = r.resolveLocalReverse(name)
 	if resp.Header.RCode == dns.RCodeRefused {
+		metricDNSReverseMissOther.Add(1)
 		return nil, errNotOurName
 	}
 
@@ -1235,4 +1237,7 @@ var (
 	metricDNSResolveLocalNoAll        = clientmetric.NewCounter("dns_resolve_local_no_all")
 	metricDNSResolveNotImplType       = clientmetric.NewCounter("dns_resolve_local_not_impl_type")
 	metricDNSResolveNoRecordType      = clientmetric.NewCounter("dns_resolve_local_no_record_type")
+
+	metricDNSReverseMissBonjour = clientmetric.NewCounter("dns_reverse_miss_bonjour")
+	metricDNSReverseMissOther   = clientmetric.NewCounter("dns_reverse_miss_other")
 )
