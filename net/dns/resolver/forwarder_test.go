@@ -168,3 +168,25 @@ func TestMaxDoHInFlight(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkNameFromQuery(b *testing.B) {
+	builder := dns.NewBuilder(nil, dns.Header{})
+	builder.StartQuestions()
+	builder.Question(dns.Question{
+		Name:  dns.MustNewName("foo.example."),
+		Type:  dns.TypeA,
+		Class: dns.ClassINET,
+	})
+	msg, err := builder.Finish()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err := nameFromQuery(msg)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
