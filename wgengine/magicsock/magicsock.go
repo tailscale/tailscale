@@ -1801,6 +1801,14 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDi
 		} else {
 			metricSentDiscoUDP.Add(1)
 		}
+		switch m.(type) {
+		case *disco.Ping:
+			metricSentDiscoPing.Add(1)
+		case *disco.Pong:
+			metricSentDiscoPong.Add(1)
+		case *disco.CallMeMaybe:
+			metricSentDiscoCallMeMaybe.Add(1)
+		}
 	} else if err == nil {
 		// Can't send. (e.g. no IPv6 locally)
 	} else {
@@ -4047,13 +4055,16 @@ var (
 	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
 
 	// Disco packets
-	metricSendDiscoUDP      = clientmetric.NewCounter("magicsock_disco_send_udp")
-	metricSendDiscoDERP     = clientmetric.NewCounter("magicsock_disco_send_derp")
-	metricSentDiscoUDP      = clientmetric.NewCounter("magicsock_disco_sent_udp")
-	metricSentDiscoDERP     = clientmetric.NewCounter("magicsock_disco_sent_derp")
-	metricRecvDiscoBadPeer  = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
-	metricRecvDiscoBadKey   = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
-	metricRecvDiscoBadParse = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
+	metricSendDiscoUDP         = clientmetric.NewCounter("magicsock_disco_send_udp")
+	metricSendDiscoDERP        = clientmetric.NewCounter("magicsock_disco_send_derp")
+	metricSentDiscoUDP         = clientmetric.NewCounter("magicsock_disco_sent_udp")
+	metricSentDiscoDERP        = clientmetric.NewCounter("magicsock_disco_sent_derp")
+	metricSentDiscoPing        = clientmetric.NewCounter("magicsock_disco_sent_ping")
+	metricSentDiscoPong        = clientmetric.NewCounter("magicsock_disco_sent_pong")
+	metricSentDiscoCallMeMaybe = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
+	metricRecvDiscoBadPeer     = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
+	metricRecvDiscoBadKey      = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
+	metricRecvDiscoBadParse    = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
 
 	metricRecvDiscoUDP                 = clientmetric.NewCounter("magicsock_disco_recv_udp")
 	metricRecvDiscoDERP                = clientmetric.NewCounter("magicsock_disco_recv_derp")
