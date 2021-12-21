@@ -611,6 +611,10 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 	}
 
+	if fl, ok := fwdLogAtomic.Load().(*fwdLog); ok {
+		fl.addName(string(domain))
+	}
+
 	clampEDNSSize(query.bs, maxResponseBytes)
 
 	if len(resolvers) == 0 {
