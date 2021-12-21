@@ -295,7 +295,6 @@ func run() error {
 	var debugMux *http.ServeMux
 	if args.debug != "" {
 		debugMux = newDebugMux()
-		go runDebugServer(debugMux, args.debug)
 	}
 
 	linkMon, err := monitor.New(logf)
@@ -313,6 +312,14 @@ func run() error {
 	}
 	if _, ok := e.(wgengine.ResolvingEngine).GetResolver(); !ok {
 		panic("internal error: exit node resolver not wired up")
+	}
+	if debugMux != nil {
+		if ig, ok := e.(wgengine.InternalsGetter); ok {
+			if _, mc, ok := ig.GetInternals(); ok {
+				debugMux.HandleFunc("/debug/magicsock", mc.ServeHTTPDebug)
+			}
+		}
+		go runDebugServer(debugMux, args.debug)
 	}
 
 	ns, err := newNetstack(logf, dialer, e)
