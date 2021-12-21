@@ -553,6 +553,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/metrics":
 		h.handleServeMetrics(w, r)
 		return
+	case "/v0/magicsock":
+		h.handleServeMagicsock(w, r)
+		return
 	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
@@ -779,6 +782,21 @@ func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Request) {
+	if !h.isSelf {
+		http.Error(w, "not owner", http.StatusForbidden)
+		return
+	}
+	eng := h.ps.b.e
+	if ig, ok := eng.(wgengine.InternalsGetter); ok {
+		if _, mc, ok := ig.GetInternals(); ok {
+			mc.ServeHTTPDebug(w, r)
+			return
+		}
+	}
+	http.Error(w, "miswired", 500)
 }
 
 func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {
