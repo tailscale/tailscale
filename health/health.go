@@ -9,6 +9,7 @@ package health
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"sort"
@@ -27,6 +28,8 @@ var (
 	sysErr   = map[Subsystem]error{}                     // error key => err (or nil for no error)
 	watchers = map[*watchHandle]func(Subsystem, error){} // opt func to run if error state changes
 	timer    *time.Timer
+
+	debugHandler = map[string]http.Handler{}
 
 	inMapPoll               bool
 	inMapPollSince          time.Time
@@ -115,6 +118,18 @@ func DNSOSHealth() error { return get(SysDNSOS) }
 func SetNetworkCategoryHealth(err error) { set(SysNetworkCategory, err) }
 
 func NetworkCategoryHealth() error { return get(SysNetworkCategory) }
+
+func RegisterDebugHandler(typ string, h http.Handler) {
+	mu.Lock()
+	defer mu.Unlock()
+	debugHandler[typ] = h
+}
+
+func DebugHandler(typ string) http.Handler {
+	mu.Lock()
+	defer mu.Unlock()
+	return debugHandler[typ]
+}
 
 func get(key Subsystem) error {
 	mu.Lock()
