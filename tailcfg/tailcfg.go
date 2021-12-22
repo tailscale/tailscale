@@ -571,10 +571,29 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	if h == nil && h2 == nil {
 		return true
 	}
-	if (h == nil) != (h2 == nil) {
+	if h == nil || h2 == nil {
 		return false
 	}
 	return reflect.DeepEqual(h, h2)
+}
+
+// BasicallyEqual reports whether h and h2 are equal other than the
+// NetInfo DERP latency timing. (see NetInfo.BasicallyEqual).
+func (h *Hostinfo) BasicallyEqual(h2 *Hostinfo) bool {
+	if h == nil && h2 == nil {
+		return true
+	}
+	if h == nil || h2 == nil {
+		return false
+	}
+	a := *h
+	b := *h2
+	if !a.NetInfo.BasicallyEqual(b.NetInfo) {
+		return false
+	}
+	a.NetInfo = nil
+	b.NetInfo = nil
+	return a.Equal(&b)
 }
 
 // SignatureType specifies a scheme for signing RegisterRequest messages. It

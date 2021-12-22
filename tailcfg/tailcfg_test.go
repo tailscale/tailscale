@@ -190,6 +190,75 @@ func TestHostinfoEqual(t *testing.T) {
 	}
 }
 
+func TestHostinfoBasicallyEqual(t *testing.T) {
+	tests := []struct {
+		a, b *Hostinfo
+		want bool
+	}{
+		{
+			want: true,
+		},
+		{
+			a:    new(Hostinfo),
+			b:    new(Hostinfo),
+			want: true,
+		},
+		{
+			a: &Hostinfo{},
+			b: &Hostinfo{
+				NetInfo: &NetInfo{},
+			},
+			want: false, // one's nil, the other's not
+		},
+		{
+			a: &Hostinfo{
+				NetInfo: &NetInfo{},
+			},
+			b: &Hostinfo{
+				NetInfo: &NetInfo{},
+			},
+			want: true,
+		},
+		{
+			a: &Hostinfo{
+				NetInfo: &NetInfo{},
+			},
+			b: &Hostinfo{
+				NetInfo: &NetInfo{
+					DERPLatency: map[string]float64{ // ignored
+						"1": 1.0,
+						"2": 2.0,
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			a: &Hostinfo{
+				NetInfo: &NetInfo{
+					PreferredDERP: 1,
+				},
+			},
+			b: &Hostinfo{
+				NetInfo: &NetInfo{
+					PreferredDERP: 2, // differs
+					DERPLatency: map[string]float64{ // ignored
+						"1": 1.0,
+						"2": 2.0,
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for i, tt := range tests {
+		got := tt.a.BasicallyEqual(tt.b)
+		if got != tt.want {
+			t.Errorf("%d. BasicallyEqual = %v; want %v", i, got, tt.want)
+		}
+	}
+}
+
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
