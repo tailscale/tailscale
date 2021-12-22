@@ -577,6 +577,68 @@ func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
 	return reflect.DeepEqual(h, h2)
 }
 
+// HowUnequal returns a list of paths through Hostinfo where h and h2 differ.
+// If they differ in nil-ness, the path is "nil", otherwise the path is like
+// "ShieldsUp" or "NetInfo.nil" or "NetInfo.PCP".
+func (h *Hostinfo) HowUnequal(h2 *Hostinfo) (path []string) {
+	return appendStructPtrDiff(nil, "", reflect.ValueOf(h), reflect.ValueOf(h2))
+}
+
+func appendStructPtrDiff(base []string, pfx string, p1, p2 reflect.Value) (ret []string) {
+	ret = base
+	if p1.IsNil() && p2.IsNil() {
+		return base
+	}
+	mkPath := func(b string) string {
+		if pfx == "" {
+			return b
+		}
+		return pfx + "." + b
+	}
+	if p1.IsNil() || p2.IsNil() {
+		return append(base, mkPath("nil"))
+	}
+	v1, v2 := p1.Elem(), p2.Elem()
+	t := v1.Type()
+	for i, n := 0, t.NumField(); i < n; i++ {
+		sf := t.Field(i)
+		switch sf.Type.Kind() {
+		case reflect.String:
+			if v1.Field(i).String() != v2.Field(i).String() {
+				ret = append(ret, mkPath(sf.Name))
+			}
+			continue
+		case reflect.Bool:
+			if v1.Field(i).Bool() != v2.Field(i).Bool() {
+				ret = append(ret, mkPath(sf.Name))
+			}
+			continue
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if v1.Field(i).Int() != v2.Field(i).Int() {
+				ret = append(ret, mkPath(sf.Name))
+			}
+			continue
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			if v1.Field(i).Uint() != v2.Field(i).Uint() {
+				ret = append(ret, mkPath(sf.Name))
+			}
+			continue
+		case reflect.Slice, reflect.Map:
+			if !reflect.DeepEqual(v1.Field(i).Interface(), v2.Field(i).Interface()) {
+				ret = append(ret, mkPath(sf.Name))
+			}
+			continue
+		case reflect.Ptr:
+			if sf.Type.Elem().Kind() == reflect.Struct {
+				ret = appendStructPtrDiff(ret, sf.Name, v1.Field(i), v2.Field(i))
+				continue
+			}
+		}
+		panic(fmt.Sprintf("unsupported type at %s: %s", mkPath(sf.Name), sf.Type.String()))
+	}
+	return ret
+}
+
 // SignatureType specifies a scheme for signing RegisterRequest messages. It
 // specifies the crypto algorithms to use, the contents of what is signed, and
 // any other relevant details. Historically, requests were unsigned so the zero

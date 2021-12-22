@@ -190,6 +190,82 @@ func TestHostinfoEqual(t *testing.T) {
 	}
 }
 
+func TestHostinfoHowEqual(t *testing.T) {
+	tests := []struct {
+		a, b *Hostinfo
+		want []string
+	}{
+		{
+			a:    nil,
+			b:    nil,
+			want: nil,
+		},
+		{
+			a:    new(Hostinfo),
+			b:    nil,
+			want: []string{"nil"},
+		},
+		{
+			a:    nil,
+			b:    new(Hostinfo),
+			want: []string{"nil"},
+		},
+		{
+			a:    new(Hostinfo),
+			b:    new(Hostinfo),
+			want: nil,
+		},
+		{
+			a: &Hostinfo{
+				IPNVersion:  "1",
+				ShieldsUp:   false,
+				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/24")},
+			},
+			b: &Hostinfo{
+				IPNVersion:  "2",
+				ShieldsUp:   true,
+				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/25")},
+			},
+			want: []string{"IPNVersion", "ShieldsUp", "RoutableIPs"},
+		},
+		{
+			a: &Hostinfo{
+				IPNVersion: "1",
+			},
+			b: &Hostinfo{
+				IPNVersion: "2",
+				NetInfo:    new(NetInfo),
+			},
+			want: []string{"IPNVersion", "NetInfo.nil"},
+		},
+		{
+			a: &Hostinfo{
+				IPNVersion: "1",
+				NetInfo: &NetInfo{
+					WorkingIPv6:   "true",
+					HavePortMap:   true,
+					LinkType:      "foo",
+					PreferredDERP: 123,
+					DERPLatency: map[string]float64{
+						"foo": 1.0,
+					},
+				},
+			},
+			b: &Hostinfo{
+				IPNVersion: "2",
+				NetInfo:    &NetInfo{},
+			},
+			want: []string{"IPNVersion", "NetInfo.WorkingIPv6", "NetInfo.HavePortMap", "NetInfo.PreferredDERP", "NetInfo.LinkType", "NetInfo.DERPLatency"},
+		},
+	}
+	for i, tt := range tests {
+		got := tt.a.HowUnequal(tt.b)
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%d. got %q; want %q", i, got, tt.want)
+		}
+	}
+}
+
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
