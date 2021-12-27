@@ -261,10 +261,18 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 
 func (c *Client) writeTimeoutFired() { c.nc.Close() }
 
+func (c *Client) SendPing(data [8]byte) error {
+	return c.sendPingOrPong(framePing, data)
+}
+
 func (c *Client) SendPong(data [8]byte) error {
+	return c.sendPingOrPong(framePong, data)
+}
+
+func (c *Client) sendPingOrPong(typ frameType, data [8]byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	if err := writeFrameHeader(c.bw, framePong, 8); err != nil {
+	if err := writeFrameHeader(c.bw, typ, 8); err != nil {
 		return err
 	}
 	if _, err := c.bw.Write(data[:]); err != nil {
@@ -374,6 +382,12 @@ func (ServerInfoMessage) msg() {}
 type PingMessage [8]byte
 
 func (PingMessage) msg() {}
+
+// PongMessage is a reply to a PingMessage from a client or server
+// with the payload sent previously in a PingMessage.
+type PongMessage [8]byte
+
+func (PongMessage) msg() {}
 
 // KeepAliveMessage is a one-way empty message from server to client, just to
 // keep the connection alive. It's like a PingMessage, but doesn't solicit
@@ -529,6 +543,15 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 
 		case framePing:
 			var pm PingMessage
+			if n < 8 {
+				c.logf("[unexpected] dropping short ping frame")
+				continue
+			}
+			copy(pm[:], b[:])
+			return pm, nil
+
+		case framePong:
+			var pm PongMessage
 			if n < 8 {
 				c.logf("[unexpected] dropping short ping frame")
 				continue

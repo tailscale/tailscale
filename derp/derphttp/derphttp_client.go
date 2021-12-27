@@ -698,6 +698,20 @@ func (c *Client) Send(dstKey key.NodePublic, b []byte) error {
 	return err
 }
 
+// SendPing sends a ping message, without any implicit connect or reconnect.
+func (c *Client) SendPing(data [8]byte) error {
+	c.mu.Lock()
+	closed, client := c.closed, c.client
+	c.mu.Unlock()
+	if closed {
+		return ErrClientClosed
+	}
+	if client == nil {
+		return errors.New("client not connected")
+	}
+	return client.SendPing(data)
+}
+
 func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.ForwardPacket")
 	if err != nil {
