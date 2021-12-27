@@ -662,6 +662,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 		connectedAt:    time.Now(),
 		sendQueue:      make(chan pkt, perClientSendQueueDepth),
 		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
+		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan key.NodePublic),
 		canMesh:        clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
 	}
@@ -729,6 +730,8 @@ func (c *sclient) run(ctx context.Context) error {
 			err = c.handleFrameWatchConns(ft, fl)
 		case frameClosePeer:
 			err = c.handleFrameClosePeer(ft, fl)
+		case framePing:
+			err = c.handleFramePing(ft, fl)
 		default:
 			err = c.handleUnknownFrame(ft, fl)
 		}
@@ -764,6 +767,32 @@ func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
 	}
 	c.s.addWatcher(c)
 	return nil
+}
+
+func (c *sclient) handleFramePing(ft frameType, fl uint32) error {
+	var m PingMessage
+	if fl < uint32(len(m)) {
+		return fmt.Errorf("short ping: %v", fl)
+	}
+	if fl > 1000 {
+		// unreasonably extra large. We leave some extra
+		// space for future extensibility, but not too much.
+		return fmt.Errorf("ping body too large: %v", fl)
+	}
+	_, err := io.ReadFull(c.br, m[:])
+	if err != nil {
+		return err
+	}
+	if extra := int64(fl) - int64(len(m)); extra > 0 {
+		_, err = io.CopyN(ioutil.Discard, c.br, extra)
+	}
+	select {
+	case c.sendPongCh <- [8]byte(m):
+	default:
+		// They're pinging too fast. Ignore.
+		// TODO(bradfitz): add a rate limiter too.
+	}
+	return err
 }
 
 func (c *sclient) handleFrameClosePeer(ft frameType, fl uint32) error {
@@ -1202,6 +1231,7 @@ type sclient struct {
 	remoteIPPort   netaddr.IPPort      // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt            // packets queued to this client; never closed
 	discoSendQueue chan pkt            // important packets queued to this client; never closed
+	sendPongCh     chan [8]byte        // pong replies to send to the client; never closed
 	peerGone       chan key.NodePublic // write request that a previous sender has disconnected (not used by mesh peers)
 	meshUpdate     chan struct{}       // write request to write peerStateChange
 	canMesh        bool                // clientInfo had correct mesh token for inter-region routing
@@ -1342,6 +1372,9 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 			werr = c.sendPacket(msg.src, msg.bs)
 			c.recordQueueTime(msg.enqueuedAt)
 			continue
+		case msg := <-c.sendPongCh:
+			werr = c.sendPong(msg)
+			continue
 		case <-keepAliveTick.C:
 			werr = c.sendKeepAlive()
 			continue
@@ -1368,6 +1401,9 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case msg := <-c.discoSendQueue:
 			werr = c.sendPacket(msg.src, msg.bs)
 			c.recordQueueTime(msg.enqueuedAt)
+		case msg := <-c.sendPongCh:
+			werr = c.sendPong(msg)
+			continue
 		case <-keepAliveTick.C:
 			werr = c.sendKeepAlive()
 		}
@@ -1382,6 +1418,16 @@ func (c *sclient) setWriteDeadline() {
 func (c *sclient) sendKeepAlive() error {
 	c.setWriteDeadline()
 	return writeFrameHeader(c.bw.bw(), frameKeepAlive, 0)
+}
+
+// sendPong sends a pong reply, without flushing.
+func (c *sclient) sendPong(data [8]byte) error {
+	c.setWriteDeadline()
+	if err := writeFrameHeader(c.bw.bw(), framePong, uint32(len(data))); err != nil {
+		return err
+	}
+	_, err := c.bw.Write(data[:])
+	return err
 }
 
 // sendPeerGone sends a peerGone frame, without flushing.

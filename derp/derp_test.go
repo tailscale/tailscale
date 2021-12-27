@@ -813,6 +813,14 @@ func TestClientRecv(t *testing.T) {
 			want: PingMessage{1, 2, 3, 4, 5, 6, 7, 8},
 		},
 		{
+			name: "pong",
+			input: []byte{
+				byte(framePong), 0, 0, 0, 8,
+				1, 2, 3, 4, 5, 6, 7, 8,
+			},
+			want: PongMessage{1, 2, 3, 4, 5, 6, 7, 8},
+		},
+		{
 			name: "health_bad",
 			input: []byte{
 				byte(frameHealth), 0, 0, 0, 3,
@@ -858,6 +866,23 @@ func TestClientRecv(t *testing.T) {
 	}
 }
 
+func TestClientSendPing(t *testing.T) {
+	var buf bytes.Buffer
+	c := &Client{
+		bw: bufio.NewWriter(&buf),
+	}
+	if err := c.SendPing([8]byte{1, 2, 3, 4, 5, 6, 7, 8}); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{
+		byte(framePing), 0, 0, 0, 8,
+		1, 2, 3, 4, 5, 6, 7, 8,
+	}
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Errorf("unexpected output\nwrote: % 02x\n want: % 02x", buf.Bytes(), want)
+	}
+}
+
 func TestClientSendPong(t *testing.T) {
 	var buf bytes.Buffer
 	c := &Client{
@@ -873,7 +898,6 @@ func TestClientSendPong(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), want) {
 		t.Errorf("unexpected output\nwrote: % 02x\n want: % 02x", buf.Bytes(), want)
 	}
-
 }
 
 func TestServerDupClients(t *testing.T) {
@@ -1314,5 +1338,32 @@ func TestClientSendRateLimiting(t *testing.T) {
 	}
 	if bytesLimited < bytes1*2 || bytesLimited >= bytes1K {
 		t.Errorf("limited conn's bytes count = %v; want >=%v, <%v", bytesLimited, bytes1K*2, bytes1K)
+	}
+}
+
+func TestServerRepliesToPing(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close(t)
+
+	tc := newRegularClient(t, ts, "alice")
+
+	data := [8]byte{1, 2, 3, 4, 5, 6, 7, 42}
+
+	if err := tc.c.SendPing(data); err != nil {
+		t.Fatal(err)
+	}
+
+	for {
+		m, err := tc.c.recvTimeout(time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch m := m.(type) {
+		case PongMessage:
+			if ([8]byte(m)) != data {
+				t.Fatalf("got pong %2x; want %2x", [8]byte(m), data)
+			}
+			return
+		}
 	}
 }
