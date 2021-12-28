@@ -55,6 +55,7 @@ import (
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -3137,4 +3138,34 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		}
 	}
 	return "", false
+}
+
+func (b *LocalBackend) DebugRebind() error {
+	mc, err := b.magicConn()
+	if err != nil {
+		return err
+	}
+	mc.Rebind()
+	return nil
+}
+
+func (b *LocalBackend) DebugReSTUN() error {
+	mc, err := b.magicConn()
+	if err != nil {
+		return err
+	}
+	mc.ReSTUN("explicit-debug")
+	return nil
+}
+
+func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
+	ig, ok := b.e.(wgengine.InternalsGetter)
+	if !ok {
+		return nil, errors.New("engine isn't InternalsGetter")
+	}
+	_, mc, ok := ig.GetInternals()
+	if !ok {
+		return nil, errors.New("failed to get internals")
+	}
+	return mc, nil
 }
