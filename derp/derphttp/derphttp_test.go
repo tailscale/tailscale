@@ -154,3 +154,55 @@ func waitConnect(t testing.TB, c *Client) {
 		t.Fatalf("client first Recv was unexpected type %T", v)
 	}
 }
+
+func TestPing(t *testing.T) {
+	serverPrivateKey := key.NewNode()
+	s := derp.NewServer(serverPrivateKey, t.Logf)
+	defer s.Close()
+
+	httpsrv := &http.Server{
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		Handler:      Handler(s),
+	}
+
+	ln, err := net.Listen("tcp4", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverURL := "http://" + ln.Addr().String()
+	t.Logf("server URL: %s", serverURL)
+
+	go func() {
+		if err := httpsrv.Serve(ln); err != nil {
+			if err == http.ErrServerClosed {
+				return
+			}
+			panic(err)
+		}
+	}()
+
+	c, err := NewClient(key.NewNode(), serverURL, t.Logf)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer c.Close()
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("client Connect: %v", err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		for {
+			m, err := c.Recv()
+			if err != nil {
+				errc <- err
+				return
+			}
+			t.Logf("Recv: %T", m)
+		}
+	}()
+	err = c.Ping(context.Background())
+	if err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+}
