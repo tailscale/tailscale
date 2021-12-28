@@ -344,7 +344,14 @@ func (m *directManager) SetDNS(config OSConfig) (err error) {
 	// cause a disruptive DNS outage each time we reset an empty
 	// OS configuration.
 	if changed && isResolvedRunning() && !runningAsGUIDesktopUser() {
-		exec.Command("systemctl", "restart", "systemd-resolved.service").Run()
+		t0 := time.Now()
+		err := restartResolved()
+		d := time.Since(t0).Round(time.Millisecond)
+		if err != nil {
+			m.logf("error restarting resolved after %v: %v", d, err)
+		} else {
+			m.logf("restarted resolved after %v", d)
+		}
 	}
 
 	return nil
