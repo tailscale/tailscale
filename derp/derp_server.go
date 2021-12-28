@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/big"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -283,9 +284,8 @@ type PacketForwarder interface {
 // It is a defined type so that non-net connections can be used.
 type Conn interface {
 	io.WriteCloser
-
+	LocalAddr() net.Addr
 	// The *Deadline methods follow the semantics of net.Conn.
-
 	SetDeadline(time.Time) error
 	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error

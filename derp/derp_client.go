@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"inet.af/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -37,8 +39,8 @@ type Client struct {
 	rate *rate.Limiter // if non-nil, rate limiter to use
 
 	// Owned by Recv:
-	peeked  int   // bytes to discard on next Recv
-	readErr error // sticky read error
+	peeked  int          // bytes to discard on next Recv
+	readErr atomic.Value // of error; sticky (set by Recv)
 }
 
 // ClientOpt is an option passed to NewClient.
@@ -441,13 +443,14 @@ func (c *Client) Recv() (m ReceivedMessage, err error) {
 }
 
 func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err error) {
-	if c.readErr != nil {
-		return nil, c.readErr
+	readErr, _ := c.readErr.Load().(error)
+	if readErr != nil {
+		return nil, readErr
 	}
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("derp.Recv: %w", err)
-			c.readErr = err
+			c.readErr.Store(err)
 		}
 	}()
 
@@ -586,4 +589,23 @@ func (c *Client) setSendRateLimiter(sm ServerInfoMessage) {
 			rate.Limit(sm.TokenBucketBytesPerSecond),
 			sm.TokenBucketBytesBurst)
 	}
+}
+
+// LocalAddr returns the TCP connection's local address.
+//
+// If the client is broken in some previously detectable way, it
+// returns an error.
+func (c *Client) LocalAddr() (netaddr.IPPort, error) {
+	readErr, _ := c.readErr.Load().(error)
+	if readErr != nil {
+		return netaddr.IPPort{}, readErr
+	}
+	if c.nc == nil {
+		return netaddr.IPPort{}, errors.New("nil conn")
+	}
+	a := c.nc.LocalAddr()
+	if a == nil {
+		return netaddr.IPPort{}, errors.New("nil addr")
+	}
+	return netaddr.ParseIPPort(a.String())
 }
