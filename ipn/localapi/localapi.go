@@ -113,6 +113,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveDERPMap(w, r)
 	case "/localapi/v0/metrics":
 		h.serveMetrics(w, r)
+	case "/localapi/v0/debug":
+		h.serveDebug(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -193,6 +195,35 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
+}
+
+func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	action := r.FormValue("action")
+	var err error
+	switch action {
+	case "rebind":
+		err = h.b.DebugRebind()
+	case "restun":
+		err = h.b.DebugReSTUN()
+	case "":
+		err = fmt.Errorf("missing parameter 'action'")
+	default:
+		err = fmt.Errorf("unknown action %q", action)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	io.WriteString(w, "done\n")
 }
 
 // serveProfileFunc is the implementation of Handler.serveProfile, after auth,
