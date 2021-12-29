@@ -104,3 +104,55 @@ func TestStateEqualFilteredIPFilter(t *testing.T) {
 		t.Errorf("%+v == %+v when restricting to interesting interfaces and IPs", s1, s2)
 	}
 }
+
+func TestStateString(t *testing.T) {
+	tests := []struct {
+		name string
+		s    *State
+		want string
+	}{
+		{
+			name: "typical_linux",
+			s: &State{
+				DefaultRouteInterface: "eth0",
+				Interface: map[string]Interface{
+					"eth0": {
+						Interface: &net.Interface{
+							Flags: net.FlagUp,
+						},
+					},
+					"wlan0": {
+						Interface: &net.Interface{},
+					},
+				},
+				InterfaceIPs: map[string][]netaddr.IPPrefix{
+					"eth0": []netaddr.IPPrefix{
+						netaddr.MustParseIPPrefix("10.0.0.2/8"),
+					},
+				},
+				HaveV4: true,
+			},
+			want: `interfaces.State{defaultRoute=eth0 ifs={eth0:[10.0.0.2/8]} v4=true v6=false}`,
+		},
+		{
+			name: "default_desc",
+			s: &State{
+				DefaultRouteInterface: "foo",
+				Interface: map[string]Interface{
+					"foo": {
+						Desc: "a foo thing",
+					},
+				},
+			},
+			want: `interfaces.State{defaultRoute=foo (a foo thing) ifs={} v4=false v6=false}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.s.String()
+			if got != tt.want {
+				t.Errorf("wrong\n got: %s\nwant: %s\n", got, tt.want)
+			}
+		})
+	}
+}

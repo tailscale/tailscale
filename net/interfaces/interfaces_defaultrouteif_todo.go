@@ -11,6 +11,6 @@ import "errors"
 
 var errTODO = errors.New("TODO")
 
-func DefaultRouteInterface() (string, error) {
-	return "TODO", errTODO
+func defaultRoute() (DefaultRouteDetails, error) {
+	return DefaultRouteDetails{}, errTODO
 }

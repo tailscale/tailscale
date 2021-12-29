@@ -5,7 +5,6 @@
 package interfaces
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/url"
@@ -217,18 +216,20 @@ func GetWindowsDefault(family winipcfg.AddressFamily) (*winipcfg.IPAdapterAddres
 	return bestIface, nil
 }
 
-func DefaultRouteInterface() (string, error) {
+func defaultRoute() (d DefaultRouteDetails, err error) {
 	// We always return the IPv4 default route.
 	// TODO(bradfitz): adjust API if/when anything cares. They could in theory differ, though,
 	// in which case we might send traffic to the wrong interface.
 	iface, err := GetWindowsDefault(windows.AF_INET)
 	if err != nil {
-		return "", err
+		return d, err
 	}
-	if iface == nil {
-		return "(none)", nil
+	if iface != nil {
+		d.InterfaceName = iface.FriendlyName()
+		d.InterfaceDesc = iface.Description()
+		d.InterfaceIndex = int(iface.IfIndex)
 	}
-	return fmt.Sprintf("%s (%s)", iface.FriendlyName(), iface.Description()), nil
+	return d, nil
 }
 
 var (

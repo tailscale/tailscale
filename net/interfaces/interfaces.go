@@ -172,6 +172,7 @@ func sortIPs(s []netaddr.IP) {
 type Interface struct {
 	*net.Interface
 	AltAddrs []net.Addr // if non-nil, returned by Addrs
+	Desc     string     // extra description (used on Windows)
 }
 
 func (i Interface) IsLoopback() bool { return isLoopback(i.Interface) }
@@ -278,13 +279,16 @@ type State struct {
 	// instead of Wifi. This field is not populated by GetState.
 	IsExpensive bool
 
-	// DefaultRouteInterface is the interface name for the machine's default route.
+	// DefaultRouteInterface is the interface name for the
+	// machine's default route.
+	//
 	// It is not yet populated on all OSes.
-	// Its exact value should not be assumed to be a map key for
-	// the Interface maps above; it's only used for debugging.
+	//
+	// When non-empty, its value is the map key into Interface and
+	// InterfaceIPs.
 	DefaultRouteInterface string
 
-	// HTTPProxy is the HTTP proxy to use.
+	// HTTPProxy is the HTTP proxy to use, if any.
 	HTTPProxy string
 
 	// PAC is the URL to the Proxy Autoconfig URL, if applicable.
@@ -293,7 +297,13 @@ type State struct {
 
 func (s *State) String() string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "interfaces.State{defaultRoute=%v ifs={", s.DefaultRouteInterface)
+	fmt.Fprintf(&sb, "interfaces.State{defaultRoute=%v ", s.DefaultRouteInterface)
+	if s.DefaultRouteInterface != "" {
+		if iface, ok := s.Interface[s.DefaultRouteInterface]; ok && iface.Desc != "" {
+			fmt.Fprintf(&sb, "(%s) ", iface.Desc)
+		}
+	}
+	sb.WriteString("ifs={")
 	ifs := make([]string, 0, len(s.Interface))
 	for k := range s.Interface {
 		if anyInterestingIP(s.InterfaceIPs[k]) {
@@ -507,7 +517,16 @@ func GetState() (*State, error) {
 		return nil, err
 	}
 
-	s.DefaultRouteInterface, _ = DefaultRouteInterface()
+	dr, _ := DefaultRoute()
+	s.DefaultRouteInterface = dr.InterfaceName
+
+	// Populate description (for Windows, primarily) if present.
+	if desc := dr.InterfaceDesc; desc != "" {
+		if iface, ok := s.Interface[dr.InterfaceName]; ok {
+			iface.Desc = desc
+			s.Interface[dr.InterfaceName] = iface
+		}
+	}
 
 	if s.AnyInterfaceUp() {
 		req, err := http.NewRequest("GET", LoginEndpointForProxyDetermination, nil)
@@ -666,4 +685,37 @@ func netInterfaces() ([]Interface, error) {
 		ret[i].Interface = &ifs[i]
 	}
 	return ret, nil
+}
+
+// DefaultRouteDetails are the
+type DefaultRouteDetails struct {
+	// InterfaceName is the interface name. It must always be populated.
+	// It's like "eth0" (Linux), "Ethernet 2" (Windows), "en0" (macOS).
+	InterfaceName string
+
+	// InterfaceDesc is populated on Windows at least. It's a
+	// longer description, like "Red Hat VirtIO Ethernet Adapter".
+	InterfaceDesc string
+
+	// InterfaceIndex is like net.Interface.Index.
+	// Zero means not populated.
+	InterfaceIndex int
+
+	// TODO(bradfitz): break this out into v4-vs-v6 once that need arises.
+}
+
+// DefaultRouteInterface is like DefaultRoute but only returns the
+// interface name.
+func DefaultRouteInterface() (string, error) {
+	dr, err := DefaultRoute()
+	if err != nil {
+		return "", err
+	}
+	return dr.InterfaceName, nil
+}
+
+// DefaultRoute returns details of the network interface that owns
+// the default route, not including any tailscale interfaces.
+func DefaultRoute() (DefaultRouteDetails, error) {
+	return defaultRoute()
 }

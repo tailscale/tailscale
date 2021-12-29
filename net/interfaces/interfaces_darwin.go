@@ -16,16 +16,18 @@ import (
 	"inet.af/netaddr"
 )
 
-func DefaultRouteInterface() (string, error) {
+func defaultRoute() (d DefaultRouteDetails, err error) {
 	idx, err := DefaultRouteInterfaceIndex()
 	if err != nil {
-		return "", err
+		return d, err
 	}
 	iface, err := net.InterfaceByIndex(idx)
 	if err != nil {
-		return "", err
+		return d, err
 	}
-	return iface.Name, nil
+	d.InterfaceName = iface.Name
+	d.InterfaceIndex = idx
+	return d, nil
 }
 
 // fetchRoutingTable calls route.FetchRIB, fetching NET_RT_DUMP2.
