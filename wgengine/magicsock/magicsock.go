@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -233,6 +234,7 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
+	linkMon                *monitor.Mon         // or nil
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -549,6 +551,7 @@ func NewConn(opts Options) (*Conn, error) {
 	if opts.LinkMonitor != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
 	}
+	c.linkMon = opts.LinkMonitor
 
 	if err := c.initialBind(); err != nil {
 		return nil, err
@@ -2393,14 +2396,61 @@ func (c *Conn) closeAllDerpLocked(why string) {
 	c.logActiveDerpLocked()
 }
 
+// maybeCloseDERPsOnRebind, in response to a rebind, closes all
+// DERP connections that don't have a local address in okayLocalIPs
+// and pings all those that do.
+func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netaddr.IPPrefix) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for regionID, ad := range c.activeDerp {
+		la, err := ad.c.LocalAddr()
+		if err != nil {
+			c.closeOrReconectDERPLocked(regionID, "rebind-no-localaddr")
+			continue
+		}
+		if !tsaddr.PrefixesContainsIP(okayLocalIPs, la.IP()) {
+			c.closeOrReconectDERPLocked(regionID, "rebind-default-route-change")
+			continue
+		}
+		regionID := regionID
+		dc := ad.c
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := dc.Ping(ctx); err != nil {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				c.closeOrReconectDERPLocked(regionID, "rebind-ping-fail")
+				return
+			}
+			c.logf("post-rebind ping of DERP region %d okay", regionID)
+		}()
+	}
+	c.logActiveDerpLocked()
+}
+
+// closeOrReconectDERPLocked closes the DERP connection to the
+// provided regionID and starts reconnecting it if it's our current
+// home DERP.
+//
+// why is a reason for logging.
+//
+// c.mu must be held.
+func (c *Conn) closeOrReconectDERPLocked(regionID int, why string) {
+	c.closeDerpLocked(regionID, why)
+	if !c.privateKey.IsZero() && c.myDerp == regionID {
+		c.startDerpHomeConnectLocked()
+	}
+}
+
 // c.mu must be held.
 // It is the responsibility of the caller to call logActiveDerpLocked after any set of closes.
-func (c *Conn) closeDerpLocked(node int, why string) {
-	if ad, ok := c.activeDerp[node]; ok {
-		c.logf("magicsock: closing connection to derp-%v (%v), age %v", node, why, time.Since(ad.createTime).Round(time.Second))
+func (c *Conn) closeDerpLocked(regionID int, why string) {
+	if ad, ok := c.activeDerp[regionID]; ok {
+		c.logf("magicsock: closing connection to derp-%v (%v), age %v", regionID, why, time.Since(ad.createTime).Round(time.Second))
 		go ad.c.Close()
 		ad.cancel()
-		delete(c.activeDerp, node)
+		delete(c.activeDerp, regionID)
 		metricNumDERPConns.Set(int64(len(c.activeDerp)))
 	}
 }
@@ -2831,13 +2881,15 @@ func (c *Conn) Rebind() {
 		return
 	}
 
-	c.mu.Lock()
-	c.closeAllDerpLocked("rebind")
-	if !c.privateKey.IsZero() {
-		c.startDerpHomeConnectLocked()
+	var ifIPs []netaddr.IPPrefix
+	if c.linkMon != nil {
+		st := c.linkMon.InterfaceState()
+		defIf := st.DefaultRouteInterface
+		ifIPs = st.InterfaceIPs[defIf]
+		c.logf("Rebind; defIf=%q, ips=%v", defIf, ifIPs)
 	}
-	c.mu.Unlock()
 
+	c.maybeCloseDERPsOnRebind(ifIPs)
 	c.resetEndpointStates()
 }
 

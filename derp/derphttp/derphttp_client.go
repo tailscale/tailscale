@@ -774,6 +774,21 @@ func (c *Client) SendPing(data [8]byte) error {
 	return client.SendPing(data)
 }
 
+// LocalAddr reports c's local TCP address, without any implicit
+// connect or reconnect.
+func (c *Client) LocalAddr() (netaddr.IPPort, error) {
+	c.mu.Lock()
+	closed, client := c.closed, c.client
+	c.mu.Unlock()
+	if closed {
+		return netaddr.IPPort{}, ErrClientClosed
+	}
+	if client == nil {
+		return netaddr.IPPort{}, errors.New("client not connected")
+	}
+	return client.LocalAddr()
+}
+
 func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
 	client, _, err := c.connect(context.TODO(), "derphttp.Client.ForwardPacket")
 	if err != nil {
