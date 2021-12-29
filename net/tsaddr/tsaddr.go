@@ -176,6 +176,16 @@ func PrefixesContainsFunc(ipp []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool)
 	return false
 }
 
+// PrefixesContainsIP reports whether any prefix in ipp contains ip.
+func PrefixesContainsIP(ipp []netaddr.IPPrefix, ip netaddr.IP) bool {
+	for _, r := range ipp {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // IPsContainsFunc reports whether f is true for any IP in ips.
 func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
 	for _, v := range ips {
