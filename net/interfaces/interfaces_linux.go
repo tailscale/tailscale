@@ -122,17 +122,18 @@ func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
 	return ret, !ret.IsZero()
 }
 
-// DefaultRouteInterface returns the name of the network interface that owns
-// the default route, not including any tailscale interfaces.
-func DefaultRouteInterface() (string, error) {
+func defaultRoute() (d DefaultRouteDetails, err error) {
 	v, err := defaultRouteInterfaceProcNet()
 	if err == nil {
-		return v, nil
+		d.InterfaceName = v
+		return d, nil
 	}
 	if runtime.GOOS == "android" {
-		return defaultRouteInterfaceAndroidIPRoute()
+		v, err = defaultRouteInterfaceAndroidIPRoute()
+		d.InterfaceName = v
+		return d, err
 	}
-	return v, err
+	return d, err
 }
 
 var zeroRouteBytes = []byte("00000000")
