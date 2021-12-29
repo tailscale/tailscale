@@ -240,6 +240,16 @@ func BugReport(ctx context.Context, note string) (string, error) {
 	return strings.TrimSpace(string(body)), nil
 }
 
+// DebugAction invokes a debug action, such as "rebind" or "restun".
+// These are development tools and subject to change or removal over time.
+func DebugAction(ctx context.Context, action string) error {
+	body, err := send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
 // Status returns the Tailscale daemon's status.
 func Status(ctx context.Context) (*ipnstate.Status, error) {
 	return status(ctx, "")

@@ -71,6 +71,16 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "print how to access Tailscale local API",
 		},
 		{
+			Name:      "restun",
+			Exec:      localAPIAction("restun"),
+			ShortHelp: "force a magicsock restun",
+		},
+		{
+			Name:      "rebind",
+			Exec:      localAPIAction("rebind"),
+			ShortHelp: "force a magicsock rebind",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
@@ -242,6 +252,15 @@ func runDERPMap(ctx context.Context, args []string) error {
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
 	return nil
+}
+
+func localAPIAction(action string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		if len(args) > 0 {
+			return errors.New("unexpected arguments")
+		}
+		return tailscale.DebugAction(ctx, action)
+	}
 }
 
 func runEnv(ctx context.Context, args []string) error {
