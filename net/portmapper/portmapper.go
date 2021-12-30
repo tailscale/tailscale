@@ -20,6 +20,7 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -478,18 +479,27 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		// Only do PCP mapping in the case when PMP did not appear to be available recently.
 		pkt := buildPCPRequestMappingPacket(myIP, localPort, prevPort, pcpMapLifetimeSec, wildcardIP)
 		if _, err := uc.WriteTo(pkt, pxpAddru); err != nil {
+			if neterror.TreatAsLostUDP(err) {
+				err = NoMappingError{ErrNoPortMappingServices}
+			}
 			return netaddr.IPPort{}, err
 		}
 	} else {
 		// Ask for our external address if needed.
 		if m.external.IP().IsZero() {
 			if _, err := uc.WriteTo(pmpReqExternalAddrPacket, pxpAddru); err != nil {
+				if neterror.TreatAsLostUDP(err) {
+					err = NoMappingError{ErrNoPortMappingServices}
+				}
 				return netaddr.IPPort{}, err
 			}
 		}
 
 		pkt := buildPMPRequestMappingPacket(localPort, prevPort, pmpMapLifetimeSec)
 		if _, err := uc.WriteTo(pkt, pxpAddru); err != nil {
+			if neterror.TreatAsLostUDP(err) {
+				err = NoMappingError{ErrNoPortMappingServices}
+			}
 			return netaddr.IPPort{}, err
 		}
 	}

@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
@@ -1212,7 +1213,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 	switch {
 	case addr.IP.To4() != nil:
 		_, err = c.pconn4.WriteTo(b, addr)
-		if err != nil && c.noV4.Get() {
+		if err != nil && (c.noV4.Get() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
 	case len(addr.IP) == net.IPv6len:
@@ -1221,7 +1222,7 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 			return false, nil
 		}
 		_, err = c.pconn6.WriteTo(b, addr)
-		if err != nil && c.noV6.Get() {
+		if err != nil && (c.noV6.Get() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
 	default:
