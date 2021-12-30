@@ -27,6 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
@@ -1234,7 +1235,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	case probeIPv4:
 		metricSTUNSend4.Add(1)
 		n, err := rs.pc4.WriteTo(req, addr)
-		if n == len(req) && err == nil {
+		if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
 			rs.mu.Lock()
 			rs.report.IPv4CanSend = true
 			rs.mu.Unlock()
@@ -1242,7 +1243,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	case probeIPv6:
 		metricSTUNSend6.Add(1)
 		n, err := rs.pc6.WriteTo(req, addr)
-		if n == len(req) && err == nil {
+		if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
 			rs.mu.Lock()
 			rs.report.IPv6CanSend = true
 			rs.mu.Unlock()
