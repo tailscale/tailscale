@@ -40,3 +40,21 @@ func TreatAsLostUDP(err error) bool {
 	}
 	return false
 }
+
+var packetWasTruncated func(error) bool // non-nil on Windows at least
+
+// PacketWasTruncated reports whether err indicates truncation but the RecvFrom
+// that generated err was otherwise successful. On Windows, Go's UDP RecvFrom
+// calls WSARecvFrom which returns the WSAEMSGSIZE error code when the received
+// datagram is larger than the provided buffer. When that happens, both a valid
+// size and an error are returned (as per the partial fix for golang/go#14074).
+// If the WSAEMSGSIZE error is returned, then we ignore the error to get
+// semantics similar to the POSIX operating systems. One caveat is that it
+// appears that the source address is not returned when WSAEMSGSIZE occurs, but
+// we do not currently look at the source address.
+func PacketWasTruncated(err error) bool {
+	if packetWasTruncated == nil {
+		return false
+	}
+	return packetWasTruncated(err)
+}
