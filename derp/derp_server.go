@@ -125,6 +125,8 @@ type Server struct {
 	packetsForwardedOut          expvar.Int
 	packetsForwardedIn           expvar.Int
 	peerGoneFrames               expvar.Int // number of peer gone frames sent
+	gotPing                      expvar.Int // number of ping frames from client
+	sentPong                     expvar.Int // number of pong frames enqueued to client
 	accepts                      expvar.Int
 	curClients                   expvar.Int
 	curHomeClients               expvar.Int // ones with preferred
@@ -770,6 +772,7 @@ func (c *sclient) handleFrameWatchConns(ft frameType, fl uint32) error {
 }
 
 func (c *sclient) handleFramePing(ft frameType, fl uint32) error {
+	c.s.gotPing.Add(1)
 	var m PingMessage
 	if fl < uint32(len(m)) {
 		return fmt.Errorf("short ping: %v", fl)
@@ -1422,6 +1425,7 @@ func (c *sclient) sendKeepAlive() error {
 
 // sendPong sends a pong reply, without flushing.
 func (c *sclient) sendPong(data [8]byte) error {
+	c.s.sentPong.Add(1)
 	c.setWriteDeadline()
 	if err := writeFrameHeader(c.bw.bw(), framePong, uint32(len(data))); err != nil {
 		return err
@@ -1671,6 +1675,8 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("unknown_frames", &s.unknownFrames)
 	m.Set("home_moves_in", &s.homeMovesIn)
 	m.Set("home_moves_out", &s.homeMovesOut)
+	m.Set("got_ping", &s.gotPing)
+	m.Set("sent_pong", &s.sentPong)
 	m.Set("peer_gone_frames", &s.peerGoneFrames)
 	m.Set("packets_forwarded_out", &s.packetsForwardedOut)
 	m.Set("packets_forwarded_in", &s.packetsForwardedIn)
