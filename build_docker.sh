@@ -20,9 +20,16 @@
 set -eu
 
 eval $(./build_dist.sh shellvars)
+DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
+DEFAULT_REPOS="tailscale/tailscale,ghcr.io/tailscale/tailscale"
+DEFAULT_BASE="ghcr.io/tailscale/alpine-base:3.14"
+
+PUSH="${PUSH:-false}"
+REPOS="${REPOS:-${DEFAULT_REPOS}}"
+TAGS="${TAGS:-${DEFAULT_TAGS}}"
+BASE="${BASE:-${DEFAULT_BASE}}"
 
 go run github.com/tailscale/mkctr@latest \
-  --base="ghcr.io/tailscale/alpine-base:3.14" \
   --gopaths="\
     tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
     tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
@@ -30,6 +37,7 @@ go run github.com/tailscale/mkctr@latest \
     -X tailscale.com/version.Long=${VERSION_LONG} \
     -X tailscale.com/version.Short=${VERSION_SHORT} \
     -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" \
-  --tags="v${VERSION_SHORT},v${VERSION_MINOR}" \
-  --repos="tailscale/tailscale,ghcr.io/tailscale/tailscale" \
-  --push
+  --base="${BASE}" \
+  --tags="${TAGS}" \
+  --repos="${REPOS}" \
+  --push="${PUSH}"
