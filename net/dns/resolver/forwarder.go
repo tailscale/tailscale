@@ -25,6 +25,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
+	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
@@ -482,7 +483,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if packetWasTruncated(err) {
+		if neterror.PacketWasTruncated(err) {
 			err = nil
 		} else {
 			metricDNSFwdUDPErrorRead.Add(1)
