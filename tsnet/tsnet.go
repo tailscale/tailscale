@@ -67,8 +67,9 @@ type Server struct {
 }
 
 // Dial connects to the address on the tailnet.
+// It will start the server if it has not been started yet.
 func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, error) {
-	if err := s.init(); err != nil {
+	if err := s.Start(); err != nil {
 		return nil, err
 	}
 	return s.dialer.UserDial(ctx, network, address)
@@ -80,7 +81,9 @@ func (s *Server) doInit() {
 	}
 }
 
-func (s *Server) init() error {
+// Start connects the server to the tailnet.
+// Optional: any calls to Dial/Listen will also call Start.
+func (s *Server) Start() error {
 	s.initOnce.Do(s.doInit)
 	return s.initErr
 }
@@ -232,13 +235,14 @@ func (s *Server) forwardTCP(c net.Conn, port uint16) {
 }
 
 // Listen announces only on the Tailscale network.
+// It will start the server if it has not been started yet.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet: %w", err)
 	}
 
-	if err := s.init(); err != nil {
+	if err := s.Start(); err != nil {
 		return nil, err
 	}
 
