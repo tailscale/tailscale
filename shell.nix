@@ -19,6 +19,6 @@ pkgs.mkShell {
   #  - gopls, the language server for Go to increase editor integration
   #  - git, the version control program (used in some scripts)
   buildInputs = with pkgs; [
-    go goimports gopls git
+    go_1_17 goimports gopls git
   ];
 }
