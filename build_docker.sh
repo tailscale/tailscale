@@ -19,6 +19,9 @@
 
 set -eu
 
+# Use the "go" binary from the "tool" directory (which is github.com/tailscale/go)
+export PATH=$PWD/tool:$PATH
+
 eval $(./build_dist.sh shellvars)
 DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
 DEFAULT_REPOS="tailscale/tailscale,ghcr.io/tailscale/tailscale"

@@ -45,4 +45,4 @@ EOF
 	exit 0
 fi
 
-exec go build -ldflags "-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}" "$@"
+exec ./tool/go build -ldflags "-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}" "$@"
