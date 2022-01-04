@@ -61,7 +61,7 @@ func newOSConfigurator(logf logger.Logf, interfaceName string, env newOSConfigEn
 	}
 
 	dbg("resolvd", "missing")
-	return newDirectManager(), nil
+	return newDirectManager(logf), nil
 }
 
 func rcIsResolvd(resolvConfContents []byte) bool {
