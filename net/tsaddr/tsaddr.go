@@ -36,12 +36,24 @@ var (
 	tsUlaRange   oncePrefix
 	ula4To6Range oncePrefix
 	ulaEph6Range oncePrefix
+	serviceIPv6  oncePrefix
 )
 
-// TailscaleServiceIP returns the listen address of services
+// TailscaleServiceIP returns the IPv4 listen address of services
 // provided by Tailscale itself such as the MagicDNS proxy.
+//
+// For IPv6, use TailscaleServiceIPv6.
 func TailscaleServiceIP() netaddr.IP {
 	return netaddr.IPv4(100, 100, 100, 100) // "100.100.100.100" for those grepping
+}
+
+// TailscaleServiceIPv6 returns the IPv6 listen address of the services
+// provided by Tailscale itself such as the MagicDNS proxy.
+//
+// For IPv4, use TailscaleServiceIP.
+func TailscaleServiceIPv6() netaddr.IP {
+	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, "fd7a:115c:a1e0::53/128") })
+	return serviceIPv6.v.IP()
 }
 
 // IsTailscaleIP reports whether ip is an IP address in a range that

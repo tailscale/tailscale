@@ -11,6 +11,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 )
@@ -40,6 +41,16 @@ type Config struct {
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
 	Hosts map[dnsname.FQDN][]netaddr.IP
+	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
+	// instead of the IPv4 version (100.100.100.100).
+	OnlyIPv6 bool
+}
+
+func (c *Config) serviceIP() netaddr.IP {
+	if c.OnlyIPv6 {
+		return tsaddr.TailscaleServiceIPv6()
+	}
+	return tsaddr.TailscaleServiceIP()
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting

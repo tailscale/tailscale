@@ -111,7 +111,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				OnlyIPv6: true,
+				Routes:   map[dnsname.FQDN][]dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netaddr.IP{
 					"b.net.":       ips("fe75::2"),
 					"myname.net.":  ips("fe75::1"),

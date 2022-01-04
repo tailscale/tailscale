@@ -1951,6 +1951,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
 	selfV6Only := tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs6) &&
 		!tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs4)
+	dcfg.OnlyIPv6 = selfV6Only
 
 	// Populate MagicDNS records. We do this unconditionally so that
 	// quad-100 can always respond to MagicDNS queries, even if the OS
@@ -2382,7 +2383,9 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router
 		}
 	}
 
-	rs.Routes = append(rs.Routes, netaddr.IPPrefixFrom(tsaddr.TailscaleServiceIP(), 32))
+	if tsaddr.PrefixesContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
+		rs.Routes = append(rs.Routes, netaddr.IPPrefixFrom(tsaddr.TailscaleServiceIP(), 32))
+	}
 
 	return rs
 }
