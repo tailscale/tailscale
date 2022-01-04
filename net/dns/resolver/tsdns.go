@@ -377,7 +377,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		// TODO: more than 1 resolver from /etc/resolv.conf?
 
 		var resolvers []resolverAndDelay
-		if nameserver == tsaddr.TailscaleServiceIP() {
+		if nameserver == tsaddr.TailscaleServiceIP() || nameserver == tsaddr.TailscaleServiceIPv6() {
 			// If resolv.conf says 100.100.100.100, it's coming right back to us anyway
 			// so avoid the loop through the kernel and just do what we
 			// would've done anyway. By not passing any resolvers, the forwarder

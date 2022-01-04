@@ -12,7 +12,6 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
@@ -122,7 +121,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// through quad-100.
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
-		ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+		ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
 		return rcfg, ocfg, nil
 	}
 
@@ -159,7 +158,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
 	rcfg.Routes = routes
-	ocfg.Nameservers = []netaddr.IP{tsaddr.TailscaleServiceIP()}
+	ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
 
 	// If the OS can't do native split-dns, read out the underlying
 	// resolver config and blend it into our config.

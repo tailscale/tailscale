@@ -56,7 +56,10 @@ import (
 
 const magicDNSPort = 53
 
-var magicDNSIP = netaddr.IPv4(100, 100, 100, 100)
+var (
+	magicDNSIP   = tsaddr.TailscaleServiceIP()
+	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
+)
 
 // Lazy wireguard-go configuration parameters.
 const (
@@ -486,12 +489,15 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if p.Dst.IP() == magicDNSIP && p.Dst.Port() == magicDNSPort && p.IPProto == ipproto.UDP {
-		err := e.dns.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
-		if err != nil {
-			e.logf("dns: enqueue: %v", err)
+	if p.Dst.Port() == magicDNSPort && p.IPProto == ipproto.UDP {
+		switch p.Dst.IP() {
+		case magicDNSIP, magicDNSIPv6:
+			err := e.dns.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
+			if err != nil {
+				e.logf("dns: enqueue: %v", err)
+			}
+			return filter.Drop
 		}
-		return filter.Drop
 	}
 	return filter.Accept
 }
@@ -508,22 +514,38 @@ func (e *userspaceEngine) pollResolver() {
 			continue
 		}
 
-		h := packet.UDP4Header{
-			IP4Header: packet.IP4Header{
-				Src: magicDNSIP,
-				Dst: to.IP(),
-			},
-			SrcPort: magicDNSPort,
-			DstPort: to.Port(),
-		}
-		hlen := h.Len()
-
-		// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
+		var buf []byte
 		const offset = tstun.PacketStartOffset
-		buf := make([]byte, offset+hlen+len(bs))
-		copy(buf[offset+hlen:], bs)
-		h.Marshal(buf[offset:])
-
+		switch {
+		case to.IP().Is4():
+			h := packet.UDP4Header{
+				IP4Header: packet.IP4Header{
+					Src: magicDNSIP,
+					Dst: to.IP(),
+				},
+				SrcPort: magicDNSPort,
+				DstPort: to.Port(),
+			}
+			hlen := h.Len()
+			// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
+			buf = make([]byte, offset+hlen+len(bs))
+			copy(buf[offset+hlen:], bs)
+			h.Marshal(buf[offset:])
+		case to.IP().Is6():
+			h := packet.UDP6Header{
+				IP6Header: packet.IP6Header{
+					Src: magicDNSIPv6,
+					Dst: to.IP(),
+				},
+				SrcPort: magicDNSPort,
+				DstPort: to.Port(),
+			}
+			hlen := h.Len()
+			// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
+			buf = make([]byte, offset+hlen+len(bs))
+			copy(buf[offset+hlen:], bs)
+			h.Marshal(buf[offset:])
+		}
 		e.tundev.InjectInboundDirect(buf, offset)
 	}
 }

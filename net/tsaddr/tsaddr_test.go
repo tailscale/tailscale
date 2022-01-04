@@ -31,6 +31,14 @@ func TestInCrostiniRange(t *testing.T) {
 	}
 }
 
+func TestTailscaleServiceIPv6(t *testing.T) {
+	got := TailscaleServiceIPv6().String()
+	want := "fd7a:115c:a1e0::53"
+	if got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
+
 func TestChromeOSVMRange(t *testing.T) {
 	if got, want := ChromeOSVMRange().String(), "100.115.92.0/23"; got != want {
 		t.Errorf("got %q; want %q", got, want)

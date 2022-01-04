@@ -22,6 +22,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/disco"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -407,17 +408,30 @@ func (t *Wrapper) sendOutbound(r tunReadResult) {
 	t.outbound <- r
 }
 
-var magicDNSIPPort = netaddr.MustParseIPPort("100.100.100.100:0")
+var (
+	magicDNSIPPort   = netaddr.IPPortFrom(tsaddr.TailscaleServiceIP(), 0) // 100.100.100.100:0
+	magicDNSIPPortv6 = netaddr.IPPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
+)
 
 func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
-	if p.IsEchoRequest() && p.Dst == magicDNSIPPort {
-		header := p.ICMP4Header()
-		header.ToResponse()
-		outp := packet.Generate(&header, p.Payload())
-		t.InjectInboundCopy(outp)
-		return filter.DropSilently // don't pass on to OS; already handled
+	if p.IsEchoRequest() {
+		switch p.Dst {
+		case magicDNSIPPort:
+			header := p.ICMP4Header()
+			header.ToResponse()
+			outp := packet.Generate(&header, p.Payload())
+			t.InjectInboundCopy(outp)
+			return filter.DropSilently // don't pass on to OS; already handled
+		case magicDNSIPPortv6:
+			header := p.ICMP6Header()
+			header.ToResponse()
+			outp := packet.Generate(&header, p.Payload())
+			t.InjectInboundCopy(outp)
+			return filter.DropSilently // don't pass on to OS; already handled
+		}
 	}
+	// TODO(bradfitz): support pinging TailscaleServiceIPv6 too.
 
 	// Issue 1526 workaround: if we sent disco packets over
 	// Tailscale from ourselves, then drop them, as that shouldn't
