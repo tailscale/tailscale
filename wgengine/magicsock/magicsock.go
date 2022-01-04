@@ -2252,10 +2252,29 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 		return
 	}
 
+	old := c.derpMap
 	c.derpMap = dm
 	if dm == nil {
 		c.closeAllDerpLocked("derp-disabled")
 		return
+	}
+
+	// Reconnect any DERP region that changed definitions.
+	if old != nil {
+		changes := false
+		for rid, oldDef := range old.Regions {
+			if reflect.DeepEqual(oldDef, dm.Regions[rid]) {
+				continue
+			}
+			changes = true
+			if rid == c.myDerp {
+				c.myDerp = 0
+			}
+			c.closeDerpLocked(rid, "derp-region-redefined")
+		}
+		if changes {
+			c.logActiveDerpLocked()
+		}
 	}
 
 	go c.ReSTUN("derp-map-update")
