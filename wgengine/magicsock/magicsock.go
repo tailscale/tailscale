@@ -3274,7 +3274,7 @@ const (
 	// try to keep an established endpoint peering alive.
 	// It's also the idle time at which we stop doing STUN queries to
 	// keep NAT mappings alive.
-	sessionActiveTimeout = 2 * time.Minute
+	sessionActiveTimeout = 45 * time.Second
 
 	// upgradeInterval is how often we try to upgrade to a better path
 	// even if we have some non-DERP route that works.
@@ -3282,11 +3282,11 @@ const (
 
 	// heartbeatInterval is how often pings to the best UDP address
 	// are sent.
-	heartbeatInterval = 2 * time.Second
+	heartbeatInterval = 3 * time.Second
 
 	// trustUDPAddrDuration is how long we trust a UDP address as the exclusive
 	// path (without using DERP) without having heard a Pong reply.
-	trustUDPAddrDuration = 5 * time.Second
+	trustUDPAddrDuration = 6500 * time.Millisecond
 
 	// goodEnoughLatency is the latency at or under which we don't
 	// try to upgrade to a better path.
