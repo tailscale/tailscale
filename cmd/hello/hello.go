@@ -161,6 +161,10 @@ func root(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
+	if r.TLS != nil && *httpsAddr != "" && strings.Contains(r.Host, "hello.ipn.dev") {
+		http.Redirect(w, r, "https://hello.ts.net", http.StatusFound)
+		return
+	}
 	tmpl, err := getTmpl()
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain")
