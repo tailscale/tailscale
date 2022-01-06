@@ -1763,3 +1763,27 @@ func (m *peerMap) validate() error {
 
 	return nil
 }
+
+func TestBlockForeverConnUnblocks(t *testing.T) {
+	c := newBlockForeverConn()
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		_, _, err := c.ReadFrom(make([]byte, 1))
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // give ReadFrom time to get blocked
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != net.ErrClosed {
+			t.Errorf("got %v; want net.ErrClosed", err)
+		}
+	case <-timer.C:
+		t.Fatal("timeout")
+	}
+}

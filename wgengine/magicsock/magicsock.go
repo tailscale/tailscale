@@ -3121,6 +3121,7 @@ func (c *blockForeverConn) Close() error {
 		return net.ErrClosed
 	}
 	c.closed = true
+	c.cond.Broadcast()
 	return nil
 }
 
