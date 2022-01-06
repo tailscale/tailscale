@@ -426,6 +426,47 @@ func (p *Prefs) AdminPageURL() string {
 	return url + "/admin/machines"
 }
 
+// AdvertisesExitNode reports whether p is advertising both the v4 and
+// v6 /0 exit node routes.
+func (p *Prefs) AdvertisesExitNode() bool {
+	if p == nil {
+		return false
+	}
+	var v4, v6 bool
+	for _, r := range p.AdvertiseRoutes {
+		if r.Bits() != 0 {
+			continue
+		}
+		if r.IP().Is4() {
+			v4 = true
+		} else if r.IP().Is6() {
+			v6 = true
+		}
+	}
+	return v4 && v6
+}
+
+// SetRunExitNode mutates p (if non-nil) to add or remove the two
+// /0 exit node routes.
+func (p *Prefs) SetRunExitNode(runExit bool) {
+	if p == nil {
+		return
+	}
+	all := p.AdvertiseRoutes
+	p.AdvertiseRoutes = p.AdvertiseRoutes[:0]
+	for _, r := range all {
+		if r.Bits() != 0 {
+			p.AdvertiseRoutes = append(p.AdvertiseRoutes, r)
+		}
+	}
+	if !runExit {
+		return
+	}
+	p.AdvertiseRoutes = append(p.AdvertiseRoutes,
+		netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
+		netaddr.IPPrefixFrom(netaddr.IPv6Unspecified(), 0))
+}
+
 // PrefsFromBytes deserializes Prefs from a JSON blob. If
 // enforceDefaults is true, Prefs.RouteAll and Prefs.AllowSingleHosts
 // are forced on.

@@ -646,3 +646,35 @@ func TestMaskedPrefsPretty(t *testing.T) {
 		}
 	}
 }
+
+func TestPrefsExitNode(t *testing.T) {
+	var p *Prefs
+	if p.AdvertisesExitNode() {
+		t.Errorf("nil shouldn't advertise exit node")
+	}
+	p = NewPrefs()
+	if p.AdvertisesExitNode() {
+		t.Errorf("default shouldn't advertise exit node")
+	}
+	p.AdvertiseRoutes = []netaddr.IPPrefix{
+		netaddr.MustParseIPPrefix("10.0.0.0/16"),
+	}
+	p.SetRunExitNode(true)
+	if got, want := len(p.AdvertiseRoutes), 3; got != want {
+		t.Errorf("routes = %d; want %d", got, want)
+	}
+	p.SetRunExitNode(true)
+	if got, want := len(p.AdvertiseRoutes), 3; got != want {
+		t.Errorf("routes = %d; want %d", got, want)
+	}
+	if !p.AdvertisesExitNode() {
+		t.Errorf("not advertising after enable")
+	}
+	p.SetRunExitNode(false)
+	if p.AdvertisesExitNode() {
+		t.Errorf("advertising after disable")
+	}
+	if got, want := len(p.AdvertiseRoutes), 1; got != want {
+		t.Errorf("routes = %d; want %d", got, want)
+	}
+}
