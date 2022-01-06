@@ -108,7 +108,7 @@ func runCert(ctx context.Context, args []string) error {
 		if version.IsMacSysExt() {
 			dir = "io.tailscale.ipn.macsys"
 		}
-		printf("Warning: the macOS CLI runs in a sandbox; this binary's filesystem writes go to $HOME/Library/Containers/%s\n", dir)
+		printf("Warning: the macOS CLI runs in a sandbox; this binary's filesystem writes go to $HOME/Library/Containers/%s/Data\n", dir)
 	}
 	if certArgs.certFile != "" {
 		certChanged, err := writeIfChanged(certArgs.certFile, certPEM, 0644)

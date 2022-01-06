@@ -2121,7 +2121,7 @@ func (b *LocalBackend) TailscaleVarRoot() string {
 		return b.varRoot
 	}
 	switch runtime.GOOS {
-	case "ios", "android":
+	case "ios", "android", "darwin":
 		dir, _ := paths.AppSharedDir.Load().(string)
 		return dir
 	}
