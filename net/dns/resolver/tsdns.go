@@ -357,10 +357,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 	switch runtime.GOOS {
 	default:
 		return nil, errors.New("unsupported exit node OS")
-	case "windows":
-		// TODO: use DnsQueryEx and write to ch.
-		// See https://docs.microsoft.com/en-us/windows/win32/api/windns/nf-windns-dnsqueryex.
-		// For now just use the net package:
+	case "windows", "android":
 		return handleExitNodeDNSQueryWithNetPkg(ctx, nil, resp)
 	case "darwin":
 		// /etc/resolv.conf is a lie and only says one upstream DNS
