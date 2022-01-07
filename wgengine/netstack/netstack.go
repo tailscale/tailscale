@@ -419,6 +419,12 @@ func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
 	switch runtime.GOOS {
 	case "windows":
 		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
+	case "android":
+		ping := "/system/bin/ping"
+		if dstIP.Is6() {
+			ping = "/system/bin/ping6"
+		}
+		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
 	default:
 		err = exec.Command("ping", "-c", "1", "-W", "3", dstIP.String()).Run()
 	}
