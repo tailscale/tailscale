@@ -446,9 +446,9 @@ func (p *Prefs) AdvertisesExitNode() bool {
 	return v4 && v6
 }
 
-// SetRunExitNode mutates p (if non-nil) to add or remove the two
+// SetAdvertiseExitNode mutates p (if non-nil) to add or remove the two
 // /0 exit node routes.
-func (p *Prefs) SetRunExitNode(runExit bool) {
+func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 	if p == nil {
 		return
 	}

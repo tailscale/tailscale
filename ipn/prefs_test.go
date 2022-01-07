@@ -659,18 +659,18 @@ func TestPrefsExitNode(t *testing.T) {
 	p.AdvertiseRoutes = []netaddr.IPPrefix{
 		netaddr.MustParseIPPrefix("10.0.0.0/16"),
 	}
-	p.SetRunExitNode(true)
+	p.SetAdvertiseExitNode(true)
 	if got, want := len(p.AdvertiseRoutes), 3; got != want {
 		t.Errorf("routes = %d; want %d", got, want)
 	}
-	p.SetRunExitNode(true)
+	p.SetAdvertiseExitNode(true)
 	if got, want := len(p.AdvertiseRoutes), 3; got != want {
 		t.Errorf("routes = %d; want %d", got, want)
 	}
 	if !p.AdvertisesExitNode() {
 		t.Errorf("not advertising after enable")
 	}
-	p.SetRunExitNode(false)
+	p.SetAdvertiseExitNode(false)
 	if p.AdvertisesExitNode() {
 		t.Errorf("advertising after disable")
 	}
