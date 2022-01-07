@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -45,7 +46,9 @@ import (
 	"tailscale.com/wgengine/magicsock"
 )
 
-const debugNetstack = false
+const debugPackets = false
+
+var debugNetstack, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETSTACK"))
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
@@ -356,7 +359,7 @@ func (ns *Impl) injectOutbound() {
 		full = append(full, hdrNetwork.View()...)
 		full = append(full, hdrTransport.View()...)
 		full = append(full, pkt.Data().AsRange().AsView()...)
-		if debugNetstack {
+		if debugPackets {
 			ns.logf("[v2] packet Write out: % x", full)
 		}
 		if err := ns.tundev.InjectOutbound(full); err != nil {
@@ -461,7 +464,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	case 6:
 		pn = header.IPv6ProtocolNumber
 	}
-	if debugNetstack {
+	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
 	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
@@ -560,6 +563,9 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netaddr.IP, wq 
 	go func() {
 		select {
 		case <-notifyCh:
+			if debugNetstack {
+				ns.logf("[v2] netstack: forwardTCP notifyCh fired; canceling context for %s", dialAddrStr)
+			}
 		case <-done:
 		}
 		cancel()
