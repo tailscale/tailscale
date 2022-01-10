@@ -12,11 +12,13 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
+      - name: Set GOPATH
+        run: echo "GOPATH=$HOME/go" >> $GITHUB_ENV
+
       - name: Set up Go
-        uses: actions/setup-go@v1
+        uses: actions/setup-go@v2.1.4
         with:
           go-version: 1.17
-        id: go
 
       - name: Checkout Code
         uses: actions/checkout@v1
