@@ -74,7 +74,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	changes <- svc.Status{State: svc.StartPending}
 
 	svcAccepts := svc.AcceptStop
-	if winutil.GetRegInteger("FlushDNSOnSessionUnlock", 0) != 0 {
+	if winutil.GetPolicyInteger("FlushDNSOnSessionUnlock", 0) != 0 {
 		svcAccepts |= svc.AcceptSessionChange
 	}
 
