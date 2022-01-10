@@ -9,7 +9,31 @@ package winutil
 // are stored. This constant is a non-empty string only when GOOS=windows.
 const RegBase = regBase
 
-// GetRegString looks up a registry path in our local machine path, or returns
+// GetPolicyString looks up a registry value in the local machine's path for
+// system policies, or returns the given default if it can't.
+// Use this function to read values that may be set by sysadmins via the MSI
+// installer or via GPO. For registry settings that you do *not* want to be
+// visible to sysadmin tools, use GetRegString instead.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return the default value.
+func GetPolicyString(name, defval string) string {
+	return getPolicyString(name, defval)
+}
+
+// GetPolicyInteger looks up a registry value in the local machine's path for
+// system policies, or returns the given default if it can't.
+// Use this function to read values that may be set by sysadmins via the MSI
+// installer or via GPO. For registry settings that you do *not* want to be
+// visible to sysadmin tools, use GetRegInteger instead.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return the default value.
+func GetPolicyInteger(name string, defval uint64) uint64 {
+	return getPolicyInteger(name, defval)
+}
+
+// GetRegString looks up a registry path in the local machine path, or returns
 // the given default if it can't.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
@@ -18,7 +42,7 @@ func GetRegString(name, defval string) string {
 	return getRegString(name, defval)
 }
 
-// GetRegInteger looks up a registry path in our local machine path, or returns
+// GetRegInteger looks up a registry path in the local machine path, or returns
 // the given default if it can't.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other

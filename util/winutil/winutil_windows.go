@@ -12,7 +12,10 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-const regBase = `SOFTWARE\Tailscale IPN`
+const (
+	regBase       = `SOFTWARE\Tailscale IPN`
+	regPolicyBase = `SOFTWARE\Policies\Tailscale`
+)
 
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop and whether it was found.
@@ -26,11 +29,45 @@ func GetDesktopPID() (pid uint32, ok bool) {
 	return pid, pid != 0
 }
 
-func getRegString(name, defval string) string {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
+func getPolicyString(name, defval string) string {
+	s, err := getRegStringInternal(regPolicyBase, name)
 	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
+		// Fall back to the legacy path
+		return getRegString(name, defval)
+	}
+	return s
+}
+
+func getPolicyInteger(name string, defval uint64) uint64 {
+	i, err := getRegIntegerInternal(regPolicyBase, name)
+	if err != nil {
+		// Fall back to the legacy path
+		return getRegInteger(name, defval)
+	}
+	return i
+}
+
+func getRegString(name, defval string) string {
+	s, err := getRegStringInternal(regBase, name)
+	if err != nil {
 		return defval
+	}
+	return s
+}
+
+func getRegInteger(name string, defval uint64) uint64 {
+	i, err := getRegIntegerInternal(regBase, name)
+	if err != nil {
+		return defval
+	}
+	return i
+}
+
+func getRegStringInternal(subKey, name string) (string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
+	if err != nil {
+		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		return "", err
 	}
 	defer key.Close()
 
@@ -39,16 +76,16 @@ func getRegString(name, defval string) string {
 		if err != registry.ErrNotExist {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
-		return defval
+		return "", err
 	}
-	return val
+	return val, nil
 }
 
-func getRegInteger(name string, defval uint64) uint64 {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
+func getRegIntegerInternal(subKey, name string) (uint64, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
-		return defval
+		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		return 0, err
 	}
 	defer key.Close()
 
@@ -57,9 +94,9 @@ func getRegInteger(name string, defval uint64) uint64 {
 		if err != registry.ErrNotExist {
 			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
 		}
-		return defval
+		return 0, err
 	}
-	return val
+	return val, nil
 }
 
 var (
