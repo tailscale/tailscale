@@ -389,10 +389,9 @@ main() {
 				echo "Please install either curl or wget to proceed."
 				exit 1
 			fi
+			export DEBIAN_FRONTEND=noninteractive
 			if ! type gpg >/dev/null; then
-				echo "The installer needs gnupg to do keyring management."
-				echo "Please install gnupg to proceed".
-				exit 1
+				apt-get install -y gnupg
 			fi
 
 			set -x
@@ -408,7 +407,7 @@ main() {
 				;;
 			esac
 			$SUDO apt-get update
-			$SUDO apt-get install tailscale
+			$SUDO apt-get install -y tailscale
 			if [ "$APT_SYSTEMCTL_START" = "true" ]; then
 				$SUDO systemctl enable --now tailscaled
 				$SUDO systemctl start tailscaled
