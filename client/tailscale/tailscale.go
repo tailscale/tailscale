@@ -113,7 +113,10 @@ func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 			if i := strings.Index(path, "?"); i != -1 {
 				pathPrefix = path[:i]
 			}
-			return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", pathPrefix, tailscaledConnectHint(), oe)
+			// Make the GitHub code scanner happy.
+			xPathPrefix := strings.Replace(pathPrefix, "\n", "", -1)
+			xPathPrefix = strings.Replace(xPathPrefix, "\r", "", -1)
+			return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", xPathPrefix, tailscaledConnectHint(), oe)
 		}
 	}
 	return nil, err

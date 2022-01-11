@@ -176,7 +176,10 @@ func root(w http.ResponseWriter, r *http.Request) {
 	var data tmplData
 	if err != nil {
 		if devMode() {
-			log.Printf("warning: using fake data in dev mode due to whois lookup error: %v", err)
+			s := err.Error()
+			s = strings.Replace(s, "\n", "", -1)
+			s = strings.Replace(s, "\r", "", -1)
+			log.Printf("warning: using fake data in dev mode due to whois lookup error: %v", s)
 			data = tmplData{
 				DisplayName:   "Taily Scalerson",
 				LoginName:     "taily@scaler.son",
