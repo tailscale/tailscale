@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"sync"
 	"syscall"
 
@@ -67,8 +66,7 @@ func socketMarkWorks() bool {
 // If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
 func useSocketMark() bool {
 	socketMarkWorksOnce.Do(func() {
-		ipRuleWorks := exec.Command("ip", "rule").Run() == nil
-		socketMarkWorksOnce.v = ipRuleWorks && socketMarkWorks()
+		socketMarkWorksOnce.v = socketMarkWorks()
 	})
 	return socketMarkWorksOnce.v
 }
