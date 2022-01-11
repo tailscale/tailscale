@@ -787,6 +787,16 @@ func TestUpdatePrefs(t *testing.T) {
 			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
 		},
 		{
+			name:  "just_edit_reset",
+			flags: []string{"--reset"},
+			curPrefs: &ipn.Prefs{
+				ControlURL: ipn.DefaultControlURL,
+				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
+			},
+			env:            upCheckEnv{backendState: "Running"},
+			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+		},
+		{
 			name:  "control_synonym",
 			flags: []string{},
 			curPrefs: &ipn.Prefs{
