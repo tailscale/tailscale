@@ -413,7 +413,6 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	justEdit := env.backendState == ipn.Running.String() &&
 		!env.upArgs.forceReauth &&
-		!env.upArgs.reset &&
 		env.upArgs.authKeyOrFile == "" &&
 		!controlURLChanged &&
 		!tagsChanged
