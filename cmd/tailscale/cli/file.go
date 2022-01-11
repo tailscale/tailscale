@@ -159,13 +159,17 @@ func runCp(ctx context.Context, args []string) error {
 		if cpArgs.verbose {
 			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
 		}
+		var pbCloser io.Closer
 		if cpArgs.progress {
 			rc := progress.New(fileContents, contentLength, time.Second)
-			defer rc.Close()
 
+			pbCloser = rc
 			fileContents = rc
 		}
 		err := tailscale.PushFile(ctx, stableID, contentLength, name, fileContents)
+		if pbCloser != nil {
+			pbCloser.Close()
+		}
 		if err != nil {
 			return err
 		}
