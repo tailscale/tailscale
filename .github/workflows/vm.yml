@@ -16,7 +16,7 @@ jobs:
         run: echo "GOPATH=$HOME/go" >> $GITHUB_ENV
 
       - name: Set up Go
-        uses: actions/setup-go@v2.1.4
+        uses: actions/setup-go@v2.1.5
         with:
           go-version: 1.17
 
