@@ -67,8 +67,8 @@ func NewManualCertManager(certdir, hostname string) (certProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("can not load cert: %w", err)
 	}
-	if x509Cert.VerifyHostname(hostname) != nil {
-		return nil, errors.New("refuse to load cert: hostname mismatch with key")
+	if err := x509Cert.VerifyHostname(hostname); err != nil {
+		return nil, fmt.Errorf("cert invalid for hostname %q: %w", hostname, err)
 	}
 	return &manualCertManager{cert: &cert, hostname: hostname}, nil
 }
