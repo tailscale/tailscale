@@ -375,7 +375,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 			data.AdvertiseExitNode = true
 		} else {
 			if data.AdvertiseRoutes != "" {
-				data.AdvertiseRoutes = ","
+				data.AdvertiseRoutes += ","
 			}
 			data.AdvertiseRoutes += r.String()
 		}
