@@ -25,6 +25,16 @@ main() {
 	PACKAGETYPE=""
 	APT_KEY_TYPE="" # Only for apt-based distros
 	APT_SYSTEMCTL_START=false # Only needs to be true for Kali
+	TRACK="${TRACK:-stable}"
+
+	case "$TRACK" in
+		stable|unstable)
+			;;
+		*)
+			echo "unsupported track $TRACK"
+			exit 1
+			;;
+	esac
 
 	if [ -f /etc/os-release ]; then
 		# /etc/os-release populates a number of shell variables. We care about the following:
@@ -318,7 +328,7 @@ main() {
 			other-linux)
 				echo "Couldn't determine what kind of Linux is running."
 				echo "You could try the static binaries at:"
-				echo "https://pkgs.tailscale.com/stable/#static"
+				echo "https://pkgs.tailscale.com/$TRACK/#static"
 				;;
 			"")
 				echo "Couldn't determine what operating system you're running."
@@ -398,12 +408,12 @@ main() {
 			$SUDO mkdir -p --mode=0755 /usr/share/keyrings
 			case "$APT_KEY_TYPE" in
 				legacy)
-					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.asc" | $SUDO apt-key add -
-					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.asc" | $SUDO apt-key add -
+					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
 				;;
 				keyring)
-					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.noarmor.gpg" | $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-					$CURL "https://pkgs.tailscale.com/stable/$OS/$VERSION.tailscale-keyring.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
+					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.noarmor.gpg" | $SUDO tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+					$CURL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION.tailscale-keyring.list" | $SUDO tee /etc/apt/sources.list.d/tailscale.list
 				;;
 			esac
 			$SUDO apt-get update
@@ -417,21 +427,21 @@ main() {
 		yum)
 			set -x
 			$SUDO yum install yum-utils
-			$SUDO yum-config-manager --add-repo "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
+			$SUDO yum-config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO yum install tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
 		dnf)
 			set -x
-			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
+			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO dnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
 		zypper)
 			set -x
-			$SUDO zypper ar -g -r "https://pkgs.tailscale.com/stable/$OS/$VERSION/tailscale.repo"
+			$SUDO zypper ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO zypper ref
 			$SUDO zypper in tailscale
 			$SUDO systemctl enable --now tailscaled
