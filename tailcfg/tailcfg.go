@@ -48,7 +48,8 @@ import (
 //    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
 //    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
 //    25: 2021-11-01: MapResponse.Debug.Exit
-const CurrentMapRequestVersion = 25
+//    26: 2022-01-12: (nothing, just bumping for 1.20.0)
+const CurrentMapRequestVersion = 26
 
 type StableID string
 
