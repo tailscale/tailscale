@@ -529,6 +529,10 @@ func stubResolverForOS() (ip netaddr.IP, err error) {
 	if c, ok := resolvConfCacheValue.Load().(resolvConfCache); ok && c.mod == cur.mod && c.size == cur.size {
 		return c.ip, nil
 	}
+	// TODO(bradfitz): unify this /etc/resolv.conf parsing code with readResolv
+	// in net/dns, which we can't use due to circular dependency reasons.
+	// Move it to a leaf, including the OSConfig type (perhaps in its own dnstype
+	// package?)
 	err = lineread.File("/etc/resolv.conf", func(line []byte) error {
 		if !ip.IsZero() {
 			return nil
@@ -536,6 +540,12 @@ func stubResolverForOS() (ip netaddr.IP, err error) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] == '#' {
 			return nil
+		}
+		// Normalize tabs to spaces to simplify parsing code later.
+		for i, b := range line {
+			if b == '\t' {
+				line[i] = ' '
+			}
 		}
 		if mem.HasPrefix(mem.B(line), mem.S("nameserver ")) {
 			s := strings.TrimSpace(strings.TrimPrefix(string(line), "nameserver "))
