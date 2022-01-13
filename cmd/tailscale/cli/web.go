@@ -270,14 +270,14 @@ func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
 	// We need a SynoToken for authenticate.cgi.
 	// So we tell the client to get one.
 	serverURL := r.URL.Scheme + "://" + r.URL.Host
-	fmt.Fprintf(w, synoTokenRedirectHTML, serverURL)
+	synoTokenRedirectHTML.Execute(w, serverURL)
 	return true
 }
 
-const synoTokenRedirectHTML = `<html><body>
+var synoTokenRedirectHTML = template.Must(template.New("redirect").Parse(`<html><body>
 Redirecting with session token...
 <script>
-var serverURL = %q;
+var serverURL = {{ . }};
 var req = new XMLHttpRequest();
 req.overrideMimeType("application/json");
 req.open("GET", serverURL + "/webman/login.cgi", true);
@@ -289,7 +289,7 @@ req.onload = function() {
 req.send(null);
 </script>
 </body></html>
-`
+`))
 
 func webHandler(w http.ResponseWriter, r *http.Request) {
 	if authRedirect(w, r) {
