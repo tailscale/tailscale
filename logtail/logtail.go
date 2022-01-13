@@ -431,6 +431,21 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 	// For now just factor in a dozen.
 	overhead += 12
 
+	// Put a sanity cap on buf's size.
+	max := 16 << 10
+	if l.lowMem {
+		max = 255
+	}
+	var nTruncated int
+	if len(buf) > max {
+		nTruncated = len(buf) - max
+		// TODO: this can break a UTF-8 character
+		// mid-encoding.  We don't tend to log
+		// non-ASCII stuff ourselves, but e.g. client
+		// names might be.
+		buf = buf[:max]
+	}
+
 	b := make([]byte, 0, len(buf)+overhead)
 	b = append(b, '{')
 
@@ -449,7 +464,7 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 	}
 
 	b = append(b, "\"text\": \""...)
-	for i, c := range buf {
+	for _, c := range buf {
 		switch c {
 		case '\b':
 			b = append(b, '\\', 'b')
@@ -469,14 +484,10 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 			// TODO: what about binary gibberish or non UTF-8?
 			b = append(b, c)
 		}
-		if l.lowMem && i > 254 {
-			// TODO: this can break a UTF-8 character
-			// mid-encoding.  We don't tend to log
-			// non-ASCII stuff ourselves, but e.g. client
-			// names might be.
-			b = append(b, "…"...)
-			break
-		}
+	}
+	if nTruncated > 0 {
+		b = append(b, "…+"...)
+		b = strconv.AppendInt(b, int64(nTruncated), 10)
 	}
 	b = append(b, "\"}\n"...)
 	return b

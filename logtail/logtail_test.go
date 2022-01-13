@@ -5,6 +5,7 @@
 package logtail
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -322,4 +323,15 @@ func unmarshalOne(t *testing.T, body []byte) map[string]interface{} {
 		t.Fatalf("expected one entry, got %d", len(entries))
 	}
 	return entries[0]
+}
+
+func TestEncodeTextTruncation(t *testing.T) {
+	lg := &Logger{timeNow: time.Now, lowMem: true}
+	in := bytes.Repeat([]byte("a"), 300)
+	b := lg.encodeText(in, true)
+	got := string(b)
+	want := `{"text": "` + strings.Repeat("a", 255) + `…+45"}` + "\n"
+	if got != want {
+		t.Errorf("got:\n%qwant:\n%q\n", got, want)
+	}
 }
