@@ -444,22 +444,9 @@ func TLSDialer(fwd DialContextFunc, dnsCache *Resolver, tlsConfigBase *tls.Confi
 		}
 		tlsConn := tls.Client(tcpConn, cfg)
 
-		errc := make(chan error, 2)
 		handshakeCtx, handshakeTimeoutCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer handshakeTimeoutCancel()
-		done := make(chan bool)
-		defer close(done)
-		go func() {
-			select {
-			case <-done:
-			case <-handshakeCtx.Done():
-				errc <- errTLSHandshakeTimeout
-			}
-		}()
-		go func() {
-			errc <- tlsConn.Handshake()
-		}()
-		if err := <-errc; err != nil {
+		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 			tcpConn.Close()
 			// TODO: if err != errTLSHandshakeTimeout,
 			// assume it might be some captive portal or
