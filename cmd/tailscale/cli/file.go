@@ -160,7 +160,7 @@ func runCp(ctx context.Context, args []string) error {
 			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
 		}
 		var pbCloser io.Closer
-		if cpArgs.progress {
+		if cpArgs.progress && isTTY(os.Stderr) {
 			rc := progress.New(fileContents, contentLength, time.Second)
 
 			pbCloser = rc
@@ -178,6 +178,15 @@ func runCp(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+func isTTY(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNodeID, isOffline bool, err error) {
