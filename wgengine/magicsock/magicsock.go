@@ -299,11 +299,18 @@ type Conn struct {
 	havePrivateKey  syncs.AtomicBool
 	publicKeyAtomic atomic.Value // of key.NodePublic (or NodeKey zero value if !havePrivateKey)
 
+	// derpMapAtomic is the same as derpMap, but without requiring
+	// sync.Mutex. For use with NewRegionClient's callback, to avoid
+	// lock ordering deadlocks. See issue 3726 and mu field docs.
+	derpMapAtomic atomic.Value // of *tailcfg.DERPMap
+
 	// port is the preferred port from opts.Port; 0 means auto.
 	port syncs.AtomicUint32
 
 	// ============================================================
-	// mu guards all following fields; see userspaceEngine lock ordering rules
+	// mu guards all following fields; see userspaceEngine lock
+	// ordering rules against the engine. For derphttp, mu must
+	// be held before derphttp.Client.mu.
 	mu     sync.Mutex
 	muCond *sync.Cond
 
@@ -1351,19 +1358,23 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.NodePublic) cha
 	}
 
 	// Note that derphttp.NewRegionClient does not dial the server
-	// so it is safe to do under the mu lock.
+	// (it doesn't block) so it is safe to do under the c.mu lock.
 	dc := derphttp.NewRegionClient(c.privateKey, c.logf, func() *tailcfg.DERPRegion {
+		// Warning: it is not legal to acquire
+		// magicsock.Conn.mu from this callback.
+		// It's run from derphttp.Client.connect (via Send, etc)
+		// and the lock ordering rules are that magicsock.Conn.mu
+		// must be acquired before derphttp.Client.mu.
+		// See https://github.com/tailscale/tailscale/issues/3726
 		if c.connCtx.Err() != nil {
-			// If we're closing, don't try to acquire the lock.
-			// We might already be in Conn.Close and the Lock would deadlock.
+			// We're closing anyway; return nil to stop dialing.
 			return nil
 		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.derpMap == nil {
+		derpMap, _ := c.derpMapAtomic.Load().(*tailcfg.DERPMap)
+		if derpMap == nil {
 			return nil
 		}
-		return c.derpMap.Regions[regionID]
+		return derpMap.Regions[regionID]
 	})
 
 	dc.SetCanAckPings(true)
@@ -2252,6 +2263,7 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 		return
 	}
 
+	c.derpMapAtomic.Store(dm)
 	old := c.derpMap
 	c.derpMap = dm
 	if dm == nil {
