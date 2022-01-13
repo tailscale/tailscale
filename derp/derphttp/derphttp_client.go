@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -61,6 +62,8 @@ type Client struct {
 	// Either url or getRegion is non-nil:
 	url       *url.URL
 	getRegion func() *tailcfg.DERPRegion
+
+	localAddrAtomic atomic.Value // of netaddr.IPPort
 
 	ctx       context.Context // closed via cancelCtx in Client.Close
 	cancelCtx context.CancelFunc
@@ -278,7 +281,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			}
 		}
 		c.serverPubKey = derpClient.ServerPublicKey()
-		c.client = derpClient
+		c.setClientLocked(derpClient)
 		c.netConn = tcpConn
 		c.connGen++
 		return c.client, c.connGen, nil
@@ -409,7 +412,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	}
 
 	c.serverPubKey = derpClient.ServerPublicKey()
-	c.client = derpClient
+	c.setClientLocked(derpClient)
 	c.netConn = tcpConn
 	c.connGen++
 	return c.client, c.connGen, nil
@@ -774,19 +777,28 @@ func (c *Client) SendPing(data [8]byte) error {
 	return client.SendPing(data)
 }
 
+// setClientLocked sets c.client to dc and updates
+// c.localAddrAtomic.
+//
+// c.mu must be held.
+func (c *Client) setClientLocked(dc *derp.Client) {
+	c.client = dc
+	var ipp netaddr.IPPort
+	if dc != nil {
+		ipp, _ = dc.LocalAddr()
+	}
+	c.localAddrAtomic.Store(ipp) // or zero it
+}
+
 // LocalAddr reports c's local TCP address, without any implicit
 // connect or reconnect.
 func (c *Client) LocalAddr() (netaddr.IPPort, error) {
-	c.mu.Lock()
-	closed, client := c.closed, c.client
-	c.mu.Unlock()
-	if closed {
-		return netaddr.IPPort{}, ErrClientClosed
-	}
-	if client == nil {
+	// Warning: don't acquire c.mu here; see https://github.com/tailscale/tailscale/issues/3726
+	addr, _ := c.localAddrAtomic.Load().(netaddr.IPPort)
+	if addr.IsZero() {
 		return netaddr.IPPort{}, errors.New("client not connected")
 	}
-	return client.LocalAddr()
+	return addr, nil
 }
 
 func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
@@ -957,7 +969,7 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 		c.netConn.Close()
 		c.netConn = nil
 	}
-	c.client = nil
+	c.setClientLocked(nil)
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
