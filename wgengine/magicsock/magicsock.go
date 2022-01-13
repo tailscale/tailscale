@@ -1508,6 +1508,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 	peerPresent := map[key.NodePublic]bool{}
 	bo := backoff.NewBackoff(fmt.Sprintf("derp-%d", regionID), c.logf, 5*time.Second)
 	var lastPacketTime time.Time
+	var lastPacketSrc key.NodePublic
 
 	for {
 		msg, connGen, err := dc.RecvDetail()
@@ -1569,9 +1570,12 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			}
 			// If this is a new sender we hadn't seen before, remember it and
 			// register a route for this peer.
-			if _, ok := peerPresent[res.src]; !ok {
-				peerPresent[res.src] = true
-				c.addDerpPeerRoute(res.src, regionID, dc)
+			if res.src != lastPacketSrc { // avoid map lookup w/ high throughput single peer
+				lastPacketSrc = res.src
+				if _, ok := peerPresent[res.src]; !ok {
+					peerPresent[res.src] = true
+					c.addDerpPeerRoute(res.src, regionID, dc)
+				}
 			}
 		case derp.PingMessage:
 			// Best effort reply to the ping.
