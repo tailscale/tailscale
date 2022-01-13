@@ -457,9 +457,7 @@ func TLSDialer(fwd DialContextFunc, dnsCache *Resolver, tlsConfigBase *tls.Confi
 			}
 		}()
 		go func() {
-			err := tlsConn.Handshake()
-			handshakeTimeoutCancel()
-			errc <- err
+			errc <- tlsConn.Handshake()
 		}()
 		if err := <-errc; err != nil {
 			tcpConn.Close()
