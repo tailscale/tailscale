@@ -68,7 +68,7 @@ func useDerpRoute() bool {
 	if v, ok := ob.Get(); ok {
 		return v
 	}
-	return false
+	return true // as of 1.21.x
 }
 
 // peerInfo is all the information magicsock tracks about a particular
@@ -1584,6 +1584,8 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 			continue
 		case derp.HealthMessage:
 			health.SetDERPRegionHealth(regionID, m.Problem)
+		case derp.PeerGoneMessage:
+			c.removeDerpPeerRoute(key.NodePublic(m), regionID, dc)
 		default:
 			// Ignore.
 			continue
