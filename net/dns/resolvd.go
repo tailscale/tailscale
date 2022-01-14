@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -130,6 +131,25 @@ func (m resolvdManager) readResolvConf() (config OSConfig, err error) {
 			config.SearchDomains = append(config.SearchDomains, fqdn)
 			continue
 		}
+
+		if strings.HasPrefix(line, "nameserver") {
+			s := strings.TrimPrefix(line, "nameserver")
+			parts := strings.Split(s, " # ")
+			if len(parts) == 0 {
+				return OSConfig{}, err
+			}
+			nameserver := strings.TrimSpace(parts[0])
+			ip, err := netaddr.ParseIP(nameserver)
+			if err != nil {
+				return OSConfig{}, err
+			}
+			config.Nameservers = append(config.Nameservers, ip)
+			continue
+		}
+	}
+
+	if err = scanner.Err(); err != nil {
+		return OSConfig{}, err
 	}
 
 	return config, nil
