@@ -265,6 +265,7 @@ type Conn struct {
 	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
 
 	// derpRecvCh is used by receiveDERP to read DERP messages.
+	// It must have buffer size > 0; see issue 3736.
 	derpRecvCh chan derpReadResult
 
 	// bind is the wireguard-go conn.Bind for Conn.
@@ -529,7 +530,7 @@ func (o *Options) derpActiveFunc() func() {
 // of NewConn. Mostly for tests.
 func newConn() *Conn {
 	c := &Conn{
-		derpRecvCh:   make(chan derpReadResult),
+		derpRecvCh:   make(chan derpReadResult, 1), // must be buffered, see issue 3736
 		derpStarted:  make(chan struct{}),
 		peerLastDerp: make(map[key.NodePublic]int),
 		peerMap:      newPeerMap(),
@@ -2647,6 +2648,7 @@ func (c *connBind) Close() error {
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
+	// connBind.Closed takes c.mu, but c.derpRecvCh is buffered.
 	c.derpRecvCh <- derpReadResult{}
 	return nil
 }
