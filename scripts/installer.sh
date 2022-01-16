@@ -41,11 +41,16 @@ main() {
 		#  - ID: the short name of the OS (e.g. "debian", "freebsd")
 		#  - VERSION_ID: the numeric release version for the OS, if any (e.g. "18.04")
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
+		#  - UBUNTU_CODENAME: if it exists, as in linuxmint, use instead of VERSION_CODENAME
 		. /etc/os-release
 		case "$ID" in
 			ubuntu|pop|neon|zorin|elementary|linuxmint)
 				OS="ubuntu"
-				VERSION="$VERSION_CODENAME"
+				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
+				    VERSION="$UBUNTU_CODENAME"
+				else
+				    VERSION="$VERSION_CODENAME"
+				fi
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Ubuntu 20.04.
