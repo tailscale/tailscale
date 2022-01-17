@@ -26,7 +26,7 @@ func TestHandshake(t *testing.T) {
 	)
 	go func() {
 		var err error
-		server, err = Server(context.Background(), serverConn, serverKey)
+		server, err = Server(context.Background(), serverConn, serverKey, nil)
 		serverErr <- err
 	}()
 
@@ -78,7 +78,7 @@ func TestNoReuse(t *testing.T) {
 		)
 		go func() {
 			var err error
-			server, err = Server(context.Background(), serverConn, serverKey)
+			server, err = Server(context.Background(), serverConn, serverKey, nil)
 			serverErr <- err
 		}()
 
@@ -172,7 +172,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			_, err := Server(context.Background(), serverConn, serverKey)
+			_, err := Server(context.Background(), serverConn, serverKey, nil)
 			// If the server failed, we have to close the Conn to
 			// unblock the client.
 			if err != nil {
@@ -200,7 +200,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			_, err := Server(context.Background(), serverConn, serverKey)
+			_, err := Server(context.Background(), serverConn, serverKey, nil)
 			serverErr <- err
 		}()
 
@@ -225,7 +225,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			server, err := Server(context.Background(), serverConn, serverKey)
+			server, err := Server(context.Background(), serverConn, serverKey, nil)
 			serverErr <- err
 			_, err = io.WriteString(server, strings.Repeat("a", 14))
 			serverErr <- err
@@ -266,7 +266,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			server, err := Server(context.Background(), serverConn, serverKey)
+			server, err := Server(context.Background(), serverConn, serverKey, nil)
 			serverErr <- err
 			var bs [100]byte
 			// The server needs a timeout if the tampering is hitting the length header.

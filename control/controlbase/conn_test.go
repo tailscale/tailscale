@@ -202,7 +202,7 @@ func TestConnStd(t *testing.T) {
 		serverErr := make(chan error, 1)
 		go func() {
 			var err error
-			c2, err = Server(context.Background(), s2, controlKey)
+			c2, err = Server(context.Background(), s2, controlKey, nil)
 			serverErr <- err
 		}()
 		c1, err = Client(context.Background(), s1, machineKey, controlKey.Public())
@@ -319,7 +319,7 @@ func pairWithConns(t *testing.T, clientConn, serverConn net.Conn) (*Conn, *Conn)
 	)
 	go func() {
 		var err error
-		server, err = Server(context.Background(), serverConn, controlKey)
+		server, err = Server(context.Background(), serverConn, controlKey, nil)
 		serverErr <- err
 	}()
 
