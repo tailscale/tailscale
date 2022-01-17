@@ -426,6 +426,11 @@ func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
 	switch runtime.GOOS {
 	case "windows":
 		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
+	case "darwin":
+		// Note: 2000 ms is actually 1 second + 2,000
+		// milliseconds extra for 3 seconds total.
+		// See https://github.com/tailscale/tailscale/pull/3753 for details.
+		err = exec.Command("ping", "-c", "1", "-W", "2000", dstIP.String()).Run()
 	case "android":
 		ping := "/system/bin/ping"
 		if dstIP.Is6() {
@@ -447,7 +452,15 @@ func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
 	}
 	d := time.Since(t0)
 	if err != nil {
-		ns.logf("exec ping of %v failed in %v: %v", dstIP, d, err)
+		if d < time.Second/2 {
+			// If it failed quicker than the 3 second
+			// timeout we gave above (500 ms is a
+			// reasonable threshold), then assume the ping
+			// failed for problems finding/running
+			// ping. We don't want to log if the host is
+			// just down.
+			ns.logf("exec ping of %v failed in %v: %v", dstIP, d, err)
+		}
 		return
 	}
 	if debugNetstack {
