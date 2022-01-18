@@ -538,7 +538,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	clientRemoteIP := netaddrIPFromNetstackIP(reqDetails.RemoteAddress)
 	if !clientRemoteIP.IsValid() {
 		ns.logf("invalid RemoteAddress in TCP ForwarderRequest: %s", stringifyTEI(reqDetails))
-		r.Complete(true)
+		r.Complete(true) // sends a RST
 		return
 	}
 
@@ -554,7 +554,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
-		r.Complete(true)
+		ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
+		r.Complete(true) // sends a RST
 		return
 	}
 	r.Complete(false)
