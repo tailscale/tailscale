@@ -72,13 +72,15 @@ type Impl struct {
 	// It can only be set before calling Start.
 	ProcessSubnets bool
 
-	ipstack *stack.Stack
-	linkEP  *channel.Endpoint
-	tundev  *tstun.Wrapper
-	e       wgengine.Engine
-	mc      *magicsock.Conn
-	logf    logger.Logf
-	dialer  *tsdial.Dialer
+	ipstack   *stack.Stack
+	linkEP    *channel.Endpoint
+	tundev    *tstun.Wrapper
+	e         wgengine.Engine
+	mc        *magicsock.Conn
+	logf      logger.Logf
+	dialer    *tsdial.Dialer
+	ctx       context.Context    // alive until Close
+	ctxCancel context.CancelFunc // called on Close
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -152,8 +154,14 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
 	}
+	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
 	return ns, nil
+}
+
+func (ns *Impl) Close() error {
+	ns.ctxCancel()
+	return nil
 }
 
 // wrapProtoHandler returns protocol handler h wrapped in a version
@@ -347,8 +355,12 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.
 
 func (ns *Impl) injectOutbound() {
 	for {
-		packetInfo, ok := ns.linkEP.ReadContext(context.Background())
+		packetInfo, ok := ns.linkEP.ReadContext(ns.ctx)
 		if !ok {
+			if ns.ctx.Err() != nil {
+				// Return without logging.
+				return
+			}
 			ns.logf("[v2] ReadContext-for-write = ok=false")
 			continue
 		}
