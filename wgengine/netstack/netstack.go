@@ -512,6 +512,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	case 6:
 		pn = header.IPv6ProtocolNumber
 	}
+	p.RemoveECNBits() // Issue 2642
 	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
