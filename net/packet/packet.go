@@ -52,7 +52,7 @@ type Parsed struct {
 	Src netaddr.IPPort
 	// DstIP4 is the destination address. Family matches IPVersion.
 	Dst netaddr.IPPort
-	// TCPFlags is the packet's TCP flag bigs. Valid iff IPProto == TCP.
+	// TCPFlags is the packet's TCP flag bits. Valid iff IPProto == TCP.
 	TCPFlags TCPFlag
 }
 
