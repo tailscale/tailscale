@@ -520,6 +520,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 		Data: vv,
 	})
 	ns.linkEP.InjectInbound(pn, packetBuf)
+	packetBuf.DecRef()
 
 	// We've now delivered this to netstack, so we're done.
 	// Instead of returning a filter.Accept here (which would also
