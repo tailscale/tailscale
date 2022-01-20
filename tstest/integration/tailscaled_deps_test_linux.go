@@ -30,6 +30,7 @@ import (
 	_ "tailscale.com/paths"
 	_ "tailscale.com/safesocket"
 	_ "tailscale.com/tailcfg"
+	_ "tailscale.com/tsweb"
 	_ "tailscale.com/types/flagtype"
 	_ "tailscale.com/types/key"
 	_ "tailscale.com/types/logger"

@@ -41,6 +41,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/tsweb"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -514,6 +515,7 @@ func newDebugMux() *http.ServeMux {
 
 func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	tsweb.VarzHandler(w, r)
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
