@@ -5,6 +5,7 @@
 *.dll
 *.so
 *.dylib
+*.spk
 
 cmd/tailscale/tailscale
 cmd/tailscaled/tailscaled
