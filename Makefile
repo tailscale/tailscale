@@ -1,4 +1,6 @@
 IMAGE_REPO ?= tailscale/tailscale
+SYNO_ARCH ?= "amd64"
+SYNO_DSM ?= "7"
 
 usage:
 	echo "See Makefile"
@@ -32,9 +34,13 @@ staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck -- $$(go list ./... | grep -v tempfork)
 
 spk:
-	go run github.com/tailscale/tailscale-synology@main --version=build -o tailscale.spk --source=.
+	PATH="${PWD}/tool:${PATH}" ./tool/go run github.com/tailscale/tailscale-synology@main -o tailscale.spk --source=. --goarch=${SYNO_ARCH} --dsm-version=${SYNO_DSM}
+
+spkall:
+	mkdir -p spks
+	PATH="${PWD}/tool:${PATH}" ./tool/go run github.com/tailscale/tailscale-synology@main -o spks --source=. --goarch=all --dsm-version=all
 
 pushspk: spk
-	echo "Pushing SPKG to root@${SYNOHOST} (env var SYNOHOST) ..."
-	scp tailscale.spk root@${SYNOHOST}:
-	ssh root@${SYNOHOST} /usr/syno/bin/synopkg install tailscale.spk
+	echo "Pushing SPK to root@${SYNO_HOST} (env var SYNO_HOST) ..."
+	scp tailscale.spk root@${SYNO_HOST}:
+	ssh root@${SYNO_HOST} /usr/syno/bin/synopkg install tailscale.spk
