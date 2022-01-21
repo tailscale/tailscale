@@ -51,9 +51,11 @@ var (
 )
 
 var (
-	stats           = new(metrics.Set)
-	stunDisposition = &metrics.LabelMap{Label: "disposition"}
-	stunAddrFamily  = &metrics.LabelMap{Label: "family"}
+	stats             = new(metrics.Set)
+	stunDisposition   = &metrics.LabelMap{Label: "disposition"}
+	stunAddrFamily    = &metrics.LabelMap{Label: "family"}
+	tlsRequestVersion = &metrics.LabelMap{Label: "version"}
+	tlsActiveVersion  = &metrics.LabelMap{Label: "version"}
 
 	stunReadError  = stunDisposition.Get("read_error")
 	stunNotSTUN    = stunDisposition.Get("not_stun")
@@ -67,6 +69,8 @@ var (
 func init() {
 	stats.Set("counter_requests", stunDisposition)
 	stats.Set("counter_addrfamily", stunAddrFamily)
+	stats.Set("tls_request_version", tlsRequestVersion)
+	stats.Set("gauge_tls_active_version", tlsActiveVersion)
 	expvar.Publish("stun", stats)
 }
 
@@ -238,6 +242,23 @@ func main() {
 			return cert, nil
 		}
 		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS != nil {
+				label := "unknown"
+				switch r.TLS.Version {
+				case tls.VersionTLS10:
+					label = "1.0"
+				case tls.VersionTLS11:
+					label = "1.1"
+				case tls.VersionTLS12:
+					label = "1.2"
+				case tls.VersionTLS13:
+					label = "1.3"
+				}
+				tlsRequestVersion.Add(label, 1)
+				tlsActiveVersion.Add(label, 1)
+				defer tlsActiveVersion.Add(label, -1)
+			}
+
 			// Set HTTP headers to appease automated security scanners.
 			//
 			// Security automation gets cranky when HTTPS sites don't
