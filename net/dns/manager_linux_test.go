@@ -34,8 +34,9 @@ func TestLinuxDNSMode(t *testing.T) {
 				resolvDotConf(
 					"# Managed by NetworkManager",
 					"nameserver 10.0.0.1")),
-			wantLog: "dns: [rc=nm resolved=not-in-use ret=direct]",
-			want:    "direct",
+			wantLog: "dns: resolvedIsActuallyResolver error: resolv.conf doesn't point to systemd-resolved; points to [10.0.0.1]\n" +
+				"dns: [rc=nm resolved=not-in-use ret=direct]",
+			want: "direct",
 		},
 		{
 			name:    "resolvconf_but_no_resolvconf_binary",
@@ -123,10 +124,11 @@ func TestLinuxDNSMode(t *testing.T) {
 			// alleged that it was managed by systemd-resolved, but it
 			// was actually a completely static config file pointing
 			// elsewhere.
-			name:    "allegedly_resolved_but_not_in_resolv.conf",
-			env:     env(resolvDotConf("# Managed by systemd-resolved", "nameserver 10.0.0.1")),
-			wantLog: "dns: [rc=resolved resolved=not-in-use ret=direct]",
-			want:    "direct",
+			name: "allegedly_resolved_but_not_in_resolv.conf",
+			env:  env(resolvDotConf("# Managed by systemd-resolved", "nameserver 10.0.0.1")),
+			wantLog: "dns: resolvedIsActuallyResolver error: resolv.conf doesn't point to systemd-resolved; points to [10.0.0.1]\n" +
+				"dns: [rc=resolved resolved=not-in-use ret=direct]",
+			want: "direct",
 		},
 		{
 			// We used to incorrectly decide that resolved wasn't in
