@@ -95,6 +95,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 		// try to program resolved in that case.
 		// https://github.com/tailscale/tailscale/issues/2136
 		if err := resolvedIsActuallyResolver(bs); err != nil {
+			logf("dns: resolvedIsActuallyResolver error: %v", err)
 			dbg("resolved", "not-in-use")
 			return "direct", nil
 		}
@@ -184,6 +185,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 		// Sometimes, NetworkManager owns the configuration but points
 		// it at systemd-resolved.
 		if err := resolvedIsActuallyResolver(bs); err != nil {
+			logf("dns: resolvedIsActuallyResolver error: %v", err)
 			dbg("resolved", "not-in-use")
 			// You'd think we would use newNMManager here. However, as
 			// explained in
@@ -300,7 +302,7 @@ func resolvedIsActuallyResolver(bs []byte) error {
 	}
 	for _, ns := range cfg.Nameservers {
 		if ns != netaddr.IPv4(127, 0, 0, 53) {
-			return errors.New("resolv.conf doesn't point to systemd-resolved")
+			return fmt.Errorf("resolv.conf doesn't point to systemd-resolved; points to %v", cfg.Nameservers)
 		}
 	}
 	return nil
