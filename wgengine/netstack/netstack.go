@@ -34,6 +34,7 @@ import (
 	"inet.af/netstack/tcpip/transport/tcp"
 	"inet.af/netstack/tcpip/transport/udp"
 	"inet.af/netstack/waiter"
+	"tailscale.com/envknob"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -49,7 +50,7 @@ import (
 
 const debugPackets = false
 
-var debugNetstack, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETSTACK"))
+var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network

@@ -29,12 +29,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
 )
@@ -63,7 +63,7 @@ func (h *Handler) certDir() (string, error) {
 	return full, nil
 }
 
-var acmeDebug, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_ACME"))
+var acmeDebug = envknob.Bool("TS_DEBUG_ACME")
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {

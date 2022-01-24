@@ -24,6 +24,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/portmapper"
@@ -224,7 +225,7 @@ func debugPortmap(ctx context.Context) error {
 	defer cancel()
 
 	portmapper.VerboseLogs = true
-	switch os.Getenv("TS_DEBUG_PORTMAP_TYPE") {
+	switch envknob.String("TS_DEBUG_PORTMAP_TYPE") {
 	case "":
 	case "pmp":
 		portmapper.DisablePCP = true

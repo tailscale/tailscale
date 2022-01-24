@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -70,12 +71,12 @@ func AllowDebugAccess(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == os.Getenv("TS_ALLOW_DEBUG_IP") {
+	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == envknob.String("TS_ALLOW_DEBUG_IP") {
 		return true
 	}
 	if r.Method == "GET" {
 		urlKey := r.FormValue("debugkey")
-		keyPath := os.Getenv("TS_DEBUG_KEY_PATH")
+		keyPath := envknob.String("TS_DEBUG_KEY_PATH")
 		if urlKey != "" && keyPath != "" {
 			slurp, err := ioutil.ReadFile(keyPath)
 			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {

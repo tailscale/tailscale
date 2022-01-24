@@ -61,8 +61,8 @@ import (
 // useDerpRoute reports whether magicsock should enable the DERP
 // return path optimization (Issue 150).
 func useDerpRoute() bool {
-	if debugUseDerpRouteEnv != "" {
-		return debugUseDerpRoute
+	if b, ok := debugUseDerpRoute.Get(); ok {
+		return b
 	}
 	ob := controlclient.DERPRouteFlag()
 	if v, ok := ob.Get(); ok {

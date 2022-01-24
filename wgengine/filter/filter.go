@@ -7,11 +7,11 @@ package filter
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstime/rate"
@@ -225,7 +225,7 @@ var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 //   effectively disable the limits on the log rate by setting the limit
 //   to 1 millisecond. This should capture everything.
 func init() {
-	if os.Getenv("TS_DEBUG_FILTER_RATE_LIMIT_LOGS") != "all" {
+	if envknob.String("TS_DEBUG_FILTER_RATE_LIMIT_LOGS") != "all" {
 		return
 	}
 

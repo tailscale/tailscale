@@ -14,6 +14,7 @@ import (
 	_ "inet.af/netaddr"
 	_ "tailscale.com/chirp"
 	_ "tailscale.com/derp/derphttp"
+	_ "tailscale.com/envknob"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/logpolicy"

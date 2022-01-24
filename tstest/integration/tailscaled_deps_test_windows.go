@@ -17,6 +17,7 @@ import (
 	_ "golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	_ "inet.af/netaddr"
 	_ "tailscale.com/derp/derphttp"
+	_ "tailscale.com/envknob"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"
 	_ "tailscale.com/logpolicy"

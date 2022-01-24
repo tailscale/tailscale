@@ -17,10 +17,11 @@ import (
 	"errors"
 	"log"
 	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tailscale.com/envknob"
 )
 
 var counterFallbackOK int32 // atomic
@@ -31,7 +32,7 @@ var counterFallbackOK int32 // atomic
 // See https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
 var sslKeyLogFile = os.Getenv("SSLKEYLOGFILE")
 
-var debug, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_TLS_DIAL"))
+var debug = envknob.Bool("TS_DEBUG_TLS_DIAL")
 
 // Config returns a tls.Config for connecting to a server.
 // If base is non-nil, it's cloned as the base config before

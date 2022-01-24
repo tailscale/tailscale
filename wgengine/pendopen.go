@@ -6,9 +6,7 @@ package wgengine
 
 import (
 	"fmt"
-	"os"
 	"runtime"
-	"strconv"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -21,17 +19,6 @@ import (
 )
 
 const tcpTimeoutBeforeDebug = 5 * time.Second
-
-// debugConnectFailures reports whether the local node should track
-// outgoing TCP connections and log which ones fail and why.
-func debugConnectFailures() bool {
-	s := os.Getenv("TS_DEBUG_CONNECT_FAILURES")
-	if s == "" {
-		return true
-	}
-	v, _ := strconv.ParseBool(s)
-	return v
-}
 
 type pendingOpenFlow struct {
 	timer *time.Timer // until giving up on the flow

@@ -13,13 +13,13 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/portmapper"
@@ -49,7 +49,7 @@ var netcheckArgs struct {
 
 func runNetcheck(ctx context.Context, args []string) error {
 	c := &netcheck.Client{
-		UDPBindAddr: os.Getenv("TS_DEBUG_NETCHECK_UDP_BIND"),
+		UDPBindAddr: envknob.String("TS_DEBUG_NETCHECK_UDP_BIND"),
 		PortMapper:  portmapper.NewClient(logger.WithPrefix(log.Printf, "portmap: "), nil),
 	}
 	if netcheckArgs.verbose {

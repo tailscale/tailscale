@@ -7,10 +7,8 @@ package dns
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -36,7 +35,7 @@ const (
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
-var configureWSL, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_CONFIGURE_WSL"))
+var configureWSL = envknob.Bool("TS_DEBUG_CONFIGURE_WSL")
 
 type windowsManager struct {
 	logf       logger.Logf

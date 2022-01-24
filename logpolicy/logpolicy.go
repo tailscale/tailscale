@@ -25,13 +25,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/term"
 	"tailscale.com/atomicfile"
+	"tailscale.com/envknob"
 	"tailscale.com/log/filelogger"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
@@ -227,7 +227,7 @@ func runningUnderSystemd() bool {
 }
 
 func redirectStderrToLogPanics() bool {
-	return runningUnderSystemd() || os.Getenv("TS_PLEASE_PANIC") != ""
+	return runningUnderSystemd() || envknob.Bool("TS_PLEASE_PANIC")
 }
 
 // winProgramDataAccessible reports whether the directory (assumed to
@@ -405,7 +405,7 @@ func New(collection string) *Policy {
 	} else {
 		lflags = log.LstdFlags
 	}
-	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_LOG_TIME")); v {
+	if envknob.Bool("TS_DEBUG_LOG_TIME") {
 		lflags = log.LstdFlags | log.Lmicroseconds
 	}
 	if runningUnderSystemd() {
@@ -670,7 +670,7 @@ func NewLogtailTransport(host string) *http.Transport {
 	// TODO(bradfitz): remove this debug knob once we've decided
 	// to upload via HTTP/1 or HTTP/2 (probably HTTP/1). Or we might just enforce
 	// it server-side.
-	if h1, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_FORCE_H1_LOGS")); h1 {
+	if envknob.Bool("TS_DEBUG_FORCE_H1_LOGS") {
 		tr.TLSClientConfig = nil // DefaultTransport's was already initialized w/ h2
 		tr.ForceAttemptHTTP2 = false
 		tr.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}

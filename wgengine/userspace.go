@@ -11,10 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +23,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
@@ -366,7 +365,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.tundev.PreFilterOut = e.handleLocalPackets
 
-	if debugConnectFailures() {
+	if envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterIn != nil {
 			return nil, errors.New("unexpected PreFilterIn already set")
 		}
@@ -550,10 +549,7 @@ func (e *userspaceEngine) pollResolver() {
 	}
 }
 
-var (
-	debugTrimWireguardEnv = os.Getenv("TS_DEBUG_TRIM_WIREGUARD")
-	debugTrimWireguard, _ = strconv.ParseBool(debugTrimWireguardEnv)
-)
+var debugTrimWireguard = envknob.OptBool("TS_DEBUG_TRIM_WIREGUARD")
 
 // forceFullWireguardConfig reports whether we should give wireguard
 // our full network map, even for inactive peers
@@ -563,8 +559,8 @@ var (
 // and we haven't got enough time testing it.
 func forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimmming via the environment variable knob?
-	if debugTrimWireguardEnv != "" {
-		return !debugTrimWireguard
+	if b, ok := debugTrimWireguard.Get(); ok {
+		return !b
 	}
 	if opt := controlclient.TrimWGConfig(); opt != "" {
 		return !opt.EqualBool(true)

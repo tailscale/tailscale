@@ -29,6 +29,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
@@ -314,7 +315,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	// not called concurrently and is not called again once it
 	// successfully returns an engine.
 	getEngine := func() (wgengine.Engine, error) {
-		if msg := os.Getenv("TS_DEBUG_WIN_FAIL"); msg != "" {
+		if msg := envknob.String("TS_DEBUG_WIN_FAIL"); msg != "" {
 			return nil, fmt.Errorf("pretending to be a service failure: %v", msg)
 		}
 		for {
