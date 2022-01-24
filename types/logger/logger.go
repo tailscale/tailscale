@@ -14,12 +14,13 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"context"
+
+	"tailscale.com/envknob"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
@@ -83,7 +84,7 @@ type limitData struct {
 	ele      *list.Element // list element used to access this string in the cache
 }
 
-var disableRateLimit = os.Getenv("TS_DEBUG_LOG_RATE") == "all"
+var disableRateLimit = envknob.String("TS_DEBUG_LOG_RATE") == "all"
 
 // rateFree are format string substrings that are exempt from rate limiting.
 // Things should not be added to this unless they're already limited otherwise

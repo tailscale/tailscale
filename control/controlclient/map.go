@@ -6,11 +6,10 @@ package controlclient
 
 import (
 	"log"
-	"os"
 	"sort"
-	"strconv"
 
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -289,7 +288,7 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 	return v2
 }
 
-var debugSelfIPv6Only, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_SELF_V6_ONLY"))
+var debugSelfIPv6Only = envknob.Bool("TS_DEBUG_SELF_V6_ONLY")
 
 func filterSelfAddresses(in []netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 	switch {

@@ -11,13 +11,12 @@ package tstun
 
 import (
 	"errors"
-	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
+	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 )
 
@@ -32,7 +31,7 @@ import (
 var tunMTU = 1280
 
 func init() {
-	if mtu, _ := strconv.Atoi(os.Getenv("TS_DEBUG_MTU")); mtu != 0 {
+	if mtu, ok := envknob.LookupInt("TS_DEBUG_MTU"); ok {
 		tunMTU = mtu
 	}
 }

@@ -6,13 +6,12 @@ package wgengine
 
 import (
 	"log"
-	"os"
 	"runtime/pprof"
-	"strconv"
 	"strings"
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
@@ -32,7 +31,7 @@ import (
 //
 // If they do not, the watchdog crashes the process.
 func NewWatchdog(e Engine) Engine {
-	if v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_DISABLE_WATCHDOG")); v {
+	if envknob.Bool("TS_DEBUG_DISABLE_WATCHDOG") {
 		return e
 	}
 	return &watchdogEngine{

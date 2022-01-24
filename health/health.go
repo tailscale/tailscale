@@ -10,13 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/multierr"
 )
@@ -308,7 +308,7 @@ func OverallError() error {
 	return overallErrorLocked()
 }
 
-var fakeErrForTesting = os.Getenv("TS_DEBUG_FAKE_HEALTH_ERROR")
+var fakeErrForTesting = envknob.String("TS_DEBUG_FAKE_HEALTH_ERROR")
 
 func overallErrorLocked() error {
 	if !anyInterfaceUp {

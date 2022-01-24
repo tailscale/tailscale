@@ -27,6 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -64,7 +65,7 @@ import (
 var controlDebugFlags = getControlDebugFlags()
 
 func getControlDebugFlags() []string {
-	if e := os.Getenv("TS_DEBUG_CONTROL_FLAGS"); e != "" {
+	if e := envknob.String("TS_DEBUG_CONTROL_FLAGS"); e != "" {
 		return strings.Split(e, ",")
 	}
 	return nil
@@ -1349,7 +1350,7 @@ func (b *LocalBackend) popBrowserAuthNow() {
 }
 
 // For testing lazy machine key generation.
-var panicOnMachineKeyGeneration, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_PANIC_MACHINE_KEY"))
+var panicOnMachineKeyGeneration = envknob.Bool("TS_DEBUG_PANIC_MACHINE_KEY")
 
 func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePrivate, error) {
 	var cache atomic.Value

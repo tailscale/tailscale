@@ -15,14 +15,13 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 )
 
 var single = &Resolver{
@@ -100,7 +99,7 @@ func (r *Resolver) ttl() time.Duration {
 	return 10 * time.Minute
 }
 
-var debug, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_DNS_CACHE"))
+var debug = envknob.Bool("TS_DEBUG_DNS_CACHE")
 
 // LookupIP returns the host's primary IP address (either IPv4 or
 // IPv6, but preferring IPv4) and optionally its IPv6 address, if

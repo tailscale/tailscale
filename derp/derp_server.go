@@ -25,7 +25,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -40,6 +39,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
 	"tailscale.com/types/key"
@@ -48,14 +48,14 @@ import (
 	"tailscale.com/version"
 )
 
-var debug, _ = strconv.ParseBool(os.Getenv("DERP_DEBUG_LOGS"))
+var debug = envknob.Bool("DERP_DEBUG_LOGS")
 
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
 
 func init() {
-	keys := os.Getenv("TS_DEBUG_VERBOSE_DROPS")
+	keys := envknob.String("TS_DEBUG_VERBOSE_DROPS")
 	if keys == "" {
 		return
 	}

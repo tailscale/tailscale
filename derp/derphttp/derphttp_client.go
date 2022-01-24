@@ -23,9 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +31,7 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/derp"
+	"tailscale.com/envknob"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
@@ -190,8 +189,7 @@ func useWebsockets() bool {
 		return true
 	}
 	if dialWebsocketFunc != nil {
-		v, _ := strconv.ParseBool(os.Getenv("TS_DEBUG_DERP_WS_CLIENT"))
-		return v
+		return envknob.Bool("TS_DEBUG_DERP_WS_CLIENT")
 	}
 	return false
 }

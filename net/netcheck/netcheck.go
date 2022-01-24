@@ -16,16 +16,15 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/tcnksm/go-httpstat"
 	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/envknob"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
@@ -40,7 +39,7 @@ import (
 
 // Debugging and experimentation tweakables.
 var (
-	debugNetcheck, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_NETCHECK"))
+	debugNetcheck = envknob.Bool("TS_DEBUG_NETCHECK")
 )
 
 // The various default timeouts for things.

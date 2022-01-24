@@ -22,6 +22,7 @@ import (
 	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
@@ -188,7 +189,7 @@ func useAmbientCaps() bool {
 	return v >= 7
 }
 
-var forceIPCommand, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_USE_IP_COMMAND"))
+var forceIPCommand = envknob.Bool("TS_DEBUG_USE_IP_COMMAND")
 
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.

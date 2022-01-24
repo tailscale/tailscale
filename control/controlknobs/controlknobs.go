@@ -7,9 +7,7 @@
 package controlknobs
 
 import (
-	"os"
-	"strconv"
-
+	"tailscale.com/envknob"
 	"tailscale.com/syncs"
 )
 
@@ -17,8 +15,7 @@ import (
 var disableUPnP syncs.AtomicBool
 
 func init() {
-	v, _ := strconv.ParseBool(os.Getenv("TS_DISABLE_UPNP"))
-	SetDisableUPnP(v)
+	SetDisableUPnP(envknob.Bool("TS_DISABLE_UPNP"))
 }
 
 // DisableUPnP reports the last reported value from control

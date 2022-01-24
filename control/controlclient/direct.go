@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +29,7 @@ import (
 	"go4.org/mem"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
@@ -874,8 +874,8 @@ func decode(res *http.Response, v interface{}, serverKey key.MachinePublic, mkey
 }
 
 var (
-	debugMap, _      = strconv.ParseBool(os.Getenv("TS_DEBUG_MAP"))
-	debugRegister, _ = strconv.ParseBool(os.Getenv("TS_DEBUG_REGISTER"))
+	debugMap      = envknob.Bool("TS_DEBUG_MAP")
+	debugRegister = envknob.Bool("TS_DEBUG_REGISTER")
 )
 
 var jsonEscapedZero = []byte(`\u0000`)
@@ -985,24 +985,12 @@ type debug struct {
 
 func initDebug() debug {
 	return debug{
-		NetMap:         envBool("TS_DEBUG_NETMAP"),
-		ProxyDNS:       envBool("TS_DEBUG_PROXY_DNS"),
-		StripEndpoints: envBool("TS_DEBUG_STRIP_ENDPOINTS"),
-		StripCaps:      envBool("TS_DEBUG_STRIP_CAPS"),
-		Disco:          os.Getenv("TS_DEBUG_USE_DISCO") == "" || envBool("TS_DEBUG_USE_DISCO"),
+		NetMap:         envknob.Bool("TS_DEBUG_NETMAP"),
+		ProxyDNS:       envknob.Bool("TS_DEBUG_PROXY_DNS"),
+		StripEndpoints: envknob.Bool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripCaps:      envknob.Bool("TS_DEBUG_STRIP_CAPS"),
+		Disco:          envknob.BoolDefaultTrue("TS_DEBUG_USE_DISCO"),
 	}
-}
-
-func envBool(k string) bool {
-	e := os.Getenv(k)
-	if e == "" {
-		return false
-	}
-	v, err := strconv.ParseBool(e)
-	if err != nil {
-		panic(fmt.Sprintf("invalid non-bool %q for env var %q", e, k))
-	}
-	return v
 }
 
 var clockNow = time.Now
