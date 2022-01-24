@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -92,9 +91,6 @@ func runCert(ctx context.Context, args []string) error {
 		certArgs.keyFile = domain + ".key"
 	}
 	certPEM, keyPEM, err := tailscale.CertPair(ctx, domain)
-	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
-		return fmt.Errorf("%v\n\nUse 'sudo tailscale cert' or 'tailscale up --operator=$USER' to not require root.", err)
-	}
 	if err != nil {
 		return err
 	}

@@ -171,6 +171,9 @@ change in the future.
 	})
 
 	err := rootCmd.Run(context.Background())
+	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
+		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
+	}
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}

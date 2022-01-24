@@ -104,6 +104,10 @@ func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 		if server := res.Header.Get("Tailscale-Version"); server != "" && server != version.Long && onVersionMismatch != nil {
 			onVersionMismatch(version.Long, server)
 		}
+		if res.StatusCode == 403 {
+			all, _ := ioutil.ReadAll(res.Body)
+			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(all))}
+		}
 		return res, nil
 	}
 	if ue, ok := err.(*url.Error); ok {
@@ -179,10 +183,6 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	if res.StatusCode != wantStatus {
-		if res.StatusCode == 403 {
-			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(slurp))}
-		}
-		err := fmt.Errorf("HTTP %s: %s (expected %v)", res.Status, slurp, wantStatus)
 		return nil, bestError(err, slurp)
 	}
 	return slurp, nil
@@ -294,7 +294,7 @@ func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, siz
 	if err != nil {
 		return nil, 0, err
 	}
-	res, err := DoLocalRequest(req)
+	res, err := doLocalRequestNiceError(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -343,7 +343,7 @@ func PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name
 		return nil
 	}
 	all, _ := io.ReadAll(res.Body)
-	return fmt.Errorf("%s: %s", res.Status, all)
+	return bestError(fmt.Errorf("%s: %s", res.Status, all), all)
 }
 
 func CheckIPForwarding(ctx context.Context) error {
