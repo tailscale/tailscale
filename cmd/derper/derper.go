@@ -69,9 +69,9 @@ var (
 func init() {
 	stats.Set("counter_requests", stunDisposition)
 	stats.Set("counter_addrfamily", stunAddrFamily)
-	stats.Set("tls_request_version", tlsRequestVersion)
-	stats.Set("gauge_tls_active_version", tlsActiveVersion)
 	expvar.Publish("stun", stats)
+	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
+	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
 }
 
 type config struct {
