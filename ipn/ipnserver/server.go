@@ -32,6 +32,7 @@ import (
 	"inet.af/netaddr"
 	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -443,6 +444,26 @@ func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
 		return true, !isReadonlyConn(ci, s.b.OperatorUserID(), logger.Discard)
 	}
 	return false, false
+}
+
+// connCanFetchCerts reports whether ci is allowed to fetch HTTPS
+// certs from this server when it wouldn't otherwise be able to.
+//
+// That is, this reports whether ci should grant additional
+// capabilities over what the conn would otherwise be able to do.
+//
+// For now this only returns true on Unix machines when
+// TS_PERMIT_CERT_UID is set the to the userid of the peer
+// connection. It's intended to give your non-root webserver access
+// (www-data, caddy, nginx, etc) to certs.
+func (s *Server) connCanFetchCerts(ci connIdentity) bool {
+	if ci.IsUnixSock && ci.Creds != nil {
+		connUID, ok := ci.Creds.UserID()
+		if ok && connUID == envknob.String("TS_PERMIT_CERT_UID") {
+			return true
+		}
+	}
+	return false
 }
 
 // registerDisconnectSub adds ch as a subscribe to connection disconnect
@@ -1075,6 +1096,7 @@ func (psc *protoSwitchConn) Close() error {
 func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 	lah := localapi.NewHandler(s.b, s.logf, s.backendLogID)
 	lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
+	lah.PermitCert = s.connCanFetchCerts(ci)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/localapi/") {

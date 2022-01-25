@@ -52,7 +52,14 @@ type Handler struct {
 	PermitRead bool
 
 	// PermitWrite is whether mutating HTTP handlers are allowed.
+	// If PermitWrite is true, everything is allowed.
+	// It effectively means that the user is root or the admin
+	// (operator user).
 	PermitWrite bool
+
+	// PermitCert is whether the client is additionally granted
+	// cert fetching access.
+	PermitCert bool
 
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
