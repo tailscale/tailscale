@@ -324,7 +324,7 @@ func runFileGet(ctx context.Context, args []string) error {
 	for {
 		wfs, err = tailscale.WaitingFiles(ctx)
 		if err != nil {
-			return fmt.Errorf("getting WaitingFiles: %v", err)
+			return fmt.Errorf("getting WaitingFiles: %w", err)
 		}
 		if len(wfs) != 0 || !getArgs.wait {
 			break
@@ -379,7 +379,7 @@ func wipeInbox(ctx context.Context) error {
 	}
 	wfs, err := tailscale.WaitingFiles(ctx)
 	if err != nil {
-		return fmt.Errorf("getting WaitingFiles: %v", err)
+		return fmt.Errorf("getting WaitingFiles: %w", err)
 	}
 	deleted := 0
 	for _, wf := range wfs {
