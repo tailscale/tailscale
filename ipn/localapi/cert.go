@@ -66,7 +66,7 @@ func (h *Handler) certDir() (string, error) {
 var acmeDebug = envknob.Bool("TS_DEBUG_ACME")
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
+	if !h.PermitWrite && !h.PermitCert {
 		http.Error(w, "cert access denied", http.StatusForbidden)
 		return
 	}
