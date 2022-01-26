@@ -62,7 +62,9 @@ type NetworkMap struct {
 
 	// ACLs
 
-	User   tailcfg.UserID
+	User tailcfg.UserID
+
+	// Domain is the current Tailnet name.
 	Domain string
 
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile

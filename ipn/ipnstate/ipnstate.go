@@ -33,6 +33,10 @@ type Status struct {
 	//  "Starting", "Running".
 	BackendState string
 
+	// TailnetName is the name of the network that's currently in
+	// use.
+	TailnetName string
+
 	AuthURL      string       // current URL provided by control to authorize client
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
