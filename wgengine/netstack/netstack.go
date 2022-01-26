@@ -21,19 +21,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/waiter"
 	"inet.af/netaddr"
-	"inet.af/netstack/tcpip"
-	"inet.af/netstack/tcpip/adapters/gonet"
-	"inet.af/netstack/tcpip/buffer"
-	"inet.af/netstack/tcpip/header"
-	"inet.af/netstack/tcpip/link/channel"
-	"inet.af/netstack/tcpip/network/ipv4"
-	"inet.af/netstack/tcpip/network/ipv6"
-	"inet.af/netstack/tcpip/stack"
-	"inet.af/netstack/tcpip/transport/icmp"
-	"inet.af/netstack/tcpip/transport/tcp"
-	"inet.af/netstack/tcpip/transport/udp"
-	"inet.af/netstack/waiter"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/packet"
@@ -370,8 +370,8 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.
 
 func (ns *Impl) injectOutbound() {
 	for {
-		packetInfo, ok := ns.linkEP.ReadContext(ns.ctx)
-		if !ok {
+		pkt := ns.linkEP.ReadContext(ns.ctx)
+		if pkt == nil {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
@@ -379,7 +379,6 @@ func (ns *Impl) injectOutbound() {
 			ns.logf("[v2] ReadContext-for-write = ok=false")
 			continue
 		}
-		pkt := packetInfo.Pkt
 		hdrNetwork := pkt.NetworkHeader()
 		hdrTransport := pkt.TransportHeader()
 
