@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -33,17 +35,33 @@ var (
 	listen     = flag.String("listen", ":8030", "HTTP listen address")
 )
 
+// certReissueAfter is the time after which we expect all certs to be
+// reissued, at minimum.
+//
+// This is currently set to the date of the LetsEncrypt ALPN revocation event of Jan 2022:
+// https://community.letsencrypt.org/t/questions-about-renewing-before-tls-alpn-01-revocations/170449
+//
+// If there's another revocation event, bump this again.
+var certReissueAfter = time.Unix(1643226768, 0)
+
 var (
 	mu            sync.Mutex
 	state         = map[nodePair]pairStatus{}
 	lastDERPMap   *tailcfg.DERPMap
 	lastDERPMapAt time.Time
+	certs         = map[string]*x509.Certificate{}
 )
 
 func main() {
 	flag.Parse()
 	go probeLoop()
 	log.Fatal(http.ListenAndServe(*listen, http.HandlerFunc(serve)))
+}
+
+func setCert(name string, cert *x509.Certificate) {
+	mu.Lock()
+	defer mu.Unlock()
+	certs[name] = cert
 }
 
 type overallStatus struct {
@@ -93,6 +111,27 @@ func getOverallStatus() (o overallStatus) {
 			}
 		}
 	}
+
+	var subjs []string
+	for k := range certs {
+		subjs = append(subjs, k)
+	}
+	sort.Strings(subjs)
+
+	soon := time.Now().Add(14 * 24 * time.Hour) // in 2 weeks; autocert does 30 days by default
+	for _, s := range subjs {
+		cert := certs[s]
+		if cert.NotBefore.Before(certReissueAfter) {
+			o.addBadf("cert %q needs reissuing; NotBefore=%v", s, cert.NotBefore.Format(time.RFC3339))
+			continue
+		}
+		if cert.NotAfter.Before(soon) {
+			o.addBadf("cert %q expiring soon (%v); wasn't auto-refreshed", s, cert.NotAfter.Format(time.RFC3339))
+			continue
+		}
+		o.addGoodf("cert %q good %v - %v", s, cert.NotBefore.Format(time.RFC3339), cert.NotAfter.Format(time.RFC3339))
+	}
+
 	return
 }
 
@@ -359,6 +398,21 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*de
 	if err != nil {
 		return nil, err
 	}
+	cs, ok := dc.TLSConnectionState()
+	if !ok {
+		dc.Close()
+		return nil, errors.New("no TLS state")
+	}
+	if len(cs.PeerCertificates) == 0 {
+		dc.Close()
+		return nil, errors.New("no peer certificates")
+	}
+	if cs.ServerName != n.HostName {
+		dc.Close()
+		return nil, fmt.Errorf("TLS server name %q != derp hostname %q", cs.ServerName, n.HostName)
+	}
+	setCert(cs.ServerName, cs.PeerCertificates[0])
+
 	errc := make(chan error, 1)
 	go func() {
 		m, err := dc.Recv()

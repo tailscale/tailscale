@@ -72,6 +72,7 @@ type Client struct {
 	client       *derp.Client
 	connGen      int // incremented once per new connection; valid values are >0
 	serverPubKey key.NodePublic
+	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 }
 
@@ -122,6 +123,17 @@ func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (
 func (c *Client) Connect(ctx context.Context) error {
 	_, _, err := c.connect(ctx, "derphttp.Client.Connect")
 	return err
+}
+
+// TLSConnectionState returns the last TLS connection state, if any.
+// The client must already be connected.
+func (c *Client) TLSConnectionState() (_ *tls.ConnectionState, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.client == nil {
+		return nil, false
+	}
+	return c.tlsState, c.tlsState != nil
 }
 
 // ServerPublicKey returns the server's public key.
@@ -318,6 +330,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	var httpConn net.Conn        // a TCP conn or a TLS conn; what we speak HTTP to
 	var serverPub key.NodePublic // or zero if unknown (if not using TLS or TLS middlebox eats it)
 	var serverProtoVersion int
+	var tlsState *tls.ConnectionState
 	if c.useHTTPS() {
 		tlsConn := c.tlsClient(tcpConn, node)
 		httpConn = tlsConn
@@ -340,9 +353,10 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		// Note that we're not specifically concerned about TLS downgrade
 		// attacks. TLS handles that fine:
 		// https://blog.gypsyengineer.com/en/security/how-does-tls-1-3-protect-against-downgrade-attacks.html
-		connState := tlsConn.ConnectionState()
-		if connState.Version >= tls.VersionTLS13 {
-			serverPub, serverProtoVersion = parseMetaCert(connState.PeerCertificates)
+		cs := tlsConn.ConnectionState()
+		tlsState = &cs
+		if cs.Version >= tls.VersionTLS13 {
+			serverPub, serverProtoVersion = parseMetaCert(cs.PeerCertificates)
 		}
 	} else {
 		httpConn = tcpConn
@@ -409,6 +423,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	c.serverPubKey = derpClient.ServerPublicKey()
 	c.client = derpClient
 	c.netConn = tcpConn
+	c.tlsState = tlsState
 	c.connGen++
 	return c.client, c.connGen, nil
 }
