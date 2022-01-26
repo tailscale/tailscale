@@ -381,6 +381,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		if b.netMap != nil {
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
+			s.TailnetName = b.netMap.Domain
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
