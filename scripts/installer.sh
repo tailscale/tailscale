@@ -142,7 +142,7 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
- 			arch)
+			arch)
 				OS="$ID"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
@@ -250,7 +250,8 @@ main() {
 		;;
 		centos)
 			if [ "$VERSION" != "7" ] && \
-			   [ "$VERSION" != "8" ]
+			   [ "$VERSION" != "8" ] && \
+			   [ "$VERSION" != "9" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
