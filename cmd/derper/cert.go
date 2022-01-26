@@ -10,8 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -39,6 +42,24 @@ func certProviderByCertMode(mode, dir, hostname string) (certProvider, error) {
 		if hostname == "derp.tailscale.com" {
 			certManager.HostPolicy = prodAutocertHostPolicy
 			certManager.Email = "security@tailscale.com"
+			if v, err := os.ReadFile("/home/derp/forcerenew.secret"); err == nil {
+				proto := strings.TrimSpace(string(v))
+				am2 := *certManager
+				am2.RenewBefore = 89 * 24 * time.Hour
+				defGetCertificate := certManager.TLSConfig().GetCertificate
+				tlsConf2 := am2.TLSConfig()
+				getCertificate := func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					for _, p := range hi.SupportedProtos {
+						if p == proto {
+							return tlsConf2.GetCertificate(hi)
+						}
+					}
+					return defGetCertificate(hi)
+				}
+				altConf := certManager.TLSConfig()
+				altConf.GetCertificate = getCertificate
+				return altConfig{certManager, altConf}, nil
+			}
 		}
 		return certManager, nil
 	case "manual":
@@ -47,6 +68,14 @@ func certProviderByCertMode(mode, dir, hostname string) (certProvider, error) {
 		return nil, fmt.Errorf("unsupport cert mode: %q", mode)
 	}
 }
+
+// altConfig is a certProvider wrapper that returns an explicit tls.Config.
+type altConfig struct {
+	certProvider
+	tlsConfig *tls.Config
+}
+
+func (ac altConfig) TLSConfig() *tls.Config { return ac.tlsConfig }
 
 type manualCertManager struct {
 	cert     *tls.Certificate
