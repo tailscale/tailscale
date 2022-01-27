@@ -387,7 +387,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	return prefs, nil
 }
 
-// updatePrefs updates prefs based on curPrefs
+// updatePrefs returns how to edit preferences based on the
+// flag-provided 'prefs' and the currently active 'curPrefs'.
 //
 // It returns a non-nil justEditMP if we're already running and none of
 // the flags require a restart, so we can just do an EditPrefs call and
@@ -424,11 +425,16 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		env.upArgs.authKeyOrFile == "" &&
 		!controlURLChanged &&
 		!tagsChanged
+
 	if justEdit {
 		justEditMP = new(ipn.MaskedPrefs)
 		justEditMP.WantRunningSet = true
 		justEditMP.Prefs = *prefs
-		env.flagSet.Visit(func(f *flag.Flag) {
+		visitFlags := env.flagSet.Visit
+		if env.upArgs.reset {
+			visitFlags = env.flagSet.VisitAll
+		}
+		visitFlags(func(f *flag.Flag) {
 			updateMaskedPrefsFromUpFlag(justEditMP, f.Name)
 		})
 	}
@@ -520,7 +526,7 @@ func runUp(ctx context.Context, args []string) error {
 	pumpErr := make(chan error, 1)
 	go func() { pumpErr <- pump(pumpCtx, bc, c) }()
 
-	printed := !simpleUp
+	var printed bool // whether we've yet printed anything to stdout or stderr
 	var loginOnce sync.Once
 	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
 
@@ -546,7 +552,6 @@ func runUp(ctx context.Context, args []string) error {
 		if s := n.State; s != nil {
 			switch *s {
 			case ipn.NeedsLogin:
-				printed = true
 				startLoginInteractive()
 			case ipn.NeedsMachineAuth:
 				printed = true
