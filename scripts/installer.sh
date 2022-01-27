@@ -467,7 +467,7 @@ main() {
 			;;
 		xbps)
 			set -x
-			$SUDO xbps-install tailscale
+			$SUDO xbps-install tailscale -y
 			set +x
 			;;
 		emerge)
