@@ -376,6 +376,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 	t.Run("login", func(t *testing.T) {
 		runTestCommands(t, timeout, cli, []expect.Batcher{
 			&expect.BSnd{S: fmt.Sprintf("tailscale up --login-server=%s\n", loginServer)},
+			&expect.BSnd{S: "echo Success.\n"},
 			&expect.BExp{R: `Success.`},
 		})
 	})

@@ -793,8 +793,25 @@ func TestUpdatePrefs(t *testing.T) {
 				ControlURL: ipn.DefaultControlURL,
 				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
 			},
-			env:            upCheckEnv{backendState: "Running"},
-			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
+			env: upCheckEnv{backendState: "Running"},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				AdvertiseRoutesSet:        true,
+				AdvertiseTagsSet:          true,
+				AllowSingleHostsSet:       true,
+				ControlURLSet:             true,
+				CorpDNSSet:                true,
+				ExitNodeAllowLANAccessSet: true,
+				ExitNodeIDSet:             true,
+				ExitNodeIPSet:             true,
+				HostnameSet:               true,
+				NetfilterModeSet:          true,
+				NoSNATSet:                 true,
+				OperatorUserSet:           true,
+				RouteAllSet:               true,
+				RunSSHSet:                 true,
+				ShieldsUpSet:              true,
+				WantRunningSet:            true,
+			},
 		},
 		{
 			name:  "control_synonym",
@@ -860,15 +877,22 @@ func TestUpdatePrefs(t *testing.T) {
 			if simpleUp != tt.wantSimpleUp {
 				t.Fatalf("simpleUp=%v, want %v", simpleUp, tt.wantSimpleUp)
 			}
+			var oldEditPrefs ipn.Prefs
 			if justEditMP != nil {
+				oldEditPrefs = justEditMP.Prefs
 				justEditMP.Prefs = ipn.Prefs{} // uninteresting
 			}
 			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
-				t.Fatalf("justEditMP: %v", cmp.Diff(justEditMP, tt.wantJustEditMP))
+				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was %+v", oldEditPrefs)
+				t.Fatalf("justEditMP: %v\n\n: ", cmp.Diff(justEditMP, tt.wantJustEditMP, cmpIP))
 			}
 		})
 	}
 }
+
+var cmpIP = cmp.Comparer(func(a, b netaddr.IP) bool {
+	return a == b
+})
 
 func TestExitNodeIPOfArg(t *testing.T) {
 	mustIP := netaddr.MustParseIP
