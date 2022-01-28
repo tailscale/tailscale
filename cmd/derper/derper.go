@@ -241,6 +241,8 @@ func main() {
 			cert.Certificate = append(cert.Certificate, s.MetaCert())
 			return cert, nil
 		}
+		// Disable TLS 1.0 and 1.1, which are obsolete and have security issues.
+		httpsrv.TLSConfig.MinVersion = tls.VersionTLS12
 		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.TLS != nil {
 				label := "unknown"
