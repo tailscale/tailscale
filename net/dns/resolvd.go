@@ -60,7 +60,9 @@ func (m *resolvdManager) SetDNS(config OSConfig) error {
 		newSearch = append(newSearch, s.WithoutTrailingDot())
 	}
 
-	newResolvConf = append(newResolvConf, []byte(strings.Join(newSearch, " "))...)
+	if len(newSearch) > 1 {
+		newResolvConf = append(newResolvConf, []byte(strings.Join(newSearch, " "))...)
+	}
 
 	err = m.fs.WriteFile(resolvConf, newResolvConf, 0644)
 	if err != nil {
