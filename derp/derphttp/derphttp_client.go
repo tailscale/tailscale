@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -63,6 +64,12 @@ type Client struct {
 
 	ctx       context.Context // closed via cancelCtx in Client.Close
 	cancelCtx context.CancelFunc
+
+	// addrFamSelAtomic is the last AddressFamilySelector set
+	// by SetAddressFamilySelector. It's an atomic because it needs
+	// to be accessed by multiple racing routines started while
+	// Client.conn holds mu.
+	addrFamSelAtomic atomic.Value // of AddressFamilySelector
 
 	mu           sync.Mutex
 	preferred    bool
@@ -191,6 +198,32 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 		return c.url.String()
 	}
 	return fmt.Sprintf("https://%s/derp", node.HostName)
+}
+
+// AddressFamilySelector decides whethers IPv6 is preferred for
+// outbound dials.
+type AddressFamilySelector interface {
+	// PreferIPv6 reports whether IPv4 dials should be slightly
+	// delayed to give IPv6 a better chance of winning dial races.
+	// Implementations should only return true if IPv6 is expected
+	// to succeed. (otherwise delaying IPv4 will delay the
+	// connection overall)
+	PreferIPv6() bool
+}
+
+// SetAddressFamilySelector sets the AddressFamilySelector that this
+// connection will use. It should be called before any dials.
+// The value must not be nil. If called more than once, s must
+// be the same concrete type as any prior calls.
+func (c *Client) SetAddressFamilySelector(s AddressFamilySelector) {
+	c.addrFamSelAtomic.Store(s)
+}
+
+func (c *Client) preferIPv6() bool {
+	if s, ok := c.addrFamSelAtomic.Load().(AddressFamilySelector); ok {
+		return s.PreferIPv6()
+	}
+	return false
 }
 
 // dialWebsocketFunc is non-nil (set by websocket.go's init) when compiled in.
@@ -583,6 +616,18 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 	startDial := func(dstPrimary, proto string) {
 		nwait++
 		go func() {
+			if proto == "tcp4" && c.preferIPv6() {
+				t := time.NewTimer(200 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					// Either user canceled original context,
+					// it timed out, or the v6 dial succeeded.
+					t.Stop()
+					return
+				case <-t.C:
+					// Start v4 dial
+				}
+			}
 			dst := dstPrimary
 			if dst == "" {
 				dst = n.HostName
