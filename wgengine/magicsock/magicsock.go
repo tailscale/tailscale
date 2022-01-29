@@ -305,6 +305,8 @@ type Conn struct {
 	// lock ordering deadlocks. See issue 3726 and mu field docs.
 	derpMapAtomic atomic.Value // of *tailcfg.DERPMap
 
+	lastNetCheckReport atomic.Value // of *netcheck.Report
+
 	// port is the preferred port from opts.Port; 0 means auto.
 	port syncs.AtomicUint32
 
@@ -741,6 +743,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		return nil, err
 	}
 
+	c.lastNetCheckReport.Store(report)
 	c.noV4.Set(!report.IPv4)
 	c.noV6.Set(!report.IPv6)
 	c.noV4Send.Set(!report.IPv4CanSend)
@@ -1380,6 +1383,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.NodePublic) cha
 
 	dc.SetCanAckPings(true)
 	dc.NotePreferred(c.myDerp == regionID)
+	dc.SetAddressFamilySelector(derpAddrFamSelector{c})
 	dc.DNSCache = dnscache.Get()
 
 	ctx, cancel := context.WithCancel(c.connCtx)
@@ -4123,6 +4127,22 @@ type discoInfo struct {
 func (di *discoInfo) setNodeKey(nk key.NodePublic) {
 	di.lastNodeKey = nk
 	di.lastNodeKeyTime = time.Now()
+}
+
+// derpAddrFamSelector is the derphttp.AddressFamilySelector we pass
+// to derphttp.Client.SetAddressFamilySelector.
+//
+// It provides the hint as to whether in an IPv4-vs-IPv6 race that
+// IPv4 should be held back a bit to give IPv6 a better-than-50/50
+// chance of winning. We only return true when we believe IPv6 will
+// work anyway, so we don't artificially delay the connection speed.
+type derpAddrFamSelector struct{ c *Conn }
+
+func (s derpAddrFamSelector) PreferIPv6() bool {
+	if r, ok := s.c.lastNetCheckReport.Load().(*netcheck.Report); ok {
+		return r.IPv6
+	}
+	return false
 }
 
 var (
