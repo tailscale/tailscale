@@ -215,7 +215,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	wiredPeerAPIPort := false
 	if ig, ok := e.(wgengine.InternalsGetter); ok {
 		if tunWrap, _, ok := ig.GetInternals(); ok {
-			tunWrap.PeerAPIPort = b.getPeerAPIPortForTSMPPing
+			tunWrap.PeerAPIPort = b.GetPeerAPIPort
 			wiredPeerAPIPort = true
 		}
 	}
@@ -1788,7 +1788,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	b.send(ipn.Notify{Prefs: newp})
 }
 
-func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok bool) {
+// GetPeerAPIPort returns the port number for the peerapi server
+// running on the provided IP.
+func (b *LocalBackend) GetPeerAPIPort(ip netaddr.IP) (port uint16, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
@@ -1797,6 +1799,27 @@ func (b *LocalBackend) getPeerAPIPortForTSMPPing(ip netaddr.IP) (port uint16, ok
 		}
 	}
 	return 0, false
+}
+
+// ServePeerAPIConnection serves an already-accepted connection c.
+//
+// The remote parameter is the remote address.
+// The local paramater is the local address (either a Tailscale IPv4
+// or IPv6 IP and the peerapi port for that address).
+//
+// The connection will be closed by ServePeerAPIConnection.
+func (b *LocalBackend) ServePeerAPIConnection(remote, local netaddr.IPPort, c net.Conn) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, pln := range b.peerAPIListeners {
+		if pln.ip == local.IP() {
+			go pln.ServeConn(remote, c)
+			return
+		}
+	}
+	b.logf("[unexpected] no peerAPI listener found for %v", local)
+	c.Close()
+	return
 }
 
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
