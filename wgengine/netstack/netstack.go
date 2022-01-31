@@ -82,9 +82,12 @@ type Impl struct {
 	mc        *magicsock.Conn
 	logf      logger.Logf
 	dialer    *tsdial.Dialer
-	ctx       context.Context    // alive until Close
-	ctxCancel context.CancelFunc // called on Close
-	lb        *ipnlocal.LocalBackend
+	ctx       context.Context        // alive until Close
+	ctxCancel context.CancelFunc     // called on Close
+	lb        *ipnlocal.LocalBackend // or nil
+
+	peerapiPort4Atomic uint32 // uint16 port number for IPv4 peerapi
+	peerapiPort6Atomic uint32 // uint16 port number for IPv6 peerapi
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -407,9 +410,33 @@ func (ns *Impl) processSSH() bool {
 	return ns.lb != nil && ns.lb.ShouldRunSSH()
 }
 
+func (ns *Impl) peerAPIPortAtomic(ip netaddr.IP) *uint32 {
+	if ip.Is4() {
+		return &ns.peerapiPort4Atomic
+	} else {
+		return &ns.peerapiPort6Atomic
+	}
+}
+
 // shouldProcessInbound reports whether an inbound packet should be
 // handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
+	// Handle incoming peerapi connections in netstack.
+	if ns.lb != nil && p.IPProto == ipproto.TCP {
+		var peerAPIPort uint16
+		dstIP := p.Dst.IP()
+		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn && ns.isLocalIP(dstIP) {
+			if port, ok := ns.lb.GetPeerAPIPort(p.Dst.IP()); ok {
+				peerAPIPort = port
+				atomic.StoreUint32(ns.peerAPIPortAtomic(dstIP), uint32(port))
+			}
+		} else {
+			peerAPIPort = uint16(atomic.LoadUint32(ns.peerAPIPortAtomic(dstIP)))
+		}
+		if p.IPProto == ipproto.TCP && p.Dst.Port() == peerAPIPort {
+			return true
+		}
+	}
 	if ns.isInboundTSSH(p) && ns.processSSH() {
 		return true
 	}
@@ -620,6 +647,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.logf("ssh demo: ok")
 		}
 		return
+	}
+	if ns.lb != nil {
+		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
+			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
+				src := netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort)
+				dst := netaddr.IPPortFrom(dialIP, port)
+				ns.lb.ServePeerAPIConnection(src, dst, c)
+				return
+			}
+		}
 	}
 	if ns.ForwardTCPIn != nil {
 		ns.ForwardTCPIn(c, reqDetails.LocalPort)
