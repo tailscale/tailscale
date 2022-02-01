@@ -36,14 +36,15 @@ import (
 
 var (
 	dev           = flag.Bool("dev", false, "run in localhost development mode")
-	addr          = flag.String("a", ":443", "server address")
+	addr          = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
 	httpPort      = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable")
 	configPath    = flag.String("c", "", "config file path")
 	certMode      = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
-	runSTUN       = flag.Bool("stun", false, "also run a STUN server")
+	runSTUN       = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
+
 	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
 	bootstrapDNS  = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
