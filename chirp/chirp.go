@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -19,9 +20,9 @@ func New(socket string) (*BIRDClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to BIRD: %w", err)
 	}
-	b := &BIRDClient{socket: socket, conn: conn, bs: bufio.NewScanner(conn)}
+	b := &BIRDClient{socket: socket, conn: conn, scanner: bufio.NewScanner(conn)}
 	// Read and discard the first line as that is the welcome message.
-	if _, err := b.readLine(); err != nil {
+	if _, err := b.readResponse(); err != nil {
 		return nil, err
 	}
 	return b, nil
@@ -29,9 +30,9 @@ func New(socket string) (*BIRDClient, error) {
 
 // BIRDClient handles communication with the BIRD Internet Routing Daemon.
 type BIRDClient struct {
-	socket string
-	conn   net.Conn
-	bs     *bufio.Scanner
+	socket  string
+	conn    net.Conn
+	scanner *bufio.Scanner
 }
 
 // Close closes the underlying connection to BIRD.
@@ -39,7 +40,7 @@ func (b *BIRDClient) Close() error { return b.conn.Close() }
 
 // DisableProtocol disables the provided protocol.
 func (b *BIRDClient) DisableProtocol(protocol string) error {
-	out, err := b.exec("disable %s\n", protocol)
+	out, err := b.exec("disable %s", protocol)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,7 @@ func (b *BIRDClient) DisableProtocol(protocol string) error {
 
 // EnableProtocol enables the provided protocol.
 func (b *BIRDClient) EnableProtocol(protocol string) error {
-	out, err := b.exec("enable %s\n", protocol)
+	out, err := b.exec("enable %s", protocol)
 	if err != nil {
 		return err
 	}
@@ -65,19 +66,51 @@ func (b *BIRDClient) EnableProtocol(protocol string) error {
 	return fmt.Errorf("failed to enable %s: %v", protocol, out)
 }
 
+// BIRD CLI docs from https://bird.network.cz/?get_doc&v=20&f=prog-2.html#ss2.9
+
+// Each session of the CLI consists of a sequence of request and replies,
+// slightly resembling the FTP and SMTP protocols.
+// Requests are commands encoded as a single line of text,
+// replies are sequences of lines starting with a four-digit code
+// followed by either a space (if it's the last line of the reply) or
+// a minus sign (when the reply is going to continue with the next line),
+// the rest of the line contains a textual message semantics of which depends on the numeric code.
+// If a reply line has the same code as the previous one and it's a continuation line,
+// the whole prefix can be replaced by a single white space character.
+//
+// Reply codes starting with 0 stand for ‘action successfully completed’ messages,
+// 1 means ‘table entry’, 8 ‘runtime error’ and 9 ‘syntax error’.
+
 func (b *BIRDClient) exec(cmd string, args ...interface{}) (string, error) {
 	if _, err := fmt.Fprintf(b.conn, cmd, args...); err != nil {
 		return "", err
 	}
-	return b.readLine()
+	fmt.Fprintln(b.conn)
+	return b.readResponse()
 }
 
-func (b *BIRDClient) readLine() (string, error) {
-	if !b.bs.Scan() {
-		return "", fmt.Errorf("reading response from bird failed")
+var respCodeRegex = regexp.MustCompile(`^\d{4}[ -]`)
+
+func (b *BIRDClient) readResponse() (string, error) {
+	var resp strings.Builder
+	var done bool
+	for !done {
+		if !b.scanner.Scan() {
+			return "", fmt.Errorf("reading response from bird failed: %q", resp.String())
+		}
+		if err := b.scanner.Err(); err != nil {
+			return "", err
+		}
+		out := b.scanner.Bytes()
+		if _, err := resp.Write(out); err != nil {
+			return "", err
+		}
+		if respCodeRegex.Match(out) {
+			done = out[4] == ' '
+		}
+		if !done {
+			resp.WriteRune('\n')
+		}
 	}
-	if err := b.bs.Err(); err != nil {
-		return "", err
-	}
-	return b.bs.Text(), nil
+	return resp.String(), nil
 }
