@@ -2,33 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build windows
-// +build windows
-
-// Package winuntil contains misc Windows/win32 helper functions.
+// Package winutil contains misc Windows/Win32 helper functions.
 package winutil
 
-import (
-	"log"
-	"syscall"
-
-	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
-)
-
-const RegBase = `SOFTWARE\Tailscale IPN`
-
-// GetDesktopPID searches the PID of the process that's running the
-// currently active desktop and whether it was found.
-// Usually the PID will be for explorer.exe.
-func GetDesktopPID() (pid uint32, ok bool) {
-	hwnd := windows.GetShellWindow()
-	if hwnd == 0 {
-		return 0, false
-	}
-	windows.GetWindowThreadProcessId(hwnd, &pid)
-	return pid, pid != 0
-}
+// RegBase is the registry path inside HKEY_LOCAL_MACHINE where registry settings
+// are stored. This constant is a non-empty string only when GOOS=windows.
+const RegBase = regBase
 
 // GetRegString looks up a registry path in our local machine path, or returns
 // the given default if it can't.
@@ -36,21 +15,7 @@ func GetDesktopPID() (pid uint32, ok bool) {
 // This function will only work on GOOS=windows. Trying to run it on any other
 // OS will always return the default value.
 func GetRegString(name, defval string) string {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
-	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
-		return defval
-	}
-	defer key.Close()
-
-	val, _, err := key.GetStringValue(name)
-	if err != nil {
-		if err != registry.ErrNotExist {
-			log.Printf("registry.GetStringValue(%v): %v", name, err)
-		}
-		return defval
-	}
-	return val
+	return getRegString(name, defval)
 }
 
 // GetRegInteger looks up a registry path in our local machine path, or returns
@@ -59,31 +24,17 @@ func GetRegString(name, defval string) string {
 // This function will only work on GOOS=windows. Trying to run it on any other
 // OS will always return the default value.
 func GetRegInteger(name string, defval uint64) uint64 {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, RegBase, registry.READ)
-	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", RegBase, err)
-		return defval
-	}
-	defer key.Close()
-
-	val, _, err := key.GetIntegerValue(name)
-	if err != nil {
-		if err != registry.ErrNotExist {
-			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
-		}
-		return defval
-	}
-	return val
+	return getRegInteger(name, defval)
 }
 
-var (
-	kernel32                         = syscall.NewLazyDLL("kernel32.dll")
-	procWTSGetActiveConsoleSessionId = kernel32.NewProc("WTSGetActiveConsoleSessionId")
-)
-
-// TODO(crawshaw): replace with x/sys/windows... one day.
-// https://go-review.googlesource.com/c/sys/+/331909
-func WTSGetActiveConsoleSessionId() uint32 {
-	r1, _, _ := procWTSGetActiveConsoleSessionId.Call()
-	return uint32(r1)
+// IsSIDValidPrincipal determines whether the SID contained in uid represents a
+// type that is a valid security principal under Windows. This check helps us
+// work around a bug in the standard library's Windows implementation of
+// LookupId in os/user.
+// See https://github.com/tailscale/tailscale/issues/869
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return false.
+func IsSIDValidPrincipal(uid string) bool {
+	return isSIDValidPrincipal(uid)
 }

@@ -47,6 +47,7 @@ import (
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -182,6 +183,13 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 func lookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
 	u, err := user.LookupId(uid)
 	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
+		// The below workaround is only applicable when uid represents a
+		// valid security principal. Omitting this check causes us to succeed
+		// even when uid represents a deleted user.
+		if !winutil.IsSIDValidPrincipal(uid) {
+			return nil, err
+		}
+
 		logf("[warning] issue 869: os/user.LookupId failed; ignoring")
 		// Work around https://github.com/tailscale/tailscale/issues/869 for
 		// now. We don't strictly need the username. It's just a nice-to-have.
