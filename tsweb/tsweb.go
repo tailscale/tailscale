@@ -280,6 +280,7 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // response code that gets sent, if any.
 type loggingResponseWriter struct {
 	http.ResponseWriter
+	ctx      context.Context
 	code     int
 	bytes    int
 	hijacked bool
@@ -328,6 +329,20 @@ func (l loggingResponseWriter) Flush() {
 		return
 	}
 	f.Flush()
+}
+
+func (l *loggingResponseWriter) httpCode() int {
+	switch {
+	case l.code != 0:
+		return l.code
+	case l.hijacked:
+		return http.StatusSwitchingProtocols
+	case l.ctx.Err() == context.Canceled:
+		return 499 // nginx convention: Client Closed Request
+	default:
+		// Handler didn't write a body or send a header, that means 200.
+		return 200
+	}
 }
 
 // HTTPError is an error with embedded HTTP response information.
