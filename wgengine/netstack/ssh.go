@@ -107,7 +107,13 @@ func (ns *Impl) handleSSH(s ssh.Session) {
 		return
 	}
 
-	cmd := exec.Command("/bin/bash")
+	var cmd *exec.Cmd
+	sshUser := s.User()
+	if os.Getuid() != 0 || sshUser == "root" {
+		cmd = exec.Command("/bin/bash")
+	} else {
+		cmd = exec.Command("/usr/bin/env", "su", "-", sshUser)
+	}
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 	f, err := pty.Start(cmd)
 	if err != nil {
