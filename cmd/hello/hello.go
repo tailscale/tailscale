@@ -18,10 +18,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tsweb"
 )
 
 var (
@@ -62,44 +62,37 @@ func main() {
 	http.HandleFunc("/", root)
 	log.Printf("Starting hello server.")
 
-	errc := make(chan error, 1)
-	if *httpAddr != "" {
-		log.Printf("running HTTP server on %s", *httpAddr)
-		go func() {
-			errc <- http.ListenAndServe(*httpAddr, nil)
-		}()
+	mainAddr := *httpsAddr
+	if mainAddr == "" {
+		mainAddr = *httpAddr
 	}
-	if *httpsAddr != "" {
-		log.Printf("running HTTPS server on %s", *httpsAddr)
-		go func() {
-			hs := &http.Server{
-				Addr: *httpsAddr,
-				TLSConfig: &tls.Config{
-					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-						switch hi.ServerName {
-						case "hello.ts.net":
-							return tailscale.GetCertificate(hi)
-						case "hello.ipn.dev":
-							c, err := tls.LoadX509KeyPair(
-								"/etc/hello/hello.ipn.dev.crt",
-								"/etc/hello/hello.ipn.dev.key",
-							)
-							if err != nil {
-								return nil, err
-							}
-							return &c, nil
-						}
-						return nil, errors.New("invalid SNI name")
-					},
-				},
-				IdleTimeout:       30 * time.Second,
-				ReadHeaderTimeout: 20 * time.Second,
-				MaxHeaderBytes:    10 << 10,
+	httpCfg := tsweb.ServerConfig{
+		Name:    "hello",
+		Addr:    mainAddr,
+		Handler: http.DefaultServeMux,
+	}
+	server := tsweb.NewServer(httpCfg)
+	if server.HTTPS != nil {
+		server.HTTPS.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			switch hi.ServerName {
+			case "hello.ts.net":
+				return tailscale.GetCertificate(hi)
+			case "hello.ipn.dev":
+				c, err := tls.LoadX509KeyPair(
+					"/etc/hello/hello.ipn.dev.crt",
+					"/etc/hello/hello.ipn.dev.key",
+				)
+				if err != nil {
+					return nil, err
+				}
+				return &c, nil
 			}
-			errc <- hs.ListenAndServeTLS("", "")
-		}()
+			return nil, errors.New("invalid SNI name")
+		}
 	}
-	log.Fatal(<-errc)
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func devMode() bool { return *httpsAddr == "" && *httpAddr != "" }
