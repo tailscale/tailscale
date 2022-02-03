@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"regexp"
 	"strings"
 )
 
@@ -89,7 +88,21 @@ func (b *BIRDClient) exec(cmd string, args ...interface{}) (string, error) {
 	return b.readResponse()
 }
 
-var respCodeRegex = regexp.MustCompile(`^\d{4}[ -]`)
+// hasResponseCode reports whether the provided byte slice is
+// prefixed with a BIRD response code.
+// Equivalent regex: `^\d{4}[ -]`.
+func hasResponseCode(s []byte) bool {
+	if len(s) < 5 {
+		return false
+	}
+	for _, b := range s[:4] {
+		if '0' <= b && b <= '9' {
+			continue
+		}
+		return false
+	}
+	return s[4] == ' ' || s[4] == '-'
+}
 
 func (b *BIRDClient) readResponse() (string, error) {
 	var resp strings.Builder
@@ -105,7 +118,7 @@ func (b *BIRDClient) readResponse() (string, error) {
 		if _, err := resp.Write(out); err != nil {
 			return "", err
 		}
-		if respCodeRegex.Match(out) {
+		if hasResponseCode(out) {
 			done = out[4] == ' '
 		}
 		if !done {
