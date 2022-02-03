@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -32,6 +33,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 )
 
 var (
@@ -135,9 +137,13 @@ func main() {
 		tsweb.DevMode = true
 	}
 
-	listenHost, _, err := net.SplitHostPort(*addr)
-	if err != nil {
-		log.Fatalf("invalid server address: %v", err)
+	if *certDir == "" {
+		log.Fatal("missing required --certdir flag")
+	}
+	switch *certMode {
+	case "letsencrypt", "manual":
+	default:
+		log.Fatalf("unknown --certmode %q", *certMode)
 	}
 
 	var logPol *logpolicy.Policy
@@ -148,34 +154,15 @@ func main() {
 
 	cfg := loadConfig()
 
-	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
-
-	s := derp.NewServer(cfg.PrivateKey, log.Printf)
-	s.SetVerifyClient(*verifyClients)
-
-	if *meshPSKFile != "" {
-		b, err := ioutil.ReadFile(*meshPSKFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		key := strings.TrimSpace(string(b))
-		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
-			log.Fatalf("key in %s must contain 64+ hex digits", *meshPSKFile)
-		}
-		s.SetMeshKey(key)
-		log.Printf("DERP mesh key configured")
-	}
-	if err := startMesh(s); err != nil {
-		log.Fatalf("startMesh: %v", err)
+	s, err := startDerper(log.Printf, cfg.PrivateKey, *verifyClients, *meshPSKFile)
+	if err != nil {
+		log.Fatal(err)
 	}
 	expvar.Publish("derp", s.ExpVar())
 
 	mux := http.NewServeMux()
-	derpHandler := derphttp.Handler(s)
-	derpHandler = addWebSocketSupport(s, derpHandler)
-	mux.Handle("/derp", derpHandler)
+	mux.Handle("/derp", addWebSocketSupport(s, derphttp.Handler(s)))
 	mux.HandleFunc("/derp/probe", probeHandler)
-	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -193,10 +180,21 @@ func main() {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
 		}
 	}))
-	debug := tsweb.Debugger(mux)
-	debug.KV("TLS hostname", *hostname)
-	debug.KV("Mesh key", s.HasMeshKey())
-	debug.Handle("check", "Consistency check", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	httpCfg := tsweb.ServerConfig{
+		Name:             "derper",
+		Addr:             *addr,
+		Handler:          mux,
+		AllowedHostnames: autocertPolicy(*hostname, *certMode == "letsencrypt"),
+		ForceTLS:         *certMode == "manual",
+	}
+	server := tsweb.NewServer(httpCfg)
+	if server.HTTPS == nil {
+		log.Fatal("derper can only serve over TLS")
+	}
+	server.Debug.KV("TLS hostname", *hostname)
+	server.Debug.KV("Mesh key", s.HasMeshKey())
+	server.Debug.Handle("check", "Consistency check", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := s.ConsistencyCheck()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -204,106 +202,69 @@ func main() {
 			io.WriteString(w, "derp.Server ConsistencyCheck okay")
 		}
 	}))
-	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	server.Debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+
+	if server.CertManager != nil {
+		if *hostname != "derp.tailscale.com" {
+			server.CertManager.Email = ""
+		}
+		// TODO: derper could just use ~/.cache/tailscale/derper, but
+		// for legacy compat, force the use of certDir.
+		server.CertManager.Cache = autocert.DirCache(*certDir)
+	}
+	if *certMode == "manual" {
+		certManager, err := NewManualCertManager(*certDir, *hostname)
+		if err != nil {
+			log.Fatalf("creating manual cert manager: %v", err)
+		}
+		server.HTTPS.TLSConfig.GetCertificate = certManager.GetCertificate
+	}
+
+	// Append the derper meta-certificate to the "regular" TLS
+	// certificate chain, to enable RTT-reduced handshaking.
+	getCert := server.HTTPS.TLSConfig.GetCertificate
+	server.HTTPS.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		cert, err := getCert(hi)
+		if err != nil {
+			return nil, err
+		}
+		cert.Certificate = append(cert.Certificate, s.MetaCert())
+		return cert, nil
+	}
 
 	if *runSTUN {
+		listenHost, _, err := net.SplitHostPort(*addr)
+		if err != nil {
+			log.Fatalf("invalid server address: %v", err)
+		}
 		go serveSTUN(listenHost)
 	}
 
-	httpsrv := &http.Server{
-		Addr:    *addr,
-		Handler: mux,
-
-		// Set read/write timeout. For derper, this basically
-		// only affects TLS setup, as read/write deadlines are
-		// cleared on Hijack, which the DERP server does. But
-		// without this, we slowly accumulate stuck TLS
-		// handshake goroutines forever. This also affects
-		// /debug/ traffic, but 30 seconds is plenty for
-		// Prometheus/etc scraping.
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-
-	if serveTLS {
-		log.Printf("derper: serving on %s with TLS", *addr)
-		var certManager certProvider
-		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname)
-		if err != nil {
-			log.Fatalf("derper: can not start cert provider: %v", err)
-		}
-		httpsrv.TLSConfig = certManager.TLSConfig()
-		getCert := httpsrv.TLSConfig.GetCertificate
-		httpsrv.TLSConfig.GetCertificate = func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			cert, err := getCert(hi)
-			if err != nil {
-				return nil, err
-			}
-			cert.Certificate = append(cert.Certificate, s.MetaCert())
-			return cert, nil
-		}
-		// Disable TLS 1.0 and 1.1, which are obsolete and have security issues.
-		httpsrv.TLSConfig.MinVersion = tls.VersionTLS12
-		httpsrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.TLS != nil {
-				label := "unknown"
-				switch r.TLS.Version {
-				case tls.VersionTLS10:
-					label = "1.0"
-				case tls.VersionTLS11:
-					label = "1.1"
-				case tls.VersionTLS12:
-					label = "1.2"
-				case tls.VersionTLS13:
-					label = "1.3"
-				}
-				tlsRequestVersion.Add(label, 1)
-				tlsActiveVersion.Add(label, 1)
-				defer tlsActiveVersion.Add(label, -1)
-			}
-
-			// Set HTTP headers to appease automated security scanners.
-			//
-			// Security automation gets cranky when HTTPS sites don't
-			// set HSTS, and when they don't specify a content
-			// security policy for XSS mitigation.
-			//
-			// DERP's HTTP interface is only ever used for debug
-			// access (for which trivial safe policies work just
-			// fine), and by DERP clients which don't obey any of
-			// these browser-centric headers anyway.
-			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
-			mux.ServeHTTP(w, r)
-		})
-		if *httpPort > -1 {
-			go func() {
-				port80srv := &http.Server{
-					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
-					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
-					ReadTimeout: 30 * time.Second,
-					// Crank up WriteTimeout a bit more than usually
-					// necessary just so we can do long CPU profiles
-					// and not hit net/http/pprof's "profile
-					// duration exceeds server's WriteTimeout".
-					WriteTimeout: 5 * time.Minute,
-				}
-				err := port80srv.ListenAndServe()
-				if err != nil {
-					if err != http.ErrServerClosed {
-						log.Fatal(err)
-					}
-				}
-			}()
-		}
-		err = httpsrv.ListenAndServeTLS("", "")
-	} else {
-		log.Printf("derper: serving on %s", *addr)
-		err = httpsrv.ListenAndServe()
-	}
-	if err != nil && err != http.ErrServerClosed {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("derper: %v", err)
 	}
+}
+
+func startDerper(logf logger.Logf, privateKey key.NodePrivate, verifyClients bool, meshPSKFile string) (*derp.Server, error) {
+	s := derp.NewServer(privateKey, logf)
+	s.SetVerifyClient(verifyClients)
+
+	if meshPSKFile != "" {
+		b, err := ioutil.ReadFile(meshPSKFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading mesh PSK file: %v", err)
+		}
+		key := strings.TrimSpace(string(b))
+		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
+			return nil, fmt.Errorf("key in %s must contain 64+ hex digits", meshPSKFile)
+		}
+		s.SetMeshKey(key)
+	}
+	if err := startMesh(s); err != nil {
+		return nil, fmt.Errorf("startMesh: %v", err)
+	}
+	go refreshBootstrapDNSLoop()
+	return s, nil
 }
 
 // probeHandler is the endpoint that js/wasm clients hit to measure
@@ -370,6 +331,16 @@ func serverSTUNListener(ctx context.Context, pc *net.UDPConn) {
 }
 
 var validProdHostname = regexp.MustCompile(`^derp([^.]*)\.tailscale\.com\.?$`)
+
+func autocertPolicy(hostname string, useAutocert bool) autocert.HostPolicy {
+	if !useAutocert {
+		return nil
+	}
+	if hostname == "derp.tailscale.com" {
+		return prodAutocertHostPolicy
+	}
+	return autocert.HostWhitelist(hostname)
+}
 
 func prodAutocertHostPolicy(_ context.Context, host string) error {
 	if validProdHostname.MatchString(host) {
