@@ -28,6 +28,11 @@ func init() {
 
 var procNetRouteErr syncs.AtomicBool
 
+// errStopReading is a sentinel error value used internally by
+// lineread.File callers to stop reading. It doesn't escape to
+// callers/users.
+var errStopReading = errors.New("stop reading")
+
 /*
 Parse 10.0.0.1 out of:
 
@@ -47,11 +52,14 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 	}
 	lineNum := 0
 	var f []mem.RO
-	err := lineread.File("/proc/net/route", func(line []byte) error {
+	err := lineread.File(procNetRoutePath, func(line []byte) error {
 		lineNum++
 		if lineNum == 1 {
 			// Skip header line.
 			return nil
+		}
+		if lineNum > maxProcNetRouteRead {
+			return errStopReading
 		}
 		f = mem.AppendFields(f[:0], mem.B(line))
 		if len(f) < 4 {
@@ -74,9 +82,13 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 		ip := netaddr.IPv4(byte(ipu32), byte(ipu32>>8), byte(ipu32>>16), byte(ipu32>>24))
 		if ip.IsPrivate() {
 			ret = ip
+			return errStopReading
 		}
 		return nil
 	})
+	if errors.Is(err, errStopReading) {
+		err = nil
+	}
 	if err != nil {
 		procNetRouteErr.Set(true)
 		if runtime.GOOS == "android" {
@@ -139,6 +151,10 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 var zeroRouteBytes = []byte("00000000")
 var procNetRoutePath = "/proc/net/route"
 
+// maxProcNetRouteRead is the max number of lines to read from
+// /proc/net/route looking for a default route.
+const maxProcNetRouteRead = 1000
+
 func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 	f, err := os.Open(procNetRoutePath)
 	if err != nil {
@@ -147,9 +163,11 @@ func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 	defer f.Close()
 
 	br := bufio.NewReaderSize(f, bufsize)
+	lineNum := 0
 	for {
+		lineNum++
 		line, err := br.ReadSlice('\n')
-		if err == io.EOF {
+		if err == io.EOF || lineNum > maxProcNetRouteRead {
 			return "", fmt.Errorf("no default routes found: %w", err)
 		}
 		if err != nil {

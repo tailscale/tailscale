@@ -51,7 +51,7 @@ func TestExtremelyLongProcNetRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for n := 0; n <= 1000; n++ {
+	for n := 0; n <= 900; n++ {
 		line := fmt.Sprintf("eth%d\t8008FEA9\t00000000\t0001\t0\t0\t0\t01FFFFFF\t0\t0\t0\n", n)
 		_, err := f.Write([]byte(line))
 		if err != nil {
