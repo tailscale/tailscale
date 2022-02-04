@@ -34,11 +34,13 @@ import (
 	"inet.af/netstack/tcpip/transport/tcp"
 	"inet.af/netstack/tcpip/transport/udp"
 	"inet.af/netstack/waiter"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/version/distro"
@@ -79,8 +81,12 @@ type Impl struct {
 	mc        *magicsock.Conn
 	logf      logger.Logf
 	dialer    *tsdial.Dialer
-	ctx       context.Context    // alive until Close
-	ctxCancel context.CancelFunc // called on Close
+	ctx       context.Context        // alive until Close
+	ctxCancel context.CancelFunc     // called on Close
+	lb        *ipnlocal.LocalBackend // or nil
+
+	peerapiPort4Atomic uint32 // uint16 port number for IPv4 peerapi
+	peerapiPort6Atomic uint32 // uint16 port number for IPv6 peerapi
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -162,6 +168,12 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 func (ns *Impl) Close() error {
 	ns.ctxCancel()
 	return nil
+}
+
+// SetLocalBackend sets the LocalBackend; it should only be run before
+// the Start method is called.
+func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
+	ns.lb = lb
 }
 
 // wrapProtoHandler returns protocol handler h wrapped in a version
@@ -251,8 +263,9 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 		ap := protocolAddr.AddressWithPrefix
 		ip := netaddrIPFromNetstackIP(ap.Address)
 		if ip == v4broadcast && ap.PrefixLen == 32 {
-			// Don't delete this one later. It seems to be important.
-			// Related to Issue 2642? Likely.
+			// Don't add 255.255.255.255/32 to oldIPs so we don't
+			// delete it later. We didn't install it, so it's not
+			// ours to delete.
 			continue
 		}
 		oldIPs[ap] = true
@@ -263,10 +276,10 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	if nm.SelfNode != nil {
 		for _, ipp := range nm.SelfNode.Addresses {
 			isAddr[ipp] = true
+			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
 		for _, ipp := range nm.SelfNode.AllowedIPs {
-			local := isAddr[ipp]
-			if local && ns.ProcessLocalIPs || !local && ns.ProcessSubnets {
+			if !isAddr[ipp] && ns.ProcessSubnets {
 				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 			}
 		}
@@ -389,9 +402,33 @@ func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
 	return ns.atomicIsLocalIPFunc.Load().(func(netaddr.IP) bool)(ip)
 }
 
+func (ns *Impl) peerAPIPortAtomic(ip netaddr.IP) *uint32 {
+	if ip.Is4() {
+		return &ns.peerapiPort4Atomic
+	} else {
+		return &ns.peerapiPort6Atomic
+	}
+}
+
 // shouldProcessInbound reports whether an inbound packet should be
 // handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
+	// Handle incoming peerapi connections in netstack.
+	if ns.lb != nil && p.IPProto == ipproto.TCP {
+		var peerAPIPort uint16
+		dstIP := p.Dst.IP()
+		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn && ns.isLocalIP(dstIP) {
+			if port, ok := ns.lb.GetPeerAPIPort(p.Dst.IP()); ok {
+				peerAPIPort = port
+				atomic.StoreUint32(ns.peerAPIPortAtomic(dstIP), uint32(port))
+			}
+		} else {
+			peerAPIPort = uint16(atomic.LoadUint32(ns.peerAPIPortAtomic(dstIP)))
+		}
+		if p.IPProto == ipproto.TCP && p.Dst.Port() == peerAPIPort {
+			return true
+		}
+	}
 	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
 		// Fast path for common case (e.g. Linux server in TUN mode) where
 		// netstack isn't used at all; don't even do an isLocalIP lookup.
@@ -584,6 +621,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
+	if ns.lb != nil {
+		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
+			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
+				src := netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort)
+				dst := netaddr.IPPortFrom(dialIP, port)
+				ns.lb.ServePeerAPIConnection(src, dst, c)
+				return
+			}
+		}
+	}
 	if ns.ForwardTCPIn != nil {
 		ns.ForwardTCPIn(c, reqDetails.LocalPort)
 		return

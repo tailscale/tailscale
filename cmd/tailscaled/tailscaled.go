@@ -328,9 +328,6 @@ func run() error {
 	}
 	ns.ProcessLocalIPs = useNetstack
 	ns.ProcessSubnets = useNetstack || wrapNetstack
-	if err := ns.Start(); err != nil {
-		return fmt.Errorf("failed to start netstack: %w", err)
-	}
 
 	if useNetstack {
 		dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
@@ -390,6 +387,10 @@ func run() error {
 	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
 	if err != nil {
 		return fmt.Errorf("ipnserver.New: %w", err)
+	}
+	ns.SetLocalBackend(srv.LocalBackend())
+	if err := ns.Start(); err != nil {
+		return fmt.Errorf("failed to start netstack: %w", err)
 	}
 
 	if debugMux != nil {
