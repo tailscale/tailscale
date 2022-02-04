@@ -15,6 +15,10 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
     - [POST device routes](#device-routes-post)
   - Authorize machine
     - [POST device authorized](#device-authorized-post)
+  - Tags
+    - [POST device tags](#device-tags-post)
+  - Key
+    - [POST device key](#device-key-post)
 * **[Tailnets](#tailnet)**
   - ACLs
     - [GET tailnet ACL](#tailnet-acl-get)
@@ -263,6 +267,68 @@ Marks a device as authorized, for Tailnets where device authorization is require
 curl 'https://api.tailscale.com/api/v2/device/11055/authorized' \
 -u "tskey-yourapikey123:" \
 --data-binary '{"authorized": true}'
+```
+
+The response is 2xx on success. The response body is currently an empty JSON
+object.
+
+<a name=device-tags-post></a>
+
+#### `POST /api/v2/device/:deviceID/tags` - update tags on a device
+
+Updates the tags set on a device.
+
+##### Parameters
+
+###### POST Body
+
+`tags` - The new list of tags for the device.
+
+```
+{
+  "tags": ["tag:foo", "tag:bar"]
+}
+```
+
+##### Example
+
+```
+curl 'https://api.tailscale.com/api/v2/device/11055/tags' \
+-u "tskey-yourapikey123:" \
+--data-binary '{"tags": ["tag:foo", "tag:bar"]}'
+```
+
+The response is 2xx on success. The response body is currently an empty JSON
+object.
+
+<a name=device-key-post></a>
+
+#### `POST /api/v2/device/:deviceID/key` - update device key
+
+Allows for updating properties on the device key.
+
+##### Parameters
+
+###### POST Body
+
+`keyExpiryDisabled`
+
+- Provide `true` to disable the device's key expiry. The original key expiry time is still maintained. Upon re-enabling, the key will expire at that original time.
+- Provide `false` to enable the device's key expiry. Sets the key to expire at the original expiry time prior to disabling. The key may already have expired. In that case, the device must be re-authenticated.
+- Empty value will not change the key expiry.
+
+```
+{
+  "keyExpiryDisabled": true
+}
+```
+
+##### Example
+
+```
+curl 'https://api.tailscale.com/api/v2/device/11055/key' \
+-u "tskey-yourapikey123:" \
+--data-binary '{"keyExpiryDisabled": true}'
 ```
 
 The response is 2xx on success. The response body is currently an empty JSON
