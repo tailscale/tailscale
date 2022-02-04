@@ -481,27 +481,32 @@ func (pln *peerAPIListener) serve() {
 			c.Close()
 			continue
 		}
-		peerNode, peerUser, ok := pln.lb.WhoIs(ipp)
-		if !ok {
-			logf("peerapi: unknown peer %v", ipp)
-			c.Close()
-			continue
-		}
-		h := &peerAPIHandler{
-			ps:         pln.ps,
-			isSelf:     pln.ps.selfNode.User == peerNode.User,
-			remoteAddr: ipp,
-			peerNode:   peerNode,
-			peerUser:   peerUser,
-		}
-		httpServer := &http.Server{
-			Handler: h,
-		}
-		if addH2C != nil {
-			addH2C(httpServer)
-		}
-		go httpServer.Serve(&oneConnListener{Listener: pln.ln, conn: c})
+		pln.ServeConn(ipp, c)
 	}
+}
+
+func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
+	logf := pln.lb.logf
+	peerNode, peerUser, ok := pln.lb.WhoIs(src)
+	if !ok {
+		logf("peerapi: unknown peer %v", src)
+		c.Close()
+		return
+	}
+	h := &peerAPIHandler{
+		ps:         pln.ps,
+		isSelf:     pln.ps.selfNode.User == peerNode.User,
+		remoteAddr: src,
+		peerNode:   peerNode,
+		peerUser:   peerUser,
+	}
+	httpServer := &http.Server{
+		Handler: h,
+	}
+	if addH2C != nil {
+		addH2C(httpServer)
+	}
+	go httpServer.Serve(&oneConnListener{Listener: pln.ln, conn: c})
 }
 
 type oneConnListener struct {
