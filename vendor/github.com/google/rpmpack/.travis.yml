@@ -1,0 +1,28 @@
+language: go
+dist: xenial
+
+# Packages required for bazel
+addons:
+  apt:
+    packages:
+    - pkg-config
+    - zip
+    - g++
+    - zlib1g-dev
+    - unzip
+    - python
+
+jobs:
+  include:
+  - stage: using go tests
+    script: go test ${gobuild_args} ./...
+  - stage: bazel build and test
+    before_install:
+      - curl -L -o "bazel-installer" https://github.com/bazelbuild/bazel/releases/download/0.29.0/bazel-0.29.0-installer-linux-x86_64.sh
+      - bash bazel-installer --user
+    script:
+      - ~/bin/bazel build --curses=no //:all
+      - ~/bin/bazel test --test_output=all --curses=no //:all
+      - cd example_bazel
+      - ~/bin/bazel build --curses=no //:all
+      - ~/bin/bazel test --test_output=all --curses=no //:all

@@ -1,0 +1,15 @@
+version = 1
+
+[merge]
+automerge_label = "automerge"
+blacklist_title_regex = "^WIP.*"
+method = "squash"
+delete_branch_on_merge = true
+block_on_reviews_requested = false
+notify_on_conflict = true
+optimistic_updates = true
+
+[merge.message]
+title = "pull_request_title"
+include_pr_number = true
+body_type = "markdown"

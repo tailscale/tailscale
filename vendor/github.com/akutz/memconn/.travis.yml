@@ -1,0 +1,21 @@
+# Setting "sudo" to false forces Travis-CI to use its
+# container-based build infrastructure, which has shorter
+# queue times.
+sudo: false
+
+# Use the newer Travis-CI build templates based on the
+# Debian Linux distribution "Trusty" release.
+dist: trusty
+
+# Select Go as the language used to run the buid.
+language: go
+go:
+  - 1.8.x
+  - 1.9.x
+  - 1.10.x
+go_import_path: github.com/akutz/memconn
+
+install: true
+script:
+  - make test
+  - make benchmark

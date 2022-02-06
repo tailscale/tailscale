@@ -1,0 +1,43 @@
+linters:
+  enable-all: true
+  disable:
+    - godox
+    - wsl
+    - gomnd
+    - testpackage
+    - nolintlint
+    - gofumpt
+    - nlreturn
+    - gci
+linters-settings:
+  maligned:
+    # print struct with more effective memory layout or not, false by default
+    suggest-new: true
+  gocyclo:
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 30
+  goimports:
+    # put imports beginning with prefix after 3rd-party packages;
+    # it's a comma-separated list of prefixes
+    local-prefixes: github.com/goreleaser/fileglob
+  govet:
+    check-shadowing: true
+  errcheck:
+    ignore: ^Close.*,fmt:.*,github.com/pkg/errors:^Wrap.*,os:^Setenv$
+  lll:
+    line-length: 200
+  golint:
+    min-confidence: .8
+  nakedret:
+    max-func-lines: 0
+  gocritic:
+    disabled-checks:
+      - whyNoLint
+    enabled-tags:
+      - style
+      - performance
+issues:
+  exclude-rules:
+    - text: "G104" # gosec G104 is caught by errcheck
+      linters:
+        - gosec

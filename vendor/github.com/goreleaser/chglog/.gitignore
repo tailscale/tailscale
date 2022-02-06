@@ -1,0 +1,9 @@
+.idea/
+*.rpm
+coverage.txt
+dist
+.DS_Store
+bin
+coverage.out
+chglog
+!chglog/

@@ -1,0 +1,45 @@
+# A build file for rpmpack.
+# For running basic build/run/test you can also use the regular go tools,
+# this is currently added to assist in external testing.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@bazel_gazelle//:def.bzl", "gazelle")
+
+# gazelle:prefix github.com/google/rpmpack
+gazelle(name = "gazelle")
+
+go_library(
+    name = "go_default_library",
+    srcs = [
+        "dir.go",
+        "file_types.go",
+        "header.go",
+        "rpm.go",
+        "sense.go",
+        "tags.go",
+        "tar.go",
+    ],
+    importpath = "github.com/google/rpmpack",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_cavaliercoder_go_cpio//:go_default_library",
+        "@com_github_pkg_errors//:go_default_library",
+        "@com_github_ulikunitz_xz//:go_default_library",
+        "@com_github_ulikunitz_xz//lzma:go_default_library",
+    ],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = [
+        "dir_test.go",
+        "file_types_test.go",
+        "header_test.go",
+        "rpm_test.go",
+        "sense_test.go",
+        "tar_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":go_default_library"],
+    deps = ["@com_github_google_go_cmp//cmp:go_default_library"],
+)

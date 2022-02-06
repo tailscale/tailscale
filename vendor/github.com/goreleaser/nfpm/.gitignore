@@ -1,0 +1,10 @@
+vendor
+*.rpm
+coverage.txt
+dist
+nfpm.yaml
+.DS_Store
+bin
+coverage.out
+/nfpm
+www/site

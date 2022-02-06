@@ -1,0 +1,29 @@
+builds:
+  - main: ./cmd/mnd/main.go
+    binary: mnd
+    goos:
+      - windows
+      - darwin
+      - linux
+    goarch:
+      - amd64
+    ldflags: -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.buildTime={{.Date}}`.
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
+brews:
+  - name: mnd
+    tap:
+      owner: tommy-muehle
+      name: homebrew-tap
+    folder: Formula
+    homepage: https://github.com/tommy-muehle/go-mnd
+    description: Magic number detector for Go
+    test: |
+      system "#{bin}/mnd --version"
+    install: |
+      bin.install "mnd"

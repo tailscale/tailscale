@@ -1,0 +1,58 @@
+env:
+  - GO111MODULE=on
+  - GOPROXY=https://gocenter.io
+before:
+  hooks:
+  - go mod tidy
+builds:
+- main: ./cmd/nfpm
+  env:
+  - CGO_ENABLED=0
+  goos:
+  - linux
+  - darwin
+  - windows
+  goarch:
+  - amd64
+dockers:
+  - image_templates:
+    - 'goreleaser/nfpm:{{ .Tag }}'
+    - 'goreleaser/nfpm:v{{ .Major }}.{{ .Minor }}'
+    - 'goreleaser/nfpm:latest'
+changelog:
+  filters:
+    exclude:
+      - Merge
+archives:
+- replacements:
+    darwin: Darwin
+    linux: Linux
+    windows: Windows
+    386: i386
+    amd64: x86_64
+brews:
+- github:
+    owner: goreleaser
+    name: homebrew-tap
+  folder: Formula
+  homepage:  https://github.com/goreleaser/nfpm
+  description: nFPM is not FPM
+  test: |
+    system "#{bin}/nfpm -v"
+nfpms:
+- file_name_template: '{{ .ProjectName }}_{{ .Arch }}'
+  homepage:  https://github.com/goreleaser/nfpm
+  description: nFPM is not FPM
+  maintainer: Carlos Alexandro Becker <root@carlosbecker.com>
+  license: MIT
+  vendor: GoReleaser
+  formats:
+  - deb
+  - rpm
+scoop:
+  bucket:
+    owner: goreleaser
+    name: scoop-bucket
+  homepage:  https://goreleaser.com
+  description: Deliver Go binaries as fast and easily as possible
+  license: MIT

@@ -1,0 +1,87 @@
+skip_branch_with_pr: true
+os: "Visual Studio 2015"
+
+build: off
+
+environment:
+  matrix:
+    - # Default Go, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+    - # Default Go, x86
+      ARCH: x86
+      MSYS2_ARCH: i686
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW32
+      GOPATH: c:\gopath
+      GOROOT: c:\go-x86
+      GOARCH: 386
+      EXTLD: i686-w64-mingw32-gcc
+    - # Go 1.12, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go112
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+    - # Go 1.11, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go111
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+    - # Go 1.10, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go110
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+    - # Go 1.9, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go19
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+    - # Go 1.9, x64
+      ARCH: x64
+      MSYS2_ARCH: x86_64
+      MSYS2_DIR: msys64
+      MSYSTEM: MINGW64
+      GOPATH: c:\gopath
+      GOROOT: c:\go18
+      GOARCH: amd64
+      EXTLD: x86_64-w64-mingw32-gcc
+
+clone_folder: C:\gopath\src\github.com\github\certstore
+
+before_test:
+  # Ensure CGO is enabled
+  - set CGO_ENABLED=1
+  # Go paths
+  - set PATH=%GOROOT%\bin;C:\%GOPATH%\bin;%PATH%
+  # MSYS paths
+  - set PATH=C:\%MSYS2_DIR%\%MSYSTEM%\bin;C:\%MSYS2_DIR%\usr\bin;%PATH%
+  # Install build deps
+  - bash -lc "for n in `seq 1 3`; do pacman --noconfirm -S mingw-w64-%MSYS2_ARCH%-libtool && break || sleep 15; done"
+  # Install Go deps
+  - go get -t -v ./...
+
+test_script:
+  - go test -v ./...

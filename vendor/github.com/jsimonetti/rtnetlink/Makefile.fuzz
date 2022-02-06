@@ -1,0 +1,32 @@
+# Makefile for fuzzing
+#
+# Currently fuzzing only works inside $GOPATH
+#
+# Installing go-fuzz
+#$ go get github.com/dvyukov/go-fuzz/go-fuzz
+#$ go get github.com/dvyukov/go-fuzz/go-fuzz-build
+# (or)
+#$ make -f Makefile.fuzz install
+#
+# Start fuzzing:
+#$ make -f Makefile.fuzz fuzz
+#
+# Cleanup using:
+#$ make -f Makefile.fuzz clean
+
+.PHONY: install
+install:
+	go get github.com/dvyukov/go-fuzz/go-fuzz
+	go get github.com/dvyukov/go-fuzz/go-fuzz-build
+
+.PHONY: fuzz
+fuzz:
+	go-fuzz-build -tags gofuzz
+	echo go-fuzz -bin=./rtnetlink-fuzz.zip -workdir=testdata -func FuzzLinkMessage
+	echo go-fuzz -bin=./rtnetlink-fuzz.zip -workdir=testdata -func FuzzAddressMessage
+	echo go-fuzz -bin=./rtnetlink-fuzz.zip -workdir=testdata -func FuzzRouteMessage
+	echo go-fuzz -bin=./rtnetlink-fuzz.zip -workdir=testdata -func FuzzNeighMessage
+
+.PHONY: clean
+clean:
+	rm rtnetlink-fuzz.zip

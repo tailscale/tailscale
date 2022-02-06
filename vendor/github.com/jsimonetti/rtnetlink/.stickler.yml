@@ -1,0 +1,11 @@
+linters:
+  golint:
+    fixer: true
+  shellcheck:
+    shell: bash
+fixers:
+  enable: true
+files:
+  ignore:
+    - '*_string.go'
+    - 'internal/unix/*.go'
