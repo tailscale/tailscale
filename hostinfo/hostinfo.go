@@ -35,6 +35,7 @@ func New() *tailcfg.Hostinfo {
 		Package:     packageType(),
 		GoArch:      runtime.GOARCH,
 		DeviceModel: deviceModel(),
+		EnvType:     GetEnvType(),
 	}
 }
 
@@ -75,25 +76,10 @@ func packageType() string {
 	return ""
 }
 
-// EnvType represents a known environment type.
-// The empty string, the default, means unknown.
-type EnvType string
+var envType atomic.Value // of tailcfg.EnvType
 
-const (
-	KNative         = EnvType("kn")
-	AWSLambda       = EnvType("lm")
-	Heroku          = EnvType("hr")
-	AzureAppService = EnvType("az")
-	AWSFargate      = EnvType("fg")
-	FlyDotIo        = EnvType("fly")
-	Kubernetes      = EnvType("k8s")
-	DockerDesktop   = EnvType("dde")
-)
-
-var envType atomic.Value // of EnvType
-
-func GetEnvType() EnvType {
-	if e, ok := envType.Load().(EnvType); ok {
+func GetEnvType() tailcfg.EnvType {
+	if e, ok := envType.Load().(tailcfg.EnvType); ok {
 		return e
 	}
 	e := getEnvType()
@@ -123,30 +109,30 @@ func deviceModel() string {
 	return s
 }
 
-func getEnvType() EnvType {
+func getEnvType() tailcfg.EnvType {
 	if inKnative() {
-		return KNative
+		return tailcfg.KNative
 	}
 	if inAWSLambda() {
-		return AWSLambda
+		return tailcfg.AWSLambda
 	}
 	if inHerokuDyno() {
-		return Heroku
+		return tailcfg.Heroku
 	}
 	if inAzureAppService() {
-		return AzureAppService
+		return tailcfg.AzureAppService
 	}
 	if inAWSFargate() {
-		return AWSFargate
+		return tailcfg.AWSFargate
 	}
 	if inFlyDotIo() {
-		return FlyDotIo
+		return tailcfg.FlyDotIo
 	}
 	if inKubernetes() {
-		return Kubernetes
+		return tailcfg.Kubernetes
 	}
 	if inDockerDesktop() {
-		return DockerDesktop
+		return tailcfg.DockerDesktop
 	}
 	return ""
 }

@@ -18,6 +18,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/tailcfg"
 )
 
 // LoginEndpointForProxyDetermination is the URL used for testing
@@ -153,7 +154,7 @@ func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 		// addresses we otherwise wouldn't, like:
 		//   + 169.254.x.x (AWS Lambda uses NAT with these)
 		//   + IPv6 ULA (Google Cloud Run uses these with address translation)
-		if hostinfo.GetEnvType() == hostinfo.AWSLambda {
+		if hostinfo.GetEnvType() == tailcfg.AWSLambda {
 			regular4 = linklocal4
 		}
 		regular6 = ula6
@@ -615,7 +616,7 @@ func isUsableV4(ip netaddr.IP) bool {
 		return false
 	}
 	if ip.IsLinkLocalUnicast() {
-		return hostinfo.GetEnvType() == hostinfo.AWSLambda
+		return hostinfo.GetEnvType() == tailcfg.AWSLambda
 	}
 	return true
 }

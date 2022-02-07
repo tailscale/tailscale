@@ -445,6 +445,7 @@ type Hostinfo struct {
 	ShieldsUp     bool               `json:",omitempty"` // indicates whether the host is blocking incoming connections
 	ShareeNode    bool               `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	GoArch        string             `json:",omitempty"` // the host's GOARCH value (of the running binary)
+	EnvType       EnvType            `json:",omitempty"` // the host's environment type, if known
 	RoutableIPs   []netaddr.IPPrefix `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags   []string           `json:",omitempty"` // set of ACL tags this node wants to claim
 	Services      []Service          `json:",omitempty"` // services advertised by this machine
@@ -1369,3 +1370,18 @@ type SetDNSRequest struct {
 	// Value is the value to add.
 	Value string
 }
+
+// EnvType represents a known environment type.
+// The empty string, the default, means unknown.
+type EnvType string
+
+const (
+	KNative         = EnvType("kn")
+	AWSLambda       = EnvType("lm")
+	Heroku          = EnvType("hr")
+	AzureAppService = EnvType("az")
+	AWSFargate      = EnvType("fg")
+	FlyDotIo        = EnvType("fly")
+	Kubernetes      = EnvType("k8s")
+	DockerDesktop   = EnvType("dde")
+)

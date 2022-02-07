@@ -122,6 +122,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp     bool
 	ShareeNode    bool
 	GoArch        string
+	EnvType       EnvType
 	RoutableIPs   []netaddr.IPPrefix
 	RequestTags   []string
 	Services      []Service
