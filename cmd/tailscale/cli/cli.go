@@ -29,6 +29,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/syncs"
+	"tailscale.com/version/distro"
 )
 
 var Stderr io.Writer = os.Stderr
@@ -154,6 +155,9 @@ change in the future.
 	// Don't advertise the debug command, but it exists.
 	if strSliceContains(args, "debug") {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
+	}
+	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
+		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
 	}
 
 	if err := rootCmd.Parse(args); err != nil {
