@@ -5,9 +5,17 @@
 package tsweb
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+
+	"go4.org/mem"
 )
 
 type response struct {
@@ -85,7 +93,73 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 		return jerr
 	}
 
-	w.WriteHeader(status)
-	w.Write(b)
+	if AcceptsEncoding(r, "gzip") {
+		encb, err := gzipBytes(b)
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(len(encb)))
+		w.Write(encb)
+	} else {
+		w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+		w.WriteHeader(status)
+		w.Write(b)
+	}
 	return err
+}
+
+var gzWriterPool sync.Pool // of *gzip.Writer
+
+// gzipBytes returns the gzipped encoding of b.
+func gzipBytes(b []byte) (zb []byte, err error) {
+	var buf bytes.Buffer
+	zw, ok := gzWriterPool.Get().(*gzip.Writer)
+	if ok {
+		zw.Reset(&buf)
+	} else {
+		zw = gzip.NewWriter(&buf)
+	}
+	defer gzWriterPool.Put(zw)
+	if _, err := zw.Write(b); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	zb = buf.Bytes()
+	zw.Reset(ioutil.Discard)
+	return zb, nil
+}
+
+// AcceptsEncoding reports whether r accepts the named encoding
+// ("gzip", "br", etc).
+func AcceptsEncoding(r *http.Request, enc string) bool {
+	h := r.Header.Get("Accept-Encoding")
+	if h == "" {
+		return false
+	}
+	if !strings.Contains(h, enc) && !mem.ContainsFold(mem.S(h), mem.S(enc)) {
+		return false
+	}
+	remain := h
+	for len(remain) > 0 {
+		comma := strings.Index(remain, ",")
+		var part string
+		if comma == -1 {
+			part = remain
+			remain = ""
+		} else {
+			part = remain[:comma]
+			remain = remain[comma+1:]
+		}
+		part = strings.TrimSpace(part)
+		if i := strings.Index(part, ";"); i != -1 {
+			part = part[:i]
+		}
+		if part == enc {
+			return true
+		}
+	}
+	return false
 }
