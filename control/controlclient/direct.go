@@ -168,6 +168,10 @@ func NewDirect(opts Options) (*Direct, error) {
 		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
 		tr.DialTLSContext = dnscache.TLSDialer(dialer.DialContext, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
+		// Disable implicit gzip compression; the various
+		// handlers (register, map, set-dns, etc) do their own
+		// zstd compression per naclbox.
+		tr.DisableCompression = true
 		httpc = &http.Client{Transport: tr}
 	}
 
