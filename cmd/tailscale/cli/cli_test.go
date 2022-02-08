@@ -808,7 +808,6 @@ func TestUpdatePrefs(t *testing.T) {
 				NoSNATSet:                 true,
 				OperatorUserSet:           true,
 				RouteAllSet:               true,
-				RunSSHSet:                 true,
 				ShieldsUpSet:              true,
 				WantRunningSet:            true,
 			},
