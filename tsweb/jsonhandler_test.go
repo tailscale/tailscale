@@ -182,6 +182,23 @@ func TestNewJSONHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("gzipped_400", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Price": 10}`))
+		r.Header.Set("Accept-Encoding", "gzip")
+		value := []string{"foo", "foo", "foo"}
+		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+			return 400, value, nil
+		}).ServeHTTPReturn(w, r)
+		res := w.Result()
+		if ct := res.Header.Get("Content-Encoding"); ct != "gzip" {
+			t.Fatalf("encoding = %q; want gzip", ct)
+		}
+		if res.StatusCode != 400 {
+			t.Errorf("Status = %v; want 400", res.StatusCode)
+		}
+	})
+
 	t.Run("400 post data error", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))

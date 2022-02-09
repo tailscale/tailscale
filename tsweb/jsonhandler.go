@@ -100,6 +100,7 @@ func (fn JSONHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Request
 		}
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Length", strconv.Itoa(len(encb)))
+		w.WriteHeader(status)
 		w.Write(encb)
 	} else {
 		w.Header().Set("Content-Length", strconv.Itoa(len(b)))
