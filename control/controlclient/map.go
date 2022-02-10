@@ -39,6 +39,7 @@ type mapSession struct {
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
 	lastParsedPacketFilter []filter.Match
+	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
 	previousPeers          []*tailcfg.Node // for delta-purposes
 	lastDomain             string
@@ -97,6 +98,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if c := resp.DNSConfig; c != nil {
 		ms.lastDNSConfig = c
 	}
+	if p := resp.SSHPolicy; p != nil {
+		ms.lastSSHPolicy = p
+	}
 
 	if v, ok := resp.CollectServices.Get(); ok {
 		ms.collectServices = v
@@ -117,6 +121,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		Domain:          ms.lastDomain,
 		DNS:             *ms.lastDNSConfig,
 		PacketFilter:    ms.lastParsedPacketFilter,
+		SSHPolicy:       ms.lastSSHPolicy,
 		CollectServices: ms.collectServices,
 		DERPMap:         ms.lastDERPMap,
 		Debug:           resp.Debug,

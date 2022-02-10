@@ -39,6 +39,7 @@ type NetworkMap struct {
 	DNS           tailcfg.DNSConfig
 	Hostinfo      tailcfg.Hostinfo
 	PacketFilter  []filter.Match
+	SSHPolicy     *tailcfg.SSHPolicy // or nil, if not enabled/allowed
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.
