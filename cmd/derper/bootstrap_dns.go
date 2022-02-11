@@ -47,7 +47,7 @@ func refreshBootstrapDNS() {
 		}
 		dnsEntries[name] = addrs
 	}
-	j, err := json.MarshalIndent(dnsCache, "", "\t")
+	j, err := json.MarshalIndent(dnsEntries, "", "\t")
 	if err != nil {
 		// leave the old values in place
 		return
