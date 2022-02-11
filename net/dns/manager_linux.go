@@ -321,14 +321,14 @@ func resolvedIsActuallyResolver(bs []byte) error {
 }
 
 func dbusPing(name, objectPath string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		// DBus probably not running.
 		return err
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
 	obj := conn.Object(name, dbus.ObjectPath(objectPath))
 	call := obj.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
