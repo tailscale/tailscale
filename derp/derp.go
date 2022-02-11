@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Package derp implements DERP, the Designated Encrypted Relay
-// for Packets.
+// for Packets protocol.
 //
 // DERP routes packets to clients using curve25519 keys as addresses.
 //
