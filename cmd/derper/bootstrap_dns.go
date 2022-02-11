@@ -12,14 +12,11 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
-var (
-	dnsMu    sync.Mutex
-	dnsCache = map[string][]net.IP{}
-)
+var dnsCache atomic.Value // of []byte
 
 var bootstrapDNSRequests = expvar.NewInt("counter_bootstrap_dns_requests")
 
@@ -37,6 +34,7 @@ func refreshBootstrapDNS() {
 	if *bootstrapDNS == "" {
 		return
 	}
+	dnsEntries := make(map[string][]net.IP)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	names := strings.Split(*bootstrapDNS, ",")
@@ -47,23 +45,19 @@ func refreshBootstrapDNS() {
 			log.Printf("bootstrap DNS lookup %q: %v", name, err)
 			continue
 		}
-		dnsMu.Lock()
-		dnsCache[name] = addrs
-		dnsMu.Unlock()
+		dnsEntries[name] = addrs
 	}
+	j, err := json.MarshalIndent(dnsCache, "", "\t")
+	if err != nil {
+		// leave the old values in place
+		return
+	}
+	dnsCache.Store(j)
 }
 
 func handleBootstrapDNS(w http.ResponseWriter, r *http.Request) {
 	bootstrapDNSRequests.Add(1)
-	dnsMu.Lock()
-	j, err := json.MarshalIndent(dnsCache, "", "\t")
-	dnsMu.Unlock()
-	if err != nil {
-		log.Printf("bootstrap DNS JSON: %v", err)
-		http.Error(w, "JSON marshal error", 500)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
+	j, _ := dnsCache.Load().([]byte)
 	w.Write(j)
 }
