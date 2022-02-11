@@ -79,7 +79,7 @@ func TestLinuxDNSMode(t *testing.T) {
 			env: env(
 				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
 				resolvedRunning()),
-			wantLog: "dns: [rc=resolved nm=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -88,7 +88,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
 				resolvedRunning(),
 				nmRunning("1.2.3", false)),
-			wantLog: "dns: [rc=resolved nm=yes nm-resolved=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=yes nm-resolved=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -97,7 +97,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
 				resolvedRunning(),
 				nmRunning("1.26.2", true)),
-			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=yes ret=network-manager]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=yes nm-resolved=yes nm-safe=yes ret=network-manager]",
 			want:    "network-manager",
 		},
 		{
@@ -106,7 +106,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
 				resolvedRunning(),
 				nmRunning("1.27.0", true)),
-			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -115,7 +115,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
 				resolvedRunning(),
 				nmRunning("1.22.0", true)),
-			wantLog: "dns: [rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=yes nm-resolved=yes nm-safe=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		// Regression tests for extreme corner cases below.
@@ -141,7 +141,7 @@ func TestLinuxDNSMode(t *testing.T) {
 					"nameserver 127.0.0.53",
 					"nameserver 127.0.0.53"),
 				resolvedRunning()),
-			wantLog: "dns: [rc=resolved nm=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -156,7 +156,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				"# run \"systemd-resolve --status\" to see details about the actual nameservers.",
 				"nameserver 127.0.0.53"),
 				resolvedRunning()),
-			wantLog: "dns: [rc=resolved nm=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -183,7 +183,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				"options edns0 trust-ad"),
 				resolvedRunning(),
 				nmRunning("1.32.12", true)),
-			wantLog: "dns: [rc=nm nm-resolved=yes nm-safe=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=nm nm-resolved=yes nm-safe=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -206,7 +206,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				"options edns0 trust-ad"),
 				resolvedRunning(),
 				nmRunning("1.26.3", true)),
-			wantLog: "dns: [rc=nm nm-resolved=yes nm-safe=yes ret=network-manager]",
+			wantLog: "dns: [resolved-ping=yes rc=nm nm-resolved=yes nm-safe=yes ret=network-manager]",
 			want:    "network-manager",
 		},
 		{
@@ -217,7 +217,7 @@ func TestLinuxDNSMode(t *testing.T) {
 				"nameserver 127.0.0.53",
 				"options edns0 trust-ad"),
 				resolvedRunning()),
-			wantLog: "dns: [rc=nm nm-resolved=yes nm=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=nm nm-resolved=yes nm=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 		{
@@ -228,7 +228,16 @@ func TestLinuxDNSMode(t *testing.T) {
 				"search lan",
 				"nameserver 127.0.0.53"),
 				resolvedRunning()),
-			wantLog: "dns: [rc=nm nm-resolved=yes nm=no ret=systemd-resolved]",
+			wantLog: "dns: [resolved-ping=yes rc=nm nm-resolved=yes nm=no ret=systemd-resolved]",
+			want:    "systemd-resolved",
+		},
+		{
+			// Make sure that we ping systemd-resolved to let it start up and write its resolv.conf
+			// before we read its file.
+			env: env(resolvedStartOnPingAndThen(
+				resolvDotConf("# Managed by systemd-resolved", "nameserver 127.0.0.53"),
+			)),
+			wantLog: "dns: [resolved-ping=yes rc=resolved nm=no ret=systemd-resolved]",
 			want:    "systemd-resolved",
 		},
 	}
@@ -292,9 +301,14 @@ func (m memFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
 	return nil
 }
 
+type dbusService struct {
+	name, path string
+	hook       func() // if non-nil, run on ping
+}
+
 type envBuilder struct {
 	fs              memFS
-	dbus            []struct{ name, path string }
+	dbus            []dbusService
 	nmUsingResolved bool
 	nmVersion       string
 	resolvconfStyle string
@@ -323,6 +337,9 @@ func env(opts ...envOption) newOSConfigEnv {
 		dbusPing: func(name, path string) error {
 			for _, svc := range b.dbus {
 				if svc.name == name && svc.path == path {
+					if svc.hook != nil {
+						svc.hook()
+					}
 					return nil
 				}
 			}
@@ -348,9 +365,25 @@ func resolvDotConf(ss ...string) envOption {
 	})
 }
 
+// resolvedRunning returns an option that makes resolved reply to a dbusPing.
 func resolvedRunning() envOption {
+	return resolvedStartOnPingAndThen( /* nothing */ )
+}
+
+// resolvedStartOnPingAndThen returns an option that makes resolved be
+// active but not yet running.  On a dbus ping, it then applies the
+// provided options.
+func resolvedStartOnPingAndThen(opts ...envOption) envOption {
 	return envOpt(func(b *envBuilder) {
-		b.dbus = append(b.dbus, struct{ name, path string }{"org.freedesktop.resolve1", "/org/freedesktop/resolve1"})
+		b.dbus = append(b.dbus, dbusService{
+			name: "org.freedesktop.resolve1",
+			path: "/org/freedesktop/resolve1",
+			hook: func() {
+				for _, opt := range opts {
+					opt.apply(b)
+				}
+			},
+		})
 	})
 }
 
@@ -358,7 +391,7 @@ func nmRunning(version string, usingResolved bool) envOption {
 	return envOpt(func(b *envBuilder) {
 		b.nmUsingResolved = usingResolved
 		b.nmVersion = version
-		b.dbus = append(b.dbus, struct{ name, path string }{"org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"})
+		b.dbus = append(b.dbus, dbusService{name: "org.freedesktop.NetworkManager", path: "/org/freedesktop/NetworkManager/DnsManager"})
 	})
 }
 
