@@ -74,38 +74,6 @@ type resolvedLinkDomain struct {
 	RoutingOnly bool
 }
 
-// isResolvedActive determines if resolved is currently managing system DNS settings.
-func isResolvedActive() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), reconfigTimeout)
-	defer cancel()
-
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		// Probably no DBus on the system, or we're not allowed to use
-		// it. Cannot control resolved.
-		return false
-	}
-
-	rd := conn.Object("org.freedesktop.resolve1", dbus.ObjectPath("/org/freedesktop/resolve1"))
-	call := rd.CallWithContext(ctx, "org.freedesktop.DBus.Peer.Ping", 0)
-	if call.Err != nil {
-		// Can't talk to resolved.
-		return false
-	}
-
-	config, err := newDirectManager(logger.Discard).readResolvFile(resolvConf)
-	if err != nil {
-		return false
-	}
-
-	// The sole nameserver must be the systemd-resolved stub.
-	if len(config.Nameservers) == 1 && config.Nameservers[0] == resolvedListenAddr {
-		return true
-	}
-
-	return false
-}
-
 // resolvedManager is an OSConfigurator which uses the systemd-resolved DBus API.
 type resolvedManager struct {
 	logf  logger.Logf
