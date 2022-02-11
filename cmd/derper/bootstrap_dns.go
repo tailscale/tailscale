@@ -58,5 +58,9 @@ func refreshBootstrapDNS() {
 func handleBootstrapDNS(w http.ResponseWriter, r *http.Request) {
 	bootstrapDNSRequests.Add(1)
 	j, _ := dnsCache.Load().([]byte)
+	// Bootstrap DNS requests occur cross-regions,
+	// and are randomized per request,
+	// so keeping a connection open is pointlessly expensive.
+	w.Header().Set("Connection", "close")
 	w.Write(j)
 }
