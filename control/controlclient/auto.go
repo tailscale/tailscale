@@ -266,9 +266,9 @@ func (c *Auto) authRoutine() {
 		goal := c.loginGoal
 		ctx := c.authCtx
 		if goal != nil {
-			c.logf("authRoutine: %s; wantLoggedIn=%v", c.state, goal.wantLoggedIn)
+			c.logf("[v1] authRoutine: %s; wantLoggedIn=%v", c.state, goal.wantLoggedIn)
 		} else {
-			c.logf("authRoutine: %s; goal=nil paused=%v", c.state, c.paused)
+			c.logf("[v1] authRoutine: %s; goal=nil paused=%v", c.state, c.paused)
 		}
 		c.mu.Unlock()
 
@@ -414,7 +414,7 @@ func (c *Auto) mapRoutine() {
 			}
 			continue
 		}
-		c.logf("mapRoutine: %s", c.state)
+		c.logf("[v1] mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
 		ctx := c.mapCtx
 		c.mu.Unlock()
@@ -445,9 +445,9 @@ func (c *Auto) mapRoutine() {
 
 			select {
 			case <-ctx.Done():
-				c.logf("mapRoutine: context done.")
+				c.logf("[v1] mapRoutine: context done.")
 			case <-c.newMapCh:
-				c.logf("mapRoutine: new map needed while idle.")
+				c.logf("[v1] mapRoutine: new map needed while idle.")
 			}
 		} else {
 			// Be sure this is false when we're not inside

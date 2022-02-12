@@ -906,7 +906,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			timer := time.NewTimer(time.Second)
 			select {
 			case <-b.gotPortPollRes:
-				b.logf("got initial portlist info in %v", time.Since(t0).Round(time.Millisecond))
+				b.logf("[v1] got initial portlist info in %v", time.Since(t0).Round(time.Millisecond))
 				timer.Stop()
 			case <-timer.C:
 				b.logf("timeout waiting for initial portlist")
@@ -1054,17 +1054,17 @@ func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs)
 	}
 
 	if !haveNetmap {
-		b.logf("netmap packet filter: (not ready yet)")
+		b.logf("[v1] netmap packet filter: (not ready yet)")
 		b.setFilter(filter.NewAllowNone(b.logf, logNets))
 		return
 	}
 
 	oldFilter := b.e.GetFilter()
 	if shieldsUp {
-		b.logf("netmap packet filter: (shields up)")
+		b.logf("[v1] netmap packet filter: (shields up)")
 		b.setFilter(filter.NewShieldsUpFilter(localNets, logNets, oldFilter, b.logf))
 	} else {
-		b.logf("netmap packet filter: %v filters", len(packetFilter))
+		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
 		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
 	}
 }
@@ -1503,19 +1503,19 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 		}
 	}
 
-	b.logf("using backend prefs")
 	bs, err := b.store.ReadState(key)
 	switch {
 	case errors.Is(err, ipn.ErrStateNotExist):
 		b.prefs = ipn.NewPrefs()
 		b.prefs.WantRunning = false
-		b.logf("created empty state for %q: %s", key, b.prefs.Pretty())
+		b.logf("using backend prefs; created empty state for %q: %s", key, b.prefs.Pretty())
 		return nil
 	case err != nil:
-		return fmt.Errorf("store.ReadState(%q): %v", key, err)
+		return fmt.Errorf("backend prefs: store.ReadState(%q): %v", key, err)
 	}
 	b.prefs, err = ipn.PrefsFromBytes(bs, false)
 	if err != nil {
+		b.logf("using backend prefs for %q", key)
 		return fmt.Errorf("PrefsFromBytes: %v", err)
 	}
 
@@ -1538,7 +1538,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 		}
 	}
 
-	b.logf("backend prefs for %q: %s", key, b.prefs.Pretty())
+	b.logf("using backend prefs for %q: %s", key, b.prefs.Pretty())
 
 	b.sshAtomicBool.Set(b.prefs != nil && b.prefs.RunSSH)
 
@@ -1916,15 +1916,15 @@ func (b *LocalBackend) authReconfig() {
 	b.mu.Unlock()
 
 	if blocked {
-		b.logf("authReconfig: blocked, skipping.")
+		b.logf("[v1] authReconfig: blocked, skipping.")
 		return
 	}
 	if nm == nil {
-		b.logf("authReconfig: netmap not yet valid. Skipping.")
+		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
 		return
 	}
 	if !prefs.WantRunning {
-		b.logf("authReconfig: skipping because !WantRunning.")
+		b.logf("[v1] authReconfig: skipping because !WantRunning.")
 		return
 	}
 

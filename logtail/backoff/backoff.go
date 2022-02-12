@@ -71,7 +71,7 @@ func (b *Backoff) BackOff(ctx context.Context, err error) {
 	d = time.Duration(float64(d) * (rand.Float64() + 0.5))
 
 	if d >= b.LogLongerThan {
-		b.logf("%s: backoff: %d msec", b.name, d.Milliseconds())
+		b.logf("%s: [v1] backoff: %d msec", b.name, d.Milliseconds())
 	}
 	t := b.NewTimer(d)
 	select {
