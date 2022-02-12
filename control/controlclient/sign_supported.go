@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/tailscale/certstore"
 	"tailscale.com/tailcfg"
@@ -73,10 +74,19 @@ func isSubjectInChain(subject string, chain []*x509.Certificate) bool {
 	return false
 }
 
-func selectIdentityFromSlice(subject string, ids []certstore.Identity) (certstore.Identity, []*x509.Certificate) {
+func selectIdentityFromSlice(subject string, ids []certstore.Identity, now time.Time) (certstore.Identity, []*x509.Certificate) {
+	var bestCandidate struct {
+		id    certstore.Identity
+		chain []*x509.Certificate
+	}
+
 	for _, id := range ids {
 		chain, err := id.CertificateChain()
 		if err != nil {
+			continue
+		}
+
+		if len(chain) < 1 {
 			continue
 		}
 
@@ -84,12 +94,26 @@ func selectIdentityFromSlice(subject string, ids []certstore.Identity) (certstor
 			continue
 		}
 
-		if isSubjectInChain(subject, chain) {
-			return id, chain
+		if now.Before(chain[0].NotBefore) || now.After(chain[0].NotAfter) {
+			// Certificate is not valid at this time
+			continue
 		}
+
+		if !isSubjectInChain(subject, chain) {
+			continue
+		}
+
+		// Select the most recently issued certificate. If there is a tie, pick
+		// one arbitrarily.
+		if len(bestCandidate.chain) > 0 && bestCandidate.chain[0].NotBefore.After(chain[0].NotBefore) {
+			continue
+		}
+
+		bestCandidate.id = id
+		bestCandidate.chain = chain
 	}
 
-	return nil, nil
+	return bestCandidate.id, bestCandidate.chain
 }
 
 // findIdentity locates an identity from the Windows or Darwin certificate
@@ -105,7 +129,7 @@ func findIdentity(subject string, st certstore.Store) (certstore.Identity, []*x5
 		return nil, nil, err
 	}
 
-	selected, chain := selectIdentityFromSlice(subject, ids)
+	selected, chain := selectIdentityFromSlice(subject, ids, time.Now())
 
 	for _, id := range ids {
 		if id != selected {
