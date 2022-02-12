@@ -214,7 +214,7 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	}
 	c.hostinfo = hi.Clone()
 	j, _ := json.Marshal(c.hostinfo)
-	c.logf("HostInfo: %s", j)
+	c.logf("[v1] HostInfo: %s", j)
 	return true
 }
 
@@ -245,10 +245,10 @@ func (c *Direct) GetPersist() persist.Persist {
 }
 
 func (c *Direct) TryLogout(ctx context.Context) error {
-	c.logf("direct.TryLogout()")
+	c.logf("[v1] direct.TryLogout()")
 
 	mustRegen, newURL, err := c.doLogin(ctx, loginOpt{Logout: true})
-	c.logf("TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
+	c.logf("[v1] TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
 
 	c.mu.Lock()
 	c.persist = persist.Persist{}
@@ -258,7 +258,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 }
 
 func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags LoginFlags) (url string, err error) {
-	c.logf("direct.TryLogin(token=%v, flags=%v)", t != nil, flags)
+	c.logf("[v1] direct.TryLogin(token=%v, flags=%v)", t != nil, flags)
 	return c.doLoginOrRegen(ctx, loginOpt{Token: t, Flags: flags})
 }
 
@@ -266,7 +266,7 @@ func (c *Direct) TryLogin(ctx context.Context, t *tailcfg.Oauth2Token, flags Log
 //
 // On success, newURL and err will both be nil.
 func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newURL string, err error) {
-	c.logf("direct.WaitLoginURL")
+	c.logf("[v1] direct.WaitLoginURL")
 	return c.doLoginOrRegen(ctx, loginOpt{URL: url})
 }
 
@@ -469,7 +469,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if resp.AuthURL != "" {
 		c.logf("AuthURL is %v", resp.AuthURL)
 	} else {
-		c.logf("No AuthURL")
+		c.logf("[v1] No AuthURL")
 	}
 
 	c.mu.Lock()
@@ -520,7 +520,7 @@ func (c *Direct) newEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (c
 	for _, ep := range endpoints {
 		epStrs = append(epStrs, ep.Addr.String())
 	}
-	c.logf("client.newEndpoints(%v, %v)", localPort, epStrs)
+	c.logf("[v2] client.newEndpoints(%v, %v)", localPort, epStrs)
 	c.localPort = localPort
 	c.endpoints = append(c.endpoints[:0], endpoints...)
 	if len(endpoints) > 0 {

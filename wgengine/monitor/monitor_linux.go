@@ -101,9 +101,21 @@ func (c *nlConn) Receive() (message, error) {
 		dst := netaddrIPPrefix(rmsg.Attributes.Dst, rmsg.DstLength)
 		gw := netaddrIP(rmsg.Attributes.Gateway)
 
+		if msg.Header.Type == unix.RTM_NEWROUTE &&
+			(rmsg.Attributes.Table == 255 || rmsg.Attributes.Table == 254) &&
+			(dst.IP().IsMulticast() || dst.IP().IsLinkLocalUnicast()) {
+			// Normal Linux route changes on new interface coming up; don't log or react.
+			return ignoreMessage{}, nil
+		}
+
 		if rmsg.Table == tsTable && dst.IsSingleIP() {
 			// Don't log. Spammy and normal to see a bunch of these on start-up,
 			// which we make ourselves.
+		} else if tsaddr.IsTailscaleIP(dst.IP()) {
+			// Verbose only.
+			c.logf("%s: [v1] src=%v, dst=%v, gw=%v, outif=%v, table=%v", typeStr,
+				condNetAddrPrefix(src), condNetAddrPrefix(dst), condNetAddrIP(gw),
+				rmsg.Attributes.OutIface, rmsg.Attributes.Table)
 		} else {
 			c.logf("%s: src=%v, dst=%v, gw=%v, outif=%v, table=%v", typeStr,
 				condNetAddrPrefix(src), condNetAddrPrefix(dst), condNetAddrIP(gw),
