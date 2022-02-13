@@ -53,7 +53,7 @@ func boolOr(envVar string, implicitValue bool) bool {
 	if err == nil {
 		return b
 	}
-	log.Fatalf("invalid environment variable %s value %q: %v", envVar, val, err)
+	log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
 	panic("unreachable")
 }
 
@@ -69,7 +69,7 @@ func LookupBool(envVar string) (v bool, ok bool) {
 	if err == nil {
 		return b, true
 	}
-	log.Fatalf("invalid environment variable %s value %q: %v", envVar, val, err)
+	log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
 	panic("unreachable")
 }
 
@@ -97,7 +97,7 @@ func LookupInt(envVar string) (v int, ok bool) {
 	if err == nil {
 		return v, true
 	}
-	log.Fatalf("invalid environment variable %s value %q: %v", envVar, val, err)
+	log.Fatalf("invalid integer environment variable %s: %v", envVar, val)
 	panic("unreachable")
 }
 
