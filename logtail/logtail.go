@@ -255,7 +255,7 @@ func (l *Logger) drainPending(scratch []byte) (res []byte) {
 				l.explainedRaw = true
 			}
 			fmt.Fprintf(l.stderr, "RAW-STDERR: %s", b)
-			b = l.encodeText(b, true)
+			b = l.encodeText(b, true, 0)
 		}
 
 		if entries > 0 {
@@ -418,7 +418,7 @@ func (l *Logger) send(jsonBlob []byte) (int, error) {
 
 // TODO: instead of allocating, this should probably just append
 // directly into the output log buffer.
-func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
+func (l *Logger) encodeText(buf []byte, skipClientTime bool, level int) []byte {
 	now := l.timeNow()
 
 	// Factor in JSON encoding overhead to try to only do one alloc
@@ -463,6 +463,14 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 		}
 	}
 
+	// Add the log level, if non-zero. Note that we only use log
+	// levels 1 and 2 currently. It's unlikely we'll ever make it
+	// past 9.
+	if level > 0 && level < 10 {
+		b = append(b, `"v":`...)
+		b = append(b, '0'+byte(level))
+		b = append(b, ',')
+	}
 	b = append(b, "\"text\": \""...)
 	for _, c := range buf {
 		switch c {
@@ -493,9 +501,9 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool) []byte {
 	return b
 }
 
-func (l *Logger) encode(buf []byte) []byte {
+func (l *Logger) encode(buf []byte, level int) []byte {
 	if buf[0] != '{' {
-		return l.encodeText(buf, l.skipClientTime) // text fast-path
+		return l.encodeText(buf, l.skipClientTime, level) // text fast-path
 	}
 
 	now := l.timeNow()
@@ -560,7 +568,7 @@ func (l *Logger) Write(buf []byte) (int, error) {
 			l.stderr.Write(withNL)
 		}
 	}
-	b := l.encode(buf)
+	b := l.encode(buf, level)
 	_, err := l.send(b)
 	return len(buf), err
 }
