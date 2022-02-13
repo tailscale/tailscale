@@ -38,6 +38,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -506,26 +507,8 @@ func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
 	if addH2C != nil {
 		addH2C(httpServer)
 	}
-	go httpServer.Serve(&oneConnListener{Listener: pln.ln, conn: c})
+	go httpServer.Serve(netutil.NewOneConnListenerFrom(c, pln.ln))
 }
-
-type oneConnListener struct {
-	net.Listener
-	conn net.Conn
-}
-
-func (l *oneConnListener) Accept() (c net.Conn, err error) {
-	c = l.conn
-	if c == nil {
-		err = io.EOF
-		return
-	}
-	err = nil
-	l.conn = nil
-	return
-}
-
-func (l *oneConnListener) Close() error { return nil }
 
 // peerAPIHandler serves the Peer API for a source specific client.
 type peerAPIHandler struct {
