@@ -825,10 +825,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 		if Debug.StripEndpoints {
 			for _, p := range resp.Peers {
-				// We need at least one endpoint here for now else
-				// other code doesn't even create the discoEndpoint.
-				// TODO(bradfitz): fix that and then just nil this out.
-				p.Endpoints = []string{"127.9.9.9:456"}
+				p.Endpoints = nil
 			}
 		}
 		if Debug.StripCaps {
