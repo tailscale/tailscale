@@ -571,6 +571,16 @@ func New(collection string) *Policy {
 	}
 }
 
+// dialLog is used by NewLogtailTransport to log the happy path of its
+// own dialing.
+//
+// By default it goes nowhere and is only enabled when
+// tailscaled's in verbose mode.
+//
+// log.Printf isn't used so its own logs don't loop back into logtail
+// in the happy path, thus generating more logs.
+var dialLog = log.New(io.Discard, "logtail: ", log.LstdFlags|log.Lmsgprefix)
+
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
 // are increasingly verbose.
@@ -578,6 +588,9 @@ func New(collection string) *Policy {
 // It should not be changed concurrently with log writes.
 func (p *Policy) SetVerbosityLevel(level int) {
 	p.Logtail.SetVerbosityLevel(level)
+	if level > 0 {
+		dialLog.SetOutput(os.Stderr)
+	}
 }
 
 // Close immediately shuts down the logger.
@@ -624,7 +637,7 @@ func NewLogtailTransport(host string) *http.Transport {
 		c, err := nd.DialContext(ctx, netw, addr)
 		d := time.Since(t0).Round(time.Millisecond)
 		if err == nil {
-			log.Printf("logtail: dialed %q in %v", addr, d)
+			dialLog.Printf("dialed %q in %v", addr, d)
 			return c, nil
 		}
 
@@ -637,10 +650,10 @@ func NewLogtailTransport(host string) *http.Transport {
 					err = errors.New(res.Status)
 				}
 				if err != nil {
-					log.Printf("logtail: CONNECT response from tailscaled: %v", err)
+					log.Printf("logtail: CONNECT response error from tailscaled: %v", err)
 					c.Close()
 				} else {
-					log.Printf("logtail: connected via tailscaled")
+					dialLog.Printf("connected via tailscaled")
 					return c, nil
 				}
 			}

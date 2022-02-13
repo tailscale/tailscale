@@ -607,7 +607,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			if strings.TrimSpace(diff) == "" {
 				b.logf("[v1] netmap diff: (none)")
 			} else {
-				b.logf("netmap diff:\n%v", diff)
+				b.logf("[v1] netmap diff:\n%v", diff)
 			}
 		}
 

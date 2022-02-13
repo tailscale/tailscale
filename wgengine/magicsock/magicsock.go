@@ -2111,12 +2111,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 	defer c.mu.Unlock()
 
 	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
-		c.logf("magicsock: want call-me-maybe but endpoints stale; restunning")
+		c.logf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
 		if c.onEndpointRefreshed == nil {
 			c.onEndpointRefreshed = map[*endpoint]func(){}
 		}
 		c.onEndpointRefreshed[de] = func() {
-			c.logf("magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
+			c.logf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
 			c.enqueueCallMeMaybe(derpAddr, de)
 		}
 		// TODO(bradfitz): make a new 'reSTUNQuickly' method
