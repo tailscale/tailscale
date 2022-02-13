@@ -217,7 +217,7 @@ func TestLoggerEncodeTextAllocs(t *testing.T) {
 	lg := &Logger{timeNow: time.Now}
 	inBuf := []byte("some text to encode")
 	err := tstest.MinAllocsPerRun(t, 1, func() {
-		sink = lg.encodeText(inBuf, false)
+		sink = lg.encodeText(inBuf, false, 0)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -328,10 +328,60 @@ func unmarshalOne(t *testing.T, body []byte) map[string]interface{} {
 func TestEncodeTextTruncation(t *testing.T) {
 	lg := &Logger{timeNow: time.Now, lowMem: true}
 	in := bytes.Repeat([]byte("a"), 300)
-	b := lg.encodeText(in, true)
+	b := lg.encodeText(in, true, 0)
 	got := string(b)
 	want := `{"text": "` + strings.Repeat("a", 255) + `…+45"}` + "\n"
 	if got != want {
 		t.Errorf("got:\n%qwant:\n%q\n", got, want)
+	}
+}
+
+type simpleMemBuf struct {
+	Buffer
+	buf bytes.Buffer
+}
+
+func (b *simpleMemBuf) Write(p []byte) (n int, err error) { return b.buf.Write(p) }
+
+func TestEncode(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{
+			"normal",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "text": "normal"}` + "\n",
+		},
+		{
+			"and a [v1] level one",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "v":1,"text": "and a level one"}` + "\n",
+		},
+		{
+			"[v2] some verbose two",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "v":2,"text": "some verbose two"}` + "\n",
+		},
+		{
+			"{}",
+			`{"logtail":{"client_time":"1970-01-01T00:02:03.000000456Z"}}` + "\n",
+		},
+		{
+			`{"foo":"bar"}`,
+			`{"foo":"bar","logtail":{"client_time":"1970-01-01T00:02:03.000000456Z"}}` + "\n",
+		},
+	}
+	for _, tt := range tests {
+		buf := new(simpleMemBuf)
+		lg := &Logger{
+			timeNow: func() time.Time { return time.Unix(123, 456).UTC() },
+			buffer:  buf,
+		}
+		io.WriteString(lg, tt.in)
+		got := buf.buf.String()
+		if got != tt.want {
+			t.Errorf("for %q,\n got: %#q\nwant: %#q\n", tt.in, got, tt.want)
+		}
+		if err := json.Compact(new(bytes.Buffer), buf.buf.Bytes()); err != nil {
+			t.Errorf("invalid output JSON for %q: %s", tt.in, got)
+		}
 	}
 }
