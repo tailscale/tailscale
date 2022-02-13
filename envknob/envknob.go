@@ -20,15 +20,51 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 
 	"tailscale.com/types/opt"
 )
 
+var (
+	mu   sync.Mutex
+	set  = map[string]string{}
+	list []string
+)
+
+func noteEnv(k, v string) {
+	if v == "" {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := set[v]; !ok {
+		list = append(list, k)
+	}
+	set[k] = v
+}
+
+// logf is logger.Logf, but logger depends on envknob, so for circular
+// dependency reasons, make a type alias (so it's still assignable,
+// but has nice docs here).
+type logf = func(format string, args ...interface{})
+
+// LogCurrent logs the currently set environment knobs.
+func LogCurrent(logf logf) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, k := range list {
+		logf("envknob: %s=%q", k, set[k])
+	}
+}
+
 // String returns the named environment variable, using os.Getenv.
 //
-// In the future it will also track usage for reporting on debug pages.
+// If the variable is non-empty, it's also tracked & logged as being
+// an in-use knob.
 func String(envVar string) string {
-	return os.Getenv(envVar)
+	v := os.Getenv(envVar)
+	noteEnv(envVar, v)
+	return v
 }
 
 // Bool returns the boolean value of the named environment variable.
@@ -51,6 +87,7 @@ func boolOr(envVar string, implicitValue bool) bool {
 	}
 	b, err := strconv.ParseBool(val)
 	if err == nil {
+		noteEnv(envVar, strconv.FormatBool(b)) // canonicalize
 		return b
 	}
 	log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
@@ -95,6 +132,7 @@ func LookupInt(envVar string) (v int, ok bool) {
 	}
 	v, err := strconv.Atoi(val)
 	if err == nil {
+		noteEnv(envVar, val)
 		return v, true
 	}
 	log.Fatalf("invalid integer environment variable %s: %v", envVar, val)
