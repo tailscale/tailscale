@@ -39,6 +39,7 @@ import (
 	"tailscale.com/ipn/store/aws"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -308,7 +309,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			ErrorLog:    logger.StdLogger(logf),
 			Handler:     s.localhostHandler(ci),
 		}
-		httpServer.Serve(&oneConnListener{&protoSwitchConn{s: s, br: br, Conn: c}})
+		httpServer.Serve(netutil.NewOneConnListener(&protoSwitchConn{s: s, br: br, Conn: c}))
 		return
 	}
 
@@ -1060,29 +1061,6 @@ func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, error)) fun
 		return e, nil
 	}
 }
-
-type dummyAddr string
-type oneConnListener struct {
-	conn net.Conn
-}
-
-func (l *oneConnListener) Accept() (c net.Conn, err error) {
-	c = l.conn
-	if c == nil {
-		err = io.EOF
-		return
-	}
-	err = nil
-	l.conn = nil
-	return
-}
-
-func (l *oneConnListener) Close() error { return nil }
-
-func (l *oneConnListener) Addr() net.Addr { return dummyAddr("unused-address") }
-
-func (a dummyAddr) Network() string { return string(a) }
-func (a dummyAddr) String() string  { return string(a) }
 
 // protoSwitchConn is a net.Conn that's we want to speak HTTP to but
 // it's already had a few bytes read from it to determine that it's
