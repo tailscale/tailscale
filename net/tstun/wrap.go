@@ -431,7 +431,6 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 			return filter.DropSilently // don't pass on to OS; already handled
 		}
 	}
-	// TODO(bradfitz): support pinging TailscaleServiceIPv6 too.
 
 	// Issue 1526 workaround: if we sent disco packets over
 	// Tailscale from ourselves, then drop them, as that shouldn't
