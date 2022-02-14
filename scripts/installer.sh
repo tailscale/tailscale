@@ -407,7 +407,8 @@ main() {
 			fi
 			export DEBIAN_FRONTEND=noninteractive
 			if ! type gpg >/dev/null; then
-				apt-get install -y gnupg
+				$SUDO apt-get update
+				$SUDO apt-get install -y gnupg
 			fi
 
 			set -x
