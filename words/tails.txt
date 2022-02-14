@@ -132,7 +132,7 @@ feist
 spitz
 squirrel
 gerbil
-hampster
+hamster
 panda
 gibbon
 flyingfox
@@ -211,3 +211,4 @@ velociraptor
 siren
 mudpuppy
 ferret
+roborovski
