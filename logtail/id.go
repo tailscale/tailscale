@@ -113,6 +113,16 @@ func ParsePublicID(s string) (PublicID, error) {
 	return p, nil
 }
 
+// MustParsePublicID calls ParsePublicID and panics in case of an error.
+// It is intended for use with constant strings, typically in tests.
+func MustParsePublicID(s string) PublicID {
+	id, err := ParsePublicID(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 func (id PublicID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {
