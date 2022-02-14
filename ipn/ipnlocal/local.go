@@ -170,6 +170,9 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	if e == nil {
 		panic("ipn.NewLocalBackend: engine must not be nil")
 	}
+
+	hi := hostinfo.New()
+	logf("Host: %s/%s, %s", hi.OS, hi.GoArch, hi.OSVersion)
 	envknob.LogCurrent(logf)
 	if dialer == nil {
 		dialer = new(tsdial.Dialer)
