@@ -6,14 +6,20 @@ package tsweb
 
 import (
 	"expvar"
+	"flag"
 	"fmt"
 	"html"
+	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
+	"strings"
+	"sync"
 
 	"tailscale.com/version"
 )
@@ -33,6 +39,9 @@ type DebugHandler struct {
 	kvs      []func(io.Writer)                // output one <li>...</li> each, see KV()
 	urls     []string                         // one <li>...</li> block with link each
 	sections []func(io.Writer, *http.Request) // invoked in registration order prior to outputting </body>
+	flagmu   sync.Mutex                       // flagmu protects access to flagset and flagc
+	flagset  *flag.FlagSet                    // runtime-modifiable flags, may be nil
+	flagc    chan map[string]interface{}      // DebugHandler sends new flag values on flagc when the flags have been modified
 }
 
 // Debugger returns the DebugHandler registered on mux at /debug/,
@@ -139,3 +148,161 @@ func gcHandler(w http.ResponseWriter, r *http.Request) {
 	runtime.GC()
 	w.Write([]byte("Done.\n"))
 }
+
+// FlagSet returns a FlagSet that can be used to add runtime-modifiable flags to d.
+// Calling code should add flags to fs, but not retain the values directly.
+// Modifications to fs will be delivered via c.
+// Maps sent to c will be keyed on the flag name, and contain the new value.
+// Only modified values will be sent on c.
+//
+// Sample usage:
+//      flagset, flagc := debug.FlagSet()
+//      flagset.Int("max", 0, "maximum number of bars")
+//      flagset.String("s", "qux", "default name for new foos")
+//      go func() {
+//          for change := range flagc {
+//              // TODO: handle change, which will contain values for keys "max" and/or "s"
+//          }
+//      }()
+func (d *DebugHandler) FlagSet() (fs *flag.FlagSet, c chan map[string]interface{}) {
+	d.flagmu.Lock()
+	defer d.flagmu.Unlock()
+	if d.flagset == nil {
+		d.flagset = flag.NewFlagSet("debug", flag.ContinueOnError)
+		d.flagc = make(chan map[string]interface{})
+		d.Handle("flags", "Runtime flags", http.HandlerFunc(d.handleFlags))
+	}
+	return d.flagset, d.flagc
+}
+
+type copiedFlag struct {
+	Name  string
+	Value string
+	Usage string
+}
+
+func copyFlags(fs *flag.FlagSet) []copiedFlag {
+	var all []copiedFlag
+	fs.VisitAll(func(f *flag.Flag) {
+		all = append(all, copiedFlag{Name: f.Name, Value: f.Value.String(), Usage: f.Usage})
+	})
+	return all
+}
+
+func (d *DebugHandler) handleFlags(w http.ResponseWriter, r *http.Request) {
+	d.flagmu.Lock()
+	defer d.flagmu.Unlock()
+
+	var userError string
+	var modified string
+	if r.Method == http.MethodPost {
+		err := r.ParseForm()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Make a copy of existing values, in case we need to roll back.
+		all := copyFlags(d.flagset)
+		// Set inbound values.
+		changed := make(map[string][2]string)
+		rollback := false
+		for k, v := range r.PostForm {
+			if len(v) != 1 {
+				userError = fmt.Sprintf("multiple values for name %q: %q", k, v)
+				rollback = true
+				break
+			}
+			f := d.flagset.Lookup(k)
+			if f == nil {
+				userError = fmt.Sprintf("unknown name %q", k)
+				rollback = true
+				break
+			}
+			prev := f.Value.String()
+			new := strings.TrimSpace(v[0])
+			if prev == new {
+				continue
+			}
+			err := d.flagset.Set(k, new)
+			if err != nil {
+				userError = fmt.Sprintf("parsing value %q for name %q: %v", new, k, err)
+				rollback = true
+				break
+			}
+			changed[k] = [2]string{prev, new}
+		}
+		if rollback {
+			for _, f := range all {
+				d.flagset.Set(f.Name, f.Value)
+			}
+		} else {
+			// Generate description of modifications.
+			var names []string
+			for k := range changed {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			buf := new(strings.Builder)
+			for i, k := range names {
+				if i != 0 {
+					buf.WriteString("; ")
+				}
+				pn := changed[k]
+				fmt.Fprintf(buf, "%q: %v → %v", k, pn[0], pn[1])
+			}
+			modified = buf.String()
+			vals := make(map[string]interface{})
+			for _, k := range names {
+				vals[k] = d.flagset.Lookup(k).Value.(flag.Getter).Get()
+			}
+
+			d.flagc <- vals
+			// TODO: post modifications to Slack, along with attribution
+		}
+	}
+
+	dot := &struct {
+		Error    string
+		Modified string
+		Flags    []copiedFlag
+	}{
+		Error:    userError,
+		Modified: modified,
+		Flags:    copyFlags(d.flagset),
+	}
+	err := flagsTemplate.Execute(w, dot)
+	if err != nil {
+		log.Print(err)
+	}
+}
+
+var (
+	flagsTemplate = template.Must(template.New("flags").Parse(`
+<html>
+<body>
+
+{{if .Error}}
+<h2>Error: <mark>{{.Error}}</mark></h2>
+{{end}}
+
+{{if .Modified}}
+<h3>Modified: <mark>{{.Modified}}</mark></h3>
+{{end}}
+
+<h3>Modifiable runtime flags</h3>
+
+<p>Warning! Modifying these values will take effect immediately and impact the running service</p>
+
+<form method="POST">
+<table>
+<tr> <th>Name</th> <th>Value</th> <th>Usage</th> </tr>
+{{range .Flags}}
+<tr> <td>{{.Name}}</td> <td><input type="text" value="{{.Value}}" name="{{.Name}}"/></td> <td>{{.Usage}}</td> </tr>
+{{end}}
+</table>
+<input type="submit"></input>
+</form>
+</body>
+</html>
+`))
+)
