@@ -21,7 +21,7 @@ import (
 func nodeDebugName(n *tailcfg.Node) string {
 	name := n.Name
 	if name == "" {
-		name = n.Hostinfo.Hostname
+		name = n.Hostinfo.Hostname()
 	}
 	if i := strings.Index(name, "."); i != -1 {
 		name = name[:i]

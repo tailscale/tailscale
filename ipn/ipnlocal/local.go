@@ -446,14 +446,14 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			ID:             p.StableID,
 			UserID:         p.User,
 			TailscaleIPs:   tailscaleIPs,
-			HostName:       p.Hostinfo.Hostname,
+			HostName:       p.Hostinfo.Hostname(),
 			DNSName:        p.Name,
-			OS:             p.Hostinfo.OS,
+			OS:             p.Hostinfo.OS(),
 			KeepAlive:      p.KeepAlive,
 			Created:        p.Created,
 			LastSeen:       lastSeen,
 			Online:         p.Online != nil && *p.Online,
-			ShareeNode:     p.Hostinfo.ShareeNode,
+			ShareeNode:     p.Hostinfo.ShareeNode(),
 			ExitNode:       p.StableID != "" && p.StableID == b.prefs.ExitNodeID,
 			ExitNodeOption: exitNodeOption,
 		})
@@ -2956,9 +2956,10 @@ func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
 // It returns the empty string if the peer doesn't support the peerapi
 // or there's no matching address family based on the netmap's own addresses.
 func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
-	if nm == nil || peer == nil {
+	if nm == nil || peer == nil || !peer.Hostinfo.Valid() {
 		return ""
 	}
+
 	var have4, have6 bool
 	for _, a := range nm.Addresses {
 		if !a.IsSingleIP() {
@@ -2972,7 +2973,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 		}
 	}
 	var p4, p6 uint16
-	for _, s := range peer.Hostinfo.Services {
+	svcs := peer.Hostinfo.Services()
+	for i, n := 0, svcs.Len(); i < n; i++ {
+		s := svcs.At(i)
 		switch s.Proto {
 		case tailcfg.PeerAPI4:
 			p4 = s.Port
@@ -3178,7 +3181,9 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		if p.StableID != exitNodeID {
 			continue
 		}
-		for _, s := range p.Hostinfo.Services {
+		services := p.Hostinfo.Services()
+		for i, n := 0, services.Len(); i < n; i++ {
+			s := services.At(i)
 			if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
 				return peerAPIBase(nm, p) + "/dns-query", true
 			}

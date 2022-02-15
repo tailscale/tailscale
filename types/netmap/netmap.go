@@ -37,9 +37,10 @@ type NetworkMap struct {
 	MachineKey    key.MachinePublic
 	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
-	Hostinfo      tailcfg.Hostinfo
-	PacketFilter  []filter.Match
-	SSHPolicy     *tailcfg.SSHPolicy // or nil, if not enabled/allowed
+	// TODO(maisem) : replace with View.
+	Hostinfo     tailcfg.Hostinfo
+	PacketFilter []filter.Match
+	SSHPolicy    *tailcfg.SSHPolicy // or nil, if not enabled/allowed
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.

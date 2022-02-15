@@ -172,9 +172,15 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 		if !codegen.ContainsPointers(ft) {
 			continue
 		}
-		if named, _ := ft.(*types.Named); named != nil && !hasBasicUnderlying(ft) {
-			writef("dst.%s = *src.%s.Clone()", fname, fname)
-			continue
+		if named, _ := ft.(*types.Named); named != nil {
+			if isViewType(ft) {
+				writef("dst.%s = src.%s", fname, fname)
+				continue
+			}
+			if !hasBasicUnderlying(ft) {
+				writef("dst.%s = *src.%s.Clone()", fname, fname)
+				continue
+			}
 		}
 		switch ft := ft.Underlying().(type) {
 		case *types.Slice:
@@ -232,6 +238,17 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 	fmt.Fprintf(buf, "}\n\n")
 
 	buf.Write(codegen.AssertStructUnchanged(t, thisPkg, name, "Clone", imports))
+}
+
+func isViewType(typ types.Type) bool {
+	t, ok := typ.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	if t.NumFields() != 1 {
+		return false
+	}
+	return t.Field(0).Name() == "ж"
 }
 
 func hasBasicUnderlying(typ types.Type) bool {

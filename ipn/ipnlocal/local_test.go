@@ -346,12 +346,12 @@ func TestPeerAPIBase(t *testing.T) {
 					netaddr.MustParseIPPrefix("100.64.1.2/32"),
 					netaddr.MustParseIPPrefix("fe70::2/128"),
 				},
-				Hostinfo: tailcfg.Hostinfo{
+				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
 						{Proto: "peerapi4", Port: 444},
 						{Proto: "peerapi6", Port: 666},
 					},
-				},
+				}).View(),
 			},
 			want: "http://100.64.1.2:444",
 		},
@@ -367,12 +367,12 @@ func TestPeerAPIBase(t *testing.T) {
 					netaddr.MustParseIPPrefix("100.64.1.2/32"),
 					netaddr.MustParseIPPrefix("fe70::2/128"),
 				},
-				Hostinfo: tailcfg.Hostinfo{
+				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
 						{Proto: "peerapi4", Port: 444},
 						{Proto: "peerapi6", Port: 666},
 					},
-				},
+				}).View(),
 			},
 			want: "http://[fe70::2]:666",
 		},
@@ -389,11 +389,11 @@ func TestPeerAPIBase(t *testing.T) {
 					netaddr.MustParseIPPrefix("100.64.1.2/32"),
 					netaddr.MustParseIPPrefix("fe70::2/128"),
 				},
-				Hostinfo: tailcfg.Hostinfo{
+				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
 						{Proto: "peerapi4", Port: 444},
 					},
-				},
+				}).View(),
 			},
 			want: "http://100.64.1.2:444",
 		},
@@ -410,11 +410,11 @@ func TestPeerAPIBase(t *testing.T) {
 					netaddr.MustParseIPPrefix("100.64.1.2/32"),
 					netaddr.MustParseIPPrefix("fe70::2/128"),
 				},
-				Hostinfo: tailcfg.Hostinfo{
+				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
 						{Proto: "peerapi6", Port: 666},
 					},
-				},
+				}).View(),
 			},
 			want: "http://[fe70::2]:666",
 		},
