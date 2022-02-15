@@ -383,9 +383,14 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			}
 		}
 		if b.netMap != nil {
-			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
-			s.TailnetName = b.netMap.Domain
+			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
+			if s.CurrentTailnet == nil {
+				s.CurrentTailnet = &ipnstate.TailnetStatus{}
+			}
+			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
+			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
+			s.CurrentTailnet.Name = b.netMap.Domain
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
