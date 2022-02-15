@@ -8,7 +8,6 @@ package resolver
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -23,16 +22,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go4.org/mem"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/lineread"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -518,7 +516,7 @@ var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 // stubResolverForOS returns the IP address of the first nameserver in
 // /etc/resolv.conf.
 func stubResolverForOS() (ip netaddr.IP, err error) {
-	fi, err := os.Stat("/etc/resolv.conf")
+	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
 		return netaddr.IP{}, err
 	}
@@ -529,37 +527,14 @@ func stubResolverForOS() (ip netaddr.IP, err error) {
 	if c, ok := resolvConfCacheValue.Load().(resolvConfCache); ok && c.mod == cur.mod && c.size == cur.size {
 		return c.ip, nil
 	}
-	// TODO(bradfitz): unify this /etc/resolv.conf parsing code with readResolv
-	// in net/dns, which we can't use due to circular dependency reasons.
-	// Move it to a leaf, including the OSConfig type (perhaps in its own dnstype
-	// package?)
-	err = lineread.File("/etc/resolv.conf", func(line []byte) error {
-		if !ip.IsZero() {
-			return nil
-		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 || line[0] == '#' {
-			return nil
-		}
-		// Normalize tabs to spaces to simplify parsing code later.
-		for i, b := range line {
-			if b == '\t' {
-				line[i] = ' '
-			}
-		}
-		if mem.HasPrefix(mem.B(line), mem.S("nameserver ")) {
-			s := strings.TrimSpace(strings.TrimPrefix(string(line), "nameserver "))
-			ip, err = netaddr.ParseIP(s)
-			return err
-		}
-		return nil
-	})
+	conf, err := resolvconffile.ParseFile(resolvconffile.Path)
 	if err != nil {
 		return netaddr.IP{}, err
 	}
-	if !ip.IsValid() {
+	if len(conf.Nameservers) == 0 {
 		return netaddr.IP{}, errEmptyResolvConf
 	}
+	ip = conf.Nameservers[0]
 	cur.ip = ip
 	resolvConfCacheValue.Store(cur)
 	return ip, nil
