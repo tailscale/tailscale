@@ -138,7 +138,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		nm.Name = node.Name
 		nm.Addresses = filterSelfAddresses(node.Addresses)
 		nm.User = node.User
-		nm.Hostinfo = node.Hostinfo
+		if node.Hostinfo.Valid() {
+			nm.Hostinfo = *node.Hostinfo.AsStruct()
+		}
 		if node.MachineAuthorized {
 			nm.MachineStatus = tailcfg.MachineAuthorized
 		} else {

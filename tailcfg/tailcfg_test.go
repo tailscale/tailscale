@@ -400,13 +400,13 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Hostinfo: Hostinfo{Hostname: "alice"}},
-			&Node{Hostinfo: Hostinfo{Hostname: "bob"}},
+			&Node{Hostinfo: (&Hostinfo{Hostname: "alice"}).View()},
+			&Node{Hostinfo: (&Hostinfo{Hostname: "bob"}).View()},
 			false,
 		},
 		{
-			&Node{Hostinfo: Hostinfo{}},
-			&Node{Hostinfo: Hostinfo{}},
+			&Node{Hostinfo: (&Hostinfo{}).View()},
+			&Node{Hostinfo: (&Hostinfo{}).View()},
 			true,
 		},
 		{

@@ -196,7 +196,7 @@ func root(w http.ResponseWriter, r *http.Request) {
 			LoginName:     who.UserProfile.LoginName,
 			ProfilePicURL: who.UserProfile.ProfilePicURL,
 			MachineName:   firstLabel(who.Node.ComputedName),
-			MachineOS:     who.Node.Hostinfo.OS,
+			MachineOS:     who.Node.Hostinfo.OS(),
 			IP:            tailscaleIP(who),
 		}
 	}

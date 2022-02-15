@@ -191,7 +191,7 @@ func peerDebugName(p *tailcfg.Node) string {
 	if i := strings.Index(n, "."); i != -1 {
 		return n[:i]
 	}
-	return p.Hostinfo.Hostname
+	return p.Hostinfo.Hostname()
 }
 
 func ipPortLess(a, b netaddr.IPPort) bool {

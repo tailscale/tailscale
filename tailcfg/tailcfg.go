@@ -157,7 +157,7 @@ type Node struct {
 	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
 	Endpoints  []string           `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 	DERP       string             `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
-	Hostinfo   Hostinfo
+	Hostinfo   HostinfoView
 	Created    time.Time
 
 	// Tags are the list of ACL tags applied to this node.
@@ -256,7 +256,10 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 // n.ComputedNameWithHost.
 func (n *Node) InitDisplayNames(networkMagicDNSSuffix string) {
 	name := dnsname.TrimSuffix(n.Name, networkMagicDNSSuffix)
-	hostIfDifferent := dnsname.SanitizeHostname(n.Hostinfo.Hostname)
+	var hostIfDifferent string
+	if n.Hostinfo.Valid() {
+		hostIfDifferent = dnsname.SanitizeHostname(n.Hostinfo.Hostname())
+	}
 
 	if strings.EqualFold(name, hostIfDifferent) {
 		hostIfDifferent = ""
@@ -456,7 +459,7 @@ type Hostinfo struct {
 	//       require changes to Hostinfo.Equal.
 }
 
-// View returns a read-only accessor for the Hostinfo object.
+// View returns a read-only accessor for hi.
 func (hi *Hostinfo) View() HostinfoView { return HostinfoView{hi} }
 
 // HostinfoView is a read-only accessor for Hostinfo.
@@ -503,7 +506,7 @@ func (v HostinfoView) Hostname() string           { return v.ж.Hostname }
 func (v HostinfoView) ShieldsUp() bool            { return v.ж.ShieldsUp }
 func (v HostinfoView) ShareeNode() bool           { return v.ж.ShareeNode }
 func (v HostinfoView) GoArch() string             { return v.ж.GoArch }
-func (v HostinfoView) Equal(h2 HostinfoView) bool { return v.ж.Equal(h2.ж) }
+func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
 
 func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
 	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
@@ -656,7 +659,7 @@ func (ni *NetInfo) portMapSummary() string {
 	return prefix + conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
 }
 
-// View returns a read-only accessor for the NetInfo object.
+// View returns a read-only accessor for ni.
 func (ni *NetInfo) View() NetInfoView { return NetInfoView{ni} }
 
 func conciseOptBool(b opt.Bool, trueVal string) string {
@@ -1390,7 +1393,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
 		eqStrings(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
-		n.Hostinfo.Equal(&n2.Hostinfo) &&
+		n.Hostinfo.Equal(n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized &&
