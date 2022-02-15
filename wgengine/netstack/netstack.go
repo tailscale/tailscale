@@ -103,9 +103,9 @@ type Impl struct {
 	connsOpenBySubnetIP map[netaddr.IP]int
 }
 
-// sshDemo is initialized in ssh.go (on Linux only) to register an SSH server
+// handleSSH is initialized in ssh.go (on Linux only) to register an SSH server
 // handler. See https://github.com/tailscale/tailscale/issues/3802.
-var sshDemo func(*Impl, net.Conn) error
+var handleSSH func(logger.Logf, *ipnlocal.LocalBackend, net.Conn) error
 
 const nicID = 1
 const mtu = 1500
@@ -638,17 +638,16 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
-	if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) && sshDemo != nil {
-		// TODO(bradfitz): un-demo this.
-		ns.logf("doing ssh demo thing....")
-		if err := sshDemo(ns, c); err != nil {
-			ns.logf("ssh demo error: %v", err)
-		} else {
-			ns.logf("ssh demo: ok")
-		}
-		return
-	}
 	if ns.lb != nil {
+		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) && handleSSH != nil {
+			ns.logf("handling SSH connection....")
+			if err := handleSSH(ns.logf, ns.lb, c); err != nil {
+				ns.logf("ssh error: %v", err)
+			} else {
+				ns.logf("ssh: ok")
+			}
+			return
+		}
 		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
 			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
 				src := netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort)
