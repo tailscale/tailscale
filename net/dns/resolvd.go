@@ -8,17 +8,14 @@
 package dns
 
 import (
-	"bufio"
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/dnsname"
 )
 
 func newResolvdManager(logf logger.Logf, interfaceName string) (*resolvdManager, error) {
@@ -117,44 +114,14 @@ func (m resolvdManager) readResolvConf() (config OSConfig, err error) {
 		return OSConfig{}, err
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(b))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// resolvd manages "nameserver" lines, we only need to handle
-		// "search".
-		if strings.HasPrefix(line, "search") {
-			domain := strings.TrimPrefix(line, "search")
-			domain = strings.TrimSpace(domain)
-			fqdn, err := dnsname.ToFQDN(domain)
-			if err != nil {
-				return OSConfig{}, fmt.Errorf("parsing search domains %q: %w", line, err)
-			}
-			config.SearchDomains = append(config.SearchDomains, fqdn)
-			continue
-		}
-
-		if strings.HasPrefix(line, "nameserver") {
-			s := strings.TrimPrefix(line, "nameserver")
-			parts := strings.Split(s, " # ")
-			if len(parts) == 0 {
-				return OSConfig{}, err
-			}
-			nameserver := strings.TrimSpace(parts[0])
-			ip, err := netaddr.ParseIP(nameserver)
-			if err != nil {
-				return OSConfig{}, err
-			}
-			config.Nameservers = append(config.Nameservers, ip)
-			continue
-		}
+	rconf, err := resolvconffile.Parse(bytes.NewReader(b))
+	if err != nil {
+		return config, err
 	}
-
-	if err = scanner.Err(); err != nil {
-		return OSConfig{}, err
-	}
-
-	return config, nil
+	return OSConfig{
+		Nameservers:   rconf.Nameservers,
+		SearchDomains: rconf.SearchDomains,
+	}, nil
 }
 
 func removeSearchLines(orig []byte) []byte {
