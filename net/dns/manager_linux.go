@@ -14,6 +14,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"inet.af/netaddr"
+	"tailscale.com/health"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 )
@@ -216,7 +217,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 		}
 		dbg("nm-resolved", "yes")
 
-		if err := env.dbusPing("org.freedesktop.resolve1", "/org/freedesktop/resolve1"); err != nil {
+		if !resolvedUp {
 			dbg("resolved", "no")
 			return "direct", nil
 		}
@@ -241,6 +242,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			dbg("nm-safe", "yes")
 			return "network-manager", nil
 		}
+		health.SetDNSManagerHealth(errors.New("systemd-resolved and NetworkManager are wired together incorrectly; MagicDNS will probably not work. For more info, see https://tailscale.com/s/resolved-nm"))
 		dbg("nm-safe", "no")
 		return "systemd-resolved", nil
 	default:
