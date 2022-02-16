@@ -231,7 +231,8 @@ main() {
 			   [ "$VERSION" != "focal" ] && \
 			   [ "$VERSION" != "groovy" ] && \
 			   [ "$VERSION" != "hirsute" ] && \
-			   [ "$VERSION" != "impish" ]
+			   [ "$VERSION" != "impish" ] && \
+			   [ "$VERSION" != "jammy" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
