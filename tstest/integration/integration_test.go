@@ -146,6 +146,27 @@ func TestCollectPanic(t *testing.T) {
 	}
 }
 
+func TestControlTimeLogLine(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n := newTestNode(t, env)
+
+	n.StartDaemon()
+	n.AwaitResponding()
+	n.MustUp()
+	n.AwaitRunning()
+
+	if err := tstest.WaitFor(20*time.Second, func() error {
+		const sub = `netmap: control time is 2020-08-03T00:00:00.000000001Z`
+		if !n.env.LogCatcher.logsContains(mem.S(sub)) {
+			return fmt.Errorf("log catcher didn't see %#q; got %s", sub, n.env.LogCatcher.logsString())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // test Issue 2321: Start with UpdatePrefs should save prefs to disk
 func TestStateSavedOnStart(t *testing.T) {
 	t.Parallel()

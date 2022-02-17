@@ -1291,6 +1291,9 @@ type MapResponse struct {
 	// SSH connections should be handled.
 	SSHPolicy *SSHPolicy `json:",omitempty"`
 
+	// ControlTime, if non-zero, is the current timestamp according to the control server.
+	ControlTime time.Time `json:",omitempty"`
+
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
 	Debug *Debug `json:",omitempty"`
