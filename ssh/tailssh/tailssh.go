@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -21,7 +20,6 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
-	gossh "golang.org/x/crypto/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
@@ -35,14 +33,6 @@ import (
 
 // Handle handles an SSH connection from c.
 func Handle(logf logger.Logf, lb *ipnlocal.LocalBackend, c net.Conn) error {
-	hostKey, err := ioutil.ReadFile("/etc/ssh/ssh_host_ed25519_key")
-	if err != nil {
-		return err
-	}
-	signer, err := gossh.ParsePrivateKey(hostKey)
-	if err != nil {
-		return err
-	}
 	sshd := &server{lb, logf}
 	srv := &ssh.Server{
 		Handler:           sshd.handleSSH,
@@ -59,7 +49,13 @@ func Handle(logf logger.Logf, lb *ipnlocal.LocalBackend, c net.Conn) error {
 	for k, v := range ssh.DefaultSubsystemHandlers {
 		srv.SubsystemHandlers[k] = v
 	}
-	srv.AddHostKey(signer)
+	keys, err := lb.GetSSHHostKeys()
+	if err != nil {
+		return err
+	}
+	for _, signer := range keys {
+		srv.AddHostKey(signer)
+	}
 
 	srv.HandleConn(c)
 	return nil
