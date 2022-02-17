@@ -730,7 +730,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Debug: &tailcfg.Debug{
 			DisableUPnP: "true",
 		},
-		DNSConfig: s.DNSConfig,
+		DNSConfig:   s.DNSConfig,
+		ControlTime: time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC),
 	}
 	for _, p := range s.AllNodes() {
 		if p.StableID != node.StableID {
