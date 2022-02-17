@@ -49,7 +49,7 @@ func Handle(logf logger.Logf, lb *ipnlocal.LocalBackend, c net.Conn) error {
 	for k, v := range ssh.DefaultSubsystemHandlers {
 		srv.SubsystemHandlers[k] = v
 	}
-	keys, err := lb.GetSSHHostKeys()
+	keys, err := lb.GetSSH_HostKeys()
 	if err != nil {
 		return err
 	}

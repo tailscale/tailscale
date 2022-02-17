@@ -106,6 +106,7 @@ func (src *Hostinfo) Clone() *Hostinfo {
 	dst.RequestTags = append(src.RequestTags[:0:0], src.RequestTags...)
 	dst.Services = append(src.Services[:0:0], src.Services...)
 	dst.NetInfo = src.NetInfo.Clone()
+	dst.SSH_HostKeys = append(src.SSH_HostKeys[:0:0], src.SSH_HostKeys...)
 	return dst
 }
 
@@ -126,6 +127,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	RequestTags   []string
 	Services      []Service
 	NetInfo       *NetInfo
+	SSH_HostKeys  []string
 }{})
 
 // Clone makes a deep copy of NetInfo.

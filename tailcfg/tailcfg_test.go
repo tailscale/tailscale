@@ -32,7 +32,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShieldsUp", "ShareeNode",
 		"GoArch",
 		"RoutableIPs", "RequestTags",
-		"Services", "NetInfo",
+		"Services", "NetInfo", "SSH_HostKeys",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -178,6 +178,11 @@ func TestHostinfoEqual(t *testing.T) {
 		},
 		{
 			&Hostinfo{ShareeNode: true},
+			&Hostinfo{},
+			false,
+		},
+		{
+			&Hostinfo{SSH_HostKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO.... root@bar"}},
 			&Hostinfo{},
 			false,
 		},

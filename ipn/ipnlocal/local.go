@@ -894,7 +894,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if b.inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", b.inServerMode)
 	}
-	applyPrefsToHostinfo(hostinfo, b.prefs)
+	b.applyPrefsToHostinfo(hostinfo, b.prefs)
 
 	b.setNetMapLocked(nil)
 	persistv := b.prefs.Persist
@@ -1739,7 +1739,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
-	applyPrefsToHostinfo(newHi, newp)
+	b.applyPrefsToHostinfo(newHi, newp)
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
 	userID := b.userID
@@ -2444,13 +2444,23 @@ func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 	return ret
 }
 
-func applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
+// Warning: b.mu might be held. Currently (2022-02-17) both callers hold it.
+func (b *LocalBackend) applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Prefs) {
 	if h := prefs.Hostname; h != "" {
 		hi.Hostname = h
 	}
 	hi.RoutableIPs = append(prefs.AdvertiseRoutes[:0:0], prefs.AdvertiseRoutes...)
 	hi.RequestTags = append(prefs.AdvertiseTags[:0:0], prefs.AdvertiseTags...)
 	hi.ShieldsUp = prefs.ShieldsUp
+
+	var sshHostKeys []string
+	if prefs.RunSSH {
+		// TODO(bradfitz): this is called with b.mu held. Not ideal.
+		// If the filesystem gets wedged or something we could block for
+		// a long time. But probably fine.
+		sshHostKeys = b.getSSHHostKeyPublicStrings()
+	}
+	hi.SSH_HostKeys = sshHostKeys
 }
 
 // enterState transitions the backend into newState, updating internal
