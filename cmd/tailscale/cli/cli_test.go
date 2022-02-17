@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
@@ -380,7 +381,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 
 				Hostname: "foo",
 			},
-			want: accidentalUpPrefix + " --authkey=secretrand --force-reauth=false --reset --hostname=foo",
+			want: accidentalUpPrefix + " --auth-key=secretrand --force-reauth=false --reset --hostname=foo",
 		},
 		{
 			name:  "error_exit_node_omit_with_ip_pref",
@@ -487,7 +488,8 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			}
 			var upArgs upArgsT
 			flagSet := newUpFlagSet(goos, &upArgs)
-			flagSet.Parse(tt.flags)
+			flags := CleanUpArgs(tt.flags)
+			flagSet.Parse(flags)
 			newPrefs, err := prefsFromUpArgs(upArgs, t.Logf, new(ipnstate.Status), goos)
 			if err != nil {
 				t.Fatal(err)
@@ -858,7 +860,8 @@ func TestUpdatePrefs(t *testing.T) {
 				tt.env.goos = "linux"
 			}
 			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
-			tt.env.flagSet.Parse(tt.flags)
+			flags := CleanUpArgs(tt.flags)
+			tt.env.flagSet.Parse(flags)
 
 			newPrefs, err := prefsFromUpArgs(tt.env.upArgs, t.Logf, new(ipnstate.Status), tt.env.goos)
 			if err != nil {
@@ -1021,5 +1024,31 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				t.Fatalf("got %v; want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCleanUpArgs(t *testing.T) {
+	c := qt.New(t)
+	tests := []struct {
+		in   []string
+		want []string
+	}{
+		{in: []string{"something"}, want: []string{"something"}},
+		{in: []string{}, want: []string{}},
+		{in: []string{"--authkey=0"}, want: []string{"--auth-key=0"}},
+		{in: []string{"a", "--authkey=1", "b"}, want: []string{"a", "--auth-key=1", "b"}},
+		{in: []string{"a", "--auth-key=2", "b"}, want: []string{"a", "--auth-key=2", "b"}},
+		{in: []string{"a", "-authkey=3", "b"}, want: []string{"a", "--auth-key=3", "b"}},
+		{in: []string{"a", "-auth-key=4", "b"}, want: []string{"a", "-auth-key=4", "b"}},
+		{in: []string{"a", "--authkey", "5", "b"}, want: []string{"a", "--auth-key", "5", "b"}},
+		{in: []string{"a", "-authkey", "6", "b"}, want: []string{"a", "--auth-key", "6", "b"}},
+		{in: []string{"a", "authkey", "7", "b"}, want: []string{"a", "authkey", "7", "b"}},
+		{in: []string{"--authkeyexpiry", "8"}, want: []string{"--authkeyexpiry", "8"}},
+		{in: []string{"--auth-key-expiry", "9"}, want: []string{"--auth-key-expiry", "9"}},
+	}
+
+	for _, tt := range tests {
+		got := CleanUpArgs(tt.in)
+		c.Assert(got, qt.DeepEquals, tt.want)
 	}
 }

@@ -104,6 +104,26 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
+// CleanUpArgs rewrites command line arguments for simplicity and backwards compatibility.
+// In particular, it rewrites --authkey to --auth-key.
+func CleanUpArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		// Rewrite --authkey to --auth-key, and --authkey=x to --auth-key=x,
+		// and the same for the -authkey variant.
+		switch {
+		case arg == "--authkey", arg == "-authkey":
+			arg = "--auth-key"
+		case strings.HasPrefix(arg, "--authkey="), strings.HasPrefix(arg, "-authkey="):
+			arg = strings.TrimLeft(arg, "-")
+			arg = strings.TrimPrefix(arg, "authkey=")
+			arg = "--auth-key=" + arg
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) error {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
