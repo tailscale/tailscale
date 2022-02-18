@@ -275,6 +275,11 @@ func TestParseAndRemoveLogLevel(t *testing.T) {
 			0,
 			"[v3] no level 3",
 		},
+		{
+			"some ignored text then [v\x00JSON]5{\"foo\":1234}",
+			5,
+			`{"foo":1234}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -367,6 +372,14 @@ func TestEncode(t *testing.T) {
 		{
 			`{"foo":"bar"}`,
 			`{"foo":"bar","logtail":{"client_time":"1970-01-01T00:02:03.000000456Z"}}` + "\n",
+		},
+		{
+			"foo: [v\x00JSON]0{\"foo\":1}",
+			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\"}}\n",
+		},
+		{
+			"foo: [v\x00JSON]2{\"foo\":1}",
+			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\"},\"v\":2}\n",
 		},
 	}
 	for _, tt := range tests {

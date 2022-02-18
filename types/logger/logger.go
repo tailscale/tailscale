@@ -9,7 +9,9 @@ package logger
 
 import (
 	"bufio"
+	"bytes"
 	"container/list"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -34,6 +36,49 @@ type Logf func(format string, args ...interface{})
 type Context context.Context
 
 type logfKey struct{}
+
+// jenc is a json.Encode + bytes.Buffer pair wired up to be reused in a pool.
+type jenc struct {
+	buf bytes.Buffer
+	enc *json.Encoder
+}
+
+var jencPool = &sync.Pool{New: func() interface{} {
+	je := new(jenc)
+	je.enc = json.NewEncoder(&je.buf)
+	return je
+}}
+
+// JSON marshals v as JSON and writes it to logf formatted with the annotation to make logtail
+// treat it as a structured log.
+//
+// The recType is the record type and becomes the key of the wrapper
+// JSON object that is logged. That is, if recType is "foo" and v is
+// 123, the value logged is {"foo":123}.
+//
+// Do not use recType "logtail" or "v", with any case. Those are
+// reserved for the logging system.
+//
+// The level can be from 0 to 9. Levels from 1 to 9 are included in
+// the logged JSON object, like {"foo":123,"v":2}.
+func (logf Logf) JSON(level int, recType string, v interface{}) {
+	je := jencPool.Get().(*jenc)
+	defer jencPool.Put(je)
+	je.buf.Reset()
+	je.buf.WriteByte('{')
+	je.enc.Encode(recType)
+	je.buf.Truncate(je.buf.Len() - 1) // remove newline from prior Encode
+	je.buf.WriteByte(':')
+	if err := je.enc.Encode(v); err != nil {
+		logf("[unexpected]: failed to encode structured JSON log record of type %q / %T: %v", recType, v, err)
+		return
+	}
+	je.buf.Truncate(je.buf.Len() - 1) // remove newline from prior Encode
+	je.buf.WriteByte('}')
+	// Magic prefix recognized by logtail:
+	logf("[v\x00JSON]%d%s", level%10, je.buf.Bytes())
+
+}
 
 // FromContext extracts a log function from ctx.
 func FromContext(ctx Context) Logf {

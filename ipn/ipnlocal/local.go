@@ -172,7 +172,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	}
 
 	hi := hostinfo.New()
-	logf("Host: %s/%s, %s", hi.OS, hi.GoArch, hi.OSVersion)
+	logf.JSON(1, "Hostinfo", hi)
 	envknob.LogCurrent(logf)
 	if dialer == nil {
 		dialer = new(tsdial.Dialer)

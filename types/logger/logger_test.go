@@ -15,6 +15,7 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/tailcfg"
 )
 
 func TestFuncWriter(t *testing.T) {
@@ -210,4 +211,14 @@ func TestContext(t *testing.T) {
 	logf = FromContext(ctx)
 	logf("a")
 	c.Assert(called, qt.IsTrue)
+}
+
+func TestJSON(t *testing.T) {
+	var buf bytes.Buffer
+	var logf Logf = func(f string, a ...interface{}) { fmt.Fprintf(&buf, f, a...) }
+	logf.JSON(1, "foo", &tailcfg.Hostinfo{})
+	want := "[v\x00JSON]1" + `{"foo":{"OS":"","Hostname":""}}`
+	if got := buf.String(); got != want {
+		t.Errorf("mismatch\n got: %q\nwant: %q\n", got, want)
+	}
 }
