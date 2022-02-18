@@ -56,8 +56,8 @@ var jencPool = &sync.Pool{New: func() interface{} {
 // JSON object that is logged. That is, if recType is "foo" and v is
 // 123, the value logged is {"foo":123}.
 //
-// Do not use recType "logtail" or "v", with any case. Those are
-// reserved for the logging system.
+// Do not use recType "logtail", "v", "text", or "metrics", with any case.
+// Those are reserved for the logging system.
 //
 // The level can be from 0 to 9. Levels from 1 to 9 are included in
 // the logged JSON object, like {"foo":123,"v":2}.
