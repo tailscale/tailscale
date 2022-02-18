@@ -10,12 +10,14 @@ package tailssh
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/creack/pty"
@@ -24,6 +26,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
 
@@ -66,6 +69,33 @@ type server struct {
 	logf logger.Logf
 }
 
+var debugPolicyFile = envknob.String("TS_DEBUG_SSH_POLICY_FILE")
+
+func (srv *server) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
+	lb := srv.lb
+	nm := lb.NetMap()
+	if nm == nil {
+		return nil, false
+	}
+	if pol := nm.SSHPolicy; pol != nil {
+		return pol, true
+	}
+	if debugPolicyFile != "" {
+		f, err := os.ReadFile(debugPolicyFile)
+		if err != nil {
+			srv.logf("error reading debug SSH policy file: %v", err)
+			return nil, false
+		}
+		p := new(tailcfg.SSHPolicy)
+		if err := json.Unmarshal(f, p); err != nil {
+			srv.logf("invalid JSON in %v: %v", debugPolicyFile, err)
+			return nil, false
+		}
+		return p, true
+	}
+	return nil, false
+}
+
 func (srv *server) handleSSH(s ssh.Session) {
 	lb := srv.lb
 	logf := srv.logf
@@ -91,35 +121,54 @@ func (srv *server) handleSSH(s ssh.Session) {
 		return
 	}
 
-	ptyReq, winCh, isPty := s.Pty()
-	if !isPty {
-		fmt.Fprintf(s, "TODO scp etc")
-		s.Exit(1)
-		return
-	}
-	srcIPP := netaddr.IPPortFrom(tanetaddr, uint16(ta.Port))
-	node, uprof, ok := lb.WhoIs(srcIPP)
+	pol, ok := srv.sshPolicy()
 	if !ok {
-		fmt.Fprintf(s, "Hello, %v. I don't know who you are.\n", srcIPP)
-		s.Exit(0)
-		return
-	}
-	allow := envknob.String("TS_SSH_ALLOW_LOGIN")
-	if allow == "" || uprof.LoginName != allow {
-		logf("ssh: access denied for %q (only allowing %q)", uprof.LoginName, allow)
-		jnode, _ := json.Marshal(node)
-		jprof, _ := json.Marshal(uprof)
-		fmt.Fprintf(s, "Access denied.\n\nYou are node: %s\n\nYour profile: %s\n\nYou wanted %+v\n", jnode, jprof, ptyReq)
+		logf("tsshd: rejecting connection; no SSH policy")
 		s.Exit(1)
 		return
 	}
 
+	ptyReq, winCh, isPty := s.Pty()
+	srcIPP := netaddr.IPPortFrom(tanetaddr, uint16(ta.Port))
+	node, uprof, ok := lb.WhoIs(srcIPP)
+	if !ok {
+		fmt.Fprintf(s, "Hello, %v. I don't know who you are.\n", srcIPP)
+		s.Exit(1)
+		return
+	}
+
+	srcIP := srcIPP.IP()
+	sctx := &sshContext{
+		now:     time.Now(),
+		sshUser: s.User(),
+		srcIP:   srcIP,
+		node:    node,
+		uprof:   &uprof,
+	}
+	action, localUser, ok := evalSSHPolicy(pol, sctx)
+	if ok && action.Message != "" {
+		io.WriteString(s, action.Message)
+	}
+	if !ok || action.Reject {
+		logf("ssh: access denied for %q from %v", uprof.LoginName, srcIP)
+		s.Exit(1)
+		return
+	}
+	if !action.Accept || action.HoldAndDelegate != "" {
+		fmt.Fprintf(s, "TODO: other SSHAction outcomes")
+		s.Exit(1)
+
+	}
+	if !isPty {
+		fmt.Fprintf(s, "TODO scp etc\n")
+		s.Exit(1)
+		return
+	}
 	var cmd *exec.Cmd
-	sshUser := s.User()
-	if os.Getuid() != 0 || sshUser == "root" {
+	if os.Getuid() != 0 || localUser == "root" {
 		cmd = exec.Command("/bin/bash")
 	} else {
-		cmd = exec.Command("/usr/bin/env", "su", "-", sshUser)
+		cmd = exec.Command("/usr/bin/env", "su", "-", localUser)
 	}
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 	f, err := pty.Start(cmd)
@@ -128,6 +177,16 @@ func (srv *server) handleSSH(s ssh.Session) {
 		s.Exit(1)
 		return
 	}
+
+	if action.SesssionDuration != 0 {
+		t := time.AfterFunc(action.SesssionDuration, func() {
+			logf("terminating SSH session from %v after max duration", srcIP)
+			cmd.Process.Kill()
+			f.Close()
+		})
+		defer t.Stop()
+	}
+
 	defer f.Close()
 	go func() {
 		for win := range winCh {
@@ -149,4 +208,92 @@ func (srv *server) handleSSH(s ssh.Session) {
 func setWinsize(f *os.File, w, h int) {
 	syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCSWINSZ),
 		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
+}
+
+type sshContext struct {
+	// now is the time to consider the present moment for the
+	// purposes of rule evaluation.
+	now time.Time
+
+	// sshUser is the requested local SSH username ("root", "alice", etc).
+	sshUser string
+
+	// srcIP is the Tailscale IP that the connection came from.
+	srcIP netaddr.IP
+
+	// node is srcIP's node.
+	node *tailcfg.Node
+
+	// uprof is node's UserProfile.
+	uprof *tailcfg.UserProfile
+}
+
+func evalSSHPolicy(pol *tailcfg.SSHPolicy, sctx *sshContext) (a *tailcfg.SSHAction, localUser string, ok bool) {
+	for _, r := range pol.Rules {
+		if a, localUser, err := matchRule(r, sctx); err == nil {
+			return a, localUser, true
+		}
+	}
+	return nil, "", false
+}
+
+// internal errors for testing; they don't escape to callers or logs.
+var (
+	errNilRule        = errors.New("nil rule")
+	errNilAction      = errors.New("nil action")
+	errRuleExpired    = errors.New("rule expired")
+	errPrincipalMatch = errors.New("principal didn't match")
+	errUserMatch      = errors.New("user didn't match")
+)
+
+func matchRule(r *tailcfg.SSHRule, sctx *sshContext) (a *tailcfg.SSHAction, localUser string, err error) {
+	if r == nil {
+		return nil, "", errNilRule
+	}
+	if r.Action == nil {
+		return nil, "", errNilAction
+	}
+	if r.RuleExpires != nil && sctx.now.After(*r.RuleExpires) {
+		return nil, "", errRuleExpired
+	}
+	if !matchesPrincipal(r.Principals, sctx) {
+		return nil, "", errPrincipalMatch
+	}
+	if !r.Action.Reject || r.SSHUsers != nil {
+		localUser = mapLocalUser(r.SSHUsers, sctx.sshUser)
+		if localUser == "" {
+			return nil, "", errUserMatch
+		}
+	}
+	return r.Action, localUser, nil
+}
+
+func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser string) {
+	if v, ok := ruleSSHUsers[reqSSHUser]; ok {
+		return v
+	}
+	return ruleSSHUsers["*"]
+}
+
+func matchesPrincipal(ps []*tailcfg.SSHPrincipal, sctx *sshContext) bool {
+	for _, p := range ps {
+		if p == nil {
+			continue
+		}
+		if p.Any {
+			return true
+		}
+		if !p.Node.IsZero() && sctx.node != nil && p.Node == sctx.node.StableID {
+			return true
+		}
+		if p.NodeIP != "" {
+			if ip, _ := netaddr.ParseIP(p.NodeIP); ip == sctx.srcIP {
+				return true
+			}
+		}
+		if p.UserLogin != "" && sctx.uprof != nil && sctx.uprof.LoginName == p.UserLogin {
+			return true
+		}
+	}
+	return false
 }
