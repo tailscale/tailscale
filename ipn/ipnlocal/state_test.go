@@ -293,7 +293,7 @@ func TestStateMachine(t *testing.T) {
 
 	cc := newMockControl(t)
 	t.Cleanup(func() { cc.preventLog.Set(true) }) // hacky way to pacify issue 3020
-	b, err := NewLocalBackend(logf, "logid", store, nil, e)
+	b, err := NewLocalBackend(logf, "logid", store, nil, e, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -954,7 +954,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
-	b, err := NewLocalBackend(logf, "logid", new(ipn.MemoryStore), nil, eng)
+	b, err := NewLocalBackend(logf, "logid", new(ipn.MemoryStore), nil, eng, 0)
 	c.Assert(err, qt.IsNil)
 
 	cc := newMockControl(t)
