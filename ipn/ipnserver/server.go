@@ -85,6 +85,9 @@ type Options struct {
 	// the actual definition of "disconnect" is when the
 	// connection count transitions from 1 to 0.
 	SurviveDisconnects bool
+
+	// LoginFlags specifies the LoginFlags to pass to the client.
+	LoginFlags controlclient.LoginFlags
 }
 
 // Server is an IPN backend and its set of 0 or more active localhost
@@ -660,6 +663,8 @@ func tryWindowsAppDataMigration(logf logger.Logf, path string) string {
 // Special cases:
 //
 //   * empty string means to use an in-memory store
+//   * if the string begins with "mem:", the suffix
+//     is ignored and an in-memory store is used.
 //   * if the string begins with "kube:", the suffix
 //     is a Kubernetes secret name
 //   * if the string begins with "arn:", the value is
@@ -668,9 +673,12 @@ func StateStore(path string, logf logger.Logf) (ipn.StateStore, error) {
 	if path == "" {
 		return &ipn.MemoryStore{}, nil
 	}
+	const memPrefix = "mem:"
 	const kubePrefix = "kube:"
 	const arnPrefix = "arn:"
 	switch {
+	case strings.HasPrefix(path, memPrefix):
+		return &ipn.MemoryStore{}, nil
 	case strings.HasPrefix(path, kubePrefix):
 		secretName := strings.TrimPrefix(path, kubePrefix)
 		store, err := ipn.NewKubeStore(secretName)
@@ -797,7 +805,7 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 //
 // To start it, use the Server.Run method.
 func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engine, dialer *tsdial.Dialer, serverModeUser *user.User, opts Options) (*Server, error) {
-	b, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng)
+	b, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("NewLocalBackend: %v", err)
 	}

@@ -54,6 +54,10 @@ type Server struct {
 	// log.Printf is used.
 	Logf logger.Logf
 
+	// Ephemeral, if true, specifies that the instance should register
+	// as an Ephemeral node (https://tailscale.com/kb/1111/ephemeral-nodes/).
+	Emphemeral bool
+
 	initOnce sync.Once
 	initErr  error
 	lb       *ipnlocal.LocalBackend
@@ -173,7 +177,11 @@ func (s *Server) start() error {
 	}
 	logid := "tslib-TODO"
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, s.dialer, eng)
+	loginFlags := controlclient.LoginDefault
+	if s.Emphemeral {
+		loginFlags = controlclient.LoginEphemeral
+	}
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, s.dialer, eng, loginFlags)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}

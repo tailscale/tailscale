@@ -136,6 +136,7 @@ type LocalBackend struct {
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
+	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
@@ -166,7 +167,7 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: engine must not be nil")
 	}
@@ -199,6 +200,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		state:          ipn.NoState,
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
+		loginFlags:     loginFlags,
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
@@ -1569,13 +1571,14 @@ func (b *LocalBackend) InServerMode() bool {
 }
 
 // Login implements Backend.
+// As of 2022-02-17, this is only exists for tests.
 func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
 	b.assertClientLocked()
 	cc := b.cc
 	b.mu.Unlock()
 
-	cc.Login(token, controlclient.LoginInteractive)
+	cc.Login(token, b.loginFlags|controlclient.LoginInteractive)
 }
 
 // StartLoginInteractive implements Backend. It requests a new
@@ -1594,15 +1597,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	if url != "" {
 		b.popBrowserAuthNow()
 	} else {
-		flags := controlclient.LoginInteractive
-		if runtime.GOOS == "js" {
-			// The js/wasm client has no state storage so for now
-			// treat all interactive logins as ephemeral.
-			// TODO(bradfitz): if we start using browser LocalStorage
-			// or something, then rethink this.
-			flags |= controlclient.LoginEphemeral
-		}
-		cc.Login(nil, flags)
+		cc.Login(nil, b.loginFlags|controlclient.LoginInteractive)
 	}
 }
 

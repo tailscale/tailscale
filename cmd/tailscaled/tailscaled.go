@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
@@ -123,7 +124,7 @@ func main() {
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
 	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
-	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM. If empty and --statedir is provided, the default is <statedir>/tailscaled.state")
+	flag.StringVar(&args.statepath, "state", paths.DefaultTailscaledStateFile(), "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an emphemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state")
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
@@ -238,8 +239,19 @@ func ipnServerOpts() (o ipnserver.Options) {
 			o.VarRoot = dir
 		}
 	}
+	if strings.HasPrefix(statePathOrDefault(), "mem:") {
+		// Register as an ephemeral node.
+		o.LoginFlags = controlclient.LoginEphemeral
+	}
 
 	switch goos {
+	case "js":
+		// The js/wasm client has no state storage so for now
+		// treat all interactive logins as ephemeral.
+		// TODO(bradfitz): if we start using browser LocalStorage
+		// or something, then rethink this.
+		o.LoginFlags = controlclient.LoginEphemeral
+		fallthrough
 	default:
 		o.SurviveDisconnects = true
 		o.AutostartStateKey = ipn.GlobalDaemonStateKey
