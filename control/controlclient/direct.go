@@ -773,7 +773,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		}
 
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
-			c.logf("netmap: control time is %v", resp.ControlTime.UTC().Format(time.RFC3339Nano))
+			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())
 		}
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")

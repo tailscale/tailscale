@@ -213,6 +213,7 @@ type LogCatcher struct {
 	buf    bytes.Buffer
 	gotErr error
 	reqs   int
+	raw    bool // indicates whether to store the raw JSON logs uploaded, instead of just the text
 }
 
 // UseLogf makes the logcatcher implementation use a given logf function
@@ -221,6 +222,13 @@ func (lc *LogCatcher) UseLogf(fn logger.Logf) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	lc.logf = fn
+}
+
+// StoreRawJSON instructs lc to save the raw JSON uploads, rather than just the text.
+func (lc *LogCatcher) StoreRawJSON() {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.raw = true
 }
 
 func (lc *LogCatcher) logsContains(sub mem.RO) bool {
@@ -315,6 +323,10 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id := privID.Public().String()[:3] // good enough for integration tests
 		for _, ent := range jreq {
+			if lc.raw {
+				lc.buf.Write(bodyBytes)
+				continue
+			}
 			fmt.Fprintf(&lc.buf, "%s\n", strings.TrimSpace(ent.Text))
 			if lc.logf != nil {
 				lc.logf("logcatch:%s: %s", id, strings.TrimSpace(ent.Text))
