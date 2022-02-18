@@ -530,6 +530,9 @@ func (l *Logger) encode(buf []byte, level int) []byte {
 			"client_time": now.Format(time.RFC3339Nano),
 		}
 	}
+	if level > 0 {
+		obj["v"] = level
+	}
 
 	b, err := json.Marshal(obj)
 	if err != nil {
@@ -577,6 +580,7 @@ var (
 	openBracketV = []byte("[v")
 	v1           = []byte("[v1] ")
 	v2           = []byte("[v2] ")
+	vJSON        = []byte("[v\x00JSON]") // precedes log level '0'-'9' byte, then JSON value
 )
 
 // level 0 is normal (or unknown) level; 1+ are increasingly verbose
@@ -589,6 +593,15 @@ func parseAndRemoveLogLevel(buf []byte) (level int, cleanBuf []byte) {
 	}
 	if bytes.Contains(buf, v2) {
 		return 2, bytes.ReplaceAll(buf, v2, nil)
+	}
+	if i := bytes.Index(buf, vJSON); i != -1 {
+		rest := buf[i+len(vJSON):]
+		if len(rest) >= 2 {
+			v := rest[0]
+			if v >= '0' && v <= '9' {
+				return int(v - '0'), rest[1:]
+			}
+		}
 	}
 	return 0, buf
 }
