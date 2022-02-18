@@ -721,6 +721,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		return nil, nil
 	}
 	user, _ := s.getUser(nk)
+	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
 	res = &tailcfg.MapResponse{
 		Node:            node,
 		DERPMap:         s.DERPMap,
@@ -731,7 +732,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			DisableUPnP: "true",
 		},
 		DNSConfig:   s.DNSConfig,
-		ControlTime: time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC),
+		ControlTime: &t,
 	}
 	for _, p := range s.AllNodes() {
 		if p.StableID != node.StableID {

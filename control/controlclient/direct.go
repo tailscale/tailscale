@@ -772,7 +772,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			go answerPing(c.logf, c.httpc, pr)
 		}
 
-		if !resp.ControlTime.IsZero() {
+		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf("netmap: control time is %v", resp.ControlTime.UTC().Format(time.RFC3339Nano))
 		}
 		if resp.KeepAlive {
