@@ -51,7 +51,8 @@ import (
 //    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
 //    25: 2021-11-01: MapResponse.Debug.Exit
 //    26: 2022-01-12: (nothing, just bumping for 1.20.0)
-const CurrentMapRequestVersion = 26
+//    27: 2022-02-18: start of SSHPolicy being respected
+const CurrentMapRequestVersion = 27
 
 type StableID string
 
@@ -1545,6 +1546,9 @@ type SSHRule struct {
 	// contain a key for either ssh-user or, as a fallback, "*" to
 	// match anything. If it does, the map entry's value is the
 	// actual user that's logged in.
+	// If the map value is the empty string (for either the
+	// requested SSH user or "*"), the rule doesn't match.
+	// It may be nil if the Action is reject.
 	SSHUsers map[string]string `json:"sshUsers"`
 
 	// Action is the outcome to task.
@@ -1553,11 +1557,14 @@ type SSHRule struct {
 }
 
 // SSHPrincipal is either a particular node or a user on any node.
-// At most one field should be non-zero specified.
+// Any matching field causes a match.
 type SSHPrincipal struct {
 	Node      StableNodeID `json:"node,omitempty"`
 	NodeIP    string       `json:"nodeIP,omitempty"`
 	UserLogin string       `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
+
+	// Any, if true, matches any user.
+	Any bool `json:"any,omitempty"`
 
 	// TODO(bradfitz): add StableUserID, once that exists
 }
@@ -1579,9 +1586,9 @@ type SSHAction struct {
 	// without further prompts.
 	Accept bool `json:"accept,omitempty"`
 
-	// SesssionExpires, if non-nil, is the time at which this
-	// session should forcefully terminate.
-	SesssionExpires *time.Time `json:"sessionExpires,omitempty"`
+	// SesssionDuration, if non-zero, is how long the session can stay open
+	// before being forcefully terminated.
+	SesssionDuration time.Duration `json:"sessionDuration,omitempty"`
 
 	// HoldAndDelegate, if non-empty, is a URL that serves an outcome verdict.
 	// The connection will be accepted and will block until the
