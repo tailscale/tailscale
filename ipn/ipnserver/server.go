@@ -458,6 +458,29 @@ func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
 	return false, false
 }
 
+// userIDFromString maps from either a numeric user id in string form
+// ("998") or username ("caddy") to its string userid ("998").
+// It returns the empty string on error.
+func userIDFromString(v string) string {
+	if v == "" || isAllDigit(v) {
+		return v
+	}
+	u, err := user.Lookup(v)
+	if err != nil {
+		return ""
+	}
+	return u.Uid
+}
+
+func isAllDigit(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < '0' || b > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // connCanFetchCerts reports whether ci is allowed to fetch HTTPS
 // certs from this server when it wouldn't otherwise be able to.
 //
@@ -471,7 +494,7 @@ func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
 func (s *Server) connCanFetchCerts(ci connIdentity) bool {
 	if ci.IsUnixSock && ci.Creds != nil {
 		connUID, ok := ci.Creds.UserID()
-		if ok && connUID == envknob.String("TS_PERMIT_CERT_UID") {
+		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
 			return true
 		}
 	}
