@@ -22,6 +22,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -64,6 +65,11 @@ var debugCmd = &ffcli.Command{
 			Name:      "env",
 			Exec:      runEnv,
 			ShortHelp: "print cmd/tailscale environment",
+		},
+		{
+			Name:      "hostinfo",
+			Exec:      runHostinfo,
+			ShortHelp: "print hostinfo",
 		},
 		{
 			Name:      "local-creds",
@@ -267,6 +273,13 @@ func runEnv(ctx context.Context, args []string) error {
 	for _, e := range os.Environ() {
 		outln(e)
 	}
+	return nil
+}
+
+func runHostinfo(ctx context.Context, args []string) error {
+	hi := hostinfo.New()
+	j, _ := json.MarshalIndent(hi, "", "  ")
+	os.Stdout.Write(j)
 	return nil
 }
 
