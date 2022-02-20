@@ -51,14 +51,46 @@ func GetOSVersion() string {
 	return ""
 }
 
-func packageType() string {
+func packageType() (ret string) {
 	if v, _ := packagingType.Load().(string); v != "" {
 		return v
 	}
 	switch runtime.GOOS {
 	case "windows":
+		defer func() {
+			if ret != "" {
+				packagingType.Store(ret)
+			}
+		}()
 		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
 			return "choco"
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return ""
+		}
+		dir := filepath.Dir(exe)
+		if !strings.Contains(dir, "Program Files") {
+			// Atypical. Not worth trying to detect. Likely open
+			// source tailscaled or a developer running by hand.
+			return ""
+		}
+		nsisUninstaller := filepath.Join(dir, "Uninstall-Tailscale.exe")
+		_, err = os.Stat(nsisUninstaller)
+		if err == nil {
+			return "nsis"
+		}
+		if os.IsNotExist(err) {
+			_, cliErr := os.Stat(filepath.Join(dir, "tailscale.exe"))
+			_, daemonErr := os.Stat(filepath.Join(dir, "tailscaled.exe"))
+			if cliErr == nil && daemonErr == nil {
+				// Almost certainly MSI.
+				// We have tailscaled.exe and tailscale.exe
+				// next to each other in Program Files, but no
+				// uninstaller.
+				// TODO(bradfitz,dblohm7): tighter heuristic?
+				return "msi"
+			}
 		}
 	case "darwin":
 		// Using tailscaled or IPNExtension?
