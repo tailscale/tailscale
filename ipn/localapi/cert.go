@@ -239,6 +239,7 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 					}
 				}
 				if !ok {
+					logf("starting SetDNS call...")
 					err = h.b.SetDNS(ctx, key, rec)
 					if err != nil {
 						return nil, fmt.Errorf("SetDNS %q => %q: %w", key, rec, err)
@@ -256,26 +257,18 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 		}
 	}
 
-	wait0 := time.Now()
 	orderURI := order.URI
-	for {
-		order, err = ac.WaitOrder(ctx, orderURI)
-		if err == nil {
-			break
+	order, err = ac.WaitOrder(ctx, orderURI)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		if oe, ok := err.(*acme.OrderError); ok && oe.Status == acme.StatusInvalid {
-			if time.Since(wait0) > 2*time.Minute {
-				return nil, errors.New("timeout waiting for order to not be invalid")
-			}
-			log.Printf("order invalid; waiting...")
-			select {
-			case <-time.After(5 * time.Second):
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
+		if oe, ok := err.(*acme.OrderError); ok {
+			logf("acme: WaitOrder: OrderError status %q", oe.Status)
+		} else {
+			logf("acme: WaitOrder error: %v", err)
 		}
-		return nil, fmt.Errorf("WaitOrder: %v", err)
+		return nil, err
 	}
 	traceACME(order)
 
@@ -296,10 +289,12 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 		return nil, err
 	}
 
+	logf("requesting cert...")
 	der, _, err := ac.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
 		return nil, fmt.Errorf("CreateOrder: %v", err)
 	}
+	logf("got cert")
 
 	var certPEM bytes.Buffer
 	for _, b := range der {
