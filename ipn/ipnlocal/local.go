@@ -448,6 +448,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			ID:             p.StableID,
 			UserID:         p.User,
 			TailscaleIPs:   tailscaleIPs,
+			Tags:           p.Tags,
+			PrimaryRoutes:  p.PrimaryRoutes,
 			HostName:       p.Hostinfo.Hostname(),
 			DNSName:        p.Name,
 			OS:             p.Hostinfo.OS(),
