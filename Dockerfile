@@ -58,3 +58,4 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
 
 FROM ghcr.io/tailscale/alpine-base:3.14
 COPY --from=build-env /go/bin/* /usr/local/bin/
+RUN cp -v /sbin/ip6tables-nft /sbin/ip6tables
