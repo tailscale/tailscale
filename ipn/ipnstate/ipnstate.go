@@ -101,14 +101,22 @@ type PeerStatusLite struct {
 }
 
 type PeerStatus struct {
-	ID        tailcfg.StableNodeID
-	PublicKey key.NodePublic
-	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)
-	DNSName   string
-	OS        string // HostInfo.OS
-	UserID    tailcfg.UserID
-
+	ID           tailcfg.StableNodeID
+	PublicKey    key.NodePublic
+	HostName     string // HostInfo's Hostname (not a DNS name or necessarily unique)
+	DNSName      string
+	OS           string // HostInfo.OS
+	UserID       tailcfg.UserID
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+
+	// Tags are the list of ACL tags applied to this node.
+	// See tailscale.com/tailcfg#Node.Tags for more information.
+	Tags []string `json:",omitempty"`
+
+	// PrimaryRoutes are the routes this node is currently the primary
+	// subnet router for, as determined by the control plane. It does
+	// not include the IPs in TailscaleIPs.
+	PrimaryRoutes []netaddr.IPPrefix `json:",omitempty"`
 
 	// Endpoints:
 	Addrs   []string
@@ -265,6 +273,12 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
+	}
+	if v := st.PrimaryRoutes; v != nil {
+		e.PrimaryRoutes = v
+	}
+	if v := st.Tags; v != nil {
+		e.Tags = v
 	}
 	if v := st.OS; v != "" {
 		e.OS = st.OS
