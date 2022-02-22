@@ -312,7 +312,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 			ErrorLog:    logger.StdLogger(logf),
 			Handler:     s.localhostHandler(ci),
 		}
-		httpServer.Serve(netutil.NewOneConnListener(&protoSwitchConn{s: s, br: br, Conn: c}))
+		httpServer.Serve(netutil.NewOneConnListener(&protoSwitchConn{s: s, br: br, Conn: c}, nil))
 		return
 	}
 

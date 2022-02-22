@@ -411,7 +411,7 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 	}
 
 	// Make a best effort to pick a deterministic port number for
-	// the ip The lower three bytes are the same for IPv4 and IPv6
+	// the ip. The lower three bytes are the same for IPv4 and IPv6
 	// Tailscale addresses (at least currently), so we'll usually
 	// get the same port number on both address families for
 	// dev/debugging purposes, which is nice. But it's not so
@@ -507,7 +507,7 @@ func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
 	if addH2C != nil {
 		addH2C(httpServer)
 	}
-	go httpServer.Serve(netutil.NewOneConnListenerFrom(c, pln.ln))
+	go httpServer.Serve(netutil.NewOneConnListener(c, pln.ln.Addr()))
 }
 
 // peerAPIHandler serves the Peer API for a source specific client.

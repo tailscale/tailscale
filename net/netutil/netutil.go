@@ -8,34 +8,49 @@ package netutil
 import (
 	"io"
 	"net"
+	"sync"
 )
 
-// NewOneConnListener returns a net.Listener that returns c on its first
-// Accept and EOF thereafter. The Listener's Addr is a dummy address.
-func NewOneConnListener(c net.Conn) net.Listener {
-	return NewOneConnListenerFrom(c, dummyListener{})
-}
-
-// NewOneConnListenerFrom returns a net.Listener wrapping ln where
-// its Accept returns c on the first call and io.EOF thereafter.
-func NewOneConnListenerFrom(c net.Conn, ln net.Listener) net.Listener {
-	return &oneConnListener{c, ln}
+// NewOneConnListener returns a net.Listener that returns c on its
+// first Accept and EOF thereafter.
+//
+// The returned Listener's Addr method returns addr if non-nil. If nil,
+// Addr returns a non-nil dummy address instead.
+func NewOneConnListener(c net.Conn, addr net.Addr) net.Listener {
+	if addr == nil {
+		addr = dummyAddr("one-conn-listener")
+	}
+	return &oneConnListener{
+		addr: addr,
+		conn: c,
+	}
 }
 
 type oneConnListener struct {
+	addr net.Addr
+
+	mu   sync.Mutex
 	conn net.Conn
-	net.Listener
 }
 
-func (l *oneConnListener) Accept() (c net.Conn, err error) {
-	c = l.conn
+func (ln *oneConnListener) Accept() (c net.Conn, err error) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	c = ln.conn
 	if c == nil {
 		err = io.EOF
 		return
 	}
 	err = nil
-	l.conn = nil
+	ln.conn = nil
 	return
+}
+
+func (ln *oneConnListener) Addr() net.Addr { return ln.addr }
+
+func (ln *oneConnListener) Close() error {
+	ln.Accept() // guarantee future call returns io.EOF
+	return nil
 }
 
 type dummyListener struct{}
