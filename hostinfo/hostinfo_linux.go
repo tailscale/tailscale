@@ -21,6 +21,7 @@ import (
 
 func init() {
 	osVersion = osVersionLinux
+	packageType = packageTypeLinux
 
 	if v := linuxDeviceModel(); v != "" {
 		SetDeviceModel(v)
@@ -114,4 +115,14 @@ func osVersionLinux() string {
 		return fmt.Sprintf("OpenWrt %s%s", m["DISTRIB_RELEASE"], attr)
 	}
 	return fmt.Sprintf("Other%s", attr)
+}
+
+func packageTypeLinux() string {
+	// Report whether this is in a snap.
+	// See https://snapcraft.io/docs/environment-variables
+	// We just look at two somewhat arbitrarily.
+	if os.Getenv("SNAP_NAME") != "" && os.Getenv("SNAP") != "" {
+		return "snap"
+	}
+	return ""
 }

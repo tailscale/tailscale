@@ -6,6 +6,9 @@ package hostinfo
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"golang.org/x/sys/windows"
@@ -14,6 +17,7 @@ import (
 
 func init() {
 	osVersion = osVersionWindows
+	packageType = packageTypeWindows
 }
 
 var winVerCache atomic.Value // of string
@@ -55,4 +59,38 @@ func getUBR() (uint32, error) {
 	}
 
 	return uint32(val), nil
+}
+
+func packageTypeWindows() string {
+	if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
+		return "choco"
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	if !strings.Contains(dir, "Program Files") {
+		// Atypical. Not worth trying to detect. Likely open
+		// source tailscaled or a developer running by hand.
+		return ""
+	}
+	nsisUninstaller := filepath.Join(dir, "Uninstall-Tailscale.exe")
+	_, err = os.Stat(nsisUninstaller)
+	if err == nil {
+		return "nsis"
+	}
+	if os.IsNotExist(err) {
+		_, cliErr := os.Stat(filepath.Join(dir, "tailscale.exe"))
+		_, daemonErr := os.Stat(filepath.Join(dir, "tailscaled.exe"))
+		if cliErr == nil && daemonErr == nil {
+			// Almost certainly MSI.
+			// We have tailscaled.exe and tailscale.exe
+			// next to each other in Program Files, but no
+			// uninstaller.
+			// TODO(bradfitz,dblohm7): tighter heuristic?
+			return "msi"
+		}
+	}
+	return ""
 }
