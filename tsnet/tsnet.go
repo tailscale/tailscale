@@ -56,7 +56,7 @@ type Server struct {
 
 	// Ephemeral, if true, specifies that the instance should register
 	// as an Ephemeral node (https://tailscale.com/kb/1111/ephemeral-nodes/).
-	Emphemeral bool
+	Ephemeral bool
 
 	initOnce sync.Once
 	initErr  error
@@ -178,7 +178,7 @@ func (s *Server) start() error {
 	logid := "tslib-TODO"
 
 	loginFlags := controlclient.LoginDefault
-	if s.Emphemeral {
+	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, s.dialer, eng, loginFlags)
