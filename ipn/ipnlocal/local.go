@@ -48,6 +48,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/multierr"
@@ -443,13 +444,23 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netaddr.IPPrefix) bool {
 			return r.Bits() == 0
 		})
+		var tags *views.StringSlice
+		var primaryRoutes *views.IPPrefixSlice
+		if p.Tags != nil {
+			v := views.StringSliceOf(p.Tags)
+			tags = &v
+		}
+		if p.PrimaryRoutes != nil {
+			v := views.IPPrefixSliceOf(p.PrimaryRoutes)
+			primaryRoutes = &v
+		}
 		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
 			InNetworkMap:   true,
 			ID:             p.StableID,
 			UserID:         p.User,
 			TailscaleIPs:   tailscaleIPs,
-			Tags:           p.Tags,
-			PrimaryRoutes:  p.PrimaryRoutes,
+			Tags:           tags,
+			PrimaryRoutes:  primaryRoutes,
 			HostName:       p.Hostinfo.Hostname(),
 			DNSName:        p.Name,
 			OS:             p.Hostinfo.OS(),

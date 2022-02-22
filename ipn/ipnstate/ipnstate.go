@@ -20,6 +20,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 )
 
@@ -111,12 +112,12 @@ type PeerStatus struct {
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
-	Tags []string `json:",omitempty"`
+	Tags *views.StringSlice `json:",omitempty"`
 
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
-	PrimaryRoutes []netaddr.IPPrefix `json:",omitempty"`
+	PrimaryRoutes *views.IPPrefixSlice `json:",omitempty"`
 
 	// Endpoints:
 	Addrs   []string
@@ -274,10 +275,10 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
 	}
-	if v := st.PrimaryRoutes; v != nil {
+	if v := st.PrimaryRoutes; v != nil && !v.IsNil() {
 		e.PrimaryRoutes = v
 	}
-	if v := st.Tags; v != nil {
+	if v := st.Tags; v != nil && !v.IsNil() {
 		e.Tags = v
 	}
 	if v := st.OS; v != "" {

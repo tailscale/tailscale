@@ -7,6 +7,9 @@
 package views
 
 import (
+	"encoding/json"
+	"errors"
+
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 )
@@ -20,6 +23,28 @@ type StringSlice struct {
 
 // StringSliceOf returns a StringSlice for the provided slice.
 func StringSliceOf(x []string) StringSlice { return StringSlice{x} }
+
+// MarshalJSON implements json.Marshaler.
+func (v StringSlice) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.ж)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *StringSlice) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("StringSlice is already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(b, &v.ж); err != nil {
+		return err
+	}
+	return nil
+}
+
+// IsNil reports whether the underlying slice is nil.
+func (v StringSlice) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
 func (v StringSlice) Len() int { return len(v.ж) }
@@ -47,6 +72,9 @@ type IPPrefixSlice struct {
 // IPPrefixSliceOf returns a IPPrefixSlice for the provided slice.
 func IPPrefixSliceOf(x []netaddr.IPPrefix) IPPrefixSlice { return IPPrefixSlice{x} }
 
+// IsNil reports whether the underlying slice is nil.
+func (v IPPrefixSlice) IsNil() bool { return v.ж == nil }
+
 // Len returns the length of the slice.
 func (v IPPrefixSlice) Len() int { return len(v.ж) }
 
@@ -71,4 +99,23 @@ func (v IPPrefixSlice) ContainsIP(ip netaddr.IP) bool {
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
 func (v IPPrefixSlice) ContainsFunc(f func(netaddr.IPPrefix) bool) bool {
 	return tsaddr.PrefixesContainsFunc(v.ж, f)
+}
+
+// MarshalJSON implements json.Marshaler.
+func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.ж)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("IPPrefixSlice is already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(b, &v.ж); err != nil {
+		return err
+	}
+	return nil
 }
