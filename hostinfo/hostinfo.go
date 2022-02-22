@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -32,13 +31,17 @@ func New() *tailcfg.Hostinfo {
 		Hostname:    hostname,
 		OS:          version.OS(),
 		OSVersion:   GetOSVersion(),
-		Package:     packageType(),
+		Package:     packageTypeCached(),
 		GoArch:      runtime.GOARCH,
 		DeviceModel: deviceModel(),
 	}
 }
 
-var osVersion func() string // non-nil on some platforms
+// non-nil on some platforms
+var (
+	osVersion   func() string
+	packageType func() string
+)
 
 // GetOSVersion returns the OSVersion of current host if available.
 func GetOSVersion() string {
@@ -51,60 +54,18 @@ func GetOSVersion() string {
 	return ""
 }
 
-func packageType() (ret string) {
+func packageTypeCached() string {
 	if v, _ := packagingType.Load().(string); v != "" {
 		return v
 	}
-	switch runtime.GOOS {
-	case "windows":
-		defer func() {
-			if ret != "" {
-				packagingType.Store(ret)
-			}
-		}()
-		if _, err := os.Stat(`C:\ProgramData\chocolatey\lib\tailscale`); err == nil {
-			return "choco"
-		}
-		exe, err := os.Executable()
-		if err != nil {
-			return ""
-		}
-		dir := filepath.Dir(exe)
-		if !strings.Contains(dir, "Program Files") {
-			// Atypical. Not worth trying to detect. Likely open
-			// source tailscaled or a developer running by hand.
-			return ""
-		}
-		nsisUninstaller := filepath.Join(dir, "Uninstall-Tailscale.exe")
-		_, err = os.Stat(nsisUninstaller)
-		if err == nil {
-			return "nsis"
-		}
-		if os.IsNotExist(err) {
-			_, cliErr := os.Stat(filepath.Join(dir, "tailscale.exe"))
-			_, daemonErr := os.Stat(filepath.Join(dir, "tailscaled.exe"))
-			if cliErr == nil && daemonErr == nil {
-				// Almost certainly MSI.
-				// We have tailscaled.exe and tailscale.exe
-				// next to each other in Program Files, but no
-				// uninstaller.
-				// TODO(bradfitz,dblohm7): tighter heuristic?
-				return "msi"
-			}
-		}
-	case "darwin":
-		// Using tailscaled or IPNExtension?
-		exe, _ := os.Executable()
-		return filepath.Base(exe)
-	case "linux":
-		// Report whether this is in a snap.
-		// See https://snapcraft.io/docs/environment-variables
-		// We just look at two somewhat arbitrarily.
-		if os.Getenv("SNAP_NAME") != "" && os.Getenv("SNAP") != "" {
-			return "snap"
-		}
+	if packageType == nil {
+		return ""
 	}
-	return ""
+	v := packageType()
+	if v != "" {
+		SetPackage(v)
+	}
+	return v
 }
 
 // EnvType represents a known environment type.
