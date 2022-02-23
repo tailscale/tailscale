@@ -8,8 +8,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -22,6 +24,7 @@ import (
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version/distro"
 )
 
 const (
@@ -245,28 +248,42 @@ func (m *directManager) rename(old, new string) error {
 		if err == nil {
 			return nil
 		}
+		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
+			// Fail fast. The fallback case below won't work anyway.
+			return err
+		}
 		m.logf("rename of %q to %q failed (%v), falling back to copy+delete", old, new, err)
 		m.renameBroken = true
 	}
 
 	bs, err := m.fs.ReadFile(old)
 	if err != nil {
-		return fmt.Errorf("reading %q to rename: %v", old, err)
+		return fmt.Errorf("reading %q to rename: %w", old, err)
 	}
 	if err := m.fs.WriteFile(new, bs, 0644); err != nil {
-		return fmt.Errorf("writing to %q in rename of %q: %v", new, old, err)
+		return fmt.Errorf("writing to %q in rename of %q: %w", new, old, err)
 	}
 
 	if err := m.fs.Remove(old); err != nil {
 		err2 := m.fs.Truncate(old)
 		if err2 != nil {
-			return fmt.Errorf("remove of %q failed (%v) and so did truncate: %v", old, err, err2)
+			return fmt.Errorf("remove of %q failed (%w) and so did truncate: %v", old, err, err2)
 		}
 	}
 	return nil
 }
 
 func (m *directManager) SetDNS(config OSConfig) (err error) {
+	defer func() {
+		if err != nil && errors.Is(err, fs.ErrPermission) && runtime.GOOS == "linux" &&
+			distro.Get() == distro.Synology && os.Geteuid() != 0 {
+			// On Synology (notably DSM7 where we don't run as root), ignore all
+			// DNS configuration errors for now. We don't have permission.
+			// See https://github.com/tailscale/tailscale/issues/4017
+			m.logf("ignoring SetDNS permission error on Synology (Issue 4017); was: %v", err)
+			err = nil
+		}
+	}()
 	var changed bool
 	if config.IsZero() {
 		changed, err = m.restoreBackup()
