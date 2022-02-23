@@ -475,7 +475,20 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			return nil, false, fmt.Errorf("createBIRDClient: %w", err)
 		}
 	}
-	if !useNetstack {
+	if useNetstack {
+		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
+			// On Synology in netstack mode, still init a DNS
+			// manager (directManager) to avoid the health check
+			// warnings in 'tailscale status' about DNS base
+			// configuration being unavailable (from the noop
+			// manager). More in Issue 4017.
+			// TODO(bradfitz): add a Synology-specific DNS manager.
+			conf.DNS, err = dns.NewOSConfigurator(logf, "") // empty interface name
+			if err != nil {
+				return nil, false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
+			}
+		}
+	} else {
 		dev, devName, err := tstun.New(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name)
