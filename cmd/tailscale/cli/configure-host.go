@@ -77,7 +77,7 @@ func runConfigureHost(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if out, err := exec.Command("/bin/setcap", "cap_net_admin+eip", daemonBin).CombinedOutput(); err != nil {
+	if out, err := exec.Command("/bin/setcap", "cap_net_admin,cap_net_raw+eip", daemonBin).CombinedOutput(); err != nil {
 		return fmt.Errorf("setcap: %v, %s", err, out)
 	}
 	fmt.Printf("Done. To restart Tailscale to use the new permissions, run:\n\n  sudo synosystemctl restart pkgctl-Tailscale.service\n\n")
