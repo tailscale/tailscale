@@ -20,7 +20,7 @@ func TestMatchRule(t *testing.T) {
 	tests := []struct {
 		name     string
 		rule     *tailcfg.SSHRule
-		ctx      *sshContext
+		ci       *sshConnInfo
 		wantErr  error
 		wantUser string
 	}{
@@ -40,7 +40,7 @@ func TestMatchRule(t *testing.T) {
 				Action:      someAction,
 				RuleExpires: timePtr(time.Unix(100, 0)),
 			},
-			ctx:     &sshContext{now: time.Unix(200, 0)},
+			ci:      &sshConnInfo{now: time.Unix(200, 0)},
 			wantErr: errRuleExpired,
 		},
 		{
@@ -56,7 +56,7 @@ func TestMatchRule(t *testing.T) {
 				Action:     someAction,
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 			},
-			ctx:     &sshContext{sshUser: "alice"},
+			ci:      &sshConnInfo{sshUser: "alice"},
 			wantErr: errUserMatch,
 		},
 		{
@@ -68,7 +68,7 @@ func TestMatchRule(t *testing.T) {
 					"*": "ubuntu",
 				},
 			},
-			ctx:      &sshContext{sshUser: "alice"},
+			ci:       &sshConnInfo{sshUser: "alice"},
 			wantUser: "ubuntu",
 		},
 		{
@@ -83,7 +83,7 @@ func TestMatchRule(t *testing.T) {
 					"*": "ubuntu",
 				},
 			},
-			ctx:      &sshContext{sshUser: "alice"},
+			ci:       &sshConnInfo{sshUser: "alice"},
 			wantUser: "ubuntu",
 		},
 		{
@@ -96,7 +96,7 @@ func TestMatchRule(t *testing.T) {
 					"alice": "thealice",
 				},
 			},
-			ctx:      &sshContext{sshUser: "alice"},
+			ci:       &sshConnInfo{sshUser: "alice"},
 			wantUser: "thealice",
 		},
 		{
@@ -105,7 +105,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 				Action:     &tailcfg.SSHAction{Reject: true},
 			},
-			ctx: &sshContext{sshUser: "alice"},
+			ci: &sshConnInfo{sshUser: "alice"},
 		},
 		{
 			name: "match-principal-node-ip",
@@ -114,7 +114,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ctx:      &sshContext{srcIP: netaddr.MustParseIP("1.2.3.4")},
+			ci:       &sshConnInfo{srcIP: netaddr.MustParseIP("1.2.3.4")},
 			wantUser: "ubuntu",
 		},
 		{
@@ -124,7 +124,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{Node: "some-node-ID"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ctx:      &sshContext{node: &tailcfg.Node{StableID: "some-node-ID"}},
+			ci:       &sshConnInfo{node: &tailcfg.Node{StableID: "some-node-ID"}},
 			wantUser: "ubuntu",
 		},
 		{
@@ -134,13 +134,13 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{UserLogin: "foo@bar.com"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ctx:      &sshContext{uprof: &tailcfg.UserProfile{LoginName: "foo@bar.com"}},
+			ci:       &sshConnInfo{uprof: &tailcfg.UserProfile{LoginName: "foo@bar.com"}},
 			wantUser: "ubuntu",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotUser, err := matchRule(tt.rule, tt.ctx)
+			got, gotUser, err := matchRule(tt.rule, tt.ci)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
