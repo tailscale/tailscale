@@ -232,11 +232,11 @@ func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *ssh
 		}
 	}
 	cmd.Dir = lu.HomeDir
+	cmd.Env = append(cmd.Env, s.Environ()...)
 	cmd.Env = append(cmd.Env, envForUser(lu)...)
 	if ptyReq.Term != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 	}
-	// TODO(bradfitz,maisem): also blend in user's s.Environ()
 	logf("Running: %q", cmd.Args)
 	var toCmd io.WriteCloser
 	var fromCmd io.ReadCloser
