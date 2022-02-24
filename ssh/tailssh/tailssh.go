@@ -27,12 +27,22 @@ import (
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 	"inet.af/netaddr"
+	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
+
+func init() {
+	childproc.Add("ssh", sshChild)
+}
+
+func sshChild([]string) error {
+	fmt.Println("TODO(maisem): ssh dbus stuff")
+	return nil
+}
 
 // TODO(bradfitz): this is all very temporary as code is temporarily
 // being moved around; it will be restructured and documented in

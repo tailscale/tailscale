@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"inet.af/netaddr"
+	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -105,6 +106,7 @@ var subCommands = map[string]*func([]string) error{
 	"install-system-daemon":   &installSystemDaemon,
 	"uninstall-system-daemon": &uninstallSystemDaemon,
 	"debug":                   &debugModeFunc,
+	"be-child":                &beChildFunc,
 }
 
 func main() {
@@ -600,4 +602,18 @@ func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpLis
 	}
 
 	return socksListener, httpListener
+}
+
+var beChildFunc = beChild
+
+func beChild(args []string) error {
+	if len(args) == 0 {
+		return errors.New("missing mode argument")
+	}
+	typ := args[0]
+	f, ok := childproc.Code[typ]
+	if !ok {
+		return fmt.Errorf("unknown be-child mode %q", typ)
+	}
+	return f(args[1:])
 }

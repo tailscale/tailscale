@@ -13,6 +13,7 @@ import (
 	// process and can cache a prior success when a dependency changes.
 	_ "inet.af/netaddr"
 	_ "tailscale.com/chirp"
+	_ "tailscale.com/cmd/tailscaled/childproc"
 	_ "tailscale.com/control/controlclient"
 	_ "tailscale.com/derp/derphttp"
 	_ "tailscale.com/envknob"
