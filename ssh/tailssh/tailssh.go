@@ -40,32 +40,39 @@ import (
 
 // Handle handles an SSH connection from c.
 func Handle(logf logger.Logf, lb *ipnlocal.LocalBackend, c net.Conn) error {
-	sshd := &server{lb, logf}
-	srv := &ssh.Server{
-		Handler:           sshd.handleSSH,
+	srv := &server{lb, logf}
+	ss, err := srv.newSSHServer()
+	if err != nil {
+		return err
+	}
+	ss.HandleConn(c)
+	return nil
+}
+
+func (srv *server) newSSHServer() (*ssh.Server, error) {
+	ss := &ssh.Server{
+		Handler:           srv.handleSSH,
 		RequestHandlers:   map[string]ssh.RequestHandler{},
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{},
 		ChannelHandlers:   map[string]ssh.ChannelHandler{},
 	}
 	for k, v := range ssh.DefaultRequestHandlers {
-		srv.RequestHandlers[k] = v
+		ss.RequestHandlers[k] = v
 	}
 	for k, v := range ssh.DefaultChannelHandlers {
-		srv.ChannelHandlers[k] = v
+		ss.ChannelHandlers[k] = v
 	}
 	for k, v := range ssh.DefaultSubsystemHandlers {
-		srv.SubsystemHandlers[k] = v
+		ss.SubsystemHandlers[k] = v
 	}
-	keys, err := lb.GetSSH_HostKeys()
+	keys, err := srv.lb.GetSSH_HostKeys()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, signer := range keys {
-		srv.AddHostKey(signer)
+		ss.AddHostKey(signer)
 	}
-
-	srv.HandleConn(c)
-	return nil
+	return ss, nil
 }
 
 type server struct {
