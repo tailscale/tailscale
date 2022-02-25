@@ -31,7 +31,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -245,65 +244,6 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 	return routes, nil
 }
 
-// peerWithTailscaleIP returns the peer in st with the provided
-// Tailscale IP.
-func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerStatus, ok bool) {
-	for _, ps := range st.Peer {
-		for _, ip2 := range ps.TailscaleIPs {
-			if ip == ip2 {
-				return ps, true
-			}
-		}
-	}
-	return nil, false
-}
-
-// exitNodeIPOfArg maps from a user-provided CLI flag value to an IP
-// address they want to use as an exit node.
-func exitNodeIPOfArg(arg string, st *ipnstate.Status) (ip netaddr.IP, err error) {
-	if arg == "" {
-		return ip, errors.New("invalid use of exitNodeIPOfArg with empty string")
-	}
-	ip, err = netaddr.ParseIP(arg)
-	if err == nil {
-		// If we're online already and have a netmap, double check that the IP
-		// address specified is valid.
-		if st.BackendState == "Running" {
-			ps, ok := peerWithTailscaleIP(st, ip)
-			if !ok {
-				return ip, fmt.Errorf("no node found in netmap with IP %v", ip)
-			}
-			if !ps.ExitNodeOption {
-				return ip, fmt.Errorf("node %v is not advertising an exit node", ip)
-			}
-		}
-		return ip, err
-	}
-	match := 0
-	for _, ps := range st.Peer {
-		baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
-		if !strings.EqualFold(arg, baseName) {
-			continue
-		}
-		match++
-		if len(ps.TailscaleIPs) == 0 {
-			return ip, fmt.Errorf("node %q has no Tailscale IP?", arg)
-		}
-		if !ps.ExitNodeOption {
-			return ip, fmt.Errorf("node %q is not advertising an exit node", arg)
-		}
-		ip = ps.TailscaleIPs[0]
-	}
-	switch match {
-	case 0:
-		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or unique node name", arg)
-	case 1:
-		return ip, nil
-	default:
-		return ip, fmt.Errorf("ambiguous exit node name %q", arg)
-	}
-}
-
 // prefsFromUpArgs returns the ipn.Prefs for the provided args.
 //
 // Note that the parameters upArgs and warnf are named intentionally
@@ -316,23 +256,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		return nil, err
 	}
 
-	var exitNodeIP netaddr.IP
-	if upArgs.exitNodeIP != "" {
-		var err error
-		exitNodeIP, err = exitNodeIPOfArg(upArgs.exitNodeIP, st)
-		if err != nil {
-			return nil, err
-		}
-	} else if upArgs.exitNodeAllowLANAccess {
+	if upArgs.exitNodeIP == "" && upArgs.exitNodeAllowLANAccess {
 		return nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
-	}
-
-	if upArgs.exitNodeIP != "" {
-		for _, ip := range st.TailscaleIPs {
-			if exitNodeIP == ip {
-				return nil, fmt.Errorf("cannot use %s as the exit node as it is a local IP address to this machine, did you mean --advertise-exit-node?", upArgs.exitNodeIP)
-			}
-		}
 	}
 
 	var tags []string
@@ -354,7 +279,17 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
-	prefs.ExitNodeIP = exitNodeIP
+
+	if upArgs.exitNodeIP != "" {
+		if err := prefs.SetExitNodeIP(upArgs.exitNodeIP, st); err != nil {
+			var e ipn.ExitNodeLocalIPError
+			if errors.As(err, &e) {
+				return nil, fmt.Errorf("%w; did you mean --advertise-exit-node?", err)
+			}
+			return nil, err
+		}
+	}
+
 	prefs.ExitNodeAllowLANAccess = upArgs.exitNodeAllowLANAccess
 	prefs.CorpDNS = upArgs.acceptDNS
 	prefs.AllowSingleHosts = upArgs.singleRoutes
