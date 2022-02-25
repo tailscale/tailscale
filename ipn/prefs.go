@@ -7,6 +7,7 @@ package ipn
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -18,10 +19,12 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/dnsname"
 )
 
 //go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
@@ -30,6 +33,12 @@ import (
 // ("coordination server") for use when no explicit one is configured.
 // The default control plane is the hosted version run by Tailscale.com.
 const DefaultControlURL = "https://controlplane.tailscale.com"
+
+var (
+	// ErrExitNodeIDAlreadySet is returned from (*Prefs).SetExitNodeIP when the
+	// Prefs.ExitNodeID field is already set.
+	ErrExitNodeIDAlreadySet = errors.New("cannot set ExitNodeIP when ExitNodeID is already set")
+)
 
 // IsLoginServerSynonym reports whether a URL is a drop-in replacement
 // for the primary Tailscale login server.
@@ -465,6 +474,109 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 	p.AdvertiseRoutes = append(p.AdvertiseRoutes,
 		netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
 		netaddr.IPPrefixFrom(netaddr.IPv6Unspecified(), 0))
+}
+
+// peerWithTailscaleIP returns the peer in st with the provided
+// Tailscale IP.
+func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerStatus, ok bool) {
+	for _, ps := range st.Peer {
+		for _, ip2 := range ps.TailscaleIPs {
+			if ip == ip2 {
+				return ps, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func isRemoteIP(st *ipnstate.Status, ip netaddr.IP) bool {
+	for _, selfIP := range st.TailscaleIPs {
+		if ip == selfIP {
+			return false
+		}
+	}
+	return true
+}
+
+// ClearExitNode sets the ExitNodeID and ExitNodeIP to their zero values.
+func (p *Prefs) ClearExitNode() {
+	p.ExitNodeID = ""
+	p.ExitNodeIP = netaddr.IP{}
+}
+
+// ExitNodeLocalIPError is returned when the requested IP address for an exit
+// node belongs to the local machine.
+type ExitNodeLocalIPError struct {
+	hostOrIP string
+}
+
+func (e ExitNodeLocalIPError) Error() string {
+	return fmt.Sprintf("cannot use %s as an exit node as it is a local IP address to this machine", e.hostOrIP)
+}
+
+func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netaddr.IP, err error) {
+	if s == "" {
+		return ip, os.ErrInvalid
+	}
+	ip, err = netaddr.ParseIP(s)
+	if err == nil {
+		// If we're online already and have a netmap, double check that the IP
+		// address specified is valid.
+		if st.BackendState == "Running" {
+			ps, ok := peerWithTailscaleIP(st, ip)
+			if !ok {
+				return ip, fmt.Errorf("no node found in netmap with IP %v", ip)
+			}
+			if !ps.ExitNodeOption {
+				return ip, fmt.Errorf("node %v is not advertising an exit node", ip)
+			}
+		}
+		if !isRemoteIP(st, ip) {
+			return ip, ExitNodeLocalIPError{s}
+		}
+		return ip, nil
+	}
+	match := 0
+	for _, ps := range st.Peer {
+		baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
+		if !strings.EqualFold(s, baseName) {
+			continue
+		}
+		match++
+		if len(ps.TailscaleIPs) == 0 {
+			return ip, fmt.Errorf("node %q has no Tailscale IP?", s)
+		}
+		if !ps.ExitNodeOption {
+			return ip, fmt.Errorf("node %q is not advertising an exit node", s)
+		}
+		ip = ps.TailscaleIPs[0]
+	}
+	switch match {
+	case 0:
+		return ip, fmt.Errorf("invalid value %q for --exit-node; must be IP or unique node name", s)
+	case 1:
+		if !isRemoteIP(st, ip) {
+			return ip, ExitNodeLocalIPError{s}
+		}
+		return ip, nil
+	default:
+		return ip, fmt.Errorf("ambiguous exit node name %q", s)
+	}
+}
+
+// SetExitNodeIP validates and sets the ExitNodeIP from a user-provided string
+// specifying either an IP address or a MagicDNS base name ("foo", as opposed to
+// "foo.bar.beta.tailscale.net"). This method does not mutate ExitNodeID and
+// will fail if ExitNodeID is already set.
+func (p *Prefs) SetExitNodeIP(s string, st *ipnstate.Status) error {
+	if !p.ExitNodeID.IsZero() {
+		return ErrExitNodeIDAlreadySet
+	}
+	ip, err := exitNodeIPOfArg(s, st)
+	if err == nil {
+		p.ExitNodeIP = ip
+	}
+	return err
 }
 
 // PrefsFromBytes deserializes Prefs from a JSON blob. If

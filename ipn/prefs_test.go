@@ -17,6 +17,7 @@ import (
 
 	"go4.org/mem"
 	"inet.af/netaddr"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
@@ -677,5 +678,135 @@ func TestPrefsExitNode(t *testing.T) {
 	}
 	if got, want := len(p.AdvertiseRoutes), 1; got != want {
 		t.Errorf("routes = %d; want %d", got, want)
+	}
+}
+
+func TestExitNodeIPOfArg(t *testing.T) {
+	mustIP := netaddr.MustParseIP
+	tests := []struct {
+		name    string
+		arg     string
+		st      *ipnstate.Status
+		want    netaddr.IP
+		wantErr string
+	}{
+		{
+			name: "ip_while_stopped_okay",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Stopped",
+			},
+			want: mustIP("1.2.3.4"),
+		},
+		{
+			name: "ip_not_found",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+			},
+			wantErr: `no node found in netmap with IP 1.2.3.4`,
+		},
+		{
+			name: "ip_not_exit",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						TailscaleIPs: []netaddr.IP{mustIP("1.2.3.4")},
+					},
+				},
+			},
+			wantErr: `node 1.2.3.4 is not advertising an exit node`,
+		},
+		{
+			name: "ip",
+			arg:  "1.2.3.4",
+			st: &ipnstate.Status{
+				BackendState: "Running",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						TailscaleIPs:   []netaddr.IP{mustIP("1.2.3.4")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			want: mustIP("1.2.3.4"),
+		},
+		{
+			name:    "no_match",
+			arg:     "unknown",
+			st:      &ipnstate.Status{MagicDNSSuffix: ".foo"},
+			wantErr: `invalid value "unknown" for --exit-node; must be IP or unique node name`,
+		},
+		{
+			name: "name",
+			arg:  "skippy",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			want: mustIP("1.0.0.2"),
+		},
+		{
+			name: "name_not_exit",
+			arg:  "skippy",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:      "skippy.foo.",
+						TailscaleIPs: []netaddr.IP{mustIP("1.0.0.2")},
+					},
+				},
+			},
+			wantErr: `node "skippy" is not advertising an exit node`,
+		},
+		{
+			name: "ambiguous",
+			arg:  "skippy",
+			st: &ipnstate.Status{
+				MagicDNSSuffix: ".foo",
+				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+					key.NewNode().Public(): {
+						DNSName:        "skippy.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+					key.NewNode().Public(): {
+						DNSName:        "SKIPPY.foo.",
+						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						ExitNodeOption: true,
+					},
+				},
+			},
+			wantErr: `ambiguous exit node name "skippy"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := exitNodeIPOfArg(tt.arg, tt.st)
+			if err != nil {
+				if err.Error() == tt.wantErr {
+					return
+				}
+				if tt.wantErr == "" {
+					t.Fatal(err)
+				}
+				t.Fatalf("error = %#q; want %#q", err, tt.wantErr)
+			}
+			if tt.wantErr != "" {
+				t.Fatalf("got %v; want error %#q", got, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("got %v; want %v", got, tt.want)
+			}
+		})
 	}
 }
