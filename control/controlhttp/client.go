@@ -40,11 +40,19 @@ import (
 	"tailscale.com/types/key"
 )
 
-// upgradeHeader is the value of the Upgrade HTTP header used to
-// indicate the Tailscale control protocol.
 const (
-	upgradeHeaderValue  = "tailscale-control-protocol"
+	// upgradeHeader is the value of the Upgrade HTTP header used to
+	// indicate the Tailscale control protocol.
+	upgradeHeaderValue = "tailscale-control-protocol"
+
+	// handshakeHeaderName is the HTTP request header that can
+	// optionally contain base64-encoded initial handshake
+	// payload, to save an RTT.
 	handshakeHeaderName = "X-Tailscale-Handshake"
+
+	// serverUpgradePath is where the server-side HTTP handler to
+	// to do the protocol switch is located.
+	serverUpgradePath = "/ts2021"
 )
 
 // Dial connects to the HTTP server at addr, requests to switch to the
@@ -53,6 +61,9 @@ const (
 //
 // If Dial fails to connect using addr, it also tries to tunnel over
 // TLS to <addr's host>:443 as a compatibility fallback.
+//
+// The provided ctx is only used for the initial connection, until
+// Dial returns. It does not affect the connection once established.
 func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic) (*controlbase.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -92,7 +103,7 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 	u := &url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(a.host, a.httpPort),
-		Path:   "/switch",
+		Path:   serverUpgradePath,
 	}
 	conn, httpErr := a.tryURL(u, init)
 	if httpErr == nil {
