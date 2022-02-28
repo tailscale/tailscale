@@ -11,12 +11,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 
+	"github.com/jsimonetti/rtnetlink"
+	"github.com/mdlayher/netlink"
 	"go4.org/mem"
+	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/util/lineread"
@@ -70,9 +74,7 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 		if err != nil {
 			return nil // ignore error, skip line and keep going
 		}
-		const RTF_UP = 0x0001
-		const RTF_GATEWAY = 0x0002
-		if flags&(RTF_UP|RTF_GATEWAY) != RTF_UP|RTF_GATEWAY {
+		if flags&(unix.RTF_UP|unix.RTF_GATEWAY) != unix.RTF_UP|unix.RTF_GATEWAY {
 			return nil
 		}
 		ipu32, err := mem.ParseUint(gwHex, 16, 32)
@@ -145,7 +147,62 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 		d.InterfaceName = v
 		return d, err
 	}
-	return d, err
+	// Issue 4038: the default route (such as on Unifi UDM Pro)
+	// might be in a non-default table, so it won't show up in
+	// /proc/net/route. Use netlink to find the default route.
+	//
+	// TODO(bradfitz): this allocates a fair bit. We should track
+	// this in wgengine/monitor instead and have
+	// interfaces.GetState take a link monitor or similar so the
+	// routing table can be cached and the monitor's existing
+	// subscription to route changes can update the cached state,
+	// rather than querying the whole thing every time like
+	// defaultRouteFromNetlink does.
+	//
+	// Then we should just always try to use the cached route
+	// table from netlink every time, and only use /proc/net/route
+	// as a fallback for weird environments where netlink might be
+	// banned but /proc/net/route is emulated (e.g. stuff like
+	// Cloud Run?).
+	return defaultRouteFromNetlink()
+}
+
+func defaultRouteFromNetlink() (d DefaultRouteDetails, err error) {
+	c, err := rtnetlink.Dial(&netlink.Config{Strict: true})
+	if err != nil {
+		return d, fmt.Errorf("defaultRouteFromNetlink: Dial: %w", err)
+	}
+	defer c.Close()
+	rms, err := c.Route.List()
+	if err != nil {
+		return d, fmt.Errorf("defaultRouteFromNetlink: List: %w", err)
+	}
+	for _, rm := range rms {
+		if rm.Attributes.Gateway == nil {
+			// A default route has a gateway. If it doesn't, skip it.
+			continue
+		}
+		if rm.Attributes.Dst != nil {
+			// A default route has a nil destination to mean anything
+			// so ignore any route for a specific destination.
+			// TODO(bradfitz): better heuristic?
+			// empirically this seems like enough.
+			continue
+		}
+		// TODO(bradfitz): care about address family, if
+		// callers ever start caring about v4-vs-v6 default
+		// route differences.
+		idx := int(rm.Attributes.OutIface)
+		if idx == 0 {
+			continue
+		}
+		if iface, err := net.InterfaceByIndex(idx); err == nil {
+			d.InterfaceName = iface.Name
+			d.InterfaceIndex = idx
+			return d, nil
+		}
+	}
+	return d, errNoDefaultRoute
 }
 
 var zeroRouteBytes = []byte("00000000")
@@ -154,6 +211,8 @@ var procNetRoutePath = "/proc/net/route"
 // maxProcNetRouteRead is the max number of lines to read from
 // /proc/net/route looking for a default route.
 const maxProcNetRouteRead = 1000
+
+var errNoDefaultRoute = errors.New("no default route found")
 
 func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 	f, err := os.Open(procNetRoutePath)
@@ -168,7 +227,7 @@ func defaultRouteInterfaceProcNetInternal(bufsize int) (string, error) {
 		lineNum++
 		line, err := br.ReadSlice('\n')
 		if err == io.EOF || lineNum > maxProcNetRouteRead {
-			return "", fmt.Errorf("no default routes found: %w", err)
+			return "", errNoDefaultRoute
 		}
 		if err != nil {
 			return "", err
