@@ -11,6 +11,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/logtail"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -47,7 +48,7 @@ func TestLocalLogLines(t *testing.T) {
 	idA := logid(0xaa)
 
 	// set up a LocalBackend, super bare bones. No functional data.
-	store := &ipn.MemoryStore{}
+	store := new(mem.Store)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
 		t.Fatal(err)

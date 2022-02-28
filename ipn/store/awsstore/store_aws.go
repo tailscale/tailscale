@@ -5,8 +5,8 @@
 //go:build linux
 // +build linux
 
-// Package aws contains an AWS SSM StateStore implementation.
-package aws
+// Package awsstore contains an ipn.StateStore implementation using AWS SSM.
+package awsstore
 
 import (
 	"context"
@@ -20,6 +20,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
+	"tailscale.com/types/logger"
 )
 
 const (
@@ -46,12 +48,12 @@ type awsStore struct {
 	ssmClient awsSSMClient
 	ssmARN    arn.ARN
 
-	memory ipn.MemoryStore
+	memory mem.Store
 }
 
-// NewStore returns a new ipn.StateStore using the AWS SSM storage
+// New returns a new ipn.StateStore using the AWS SSM storage
 // location given by ssmARN.
-func NewStore(ssmARN string) (ipn.StateStore, error) {
+func New(_ logger.Logf, ssmARN string) (ipn.StateStore, error) {
 	return newStore(ssmARN, nil)
 }
 

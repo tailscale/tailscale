@@ -22,8 +22,8 @@ import (
 
 	"github.com/gliderlabs/ssh"
 	"inet.af/netaddr"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -181,7 +181,7 @@ func TestSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	lb, err := ipnlocal.NewLocalBackend(logf, "",
-		new(ipn.MemoryStore),
+		new(mem.Store),
 		new(tsdial.Dialer),
 		eng, 0)
 	if err != nil {

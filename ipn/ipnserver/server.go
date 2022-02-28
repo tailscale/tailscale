@@ -36,12 +36,10 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
-	"tailscale.com/ipn/store/aws"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
@@ -655,75 +653,6 @@ func (s *Server) writeToClients(n ipn.Notify) {
 			ipn.WriteMsg(c, b)
 		}
 	}
-}
-
-// tryWindowsAppDataMigration attempts to copy the Windows state file
-// from its old location to the new location. (Issue 2856)
-//
-// Tailscale 1.14 and before stored state under %LocalAppData%
-// (usually "C:\WINDOWS\system32\config\systemprofile\AppData\Local"
-// when tailscaled.exe is running as a non-user system service).
-// However it is frequently cleared for almost any reason: Windows
-// updates, System Restore, even various System Cleaner utilities.
-//
-// Returns a string of the path to use for the state file.
-// This will be a fallback %LocalAppData% path if migration fails,
-// a %ProgramData% path otherwise.
-func tryWindowsAppDataMigration(logf logger.Logf, path string) string {
-	if path != paths.DefaultTailscaledStateFile() {
-		// If they're specifying a non-default path, just trust that they know
-		// what they are doing.
-		return path
-	}
-	oldFile := paths.LegacyStateFilePath()
-	return paths.TryConfigFileMigration(logf, oldFile, path)
-}
-
-// StateStore returns a StateStore from path.
-//
-// The path should be an absolute path to a file.
-//
-// Special cases:
-//
-//   * empty string means to use an in-memory store
-//   * if the string begins with "mem:", the suffix
-//     is ignored and an in-memory store is used.
-//   * if the string begins with "kube:", the suffix
-//     is a Kubernetes secret name
-//   * if the string begins with "arn:", the value is
-//     an AWS ARN for an SSM.
-func StateStore(path string, logf logger.Logf) (ipn.StateStore, error) {
-	if path == "" {
-		return &ipn.MemoryStore{}, nil
-	}
-	const memPrefix = "mem:"
-	const kubePrefix = "kube:"
-	const arnPrefix = "arn:"
-	switch {
-	case strings.HasPrefix(path, memPrefix):
-		return &ipn.MemoryStore{}, nil
-	case strings.HasPrefix(path, kubePrefix):
-		secretName := strings.TrimPrefix(path, kubePrefix)
-		store, err := ipn.NewKubeStore(secretName)
-		if err != nil {
-			return nil, fmt.Errorf("ipn.NewKubeStore(%q): %v", secretName, err)
-		}
-		return store, nil
-	case strings.HasPrefix(path, arnPrefix):
-		store, err := aws.NewStore(path)
-		if err != nil {
-			return nil, fmt.Errorf("aws.NewStore(%q): %v", path, err)
-		}
-		return store, nil
-	}
-	if runtime.GOOS == "windows" {
-		path = tryWindowsAppDataMigration(logf, path)
-	}
-	store, err := ipn.NewFileStore(path)
-	if err != nil {
-		return nil, fmt.Errorf("ipn.NewFileStore(%q): %v", path, err)
-	}
-	return store, nil
 }
 
 // Run runs a Tailscale backend service.

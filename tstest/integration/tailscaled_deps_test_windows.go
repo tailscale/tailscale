@@ -22,6 +22,7 @@ import (
 	_ "tailscale.com/envknob"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"
+	_ "tailscale.com/ipn/store"
 	_ "tailscale.com/logpolicy"
 	_ "tailscale.com/logtail"
 	_ "tailscale.com/logtail/backoff"

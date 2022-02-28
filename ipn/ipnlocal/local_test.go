@@ -14,6 +14,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -457,7 +458,7 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	panicOnMachineKeyGeneration = true
 
 	var logf logger.Logf = logger.Discard
-	store := new(ipn.MemoryStore)
+	store := new(mem.Store)
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
