@@ -27,6 +27,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
+	"tailscale.com/ipn/store"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/nettest"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
@@ -46,6 +48,12 @@ type Server struct {
 	// based on the name of the binary.
 	Dir string
 
+	// Store specifies the state store to use.
+	//
+	// If nil, a new FileStore is initialized at `Dir/tailscaled.state`.
+	// See tailscale.com/ipn/store for supported stores.
+	Store ipn.StateStore
+
 	// Hostname is the hostname to present to the control server.
 	// If empty, the binary name is used.
 	Hostname string
@@ -62,7 +70,7 @@ type Server struct {
 	initErr  error
 	lb       *ipnlocal.LocalBackend
 	// the state directory
-	dir      string
+	rootPath string
 	hostname string
 
 	mu        sync.Mutex
@@ -79,17 +87,17 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 	return s.dialer.UserDial(ctx, network, address)
 }
 
-func (s *Server) doInit() {
-	if err := s.start(); err != nil {
-		s.initErr = fmt.Errorf("tsnet: %w", err)
-	}
-}
-
 // Start connects the server to the tailnet.
 // Optional: any calls to Dial/Listen will also call Start.
 func (s *Server) Start() error {
 	s.initOnce.Do(s.doInit)
 	return s.initErr
+}
+
+func (s *Server) doInit() {
+	if err := s.start(); err != nil {
+		s.initErr = fmt.Errorf("tsnet: %w", err)
+	}
 }
 
 func (s *Server) start() error {
@@ -108,21 +116,26 @@ func (s *Server) start() error {
 		s.hostname = prog
 	}
 
-	s.dir = s.Dir
-	if s.dir == "" {
+	s.rootPath = s.Dir
+	if s.Store != nil && !s.Ephemeral {
+		if _, ok := s.Store.(*mem.Store); !ok {
+			return fmt.Errorf("in-memory store is only supported for Ephemeral nodes")
+		}
+	}
+	if s.rootPath == "" {
 		confDir, err := os.UserConfigDir()
 		if err != nil {
 			return err
 		}
-		s.dir = filepath.Join(confDir, "tslib-"+prog)
-		if err := os.MkdirAll(s.dir, 0700); err != nil {
+		s.rootPath = filepath.Join(confDir, "tslib-"+prog)
+		if err := os.MkdirAll(s.rootPath, 0700); err != nil {
 			return err
 		}
 	}
-	if fi, err := os.Stat(s.dir); err != nil {
+	if fi, err := os.Stat(s.rootPath); err != nil {
 		return err
 	} else if !fi.IsDir() {
-		return fmt.Errorf("%v is not a directory", s.dir)
+		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
 	logf := s.Logf
@@ -170,10 +183,11 @@ func (s *Server) start() error {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
-	statePath := filepath.Join(s.dir, "tailscaled.state")
-	store, err := ipn.NewFileStore(statePath)
-	if err != nil {
-		return err
+	if s.Store == nil {
+		s.Store, err = store.New(logf, filepath.Join(s.rootPath, "tailscaled.state"))
+		if err != nil {
+			return err
+		}
 	}
 	logid := "tslib-TODO"
 
@@ -181,11 +195,11 @@ func (s *Server) start() error {
 	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, s.dialer, eng, loginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, s.Store, s.dialer, eng, loginFlags)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
-	lb.SetVarRoot(s.dir)
+	lb.SetVarRoot(s.rootPath)
 	s.lb = lb
 	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)

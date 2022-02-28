@@ -31,6 +31,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnserver"
+	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tsdial"
@@ -335,8 +336,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 			return nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
 		}
 	}
-
-	store, err := ipnserver.StateStore(statePathOrDefault(), logf)
+	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
 		return err
 	}

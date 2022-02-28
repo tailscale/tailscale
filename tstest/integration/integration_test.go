@@ -33,6 +33,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -586,7 +587,7 @@ func (n *testNode) diskPrefs() *ipn.Prefs {
 	if _, err := ioutil.ReadFile(n.stateFile); err != nil {
 		t.Fatalf("reading prefs: %v", err)
 	}
-	fs, err := ipn.NewFileStore(n.stateFile)
+	fs, err := store.NewFileStore(nil, n.stateFile)
 	if err != nil {
 		t.Fatalf("reading prefs, NewFileStore: %v", err)
 	}

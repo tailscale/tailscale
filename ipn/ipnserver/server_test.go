@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
 	"tailscale.com/wgengine"
@@ -66,7 +67,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 
 	opts := ipnserver.Options{}
 	t.Logf("pre-Run")
-	store := new(ipn.MemoryStore)
+	store := new(mem.Store)
 
 	ln, _, err := safesocket.Listen(socketPath, 0)
 	if err != nil {

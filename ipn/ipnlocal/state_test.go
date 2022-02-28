@@ -14,6 +14,7 @@ import (
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
@@ -922,7 +923,7 @@ func TestStateMachine(t *testing.T) {
 }
 
 type testStateStorage struct {
-	mem     ipn.MemoryStore
+	mem     mem.Store
 	written syncs.AtomicBool
 }
 
@@ -954,7 +955,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
-	b, err := NewLocalBackend(logf, "logid", new(ipn.MemoryStore), nil, eng, 0)
+	b, err := NewLocalBackend(logf, "logid", new(mem.Store), nil, eng, 0)
 	c.Assert(err, qt.IsNil)
 
 	cc := newMockControl(t)

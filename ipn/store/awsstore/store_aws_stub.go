@@ -5,7 +5,7 @@
 //go:build !linux
 // +build !linux
 
-package aws
+package awsstore
 
 import (
 	"fmt"

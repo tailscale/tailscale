@@ -33,6 +33,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnserver"
+	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
@@ -394,9 +395,9 @@ func run() error {
 
 	opts := ipnServerOpts()
 
-	store, err := ipnserver.StateStore(statePathOrDefault(), logf)
+	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return fmt.Errorf("ipnserver.StateStore: %w", err)
+		return fmt.Errorf("store.New: %w", err)
 	}
 	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
 	if err != nil {
