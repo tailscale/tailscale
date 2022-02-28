@@ -5,7 +5,9 @@
 package interfaces
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -106,4 +108,15 @@ func BenchmarkDefaultRouteInterface(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestRouteLinuxNetlink(t *testing.T) {
+	d, err := defaultRouteFromNetlink()
+	if errors.Is(err, fs.ErrPermission) {
+		t.Skip(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Got: %+v", d)
 }

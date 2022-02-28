@@ -687,7 +687,8 @@ func netInterfaces() ([]Interface, error) {
 	return ret, nil
 }
 
-// DefaultRouteDetails are the
+// DefaultRouteDetails are the details about a default route returned
+// by DefaultRoute.
 type DefaultRouteDetails struct {
 	// InterfaceName is the interface name. It must always be populated.
 	// It's like "eth0" (Linux), "Ethernet 2" (Windows), "en0" (macOS).
