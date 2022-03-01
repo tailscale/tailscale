@@ -16,7 +16,6 @@ package rate
 import (
 	"context"
 	"math"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -152,61 +151,6 @@ func TestSimultaneousRequests(t *testing.T) {
 	wg.Wait()
 	if numOK != burst {
 		t.Errorf("numOK = %d, want %d", numOK, burst)
-	}
-}
-
-func TestLongRunningQPS(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode")
-	}
-	if runtime.GOOS == "openbsd" {
-		t.Skip("low resolution time.Sleep invalidates test (golang.org/issue/14183)")
-		return
-	}
-
-	// The test runs for a few seconds executing many requests and then checks
-	// that overall number of requests is reasonable.
-	const (
-		limit = 100
-		burst = 100
-	)
-	var numOK = int32(0)
-
-	lim := NewLimiter(limit, burst)
-
-	var wg sync.WaitGroup
-	f := func() {
-		if ok := lim.Allow(); ok {
-			atomic.AddInt32(&numOK, 1)
-		}
-		wg.Done()
-	}
-
-	// This will still offer ~500 requests per second,
-	// but won't consume outrageous amount of CPU.
-	start := time.Now()
-	end := start.Add(1 * time.Second)
-	ticker := time.NewTicker(2 * time.Millisecond)
-	defer ticker.Stop()
-	for now := range ticker.C {
-		if now.After(end) {
-			break
-		}
-		wg.Add(1)
-		go f()
-	}
-	wg.Wait()
-	elapsed := time.Since(start)
-	ideal := burst + (limit * float64(elapsed) / float64(time.Second))
-
-	// We should never get more requests than allowed.
-	if want := int32(ideal + 1); numOK > want {
-		t.Errorf("numOK = %d, want %d (ideal %f)", numOK, want, ideal)
-	}
-	// We should get close-ish to the number of requests allowed.
-	// Trying to get too close causes flakes. Treat this as a sanity check.
-	if want := int32(0.9 * ideal); numOK < want {
-		t.Errorf("numOK = %d, want %d (ideal %f)", numOK, want, ideal)
 	}
 }
 
