@@ -5,7 +5,6 @@
 package store
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -63,18 +62,8 @@ func TestNewStore(t *testing.T) {
 	} else if _, ok := s.(*store2); !ok {
 		t.Fatalf("%q: got: %T, want: %T", path, s, new(store2))
 	}
-	f, err := os.CreateTemp("", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		os.Remove(f.Name())
-	})
 
-	path = f.Name()
+	path = filepath.Join(t.TempDir(), "state")
 	if s, err := New(t.Logf, path); err != nil {
 		t.Fatalf("%q: %v", path, err)
 	} else if _, ok := s.(*FileStore); !ok {

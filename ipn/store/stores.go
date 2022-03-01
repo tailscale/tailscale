@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -125,7 +124,7 @@ func (s *FileStore) Path() string { return s.path }
 func (s *FileStore) String() string { return fmt.Sprintf("FileStore(%q)", s.path) }
 
 // NewFileStore returns a new file store that persists to path.
-func NewFileStore(_ logger.Logf, path string) (ipn.StateStore, error) {
+func NewFileStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 	// We unconditionally call this to ensure that our perms are correct
 	if err := paths.MkStateDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("creating state directory: %w", err)
@@ -136,7 +135,7 @@ func NewFileStore(_ logger.Logf, path string) (ipn.StateStore, error) {
 	// Treat an empty file as a missing file.
 	// (https://github.com/tailscale/tailscale/issues/895#issuecomment-723255589)
 	if err == nil && len(bs) == 0 {
-		log.Printf("ipn.NewFileStore(%q): file empty; treating it like a missing file [warning]", path)
+		logf("store.NewFileStore(%q): file empty; treating it like a missing file [warning]", path)
 		err = os.ErrNotExist
 	}
 
