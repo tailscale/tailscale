@@ -19,7 +19,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,7 +56,15 @@ var (
 
 func main() {
 	flag.Parse()
+
+	// proactively load the DERP map. Nothing terrible happens if this fails, so we ignore
+	// the error. The Slack bot will print a notification that the DERP map was empty.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _ = getDERPMap(ctx)
+
 	go probeLoop()
+	go slackLoop()
 	log.Fatal(http.ListenAndServe(*listen, http.HandlerFunc(serve)))
 }
 
@@ -138,10 +148,14 @@ func getOverallStatus() (o overallStatus) {
 func serve(w http.ResponseWriter, r *http.Request) {
 	st := getOverallStatus()
 	summary := "All good"
-	if len(st.bad) > 0 {
+	if (float64(len(st.bad)) / float64(len(st.bad)+len(st.good))) > 0.25 {
+		// This will generate an alert and page a human.
+		// It also ends up in Slack, but as part of the alert handling pipeline not
+		// because we generated a Slack notification from here.
 		w.WriteHeader(500)
 		summary = fmt.Sprintf("%d problems", len(st.bad))
 	}
+
 	io.WriteString(w, "<html><head><style>.bad { font-weight: bold; color: #700; }</style></head>\n")
 	fmt.Fprintf(w, "<body><h1>derp probe</h1>\n%s:<ul>", summary)
 	for _, s := range st.bad {
@@ -151,6 +165,71 @@ func serve(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<li>%s</li>\n", html.EscapeString(s))
 	}
 	io.WriteString(w, "</ul></body></html>\n")
+}
+
+func notifySlack(text string) error {
+	type SlackRequestBody struct {
+		Text string `json:"text"`
+	}
+
+	slackBody, err := json.Marshal(SlackRequestBody{Text: text})
+	if err != nil {
+		return err
+	}
+
+	webhookUrl := os.Getenv("SLACK_WEBHOOK")
+	if webhookUrl == "" {
+		return errors.New("No SLACK_WEBHOOK configured")
+	}
+
+	req, err := http.NewRequest("POST", webhookUrl, bytes.NewReader(slackBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Add("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return errors.New(resp.Status)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "ok" {
+		return errors.New("Non-ok response returned from Slack")
+	}
+	return nil
+}
+
+// We only page a human if it looks like there is a significant outage across multiple regions.
+// To Slack, we report all failures great and small.
+func slackLoop() {
+	inBadState := false
+	for {
+		time.Sleep(time.Second * 30)
+		st := getOverallStatus()
+
+		if len(st.bad) > 0 && !inBadState {
+			err := notifySlack(strings.Join(st.bad, "\n"))
+			if err == nil {
+				inBadState = true
+			} else {
+				log.Printf("%d problems, notify Slack failed: %v", len(st.bad), err)
+			}
+		}
+
+		if len(st.bad) == 0 && inBadState {
+			err := notifySlack("All DERPs recovered.")
+			if err == nil {
+				inBadState = false
+			}
+		}
+	}
 }
 
 func sortedRegions(dm *tailcfg.DERPMap) []*tailcfg.DERPRegion {
