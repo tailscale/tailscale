@@ -129,6 +129,13 @@ func Run(args []string) error {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
 		args = []string{"version"}
 	}
+	if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy && len(args) == 0 &&
+		os.Getenv("GOKRAZY_FIRST_START") == "1" {
+		// Exit with 125 otherwise the CLI binary is restarted
+		// forever in a loop by the Gokrazy process supervisor.
+		// See https://gokrazy.org/userguide/process-interface/
+		os.Exit(125)
+	}
 
 	var warnOnce sync.Once
 	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
