@@ -113,6 +113,8 @@ func osVersionLinux() string {
 		return fmt.Sprintf("Synology %s%s", m["productversion"], attr)
 	case distro.OpenWrt:
 		return fmt.Sprintf("OpenWrt %s%s", m["DISTRIB_RELEASE"], attr)
+	case distro.Gokrazy:
+		return fmt.Sprintf("Gokrazy%s", attr)
 	}
 	return fmt.Sprintf("Other%s", attr)
 }
