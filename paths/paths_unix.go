@@ -14,6 +14,7 @@ import (
 	"runtime"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/version/distro"
 )
 
 func init() {
@@ -34,6 +35,9 @@ func statePath() string {
 }
 
 func stateFileUnix() string {
+	if distro.Get() == distro.Gokrazy {
+		return "/perm/tailscaled/tailscaled.state"
+	}
 	path := statePath()
 	if path == "" {
 		return ""
