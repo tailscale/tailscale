@@ -70,11 +70,27 @@ func defaultTunName() string {
 		// as a magic value that uses/creates any free number.
 		return "utun"
 	case "linux":
-		if distro.Get() == distro.Synology {
+		switch distro.Get() {
+		case distro.Synology:
 			// Try TUN, but fall back to userspace networking if needed.
 			// See https://github.com/tailscale/tailscale-synology/issues/35
 			return "tailscale0,userspace-networking"
+		case distro.Gokrazy:
+			// Gokrazy doesn't yet work in tun mode because the whole
+			// Gokrazy thing is no C code, and Tailscale currently
+			// depends on the iptables binary for Linux's
+			// wgengine/router.
+			// But on Gokrazy there's no legacy iptables, so we could use netlink
+			// to program nft-iptables directly. It just isn't done yet;
+			// see https://github.com/tailscale/tailscale/issues/391
+			//
+			// But Gokrazy does have the tun module built-in, so users
+			// can stil run --tun=tailscale0 if they wish, if they
+			// arrange for iptables to be present or run in "tailscale
+			// up --netfilter-mode=off" mode, perhaps. Untested.
+			return "userspace-networking"
 		}
+
 	}
 	return "tailscale0"
 }
