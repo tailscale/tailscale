@@ -28,7 +28,8 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "darwin" {
 		return "/var/run/tailscaled.socket"
 	}
-	if distro.Get() == distro.Synology {
+	switch distro.Get() {
+	case distro.Synology:
 		// TODO(maisem): be smarter about this. We can parse /etc/VERSION.
 		const dsm6Sock = "/var/packages/Tailscale/etc/tailscaled.sock"
 		const dsm7Sock = "/var/packages/Tailscale/var/tailscaled.sock"
@@ -38,6 +39,8 @@ func DefaultTailscaledSocket() string {
 		if fi, err := os.Stat(dsm7Sock); err == nil && !fi.IsDir() {
 			return dsm7Sock
 		}
+	case distro.Gokrazy:
+		return "/perm/tailscaled/tailscaled.sock"
 	}
 	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
 		return "/var/run/tailscale/tailscaled.sock"
