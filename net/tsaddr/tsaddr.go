@@ -213,3 +213,28 @@ func PrefixIs4(p netaddr.IPPrefix) bool { return p.IP().Is4() }
 
 // PrefixIs6 reports whether p is an IPv6 prefix.
 func PrefixIs6(p netaddr.IPPrefix) bool { return p.IP().Is6() }
+
+// ContainsExitRoutes reports whether rr contains both the IPv4 and
+// IPv6 /0 route.
+func ContainsExitRoutes(rr []netaddr.IPPrefix) bool {
+	var v4, v6 bool
+	for _, r := range rr {
+		if r == allIPv4 {
+			v4 = true
+		} else if r == allIPv6 {
+			v6 = true
+		}
+	}
+	return v4 && v6
+}
+
+var (
+	allIPv4 = netaddr.MustParseIPPrefix("0.0.0.0/0")
+	allIPv6 = netaddr.MustParseIPPrefix("::/0")
+)
+
+// AllIPv4 returns 0.0.0.0/0.
+func AllIPv4() netaddr.IPPrefix { return allIPv4 }
+
+// AllIPv6 returns ::/0.
+func AllIPv6() netaddr.IPPrefix { return allIPv6 }
