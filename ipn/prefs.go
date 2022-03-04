@@ -18,6 +18,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -442,18 +443,7 @@ func (p *Prefs) AdvertisesExitNode() bool {
 	if p == nil {
 		return false
 	}
-	var v4, v6 bool
-	for _, r := range p.AdvertiseRoutes {
-		if r.Bits() != 0 {
-			continue
-		}
-		if r.IP().Is4() {
-			v4 = true
-		} else if r.IP().Is6() {
-			v6 = true
-		}
-	}
-	return v4 && v6
+	return tsaddr.ContainsExitRoutes(p.AdvertiseRoutes)
 }
 
 // SetAdvertiseExitNode mutates p (if non-nil) to add or remove the two
