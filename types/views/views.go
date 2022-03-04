@@ -101,6 +101,11 @@ func (v IPPrefixSlice) ContainsFunc(f func(netaddr.IPPrefix) bool) bool {
 	return tsaddr.PrefixesContainsFunc(v.ж, f)
 }
 
+// ContainsExitRoutes reports whether v contains ExitNode Routes.
+func (v IPPrefixSlice) ContainsExitRoutes() bool {
+	return tsaddr.ContainsExitRoutes(v.ж)
+}
+
 // MarshalJSON implements json.Marshaler.
 func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ж)
