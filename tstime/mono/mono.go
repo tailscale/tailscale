@@ -53,7 +53,7 @@ func (t Time) After(n Time) bool {
 	return t > n
 }
 
-// After reports t < n, whether t is before n.
+// Before reports t < n, whether t is before n.
 func (t Time) Before(n Time) bool {
 	return t < n
 }
