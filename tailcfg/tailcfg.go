@@ -1596,3 +1596,27 @@ type SSHAction struct {
 	// value.
 	HoldAndDelegate string `json:"holdAndDelegate,omitempty"`
 }
+
+// OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
+// over HTTPS (regular TLS) to the Tailscale control plane server,
+// where the 'v' argument is the client's current capability version
+// (previously known as the "MapRequest version").
+//
+// The "OverTLS" prefix is to loudly declare that this exchange
+// doesn't happen over Noise and can be intercepted/MITM'ed by
+// enterprise/corp proxies where the orgnanization can put TLS roots
+// on devices.
+type OverTLSPublicKeyResponse struct {
+	// LegacyPublic specifies the control plane server's original
+	// NaCl crypto_box machine key.
+	// It will be zero for sufficiently new clients, based on their
+	// advertised "v" parameter (the CurrentMapRequestVersion).
+	// In that case, only the newer Noise-based transport may be used
+	// using the PublicKey field.
+	LegacyPublicKey key.MachinePublic `json:"legacyPublicKey"`
+
+	// PublicKey specifies the server's public key for the
+	// Noise-based control plane protocol. (see packages
+	// control/controlbase and control/controlhttp)
+	PublicKey key.MachinePublic `json:"publicKey"`
+}
