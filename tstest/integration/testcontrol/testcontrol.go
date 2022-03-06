@@ -408,19 +408,18 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
 	msg, err := ioutil.ReadAll(io.LimitReader(r.Body, msgLimit))
+	r.Body.Close()
 	if err != nil {
-		r.Body.Close()
 		http.Error(w, fmt.Sprintf("bad map request read: %v", err), 400)
 		return
 	}
-	r.Body.Close()
 
 	var req tailcfg.RegisterRequest
 	if err := s.decode(mkey, msg, &req); err != nil {
 		go panic(fmt.Sprintf("serveRegister: decode: %v", err))
 	}
-	if req.Version != 1 {
-		go panic(fmt.Sprintf("serveRegister: unsupported version: %d", req.Version))
+	if req.Version == 0 {
+		panic("serveRegister: zero Version")
 	}
 	if req.NodeKey.IsZero() {
 		go panic("serveRegister: request has zero node key")

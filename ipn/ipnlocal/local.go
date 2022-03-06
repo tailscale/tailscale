@@ -2930,7 +2930,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 // friendly options to get HTTPS certs.
 func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	req := &tailcfg.SetDNSRequest{
-		Version: 1,
+		Version: 1, // TODO(bradfitz,maisem): use tailcfg.CurrentCapabilityVersion when using the Noise transport
 		Type:    "TXT",
 		Name:    name,
 		Value:   value,
