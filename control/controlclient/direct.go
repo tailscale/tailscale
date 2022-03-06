@@ -368,7 +368,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
-		Version:    1,
+		Version:    1, // TODO(bradfitz): use tailcfg.CurrentCapabilityVersion when over Noise
 		OldNodeKey: oldNodeKey,
 		NodeKey:    tryingNewKey.Public(),
 		Hostinfo:   hi,
@@ -614,7 +614,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	}
 
 	request := &tailcfg.MapRequest{
-		Version:       tailcfg.CurrentMapRequestVersion,
+		Version:       tailcfg.CurrentCapabilityVersion,
 		KeepAlive:     c.keepAlive,
 		NodeKey:       persist.PrivateNodeKey.Public(),
 		DiscoKey:      c.discoPubKey,

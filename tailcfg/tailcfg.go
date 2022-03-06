@@ -24,7 +24,19 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-// CurrentMapRequestVersion is the current MapRequest.Version value.
+// CapabilityVersion represents the client's capability level. That
+// is, it can be thought of as the client's simple version number: a
+// single monotonically increasing integer, rather than the relatively
+// complex x.y.z-xxxxx semver+hash(es). Whenever the client gains a
+// capability or wants to negotiate a change in semantics with the
+// server (control plane), bump this number and document what's new.
+//
+// Previously (prior to 2022-03-06), it was known as the "MapRequest
+// version" or "mapVer" or "map cap" and that name and usage persists
+// in places.
+type CapabilityVersion int
+
+// CurrentCapabilityVersion is the current capability version of the codebase.
 //
 // History of versions:
 //     3: implicit compression, keep-alives
@@ -52,7 +64,7 @@ import (
 //    25: 2021-11-01: MapResponse.Debug.Exit
 //    26: 2022-01-12: (nothing, just bumping for 1.20.0)
 //    27: 2022-02-18: start of SSHPolicy being respected
-const CurrentMapRequestVersion = 27
+const CurrentCapabilityVersion CapabilityVersion = 27
 
 type StableID string
 
@@ -846,8 +858,15 @@ func (st SignatureType) String() string {
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>
 type RegisterRequest struct {
-	_          structs.Incomparable
-	Version    int // currently 1
+	_ structs.Incomparable
+
+	// Version is the client's capabilities when using the Noise
+	// transport.
+	//
+	// When using the original nacl crypto_box transport, the
+	// value must be 1.
+	Version CapabilityVersion
+
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	Auth       struct {
@@ -961,8 +980,8 @@ type MapRequest struct {
 	// we want to signal to the control server that we're capable of something
 	// different.
 	//
-	// For current values and history, see CurrentMapRequestVersion above.
-	Version int
+	// For current values and history, see the CapabilityVersion type's docs.
+	Version CapabilityVersion
 
 	Compress    string // "zstd" or "" (no compression)
 	KeepAlive   bool   // whether server should send keep-alives back to us
@@ -1046,7 +1065,7 @@ type FilterRule struct {
 	SrcIPs []string
 
 	// SrcBits is deprecated; it's the old way to specify a CIDR
-	// prior to MapRequest.Version 7. Its values correspond to the
+	// prior to CapabilityVersion 7. Its values correspond to the
 	// SrcIPs above.
 	//
 	// If an entry of SrcBits is present for the same index as a
@@ -1491,10 +1510,12 @@ const (
 // using the local machine key, and sent to:
 //	https://login.tailscale.com/machine/<mkey hex>/set-dns
 type SetDNSRequest struct {
-	// Version indicates what level of SetDNSRequest functionality
-	// the client understands. Currently this type only has
-	// one version; this field should always be 1 for now.
-	Version int
+	// Version is the client's capabilities
+	// (CurrentCapabilityVersion) when using the Noise transport.
+	//
+	// When using the original nacl crypto_box transport, the
+	// value must be 1.
+	Version CapabilityVersion
 
 	// NodeKey is the client's current node key.
 	NodeKey key.NodePublic
