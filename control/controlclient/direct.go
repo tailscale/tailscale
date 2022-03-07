@@ -47,6 +47,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/systemd"
 	"tailscale.com/wgengine/monitor"
 )
@@ -68,8 +69,10 @@ type Direct struct {
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
 
-	mu           sync.Mutex // mutex guards the following fields
-	serverKey    key.MachinePublic
+	mu             sync.Mutex        // mutex guards the following fields
+	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
+	serverNoiseKey key.MachinePublic
+
 	persist      persist.Persist
 	authKey      string
 	tryingNewKey key.NodePrivate
@@ -326,16 +329,17 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
 	if serverKey.IsZero() {
-		var err error
-		serverKey, err = loadServerKey(ctx, c.httpc, c.serverURL)
+		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
 		if err != nil {
 			return regen, opt.URL, err
 		}
 		c.logf("control server key %s from %s", serverKey.ShortString(), c.serverURL)
 
 		c.mu.Lock()
-		c.serverKey = serverKey
+		c.serverKey = keys.LegacyPublicKey
+		c.serverNoiseKey = keys.PublicKey
 		c.mu.Unlock()
+		serverKey = keys.LegacyPublicKey
 	}
 
 	var oldNodeKey key.NodePublic
@@ -950,29 +954,39 @@ func encode(v interface{}, serverKey key.MachinePublic, mkey key.MachinePrivate)
 	return mkey.SealTo(serverKey, b), nil
 }
 
-func loadServerKey(ctx context.Context, httpc *http.Client, serverURL string) (key.MachinePublic, error) {
-	req, err := http.NewRequest("GET", serverURL+"/key", nil)
+func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string) (*tailcfg.OverTLSPublicKeyResponse, error) {
+	keyURL := fmt.Sprintf("%v/key?v=%d", serverURL, tailcfg.CurrentCapabilityVersion)
+	req, err := http.NewRequestWithContext(ctx, "GET", keyURL, nil)
 	if err != nil {
-		return key.MachinePublic{}, fmt.Errorf("create control key request: %v", err)
+		return nil, fmt.Errorf("create control key request: %v", err)
 	}
-	req = req.WithContext(ctx)
 	res, err := httpc.Do(req)
 	if err != nil {
-		return key.MachinePublic{}, fmt.Errorf("fetch control key: %v", err)
+		return nil, fmt.Errorf("fetch control key: %v", err)
 	}
 	defer res.Body.Close()
-	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<16))
+	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 64<<10))
 	if err != nil {
-		return key.MachinePublic{}, fmt.Errorf("fetch control key response: %v", err)
+		return nil, fmt.Errorf("fetch control key response: %v", err)
 	}
 	if res.StatusCode != 200 {
-		return key.MachinePublic{}, fmt.Errorf("fetch control key: %d: %s", res.StatusCode, string(b))
+		return nil, fmt.Errorf("fetch control key: %d", res.StatusCode)
 	}
+	var out tailcfg.OverTLSPublicKeyResponse
+	jsonErr := json.Unmarshal(b, &out)
+	if jsonErr == nil {
+		return &out, nil
+	}
+
+	// Some old control servers might not be updated to send the new format.
+	// Accept the old pre-JSON format too.
+	out = tailcfg.OverTLSPublicKeyResponse{}
 	k, err := key.ParseMachinePublicUntyped(mem.B(b))
 	if err != nil {
-		return key.MachinePublic{}, fmt.Errorf("fetch control key: %v", err)
+		return nil, multierr.New(jsonErr, err)
 	}
-	return k, nil
+	out.LegacyPublicKey = k
+	return &out, nil
 }
 
 // Debug contains temporary internal-only debug knobs.

@@ -53,11 +53,15 @@ type Server struct {
 	initMuxOnce sync.Once
 	mux         *http.ServeMux
 
-	mu            sync.Mutex
-	inServeMap    int
-	cond          *sync.Cond // lazily initialized by condLocked
-	pubKey        key.MachinePublic
-	privKey       key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
+	mu         sync.Mutex
+	inServeMap int
+	cond       *sync.Cond // lazily initialized by condLocked
+	pubKey     key.MachinePublic
+	privKey    key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
+
+	noisePubKey  key.MachinePublic
+	noisePrivKey key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
+
 	nodes         map[key.NodePublic]*tailcfg.Node
 	users         map[key.NodePublic]*tailcfg.User
 	logins        map[key.NodePublic]*tailcfg.Login
@@ -211,30 +215,42 @@ func (s *Server) serveUnhandled(w http.ResponseWriter, r *http.Request) {
 	go panic(fmt.Sprintf("testcontrol.Server received unhandled request: %s", got.Bytes()))
 }
 
-func (s *Server) publicKey() key.MachinePublic {
-	pub, _ := s.keyPair()
-	return pub
+func (s *Server) publicKeys() (noiseKey, pubKey key.MachinePublic) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureKeyPairLocked()
+	return s.noisePubKey, s.pubKey
 }
 
 func (s *Server) privateKey() key.ControlPrivate {
-	_, priv := s.keyPair()
-	return priv
-}
-
-func (s *Server) keyPair() (pub key.MachinePublic, priv key.ControlPrivate) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.pubKey.IsZero() {
-		s.privKey = key.NewControl()
-		s.pubKey = s.privKey.Public()
+	s.ensureKeyPairLocked()
+	return s.privKey
+}
+
+func (s *Server) ensureKeyPairLocked() {
+	if !s.pubKey.IsZero() {
+		return
 	}
-	return s.pubKey, s.privKey
+	s.noisePrivKey = key.NewControl()
+	s.noisePubKey = s.noisePrivKey.Public()
+	s.privKey = key.NewControl()
+	s.pubKey = s.privKey.Public()
 }
 
 func (s *Server) serveKey(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(200)
-	io.WriteString(w, s.publicKey().UntypedHexString())
+	noiseKey, legacyKey := s.publicKeys()
+	if r.FormValue("v") == "" {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, legacyKey.UntypedHexString())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(&tailcfg.OverTLSPublicKeyResponse{
+		LegacyPublicKey: legacyKey,
+		PublicKey:       noiseKey,
+	})
 }
 
 func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +261,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 		mkeyStr = mkeyStr[:i]
 	}
 
+	// TODO(maisem/bradfitz): support noise protocol here.
 	mkey, err := key.ParseMachinePublicUntyped(mem.S(mkeyStr))
 	if err != nil {
 		http.Error(w, "bad machine key hex", 400)
