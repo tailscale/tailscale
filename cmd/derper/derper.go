@@ -324,7 +324,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveSTUN(host string, stunPort int) {
-	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, fmt.Sprintf("%d", stunPort))
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, fmt.Sprintf("%d", stunPort)))
 	if err != nil {
 		log.Fatalf("failed to open STUN listener: %v", err)
 	}
