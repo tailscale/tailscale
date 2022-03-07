@@ -1298,7 +1298,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 		msg, _ := ioutil.ReadAll(res.Body)
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
-	var setDNSRes struct{} // no fields yet
+	var setDNSRes tailcfg.SetDNSResponse
 	if err := decode(res, &setDNSRes, serverKey, machinePrivKey); err != nil {
 		c.logf("error decoding SetDNSResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return fmt.Errorf("set-dns-response: %v", err)
