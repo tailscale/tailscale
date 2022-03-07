@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"golang.org/x/sync/singleflight"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
@@ -72,6 +73,9 @@ type Direct struct {
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
 	serverNoiseKey key.MachinePublic
+
+	sfGroup     singleflight.Group // protects noiseClient creation.
+	noiseClient *noiseClient
 
 	persist      persist.Persist
 	authKey      string
@@ -201,6 +205,19 @@ func NewDirect(opts Options) (*Direct, error) {
 		c.SetHostinfo(opts.Hostinfo)
 	}
 	return c, nil
+}
+
+// Close closes the underlying Noise connection(s).
+func (c *Direct) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.noiseClient != nil {
+		if err := c.noiseClient.Close(); err != nil {
+			return err
+		}
+	}
+	c.noiseClient = nil
+	return nil
 }
 
 // SetHostinfo clones the provided Hostinfo and remembers it for the
@@ -1202,6 +1219,39 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 			}
 		}
 	}
+}
+
+// getNoiseClient returns the noise client, creating one if one doesn't exist.
+func (c *Direct) getNoiseClient() (*noiseClient, error) {
+	c.mu.Lock()
+	serverNoiseKey := c.serverNoiseKey
+	nc := c.noiseClient
+	c.mu.Unlock()
+	if serverNoiseKey.IsZero() {
+		return nil, errors.New("zero serverNoiseKey")
+	}
+	if nc != nil {
+		return nc, nil
+	}
+	np, err, _ := c.sfGroup.Do("noise", func() (interface{}, error) {
+		k, err := c.getMachinePrivKey()
+		if err != nil {
+			return nil, err
+		}
+
+		nc, err = newNoiseClient(k, serverNoiseKey, c.serverURL)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.noiseClient = nc
+		return nc, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return np.(*noiseClient), nil
 }
 
 // SetDNS sends the SetDNSRequest request to the control plane server,
