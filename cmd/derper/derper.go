@@ -40,6 +40,7 @@ var (
 	dev           = flag.Bool("dev", false, "run in localhost development mode")
 	addr          = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
 	httpPort      = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable")
+	stunPort      = flag.Int("stun-port", 3478, "The port on which to serve stun. Default is 3478")
 	configPath    = flag.String("c", "", "config file path")
 	certMode      = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
 	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
@@ -212,7 +213,7 @@ func main() {
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
 	if *runSTUN {
-		go serveSTUN(listenHost)
+		go serveSTUN(listenHost, *stunPort)
 	}
 
 	httpsrv := &http.Server{
@@ -322,8 +323,8 @@ func probeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func serveSTUN(host string) {
-	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "3478"))
+func serveSTUN(host string, stunPort int) {
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, fmt.Sprintf("%d", stunPort))
 	if err != nil {
 		log.Fatalf("failed to open STUN listener: %v", err)
 	}
