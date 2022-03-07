@@ -1534,6 +1534,9 @@ type SetDNSRequest struct {
 	Value string
 }
 
+// SetDNSResponse is the response to a SetDNSRequest.
+type SetDNSResponse struct{}
+
 // SSHPolicy is the policy for how to handle incoming SSH connections
 // over Tailscale.
 type SSHPolicy struct {
