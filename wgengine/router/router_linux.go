@@ -247,9 +247,6 @@ func (r *linuxRouter) Up() error {
 	if r.unregLinkMon == nil && r.linkMon != nil {
 		r.unregLinkMon = r.linkMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
 	}
-	if err := r.delLegacyNetfilter(); err != nil {
-		return err
-	}
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
@@ -1377,38 +1374,6 @@ func (r *linuxRouter) delSNATRule() error {
 			return fmt.Errorf("deleting %v in v6/nat/ts-postrouting: %w", args, err)
 		}
 	}
-	return nil
-}
-
-func (r *linuxRouter) delLegacyNetfilter() error {
-	if distro.Get() == distro.Synology {
-		// We don't support netfilter on Synology, and unlike other platforms
-		// the following commands error out as the `comment` module doesn't
-		// exist in the iptables binary present on Synology. Albeit the errors
-		// are ignored it's nice to not have logspam.
-		return nil
-	}
-
-	del := func(table, chain string, args ...string) error {
-		exists, err := r.ipt4.Exists(table, chain, args...)
-		if err != nil {
-			return fmt.Errorf("checking for %v in %s/%s: %w", args, table, chain, err)
-		}
-		if exists {
-			if err := r.ipt4.Delete(table, chain, args...); err != nil {
-				return fmt.Errorf("deleting %v in %s/%s: %w", args, table, chain, err)
-			}
-		}
-		return nil
-	}
-
-	if err := del("filter", "FORWARD", "-m", "comment", "--comment", "tailscale", "-i", r.tunname, "-j", "ACCEPT"); err != nil {
-		r.logf("failed to delete legacy rule, continuing anyway: %v", err)
-	}
-	if err := del("nat", "POSTROUTING", "-m", "comment", "--comment", "tailscale", "-o", "eth0", "-j", "MASQUERADE"); err != nil {
-		r.logf("failed to delete legacy rule, continuing anyway: %v", err)
-	}
-
 	return nil
 }
 
