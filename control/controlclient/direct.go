@@ -1254,6 +1254,45 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	return np.(*noiseClient), nil
 }
 
+// setDNSNoise sends the SetDNSRequest request to the control plane server over Noise,
+// requesting a DNS record be created or updated.
+func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) error {
+	newReq := *req
+	newReq.Version = tailcfg.CurrentCapabilityVersion
+	np, err := c.getNoiseClient()
+	if err != nil {
+		return err
+	}
+	bodyData, err := json.Marshal(newReq)
+	if err != nil {
+		return err
+	}
+	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.serverHost, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		msg, _ := ioutil.ReadAll(res.Body)
+		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
+	}
+	var setDNSRes tailcfg.SetDNSResponse
+	if err := json.NewDecoder(res.Body).Decode(&setDNSRes); err != nil {
+		c.logf("error decoding SetDNSResponse: %v", err)
+		return fmt.Errorf("set-dns-response: %w", err)
+	}
+
+	return nil
+}
+
+// noiseConfigured reports whether the client can communicate with Control
+// over Noise.
+func (c *Direct) noiseConfigured() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.serverNoiseKey.IsZero()
+}
+
 // SetDNS sends the SetDNSRequest request to the control plane server,
 // requesting a DNS record be created or updated.
 func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err error) {
@@ -1263,6 +1302,9 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 			metricSetDNSError.Add(1)
 		}
 	}()
+	if c.noiseConfigured() {
+		return c.setDNSNoise(ctx, req)
+	}
 	c.mu.Lock()
 	serverKey := c.serverKey
 	c.mu.Unlock()
@@ -1301,7 +1343,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 	var setDNSRes tailcfg.SetDNSResponse
 	if err := decode(res, &setDNSRes, serverKey, machinePrivKey); err != nil {
 		c.logf("error decoding SetDNSResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
-		return fmt.Errorf("set-dns-response: %v", err)
+		return fmt.Errorf("set-dns-response: %w", err)
 	}
 
 	return nil
