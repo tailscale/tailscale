@@ -44,6 +44,18 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 		return nil, fmt.Errorf("decoding base64 handshake header: %v", err)
 	}
 
+	if wantPub := r.Header.Get(serverPubHeaderName); wantPub != "" {
+		// If the client declared the public key they expect to speak to,
+		// check it.
+		// TODO: replace the 'private' parameter with a func/interface
+		// that looks up the private key as a function of the public key
+		// to see if we have a currently in-rotation key that's valid.
+		if private.Public().String() != wantPub {
+			http.Error(w, "requested server key unavailable", http.StatusServiceUnavailable)
+			return nil, errors.New("client requested unavailble server key")
+		}
+	}
+
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "make request over HTTP/1", http.StatusBadRequest)

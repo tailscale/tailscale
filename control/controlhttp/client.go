@@ -50,6 +50,10 @@ const (
 	// payload, to save an RTT.
 	handshakeHeaderName = "X-Tailscale-Handshake"
 
+	// serverPubHeaderName is the HTTP request header that
+	// says the expected public key of the control plane.
+	serverPubHeaderName = "X-Tailscale-Control-Public"
+
 	// serverUpgradePath is where the server-side HTTP handler to
 	// to do the protocol switch is located.
 	serverUpgradePath = "/ts2021"
@@ -194,6 +198,7 @@ func (a *dialParams) tryURL(u *url.URL, init []byte) (net.Conn, error) {
 			"Upgrade":           []string{upgradeHeaderValue},
 			"Connection":        []string{"upgrade"},
 			handshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
+			serverPubHeaderName: []string{a.controlKey.String()},
 		},
 	}
 	req = req.WithContext(ctx)
