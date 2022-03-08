@@ -310,11 +310,18 @@ type loginOpt struct {
 	Logout bool
 }
 
+// httpClient provides a common interface for the noiseClient and
+// the NaCl box http.Client.
+type httpClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, err error) {
 	c.mu.Lock()
 	persist := c.persist
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
+	serverNoiseKey := c.serverNoiseKey
 	authKey := c.authKey
 	hi := c.hostinfo.Clone()
 	backendLogID := hi.BackendLogID
@@ -357,8 +364,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.serverNoiseKey = keys.PublicKey
 		c.mu.Unlock()
 		serverKey = keys.LegacyPublicKey
+		serverNoiseKey = keys.PublicKey
 	}
-
 	var oldNodeKey key.NodePublic
 	switch {
 	case opt.Logout:
@@ -389,7 +396,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
-		Version:    1, // TODO(bradfitz): use tailcfg.CurrentCapabilityVersion when over Noise
+		Version:    1,
 		OldNodeKey: oldNodeKey,
 		NodeKey:    tryingNewKey.Public(),
 		Hostinfo:   hi,
@@ -426,22 +433,32 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("RegisterRequest: %s", j)
 	}
 
-	bodyData, err := encode(request, serverKey, machinePrivKey)
+	// URL and httpc are protocol specific.
+	var url string
+	var httpc httpClient
+	if serverNoiseKey.IsZero() {
+		httpc = c.httpc
+		url = fmt.Sprintf("%s/machine/%s", c.serverURL, machinePrivKey.Public().UntypedHexString())
+	} else {
+		request.Version = tailcfg.CurrentCapabilityVersion
+		httpc, err = c.getNoiseClient()
+		if err != nil {
+			return regen, opt.URL, fmt.Errorf("getNoiseClient: %w", err)
+		}
+		url = fmt.Sprintf("%s/machine/register", c.serverURL)
+		url = strings.Replace(url, "http:", "https:", 1)
+	}
+	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
 		return regen, opt.URL, err
 	}
-	body := bytes.NewReader(bodyData)
-
-	u := fmt.Sprintf("%s/machine/%s", c.serverURL, machinePrivKey.Public().UntypedHexString())
-	req, err := http.NewRequest("POST", u, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
 		return regen, opt.URL, err
 	}
-	req = req.WithContext(ctx)
-
-	res, err := c.httpc.Do(req)
+	res, err := httpc.Do(req)
 	if err != nil {
-		return regen, opt.URL, fmt.Errorf("register request: %v", err)
+		return regen, opt.URL, fmt.Errorf("register request: %w", err)
 	}
 	if res.StatusCode != 200 {
 		msg, _ := ioutil.ReadAll(res.Body)
@@ -450,7 +467,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	resp := tailcfg.RegisterResponse{}
-	if err := decode(res, &resp, serverKey, machinePrivKey); err != nil {
+	if err := decode(res, &resp, serverKey, serverNoiseKey, machinePrivKey); err != nil {
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, fmt.Errorf("register request: %v", err)
 	}
@@ -679,7 +696,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		request.ReadOnly = true
 	}
 
-	bodyData, err := encode(request, serverKey, machinePrivKey)
+	// TODO(maisem/bradfitz): use Noise for map requests.
+	// Currently we pass an empty key to encode so that it doesn't encode for noise.
+	var serverNoiseKey key.MachinePublic
+	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
 		vlogf("netmap: encode: %v", err)
 		return err
@@ -886,7 +906,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	return nil
 }
 
-func decode(res *http.Response, v interface{}, serverKey key.MachinePublic, mkey key.MachinePrivate) error {
+// decode JSON decodes the res.Body into v. If serverNoiseKey is not specified,
+// it uses the serverKey and mkey to decode the message from the NaCl-crypto-box.
+func decode(res *http.Response, v interface{}, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
 	defer res.Body.Close()
 	msg, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
@@ -894,6 +916,9 @@ func decode(res *http.Response, v interface{}, serverKey key.MachinePublic, mkey
 	}
 	if res.StatusCode != 200 {
 		return fmt.Errorf("%d: %v", res.StatusCode, string(msg))
+	}
+	if !serverNoiseKey.IsZero() {
+		return json.Unmarshal(msg, v)
 	}
 	return decodeMsg(msg, v, serverKey, mkey)
 }
@@ -958,7 +983,9 @@ func decodeMsg(msg []byte, v interface{}, serverKey key.MachinePublic, machinePr
 	return nil
 }
 
-func encode(v interface{}, serverKey key.MachinePublic, mkey key.MachinePrivate) ([]byte, error) {
+// encode JSON encodes v. If serverNoiseKey is not specified, it uses the serverKey and mkey to
+// seal the message into a NaCl-crypto-box.
+func encode(v interface{}, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -967,6 +994,9 @@ func encode(v interface{}, serverKey key.MachinePublic, mkey key.MachinePrivate)
 		if _, ok := v.(*tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
+	}
+	if !serverNoiseKey.IsZero() {
+		return b, nil
 	}
 	return mkey.SealTo(serverKey, b), nil
 }
@@ -1320,7 +1350,9 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 		return errors.New("getMachinePrivKey returned zero key")
 	}
 
-	bodyData, err := encode(req, serverKey, machinePrivKey)
+	// TODO(maisem): dedupe this codepath from SetDNSNoise.
+	var serverNoiseKey key.MachinePublic
+	bodyData, err := encode(req, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
 		return err
 	}
@@ -1341,7 +1373,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse
-	if err := decode(res, &setDNSRes, serverKey, machinePrivKey); err != nil {
+	if err := decode(res, &setDNSRes, serverKey, serverNoiseKey, machinePrivKey); err != nil {
 		c.logf("error decoding SetDNSResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return fmt.Errorf("set-dns-response: %w", err)
 	}
