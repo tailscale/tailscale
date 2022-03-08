@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !linux && !windows && !darwin
-// +build !linux,!windows,!darwin
+//go:build !linux && !windows && !darwin && !freebsd
+// +build !linux,!windows,!darwin,!freebsd
 
 package interfaces
 
