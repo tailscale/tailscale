@@ -112,11 +112,11 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 		go func() {
+			defer c.Close()
 			conn := &Conn{clientConn: c, srv: s}
 			err := conn.Run()
 			if err != nil {
 				s.logf("client connection failed: %v", err)
-				conn.clientConn.Close()
 			}
 		}()
 	}
