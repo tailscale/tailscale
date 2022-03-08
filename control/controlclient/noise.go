@@ -90,6 +90,15 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 	// but it's actually our Noise dialer:
 	h2Transport.DialTLS = np.dial
 
+	// ConfigureTransports assumes it's being used to wire up an HTTP/1
+	// and HTTP/2 Transport together, so its returned http2.Transport
+	// has a ConnPool already initialized that's configured to not dial
+	// (assuming it's only called from the HTTP/1 Transport). But we
+	// want it to dial, so nil it out before use. On first use it has
+	// a sync.Once that lazily initializes the ConnPool to its default
+	// one that dials.
+	h2Transport.ConnPool = nil
+
 	np.Client = &http.Client{Transport: h2Transport}
 	return np, nil
 }
