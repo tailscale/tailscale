@@ -677,6 +677,7 @@ func (c *Auto) Shutdown() {
 	c.mu.Lock()
 	inSendStatus := c.inSendStatus
 	closed := c.closed
+	direct := c.direct
 	if !closed {
 		c.closed = true
 		c.statusFunc = nil
@@ -685,6 +686,9 @@ func (c *Auto) Shutdown() {
 
 	c.logf("client.Shutdown: inSendStatus=%v", inSendStatus)
 	if !closed {
+		if direct != nil {
+			direct.Close()
+		}
 		c.unregisterHealthWatch()
 		close(c.quit)
 		c.cancelAuth()
