@@ -240,16 +240,17 @@ func (s *Server) ensureKeyPairLocked() {
 }
 
 func (s *Server) serveKey(w http.ResponseWriter, r *http.Request) {
-	noiseKey, legacyKey := s.publicKeys()
+	_, legacyKey := s.publicKeys()
 	if r.FormValue("v") == "" {
 		w.Header().Set("Content-Type", "text/plain")
 		io.WriteString(w, legacyKey.UntypedHexString())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	// TODO(maisem/bradfitz): support noise protocol here.
 	json.NewEncoder(w).Encode(&tailcfg.OverTLSPublicKeyResponse{
 		LegacyPublicKey: legacyKey,
-		PublicKey:       noiseKey,
+		// PublicKey:       noiseKey,
 	})
 }
 
