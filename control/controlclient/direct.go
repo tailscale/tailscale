@@ -614,6 +614,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	persist := c.persist
 	serverURL := c.serverURL
 	serverKey := c.serverKey
+	serverNoiseKey := c.serverNoiseKey
 	hi := c.hostinfo.Clone()
 	backendLogID := hi.BackendLogID
 	localPort := c.localPort
@@ -696,9 +697,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		request.ReadOnly = true
 	}
 
-	// TODO(maisem/bradfitz): use Noise for map requests.
-	// Currently we pass an empty key to encode so that it doesn't encode for noise.
-	var serverNoiseKey key.MachinePublic
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
 		vlogf("netmap: encode: %v", err)
@@ -710,14 +708,28 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 	machinePubKey := machinePrivKey.Public()
 	t0 := time.Now()
-	u := fmt.Sprintf("%s/machine/%s/map", serverURL, machinePubKey.UntypedHexString())
 
-	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(bodyData))
+	// Url and httpc are protocol specific.
+	var url string
+	var httpc httpClient
+	if serverNoiseKey.IsZero() {
+		httpc = c.httpc
+		url = fmt.Sprintf("%s/machine/%s/map", serverURL, machinePubKey.UntypedHexString())
+	} else {
+		httpc, err = c.getNoiseClient()
+		if err != nil {
+			return fmt.Errorf("getNoiseClient: %w", err)
+		}
+		url = fmt.Sprintf("%s/machine/map", serverURL)
+		url = strings.Replace(url, "http:", "https:", 1)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
 		return err
 	}
 
-	res, err := c.httpc.Do(req)
+	res, err := httpc.Do(req)
 	if err != nil {
 		vlogf("netmap: Do: %v", err)
 		return err
@@ -930,14 +942,24 @@ var (
 
 var jsonEscapedZero = []byte(`\u0000`)
 
-func (c *Direct) decodeMsg(msg []byte, v interface{}, machinePrivKey key.MachinePrivate) error {
+// decodeMsg is responsible for uncompressing msg and unmarshaling into v.
+// If c.serverNoiseKey is not specified, it uses the c.serverKey and mkey
+// to first the decrypt msg from the NaCl-crypto-box.
+func (c *Direct) decodeMsg(msg []byte, v interface{}, mkey key.MachinePrivate) error {
 	c.mu.Lock()
 	serverKey := c.serverKey
+	serverNoiseKey := c.serverNoiseKey
 	c.mu.Unlock()
 
-	decrypted, ok := machinePrivKey.OpenFrom(serverKey, msg)
-	if !ok {
-		return errors.New("cannot decrypt response")
+	var decrypted []byte
+	if serverNoiseKey.IsZero() {
+		var ok bool
+		decrypted, ok = mkey.OpenFrom(serverKey, msg)
+		if !ok {
+			return errors.New("cannot decrypt response")
+		}
+	} else {
+		decrypted = msg
 	}
 	var b []byte
 	if c.newDecompressor == nil {
