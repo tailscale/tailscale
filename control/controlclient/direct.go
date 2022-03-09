@@ -302,12 +302,27 @@ func (c *Direct) doLoginOrRegen(ctx context.Context, opt loginOpt) (newURL strin
 	return url, err
 }
 
+// SetExpirySooner attempts to shorten the expiry to the specified time.
+func (c *Direct) SetExpirySooner(ctx context.Context, expiry time.Time) error {
+	c.logf("[v1] direct.SetExpirySooner()")
+
+	newURL, err := c.doLoginOrRegen(ctx, loginOpt{Expiry: &expiry})
+	c.logf("[v1] SetExpirySooner control response: newURL=%v, err=%v", newURL, err)
+
+	return err
+}
+
 type loginOpt struct {
 	Token  *tailcfg.Oauth2Token
 	Flags  LoginFlags
-	Regen  bool
+	Regen  bool // generate a new nodekey, can be overridden in doLogin
 	URL    string
-	Logout bool
+	Logout bool // set the expiry to the far past, expiring the node
+	// Expiry, if non-nil, attempts to set the node expiry to the
+	// specified time and cannot be used to extend the expiry.
+	// It is ignored if Logout is set since Logout works by setting a
+	// expiry time in the far past.
+	Expiry *time.Time
 }
 
 // httpClient provides a common interface for the noiseClient and
@@ -406,6 +421,8 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past
+	} else if opt.Expiry != nil {
+		request.Expiry = *opt.Expiry
 	}
 	c.logf("RegisterReq: onode=%v node=%v fup=%v",
 		request.OldNodeKey.ShortString(),
