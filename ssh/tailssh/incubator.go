@@ -65,7 +65,7 @@ func newIncubatorCommand(ctx context.Context, ci *sshConnInfo, lu *user.User, ta
 		"be-child",
 		"ssh",
 		"--uid=" + lu.Uid,
-		"--local-user=" + lu.Name,
+		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.IP().String(),
 		"--cmd=" + name,
