@@ -64,7 +64,8 @@ type CapabilityVersion int
 //    25: 2021-11-01: MapResponse.Debug.Exit
 //    26: 2022-01-12: (nothing, just bumping for 1.20.0)
 //    27: 2022-02-18: start of SSHPolicy being respected
-const CurrentCapabilityVersion CapabilityVersion = 27
+//    28: 2022-03-09: client can communicate over Noise.
+const CurrentCapabilityVersion CapabilityVersion = 28
 
 type StableID string
 
