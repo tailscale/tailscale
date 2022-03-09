@@ -189,7 +189,10 @@ func TestSSH(t *testing.T) {
 	dir := t.TempDir()
 	lb.SetVarRoot(dir)
 
-	srv := &server{lb, logf, ""}
+	srv := &server{
+		lb:   lb,
+		logf: logf,
+	}
 	ss, err := srv.newSSHServer()
 	if err != nil {
 		t.Fatal(err)
