@@ -267,18 +267,16 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 
 		ciphertext, err := c.encryptLocked(toSend)
 		if err != nil {
-			return 0, err
+			return sent, err
 		}
-
-		n, err := c.conn.Write(ciphertext)
-		sent += n
-		if err != nil {
+		if _, err := c.conn.Write(ciphertext); err != nil {
 			// Return the raw error on the Write that actually
 			// failed. For future writes, return that error wrapped in
 			// a desync error.
 			c.tx.err = errPartialWrite{err}
 			return sent, err
 		}
+		sent += len(toSend)
 	}
 	return sent, nil
 }
