@@ -26,7 +26,6 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/lineread"
 	"tailscale.com/wgengine"
@@ -131,7 +130,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{srcIP: netaddr.MustParseIP("1.2.3.4")},
+			ci:       &sshConnInfo{src: netaddr.MustParseIPPort("1.2.3.4:30343")},
 			wantUser: "ubuntu",
 		},
 		{
@@ -174,8 +173,7 @@ func TestMatchRule(t *testing.T) {
 func timePtr(t time.Time) *time.Time { return &t }
 
 func TestSSH(t *testing.T) {
-	ml := new(tstest.MemLogger)
-	var logf logger.Logf = ml.Logf
+	var logf logger.Logf = t.Logf
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +189,7 @@ func TestSSH(t *testing.T) {
 	dir := t.TempDir()
 	lb.SetVarRoot(dir)
 
-	srv := &server{lb, logf}
+	srv := &server{lb, logf, ""}
 	ss, err := srv.newSSHServer()
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +202,8 @@ func TestSSH(t *testing.T) {
 
 	ci := &sshConnInfo{
 		sshUser: "test",
-		srcIP:   netaddr.MustParseIP("1.2.3.4"),
+		src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
+		dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
 		node:    &tailcfg.Node{},
 		uprof:   &tailcfg.UserProfile{},
 	}
@@ -245,8 +244,8 @@ func TestSSH(t *testing.T) {
 	}
 
 	t.Run("env", func(t *testing.T) {
-		cmd := execSSH("env")
-		cmd.Env = append(os.Environ(), "LANG=foo")
+		cmd := execSSH("LANG=foo env")
+		cmd.Env = append(os.Environ(), "LOCAL_ENV=bar")
 		got, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatal(err)
@@ -269,6 +268,9 @@ func TestSSH(t *testing.T) {
 		}
 		if got, want := m["LANG"], "foo"; got != want {
 			t.Errorf("LANG = %q; want %q", got, want)
+		}
+		if got := m["LOCAL_ENV"]; got != "" {
+			t.Errorf("LOCAL_ENV leaked over ssh: %v", got)
 		}
 		t.Logf("got: %+v", m)
 	})
