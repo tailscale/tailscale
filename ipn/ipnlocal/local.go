@@ -3187,6 +3187,15 @@ func (b *LocalBackend) allowExitNodeDNSProxyToServeName(name string) bool {
 	return true
 }
 
+// SetExpiry updates the expiry of the current node key to t, as long as it's
+// only sooner than the old expiry.
+//
+// If t is in the past, the key is expired immediately.
+// If t is after the current expiry, an error is returned.
+func (b *LocalBackend) SetExpirySooner(ctx context.Context, expiry time.Time) error {
+	return b.cc.SetExpirySooner(ctx, expiry)
+}
+
 // exitNodeCanProxyDNS reports the DoH base URL ("http://foo/dns-query") without query parameters
 // to exitNodeID's DoH service, if available.
 //

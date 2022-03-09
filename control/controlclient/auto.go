@@ -657,6 +657,10 @@ func (c *Auto) Logout(ctx context.Context) error {
 	}
 }
 
+func (c *Auto) SetExpirySooner(ctx context.Context, expiry time.Time) error {
+	return c.direct.SetExpirySooner(ctx, expiry)
+}
+
 // UpdateEndpoints sets the client's discovered endpoints and sends
 // them to the control server if they've changed.
 //

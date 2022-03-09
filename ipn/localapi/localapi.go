@@ -122,6 +122,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveMetrics(w, r)
 	case "/localapi/v0/debug":
 		h.serveDebug(w, r)
+	case "/localapi/v0/set-expiry-sooner":
+		h.serveSetExpirySooner(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -509,6 +511,35 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(h.b.DERPMap())
+}
+
+// serveSetExpirySooner sets the expiry date on the current machine, specified
+// by an `expiry` unix timestamp as POST or query param.
+func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var expiryTime time.Time
+	if v := r.FormValue("expiry"); v != "" {
+		expiryInt, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			http.Error(w, "can't parse expiry time, expects a unix timestamp", http.StatusBadRequest)
+			return
+		}
+		expiryTime = time.Unix(expiryInt, 0)
+	} else {
+		http.Error(w, "missing 'expiry' parameter, a unix timestamp", http.StatusBadRequest)
+		return
+	}
+	err := h.b.SetExpirySooner(r.Context(), expiryTime)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	io.WriteString(w, "done\n")
 }
 
 func defBool(a string, def bool) bool {
