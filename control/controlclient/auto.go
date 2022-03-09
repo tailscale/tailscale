@@ -686,15 +686,15 @@ func (c *Auto) Shutdown() {
 
 	c.logf("client.Shutdown: inSendStatus=%v", inSendStatus)
 	if !closed {
-		if direct != nil {
-			direct.Close()
-		}
 		c.unregisterHealthWatch()
 		close(c.quit)
 		c.cancelAuth()
 		<-c.authDone
 		c.cancelMapUnsafely()
 		<-c.mapDone
+		if direct != nil {
+			direct.Close()
+		}
 		c.logf("Client.Shutdown done.")
 	}
 }
