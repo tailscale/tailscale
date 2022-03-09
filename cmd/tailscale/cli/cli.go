@@ -125,16 +125,21 @@ func CleanUpArgs(args []string) []string {
 }
 
 // Run runs the CLI. The args do not include the binary name.
-func Run(args []string) error {
+func Run(args []string) (err error) {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
 		args = []string{"version"}
 	}
-	if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy && len(args) == 0 &&
+	if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy &&
 		os.Getenv("GOKRAZY_FIRST_START") == "1" {
-		// Exit with 125 otherwise the CLI binary is restarted
-		// forever in a loop by the Gokrazy process supervisor.
-		// See https://gokrazy.org/userguide/process-interface/
-		os.Exit(125)
+		defer func() {
+			// Exit with 125 otherwise the CLI binary is restarted
+			// forever in a loop by the Gokrazy process supervisor.
+			// See https://gokrazy.org/userguide/process-interface/
+			if err != nil {
+				log.Println(err)
+			}
+			os.Exit(125)
+		}()
 	}
 
 	var warnOnce sync.Once
@@ -201,7 +206,7 @@ change in the future.
 		}
 	})
 
-	err := rootCmd.Run(context.Background())
+	err = rootCmd.Run(context.Background())
 	if tailscale.IsAccessDeniedError(err) && os.Getuid() != 0 && runtime.GOOS != "windows" {
 		return fmt.Errorf("%v\n\nUse 'sudo tailscale %s' or 'tailscale up --operator=$USER' to not require root.", err, strings.Join(args, " "))
 	}
