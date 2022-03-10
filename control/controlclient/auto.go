@@ -7,6 +7,7 @@ package controlclient
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -724,4 +725,8 @@ func (c *Auto) TestOnlyTimeNow() time.Time {
 // requesting a DNS record be created or updated.
 func (c *Auto) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 	return c.direct.SetDNS(ctx, req)
+}
+
+func (c *Auto) DoNoiseRequest(req *http.Request) (*http.Response, error) {
+	return c.direct.DoNoiseRequest(req)
 }

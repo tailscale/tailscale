@@ -1428,6 +1428,14 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 	return nil
 }
 
+func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return nil, err
+	}
+	return nc.Do(req)
+}
+
 // tsmpPing sends a Ping to pr.IP, and sends an http request back to pr.URL
 // with ping response data.
 func tsmpPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) error {

@@ -1615,10 +1615,14 @@ type SSHAction struct {
 	// before being forcefully terminated.
 	SesssionDuration time.Duration `json:"sessionDuration,omitempty"`
 
-	// HoldAndDelegate, if non-empty, is a URL that serves an outcome verdict.
-	// The connection will be accepted and will block until the
-	// provided long-polling URL serves a new SSHAction JSON
-	// value.
+	// HoldAndDelegate, if non-empty, is a URL that serves an
+	// outcome verdict.  The connection will be accepted and will
+	// block until the provided long-polling URL serves a new
+	// SSHAction JSON value. The URL must be fetched using the
+	// Noise transport (in package control/control{base,http}).
+	// If the long poll breaks before returning a complete HTTP
+	// response, it should be re-fetched as long as the SSH
+	// session is open.
 	HoldAndDelegate string `json:"holdAndDelegate,omitempty"`
 }
 

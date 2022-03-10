@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
@@ -26,6 +27,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -200,19 +202,40 @@ func (srv *server) handleSSH(s ssh.Session) {
 		s.Exit(1)
 		return
 	}
-	if action.Message != "" {
-		io.WriteString(s.Stderr(), strings.Replace(action.Message, "\n", "\r\n", -1))
+
+	// Loop processing/fetching Actions until one reaches a
+	// terminal state (Accept, Reject, or invalid Action), or
+	// until fetchSSHAction times out due to the context being
+	// done (client disconnect) or its 30 minute timeout passes.
+	// (Which is a long time for somebody to see login
+	// instructions and go to a URL to do something.)
+ProcessAction:
+	for {
+		if action.Message != "" {
+			io.WriteString(s.Stderr(), strings.Replace(action.Message, "\n", "\r\n", -1))
+		}
+		if action.Reject {
+			logf("ssh: access denied for %q from %v", ci.uprof.LoginName, ci.src.IP())
+			s.Exit(1)
+			return
+		}
+		if action.Accept {
+			break ProcessAction
+		}
+		url := action.HoldAndDelegate
+		if url == "" {
+			logf("ssh: access denied; SSHAction has neither Reject, Accept, or next step URL")
+			s.Exit(1)
+			return
+		}
+		action, err = srv.fetchSSHAction(s.Context(), url)
+		if err != nil {
+			logf("ssh: fetching SSAction from %s: %v", url, err)
+			s.Exit(1)
+			return
+		}
 	}
-	if action.Reject {
-		logf("ssh: access denied for %q from %v", ci.uprof.LoginName, ci.src.IP())
-		s.Exit(1)
-		return
-	}
-	if !action.Accept || action.HoldAndDelegate != "" {
-		fmt.Fprintf(s, "TODO: other SSHAction outcomes")
-		s.Exit(1)
-		return
-	}
+
 	lu, err := user.Lookup(localUser)
 	if err != nil {
 		logf("ssh: user Lookup %q: %v", localUser, err)
@@ -233,6 +256,37 @@ func (srv *server) handleSSH(s ssh.Session) {
 		defer t.Stop()
 	}
 	srv.handleAcceptedSSH(ctx, s, ci, lu)
+}
+
+func (srv *server) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHAction, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	bo := backoff.NewBackoff("fetch-ssh-action", srv.logf, 10*time.Second)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		res, err := srv.lb.DoNoiseRequest(req)
+		if err != nil {
+			bo.BackOff(ctx, err)
+			continue
+		}
+		if res.StatusCode != 200 {
+			res.Body.Close()
+			bo.BackOff(ctx, fmt.Errorf("unexpected status: %v", res.Status))
+			continue
+		}
+		a := new(tailcfg.SSHAction)
+		if err := json.NewDecoder(res.Body).Decode(a); err != nil {
+			bo.BackOff(ctx, err)
+			continue
+		}
+		return a, nil
+	}
 }
 
 func (srv *server) handleSessionTermination(ctx context.Context, s ssh.Session, ci *sshConnInfo, cmd *exec.Cmd, exitOnce *sync.Once) {
