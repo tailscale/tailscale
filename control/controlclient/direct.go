@@ -380,6 +380,14 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.mu.Unlock()
 		serverKey = keys.LegacyPublicKey
 		serverNoiseKey = keys.PublicKey
+
+		// For servers supporting the Noise transport,
+		// proactively shut down our TLS TCP connection.
+		// We're not going to need it and it's nicer to the
+		// server.
+		if !serverNoiseKey.IsZero() {
+			c.httpc.CloseIdleConnections()
+		}
 	}
 	var oldNodeKey key.NodePublic
 	switch {
