@@ -69,11 +69,14 @@ func newIncubatorCommand(ctx context.Context, ci *sshConnInfo, lu *user.User, ta
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.IP().String(),
 		"--cmd=" + name,
+		"--has-tty=false", // updated in-place by startWithPTY
+		"--tty-name=",     // updated in-place by startWithPTY
+	}
+	if len(args) > 0 {
+		incubatorArgs = append(incubatorArgs, "--")
+		incubatorArgs = append(incubatorArgs, args...)
 	}
 
-	if len(args) > 0 {
-		incubatorArgs = append(incubatorArgs, fmt.Sprintf("--cmd-args=%q", strings.Join(args, " ")))
-	}
 	return exec.CommandContext(ctx, tailscaled, incubatorArgs...)
 }
 
@@ -97,11 +100,12 @@ func beIncubator(args []string) error {
 		ttyName    = flags.String("tty-name", "", "the tty name (pts/3)")
 		hasTTY     = flags.Bool("has-tty", false, "is the output attached to a tty")
 		cmdName    = flags.String("cmd", "", "the cmd to launch")
-		cmdArgs    = flags.String("cmd-args", "", "the args for cmd")
 	)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	cmdArgs := flags.Args()
+
 	logf := logger.Discard
 	if debugIncubator {
 		// We don't own stdout or stderr, so the only place we can log is syslog.
@@ -125,12 +129,7 @@ func beIncubator(args []string) error {
 		}
 	}
 
-	var cArgs []string
-	if *cmdArgs != "" {
-		cArgs = strings.Split(*cmdArgs, " ")
-	}
-
-	cmd := exec.Command(*cmdName, cArgs...)
+	cmd := exec.Command(*cmdName, cmdArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -158,7 +157,9 @@ func (srv *server) launchProcess(ctx context.Context, s ssh.Session, ci *sshConn
 	shell := loginShell(lu.Uid)
 	var args []string
 	if rawCmd := s.RawCommand(); rawCmd != "" {
-		args = []string{"-c", rawCmd}
+		args = append(args, "-c", rawCmd)
+	} else {
+		args = append(args, "-l") // login shell
 	}
 	ptyReq, winCh, isPty := s.Pty()
 
@@ -209,8 +210,8 @@ func startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File, err error) {
 		}
 	}()
 	if err = pty.Setsize(ptyFile, &pty.Winsize{
-		Rows: uint16(ptyReq.Window.Width),
-		Cols: uint16(ptyReq.Window.Height),
+		Rows: uint16(ptyReq.Window.Height),
+		Cols: uint16(ptyReq.Window.Width),
 	}); err != nil {
 		err = fmt.Errorf("pty.Setsize: %w", err)
 		return
@@ -219,10 +220,11 @@ func startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File, err error) {
 		Setctty: true,
 		Setsid:  true,
 	}
-	cmd.Args = append(cmd.Args, "--has-tty=true")
+	updateStringInSlice(cmd.Args, "--has-tty=false", "--has-tty=true")
 	if ptyName, err := ptyName(ptyFile); err == nil {
-		cmd.Args = append(cmd.Args, "--tty-name="+ptyName)
+		updateStringInSlice(cmd.Args, "--tty-name=", "--tty-name="+ptyName)
 	}
+
 	if ptyReq.Term != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 	}
@@ -284,5 +286,16 @@ func envForUser(u *user.User) []string {
 		fmt.Sprintf("SHELL=" + loginShell(u.Uid)),
 		fmt.Sprintf("USER=" + u.Username),
 		fmt.Sprintf("HOME=" + u.HomeDir),
+	}
+}
+
+// updateStringInSlice mutates ss to change the first occurrence of a
+// to b.
+func updateStringInSlice(ss []string, a, b string) {
+	for i, s := range ss {
+		if s == a {
+			ss[i] = b
+			return
+		}
 	}
 }
