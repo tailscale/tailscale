@@ -3241,3 +3241,15 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	}
 	return mc, nil
 }
+
+// DoNoiseRequest sends a request to URL over the the control plane
+// Noise connection.
+func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
+	b.mu.Lock()
+	cc := b.cc
+	b.mu.Unlock()
+	if cc == nil {
+		return nil, errors.New("no client")
+	}
+	return cc.DoNoiseRequest(req)
+}
