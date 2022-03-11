@@ -28,6 +28,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
+	"github.com/u-root/u-root/pkg/termios"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/types/logger"
@@ -209,12 +210,50 @@ func startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File, err error) {
 			tty.Close()
 		}
 	}()
-	if err = pty.Setsize(ptyFile, &pty.Winsize{
-		Rows: uint16(ptyReq.Window.Height),
-		Cols: uint16(ptyReq.Window.Width),
+	ptyRawConn, err := ptyFile.SyscallConn()
+	if err != nil {
+		return nil, fmt.Errorf("SyscallConn: %w", err)
+	}
+	var ctlErr error
+	if err := ptyRawConn.Control(func(fd uintptr) {
+		// Load existing PTY settings to modify them & save them back.
+		tios, err := termios.GTTY(int(fd))
+		if err != nil {
+			ctlErr = fmt.Errorf("GTTY: %w", err)
+			return
+		}
+
+		// Set the rows & cols to those advertised from the ptyReq frame
+		// received over SSH.
+		tios.Row = int(ptyReq.Window.Height)
+		tios.Col = int(ptyReq.Window.Width)
+
+		// And these are just stumbling around in the dark temporarily
+		// while we try to match OpenSSH settings. Empirically this makes
+		// stty -a output be the same, but we're still having problems:
+		// https://github.com/tailscale/tailscale/issues/4146
+		// TODO(bradfitz): figure all this out and do something more principled
+		// and confident and documented, once we have a clue.
+		tios.Ispeed = 9600
+		tios.Ospeed = 9600
+		tios.CC["eol"] = 255
+		tios.CC["eol2"] = 255
+		tios.Opts["echok"] = false
+		tios.Opts["imaxbel"] = true
+		tios.Opts["iutf8"] = true
+		tios.Opts["ixany"] = true
+		tios.Opts["pendin"] = true
+
+		// Save PTY settings.
+		if _, err := tios.STTY(int(fd)); err != nil {
+			ctlErr = fmt.Errorf("STTY: %w", err)
+			return
+		}
 	}); err != nil {
-		err = fmt.Errorf("pty.Setsize: %w", err)
-		return
+		return nil, fmt.Errorf("ptyRawConn.Control: %w", err)
+	}
+	if ctlErr != nil {
+		return nil, fmt.Errorf("ptyRawConn.Control func: %w", ctlErr)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setctty: true,

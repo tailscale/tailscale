@@ -45,8 +45,9 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
+	github.com/u-root/u-root v0.8.0
 	github.com/ulikunitz/xz v0.5.10 // indirect
-	github.com/vishvananda/netlink v1.1.1-0.20211101163509-b10eb8fe5cf6
+	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	golang.org/x/crypto v0.0.0-20211202192323-5770296d904e
 	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd
