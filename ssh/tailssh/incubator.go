@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -119,6 +120,8 @@ func beIncubator(args []string) error {
 	euid := uint64(os.Geteuid())
 	// Inform the system that we are about to log someone in.
 	// We can only do this if we are running as root.
+	// This is best effort to still allow running on machines where
+	// we don't support starting session, e.g. darwin.
 	sessionCloser, err := maybeStartLoginSession(logf, uint32(*uid), *localUser, *remoteUser, *remoteIP, *ttyName)
 	if err == nil && sessionCloser != nil {
 		defer sessionCloser()
@@ -334,6 +337,8 @@ func (srv *server) startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File
 	updateStringInSlice(cmd.Args, "--has-tty=false", "--has-tty=true")
 	if ptyName, err := ptyName(ptyFile); err == nil {
 		updateStringInSlice(cmd.Args, "--tty-name=", "--tty-name="+ptyName)
+		fullPath := filepath.Join("/dev", ptyName)
+		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_TTY=%s", fullPath))
 	}
 
 	if ptyReq.Term != "" {
