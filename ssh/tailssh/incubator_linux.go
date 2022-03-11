@@ -165,6 +165,7 @@ func maybeStartLoginSessionLinux(logf logger.Logf, uid uint32, localUser, remote
 		logf("ssh: failed to CreateSession for user %q (%d) %v", localUser, uid, err)
 		return nil, nil
 	}
+	os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=%v/bus", resp.runtimePath))
 	if !resp.existing {
 		return func() error {
 			return releaseSession(resp.sessionID)
