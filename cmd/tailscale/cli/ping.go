@@ -50,7 +50,7 @@ relay node.
 		fs.BoolVar(&pingArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
 		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through IP + wireguard, but not involving host OS stack)")
-		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send")
+		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send. 0 for infinity.")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
 		return fs
 	})(),
