@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -375,7 +376,14 @@ func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *ssh
 		stdin.Close()
 	}()
 	go func() {
-		_, err := io.Copy(s, stdout)
+		// Write to s.Channel directly, avoiding gliderlab/ssh's (*session).Write
+		// call that translates newline endings, which we don't need.
+		// See https://github.com/tailscale/tailscale/issues/4146.
+		// TODO(bradfitz,maisem): remove this reflect hackery once gliderlab/ssh changes
+		// are all in.
+		// s is an gliderlabs/ssh.(*session); write to its Channel field.
+		sshChan := reflect.ValueOf(s).Elem().FieldByName("Channel").Interface().(io.Writer)
+		_, err := io.Copy(sshChan, stdout)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("ssh: stdout copy: %v", err)
