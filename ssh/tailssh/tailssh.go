@@ -67,6 +67,7 @@ func (srv *server) newSSHServer() (*ssh.Server, error) {
 		ChannelHandlers: map[string]ssh.ChannelHandler{
 			"direct-tcpip": ssh.DirectTCPIPHandler,
 		},
+		Version:                     "SSH-2.0-Tailscale",
 		LocalPortForwardingCallback: srv.portForward,
 	}
 	for k, v := range ssh.DefaultRequestHandlers {
