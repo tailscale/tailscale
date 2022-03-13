@@ -9,7 +9,6 @@ package tailssh
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -211,10 +210,9 @@ func TestSSH(t *testing.T) {
 		uprof:   &tailcfg.UserProfile{},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	ss.Handler = func(s ssh.Session) {
-		srv.handleAcceptedSSH(ctx, s, ci, u)
+		ss := srv.newSSHSession(s, ci, u, &tailcfg.SSHAction{Accept: true})
+		ss.run()
 	}
 
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
