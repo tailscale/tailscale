@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gliderlabs/ssh"
+	"github.com/tailscale/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"

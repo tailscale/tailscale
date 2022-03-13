@@ -6,7 +6,6 @@ require (
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
-	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/aws/aws-sdk-go-v2 v1.11.2
 	github.com/aws/aws-sdk-go-v2/config v1.11.0
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.7.4
@@ -16,7 +15,6 @@ require (
 	github.com/creack/pty v1.1.17
 	github.com/dave/jennifer v1.4.1
 	github.com/frankban/quicktest v1.14.0
-	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.0.6
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
@@ -24,7 +22,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/iancoleman/strcase v0.2.0
-	github.com/insomniacslk/dhcp v0.0.0-20211026125128-ad197bcd36fd
+	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
 	github.com/jsimonetti/rtnetlink v0.0.0-20211203074127-fd9a11f42291
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.13.6
@@ -43,16 +41,16 @@ require (
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20211105212140-3a0adc019d83
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
+	github.com/tailscale/ssh v0.3.4-0.20220313013419-be8b7add4057
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/u-root/u-root v0.8.0
-	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
-	golang.org/x/crypto v0.0.0-20211202192323-5770296d904e
+	golang.org/x/crypto v0.0.0-20220313003712-b769efc7c000
 	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20220227234510-4e6760a101f9
+	golang.org/x/sys v0.0.0-20220310020820-b874c991c1a5
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.1.8
@@ -81,6 +79,7 @@ require (
 	github.com/ProtonMail/go-crypto v0.0.0-20211112122917-428f8eabeeb3 // indirect
 	github.com/acomagu/bufpipe v1.0.3 // indirect
 	github.com/alexkohler/prealloc v1.0.0 // indirect
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/ashanbrown/forbidigo v1.2.0 // indirect
 	github.com/ashanbrown/makezero v0.0.0-20210520155254-b6261585ddde // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.0.0 // indirect
@@ -116,6 +115,7 @@ require (
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/fzipp/gocyclo v0.3.1 // indirect
+	github.com/gliderlabs/ssh v0.3.3 // indirect
 	github.com/go-critic/go-critic v0.6.1 // indirect
 	github.com/go-git/gcfg v1.5.0 // indirect
 	github.com/go-git/go-billy/v5 v5.3.1 // indirect
@@ -238,7 +238,8 @@ require (
 	github.com/timakin/bodyclose v0.0.0-20210704033933-f49887972144 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.4.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.4.0 // indirect
-	github.com/u-root/uio v0.0.0-20210528114334-82958018845c // indirect
+	github.com/u-root/uio v0.0.0-20210528151154-e40b768296a7 // indirect
+	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/ultraware/funlen v0.0.3 // indirect
 	github.com/ultraware/whitespace v0.0.4 // indirect
 	github.com/uudashr/gocognit v1.0.5 // indirect
