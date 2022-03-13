@@ -244,19 +244,14 @@ ProcessAction:
 		return
 	}
 
-	var ctx context.Context = context.Background()
-	if action.SesssionDuration != 0 {
-		sctx := newSSHContext()
-		ctx = sctx
-		t := time.AfterFunc(action.SesssionDuration, func() {
-			sctx.CloseWithError(userVisibleError{
-				fmt.Sprintf("Session timeout of %v elapsed.", action.SesssionDuration),
-				context.DeadlineExceeded,
-			})
-		})
-		defer t.Stop()
-	}
-	srv.handleAcceptedSSH(ctx, s, ci, lu)
+	srv.handleAcceptedSSH(&sshSession{
+		id:        s.Context().(ssh.Context).SessionID(),
+		connInfo:  ci,
+		action:    *action,
+		localUser: lu,
+		logf:      srv.logf,
+		Session:   s,
+	})
 }
 
 func (srv *server) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHAction, error) {
@@ -290,21 +285,28 @@ func (srv *server) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSH
 	}
 }
 
-func (srv *server) handleSessionTermination(ctx context.Context, s ssh.Session, ci *sshConnInfo, cmd *exec.Cmd, exitOnce *sync.Once) {
-	<-ctx.Done()
-	// Either the process has already existed, in which case this does nothing.
-	// Or, the process is still running in which case this will kill it.
-	exitOnce.Do(func() {
-		err := ctx.Err()
-		if serr, ok := err.(SSHTerminationError); ok {
-			msg := serr.SSHTerminationMessage()
-			if msg != "" {
-				io.WriteString(s.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
-			}
-		}
-		srv.logf("terminating SSH session from %v: %v", ci.src.IP(), err)
-		cmd.Process.Kill()
-	})
+// handleAcceptedSSH handles s once it's been accepted and determined
+// that it should run as local system user lu.
+//
+// When ctx is done, the session is forcefully terminated. If its Err
+// is an SSHTerminationError, its SSHTerminationMessage is sent to the
+// user.
+func (srv *server) handleAcceptedSSH(ss *sshSession) {
+	srv.startSession(ss)
+	defer srv.endSession(ss)
+	ctx := context.Background()
+	if ss.action.SesssionDuration != 0 {
+		sctx := newSSHContext()
+		ctx = sctx
+		t := time.AfterFunc(ss.action.SesssionDuration, func() {
+			sctx.CloseWithError(userVisibleError{
+				fmt.Sprintf("Session timeout of %v elapsed.", ss.action.SesssionDuration),
+				context.DeadlineExceeded,
+			})
+		})
+		defer t.Stop()
+	}
+	ss.run(ctx)
 }
 
 // isActiveSession reports whether the ssh.Context corresponds
@@ -316,63 +318,86 @@ func (srv *server) isActiveSession(sctx ssh.Context) bool {
 }
 
 // startSession registers s as an active session.
-func (srv *server) startSession(s ssh.Session) {
+func (srv *server) startSession(ss *sshSession) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if srv.activeSessions == nil {
 		srv.activeSessions = make(map[string]bool)
 	}
-	srv.activeSessions[s.Context().(ssh.Context).SessionID()] = true
+	srv.activeSessions[ss.id] = true
 }
 
 // endSession unregisters s from the list of active sessions.
-func (srv *server) endSession(s ssh.Session) {
+func (srv *server) endSession(ss *sshSession) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	delete(srv.activeSessions, s.Context().(ssh.Context).SessionID())
+	delete(srv.activeSessions, ss.id)
 }
 
-// handleAcceptedSSH handles s once it's been accepted and determined
-// that it should run as local system user lu.
-//
-// When ctx is done, the session is forcefully terminated. If its Err
-// is an SSHTerminationError, its SSHTerminationMessage is sent to the
-// user.
-func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *sshConnInfo, lu *user.User) {
-	srv.startSession(s)
-	defer srv.endSession(s)
-	logf := srv.logf
+type sshSession struct {
+	ssh.Session
+	id        string
+	connInfo  *sshConnInfo
+	action    tailcfg.SSHAction
+	localUser *user.User
+	logf      logger.Logf
+
+	// tailscaledPath is used to launch "tailscaled be-child ssh" subcommand.
+	tailscaledPath string
+
+	// exitOnce is used to ensure that we only terminate the process once,
+	// either it exits itself or is terminated.
+	exitOnce sync.Once
+}
+
+func (ss *sshSession) terminate(ctx context.Context, cmd *exec.Cmd) {
+	<-ctx.Done()
+	// Either the process has already existed, in which case this does nothing.
+	// Or, the process is still running in which case this will kill it.
+	ss.exitOnce.Do(func() {
+		err := ctx.Err()
+		if serr, ok := err.(SSHTerminationError); ok {
+			msg := serr.SSHTerminationMessage()
+			if msg != "" {
+				io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
+			}
+		}
+		ss.logf("terminating SSH session from %v: %v", ss.connInfo.src.IP(), err)
+		cmd.Process.Kill()
+	})
+}
+
+func (ss *sshSession) run(ctx context.Context) {
+	lu := ss.localUser
+	logf := ss.logf
 	localUser := lu.Username
 
 	if euid := os.Geteuid(); euid != 0 {
 		if lu.Uid != fmt.Sprint(euid) {
 			logf("ssh: can't switch to user %q from process euid %v", localUser, euid)
-			fmt.Fprintf(s, "can't switch user\n")
-			s.Exit(1)
+			fmt.Fprintf(ss, "can't switch user\n")
+			ss.Exit(1)
 			return
 		}
 	}
 
 	// Take control of the PTY so that we can configure it below.
 	// See https://github.com/tailscale/tailscale/issues/4146
-	s.DisablePTYEmulation()
+	ss.DisablePTYEmulation()
 
-	cmd, stdin, stdout, stderr, err := srv.launchProcess(ctx, s, ci, lu)
+	cmd, stdin, stdout, stderr, err := ss.launchProcess(ctx)
 	if err != nil {
 		logf("start failed: %v", err.Error())
-		s.Exit(1)
+		ss.Exit(1)
 		return
 	}
-	// We use this sync.Once to ensure that we only terminate the process once,
-	// either it exits itself or is terminated
-	var exitOnce sync.Once
 	if ctx.Done() != nil {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		go srv.handleSessionTermination(ctx, s, ci, cmd, &exitOnce)
+		go ss.terminate(ctx, cmd)
 	}
 	go func() {
-		_, err := io.Copy(stdin, s)
+		_, err := io.Copy(stdin, ss)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("ssh: stdin copy: %v", err)
@@ -380,7 +405,7 @@ func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *ssh
 		stdin.Close()
 	}()
 	go func() {
-		_, err := io.Copy(s, stdout)
+		_, err := io.Copy(ss, stdout)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("ssh: stdout copy: %v", err)
@@ -389,7 +414,7 @@ func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *ssh
 	// stderr is nil for ptys.
 	if stderr != nil {
 		go func() {
-			_, err := io.Copy(s.Stderr(), stderr)
+			_, err := io.Copy(ss.Stderr(), stderr)
 			if err != nil {
 				// TODO: don't log in the success case.
 				logf("ssh: stderr copy: %v", err)
@@ -400,22 +425,22 @@ func (srv *server) handleAcceptedSSH(ctx context.Context, s ssh.Session, ci *ssh
 	// This will either make the SSH Termination goroutine be a no-op,
 	// or itself will be a no-op because the process was killed by the
 	// aforementioned goroutine.
-	exitOnce.Do(func() {})
+	ss.exitOnce.Do(func() {})
 
 	if err == nil {
 		logf("ssh: Wait: ok")
-		s.Exit(0)
+		ss.Exit(0)
 		return
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
 		code := ee.ProcessState.ExitCode()
 		logf("ssh: Wait: code=%v", code)
-		s.Exit(code)
+		ss.Exit(code)
 		return
 	}
 
 	logf("ssh: Wait: %v", err)
-	s.Exit(1)
+	ss.Exit(1)
 	return
 }
 

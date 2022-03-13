@@ -52,37 +52,6 @@ var maybeStartLoginSession = func(logf logger.Logf, uid uint32, localUser, remot
 	return nil, nil
 }
 
-// newIncubatorCommand returns a new exec.Cmd configured with
-// `tailscaled be-child ssh` as the entrypoint.
-// If tailscaled is empty, the desired cmd is executed directly.
-func newIncubatorCommand(ctx context.Context, ci *sshConnInfo, lu *user.User, tailscaled, name string, args []string) *exec.Cmd {
-	if tailscaled == "" {
-		return exec.CommandContext(ctx, name, args...)
-	}
-	remoteUser := ci.uprof.LoginName
-	if len(ci.node.Tags) > 0 {
-		remoteUser = strings.Join(ci.node.Tags, ",")
-	}
-
-	incubatorArgs := []string{
-		"be-child",
-		"ssh",
-		"--uid=" + lu.Uid,
-		"--local-user=" + lu.Username,
-		"--remote-user=" + remoteUser,
-		"--remote-ip=" + ci.src.IP().String(),
-		"--cmd=" + name,
-		"--has-tty=false", // updated in-place by startWithPTY
-		"--tty-name=",     // updated in-place by startWithPTY
-	}
-	if len(args) > 0 {
-		incubatorArgs = append(incubatorArgs, "--")
-		incubatorArgs = append(incubatorArgs, args...)
-	}
-
-	return exec.CommandContext(ctx, tailscaled, incubatorArgs...)
-}
-
 const debugIncubator = false
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
@@ -155,34 +124,66 @@ func beIncubator(args []string) error {
 	return cmd.Run()
 }
 
+// newIncubatorCommand returns a new exec.Cmd configured with
+// `tailscaled be-child ssh` as the entrypoint.
+// If tailscaled is empty, the desired cmd is executed directly.
+func (ss *sshSession) newIncubatorCommand(ctx context.Context, name string, args []string) *exec.Cmd {
+	if ss.tailscaledPath == "" {
+		return exec.CommandContext(ctx, name, args...)
+	}
+	remoteUser := ss.connInfo.uprof.LoginName
+	if len(ss.connInfo.node.Tags) > 0 {
+		remoteUser = strings.Join(ss.connInfo.node.Tags, ",")
+	}
+
+	incubatorArgs := []string{
+		"be-child",
+		"ssh",
+		"--uid=" + ss.localUser.Uid,
+		"--local-user=" + ss.localUser.Username,
+		"--remote-user=" + remoteUser,
+		"--remote-ip=" + ss.connInfo.src.IP().String(),
+		"--cmd=" + name,
+		"--has-tty=false", // updated in-place by startWithPTY
+		"--tty-name=",     // updated in-place by startWithPTY
+	}
+	if len(args) > 0 {
+		incubatorArgs = append(incubatorArgs, "--")
+		incubatorArgs = append(incubatorArgs, args...)
+	}
+
+	return exec.CommandContext(ctx, ss.tailscaledPath, incubatorArgs...)
+}
+
 // launchProcess launches an incubator process for the provided session.
 // It is responsible for configuring the process execution environment.
 // The caller can wait for the process to exit by calling cmd.Wait().
-func (srv *server) launchProcess(ctx context.Context, s ssh.Session, ci *sshConnInfo, lu *user.User) (cmd *exec.Cmd, stdin io.WriteCloser, stdout, stderr io.Reader, err error) {
-	shell := loginShell(lu.Uid)
+func (ss *sshSession) launchProcess(ctx context.Context) (cmd *exec.Cmd, stdin io.WriteCloser, stdout, stderr io.Reader, err error) {
+	shell := loginShell(ss.localUser.Uid)
+	ci := ss.connInfo
 	var args []string
-	if rawCmd := s.RawCommand(); rawCmd != "" {
+	if rawCmd := ss.RawCommand(); rawCmd != "" {
 		args = append(args, "-c", rawCmd)
 	} else {
 		args = append(args, "-l") // login shell
 	}
-	ptyReq, winCh, isPty := s.Pty()
+	ptyReq, winCh, isPty := ss.Pty()
 
-	cmd = newIncubatorCommand(ctx, ci, lu, srv.tailscaledPath, shell, args)
-	cmd.Dir = lu.HomeDir
-	cmd.Env = append(cmd.Env, envForUser(lu)...)
-	cmd.Env = append(cmd.Env, s.Environ()...)
+	cmd = ss.newIncubatorCommand(ctx, shell, args)
+	cmd.Dir = ss.localUser.HomeDir
+	cmd.Env = append(cmd.Env, envForUser(ss.localUser)...)
+	cmd.Env = append(cmd.Env, ss.Environ()...)
 	cmd.Env = append(cmd.Env,
 		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.IP(), ci.src.Port(), ci.dst.Port()),
 		fmt.Sprintf("SSH_CONNECTION=%s %d %s %d", ci.src.IP(), ci.src.Port(), ci.dst.IP(), ci.dst.Port()),
 	)
-	srv.logf("ssh: starting: %+v", cmd.Args)
+	ss.logf("ssh: starting: %+v", cmd.Args)
 
 	if !isPty {
 		stdin, stdout, stderr, err = startWithStdPipes(cmd)
 		return
 	}
-	pty, err := srv.startWithPTY(cmd, ptyReq)
+	pty, err := ss.startWithPTY(cmd, ptyReq)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -263,7 +264,7 @@ var opcodeShortName = map[uint8]string{
 }
 
 // startWithPTY starts cmd with a psuedo-terminal attached to Stdin, Stdout and Stderr.
-func (srv *server) startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File, err error) {
+func (ss *sshSession) startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File, err error) {
 	var tty *os.File
 	ptyFile, tty, err = pty.Open()
 	if err != nil {
@@ -305,7 +306,7 @@ func (srv *server) startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File
 			}
 			k, ok := opcodeShortName[c]
 			if !ok {
-				srv.logf("unknown opcode: %d", c)
+				ss.logf("unknown opcode: %d", c)
 				continue
 			}
 			if _, ok := tios.CC[k]; ok {
@@ -316,7 +317,7 @@ func (srv *server) startWithPTY(cmd *exec.Cmd, ptyReq ssh.Pty) (ptyFile *os.File
 				tios.Opts[k] = v > 0
 				continue
 			}
-			srv.logf("unsupported opcode: %v(%d)=%v", k, c, v)
+			ss.logf("unsupported opcode: %v(%d)=%v", k, c, v)
 		}
 
 		// Save PTY settings.
