@@ -15,12 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -432,11 +434,16 @@ func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) err
 	return nil
 }
 
+// recordSSH is a temporary dev knob to test the SSH recording
+// functionality and support off-node streaming.
+//
+// TODO(bradfitz,maisem): move this to SSHPolicy.
+var recordSSH = envknob.Bool("TS_DEBUG_LOG_SSH")
+
 // run is the entrypoint for a newly accepted SSH session.
 //
-// When ctx is done, the session is forcefully terminated. If its Err
-// is an SSHTerminationError, its SSHTerminationMessage is sent to the
-// user.
+// It handles ss once it's been accepted and determined
+// that it should run.
 func (ss *sshSession) run() {
 	srv := ss.srv
 	srv.startSession(ss)
@@ -477,6 +484,20 @@ func (ss *sshSession) run() {
 		// TODO(maisem/bradfitz): add a way to close all session resources
 		defer ss.agentListener.Close()
 	}
+
+	var rec *recording // or nil if disabled
+	if ss.shouldRecord() {
+		var err error
+		rec, err = ss.startNewRecording()
+		if err != nil {
+			fmt.Fprintf(ss, "can't start new recording\n")
+			logf("startNewRecording: %v", err)
+			ss.Exit(1)
+			return
+		}
+		defer rec.Close()
+	}
+
 	err := ss.launchProcess(ss.ctx)
 	if err != nil {
 		logf("start failed: %v", err.Error())
@@ -486,7 +507,7 @@ func (ss *sshSession) run() {
 	go ss.killProcessOnContextDone()
 
 	go func() {
-		_, err := io.Copy(ss.stdin, ss)
+		_, err := io.Copy(rec.writer("i", ss.stdin), ss)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("ssh: stdin copy: %v", err)
@@ -494,7 +515,7 @@ func (ss *sshSession) run() {
 		ss.stdin.Close()
 	}()
 	go func() {
-		_, err := io.Copy(ss, ss.stdout)
+		_, err := io.Copy(rec.writer("o", ss), ss.stdout)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("ssh: stdout copy: %v", err)
@@ -531,6 +552,14 @@ func (ss *sshSession) run() {
 	logf("ssh: Wait: %v", err)
 	ss.Exit(1)
 	return
+}
+
+func (ss *sshSession) shouldRecord() bool {
+	// for now only record pty sessions
+	// TODO(bradfitz,maisem): make configurable on SSHPolicy and
+	// support recording non-pty stuff too.
+	_, _, isPtyReq := ss.Pty()
+	return recordSSH && isPtyReq
 }
 
 type sshConnInfo struct {
@@ -630,4 +659,163 @@ func randBytes(n int) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// startNewRecording starts a new SSH session recording.
+//
+// It writes an asciinema file to
+// $TAILSCALE_VAR_ROOT/ssh-sessions/ssh-session-<unixtime>-*.cast.
+func (ss *sshSession) startNewRecording() (*recording, error) {
+	var w ssh.Window
+	if ptyReq, _, isPtyReq := ss.Pty(); isPtyReq {
+		w = ptyReq.Window
+	}
+
+	term := envValFromList(ss.Environ(), "TERM")
+	if term == "" {
+		term = "xterm-256color" // something non-empty
+	}
+
+	now := time.Now()
+	rec := &recording{
+		ss:    ss,
+		start: now,
+	}
+	varRoot := ss.srv.lb.TailscaleVarRoot()
+	if varRoot == "" {
+		return nil, errors.New("no var root for recording storage")
+	}
+	dir := filepath.Join(varRoot, "ssh-sessions")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	f, err := ioutil.TempFile(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
+	if err != nil {
+		return nil, err
+	}
+	rec.out = f
+
+	// {"version": 2, "width": 221, "height": 84, "timestamp": 1647146075, "env": {"SHELL": "/bin/bash", "TERM": "screen"}}
+	type CastHeader struct {
+		Version   int               `json:"version"`
+		Width     int               `json:"width"`
+		Height    int               `json:"height"`
+		Timestamp int64             `json:"timestamp"`
+		Env       map[string]string `json:"env"`
+	}
+	j, err := json.Marshal(CastHeader{
+		Version:   2,
+		Width:     w.Width,
+		Height:    w.Height,
+		Timestamp: now.Unix(),
+		Env: map[string]string{
+			"TERM": term,
+			// TODO(bradiftz): anything else important?
+			// including all seems noisey, but maybe we should
+			// for auditing. But first need to break
+			// launchProcess's startWithStdPipes and
+			// startWithPTY up so that they first return the cmd
+			// without starting it, and then a step that starts
+			// it. Then we can (1) make the cmd, (2) start the
+			// recording, (3) start the process.
+		},
+	})
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	ss.logf("starting asciinema recording to %s", f.Name())
+	j = append(j, '\n')
+	if _, err := f.Write(j); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return rec, nil
+}
+
+// recording is the state for an SSH session recording.
+type recording struct {
+	ss    *sshSession
+	start time.Time
+
+	mu  sync.Mutex // guards writes to, close of out
+	out *os.File   // nil if closed
+}
+
+func (r *recording) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.out == nil {
+		return nil
+	}
+	err := r.out.Close()
+	r.out = nil
+	return err
+}
+
+// writer returns an io.Writer around w that first records the write.
+//
+// The dir should be "i" for input or "o" for output.
+//
+// If r is nil, it returns w unchanged.
+func (r *recording) writer(dir string, w io.Writer) io.Writer {
+	if r == nil {
+		return w
+	}
+	return &loggingWriter{r, dir, w}
+}
+
+// loggingWriter is an io.Writer wrapper that writes first an
+// asciinema JSON cast format recording line, and then writes to w.
+type loggingWriter struct {
+	r   *recording
+	dir string    // "i" or "o" (input or output)
+	w   io.Writer // underlying Writer, after writing to r.out
+}
+
+func (w loggingWriter) Write(p []byte) (n int, err error) {
+	j, err := json.Marshal([]interface{}{
+		time.Since(w.r.start).Seconds(),
+		w.dir,
+		string(p),
+	})
+	if err != nil {
+		return 0, err
+	}
+	j = append(j, '\n')
+	if err := w.writeCastLine(j); err != nil {
+		return 0, nil
+	}
+	return w.w.Write(p)
+}
+
+func (w loggingWriter) writeCastLine(j []byte) error {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	if w.r.out == nil {
+		return errors.New("logger closed")
+	}
+	_, err := w.r.out.Write(j)
+	if err != nil {
+		return fmt.Errorf("logger Write: %w", err)
+	}
+	return nil
+}
+
+func envValFromList(env []string, wantKey string) (v string) {
+	for _, kv := range env {
+		if thisKey, v, ok := strings.Cut(kv, "="); ok && envEq(thisKey, wantKey) {
+			return v
+		}
+	}
+	return ""
+}
+
+// envEq reports whether environment variable a == b for the current
+// operating system.
+func envEq(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
