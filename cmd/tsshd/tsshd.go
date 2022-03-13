@@ -31,7 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
-	"github.com/gliderlabs/ssh"
+	"github.com/tailscale/ssh"
 	gossh "golang.org/x/crypto/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"

@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gliderlabs/ssh"
+	"github.com/tailscale/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"

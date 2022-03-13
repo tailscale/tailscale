@@ -27,7 +27,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
-	"github.com/gliderlabs/ssh"
+	"github.com/tailscale/ssh"
 	"github.com/u-root/u-root/pkg/termios"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
