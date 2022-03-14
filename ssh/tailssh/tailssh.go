@@ -71,7 +71,7 @@ func (srv *server) newSSHServer() (*ssh.Server, error) {
 			"direct-tcpip": ssh.DirectTCPIPHandler,
 		},
 		Version:                     "SSH-2.0-Tailscale",
-		LocalPortForwardingCallback: srv.portForward,
+		LocalPortForwardingCallback: srv.mayForwardLocalPortTo,
 	}
 	for k, v := range ssh.DefaultRequestHandlers {
 		ss.RequestHandlers[k] = v
@@ -105,11 +105,15 @@ type server struct {
 
 var debugPolicyFile = envknob.String("TS_DEBUG_SSH_POLICY_FILE")
 
-// portForward reports whether the ctx should be allowed to port forward
+// mayForwardLocalPortTo reports whether the ctx should be allowed to port forward
 // to the specified host and port.
 // TODO(bradfitz/maisem): should we have more checks on host/port?
-func (srv *server) portForward(ctx ssh.Context, destinationHost string, destinationPort uint32) bool {
-	return srv.isActiveSession(ctx)
+func (srv *server) mayForwardLocalPortTo(ctx ssh.Context, destinationHost string, destinationPort uint32) bool {
+	ss, ok := srv.getSessionForContext(ctx)
+	if !ok {
+		return false
+	}
+	return ss.action.AllowLocalPortForwarding
 }
 
 // sshPolicy returns the SSHPolicy for current node.
@@ -343,13 +347,12 @@ func (ss *sshSession) killProcessOnContextDone() {
 	})
 }
 
-// isActiveSession reports whether the ssh.Context corresponds
-// to an active session.
-func (srv *server) isActiveSession(sctx ssh.Context) bool {
+// sessionAction returns the SSHAction associated with the session.
+func (srv *server) getSessionForContext(sctx ssh.Context) (ss *sshSession, ok bool) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	_, ok := srv.activeSessionByH[sctx.SessionID()]
-	return ok
+	ss, ok = srv.activeSessionByH[sctx.SessionID()]
+	return
 }
 
 // startSession registers ss as an active session.
