@@ -1624,6 +1624,10 @@ type SSHAction struct {
 	// response, it should be re-fetched as long as the SSH
 	// session is open.
 	HoldAndDelegate string `json:"holdAndDelegate,omitempty"`
+
+	// AllowLocalPortForwarding, if true, allows accepted connections
+	// to use local port forwarding if requested.
+	AllowLocalPortForwarding bool `json:"allowLocalPortForwarding,omitempty"`
 }
 
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
