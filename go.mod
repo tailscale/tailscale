@@ -264,3 +264,5 @@ require (
 	mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca // indirect
 	software.sslmate.com/src/go-pkcs12 v0.0.0-20210415151418-c5206de65a78 // indirect
 )
+
+replace github.com/go-ole/go-ole => github.com/dblohm7/go-ole v1.2.7-0.20220314213339-59aeb1072cbe
