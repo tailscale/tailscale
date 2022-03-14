@@ -186,6 +186,10 @@ func (ss *sshSession) launchProcess(ctx context.Context) error {
 
 	ss.cmd = cmd
 
+	if ss.agentListener != nil {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
+	}
+
 	ptyReq, winCh, isPty := ss.Pty()
 	if !isPty {
 		ss.logf("starting non-pty command: %+v", cmd.Args)
