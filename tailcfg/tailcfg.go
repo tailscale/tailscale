@@ -1615,6 +1615,10 @@ type SSHAction struct {
 	// before being forcefully terminated.
 	SesssionDuration time.Duration `json:"sessionDuration,omitempty"`
 
+	// AllowAgentForwarding, if true, allows accepted connections to forward
+	// the ssh agent if requested.
+	AllowAgentForwarding bool `json:"allowAgentForwarding,omitempty"`
+
 	// HoldAndDelegate, if non-empty, is a URL that serves an
 	// outcome verdict.  The connection will be accepted and will
 	// block until the provided long-polling URL serves a new

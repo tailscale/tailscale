@@ -20,6 +20,8 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -257,11 +259,12 @@ type sshSession struct {
 	sharedID string // ID that's shared with control
 	logf     logger.Logf
 
-	ctx       *sshContext // implements context.Context
-	srv       *server
-	connInfo  *sshConnInfo
-	action    *tailcfg.SSHAction
-	localUser *user.User
+	ctx           *sshContext // implements context.Context
+	srv           *server
+	connInfo      *sshConnInfo
+	action        *tailcfg.SSHAction
+	localUser     *user.User
+	agentListener net.Listener // non-nil if agent-forwarding requested+allowed
 
 	// initialized by launchProcess:
 	cmd    *exec.Cmd
@@ -385,6 +388,47 @@ func (srv *server) endSession(ss *sshSession) {
 
 var errSessionDone = errors.New("session is done")
 
+// handleSSHAgentForwarding starts a Unix socket listener and in the background
+// forwards agent connections between the listenr and the ssh.Session.
+// On success, it assigns ss.agentListener.
+func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) error {
+	if !ssh.AgentRequested(ss) || !ss.action.AllowAgentForwarding {
+		return nil
+	}
+	ss.logf("ssh: agent forwarding requested")
+	ln, err := ssh.NewAgentListener()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil && ln != nil {
+			ln.Close()
+		}
+	}()
+
+	uid, err := strconv.ParseUint(lu.Uid, 10, 32)
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.ParseUint(lu.Gid, 10, 32)
+	if err != nil {
+		return err
+	}
+	socket := ln.Addr().String()
+	dir := filepath.Dir(socket)
+	// Make sure the socket is accessible by the user.
+	if err := os.Chown(socket, int(uid), int(gid)); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
+		return err
+	}
+
+	go ssh.ForwardAgentConnections(ln, s)
+	ss.agentListener = ln
+	return nil
+}
+
 // run is the entrypoint for a newly accepted SSH session.
 //
 // When ctx is done, the session is forcefully terminated. If its Err
@@ -424,6 +468,12 @@ func (ss *sshSession) run() {
 	// See https://github.com/tailscale/tailscale/issues/4146
 	ss.DisablePTYEmulation()
 
+	if err := ss.handleSSHAgentForwarding(ss, lu); err != nil {
+		logf("ssh: agent forwarding failed: %v", err)
+	} else if ss.agentListener != nil {
+		// TODO(maisem/bradfitz): add a way to close all session resources
+		defer ss.agentListener.Close()
+	}
 	err := ss.launchProcess(ss.ctx)
 	if err != nil {
 		logf("start failed: %v", err.Error())
