@@ -84,6 +84,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		cfg.Buffer = NewMemoryBuffer(pendingSize)
 	}
 	l := &Logger{
+		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
 		stderrLevel:    int64(cfg.StderrLevel),
 		httpc:          cfg.HTTPC,
@@ -133,6 +134,7 @@ type Logger struct {
 	uploadCancel   func()
 	explainedRaw   bool
 	metricsDelta   func() string // or nil
+	privateID      PrivateID
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closed when shutdown complete
@@ -152,6 +154,11 @@ func (l *Logger) SetVerbosityLevel(level int) {
 func (l *Logger) SetLinkMonitor(lm *monitor.Mon) {
 	l.linkMonitor = lm
 }
+
+// PrivateID returns the logger's private log ID.
+//
+// It exists for internal use only.
+func (l *Logger) PrivateID() PrivateID { return l.privateID }
 
 // Shutdown gracefully shuts down the logger while completing any
 // remaining uploads.
