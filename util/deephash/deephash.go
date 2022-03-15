@@ -328,19 +328,21 @@ func (c *valueCache) get(t reflect.Type) reflect.Value {
 func (h *hasher) hashMap(v reflect.Value) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
-	iter := mapIter(&mh.iter, v)
-	defer mapIter(&mh.iter, reflect.Value{}) // avoid pinning v from mh.iter when we return
+
+	iter := &mh.iter
+	iter.Reset(v)
+	defer iter.Reset(reflect.Value{}) // avoid pinning v from mh.iter when we return
 
 	var sum Sum
 	k := mh.val.get(v.Type().Key())
 	e := mh.val.get(v.Type().Elem())
 	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
 	for iter.Next() {
-		key := iterKey(iter, k)
-		val := iterVal(iter, e)
+		k.SetIterKey(iter)
+		e.SetIterValue(iter)
 		mh.h.reset()
-		mh.h.hashValue(key)
-		mh.h.hashValue(val)
+		mh.h.hashValue(k)
+		mh.h.hashValue(v)
 		sum.xor(mh.h.sum())
 	}
 	h.bw.Write(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
