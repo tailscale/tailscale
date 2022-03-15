@@ -965,8 +965,6 @@ func TestAllocs(t *testing.T) {
 	}{
 		// Name lowercasing, response slice created by dns.NewBuilder,
 		// and closure allocation from go call.
-		// (Closure allocation only happens when using new register ABI,
-		// which is amd64 with Go 1.17, and probably more platforms later.)
 		{"forward", dnspacket("test1.ipn.dev.", dns.TypeA, noEdns), 3},
 		// 3 extra allocs in rdnsNameToIPv4 and one in marshalPTRRecord (dns.NewName).
 		{"reverse", dnspacket("4.3.2.1.in-addr.arpa.", dns.TypePTR, noEdns), 5},
