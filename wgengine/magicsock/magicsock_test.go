@@ -1294,7 +1294,7 @@ func goMajorVersion(s string) (version int, isTS bool) {
 	}
 	mm := s[len("go1."):]
 	var major, rest string
-	for _, sep := range []string{".", "rc", "beta"} {
+	for _, sep := range []string{".", "rc", "beta", "-"} {
 		i := strings.Index(mm, sep)
 		if i > 0 {
 			major, rest = mm[:i], mm[i:]
@@ -1322,6 +1322,7 @@ func TestGoMajorVersion(t *testing.T) {
 		{"go1.16rc1", 16, false},
 		{"go1.15.5-ts3bd89195a3", 15, true},
 		{"go1.15", 15, false},
+		{"go1.18-ts0d07ed810a", 18, true},
 	}
 
 	for _, tt := range tests {
@@ -1329,6 +1330,12 @@ func TestGoMajorVersion(t *testing.T) {
 		if tt.wantN != n || tt.wantTS != ts {
 			t.Errorf("goMajorVersion(%s) = %v, %v, want %v, %v", tt.version, n, ts, tt.wantN, tt.wantTS)
 		}
+	}
+
+	// Ensure that the current Go version is parseable.
+	n, _ := goMajorVersion(runtime.Version())
+	if n == 0 {
+		t.Fatalf("unable to parse %v", runtime.Version())
 	}
 }
 
