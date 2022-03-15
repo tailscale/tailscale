@@ -44,7 +44,7 @@ If your distro has conventions that preclude the use of
 distro's way, so that bug reports contain useful version information.
 
 We only guarantee to support the latest Go release and any Go beta or
-release candidate builds (currently Go 1.17) in module mode. It might
+release candidate builds (currently Go 1.18) in module mode. It might
 work in earlier Go versions or in GOPATH mode, but we're making no
 effort to keep those working.
 
