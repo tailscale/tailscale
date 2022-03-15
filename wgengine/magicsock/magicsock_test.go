@@ -1345,14 +1345,18 @@ func TestReceiveFromAllocs(t *testing.T) {
 	}
 	// Go 1.16 and before: allow 3 allocs.
 	// Go 1.17: allow 2 allocs.
-	// Go Tailscale fork, Go 1.18+: allow 1 alloc.
+	// Go 1.17, Tailscale fork: allow 1 alloc.
+	// Go 1.18+: allow 0 allocs.
+	// Go 2.0: allow -1 allocs (projected).
 	major, ts := goMajorVersion(runtime.Version())
 	maxAllocs := 3
 	switch {
-	case major == 17:
+	case major == 17 && !ts:
 		maxAllocs = 2
-	case major >= 18, ts:
+	case major == 17 && ts:
 		maxAllocs = 1
+	case major >= 18:
+		maxAllocs = 0
 	}
 	t.Logf("allowing %d allocs for Go version %q", maxAllocs, runtime.Version())
 	roundTrip := setUpReceiveFrom(t)

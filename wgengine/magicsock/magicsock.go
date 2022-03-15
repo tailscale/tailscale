@@ -17,6 +17,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"sort"
@@ -53,6 +54,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/netconv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -3025,35 +3027,30 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort,
 		pconn := c.currentConn()
 
 		// Optimization: Treat *net.UDPConn specially.
-		// ReadFromUDP gets partially inlined, avoiding allocating a *net.UDPAddr,
-		// as long as pAddr itself doesn't escape.
+		// This lets us avoid allocations by calling ReadFromUDPAddrPort.
 		// The non-*net.UDPConn case works, but it allocates.
-		var pAddr *net.UDPAddr
 		if udpConn, ok := pconn.(*net.UDPConn); ok {
-			n, pAddr, err = udpConn.ReadFromUDP(b)
+			var ap netip.AddrPort
+			n, ap, err = udpConn.ReadFromUDPAddrPort(b)
+			ipp = netconv.AsIPPort(ap)
 		} else {
 			var addr net.Addr
 			n, addr, err = pconn.ReadFrom(b)
-			if addr != nil {
-				pAddr, ok = addr.(*net.UDPAddr)
+			pAddr, ok := addr.(*net.UDPAddr)
+			if addr != nil && !ok {
+				return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+			}
+			if pAddr != nil {
+				ipp, ok = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
 				if !ok {
-					return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+					return 0, netaddr.IPPort{}, errors.New("netaddr.FromStdAddr failed")
 				}
 			}
 		}
 
-		if err != nil {
-			if pconn != c.currentConn() {
-				continue
-			}
-		} else {
-			// Convert pAddr to a netaddr.IPPort.
-			// This prevents pAddr from escaping.
-			var ok bool
-			ipp, ok = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
-			if !ok {
-				return 0, netaddr.IPPort{}, errors.New("netaddr.FromStdAddr failed")
-			}
+		if err != nil && pconn != c.currentConn() {
+			// The connection changed underfoot. Try again.
+			continue
 		}
 		return n, ipp, err
 	}
