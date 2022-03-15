@@ -1179,7 +1179,7 @@ func loadExtraEnv() (env []string, err error) {
 		if line == "" || line[0] == '#' {
 			continue
 		}
-		k, v, ok := stringsCut(line, "=")
+		k, v, ok := strings.Cut(line, "=")
 		if !ok || k == "" {
 			continue
 		}
@@ -1195,13 +1195,4 @@ func loadExtraEnv() (env []string, err error) {
 		}
 	}
 	return env, nil
-}
-
-// stringsCut is Go 1.18's strings.Cut.
-// TODO(bradfitz): delete this when we depend on Go 1.18.
-func stringsCut(s, sep string) (before, after string, found bool) {
-	if i := strings.Index(s, sep); i >= 0 {
-		return s[:i], s[i+len(sep):], true
-	}
-	return s, "", false
 }
