@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build windows && cgo && tailscale_go
-// +build windows,cgo,tailscale_go
+//go:build windows && cgo
+// +build windows,cgo
 
 package controlclient
 
