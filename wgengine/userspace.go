@@ -118,14 +118,13 @@ type userspaceEngine struct {
 	lastEngineSigFull   deephash.Sum // of full wireguard config
 	lastEngineSigTrim   deephash.Sum // of trimmed wireguard config
 	lastDNSConfig       *dns.Config
+	lastIsSubnetRouter  bool // was the node a primary subnet router in the last run.
 	recvActivityAt      map[key.NodePublic]mono.Time
 	trimmedNodes        map[key.NodePublic]bool   // set of node keys of peers currently excluded from wireguard config
 	sentActivityAt      map[netaddr.IP]*mono.Time // value is accessed atomically
 	destIPActivityFuncs map[netaddr.IP]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 	lastStatusPollTime  mono.Time     // last time we polled the engine status
-
-	lastIsSubnetRouter bool // was the node a primary subnet router in the last run.
 
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
@@ -854,6 +853,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		e.peerSequence = append(e.peerSequence, p.PublicKey)
 		peerSet[p.PublicKey] = struct{}{}
 	}
+	nm := e.netMap
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
@@ -862,8 +862,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	isSubnetRouter := false
-	if e.birdClient != nil {
-		isSubnetRouter = hasOverlap(e.netMap.SelfNode.PrimaryRoutes, e.netMap.Hostinfo.RoutableIPs)
+	if e.birdClient != nil && nm != nil && nm.SelfNode != nil {
+		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes, nm.Hostinfo.RoutableIPs)
 	}
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
 
