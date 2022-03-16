@@ -78,8 +78,8 @@ type NetworkMap struct {
 // It will neither start nor end with a period.
 func (nm *NetworkMap) MagicDNSSuffix() string {
 	name := strings.Trim(nm.Name, ".")
-	if i := strings.Index(name, "."); i != -1 {
-		name = name[i+1:]
+	if _, rest, ok := strings.Cut(name, "."); ok {
+		return rest
 	}
 	return name
 }

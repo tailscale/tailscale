@@ -145,19 +145,10 @@ func AcceptsEncoding(r *http.Request, enc string) bool {
 	}
 	remain := h
 	for len(remain) > 0 {
-		comma := strings.Index(remain, ",")
 		var part string
-		if comma == -1 {
-			part = remain
-			remain = ""
-		} else {
-			part = remain[:comma]
-			remain = remain[comma+1:]
-		}
+		part, remain, _ = strings.Cut(remain, ",")
 		part = strings.TrimSpace(part)
-		if i := strings.Index(part, ";"); i != -1 {
-			part = part[:i]
-		}
+		part, _, _ = strings.Cut(part, ";")
 		if part == enc {
 			return true
 		}

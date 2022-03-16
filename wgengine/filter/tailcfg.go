@@ -114,8 +114,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		return []netaddr.IPPrefix{pfx}, nil
 	}
 	if strings.Count(arg, "-") == 1 {
-		i := strings.Index(arg, "-")
-		ip1s, ip2s := arg[:i], arg[i+1:]
+		ip1s, ip2s, _ := strings.Cut(arg, "-")
 		ip1, err := netaddr.ParseIP(ip1s)
 		if err != nil {
 			return nil, err
