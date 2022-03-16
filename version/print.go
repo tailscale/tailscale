@@ -15,7 +15,11 @@ func String() string {
 	ret.WriteString(Short)
 	ret.WriteByte('\n')
 	if GitCommit != "" {
-		fmt.Fprintf(&ret, "  tailscale commit: %s\n", GitCommit)
+		var dirty string
+		if GitDirty {
+			dirty = "-dirty"
+		}
+		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", GitCommit, dirty)
 	}
 	if ExtraGitCommit != "" {
 		fmt.Fprintf(&ret, "  other commit: %s\n", ExtraGitCommit)
