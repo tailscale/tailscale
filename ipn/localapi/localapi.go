@@ -448,12 +448,12 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upath := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
-	slash := strings.Index(upath, "/")
-	if slash == -1 {
+	stableIDStr, filenameEscaped, ok := strings.Cut(upath, "/")
+	if !ok {
 		http.Error(w, "bogus URL", 400)
 		return
 	}
-	stableID, filenameEscaped := tailcfg.StableNodeID(upath[:slash]), upath[slash+1:]
+	stableID := tailcfg.StableNodeID(stableIDStr)
 
 	var ft *apitype.FileTarget
 	for _, x := range fts {

@@ -370,8 +370,8 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	}
 	if strings.HasPrefix(key, "labelmap_") {
 		key = strings.TrimPrefix(key, "labelmap_")
-		if i := strings.Index(key, "_"); i != -1 {
-			label, key = key[:i], key[i+1:]
+		if a, b, ok := strings.Cut(key, "_"); ok {
+			label, key = a, b
 		}
 	}
 	name := prefix + key
@@ -541,9 +541,7 @@ func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metric
 		sf := t.Field(i)
 		name := sf.Name
 		if v := sf.Tag.Get("json"); v != "" {
-			if i := strings.Index(v, ","); i != -1 {
-				v = v[:i]
-			}
+			v, _, _ = strings.Cut(v, ",")
 			if v == "-" {
 				// Skip it, regardless of its metrictype.
 				continue

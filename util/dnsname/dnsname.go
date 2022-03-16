@@ -185,10 +185,8 @@ func NumLabels(hostname string) int {
 
 // FirstLabel returns the first DNS label of hostname.
 func FirstLabel(hostname string) string {
-	if i := strings.IndexByte(hostname, '.'); i != -1 {
-		return hostname[:i]
-	}
-	return hostname
+	first, _, _ := strings.Cut(hostname, ".")
+	return first
 }
 
 var separators = map[byte]bool{

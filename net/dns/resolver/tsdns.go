@@ -976,17 +976,17 @@ const (
 //  lb._dns-sd._udp.<domain>.
 func hasRDNSBonjourPrefix(name dnsname.FQDN) bool {
 	s := name.WithTrailingDot()
-	dot := strings.IndexByte(s, '.')
-	if dot == -1 {
+	base, rest, ok := strings.Cut(s, ".")
+	if !ok {
 		return false // shouldn't happen
 	}
-	switch s[:dot] {
+	switch base {
 	case "b", "db", "r", "dr", "lb":
 	default:
 		return false
 	}
 
-	return strings.HasPrefix(s[dot:], "._dns-sd._udp.")
+	return strings.HasPrefix(rest, "_dns-sd._udp.")
 }
 
 // rawNameToLower converts a raw DNS name to a string, lowercasing it.
