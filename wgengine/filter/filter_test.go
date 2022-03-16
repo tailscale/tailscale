@@ -432,7 +432,7 @@ func TestLoggingPrivacy(t *testing.T) {
 		logged     bool
 		testLogger logger.Logf
 	)
-	logf := func(format string, args ...interface{}) {
+	logf := func(format string, args ...any) {
 		testLogger(format, args...)
 		logged = true
 	}

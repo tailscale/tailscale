@@ -1641,8 +1641,8 @@ func (m multiForwarder) ForwardPacket(src, dst key.NodePublic, payload []byte) e
 	return fwd.ForwardPacket(src, dst, payload)
 }
 
-func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
-	return expvar.Func(func() interface{} {
+func (s *Server) expVarFunc(f func() any) expvar.Func {
+	return expvar.Func(func() any {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return f()
@@ -1652,14 +1652,14 @@ func (s *Server) expVarFunc(f func() interface{}) expvar.Func {
 // ExpVar returns an expvar variable suitable for registering with expvar.Publish.
 func (s *Server) ExpVar() expvar.Var {
 	m := new(metrics.Set)
-	m.Set("gauge_memstats_sys0", expvar.Func(func() interface{} { return int64(s.memSys0) }))
-	m.Set("gauge_watchers", s.expVarFunc(func() interface{} { return len(s.watchers) }))
-	m.Set("gauge_current_file_descriptors", expvar.Func(func() interface{} { return metrics.CurrentFDs() }))
+	m.Set("gauge_memstats_sys0", expvar.Func(func() any { return int64(s.memSys0) }))
+	m.Set("gauge_watchers", s.expVarFunc(func() any { return len(s.watchers) }))
+	m.Set("gauge_current_file_descriptors", expvar.Func(func() any { return metrics.CurrentFDs() }))
 	m.Set("gauge_current_connections", &s.curClients)
 	m.Set("gauge_current_home_connections", &s.curHomeClients)
-	m.Set("gauge_clients_total", expvar.Func(func() interface{} { return len(s.clientsMesh) }))
-	m.Set("gauge_clients_local", expvar.Func(func() interface{} { return len(s.clients) }))
-	m.Set("gauge_clients_remote", expvar.Func(func() interface{} { return len(s.clientsMesh) - len(s.clients) }))
+	m.Set("gauge_clients_total", expvar.Func(func() any { return len(s.clientsMesh) }))
+	m.Set("gauge_clients_local", expvar.Func(func() any { return len(s.clients) }))
+	m.Set("gauge_clients_remote", expvar.Func(func() any { return len(s.clientsMesh) - len(s.clients) }))
 	m.Set("gauge_current_dup_client_keys", &s.dupClientKeys)
 	m.Set("gauge_current_dup_client_conns", &s.dupClientConns)
 	m.Set("counter_total_dup_client_conns", &s.dupClientConnTotal)
@@ -1683,7 +1683,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("multiforwarder_created", &s.multiForwarderCreated)
 	m.Set("multiforwarder_deleted", &s.multiForwarderDeleted)
 	m.Set("packet_forwarder_delete_other_value", &s.removePktForwardOther)
-	m.Set("average_queue_duration_ms", expvar.Func(func() interface{} {
+	m.Set("average_queue_duration_ms", expvar.Func(func() any {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
 	var expvarVersion expvar.String
@@ -1813,7 +1813,7 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 var bufioWriterPool = &sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return bufio.NewWriterSize(ioutil.Discard, 2<<10)
 	},
 }

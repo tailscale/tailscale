@@ -79,7 +79,7 @@ func runCert(ctx context.Context, args []string) error {
 	}
 	domain := args[0]
 
-	printf := func(format string, a ...interface{}) {
+	printf := func(format string, a ...any) {
 		printf(format, a...)
 	}
 	if certArgs.certFile == "-" || certArgs.keyFile == "-" {

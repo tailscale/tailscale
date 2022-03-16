@@ -30,7 +30,7 @@ func (b Bool) Get() (v bool, ok bool) {
 }
 
 // Scan implements database/sql.Scanner.
-func (b *Bool) Scan(src interface{}) error {
+func (b *Bool) Scan(src any) error {
 	if src == nil {
 		*b = ""
 		return nil

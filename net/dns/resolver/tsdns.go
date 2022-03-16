@@ -711,7 +711,7 @@ type response struct {
 }
 
 var dnsParserPool = &sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new(dnsParser)
 	},
 }

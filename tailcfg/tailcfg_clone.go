@@ -326,7 +326,7 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
 // where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode.
-func Clone(dst, src interface{}) bool {
+func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
 		switch dst := dst.(type) {

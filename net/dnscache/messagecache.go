@@ -103,7 +103,7 @@ type msgResource struct {
 var ErrCacheMiss = errors.New("cache miss")
 
 var parserPool = &sync.Pool{
-	New: func() interface{} { return new(dnsmessage.Parser) },
+	New: func() any { return new(dnsmessage.Parser) },
 }
 
 // ReplyFromCache writes a DNS reply to w for the provided DNS query message,

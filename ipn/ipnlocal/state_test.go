@@ -107,7 +107,7 @@ func newMockControl(tb testing.TB) *mockControl {
 	}
 }
 
-func (cc *mockControl) logf(format string, args ...interface{}) {
+func (cc *mockControl) logf(format string, args ...any) {
 	if cc.preventLog.Get() || cc.logfActual == nil {
 		return
 	}

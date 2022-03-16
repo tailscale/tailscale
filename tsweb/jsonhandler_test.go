@@ -71,7 +71,7 @@ func TestNewJSONHandler(t *testing.T) {
 		return d
 	}
 
-	h21 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+	h21 := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 		return http.StatusOK, nil, nil
 	})
 
@@ -83,7 +83,7 @@ func TestNewJSONHandler(t *testing.T) {
 	})
 
 	t.Run("403 HTTPError", func(t *testing.T) {
-		h := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+		h := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 			return 0, nil, Error(http.StatusForbidden, "forbidden", nil)
 		})
 
@@ -93,7 +93,7 @@ func TestNewJSONHandler(t *testing.T) {
 		checkStatus(t, w, "error", http.StatusForbidden)
 	})
 
-	h22 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+	h22 := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 		return http.StatusOK, &Data{Name: "tailscale"}, nil
 	})
 
@@ -104,7 +104,7 @@ func TestNewJSONHandler(t *testing.T) {
 		checkStatus(t, w, "success", http.StatusOK)
 	})
 
-	h31 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+	h31 := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 		body := new(Data)
 		if err := json.NewDecoder(r.Body).Decode(body); err != nil {
 			return 0, nil, Error(http.StatusBadRequest, err.Error(), err)
@@ -140,7 +140,7 @@ func TestNewJSONHandler(t *testing.T) {
 		}
 	})
 
-	h32 := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+	h32 := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 		body := new(Data)
 		if err := json.NewDecoder(r.Body).Decode(body); err != nil {
 			return 0, nil, Error(http.StatusBadRequest, err.Error(), err)
@@ -187,7 +187,7 @@ func TestNewJSONHandler(t *testing.T) {
 		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"Price": 10}`))
 		r.Header.Set("Accept-Encoding", "gzip")
 		value := []string{"foo", "foo", "foo"}
-		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+		JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 			return 400, value, nil
 		}).ServeHTTPReturn(w, r)
 		res := w.Result()
@@ -222,7 +222,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("500 misuse", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", nil)
-		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+		JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 			return http.StatusOK, make(chan int), nil
 		}).ServeHTTPReturn(w, r)
 		resp := checkStatus(t, w, "error", http.StatusInternalServerError)
@@ -234,7 +234,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("500 empty status code", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", nil)
-		JSONHandlerFunc(func(r *http.Request) (status int, data interface{}, err error) {
+		JSONHandlerFunc(func(r *http.Request) (status int, data any, err error) {
 			return
 		}).ServeHTTPReturn(w, r)
 		checkStatus(t, w, "error", http.StatusInternalServerError)
@@ -243,7 +243,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError agree", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", nil)
-		JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+		JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 			return http.StatusForbidden, nil, Error(http.StatusForbidden, "403 forbidden", nil)
 		}).ServeHTTPReturn(w, r)
 		want := &Response{
@@ -260,7 +260,7 @@ func TestNewJSONHandler(t *testing.T) {
 	t.Run("403 forbidden, status returned by JSONHandlerFunc and HTTPError do not agree", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("POST", "/", nil)
-		err := JSONHandlerFunc(func(r *http.Request) (int, interface{}, error) {
+		err := JSONHandlerFunc(func(r *http.Request) (int, any, error) {
 			return http.StatusInternalServerError, nil, Error(http.StatusForbidden, "403 forbidden", nil)
 		}).ServeHTTPReturn(w, r)
 		if !strings.HasPrefix(err.Error(), "[unexpected]") {

@@ -84,7 +84,7 @@ type netfilterRunner interface {
 
 type linuxRouter struct {
 	closed           syncs.AtomicBool
-	logf             func(fmt string, args ...interface{})
+	logf             func(fmt string, args ...any)
 	tunname          string
 	linkMon          *monitor.Mon
 	unregLinkMon     func()

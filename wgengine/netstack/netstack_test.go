@@ -21,7 +21,7 @@ import (
 func TestInjectInboundLeak(t *testing.T) {
 	tunDev := tstun.NewFake()
 	dialer := new(tsdial.Dialer)
-	logf := func(format string, args ...interface{}) {
+	logf := func(format string, args ...any) {
 		if !t.Failed() {
 			t.Logf(format, args...)
 		}

@@ -42,7 +42,7 @@ var (
 
 // IsLoginServerSynonym reports whether a URL is a drop-in replacement
 // for the primary Tailscale login server.
-func IsLoginServerSynonym(val interface{}) bool {
+func IsLoginServerSynonym(val any) bool {
 	return val == "https://login.tailscale.com" || val == "https://controlplane.tailscale.com"
 }
 

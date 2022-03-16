@@ -802,7 +802,7 @@ func TestClientRecv(t *testing.T) {
 	tests := []struct {
 		name  string
 		input []byte
-		want  interface{}
+		want  any
 	}{
 		{
 			name: "ping",

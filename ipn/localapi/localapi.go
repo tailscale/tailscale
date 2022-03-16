@@ -557,7 +557,7 @@ func defBool(a string, def bool) bool {
 // (currently only a slice or a map) and makes sure it's non-nil for
 // JSON serialization. (In particular, JavaScript clients usually want
 // the field to be defined after they decode the JSON.)
-func makeNonNil(ptr interface{}) {
+func makeNonNil(ptr any) {
 	if ptr == nil {
 		panic("nil interface")
 	}

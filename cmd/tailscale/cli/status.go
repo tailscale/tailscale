@@ -136,7 +136,7 @@ func runStatus(ctx context.Context, args []string) error {
 	}
 
 	var buf bytes.Buffer
-	f := func(format string, a ...interface{}) { fmt.Fprintf(&buf, format, a...) }
+	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
 	printPS := func(ps *ipnstate.PeerStatus) {
 		f("%-15s %-20s %-12s %-7s ",
 			firstIPString(ps.TailscaleIPs),

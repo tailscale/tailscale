@@ -945,7 +945,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 // decode JSON decodes the res.Body into v. If serverNoiseKey is not specified,
 // it uses the serverKey and mkey to decode the message from the NaCl-crypto-box.
-func decode(res *http.Response, v interface{}, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
+func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
 	defer res.Body.Close()
 	msg, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
@@ -970,7 +970,7 @@ var jsonEscapedZero = []byte(`\u0000`)
 // decodeMsg is responsible for uncompressing msg and unmarshaling into v.
 // If c.serverNoiseKey is not specified, it uses the c.serverKey and mkey
 // to first the decrypt msg from the NaCl-crypto-box.
-func (c *Direct) decodeMsg(msg []byte, v interface{}, mkey key.MachinePrivate) error {
+func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 	c.mu.Lock()
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
@@ -1016,7 +1016,7 @@ func (c *Direct) decodeMsg(msg []byte, v interface{}, mkey key.MachinePrivate) e
 
 }
 
-func decodeMsg(msg []byte, v interface{}, serverKey key.MachinePublic, machinePrivKey key.MachinePrivate) error {
+func decodeMsg(msg []byte, v any, serverKey key.MachinePublic, machinePrivKey key.MachinePrivate) error {
 	decrypted, ok := machinePrivKey.OpenFrom(serverKey, msg)
 	if !ok {
 		return errors.New("cannot decrypt response")
@@ -1032,7 +1032,7 @@ func decodeMsg(msg []byte, v interface{}, serverKey key.MachinePublic, machinePr
 
 // encode JSON encodes v. If serverNoiseKey is not specified, it uses the serverKey and mkey to
 // seal the message into a NaCl-crypto-box.
-func encode(v interface{}, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) ([]byte, error) {
+func encode(v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -1310,7 +1310,7 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	if nc != nil {
 		return nc, nil
 	}
-	np, err, _ := c.sfGroup.Do("noise", func() (interface{}, error) {
+	np, err, _ := c.sfGroup.Do("noise", func() (any, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
 			return nil, err

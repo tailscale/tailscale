@@ -95,7 +95,7 @@ func (s *Server) dial(ctx context.Context, network, addr string) (net.Conn, erro
 	return dial(ctx, network, addr)
 }
 
-func (s *Server) logf(format string, args ...interface{}) {
+func (s *Server) logf(format string, args ...any) {
 	logf := s.Logf
 	if logf == nil {
 		logf = log.Printf

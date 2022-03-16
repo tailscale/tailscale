@@ -19,16 +19,16 @@ import (
 )
 
 type response struct {
-	Status string      `json:"status"`
-	Error  string      `json:"error,omitempty"`
-	Data   interface{} `json:"data,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	Data   any    `json:"data,omitempty"`
 }
 
 // JSONHandlerFunc is an HTTP ReturnHandler that writes JSON responses to the client.
 //
 // Return a HTTPError to show an error message, otherwise JSONHandlerFunc will
 // only report "internal server error" to the user with status code 500.
-type JSONHandlerFunc func(r *http.Request) (status int, data interface{}, err error)
+type JSONHandlerFunc func(r *http.Request) (status int, data any, err error)
 
 // ServeHTTPReturn implements the ReturnHandler interface.
 //

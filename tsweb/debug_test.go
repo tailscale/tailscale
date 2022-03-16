@@ -66,7 +66,7 @@ func TestDebuggerKV(t *testing.T) {
 	dbg.KV("Donuts", 42)
 	dbg.KV("Secret code", "hunter2")
 	val := "red"
-	dbg.KVFunc("Condition", func() interface{} { return val })
+	dbg.KVFunc("Condition", func() any { return val })
 
 	code, _ := get(mux, "/debug/", pubIP)
 	if code != 403 {
@@ -183,7 +183,7 @@ func ExampleDebugHandler_KVFunc() {
 	// Adds an count of page renders to /debug/. Note this example
 	// isn't concurrency-safe.
 	views := 0
-	dbg.KVFunc("Debug pageviews", func() interface{} {
+	dbg.KVFunc("Debug pageviews", func() any {
 		views = views + 1
 		return views
 	})

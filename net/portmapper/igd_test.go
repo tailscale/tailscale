@@ -67,7 +67,7 @@ func NewTestIGD(logf logger.Logf, t TestIGDOptions) (*TestIGD, error) {
 		doPCP:  t.PCP,
 		doUPnP: t.UPnP,
 	}
-	d.logf = func(msg string, args ...interface{}) {
+	d.logf = func(msg string, args ...any) {
 		// Don't log after the device has closed;
 		// stray trailing logging angers testing.T.Logf.
 		if d.closed.Get() {

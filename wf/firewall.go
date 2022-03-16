@@ -276,7 +276,7 @@ func (f *Firewall) permitNDP(w weight) error {
 	fieldICMPType := wf.FieldIPLocalPort
 	fieldICMPCode := wf.FieldIPRemotePort
 
-	var icmpConditions = func(t, c uint16, remoteAddress interface{}) []*wf.Match {
+	var icmpConditions = func(t, c uint16, remoteAddress any) []*wf.Match {
 		conditions := []*wf.Match{
 			{
 				Field: wf.FieldIPProtocol,
@@ -359,7 +359,7 @@ func (f *Firewall) permitNDP(w weight) error {
 }
 
 func (f *Firewall) permitDHCPv6(w weight) error {
-	var dhcpConditions = func(remoteAddrs ...interface{}) []*wf.Match {
+	var dhcpConditions = func(remoteAddrs ...any) []*wf.Match {
 		conditions := []*wf.Match{
 			{
 				Field: wf.FieldIPProtocol,
@@ -403,7 +403,7 @@ func (f *Firewall) permitDHCPv6(w weight) error {
 }
 
 func (f *Firewall) permitDHCPv4(w weight) error {
-	var dhcpConditions = func(remoteAddrs ...interface{}) []*wf.Match {
+	var dhcpConditions = func(remoteAddrs ...any) []*wf.Match {
 		conditions := []*wf.Match{
 			{
 				Field: wf.FieldIPProtocol,

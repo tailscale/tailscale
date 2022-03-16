@@ -23,7 +23,7 @@ func (e badTypeError) Error() string {
 // It adjusts the length of the slice appropriately and zeros the tail.
 // eq reports whether (*sliceptr)[i] and (*sliceptr)[j] are equal.
 // ModifySlice does O(len(*sliceptr)) operations.
-func ModifySlice(sliceptr interface{}, eq func(i, j int) bool) {
+func ModifySlice(sliceptr any, eq func(i, j int) bool) {
 	rvp := reflect.ValueOf(sliceptr)
 	if rvp.Type().Kind() != reflect.Ptr {
 		panic(badTypeError{rvp.Type()})

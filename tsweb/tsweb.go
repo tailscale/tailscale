@@ -33,10 +33,10 @@ import (
 )
 
 func init() {
-	expvar.Publish("process_start_unix_time", expvar.Func(func() interface{} { return timeStart.Unix() }))
-	expvar.Publish("version", expvar.Func(func() interface{} { return version.Long }))
-	expvar.Publish("counter_uptime_sec", expvar.Func(func() interface{} { return int64(Uptime().Seconds()) }))
-	expvar.Publish("gauge_goroutines", expvar.Func(func() interface{} { return runtime.NumGoroutine() }))
+	expvar.Publish("process_start_unix_time", expvar.Func(func() any { return timeStart.Unix() }))
+	expvar.Publish("version", expvar.Func(func() any { return version.Long }))
+	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
+	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
 
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.
@@ -513,7 +513,7 @@ type PrometheusMetricsReflectRooter interface {
 	expvar.Var
 
 	// PrometheusMetricsReflectRoot returns the struct or struct pointer to walk.
-	PrometheusMetricsReflectRoot() interface{}
+	PrometheusMetricsReflectRoot() any
 }
 
 var expvarDo = expvar.Do // pulled out for tests
@@ -562,10 +562,10 @@ func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metric
 	}
 }
 
-type expVarPromStructRoot struct{ v interface{} }
+type expVarPromStructRoot struct{ v any }
 
-func (r expVarPromStructRoot) PrometheusMetricsReflectRoot() interface{} { return r.v }
-func (r expVarPromStructRoot) String() string                            { panic("unused") }
+func (r expVarPromStructRoot) PrometheusMetricsReflectRoot() any { return r.v }
+func (r expVarPromStructRoot) String() string                    { panic("unused") }
 
 var (
 	_ PrometheusMetricsReflectRooter = expVarPromStructRoot{}

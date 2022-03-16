@@ -25,7 +25,7 @@ func TestCache(t *testing.T) {
 			t.Fatalf("Len = %d; want %d", got, want)
 		}
 	}
-	wantVal := func(key Tuple, want interface{}) {
+	wantVal := func(key Tuple, want any) {
 		t.Helper()
 		got, ok := c.Get(key)
 		if !ok {

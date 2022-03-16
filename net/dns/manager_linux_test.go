@@ -258,7 +258,7 @@ func TestLinuxDNSMode(t *testing.T) {
 	}
 }
 
-type memFS map[string]interface{} // full path => string for regular files
+type memFS map[string]any // full path => string for regular files
 
 func (m memFS) Stat(name string) (isRegular bool, err error) {
 	v, ok := m[name]

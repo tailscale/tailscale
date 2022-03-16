@@ -141,7 +141,7 @@ func (m *resolvedManager) resync(ctx context.Context, signals chan *dbus.Signal)
 			if signal.Path != dbusPath || signal.Name != dbusInterface+"."+dbusOwnerSignal {
 				continue
 			}
-			// signal.Body is a []interface{} of 3 strings: bus name, previous owner, new owner.
+			// signal.Body is a []any of 3 strings: bus name, previous owner, new owner.
 			if len(signal.Body) != 3 {
 				m.logf("[unexpectected] DBus NameOwnerChanged len(Body) = %d, want 3")
 			}

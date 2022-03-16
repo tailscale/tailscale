@@ -46,7 +46,7 @@ func noteEnv(k, v string) {
 // logf is logger.Logf, but logger depends on envknob, so for circular
 // dependency reasons, make a type alias (so it's still assignable,
 // but has nice docs here).
-type logf = func(format string, args ...interface{})
+type logf = func(format string, args ...any)
 
 // LogCurrent logs the currently set environment knobs.
 func LogCurrent(logf logf) {

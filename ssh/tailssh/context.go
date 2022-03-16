@@ -42,7 +42,7 @@ func (ctx *sshContext) Err() error {
 
 func (ctx *sshContext) Done() <-chan struct{}                   { return ctx.done }
 func (ctx *sshContext) Deadline() (deadline time.Time, ok bool) { return }
-func (ctx *sshContext) Value(interface{}) interface{}           { return nil }
+func (ctx *sshContext) Value(any) any                           { return nil }
 
 // userVisibleError is a wrapper around an error that implements
 // SSHTerminationError, so msg is written to their session.

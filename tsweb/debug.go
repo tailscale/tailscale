@@ -52,7 +52,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	// index page. The /pprof/ index already covers it.
 	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
 
-	ret.KVFunc("Uptime", func() interface{} { return Uptime() })
+	ret.KVFunc("Uptime", func() any { return Uptime() })
 	ret.KV("Version", version.Long)
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
 	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(VarzHandler))
@@ -79,7 +79,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+	f := func(format string, args ...any) { fmt.Fprintf(w, format, args...) }
 	f("<html><body><h1>%s debug</h1><ul>", version.CmdName())
 	for _, kv := range d.kvs {
 		kv(w)
@@ -101,7 +101,7 @@ func (d *DebugHandler) Handle(slug, desc string, handler http.Handler) {
 }
 
 // KV adds a key/value list item to /debug/.
-func (d *DebugHandler) KV(k string, v interface{}) {
+func (d *DebugHandler) KV(k string, v any) {
 	val := html.EscapeString(fmt.Sprintf("%v", v))
 	d.kvs = append(d.kvs, func(w io.Writer) {
 		fmt.Fprintf(w, "<li><b>%s:</b> %s</li>", k, val)
@@ -110,7 +110,7 @@ func (d *DebugHandler) KV(k string, v interface{}) {
 
 // KVFunc adds a key/value list item to /debug/. v is called on every
 // render of /debug/.
-func (d *DebugHandler) KVFunc(k string, v func() interface{}) {
+func (d *DebugHandler) KVFunc(k string, v func() any) {
 	d.kvs = append(d.kvs, func(w io.Writer) {
 		val := html.EscapeString(fmt.Sprintf("%v", v()))
 		fmt.Fprintf(w, "<li><b>%s:</b> %s</li>", k, val)

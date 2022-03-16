@@ -27,7 +27,7 @@ func TestCompareToStd(t *testing.T) {
 
 	for _, test := range tests {
 		b := []byte(test)
-		var ourV, stdV interface{}
+		var ourV, stdV any
 		ourErr := Unmarshal(b, &ourV)
 		stdErr := json.Unmarshal(b, &stdV)
 		if (ourErr == nil) != (stdErr == nil) {
@@ -47,7 +47,7 @@ func TestCompareToStd(t *testing.T) {
 }
 
 func BenchmarkUnmarshal(b *testing.B) {
-	var m interface{}
+	var m any
 	j := []byte("5")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -56,7 +56,7 @@ func BenchmarkUnmarshal(b *testing.B) {
 }
 
 func BenchmarkStdUnmarshal(b *testing.B) {
-	var m interface{}
+	var m any
 	j := []byte("5")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

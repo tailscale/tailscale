@@ -340,7 +340,7 @@ func (m *Mon) debounce() {
 	}
 }
 
-func jsonSummary(x interface{}) interface{} {
+func jsonSummary(x any) any {
 	j, err := json.Marshal(x)
 	if err != nil {
 		return err

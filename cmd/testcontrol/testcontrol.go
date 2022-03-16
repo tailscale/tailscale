@@ -46,10 +46,10 @@ type fakeTB struct {
 }
 
 func (t fakeTB) Cleanup(_ func()) {}
-func (t fakeTB) Error(args ...interface{}) {
+func (t fakeTB) Error(args ...any) {
 	t.Fatal(args...)
 }
-func (t fakeTB) Errorf(format string, args ...interface{}) {
+func (t fakeTB) Errorf(format string, args ...any) {
 	t.Fatalf(format, args...)
 }
 func (t fakeTB) Fail() {
@@ -61,17 +61,17 @@ func (t fakeTB) FailNow() {
 func (t fakeTB) Failed() bool {
 	return false
 }
-func (t fakeTB) Fatal(args ...interface{}) {
+func (t fakeTB) Fatal(args ...any) {
 	log.Fatal(args...)
 }
-func (t fakeTB) Fatalf(format string, args ...interface{}) {
+func (t fakeTB) Fatalf(format string, args ...any) {
 	log.Fatalf(format, args...)
 }
 func (t fakeTB) Helper() {}
-func (t fakeTB) Log(args ...interface{}) {
+func (t fakeTB) Log(args ...any) {
 	log.Print(args...)
 }
-func (t fakeTB) Logf(format string, args ...interface{}) {
+func (t fakeTB) Logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 func (t fakeTB) Name() string {
@@ -80,13 +80,13 @@ func (t fakeTB) Name() string {
 func (t fakeTB) Setenv(key string, value string) {
 	panic("not implemented")
 }
-func (t fakeTB) Skip(args ...interface{}) {
+func (t fakeTB) Skip(args ...any) {
 	t.Fatal("skipped")
 }
 func (t fakeTB) SkipNow() {
 	t.Fatal("skipnow")
 }
-func (t fakeTB) Skipf(format string, args ...interface{}) {
+func (t fakeTB) Skipf(format string, args ...any) {
 	t.Logf(format, args...)
 	t.Fatal("skipped")
 }

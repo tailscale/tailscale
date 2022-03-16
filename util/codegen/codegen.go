@@ -79,7 +79,7 @@ func NamedTypes(pkg *packages.Package) map[string]*types.Named {
 // for each package path that the caller must import for the returned code to compile.
 func AssertStructUnchanged(t *types.Struct, thisPkg *types.Package, tname, ctx string, imports map[string]struct{}) []byte {
 	buf := new(bytes.Buffer)
-	w := func(format string, args ...interface{}) {
+	w := func(format string, args ...any) {
 		fmt.Fprintf(buf, format+"\n", args...)
 	}
 	w("// A compilation failure here means this code must be regenerated, with the command at the top of this file.")

@@ -28,7 +28,7 @@ import (
 // Logf is the basic Tailscale logger type: a printf-like func.
 // Like log.Printf, the format need not end in a newline.
 // Logf functions must be safe for concurrent use.
-type Logf func(format string, args ...interface{})
+type Logf func(format string, args ...any)
 
 // A Context is a context.Context that should contain a custom log function, obtainable from FromContext.
 // If no log function is present, FromContext will return log.Printf.
@@ -43,7 +43,7 @@ type jenc struct {
 	enc *json.Encoder
 }
 
-var jencPool = &sync.Pool{New: func() interface{} {
+var jencPool = &sync.Pool{New: func() any {
 	je := new(jenc)
 	je.enc = json.NewEncoder(&je.buf)
 	return je
@@ -61,7 +61,7 @@ var jencPool = &sync.Pool{New: func() interface{} {
 //
 // The level can be from 0 to 9. Levels from 1 to 9 are included in
 // the logged JSON object, like {"foo":123,"v":2}.
-func (logf Logf) JSON(level int, recType string, v interface{}) {
+func (logf Logf) JSON(level int, recType string, v any) {
 	je := jencPool.Get().(*jenc)
 	defer jencPool.Put(je)
 	je.buf.Reset()
@@ -96,7 +96,7 @@ func Ctx(ctx context.Context, fn Logf) Context {
 
 // WithPrefix wraps f, prefixing each format with the provided prefix.
 func WithPrefix(f Logf, prefix string) Logf {
-	return func(format string, args ...interface{}) {
+	return func(format string, args ...any) {
 		f(prefix+format, args...)
 	}
 }
@@ -119,7 +119,7 @@ func (w funcWriter) Write(p []byte) (int, error) {
 }
 
 // Discard is a Logf that throws away the logs given to it.
-func Discard(string, ...interface{}) {}
+func Discard(string, ...any) {}
 
 // limitData is used to keep track of each format string's associated
 // rate-limiting data.
@@ -165,7 +165,7 @@ func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int,
 		msgCache = list.New()                  // a rudimentary LRU that limits the size of the map
 	)
 
-	return func(format string, args ...interface{}) {
+	return func(format string, args ...any) {
 		// Shortcut for formats with no rate limit
 		for _, sub := range rateFree {
 			if strings.Contains(format, sub) {
@@ -239,7 +239,7 @@ func LogOnChange(logf Logf, maxInterval time.Duration, timeNow func() time.Time)
 		tLastLogged = timeNow()
 	)
 
-	return func(format string, args ...interface{}) {
+	return func(format string, args ...any) {
 		s := fmt.Sprintf(format, args...)
 
 		mu.Lock()
@@ -270,13 +270,13 @@ func (fn ArgWriter) Format(f fmt.State, _ rune) {
 	argBufioPool.Put(bw)
 }
 
-var argBufioPool = &sync.Pool{New: func() interface{} { return bufio.NewWriterSize(ioutil.Discard, 1024) }}
+var argBufioPool = &sync.Pool{New: func() any { return bufio.NewWriterSize(ioutil.Discard, 1024) }}
 
 // Filtered returns a Logf that silently swallows some log lines.
 // Each inbound format and args is evaluated and printed to a string s.
 // The original format and args are passed to logf if and only if allow(s) returns true.
 func Filtered(logf Logf, allow func(s string) bool) Logf {
-	return func(format string, args ...interface{}) {
+	return func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		if !allow(msg) {
 			return
@@ -297,7 +297,7 @@ func LogfCloser(logf Logf) (newLogf Logf, close func()) {
 		defer mu.Unlock()
 		closed = true
 	}
-	newLogf = func(msg string, args ...interface{}) {
+	newLogf = func(msg string, args ...any) {
 		mu.Lock()
 		if closed {
 			mu.Unlock()

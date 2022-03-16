@@ -541,7 +541,7 @@ func makeNestable(t *testing.T) (logf logger.Logf, setT func(t *testing.T)) {
 		mu.Unlock()
 	}
 
-	logf = func(s string, args ...interface{}) {
+	logf = func(s string, args ...any) {
 		mu.RLock()
 		t := cur
 
@@ -920,7 +920,7 @@ func testActiveDiscovery(t *testing.T, d *devices) {
 	setT(t)
 
 	start := time.Now()
-	wlogf := func(msg string, args ...interface{}) {
+	wlogf := func(msg string, args ...any) {
 		t.Helper()
 		msg = fmt.Sprintf("%s: %s", time.Since(start).Truncate(time.Microsecond), msg)
 		tlogf(msg, args...)

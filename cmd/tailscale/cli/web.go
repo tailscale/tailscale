@@ -313,7 +313,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 			AdvertiseExitNode bool
 			Reauthenticate    bool
 		}
-		type mi map[string]interface{}
+		type mi map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&postData); err != nil {
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})

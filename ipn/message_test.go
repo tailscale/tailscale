@@ -85,10 +85,10 @@ func TestClientServer(t *testing.T) {
 	clientToServer := func(b []byte) {
 		bs.GotCommandMsg(context.TODO(), b)
 	}
-	slogf := func(fmt string, args ...interface{}) {
+	slogf := func(fmt string, args ...any) {
 		t.Logf("s: "+fmt, args...)
 	}
-	clogf := func(fmt string, args ...interface{}) {
+	clogf := func(fmt string, args ...any) {
 		t.Logf("c: "+fmt, args...)
 	}
 	bs = NewBackendServer(slogf, b, serverToClient)

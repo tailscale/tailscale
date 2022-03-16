@@ -46,7 +46,7 @@ type Cache struct {
 // entry is the container/list element type.
 type entry struct {
 	key   Tuple
-	value interface{}
+	value any
 }
 
 // Add adds a value to the cache, set or updating its associated
@@ -54,7 +54,7 @@ type entry struct {
 //
 // If MaxEntries is non-zero and the length of the cache is greater
 // after any addition, the least recently used value is evicted.
-func (c *Cache) Add(key Tuple, value interface{}) {
+func (c *Cache) Add(key Tuple, value any) {
 	if c.m == nil {
 		c.m = make(map[Tuple]*list.Element)
 		c.ll = list.New()
@@ -73,7 +73,7 @@ func (c *Cache) Add(key Tuple, value interface{}) {
 
 // Get looks up a key's value from the cache, also reporting
 // whether it was present.
-func (c *Cache) Get(key Tuple) (value interface{}, ok bool) {
+func (c *Cache) Get(key Tuple) (value any, ok bool) {
 	if ele, hit := c.m[key]; hit {
 		c.ll.MoveToFront(ele)
 		return ele.Value.(*entry).value, true

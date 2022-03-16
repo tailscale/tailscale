@@ -92,7 +92,7 @@ func NewNoStart(opts Options) (*Auto, error) {
 		return nil, err
 	}
 	if opts.Logf == nil {
-		opts.Logf = func(fmt string, args ...interface{}) {}
+		opts.Logf = func(fmt string, args ...any) {}
 	}
 	if opts.TimeNow == nil {
 		opts.TimeNow = time.Now

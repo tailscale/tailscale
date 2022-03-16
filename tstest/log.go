@@ -82,7 +82,7 @@ type LogLineTracker struct {
 }
 
 // Logf logs to its underlying logger and also tracks that the given format pattern has been seen.
-func (lt *LogLineTracker) Logf(format string, args ...interface{}) {
+func (lt *LogLineTracker) Logf(format string, args ...any) {
 	lt.mu.Lock()
 	if lt.closed {
 		lt.mu.Unlock()
@@ -131,7 +131,7 @@ type MemLogger struct {
 	bytes.Buffer
 }
 
-func (ml *MemLogger) Logf(format string, args ...interface{}) {
+func (ml *MemLogger) Logf(format string, args ...any) {
 	ml.Lock()
 	defer ml.Unlock()
 	fmt.Fprintf(&ml.Buffer, format, args...)

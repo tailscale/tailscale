@@ -68,11 +68,11 @@ type overallStatus struct {
 	good, bad []string
 }
 
-func (st *overallStatus) addBadf(format string, a ...interface{}) {
+func (st *overallStatus) addBadf(format string, a ...any) {
 	st.bad = append(st.bad, fmt.Sprintf(format, a...))
 }
 
-func (st *overallStatus) addGoodf(format string, a ...interface{}) {
+func (st *overallStatus) addGoodf(format string, a ...any) {
 	st.good = append(st.good, fmt.Sprintf(format, a...))
 }
 
@@ -347,7 +347,7 @@ func probeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailcfg.D
 	}
 
 	// Receive the random packet.
-	recvc := make(chan interface{}, 1) // either derp.ReceivedPacket or error
+	recvc := make(chan any, 1) // either derp.ReceivedPacket or error
 	go func() {
 		for {
 			m, err := toc.Recv()

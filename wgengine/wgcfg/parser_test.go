@@ -25,7 +25,7 @@ func noError(t *testing.T, err error) bool {
 	return false
 }
 
-func equal(t *testing.T, expected, actual interface{}) bool {
+func equal(t *testing.T, expected, actual any) bool {
 	if reflect.DeepEqual(expected, actual) {
 		return true
 	}

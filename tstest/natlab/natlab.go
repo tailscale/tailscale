@@ -66,16 +66,16 @@ func (p *Packet) short() string {
 	return fmt.Sprintf("%s/%s", payload, tuple)
 }
 
-func (p *Packet) Trace(msg string, args ...interface{}) {
+func (p *Packet) Trace(msg string, args ...any) {
 	if !traceOn {
 		return
 	}
-	allArgs := []interface{}{p.short(), p.locator, p.Src, p.Dst}
+	allArgs := []any{p.short(), p.locator, p.Src, p.Dst}
 	allArgs = append(allArgs, args...)
 	fmt.Fprintf(os.Stderr, "[%s]%s src=%s dst=%s "+msg+"\n", allArgs...)
 }
 
-func (p *Packet) setLocator(msg string, args ...interface{}) {
+func (p *Packet) setLocator(msg string, args ...any) {
 	p.locator = fmt.Sprintf(" "+msg, args...)
 }
 

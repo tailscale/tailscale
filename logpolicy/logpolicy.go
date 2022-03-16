@@ -416,7 +416,7 @@ func New(collection string) *Policy {
 	console := log.New(stderrWriter{}, "", lflags)
 
 	var earlyErrBuf bytes.Buffer
-	earlyLogf := func(format string, a ...interface{}) {
+	earlyLogf := func(format string, a ...any) {
 		fmt.Fprintf(&earlyErrBuf, format, a...)
 		earlyErrBuf.WriteByte('\n')
 	}

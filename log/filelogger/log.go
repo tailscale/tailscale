@@ -77,7 +77,7 @@ func dayOf(t time.Time) civilDay {
 	return civilDay{t.Year(), t.Month(), t.Day()}
 }
 
-func (w *logFileWriter) Logf(format string, a ...interface{}) {
+func (w *logFileWriter) Logf(format string, a ...any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

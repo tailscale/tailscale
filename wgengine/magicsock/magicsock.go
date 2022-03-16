@@ -1197,7 +1197,7 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 var errNoUDP = errors.New("no UDP available on platform")
 
 var udpAddrPool = &sync.Pool{
-	New: func() interface{} { return new(net.UDPAddr) },
+	New: func() any { return new(net.UDPAddr) },
 }
 
 // sendUDP sends UDP packet b to ipp.

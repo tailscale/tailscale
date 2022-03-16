@@ -28,7 +28,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 	td := t.TempDir()
 	socketPath := filepath.Join(td, "tailscale.sock")
 
-	logf := func(format string, args ...interface{}) {
+	logf := func(format string, args ...any) {
 		format = strings.TrimRight(format, "\n")
 		println(fmt.Sprintf(format, args...))
 		t.Logf(format, args...)
@@ -52,7 +52,7 @@ func TestRunMultipleAccepts(t *testing.T) {
 		}
 	}
 
-	logTriggerTestf := func(format string, args ...interface{}) {
+	logTriggerTestf := func(format string, args ...any) {
 		logf(format, args...)
 		if strings.HasPrefix(format, "Listening on ") {
 			connect()

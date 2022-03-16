@@ -30,7 +30,7 @@ func TestStdLogger(t *testing.T) {
 }
 
 func logTester(want []string, t *testing.T, i *int) Logf {
-	return func(format string, args ...interface{}) {
+	return func(format string, args ...any) {
 		got := fmt.Sprintf(format, args...)
 		if *i >= len(want) {
 			t.Fatalf("Logging continued past end of expected input: %s", got)
@@ -204,7 +204,7 @@ func TestContext(t *testing.T) {
 
 	// Test that FromContext and Ctx work together.
 	var called bool
-	markCalled := func(string, ...interface{}) {
+	markCalled := func(string, ...any) {
 		called = true
 	}
 	ctx = Ctx(ctx, markCalled)
@@ -215,7 +215,7 @@ func TestContext(t *testing.T) {
 
 func TestJSON(t *testing.T) {
 	var buf bytes.Buffer
-	var logf Logf = func(f string, a ...interface{}) { fmt.Fprintf(&buf, f, a...) }
+	var logf Logf = func(f string, a ...any) { fmt.Fprintf(&buf, f, a...) }
 	logf.JSON(1, "foo", &tailcfg.Hostinfo{})
 	want := "[v\x00JSON]1" + `{"foo":{"OS":"","Hostname":""}}`
 	if got := buf.String(); got != want {

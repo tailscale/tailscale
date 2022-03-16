@@ -13,7 +13,7 @@ import (
 func TestBool(t *testing.T) {
 	tests := []struct {
 		name string
-		in   interface{}
+		in   any
 		want string // JSON
 	}{
 		{

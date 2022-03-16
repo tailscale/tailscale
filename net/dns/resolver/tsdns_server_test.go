@@ -221,7 +221,7 @@ func weirdoGoCNAMEHandler(target string) dns.HandlerFunc {
 // provided.
 //
 // Types supported: netaddr.IP.
-func dnsHandler(answers ...interface{}) dns.HandlerFunc {
+func dnsHandler(answers ...any) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(req)
@@ -303,7 +303,7 @@ func dnsHandler(answers ...interface{}) dns.HandlerFunc {
 	}
 }
 
-func serveDNS(tb testing.TB, addr string, records ...interface{}) *dns.Server {
+func serveDNS(tb testing.TB, addr string, records ...any) *dns.Server {
 	if len(records)%2 != 0 {
 		panic("must have an even number of record values")
 	}

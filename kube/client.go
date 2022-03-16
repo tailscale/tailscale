@@ -110,7 +110,7 @@ func getError(resp *http.Response) error {
 	return st
 }
 
-func (c *Client) doRequest(ctx context.Context, method, url string, in, out interface{}) error {
+func (c *Client) doRequest(ctx context.Context, method, url string, in, out any) error {
 	tk, err := c.getOrRenewToken()
 	if err != nil {
 		return err

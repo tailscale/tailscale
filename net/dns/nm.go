@@ -140,12 +140,12 @@ func (m *nmManager) trySet(ctx context.Context, config OSConfig) error {
 	// NetworkManager wipes out IPv6 address configuration unless we
 	// tell it explicitly to keep it. Read out the current interface
 	// settings and mirror them out to NetworkManager.
-	var addrs6 []map[string]interface{}
+	var addrs6 []map[string]any
 	addrs, _, err := interfaces.Tailscale()
 	if err == nil {
 		for _, a := range addrs {
 			if a.Is6() {
-				addrs6 = append(addrs6, map[string]interface{}{
+				addrs6 = append(addrs6, map[string]any{
 					"address": a.String(),
 					"prefix":  uint32(128),
 				})

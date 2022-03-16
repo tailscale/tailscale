@@ -129,7 +129,7 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, al
 		ip, ip6 net.IP
 		allIPs  []net.IPAddr
 	}
-	ch := r.sf.DoChan(host, func() (interface{}, error) {
+	ch := r.sf.DoChan(host, func() (any, error) {
 		ip, ip6, allIPs, err := r.lookupIP(host)
 		if err != nil {
 			return nil, err

@@ -83,7 +83,7 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 	if !os.IsNotExist(err) {
 		return nil, err
 	}
-	var priv interface{}
+	var priv any
 	switch typ {
 	default:
 		return nil, fmt.Errorf("unsupported key type %q", typ)

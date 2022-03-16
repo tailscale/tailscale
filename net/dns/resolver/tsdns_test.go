@@ -454,7 +454,7 @@ func TestDelegate(t *testing.T) {
 	// intend to handle responses this large, so there should be truncation.
 	hugeTXT := generateTXT(64000, randSource)
 
-	records := []interface{}{
+	records := []any{
 		"test.site.",
 		resolveToIP(testipv4, testipv6, "dns.test.site."),
 		"LCtesT.SiTe.",
@@ -1105,7 +1105,7 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 		t.Skip("skipping test on Windows; waiting for golang.org/issue/33097")
 	}
 
-	records := []interface{}{
+	records := []any{
 		"no-records.test.",
 		dnsHandler(),
 
