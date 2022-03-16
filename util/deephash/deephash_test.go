@@ -35,8 +35,8 @@ func (p appendBytes) AppendTo(b []byte) []byte {
 }
 
 func TestHash(t *testing.T) {
-	type tuple [2]interface{}
-	type iface struct{ X interface{} }
+	type tuple [2]any
+	type iface struct{ X any }
 	type scalars struct {
 		I8   int8
 		I16  int16
@@ -132,8 +132,8 @@ func TestDeepHash(t *testing.T) {
 	}
 }
 
-func getVal() []interface{} {
-	return []interface{}{
+func getVal() []any {
+	return []any{
 		&wgcfg.Config{
 			Name:      "foo",
 			Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
@@ -321,10 +321,10 @@ func TestExhaustive(t *testing.T) {
 // verify this doesn't loop forever, as it used to (Issue 2340)
 func TestMapCyclicFallback(t *testing.T) {
 	type T struct {
-		M map[string]interface{}
+		M map[string]any
 	}
 	v := &T{
-		M: map[string]interface{}{},
+		M: map[string]any{},
 	}
 	v.M["m"] = v.M
 	Hash(v)

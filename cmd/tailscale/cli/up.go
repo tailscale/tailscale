@@ -192,7 +192,7 @@ type upOutputJSON struct {
 	Error        string `json:",omitempty"` // description of an error
 }
 
-func warnf(format string, args ...interface{}) {
+func warnf(format string, args ...any) {
 	printf("Warning: "+format+"\n", args...)
 }
 
@@ -823,8 +823,8 @@ func flagAppliesToOS(flag, goos string) bool {
 	return true
 }
 
-func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]interface{}) {
-	ret := make(map[string]interface{})
+func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
+	ret := make(map[string]any)
 
 	exitNodeIPStr := func() string {
 		if !prefs.ExitNodeIP.IsZero() {
@@ -841,7 +841,7 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]interfac
 		if preflessFlag(f.Name) {
 			return
 		}
-		set := func(v interface{}) {
+		set := func(v any) {
 			if flagAppliesToOS(f.Name, env.goos) {
 				ret[f.Name] = v
 			} else {
@@ -895,7 +895,7 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]interfac
 	return ret
 }
 
-func fmtFlagValueArg(flagName string, val interface{}) string {
+func fmtFlagValueArg(flagName string, val any) string {
 	if val == true {
 		return "--" + flagName
 	}

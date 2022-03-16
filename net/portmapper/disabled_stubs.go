@@ -15,7 +15,7 @@ import (
 	"inet.af/netaddr"
 )
 
-type upnpClient interface{}
+type upnpClient any
 
 type uPnPDiscoResponse struct{}
 

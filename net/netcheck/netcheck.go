@@ -191,7 +191,7 @@ func (c *Client) enoughRegions() int {
 	return 3
 }
 
-func (c *Client) logf(format string, a ...interface{}) {
+func (c *Client) logf(format string, a ...any) {
 	if c.Logf != nil {
 		c.Logf(format, a...)
 	} else {
@@ -199,7 +199,7 @@ func (c *Client) logf(format string, a ...interface{}) {
 	}
 }
 
-func (c *Client) vlogf(format string, a ...interface{}) {
+func (c *Client) vlogf(format string, a ...any) {
 	if c.Verbose || debugNetcheck {
 		c.logf(format, a...)
 	}

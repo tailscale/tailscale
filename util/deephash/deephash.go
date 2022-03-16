@@ -113,11 +113,11 @@ func (h *hasher) sum() (s Sum) {
 }
 
 var hasherPool = &sync.Pool{
-	New: func() interface{} { return new(hasher) },
+	New: func() any { return new(hasher) },
 }
 
 // Hash returns the hash of v.
-func Hash(v interface{}) (s Sum) {
+func Hash(v any) (s Sum) {
 	h := hasherPool.Get().(*hasher)
 	defer hasherPool.Put(h)
 	h.reset()
@@ -130,7 +130,7 @@ func Hash(v interface{}) (s Sum) {
 }
 
 // Update sets last to the hash of v and reports whether its value changed.
-func Update(last *Sum, v ...interface{}) (changed bool) {
+func Update(last *Sum, v ...any) (changed bool) {
 	sum := Hash(v)
 	if sum == *last {
 		// unchanged.
@@ -304,7 +304,7 @@ type mapHasher struct {
 }
 
 var mapHasherPool = &sync.Pool{
-	New: func() interface{} { return new(mapHasher) },
+	New: func() any { return new(mapHasher) },
 }
 
 type valueCache map[reflect.Type]reflect.Value

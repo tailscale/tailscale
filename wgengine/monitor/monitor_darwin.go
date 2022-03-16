@@ -178,7 +178,7 @@ func ipOfAddr(a route.Addr) netaddr.IP {
 	return netaddr.IP{}
 }
 
-func fmtAddr(a route.Addr) interface{} {
+func fmtAddr(a route.Addr) any {
 	if a == nil {
 		return nil
 	}

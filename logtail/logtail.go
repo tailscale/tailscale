@@ -515,7 +515,7 @@ func (l *Logger) encode(buf []byte, level int) []byte {
 
 	now := l.timeNow()
 
-	obj := make(map[string]interface{})
+	obj := make(map[string]any)
 	if err := json.Unmarshal(buf, &obj); err != nil {
 		for k := range obj {
 			delete(obj, k)
@@ -553,7 +553,7 @@ func (l *Logger) encode(buf []byte, level int) []byte {
 }
 
 // Logf logs to l using the provided fmt-style format and optional arguments.
-func (l *Logger) Logf(format string, args ...interface{}) {
+func (l *Logger) Logf(format string, args ...any) {
 	fmt.Fprintf(l, format, args...)
 }
 

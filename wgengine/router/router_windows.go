@@ -28,7 +28,7 @@ import (
 )
 
 type winRouter struct {
-	logf                func(fmt string, args ...interface{})
+	logf                func(fmt string, args ...any)
 	linkMon             *monitor.Mon // may be nil
 	nativeTun           *tun.NativeTun
 	routeChangeCallback *winipcfg.RouteChangeCallback

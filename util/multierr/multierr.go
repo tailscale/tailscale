@@ -78,7 +78,7 @@ func (e Error) Is(target error) bool {
 
 // As finds the first error in e that matches target, and if any is found,
 // sets target to that error value and returns true. Otherwise, it returns false.
-func (e Error) As(target interface{}) bool {
+func (e Error) As(target any) bool {
 	for _, err := range e.errs {
 		if ok := errors.As(err, target); ok {
 			return true

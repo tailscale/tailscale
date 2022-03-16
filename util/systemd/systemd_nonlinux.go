@@ -7,5 +7,5 @@
 
 package systemd
 
-func Ready()                        {}
-func Status(string, ...interface{}) {}
+func Ready()                {}
+func Status(string, ...any) {}

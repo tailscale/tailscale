@@ -118,17 +118,17 @@ type responseOpt bool
 
 type ttlOpt uint32
 
-func makeQ(txID uint16, name string, opt ...interface{}) []byte {
+func makeQ(txID uint16, name string, opt ...any) []byte {
 	opt = append(opt, responseOpt(false))
 	return makeDNSPkt(txID, name, opt...)
 }
 
-func makeRes(txID uint16, name string, opt ...interface{}) []byte {
+func makeRes(txID uint16, name string, opt ...any) []byte {
 	opt = append(opt, responseOpt(true))
 	return makeDNSPkt(txID, name, opt...)
 }
 
-func makeDNSPkt(txID uint16, name string, opt ...interface{}) []byte {
+func makeDNSPkt(txID uint16, name string, opt ...any) []byte {
 	typ := dnsmessage.TypeA
 	class := dnsmessage.ClassINET
 	var response bool

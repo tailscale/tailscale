@@ -119,7 +119,7 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 
 func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	// report returns a *Report from (DERP host, time.Duration)+ pairs.
-	report := func(a ...interface{}) *Report {
+	report := func(a ...any) *Report {
 		r := &Report{RegionLatency: map[int]time.Duration{}}
 		for i := 0; i < len(a); i += 2 {
 			s := a[i].(string)
@@ -606,7 +606,7 @@ func TestLogConciseReport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			c := &Client{Logf: func(f string, a ...interface{}) { fmt.Fprintf(&buf, f, a...) }}
+			c := &Client{Logf: func(f string, a ...any) { fmt.Fprintf(&buf, f, a...) }}
 			c.logConciseReport(tt.r, dm)
 			if got := strings.TrimPrefix(buf.String(), "[v1] report: "); got != tt.want {
 				t.Errorf("unexpected result.\n got: %#q\nwant: %#q\n", got, tt.want)

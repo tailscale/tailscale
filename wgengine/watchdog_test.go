@@ -57,7 +57,7 @@ func TestWatchdog(t *testing.T) {
 		logBuf := new(tstest.MemLogger)
 		fatalCalled := make(chan struct{})
 		wdEngine.logf = logBuf.Logf
-		wdEngine.fatalf = func(format string, args ...interface{}) {
+		wdEngine.fatalf = func(format string, args ...any) {
 			t.Logf("FATAL: %s", fmt.Sprintf(format, args...))
 			fatalCalled <- struct{}{}
 		}

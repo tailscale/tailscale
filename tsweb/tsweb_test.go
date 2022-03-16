@@ -241,7 +241,7 @@ func TestStdHandler(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var logs []AccessLogRecord
-			logf := func(fmt string, args ...interface{}) {
+			logf := func(fmt string, args ...any) {
 				if fmt == "%s" {
 					logs = append(logs, args[0].(AccessLogRecord))
 				}
@@ -378,19 +378,19 @@ func TestVarzHandler(t *testing.T) {
 		{
 			"func_float64",
 			"counter_x",
-			expvar.Func(func() interface{} { return float64(1.2) }),
+			expvar.Func(func() any { return float64(1.2) }),
 			"# TYPE x counter\nx 1.2\n",
 		},
 		{
 			"func_float64_gauge",
 			"gauge_x",
-			expvar.Func(func() interface{} { return float64(1.2) }),
+			expvar.Func(func() any { return float64(1.2) }),
 			"# TYPE x gauge\nx 1.2\n",
 		},
 		{
 			"func_float64_untyped",
 			"x",
-			expvar.Func(func() interface{} { return float64(1.2) }),
+			expvar.Func(func() any { return float64(1.2) }),
 			"x 1.2\n",
 		},
 		{
@@ -466,7 +466,7 @@ foo_AUint16 65535
 		{
 			"func_returning_int",
 			"num_goroutines",
-			expvar.Func(func() interface{} { return 123 }),
+			expvar.Func(func() any { return 123 }),
 			"num_goroutines 123\n",
 		},
 	}
@@ -531,6 +531,6 @@ type expvarAdapter struct {
 
 func (expvarAdapter) String() string { return "{}" } // expvar JSON; unused in test
 
-func (a expvarAdapter) PrometheusMetricsReflectRoot() interface{} {
+func (a expvarAdapter) PrometheusMetricsReflectRoot() any {
 	return a.st
 }

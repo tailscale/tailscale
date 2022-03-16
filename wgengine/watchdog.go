@@ -44,8 +44,8 @@ func NewWatchdog(e Engine) Engine {
 
 type watchdogEngine struct {
 	wrap    Engine
-	logf    func(format string, args ...interface{})
-	fatalf  func(format string, args ...interface{})
+	logf    func(format string, args ...any)
+	fatalf  func(format string, args ...any)
 	maxWait time.Duration
 }
 

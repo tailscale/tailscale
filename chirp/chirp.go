@@ -80,7 +80,7 @@ func (b *BIRDClient) EnableProtocol(protocol string) error {
 // Reply codes starting with 0 stand for ‘action successfully completed’ messages,
 // 1 means ‘table entry’, 8 ‘runtime error’ and 9 ‘syntax error’.
 
-func (b *BIRDClient) exec(cmd string, args ...interface{}) (string, error) {
+func (b *BIRDClient) exec(cmd string, args ...any) (string, error) {
 	if _, err := fmt.Fprintf(b.conn, cmd, args...); err != nil {
 		return "", err
 	}

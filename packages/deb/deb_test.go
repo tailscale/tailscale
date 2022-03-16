@@ -141,7 +141,7 @@ func TestDebInfo(t *testing.T) {
 	}
 }
 
-func diff(got, want interface{}) string {
+func diff(got, want any) string {
 	matchField := func(name string) func(p cmp.Path) bool {
 		return func(p cmp.Path) bool {
 			if len(p) != 3 {

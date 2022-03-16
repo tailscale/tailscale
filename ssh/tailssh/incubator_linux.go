@@ -35,7 +35,7 @@ func ptyNameLinux(f *os.File) (string, error) {
 
 // callLogin1 invokes the provided method of the "login1" service over D-Bus.
 // https://www.freedesktop.org/software/systemd/man/org.freedesktop.login1.html
-func callLogin1(method string, flags dbus.Flags, args ...interface{}) (*dbus.Call, error) {
+func callLogin1(method string, flags dbus.Flags, args ...any) (*dbus.Call, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		// DBus probably not running.
@@ -77,8 +77,8 @@ type createSessionArgs struct {
 	}
 }
 
-func (a createSessionArgs) args() []interface{} {
-	return []interface{}{
+func (a createSessionArgs) args() []any {
+	return []any{
 		a.uid,
 		a.pid,
 		a.service,

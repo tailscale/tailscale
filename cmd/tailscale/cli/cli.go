@@ -35,7 +35,7 @@ import (
 var Stderr io.Writer = os.Stderr
 var Stdout io.Writer = os.Stdout
 
-func printf(format string, a ...interface{}) {
+func printf(format string, a ...any) {
 	fmt.Fprintf(Stdout, format, a...)
 }
 
@@ -44,7 +44,7 @@ func printf(format string, a ...interface{}) {
 //
 // It's not named println because that looks like the Go built-in
 // which goes to stderr and formats slightly differently.
-func outln(a ...interface{}) {
+func outln(a ...any) {
 	fmt.Fprintln(Stdout, a...)
 }
 
@@ -216,7 +216,7 @@ change in the future.
 	return err
 }
 
-func fatalf(format string, a ...interface{}) {
+func fatalf(format string, a ...any) {
 	if Fatalf != nil {
 		Fatalf(format, a...)
 		return
@@ -226,7 +226,7 @@ func fatalf(format string, a ...interface{}) {
 }
 
 // Fatalf, if non-nil, is used instead of log.Fatalf.
-var Fatalf func(format string, a ...interface{})
+var Fatalf func(format string, a ...any)
 
 var rootArgs struct {
 	socket string

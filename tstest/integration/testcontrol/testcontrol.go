@@ -189,7 +189,7 @@ func (ap *AuthPath) CompleteSuccessfully() {
 	ap.closeOnce.Do(ap.completeSuccessfully)
 }
 
-func (s *Server) logf(format string, a ...interface{}) {
+func (s *Server) logf(format string, a ...any) {
 	if s.Logf != nil {
 		s.Logf(format, a...)
 	} else {
@@ -779,7 +779,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	return res, nil
 }
 
-func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compress bool, msg interface{}) error {
+func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compress bool, msg any) error {
 	resBytes, err := s.encode(mkey, compress, msg)
 	if err != nil {
 		return err
@@ -803,7 +803,7 @@ func (s *Server) sendMapMsg(w http.ResponseWriter, mkey key.MachinePublic, compr
 	return nil
 }
 
-func (s *Server) decode(mkey key.MachinePublic, msg []byte, v interface{}) error {
+func (s *Server) decode(mkey key.MachinePublic, msg []byte, v any) error {
 	if len(msg) == msgLimit {
 		return errors.New("encrypted message too long")
 	}
@@ -816,7 +816,7 @@ func (s *Server) decode(mkey key.MachinePublic, msg []byte, v interface{}) error
 }
 
 var zstdEncoderPool = &sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		encoder, err := smallzstd.NewEncoder(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 		if err != nil {
 			panic(err)
@@ -825,7 +825,7 @@ var zstdEncoderPool = &sync.Pool{
 	},
 }
 
-func (s *Server) encode(mkey key.MachinePublic, compress bool, v interface{}) (b []byte, err error) {
+func (s *Server) encode(mkey key.MachinePublic, compress bool, v any) (b []byte, err error) {
 	var isBytes bool
 	if b, isBytes = v.([]byte); !isBytes {
 		b, err = json.Marshal(v)

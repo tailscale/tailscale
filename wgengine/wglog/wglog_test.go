@@ -18,22 +18,22 @@ import (
 func TestLogger(t *testing.T) {
 	tests := []struct {
 		format string
-		args   []interface{}
+		args   []any
 		want   string
 		omit   bool
 	}{
 		{"hi", nil, "hi", false},
 		{"Routine: starting", nil, "", true},
-		{"%v says it misses you", []interface{}{stringer("peer(IMTB…r7lM)")}, "[IMTBr] says it misses you", false},
+		{"%v says it misses you", []any{stringer("peer(IMTB…r7lM)")}, "[IMTBr] says it misses you", false},
 	}
 
 	type log struct {
 		format string
-		args   []interface{}
+		args   []any
 	}
 
 	c := make(chan log, 1)
-	logf := func(format string, args ...interface{}) {
+	logf := func(format string, args ...any) {
 		select {
 		case c <- log{format, args}:
 		default:

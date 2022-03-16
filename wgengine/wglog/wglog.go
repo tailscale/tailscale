@@ -37,7 +37,7 @@ type strCache struct {
 // and rewrites peer keys from wireguard-go into Tailscale format.
 func NewLogger(logf logger.Logf) *Logger {
 	ret := new(Logger)
-	wrapper := func(format string, args ...interface{}) {
+	wrapper := func(format string, args ...any) {
 		if strings.Contains(format, "Routine:") && !strings.Contains(format, "receive incoming") {
 			// wireguard-go logs as it starts and stops routines.
 			// Drop those; there are a lot of them, and they're just noise.
@@ -60,7 +60,7 @@ func NewLogger(logf logger.Logf) *Logger {
 		}
 		// Duplicate the args slice so that we can modify it.
 		// This is not always required, but the code required to avoid it is not worth the complexity.
-		newargs := make([]interface{}, len(args))
+		newargs := make([]any, len(args))
 		copy(newargs, args)
 		for i, arg := range newargs {
 			// We want to replace *device.Peer args with the Tailscale-formatted version of themselves.

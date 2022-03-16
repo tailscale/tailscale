@@ -25,7 +25,7 @@ type logOnce struct {
 	sync.Once
 }
 
-func (l *logOnce) logf(format string, args ...interface{}) {
+func (l *logOnce) logf(format string, args ...any) {
 	l.Once.Do(func() {
 		log.Printf(format, args...)
 	})
@@ -71,7 +71,7 @@ func Ready() {
 //    CPU: 2min 38.469s
 //    CGroup: /system.slice/tailscale.service
 //    └─26741 /nix/store/sv6cj4mw2jajm9xkbwj07k29dj30lh0n-tailscale-date.20200727/bin/tailscaled --port 41641
-func Status(format string, args ...interface{}) {
+func Status(format string, args ...any) {
 	err := notifier().Notify(sdnotify.Statusf(format, args...))
 	if err != nil {
 		statusOnce.logf("systemd: error notifying: %v", err)

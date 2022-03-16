@@ -60,7 +60,7 @@ var (
 // parsedPacketPool holds a pool of Parsed structs for use in filtering.
 // This is needed because escape analysis cannot see that parsed packets
 // do not escape through {Pre,Post}Filter{In,Out}.
-var parsedPacketPool = sync.Pool{New: func() interface{} { return new(packet.Parsed) }}
+var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 
 // FilterFunc is a packet-filtering function with access to the Wrapper device.
 // It must not hold onto the packet struct, as its backing storage will be reused.

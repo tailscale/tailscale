@@ -20,13 +20,13 @@ type decoder struct {
 }
 
 var readerPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return bytes.NewReader(nil)
 	},
 }
 
 var decoderPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		var d decoder
 		d.r = readerPool.Get().(*bytes.Reader)
 		d.dec = json.NewDecoder(d.r)
@@ -47,7 +47,7 @@ var decoderPool = sync.Pool{
 // don't use this Unmarshal.
 //
 // This Unmarshal allocates considerably less memory.
-func Unmarshal(b []byte, v interface{}) error {
+func Unmarshal(b []byte, v any) error {
 	d := decoderPool.Get().(*decoder)
 	d.r.Reset(b)
 	off := d.dec.InputOffset()

@@ -32,7 +32,7 @@ var _ResolverCloneNeedsRegeneration = Resolver(struct {
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
 // where T is one of Resolver.
-func Clone(dst, src interface{}) bool {
+func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *Resolver:
 		switch dst := dst.(type) {

@@ -342,7 +342,7 @@ type StatusUpdater interface {
 }
 
 func (st *Status) WriteHTML(w io.Writer) {
-	f := func(format string, args ...interface{}) { fmt.Fprintf(w, format, args...) }
+	f := func(format string, args ...any) { fmt.Fprintf(w, format, args...) }
 
 	f(`<!DOCTYPE html>
 <html lang="en">

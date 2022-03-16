@@ -128,7 +128,7 @@ func TestEncodeAndUploadMessages(t *testing.T) {
 
 		ltail, ok := data["logtail"]
 		if ok {
-			logtailmap := ltail.(map[string]interface{})
+			logtailmap := ltail.(map[string]any)
 			_, ok = logtailmap["client_time"]
 			if !ok {
 				t.Errorf("%s: no client_time present", tt.name)
@@ -317,9 +317,9 @@ func TestPublicIDUnmarshalText(t *testing.T) {
 	}
 }
 
-func unmarshalOne(t *testing.T, body []byte) map[string]interface{} {
+func unmarshalOne(t *testing.T, body []byte) map[string]any {
 	t.Helper()
-	var entries []map[string]interface{}
+	var entries []map[string]any
 	err := json.Unmarshal(body, &entries)
 	if err != nil {
 		t.Error(err)

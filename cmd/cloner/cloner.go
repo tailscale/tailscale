@@ -69,14 +69,14 @@ func main() {
 		gen(buf, imports, typ, pkg.Types)
 	}
 
-	w := func(format string, args ...interface{}) {
+	w := func(format string, args ...any) {
 		fmt.Fprintf(buf, format+"\n", args...)
 	}
 	if *flagCloneFunc {
 		w("// Clone duplicates src into dst and reports whether it succeeded.")
 		w("// To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,")
 		w("// where T is one of %s.", *flagTypes)
-		w("func Clone(dst, src interface{}) bool {")
+		w("func Clone(dst, src any) bool {")
 		w("	switch src := src.(type) {")
 		for _, typeName := range typeNames {
 			w("	case *%s:", typeName)
@@ -158,7 +158,7 @@ func gen(buf *bytes.Buffer, imports map[string]struct{}, typ *types.Named, thisP
 	fmt.Fprintf(buf, "// Clone makes a deep copy of %s.\n", name)
 	fmt.Fprintf(buf, "// The result aliases no memory with the original.\n")
 	fmt.Fprintf(buf, "func (src *%s) Clone() *%s {\n", name, name)
-	writef := func(format string, args ...interface{}) {
+	writef := func(format string, args ...any) {
 		fmt.Fprintf(buf, "\t"+format+"\n", args...)
 	}
 	writef("if src == nil {")

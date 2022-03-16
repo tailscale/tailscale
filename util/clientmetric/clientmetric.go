@@ -256,7 +256,7 @@ func EncodeLogTailMetricsDelta() string {
 }
 
 var deltaPool = &sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new(deltaEncBuf)
 	},
 }

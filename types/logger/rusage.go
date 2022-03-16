@@ -13,7 +13,7 @@ import (
 // a prefixed log message to each line with the current binary memory usage
 // and max RSS.
 func RusagePrefixLog(logf Logf) Logf {
-	return func(f string, argv ...interface{}) {
+	return func(f string, argv ...any) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
 		goMem := float64(m.HeapInuse+m.StackInuse) / (1 << 20)

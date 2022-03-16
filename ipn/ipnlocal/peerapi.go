@@ -519,7 +519,7 @@ type peerAPIHandler struct {
 	peerUser   tailcfg.UserProfile // profile of peerNode
 }
 
-func (h *peerAPIHandler) logf(format string, a ...interface{}) {
+func (h *peerAPIHandler) logf(format string, a ...any) {
 	h.ps.b.logf("peerapi: "+format, a...)
 }
 
