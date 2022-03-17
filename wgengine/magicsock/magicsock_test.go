@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -43,6 +44,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cibuild"
+	"tailscale.com/util/netconv"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -509,7 +511,7 @@ func TestConnClosed(t *testing.T) {
 	cleanup = meshStacks(t.Logf, nil, ms1, ms2)
 	defer cleanup()
 
-	pkt := tuntest.Ping(ms2.IP().IPAddr().IP, ms1.IP().IPAddr().IP)
+	pkt := tuntest.Ping(netconv.AsAddr(ms2.IP()), netconv.AsAddr(ms1.IP()))
 
 	if len(ms1.conn.activeDerp) == 0 {
 		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
@@ -641,7 +643,7 @@ func TestNoDiscoKey(t *testing.T) {
 		break
 	}
 
-	pkt := tuntest.Ping(m2.IP().IPAddr().IP, m1.IP().IPAddr().IP)
+	pkt := tuntest.Ping(netconv.AsAddr(m2.IP()), netconv.AsAddr(m1.IP()))
 	m1.tun.Outbound <- pkt
 	select {
 	case <-m2.tun.Inbound:
@@ -854,7 +856,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 		// failure). Figure out what kind of thing would be
 		// acceptable to test instead of "every ping must
 		// transit".
-		pkt := tuntest.Ping(dst.IP().IPAddr().IP, src.IP().IPAddr().IP)
+		pkt := tuntest.Ping(netconv.AsAddr(dst.IP()), netconv.AsAddr(src.IP()))
 		select {
 		case src.tun.Outbound <- pkt:
 		case <-ctx.Done():
@@ -1069,7 +1071,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	}
 
 	ping1 := func(t *testing.T) {
-		msg2to1 := tuntest.Ping(net.ParseIP("1.0.0.1"), net.ParseIP("1.0.0.2"))
+		msg2to1 := tuntest.Ping(netip.MustParseAddr("1.0.0.1"), netip.MustParseAddr("1.0.0.2"))
 		send := func() {
 			m2.tun.Outbound <- msg2to1
 			t.Log("ping1 sent")
@@ -1080,7 +1082,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		}
 	}
 	ping2 := func(t *testing.T) {
-		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
+		msg1to2 := tuntest.Ping(netip.MustParseAddr("1.0.0.2"), netip.MustParseAddr("1.0.0.1"))
 		send := func() {
 			m1.tun.Outbound <- msg1to2
 			t.Log("ping2 sent")
@@ -1107,7 +1109,7 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	t.Run("ping 1.0.0.2 via SendPacket", func(t *testing.T) {
 		setT(t)
 		defer setT(outerT)
-		msg1to2 := tuntest.Ping(net.ParseIP("1.0.0.2"), net.ParseIP("1.0.0.1"))
+		msg1to2 := tuntest.Ping(netip.MustParseAddr("1.0.0.2"), netip.MustParseAddr("1.0.0.1"))
 		send := func() {
 			if err := m1.tsTun.InjectOutbound(msg1to2); err != nil {
 				t.Fatal(err)
