@@ -407,7 +407,7 @@ main() {
 				exit 1
 			fi
 			export DEBIAN_FRONTEND=noninteractive
-			if ! type gpg >/dev/null; then
+			if [ "$APT_KEY_TYPE" = "legacy" ] && ! type gpg >/dev/null; then
 				$SUDO apt-get update
 				$SUDO apt-get install -y gnupg
 			fi
