@@ -453,6 +453,9 @@ func (s *Server) initMetacert() {
 		// Windows requires NotAfter and NotBefore set:
 		NotAfter:  time.Now().Add(30 * 24 * time.Hour),
 		NotBefore: time.Now().Add(-30 * 24 * time.Hour),
+		// Per https://github.com/golang/go/issues/51759#issuecomment-1071147836,
+		// macOS requires BasicConstraints when subject == issuer:
+		BasicConstraintsValid: true,
 	}
 	cert, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, pub, priv)
 	if err != nil {
