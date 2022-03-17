@@ -569,6 +569,7 @@ var (
 	errNilAction      = errors.New("nil action")
 	errRuleExpired    = errors.New("rule expired")
 	errPrincipalMatch = errors.New("principal didn't match")
+	errTargetMatch    = errors.New("target didn't match")
 	errUserMatch      = errors.New("user didn't match")
 )
 
@@ -585,6 +586,9 @@ func matchRule(r *tailcfg.SSHRule, ci *sshConnInfo) (a *tailcfg.SSHAction, local
 	if !matchesPrincipal(r.Principals, ci) {
 		return nil, "", errPrincipalMatch
 	}
+	if !matchesIP(r.Targets, ci) {
+		return nil, "", errTargetMatch
+	}
 	if !r.Action.Reject || r.SSHUsers != nil {
 		localUser = mapLocalUser(r.SSHUsers, ci.sshUser)
 		if localUser == "" {
@@ -599,6 +603,15 @@ func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser 
 		return v
 	}
 	return ruleSSHUsers["*"]
+}
+
+func matchesIP(targets []netaddr.IP, ci *sshConnInfo) bool {
+	for _, t := range targets {
+		if ci.dst.IP() == t {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesPrincipal(ps []*tailcfg.SSHPrincipal, ci *sshConnInfo) bool {

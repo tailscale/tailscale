@@ -1562,7 +1562,7 @@ type SSHRule struct {
 	RuleExpires *time.Time `json:"ruleExpires,omitempty"`
 
 	// Principals matches an incoming connection. If the connection
-	// matches anything in this list and also matches SSHUsers,
+	// matches anything in this list and also matches SSHUsers, Targets,
 	// then Action is applied.
 	Principals []*SSHPrincipal `json:"principals"`
 
@@ -1579,6 +1579,9 @@ type SSHRule struct {
 	// Action is the outcome to task.
 	// A nil or invalid action means to deny.
 	Action *SSHAction `json:"action"`
+
+	// Targets matches an incoming connection for the target destination.
+	Targets []netaddr.IP `json:"targets"`
 }
 
 // SSHPrincipal is either a particular node or a user on any node.
