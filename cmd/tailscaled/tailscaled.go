@@ -178,6 +178,9 @@ func main() {
 		os.Exit(0)
 	}
 
+	if runtime.GOOS == "darwin" && runtime.Version() == "go1.18" {
+		log.Fatalf("tailscaled is broken on macOS with go1.18 due to upstream bug https://github.com/golang/go/issues/51759; use 1.18.1+ or Tailscale's Go fork")
+	}
 	if runtime.GOOS == "darwin" && os.Getuid() != 0 && !strings.Contains(args.tunname, "userspace-networking") && !args.cleanup {
 		log.SetFlags(0)
 		log.Fatalf("tailscaled requires root; use sudo tailscaled (or use --tun=userspace-networking)")
