@@ -8,7 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
@@ -256,5 +256,5 @@ func (e dummyEndpoint) ClearSrc()           {}
 func (e dummyEndpoint) SrcToString() string { return "" }
 func (e dummyEndpoint) DstToString() string { return string(e) }
 func (e dummyEndpoint) DstToBytes() []byte  { return nil }
-func (e dummyEndpoint) DstIP() net.IP       { return nil }
-func (dummyEndpoint) SrcIP() net.IP         { return nil }
+func (e dummyEndpoint) DstIP() netip.Addr   { return netip.Addr{} }
+func (dummyEndpoint) SrcIP() netip.Addr     { return netip.Addr{} }

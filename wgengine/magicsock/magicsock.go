@@ -3442,9 +3442,9 @@ func (de *endpoint) String() string {
 
 func (de *endpoint) ClearSrc()           {}
 func (de *endpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
-func (de *endpoint) SrcIP() net.IP       { panic("unused") } // unused by wireguard-go
+func (de *endpoint) SrcIP() netip.Addr   { panic("unused") } // unused by wireguard-go
 func (de *endpoint) DstToString() string { return de.wgEndpoint }
-func (de *endpoint) DstIP() net.IP       { panic("unused") }
+func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
 // canP2P reports whether this endpoint understands the disco protocol
