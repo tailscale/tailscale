@@ -245,6 +245,11 @@ func TestSSH(t *testing.T) {
 	}
 
 	t.Run("env", func(t *testing.T) {
+		if os.Getenv("CI") == "true" {
+			// CI env variable is set by GitHub.
+			// https://docs.github.com/en/actions/learn-github-actions/environment-variables#default-environment-variables
+			t.Skip("Skipping for now; see https://github.com/tailscale/tailscale/issues/4051")
+		}
 		cmd := execSSH("LANG=foo env")
 		cmd.Env = append(os.Environ(), "LOCAL_ENV=bar")
 		got, err := cmd.CombinedOutput()
@@ -253,9 +258,6 @@ func TestSSH(t *testing.T) {
 		}
 		m := parseEnv(got)
 		if got := m["USER"]; got == "" || got != u.Username {
-			if u.Username == "runner" {
-				t.Skip("Skipping for now; see https://github.com/tailscale/tailscale/issues/4051")
-			}
 			t.Errorf("USER = %q; want %q", got, u.Username)
 		}
 		if got := m["HOME"]; got == "" || got != u.HomeDir {
