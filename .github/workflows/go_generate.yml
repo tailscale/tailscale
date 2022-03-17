@@ -25,14 +25,13 @@ jobs:
           fetch-depth: 0
 
       - name: check 'go generate' is clean
+        # The shell script invocation below is a temporary hack for
+        # https://github.com/tailscale/tailscale/issues/4194. When
+        # that issue is fixed, replace its invocation with:
+        # go generate --tags=hermetic ./...
         run: |
-          if [[ "${{github.ref}}" == release-branch/* ]]
-          then
-            pkgs=$(go list ./... | grep -v dnsfallback)
-          else
-            pkgs=$(go list ./... | grep -v dnsfallback)
-          fi
-          go generate $pkgs
+          set -e
+          ./.github/workflows/go-generate-without-stringer.sh
           echo
           echo
           git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
