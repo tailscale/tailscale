@@ -9,7 +9,6 @@ package tsnet
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -66,12 +65,15 @@ type Server struct {
 	// as an Ephemeral node (https://tailscale.com/kb/1111/ephemeral-nodes/).
 	Ephemeral bool
 
-	initOnce sync.Once
-	initErr  error
-	lb       *ipnlocal.LocalBackend
-	// the state directory
-	rootPath string
-	hostname string
+	initOnce         sync.Once
+	initErr          error
+	lb               *ipnlocal.LocalBackend
+	linkMon          *monitor.Mon
+	localAPIListener net.Listener
+	rootPath         string // the state directory
+	hostname         string
+	shutdownCtx      context.Context
+	shutdownCancel   context.CancelFunc
 
 	mu        sync.Mutex
 	listeners map[listenKey]*listener
@@ -94,17 +96,34 @@ func (s *Server) Start() error {
 	return s.initErr
 }
 
+// Close stops the server.
+//
+// It must not be called before or concurrently with Start.
+func (s *Server) Close() error {
+	s.shutdownCancel()
+	s.lb.Shutdown()
+	s.linkMon.Close()
+	s.localAPIListener.Close()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ln := range s.listeners {
+		ln.Close()
+	}
+	s.listeners = nil
+
+	return nil
+}
+
 func (s *Server) doInit() {
+
+	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
 	if err := s.start(); err != nil {
 		s.initErr = fmt.Errorf("tsnet: %w", err)
 	}
 }
 
 func (s *Server) start() error {
-	if !envknob.UseWIPCode() {
-		return errors.New("code disabled without environment variable TAILSCALE_USE_WIP_CODE set true")
-	}
-
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -122,12 +141,18 @@ func (s *Server) start() error {
 			return fmt.Errorf("in-memory store is only supported for Ephemeral nodes")
 		}
 	}
+
+	logf := s.logf
+
 	if s.rootPath == "" {
 		confDir, err := os.UserConfigDir()
 		if err != nil {
 			return err
 		}
-		s.rootPath = filepath.Join(confDir, "tslib-"+prog)
+		s.rootPath, err = getTSNetDir(logf, confDir, prog)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(s.rootPath, 0700); err != nil {
 			return err
 		}
@@ -138,15 +163,10 @@ func (s *Server) start() error {
 		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
-	logf := s.Logf
-	if logf == nil {
-		logf = log.Printf
-	}
-
 	// TODO(bradfitz): start logtail? don't use filch, perhaps?
 	// only upload plumbed Logf?
 
-	linkMon, err := monitor.New(logf)
+	s.linkMon, err = monitor.New(logf)
 	if err != nil {
 		return err
 	}
@@ -154,7 +174,7 @@ func (s *Server) start() error {
 	s.dialer = new(tsdial.Dialer) // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		ListenPort:  0,
-		LinkMonitor: linkMon,
+		LinkMonitor: s.linkMon,
 		Dialer:      s.dialer,
 	})
 	if err != nil {
@@ -184,12 +204,14 @@ func (s *Server) start() error {
 	}
 
 	if s.Store == nil {
-		s.Store, err = store.New(logf, filepath.Join(s.rootPath, "tailscaled.state"))
+		stateFile := filepath.Join(s.rootPath, "tailscaled.state")
+		logf("tsnet running state path %s", stateFile)
+		s.Store, err = store.New(logf, stateFile)
 		if err != nil {
 			return err
 		}
 	}
-	logid := "tslib-TODO"
+	logid := "tsnet-TODO" // https://github.com/tailscale/tailscale/issues/3866
 
 	loginFlags := controlclient.LoginDefault
 	if s.Ephemeral {
@@ -200,6 +222,7 @@ func (s *Server) start() error {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
 	lb.SetVarRoot(s.rootPath)
+	logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
 	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
@@ -207,17 +230,22 @@ func (s *Server) start() error {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
+	authKey := os.Getenv("TS_AUTHKEY")
 	err = lb.Start(ipn.Options{
 		StateKey:    ipn.GlobalDaemonStateKey,
 		UpdatePrefs: prefs,
-		AuthKey:     os.Getenv("TS_AUTHKEY"),
+		AuthKey:     authKey,
 	})
 	if err != nil {
 		return fmt.Errorf("starting backend: %w", err)
 	}
-	if os.Getenv("TS_LOGIN") == "1" || os.Getenv("TS_AUTHKEY") != "" {
+	if lb.State() == ipn.NeedsLogin || envknob.Bool("TSNET_FORCE_LOGIN") {
+		logf("LocalBackend state is %v; running StartLoginInteractive...")
 		s.lb.StartLoginInteractive()
+	} else if authKey != "" {
+		logf("TS_AUTHKEY is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.")
 	}
+	go s.printAuthURLLoop()
 
 	// Run the localapi handler, to allow fetching LetsEncrypt certs.
 	lah := localapi.NewHandler(lb, logf, logid)
@@ -228,6 +256,7 @@ func (s *Server) start() error {
 	// nettest.Listen provides a in-memory pipe based implementation for net.Conn.
 	// TODO(maisem): Rename nettest package to remove "test".
 	lal := nettest.Listen("local-tailscaled.sock:80")
+	s.localAPIListener = lal
 
 	// Override the Tailscale client to use the in-process listener.
 	tailscale.TailscaledDialer = lal.Dial
@@ -237,6 +266,37 @@ func (s *Server) start() error {
 		}
 	}()
 	return nil
+}
+
+func (s *Server) logf(format string, a ...interface{}) {
+	if s.Logf != nil {
+		s.Logf(format, a...)
+		return
+	}
+	log.Printf(format, a...)
+}
+
+// printAuthURLLoop loops once every few seconds while the server is still running and
+// is in NeedsLogin state, printing out the auth URL.
+func (s *Server) printAuthURLLoop() {
+	for {
+		if s.shutdownCtx.Err() != nil {
+			return
+		}
+		if st := s.lb.State(); st != ipn.NeedsLogin {
+			s.logf("printAuthURLLoop: state is %v; stopping", st)
+			return
+		}
+		st := s.lb.StatusWithoutPeers()
+		if st.AuthURL != "" {
+			s.logf("To start this tsnet server, restart with TS_AUTHKEY set, or go to: %s", st.AuthURL)
+		}
+		select {
+		case <-time.After(5 * time.Second):
+		case <-s.shutdownCtx.Done():
+			return
+		}
+	}
 }
 
 func (s *Server) forwardTCP(c net.Conn, port uint16) {
@@ -254,6 +314,49 @@ func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	case <-t.C:
 		c.Close()
 	}
+}
+
+// getTSNetDir usually just returns filepath.Join(confDir, "tsnet-"+prog)
+// with no error.
+//
+// One special case is that it renames old "tslib-" directories to
+// "tsnet-", and that rename might return an error.
+//
+// TODO(bradfitz): remove this maybe 6 months after 2022-03-17,
+// once people (notably Tailscale corp services) have updated.
+func getTSNetDir(logf logger.Logf, confDir, prog string) (string, error) {
+	oldPath := filepath.Join(confDir, "tslib-"+prog)
+	newPath := filepath.Join(confDir, "tsnet-"+prog)
+
+	fi, err := os.Lstat(oldPath)
+	if os.IsNotExist(err) {
+		// Common path.
+		return newPath, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("expected old tslib path %q to be a directory; got %v", oldPath, fi.Mode())
+	}
+
+	// At this point, oldPath exists and is a directory. But does
+	// the new path exist?
+
+	fi, err = os.Lstat(newPath)
+	if err == nil && fi.IsDir() {
+		// New path already exists somehow. Ignore the old one and
+		// don't try to migrate it.
+		return newPath, nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return "", err
+	}
+	logf("renamed old tsnet state storage directory %q to %q", oldPath, newPath)
+	return newPath, nil
 }
 
 // Listen announces only on the Tailscale network.
