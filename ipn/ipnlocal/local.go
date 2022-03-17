@@ -444,10 +444,10 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netaddr.IPPrefix) bool {
 			return r.Bits() == 0
 		})
-		var tags *views.StringSlice
+		var tags *views.Slice[string]
 		var primaryRoutes *views.IPPrefixSlice
 		if p.Tags != nil {
-			v := views.StringSliceOf(p.Tags)
+			v := views.SliceOf(p.Tags)
 			tags = &v
 		}
 		if p.PrimaryRoutes != nil {

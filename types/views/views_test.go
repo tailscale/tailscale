@@ -23,10 +23,12 @@ func TestViewsJSON(t *testing.T) {
 	}
 	type viewStruct struct {
 		Addrs      IPPrefixSlice
-		Strings    StringSlice
+		Strings    Slice[string]
 		AddrsPtr   *IPPrefixSlice `json:",omitempty"`
-		StringsPtr *StringSlice   `json:",omitempty"`
+		StringsPtr *Slice[string] `json:",omitempty"`
 	}
+	ipp := IPPrefixSliceOf(mustCIDR("192.168.0.0/24"))
+	ss := SliceOf([]string{"bar"})
 	tests := []struct {
 		name     string
 		in       viewStruct
@@ -40,12 +42,12 @@ func TestViewsJSON(t *testing.T) {
 		{
 			name: "everything",
 			in: viewStruct{
-				Addrs:      IPPrefixSliceOf(mustCIDR("192.168.0.0/24")),
-				AddrsPtr:   &IPPrefixSlice{mustCIDR("192.168.0.0/24")},
-				StringsPtr: &StringSlice{[]string{"foo"}},
-				Strings:    StringSlice{[]string{"bar"}},
+				Addrs:      ipp,
+				AddrsPtr:   &ipp,
+				StringsPtr: &ss,
+				Strings:    ss,
 			},
-			wantJSON: `{"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["foo"]}`,
+			wantJSON: `{"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
 		},
 	}
 
