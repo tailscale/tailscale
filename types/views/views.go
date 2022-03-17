@@ -84,8 +84,8 @@ func (v IPPrefixSlice) AppendTo(dst []netaddr.IPPrefix) []netaddr.IPPrefix {
 	return v.ж.AppendTo(dst)
 }
 
-// Generic returns the underlying Slice[netaddr.IPPrefix].
-func (v IPPrefixSlice) Generic() Slice[netaddr.IPPrefix] {
+// Unwrap returns the underlying Slice[netaddr.IPPrefix].
+func (v IPPrefixSlice) Unwrap() Slice[netaddr.IPPrefix] {
 	return v.ж
 }
 
