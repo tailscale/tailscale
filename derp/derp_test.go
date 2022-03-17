@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"errors"
 	"expvar"
@@ -789,6 +790,17 @@ func TestMetaCert(t *testing.T) {
 	}
 	if g, w := cert.Subject.CommonName, fmt.Sprintf("derpkey%s", pub.UntypedHexString()); g != w {
 		t.Errorf("CommonName = %q; want %q", g, w)
+	}
+	if n := len(cert.Extensions); n != 1 {
+		t.Fatalf("got %d extensions; want 1", n)
+	}
+
+	// oidExtensionBasicConstraints is the Basic Constraints ID copied
+	// from the x509 package.
+	oidExtensionBasicConstraints := asn1.ObjectIdentifier{2, 5, 29, 19}
+
+	if id := cert.Extensions[0].Id; !id.Equal(oidExtensionBasicConstraints) {
+		t.Errorf("extension ID = %v; want %v", id, oidExtensionBasicConstraints)
 	}
 }
 
