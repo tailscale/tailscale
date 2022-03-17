@@ -527,12 +527,12 @@ func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
 	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
 }
 
-func (v HostinfoView) RequestTags() views.StringSlice {
-	return views.StringSliceOf(v.ж.RequestTags)
+func (v HostinfoView) RequestTags() views.Slice[string] {
+	return views.SliceOf(v.ж.RequestTags)
 }
 
-func (v HostinfoView) SSH_HostKeys() views.StringSlice {
-	return views.StringSliceOf(v.ж.SSH_HostKeys)
+func (v HostinfoView) SSH_HostKeys() views.Slice[string] {
+	return views.SliceOf(v.ж.SSH_HostKeys)
 }
 
 func (v HostinfoView) Services() ServiceSlice {

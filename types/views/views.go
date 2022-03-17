@@ -14,25 +14,25 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
-// StringSlice is a read-only accessor for a slice of strings.
-type StringSlice struct {
+// Slice is a read-only accessor for a slice.
+type Slice[T any] struct {
 	// It is named distinctively to make you think of how dangerous it is to escape
 	// to callers. You must not let callers be able to mutate it.
-	ж []string
+	ж []T
 }
 
-// StringSliceOf returns a StringSlice for the provided slice.
-func StringSliceOf(x []string) StringSlice { return StringSlice{x} }
+// SliceOf returns a Slice for the provided slice.
+func SliceOf[T any](x []T) Slice[T] { return Slice[T]{x} }
 
 // MarshalJSON implements json.Marshaler.
-func (v StringSlice) MarshalJSON() ([]byte, error) {
+func (v Slice[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.ж)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (v *StringSlice) UnmarshalJSON(b []byte) error {
+func (v *Slice[T]) UnmarshalJSON(b []byte) error {
 	if v.ж != nil {
-		return errors.New("StringSlice is already initialized")
+		return errors.New("Slice is already initialized")
 	}
 	if len(b) == 0 {
 		return nil
@@ -44,83 +44,77 @@ func (v *StringSlice) UnmarshalJSON(b []byte) error {
 }
 
 // IsNil reports whether the underlying slice is nil.
-func (v StringSlice) IsNil() bool { return v.ж == nil }
+func (v Slice[T]) IsNil() bool { return v.ж == nil }
 
 // Len returns the length of the slice.
-func (v StringSlice) Len() int { return len(v.ж) }
+func (v Slice[T]) Len() int { return len(v.ж) }
 
-// At returns the string at index `i` of the slice.
-func (v StringSlice) At(i int) string { return v.ж[i] }
+// At returns the element at index `i` of the slice.
+func (v Slice[T]) At(i int) T { return v.ж[i] }
 
 // AppendTo appends the underlying slice values to dst.
-func (v StringSlice) AppendTo(dst []string) []string {
+func (v Slice[T]) AppendTo(dst []T) []T {
 	return append(dst, v.ж...)
 }
 
 // AsSlice returns a copy of underlying slice.
-func (v StringSlice) AsSlice() []string {
+func (v Slice[T]) AsSlice() []T {
 	return v.AppendTo(v.ж[:0:0])
 }
 
 // IPPrefixSlice is a read-only accessor for a slice of netaddr.IPPrefix.
 type IPPrefixSlice struct {
-	// It is named distinctively to make you think of how dangerous it is to escape
-	// to callers. You must not let callers be able to mutate it.jd
-	ж []netaddr.IPPrefix
+	ж Slice[netaddr.IPPrefix]
 }
 
 // IPPrefixSliceOf returns a IPPrefixSlice for the provided slice.
-func IPPrefixSliceOf(x []netaddr.IPPrefix) IPPrefixSlice { return IPPrefixSlice{x} }
+func IPPrefixSliceOf(x []netaddr.IPPrefix) IPPrefixSlice { return IPPrefixSlice{SliceOf(x)} }
 
 // IsNil reports whether the underlying slice is nil.
-func (v IPPrefixSlice) IsNil() bool { return v.ж == nil }
+func (v IPPrefixSlice) IsNil() bool { return v.ж.IsNil() }
 
 // Len returns the length of the slice.
-func (v IPPrefixSlice) Len() int { return len(v.ж) }
+func (v IPPrefixSlice) Len() int { return v.ж.Len() }
 
 // At returns the IPPrefix at index `i` of the slice.
-func (v IPPrefixSlice) At(i int) netaddr.IPPrefix { return v.ж[i] }
+func (v IPPrefixSlice) At(i int) netaddr.IPPrefix { return v.ж.At(i) }
 
-// Append appends the underlying slice values to dst.
+// AppendTo appends the underlying slice values to dst.
 func (v IPPrefixSlice) AppendTo(dst []netaddr.IPPrefix) []netaddr.IPPrefix {
-	return append(dst, v.ж...)
+	return v.ж.AppendTo(dst)
+}
+
+// Generic returns the underlying Slice[netaddr.IPPrefix].
+func (v IPPrefixSlice) Generic() Slice[netaddr.IPPrefix] {
+	return v.ж
 }
 
 // AsSlice returns a copy of underlying slice.
 func (v IPPrefixSlice) AsSlice() []netaddr.IPPrefix {
-	return v.AppendTo(v.ж[:0:0])
+	return v.ж.AsSlice()
 }
 
 // PrefixesContainsIP reports whether any IPPrefix contains IP.
 func (v IPPrefixSlice) ContainsIP(ip netaddr.IP) bool {
-	return tsaddr.PrefixesContainsIP(v.ж, ip)
+	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
 }
 
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
 func (v IPPrefixSlice) ContainsFunc(f func(netaddr.IPPrefix) bool) bool {
-	return tsaddr.PrefixesContainsFunc(v.ж, f)
+	return tsaddr.PrefixesContainsFunc(v.ж.ж, f)
 }
 
 // ContainsExitRoutes reports whether v contains ExitNode Routes.
 func (v IPPrefixSlice) ContainsExitRoutes() bool {
-	return tsaddr.ContainsExitRoutes(v.ж)
+	return tsaddr.ContainsExitRoutes(v.ж.ж)
 }
 
 // MarshalJSON implements json.Marshaler.
 func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.ж)
+	return v.ж.MarshalJSON()
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
-	if v.ж != nil {
-		return errors.New("IPPrefixSlice is already initialized")
-	}
-	if len(b) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(b, &v.ж); err != nil {
-		return err
-	}
-	return nil
+	return v.ж.UnmarshalJSON(b)
 }
