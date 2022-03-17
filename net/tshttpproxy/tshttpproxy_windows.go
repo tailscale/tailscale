@@ -14,13 +14,16 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"github.com/alexbrainman/sspi/negotiate"
 	"golang.org/x/sys/windows"
+	"tailscale.com/hostinfo"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cmpver"
 )
 
 var (
@@ -146,6 +149,7 @@ func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err e
 var userAgent = windows.StringToUTF16Ptr("Tailscale")
 
 const (
+	winHTTP_ACCESS_TYPE_DEFAULT_PROXY   = 0
 	winHTTP_ACCESS_TYPE_AUTOMATIC_PROXY = 4
 	winHTTP_AUTOPROXY_ALLOW_AUTOCONFIG  = 0x00000100
 	winHTTP_AUTOPROXY_AUTO_DETECT       = 1
@@ -153,13 +157,34 @@ const (
 	winHTTP_AUTO_DETECT_TYPE_DNS_A      = 0x00000002
 )
 
+// Windows 8.1 is actually Windows 6.3 under the hood. Yay, marketing!
+const win8dot1Ver = "6.3"
+
+// accessType is the flag we must pass to WinHttpOpen for proxy resolution
+// depending on whether or not we're running Windows < 8.1
+var accessType atomic.Value // of uint32
+
+func getAccessFlag() uint32 {
+	if flag, ok := accessType.Load().(uint32); ok {
+		return flag
+	}
+	var flag uint32
+	if cmpver.Compare(hostinfo.GetOSVersion(), win8dot1Ver) < 0 {
+		flag = winHTTP_ACCESS_TYPE_DEFAULT_PROXY
+	} else {
+		flag = winHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+	}
+	accessType.Store(flag)
+	return flag
+}
+
 func winHTTPOpen() (winHTTPInternet, error) {
 	if err := httpOpenProc.Find(); err != nil {
 		return 0, err
 	}
 	r, _, err := httpOpenProc.Call(
 		uintptr(unsafe.Pointer(userAgent)),
-		winHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+		uintptr(getAccessFlag()),
 		0, /* WINHTTP_NO_PROXY_NAME */
 		0, /* WINHTTP_NO_PROXY_BYPASS */
 		0)
