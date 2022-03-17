@@ -126,7 +126,7 @@ func TestMatchRule(t *testing.T) {
 			name: "match-principal-node-ip",
 			rule: &tailcfg.SSHRule{
 				Action:     someAction,
-				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
+				Principals: []*tailcfg.SSHPrincipal{{NodeIP: netaddr.MustParseIP("1.2.3.4")}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
 			ci:       &sshConnInfo{src: netaddr.MustParseIPPort("1.2.3.4:30343")},

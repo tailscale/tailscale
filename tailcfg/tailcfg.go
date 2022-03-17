@@ -1585,7 +1585,7 @@ type SSHRule struct {
 // Any matching field causes a match.
 type SSHPrincipal struct {
 	Node      StableNodeID `json:"node,omitempty"`
-	NodeIP    string       `json:"nodeIP,omitempty"`
+	NodeIP    netaddr.IP   `json:"nodeIP,omitempty"`
 	UserLogin string       `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
 
 	// Any, if true, matches any user.

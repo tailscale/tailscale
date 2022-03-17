@@ -612,10 +612,8 @@ func matchesPrincipal(ps []*tailcfg.SSHPrincipal, ci *sshConnInfo) bool {
 		if !p.Node.IsZero() && ci.node != nil && p.Node == ci.node.StableID {
 			return true
 		}
-		if p.NodeIP != "" {
-			if ip, _ := netaddr.ParseIP(p.NodeIP); ip == ci.src.IP() {
-				return true
-			}
+		if !p.NodeIP.IsZero() && p.NodeIP == ci.src.IP() {
+			return true
 		}
 		if p.UserLogin != "" && ci.uprof != nil && ci.uprof.LoginName == p.UserLogin {
 			return true
