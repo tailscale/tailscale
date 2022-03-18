@@ -27,10 +27,12 @@ type Filter struct {
 	// destination within local, regardless of the policy filter
 	// below.
 	local *netaddr.IPSet
+
 	// logIPs is the set of IPs that are allowed to appear in flow
 	// logs. If a packet is to or from an IP not in logIPs, it will
 	// never be logged.
 	logIPs *netaddr.IPSet
+
 	// matches4 and matches6 are lists of match->action rules
 	// applied to all packets arriving over tailscale
 	// tunnels. Matches are checked in order, and processing stops
@@ -38,6 +40,11 @@ type Filter struct {
 	// match is to drop the packet.
 	matches4 matches
 	matches6 matches
+
+	// cap4 and cap6 are the subsets of the matches that are about
+	// capability grants, partitioned by source IP address family.
+	cap4, cap6 matches
+
 	// state is the connection tracking state attached to this
 	// filter. It is used to allow incoming traffic that is a response
 	// to an outbound connection that this node made, even if those
@@ -174,6 +181,8 @@ func New(matches []Match, localNets *netaddr.IPSet, logIPs *netaddr.IPSet, share
 		logf:     logf,
 		matches4: matchesFamily(matches, netaddr.IP.Is4),
 		matches6: matchesFamily(matches, netaddr.IP.Is6),
+		cap4:     capMatchesFunc(matches, netaddr.IP.Is4),
+		cap6:     capMatchesFunc(matches, netaddr.IP.Is6),
 		local:    localNets,
 		logIPs:   logIPs,
 		state:    state,
@@ -199,6 +208,27 @@ func matchesFamily(ms matches, keep func(netaddr.IP) bool) matches {
 			}
 		}
 		if len(retm.Srcs) > 0 && len(retm.Dsts) > 0 {
+			ret = append(ret, retm)
+		}
+	}
+	return ret
+}
+
+// capMatchesFunc returns a copy of the subset of ms for which keep(srcNet.IP)
+// and the match is a capability grant.
+func capMatchesFunc(ms matches, keep func(netaddr.IP) bool) matches {
+	var ret matches
+	for _, m := range ms {
+		if len(m.Caps) == 0 {
+			continue
+		}
+		retm := Match{Caps: m.Caps}
+		for _, src := range m.Srcs {
+			if keep(src.IP()) {
+				retm.Srcs = append(retm.Srcs, src)
+			}
+		}
+		if len(retm.Srcs) > 0 {
 			ret = append(ret, retm)
 		}
 	}
@@ -289,6 +319,30 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	pkt.TCPFlags = packet.TCPSyn
 
 	return f.RunIn(pkt, 0)
+}
+
+// AppendCaps appends to base the capabilities that srcIP has talking
+// to dstIP.
+func (f *Filter) AppendCaps(base []string, srcIP, dstIP netaddr.IP) []string {
+	ret := base
+	var mm matches
+	switch {
+	case srcIP.Is4():
+		mm = f.cap4
+	case srcIP.Is6():
+		mm = f.cap6
+	}
+	for _, m := range mm {
+		if !ipInList(srcIP, m.Srcs) {
+			continue
+		}
+		for _, cm := range m.Caps {
+			if cm.Cap != "" && cm.Dst.Contains(dstIP) {
+				ret = append(ret, cm.Cap)
+			}
+		}
+	}
+	return ret
 }
 
 // ShieldsUp reports whether this is a "shields up" (block everything

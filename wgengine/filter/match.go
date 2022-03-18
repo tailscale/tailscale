@@ -47,12 +47,24 @@ func (npr NetPortRange) String() string {
 	return fmt.Sprintf("%v:%v", npr.Net, npr.Ports)
 }
 
+// CapMatch is a capability grant match predicate.
+type CapMatch struct {
+	// Dst is the IP prefix that the destination IP address matches against
+	// to get the capability.
+	Dst netaddr.IPPrefix
+
+	// Cap is the capability that's granted if the destination IP addresses
+	// matches Dst.
+	Cap string
+}
+
 // Match matches packets from any IP address in Srcs to any ip:port in
 // Dsts.
 type Match struct {
 	IPProto []ipproto.Proto // required set (no default value at this layer)
-	Dsts    []NetPortRange
 	Srcs    []netaddr.IPPrefix
+	Dsts    []NetPortRange // optional, if Srcs match
+	Caps    []CapMatch     // optional, if Srcs match
 }
 
 func (m Match) String() string {

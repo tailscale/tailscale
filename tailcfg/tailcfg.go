@@ -68,7 +68,8 @@ type CapabilityVersion int
 //    29: 2022-03-21: MapResponse.PopBrowserURL
 //    30: 2022-03-22: client can request id tokens.
 //    31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
-const CurrentCapabilityVersion CapabilityVersion = 31
+//    32: 2022-04-17: client knows FilterRule.CapMatch
+const CurrentCapabilityVersion CapabilityVersion = 32
 
 type StableID string
 
@@ -1051,6 +1052,18 @@ type NetPortRange struct {
 	Ports PortRange
 }
 
+// CapGrant grants capabilities in a FilterRule.
+type CapGrant struct {
+	// Dsts are the destination IP ranges that this capabilty
+	// grant matches.
+	Dsts []netaddr.IPPrefix
+
+	// Caps are the capabilities the source IP matched by
+	// FilterRule.SrcIPs are granted to the destination IP,
+	// matched by Dsts.
+	Caps []string `json:",omitempty"`
+}
+
 // FilterRule represents one rule in a packet filter.
 //
 // A rule is logically a set of source CIDRs to match (described by
@@ -1081,7 +1094,9 @@ type FilterRule struct {
 
 	// DstPorts are the port ranges to allow once a source IP
 	// matches (is in the CIDR described by SrcIPs & SrcBits).
-	DstPorts []NetPortRange
+	//
+	// CapGrant and DstPorts are mutually exclusive: at most one can be non-nil.
+	DstPorts []NetPortRange `json:",omitempty"`
 
 	// IPProto are the IP protocol numbers to match.
 	//
@@ -1093,6 +1108,18 @@ type FilterRule struct {
 	// Depending on the IPProto values, DstPorts may or may not be
 	// used.
 	IPProto []int `json:",omitempty"`
+
+	// CapGrant, if non-empty, are the capabilities to
+	// conditionally grant to the source IP in SrcIPs.
+	//
+	// Think of DstPorts as "capabilities for networking" and
+	// CapGrant as arbitrary application-defined capabilities
+	// defined between the admin's ACLs and the application
+	// doing WhoIs lookups, looking up the remote IP address's
+	// application-level capabilities.
+	//
+	// CapGrant and DstPorts are mutually exclusive: at most one can be non-nil.
+	CapGrant []CapGrant `json:",omitempty"`
 }
 
 var FilterAllowAll = []FilterRule{

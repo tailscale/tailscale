@@ -70,6 +70,16 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 				})
 			}
 		}
+		for _, cm := range r.CapGrant {
+			for _, dstNet := range cm.Dsts {
+				for _, cap := range cm.Caps {
+					m.Caps = append(m.Caps, CapMatch{
+						Dst: dstNet,
+						Cap: cap,
+					})
+				}
+			}
+		}
 
 		mm = append(mm, m)
 	}

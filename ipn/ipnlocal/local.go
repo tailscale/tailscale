@@ -526,6 +526,30 @@ func (b *LocalBackend) WhoIs(ipp netaddr.IPPort) (n *tailcfg.Node, u tailcfg.Use
 	return n, u, true
 }
 
+// PeerCaps returns the capabilities that remote src IP has to
+// ths current node.
+func (b *LocalBackend) PeerCaps(src netaddr.IP) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.netMap == nil {
+		return nil
+	}
+	filt, ok := b.filterAtomic.Load().(*filter.Filter)
+	if !ok {
+		return nil
+	}
+	for _, a := range b.netMap.Addresses {
+		if !a.IsSingleIP() {
+			continue
+		}
+		dstIP := a.IP()
+		if dstIP.BitLen() == src.BitLen() {
+			return filt.AppendCaps(nil, src, a.IP())
+		}
+	}
+	return nil
+}
+
 // SetDecompressor sets a decompression function, which must be a zstd
 // reader.
 //
