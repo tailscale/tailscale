@@ -11,6 +11,9 @@ import "tailscale.com/tailcfg"
 type WhoIsResponse struct {
 	Node        *tailcfg.Node
 	UserProfile *tailcfg.UserProfile
+
+	// Caps are extra capabilities that the remote Node has to this node.
+	Caps []string `json:",omitempty"`
 }
 
 // FileTarget is a node to which files can be sent, and the PeerAPI

@@ -21,14 +21,16 @@ func (src *Match) Clone() *Match {
 	dst := new(Match)
 	*dst = *src
 	dst.IPProto = append(src.IPProto[:0:0], src.IPProto...)
-	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
+	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
+	dst.Caps = append(src.Caps[:0:0], src.Caps...)
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MatchCloneNeedsRegeneration = Match(struct {
 	IPProto []ipproto.Proto
-	Dsts    []NetPortRange
 	Srcs    []netaddr.IPPrefix
+	Dsts    []NetPortRange
+	Caps    []CapMatch
 }{})
