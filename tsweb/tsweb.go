@@ -112,7 +112,13 @@ func Uptime() time.Duration { return time.Since(timeStart).Round(time.Second) }
 // Port80Handler is the handler to be given to
 // autocert.Manager.HTTPHandler.  The inner handler is the mux
 // returned by NewMux containing registered /debug handlers.
-type Port80Handler struct{ Main http.Handler }
+type Port80Handler struct {
+	Main http.Handler
+	// FQDN is used to redirect incoming requests to https://<FQDN>.
+	// If it is not set, the hostname is calculated from the incoming
+	// request.
+	FQDN string
+}
 
 func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.RequestURI
@@ -128,16 +134,12 @@ func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Redirect authorized user to the debug handler.
 		path = "/debug/"
 	}
-	target := "https://" + stripPort(r.Host) + path
-	http.Redirect(w, r, target, http.StatusFound)
-}
-
-func stripPort(hostport string) string {
-	host, _, err := net.SplitHostPort(hostport)
-	if err != nil {
-		return hostport
+	host := h.FQDN
+	if host == "" {
+		host = r.URL.Hostname()
 	}
-	return net.JoinHostPort(host, "443")
+	target := "https://" + host + path
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // ReturnHandler is like net/http.Handler, but the handler can return an
