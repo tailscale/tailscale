@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"tailscale.com/util/cibuild"
 )
 
 func TestInQemu(t *testing.T) {
@@ -33,7 +35,7 @@ func TestInQemu(t *testing.T) {
 		{"mips64le", "mips64el"},
 		{"386", "386"},
 	}
-	inCI := os.Getenv("CI") == "true"
+	inCI := cibuild.On()
 	for _, arch := range arches {
 		arch := arch
 		t.Run(arch.Goarch, func(t *testing.T) {
