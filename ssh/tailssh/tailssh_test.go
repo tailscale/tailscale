@@ -292,6 +292,11 @@ func TestSSH(t *testing.T) {
 	})
 
 	t.Run("stdin", func(t *testing.T) {
+		if os.Getenv("CI") == "true" {
+			// CI env variable is set by GitHub.
+			// https://docs.github.com/en/actions/learn-github-actions/environment-variables#default-environment-variables
+			t.Skip("Skipping for now; see https://github.com/tailscale/tailscale/issues/4051")
+		}
 		cmd := execSSH("cat")
 		var outBuf bytes.Buffer
 		cmd.Stdout = &outBuf
