@@ -6,24 +6,24 @@ usage:
 	echo "See Makefile"
 
 vet:
-	go vet ./...
+	./tool/go vet ./...
 
 updatedeps:
-	go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscaled
-	go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscale
+	./tool/go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscaled
+	./tool/go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscale
 
 depaware:
-	go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
-	go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscale
+	./tool/go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
+	./tool/go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscale
 
 buildwindows:
-	GOOS=windows GOARCH=amd64 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=windows GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 build386:
-	GOOS=linux GOARCH=386 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=linux GOARCH=386 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 buildlinuxarm:
-	GOOS=linux GOARCH=arm go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=linux GOARCH=arm ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 buildmultiarchimage:
 	./build_docker.sh
@@ -31,7 +31,7 @@ buildmultiarchimage:
 check: staticcheck vet depaware buildwindows build386 buildlinuxarm
 
 staticcheck:
-	go run honnef.co/go/tools/cmd/staticcheck -- $$(go list ./... | grep -v tempfork)
+	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go list ./... | grep -v tempfork)
 
 spk:
 	PATH="${PWD}/tool:${PATH}" ./tool/go run github.com/tailscale/tailscale-synology@main -o tailscale.spk --source=. --goarch=${SYNO_ARCH} --dsm-version=${SYNO_DSM}
