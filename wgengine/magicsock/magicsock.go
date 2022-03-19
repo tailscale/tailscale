@@ -905,9 +905,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 	if res.NodeName == "" {
 		res.NodeName = peer.Hostinfo.Hostname() // else hostname
 	} else {
-		if i := strings.Index(res.NodeName, "."); i != -1 {
-			res.NodeName = res.NodeName[:i]
-		}
+		res.NodeName, _, _ = strings.Cut(res.NodeName, ".")
 	}
 
 	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
