@@ -206,8 +206,6 @@ func root(w http.ResponseWriter, r *http.Request) {
 
 // firstLabel s up until the first period, if any.
 func firstLabel(s string) string {
-	if i := strings.Index(s, "."); i != -1 {
-		return s[:i]
-	}
+	s, _, _ = strings.Cut(s, ".")
 	return s
 }

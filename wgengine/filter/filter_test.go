@@ -676,7 +676,7 @@ func pfx(strs ...string) (ret []netaddr.IPPrefix) {
 
 func nets(nets ...string) (ret []netaddr.IPPrefix) {
 	for _, s := range nets {
-		if i := strings.IndexByte(s, '/'); i == -1 {
+		if !strings.Contains(s, "/") {
 			ip, err := netaddr.ParseIP(s)
 			if err != nil {
 				panic(err)

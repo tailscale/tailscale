@@ -65,10 +65,7 @@ func Parse(r io.Reader) (*Config, error) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		i := strings.IndexByte(line, '#')
-		if i >= 0 {
-			line = line[:i]
-		}
+		line, _, _ = strings.Cut(line, "#") // remove any comments
 		line = strings.TrimSpace(line)
 
 		if strings.HasPrefix(line, "nameserver") {

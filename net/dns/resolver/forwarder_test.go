@@ -37,13 +37,13 @@ func TestResolversWithDelays(t *testing.T) {
 	o := func(ss ...string) (rr []resolverAndDelay) {
 		for _, s := range ss {
 			var d time.Duration
-			if i := strings.Index(s, "+"); i != -1 {
+			s, durStr, hasPlus := strings.Cut(s, "+")
+			if hasPlus {
 				var err error
-				d, err = time.ParseDuration(s[i+1:])
+				d, err = time.ParseDuration(durStr)
 				if err != nil {
 					panic(fmt.Sprintf("parsing duration in %q: %v", s, err))
 				}
-				s = s[:i]
 			}
 			host, _, err := net.SplitHostPort(s)
 			if err != nil {

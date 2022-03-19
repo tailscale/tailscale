@@ -196,12 +196,11 @@ func maxDoHInFlight(goos string) int {
 		// Unknown iOS version, be cautious.
 		return 10
 	}
-	idx := strings.Index(ver, ".")
-	if idx == -1 {
+	major, _, ok := strings.Cut(ver, ".")
+	if !ok {
 		// Unknown iOS version, be cautious.
 		return 10
 	}
-	major := ver[:idx]
 	if m, err := strconv.Atoi(major); err != nil || m < 15 {
 		return 10
 	}

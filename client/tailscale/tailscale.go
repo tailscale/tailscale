@@ -116,10 +116,7 @@ func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 	if ue, ok := err.(*url.Error); ok {
 		if oe, ok := ue.Err.(*net.OpError); ok && oe.Op == "dial" {
 			path := req.URL.Path
-			pathPrefix := path
-			if i := strings.Index(path, "?"); i != -1 {
-				pathPrefix = path[:i]
-			}
+			pathPrefix, _, _ := strings.Cut(path, "?")
 			return nil, fmt.Errorf("Failed to connect to local Tailscale daemon for %s; %s Error: %w", pathPrefix, tailscaledConnectHint(), oe)
 		}
 	}
@@ -520,8 +517,8 @@ func tailscaledConnectHint() string {
 	// SubState=dead
 	st := map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
-		if i := strings.Index(line, "="); i != -1 {
-			st[line[:i]] = strings.TrimSpace(line[i+1:])
+		if k, v, ok := strings.Cut(line, "="); ok {
+			st[k] = strings.TrimSpace(v)
 		}
 	}
 	if st["LoadState"] == "loaded" &&

@@ -188,8 +188,8 @@ func peerDebugName(p *tailcfg.Node) string {
 		return ""
 	}
 	n := p.Name
-	if i := strings.Index(n, "."); i != -1 {
-		return n[:i]
+	if base, _, ok := strings.Cut(n, "."); ok {
+		return base
 	}
 	return p.Hostinfo.Hostname()
 }
