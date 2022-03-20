@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,7 +57,7 @@ func (p *Prober) Expvar() expvar.Var {
 // Run executes fun every interval, and exports probe results under probeName.
 //
 // Registering a probe under an already-registered name panics.
-func (p *Prober) Run(name string, interval time.Duration, fun ProbeFunc) *Probe {
+func (p *Prober) Run(name string, interval time.Duration, labels map[string]string, fun ProbeFunc) *Probe {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.probes[name]; ok {
@@ -75,6 +76,7 @@ func (p *Prober) Run(name string, interval time.Duration, fun ProbeFunc) *Probe 
 		doProbe:  fun,
 		interval: interval,
 		tick:     ticker,
+		labels:   labels,
 	}
 	p.probes[name] = probe
 	go probe.loop()
@@ -107,11 +109,12 @@ type Probe struct {
 	doProbe  ProbeFunc
 	interval time.Duration
 	tick     ticker
+	labels   map[string]string
 
 	mu     sync.Mutex
-	start  time.Time
-	end    time.Time
-	result bool
+	start  time.Time // last time doProbe started
+	end    time.Time // last time doProbe returned
+	result bool      // whether the last doProbe call succeeded
 }
 
 // Close shuts down the Probe and unregisters it from its Prober.
@@ -189,13 +192,19 @@ type varExporter struct {
 	p *Prober
 }
 
+// probeInfo is the state of a Probe. Used in expvar-format debug
+// data.
+type probeInfo struct {
+	Labels  map[string]string
+	Start   time.Time
+	End     time.Time
+	Latency string // as a string because time.Duration doesn't encode readably to JSON
+	Result  bool
+}
+
+// String implements expvar.Var, returning the prober's state as an
+// encoded JSON map of probe name to its probeInfo.
 func (v varExporter) String() string {
-	type probeInfo struct {
-		Start   time.Time
-		End     time.Time
-		Latency string
-		Result  bool
-	}
 	out := map[string]probeInfo{}
 
 	v.p.mu.Lock()
@@ -208,6 +217,7 @@ func (v varExporter) String() string {
 	for _, probe := range probes {
 		probe.mu.Lock()
 		inf := probeInfo{
+			Labels: probe.labels,
 			Start:  probe.start,
 			End:    probe.end,
 			Result: probe.result,
@@ -226,6 +236,20 @@ func (v varExporter) String() string {
 	return string(bs)
 }
 
+// WritePrometheus writes the the state of all probes to w.
+//
+// For each probe, WritePrometheus exports 5 variables:
+//  - <prefix>_interval_secs, how frequently the probe runs.
+//  - <prefix>_start_secs, when the probe last started running, in seconds since epoch.
+//  - <prefix>_end_secs, when the probe last finished running, in seconds since epoch.
+//  - <prefix>_latency_millis, how long the last probe cycle took, in
+//    milliseconds. This is just (end_secs-start_secs) in an easier to
+//    graph form.
+//  - <prefix>_result, 1 if the last probe succeeded, 0 if it failed.
+//
+// Each probe has a set of static key/value labels (defined once at
+// probe creation), which are added as Prometheus metric labels to
+// that probe's variables.
 func (v varExporter) WritePrometheus(w io.Writer, prefix string) {
 	v.p.mu.Lock()
 	probes := make([]*Probe, 0, len(v.p.probes))
@@ -239,18 +263,30 @@ func (v varExporter) WritePrometheus(w io.Writer, prefix string) {
 	})
 	for _, probe := range probes {
 		probe.mu.Lock()
-		fmt.Fprintf(w, "%s_interval_secs{probe=%q} %f\n", prefix, probe.name, probe.interval.Seconds())
+		keys := make([]string, 0, len(probe.labels))
+		for k := range probe.labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "name=%q", probe.name)
+		for _, k := range keys {
+			fmt.Fprintf(&sb, ",%s=%q", k, probe.labels[k])
+		}
+		labels := sb.String()
+
+		fmt.Fprintf(w, "%s_interval_secs{%s} %f\n", prefix, labels, probe.interval.Seconds())
 		if !probe.start.IsZero() {
-			fmt.Fprintf(w, "%s_start_secs{probe=%q} %d\n", prefix, probe.name, probe.start.Unix())
+			fmt.Fprintf(w, "%s_start_secs{%s} %d\n", prefix, labels, probe.start.Unix())
 		}
 		if !probe.end.IsZero() {
-			fmt.Fprintf(w, "%s_end_secs{probe=%q} %d\n", prefix, probe.name, probe.end.Unix())
+			fmt.Fprintf(w, "%s_end_secs{%s} %d\n", prefix, labels, probe.end.Unix())
 			// Start is always present if end is.
-			fmt.Fprintf(w, "%s_latency_millis{probe=%q} %d\n", prefix, probe.name, probe.end.Sub(probe.start).Milliseconds())
+			fmt.Fprintf(w, "%s_latency_millis{%s} %d\n", prefix, labels, probe.end.Sub(probe.start).Milliseconds())
 			if probe.result {
-				fmt.Fprintf(w, "%s_result{probe=%q} 1\n", prefix, probe.name)
+				fmt.Fprintf(w, "%s_result{%s} 1\n", prefix, labels)
 			} else {
-				fmt.Fprintf(w, "%s_result{probe=%q} 0\n", prefix, probe.name)
+				fmt.Fprintf(w, "%s_result{%s} 0\n", prefix, labels)
 			}
 		}
 		probe.mu.Unlock()
