@@ -12,8 +12,8 @@ import (
 
 // TCP returns a Probe that healthchecks a TCP endpoint.
 //
-// The Probe reports whether it can successfully connect to addr.
-func TCP(addr string) Probe {
+// The ProbeFunc reports whether it can successfully connect to addr.
+func TCP(addr string) ProbeFunc {
 	return func(ctx context.Context) error {
 		return probeTCP(ctx, addr)
 	}

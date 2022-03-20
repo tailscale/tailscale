@@ -18,10 +18,10 @@ import (
 	"tailscale.com/metrics"
 )
 
-// Probe is a function that probes something and reports whether the
+// ProbeFunc is a function that probes something and reports whether the
 // probe succeeded. The provided context must be used to ensure timely
 // cancellation and timeout behavior.
-type Probe func(context.Context) error
+type ProbeFunc func(context.Context) error
 
 // a Prober manages a set of probes and keeps track of their results.
 type Prober struct {
@@ -101,7 +101,7 @@ func (p *Prober) Expvar() *metrics.Set {
 // returns.
 //
 // Registering a probe under an already-registered name panics.
-func (p *Prober) Run(name string, interval time.Duration, fun Probe) context.CancelFunc {
+func (p *Prober) Run(name string, interval time.Duration, fun ProbeFunc) context.CancelFunc {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	ticker := p.registerLocked(name, interval)
@@ -120,7 +120,7 @@ func (p *Prober) Run(name string, interval time.Duration, fun Probe) context.Can
 
 // probeLoop invokes runProbe on fun every interval. The first probe
 // is run after interval.
-func (p *Prober) probeLoop(ctx context.Context, name string, interval time.Duration, tick ticker, fun Probe) {
+func (p *Prober) probeLoop(ctx context.Context, name string, interval time.Duration, tick ticker, fun ProbeFunc) {
 	defer func() {
 		p.unregister(name)
 		tick.Stop()
@@ -143,7 +143,7 @@ func (p *Prober) probeLoop(ctx context.Context, name string, interval time.Durat
 // fun is invoked with a timeout slightly less than interval, so that
 // the probe either succeeds or fails before the next cycle is
 // scheduled to start.
-func (p *Prober) runProbe(ctx context.Context, name string, interval time.Duration, fun Probe) {
+func (p *Prober) runProbe(ctx context.Context, name string, interval time.Duration, fun ProbeFunc) {
 	start := p.start(name)
 	defer func() {
 		// Prevent a panic within one probe function from killing the
