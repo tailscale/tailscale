@@ -14,10 +14,10 @@ import (
 
 // TLS returns a Probe that healthchecks a TLS endpoint.
 //
-// The Probe connects to hostname, does a TLS handshake, verifies that
-// the hostname matches the presented certificate, and that the
+// The ProbeFunc connects to hostname, does a TLS handshake, verifies
+// that the hostname matches the presented certificate, and that the
 // certificate expires in more than 7 days from the probe time.
-func TLS(hostname string) Probe {
+func TLS(hostname string) ProbeFunc {
 	return func(ctx context.Context) error {
 		return probeTLS(ctx, hostname)
 	}
