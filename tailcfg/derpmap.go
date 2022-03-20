@@ -68,6 +68,20 @@ type DERPRegion struct {
 	// away to a new region without Avoid set.
 	Avoid bool `json:",omitempty"`
 
+	// AnycastIPv4 and AnycastIPv6, if non-empty, specify that
+	// this region is discoverable via Anycast STUN queries. The
+	// STUN responses will indicate which region replied.
+	//
+	// Why a region has any anycast address for an address family,
+	// the Node-specific address(es) for that address family
+	// in the Nodes slice should not be used for STUN. They should,
+	// however, be used for TCP connections.
+	//
+	// If multiple regions share an anycast address, only one STUN
+	// query should be sent out (per address family) for the whole
+	// group.
+	AnycastIPv4, AnycastIPv6 string `json:",omitempty"`
+
 	// Nodes are the DERP nodes running in this region, in
 	// priority order for the current client. Client TLS
 	// connections should ideally only go to the first entry
