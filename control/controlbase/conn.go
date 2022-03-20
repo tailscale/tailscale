@@ -63,7 +63,6 @@ type txState struct {
 	sync.Mutex
 	cipher cipher.AEAD
 	nonce  nonce
-	buf    [maxMessageSize]byte
 	err    error // records the first partial write error for all future calls
 }
 
@@ -134,19 +133,19 @@ func (c *Conn) decryptLocked(msg []byte) (err error) {
 	return err
 }
 
-// encryptLocked encrypts plaintext into c.tx.buf (including the
+// encryptLocked encrypts plaintext into buf (including the
 // packet header) and returns a slice of the ciphertext, or an error
 // if the cipher is exhausted (i.e. can no longer be used safely).
-func (c *Conn) encryptLocked(plaintext []byte) ([]byte, error) {
+func (c *Conn) encryptLocked(plaintext []byte, buf *maxMsgBuffer) ([]byte, error) {
 	if !c.tx.nonce.Valid() {
 		// Received 2^64-1 messages on this cipher state. Connection
 		// is no longer usable.
 		return nil, errCipherExhausted{}
 	}
 
-	c.tx.buf[0] = msgTypeRecord
-	binary.BigEndian.PutUint16(c.tx.buf[1:headerLen], uint16(len(plaintext)+chp.Overhead))
-	ret := c.tx.cipher.Seal(c.tx.buf[:headerLen], c.tx.nonce[:], plaintext, nil)
+	buf[0] = msgTypeRecord
+	binary.BigEndian.PutUint16(buf[1:headerLen], uint16(len(plaintext)+chp.Overhead))
+	ret := c.tx.cipher.Seal(buf[:headerLen], c.tx.nonce[:], plaintext, nil)
 	c.tx.nonce.Increment()
 
 	return ret, nil
@@ -257,6 +256,9 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 		return 0, net.ErrClosed
 	}
 
+	buf := bufPool.Get().(*maxMsgBuffer)
+	defer bufPool.Put(buf)
+
 	var sent int
 	for len(bs) > 0 {
 		toSend := bs
@@ -265,7 +267,7 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 		}
 		bs = bs[len(toSend):]
 
-		ciphertext, err := c.encryptLocked(toSend)
+		ciphertext, err := c.encryptLocked(toSend, buf)
 		if err != nil {
 			return sent, err
 		}
@@ -354,4 +356,13 @@ func (n *nonce) Increment() {
 		panic("increment of invalid nonce")
 	}
 	binary.BigEndian.PutUint64(n[4:], 1+binary.BigEndian.Uint64(n[4:]))
+}
+
+type maxMsgBuffer [maxMessageSize]byte
+
+// bufPool holds the temporary buffers for Conn.Read & Write.
+var bufPool = &sync.Pool{
+	New: func() interface{} {
+		return new(maxMsgBuffer)
+	},
 }
