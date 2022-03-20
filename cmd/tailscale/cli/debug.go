@@ -192,7 +192,7 @@ func runDebug(ctx context.Context, args []string) error {
 		// to subcommands.
 		return nil
 	}
-	return errors.New("see 'tailscale debug --help")
+	return errors.New("see 'tailscale debug --help'")
 }
 
 func runLocalCreds(ctx context.Context, args []string) error {

@@ -175,6 +175,7 @@ change in the future.
 			fileCmd,
 			bugReportCmd,
 			certCmd,
+			adminCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
