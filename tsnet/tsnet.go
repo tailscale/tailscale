@@ -239,11 +239,12 @@ func (s *Server) start() error {
 	if err != nil {
 		return fmt.Errorf("starting backend: %w", err)
 	}
-	if lb.State() == ipn.NeedsLogin || envknob.Bool("TSNET_FORCE_LOGIN") {
-		logf("LocalBackend state is %v; running StartLoginInteractive...")
+	st := lb.State()
+	if st == ipn.NeedsLogin || envknob.Bool("TSNET_FORCE_LOGIN") {
+		logf("LocalBackend state is %v; running StartLoginInteractive...", st)
 		s.lb.StartLoginInteractive()
 	} else if authKey != "" {
-		logf("TS_AUTHKEY is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.")
+		logf("TS_AUTHKEY is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.", st)
 	}
 	go s.printAuthURLLoop()
 
