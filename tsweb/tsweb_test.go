@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"expvar"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -469,6 +471,12 @@ foo_AUint16 65535
 			expvar.Func(func() any { return 123 }),
 			"num_goroutines 123\n",
 		},
+		{
+			"var_that_exports_itself",
+			"custom_var",
+			promWriter{},
+			"custom_var_value 42\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -533,4 +541,14 @@ func (expvarAdapter) String() string { return "{}" } // expvar JSON; unused in t
 
 func (a expvarAdapter) PrometheusMetricsReflectRoot() any {
 	return a.st
+}
+
+type promWriter struct{}
+
+func (promWriter) WritePrometheus(w io.Writer, prefix string) {
+	fmt.Fprintf(w, "%s_value 42\n", prefix)
+}
+
+func (promWriter) String() string {
+	return ""
 }

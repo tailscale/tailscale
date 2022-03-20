@@ -349,6 +349,15 @@ func Error(code int, msg string, err error) HTTPError {
 	return HTTPError{Code: code, Msg: msg, Err: err}
 }
 
+// PrometheusVar is a value that knows how to format itself into
+// Prometheus metric syntax.
+type PrometheusVar interface {
+	// WritePrometheus writes the value of the var to w, in Prometheus
+	// metric syntax. All variables names written out must start with
+	// prefix (or write out a single variable named exactly prefix)
+	WritePrometheus(w io.Writer, prefix string)
+}
+
 // WritePrometheusExpvar writes kv to w in Prometheus metrics format.
 //
 // See VarzHandler for conventions. This is exported primarily for
@@ -379,6 +388,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	name := prefix + key
 
 	switch v := kv.Value.(type) {
+	case PrometheusVar:
+		v.WritePrometheus(w, name)
+		return
 	case *expvar.Int:
 		if typ == "" {
 			typ = "counter"
