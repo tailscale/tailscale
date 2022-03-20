@@ -80,10 +80,10 @@ func TestProberRun(t *testing.T) {
 	)
 
 	const startingProbes = 100
-	cancels := []context.CancelFunc{}
+	var probes []*Probe
 
 	for i := 0; i < startingProbes; i++ {
-		cancels = append(cancels, p.Run(fmt.Sprintf("probe%d", i), probeInterval, func(context.Context) error {
+		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, func(context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()
 			cnt++
@@ -114,7 +114,7 @@ func TestProberRun(t *testing.T) {
 	keep := startingProbes / 2
 
 	for i := keep; i < startingProbes; i++ {
-		cancels[i]()
+		probes[i].Close()
 	}
 	waitActiveProbes(t, p, keep)
 
