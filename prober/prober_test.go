@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	probeInterval        = 10 * time.Second // So expvars that are integer numbers of seconds change
+	probeInterval        = 8 * time.Second // So expvars that are integer numbers of seconds change
 	halfProbeInterval    = probeInterval / 2
 	quarterProbeInterval = probeInterval / 4
 	convergenceTimeout   = time.Second
@@ -58,6 +58,7 @@ func TestProberTiming(t *testing.T) {
 
 	waitActiveProbes(t, p, 1)
 
+	called()
 	notCalled()
 	clk.Advance(probeInterval + halfProbeInterval)
 	called()
@@ -106,6 +107,7 @@ func TestProberRun(t *testing.T) {
 	}
 
 	waitActiveProbes(t, p, startingProbes)
+	checkCnt(startingProbes)
 	clk.Advance(probeInterval + halfProbeInterval)
 	checkCnt(startingProbes)
 
@@ -135,19 +137,18 @@ func TestExpvar(t *testing.T) {
 	})
 
 	waitActiveProbes(t, p, 1)
-	clk.Advance(probeInterval + halfProbeInterval)
 
-	waitExpInt(t, p, "start_secs/probe", int((probeInterval + halfProbeInterval).Seconds()))
-	waitExpInt(t, p, "end_secs/probe", int((probeInterval + halfProbeInterval).Seconds()))
+	waitExpInt(t, p, "start_secs/probe", 0)
+	waitExpInt(t, p, "end_secs/probe", 0)
 	waitExpInt(t, p, "interval_secs/probe", int(probeInterval.Seconds()))
 	waitExpInt(t, p, "latency_millis/probe", int(aFewMillis.Milliseconds()))
 	waitExpInt(t, p, "result/probe", 0)
 
 	succeed.Set(true)
-	clk.Advance(probeInterval)
+	clk.Advance(probeInterval + halfProbeInterval)
 
-	waitExpInt(t, p, "start_secs/probe", int((probeInterval + probeInterval + halfProbeInterval).Seconds()))
-	waitExpInt(t, p, "end_secs/probe", int((probeInterval + probeInterval + halfProbeInterval).Seconds()))
+	waitExpInt(t, p, "start_secs/probe", int((probeInterval + halfProbeInterval).Seconds()))
+	waitExpInt(t, p, "end_secs/probe", int((probeInterval + halfProbeInterval).Seconds()))
 	waitExpInt(t, p, "interval_secs/probe", int(probeInterval.Seconds()))
 	waitExpInt(t, p, "latency_millis/probe", int(aFewMillis.Milliseconds()))
 	waitExpInt(t, p, "result/probe", 1)

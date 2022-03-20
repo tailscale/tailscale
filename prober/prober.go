@@ -126,6 +126,8 @@ func (p *Prober) probeLoop(ctx context.Context, name string, interval time.Durat
 		tick.Stop()
 	}()
 
+	// Do a first probe right away, so that the prober immediately exports results for everything.
+	p.runProbe(ctx, name, interval, fun)
 	for {
 		select {
 		case <-tick.Chan():
