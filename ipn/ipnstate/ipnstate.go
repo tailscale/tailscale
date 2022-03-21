@@ -79,6 +79,9 @@ type TailnetStatus struct {
 	// Note that the current device may still not support MagicDNS if
 	// `--accept-dns=false` was used.
 	MagicDNSEnabled bool
+
+	// ControlURL identifies the Control server this tailnet corresponds to.
+	ControlURL string
 }
 
 func (s *Status) Peers() []key.NodePublic {

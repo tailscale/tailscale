@@ -394,6 +394,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
 			s.CurrentTailnet.Name = b.netMap.Domain
+			s.CurrentTailnet.ControlURL = b.serverURL
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
