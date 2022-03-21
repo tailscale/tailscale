@@ -44,6 +44,7 @@ type mapSession struct {
 	previousPeers          []*tailcfg.Node // for delta-purposes
 	lastDomain             string
 	lastHealth             []string
+	lastPopBrowserURL      string
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.

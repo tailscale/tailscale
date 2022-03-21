@@ -973,6 +973,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		DebugFlags:           debugFlags,
 		LinkMonitor:          b.e.GetLinkMonitor(),
 		Pinger:               b.e,
+		PopBrowserURL:        b.tellClientToBrowseToURL,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -1370,9 +1371,15 @@ func (b *LocalBackend) popBrowserAuthNow() {
 
 	b.blockEngineUpdates(true)
 	b.stopEngineAndWait()
-	b.send(ipn.Notify{BrowseToURL: &url})
+	b.tellClientToBrowseToURL(url)
 	if b.State() == ipn.Running {
 		b.enterState(ipn.Starting)
+	}
+}
+
+func (b *LocalBackend) tellClientToBrowseToURL(url string) {
+	if url != "" {
+		b.send(ipn.Notify{BrowseToURL: &url})
 	}
 }
 

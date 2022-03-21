@@ -65,7 +65,8 @@ type CapabilityVersion int
 //    26: 2022-01-12: (nothing, just bumping for 1.20.0)
 //    27: 2022-02-18: start of SSHPolicy being respected
 //    28: 2022-03-09: client can communicate over Noise.
-const CurrentCapabilityVersion CapabilityVersion = 28
+//    29: 2022-03-09: MapResponse.PopBrowserURL
+const CurrentCapabilityVersion CapabilityVersion = 29
 
 type StableID string
 
@@ -1221,7 +1222,7 @@ type PingRequest struct {
 type MapResponse struct {
 	// KeepAlive, if set, represents an empty message just to keep
 	// the connection alive. When true, all other fields except
-	// PingRequest are ignored.
+	// PingRequest, ControlTime, and PopBrowserURL are ignored.
 	KeepAlive bool `json:",omitempty"`
 
 	// PingRequest, if non-empty, is a request to the client to
@@ -1230,6 +1231,11 @@ type MapResponse struct {
 	// PingRequest may be sent on any MapResponse (ones with
 	// KeepAlive true or false).
 	PingRequest *PingRequest `json:",omitempty"`
+
+	// PopBrowserURL, if non-empty, is a URL for the client to
+	// open to complete an action. The client should dup suppress
+	// identical URLs and only open it once for the same URL.
+	PopBrowserURL string
 
 	// Networking
 
