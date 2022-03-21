@@ -25,7 +25,7 @@ jobs:
       uses: actions/checkout@v2
 
     - name: Restore Cache
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         # Note: unlike some other setups, this is only grabbing the mod download
         # cache, rather than the whole mod directory, as the download cache
