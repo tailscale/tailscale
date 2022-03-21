@@ -69,6 +69,7 @@ type Direct struct {
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
+	popBrowser             func(url string) // or nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -100,9 +101,10 @@ type Options struct {
 	NewDecompressor      func() (Decompressor, error)
 	KeepAlive            bool
 	Logf                 logger.Logf
-	HTTPTestClient       *http.Client // optional HTTP client to use (for tests only)
-	DebugFlags           []string     // debug settings to send to control
-	LinkMonitor          *monitor.Mon // optional link monitor
+	HTTPTestClient       *http.Client     // optional HTTP client to use (for tests only)
+	DebugFlags           []string         // debug settings to send to control
+	LinkMonitor          *monitor.Mon     // optional link monitor
+	PopBrowserURL        func(url string) // optional func to open browser
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -198,6 +200,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		linkMon:                opts.LinkMonitor,
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
+		popBrowser:             opts.PopBrowserURL,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -849,7 +852,15 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			metricMapResponsePings.Add(1)
 			go answerPing(c.logf, c.httpc, pr)
 		}
-
+		if u := resp.PopBrowserURL; u != "" && u != sess.lastPopBrowserURL {
+			sess.lastPopBrowserURL = u
+			if c.popBrowser != nil {
+				c.logf("netmap: control says to open URL %v; opening...", u)
+				c.popBrowser(u)
+			} else {
+				c.logf("netmap: control says to open URL %v; no popBrowser func", u)
+			}
+		}
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())
 		}
@@ -858,6 +869,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 		} else {
 			vlogf("netmap: got new map")
 		}
+
 		select {
 		case timeoutReset <- struct{}{}:
 			vlogf("netmap: sent timer reset")
