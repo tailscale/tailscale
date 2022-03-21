@@ -624,10 +624,14 @@ func matchRule(r *tailcfg.SSHRule, ci *sshConnInfo) (a *tailcfg.SSHAction, local
 }
 
 func mapLocalUser(ruleSSHUsers map[string]string, reqSSHUser string) (localUser string) {
-	if v, ok := ruleSSHUsers[reqSSHUser]; ok {
-		return v
+	v, ok := ruleSSHUsers[reqSSHUser]
+	if !ok {
+		v = ruleSSHUsers["*"]
 	}
-	return ruleSSHUsers["*"]
+	if v == "=" {
+		return reqSSHUser
+	}
+	return v
 }
 
 func matchesPrincipal(ps []*tailcfg.SSHPrincipal, ci *sshConnInfo) bool {

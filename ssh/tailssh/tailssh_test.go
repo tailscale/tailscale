@@ -153,6 +153,18 @@ func TestMatchRule(t *testing.T) {
 			ci:       &sshConnInfo{uprof: &tailcfg.UserProfile{LoginName: "foo@bar.com"}},
 			wantUser: "ubuntu",
 		},
+		{
+			name: "ssh-user-equal",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+				SSHUsers: map[string]string{
+					"*": "=",
+				},
+			},
+			ci:       &sshConnInfo{sshUser: "alice"},
+			wantUser: "alice",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
