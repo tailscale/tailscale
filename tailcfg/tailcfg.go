@@ -1573,6 +1573,8 @@ type SSHRule struct {
 	// actual user that's logged in.
 	// If the map value is the empty string (for either the
 	// requested SSH user or "*"), the rule doesn't match.
+	// If the map value is "=", it means the ssh-user should map
+	// directly to the local-user.
 	// It may be nil if the Action is reject.
 	SSHUsers map[string]string `json:"sshUsers"`
 
