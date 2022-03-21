@@ -52,10 +52,11 @@ type rxState struct {
 	sync.Mutex
 	cipher    cipher.AEAD
 	nonce     nonce
-	buf       [maxMessageSize]byte
-	n         int    // number of valid bytes in buf
-	next      int    // offset of next undecrypted packet
-	plaintext []byte // slice into buf of decrypted bytes
+	buf       *maxMsgBuffer   // or nil when reads exhausted
+	n         int             // number of valid bytes in buf
+	next      int             // offset of next undecrypted packet
+	plaintext []byte          // slice into buf of decrypted bytes
+	hdrBuf    [headerLen]byte // small buffer used when buf is nil
 }
 
 // txState is all the Conn state that Write uses.
@@ -88,6 +89,10 @@ func (c *Conn) Peer() key.MachinePublic {
 // readNLocked reads into c.rx.buf until buf contains at least total
 // bytes. Returns a slice of the total bytes in rxBuf, or an
 // error if fewer than total bytes are available.
+//
+// It may be called with a nil c.rx.buf only if total == headerLen.
+//
+// On success, c.rx.buf will be non-nil.
 func (c *Conn) readNLocked(total int) ([]byte, error) {
 	if total > maxMessageSize {
 		return nil, errReadTooBig{total}
@@ -96,8 +101,26 @@ func (c *Conn) readNLocked(total int) ([]byte, error) {
 		if total <= c.rx.n {
 			return c.rx.buf[:total], nil
 		}
-
-		n, err := c.conn.Read(c.rx.buf[c.rx.n:])
+		var n int
+		var err error
+		if c.rx.buf == nil {
+			if c.rx.n != 0 || total != headerLen {
+				panic("unexpected")
+			}
+			// Optimization to reduce memory usage.
+			// Most connections are blocked forever waiting for
+			// a read, so we don't want c.rx.buf to be allocated until
+			// we know there's data to read. Instead, when we're
+			// waiting for data to arrive here, read into the
+			// 3 byte hdrBuf:
+			n, err = c.conn.Read(c.rx.hdrBuf[:])
+			if n > 0 {
+				c.rx.buf = getMaxMsgBuffer()
+				copy(c.rx.buf[:], c.rx.hdrBuf[:n])
+			}
+		} else {
+			n, err = c.conn.Read(c.rx.buf[c.rx.n:])
+		}
 		c.rx.n += n
 		if err != nil {
 			return nil, err
@@ -190,6 +213,14 @@ func (c *Conn) decryptOneLocked() error {
 		c.rx.next = 0
 	}
 
+	// Return our buffer to the pool if it's empty, lest we be
+	// blocked in a long Read call, reading the 3 byte header. We
+	// don't to keep that buffer unnecessarily alive.
+	if c.rx.n == 0 && c.rx.next == 0 && c.rx.buf != nil {
+		bufPool.Put(c.rx.buf)
+		c.rx.buf = nil
+	}
+
 	bs, err := c.readNLocked(headerLen)
 	if err != nil {
 		return err
@@ -226,6 +257,12 @@ func (c *Conn) Read(bs []byte) (int, error) {
 	}
 	n := copy(bs, c.rx.plaintext)
 	c.rx.plaintext = c.rx.plaintext[n:]
+
+	// Lose slice's underlying array pointer to unneeded memory so
+	// GC can collect more.
+	if len(c.rx.plaintext) == 0 {
+		c.rx.plaintext = nil
+	}
 	return n, nil
 }
 
@@ -256,7 +293,7 @@ func (c *Conn) Write(bs []byte) (n int, err error) {
 		return 0, net.ErrClosed
 	}
 
-	buf := bufPool.Get().(*maxMsgBuffer)
+	buf := getMaxMsgBuffer()
 	defer bufPool.Put(buf)
 
 	var sent int
@@ -365,4 +402,8 @@ var bufPool = &sync.Pool{
 	New: func() interface{} {
 		return new(maxMsgBuffer)
 	},
+}
+
+func getMaxMsgBuffer() *maxMsgBuffer {
+	return bufPool.Get().(*maxMsgBuffer)
 }
