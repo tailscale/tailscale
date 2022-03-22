@@ -19,7 +19,7 @@ jobs:
         go-version: 1.18
 
     - name: Check out code
-      uses: actions/checkout@v1
+      uses: actions/checkout@v3
 
     - name: depaware tailscaled
       run: go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
