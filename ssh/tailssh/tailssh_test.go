@@ -224,7 +224,8 @@ func TestSSH(t *testing.T) {
 	}
 
 	ss.Handler = func(s ssh.Session) {
-		ss := srv.newSSHSession(s, ci, u, &tailcfg.SSHAction{Accept: true})
+		ss := srv.newSSHSession(s, ci, u)
+		ss.action = &tailcfg.SSHAction{Accept: true}
 		ss.run()
 	}
 
