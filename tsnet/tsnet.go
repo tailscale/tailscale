@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,9 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 // Start connects the server to the tailnet.
 // Optional: any calls to Dial/Listen will also call Start.
 func (s *Server) Start() error {
+	if runtime.GOOS == "darwin" && runtime.Version() == "go1.18" {
+		log.Fatalf("Tailscale is broken on macOS with go1.18 due to upstream bug https://github.com/golang/go/issues/51759; use 1.18.1+ or Tailscale's Go fork")
+	}
 	s.initOnce.Do(s.doInit)
 	return s.initErr
 }
