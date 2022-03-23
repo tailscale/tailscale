@@ -147,8 +147,8 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
-			arch)
-				OS="$ID"
+			arch|steamos)
+				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
