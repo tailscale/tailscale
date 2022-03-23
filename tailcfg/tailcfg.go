@@ -1672,3 +1672,42 @@ type OverTLSPublicKeyResponse struct {
 	// control/controlbase and control/controlhttp)
 	PublicKey key.MachinePublic `json:"publicKey"`
 }
+
+// TokenRequest is a request to get an OIDC ID token for an audience.
+// The token can be presented to any resource provider which offers OIDC
+// Federation.
+//
+// It is JSON-encoded and sent over Noise to "/machine/id-token".
+type TokenRequest struct {
+	// CapVersion is the client's current CapabilityVersion.
+	CapVersion CapabilityVersion
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
+	// Audience the token is being requested for.
+	Audience string
+}
+
+// TokenResponse is the response to a TokenRequest.
+type TokenResponse struct {
+	// IDToken is a JWT encoding the following standard claims:
+	//
+	//   `sub` | the MagicDNS name of the node
+	//   `aud` | Audience from the request
+	//   `exp` | Token expiry
+	//   `iat` | Token issuance time
+	//   `iss` | Issuer
+	//   `jti` | Random token identifier
+	//   `nbf` | Not before time
+	//
+	// It also encodes the following Tailscale specific claims:
+	//
+	//   `key`       | the node public key
+	//   `addresses` | the Tailscale IPs of the node
+	//   `nid`       | the node ID
+	//   `node`      | the name of the node
+	//   `domain`    | the domain of the node, it has the same format as MapResponse.Domain.
+	//   `tags`      | an array of <domain:tag> on the node (like alice.github:tag:foo or example.com:tag:foo)
+	//   `user`      | user emailish (like alice.github:alice@github or example.com:bob@example.com), if not tagged
+	//   `uid`       | user ID, if not tagged
+	IDToken string `json:"id_token"`
+}
