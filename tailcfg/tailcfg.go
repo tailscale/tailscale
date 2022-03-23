@@ -1635,6 +1635,15 @@ type SSHAction struct {
 	// If the long poll breaks before returning a complete HTTP
 	// response, it should be re-fetched as long as the SSH
 	// session is open.
+	//
+	// The following variables in the URL are expanded by tailscaled:
+	//
+	//   * $SRC_NODE_IP (URL escaped)
+	//   * $SRC_NODE_ID (Node.ID as int64 string)
+	//   * $DST_NODE_IP (URL escaped)
+	//   * $DST_NODE_ID (Node.ID as int64 string)
+	//   * $SSH_USER (URL escaped, ssh user requested)
+	//   * $LOCAL_USER (URL escaped, local user mapped)
 	HoldAndDelegate string `json:"holdAndDelegate,omitempty"`
 
 	// AllowLocalPortForwarding, if true, allows accepted connections

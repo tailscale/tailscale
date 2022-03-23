@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -272,18 +273,20 @@ func (ss *sshSession) resolveTerminalAction(action *tailcfg.SSHAction) (*tailcfg
 	}
 }
 
-func (ss *sshSession) expandDelegateURL(url string) string {
+func (ss *sshSession) expandDelegateURL(actionURL string) string {
 	nm := ss.srv.lb.NetMap()
 	var dstNodeID string
 	if nm != nil {
 		dstNodeID = fmt.Sprint(int64(nm.SelfNode.ID))
 	}
 	return strings.NewReplacer(
+		"$SRC_NODE_IP", url.QueryEscape(ss.connInfo.src.IP().String()),
 		"$SRC_NODE_ID", fmt.Sprint(int64(ss.connInfo.node.ID)),
+		"$DST_NODE_IP", url.QueryEscape(ss.connInfo.dst.IP().String()),
 		"$DST_NODE_ID", dstNodeID,
-		"$SSH_USER", ss.connInfo.sshUser,
-		"$LOCAL_USER", ss.localUser.Username,
-	).Replace(url)
+		"$SSH_USER", url.QueryEscape(ss.connInfo.sshUser),
+		"$LOCAL_USER", url.QueryEscape(ss.localUser.Username),
+	).Replace(actionURL)
 }
 
 // sshSession is an accepted Tailscale SSH session.
