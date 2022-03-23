@@ -47,7 +47,7 @@ require (
 	github.com/u-root/u-root v0.8.0
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
-	golang.org/x/crypto v0.0.0-20220315160706-3147a52a75dd
+	golang.org/x/crypto v0.0.0-20220321153916-2c7772ba3064
 	golang.org/x/net v0.0.0-20220225172249-27dd8689420f
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/sys v0.0.0-20220315194320-039c03cc5b86
