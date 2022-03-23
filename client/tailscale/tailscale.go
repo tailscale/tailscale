@@ -183,6 +183,7 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 		return nil, err
 	}
 	if res.StatusCode != wantStatus {
+		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
 		return nil, bestError(err, slurp)
 	}
 	return slurp, nil

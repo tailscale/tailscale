@@ -65,6 +65,7 @@ import (
 )
 
 var controlDebugFlags = getControlDebugFlags()
+var canSSH = envknob.CanSSHD()
 
 func getControlDebugFlags() []string {
 	if e := envknob.String("TS_DEBUG_CONTROL_FLAGS"); e != "" {
@@ -1564,7 +1565,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 
 	b.logf("using backend prefs for %q: %s", key, b.prefs.Pretty())
 
-	b.sshAtomicBool.Set(b.prefs != nil && b.prefs.RunSSH)
+	b.sshAtomicBool.Set(b.prefs != nil && b.prefs.RunSSH && canSSH)
 
 	return nil
 }
@@ -1703,6 +1704,11 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	p0 := b.prefs.Clone()
 	p1 := b.prefs.Clone()
 	p1.ApplyEdits(mp)
+	if p1.RunSSH && !canSSH {
+		b.mu.Unlock()
+		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
+		return nil, errors.New("Tailscale SSH server administratively disabled.")
+	}
 	if p1.Equals(p0) {
 		b.mu.Unlock()
 		return p1, nil
@@ -1732,7 +1738,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	netMap := b.netMap
 	stateKey := b.stateKey
 
-	b.sshAtomicBool.Set(newp.RunSSH)
+	b.sshAtomicBool.Set(newp.RunSSH && canSSH)
 
 	oldp := b.prefs
 	newp.Persist = oldp.Persist // caller isn't allowed to override this
@@ -2462,7 +2468,7 @@ func (b *LocalBackend) applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Pre
 	hi.ShieldsUp = prefs.ShieldsUp
 
 	var sshHostKeys []string
-	if prefs.RunSSH {
+	if prefs.RunSSH && canSSH {
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
@@ -2679,7 +2685,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.sshAtomicBool.Set(false)
 }
 
-func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Get() }
+func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Get() && canSSH }
 
 // Logout tells the controlclient that we want to log out, and
 // transitions the local engine to the logged-out state without
