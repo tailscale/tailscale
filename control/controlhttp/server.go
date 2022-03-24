@@ -5,15 +5,14 @@
 package controlhttp
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 
 	"tailscale.com/control/controlbase"
+	"tailscale.com/net/netutil"
 	"tailscale.com/types/key"
 )
 
@@ -62,9 +61,7 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 		conn.Close()
 		return nil, fmt.Errorf("flushing hijacked HTTP buffer: %w", err)
 	}
-	if brw.Reader.Buffered() > 0 {
-		conn = &drainBufConn{conn, brw.Reader}
-	}
+	conn = netutil.NewDrainBufConn(conn, brw.Reader)
 
 	nc, err := controlbase.Server(ctx, conn, private, init)
 	if err != nil {
@@ -73,23 +70,4 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	}
 
 	return nc, nil
-}
-
-// drainBufConn is a net.Conn with an initial bunch of bytes in a
-// bufio.Reader. Read drains the bufio.Reader until empty, then passes
-// through subsequent reads to the Conn directly.
-type drainBufConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (b *drainBufConn) Read(bs []byte) (int, error) {
-	if b.r == nil {
-		return b.Conn.Read(bs)
-	}
-	n, err := b.r.Read(bs)
-	if b.r.Buffered() == 0 {
-		b.r = nil
-	}
-	return n, err
 }
