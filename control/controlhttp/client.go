@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/types/key"
@@ -232,22 +233,5 @@ func (a *dialParams) tryURL(u *url.URL, init []byte) (net.Conn, error) {
 		return nil, errors.New("http Transport did not provide a writable body")
 	}
 
-	return &wrappedConn{switchedConn, rwc}, nil
-}
-
-type wrappedConn struct {
-	net.Conn
-	rwc io.ReadWriteCloser
-}
-
-func (w *wrappedConn) Read(bs []byte) (int, error) {
-	return w.rwc.Read(bs)
-}
-
-func (w *wrappedConn) Write(bs []byte) (int, error) {
-	return w.rwc.Write(bs)
-}
-
-func (w *wrappedConn) Close() error {
-	return w.rwc.Close()
+	return netutil.NewAltReadWriteCloserConn(rwc, switchedConn), nil
 }

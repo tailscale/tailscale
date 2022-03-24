@@ -6,6 +6,7 @@
 package netutil
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"sync"
@@ -63,3 +64,55 @@ type dummyAddr string
 
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
+
+// NewDrainBufConn returns a net.Conn conditionally wrapping c,
+// prefixing any bytes that are in initialReadBuf, which may be nil.
+func NewDrainBufConn(c net.Conn, initialReadBuf *bufio.Reader) net.Conn {
+	r := initialReadBuf
+	if r != nil && r.Buffered() == 0 {
+		r = nil
+	}
+	return &drainBufConn{c, r}
+}
+
+// drainBufConn is a net.Conn with an initial bunch of bytes in a
+// bufio.Reader. Read drains the bufio.Reader until empty, then passes
+// through subsequent reads to the Conn directly.
+type drainBufConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b *drainBufConn) Read(bs []byte) (int, error) {
+	if b.r == nil {
+		return b.Conn.Read(bs)
+	}
+	n, err := b.r.Read(bs)
+	if b.r.Buffered() == 0 {
+		b.r = nil
+	}
+	return n, err
+}
+
+// NewAltReadWriteCloserConn returns a net.Conn that wraps rwc (for
+// Read, Write, and Close) and c (for all other methods).
+func NewAltReadWriteCloserConn(rwc io.ReadWriteCloser, c net.Conn) net.Conn {
+	return wrappedConn{c, rwc}
+}
+
+type wrappedConn struct {
+	net.Conn
+	rwc io.ReadWriteCloser
+}
+
+func (w wrappedConn) Read(bs []byte) (int, error) {
+	return w.rwc.Read(bs)
+}
+
+func (w wrappedConn) Write(bs []byte) (int, error) {
+	return w.rwc.Write(bs)
+}
+
+func (w wrappedConn) Close() error {
+	return w.rwc.Close()
+}
