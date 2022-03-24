@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,6 +27,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -124,6 +126,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveDebug(w, r)
 	case "/localapi/v0/set-expiry-sooner":
 		h.serveSetExpirySooner(w, r)
+	case "/localapi/v0/dial":
+		h.serveDial(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -540,6 +544,63 @@ func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	const upgradeProto = "ts-dial"
+	if !strings.Contains(r.Header.Get("Connection"), "upgrade") ||
+		r.Header.Get("Upgrade") != upgradeProto {
+		http.Error(w, "bad ts-dial upgrade", http.StatusBadRequest)
+		return
+	}
+	hostStr, portStr := r.Header.Get("Dial-Host"), r.Header.Get("Dial-Port")
+	if hostStr == "" || portStr == "" {
+		http.Error(w, "missing Dial-Host or Dial-Port header", http.StatusBadRequest)
+		return
+	}
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "make request over HTTP/1", http.StatusBadRequest)
+		return
+	}
+
+	addr := net.JoinHostPort(hostStr, portStr)
+	outConn, err := h.b.Dialer().UserDial(r.Context(), "tcp", addr)
+	if err != nil {
+		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer outConn.Close()
+
+	w.Header().Set("Upgrade", upgradeProto)
+	w.Header().Set("Connection", "upgrade")
+	w.WriteHeader(http.StatusSwitchingProtocols)
+
+	reqConn, brw, err := hijacker.Hijack()
+	if err != nil {
+		h.logf("localapi dial Hijack error: %v", err)
+		return
+	}
+	defer reqConn.Close()
+	if err := brw.Flush(); err != nil {
+		return
+	}
+	reqConn = netutil.NewDrainBufConn(reqConn, brw.Reader)
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(reqConn, outConn)
+		errc <- err
+	}()
+	go func() {
+		_, err := io.Copy(outConn, reqConn)
+		errc <- err
+	}()
+	<-errc
 }
 
 func defBool(a string, def bool) bool {
