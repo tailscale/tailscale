@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -69,7 +70,14 @@ var statusArgs struct {
 }
 
 func runStatus(ctx context.Context, args []string) error {
-	st, err := tailscale.Status(ctx)
+	if len(args) > 0 {
+		return errors.New("unexpected non-flag arguments to 'tailscale status'")
+	}
+	getStatus := tailscale.Status
+	if !statusArgs.peers {
+		getStatus = tailscale.StatusWithoutPeers
+	}
+	st, err := getStatus(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
