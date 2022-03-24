@@ -171,6 +171,7 @@ change in the future.
 			statusCmd,
 			pingCmd,
 			ncCmd,
+			sshCmd,
 			versionCmd,
 			webCmd,
 			fileCmd,
