@@ -5,6 +5,7 @@ go 1.18
 require (
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0
+	github.com/alessio/shellescape v1.4.1
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
 	github.com/aws/aws-sdk-go-v2 v1.11.2
 	github.com/aws/aws-sdk-go-v2/config v1.11.0
