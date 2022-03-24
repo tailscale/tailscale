@@ -19,6 +19,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -31,6 +32,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netutil"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -417,6 +419,60 @@ func SetDNS(ctx context.Context, name, value string) error {
 	v.Set("value", value)
 	_, err := send(ctx, "POST", "/localapi/v0/set-dns?"+v.Encode(), 200, nil)
 	return err
+}
+
+// DialTCP connects to the host's port via Tailscale.
+//
+// The host may be a base DNS name (resolved from the netmap inside
+// tailscaled), a FQDN, or an IP address.
+//
+// The ctx is only used for the duration of the call, not the lifetime of the net.Conn.
+func DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
+	connCh := make(chan net.Conn, 1)
+	trace := httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			connCh <- info.Conn
+		},
+	}
+	ctx = httptrace.WithClientTrace(ctx, &trace)
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://local-tailscaled.sock/localapi/v0/dial", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = http.Header{
+		"Upgrade":    []string{"ts-dial"},
+		"Connection": []string{"upgrade"},
+		"Dial-Host":  []string{host},
+		"Dial-Port":  []string{fmt.Sprint(port)},
+	}
+	res, err := DoLocalRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("unexpected HTTP response: %s, %s", res.Status, body)
+	}
+	// From here on, the underlying net.Conn is ours to use, but there
+	// is still a read buffer attached to it within resp.Body. So, we
+	// must direct I/O through resp.Body, but we can still use the
+	// underlying net.Conn for stuff like deadlines.
+	var switchedConn net.Conn
+	select {
+	case switchedConn = <-connCh:
+	default:
+	}
+	if switchedConn == nil {
+		res.Body.Close()
+		return nil, fmt.Errorf("httptrace didn't provide a connection")
+	}
+	rwc, ok := res.Body.(io.ReadWriteCloser)
+	if !ok {
+		res.Body.Close()
+		return nil, errors.New("http Transport did not provide a writable body")
+	}
+	return netutil.NewAltReadWriteCloserConn(rwc, switchedConn), nil
 }
 
 // CurrentDERPMap returns the current DERPMap that is being used by the local tailscaled.

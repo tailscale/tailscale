@@ -170,6 +170,7 @@ change in the future.
 			ipCmd,
 			statusCmd,
 			pingCmd,
+			ncCmd,
 			versionCmd,
 			webCmd,
 			fileCmd,
