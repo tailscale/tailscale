@@ -23,6 +23,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
@@ -92,6 +93,7 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 // Start connects the server to the tailnet.
 // Optional: any calls to Dial/Listen will also call Start.
 func (s *Server) Start() error {
+	hostinfo.SetPackage("tsnet")
 	s.initOnce.Do(s.doInit)
 	return s.initErr
 }
@@ -116,7 +118,6 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) doInit() {
-
 	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
 	if err := s.start(); err != nil {
 		s.initErr = fmt.Errorf("tsnet: %w", err)
