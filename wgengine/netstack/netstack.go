@@ -60,9 +60,7 @@ var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
 type Impl struct {
 	// ForwardTCPIn, if non-nil, handles forwarding an inbound TCP
 	// connection.
-	// TODO(bradfitz): provide mechanism for tsnet to reject a
-	// port other than accepting it and closing it.
-	ForwardTCPIn func(c net.Conn, port uint16)
+	ForwardTCPIn func(c net.Conn, port uint16) filter.Response
 
 	// ProcessLocalIPs is whether netstack should handle incoming
 	// traffic directed at the Node.Addresses (local IPs).
@@ -654,9 +652,12 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			}
 		}
 	}
-	if ns.ForwardTCPIn != nil {
-		ns.ForwardTCPIn(c, reqDetails.LocalPort)
-		return
+
+	if ns.isLocalIP(dialIP) && ns.ForwardTCPIn != nil {
+		accept := ns.ForwardTCPIn(c, reqDetails.LocalPort)
+		if accept == filter.Accept {
+			return
+		}
 	}
 	if isTailscaleIP {
 		dialIP = netaddr.IPv4(127, 0, 0, 1)
