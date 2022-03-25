@@ -27,6 +27,10 @@ import (
 )
 
 func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
+	if ip, err := netaddr.ParseIP(host); err == nil && !ip.IsZero() {
+		return []netaddr.IP{ip}, nil
+	}
+
 	type nameIP struct {
 		dnsName string
 		ip      netaddr.IP
