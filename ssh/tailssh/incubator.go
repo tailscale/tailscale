@@ -29,11 +29,11 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
-	"github.com/tailscale/ssh"
 	"github.com/u-root/u-root/pkg/termios"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 )
 

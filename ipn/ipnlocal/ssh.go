@@ -23,7 +23,7 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/tailscale/golang-x-crypto/ssh"
 	"tailscale.com/envknob"
 )
 

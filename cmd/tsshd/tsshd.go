@@ -31,11 +31,11 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
-	"github.com/tailscale/ssh"
-	gossh "golang.org/x/crypto/ssh"
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
 var (

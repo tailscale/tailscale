@@ -19,12 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tailscale/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineread"
