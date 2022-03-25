@@ -29,13 +29,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tailscale/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 )
 
