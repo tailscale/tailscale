@@ -312,7 +312,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 	defer func() {
 		// On failure, consider that our DNS might be wrong and ask the DNS fallback mechanism for
 		// some other IPs to try.
-		if ret == nil || d.dnsCache.LookupIPFallback == nil || dc.dnsWasTrustworthy() {
+		if ret == nil || ctx.Err() != nil || d.dnsCache.LookupIPFallback == nil || dc.dnsWasTrustworthy() {
 			return
 		}
 		ips, err := d.dnsCache.LookupIPFallback(ctx, host)
