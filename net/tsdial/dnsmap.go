@@ -21,8 +21,13 @@ import (
 // It must not be mutated once created.
 //
 // Example keys are "foo.domain.tld.beta.tailscale.net" and "foo",
-// both without trailing dots.
+// both without trailing dots, and both always lowercase.
 type dnsMap map[string]netaddr.IP
+
+// canonMapKey canonicalizes its input s to be a dnsMap map key.
+func canonMapKey(s string) string {
+	return strings.ToLower(strings.TrimSuffix(s, "."))
+}
 
 func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	if nm == nil {
@@ -33,9 +38,9 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
 		ip := nm.Addresses[0].IP()
-		ret[strings.TrimRight(nm.Name, ".")] = ip
+		ret[canonMapKey(nm.Name)] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
-			ret[dnsname.TrimSuffix(nm.Name, suffix)] = ip
+			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
 		}
 		for _, a := range nm.Addresses {
 			if a.IP().Is4() {
@@ -52,9 +57,9 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 			if ip.Is4() && !have4 {
 				continue
 			}
-			ret[strings.TrimRight(p.Name, ".")] = ip
+			ret[canonMapKey(p.Name)] = ip
 			if dnsname.HasSuffix(p.Name, suffix) {
-				ret[dnsname.TrimSuffix(p.Name, suffix)] = ip
+				ret[canonMapKey(dnsname.TrimSuffix(p.Name, suffix))] = ip
 			}
 			break
 		}
@@ -67,7 +72,7 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 		if err != nil {
 			continue
 		}
-		ret[strings.TrimRight(rec.Name, ".")] = ip
+		ret[canonMapKey(rec.Name)] = ip
 	}
 	return ret
 }
@@ -106,7 +111,7 @@ func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ neta
 	// Host is not an IP, so assume it's a DNS name.
 
 	// Try MagicDNS first, otherwise a real DNS lookup.
-	ip := m[host]
+	ip := m[canonMapKey(host)]
 	if !ip.IsZero() {
 		return netaddr.IPPortFrom(ip, port), nil
 	}
