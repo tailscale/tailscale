@@ -107,8 +107,9 @@ func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
 func SetOSVersion(v string) { osVersionAtomic.Store(v) }
 
 // SetPackage sets the packaging type for the app.
-// This is currently (2021-10-05) only used by Android,
-// set to "nogoogle" for the F-Droid build.
+//
+// As of 2022-03-25, this is used by Android ("nogoogle" for the
+// F-Droid build) and tsnet (set to "tsnet").
 func SetPackage(v string) { packagingType.Store(v) }
 
 func deviceModel() string {
