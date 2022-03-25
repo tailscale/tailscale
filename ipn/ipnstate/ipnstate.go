@@ -145,6 +145,9 @@ type PeerStatus struct {
 	PeerAPIURL   []string
 	Capabilities []string `json:",omitempty"`
 
+	// SSH_HostKeys are the node's SSH host keys, if known.
+	SSH_HostKeys []string `json:"sshHostKeys,omitempty"`
+
 	// ShareeNode indicates this node exists in the netmap because
 	// it's owned by a shared-to user and that node might connect
 	// to us. These nodes should be hidden by "tailscale status"
@@ -283,6 +286,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.OS; v != "" {
 		e.OS = st.OS
+	}
+	if v := st.SSH_HostKeys; v != nil {
+		e.SSH_HostKeys = v
 	}
 	if v := st.Addrs; v != nil {
 		e.Addrs = v
