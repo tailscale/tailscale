@@ -62,6 +62,7 @@ func (nt *notifyThrottler) put(n ipn.Notify) {
 // drain pulls the notifications out of the queue, asserting that there are
 // exactly count notifications that have been put so far.
 func (nt *notifyThrottler) drain(count int) []ipn.Notify {
+	nt.t.Helper()
 	nt.mu.Lock()
 	ch := nt.ch
 	nt.mu.Unlock()
@@ -923,7 +924,7 @@ func TestStateMachine(t *testing.T) {
 	}
 	notifies.expect(1)
 	// Fake a DERP connection.
-	b.setWgengineStatus(&wgengine.Status{DERPs: 1}, nil)
+	b.setWgengineStatus(&wgengine.Status{DERPs: 1, AsOf: time.Now()}, nil)
 	{
 		nn := notifies.drain(1)
 		cc.assertCalls("unpause")
@@ -1016,7 +1017,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 			if i == 0 {
 				n = 1
 			}
-			b.setWgengineStatus(&wgengine.Status{DERPs: n}, nil)
+			b.setWgengineStatus(&wgengine.Status{AsOf: time.Now(), DERPs: n}, nil)
 		}(i)
 	}
 	wg.Wait()

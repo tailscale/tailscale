@@ -1113,6 +1113,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	return &Status{
+		AsOf:       time.Now(),
 		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
 		Peers:      peers,
 		DERPs:      derpConns,

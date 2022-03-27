@@ -6,6 +6,7 @@ package wgengine
 
 import (
 	"errors"
+	"time"
 
 	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
@@ -23,6 +24,7 @@ import (
 //
 // TODO(bradfitz): remove this, subset of ipnstate? Need to migrate users.
 type Status struct {
+	AsOf       time.Time // the time at which the status was calculated
 	Peers      []ipnstate.PeerStatusLite
 	LocalAddrs []tailcfg.Endpoint // the set of possible endpoints for the magic conn
 	DERPs      int                // number of active DERP connections
