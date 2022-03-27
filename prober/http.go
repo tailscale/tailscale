@@ -49,7 +49,7 @@ func probeHTTP(ctx context.Context, url string, want []byte) error {
 		return fmt.Errorf("fetching %q: status code %d, want 200", url, resp.StatusCode)
 	}
 
-	bs, err := io.ReadAll(&io.LimitedReader{resp.Body, maxHTTPBody})
+	bs, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody))
 	if err != nil {
 		return fmt.Errorf("reading body of %q: %w", url, err)
 	}
