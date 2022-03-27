@@ -140,6 +140,7 @@ type LocalBackend struct {
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
+	lastStatusTime   time.Time // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
 	// intermediate buffered directory for "pick-up" later. If
@@ -706,6 +707,13 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 	}
 
 	b.mu.Lock()
+	if s.AsOf.Before(b.lastStatusTime) {
+		// Don't process a status update that is older than the one we have
+		// already processed. (corp#2579)
+		b.mu.Unlock()
+		return
+	}
+	b.lastStatusTime = s.AsOf
 	es := b.parseWgStatusLocked(s)
 	cc := b.cc
 	b.engineStatus = es
