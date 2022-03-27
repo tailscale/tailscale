@@ -7,14 +7,28 @@
 package groupmember
 
 import (
-	"errors"
-	"runtime"
+	"os/user"
 )
-
-var ErrNotImplemented = errors.New("not implemented for GOOS=" + runtime.GOOS)
 
 // IsMemberOfGroup reports whether the provided user is a member of
 // the provided system group.
 func IsMemberOfGroup(group, userName string) (bool, error) {
-	return isMemberOfGroup(group, userName)
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return false, err
+	}
+	ugids, err := u.GroupIds()
+	if err != nil {
+		return false, err
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return false, err
+	}
+	for _, ugid := range ugids {
+		if g.Gid == ugid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
