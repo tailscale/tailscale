@@ -5,7 +5,6 @@
 package ipnlocal
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -35,6 +33,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
@@ -3038,105 +3037,17 @@ func nodeIP(n *tailcfg.Node, pred func(netaddr.IP) bool) netaddr.IP {
 	return netaddr.IP{}
 }
 
-func isBSD(s string) bool {
-	return s == "dragonfly" || s == "freebsd" || s == "netbsd" || s == "openbsd"
-}
-
 func (b *LocalBackend) CheckIPForwarding() error {
 	if wgengine.IsNetstackRouter(b.e) {
 		return nil
 	}
 
-	switch {
-	case isBSD(runtime.GOOS):
-		return fmt.Errorf("Subnet routing and exit nodes only work with additional manual configuration on %v, and is not currently officially supported.", runtime.GOOS)
-	case runtime.GOOS == "linux":
-		return checkIPForwardingLinux()
-	default:
-		// TODO: subnet routing and exit nodes probably don't work
-		// correctly on non-linux, non-netstack OSes either. Warn
-		// instead of being silent?
-		return nil
-	}
-}
-
-// checkIPForwardingLinux checks if IP forwarding is enabled correctly
-// for subnet routing and exit node functionality. Returns an error
-// describing configuration issues if the configuration is not
-// definitely good.
-func checkIPForwardingLinux() error {
-	const kbLink = "\nSee https://tailscale.com/kb/1104/enable-ip-forwarding/"
-
-	disabled, err := disabledSysctls("net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding")
+	// TODO: let the caller pass in the ranges.
+	warn, err := netutil.CheckIPForwarding(tsaddr.ExitRoutes(), nil)
 	if err != nil {
-		return fmt.Errorf("Couldn't check system's IP forwarding configuration, subnet routing/exit nodes may not work: %w%s", err, kbLink)
+		return err
 	}
-
-	if len(disabled) == 0 {
-		// IP forwarding is enabled systemwide, all is well.
-		return nil
-	}
-
-	// IP forwarding isn't enabled globally, but it might be enabled
-	// on a per-interface basis. Check if it's on for all interfaces,
-	// and warn appropriately if it's not.
-	ifaces, err := interfaces.GetList()
-	if err != nil {
-		return fmt.Errorf("Couldn't enumerate network interfaces, subnet routing/exit nodes may not work: %w%s", err, kbLink)
-	}
-
-	var (
-		warnings   []string
-		anyEnabled bool
-	)
-	for _, iface := range ifaces {
-		if iface.Name == "lo" {
-			continue
-		}
-		disabled, err = disabledSysctls(fmt.Sprintf("net.ipv4.conf.%s.forwarding", iface.Name), fmt.Sprintf("net.ipv6.conf.%s.forwarding", iface.Name))
-		if err != nil {
-			return fmt.Errorf("Couldn't check system's IP forwarding configuration, subnet routing/exit nodes may not work: %w%s", err, kbLink)
-		}
-		if len(disabled) > 0 {
-			warnings = append(warnings, fmt.Sprintf("Traffic received on %s won't be forwarded (%s disabled)", iface.Name, strings.Join(disabled, ", ")))
-		} else {
-			anyEnabled = true
-		}
-	}
-	if !anyEnabled {
-		// IP forwarding is compeltely disabled, just say that rather
-		// than enumerate all the interfaces on the system.
-		return fmt.Errorf("IP forwarding is disabled, subnet routing/exit nodes will not work.%s", kbLink)
-	}
-	if len(warnings) > 0 {
-		// If partially enabled, enumerate the bits that won't work.
-		return fmt.Errorf("%s\nSubnet routes and exit nodes may not work correctly.%s", strings.Join(warnings, "\n"), kbLink)
-	}
-
-	return nil
-}
-
-// disabledSysctls checks if the given sysctl keys are off, according
-// to strconv.ParseBool. Returns a list of keys that are disabled, or
-// err if something went wrong which prevented the lookups from
-// completing.
-func disabledSysctls(sysctls ...string) (disabled []string, err error) {
-	for _, k := range sysctls {
-		// TODO: on linux, we can get at these values via /proc/sys,
-		// rather than fork subcommands that may not be installed.
-		bs, err := exec.Command("sysctl", "-n", k).Output()
-		if err != nil {
-			return nil, fmt.Errorf("couldn't check %s (%v)", k, err)
-		}
-		on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
-		if err != nil {
-			return nil, fmt.Errorf("couldn't parse %s (%v)", k, err)
-		}
-		if !on {
-			disabled = append(disabled, k)
-		}
-	}
-	return disabled, nil
+	return warn
 }
 
 // DERPMap returns the current DERPMap in use, or nil if not connected.
