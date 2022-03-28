@@ -238,3 +238,6 @@ func AllIPv4() netaddr.IPPrefix { return allIPv4 }
 
 // AllIPv6 returns ::/0.
 func AllIPv6() netaddr.IPPrefix { return allIPv6 }
+
+// ExitRoutes returns a slice containing AllIPv4 and AllIPv6.
+func ExitRoutes() []netaddr.IPPrefix { return []netaddr.IPPrefix{allIPv4, allIPv6} }

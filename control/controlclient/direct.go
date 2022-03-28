@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"reflect"
 	"runtime"
 	"strings"
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
@@ -1151,89 +1151,17 @@ func TrimWGConfig() opt.Bool {
 //
 // It should not return false positives.
 //
-// TODO(bradfitz): merge this code into LocalBackend.CheckIPForwarding
-// and change controlclient.Options.SkipIPForwardingCheck into a
-// func([]netaddr.IPPrefix) error signature instead. Then we only have
-// one copy of this code.
+// TODO(bradfitz): Change controlclient.Options.SkipIPForwardingCheck into a
+// func([]netaddr.IPPrefix) error signature instead.
 func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool {
-	if len(routes) == 0 {
-		// Nothing to route, so no need to warn.
+	warn, err := netutil.CheckIPForwarding(routes, state)
+	if err != nil {
+		// Oh well, we tried. This is just for debugging.
+		// We don't want false positives.
+		// TODO: maybe we want a different warning for inability to check?
 		return false
 	}
-
-	if runtime.GOOS != "linux" {
-		// We only do subnet routing on Linux for now.
-		// It might work on darwin/macOS when building from source, so
-		// don't return true for other OSes. We can OS-based warnings
-		// already in the admin panel.
-		return false
-	}
-
-	localIPs := map[netaddr.IP]bool{}
-	for _, addrs := range state.InterfaceIPs {
-		for _, pfx := range addrs {
-			localIPs[pfx.IP()] = true
-		}
-	}
-
-	v4Routes, v6Routes := false, false
-	for _, r := range routes {
-		// It's possible to advertise a route to one of the local
-		// machine's local IPs. IP forwarding isn't required for this
-		// to work, so we shouldn't warn for such exports.
-		if r.IsSingleIP() && localIPs[r.IP()] {
-			continue
-		}
-		if r.IP().Is4() {
-			v4Routes = true
-		} else {
-			v6Routes = true
-		}
-	}
-
-	if v4Routes {
-		out, err := ioutil.ReadFile("/proc/sys/net/ipv4/ip_forward")
-		if err != nil {
-			// Try another way.
-			out, err = exec.Command("sysctl", "-n", "net.ipv4.ip_forward").Output()
-		}
-		if err != nil {
-			// Oh well, we tried. This is just for debugging.
-			// We don't want false positives.
-			// TODO: maybe we want a different warning for inability to check?
-			return false
-		}
-		if strings.TrimSpace(string(out)) == "0" {
-			return true
-		}
-	}
-	if v6Routes {
-		// Note: you might be wondering why we check only the state of
-		// conf.all.forwarding, rather than per-interface forwarding
-		// configuration. According to kernel documentation, it seems
-		// that to actually forward packets, you need to enable
-		// forwarding globally, and the per-interface forwarding
-		// setting only alters other things such as how router
-		// advertisements are handled. The kernel itself warns that
-		// enabling forwarding per-interface and not globally will
-		// probably not work, so I feel okay calling those configs
-		// broken until we have proof otherwise.
-		out, err := ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/forwarding")
-		if err != nil {
-			out, err = exec.Command("sysctl", "-n", "net.ipv6.conf.all.forwarding").Output()
-		}
-		if err != nil {
-			// Oh well, we tried. This is just for debugging.
-			// We don't want false positives.
-			// TODO: maybe we want a different warning for inability to check?
-			return false
-		}
-		if strings.TrimSpace(string(out)) == "0" {
-			return true
-		}
-	}
-
-	return false
+	return warn != nil
 }
 
 // isUniquePingRequest reports whether pr contains a new PingRequest.URL
