@@ -25,7 +25,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -130,14 +129,6 @@ var subCommands = map[string]*func([]string) error{
 }
 
 func main() {
-	// We aren't very performance sensitive, and the parts that are
-	// performance sensitive (wireguard) try hard not to do any memory
-	// allocations. So let's be aggressive about garbage collection,
-	// unless the user specifically overrides it in the usual way.
-	if _, ok := os.LookupEnv("GOGC"); !ok {
-		debug.SetGCPercent(10)
-	}
-
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
