@@ -65,8 +65,9 @@ type CapabilityVersion int
 //    26: 2022-01-12: (nothing, just bumping for 1.20.0)
 //    27: 2022-02-18: start of SSHPolicy being respected
 //    28: 2022-03-09: client can communicate over Noise.
-//    29: 2022-03-09: MapResponse.PopBrowserURL
-const CurrentCapabilityVersion CapabilityVersion = 29
+//    29: 2022-03-21: MapResponse.PopBrowserURL
+//    30: 2022-03-22: client can request id tokens.
+const CurrentCapabilityVersion CapabilityVersion = 30
 
 type StableID string
 
