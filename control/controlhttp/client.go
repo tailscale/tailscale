@@ -43,24 +43,20 @@ import (
 	"tailscale.com/types/key"
 )
 
-// Dial connects to the HTTP server at addr, requests to switch to the
+// Dial connects to the HTTP server at host:httpPort, requests to switch to the
 // Tailscale control protocol, and returns an established control
 // protocol connection.
 //
 // If Dial fails to connect using addr, it also tries to tunnel over
-// TLS to <addr's host>:443 as a compatibility fallback.
+// TLS to host:httpsPort as a compatibility fallback.
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
+func Dial(ctx context.Context, host string, httpPort string, httpsPort string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
 	a := &dialParams{
 		host:       host,
-		httpPort:   port,
-		httpsPort:  "443",
+		httpPort:   httpPort,
+		httpsPort:  httpsPort,
 		machineKey: machineKey,
 		controlKey: controlKey,
 		version:    protocolVersion,
