@@ -37,7 +37,7 @@ func noteEnv(k, v string) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if _, ok := set[v]; !ok {
+	if _, ok := set[k]; !ok {
 		list = append(list, k)
 	}
 	set[k] = v
