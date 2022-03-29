@@ -1329,7 +1329,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	if err != nil {
 		return err
 	}
-	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.serverHost, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
+	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.host, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
 	if err != nil {
 		return err
 	}
