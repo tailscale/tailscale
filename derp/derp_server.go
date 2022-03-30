@@ -391,6 +391,18 @@ func (s *Server) isClosed() bool {
 	return s.closed
 }
 
+// IsClientConnectedForTest reports whether the client with specified key is connected.
+// This is used in tests to verify that nodes are connected.
+func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x, ok := s.clients[k]
+	if !ok {
+		return false
+	}
+	return x.ActiveClient() != nil
+}
+
 // Accept adds a new connection to the server and serves it.
 //
 // The provided bufio ReadWriter must be already connected to nc.
