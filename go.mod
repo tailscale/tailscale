@@ -17,7 +17,6 @@ require (
 	github.com/creack/pty v1.1.17
 	github.com/dave/jennifer v1.4.1
 	github.com/frankban/quicktest v1.14.0
-	github.com/gliderlabs/ssh v0.3.3
 	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.0.6
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
@@ -41,6 +40,7 @@ require (
 	github.com/tailscale/certstore v0.1.1-0.20220316223106-78d6e1c49d8d
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
+	github.com/tailscale/golang-x-crypto v0.0.0-20220330002111-62119522bbcf
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20211105212140-3a0adc019d83
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
@@ -116,6 +116,7 @@ require (
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/fzipp/gocyclo v0.3.1 // indirect
+	github.com/gliderlabs/ssh v0.3.3 // indirect
 	github.com/go-critic/go-critic v0.6.1 // indirect
 	github.com/go-git/gcfg v1.5.0 // indirect
 	github.com/go-git/go-billy/v5 v5.3.1 // indirect
@@ -233,7 +234,6 @@ require (
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/sylvia7788/contextcheck v1.0.4 // indirect
-	github.com/tailscale/golang-x-crypto v0.0.0-20220326011347-d690bbfb6b5f // indirect
 	github.com/tdakkota/asciicheck v0.1.1 // indirect
 	github.com/tetafro/godot v1.4.11 // indirect
 	github.com/timakin/bodyclose v0.0.0-20210704033933-f49887972144 // indirect
