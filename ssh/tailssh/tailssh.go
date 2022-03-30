@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
@@ -75,6 +76,10 @@ func (srv *server) newSSHServer() (*ssh.Server, error) {
 		},
 		Version:                     "SSH-2.0-Tailscale",
 		LocalPortForwardingCallback: srv.mayForwardLocalPortTo,
+		NoClientAuthCallback: func(m gossh.ConnMetadata) (*gossh.Permissions, error) {
+			srv.logf("SSH connection from %v for %q; client ver %q", m.RemoteAddr(), m.User(), m.ClientVersion())
+			return nil, nil
+		},
 	}
 	for k, v := range ssh.DefaultRequestHandlers {
 		ss.RequestHandlers[k] = v
