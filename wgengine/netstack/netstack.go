@@ -431,6 +431,8 @@ func (ns *Impl) peerAPIPortAtomic(ip netaddr.IP) *uint32 {
 	}
 }
 
+var viaRange = tsaddr.TailscaleViaRange()
+
 // shouldProcessInbound reports whether an inbound packet should be
 // handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
@@ -452,6 +454,9 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	}
 	if ns.isInboundTSSH(p) && ns.processSSH() {
 		return true
+	}
+	if p.IPVersion == 6 && viaRange.Contains(p.Dst.IP()) {
+		return ns.lb != nil && ns.lb.ShouldHandleViaIP(p.Dst.IP())
 	}
 	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
 		// Fast path for common case (e.g. Linux server in TUN mode) where
@@ -624,6 +629,12 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	dialIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	isTailscaleIP := tsaddr.IsTailscaleIP(dialIP)
+
+	if viaRange.Contains(dialIP) {
+		isTailscaleIP = false
+		dialIP = tsaddr.UnmapVia(dialIP)
+	}
+
 	defer func() {
 		if !isTailscaleIP {
 			// if this is a subnet IP, we added this in before the TCP handshake
@@ -775,6 +786,9 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 		backendRemoteAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
 	} else {
+		if dstIP := dstAddr.IP(); viaRange.Contains(dstIP) {
+			dstAddr = netaddr.IPPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
+		}
 		backendRemoteAddr = dstAddr.UDPAddr()
 		if dstAddr.IP().Is4() {
 			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: int(srcPort)}
