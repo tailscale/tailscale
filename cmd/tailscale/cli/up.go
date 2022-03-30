@@ -7,6 +7,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -201,6 +203,26 @@ var (
 	ipv6default = netaddr.MustParseIPPrefix("::/0")
 )
 
+func validateViaPrefix(ipp netaddr.IPPrefix) error {
+	if !tsaddr.IsViaPrefix(ipp) {
+		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
+	}
+	if ipp.Bits() < (128 - 32) {
+		return fmt.Errorf("%v 4-in-6 prefix must be at least a /%v", ipp, 128-32)
+	}
+	a := ipp.IP().As16()
+	// The first 64 bits of a are the via prefix.
+	// The next 32 bits are the "site ID".
+	// The last 32 bits are the IPv4.
+	// For now, we reserve the top 3 bytes of the site ID,
+	// and only allow users to use site IDs 0-255.
+	siteID := binary.BigEndian.Uint32(a[8:12])
+	if siteID > 0xFF {
+		return fmt.Errorf("route %v contains invalid site ID %08x; must be 0xff or less", ipp, siteID)
+	}
+	return nil
+}
+
 func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netaddr.IPPrefix, error) {
 	routeMap := map[netaddr.IPPrefix]bool{}
 	if advertiseRoutes != "" {
@@ -213,6 +235,11 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 			}
 			if ipp != ipp.Masked() {
 				return nil, fmt.Errorf("%s has non-address bits set; expected %s", ipp, ipp.Masked())
+			}
+			if tsaddr.IsViaPrefix(ipp) {
+				if err := validateViaPrefix(ipp); err != nil {
+					return nil, err
+				}
 			}
 			if ipp == ipv4default {
 				default4 = true

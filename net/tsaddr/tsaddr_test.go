@@ -88,3 +88,19 @@ func BenchmarkTailscaleServiceAddr(b *testing.B) {
 		sinkIP = TailscaleServiceIP()
 	}
 }
+
+func TestUnmapVia(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want string
+	}{
+		{"1.2.3.4", "1.2.3.4"}, // unchanged v4
+		{"fd7a:115c:a1e0:b1a::bb:10.2.1.3", "10.2.1.3"},
+		{"fd7a:115c:a1e0:b1b::bb:10.2.1.4", "fd7a:115c:a1e0:b1b:0:bb:a02:104"}, // "b1b",not "bia"
+	}
+	for _, tt := range tests {
+		if got := UnmapVia(netaddr.MustParseIP(tt.ip)).String(); got != tt.want {
+			t.Errorf("for %q: got %q, want %q", tt.ip, got, tt.want)
+		}
+	}
+}

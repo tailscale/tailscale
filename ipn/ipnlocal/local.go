@@ -106,7 +106,8 @@ type LocalBackend struct {
 
 	filterHash deephash.Sum
 
-	filterAtomic atomic.Value // of *filter.Filter
+	filterAtomic            atomic.Value // of *filter.Filter
+	containsViaIPFuncAtomic atomic.Value // of func(netaddr.IP) bool
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -1573,9 +1574,21 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 
 	b.logf("using backend prefs for %q: %s", key, b.prefs.Pretty())
 
-	b.sshAtomicBool.Set(b.prefs != nil && b.prefs.RunSSH && canSSH)
+	b.setAtomicValuesFromPrefs(b.prefs)
 
 	return nil
+}
+
+// setAtomicValuesFromPrefs populates sshAtomicBool and containsViaIPFuncAtomic
+// from the prefs p, which may be nil.
+func (b *LocalBackend) setAtomicValuesFromPrefs(p *ipn.Prefs) {
+	b.sshAtomicBool.Set(p != nil && p.RunSSH && canSSH)
+
+	if p == nil {
+		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
+	} else {
+		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes, tsaddr.IsViaPrefix)))
+	}
 }
 
 // State returns the backend state machine's current state.
@@ -1746,7 +1759,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	netMap := b.netMap
 	stateKey := b.stateKey
 
-	b.sshAtomicBool.Set(newp.RunSSH && canSSH)
+	b.setAtomicValuesFromPrefs(newp)
 
 	oldp := b.prefs
 	newp.Persist = oldp.Persist // caller isn't allowed to override this
@@ -2690,10 +2703,20 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.authURL = ""
 	b.authURLSticky = ""
 	b.activeLogin = ""
-	b.sshAtomicBool.Set(false)
+	b.setAtomicValuesFromPrefs(nil)
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Get() && canSSH }
+
+// ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
+// Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
+// by Tailscale.
+func (b *LocalBackend) ShouldHandleViaIP(ip netaddr.IP) bool {
+	if f, ok := b.containsViaIPFuncAtomic.Load().(func(netaddr.IP) bool); ok {
+		return f(ip)
+	}
+	return false
+}
 
 // Logout tells the controlclient that we want to log out, and
 // transitions the local engine to the logged-out state without

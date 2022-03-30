@@ -659,6 +659,39 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:        true,
 			},
 		},
+		{
+			name: "via_route_good",
+			goos: "linux",
+			args: upArgsT{
+				advertiseRoutes: "fd7a:115c:a1e0:b1a::bb:10.0.0.0/112",
+				netfilterMode: "off",
+			},
+			want: &ipn.Prefs{
+				WantRunning:   true,
+				NoSNAT:        true,
+				AdvertiseRoutes: []netaddr.IPPrefix{
+					netaddr.MustParseIPPrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
+				},
+			},
+		},
+		{
+			name: "via_route_short_prefix",
+			goos: "linux",
+			args: upArgsT{
+				advertiseRoutes: "fd7a:115c:a1e0:b1a::/64",
+				netfilterMode: "off",
+			},
+			wantErr: "fd7a:115c:a1e0:b1a::/64 4-in-6 prefix must be at least a /96",
+		},
+		{
+			name: "via_route_short_reserved_siteid",
+			goos: "linux",
+			args: upArgsT{
+				advertiseRoutes: "fd7a:115c:a1e0:b1a:1234:5678::/112",
+				netfilterMode: "off",
+			},
+			wantErr: "route fd7a:115c:a1e0:b1a:1234:5678::/112 contains invalid site ID 12345678; must be 0xff or less",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
