@@ -1593,16 +1593,22 @@ type SSHRule struct {
 }
 
 // SSHPrincipal is either a particular node or a user on any node.
-// Any matching field causes a match.
 type SSHPrincipal struct {
+	// Matching any one of the following four field causes a match.
+	// It must also match Certs, if non-empty.
+
 	Node      StableNodeID `json:"node,omitempty"`
 	NodeIP    string       `json:"nodeIP,omitempty"`
 	UserLogin string       `json:"userLogin,omitempty"` // email-ish: foo@example.com, bar@github
-
-	// Any, if true, matches any user.
-	Any bool `json:"any,omitempty"`
-
+	Any       bool         `json:"any,omitempty"`       // if true, match any connection
 	// TODO(bradfitz): add StableUserID, once that exists
+
+	// PubKeys, if non-empty, means that this SSHPrincipal only
+	// matches if one of these public keys is presented by the user.
+	//
+	// As a special case, if len(PubKeys) == 1 and PubKeys[0] starts
+	// with "https://", then it's fetched (like https://github.com/username.keys).
+	PubKeys []string `json:"pubKeys,omitempty"`
 }
 
 // SSHAction is how to handle an incoming connection.

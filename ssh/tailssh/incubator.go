@@ -330,7 +330,7 @@ func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 			}
 			k, ok := opcodeShortName[c]
 			if !ok {
-				ss.logf("unknown opcode: %d", c)
+				ss.vlogf("unknown opcode: %d", c)
 				continue
 			}
 			if _, ok := tios.CC[k]; ok {
@@ -341,7 +341,7 @@ func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 				tios.Opts[k] = v > 0
 				continue
 			}
-			ss.logf("unsupported opcode: %v(%d)=%v", k, c, v)
+			ss.vlogf("unsupported opcode: %v(%d)=%v", k, c, v)
 		}
 
 		// Save PTY settings.
