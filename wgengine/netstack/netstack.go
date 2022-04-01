@@ -666,8 +666,6 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.logf("handling SSH connection....")
 			if err := handleSSH(ns.logf, ns.lb, c); err != nil {
 				ns.logf("ssh error: %v", err)
-			} else {
-				ns.logf("ssh: ok")
 			}
 			return
 		}

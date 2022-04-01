@@ -63,7 +63,10 @@ func TestMatchRule(t *testing.T) {
 			name: "no-principal",
 			rule: &tailcfg.SSHRule{
 				Action: someAction,
-			},
+				SSHUsers: map[string]string{
+					"*": "ubuntu",
+				}},
+			ci:      &sshConnInfo{},
 			wantErr: errPrincipalMatch,
 		},
 		{
