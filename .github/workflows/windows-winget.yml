@@ -1,0 +1,38 @@
+name: Submit to winget
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  winget-bump:
+    name: winget
+    runs-on: windows-latest
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@v2
+      - uses: oprypin/find-latest-tag@v1
+        with:
+          repository: tailscale/tailscale  # The repository to scan.
+          releases-only: true  # We know that all relevant tags have a GitHub release for them.
+        id: latesttag
+      - name: Set Version
+        id: versionset
+        run: |
+          tag="${{ steps.latesttag.outputs.tag }}"
+          version=${tag/v/}
+          echo "::set-output name=version::$version"
+      - name: Submit to winget repository #Name of the workflow step
+        uses: gnpaone/winget-push-test@v1
+        with:
+          version: ${{ steps.versionset.outputs.version }} #Package version
+          url: https://pkgs.tailscale.com/stable/tailscale-ipn-setup-${{ steps.versionset.outputs.version }}.exe
+          token:  ${{ secrets.PAT }} #Token used to submit to Winget repository
+          packageid: tailscale.tailscale #Package ID
+          user: microsoft #Github username where test winget repo exists
+          repo: winget-pkgs #Name of winget test repo
