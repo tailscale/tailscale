@@ -217,7 +217,7 @@ func TestJSON(t *testing.T) {
 	var buf bytes.Buffer
 	var logf Logf = func(f string, a ...any) { fmt.Fprintf(&buf, f, a...) }
 	logf.JSON(1, "foo", &tailcfg.Hostinfo{})
-	want := "[v\x00JSON]1" + `{"foo":{"OS":"","Hostname":""}}`
+	want := "[v\x00JSON]1" + `{"foo":{}}`
 	if got := buf.String(); got != want {
 		t.Errorf("mismatch\n got: %q\nwant: %q\n", got, want)
 	}
