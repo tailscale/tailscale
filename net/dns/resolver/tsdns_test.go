@@ -344,6 +344,7 @@ func TestResolveLocal(t *testing.T) {
 		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeNameError},
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
+		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netaddr.MustParseIP("100.100.100.100"), dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {
@@ -377,6 +378,7 @@ func TestResolveLocalReverse(t *testing.T) {
 		{"ipv4_nxdomain", dnsname.FQDN("5.3.2.1.in-addr.arpa."), "", dns.RCodeNameError},
 		{"ipv6_nxdomain", dnsname.FQDN("0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.ip6.arpa."), "", dns.RCodeNameError},
 		{"nxdomain", dnsname.FQDN("2.3.4.5.in-addr.arpa."), "", dns.RCodeRefused},
+		{"magicdns", dnsname.FQDN("100.100.100.100.in-addr.arpa."), dnsSymbolicFQDN, dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {
