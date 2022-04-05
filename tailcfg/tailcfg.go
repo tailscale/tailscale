@@ -452,16 +452,14 @@ type Service struct {
 // Because it contains pointers (slices), this type should not be used
 // as a value type.
 type Hostinfo struct {
-	// TODO(crawshaw): mark all these fields ",omitempty" when all the
-	// iOS apps are updated with the latest swift version of this struct.
 	IPNVersion    string             `json:",omitempty"` // version of this code
 	FrontendLogID string             `json:",omitempty"` // logtail ID of frontend instance
 	BackendLogID  string             `json:",omitempty"` // logtail ID of backend instance
-	OS            string             // operating system the client runs on (a version.OS value)
+	OS            string             `json:",omitempty"` // operating system the client runs on (a version.OS value)
 	OSVersion     string             `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
 	Package       string             `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel   string             `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
-	Hostname      string             // name of the host the client runs on
+	Hostname      string             `json:",omitempty"` // name of the host the client runs on
 	ShieldsUp     bool               `json:",omitempty"` // indicates whether the host is blocking incoming connections
 	ShareeNode    bool               `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	GoArch        string             `json:",omitempty"` // the host's GOARCH value (of the running binary)
