@@ -34,6 +34,8 @@ import (
 	"tailscale.com/wgengine/monitor"
 )
 
+const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
+
 // maxResponseBytes is the maximum size of a response from a Resolver. The
 // actual buffer size will be one larger than this so that we can detect
 // truncation in a platform-agnostic way.
@@ -553,6 +555,18 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 		return netaddr.IP{}, dns.RCodeNameError
 	}
 
+	// We return a symbolic domain if someone does a reverse lookup on the
+	// DNS endpoint. To round out this special case, we also do the inverse
+	// (returning the endpoint IP if someone looks up the symbolic domain).
+	if domain == dnsSymbolicFQDN {
+		switch typ {
+		case dns.TypeA:
+			return tsaddr.TailscaleServiceIP(), dns.RCodeSuccess
+		case dns.TypeAAAA:
+			return tsaddr.TailscaleServiceIPv6(), dns.RCodeSuccess
+		}
+	}
+
 	r.mu.Lock()
 	hosts := r.hostToIP
 	localDomains := r.localDomains
@@ -642,6 +656,14 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 		// who knows what upstreams might do, try kicking it up to
 		// them. We definitely won't handle it.
 		return "", dns.RCodeRefused
+	}
+
+	// If someone curiously does a reverse lookup on the DNS IP, we
+	// return a domain that helps indicate that Tailscale is using
+	// this IP for a special purpose and it is not a node on their
+	// tailnet.
+	if ip == tsaddr.TailscaleServiceIP() || ip == tsaddr.TailscaleServiceIPv6() {
+		return dnsSymbolicFQDN, dns.RCodeSuccess
 	}
 
 	r.mu.Lock()
