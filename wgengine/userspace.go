@@ -487,23 +487,23 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 
 // handleDNS is an outbound pre-filter resolving Tailscale domains.
 func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
-	if p.Dst.Port() == magicDNSPort && p.IPProto == ipproto.UDP {
-		switch p.Dst.IP() {
-		case magicDNSIP, magicDNSIPv6:
-			err := e.dns.EnqueueRequest(append([]byte(nil), p.Payload()...), p.Src)
-			if err != nil {
-				e.logf("dns: enqueue: %v", err)
-			}
-			return filter.Drop
+	switch p.Dst.IP() {
+	case magicDNSIP, magicDNSIPv6:
+		err := e.dns.EnqueuePacket(append([]byte(nil), p.Payload()...), p.IPProto, p.Src, p.Dst)
+		if err != nil {
+			e.logf("dns: enqueue: %v", err)
 		}
+		return filter.Drop
+	default:
+		return filter.Accept
 	}
-	return filter.Accept
 }
 
-// pollResolver reads responses from the DNS resolver and injects them inbound.
+// pollResolver reads packets from the DNS resolver and injects them inbound.
 func (e *userspaceEngine) pollResolver() {
 	for {
-		bs, to, err := e.dns.NextResponse()
+		// TODO(tom): Pass offset length up callstack to avoid extra copies.
+		bs, err := e.dns.NextPacket()
 		if err == resolver.ErrClosed {
 			return
 		}
@@ -512,38 +512,9 @@ func (e *userspaceEngine) pollResolver() {
 			continue
 		}
 
-		var buf []byte
 		const offset = tstun.PacketStartOffset
-		switch {
-		case to.IP().Is4():
-			h := packet.UDP4Header{
-				IP4Header: packet.IP4Header{
-					Src: magicDNSIP,
-					Dst: to.IP(),
-				},
-				SrcPort: magicDNSPort,
-				DstPort: to.Port(),
-			}
-			hlen := h.Len()
-			// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
-			buf = make([]byte, offset+hlen+len(bs))
-			copy(buf[offset+hlen:], bs)
-			h.Marshal(buf[offset:])
-		case to.IP().Is6():
-			h := packet.UDP6Header{
-				IP6Header: packet.IP6Header{
-					Src: magicDNSIPv6,
-					Dst: to.IP(),
-				},
-				SrcPort: magicDNSPort,
-				DstPort: to.Port(),
-			}
-			hlen := h.Len()
-			// TODO(dmytro): avoid this allocation without importing tstun quirks into dns.
-			buf = make([]byte, offset+hlen+len(bs))
-			copy(buf[offset+hlen:], bs)
-			h.Marshal(buf[offset:])
-		}
+		buf := make([]byte, len(bs)+offset)
+		copy(buf[offset:], bs)
 		e.tundev.InjectInboundDirect(buf, offset)
 	}
 }
