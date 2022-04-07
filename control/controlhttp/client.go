@@ -65,7 +65,7 @@ const (
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic) (*controlbase.Conn, error) {
+func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16) (*controlbase.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -77,6 +77,7 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 		httpsPort:  "443",
 		machineKey: machineKey,
 		controlKey: controlKey,
+		version:    protocolVersion,
 		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
 	}
 	return a.dial()
@@ -89,6 +90,7 @@ type dialParams struct {
 	httpsPort  string
 	machineKey key.MachinePrivate
 	controlKey key.MachinePublic
+	version    uint16
 	proxyFunc  func(*http.Request) (*url.URL, error) // or nil
 
 	// For tests only
@@ -96,7 +98,7 @@ type dialParams struct {
 }
 
 func (a *dialParams) dial() (*controlbase.Conn, error) {
-	init, cont, err := controlbase.ClientDeferred(a.machineKey, a.controlKey)
+	init, cont, err := controlbase.ClientDeferred(a.machineKey, a.controlKey, a.version)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +122,7 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 	// being difficult and see if we can get through over HTTPS.
 	u.Scheme = "https"
 	u.Host = net.JoinHostPort(a.host, a.httpsPort)
-	init, cont, err = controlbase.ClientDeferred(a.machineKey, a.controlKey)
+	init, cont, err = controlbase.ClientDeferred(a.machineKey, a.controlKey, a.version)
 	if err != nil {
 		return nil, err
 	}

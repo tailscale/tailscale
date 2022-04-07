@@ -39,9 +39,9 @@ const (
 // 16b: message tag (authenticates the whole message)
 type initiationMessage [101]byte
 
-func mkInitiationMessage() initiationMessage {
+func mkInitiationMessage(protocolVersion uint16) initiationMessage {
 	var ret initiationMessage
-	binary.BigEndian.PutUint16(ret[:2], uint16(protocolVersion))
+	binary.BigEndian.PutUint16(ret[:2], protocolVersion)
 	ret[2] = msgTypeInitiation
 	binary.BigEndian.PutUint16(ret[3:5], uint16(len(ret.Payload())))
 	return ret
