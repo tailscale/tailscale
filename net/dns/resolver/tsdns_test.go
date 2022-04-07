@@ -39,7 +39,7 @@ var (
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
 
-	magicdnsDstUdp = netaddr.MustParseIPPort("100.100.100.100:53")
+	magicDNSv4Port = netaddr.MustParseIPPort("100.100.100.100:53")
 )
 
 var dnsCfg = Config{
@@ -234,7 +234,7 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	if err := r.enqueueRequest(query, ipproto.UDP, netaddr.IPPort{}, magicdnsDstUdp); err != nil {
+	if err := r.enqueueRequest(query, ipproto.UDP, netaddr.IPPort{}, magicDNSv4Port); err != nil {
 		return nil, fmt.Errorf("enqueueRequest: %w", err)
 	}
 	payload, _, err := r.nextResponse()
@@ -730,7 +730,7 @@ func TestDelegateCollision(t *testing.T) {
 	// packets will have the same dns txid.
 	for _, p := range packets {
 		payload := dnspacket(p.qname, p.qtype, noEdns)
-		err := r.enqueueRequest(payload, ipproto.UDP, p.addr, magicdnsDstUdp)
+		err := r.enqueueRequest(payload, ipproto.UDP, p.addr, magicDNSv4Port)
 		if err != nil {
 			t.Error(err)
 		}
