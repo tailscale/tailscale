@@ -636,11 +636,9 @@ POST /api/v2/tailnet/example.com/acl/validate
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
   -u "tskey-yourapikey123:" \
   --data-binary '
-{
   [
     {"User": "user1@example.com", "Allow": ["example-host-1:22"], "Deny": ["example-host-2:100"]}
-  ]
-}'
+  ]'
 ```
 
 Response:
