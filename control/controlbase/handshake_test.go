@@ -26,11 +26,11 @@ func TestHandshake(t *testing.T) {
 	)
 	go func() {
 		var err error
-		server, err = Server(context.Background(), serverConn, serverKey, nil)
+		server, err = Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 		serverErr <- err
 	}()
 
-	client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+	client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 	if err != nil {
 		t.Fatalf("client connection failed: %v", err)
 	}
@@ -42,8 +42,8 @@ func TestHandshake(t *testing.T) {
 		t.Fatal("client and server disagree on handshake hash")
 	}
 
-	if client.ProtocolVersion() != int(protocolVersion) {
-		t.Fatalf("client reporting wrong protocol version %d, want %d", client.ProtocolVersion(), protocolVersion)
+	if client.ProtocolVersion() != int(testProtocolVersion) {
+		t.Fatalf("client reporting wrong protocol version %d, want %d", client.ProtocolVersion(), testProtocolVersion)
 	}
 	if client.ProtocolVersion() != server.ProtocolVersion() {
 		t.Fatalf("peers disagree on protocol version, client=%d server=%d", client.ProtocolVersion(), server.ProtocolVersion())
@@ -78,11 +78,11 @@ func TestNoReuse(t *testing.T) {
 		)
 		go func() {
 			var err error
-			server, err = Server(context.Background(), serverConn, serverKey, nil)
+			server, err = Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 			serverErr <- err
 		}()
 
-		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 		if err != nil {
 			t.Fatalf("client connection failed: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			_, err := Server(context.Background(), serverConn, serverKey, nil)
+			_, err := Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 			// If the server failed, we have to close the Conn to
 			// unblock the client.
 			if err != nil {
@@ -181,7 +181,7 @@ func TestTampering(t *testing.T) {
 			serverErr <- err
 		}()
 
-		_, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+		_, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 		if err == nil {
 			t.Fatal("client connection succeeded despite tampering")
 		}
@@ -200,11 +200,11 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			_, err := Server(context.Background(), serverConn, serverKey, nil)
+			_, err := Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 			serverErr <- err
 		}()
 
-		_, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+		_, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 		if err == nil {
 			t.Fatal("client connection succeeded despite tampering")
 		}
@@ -225,13 +225,13 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			server, err := Server(context.Background(), serverConn, serverKey, nil)
+			server, err := Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 			serverErr <- err
 			_, err = io.WriteString(server, strings.Repeat("a", 14))
 			serverErr <- err
 		}()
 
-		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 		if err != nil {
 			t.Fatalf("client handshake failed: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestTampering(t *testing.T) {
 			serverErr             = make(chan error, 1)
 		)
 		go func() {
-			server, err := Server(context.Background(), serverConn, serverKey, nil)
+			server, err := Server(context.Background(), serverConn, serverKey, testProtocolVersion, nil)
 			serverErr <- err
 			var bs [100]byte
 			// The server needs a timeout if the tampering is hitting the length header.
@@ -281,7 +281,7 @@ func TestTampering(t *testing.T) {
 			}
 		}()
 
-		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public())
+		client, err := Client(context.Background(), clientConn, clientKey, serverKey.Public(), testProtocolVersion)
 		if err != nil {
 			t.Fatalf("client handshake failed: %v", err)
 		}

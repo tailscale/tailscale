@@ -29,7 +29,7 @@ func TestInteropClient(t *testing.T) {
 	)
 
 	go func() {
-		server, err := Server(context.Background(), s2, controlKey, nil)
+		server, err := Server(context.Background(), s2, controlKey, testProtocolVersion, nil)
 		serverErr <- err
 		if err != nil {
 			return
@@ -77,7 +77,7 @@ func TestInteropServer(t *testing.T) {
 	)
 
 	go func() {
-		client, err := Client(context.Background(), s1, machineKey, controlKey.Public())
+		client, err := Client(context.Background(), s1, machineKey, controlKey.Public(), testProtocolVersion)
 		clientErr <- err
 		if err != nil {
 			return
@@ -121,11 +121,11 @@ func noiseExplorerClient(conn net.Conn, controlKey key.MachinePublic, machineKey
 	copy(mk.public_key[:], machineKey.Public().UntypedBytes())
 	var peerKey [32]byte
 	copy(peerKey[:], controlKey.UntypedBytes())
-	session := InitSession(true, protocolVersionPrologue(protocolVersion), mk, peerKey)
+	session := InitSession(true, protocolVersionPrologue(testProtocolVersion), mk, peerKey)
 
 	_, msg1 := SendMessage(&session, nil)
 	var hdr [initiationHeaderLen]byte
-	binary.BigEndian.PutUint16(hdr[:2], protocolVersion)
+	binary.BigEndian.PutUint16(hdr[:2], testProtocolVersion)
 	hdr[2] = msgTypeInitiation
 	binary.BigEndian.PutUint16(hdr[3:5], 96)
 	if _, err := conn.Write(hdr[:]); err != nil {
@@ -193,7 +193,7 @@ func noiseExplorerServer(conn net.Conn, controlKey key.MachinePrivate, wantMachi
 	var mk keypair
 	copy(mk.private_key[:], controlKey.UntypedBytes())
 	copy(mk.public_key[:], controlKey.Public().UntypedBytes())
-	session := InitSession(false, protocolVersionPrologue(protocolVersion), mk, [32]byte{})
+	session := InitSession(false, protocolVersionPrologue(testProtocolVersion), mk, [32]byte{})
 
 	var buf [1024]byte
 	if _, err := io.ReadFull(conn, buf[:101]); err != nil {

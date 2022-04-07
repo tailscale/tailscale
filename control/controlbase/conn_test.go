@@ -26,6 +26,8 @@ import (
 	"tailscale.com/types/key"
 )
 
+const testProtocolVersion = 1
+
 func TestMessageSize(t *testing.T) {
 	// This test is a regression guard against someone looking at
 	// maxCiphertextSize, going "huh, we could be more efficient if it
@@ -204,10 +206,10 @@ func TestConnStd(t *testing.T) {
 		serverErr := make(chan error, 1)
 		go func() {
 			var err error
-			c2, err = Server(context.Background(), s2, controlKey, nil)
+			c2, err = Server(context.Background(), s2, controlKey, testProtocolVersion, nil)
 			serverErr <- err
 		}()
-		c1, err = Client(context.Background(), s1, machineKey, controlKey.Public())
+		c1, err = Client(context.Background(), s1, machineKey, controlKey.Public(), testProtocolVersion)
 		if err != nil {
 			s1.Close()
 			s2.Close()
@@ -396,11 +398,11 @@ func pairWithConns(t *testing.T, clientConn, serverConn net.Conn) (*Conn, *Conn)
 	)
 	go func() {
 		var err error
-		server, err = Server(context.Background(), serverConn, controlKey, nil)
+		server, err = Server(context.Background(), serverConn, controlKey, testProtocolVersion, nil)
 		serverErr <- err
 	}()
 
-	client, err := Client(context.Background(), clientConn, machineKey, controlKey.Public())
+	client, err := Client(context.Background(), clientConn, machineKey, controlKey.Public(), testProtocolVersion)
 	if err != nil {
 		t.Fatalf("client connection failed: %v", err)
 	}

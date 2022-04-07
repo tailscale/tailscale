@@ -104,9 +104,10 @@ func TestControlHTTP(t *testing.T) {
 func testControlHTTP(t *testing.T, proxy proxy) {
 	client, server := key.NewMachine(), key.NewMachine()
 
+	const testProtocolVersion = 1
 	sch := make(chan serverResult, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := AcceptHTTP(context.Background(), w, r, server)
+		conn, err := AcceptHTTP(context.Background(), w, r, server, testProtocolVersion)
 		if err != nil {
 			log.Print(err)
 		}
@@ -152,6 +153,7 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 		httpsPort:   strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
 		machineKey:  client,
 		controlKey:  server.Public(),
+		version:     testProtocolVersion,
 		insecureTLS: true,
 	}
 

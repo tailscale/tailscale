@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/multierr"
 )
@@ -146,7 +148,12 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn, err := controlhttp.Dial(ctx, nc.serverHost, nc.privKey, nc.serverPubKey)
+	if tailcfg.CurrentCapabilityVersion > math.MaxUint16 {
+		// Panic, because a test should have started failing several
+		// thousand version numbers before getting to this point.
+		panic("capability version is too high to fit in the wire protocol")
+	}
+	conn, err := controlhttp.Dial(ctx, nc.serverHost, nc.privKey, nc.serverPubKey, uint16(tailcfg.CurrentCapabilityVersion))
 	if err != nil {
 		return nil, err
 	}
