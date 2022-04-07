@@ -26,7 +26,7 @@ This test also requires the following:
 - the user running these tests must have access to `/dev/kvm` (being in the
   `kvm` group should suffice)
 
-The `-no-s3` flag is needed to disable downloads from S3, which require
+The `--no-s3` flag is needed to disable downloads from S3, which require
 credentials. However keep in mind that some distributions do not use stable URLs
 for each individual image artifact, so there may be spurious test failures as a
 result.
