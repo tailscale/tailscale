@@ -502,7 +502,6 @@ func (e *userspaceEngine) handleDNS(p *packet.Parsed, t *tstun.Wrapper) filter.R
 // pollResolver reads packets from the DNS resolver and injects them inbound.
 func (e *userspaceEngine) pollResolver() {
 	for {
-		// TODO(tom): Pass offset length up callstack to avoid extra copies.
 		bs, err := e.dns.NextPacket()
 		if err == resolver.ErrClosed {
 			return
@@ -512,10 +511,9 @@ func (e *userspaceEngine) pollResolver() {
 			continue
 		}
 
-		const offset = tstun.PacketStartOffset
-		buf := make([]byte, len(bs)+offset)
-		copy(buf[offset:], bs)
-		e.tundev.InjectInboundDirect(buf, offset)
+		// The leading empty space required by the semantics of
+		// InjectInboundDirect is allocated in NextPacket().
+		e.tundev.InjectInboundDirect(bs, tstun.PacketStartOffset)
 	}
 }
 
