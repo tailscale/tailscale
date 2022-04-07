@@ -117,6 +117,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	BackendLogID  string
 	OS            string
 	OSVersion     string
+	Desktop       opt.Bool
 	Package       string
 	DeviceModel   string
 	Hostname      string

@@ -17,10 +17,13 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
 )
+
+var started = time.Now()
 
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
@@ -31,6 +34,7 @@ func New() *tailcfg.Hostinfo {
 		Hostname:    hostname,
 		OS:          version.OS(),
 		OSVersion:   GetOSVersion(),
+		Desktop:     desktop(),
 		Package:     packageTypeCached(),
 		GoArch:      runtime.GOARCH,
 		DeviceModel: deviceModel(),
@@ -97,6 +101,7 @@ func GetEnvType() EnvType {
 var (
 	deviceModelAtomic atomic.Value // of string
 	osVersionAtomic   atomic.Value // of string
+	desktopAtomic     atomic.Value // of opt.Bool
 	packagingType     atomic.Value // of string
 )
 
@@ -115,6 +120,31 @@ func SetPackage(v string) { packagingType.Store(v) }
 func deviceModel() string {
 	s, _ := deviceModelAtomic.Load().(string)
 	return s
+}
+
+func desktop() (ret opt.Bool) {
+	if runtime.GOOS != "linux" {
+		return opt.Bool("")
+	}
+	if v := desktopAtomic.Load(); v != nil {
+		v, _ := v.(opt.Bool)
+		return v
+	}
+
+	seenDesktop := false
+	lineread.File("/proc/net/unix", func(line []byte) error {
+		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(" @/tmp/dbus-"))
+		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S(".X11-unix"))
+		seenDesktop = seenDesktop || mem.Contains(mem.B(line), mem.S("/wayland-1"))
+		return nil
+	})
+	ret.Set(seenDesktop)
+
+	// Only cache after a minute - compositors might not have started yet.
+	if time.Since(started) > time.Minute {
+		desktopAtomic.Store(ret)
+	}
+	return ret
 }
 
 func getEnvType() EnvType {
