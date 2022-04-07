@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
@@ -53,6 +54,21 @@ import (
 const debugPackets = false
 
 var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
+
+func init() {
+	var debugNetstackLeakMode = envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
+	// Note: netstacks refsvfs2 package that will eventually replace refs
+	// consumes the refs.LeakMode setting, but enables some checks when set to
+	// UninitializedLeakChecking which is what empty string becomes. This mode
+	// is largely un-useful, so it is explicitly disabled here, and more useful
+	// modes can be set via the envknob. See #4309 for more references.
+	if debugNetstackLeakMode == "" {
+		debugNetstackLeakMode = "disabled"
+	}
+	var lm refs.LeakMode
+	lm.Set(debugNetstackLeakMode)
+	refs.SetLeakMode(lm)
+}
 
 // Impl contains the state for the netstack implementation,
 // and implements wgengine.FakeImpl to act as a userspace network
