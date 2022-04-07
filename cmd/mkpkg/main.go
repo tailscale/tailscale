@@ -6,6 +6,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"github.com/goreleaser/nfpm"
 	_ "github.com/goreleaser/nfpm/deb"
 	_ "github.com/goreleaser/nfpm/rpm"
-	"github.com/pborman/getopt"
 )
 
 // parseFiles parses a comma-separated list of colon-separated pairs
@@ -44,21 +44,21 @@ func parseEmptyDirs(s string) []string {
 }
 
 func main() {
-	out := getopt.StringLong("out", 'o', "", "output file to write")
-	name := getopt.StringLong("name", 'n', "tailscale", "package name")
-	description := getopt.StringLong("description", 'd', "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO", "package description")
-	goarch := getopt.StringLong("arch", 'a', "amd64", "GOARCH this package is for")
-	pkgType := getopt.StringLong("type", 't', "deb", "type of package to build (deb or rpm)")
-	files := getopt.StringLong("files", 'F', "", "comma-separated list of files in src:dst form")
-	configFiles := getopt.StringLong("configs", 'C', "", "like --files, but for files marked as user-editable config files")
-	emptyDirs := getopt.StringLong("emptydirs", 'E', "", "comma-separated list of empty directories")
-	version := getopt.StringLong("version", 0, "0.0.0", "version of the package")
-	postinst := getopt.StringLong("postinst", 0, "", "debian postinst script path")
-	prerm := getopt.StringLong("prerm", 0, "", "debian prerm script path")
-	postrm := getopt.StringLong("postrm", 0, "", "debian postrm script path")
-	replaces := getopt.StringLong("replaces", 0, "", "package which this package replaces, if any")
-	depends := getopt.StringLong("depends", 0, "", "comma-separated list of packages this package depends on")
-	getopt.Parse()
+	out := flag.String("out", "", "output file to write")
+	name := flag.String("name", "tailscale", "package name")
+	description := flag.String("description", "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO", "package description")
+	goarch := flag.String("arch", "amd64", "GOARCH this package is for")
+	pkgType := flag.String("type", "deb", "type of package to build (deb or rpm)")
+	files := flag.String("files", "", "comma-separated list of files in src:dst form")
+	configFiles := flag.String("configs", "", "like --files, but for files marked as user-editable config files")
+	emptyDirs := flag.String("emptydirs", "", "comma-separated list of empty directories")
+	version := flag.String("version", "0.0.0", "version of the package")
+	postinst := flag.String("postinst", "", "debian postinst script path")
+	prerm := flag.String("prerm", "", "debian prerm script path")
+	postrm := flag.String("postrm", "", "debian postrm script path")
+	replaces := flag.String("replaces", "", "package which this package replaces, if any")
+	depends := flag.String("depends", "", "comma-separated list of packages this package depends on")
+	flag.Parse()
 
 	filesMap, err := parseFiles(*files)
 	if err != nil {
