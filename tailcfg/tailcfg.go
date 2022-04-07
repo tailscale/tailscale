@@ -460,6 +460,7 @@ type Hostinfo struct {
 	BackendLogID  string             `json:",omitempty"` // logtail ID of backend instance
 	OS            string             `json:",omitempty"` // operating system the client runs on (a version.OS value)
 	OSVersion     string             `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	Desktop       opt.Bool           `json:",omitempty"` // if a desktop was detected on Linux
 	Package       string             `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel   string             `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
 	Hostname      string             `json:",omitempty"` // name of the host the client runs on
