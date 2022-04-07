@@ -11,12 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/util/multierr"
 )
@@ -146,7 +148,9 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn, err := controlhttp.Dial(ctx, nc.serverHost, nc.privKey, nc.serverPubKey)
+	conn, err := controlhttp.Dial(ctx, nc.serverHost, nc.privKey, nc.serverPubKey, http.Header{
+		"X-Tailscale-Cap": []string{strconv.Itoa(int(tailcfg.CurrentCapabilityVersion))},
+	})
 	if err != nil {
 		return nil, err
 	}

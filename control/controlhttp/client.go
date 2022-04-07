@@ -65,7 +65,10 @@ const (
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic) (*controlbase.Conn, error) {
+//
+// The optional clearTextExtHeader contains extra headers to send
+// in the HTTP upgrade request, in the clear.
+func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, clearTextExtHeader http.Header) (*controlbase.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -78,6 +81,7 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 		machineKey: machineKey,
 		controlKey: controlKey,
 		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
+		extHeader:  clearTextExtHeader,
 	}
 	return a.dial()
 }
@@ -90,6 +94,7 @@ type dialParams struct {
 	machineKey key.MachinePrivate
 	controlKey key.MachinePublic
 	proxyFunc  func(*http.Request) (*url.URL, error) // or nil
+	extHeader  http.Header
 
 	// For tests only
 	insecureTLS bool
@@ -196,6 +201,9 @@ func (a *dialParams) tryURL(u *url.URL, init []byte) (net.Conn, error) {
 			"Connection":        []string{"upgrade"},
 			handshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
 		},
+	}
+	for k, vv := range a.extHeader {
+		req.Header[k] = vv
 	}
 	req = req.WithContext(ctx)
 
