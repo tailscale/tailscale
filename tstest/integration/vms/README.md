@@ -26,19 +26,16 @@ This test also requires the following:
 - the user running these tests must have access to `/dev/kvm` (being in the
   `kvm` group should suffice)
 
-This optionally requires an AWS profile to be configured at the [default
-path](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html).
-The S3 bucket is set so that the requester pays. Please keep this in mind when
-running these tests on your machine. If you are uncomfortable with the cost from
-downloading from S3, you should pass the `-no-s3` flag to disable downloads from
-S3. However keep in mind that some distributions do not use stable URLs for each
-individual image artifact, so there may be spurious test failures as a result.
+The `-no-s3` flag is needed to disable downloads from S3, which require
+credentials. However keep in mind that some distributions do not use stable URLs
+for each individual image artifact, so there may be spurious test failures as a
+result.
 
 If you are using [Nix](https://nixos.org), you can run all of the tests with the
 correct command line tools using this command:
 
 ```console
-$ nix-shell -p openssh -p go -p qemu -p cdrkit --run "go test . --run-vm-tests --v --timeout 30m"
+$ nix-shell -p openssh -p go -p qemu -p cdrkit --run "go test . --run-vm-tests --v --timeout 30m --no-s3"
 ```
 
 Keep the timeout high for the first run, especially if you are not downloading

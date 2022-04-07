@@ -103,7 +103,8 @@ func mkLayeredQcow(t *testing.T, tdir string, d Distro, qcowBase string) {
 
 	run(t, tdir, "qemu-img", "create",
 		"-f", "qcow2",
-		"-o", "backing_file="+qcowBase,
+		"-b", qcowBase,
+		"-F", "qcow2",
 		filepath.Join(tdir, d.Name+".qcow2"),
 	)
 }
