@@ -15,10 +15,10 @@ pkgs.mkShell {
   # This specifies the tools that are needed for people to get started with
   # development. These tools include:
   #  - The Go compiler toolchain (and all additional tooling with it)
-  #  - goimports, a robust formatting tool for Go source code
+  #  - gotools for goimports, a robust formatting tool for Go source code
   #  - gopls, the language server for Go to increase editor integration
   #  - git, the version control program (used in some scripts)
   buildInputs = with pkgs; [
-    go goimports gopls git
+    go gotools gopls git
   ];
 }
