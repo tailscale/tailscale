@@ -193,19 +193,13 @@ func continueClientHandshake(ctx context.Context, conn net.Conn, s *symmetricSta
 // Server initiates a control server handshake, returning the resulting
 // control connection.
 //
-// maxSupportedVersion is the highest handshake version the server is
-// willing to handshake with. The server will handshake with any
-// version from 0 to maxSupportedVersion inclusive, the caller should
-// inspect conn.Version() to determine what version of the handshake
-// was executed.
-//
 // optionalInit can be the client's initial handshake message as
 // returned by ClientDeferred, or nil in which case the initial
 // message is read from conn.
 //
 // The context deadline, if any, covers the entire handshaking
 // process.
-func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, maxSupportedVersion uint16, optionalInit []byte) (*Conn, error) {
+func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, optionalInit []byte) (*Conn, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting conn deadline: %w", err)
@@ -245,15 +239,11 @@ func Server(ctx context.Context, conn net.Conn, controlKey key.MachinePrivate, m
 	} else if _, err := io.ReadFull(conn, init.Header()); err != nil {
 		return nil, err
 	}
-	// Currently, these versions exclusively indicate what the upper
-	// RPC protocol understands, the Noise handshake is exactly the
-	// same in all versions. If that ever changes, this check will
-	// need to become more complex to handle different kinds of
-	// handshake.
-	if init.Version() > maxSupportedVersion {
-		return nil, sendErr("unsupported handshake version")
-	}
-	// Just a rename to make it more obvious what the value is
+	// Just a rename to make it more obvious what the value is. In the
+	// current implementation we don't need to block any protocol
+	// versions at this layer, it's safe to let the handshake proceed
+	// and then let the caller make decisions based on the agreed-upon
+	// protocol version.
 	clientVersion := init.Version()
 	if init.Type() != msgTypeInitiation {
 		return nil, sendErr("unexpected handshake message type")

@@ -107,7 +107,7 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 	const testProtocolVersion = 1
 	sch := make(chan serverResult, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := AcceptHTTP(context.Background(), w, r, server, testProtocolVersion)
+		conn, err := AcceptHTTP(context.Background(), w, r, server)
 		if err != nil {
 			log.Print(err)
 		}
