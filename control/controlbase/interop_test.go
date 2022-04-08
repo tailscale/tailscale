@@ -29,7 +29,7 @@ func TestInteropClient(t *testing.T) {
 	)
 
 	go func() {
-		server, err := Server(context.Background(), s2, controlKey, testProtocolVersion, nil)
+		server, err := Server(context.Background(), s2, controlKey, nil)
 		serverErr <- err
 		if err != nil {
 			return

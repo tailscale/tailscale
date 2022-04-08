@@ -21,7 +21,7 @@ import (
 //
 // AcceptHTTP always writes an HTTP response to w. The caller must not
 // attempt their own response after calling AcceptHTTP.
-func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate, maxSupportedVersion uint16) (*controlbase.Conn, error) {
+func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
 	next := r.Header.Get("Upgrade")
 	if next == "" {
 		http.Error(w, "missing next protocol", http.StatusBadRequest)
@@ -63,7 +63,7 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	}
 	conn = netutil.NewDrainBufConn(conn, brw.Reader)
 
-	nc, err := controlbase.Server(ctx, conn, private, maxSupportedVersion, init)
+	nc, err := controlbase.Server(ctx, conn, private, init)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("noise handshake failed: %w", err)
