@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"testing"
 
+	"gvisor.dev/gvisor/pkg/refs"
 	"inet.af/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
@@ -73,4 +74,13 @@ func getMemStats() (ms runtime.MemStats) {
 	runtime.GC()
 	runtime.ReadMemStats(&ms)
 	return
+}
+
+func TestNetstackLeakMode(t *testing.T) {
+	// See the comments in init(), and/or in issue #4309.
+	// Influenced by an envknob that may be useful in tests, so just check that
+	// it's not the oddly behaving zero value.
+	if refs.GetLeakMode() == 0 {
+		t.Fatalf("refs.leakMode is 0, want a non-zero value")
+	}
 }
