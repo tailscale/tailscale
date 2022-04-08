@@ -25,7 +25,7 @@ require (
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
-	github.com/jsimonetti/rtnetlink v0.0.0-20211203074127-fd9a11f42291
+	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.13.6
 	github.com/mdlayher/genetlink v1.2.0
@@ -49,9 +49,9 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	golang.org/x/crypto v0.0.0-20220321153916-2c7772ba3064
-	golang.org/x/net v0.0.0-20220225172249-27dd8689420f
+	golang.org/x/net v0.0.0-20220407224826-aac1ed45d8e3
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20220405052023-b1e9470b6e64
+	golang.org/x/sys v0.0.0-20220408201424-a24fb2fb8a0f
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.1.11-0.20220316014157-77aa08bb151a
@@ -183,7 +183,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/mbilski/exhaustivestruct v1.2.0 // indirect
-	github.com/mdlayher/socket v0.1.1 // indirect
+	github.com/mdlayher/socket v0.2.3 // indirect
 	github.com/mgechev/dots v0.0.0-20210922191527-e955255bf517 // indirect
 	github.com/mgechev/revive v1.1.2 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
