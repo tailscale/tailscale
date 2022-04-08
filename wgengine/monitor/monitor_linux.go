@@ -38,6 +38,12 @@ type nlConn struct {
 	logf     logger.Logf
 	conn     *netlink.Conn
 	buffered []netlink.Message
+
+	// addrCache maps interface indices to a set of addresses, and is
+	// used to suppress duplicate RTM_NEWADDR messages. It is populated
+	// by RTM_NEWADDR messages and de-populated by RTM_DELADDR. See
+	// issue #4282.
+	addrCache map[uint32]map[netaddr.IP]bool
 }
 
 func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
@@ -55,7 +61,7 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
 		return newPollingMon(logf, m)
 	}
-	return &nlConn{logf: logf, conn: conn}, nil
+	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netaddr.IP]bool)}, nil
 }
 
 func (c *nlConn) Close() error { return c.conn.Close() }
@@ -86,10 +92,58 @@ func (c *nlConn) Receive() (message, error) {
 			return unspecifiedMessage{}, nil
 		}
 
+		nip := netaddrIP(rmsg.Attributes.Address)
+
+		if debugNetlinkMessages {
+			typ := "RTM_NEWADDR"
+			if msg.Header.Type == unix.RTM_DELADDR {
+				typ = "RTM_DELADDR"
+			}
+
+			// label attributes are seemingly only populated for ipv4 addresses in the wild.
+			label := rmsg.Attributes.Label
+			if label == "" {
+				itf, err := net.InterfaceByIndex(int(rmsg.Index))
+				if err == nil {
+					label = itf.Name
+				}
+			}
+
+			c.logf("%s: %s(%d) %s / %s", typ, label, rmsg.Index, rmsg.Attributes.Address, rmsg.Attributes.Local)
+		}
+
+		addrs := c.addrCache[rmsg.Index]
+
+		// Ignore duplicate RTM_NEWADDR messages using c.addrCache to
+		// detect them. See nlConn.addrcache and issue #4282.
+		if msg.Header.Type == unix.RTM_NEWADDR {
+			if addrs == nil {
+				addrs = make(map[netaddr.IP]bool)
+				c.addrCache[rmsg.Index] = addrs
+			}
+
+			if addrs[nip] {
+				if debugNetlinkMessages {
+					c.logf("ignored duplicate RTM_NEWADDR for %s", nip)
+				}
+				return ignoreMessage{}, nil
+			}
+
+			addrs[nip] = true
+		} else { // msg.Header.Type == unix.RTM_DELADDR
+			if addrs != nil {
+				delete(addrs, nip)
+			}
+
+			if len(addrs) == 0 {
+				delete(c.addrCache, rmsg.Index)
+			}
+		}
+
 		nam := &newAddrMessage{
-			Label:  rmsg.Attributes.Label,
-			Addr:   netaddrIP(rmsg.Attributes.Local),
-			Delete: msg.Header.Type == unix.RTM_DELADDR,
+			IfIndex: rmsg.Index,
+			Addr:    nip,
+			Delete:  msg.Header.Type == unix.RTM_DELADDR,
 		}
 		if debugNetlinkMessages {
 			c.logf("%+v", nam)
@@ -218,9 +272,9 @@ func (m *newRouteMessage) ignore() bool {
 
 // newAddrMessage is a message for a new address being added.
 type newAddrMessage struct {
-	Delete bool
-	Addr   netaddr.IP
-	Label  string // netlink Label attribute (e.g. "tailscale0")
+	Delete  bool
+	Addr    netaddr.IP
+	IfIndex uint32 // interface index
 }
 
 func (m *newAddrMessage) ignore() bool {
