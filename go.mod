@@ -57,7 +57,7 @@ require (
 	golang.org/x/tools v0.1.11-0.20220316014157-77aa08bb151a
 	golang.zx2c4.com/wireguard v0.0.0-20220317000134-95b48cdb3961
 	golang.zx2c4.com/wireguard/windows v0.4.10
-	gvisor.dev/gvisor v0.0.0-20220318082524-536b85ae1a6a
+	gvisor.dev/gvisor v0.0.0-20220407223209-21871174d445
 	honnef.co/go/tools v0.4.0-0.dev.0.20220404092545-59d7a2877f83
 	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
