@@ -15,9 +15,12 @@ import (
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
+
+var debugNetlinkMessages = envknob.Bool("TS_DEBUG_NETLINK")
 
 // unspecifiedMessage is a minimal message implementation that should not
 // be ignored. In general, OS-specific implementations should use better
@@ -82,11 +85,16 @@ func (c *nlConn) Receive() (message, error) {
 			c.logf("failed to parse type %v: %v", msg.Header.Type, err)
 			return unspecifiedMessage{}, nil
 		}
-		return &newAddrMessage{
+
+		nam := &newAddrMessage{
 			Label:  rmsg.Attributes.Label,
 			Addr:   netaddrIP(rmsg.Attributes.Local),
 			Delete: msg.Header.Type == unix.RTM_DELADDR,
-		}, nil
+		}
+		if debugNetlinkMessages {
+			c.logf("%+v", nam)
+		}
+		return nam, nil
 	case unix.RTM_NEWROUTE, unix.RTM_DELROUTE:
 		typeStr := "RTM_NEWROUTE"
 		if msg.Header.Type == unix.RTM_DELROUTE {
@@ -104,6 +112,11 @@ func (c *nlConn) Receive() (message, error) {
 		if msg.Header.Type == unix.RTM_NEWROUTE &&
 			(rmsg.Attributes.Table == 255 || rmsg.Attributes.Table == 254) &&
 			(dst.IP().IsMulticast() || dst.IP().IsLinkLocalUnicast()) {
+
+			if debugNetlinkMessages {
+				c.logf("%s ignored", typeStr)
+			}
+
 			// Normal Linux route changes on new interface coming up; don't log or react.
 			return ignoreMessage{}, nil
 		}
@@ -126,12 +139,17 @@ func (c *nlConn) Receive() (message, error) {
 			// (Debugging https://github.com/tailscale/tailscale/issues/643)
 			return unspecifiedMessage{}, nil
 		}
-		return &newRouteMessage{
+
+		nrm := &newRouteMessage{
 			Table:   rmsg.Table,
 			Src:     src,
 			Dst:     dst,
 			Gateway: gw,
-		}, nil
+		}
+		if debugNetlinkMessages {
+			c.logf("%+v", nrm)
+		}
+		return nrm, nil
 	case unix.RTM_NEWRULE:
 		// Probably ourselves adding it.
 		return ignoreMessage{}, nil
@@ -147,10 +165,14 @@ func (c *nlConn) Receive() (message, error) {
 			// On `ip -4 rule del pref 5210 table main`, logs:
 			// monitor: ip rule deleted: {Family:2 DstLength:0 SrcLength:0 Tos:0 Table:254 Protocol:0 Scope:0 Type:1 Flags:0 Attributes:{Dst:<nil> Src:<nil> Gateway:<nil> OutIface:0 Priority:5210 Table:254 Mark:4294967295 Expires:<nil> Metrics:<nil> Multipath:[]}}
 		}
-		return ipRuleDeletedMessage{
+		rdm := ipRuleDeletedMessage{
 			table:    rmsg.Table,
 			priority: rmsg.Attributes.Priority,
-		}, nil
+		}
+		if debugNetlinkMessages {
+			c.logf("%+v", rdm)
+		}
+		return rdm, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
