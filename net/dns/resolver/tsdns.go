@@ -25,9 +25,12 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolvconffile"
+	tspacket "tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/net/tstun"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/dnsname"
@@ -35,6 +38,13 @@ import (
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
+
+var (
+	magicDNSIP   = tsaddr.TailscaleServiceIP()
+	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
+)
+
+const magicDNSPort = 53
 
 // maxResponseBytes is the maximum size of a response from a Resolver. The
 // actual buffer size will be one larger than this so that we can detect
@@ -282,10 +292,20 @@ func (r *Resolver) Close() {
 	r.forwarder.Close()
 }
 
-// EnqueueRequest places the given DNS request in the resolver's queue.
+// EnqueuePacket handles a packet to the magicDNS endpoint.
 // It takes ownership of the payload and does not block.
 // If the queue is full, the request will be dropped and an error will be returned.
-func (r *Resolver) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
+func (r *Resolver) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
+	if to.Port() != magicDNSPort || proto != ipproto.UDP {
+		return nil
+	}
+
+	return r.enqueueRequest(bs, proto, from, to)
+}
+
+// enqueueRequest places the given DNS request in the resolver's queue.
+// If the queue is full, the request will be dropped and an error will be returned.
+func (r *Resolver) enqueueRequest(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
 	metricDNSQueryLocal.Add(1)
 	select {
 	case <-r.closed:
@@ -302,9 +322,56 @@ func (r *Resolver) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
 	return nil
 }
 
-// NextResponse returns a DNS response to a previously enqueued request.
+// NextPacket returns the next packet to service traffic for magicDNS. The returned
+// packet is prefixed with unused space consistent with the semantics of injection
+// into tstun.Wrapper.
 // It blocks until a response is available and gives up ownership of the response payload.
-func (r *Resolver) NextResponse() (packet []byte, to netaddr.IPPort, err error) {
+func (r *Resolver) NextPacket() (ipPacket []byte, err error) {
+	bs, to, err := r.nextResponse()
+	if err != nil {
+		return nil, err
+	}
+
+	// Unused space is needed further down the stack. To avoid extra
+	// allocations/copying later on, we allocate such space here.
+	const offset = tstun.PacketStartOffset
+
+	var buf []byte
+	switch {
+	case to.IP().Is4():
+		h := tspacket.UDP4Header{
+			IP4Header: tspacket.IP4Header{
+				Src: magicDNSIP,
+				Dst: to.IP(),
+			},
+			SrcPort: magicDNSPort,
+			DstPort: to.Port(),
+		}
+		hlen := h.Len()
+		buf = make([]byte, offset+hlen+len(bs))
+		copy(buf[offset+hlen:], bs)
+		h.Marshal(buf[offset:])
+	case to.IP().Is6():
+		h := tspacket.UDP6Header{
+			IP6Header: tspacket.IP6Header{
+				Src: magicDNSIPv6,
+				Dst: to.IP(),
+			},
+			SrcPort: magicDNSPort,
+			DstPort: to.Port(),
+		}
+		hlen := h.Len()
+		buf = make([]byte, offset+hlen+len(bs))
+		copy(buf[offset+hlen:], bs)
+		h.Marshal(buf[offset:])
+	}
+
+	return buf, nil
+}
+
+// nextResponse returns a DNS response to a previously enqueued request.
+// It blocks until a response is available and gives up ownership of the response payload.
+func (r *Resolver) nextResponse() (packet []byte, to netaddr.IPPort, err error) {
 	select {
 	case <-r.closed:
 		return nil, netaddr.IPPort{}, ErrClosed

@@ -14,6 +14,7 @@ import (
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -204,12 +205,12 @@ func toIPPorts(ips []netaddr.IP) (ret []netaddr.IPPort) {
 	return ret
 }
 
-func (m *Manager) EnqueueRequest(bs []byte, from netaddr.IPPort) error {
-	return m.resolver.EnqueueRequest(bs, from)
+func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
+	return m.resolver.EnqueuePacket(bs, proto, from, to)
 }
 
-func (m *Manager) NextResponse() ([]byte, netaddr.IPPort, error) {
-	return m.resolver.NextResponse()
+func (m *Manager) NextPacket() ([]byte, error) {
+	return m.resolver.NextPacket()
 }
 
 func (m *Manager) Down() error {
