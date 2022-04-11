@@ -18,3 +18,9 @@ func TestRunUbuntu2004(t *testing.T) {
 	setupTests(t)
 	testOneDistribution(t, 1, Distros[1])
 }
+
+func TestRunNixos2111(t *testing.T) {
+	t.Parallel()
+	setupTests(t)
+	testOneDistribution(t, 2, Distros[2])
+}

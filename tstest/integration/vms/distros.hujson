@@ -27,4 +27,13 @@
         "PackageManager": "apt",
         "InitSystem": "systemd"
     },
+    {
+        "Name": "nixos-21-11",
+        "URL": "channel:nixos-21.11",
+        "SHA256Sum": "lolfakesha",
+        "MemoryMegs": 512,
+        "PackageManager": "nix",
+        "InitSystem": "systemd",
+        "HostGenerated": true
+    },
 ]
