@@ -49,6 +49,13 @@ func (vm *vmInstance) running() bool {
 	}
 }
 
+func (h *Harness) makeImage(t *testing.T, d Distro, cdir string) string {
+	if !strings.HasPrefix(d.Name, "nixos") {
+		t.Fatal("image generation for non-nixos is not implemented")
+	}
+	return h.makeNixOSImage(t, d, cdir)
+}
+
 // mkVM makes a KVM-accelerated virtual machine and prepares it for introduction
 // to the testcontrol server. The function it returns is for killing the virtual
 // machine when it is time for it to die.
@@ -67,7 +74,14 @@ func (h *Harness) mkVM(t *testing.T, n int, d Distro, sshKey, hostURL, tdir stri
 		t.Fatal(err)
 	}
 
-	mkLayeredQcow(t, tdir, d, fetchDistro(t, d))
+	var qcowPath string
+	if d.HostGenerated {
+		qcowPath = h.makeImage(t, d, cdir)
+	} else {
+		qcowPath = fetchDistro(t, d)
+	}
+
+	mkLayeredQcow(t, tdir, d, qcowPath)
 	mkSeed(t, d, sshKey, hostURL, tdir, port)
 
 	driveArg := fmt.Sprintf("file=%s,if=virtio", filepath.Join(tdir, d.Name+".qcow2"))

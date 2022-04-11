@@ -35,7 +35,7 @@ If you are using [Nix](https://nixos.org), you can run all of the tests with the
 correct command line tools using this command:
 
 ```console
-$ nix-shell -p openssh -p go -p qemu -p cdrkit --run "go test . --run-vm-tests --v --timeout 30m --no-s3"
+$ nix-shell -p nixos-generators -p openssh -p go -p qemu -p cdrkit --run "go test . --run-vm-tests --v --timeout 30m --no-s3"
 ```
 
 Keep the timeout high for the first run, especially if you are not downloading

@@ -20,6 +20,7 @@ type Distro struct {
 	MemoryMegs     int    // VM memory in megabytes
 	PackageManager string // yum/apt/dnf/zypper
 	InitSystem     string // systemd/openrc
+	HostGenerated  bool   // generated image rather than downloaded
 }
 
 func (d *Distro) InstallPre() string {
