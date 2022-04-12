@@ -124,7 +124,7 @@ in {
   systemd.services.cloud-final.path = with pkgs; [ curl ];
 
   # Curl is needed for one of the integration tests
-  environment.systemPackages = with pkgs; [ curl ];
+  environment.systemPackages = with pkgs; [ curl nix bash squid openssl daemonize ];
 
   # yolo, this vm can sudo freely.
   security.sudo.wheelNeedsPassword = false;

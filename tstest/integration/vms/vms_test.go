@@ -276,17 +276,14 @@ func testOneDistribution(t *testing.T, n int, distro Distro) {
 	t.Cleanup(func() { ramsem.sem.Release(int64(distro.MemoryMegs)) })
 
 	vm := h.mkVM(t, n, distro, h.pubKey, h.loginServerURL, dir)
-	var ipm ipMapping
+	vm.waitStartup(t)
 
-	for i := 0; i < 100; i++ {
-		if vm.running() {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !vm.running() {
-		t.Fatal("vm not running")
-	}
+	h.testDistro(t, distro, h.waitForIPMap(t, vm, distro))
+}
+
+func (h *Harness) waitForIPMap(t *testing.T, vm *vmInstance, distro Distro) ipMapping {
+	t.Helper()
+	var ipm ipMapping
 
 	waiter := time.NewTicker(time.Second)
 	defer waiter.Stop()
@@ -305,13 +302,11 @@ func testOneDistribution(t *testing.T, n int, distro Distro) {
 		}
 		<-waiter.C
 	}
-
-	h.testDistro(t, distro, ipm)
+	return ipm
 }
 
-func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
+func (h *Harness) setupSSHShell(t *testing.T, d Distro, ipm ipMapping) (*ssh.ClientConfig, *ssh.Client) {
 	signer := h.signer
-	loginServer := h.loginServerURL
 
 	t.Helper()
 	port := ipm.port
@@ -349,6 +344,13 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 		t.Fatal(err)
 	}
 	h.copyBinaries(t, d, cli)
+
+	return ccfg, cli
+}
+
+func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
+	loginServer := h.loginServerURL
+	ccfg, cli := h.setupSSHShell(t, d, ipm)
 
 	timeout := 30 * time.Second
 
