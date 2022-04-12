@@ -25,7 +25,6 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -143,10 +142,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "id-token access denied", http.StatusForbidden)
-		return
-	}
-	if !envknob.UseWIPCode() {
-		http.Error(w, "id-token access denied", http.StatusServiceUnavailable)
 		return
 	}
 	nm := h.b.NetMap()

@@ -275,6 +275,21 @@ func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
 	return st, nil
 }
 
+// IDToken is a request to get an OIDC ID token for an audience.
+// The token can be presented to any resource provider which offers OIDC
+// Federation.
+func IDToken(ctx context.Context, aud string) (*tailcfg.TokenResponse, error) {
+	body, err := get200(ctx, "/localapi/v0/id-token?aud="+url.QueryEscape(aud))
+	if err != nil {
+		return nil, err
+	}
+	tr := new(tailcfg.TokenResponse)
+	if err := json.Unmarshal(body, tr); err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
+
 func WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
 	body, err := get200(ctx, "/localapi/v0/files/")
 	if err != nil {

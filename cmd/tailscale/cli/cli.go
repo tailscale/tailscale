@@ -25,6 +25,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -172,6 +173,9 @@ change in the future.
 	}
 	for _, c := range rootCmd.Subcommands {
 		c.UsageFunc = usageFunc
+	}
+	if envknob.UseWIPCode() {
+		rootCmd.Subcommands = append(rootCmd.Subcommands, idTokenCmd)
 	}
 
 	// Don't advertise the debug command, but it exists.
