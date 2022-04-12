@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -46,6 +47,19 @@ func (vm *vmInstance) running() bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func (vm *vmInstance) waitStartup(t *testing.T) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if vm.running() {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !vm.running() {
+		t.Fatal("vm not running")
 	}
 }
 
