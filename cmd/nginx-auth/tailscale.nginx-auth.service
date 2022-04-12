@@ -1,0 +1,11 @@
+[Unit]
+Description=Tailscale NGINX Authentication service
+After=nginx.service
+Wants=nginx.service
+
+[Service]
+ExecStart=/usr/sbin/tailscale.nginx-auth
+DynamicUser=yes
+
+[Install]
+WantedBy=default.target
