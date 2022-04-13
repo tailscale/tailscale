@@ -25,6 +25,7 @@ import (
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
@@ -242,7 +243,7 @@ func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
 	rr := make([]resolverAndDelay, len(resolvers))
 	for _, r := range resolvers {
 		if ip, err := netaddr.ParseIP(r.Addr); err == nil {
-			if host, ok := knownDoH[ip]; ok {
+			if host, ok := publicdns.KnownDoH()[ip]; ok {
 				total[hostAndFam{host, ip.BitLen()}]++
 			}
 		}
@@ -252,7 +253,7 @@ func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
 	for i, r := range resolvers {
 		var startDelay time.Duration
 		if ip, err := netaddr.ParseIP(r.Addr); err == nil {
-			if host, ok := knownDoH[ip]; ok {
+			if host, ok := publicdns.KnownDoH()[ip]; ok {
 				key4 := hostAndFam{host, 32}
 				key6 := hostAndFam{host, 128}
 				switch {
@@ -332,7 +333,7 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 }
 
 func (f *forwarder) getKnownDoHClient(ip netaddr.IP) (urlBase string, c *http.Client, ok bool) {
-	urlBase, ok = knownDoH[ip]
+	urlBase, ok = publicdns.KnownDoH()[ip]
 	if !ok {
 		return
 	}
@@ -356,7 +357,7 @@ func (f *forwarder) getKnownDoHClient(ip netaddr.IP) (urlBase string, c *http.Cl
 				c, err := nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "443"))
 				// If v4 failed, try an equivalent v6 also in the time remaining.
 				if err != nil && ctx.Err() == nil {
-					if ip6, ok := dohV6(urlBase); ok && ip.Is4() {
+					if ip6, ok := publicdns.DoHV6(urlBase); ok && ip.Is4() {
 						if c6, err := nsDialer.DialContext(ctx, "tcp", net.JoinHostPort(ip6.String(), "443")); err == nil {
 							return c6, nil
 						}
@@ -775,70 +776,4 @@ func (p *closePool) Close() error {
 		c.Close()
 	}
 	return nil
-}
-
-var knownDoH = map[netaddr.IP]string{} // 8.8.8.8 => "https://..."
-
-var dohIPsOfBase = map[string][]netaddr.IP{}
-
-func addDoH(ipStr, base string) {
-	ip := netaddr.MustParseIP(ipStr)
-	knownDoH[ip] = base
-	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
-}
-
-func dohV6(base string) (ip netaddr.IP, ok bool) {
-	for _, ip := range dohIPsOfBase[base] {
-		if ip.Is6() {
-			return ip, true
-		}
-	}
-	return ip, false
-}
-
-func init() {
-	// Cloudflare
-	addDoH("1.1.1.1", "https://cloudflare-dns.com/dns-query")
-	addDoH("1.0.0.1", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1111", "https://cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1001", "https://cloudflare-dns.com/dns-query")
-
-	// Cloudflare -Malware
-	addDoH("1.1.1.2", "https://security.cloudflare-dns.com/dns-query")
-	addDoH("1.0.0.2", "https://security.cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1112", "https://security.cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1002", "https://security.cloudflare-dns.com/dns-query")
-
-	// Cloudflare -Malware -Adult
-	addDoH("1.1.1.3", "https://family.cloudflare-dns.com/dns-query")
-	addDoH("1.0.0.3", "https://family.cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1113", "https://family.cloudflare-dns.com/dns-query")
-	addDoH("2606:4700:4700::1003", "https://family.cloudflare-dns.com/dns-query")
-
-	// Google
-	addDoH("8.8.8.8", "https://dns.google/dns-query")
-	addDoH("8.8.4.4", "https://dns.google/dns-query")
-	addDoH("2001:4860:4860::8888", "https://dns.google/dns-query")
-	addDoH("2001:4860:4860::8844", "https://dns.google/dns-query")
-
-	// OpenDNS
-	// TODO(bradfitz): OpenDNS is unique amongst this current set in that
-	// its DoH DNS names resolve to different IPs than its normal DNS
-	// IPs. Support that later. For now we assume that they're the same.
-	// addDoH("208.67.222.222", "https://doh.opendns.com/dns-query")
-	// addDoH("208.67.220.220", "https://doh.opendns.com/dns-query")
-	// addDoH("208.67.222.123", "https://doh.familyshield.opendns.com/dns-query")
-	// addDoH("208.67.220.123", "https://doh.familyshield.opendns.com/dns-query")
-
-	// Quad9
-	addDoH("9.9.9.9", "https://dns.quad9.net/dns-query")
-	addDoH("149.112.112.112", "https://dns.quad9.net/dns-query")
-	addDoH("2620:fe::fe", "https://dns.quad9.net/dns-query")
-	addDoH("2620:fe::fe:9", "https://dns.quad9.net/dns-query")
-
-	// Quad9 -DNSSEC
-	addDoH("9.9.9.10", "https://dns10.quad9.net/dns-query")
-	addDoH("149.112.112.10", "https://dns10.quad9.net/dns-query")
-	addDoH("2620:fe::10", "https://dns10.quad9.net/dns-query")
-	addDoH("2620:fe::fe:10", "https://dns10.quad9.net/dns-query")
 }
