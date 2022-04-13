@@ -2397,7 +2397,18 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPref
 	} else {
 		routes = append(routes, cgNATIPs...)
 	}
+
+	sort.Slice(routes, func(i, j int) bool {
+		return ipPrefixLess(routes[i], routes[j])
+	})
 	return routes
+}
+
+func ipPrefixLess(ri, rj netaddr.IPPrefix) bool {
+	if ri.IP() == rj.IP() {
+		return ri.Bits() < rj.Bits()
+	}
+	return ri.IP().Less(rj.IP())
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
