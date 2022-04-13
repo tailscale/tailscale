@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:generate go run update-dns-fallbacks.go
+
 // Package dnsfallback contains a DNS fallback mechanism
 // for starting up Tailscale when the system DNS is broken or otherwise unavailable.
 package dnsfallback
