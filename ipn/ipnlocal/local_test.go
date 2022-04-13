@@ -302,8 +302,31 @@ func TestPeerRoutes(t *testing.T) {
 				},
 			},
 			want: []netaddr.IPPrefix{
-				pp("fd7a:115c:a1e0::/48"),
 				pp("100.64.0.0/10"),
+				pp("fd7a:115c:a1e0::/48"),
+			},
+		},
+		{
+			name: "output-should-be-sorted",
+			peers: []wgcfg.Peer{
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("100.64.0.2/32"),
+						pp("10.0.0.0/16"),
+					},
+				},
+				{
+					AllowedIPs: []netaddr.IPPrefix{
+						pp("100.64.0.1/32"),
+						pp("10.0.0.0/8"),
+					},
+				},
+			},
+			want: []netaddr.IPPrefix{
+				pp("10.0.0.0/8"),
+				pp("10.0.0.0/16"),
+				pp("100.64.0.1/32"),
+				pp("100.64.0.2/32"),
 			},
 		},
 	}
