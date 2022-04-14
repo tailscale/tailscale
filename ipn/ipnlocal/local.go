@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -3224,4 +3225,39 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
+}
+
+// ProxyAPIRequestOverNoise sends Tailscale API request r over the
+// Noise channel, authenticated as the current node+machine key, to
+// the control plane and copies its response back to w.
+func (b *LocalBackend) ProxyAPIRequestOverNoise(w http.ResponseWriter, r *http.Request) {
+	var nodePub key.NodePublic
+	b.mu.Lock()
+	if nm := b.netMap; nm != nil {
+		nodePub = nm.NodeKey
+	}
+	b.mu.Unlock()
+	if nodePub.IsZero() {
+		http.Error(w, "no node public key", http.StatusBadGateway)
+		return
+	}
+
+	outR := r.Clone(r.Context())
+	outR.RequestURI = ""
+	outR.URL.Scheme = "https"
+	outR.URL.Host = "unused"
+
+	outR.SetBasicAuth(url.QueryEscape(nodePub.String()), "")
+	res, err := b.DoNoiseRequest(outR)
+	if err != nil {
+		http.Error(w, "failed to make backend noise request: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	for k, vv := range res.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(res.StatusCode)
+	io.Copy(w, res.Body)
 }

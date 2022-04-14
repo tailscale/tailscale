@@ -1049,6 +1049,10 @@ func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 			lah.ServeHTTP(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			s.b.ProxyAPIRequestOverNoise(w, r)
+			return
+		}
 		if ci.NotWindows {
 			io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.")
 			return
