@@ -362,7 +362,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	if conf.RespondToPing {
 		e.tundev.PostFilterIn = echoRespondToAll
 	}
-	e.tundev.PreFilterOut = e.handleLocalPackets
+	e.tundev.PreFilterFromTunToEngine = e.handleLocalPackets
 
 	if envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
 		if e.tundev.PreFilterIn != nil {
