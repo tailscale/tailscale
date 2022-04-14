@@ -19,12 +19,16 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: 1.18
+      - name: Set up Nix
+        uses: cachix/install-nix-action@v17
+        with:
+          nix_path: nixpkgs=channel:nixos-21.11
 
       - name: Checkout Code
         uses: actions/checkout@v3
 
       - name: Run VM tests
-        run: go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
+        run: go test ./tstest/integration/vms -v --timeout=20m --no-s3 --run-vm-tests --distro-regex '(nix|ubuntu)'
         env:
           HOME: "/tmp"
           TMPDIR: "/tmp"
