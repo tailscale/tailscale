@@ -190,9 +190,6 @@ type forwarder struct {
 	ctx       context.Context    // good until Close
 	ctxCancel context.CancelFunc // closes ctx
 
-	// responses is a channel by which responses are returned.
-	responses chan packet
-
 	mu sync.Mutex // guards following
 
 	dohClient map[string]*http.Client // urlBase -> client
@@ -229,14 +226,13 @@ func maxDoHInFlight(goos string) int {
 	return 1000
 }
 
-func newForwarder(logf logger.Logf, responses chan packet, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
+func newForwarder(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
 	f := &forwarder{
-		logf:      logger.WithPrefix(logf, "forward: "),
-		linkMon:   linkMon,
-		linkSel:   linkSel,
-		dialer:    dialer,
-		responses: responses,
-		dohSem:    make(chan struct{}, maxDoHInFlight(runtime.GOOS)),
+		logf:    logger.WithPrefix(logf, "forward: "),
+		linkMon: linkMon,
+		linkSel: linkSel,
+		dialer:  dialer,
+		dohSem:  make(chan struct{}, maxDoHInFlight(runtime.GOOS)),
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
@@ -599,17 +595,6 @@ type forwardQuery struct {
 	// TODO(bradfitz): add race delay state:
 	// mu sync.Mutex
 	// ...
-}
-
-// forward forwards the query to all upstream nameservers and waits for
-// the first response.
-//
-// It either sends to f.responses and returns nil, or returns a
-// non-nil error (without sending to the channel).
-func (f *forwarder) forward(query packet) error {
-	ctx, cancel := context.WithTimeout(f.ctx, responseTimeout)
-	defer cancel()
-	return f.forwardWithDestChan(ctx, query, f.responses)
 }
 
 // forwardWithDestChan forwards the query to all upstream nameservers
