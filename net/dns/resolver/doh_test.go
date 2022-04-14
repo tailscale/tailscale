@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/net/dns/publicdns"
 )
 
 var testDoH = flag.Bool("test-doh", false, "do real DoH tests against the network")
@@ -40,7 +41,7 @@ func TestDoH(t *testing.T) {
 	if !*testDoH {
 		t.Skip("skipping manual test without --test-doh flag")
 	}
-	if len(knownDoH) == 0 {
+	if len(publicdns.KnownDoH()) == 0 {
 		t.Fatal("no known DoH")
 	}
 
@@ -48,7 +49,7 @@ func TestDoH(t *testing.T) {
 		dohSem: make(chan struct{}, 10),
 	}
 
-	for ip := range knownDoH {
+	for ip := range publicdns.KnownDoH() {
 		t.Run(ip.String(), func(t *testing.T) {
 			urlBase, c, ok := f.getKnownDoHClient(ip)
 			if !ok {
@@ -85,9 +86,9 @@ func TestDoH(t *testing.T) {
 }
 
 func TestDoHV6Fallback(t *testing.T) {
-	for ip, base := range knownDoH {
+	for ip, base := range publicdns.KnownDoH() {
 		if ip.Is4() {
-			ip6, ok := dohV6(base)
+			ip6, ok := publicdns.DoHV6(base)
 			if !ok {
 				t.Errorf("no v6 DoH known for %v", ip)
 			} else if !ip6.Is6() {
