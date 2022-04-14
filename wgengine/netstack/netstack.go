@@ -56,6 +56,11 @@ const debugPackets = false
 
 var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
 
+var (
+	magicDNSIP   = tsaddr.TailscaleServiceIP()
+	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
+)
+
 func init() {
 	var debugNetstackLeakMode = envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
 	// Note: netstacks refsvfs2 package that will eventually replace refs
@@ -229,8 +234,9 @@ func (ns *Impl) Start() error {
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapProtoHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapProtoHandler(udpFwd.HandlePacket))
-	go ns.injectOutbound()
+	go ns.inject()
 	ns.tundev.PostFilterIn = ns.injectInbound
+	ns.tundev.PreFilterFromTunToNetstack = ns.handleLocalPackets
 	return nil
 }
 
@@ -358,6 +364,35 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 }
 
+// handleLocalPackets is hooked into the tun datapath for packets leaving
+// the host and arriving at tailscaled. This method returns filter.DropSilently
+// to intercept a packet for handling, for instance traffic to quad-100.
+func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	// If it's not traffic to the service IP (i.e. magicDNS) we don't
+	// care; resume processing.
+	if dst := p.Dst.IP(); dst != magicDNSIP && dst != magicDNSIPv6 {
+		return filter.Accept
+	}
+
+	var pn tcpip.NetworkProtocolNumber
+	switch p.IPVersion {
+	case 4:
+		pn = header.IPv4ProtocolNumber
+	case 6:
+		pn = header.IPv6ProtocolNumber
+	}
+	if debugPackets {
+		ns.logf("[v2] service packet in (from %v): % x", p.Src, p.Buffer())
+	}
+	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
+	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Data: vv,
+	})
+	ns.linkEP.InjectInbound(pn, packetBuf)
+	packetBuf.DecRef()
+	return filter.DropSilently
+}
+
 func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.TCPConn, error) {
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
@@ -390,7 +425,9 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.
 	return gonet.DialUDP(ns.ipstack, nil, remoteAddress, ipType)
 }
 
-func (ns *Impl) injectOutbound() {
+// The inject goroutine reads in packets that netstack generated, and delivers
+// them to the correct path.
+func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
 		if pkt == nil {
@@ -406,13 +443,50 @@ func (ns *Impl) injectOutbound() {
 			ns.logf("[v2] packet Write out: % x", stack.PayloadSince(pkt.NetworkHeader()))
 		}
 
-		// pkt has a non-zero refcount, InjectOutboundPacketBuffer takes
-		// ownership of one count and will decrement on completion.
-		if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
-			log.Printf("netstack inject outbound: %v", err)
-			return
+		// In the normal case, netstack synthesizes the bytes for
+		// traffic which should transit back into WG and go to peers.
+		// However, some uses of netstack (presently, magic DNS)
+		// send traffic destined for the local device, hence must
+		// be injected 'inbound'.
+		sendToHost := false
+
+		// Determine if the packet is from a service IP, in which case it
+		// needs to go back into the machines network (inbound) instead of
+		// out.
+		// TODO(tom): Work out a way to avoid parsing packets to determine if
+		//            its from the service IP. Maybe gvisor netstack magic. I
+		//            went through the fields of PacketBuffer, and nop :/
+		// TODO(tom): Figure out if its safe to modify packet.Parsed to fill in
+		//            the IP src/dest even if its missing the rest of the pkt.
+		//            That way we dont have to do this twitchy-af byte-yeeting.
+		if b := pkt.NetworkHeader().View(); len(b) >= 20 { // min ipv4 header
+			switch b[0] >> 4 { // ip proto field
+			case 4:
+				if srcIP := netaddr.IPv4(b[12], b[13], b[14], b[15]); magicDNSIP == srcIP {
+					sendToHost = true
+				}
+			case 6:
+				if len(b) >= 40 { // min ipv6 header
+					if srcIP, ok := netaddr.FromStdIP(net.IP(b[8:24])); ok && magicDNSIPv6 == srcIP {
+						sendToHost = true
+					}
+				}
+			}
 		}
 
+		// pkt has a non-zero refcount, so injection methods takes
+		// ownership of one count and will decrement on completion.
+		if sendToHost {
+			if err := ns.tundev.InjectInboundPacketBuffer(pkt); err != nil {
+				log.Printf("netstack inject inbound: %v", err)
+				return
+			}
+		} else {
+			if err := ns.tundev.InjectOutboundPacketBuffer(pkt); err != nil {
+				log.Printf("netstack inject outbound: %v", err)
+				return
+			}
+		}
 	}
 }
 
@@ -436,8 +510,8 @@ func (ns *Impl) peerAPIPortAtomic(ip netaddr.IP) *uint32 {
 
 var viaRange = tsaddr.TailscaleViaRange()
 
-// shouldProcessInbound reports whether an inbound packet should be
-// handled by netstack.
+// shouldProcessInbound reports whether an inbound packet (a packet from a
+// WireGuard peer) should be handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	// Handle incoming peerapi connections in netstack.
 	if ns.lb != nil && p.IPProto == ipproto.TCP {
@@ -558,6 +632,11 @@ func (ns *Impl) isInboundTSSH(p *packet.Parsed) bool {
 		ns.isLocalIP(p.Dst.IP())
 }
 
+// injectInbound is installed as a packet hook on the 'inbound' (from a
+// WireGuard peer) path. Returning filter.Accept releases the packet to
+// continue normally (typically being delivered to the host networking stack),
+// whereas returning filter.DropSilently is done when netstack intercepts the
+// packet and no further processing towards to host should be done.
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	if !ns.shouldProcessInbound(p, t) {
 		// Let the host network stack (if any) deal with it.
@@ -779,8 +858,39 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 		return
 	}
 
+	// Handle magicDNS traffic (via UDP) here.
+	if dst := dstAddr.IP(); dst == magicDNSIP || dst == magicDNSIPv6 {
+		if dstAddr.Port() != 53 {
+			return // Only MagicDNS traffic runs on the service IPs for now.
+		}
+
+		c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
+		go ns.handleMagicDNSUDP(srcAddr, c)
+		return
+	}
+
 	c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
 	go ns.forwardUDP(c, &wq, srcAddr, dstAddr)
+}
+
+func (ns *Impl) handleMagicDNSUDP(srcAddr netaddr.IPPort, c *gonet.UDPConn) {
+	// In practice, implementations are advised not to exceed 512 bytes
+	// due to fragmenting. Just to be sure, we bump all the way to the MTU.
+	const maxUDPReqSize = mtu
+
+	defer c.Close()
+	q := make([]byte, maxUDPReqSize)
+	n, err := c.Read(q)
+	if err != nil {
+		ns.logf("dns udp read: %v", err)
+		return
+	}
+	resp, err := ns.dns.Query(context.Background(), q[:n], srcAddr)
+	if err != nil {
+		ns.logf("dns udp query: %v", err)
+		return
+	}
+	c.Write(resp)
 }
 
 // forwardUDP proxies between client (with addr clientAddr) and dstAddr.

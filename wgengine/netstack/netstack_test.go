@@ -39,12 +39,12 @@ func TestInjectInboundLeak(t *testing.T) {
 	if !ok {
 		t.Fatal("not an InternalsGetter")
 	}
-	tunWrap, magicSock, ok := ig.GetInternals()
+	tunWrap, magicSock, d, ok := ig.GetInternals()
 	if !ok {
 		t.Fatal("failed to get internals")
 	}
 
-	ns, err := Create(logf, tunWrap, eng, magicSock, dialer)
+	ns, err := Create(logf, tunWrap, eng, magicSock, dialer, d)
 	if err != nil {
 		t.Fatal(err)
 	}

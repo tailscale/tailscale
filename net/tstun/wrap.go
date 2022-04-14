@@ -694,6 +694,27 @@ func (t *Wrapper) SetFilter(filt *filter.Filter) {
 
 // InjectInboundDirect makes the Wrapper device behave as if a packet
 // with the given contents was received from the network.
+// It takes ownership of one reference count on the packet. The injected
+// packet will not pass through inbound filters.
+//
+// This path is typically used to deliver synthesized packets to the
+// host networking stack.
+func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
+	buf := make([]byte, PacketStartOffset + pkt.Size())
+
+	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().View())
+	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().View())
+	n += copy(buf[PacketStartOffset+n:], pkt.Data().AsRange().AsView())
+	if n != pkt.Size() {
+		panic("unexpected: revisit assumptions")
+	}
+	pkt.DecRef()
+
+	return t.InjectInboundDirect(buf, PacketStartOffset)
+}
+
+// InjectInboundDirect makes the Wrapper device behave as if a packet
+// with the given contents was received from the network.
 // It blocks and does not take ownership of the packet.
 // The injected packet will not pass through inbound filters.
 //
