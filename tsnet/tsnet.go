@@ -196,12 +196,12 @@ func (s *Server) start() error {
 		return err
 	}
 
-	tunDev, magicConn, ok := eng.(wgengine.InternalsGetter).GetInternals()
+	tunDev, magicConn, d, ok := eng.(wgengine.InternalsGetter).GetInternals()
 	if !ok {
 		return fmt.Errorf("%T is not a wgengine.InternalsGetter", eng)
 	}
 
-	ns, err := netstack.Create(logf, tunDev, eng, magicConn, s.dialer)
+	ns, err := netstack.Create(logf, tunDev, eng, magicConn, s.dialer, d)
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
