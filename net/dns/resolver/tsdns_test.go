@@ -27,7 +27,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
-	"tailscale.com/types/ipproto"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
 )
@@ -234,11 +233,7 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	if err := r.enqueueRequest(query, ipproto.UDP, netaddr.IPPort{}, magicDNSv4Port); err != nil {
-		return nil, fmt.Errorf("enqueueRequest: %w", err)
-	}
-	payload, _, err := r.nextResponse()
-	return payload, err
+	return r.Query(context.Background(), query, netaddr.IPPort{})
 }
 
 func mustIP(str string) netaddr.IP {
@@ -708,78 +703,6 @@ func TestDelegateSplitRoute(t *testing.T) {
 	}
 }
 
-func TestDelegateCollision(t *testing.T) {
-	server := serveDNS(t, "127.0.0.1:0",
-		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
-	defer server.Shutdown()
-
-	r := newResolver(t)
-	defer r.Close()
-
-	cfg := dnsCfg
-	cfg.Routes = map[dnsname.FQDN][]dnstype.Resolver{
-		".": {{Addr: server.PacketConn.LocalAddr().String()}},
-	}
-	r.SetConfig(cfg)
-
-	packets := []struct {
-		qname dnsname.FQDN
-		qtype dns.Type
-		addr  netaddr.IPPort
-	}{
-		{"test.site.", dns.TypeA, netaddr.IPPortFrom(netaddr.IPv4(1, 1, 1, 1), 1001)},
-		{"test.site.", dns.TypeAAAA, netaddr.IPPortFrom(netaddr.IPv4(1, 1, 1, 1), 1002)},
-	}
-
-	// packets will have the same dns txid.
-	for _, p := range packets {
-		payload := dnspacket(p.qname, p.qtype, noEdns)
-		err := r.enqueueRequest(payload, ipproto.UDP, p.addr, magicDNSv4Port)
-		if err != nil {
-			t.Error(err)
-		}
-	}
-
-	// Despite the txid collision, the answer(s) should still match the query.
-	resp, addr, err := r.nextResponse()
-	if err != nil {
-		t.Error(err)
-	}
-
-	var p dns.Parser
-	_, err = p.Start(resp)
-	if err != nil {
-		t.Error(err)
-	}
-	err = p.SkipAllQuestions()
-	if err != nil {
-		t.Error(err)
-	}
-	ans, err := p.AllAnswers()
-	if err != nil {
-		t.Error(err)
-	}
-	if len(ans) == 0 {
-		t.Fatal("no answers")
-	}
-
-	var wantType dns.Type
-	switch ans[0].Body.(type) {
-	case *dns.AResource:
-		wantType = dns.TypeA
-	case *dns.AAAAResource:
-		wantType = dns.TypeAAAA
-	default:
-		t.Errorf("unexpected answer type: %T", ans[0].Body)
-	}
-
-	for _, p := range packets {
-		if p.qtype == wantType && p.addr != addr {
-			t.Errorf("addr = %v; want %v", addr, p.addr)
-		}
-	}
-}
-
 var allResponse = []byte{
 	0x00, 0x00, // transaction id: 0
 	0x84, 0x00, // flags: response, authoritative, no error
@@ -1076,7 +999,7 @@ func TestForwardLinkSelection(t *testing.T) {
 	// routes differently.
 	specialIP := netaddr.IPv4(1, 2, 3, 4)
 
-	fwd := newForwarder(t.Logf, nil, nil, linkSelFunc(func(ip netaddr.IP) string {
+	fwd := newForwarder(t.Logf, nil, linkSelFunc(func(ip netaddr.IP) string {
 		if ip == netaddr.IPv4(1, 2, 3, 4) {
 			return "special"
 		}
