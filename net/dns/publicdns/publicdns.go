@@ -33,6 +33,7 @@ func DoHIPsOfBase() map[string][]netaddr.IP {
 // DoHV6 returns the first IPv6 DNS address from a given public DNS provider
 // if found, along with a boolean indicating success.
 func DoHV6(base string) (ip netaddr.IP, ok bool) {
+	populateOnce.Do(populate)
 	for _, ip := range dohIPsOfBase[base] {
 		if ip.Is6() {
 			return ip, true
