@@ -142,11 +142,11 @@ type userspaceEngine struct {
 
 // InternalsGetter is implemented by Engines that can export their internals.
 type InternalsGetter interface {
-	GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, ok bool)
+	GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, _ *dns.Manager, ok bool)
 }
 
-func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, ok bool) {
-	return e.tundev, e.magicConn, true
+func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, _ *dns.Manager, ok bool) {
+	return e.tundev, e.magicConn, e.dns, true
 }
 
 // ResolvingEngine is implemented by Engines that have DNS resolvers.
@@ -244,7 +244,7 @@ func IsNetstack(e Engine) bool {
 	if !ok {
 		return false
 	}
-	tw, _, ok := ig.GetInternals()
+	tw, _, _, ok := ig.GetInternals()
 	if !ok {
 		return false
 	}

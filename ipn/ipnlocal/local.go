@@ -249,7 +249,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 
 	wiredPeerAPIPort := false
 	if ig, ok := e.(wgengine.InternalsGetter); ok {
-		if tunWrap, _, ok := ig.GetInternals(); ok {
+		if tunWrap, _, _, ok := ig.GetInternals(); ok {
 			tunWrap.PeerAPIPort = b.GetPeerAPIPort
 			wiredPeerAPIPort = true
 		}
@@ -3287,7 +3287,7 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	if !ok {
 		return nil, errors.New("engine isn't InternalsGetter")
 	}
-	_, mc, ok := ig.GetInternals()
+	_, mc, _, ok := ig.GetInternals()
 	if !ok {
 		return nil, errors.New("failed to get internals")
 	}

@@ -342,7 +342,7 @@ func run() error {
 	}
 	if debugMux != nil {
 		if ig, ok := e.(wgengine.InternalsGetter); ok {
-			if _, mc, ok := ig.GetInternals(); ok {
+			if _, mc, _, ok := ig.GetInternals(); ok {
 				debugMux.HandleFunc("/debug/magicsock", mc.ServeHTTPDebug)
 			}
 		}
@@ -566,11 +566,11 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, dialer *tsdial.Dialer, e wgengine.Engine) (*netstack.Impl, error) {
-	tunDev, magicConn, ok := e.(wgengine.InternalsGetter).GetInternals()
+	tunDev, magicConn, dns, ok := e.(wgengine.InternalsGetter).GetInternals()
 	if !ok {
 		return nil, fmt.Errorf("%T is not a wgengine.InternalsGetter", e)
 	}
-	return netstack.Create(logf, tunDev, e, magicConn, dialer)
+	return netstack.Create(logf, tunDev, e, magicConn, dialer, dns)
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP

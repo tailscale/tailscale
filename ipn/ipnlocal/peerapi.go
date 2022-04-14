@@ -864,7 +864,7 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 	}
 	eng := h.ps.b.e
 	if ig, ok := eng.(wgengine.InternalsGetter); ok {
-		if _, mc, ok := ig.GetInternals(); ok {
+		if _, mc, _, ok := ig.GetInternals(); ok {
 			mc.ServeHTTPDebug(w, r)
 			return
 		}
