@@ -133,7 +133,7 @@ func (e *watchdogEngine) WhoIsIPPort(ipp netaddr.IPPort) (tsIP netaddr.IP, ok bo
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
 }
-func (e *watchdogEngine) GetInternals() (tw *tstun.Wrapper, c *magicsock.Conn, ok bool) {
+func (e *watchdogEngine) GetInternals() (tw *tstun.Wrapper, c *magicsock.Conn, d *dns.Manager, ok bool) {
 	if ig, ok := e.wrap.(InternalsGetter); ok {
 		return ig.GetInternals()
 	}

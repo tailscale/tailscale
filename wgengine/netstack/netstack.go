@@ -37,6 +37,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/net/dns"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -101,6 +102,7 @@ type Impl struct {
 	ctx       context.Context        // alive until Close
 	ctxCancel context.CancelFunc     // called on Close
 	lb        *ipnlocal.LocalBackend // or nil
+	dns       *dns.Manager
 
 	peerapiPort4Atomic uint32 // uint16 port number for IPv4 peerapi
 	peerapiPort6Atomic uint32 // uint16 port number for IPv6 peerapi
@@ -127,7 +129,7 @@ const nicID = 1
 const mtu = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -180,6 +182,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		mc:                  mc,
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netaddr.IP]int),
+		dns:                 dns,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
