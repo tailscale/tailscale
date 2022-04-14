@@ -1957,6 +1957,7 @@ func (b *LocalBackend) authReconfig() {
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := nm != nil && nm.Debug != nil && nm.Debug.DisableSubnetsIfPAC.EqualBool(true)
+	oneCGNATRoute := nm != nil && nm.Debug != nil && nm.Debug.OneCGNATRoute.EqualBool(true)
 	b.mu.Unlock()
 
 	if blocked {
@@ -2001,7 +2002,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	rcfg := b.routerConfig(cfg, prefs)
+	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
@@ -2412,13 +2413,17 @@ func ipPrefixLess(ri, rj netaddr.IPPrefix) bool {
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
-func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs) *router.Config {
+func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNATRoute bool) *router.Config {
+	singleRouteThreshold := 10_000
+	if oneCGNATRoute {
+		singleRouteThreshold = 1
+	}
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-		Routes:           peerRoutes(cfg.Peers, 10_000),
+		Routes:           peerRoutes(cfg.Peers, singleRouteThreshold),
 	}
 
 	if distro.Get() == distro.Synology {

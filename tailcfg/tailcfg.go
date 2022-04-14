@@ -1377,6 +1377,10 @@ type Debug struct {
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
 
+	// OneCGNATRoute controls whether the client should prefer to make one
+	// big CGNAT /10 route rather than a /32 per peer.
+	OneCGNATRoute opt.Bool `json:",omitempty"`
+
 	// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
 	// By default, we want to enable it to see if it works on more clients.
 	//
