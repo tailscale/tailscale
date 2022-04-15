@@ -113,7 +113,8 @@ func TestTsmpPing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pingRes := &ipnstate.PingResult{
+	pingRes := &tailcfg.PingResponse{
+		Type:     "TSMP",
 		IP:       "123.456.7890",
 		Err:      "",
 		NodeName: "testnode",
