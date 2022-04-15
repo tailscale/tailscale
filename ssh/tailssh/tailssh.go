@@ -42,27 +42,41 @@ import (
 	"tailscale.com/types/logger"
 )
 
-var sshVerboseLogging = envknob.Bool("TS_DEBUG_SSH_VLOG")
+var (
+	debugPolicyFile             = envknob.String("TS_DEBUG_SSH_POLICY_FILE")
+	debugIgnoreTailnetSSHPolicy = envknob.Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY")
+	sshVerboseLogging           = envknob.Bool("TS_DEBUG_SSH_VLOG")
+)
 
-// TODO(bradfitz): this is all very temporary as code is temporarily
-// being moved around; it will be restructured and documented in
-// following commits.
+type server struct {
+	lb             *ipnlocal.LocalBackend
+	logf           logger.Logf
+	tailscaledPath string
 
-// Handle handles an SSH connection from c.
-func Handle(logf logger.Logf, lb *ipnlocal.LocalBackend, c net.Conn) error {
-	tsd, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	// TODO(bradfitz): make just one server for the whole process. rearrange
-	// netstack's hooks to be a constructor given a lb instead. Then the *server
-	// will have a HandleTailscaleConn method.
-	srv := &server{
-		lb:             lb,
-		logf:           logf,
-		tailscaledPath: tsd,
-	}
-	ss, err := srv.newSSHServer()
+	// mu protects activeSessions.
+	mu                      sync.Mutex
+	activeSessionByH        map[string]*sshSession // ssh.SessionID (DH H) => that session
+	activeSessionBySharedID map[string]*sshSession // yyymmddThhmmss-XXXXX => session
+}
+
+func init() {
+	ipnlocal.RegisterNewSSHServer(func(logf logger.Logf, lb *ipnlocal.LocalBackend) (ipnlocal.SSHServer, error) {
+		tsd, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		srv := &server{
+			lb:             lb,
+			logf:           logf,
+			tailscaledPath: tsd,
+		}
+		return srv, nil
+	})
+}
+
+// HandleSSHConn handles a Tailscale SSH connection from c.
+func (s *server) HandleSSHConn(c net.Conn) error {
+	ss, err := s.newSSHServer()
 	if err != nil {
 		return err
 	}
@@ -120,22 +134,6 @@ func (srv *server) newSSHServer() (*ssh.Server, error) {
 	}
 	return ss, nil
 }
-
-type server struct {
-	lb             *ipnlocal.LocalBackend
-	logf           logger.Logf
-	tailscaledPath string
-
-	// mu protects activeSessions.
-	mu                      sync.Mutex
-	activeSessionByH        map[string]*sshSession // ssh.SessionID (DH H) => that session
-	activeSessionBySharedID map[string]*sshSession // yyymmddThhmmss-XXXXX => session
-}
-
-var (
-	debugPolicyFile             = envknob.String("TS_DEBUG_SSH_POLICY_FILE")
-	debugIgnoreTailnetSSHPolicy = envknob.Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY")
-)
 
 // mayForwardLocalPortTo reports whether the ctx should be allowed to port forward
 // to the specified host and port.
