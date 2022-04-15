@@ -67,7 +67,8 @@ type CapabilityVersion int
 //    28: 2022-03-09: client can communicate over Noise.
 //    29: 2022-03-21: MapResponse.PopBrowserURL
 //    30: 2022-03-22: client can request id tokens.
-const CurrentCapabilityVersion CapabilityVersion = 30
+//    31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
+const CurrentCapabilityVersion CapabilityVersion = 31
 
 type StableID string
 
@@ -1194,8 +1195,8 @@ type DNSRecord struct {
 
 // PingRequest with no IP and Types is a request to send an HTTP request to prove the
 // long-polling client is still connected.
-// PingRequest with Types and IP, will send a ping to the IP and send a
-// POST request to the URL to prove that the ping succeeded.
+// PingRequest with Types and IP, will send a ping to the IP and send a POST
+// request containing a PingResponse to the URL containing results.
 type PingRequest struct {
 	// URL is the URL to send a HEAD request to.
 	// It will be a unique URL each time. No auth headers are necessary.
@@ -1216,6 +1217,48 @@ type PingRequest struct {
 	// IP is the ping target.
 	// It is used in TSMP pings, if IP is invalid or empty then do a HEAD request to the URL.
 	IP netaddr.IP
+}
+
+// PingResponse provides result information for a TSMP or Disco PingRequest.
+// Typically populated from an ipnstate.PingResult used in `tailscale ping`.
+type PingResponse struct {
+	Type string // ping type, such as TSMP or disco.
+
+	IP       string `json:",omitempty"` // ping destination
+	NodeIP   string `json:",omitempty"` // Tailscale IP of node handling IP (different for subnet routers)
+	NodeName string `json:",omitempty"` // DNS name base or (possibly not unique) hostname
+
+	// Err contains a short description of error conditions if the PingRequest
+	// could not be fulfilled for some reason.
+	// e.g. "100.1.2.3 is local Tailscale IP"
+	Err string `json:",omitempty"`
+
+	// LatencySeconds reports measurement of the round-trip time of a message to
+	// the requested target, if it could be determined. If LatencySeconds is
+	// omitted, Err should contain information as to the cause.
+	LatencySeconds float64 `json:",omitempty"`
+
+	// Endpoint is the ip:port if direct UDP was used.
+	// It is not currently set for TSMP pings.
+	Endpoint string `json:",omitempty"`
+
+	// DERPRegionID is non-zero DERP region ID if DERP was used.
+	// It is not currently set for TSMP pings.
+	DERPRegionID int `json:",omitempty"`
+
+	// DERPRegionCode is the three-letter region code
+	// corresponding to DERPRegionID.
+	// It is not currently set for TSMP pings.
+	DERPRegionCode string `json:",omitempty"`
+
+	// PeerAPIPort is set by TSMP ping responses for peers that
+	// are running a peerapi server. This is the port they're
+	// running the server on.
+	PeerAPIPort uint16 `json:",omitempty"`
+
+	// IsLocalIP is whether the ping request error is due to it being
+	// a ping to the local node.
+	IsLocalIP bool `json:",omitempty"`
 }
 
 type MapResponse struct {

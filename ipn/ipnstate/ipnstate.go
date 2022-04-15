@@ -480,6 +480,8 @@ func osEmoji(os string) string {
 
 // PingResult contains response information for the "tailscale ping" subcommand,
 // saying how Tailscale can reach a Tailscale IP or subnet-routed IP.
+// See tailcfg.PingResponse for a related response that is sent back to control
+// for remote diagnostic pings.
 type PingResult struct {
 	IP       string // ping destination
 	NodeIP   string // Tailscale IP of node handling IP (different for subnet routers)
@@ -511,6 +513,22 @@ type PingResult struct {
 	IsLocalIP bool `json:",omitempty"`
 
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
+}
+
+func (pr *PingResult) ToPingResponse(pingType string) *tailcfg.PingResponse {
+	return &tailcfg.PingResponse{
+		Type:           pingType,
+		IP:             pr.IP,
+		NodeIP:         pr.NodeIP,
+		NodeName:       pr.NodeName,
+		Err:            pr.Err,
+		LatencySeconds: pr.LatencySeconds,
+		Endpoint:       pr.Endpoint,
+		DERPRegionID:   pr.DERPRegionID,
+		DERPRegionCode: pr.DERPRegionCode,
+		PeerAPIPort:    pr.PeerAPIPort,
+		IsLocalIP:      pr.IsLocalIP,
+	}
 }
 
 func SortPeers(peers []*PeerStatus) {

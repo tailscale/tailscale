@@ -850,7 +850,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
 			metricMapResponsePings.Add(1)
-			go answerPing(c.logf, c.httpc, pr)
+			go answerPing(c.logf, c.httpc, pr, c.pinger)
 		}
 		if u := resp.PopBrowserURL; u != "" && u != sess.lastPopBrowserURL {
 			sess.lastPopBrowserURL = u
@@ -1181,29 +1181,47 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 	return true
 }
 
-func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
+func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) {
 	if pr.URL == "" {
 		logf("invalid PingRequest with no URL")
 		return
 	}
+	if pr.Types == "" {
+		answerHeadPing(logf, c, pr)
+		return
+	}
+	for _, t := range strings.Split(pr.Types, ",") {
+		switch t {
+		case "TSMP", "disco":
+			go doPingerPing(logf, c, pr, pinger, t)
+		// TODO(tailscale/corp#754)
+		// case "host":
+		// case "peerapi":
+		default:
+			logf("unsupported ping request type: %q", t)
+		}
+	}
+}
+
+func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "HEAD", pr.URL, nil)
 	if err != nil {
-		logf("http.NewRequestWithContext(%q): %v", pr.URL, err)
+		logf("answerHeadPing: NewRequestWithContext: %v", err)
 		return
 	}
 	if pr.Log {
-		logf("answerPing: sending ping to %v ...", pr.URL)
+		logf("answerHeadPing: sending HEAD ping to %v ...", pr.URL)
 	}
 	t0 := time.Now()
 	_, err = c.Do(req)
 	d := time.Since(t0).Round(time.Millisecond)
 	if err != nil {
-		logf("answerPing error: %v to %v (after %v)", err, pr.URL, d)
+		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
-		logf("answerPing complete to %v (after %v)", pr.URL, d)
+		logf("answerHeadPing complete to %v (after %v)", pr.URL, d)
 	}
 }
 
@@ -1376,35 +1394,28 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return nc.Do(req)
 }
 
-// tsmpPing sends a Ping to pr.IP, and sends an http request back to pr.URL
-// with ping response data.
-func tsmpPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) error {
-	var err error
-	if pr.URL == "" {
-		return errors.New("invalid PingRequest with no URL")
+// doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
+// pr.URL with ping response data.
+func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType string) {
+	if pr.URL == "" || pr.IP.IsZero() || pinger == nil {
+		logf("invalid ping request: missing url, ip or pinger")
+		return
 	}
-	if pr.IP.IsZero() {
-		return errors.New("PingRequest without IP")
-	}
-	if !strings.Contains(pr.Types, "TSMP") {
-		return fmt.Errorf("PingRequest with no TSMP in Types, got %q", pr.Types)
-	}
-
-	now := time.Now()
-	pinger.Ping(pr.IP, true, func(res *ipnstate.PingResult) {
+	start := time.Now()
+	pinger.Ping(pr.IP, pingType == "TSMP", func(res *ipnstate.PingResult) {
 		// Currently does not check for error since we just return if it fails.
-		err = postPingResult(now, logf, c, pr, res)
+		postPingResult(start, logf, c, pr, res.ToPingResponse(pingType))
 	})
-	return err
 }
 
-func postPingResult(now time.Time, logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, res *ipnstate.PingResult) error {
-	if res.Err != "" {
-		return errors.New(res.Err)
-	}
-	duration := time.Since(now)
+func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, res *tailcfg.PingResponse) error {
+	duration := time.Since(start)
 	if pr.Log {
-		logf("TSMP ping to %v completed in %v seconds. pinger.Ping took %v seconds", pr.IP, res.LatencySeconds, duration.Seconds())
+		if res.Err == "" {
+			logf("ping to %v completed in %v. pinger.Ping took %v seconds", pr.IP, res.LatencySeconds, duration)
+		} else {
+			logf("ping to %v failed after %v: %v", pr.IP, duration, res.Err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -1414,20 +1425,20 @@ func postPingResult(now time.Time, logf logger.Logf, c *http.Client, pr *tailcfg
 		return err
 	}
 	// Send the results of the Ping, back to control URL.
-	req, err := http.NewRequestWithContext(ctx, "POST", pr.URL, bytes.NewBuffer(jsonPingRes))
+	req, err := http.NewRequestWithContext(ctx, "POST", pr.URL, bytes.NewReader(jsonPingRes))
 	if err != nil {
 		return fmt.Errorf("http.NewRequestWithContext(%q): %w", pr.URL, err)
 	}
 	if pr.Log {
-		logf("tsmpPing: sending ping results to %v ...", pr.URL)
+		logf("postPingResult: sending ping results to %v ...", pr.URL)
 	}
 	t0 := time.Now()
 	_, err = c.Do(req)
 	d := time.Since(t0).Round(time.Millisecond)
 	if err != nil {
-		return fmt.Errorf("tsmpPing error: %w to %v (after %v)", err, pr.URL, d)
+		return fmt.Errorf("postPingResult error: %w to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
-		logf("tsmpPing complete to %v (after %v)", pr.URL, d)
+		logf("postPingResult complete to %v (after %v)", pr.URL, d)
 	}
 	return nil
 }
