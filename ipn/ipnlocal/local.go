@@ -73,6 +73,20 @@ func getControlDebugFlags() []string {
 	return nil
 }
 
+// SSHServer is the interface of the conditionally linked ssh/tailssh.server.
+type SSHServer interface {
+	HandleSSHConn(net.Conn) error
+}
+
+type newSSHServerFunc func(logger.Logf, *LocalBackend) (SSHServer, error)
+
+var newSSHServer newSSHServerFunc // or nil
+
+// RegisterNewSSHServer lets the conditionally linked ssh/tailssh package register itself.
+func RegisterNewSSHServer(fn newSSHServerFunc) {
+	newSSHServer = fn
+}
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -103,6 +117,7 @@ type LocalBackend struct {
 	newDecompressor       func() (controlclient.Decompressor, error)
 	varRoot               string // or empty if SetVarRoot never called
 	sshAtomicBool         syncs.AtomicBool
+	sshServer             SSHServer // or nil
 
 	filterHash deephash.Sum
 
@@ -204,6 +219,12 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		portpoll:       portpoll,
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
+	}
+	if newSSHServer != nil {
+		b.sshServer, err = newSSHServer(logf, b)
+		if err != nil {
+			return nil, fmt.Errorf("newSSHServer: %w", err)
+		}
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
@@ -3224,4 +3245,11 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
+}
+
+func (b *LocalBackend) HandleSSHConn(c net.Conn) error {
+	if b.sshServer == nil {
+		return errors.New("no SSH server")
+	}
+	return b.sshServer.HandleSSHConn(c)
 }

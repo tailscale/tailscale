@@ -662,9 +662,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	c := gonet.NewTCPConn(&wq, ep)
 
 	if ns.lb != nil {
-		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) && handleSSH != nil {
-			ns.logf("handling SSH connection....")
-			if err := handleSSH(ns.logf, ns.lb, c); err != nil {
+		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {
+			if err := ns.lb.HandleSSHConn(c); err != nil {
 				ns.logf("ssh error: %v", err)
 			}
 			return
