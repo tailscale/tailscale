@@ -67,7 +67,8 @@ type CapabilityVersion int
 //    28: 2022-03-09: client can communicate over Noise.
 //    29: 2022-03-21: MapResponse.PopBrowserURL
 //    30: 2022-03-22: client can request id tokens.
-const CurrentCapabilityVersion CapabilityVersion = 30
+//    31: 2022-04-15: PingRequest TSMP support
+const CurrentCapabilityVersion CapabilityVersion = 31
 
 type StableID string
 
