@@ -72,6 +72,17 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
+			parrot)
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_ID" -lt 5 ]; then
+					VERSION="buster"
+					APT_KEY_TYPE="legacy"
+				else
+					VERSION="bullseye"
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
 			raspbian)
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
