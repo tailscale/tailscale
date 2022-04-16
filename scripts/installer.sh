@@ -485,7 +485,7 @@ main() {
 			;;
 		emerge)
 			set -x
-			$SUDO emerge net-vpn/tailscale
+			$SUDO emerge --ask=n net-vpn/tailscale
 			set +x
 			;;
 		appstore)
