@@ -41,16 +41,11 @@ main() {
 		#  - ID: the short name of the OS (e.g. "debian", "freebsd")
 		#  - VERSION_ID: the numeric release version for the OS, if any (e.g. "18.04")
 		#  - VERSION_CODENAME: the codename of the OS release, if any (e.g. "buster")
-		#  - UBUNTU_CODENAME: if it exists, as in linuxmint, use instead of VERSION_CODENAME
 		. /etc/os-release
 		case "$ID" in
-			ubuntu|pop|neon|zorin|elementary|linuxmint)
+			ubuntu|pop|neon|zorin|elementary)
 				OS="ubuntu"
-				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
-				    VERSION="$UBUNTU_CODENAME"
-				else
-				    VERSION="$VERSION_CODENAME"
-				fi
+				VERSION="$VERSION_CODENAME"
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Ubuntu 20.04.
@@ -67,6 +62,24 @@ main() {
 				# Third-party keyrings became the preferred method of
 				# installation in Debian 11 (Bullseye).
 				if [ "$VERSION_ID" -lt 11 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
+			linuxmint)
+				if [ "${UBUNTU_CODENAME:-}" != "" ]; then
+				    OS="ubuntu"
+				    VERSION="$UBUNTU_CODENAME"
+				elif [ "${DEBIAN_CODENAME:-}" != "" ]; then
+				    OS="debian"
+				    VERSION="$DEBIAN_CODENAME"
+				else
+				    OS="ubuntu"
+				    VERSION="$VERSION_CODENAME"
+				fi
+				PACKAGETYPE="apt"
+				if [ "$VERSION_ID" -lt 5 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
