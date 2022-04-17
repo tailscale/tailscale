@@ -6,18 +6,25 @@
 			"RegionName": "r1",
 			"Nodes": [
 				{
-					"Name": "1a",
+					"Name": "1c",
 					"RegionID": 1,
-					"HostName": "derp1.tailscale.com",
-					"IPv4": "159.89.225.99",
-					"IPv6": "2604:a880:400:d1::828:b001"
+					"HostName": "derp1c.tailscale.com",
+					"IPv4": "104.248.8.210",
+					"IPv6": "2604:a880:800:10::7a0:e001"
 				},
 				{
-					"Name": "1b",
+					"Name": "1d",
 					"RegionID": 1,
-					"HostName": "derp1b.tailscale.com",
-					"IPv4": "45.55.35.93",
-					"IPv6": "2604:a880:800:a1::f:2001"
+					"HostName": "derp1d.tailscale.com",
+					"IPv4": "165.22.33.71",
+					"IPv6": "2604:a880:800:10::7fe:f001"
+				},
+				{
+					"Name": "1e",
+					"RegionID": 1,
+					"HostName": "derp1e.tailscale.com",
+					"IPv4": "64.225.56.166",
+					"IPv6": "2604:a880:800:10::873:4001"
 				}
 			]
 		},
