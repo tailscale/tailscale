@@ -151,7 +151,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky)
+			rocky|almalinux)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
