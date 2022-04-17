@@ -76,6 +76,11 @@ func getControlDebugFlags() []string {
 // SSHServer is the interface of the conditionally linked ssh/tailssh.server.
 type SSHServer interface {
 	HandleSSHConn(net.Conn) error
+
+	// OnPolicyChange is called when the SSH access policy changes,
+	// so that existing sessions can be re-evaluated for validity
+	// and closed if they'd no longer be accepted.
+	OnPolicyChange()
 }
 
 type newSSHServerFunc func(logger.Logf, *LocalBackend) (SSHServer, error)
@@ -1147,6 +1152,10 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs *ipn.
 	} else {
 		b.logf("[v1] netmap packet filter: %v filters", len(packetFilter))
 		b.setFilter(filter.New(packetFilter, localNets, logNets, oldFilter, b.logf))
+	}
+
+	if b.sshServer != nil {
+		go b.sshServer.OnPolicyChange()
 	}
 }
 
