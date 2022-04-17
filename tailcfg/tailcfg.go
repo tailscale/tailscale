@@ -1577,8 +1577,16 @@ type Oauth2Token struct {
 }
 
 const (
+	// MapResponse.Node self capabilities.
+
 	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
+
+	// Inter-node capabilities.
+
+	// CapabilityFileSharingSend grants the ability to receive files from a
+	// node that's owned by a different user.
+	CapabilityFileSharingSend = "https://tailscale.com/cap/file-send"
 )
 
 // SetDNSRequest is a request to add a DNS record.
