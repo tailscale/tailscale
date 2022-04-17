@@ -119,13 +119,12 @@ type LocalBackend struct {
 	sshAtomicBool         syncs.AtomicBool
 	sshServer             SSHServer // or nil
 
-	filterHash deephash.Sum
-
 	filterAtomic            atomic.Value // of *filter.Filter
 	containsViaIPFuncAtomic atomic.Value // of func(netaddr.IP) bool
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
+	filterHash     deephash.Sum
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
 	notify         func(ipn.Notify)
@@ -316,7 +315,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	// If the local network configuration has changed, our filter may
 	// need updating to tweak default routes.
-	b.updateFilter(b.netMap, b.prefs)
+	b.updateFilterLocked(b.netMap, b.prefs)
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
 		want := len(b.netMap.Addresses)
@@ -661,7 +660,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	if prefsChanged {
 		prefs = b.prefs.Clone()
 	}
-
+	if st.NetMap != nil {
+		b.updateFilterLocked(st.NetMap, prefs)
+	}
 	b.mu.Unlock()
 
 	// Now complete the lock-free parts of what we started while locked.
@@ -683,7 +684,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			}
 		}
 
-		b.updateFilter(st.NetMap, prefs)
 		b.e.SetNetworkMap(st.NetMap)
 		b.e.SetDERPMap(st.NetMap.DERPMap)
 
@@ -968,9 +968,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.setNetMapLocked(nil)
 	persistv := b.prefs.Persist
+	b.updateFilterLocked(nil, nil)
 	b.mu.Unlock()
-
-	b.updateFilter(nil, nil)
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
@@ -1069,9 +1068,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
-// updateFilter updates the packet filter in wgengine based on the
+// updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
-func (b *LocalBackend) updateFilter(netMap *netmap.NetworkMap, prefs *ipn.Prefs) {
+//
+// b.mu must be held.
+func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs *ipn.Prefs) {
 	// NOTE(danderson): keep change detection as the first thing in
 	// this function. Don't try to optimize by returning early, more
 	// likely than not you'll just end up breaking the change
@@ -1825,6 +1826,12 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	userID := b.userID
 	cc := b.cc
 
+	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
+	if caller == "SetPrefs" {
+		b.logf("SetPrefs: %v", newp.Pretty())
+	}
+	b.updateFilterLocked(netMap, newp)
+
 	b.mu.Unlock()
 
 	if stateKey != "" {
@@ -1834,10 +1841,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	}
 	b.writeServerModeStartState(userID, newp)
 
-	// [GRINDER STATS LINE] - please don't remove (used for log parsing)
-	if caller == "SetPrefs" {
-		b.logf("SetPrefs: %v", newp.Pretty())
-	}
 	if netMap != nil {
 		if login := netMap.UserProfiles[netMap.User].LoginName; login != "" {
 			if newp.Persist == nil {
@@ -1856,8 +1859,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	if oldp.ShieldsUp != newp.ShieldsUp || hostInfoChanged {
 		b.doSetHostinfoFilterServices(newHi)
 	}
-
-	b.updateFilter(netMap, newp)
 
 	if netMap != nil {
 		b.e.SetDERPMap(netMap.DERPMap)
