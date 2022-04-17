@@ -9,13 +9,19 @@ package tailssh
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/user"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +31,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineread"
@@ -335,4 +342,64 @@ func parseEnv(out []byte) map[string]string {
 		return nil
 	})
 	return e
+}
+
+func TestPublicKeyFetching(t *testing.T) {
+	var reqsTotal, reqsIfNoneMatchHit, reqsIfNoneMatchMiss int32
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32((&reqsTotal), 1)
+		etag := fmt.Sprintf("W/%q", sha256.Sum256([]byte(r.URL.Path)))
+		w.Header().Set("Etag", etag)
+		if v := r.Header.Get("If-None-Match"); v != "" {
+			if v == etag {
+				atomic.AddInt32(&reqsIfNoneMatchHit, 1)
+				w.WriteHeader(304)
+				return
+			}
+			atomic.AddInt32(&reqsIfNoneMatchMiss, 1)
+		}
+		io.WriteString(w, "foo\nbar\n"+string(r.URL.Path)+"\n")
+	}))
+	ts.StartTLS()
+	defer ts.Close()
+	keys := ts.URL
+
+	clock := &tstest.Clock{}
+	srv := &server{
+		pubKeyHTTPClient: ts.Client(),
+		timeNow:          clock.Now,
+	}
+	for i := 0; i < 2; i++ {
+		got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("got %q; want %q", got, want)
+		}
+	}
+	if got, want := atomic.LoadInt32(&reqsTotal), int32(1); got != want {
+		t.Errorf("got %d requests; want %d", got, want)
+	}
+	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(0); got != want {
+		t.Errorf("got %d etag hits; want %d", got, want)
+	}
+	clock.Advance(5 * time.Minute)
+	got, err := srv.fetchPublicKeysURL(keys + "/alice.keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"foo", "bar", "/alice.keys"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	if got, want := atomic.LoadInt32(&reqsTotal), int32(2); got != want {
+		t.Errorf("got %d requests; want %d", got, want)
+	}
+	if got, want := atomic.LoadInt32(&reqsIfNoneMatchHit), int32(1); got != want {
+		t.Errorf("got %d etag hits; want %d", got, want)
+	}
+	if got, want := atomic.LoadInt32(&reqsIfNoneMatchMiss), int32(0); got != want {
+		t.Errorf("got %d etag misses; want %d", got, want)
+	}
+
 }
