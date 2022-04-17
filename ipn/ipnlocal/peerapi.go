@@ -620,9 +620,31 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 	}
 }
 
+// canPutFile reports whether h can put a file ("Taildrop") to this node.
+func (h *peerAPIHandler) canPutFile() bool {
+	if h.isSelf {
+		return true
+	}
+	if h.peerNode == nil {
+		// Shouldn't happen, but in case.
+		return false
+	}
+	for _, addr := range h.peerNode.Addresses {
+		if !addr.IsSingleIP() {
+			continue
+		}
+		for _, cap := range h.ps.b.PeerCaps(addr.IP()) {
+			if cap == tailcfg.CapabilityFileSharingSend {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canPutFile() {
+		http.Error(w, "Taildrop access denied", http.StatusForbidden)
 		return
 	}
 	if !h.ps.b.hasCapFileSharing() {
