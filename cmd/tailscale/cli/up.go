@@ -592,6 +592,10 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	} else {
+		if err := tailscale.CheckPrefs(ctx, prefs); err != nil {
+			return err
+		}
+
 		authKey, err := upArgs.getAuthKey()
 		if err != nil {
 			return err

@@ -111,6 +111,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveLogout(w, r)
 	case "/localapi/v0/prefs":
 		h.servePrefs(w, r)
+	case "/localapi/v0/check-prefs":
+		h.serveCheckPrefs(w, r)
 	case "/localapi/v0/check-ip-forwarding":
 		h.serveCheckIPForwarding(w, r)
 	case "/localapi/v0/bugreport":
@@ -376,7 +378,9 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		var err error
 		prefs, err = h.b.EditPrefs(mp)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(resJSON{Error: err.Error()})
 			return
 		}
 	case "GET", "HEAD":
@@ -389,6 +393,33 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(prefs)
+}
+
+type resJSON struct {
+	Error string `json:",omitempty"`
+}
+
+func (h *Handler) serveCheckPrefs(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "checkprefs access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+	p := new(ipn.Prefs)
+	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+	err := h.b.CheckPrefs(p)
+	var res resJSON
+	if err != nil {
+		res.Error = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
