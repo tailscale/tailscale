@@ -5,6 +5,7 @@
 package resolver
 
 import (
+	"flag"
 	"fmt"
 	"net"
 	"reflect"
@@ -167,6 +168,25 @@ func TestMaxDoHInFlight(t *testing.T) {
 			}
 		})
 	}
+}
+
+var testDNS = flag.Bool("test-dns", false, "run tests that require a working DNS server")
+
+func TestGetKnownDoHClientForProvider(t *testing.T) {
+	var fwd forwarder
+	c, ok := fwd.getKnownDoHClientForProvider("https://dns.google/dns-query")
+	if !ok {
+		t.Fatal("not found")
+	}
+	if !*testDNS {
+		t.Skip("skipping without --test-dns")
+	}
+	res, err := c.Head("https://dns.google/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	t.Logf("Got: %+v", res)
 }
 
 func BenchmarkNameFromQuery(b *testing.B) {
