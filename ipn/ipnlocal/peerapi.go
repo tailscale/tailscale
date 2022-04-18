@@ -622,21 +622,19 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
 func (h *peerAPIHandler) canPutFile() bool {
-	if h.isSelf {
-		return true
-	}
-	if h.peerNode == nil {
-		// Shouldn't happen, but in case.
-		return false
-	}
-	for _, addr := range h.peerNode.Addresses {
-		if !addr.IsSingleIP() {
-			continue
-		}
-		for _, cap := range h.ps.b.PeerCaps(addr.IP()) {
-			if cap == tailcfg.CapabilityFileSharingSend {
-				return true
-			}
+	return h.isSelf || h.peerHasCap(tailcfg.CapabilityFileSharingSend)
+}
+
+// canDebug reports whether h can debug this node (goroutines, metrics,
+// magicsock internal state, etc).
+func (h *peerAPIHandler) canDebug() bool {
+	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
+}
+
+func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
+	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.IP()) {
+		if hasCap == wantCap {
+			return true
 		}
 	}
 	return false
@@ -763,8 +761,8 @@ func approxSize(n int64) string {
 }
 
 func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
 	var buf []byte
@@ -779,8 +777,8 @@ func (h *peerAPIHandler) handleServeGoroutines(w http.ResponseWriter, r *http.Re
 }
 
 func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
 	var data struct {
@@ -799,8 +797,8 @@ func (h *peerAPIHandler) handleServeEnv(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
 	eng := h.ps.b.e
@@ -814,8 +812,8 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 }
 
 func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
