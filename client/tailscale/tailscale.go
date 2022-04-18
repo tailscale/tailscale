@@ -381,6 +381,21 @@ func CheckIPForwarding(ctx context.Context) error {
 	return nil
 }
 
+// CheckPrefs validates the provided preferences, without making any changes.
+//
+// The CLI uses this before a Start call to fail fast if the preferences won't
+// work. Currently (2022-04-18) this only checks for SSH server compatibility.
+// Note that EditPrefs does the same validation as this, so call CheckPrefs before
+// EditPrefs is not necessary.
+func CheckPrefs(ctx context.Context, p *ipn.Prefs) error {
+	pj, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = send(ctx, "POST", "/localapi/v0/check-prefs", http.StatusOK, bytes.NewReader(pj))
+	return err
+}
+
 func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	body, err := get200(ctx, "/localapi/v0/prefs")
 	if err != nil {

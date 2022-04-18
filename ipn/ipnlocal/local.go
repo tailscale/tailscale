@@ -1775,11 +1775,49 @@ func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Unlock()
 }
 
+func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.checkPrefsLocked(p)
+}
+
+func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
+	if p.Hostname == "badhostname.tailscale." {
+		// Keep this one just for testing.
+		return errors.New("bad hostname [test]")
+	}
+	if p.RunSSH {
+		switch runtime.GOOS {
+		case "linux":
+			// okay
+		case "darwin":
+			// okay only in tailscaled mode for now.
+			if version.IsSandboxedMacOS() {
+				return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
+			}
+			if !envknob.UseWIPCode() {
+				return errors.New("The Tailscale SSH server is disabled on macOS tailscaled by default. To try, set env TAILSCALE_USE_WIP_CODE=1")
+			}
+		default:
+			return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
+		}
+		if !canSSH {
+			return errors.New("The Tailscale SSH server has been administratively disabled.")
+		}
+	}
+	return nil
+}
+
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	b.mu.Lock()
 	p0 := b.prefs.Clone()
 	p1 := b.prefs.Clone()
 	p1.ApplyEdits(mp)
+	if err := b.checkPrefsLocked(p1); err != nil {
+		b.mu.Unlock()
+		b.logf("EditPrefs check error: %v", err)
+		return nil, err
+	}
 	if p1.RunSSH && !canSSH {
 		b.mu.Unlock()
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
