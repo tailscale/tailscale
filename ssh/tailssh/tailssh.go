@@ -524,8 +524,8 @@ func (srv *server) newSSHSession(s ssh.Session, ci *sshConnInfo, lu *user.User) 
 // If not, it terminates the session.
 func (ss *sshSession) checkStillValid() {
 	ci := ss.connInfo
-	a, _, _, err := ss.srv.evaluatePolicy(ci.sshUser, ci.src, ci.dst, ci.pubKey)
-	if err == nil && (a.Accept || a.HoldAndDelegate != "") {
+	a, _, lu, err := ss.srv.evaluatePolicy(ci.sshUser, ci.src, ci.dst, ci.pubKey)
+	if err == nil && (a.Accept || a.HoldAndDelegate != "") && lu == ss.localUser.Username {
 		return
 	}
 	ss.logf("session no longer valid per new SSH policy; closing")
