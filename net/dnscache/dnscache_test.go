@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"reflect"
 	"testing"
@@ -108,5 +109,35 @@ func TestDialCall_uniqueIPs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v; want %v", got, want)
+	}
+}
+
+func TestResolverAllHostStaticResult(t *testing.T) {
+	r := &Resolver{
+		SingleHost: "foo.bar",
+		SingleHostStaticResult: []netaddr.IP{
+			netaddr.MustParseIP("2001:4860:4860::8888"),
+			netaddr.MustParseIP("2001:4860:4860::8844"),
+			netaddr.MustParseIP("8.8.8.8"),
+			netaddr.MustParseIP("8.8.4.4"),
+		},
+	}
+	ip4, ip6, allIPs, err := r.LookupIP(context.Background(), "foo.bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ip4.String(), "8.8.8.8"; got != want {
+		t.Errorf("ip4 got %q; want %q", got, want)
+	}
+	if got, want := ip6.String(), "2001:4860:4860::8888"; got != want {
+		t.Errorf("ip4 got %q; want %q", got, want)
+	}
+	if got, want := fmt.Sprintf("%q", allIPs), `[{"2001:4860:4860::8888" ""} {"2001:4860:4860::8844" ""} {"8.8.8.8" ""} {"8.8.4.4" ""}]`; got != want {
+		t.Errorf("allIPs got %q; want %q", got, want)
+	}
+
+	_, _, _, err = r.LookupIP(context.Background(), "bad")
+	if got, want := fmt.Sprint(err), `dnscache: unexpected hostname "bad" doesn't match expected "foo.bar"`; got != want {
+		t.Errorf("bad dial error got %q; want %q", got, want)
 	}
 }
