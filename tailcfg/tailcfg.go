@@ -1458,6 +1458,10 @@ type Debug struct {
 	// new attempts at UPnP connections.
 	DisableUPnP opt.Bool `json:",omitempty"`
 
+	// DisableLogTail disables the logtail package. Once disabled it can't be
+	// re-enabled for the lifetime of the process.
+	DisableLogTail bool `json:",omitempty"`
+
 	// Exit optionally specifies that the client should os.Exit
 	// with this code.
 	Exit *int `json:",omitempty"`

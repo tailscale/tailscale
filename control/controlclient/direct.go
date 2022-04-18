@@ -34,6 +34,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/log/logheap"
+	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
@@ -894,6 +895,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 			if code := resp.Debug.Exit; code != nil {
 				c.logf("exiting process with status %v per controlplane", *code)
 				os.Exit(*code)
+			}
+			if resp.Debug.DisableLogTail {
+				logtail.Disable()
 			}
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
