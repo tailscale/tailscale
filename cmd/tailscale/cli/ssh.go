@@ -79,9 +79,13 @@ func runSSH(ctx context.Context, args []string) error {
 	argv := append([]string{
 		ssh,
 
+		// Only trust SSH hosts that we know about.
 		"-o", fmt.Sprintf("UserKnownHostsFile %s",
 			shellescape.Quote(knownHostsFile),
 		),
+		"-o", "UpdateHostKeys no",
+		"-o", "StrictHostKeyChecking yes",
+
 		"-o", fmt.Sprintf("ProxyCommand %s --socket=%s nc %%h %%p",
 			shellescape.Quote(tailscaleBin),
 			shellescape.Quote(rootArgs.socket),
