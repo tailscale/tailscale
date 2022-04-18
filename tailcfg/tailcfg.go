@@ -1587,6 +1587,9 @@ const (
 	// CapabilityFileSharingSend grants the ability to receive files from a
 	// node that's owned by a different user.
 	CapabilityFileSharingSend = "https://tailscale.com/cap/file-send"
+	// CapabilityDebugPeer grants the ability for a peer to read this node's
+	// goroutines, metrics, magicsock internal state, etc.
+	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
 )
 
 // SetDNSRequest is a request to add a DNS record.
