@@ -87,7 +87,7 @@ func init() {
 
 // HandleSSHConn handles a Tailscale SSH connection from c.
 func (srv *server) HandleSSHConn(c net.Conn) error {
-	ss, err := srv.newSSHServer()
+	ss, err := srv.newSSHServer(c)
 	if err != nil {
 		return err
 	}
@@ -109,8 +109,28 @@ func (srv *server) OnPolicyChange() {
 	}
 }
 
-func (srv *server) newSSHServer() (*ssh.Server, error) {
+func (srv *server) newSSHServer(c net.Conn) (*ssh.Server, error) {
 	ss := &ssh.Server{
+		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+			conf := &gossh.ServerConfig{
+				NoClientAuth: true,
+				NoClientAuthCallback: func(m gossh.ConnMetadata) (*gossh.Permissions, error) {
+					if srv.requiresPubKey(m.User(), toIPPort(m.LocalAddr()), toIPPort(m.RemoteAddr())) {
+						return nil, errors.New("public key required") // any non-nil error will do
+					}
+					return nil, nil
+				},
+				BannerCallback: func(m gossh.ConnMetadata) string {
+					// TODO(bradfitz): make this be a "you are rejected, contact
+					// your Tailnet admin etc etc" message or or the
+					// SSHAction.Message from the rejecting SSHAction if
+					// matched.
+					return "# Tailscale SSH server\n"
+				},
+			}
+			return conf
+		},
+
 		Handler:           srv.handleSSH,
 		RequestHandlers:   map[string]ssh.RequestHandler{},
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{},
@@ -122,12 +142,9 @@ func (srv *server) newSSHServer() (*ssh.Server, error) {
 		},
 		Version:                     "SSH-2.0-Tailscale",
 		LocalPortForwardingCallback: srv.mayForwardLocalPortTo,
-		NoClientAuthCallback: func(m gossh.ConnMetadata) (*gossh.Permissions, error) {
-			if srv.requiresPubKey(m.User(), toIPPort(m.LocalAddr()), toIPPort(m.RemoteAddr())) {
-				return nil, errors.New("public key required") // any non-nil error will do
-			}
-			return nil, nil
-		},
+
+		// TODO(bradfitz,maisem): don't register this hook if the policy doesn't
+		// involve any pubkey stuff at all for the user identified by c.
 		PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
 			if srv.acceptPubKey(ctx.User(), toIPPort(ctx.LocalAddr()), toIPPort(ctx.RemoteAddr()), key) {
 				srv.logf("accepting SSH public key %s", bytes.TrimSpace(gossh.MarshalAuthorizedKey(key)))

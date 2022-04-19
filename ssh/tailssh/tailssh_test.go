@@ -211,32 +211,9 @@ func TestSSH(t *testing.T) {
 	dir := t.TempDir()
 	lb.SetVarRoot(dir)
 
-	srv := &server{
-		lb:   lb,
-		logf: logf,
-	}
-	ss, err := srv.newSSHServer()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	u, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	ci := &sshConnInfo{
-		sshUser: "test",
-		src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
-		dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
-		node:    &tailcfg.Node{},
-		uprof:   &tailcfg.UserProfile{},
-	}
-
-	ss.Handler = func(s ssh.Session) {
-		ss := srv.newSSHSession(s, ci, u)
-		ss.action = &tailcfg.SSHAction{Accept: true}
-		ss.run()
 	}
 
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -254,6 +231,30 @@ func TestSSH(t *testing.T) {
 					t.Errorf("Accept: %v", err)
 				}
 				return
+			}
+
+			srv := &server{
+				lb:   lb,
+				logf: logf,
+			}
+			ss, err := srv.newSSHServer(c)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+
+			ci := &sshConnInfo{
+				sshUser: "test",
+				src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
+				dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
+				node:    &tailcfg.Node{},
+				uprof:   &tailcfg.UserProfile{},
+			}
+
+			ss.Handler = func(s ssh.Session) {
+				ss := srv.newSSHSession(s, ci, u)
+				ss.action = &tailcfg.SSHAction{Accept: true}
+				ss.run()
 			}
 			go ss.HandleConn(c)
 		}
