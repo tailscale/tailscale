@@ -197,14 +197,6 @@ func toIPsOnly(resolvers []dnstype.Resolver) (ret []netaddr.IP) {
 	return ret
 }
 
-func toIPPorts(ips []netaddr.IP) (ret []netaddr.IPPort) {
-	ret = make([]netaddr.IPPort, 0, len(ips))
-	for _, ip := range ips {
-		ret = append(ret, netaddr.IPPortFrom(ip, 53))
-	}
-	return ret
-}
-
 func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
 	return m.resolver.EnqueuePacket(bs, proto, from, to)
 }
