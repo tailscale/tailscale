@@ -49,9 +49,9 @@ func TestDoH(t *testing.T) {
 		dohSem: make(chan struct{}, 10),
 	}
 
-	for ip := range publicdns.KnownDoH() {
-		t.Run(ip.String(), func(t *testing.T) {
-			urlBase, c, ok := f.getKnownDoHClient(ip)
+	for urlBase := range publicdns.DoHIPsOfBase() {
+		t.Run(urlBase, func(t *testing.T) {
+			c, ok := f.getKnownDoHClientForProvider(urlBase)
 			if !ok {
 				t.Fatal("expected DoH")
 			}

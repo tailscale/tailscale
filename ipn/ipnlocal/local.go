@@ -2207,7 +2207,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 
 	addDefault := func(resolvers []dnstype.Resolver) {
 		for _, r := range resolvers {
-			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, normalizeResolver(r))
+			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, r)
 		}
 	}
 
@@ -2236,7 +2236,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		dcfg.Routes[fqdn] = make([]dnstype.Resolver, 0, len(resolvers))
 
 		for _, r := range resolvers {
-			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], normalizeResolver(r))
+			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], r)
 		}
 	}
 
@@ -2265,16 +2265,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	}
 
 	return dcfg
-}
-
-func normalizeResolver(cfg dnstype.Resolver) dnstype.Resolver {
-	if ip, err := netaddr.ParseIP(cfg.Addr); err == nil {
-		// Add 53 here for bare IPs for consistency with previous data type.
-		return dnstype.Resolver{
-			Addr: netaddr.IPPortFrom(ip, 53).String(),
-		}
-	}
-	return cfg
 }
 
 // SetVarRoot sets the root directory of Tailscale's writable

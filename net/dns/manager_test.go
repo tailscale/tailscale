@@ -96,7 +96,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
@@ -107,7 +107,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-split",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
@@ -119,7 +119,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-magic",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
@@ -131,7 +131,7 @@ func TestManager(t *testing.T) {
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(".", "1.1.1.1:53", "9.9.9.9:53"),
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -141,7 +141,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-magic-split",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 				Routes:           upstreams("ts.com", ""),
 				Hosts: hosts(
@@ -154,7 +154,7 @@ func TestManager(t *testing.T) {
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(".", "1.1.1.1:53", "9.9.9.9:53"),
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -164,8 +164,8 @@ func TestManager(t *testing.T) {
 		{
 			name: "corp-routes",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
-				Routes:           upstreams("corp.com", "2.2.2.2:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				Routes:           upstreams("corp.com", "2.2.2.2"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			os: OSConfig{
@@ -174,15 +174,15 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "1.1.1.1:53", "9.9.9.9:53",
-					"corp.com.", "2.2.2.2:53"),
+					".", "1.1.1.1", "9.9.9.9",
+					"corp.com.", "2.2.2.2"),
 			},
 		},
 		{
 			name: "corp-routes-split",
 			in: Config{
-				DefaultResolvers: mustRes("1.1.1.1:53", "9.9.9.9:53"),
-				Routes:           upstreams("corp.com", "2.2.2.2:53"),
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				Routes:           upstreams("corp.com", "2.2.2.2"),
 				SearchDomains:    fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
@@ -192,14 +192,14 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "1.1.1.1:53", "9.9.9.9:53",
-					"corp.com.", "2.2.2.2:53"),
+					".", "1.1.1.1", "9.9.9.9",
+					"corp.com.", "2.2.2.2"),
 			},
 		},
 		{
 			name: "routes",
 			in: Config{
-				Routes:        upstreams("corp.com", "2.2.2.2:53"),
+				Routes:        upstreams("corp.com", "2.2.2.2"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
@@ -212,14 +212,14 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "8.8.8.8:53",
-					"corp.com.", "2.2.2.2:53"),
+					".", "8.8.8.8",
+					"corp.com.", "2.2.2.2"),
 			},
 		},
 		{
 			name: "routes-split",
 			in: Config{
-				Routes:        upstreams("corp.com", "2.2.2.2:53"),
+				Routes:        upstreams("corp.com", "2.2.2.2"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
@@ -233,8 +233,8 @@ func TestManager(t *testing.T) {
 			name: "routes-multi",
 			in: Config{
 				Routes: upstreams(
-					"corp.com", "2.2.2.2:53",
-					"bigco.net", "3.3.3.3:53"),
+					"corp.com", "2.2.2.2",
+					"bigco.net", "3.3.3.3"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			bs: OSConfig{
@@ -247,17 +247,17 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					".", "8.8.8.8:53",
-					"corp.com.", "2.2.2.2:53",
-					"bigco.net.", "3.3.3.3:53"),
+					".", "8.8.8.8",
+					"corp.com.", "2.2.2.2",
+					"bigco.net.", "3.3.3.3"),
 			},
 		},
 		{
 			name: "routes-multi-split",
 			in: Config{
 				Routes: upstreams(
-					"corp.com", "2.2.2.2:53",
-					"bigco.net", "3.3.3.3:53"),
+					"corp.com", "2.2.2.2",
+					"bigco.net", "3.3.3.3"),
 				SearchDomains: fqdns("tailscale.com", "universe.tf"),
 			},
 			split: true,
@@ -268,8 +268,8 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					"corp.com.", "2.2.2.2:53",
-					"bigco.net.", "3.3.3.3:53"),
+					"corp.com.", "2.2.2.2",
+					"bigco.net.", "3.3.3.3"),
 			},
 		},
 		{
@@ -290,7 +290,7 @@ func TestManager(t *testing.T) {
 				SearchDomains: fqdns("tailscale.com", "universe.tf", "coffee.shop"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams(".", "8.8.8.8:53"),
+				Routes: upstreams(".", "8.8.8.8"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -322,7 +322,7 @@ func TestManager(t *testing.T) {
 		{
 			name: "routes-magic",
 			in: Config{
-				Routes: upstreams("corp.com", "2.2.2.2:53", "ts.com", ""),
+				Routes: upstreams("corp.com", "2.2.2.2", "ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -338,8 +338,8 @@ func TestManager(t *testing.T) {
 			},
 			rs: resolver.Config{
 				Routes: upstreams(
-					"corp.com.", "2.2.2.2:53",
-					".", "8.8.8.8:53"),
+					"corp.com.", "2.2.2.2",
+					".", "8.8.8.8"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -350,7 +350,7 @@ func TestManager(t *testing.T) {
 			name: "routes-magic-split",
 			in: Config{
 				Routes: upstreams(
-					"corp.com", "2.2.2.2:53",
+					"corp.com", "2.2.2.2",
 					"ts.com", ""),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
@@ -364,7 +364,7 @@ func TestManager(t *testing.T) {
 				MatchDomains:  fqdns("corp.com", "ts.com"),
 			},
 			rs: resolver.Config{
-				Routes: upstreams("corp.com.", "2.2.2.2:53"),
+				Routes: upstreams("corp.com.", "2.2.2.2"),
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
@@ -393,6 +393,14 @@ func TestManager(t *testing.T) {
 		},
 	}
 
+	trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
+	trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string {
+		if ipp.Port() == 53 {
+			return ipp.IP().String()
+		}
+		return ipp.String()
+	})
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			f := fakeOSConfigurator{
@@ -405,8 +413,6 @@ func TestManager(t *testing.T) {
 			if err := m.Set(test.in); err != nil {
 				t.Fatalf("m.Set: %v", err)
 			}
-			trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
-			trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string { return ipp.String() })
 			if diff := cmp.Diff(f.OSConfig, test.os, trIP, trIPPort, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("wrong OSConfig (-got+want)\n%s", diff)
 			}
@@ -503,6 +509,11 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 				panic("IPPort provided before suffix")
 			}
 			ret[key] = append(ret[key], dnstype.Resolver{Addr: ipp.String()})
+		} else if _, err := netaddr.ParseIP(s); err == nil {
+			if key == "" {
+				panic("IPPort provided before suffix")
+			}
+			ret[key] = append(ret[key], dnstype.Resolver{Addr: s})
 		} else if strings.HasPrefix(s, "http") {
 			ret[key] = append(ret[key], dnstype.Resolver{Addr: s})
 		} else {

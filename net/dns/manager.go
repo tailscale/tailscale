@@ -174,7 +174,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		}
 		var defaultRoutes []dnstype.Resolver
 		for _, ip := range bcfg.Nameservers {
-			defaultRoutes = append(defaultRoutes, dnstype.ResolverFromIP(ip))
+			defaultRoutes = append(defaultRoutes, dnstype.Resolver{Addr: ip.String()})
 		}
 		rcfg.Routes["."] = defaultRoutes
 		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)
@@ -188,10 +188,8 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 // DoH or custom-port entries with something like hasDefaultIPResolversOnly.
 func toIPsOnly(resolvers []dnstype.Resolver) (ret []netaddr.IP) {
 	for _, r := range resolvers {
-		if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil && ipp.Port() == 53 {
+		if ipp, ok := r.IPPort(); ok && ipp.Port() == 53 {
 			ret = append(ret, ipp.IP())
-		} else if ip, err := netaddr.ParseIP(r.Addr); err == nil {
-			ret = append(ret, ip)
 		}
 	}
 	return ret

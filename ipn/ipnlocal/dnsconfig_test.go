@@ -259,10 +259,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			want: &dns.Config{
 				Hosts: map[dnsname.FQDN][]netaddr.IP{},
 				DefaultResolvers: []dnstype.Resolver{
-					{Addr: "8.8.8.8:53"},
+					{Addr: "8.8.8.8"},
 				},
 				Routes: map[dnsname.FQDN][]dnstype.Resolver{
-					"foo.com.": {{Addr: "1.2.3.4:53"}},
+					"foo.com.": {{Addr: "1.2.3.4"}},
 				},
 			},
 		},
@@ -283,7 +283,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
 				DefaultResolvers: []dnstype.Resolver{
-					{Addr: "8.8.4.4:53"},
+					{Addr: "8.8.4.4"},
 				},
 			},
 		},
