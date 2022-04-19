@@ -1636,9 +1636,21 @@ type SetDNSResponse struct{}
 // SSHPolicy is the policy for how to handle incoming SSH connections
 // over Tailscale.
 type SSHPolicy struct {
-	// Rules are the rules to process for an incoming SSH
-	// connection. The first matching rule takes its action and
-	// stops processing further rules.
+	// Rules are the rules to process for an incoming SSH connection. The first
+	// matching rule takes its action and stops processing further rules.
+	//
+	// When an incoming connection first starts, all rules are evaluated in
+	// "none" auth mode, where the client hasn't even been asked to send a
+	// public key. All SSHRule.Principals requiring a public key won't match. If
+	// a rule matches on the first pass and its Action is reject, the
+	// authentication fails with that action's rejection message, if any.
+	//
+	// If the first pass rule evaluation matches nothing without matching an
+	// Action with Reject set, the rules are considered to see whether public
+	// keys might still result in a match. If not, "none" auth is terminated
+	// before proceeding to public key mode. If so, the client is asked to try
+	// public key authentication and the rules are evaluated again for each of
+	// the client's present keys.
 	Rules []*SSHRule `json:"rules"`
 }
 
