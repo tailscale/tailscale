@@ -538,12 +538,17 @@ func (c *Client) tlsClient(nc net.Conn, node *tailcfg.DERPNode) *tls.Conn {
 	return tls.Client(nc, tlsConf)
 }
 
-func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tlsConn *tls.Conn, connClose io.Closer, err error) {
+// DialRegionTLS returns a TLS connection to a DERP node in the given region.
+//
+// DERP nodes for a region are tried in sequence according to their order
+// in the DERP map. TLS is initiated on the first node where a socket is
+// established.
+func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tlsConn *tls.Conn, connClose io.Closer, node *tailcfg.DERPNode, err error) {
 	tcpConn, node, err := c.dialRegion(ctx, reg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	done := make(chan bool) // unbufferd
+	done := make(chan bool) // unbuffered
 	defer close(done)
 
 	tlsConn = c.tlsClient(tcpConn, node)
@@ -556,13 +561,13 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 	}()
 	err = tlsConn.Handshake()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	select {
 	case done <- true:
-		return tlsConn, tcpConn, nil
+		return tlsConn, tcpConn, node, nil
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, nil, nil, ctx.Err()
 	}
 }
 
