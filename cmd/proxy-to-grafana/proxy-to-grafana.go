@@ -86,11 +86,12 @@ func main() {
 			for i := 0; i < 60; i++ {
 				st, err := tailscale.Status(context.Background())
 				if err != nil {
-					log.Fatal(err)
-				}
-				log.Printf("tailscale status: %v", st.BackendState)
-				if st.BackendState == "Running" {
-					break
+					log.Printf("error retrieving tailscale status; retrying: %v", err)
+				} else {
+					log.Printf("tailscale status: %v", st.BackendState)
+					if st.BackendState == "Running" {
+						break
+					}
 				}
 				time.Sleep(time.Second)
 			}
