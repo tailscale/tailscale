@@ -25,6 +25,7 @@ import (
 
 	dns "golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
@@ -48,6 +49,11 @@ const (
 	// connections open to DNS-over-HTTPs servers. This is pretty
 	// arbitrary.
 	dohTransportTimeout = 30 * time.Second
+
+	// dohTransportTimeout is how much of a head start to give a DoH query
+	// that was upgraded from a well-known public DNS provider's IP before
+	// normal UDP mode is attempted as a fallback.
+	dohHeadStart = 500 * time.Millisecond
 
 	// wellKnownHostBackupDelay is how long to artificially delay upstream
 	// DNS queries to the "fallback" DNS server IP for a known provider
@@ -228,65 +234,55 @@ func (f *forwarder) Close() error {
 	return nil
 }
 
-// resolversWithDelays maps from a set of DNS server names to a slice of
-// a type that included a startDelay. So if resolvers contains e.g. four
-// Google DNS IPs (two IPv4 + twoIPv6), this function partition adds
-// delays to some.
+// resolversWithDelays maps from a set of DNS server names to a slice of a type
+// that included a startDelay, upgrading any well-known DoH (DNS-over-HTTP)
+// servers in the process, insert a DoH lookup first before UDP fallbacks.
 func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
+	rr := make([]resolverAndDelay, 0, len(resolvers)+2)
+
+	// Add the known DoH ones first, starting immediately.
+	didDoH := map[string]bool{}
+	for _, r := range resolvers {
+		ipp, ok := r.IPPort()
+		if !ok {
+			continue
+		}
+		dohBase, ok := publicdns.KnownDoH()[ipp.IP()]
+		if !ok || didDoH[dohBase] {
+			continue
+		}
+		didDoH[dohBase] = true
+		rr = append(rr, resolverAndDelay{name: dnstype.Resolver{Addr: dohBase}})
+	}
+
 	type hostAndFam struct {
 		host string // some arbitrary string representing DNS host (currently the DoH base)
 		bits uint8  // either 32 or 128 for IPv4 vs IPv6s address family
 	}
-
-	// Track how many of each known resolver host are in the list,
-	// per address family.
-	total := map[hostAndFam]int{}
-
-	rr := make([]resolverAndDelay, len(resolvers))
-	for _, r := range resolvers {
-		if ip, err := netaddr.ParseIP(r.Addr); err == nil {
-			if host, ok := publicdns.KnownDoH()[ip]; ok {
-				total[hostAndFam{host, ip.BitLen()}]++
-			}
-		}
-	}
-
 	done := map[hostAndFam]int{}
-	for i, r := range resolvers {
-		var startDelay time.Duration
-		if ip, err := netaddr.ParseIP(r.Addr); err == nil {
-			if host, ok := publicdns.KnownDoH()[ip]; ok {
-				key4 := hostAndFam{host, 32}
-				key6 := hostAndFam{host, 128}
-				switch {
-				case ip.Is4():
-					if done[key4] > 0 {
-						startDelay += wellKnownHostBackupDelay
-					}
-				case ip.Is6():
-					total4 := total[key4]
-					if total4 >= 2 {
-						// If we have two IPv4 IPs of the same provider
-						// already in the set, delay the IPv6 queries
-						// until halfway through the timeout (so wait
-						// 2.5 seconds). Even the network is IPv6-only,
-						// the DoH dialer will fallback to IPv6
-						// immediately anyway.
-						startDelay = responseTimeout / 2
-					} else if total4 == 1 {
-						startDelay += wellKnownHostBackupDelay
-					}
-					if done[key6] > 0 {
-						startDelay += wellKnownHostBackupDelay
-					}
-				}
-				done[hostAndFam{host, ip.BitLen()}]++
-			}
+	for _, r := range resolvers {
+		ipp, ok := r.IPPort()
+		if !ok {
+			// Pass non-IP ones through unchanged, without delay.
+			// (e.g. DNS-over-ExitDNS when using an exit node)
+			rr = append(rr, resolverAndDelay{name: r})
+			continue
 		}
-		rr[i] = resolverAndDelay{
+		ip := ipp.IP()
+		var startDelay time.Duration
+		if host, ok := publicdns.KnownDoH()[ip]; ok {
+			// We already did the DoH query early. These
+			startDelay = dohHeadStart
+			key := hostAndFam{host, ip.BitLen()}
+			if done[key] > 0 {
+				startDelay += wellKnownHostBackupDelay
+			}
+			done[key]++
+		}
+		rr = append(rr, resolverAndDelay{
 			name:       r,
 			startDelay: startDelay,
-		}
+		})
 	}
 	return rr
 }
@@ -332,23 +328,6 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 		return nil, err
 	}
 	return lc, nil
-}
-
-// getKnownDoHClient returns an HTTP client for a DoH provider (such as Google
-// or Cloudflare DNS), as a function of one of its (usually four) IPs.
-//
-// The provided IP is only used to determine the DoH provider; it is not
-// prioritized among the set of IPs that are used by the provider.
-func (f *forwarder) getKnownDoHClient(ip netaddr.IP) (urlBase string, c *http.Client, ok bool) {
-	urlBase, ok = publicdns.KnownDoH()[ip]
-	if !ok {
-		return "", nil, false
-	}
-	c, ok = f.getKnownDoHClientForProvider(urlBase)
-	if !ok {
-		return "", nil, false
-	}
-	return urlBase, c, true
 }
 
 // getKnownDoHClientForProvider returns an HTTP client for a specific DoH
@@ -444,34 +423,43 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	return res, err
 }
 
+var verboseDNSForward = envknob.Bool("TS_DEBUG_DNS_FORWARD_SEND")
+
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
-func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) ([]byte, error) {
+func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
+	if verboseDNSForward {
+		f.logf("forwarder.send(%q) ...", rr.name.Addr)
+		defer func() {
+			f.logf("forwarder.send(%q) = %v, %v", rr.name.Addr, len(ret), err)
+		}()
+	}
 	if strings.HasPrefix(rr.name.Addr, "http://") {
 		return f.sendDoH(ctx, rr.name.Addr, f.dialer.PeerAPIHTTPClient(), fq.packet)
 	}
 	if strings.HasPrefix(rr.name.Addr, "https://") {
+		// Only known DoH providers are supported currently. Specifically, we
+		// only support DoH providers where we can TCP connect to them on port
+		// 443 at the same IP address they serve normal UDP DNS from (1.1.1.1,
+		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custon DoH providers
+		// aren't currently supported. There's no backup DNS resolution path for
+		// them.
+		urlBase := rr.name.Addr
+		if hc, ok := f.getKnownDoHClientForProvider(urlBase); ok {
+			return f.sendDoH(ctx, urlBase, hc, fq.packet)
+		}
 		metricDNSFwdErrorType.Add(1)
-		return nil, fmt.Errorf("https:// resolvers not supported yet")
+		return nil, fmt.Errorf("arbitrary https:// resolvers not supported yet")
 	}
 	if strings.HasPrefix(rr.name.Addr, "tls://") {
 		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
-	ipp, err := netaddr.ParseIPPort(rr.name.Addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Upgrade known DNS IPs to DoH (DNS-over-HTTPs).
-	// All known DoH is over port 53.
-	if urlBase, dc, ok := f.getKnownDoHClient(ipp.IP()); ok {
-		res, err := f.sendDoH(ctx, urlBase, dc, fq.packet)
-		if err == nil || ctx.Err() != nil {
-			return res, err
-		}
-		f.logf("DoH error from %v: %v", ipp.IP(), err)
+	ipp, ok := rr.name.IPPort()
+	if !ok {
+		metricDNSFwdErrorType.Add(1)
+		return nil, fmt.Errorf("unrecognized resolver type %q", rr.name.Addr)
 	}
 
 	metricDNSFwdUDP.Add(1)

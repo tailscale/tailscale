@@ -755,6 +755,9 @@ func TestDelegateCollision(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	if len(ans) == 0 {
+		t.Fatal("no answers")
+	}
 
 	var wantType dns.Type
 	switch ans[0].Body.(type) {

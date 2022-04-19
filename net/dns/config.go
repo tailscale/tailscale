@@ -84,10 +84,7 @@ func (c Config) hasDefaultIPResolversOnly() bool {
 		return false
 	}
 	for _, r := range c.DefaultResolvers {
-		if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil && ipp.Port() == 53 {
-			continue
-		}
-		if _, err := netaddr.ParseIP(r.Addr); err != nil {
+		if ipp, ok := r.IPPort(); !ok || ipp.Port() != 53 {
 			return false
 		}
 	}

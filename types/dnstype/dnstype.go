@@ -12,7 +12,9 @@ import "inet.af/netaddr"
 // Resolver is the configuration for one DNS resolver.
 type Resolver struct {
 	// Addr is the address of the DNS resolver, one of:
-	//  - A plain IP address for a "classic" UDP+TCP DNS resolver
+	//  - A plain IP address for a "classic" UDP+TCP DNS resolver.
+	//    This is the common format as sent by the control plane.
+	//  - An IP:port, for tests.
 	//  - [TODO] "tls://resolver.com" for DNS over TCP+TLS
 	//  - [TODO] "https://resolver.com/query-tmpl" for DNS over HTTPS
 	Addr string `json:",omitempty"`
@@ -26,7 +28,20 @@ type Resolver struct {
 	BootstrapResolution []netaddr.IP `json:",omitempty"`
 }
 
-// ResolverFromIP defines a Resolver for ip on port 53.
-func ResolverFromIP(ip netaddr.IP) Resolver {
-	return Resolver{Addr: netaddr.IPPortFrom(ip, 53).String()}
+// IPPort returns r.Addr as an IP address and port if either
+// r.Addr is an IP address (the common case) or if r.Addr
+// is an IP:port (as done in tests).
+func (r *Resolver) IPPort() (ipp netaddr.IPPort, ok bool) {
+	if r.Addr == "" || r.Addr[0] == 'h' || r.Addr[0] == 't' {
+		// Fast path to avoid ParseIP error allocation for obviously not IP
+		// cases.
+		return
+	}
+	if ip, err := netaddr.ParseIP(r.Addr); err == nil {
+		return netaddr.IPPortFrom(ip, 53), true
+	}
+	if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil {
+		return ipp, true
+	}
+	return
 }
