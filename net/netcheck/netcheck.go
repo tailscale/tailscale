@@ -979,13 +979,21 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 			// One warm-up one to get HTTP connection set
 			// up and get a connection from the browser's
 			// pool.
-			if _, err := http.DefaultClient.Do(req); err != nil {
-				c.logf("probing %s: %v", node.HostName, err)
+			if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode > 299 {
+				if err != nil {
+					c.logf("probing %s: %v", node.HostName, err)
+				} else {
+					c.logf("probing %s: unexpected status %s", node.HostName, r.Status)
+				}
 				return
 			}
 			t0 := c.timeNow()
-			if _, err := http.DefaultClient.Do(req); err != nil {
-				c.logf("probing %s: %v", node.HostName, err)
+			if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode > 299 {
+				if err != nil {
+					c.logf("probing %s: %v", node.HostName, err)
+				} else {
+					c.logf("probing %s: unexpected status %s", node.HostName, r.Status)
+				}
 				return
 			}
 			d := c.timeNow().Sub(t0)
@@ -1005,7 +1013,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	var ip netaddr.IP
 
 	dc := derphttp.NewNetcheckClient(c.logf)
-	tlsConn, tcpConn, err := dc.DialRegionTLS(ctx, reg)
+	tlsConn, tcpConn, node, err := dc.DialRegionTLS(ctx, reg)
 	if err != nil {
 		return 0, ip, err
 	}
@@ -1036,7 +1044,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	hc := &http.Client{Transport: tr}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://derp-unused-hostname.tld/derp/latency-check", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://" + node.HostName + "/derp/latency-check", nil)
 	if err != nil {
 		return 0, ip, err
 	}
@@ -1046,6 +1054,13 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 		return 0, ip, err
 	}
 	defer resp.Body.Close()
+
+	// DERPs should give us a nominal status code, so anything else is probably
+	// an access denied by a MITM proxy (or at the very least a signal not to
+	// trust this latency check).
+	if resp.StatusCode > 299 {
+		return 0, ip, fmt.Errorf("unexpected status code: %d (%s)", resp.StatusCode, resp.Status)
+	}
 
 	_, err = io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8<<10))
 	if err != nil {
