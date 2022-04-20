@@ -178,7 +178,7 @@ func TestMatchRule(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotUser, err := matchRule(tt.rule, tt.ci)
+			got, gotUser, err := matchRule(tt.rule, tt.ci, nil)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -215,10 +215,12 @@ func TestSSH(t *testing.T) {
 		lb:   lb,
 		logf: logf,
 	}
-	ss, err := srv.newSSHServer()
+	sc, err := srv.newConn()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Remove the auth checks for the test
+	sc.insecureSkipTailscaleAuth = true
 
 	u, err := user.Current()
 	if err != nil {
@@ -233,7 +235,7 @@ func TestSSH(t *testing.T) {
 		uprof:   &tailcfg.UserProfile{},
 	}
 
-	ss.Handler = func(s ssh.Session) {
+	sc.Handler = func(s ssh.Session) {
 		ss := srv.newSSHSession(s, ci, u)
 		ss.action = &tailcfg.SSHAction{Accept: true}
 		ss.run()
@@ -255,12 +257,13 @@ func TestSSH(t *testing.T) {
 				}
 				return
 			}
-			go ss.HandleConn(c)
+			go sc.HandleConn(c)
 		}
 	}()
 
 	execSSH := func(args ...string) *exec.Cmd {
 		cmd := exec.Command("ssh",
+			"-v",
 			"-p", fmt.Sprint(port),
 			"-o", "StrictHostKeyChecking=no",
 			"user@127.0.0.1")
@@ -276,7 +279,7 @@ func TestSSH(t *testing.T) {
 		cmd.Env = append(os.Environ(), "LOCAL_ENV=bar")
 		got, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal(err, string(got))
 		}
 		m := parseEnv(got)
 		if got := m["USER"]; got == "" || got != u.Username {
