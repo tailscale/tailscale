@@ -386,6 +386,14 @@ func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64,
 }
 
 func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
+	// Android for whatever reason often has problems creating the peerapi listener.
+	// But since we started intercepting it with netstack, it's not even important that
+	// we have a real kernel-level listener. So just create a dummy listener on Android
+	// and let netstack intercept it.
+	if runtime.GOOS == "android" {
+		return newFakePeerAPIListener(ip), nil
+	}
+
 	ipStr := ip.String()
 
 	var lc net.ListenConfig
@@ -1047,3 +1055,49 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 	w.Write(j)
 	return nil
 }
+
+// newFakePeerAPIListener creates a new net.Listener that acts like
+// it's listening on the provided IP address and on TCP port 1.
+//
+// See docs on fakePeerAPIListener.
+func newFakePeerAPIListener(ip netaddr.IP) net.Listener {
+	return &fakePeerAPIListener{
+		addr:   netaddr.IPPortFrom(ip, 1).TCPAddr(),
+		closed: make(chan struct{}),
+	}
+}
+
+// fakePeerAPIListener is a net.Listener that has an Addr method returning a TCPAddr
+// for a given IP on port 1 (arbitrary) and can be Closed, but otherwise Accept
+// just blocks forever until closed. The purpose of this is to let the rest
+// of the LocalBackend/PeerAPI code run and think it's talking to the kernel,
+// even if the kernel isn't cooperating (like on Android: Issue 4449, 4293, etc)
+// or we lack permission to listen on a port. It's okay to not actually listen via
+// the kernel because on almost all platforms (except iOS as of 2022-04-20) we
+// also intercept netstack TCP requests in to our peerapi port and hand it over
+// directly to peerapi, without involving the kernel. So this doesn't need to be
+// real. But the port number we return (1, in this case) is the port number we advertise
+// to peers and they connect to. 1 seems pretty safe to use. Even if the kernel's
+// using it, it doesn't matter, as we intercept it first in netstack and the kernel
+// never notices.
+//
+// Eventually we'll remove this code and do this on all platforms, when iOS also uses
+// netstack.
+type fakePeerAPIListener struct {
+	addr net.Addr
+
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (fl *fakePeerAPIListener) Close() error {
+	fl.closeOnce.Do(func() { close(fl.closed) })
+	return nil
+}
+
+func (fl *fakePeerAPIListener) Accept() (net.Conn, error) {
+	<-fl.closed
+	return nil, io.EOF
+}
+
+func (fl *fakePeerAPIListener) Addr() net.Addr { return fl.addr }
