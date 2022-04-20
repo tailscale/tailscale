@@ -406,3 +406,23 @@ func TestPublicKeyFetching(t *testing.T) {
 	}
 
 }
+
+func TestExpandPublicKeyURL(t *testing.T) {
+	ci := &sshConnInfo{
+		uprof: &tailcfg.UserProfile{
+			LoginName: "bar@baz.tld",
+		},
+	}
+	if got, want := ci.expandPublicKeyURL("foo"), "foo"; got != want {
+		t.Errorf("basic: got %q; want %q", got, want)
+	}
+	if got, want := ci.expandPublicKeyURL("https://example.com/$LOGINNAME_LOCALPART.keys"), "https://example.com/bar.keys"; got != want {
+		t.Errorf("localpart: got %q; want %q", got, want)
+	}
+	if got, want := ci.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email=bar@baz.tld"; got != want {
+		t.Errorf("email: got %q; want %q", got, want)
+	}
+	if got, want := new(sshConnInfo).expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email="; got != want {
+		t.Errorf("on empty: got %q; want %q", got, want)
+	}
+}

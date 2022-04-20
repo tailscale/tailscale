@@ -541,6 +541,22 @@ func (srv *server) expandDelegateURL(ci *sshConnInfo, lu *user.User, actionURL s
 	).Replace(actionURL)
 }
 
+func (ci *sshConnInfo) expandPublicKeyURL(pubKeyURL string) string {
+	if !strings.Contains(pubKeyURL, "$") {
+		return pubKeyURL
+	}
+	var localPart string
+	var loginName string
+	if ci.uprof != nil {
+		loginName = ci.uprof.LoginName
+		localPart, _, _ = strings.Cut(loginName, "@")
+	}
+	return strings.NewReplacer(
+		"$LOGINNAME_EMAIL", loginName,
+		"$LOGINNAME_LOCALPART", localPart,
+	).Replace(pubKeyURL)
+}
+
 // sshSession is an accepted Tailscale SSH session.
 type sshSession struct {
 	ssh.Session
@@ -1011,7 +1027,7 @@ func principalMatchesPubKey(p *tailcfg.SSHPrincipal, ci *sshConnInfo, clientPubK
 			return false, fmt.Errorf("no public key fetcher")
 		}
 		var err error
-		knownKeys, err = ci.fetchPublicKeysURL(knownKeys[0])
+		knownKeys, err = ci.fetchPublicKeysURL(ci.expandPublicKeyURL(knownKeys[0]))
 		if err != nil {
 			return false, err
 		}
