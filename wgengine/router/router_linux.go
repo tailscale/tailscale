@@ -1514,8 +1514,14 @@ func supportsV6NAT() bool {
 		// Can't read the file. Assume SNAT works.
 		return true
 	}
-
-	return bytes.Contains(bs, []byte("nat\n"))
+	if bytes.Contains(bs, []byte("nat\n")) {
+		return true
+	}
+	// In nftables mode, that proc file will be empty. Try another thing:
+	if exec.Command("modprobe", "ip6table_nat").Run() == nil {
+		return true
+	}
+	return false
 }
 
 func checkIPRuleSupportsV6(logf logger.Logf) error {
