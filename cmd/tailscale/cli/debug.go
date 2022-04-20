@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,9 +22,11 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 )
@@ -105,6 +108,11 @@ var debugCmd = &ffcli.Command{
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				return fs
 			})(),
+		},
+		{
+			Name:      "via",
+			Exec:      runVia,
+			ShortHelp: "convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
 		},
 	},
 }
@@ -347,4 +355,47 @@ func runDaemonMetrics(ctx context.Context, args []string) error {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+func runVia(ctx context.Context, args []string) error {
+	switch len(args) {
+	default:
+		return errors.New("expect either <site-id> <v4-cidr> or <v6-route>")
+	case 1:
+		ipp, err := netaddr.ParseIPPrefix(args[0])
+		if err != nil {
+			return err
+		}
+		if !ipp.IP().Is6() {
+			return errors.New("with one argument, expect an IPv6 CIDR")
+		}
+		if !tsaddr.TailscaleViaRange().Contains(ipp.IP()) {
+			return errors.New("not a via route")
+		}
+		if ipp.Bits() < 96 {
+			return errors.New("short length, want /96 or more")
+		}
+		v4 := tsaddr.UnmapVia(ipp.IP())
+		a := ipp.IP().As16()
+		siteID := binary.BigEndian.Uint32(a[8:12])
+		fmt.Printf("site %v (0x%x), %v\n", siteID, siteID, netaddr.IPPrefixFrom(v4, ipp.Bits()-96))
+	case 2:
+		siteID, err := strconv.ParseUint(args[0], 0, 32)
+		if err != nil {
+			return fmt.Errorf("invalid site-id %q; must be decimal or hex with 0x prefix", args[0])
+		}
+		if siteID > 0xff {
+			return fmt.Errorf("site-id values over 255 are currently reserved")
+		}
+		ipp, err := netaddr.ParseIPPrefix(args[1])
+		if err != nil {
+			return err
+		}
+		via, err := tsaddr.MapVia(uint32(siteID), ipp)
+		if err != nil {
+			return err
+		}
+		fmt.Println(via)
+	}
+	return nil
 }
