@@ -382,6 +382,7 @@ func TestResolveLocalReverse(t *testing.T) {
 		{"ipv6_nxdomain", dnsname.FQDN("0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.0.0.0.ip6.arpa."), "", dns.RCodeNameError},
 		{"nxdomain", dnsname.FQDN("2.3.4.5.in-addr.arpa."), "", dns.RCodeRefused},
 		{"magicdns", dnsname.FQDN("100.100.100.100.in-addr.arpa."), dnsSymbolicFQDN, dns.RCodeSuccess},
+		{"ipv6_4to6", dnsname.FQDN("4.6.4.6.4.6.2.6.6.9.d.c.3.4.8.4.2.1.b.a.0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."), dnsSymbolicFQDN, dns.RCodeSuccess},
 	}
 
 	for _, tt := range tests {

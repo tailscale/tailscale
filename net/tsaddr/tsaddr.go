@@ -128,6 +128,18 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 	return netaddr.IPFrom16(ret)
 }
 
+// Tailscale6to4 returns the IPv4 address corresponding to the given
+// tailscale IPv6 address within the 4To6 range. The IPv4 address
+// and true are returned if the given address was in the correct range,
+// false if not.
+func Tailscale6to4(ipv6 netaddr.IP) (netaddr.IP, bool) {
+	if !ipv6.Is6() || !Tailscale4To6Range().Contains(ipv6) {
+		return netaddr.IP{}, false
+	}
+	v6 := ipv6.As16()
+	return netaddr.IPv4(100, v6[13], v6[14], v6[15]), true
+}
+
 func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 	var err error
 	*v, err = netaddr.ParseIPPrefix(prefix)

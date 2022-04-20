@@ -725,6 +725,22 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 		return "", dns.RCodeRefused
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// If the requested IP is part of the IPv6 4-to-6 range, it might
+	// correspond to an IPv4 address (assuming IPv4 is enabled).
+	if ip4, ok := tsaddr.Tailscale6to4(ip); ok {
+		fqdn, code := r.fqdnForIPLocked(ip4, name)
+		if code == dns.RCodeSuccess {
+			return fqdn, code
+		}
+	}
+	return r.fqdnForIPLocked(ip, name)
+}
+
+// r.mu must be held.
+func (r *Resolver) fqdnForIPLocked(ip netaddr.IP, name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
 	// If someone curiously does a reverse lookup on the DNS IP, we
 	// return a domain that helps indicate that Tailscale is using
 	// this IP for a special purpose and it is not a node on their
@@ -733,8 +749,6 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 		return dnsSymbolicFQDN, dns.RCodeSuccess
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	ret, ok := r.ipToHost[ip]
 	if !ok {
 		for _, suffix := range r.localDomains {
