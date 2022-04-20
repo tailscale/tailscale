@@ -112,11 +112,18 @@ func addrType(addrs []route.Addr, rtaxType int) route.Addr {
 	return nil
 }
 
+func (m *darwinRouteMon) IsInterestingInterface(iface string) bool {
+	baseName := strings.TrimRight(iface, "0123456789")
+	switch baseName {
+	case "llw", "awdl", "pdp_ip", "ipsec":
+		return false
+	}
+	return true
+}
+
 func (m *darwinRouteMon) skipInterfaceAddrMessage(msg *route.InterfaceAddrMessage) bool {
 	if la, ok := addrType(msg.Addrs, unix.RTAX_IFP).(*route.LinkAddr); ok {
-		baseName := strings.TrimRight(la.Name, "0123456789")
-		switch baseName {
-		case "llw", "awdl", "pdp_ip", "ipsec":
+		if !m.IsInterestingInterface(la.Name) {
 			return true
 		}
 	}
