@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 
@@ -72,6 +73,12 @@ func main() {
 		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
 			log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
+			return
+		}
+
+		if expectedTailnet := r.Header.Get("Expected-Tailnet"); expectedTailnet != "" && expectedTailnet != tailnet {
+			w.WriteHeader(http.StatusForbidden)
+			log.Printf("user is part of tailnet %s, wanted: %s", tailnet, url.QueryEscape(expectedTailnet))
 			return
 		}
 

@@ -117,10 +117,32 @@ header.
 
 The `Tailscale-Tailnet` header can help you identify which tailnet the session
 is coming from. If you are using node sharing, this can help you make sure that
-you aren't giving administrative access to people outside your tailnet. You will
-need to be sure to check this in your application code. If you use OpenResty,
-you may be able to do more complicated access controls than you can with NGINX
-alone.
+you aren't giving administrative access to people outside your tailnet.
+
+### Allow Requests From Only One Tailnet
+
+If you want to prevent node sharing from allowing users to access a service, add
+the `Expected-Tailnet` header to your auth request:
+
+```nginx
+location /auth {
+  # ...
+  proxy_set_header Expected-Tailnet "tailscale.com";
+}
+```
+
+If a user from a different tailnet tries to use that service, this will return a
+generic "forbidden" error page:
+
+```html
+<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>nginx/1.18.0 (Ubuntu)</center>
+</body>
+</html>
+```
 
 ## Building
 
