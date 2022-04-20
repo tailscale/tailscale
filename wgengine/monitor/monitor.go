@@ -316,8 +316,9 @@ func (m *Mon) debounce() {
 				m.ifState = curState
 
 				if s1, s2 := oldState.String(), curState.String(); s1 == s2 {
-					m.logf("[unexpected] network state changed, but stringification didn't: %v\nold: %s\nnew: %s\n", s1,
-						jsonSummary(oldState), jsonSummary(curState))
+					m.logf("[unexpected] network state changed, but stringification didn't: %v", s1)
+					m.logf("[unexpected] old: %s", jsonSummary(oldState))
+					m.logf("[unexpected] new: %s", jsonSummary(curState))
 				}
 			}
 			// See if we have a queued or new time jump signal.
