@@ -436,8 +436,15 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 			return ln, nil
 		}
 	}
-	// Fall back to random ephemeral port.
-	return lc.Listen(context.Background(), tcp4or6, net.JoinHostPort(ipStr, "0"))
+	// Fall back to some random ephemeral port.
+	ln, err = lc.Listen(context.Background(), tcp4or6, net.JoinHostPort(ipStr, "0"))
+
+	// And if we're on a platform with netstack (anything but iOS), then just fallback to netstack.
+	if err != nil && runtime.GOOS != "ios" {
+		s.b.logf("peerapi: failed to do peerAPI listen, harmless (netstack available) but error was: %v", err)
+		return newFakePeerAPIListener(ip), nil
+	}
+	return ln, err
 }
 
 type peerAPIListener struct {
