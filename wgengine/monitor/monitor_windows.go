@@ -72,6 +72,8 @@ func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 	return m, nil
 }
 
+func (m *winMon) IsInterestingInterface(iface string) bool { return true }
+
 func (m *winMon) Close() (ret error) {
 	m.cancel()
 	m.noDeadlockTicker.Stop()

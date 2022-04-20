@@ -42,6 +42,10 @@ type osMon interface {
 	// until the osMon is closed. After a Close, the returned
 	// error is ignored.
 	Receive() (message, error)
+
+	// IsInterestingInterface reports whether the provided interface should
+	// be considered for network change events.
+	IsInterestingInterface(iface string) bool
 }
 
 // ChangeFunc is a callback function that's called when the network
@@ -282,6 +286,13 @@ func (m *Mon) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 	}
 }
 
+// isInterestingInterface reports whether the provided interface should be
+// considered when checking for network state changes.
+// The ips parameter should be the IPs of the provided interface.
+func (m *Mon) isInterestingInterface(i interfaces.Interface, ips []netaddr.IPPrefix) bool {
+	return m.om.IsInterestingInterface(i.Name) && interfaces.UseInterestingInterfaces(i, ips)
+}
+
 // debounce calls the callback function with a delay between events
 // and exits when a stop is issued.
 func (m *Mon) debounce() {
@@ -299,7 +310,7 @@ func (m *Mon) debounce() {
 			m.mu.Lock()
 
 			oldState := m.ifState
-			changed := !curState.EqualFiltered(oldState, interfaces.UseInterestingInterfaces, interfaces.UseInterestingIPs)
+			changed := !curState.EqualFiltered(oldState, m.isInterestingInterface, interfaces.UseInterestingIPs)
 			if changed {
 				m.gwValid = false
 				m.ifState = curState

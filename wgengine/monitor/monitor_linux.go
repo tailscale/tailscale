@@ -64,6 +64,8 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netaddr.IP]bool)}, nil
 }
 
+func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
+
 func (c *nlConn) Close() error { return c.conn.Close() }
 
 func (c *nlConn) Receive() (message, error) {
