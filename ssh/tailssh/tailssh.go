@@ -43,8 +43,8 @@ import (
 )
 
 var (
-	debugPolicyFile             = envknob.String("TS_DEBUG_SSH_POLICY_FILE")
-	debugIgnoreTailnetSSHPolicy = envknob.Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY")
+	debugPolicyFile             = envknob.SSHPolicyFile()
+	debugIgnoreTailnetSSHPolicy = envknob.SSHIgnoreTailnetPolicy()
 	sshVerboseLogging           = envknob.Bool("TS_DEBUG_SSH_VLOG")
 )
 

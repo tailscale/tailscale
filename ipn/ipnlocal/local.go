@@ -1808,6 +1808,10 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 		if !canSSH {
 			return errors.New("The Tailscale SSH server has been administratively disabled.")
 		}
+		if b.netMap != nil && b.netMap.SSHPolicy == nil &&
+			envknob.SSHPolicyFile() == "" && !envknob.SSHIgnoreTailnetPolicy() {
+			return errors.New("Unable to enable local Tailscale SSH server; not enabled/configured on Tailnet.")
+		}
 	}
 	return nil
 }
