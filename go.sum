@@ -1828,10 +1828,6 @@ inet.af/peercred v0.0.0-20210906144145-0893ea02156a h1:qdkS8Q5/i10xU2ArJMKYhVa1D
 inet.af/peercred v0.0.0-20210906144145-0893ea02156a/go.mod h1:FjawnflS/udxX+SvpsMgZfdqx2aykOlkISeAsADi5IU=
 inet.af/wf v0.0.0-20211204062712-86aaea0a7310 h1:0jKHTf+W75kYRyg5bto1UT+r18QmAz2u/5pAs/fx4zo=
 inet.af/wf v0.0.0-20211204062712-86aaea0a7310/go.mod h1:ViGMZRA6+RA318D7GCncrjv5gHUrPYrNDejjU12tikA=
-kernel.org/pub/linux/libs/security/libcap/cap v1.2.64 h1:E1U4GNGSXEdzQUT+mop0iYawCNXDUU46Y8nfodb+ZY0=
-kernel.org/pub/linux/libs/security/libcap/cap v1.2.64/go.mod h1:gtBlgvjXflnxHng9/3bXyXG3XmBYKDt35zu+lNmB+IA=
-kernel.org/pub/linux/libs/security/libcap/psx v1.2.64 h1:zlw/KoDjEObyddpFcvLiuu8frEvyEwVNc62WZQBp68w=
-kernel.org/pub/linux/libs/security/libcap/psx v1.2.64/go.mod h1:+l6Ee2F59XiJ2I6WR5ObpC1utCQJZ/VLsEbQCD8RG24=
 mvdan.cc/gofumpt v0.0.0-20200802201014-ab5a8192947d/go.mod h1:bzrjFmaD6+xqohD3KYP0H2FEuxknnBmyyOxdhLdaIws=
 mvdan.cc/gofumpt v0.0.0-20201129102820-5c11c50e9475/go.mod h1:E4LOcu9JQEtnYXtB1Y51drqh2Qr2Ngk9J3YrRCwcbd0=
 mvdan.cc/gofumpt v0.1.1/go.mod h1:yXG1r1WqZVKWbVRtBWKWX9+CxGYfA51nSomhM0woR48=

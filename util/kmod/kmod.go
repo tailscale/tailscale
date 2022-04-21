@@ -26,7 +26,6 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
-	"kernel.org/pub/linux/libs/security/libcap/cap"
 	"pault.ag/go/modprobe"
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/multierr"
@@ -65,16 +64,12 @@ func hasKernelModule(name string) (bool, error) {
 // result of true implies that it may be worth trying to install a module, not
 // that doing so will work.
 func canInstallModule() (bool, error) {
-	caps, err := cap.GetPID(0) // 0 = current process
-	if err == nil {
-		// errors from GetFlag are either due to the receiver being
-		// uninitialized, or the kernel gave junk results, both of which aren't
-		// very meaningful out of context to a user, so this error is mostly
-		// ignored.
-		b, err := caps.GetFlag(cap.Effective, cap.SYS_MODULE)
-		if err == nil {
-			return b, nil
-		}
+	var capData unix.CapUserData
+	if unix.Capget(&unix.CapUserHeader{
+		Version: 0x20080522, // V3 added in Linux 2.6.26
+		Pid:     0,          // current
+	}, &capData) == nil {
+		return capData.Effective&unix.CAP_SYS_MODULE != 0, nil
 	}
 
 	// could not determine a well known result from capabilities, make an
