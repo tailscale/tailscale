@@ -348,6 +348,9 @@ func TestResolveLocal(t *testing.T) {
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
 		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netaddr.MustParseIP("100.100.100.100"), dns.RCodeSuccess},
+		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:102:304"), dns.RCodeSuccess},
+		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:a00:1"), dns.RCodeSuccess},
+		{"via_invalid", dnsname.FQDN("via-."), dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
