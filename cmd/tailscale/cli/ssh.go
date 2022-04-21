@@ -24,6 +24,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/version"
 )
 
 var sshCmd = &ffcli.Command{
@@ -104,8 +105,8 @@ func runSSH(ctx context.Context, args []string) error {
 		username + "@" + hostForSSH,
 	}, argRest...)
 
-	if runtime.GOOS == "windows" {
-		// Don't use syscall.Exec on Windows.
+	if runtime.GOOS == "windows" || version.IsSandboxedMacOS() {
+		// Don't use syscall.Exec on Windows or in the macOS sandbox.
 		cmd := exec.Command(ssh, argv[1:]...)
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
