@@ -1706,6 +1706,10 @@ type SSHPrincipal struct {
 	//
 	// As a special case, if len(PubKeys) == 1 and PubKeys[0] starts
 	// with "https://", then it's fetched (like https://github.com/username.keys).
+	// In that case, the following variable expansions are also supported
+	// in the URL:
+	//   * $LOGINNAME_EMAIL ("foo@bar.com" or "foo@github")
+	//   * $LOGINNAME_LOCALPART (the "foo" from either of the above)
 	PubKeys []string `json:"pubKeys,omitempty"`
 }
 
