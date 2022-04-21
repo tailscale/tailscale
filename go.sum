@@ -1447,7 +1447,6 @@ golang.org/x/sys v0.0.0-20210220050731-9a76102bfb43/go.mod h1:h1NjWce9XRLGQEsW7w
 golang.org/x/sys v0.0.0-20210301091718-77cc2087c03b/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210303074136-134d130e1a04/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210305230114-8fe3ee5dd75b/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
-golang.org/x/sys v0.0.0-20210309074719-68d13333faf2/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210315160823-c6e025ad8005/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210320140829-1e4c9ba3b0c4/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210324051608-47abb6519492/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
@@ -1828,10 +1827,6 @@ inet.af/peercred v0.0.0-20210906144145-0893ea02156a h1:qdkS8Q5/i10xU2ArJMKYhVa1D
 inet.af/peercred v0.0.0-20210906144145-0893ea02156a/go.mod h1:FjawnflS/udxX+SvpsMgZfdqx2aykOlkISeAsADi5IU=
 inet.af/wf v0.0.0-20211204062712-86aaea0a7310 h1:0jKHTf+W75kYRyg5bto1UT+r18QmAz2u/5pAs/fx4zo=
 inet.af/wf v0.0.0-20211204062712-86aaea0a7310/go.mod h1:ViGMZRA6+RA318D7GCncrjv5gHUrPYrNDejjU12tikA=
-kernel.org/pub/linux/libs/security/libcap/cap v1.2.64 h1:E1U4GNGSXEdzQUT+mop0iYawCNXDUU46Y8nfodb+ZY0=
-kernel.org/pub/linux/libs/security/libcap/cap v1.2.64/go.mod h1:gtBlgvjXflnxHng9/3bXyXG3XmBYKDt35zu+lNmB+IA=
-kernel.org/pub/linux/libs/security/libcap/psx v1.2.64 h1:zlw/KoDjEObyddpFcvLiuu8frEvyEwVNc62WZQBp68w=
-kernel.org/pub/linux/libs/security/libcap/psx v1.2.64/go.mod h1:+l6Ee2F59XiJ2I6WR5ObpC1utCQJZ/VLsEbQCD8RG24=
 mvdan.cc/gofumpt v0.0.0-20200802201014-ab5a8192947d/go.mod h1:bzrjFmaD6+xqohD3KYP0H2FEuxknnBmyyOxdhLdaIws=
 mvdan.cc/gofumpt v0.0.0-20201129102820-5c11c50e9475/go.mod h1:E4LOcu9JQEtnYXtB1Y51drqh2Qr2Ngk9J3YrRCwcbd0=
 mvdan.cc/gofumpt v0.1.1/go.mod h1:yXG1r1WqZVKWbVRtBWKWX9+CxGYfA51nSomhM0woR48=
@@ -1847,10 +1842,6 @@ mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca h1:xzXXnoG5a3NUnKAcVMpE2cs3+
 mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca/go.mod h1:Mb96j26qXgU/+SOj6MSgC36X30UgAlRYaxckYuYyEmo=
 nhooyr.io/websocket v1.8.7 h1:usjR2uOr/zjjkVMy0lW+PPohFok7PCow5sDjLgX4P4g=
 nhooyr.io/websocket v1.8.7/go.mod h1:B70DZP8IakI65RVQ51MsWP/8jndNma26DVA/nFSCgW0=
-pault.ag/go/modprobe v0.1.2 h1:bblunaPhqpTxGDJ5TVFW/4gheohBPleF2dIV6j6sWkI=
-pault.ag/go/modprobe v0.1.2/go.mod h1:afr2STC/2Maz/qi4+Bma1s0dszZgO/PcM8AKar9DWhM=
-pault.ag/go/topsort v0.0.0-20160530003732-f98d2ad46e1a h1:WwS7vlB5H2AtwKj1jsGwp2ZLud1x6WXRXh2fXsRqrcA=
-pault.ag/go/topsort v0.0.0-20160530003732-f98d2ad46e1a/go.mod h1:INqx0ClF7kmPAMk2zVTX8DRnhZ/yaA/Mg52g8KFKE7k=
 rsc.io/binaryregexp v0.2.0/go.mod h1:qTv7/COck+e2FymRvadv62gMdZztPaShugOCi3I+8D8=
 rsc.io/quote/v3 v3.1.0/go.mod h1:yEA65RcK8LyAZtP9Kv3t0HmxON59tX3rD+tICJqUlj0=
 rsc.io/sampler v1.3.0/go.mod h1:T1hPZKmBbMNahiBKFy5HrXp6adAjACjK9JXDnKaTXpA=
