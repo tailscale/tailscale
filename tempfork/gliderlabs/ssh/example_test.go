@@ -1,6 +1,7 @@
 package ssh_test
 
 import (
+	"errors"
 	"io"
 	"io/ioutil"
 
@@ -27,10 +28,19 @@ func ExampleNoPty() {
 
 func ExamplePublicKeyAuth() {
 	ssh.ListenAndServe(":2222", nil,
-		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
-			data, _ := ioutil.ReadFile("/path/to/allowed/key.pub")
-			allowed, _, _, _, _ := ssh.ParseAuthorizedKey(data)
-			return ssh.KeysEqual(key, allowed)
+		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) error {
+			data, err := ioutil.ReadFile("/path/to/allowed/key.pub")
+			if err != nil {
+				return err
+			}
+			allowed, _, _, _, err := ssh.ParseAuthorizedKey(data)
+			if err != nil {
+				return err
+			}
+			if !ssh.KeysEqual(key, allowed) {
+				return errors.New("some error")
+			}
+			return nil
 		}),
 	)
 }

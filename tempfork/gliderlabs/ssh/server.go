@@ -144,8 +144,8 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 	if srv.PublicKeyHandler != nil {
 		config.PublicKeyCallback = func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
 			applyConnMetadata(ctx, conn)
-			if ok := srv.PublicKeyHandler(ctx, key); !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+			if err := srv.PublicKeyHandler(ctx, key); err != nil {
+				return ctx.Permissions().Permissions, err
 			}
 			ctx.SetValue(ContextKeyPublicKey, key)
 			return ctx.Permissions().Permissions, nil

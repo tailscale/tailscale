@@ -63,7 +63,7 @@ func TestMatchRule(t *testing.T) {
 				Action:      someAction,
 				RuleExpires: timePtr(time.Unix(100, 0)),
 			},
-			ci:      &sshConnInfo{now: time.Unix(200, 0)},
+			ci:      &sshConnInfo{},
 			wantErr: errRuleExpired,
 		},
 		{
@@ -178,7 +178,11 @@ func TestMatchRule(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotUser, err := matchRule(tt.rule, tt.ci, nil)
+			c := &conn{
+				now:  time.Unix(200, 0),
+				info: tt.ci,
+			}
+			got, gotUser, err := c.matchRule(tt.rule, nil)
 			if err != tt.wantErr {
 				t.Errorf("err = %v; want %v", err, tt.wantErr)
 			}
@@ -226,8 +230,8 @@ func TestSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	ci := &sshConnInfo{
+	sc.localUser = u
+	sc.info = &sshConnInfo{
 		sshUser: "test",
 		src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
 		dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
@@ -236,9 +240,7 @@ func TestSSH(t *testing.T) {
 	}
 
 	sc.Handler = func(s ssh.Session) {
-		ss := srv.newSSHSession(s, ci, u)
-		ss.action = &tailcfg.SSHAction{Accept: true}
-		ss.run()
+		sc.newSSHSession(s, &tailcfg.SSHAction{Accept: true}).run()
 	}
 
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -408,21 +410,24 @@ func TestPublicKeyFetching(t *testing.T) {
 }
 
 func TestExpandPublicKeyURL(t *testing.T) {
-	ci := &sshConnInfo{
-		uprof: &tailcfg.UserProfile{
-			LoginName: "bar@baz.tld",
+	c := &conn{
+		info: &sshConnInfo{
+			uprof: &tailcfg.UserProfile{
+				LoginName: "bar@baz.tld",
+			},
 		},
 	}
-	if got, want := ci.expandPublicKeyURL("foo"), "foo"; got != want {
+	if got, want := c.expandPublicKeyURL("foo"), "foo"; got != want {
 		t.Errorf("basic: got %q; want %q", got, want)
 	}
-	if got, want := ci.expandPublicKeyURL("https://example.com/$LOGINNAME_LOCALPART.keys"), "https://example.com/bar.keys"; got != want {
+	if got, want := c.expandPublicKeyURL("https://example.com/$LOGINNAME_LOCALPART.keys"), "https://example.com/bar.keys"; got != want {
 		t.Errorf("localpart: got %q; want %q", got, want)
 	}
-	if got, want := ci.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email=bar@baz.tld"; got != want {
+	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email=bar@baz.tld"; got != want {
 		t.Errorf("email: got %q; want %q", got, want)
 	}
-	if got, want := new(sshConnInfo).expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email="; got != want {
+	c.info = new(sshConnInfo)
+	if got, want := c.expandPublicKeyURL("https://example.com/keys?email=$LOGINNAME_EMAIL"), "https://example.com/keys?email="; got != want {
 		t.Errorf("on empty: got %q; want %q", got, want)
 	}
 }

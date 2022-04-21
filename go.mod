@@ -40,7 +40,7 @@ require (
 	github.com/tailscale/certstore v0.1.1-0.20220316223106-78d6e1c49d8d
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
 	github.com/tailscale/goexpect v0.0.0-20210902213824-6e8c725cea41
-	github.com/tailscale/golang-x-crypto v0.0.0-20220420170900-3a580d9e7b34
+	github.com/tailscale/golang-x-crypto v0.0.0-20220420224200-c602b5dfaa7f
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20211105212140-3a0adc019d83
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
