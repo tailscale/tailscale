@@ -431,3 +431,22 @@ func TestExpandPublicKeyURL(t *testing.T) {
 		t.Errorf("on empty: got %q; want %q", got, want)
 	}
 }
+
+func TestAcceptEnvPair(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"TERM=x", true},
+		{"term=x", false},
+		{"TERM", false},
+		{"LC_FOO=x", true},
+		{"LD_PRELOAD=naah", false},
+		{"TERM=screen-256color", true},
+	}
+	for _, tt := range tests {
+		if got := acceptEnvPair(tt.in); got != tt.want {
+			t.Errorf("for %q, got %v; want %v", tt.in, got, tt.want)
+		}
+	}
+}

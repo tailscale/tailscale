@@ -220,7 +220,11 @@ func (ss *sshSession) launchProcess() error {
 	cmd := ss.cmd
 	cmd.Dir = ss.conn.localUser.HomeDir
 	cmd.Env = append(cmd.Env, envForUser(ss.conn.localUser)...)
-	cmd.Env = append(cmd.Env, ss.Environ()...)
+	for _, kv := range ss.Environ() {
+		if acceptEnvPair(kv) {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
 
 	ci := ss.conn.info
 	cmd.Env = append(cmd.Env,
@@ -492,4 +496,15 @@ func updateStringInSlice(ss []string, a, b string) {
 			return
 		}
 	}
+}
+
+// acceptEnvPair reports whether the environment variable key=value pair
+// should be accepted from the client. It uses the same default as OpenSSH
+// AcceptEnv.
+func acceptEnvPair(kv string) bool {
+	k, _, ok := strings.Cut(kv, "=")
+	if !ok {
+		return false
+	}
+	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
 }
