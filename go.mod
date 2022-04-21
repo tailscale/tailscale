@@ -63,9 +63,7 @@ require (
 	inet.af/netaddr v0.0.0-20211027220019-c74959edd3b6
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/wf v0.0.0-20211204062712-86aaea0a7310
-	kernel.org/pub/linux/libs/security/libcap/cap v1.2.64
 	nhooyr.io/websocket v1.8.7
-	pault.ag/go/modprobe v0.1.2
 )
 
 require (
@@ -262,11 +260,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	howett.net/plist v1.0.0 // indirect
-	kernel.org/pub/linux/libs/security/libcap/psx v1.2.64 // indirect
 	mvdan.cc/gofumpt v0.2.0 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
 	mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca // indirect
-	pault.ag/go/topsort v0.0.0-20160530003732-f98d2ad46e1a // indirect
 	software.sslmate.com/src/go-pkcs12 v0.0.0-20210415151418-c5206de65a78 // indirect
 )

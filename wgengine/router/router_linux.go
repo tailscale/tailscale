@@ -27,13 +27,10 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/util/kmod"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine/monitor"
 )
-
-var disableModprobe = envknob.Bool("TS_DISABLE_MODPROBE")
 
 const (
 	netfilterOff      = preftype.NetfilterOff
@@ -175,14 +172,6 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 		} else {
 			r.logf("[v1] policy routing available; found %d rules", len(rules))
 			r.ipRuleAvailable = true
-		}
-	}
-
-	if !disableModprobe {
-		// xt_mark is required, so attempt to load it, and log errors that occur.
-		_, err := kmod.EnsureModule("xt_mark")
-		if err != nil {
-			r.logf("ensure module xt_mark: %s", err)
 		}
 	}
 
