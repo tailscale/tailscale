@@ -221,7 +221,7 @@ func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 func (srv *server) newConn() (*conn, error) {
 	c := &conn{srv: srv, now: srv.now()}
 	c.Server = &ssh.Server{
-		Version:           "SSH-2.0-Tailscale",
+		Version:           "Tailscale",
 		Handler:           c.handleConnPostSSHAuth,
 		RequestHandlers:   map[string]ssh.RequestHandler{},
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{},
