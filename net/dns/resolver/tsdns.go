@@ -17,6 +17,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -633,6 +634,10 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 			return tsaddr.TailscaleServiceIPv6(), dns.RCodeSuccess
 		}
 	}
+	// Special-case: 'via-<siteid>.<ipv4>' queries.
+	if ip, ok := r.parseViaDomain(domain, typ); ok {
+		return ip, dns.RCodeSuccess
+	}
 
 	r.mu.Lock()
 	hosts := r.hostToIP
@@ -706,6 +711,46 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 		// The name exists, but no records exist of the requested type.
 		return netaddr.IP{}, dns.RCodeSuccess
 	}
+}
+
+// parseViaDomain synthesizes an IP address for quad-A DNS requests of
+// the form 'via-<X>.<IPv4-address>', where X is a decimal, or hex-encoded
+// number with a '0x' prefix.
+//
+// This exists as a convenient mapping into Tailscales 'Via Range'.
+func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, bool) {
+	fqdn := string(domain.WithoutTrailingDot())
+	if typ != dns.TypeAAAA {
+		return netaddr.IP{}, false
+	}
+	if len(fqdn) < len("via-X.0.0.0.0") {
+		return netaddr.IP{}, false // too short to be valid
+	}
+	if !strings.HasPrefix(fqdn, "via-") {
+		return netaddr.IP{}, false
+	}
+
+	firstDot := strings.Index(fqdn, ".")
+	if firstDot < 0 {
+		return netaddr.IP{}, false // missing dot delimiters
+	}
+
+	siteID := fqdn[len("via-"):firstDot]
+	ip4Str := fqdn[firstDot+1:]
+
+	ip4, err := netaddr.ParseIP(ip4Str)
+	if err != nil {
+		return netaddr.IP{}, false // badly formed, dont respond
+	}
+
+	prefix, err := strconv.ParseUint(siteID, 0, 32)
+	if err != nil {
+		return netaddr.IP{}, false // badly formed, dont respond
+	}
+
+	// MapVia will never error when given an ipv4 netaddr.IPPrefix.
+	out, _ := tsaddr.MapVia(uint32(prefix), netaddr.IPPrefixFrom(ip4, ip4.BitLen()))
+	return out.IP(), true
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
