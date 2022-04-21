@@ -976,7 +976,10 @@ func (c *conn) matchRule(r *tailcfg.SSHRule, pubKey gossh.PublicKey) (a *tailcfg
 	if c.ruleExpired(r) {
 		return nil, "", errRuleExpired
 	}
-	if !r.Action.Reject || r.SSHUsers != nil {
+	if !r.Action.Reject {
+		// For all but Reject rules, SSHUsers is required.
+		// If SSHUsers is nil or empty, mapLocalUser will return an
+		// empty string anyway.
 		localUser = mapLocalUser(r.SSHUsers, c.info.sshUser)
 		if localUser == "" {
 			return nil, "", errUserMatch
