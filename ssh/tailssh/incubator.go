@@ -24,6 +24,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -93,6 +94,8 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 		"be-child",
 		"ssh",
 		"--uid=" + lu.Uid,
+		"--gid=" + lu.Gid,
+		"--groups=" + strings.Join(ss.conn.userGroupIDs, ","),
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.IP().String(),
@@ -141,6 +144,8 @@ func beIncubator(args []string) error {
 	var (
 		flags      = flag.NewFlagSet("", flag.ExitOnError)
 		uid        = flags.Uint64("uid", 0, "the uid of local-user")
+		gid        = flags.Int("gid", 0, "the gid of local-user")
+		groups     = flags.String("groups", "", "comma-separated list of gids of local-user")
 		localUser  = flags.String("local-user", "", "the user to run as")
 		remoteUser = flags.String("remote-user", "", "the remote user/tags")
 		remoteIP   = flags.String("remote-ip", "", "the remote Tailscale IP")
@@ -170,6 +175,23 @@ func beIncubator(args []string) error {
 	sessionCloser, err := maybeStartLoginSession(logf, uint32(*uid), *localUser, *remoteUser, *remoteIP, *ttyName)
 	if err == nil && sessionCloser != nil {
 		defer sessionCloser()
+	}
+	var groupIDs []int
+	for _, g := range strings.Split(*groups, ",") {
+		gid, err := strconv.ParseInt(g, 10, 32)
+		if err != nil {
+			return err
+		}
+		groupIDs = append(groupIDs, int(gid))
+	}
+	if err := syscall.Setgroups(groupIDs); err != nil {
+		return err
+	}
+	if egid := os.Getegid(); egid != *gid {
+		if err := syscall.Setgid(int(*gid)); err != nil {
+			logf(err.Error())
+			os.Exit(1)
+		}
 	}
 	if euid != *uid {
 		// Switch users if required before starting the desired process.

@@ -118,10 +118,11 @@ type conn struct {
 	// purposes of rule evaluation.
 	now time.Time
 
-	action0   *tailcfg.SSHAction // first matching action
-	srv       *server
-	info      *sshConnInfo // set by setInfo
-	localUser *user.User   // set by checkAuth
+	action0      *tailcfg.SSHAction // first matching action
+	srv          *server
+	info         *sshConnInfo // set by setInfo
+	localUser    *user.User   // set by checkAuth
+	userGroupIDs []string     // set by checkAuth
 
 	insecureSkipTailscaleAuth bool // used by tests.
 }
@@ -191,6 +192,11 @@ func (c *conn) checkAuth(pubKey ssh.PublicKey) error {
 				Message: fmt.Sprintf("failed to lookup %v\r\n", localUser),
 			}
 		}
+		gids, err := lu.GroupIds()
+		if err != nil {
+			return err
+		}
+		c.userGroupIDs = gids
 		c.localUser = lu
 		return nil
 	}
