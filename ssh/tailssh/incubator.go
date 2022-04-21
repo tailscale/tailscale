@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains the code for the incubator process.
-// Taiscaled launches the incubator as the same user as it was launched as.
-// The incbuator then registers a new session with the OS, sets its own UID to
-// the specified `--uid`` and then lauches the requested `--cmd`.
+// This file contains the code for the incubator process.  Taiscaled
+// launches the incubator as the same user as it was launched as.  The
+// incubator then registers a new session with the OS, sets its UID
+// and groups to the specified `--uid`, `--gid` and `--groups`, and
+// then lauches the requested `--cmd`.
 
 //go:build linux || (darwin && !ios)
 // +build linux darwin,!ios
@@ -137,9 +138,10 @@ func (stdRWC) Close() error {
 // This is sometimes necessary for mounting home directories and decrypting file
 // systems.
 //
-// Taiscaled launches the incubator as the same user as it was launched as.
-// The incbuator then registers a new session with the OS, sets its own UID to
-// the specified `--uid`` and then lauches the requested `--cmd`.
+// Tailscaled launches the incubator as the same user as it was
+// launched as.  The incubator then registers a new session with the
+// OS, sets its UID and groups to the specified `--uid`, `--gid` and
+// `--groups` and then launches the requested `--cmd`.
 func beIncubator(args []string) error {
 	var (
 		flags      = flag.NewFlagSet("", flag.ExitOnError)
@@ -171,7 +173,7 @@ func beIncubator(args []string) error {
 	// Inform the system that we are about to log someone in.
 	// We can only do this if we are running as root.
 	// This is best effort to still allow running on machines where
-	// we don't support starting session, e.g. darwin.
+	// we don't support starting sessions, e.g. darwin.
 	sessionCloser, err := maybeStartLoginSession(logf, uint32(*uid), *localUser, *remoteUser, *remoteIP, *ttyName)
 	if err == nil && sessionCloser != nil {
 		defer sessionCloser()
@@ -285,7 +287,7 @@ func resizeWindow(f *os.File, winCh <-chan ssh.Window) {
 }
 
 // opcodeShortName is a mapping of SSH opcode
-// to mnemonic names expected by the termios packaage.
+// to mnemonic names expected by the termios package.
 // These are meant to be platform independent.
 var opcodeShortName = map[uint8]string{
 	gossh.VINTR:         "intr",
@@ -498,7 +500,7 @@ func loginShell(uid string) string {
 	if e := os.Getenv("SHELL"); e != "" {
 		return e
 	}
-	return "/bin/bash"
+	return "/bin/sh"
 }
 
 func envForUser(u *user.User) []string {

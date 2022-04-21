@@ -367,10 +367,8 @@ func (c *conn) setInfo(cm gossh.ConnMetadata) error {
 	return nil
 }
 
-// evaluatePolicy returns the SSHAction, sshConnInfo and localUser after
-// evaluating the sshUser and remoteAddr against the SSHPolicy. The remoteAddr
-// and localAddr params must be Tailscale IPs. The pubKey may be nil for "none"
-// auth.
+// evaluatePolicy returns the SSHAction and localUser after evaluating
+// the SSHPolicy for this conn. The pubKey may be nil for "none" auth.
 func (c *conn) evaluatePolicy(pubKey gossh.PublicKey) (_ *tailcfg.SSHAction, localUser string, _ error) {
 	pol, ok := c.sshPolicy()
 	if !ok {
@@ -692,7 +690,7 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 // unless the process has already exited.
 func (ss *sshSession) killProcessOnContextDone() {
 	<-ss.ctx.Done()
-	// Either the process has already existed, in which case this does nothing.
+	// Either the process has already exited, in which case this does nothing.
 	// Or, the process is still running in which case this will kill it.
 	ss.exitOnce.Do(func() {
 		err := ss.ctx.Err()
@@ -703,6 +701,8 @@ func (ss *sshSession) killProcessOnContextDone() {
 			}
 		}
 		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.IP(), err)
+		// We don't need to Process.Wait here, sshSession.run() does
+		// the waiting regardless of termination reason.
 		ss.cmd.Process.Kill()
 	})
 }
@@ -746,7 +746,7 @@ func (srv *server) endSession(ss *sshSession) {
 var errSessionDone = errors.New("session is done")
 
 // handleSSHAgentForwarding starts a Unix socket listener and in the background
-// forwards agent connections between the listenr and the ssh.Session.
+// forwards agent connections between the listener and the ssh.Session.
 // On success, it assigns ss.agentListener.
 func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) error {
 	if !ssh.AgentRequested(ss) || !ss.action.AllowAgentForwarding {
@@ -896,7 +896,6 @@ func (ss *sshSession) run() {
 	ss.exitOnce.Do(func() {})
 
 	if err == nil {
-		ss.logf("Wait: ok")
 		ss.Exit(0)
 		return
 	}
@@ -1214,7 +1213,7 @@ func (w loggingWriter) Write(p []byte) (n int, err error) {
 	}
 	j = append(j, '\n')
 	if err := w.writeCastLine(j); err != nil {
-		return 0, nil
+		return 0, err
 	}
 	return w.w.Write(p)
 }
