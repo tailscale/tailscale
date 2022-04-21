@@ -1730,9 +1730,9 @@ type SSHAction struct {
 	// without further prompts.
 	Accept bool `json:"accept,omitempty"`
 
-	// SesssionDuration, if non-zero, is how long the session can stay open
+	// SessionDuration, if non-zero, is how long the session can stay open
 	// before being forcefully terminated.
-	SesssionDuration time.Duration `json:"sessionDuration,omitempty"`
+	SessionDuration time.Duration `json:"sessionDuration,omitempty"`
 
 	// AllowAgentForwarding, if true, allows accepted connections to forward
 	// the ssh agent if requested.
