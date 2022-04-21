@@ -59,11 +59,11 @@ var maybeStartLoginSession = func(logf logger.Logf, uid uint32, localUser, remot
 // If ss.srv.tailscaledPath is empty, this method is equivalent to
 // exec.CommandContext.
 func (ss *sshSession) newIncubatorCommand(ctx context.Context, name string, args []string) *exec.Cmd {
-	if ss.srv.tailscaledPath == "" {
+	if ss.conn.srv.tailscaledPath == "" {
 		return exec.CommandContext(ctx, name, args...)
 	}
-	lu := ss.localUser
-	ci := ss.connInfo
+	lu := ss.conn.localUser
+	ci := ss.conn.info
 	remoteUser := ci.uprof.LoginName
 	if len(ci.node.Tags) > 0 {
 		remoteUser = strings.Join(ci.node.Tags, ",")
@@ -85,7 +85,7 @@ func (ss *sshSession) newIncubatorCommand(ctx context.Context, name string, args
 		incubatorArgs = append(incubatorArgs, args...)
 	}
 
-	return exec.CommandContext(ctx, ss.srv.tailscaledPath, incubatorArgs...)
+	return exec.CommandContext(ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 }
 
 const debugIncubator = false
@@ -166,7 +166,7 @@ func beIncubator(args []string) error {
 //
 // It sets ss.cmd, stdin, stdout, and stderr.
 func (ss *sshSession) launchProcess(ctx context.Context) error {
-	shell := loginShell(ss.localUser.Uid)
+	shell := loginShell(ss.conn.localUser.Uid)
 	var args []string
 	if rawCmd := ss.RawCommand(); rawCmd != "" {
 		args = append(args, "-c", rawCmd)
@@ -174,10 +174,10 @@ func (ss *sshSession) launchProcess(ctx context.Context) error {
 		args = append(args, "-l") // login shell
 	}
 
-	ci := ss.connInfo
+	ci := ss.conn.info
 	cmd := ss.newIncubatorCommand(ctx, shell, args)
-	cmd.Dir = ss.localUser.HomeDir
-	cmd.Env = append(cmd.Env, envForUser(ss.localUser)...)
+	cmd.Dir = ss.conn.localUser.HomeDir
+	cmd.Env = append(cmd.Env, envForUser(ss.conn.localUser)...)
 	cmd.Env = append(cmd.Env, ss.Environ()...)
 	cmd.Env = append(cmd.Env,
 		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.IP(), ci.src.Port(), ci.dst.Port()),
