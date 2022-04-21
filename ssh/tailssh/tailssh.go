@@ -773,10 +773,14 @@ func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) err
 	}
 	socket := ln.Addr().String()
 	dir := filepath.Dir(socket)
-	// Make sure the socket is accessible by the user.
+	// Make sure the socket is accessible only by the user.
+	if err := os.Chmod(socket, 0600); err != nil {
+		return err
+	}
 	if err := os.Chown(socket, int(uid), int(gid)); err != nil {
 		return err
 	}
+	// Make sure the dir is also accessible.
 	if err := os.Chmod(dir, 0755); err != nil {
 		return err
 	}
