@@ -221,10 +221,12 @@ func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 func (srv *server) newConn() (*conn, error) {
 	c := &conn{srv: srv, now: srv.now()}
 	c.Server = &ssh.Server{
-		Version:           "Tailscale",
-		Handler:           c.handleConnPostSSHAuth,
-		RequestHandlers:   map[string]ssh.RequestHandler{},
-		SubsystemHandlers: map[string]ssh.SubsystemHandler{},
+		Version:         "Tailscale",
+		Handler:         c.handleConnPostSSHAuth,
+		RequestHandlers: map[string]ssh.RequestHandler{},
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"sftp": c.handleConnPostSSHAuth,
+		},
 
 		// Note: the direct-tcpip channel handler and LocalPortForwardingCallback
 		// only adds support for forwarding ports from the local machine.
@@ -475,7 +477,7 @@ func (srv *server) fetchPublicKeysURL(url string) ([]string, error) {
 
 // handleConnPostSSHAuth runs an SSH session after the SSH-level authentication,
 // but not necessarily before all the Tailscale-level extra verification has
-// completed.
+// completed. It also handles SFTP requests.
 func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 	sshUser := s.User()
 	action, err := c.resolveTerminalAction(s)
@@ -487,6 +489,15 @@ func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 	}
 	if action.Reject || !action.Accept {
 		c.logf("access denied for %v", c.info.uprof.LoginName)
+		s.Exit(1)
+		return
+	}
+
+	// Do this check after auth, but before starting the session.
+	switch s.Subsystem() {
+	case "sftp", "":
+	default:
+		fmt.Fprintf(s.Stderr(), "Unsupported subsystem %q \r\n", s.Subsystem())
 		s.Exit(1)
 		return
 	}
@@ -813,27 +824,29 @@ func (ss *sshSession) run() {
 	// See https://github.com/tailscale/tailscale/issues/4146
 	ss.DisablePTYEmulation()
 
-	if err := ss.handleSSHAgentForwarding(ss, lu); err != nil {
-		ss.logf("agent forwarding failed: %v", err)
-	} else if ss.agentListener != nil {
-		// TODO(maisem/bradfitz): add a way to close all session resources
-		defer ss.agentListener.Close()
-	}
-
 	var rec *recording // or nil if disabled
-	if ss.shouldRecord() {
-		var err error
-		rec, err = ss.startNewRecording()
-		if err != nil {
-			fmt.Fprintf(ss, "can't start new recording\r\n")
-			ss.logf("startNewRecording: %v", err)
-			ss.Exit(1)
-			return
+	if ss.Subsystem() != "sftp" {
+		if err := ss.handleSSHAgentForwarding(ss, lu); err != nil {
+			ss.logf("agent forwarding failed: %v", err)
+		} else if ss.agentListener != nil {
+			// TODO(maisem/bradfitz): add a way to close all session resources
+			defer ss.agentListener.Close()
 		}
-		defer rec.Close()
+
+		if ss.shouldRecord() {
+			var err error
+			rec, err = ss.startNewRecording()
+			if err != nil {
+				fmt.Fprintf(ss, "can't start new recording\r\n")
+				ss.logf("startNewRecording: %v", err)
+				ss.Exit(1)
+				return
+			}
+			defer rec.Close()
+		}
 	}
 
-	err := ss.launchProcess(ss.ctx)
+	err := ss.launchProcess()
 	if err != nil {
 		logf("start failed: %v", err.Error())
 		ss.Exit(1)
