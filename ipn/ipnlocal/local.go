@@ -344,6 +344,7 @@ func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
 func (b *LocalBackend) Shutdown() {
 	b.mu.Lock()
 	cc := b.cc
+	b.closePeerAPIListenersLocked()
 	b.mu.Unlock()
 
 	b.unregisterLinkMon()
