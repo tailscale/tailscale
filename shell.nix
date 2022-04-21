@@ -14,8 +14,8 @@
 {
 	pkgs ? import <nixpkgs> {},
 	nixosUnstable ? import (fetchTarball https://github.com/NixOS/nixpkgs/archive/refs/heads/nixpkgs-unstable.tar.gz) { },
-	tailscale-go-rev ? "5ce3ec4d89c72f2a2b6f6f5089c950d7a6a33530",
-	tailscale-go-sha ? "sha256-KMOfzmikh30vEkViEkWUsOHczUifSTiRL6rhKQpHCRI=",
+	tailscale-go-rev ? "710a0d861098c07540ad073bb73a42ce81bf54a8",
+	tailscale-go-sha ? "sha256-hnyddxiyqMFHGwV3I4wkBcYNd56schYFi0SL5/0PnMI=",
 }:
 let
 	tailscale-go = pkgs.lib.overrideDerivation nixosUnstable.go_1_18 (attrs: rec {
