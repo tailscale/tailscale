@@ -13,7 +13,6 @@
 package tailssh
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"github.com/pkg/sftp"
 	"github.com/u-root/u-root/pkg/termios"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
@@ -58,9 +58,29 @@ var maybeStartLoginSession = func(logf logger.Logf, uid uint32, localUser, remot
 //
 // If ss.srv.tailscaledPath is empty, this method is equivalent to
 // exec.CommandContext.
-func (ss *sshSession) newIncubatorCommand(ctx context.Context, name string, args []string) *exec.Cmd {
+func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
+	var (
+		name   string
+		args   []string
+		isSFTP bool
+	)
+	switch ss.Subsystem() {
+	case "sftp":
+		isSFTP = true
+	case "":
+		name = loginShell(ss.conn.localUser.Uid)
+		if rawCmd := ss.RawCommand(); rawCmd != "" {
+			args = append(args, "-c", rawCmd)
+		} else {
+			args = append(args, "-l") // login shell
+		}
+	default:
+		panic(fmt.Sprintf("unexpected subsystem: %v", ss.Subsystem()))
+	}
+
 	if ss.conn.srv.tailscaledPath == "" {
-		return exec.CommandContext(ctx, name, args...)
+		// TODO(maisem): this doesn't work with sftp
+		return exec.CommandContext(ss.ctx, name, args...)
 	}
 	lu := ss.conn.localUser
 	ci := ss.conn.info
@@ -76,19 +96,38 @@ func (ss *sshSession) newIncubatorCommand(ctx context.Context, name string, args
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.IP().String(),
-		"--cmd=" + name,
 		"--has-tty=false", // updated in-place by startWithPTY
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
-	if len(args) > 0 {
-		incubatorArgs = append(incubatorArgs, "--")
-		incubatorArgs = append(incubatorArgs, args...)
-	}
 
-	return exec.CommandContext(ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
+	if isSFTP {
+		incubatorArgs = append(incubatorArgs, "--sftp")
+	} else {
+		incubatorArgs = append(incubatorArgs, "--cmd="+name)
+		if len(args) > 0 {
+			incubatorArgs = append(incubatorArgs, "--")
+			incubatorArgs = append(incubatorArgs, args...)
+		}
+	}
+	return exec.CommandContext(ss.ctx, ss.conn.srv.tailscaledPath, incubatorArgs...)
 }
 
 const debugIncubator = false
+
+type stdRWC struct{}
+
+func (stdRWC) Read(p []byte) (n int, err error) {
+	return os.Stdin.Read(p)
+}
+
+func (stdRWC) Write(b []byte) (n int, err error) {
+	return os.Stdout.Write(b)
+}
+
+func (stdRWC) Close() error {
+	os.Exit(0)
+	return nil
+}
 
 // beIncubator is the entrypoint to the `tailscaled be-child ssh` subcommand.
 // It is responsible for informing the system of a new login session for the user.
@@ -107,7 +146,8 @@ func beIncubator(args []string) error {
 		remoteIP   = flags.String("remote-ip", "", "the remote Tailscale IP")
 		ttyName    = flags.String("tty-name", "", "the tty name (pts/3)")
 		hasTTY     = flags.Bool("has-tty", false, "is the output attached to a tty")
-		cmdName    = flags.String("cmd", "", "the cmd to launch")
+		cmdName    = flags.String("cmd", "", "the cmd to launch (ignored in sftp mode)")
+		sftpMode   = flags.Bool("sftp", false, "run sftp server (cmd is ignored)")
 	)
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -138,6 +178,15 @@ func beIncubator(args []string) error {
 			os.Exit(1)
 		}
 	}
+	if *sftpMode {
+		logf("handling sftp")
+
+		server, err := sftp.NewServer(stdRWC{})
+		if err != nil {
+			return err
+		}
+		return server.Serve()
+	}
 
 	cmd := exec.Command(*cmdName, cmdArgs...)
 	cmd.Stdin = os.Stdin
@@ -165,26 +214,19 @@ func beIncubator(args []string) error {
 // The caller can wait for the process to exit by calling cmd.Wait().
 //
 // It sets ss.cmd, stdin, stdout, and stderr.
-func (ss *sshSession) launchProcess(ctx context.Context) error {
-	shell := loginShell(ss.conn.localUser.Uid)
-	var args []string
-	if rawCmd := ss.RawCommand(); rawCmd != "" {
-		args = append(args, "-c", rawCmd)
-	} else {
-		args = append(args, "-l") // login shell
-	}
+func (ss *sshSession) launchProcess() error {
+	ss.cmd = ss.newIncubatorCommand()
 
-	ci := ss.conn.info
-	cmd := ss.newIncubatorCommand(ctx, shell, args)
+	cmd := ss.cmd
 	cmd.Dir = ss.conn.localUser.HomeDir
 	cmd.Env = append(cmd.Env, envForUser(ss.conn.localUser)...)
 	cmd.Env = append(cmd.Env, ss.Environ()...)
+
+	ci := ss.conn.info
 	cmd.Env = append(cmd.Env,
 		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.IP(), ci.src.Port(), ci.dst.Port()),
 		fmt.Sprintf("SSH_CONNECTION=%s %d %s %d", ci.src.IP(), ci.src.Port(), ci.dst.IP(), ci.dst.Port()),
 	)
-
-	ss.cmd = cmd
 
 	if ss.agentListener != nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("SSH_AUTH_SOCK=%s", ss.agentListener.Addr()))
