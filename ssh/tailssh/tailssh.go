@@ -797,10 +797,10 @@ func (ss *sshSession) run() {
 
 	defer ss.ctx.CloseWithError(errSessionDone)
 
-	if ss.action.SesssionDuration != 0 {
-		t := time.AfterFunc(ss.action.SesssionDuration, func() {
+	if ss.action.SessionDuration != 0 {
+		t := time.AfterFunc(ss.action.SessionDuration, func() {
 			ss.ctx.CloseWithError(userVisibleError{
-				fmt.Sprintf("Session timeout of %v elapsed.", ss.action.SesssionDuration),
+				fmt.Sprintf("Session timeout of %v elapsed.", ss.action.SessionDuration),
 				context.DeadlineExceeded,
 			})
 		})
