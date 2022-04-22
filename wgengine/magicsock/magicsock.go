@@ -54,8 +54,8 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/netconv"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/netconv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -603,6 +603,7 @@ func (c *Conn) stopPeriodicReSTUNTimerLocked() {
 
 // c.mu must NOT be held.
 func (c *Conn) updateEndpoints(why string) {
+	metricUpdateEndpoints.Add(1)
 	defer func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -1048,7 +1049,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	}
 
 	var already map[netaddr.IPPort]tailcfg.EndpointType // endpoint -> how it was found
-	var eps []tailcfg.Endpoint                               // unique endpoints
+	var eps []tailcfg.Endpoint                          // unique endpoints
 
 	ipp := func(s string) (ipp netaddr.IPPort) {
 		ipp, _ = netaddr.ParseIPPort(s)
@@ -2768,6 +2769,7 @@ func (c *Conn) ReSTUN(why string) {
 		// raced with a shutdown.
 		return
 	}
+	metricReSTUNCalls.Add(1)
 
 	// If the user stopped the app, stop doing work. (When the
 	// user stops Tailscale via the GUI apps, ipn/local.go
@@ -2917,6 +2919,7 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 // Rebind closes and re-binds the UDP sockets and resets the DERP connection.
 // It should be followed by a call to ReSTUN.
 func (c *Conn) Rebind() {
+	metricRebindCalls.Add(1)
 	if err := c.rebind(keepCurrentPort); err != nil {
 		c.logf("%w", err)
 		return
@@ -4137,6 +4140,10 @@ func (s derpAddrFamSelector) PreferIPv6() bool {
 var (
 	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
 	metricNumDERPConns = clientmetric.NewGauge("magicsock_num_derp_conns")
+
+	metricRebindCalls     = clientmetric.NewCounter("magicsock_rebind_calls")
+	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")
+	metricUpdateEndpoints = clientmetric.NewCounter("magicsock_update_endpoints")
 
 	// Sends (data or disco)
 	metricSendDERPQueued      = clientmetric.NewCounter("magicsock_send_derp_queued")

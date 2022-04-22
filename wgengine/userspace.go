@@ -1203,7 +1203,10 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	why := "link-change-minor"
 	if changed {
 		why = "link-change-major"
+		metricNumMajorChanges.Add(1)
 		e.magicConn.Rebind()
+	} else {
+		metricNumMinorChanges.Add(1)
 	}
 	e.magicConn.ReSTUN(why)
 }
@@ -1551,4 +1554,7 @@ func (ls fwdDNSLinkSelector) PickLink(ip netaddr.IP) (linkName string) {
 var (
 	metricMagicDNSPacketIn = clientmetric.NewGauge("magicdns_packet_in") // for 100.100.100.100
 	metricReflectToOS      = clientmetric.NewGauge("packet_reflect_to_os")
+
+	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
+	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
 )
