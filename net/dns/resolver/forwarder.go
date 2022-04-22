@@ -41,6 +41,19 @@ import (
 // headerBytes is the number of bytes in a DNS message header.
 const headerBytes = 12
 
+// dnsFlagTruncated is set in the flags word when the packet is truncated.
+const dnsFlagTruncated = 0x200
+
+// truncatedFlagSet returns true if the DNS packet signals that it has
+// been truncated. False is also returned if the packet was too small
+// to be valid.
+func truncatedFlagSet(pkt []byte) bool {
+	if len(pkt) < headerBytes {
+		return false
+	}
+	return (binary.BigEndian.Uint16(pkt[2:4]) & dnsFlagTruncated) != 0
+}
+
 const (
 	// responseTimeout is the maximal amount of time to wait for a DNS response.
 	responseTimeout = 5 * time.Second
@@ -420,6 +433,9 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	if err != nil {
 		metricDNSFwdDoHErrorBody.Add(1)
 	}
+	if truncatedFlagSet(res) {
+		metricDNSFwdTruncated.Add(1)
+	}
 	return res, err
 }
 
@@ -456,13 +472,18 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
+
+	return f.sendUDP(ctx, fq, rr)
+}
+
+func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()
 	if !ok {
 		metricDNSFwdErrorType.Add(1)
 		return nil, fmt.Errorf("unrecognized resolver type %q", rr.name.Addr)
 	}
-
 	metricDNSFwdUDP.Add(1)
+
 	ln, err := f.packetListener(ipp.IP())
 	if err != nil {
 		return nil, err
@@ -522,7 +543,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	}
 
 	if truncated {
-		const dnsFlagTruncated = 0x200
+		// Set the truncated bit if it wasn't already.
 		flags := binary.BigEndian.Uint16(out[2:4])
 		flags |= dnsFlagTruncated
 		binary.BigEndian.PutUint16(out[2:4], flags)
@@ -532,6 +553,10 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// section can be preserved if possible. However, the UDP read with
 		// a too-small buffer has already dropped the end, so that's the
 		// best we can do.
+	}
+
+	if truncatedFlagSet(out) {
+		metricDNSFwdTruncated.Add(1)
 	}
 
 	clampEDNSSize(out, maxResponseBytes)
