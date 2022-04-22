@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/ipn/store/storetest"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 )
@@ -70,77 +71,11 @@ func TestNewStore(t *testing.T) {
 		t.Fatalf("%q: got: %T, want: %T", path, s, new(FileStore))
 	}
 }
-
-func testStoreSemantics(t *testing.T, store ipn.StateStore) {
-	t.Helper()
-
-	tests := []struct {
-		// if true, data is data to write. If false, data is expected
-		// output of read.
-		write bool
-		id    ipn.StateKey
-		data  string
-		// If write=false, true if we expect a not-exist error.
-		notExists bool
-	}{
-		{
-			id:        "foo",
-			notExists: true,
-		},
-		{
-			write: true,
-			id:    "foo",
-			data:  "bar",
-		},
-		{
-			id:   "foo",
-			data: "bar",
-		},
-		{
-			id:        "baz",
-			notExists: true,
-		},
-		{
-			write: true,
-			id:    "baz",
-			data:  "quux",
-		},
-		{
-			id:   "foo",
-			data: "bar",
-		},
-		{
-			id:   "baz",
-			data: "quux",
-		},
-	}
-
-	for _, test := range tests {
-		if test.write {
-			if err := store.WriteState(test.id, []byte(test.data)); err != nil {
-				t.Errorf("writing %q to %q: %v", test.data, test.id, err)
-			}
-		} else {
-			bs, err := store.ReadState(test.id)
-			if err != nil {
-				if test.notExists && err == ipn.ErrStateNotExist {
-					continue
-				}
-				t.Errorf("reading %q: %v", test.id, err)
-				continue
-			}
-			if string(bs) != test.data {
-				t.Errorf("reading %q: got %q, want %q", test.id, string(bs), test.data)
-			}
-		}
-	}
-}
-
 func TestMemoryStore(t *testing.T) {
 	tstest.PanicOnLog()
 
 	store := new(mem.Store)
-	testStoreSemantics(t, store)
+	storetest.TestStoreSemantics(t, store)
 }
 
 func TestFileStore(t *testing.T) {
@@ -154,7 +89,7 @@ func TestFileStore(t *testing.T) {
 		t.Fatalf("creating file store failed: %v", err)
 	}
 
-	testStoreSemantics(t, store)
+	storetest.TestStoreSemantics(t, store)
 
 	// Build a brand new file store and check that both IDs written
 	// above are still there.

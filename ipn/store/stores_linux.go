@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/awsstore"
+	"tailscale.com/ipn/store/gcpstore"
 	"tailscale.com/ipn/store/kubestore"
 	"tailscale.com/types/logger"
 )
@@ -23,4 +24,8 @@ func registerExternalStores() {
 		return kubestore.New(logf, secretName)
 	})
 	Register("arn:", awsstore.New)
+	Register("gcp:", func(logf logger.Logf, arg string) (ipn.StateStore, error) {
+		secretName := strings.TrimPrefix(path, "gcp:")
+		return gcpstore.New(logf, secretName)
+	})
 }

@@ -54,6 +54,8 @@ var knownStores map[string]Provider
 //     the suffix an AWS ARN for an SSM.
 //   * (Linux-only) if the string begins with "kube:",
 //     the suffix is a Kubernetes secret name
+//   * (Linux-only) if the string begins with "gcp:",
+//     the suffix is a GCP secret resource name
 //   * In all other cases, the path is treated as a filepath.
 func New(logf logger.Logf, path string) (ipn.StateStore, error) {
 	regOnce.Do(registerDefaultStores)
