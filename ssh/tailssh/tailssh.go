@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 var (
@@ -471,7 +472,7 @@ func (srv *server) fetchPublicKeysURL(url string) ([]string, error) {
 
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	mapSet(&srv.fetchPublicKeysCache, url, pubKeyCacheEntry{
+	mak.Set(&srv.fetchPublicKeysCache, url, pubKeyCacheEntry{
 		at:    srv.now(),
 		lines: lines,
 		etag:  etag,
@@ -731,8 +732,8 @@ func (srv *server) startSession(ss *sshSession) {
 	if _, dup := srv.activeSessionBySharedID[ss.sharedID]; dup {
 		panic("dup sharedID")
 	}
-	mapSet(&srv.activeSessionByH, ss.idH, ss)
-	mapSet(&srv.activeSessionBySharedID, ss.sharedID, ss)
+	mak.Set(&srv.activeSessionByH, ss.idH, ss)
+	mak.Set(&srv.activeSessionBySharedID, ss.sharedID, ss)
 }
 
 // endSession unregisters s from the list of active sessions.
@@ -1247,12 +1248,4 @@ func envEq(a, b string) bool {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
-}
-
-// mapSet assigns m[k] = v, making m if necessary.
-func mapSet[K comparable, V any](m *map[K]V, k K, v V) {
-	if *m == nil {
-		*m = make(map[K]V)
-	}
-	(*m)[k] = v
 }

@@ -55,6 +55,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/netconv"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
@@ -438,11 +439,7 @@ func (c *Conn) removeDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp
 func (c *Conn) addDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.derpRoute == nil {
-		c.derpRoute = make(map[key.NodePublic]derpRoute)
-	}
-	r := derpRoute{derpID, dc}
-	c.derpRoute[peer] = r
+	mak.Set(&c.derpRoute, peer, derpRoute{derpID, dc})
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means
@@ -1050,7 +1047,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}, nil
 	}
 
-	already := make(map[netaddr.IPPort]tailcfg.EndpointType) // endpoint -> how it was found
+	var already map[netaddr.IPPort]tailcfg.EndpointType // endpoint -> how it was found
 	var eps []tailcfg.Endpoint                               // unique endpoints
 
 	ipp := func(s string) (ipp netaddr.IPPort) {
@@ -1062,7 +1059,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			return
 		}
 		if _, ok := already[ipp]; !ok {
-			already[ipp] = et
+			mak.Set(&already, ipp, et)
 			eps = append(eps, tailcfg.Endpoint{Addr: ipp, Type: et})
 		}
 	}
@@ -3957,9 +3954,6 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	for ep := range de.isCallMeMaybeEP {
 		de.isCallMeMaybeEP[ep] = false // mark for deletion
 	}
-	if de.isCallMeMaybeEP == nil {
-		de.isCallMeMaybeEP = map[netaddr.IPPort]bool{}
-	}
 	var newEPs []netaddr.IPPort
 	for _, ep := range m.MyNumber {
 		if ep.IP().Is6() && ep.IP().IsLinkLocalUnicast() {
@@ -3968,7 +3962,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 			// for these.
 			continue
 		}
-		de.isCallMeMaybeEP[ep] = true
+		mak.Set(&de.isCallMeMaybeEP, ep, true)
 		if es, ok := de.endpointState[ep]; ok {
 			es.callMeMaybeTime = now
 		} else {

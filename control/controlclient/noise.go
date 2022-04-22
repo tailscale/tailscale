@@ -20,6 +20,7 @@ import (
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 )
 
@@ -137,9 +138,6 @@ func (nc *noiseClient) Close() error {
 func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	nc.mu.Lock()
 	connID := nc.nextID
-	if nc.connPool == nil {
-		nc.connPool = make(map[int]*noiseConn)
-	}
 	nc.nextID++
 	nc.mu.Unlock()
 
@@ -161,6 +159,6 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
 	ncc := &noiseConn{Conn: conn, id: connID, pool: nc}
-	nc.connPool[ncc.id] = ncc
+	mak.Set(&nc.connPool, ncc.id, ncc)
 	return ncc, nil
 }
