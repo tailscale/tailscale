@@ -126,9 +126,9 @@ type Options struct {
 
 // Pinger is a subset of the wgengine.Engine interface, containing just the Ping method.
 type Pinger interface {
-	// Ping is a request to start a discovery or TSMP ping with the peer handling
-	// the given IP and then call cb with its ping latency & method.
-	Ping(ip netaddr.IP, useTSMP bool, cb func(*ipnstate.PingResult))
+	// Ping is a request to start a ping with the peer handling the given IP and
+	// then call cb with its ping latency & method.
+	Ping(ip netaddr.IP, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
 }
 
 type Decompressor interface {
@@ -1197,11 +1197,10 @@ func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinge
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
-		switch t {
-		case "TSMP", "disco":
-			go doPingerPing(logf, c, pr, pinger, t)
+		switch pt := tailcfg.PingType(t); pt {
+		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP:
+			go doPingerPing(logf, c, pr, pinger, pt)
 		// TODO(tailscale/corp#754)
-		// case "host":
 		// case "peerapi":
 		default:
 			logf("unsupported ping request type: %q", t)
@@ -1402,13 +1401,13 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
 // pr.URL with ping response data.
-func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType string) {
+func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType tailcfg.PingType) {
 	if pr.URL == "" || pr.IP.IsZero() || pinger == nil {
 		logf("invalid ping request: missing url, ip or pinger")
 		return
 	}
 	start := time.Now()
-	pinger.Ping(pr.IP, pingType == "TSMP", func(res *ipnstate.PingResult) {
+	pinger.Ping(pr.IP, pingType, func(res *ipnstate.PingResult) {
 		// Currently does not check for error since we just return if it fails.
 		postPingResult(start, logf, c, pr, res.ToPingResponse(pingType))
 	})

@@ -515,7 +515,7 @@ type PingResult struct {
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
 }
 
-func (pr *PingResult) ToPingResponse(pingType string) *tailcfg.PingResponse {
+func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingResponse {
 	return &tailcfg.PingResponse{
 		Type:           pingType,
 		IP:             pr.IP,

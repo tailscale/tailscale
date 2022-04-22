@@ -52,8 +52,8 @@ type SetPrefsArgs struct {
 }
 
 type PingArgs struct {
-	IP      string
-	UseTSMP bool
+	IP   string
+	Type tailcfg.PingType
 }
 
 // Command is a command message that is JSON encoded and sent by a
@@ -171,7 +171,7 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 		bs.b.RequestEngineStatus()
 		return nil
 	} else if c := cmd.Ping; c != nil {
-		bs.b.Ping(c.IP, c.UseTSMP)
+		bs.b.Ping(c.IP, tailcfg.PingType(c.Type))
 		return nil
 	}
 
@@ -311,10 +311,10 @@ func (bc *BackendClient) RequestStatus() {
 	bc.send(Command{AllowVersionSkew: true, RequestStatus: &NoArgs{}})
 }
 
-func (bc *BackendClient) Ping(ip string, useTSMP bool) {
+func (bc *BackendClient) Ping(ip string, pingType tailcfg.PingType) {
 	bc.send(Command{Ping: &PingArgs{
-		IP:      ip,
-		UseTSMP: useTSMP,
+		IP:   ip,
+		Type: pingType,
 	}})
 }
 

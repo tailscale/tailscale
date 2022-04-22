@@ -434,6 +434,29 @@ func (q *Parsed) IsEchoResponse() bool {
 	}
 }
 
+// EchoIDSeq extracts the identifier/sequence bytes from an ICMP Echo response,
+// and returns them as a uint32, used to lookup internally routed ICMP echo
+// responses. This function is intentionally lightweight as it is called on
+// every incoming ICMP packet.
+func (q *Parsed) EchoIDSeq() uint32 {
+	switch q.IPProto {
+	case ipproto.ICMPv4:
+		offset := ip4HeaderLength + icmp4HeaderLength
+		if len(q.b) < offset+4 {
+			return 0
+		}
+		return binary.LittleEndian.Uint32(q.b[offset:])
+	case ipproto.ICMPv6:
+		offset := ip6HeaderLength + icmp6HeaderLength
+		if len(q.b) < offset+4 {
+			return 0
+		}
+		return binary.LittleEndian.Uint32(q.b[offset:])
+	default:
+		return 0
+	}
+}
+
 func Hexdump(b []byte) string {
 	out := new(strings.Builder)
 	for i := 0; i < len(b); i += 16 {

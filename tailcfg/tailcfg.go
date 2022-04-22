@@ -1217,6 +1217,19 @@ type DNSRecord struct {
 	Value string
 }
 
+// PingType is a string representing the kind of ping to perform.
+type PingType string
+
+const (
+	// PingDisco performs a ping, without involving IP at either end.
+	PingDisco PingType = "disco"
+	// PingTSMP performs a ping, using the IP layer, but avoiding the OS IP stack.
+	PingTSMP PingType = "TSMP"
+	// PingICMP performs a ping between two tailscale nodes using ICMP that is
+	// received by the target systems IP stack.
+	PingICMP PingType = "ICMP"
+)
+
 // PingRequest with no IP and Types is a request to send an HTTP request to prove the
 // long-polling client is still connected.
 // PingRequest with Types and IP, will send a ping to the IP and send a POST
@@ -1234,8 +1247,8 @@ type PingRequest struct {
 	// For failure cases, the client will log regardless.
 	Log bool `json:",omitempty"`
 
-	// Types is the types of ping that is initiated. Can be TSMP, ICMP or disco.
-	// Types will be comma separated, such as TSMP,disco.
+	// Types is the types of ping that are initiated. Can be any PingType, comma
+	// separated, e.g. "disco,TSMP"
 	Types string
 
 	// IP is the ping target.
@@ -1246,7 +1259,7 @@ type PingRequest struct {
 // PingResponse provides result information for a TSMP or Disco PingRequest.
 // Typically populated from an ipnstate.PingResult used in `tailscale ping`.
 type PingResponse struct {
-	Type string // ping type, such as TSMP or disco.
+	Type PingType // ping type, such as TSMP or disco.
 
 	IP       string `json:",omitempty"` // ping destination
 	NodeIP   string `json:",omitempty"` // Tailscale IP of node handling IP (different for subnet routers)

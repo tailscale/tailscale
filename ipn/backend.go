@@ -248,5 +248,5 @@ type Backend interface {
 	// Ping attempts to start connecting to the given IP and sends a Notify
 	// with its PingResult. If the host is down, there might never
 	// be a PingResult sent. The cmd/tailscale CLI client adds a timeout.
-	Ping(ip string, useTSMP bool)
+	Ping(ip string, pingType tailcfg.PingType)
 }
