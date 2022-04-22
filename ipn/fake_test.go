@@ -100,7 +100,7 @@ func (b *FakeBackend) RequestEngineStatus() {
 	}
 }
 
-func (b *FakeBackend) Ping(ip string, useTSMP bool) {
+func (b *FakeBackend) Ping(ip string, pingType tailcfg.PingType) {
 	if b.notify != nil {
 		b.notify(Notify{PingResult: &ipnstate.PingResult{}})
 	}

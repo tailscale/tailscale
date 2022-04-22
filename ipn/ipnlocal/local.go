@@ -1699,13 +1699,13 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
-func (b *LocalBackend) Ping(ipStr string, useTSMP bool) {
+func (b *LocalBackend) Ping(ipStr string, pingType tailcfg.PingType) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
 		b.logf("ignoring Ping request to invalid IP %q", ipStr)
 		return
 	}
-	b.e.Ping(ip, useTSMP, func(pr *ipnstate.PingResult) {
+	b.e.Ping(ip, pingType, func(pr *ipnstate.PingResult) {
 		b.send(ipn.Notify{PingResult: pr})
 	})
 }
