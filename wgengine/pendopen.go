@@ -15,6 +15,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -115,14 +116,11 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.pendOpen == nil {
-		e.pendOpen = make(map[flowtrack.Tuple]*pendingOpenFlow)
-	}
 	if _, dup := e.pendOpen[flow]; dup {
 		// Duplicates are expected when the OS retransmits. Ignore.
 		return
 	}
-	e.pendOpen[flow] = &pendingOpenFlow{timer: timer}
+	mak.Set(&e.pendOpen, flow, &pendingOpenFlow{timer: timer})
 
 	return filter.Accept
 }

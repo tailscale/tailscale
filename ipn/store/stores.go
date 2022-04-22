@@ -21,6 +21,7 @@ import (
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/paths"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 // Provider returns a StateStore for the provided path.
@@ -82,10 +83,7 @@ func Register(prefix string, fn Provider) {
 	if _, ok := knownStores[prefix]; ok {
 		panic(fmt.Sprintf("%q already registered", prefix))
 	}
-	if knownStores == nil {
-		knownStores = make(map[string]Provider)
-	}
-	knownStores[prefix] = fn
+	mak.Set(&knownStores, prefix, fn)
 }
 
 // TryWindowsAppDataMigration attempts to copy the Windows state file
