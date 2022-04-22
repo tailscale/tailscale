@@ -1340,6 +1340,7 @@ var (
 
 	metricDNSFwdErrorType      = clientmetric.NewCounter("dns_query_fwd_error_type")
 	metricDNSFwdErrorParseAddr = clientmetric.NewCounter("dns_query_fwd_error_parse_addr")
+	metricDNSFwdTruncated      = clientmetric.NewCounter("dns_query_fwd_truncated")
 
 	metricDNSFwdUDP            = clientmetric.NewCounter("dns_query_fwd_udp")       // on entry
 	metricDNSFwdUDPWrote       = clientmetric.NewCounter("dns_query_fwd_udp_wrote") // sent UDP packet
