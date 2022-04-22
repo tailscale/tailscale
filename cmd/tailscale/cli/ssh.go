@@ -18,7 +18,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alessio/shellescape"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
@@ -81,15 +80,13 @@ func runSSH(ctx context.Context, args []string) error {
 		ssh,
 
 		// Only trust SSH hosts that we know about.
-		"-o", fmt.Sprintf("UserKnownHostsFile %s",
-			shellescape.Quote(knownHostsFile),
-		),
+		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking yes",
 
-		"-o", fmt.Sprintf("ProxyCommand %s --socket=%s nc %%h %%p",
-			shellescape.Quote(tailscaleBin),
-			shellescape.Quote(rootArgs.socket),
+		"-o", fmt.Sprintf("ProxyCommand %q --socket=%q nc %%h %%p",
+			tailscaleBin,
+			rootArgs.socket,
 		),
 
 		// Explicitly rebuild the user@host argument rather than
