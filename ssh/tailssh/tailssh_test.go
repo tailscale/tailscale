@@ -265,6 +265,8 @@ func TestSSH(t *testing.T) {
 
 	execSSH := func(args ...string) *exec.Cmd {
 		cmd := exec.Command("ssh",
+			"-F",
+			"none",
 			"-v",
 			"-p", fmt.Sprint(port),
 			"-o", "StrictHostKeyChecking=no",
