@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !linux && !freebsd && !openbsd && !windows
-// +build !linux,!freebsd,!openbsd,!windows
+//go:build !linux && !freebsd && !openbsd && !windows && !darwin
+// +build !linux,!freebsd,!openbsd,!windows,!darwin
 
 package dns
 
