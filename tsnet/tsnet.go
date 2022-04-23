@@ -137,8 +137,9 @@ func (s *Server) start() error {
 	}
 
 	s.rootPath = s.Dir
-	if s.Store != nil && !s.Ephemeral {
-		if _, ok := s.Store.(*mem.Store); !ok {
+	if s.Store != nil {
+		_, isMemStore := s.Store.(*mem.Store)
+		if isMemStore && !s.Ephemeral {
 			return fmt.Errorf("in-memory store is only supported for Ephemeral nodes")
 		}
 	}
