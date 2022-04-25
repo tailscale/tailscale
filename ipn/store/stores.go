@@ -18,6 +18,7 @@ import (
 
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/httpstore"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/paths"
 	"tailscale.com/types/logger"
@@ -34,6 +35,8 @@ var registerAvailableExternalStores func()
 
 func registerDefaultStores() {
 	Register("mem:", mem.New)
+	Register("http:", httpstore.New)
+	Register("https:", httpstore.New)
 
 	if registerAvailableExternalStores != nil {
 		registerAvailableExternalStores()
@@ -51,6 +54,8 @@ var knownStores map[string]Provider
 //
 //   * if the string begins with "mem:", the suffix
 //     is ignored and an in-memory store is used.
+//   * if the string begins with "http:" or "https:",
+//     it is interpreted as a URL
 //   * (Linux-only) if the string begins with "arn:",
 //     the suffix an AWS ARN for an SSM.
 //   * (Linux-only) if the string begins with "kube:",
