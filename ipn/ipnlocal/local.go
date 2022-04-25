@@ -123,6 +123,7 @@ type LocalBackend struct {
 	varRoot               string // or empty if SetVarRoot never called
 	sshAtomicBool         syncs.AtomicBool
 	sshServer             SSHServer // or nil
+	shutdownCalled        bool      // if Shutdown has been called
 
 	filterAtomic            atomic.Value // of *filter.Filter
 	containsViaIPFuncAtomic atomic.Value // of func(netaddr.IP) bool
@@ -343,6 +344,7 @@ func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
 	b.mu.Lock()
+	b.shutdownCalled = true
 	cc := b.cc
 	b.closePeerAPIListenersLocked()
 	b.mu.Unlock()
@@ -2341,6 +2343,9 @@ const peerAPIListenAsync = runtime.GOOS == "windows" || runtime.GOOS == "android
 func (b *LocalBackend) initPeerAPIListener() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.shutdownCalled {
+		return
+	}
 
 	if b.netMap == nil {
 		// We're called from authReconfig which checks that
