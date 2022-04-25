@@ -115,7 +115,8 @@ func addrType(addrs []route.Addr, rtaxType int) route.Addr {
 func (m *darwinRouteMon) IsInterestingInterface(iface string) bool {
 	baseName := strings.TrimRight(iface, "0123456789")
 	switch baseName {
-	case "llw", "awdl", "pdp_ip", "ipsec":
+	// TODO(maisem): figure out what this list should actually be.
+	case "llw", "awdl", "ipsec":
 		return false
 	}
 	return true
