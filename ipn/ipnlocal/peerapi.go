@@ -1104,7 +1104,7 @@ func (fl *fakePeerAPIListener) Close() error {
 
 func (fl *fakePeerAPIListener) Accept() (net.Conn, error) {
 	<-fl.closed
-	return nil, io.EOF
+	return nil, net.ErrClosed
 }
 
 func (fl *fakePeerAPIListener) Addr() net.Addr { return fl.addr }
