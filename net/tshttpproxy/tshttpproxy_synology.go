@@ -121,7 +121,7 @@ func parseSynologyConfig(r io.Reader) (*url.URL, error) {
 	return proxyURL, nil
 }
 
-// mtime stat's path and returns it's modification time. If path does not exist,
+// mtime stat's path and returns its modification time. If path does not exist,
 // it returns the unix epoch.
 func mtime(path string) time.Time {
 	fi, err := os.Stat(path)
