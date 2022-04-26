@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -19,7 +18,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 )
 
 // TODO(apenwarr): handle magic cookie auth
@@ -114,77 +112,30 @@ func socketPermissionsForOS() os.FileMode {
 	return 0600
 }
 
-// connectMacOSAppSandbox connects to the Tailscale Network Extension,
-// which is necessarily running within the macOS App Sandbox.  Our
-// little dance to connect a regular user binary to the sandboxed
-// network extension is:
+// connectMacOSAppSandbox connects to the Tailscale Network Extension (macOS App
+// Store build) or App Extension (macsys standalone build), where the CLI itself
+// is either running within the macOS App Sandbox or built separately (e.g.
+// homebrew or go install). This little dance to connect a regular user binary
+// to the sandboxed network extension is:
 //
 //   * the sandboxed IPNExtension picks a random localhost:0 TCP port
 //     to listen on
 //   * it also picks a random hex string that acts as an auth token
-//   * it then creates a file named "sameuserproof-$PORT-$TOKEN" and leaves
-//     that file descriptor open forever.
-//
-// Then, we do different things depending on whether the user is
-// running cmd/tailscale that they built themselves (running as
-// themselves, outside the App Sandbox), or whether the user is
-// running the CLI via the GUI binary
-// (e.g. /Applications/Tailscale.app/Contents/MacOS/Tailscale <args>),
-// in which case we're running within the App Sandbox.
-//
-// If we're outside the App Sandbox:
-//
-//   * then we come along here, running as the same UID, but outside
-//     of the sandbox, and look for it. We can run lsof on our own processes,
-//     but other users on the system can't.
-//   * we parse out the localhost port number and the auth token
-//   * we connect to TCP localhost:$PORT
-//   * we send $TOKEN + "\n"
-//   * server verifies $TOKEN, sends "#IPN\n" if okay.
-//   * server is now protocol switched
-//   * we return the net.Conn and the caller speaks the normal protocol
-//
-// If we're inside the App Sandbox, then TS_MACOS_CLI_SHARED_DIR has
-// been set to our shared directory. We now have to find the most
-// recent "sameuserproof" file (there should only be 1, but previous
-// versions of the macOS app didn't clean them up).
+//   * the CLI looks on disk for that TCP port + auth token (see localTCPPortAndTokenDarwin)
+//   * we send it upon TCP connect to prove to the Tailscale daemon that
+//     we're a suitably privileged user to have access the files on disk
+//     which the Network/App Extension wrote.
 func connectMacOSAppSandbox() (net.Conn, error) {
-	// Are we running the Tailscale.app GUI binary as a CLI, running within the App Sandbox?
-	if d := os.Getenv("TS_MACOS_CLI_SHARED_DIR"); d != "" {
-		fis, err := ioutil.ReadDir(d)
-		if err != nil {
-			return nil, fmt.Errorf("reading TS_MACOS_CLI_SHARED_DIR: %w", err)
-		}
-		var best os.FileInfo
-		for _, fi := range fis {
-			if !strings.HasPrefix(fi.Name(), "sameuserproof-") || strings.Count(fi.Name(), "-") != 2 {
-				continue
-			}
-			if best == nil || fi.ModTime().After(best.ModTime()) {
-				best = fi
-			}
-		}
-		if best == nil {
-			return nil, fmt.Errorf("no sameuserproof token found in TS_MACOS_CLI_SHARED_DIR %q", d)
-		}
-		f := strings.SplitN(best.Name(), "-", 3)
-		portStr, token := f[1], f[2]
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid port %q", portStr)
-		}
-		return connectMacTCP(port, token)
-	}
-
-	// Otherwise, assume we're running the cmd/tailscale binary from outside the
-	// App Sandbox.
 	port, token, err := LocalTCPPortAndToken()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to find local Tailscale daemon: %w", err)
 	}
 	return connectMacTCP(port, token)
 }
 
+// connectMacTCP creates an authenticated net.Conn to the local macOS Tailscale
+// daemon for used by the "IPN" JSON message bus protocol (Tailscale's original
+// local non-HTTP IPC protocol).
 func connectMacTCP(port int, token string) (net.Conn, error) {
 	c, err := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
 	if err != nil {
