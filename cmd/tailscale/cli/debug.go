@@ -70,6 +70,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "print cmd/tailscale environment",
 		},
 		{
+			Name:      "stat",
+			Exec:      runStat,
+			ShortHelp: "stat a file",
+		},
+		{
 			Name:      "hostinfo",
 			Exec:      runHostinfo,
 			ShortHelp: "print hostinfo",
@@ -280,6 +285,28 @@ func localAPIAction(action string) func(context.Context, []string) error {
 func runEnv(ctx context.Context, args []string) error {
 	for _, e := range os.Environ() {
 		outln(e)
+	}
+	return nil
+}
+
+func runStat(ctx context.Context, args []string) error {
+	for _, a := range args {
+		fi, err := os.Lstat(a)
+		if err != nil {
+			fmt.Printf("%s: %v\n", a, err)
+			continue
+		}
+		fmt.Printf("%s: %v, %v\n", a, fi.Mode(), fi.Size())
+		if fi.IsDir() {
+			ents, _ := os.ReadDir(a)
+			for i, ent := range ents {
+				if i == 25 {
+					fmt.Printf("  ...\n")
+					break
+				}
+				fmt.Printf("  - %s\n", ent.Name())
+			}
+		}
 	}
 	return nil
 }
