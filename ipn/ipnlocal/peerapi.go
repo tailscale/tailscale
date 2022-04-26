@@ -29,6 +29,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
 	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
@@ -563,6 +564,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/dnsfwd":
 		h.handleServeDNSFwd(w, r)
 		return
+	case "/v0/wol":
+		h.handleWakeOnLAN(w, r)
+		return
 	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
@@ -644,6 +648,11 @@ func (h *peerAPIHandler) canPutFile() bool {
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
 	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
+}
+
+// canWakeOnLAN reports whether h can send a Wake-on-LAN packet from this node.
+func (h *peerAPIHandler) canWakeOnLAN() bool {
+	return h.isSelf || h.peerHasCap(tailcfg.CapabilityWakeOnLAN)
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
@@ -836,8 +845,8 @@ func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Request) {
-	if !h.isSelf {
-		http.Error(w, "not owner", http.StatusForbidden)
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
 	dh := health.DebugHandler("dnsfwd")
@@ -846,6 +855,62 @@ func (h *peerAPIHandler) handleServeDNSFwd(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	dh.ServeHTTP(w, r)
+}
+
+func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request) {
+	if !h.canWakeOnLAN() {
+		http.Error(w, "no WoL access", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		return
+	}
+	macStr := r.FormValue("mac")
+	if macStr == "" {
+		http.Error(w, "missing 'mac' param", http.StatusBadRequest)
+		return
+	}
+	mac, err := net.ParseMAC(macStr)
+	if err != nil {
+		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
+		return
+	}
+	var password []byte // TODO(bradfitz): support?
+	st, err := interfaces.GetState()
+	if err != nil {
+		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
+		return
+	}
+	var res struct {
+		SentTo []string
+		Errors []string
+	}
+	for ifName, ips := range st.InterfaceIPs {
+		for _, ip := range ips {
+			if ip.IP().IsLoopback() || ip.IP().Is6() {
+				continue
+			}
+			ipa := ip.IP().IPAddr()
+			local := &net.UDPAddr{
+				IP:   ipa.IP,
+				Port: 0,
+			}
+			remote := &net.UDPAddr{
+				IP:   net.IPv4bcast,
+				Port: 0,
+			}
+			if err := wol.Wake(mac, password, local, remote); err != nil {
+				res.Errors = append(res.Errors, err.Error())
+			} else {
+				res.SentTo = append(res.SentTo, ifName)
+			}
+			break // one per interface is enough
+		}
+	}
+	sort.Strings(res.SentTo)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (h *peerAPIHandler) replyToDNSQueries() bool {
