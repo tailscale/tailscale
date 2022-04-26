@@ -567,6 +567,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/wol":
 		h.handleWakeOnLAN(w, r)
 		return
+	case "/v0/interfaces":
+		h.handleServeInterfaces(w, r)
+		return
 	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
@@ -579,6 +582,40 @@ This is my Tailscale device. Your device is %v.
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
 	}
+}
+
+func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Request) {
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
+		return
+	}
+	i, err := interfaces.GetList()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+
+	dr, err := interfaces.DefaultRoute()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintln(w, "<h1>Interfaces</h1>")
+	fmt.Fprintf(w, "<h3>Default route is %q(%d)</h3>\n", dr.InterfaceName, dr.InterfaceIndex)
+
+	fmt.Fprintln(w, "<table>")
+	fmt.Fprint(w, "<tr>")
+	for _, v := range []any{"Index", "Name", "MTU", "Flags", "Addrs"} {
+		fmt.Fprintf(w, "<th>%v</th> ", v)
+	}
+	fmt.Fprint(w, "</tr>\n")
+	i.ForeachInterface(func(iface interfaces.Interface, ipps []netaddr.IPPrefix) {
+		fmt.Fprint(w, "<tr>")
+		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
+			fmt.Fprintf(w, "<td>%v</td> ", v)
+		}
+		fmt.Fprint(w, "</tr>\n")
+	})
+	fmt.Fprintln(w, "</table>")
 }
 
 type incomingFile struct {
