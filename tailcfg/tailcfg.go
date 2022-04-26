@@ -1595,6 +1595,8 @@ const (
 	// CapabilityDebugPeer grants the ability for a peer to read this node's
 	// goroutines, metrics, magicsock internal state, etc.
 	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
+	// CapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
+	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
 )
 
 // SetDNSRequest is a request to add a DNS record.
