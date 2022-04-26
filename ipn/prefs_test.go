@@ -810,3 +810,18 @@ func TestExitNodeIPOfArg(t *testing.T) {
 		})
 	}
 }
+
+func TestControlURLOrDefault(t *testing.T) {
+	var p Prefs
+	if got, want := p.ControlURLOrDefault(), DefaultControlURL; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	p.ControlURL = "http://foo.bar"
+	if got, want := p.ControlURLOrDefault(), "http://foo.bar"; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	p.ControlURL = "https://login.tailscale.com"
+	if got, want := p.ControlURLOrDefault(), DefaultControlURL; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
