@@ -23,7 +23,6 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/version"
 )
 
 var sshCmd = &ffcli.Command{
@@ -76,36 +75,52 @@ func runSSH(ctx context.Context, args []string) error {
 		return err
 	}
 
-	argv := append([]string{
-		ssh,
+	argv := []string{ssh}
 
+	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
+		argv = append(argv, "-vvv")
+	}
+	argv = append(argv,
 		// Only trust SSH hosts that we know about.
 		"-o", fmt.Sprintf("UserKnownHostsFile %q", knownHostsFile),
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking yes",
+	)
 
-		"-o", fmt.Sprintf("ProxyCommand %q --socket=%q nc %%h %%p",
-			tailscaleBin,
-			rootArgs.socket,
-		),
+	// TODO(bradfitz): nc is currently broken on macOS:
+	// https://github.com/tailscale/tailscale/issues/4529
+	// So don't use it for now. MagicDNS is usually working on macOS anyway
+	// and they're not in userspace mode, so 'nc' isn't very useful.
+	if runtime.GOOS != "darwin" {
+		argv = append(argv,
+			"-o", fmt.Sprintf("ProxyCommand %q --socket=%q nc %%h %%p",
+				tailscaleBin,
+				rootArgs.socket,
+			))
+	}
 
-		// Explicitly rebuild the user@host argument rather than
-		// passing it through.  In general, the use of OpenSSH's ssh
-		// binary is a crutch for now.  We don't want to be
-		// Hyrum-locked into passing through all OpenSSH flags to the
-		// OpenSSH client forever. We try to make our flags and args
-		// be compatible, but only a subset. The "tailscale ssh"
-		// command should be a simple and portable one. If they want
-		// to use a different one, we'll later be making stock ssh
-		// work well by default too. (doing things like automatically
-		// setting known_hosts, etc)
-		username + "@" + hostForSSH,
-	}, argRest...)
+	// Explicitly rebuild the user@host argument rather than
+	// passing it through.  In general, the use of OpenSSH's ssh
+	// binary is a crutch for now.  We don't want to be
+	// Hyrum-locked into passing through all OpenSSH flags to the
+	// OpenSSH client forever. We try to make our flags and args
+	// be compatible, but only a subset. The "tailscale ssh"
+	// command should be a simple and portable one. If they want
+	// to use a different one, we'll later be making stock ssh
+	// work well by default too. (doing things like automatically
+	// setting known_hosts, etc)
+	argv = append(argv, username+"@"+hostForSSH)
 
-	if runtime.GOOS == "windows" || version.IsSandboxedMacOS() {
-		// Don't use syscall.Exec on Windows or in the macOS sandbox.
+	argv = append(argv, argRest...)
+
+	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
+		log.Printf("Running: %q, %q ...", ssh, argv)
+	}
+
+	if runtime.GOOS == "windows" {
+		// Don't use syscall.Exec on Windows.
 		cmd := exec.Command(ssh, argv[1:]...)
-		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		var ee *exec.ExitError
@@ -116,9 +131,6 @@ func runSSH(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if envknob.Bool("TS_DEBUG_SSH_EXEC") {
-		log.Printf("Running: %q, %q ...", ssh, argv)
-	}
 	if err := syscall.Exec(ssh, argv, os.Environ()); err != nil {
 		return err
 	}
