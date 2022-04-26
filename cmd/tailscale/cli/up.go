@@ -52,7 +52,7 @@ down").
 If flags are specified, the flags must be the complete set of desired
 settings. An error is returned if any setting would be changed as a
 result of an unspecified flag's default value, unless the --reset flag
-is also used. (The flags --authkey, --force-reauth, and --qr are not
+is also used. (The flags --auth-key, --force-reauth, and --qr are not
 considered settings that need to be re-specified when modifying
 settings.)
 `),
