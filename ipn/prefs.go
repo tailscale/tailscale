@@ -428,9 +428,14 @@ func NewPrefs() *Prefs {
 }
 
 // ControlURLOrDefault returns the coordination server's URL base.
-// If not configured, DefaultControlURL is returned instead.
+//
+// If not configured, or if the configured value is a legacy name equivalent to
+// the default, then DefaultControlURL is returned instead.
 func (p *Prefs) ControlURLOrDefault() string {
 	if p.ControlURL != "" {
+		if p.ControlURL != DefaultControlURL && IsLoginServerSynonym(p.ControlURL) {
+			return DefaultControlURL
+		}
 		return p.ControlURL
 	}
 	return DefaultControlURL
