@@ -9,12 +9,15 @@ package netns
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 )
 
 // SetListenConfigInterfaceIndex sets lc.Control such that sockets are bound
@@ -51,4 +54,37 @@ func bindInterface(fd uintptr, network, address string, ifIndex int) error {
 		opt = unix.IPV6_BOUND_IF
 	}
 	return unix.SetsockoptInt(int(fd), proto, opt, ifIndex)
+}
+
+func control(logf logger.Logf) func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, c syscall.RawConn) error {
+		return controlLogf(logf, network, address, c)
+	}
+}
+
+// controlLogf marks c as necessary to dial in a separate network namespace.
+//
+// It's intentionally the same signature as net.Dialer.Control
+// and net.ListenConfig.Control.
+func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) error {
+	if strings.HasPrefix(address, "127.") || address == "::1" {
+		// Don't bind to an interface for localhost connections.
+		return nil
+	}
+	idx, err := interfaces.DefaultRouteInterfaceIndex()
+	if err != nil {
+		logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+		return nil
+	}
+	var sockErr error
+	err = c.Control(func(fd uintptr) {
+		sockErr = bindInterface(fd, network, address, idx)
+	})
+	if err != nil {
+		return fmt.Errorf("RawConn.Control on %T: %w", c, err)
+	}
+	if sockErr != nil {
+		logf("[unexpected] netns: control(%q, %q), index=%v: %v", network, address, idx, sockErr)
+	}
+	return sockErr
 }
