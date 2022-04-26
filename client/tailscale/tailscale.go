@@ -36,7 +36,6 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
-	"tailscale.com/version"
 )
 
 var (
@@ -106,8 +105,8 @@ func DoLocalRequest(req *http.Request) (*http.Response, error) {
 func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 	res, err := DoLocalRequest(req)
 	if err == nil {
-		if server := res.Header.Get("Tailscale-Version"); server != "" && server != version.Long && onVersionMismatch != nil {
-			onVersionMismatch(version.Long, server)
+		if server := res.Header.Get("Tailscale-Version"); server != "" && server != ipn.IPCVersion() && onVersionMismatch != nil {
+			onVersionMismatch(ipn.IPCVersion(), server)
 		}
 		if res.StatusCode == 403 {
 			all, _ := ioutil.ReadAll(res.Body)
