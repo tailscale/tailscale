@@ -734,11 +734,15 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netaddr.IP, wq 
 		_, err := io.Copy(client, server)
 		connClosed <- err
 	}()
-	err = <-connClosed
-	if err != nil {
-		ns.logf("proxy connection closed with error: %v", err)
+	select {
+	case err := <-connClosed:
+		if err != nil {
+			ns.logf("proxy connection closed with error: %v", err)
+		}
+		ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
+	case <-ctx.Done():
+		ns.logf("[v2] netstack: context done, closing TCP forward conn to %s", dialAddrStr)
 	}
-	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
