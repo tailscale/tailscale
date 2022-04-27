@@ -38,9 +38,9 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -57,7 +57,8 @@ import (
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
 	httpc                  *http.Client // HTTP client used to talk to tailcontrol
-	serverURL              string       // URL of the tailcontrol server
+	dialer                 *tsdial.Dialer
+	serverURL              string // URL of the tailcontrol server
 	timeNow                func() time.Time
 	lastPrintMap           time.Time
 	newDecompressor        func() (Decompressor, error)
@@ -106,6 +107,7 @@ type Options struct {
 	DebugFlags           []string         // debug settings to send to control
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
+	Dialer               *tsdial.Dialer   // non-nil
 
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
@@ -170,13 +172,12 @@ func NewDirect(opts Options) (*Direct, error) {
 			UseLastGood:      true,
 			LookupIPFallback: dnsfallback.Lookup,
 		}
-		dialer := netns.NewDialer(opts.Logf)
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
 		tr.TLSClientConfig = tlsdial.Config(serverURL.Hostname(), tr.TLSClientConfig)
-		tr.DialContext = dnscache.Dialer(dialer.DialContext, dnsCache)
-		tr.DialTLSContext = dnscache.TLSDialer(dialer.DialContext, dnsCache, tr.TLSClientConfig)
+		tr.DialContext = dnscache.Dialer(opts.Dialer.SystemDial, dnsCache)
+		tr.DialTLSContext = dnscache.TLSDialer(opts.Dialer.SystemDial, dnsCache, tr.TLSClientConfig)
 		tr.ForceAttemptHTTP2 = true
 		// Disable implicit gzip compression; the various
 		// handlers (register, map, set-dns, etc) do their own
@@ -202,6 +203,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		dialer:                 opts.Dialer,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -1278,7 +1280,7 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 			return nil, err
 		}
 
-		nc, err = newNoiseClient(k, serverNoiseKey, c.serverURL)
+		nc, err = newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer)
 		if err != nil {
 			return nil, err
 		}

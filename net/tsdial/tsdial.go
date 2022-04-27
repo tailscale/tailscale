@@ -20,8 +20,12 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netknob"
+	"tailscale.com/net/netns"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -30,6 +34,7 @@ import (
 // (TUN, netstack), the OS network sandboxing style (macOS/iOS
 // Extension, none), user-selected route acceptance prefs, etc.
 type Dialer struct {
+	Logf logger.Logf
 	// UseNetstackForIP if non-nil is whether NetstackDialTCP (if
 	// it's non-nil) should be used to dial the provided IP.
 	UseNetstackForIP func(netaddr.IP) bool
@@ -46,12 +51,33 @@ type Dialer struct {
 	peerDialerOnce sync.Once
 	peerDialer     *net.Dialer
 
-	mu             sync.Mutex
-	dns            dnsMap
-	tunName        string // tun device name
-	linkMon        *monitor.Mon
-	exitDNSDoHBase string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
-	dnsCache       *dnscache.MessageCache // nil until first first non-empty SetExitDNSDoH
+	netnsDialerOnce sync.Once
+	netnsDialer     netns.Dialer
+
+	mu                sync.Mutex
+	closed            bool
+	dns               dnsMap
+	tunName           string // tun device name
+	linkMon           *monitor.Mon
+	linkMonUnregister func()
+	exitDNSDoHBase    string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
+	dnsCache          *dnscache.MessageCache // nil until first first non-empty SetExitDNSDoH
+	nextSysConnID     int
+	activeSysConns    map[int]net.Conn // active connections not yet closed
+}
+
+// sysConn wraps a net.Conn that was created using d.SystemDial.
+// It exists to track which connections are still open, and should be
+// closed on major link changes.
+type sysConn struct {
+	net.Conn
+	id int
+	d  *Dialer
+}
+
+func (c sysConn) Close() error {
+	c.d.closeSysConn(c.id)
+	return nil
 }
 
 // SetTUNName sets the name of the tun device in use ("tailscale0", "utun6",
@@ -91,10 +117,53 @@ func (d *Dialer) SetExitDNSDoH(doh string) {
 	}
 }
 
+func (d *Dialer) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	if d.linkMonUnregister != nil {
+		d.linkMonUnregister()
+		d.linkMonUnregister = nil
+	}
+	for _, c := range d.activeSysConns {
+		c.Close()
+	}
+	d.activeSysConns = nil
+	return nil
+}
+
 func (d *Dialer) SetLinkMonitor(mon *monitor.Mon) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.linkMonUnregister != nil {
+		go d.linkMonUnregister()
+		d.linkMonUnregister = nil
+	}
 	d.linkMon = mon
+	d.linkMonUnregister = d.linkMon.RegisterChangeCallback(d.linkChanged)
+}
+
+func (d *Dialer) linkChanged(major bool, state *interfaces.State) {
+	if !major {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id, c := range d.activeSysConns {
+		go c.Close()
+		delete(d.activeSysConns, id)
+	}
+}
+
+func (d *Dialer) closeSysConn(id int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := d.activeSysConns[id]
+	if !ok {
+		return
+	}
+	delete(d.activeSysConns, id)
+	go c.Close() // ignore the error
 }
 
 func (d *Dialer) interfaceIndexLocked(ifName string) (index int, ok bool) {
@@ -195,6 +264,42 @@ func ipNetOfNetwork(n string) string {
 		return "ip6"
 	}
 	return "ip"
+}
+
+// SystemDial connects to the provided network address without going over
+// Tailscale. It prefers going over the default interface and closes existing
+// connections if the default interface changes. It is used to connect to
+// Control and (in the future, as of 2022-04-27) DERPs..
+func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.mu.Lock()
+	closed := d.closed
+	d.mu.Unlock()
+	if closed {
+		return nil, net.ErrClosed
+	}
+
+	d.netnsDialerOnce.Do(func() {
+		logf := d.Logf
+		if logf == nil {
+			logf = logger.Discard
+		}
+		d.netnsDialer = netns.NewDialer(logf)
+	})
+	c, err := d.netnsDialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id := d.nextSysConnID
+	d.nextSysConnID++
+	mak.Set(&d.activeSysConns, id, c)
+
+	return sysConn{
+		id:   id,
+		d:    d,
+		Conn: c,
+	}, nil
 }
 
 // UserDial connects to the provided network address as if a user were initiating the dial.

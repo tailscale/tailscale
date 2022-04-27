@@ -14,6 +14,7 @@ import (
 	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -30,6 +31,7 @@ func TestNewDirect(t *testing.T) {
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
+		Dialer: new(tsdial.Dialer),
 	}
 	c, err := NewDirect(opts)
 	if err != nil {
@@ -106,6 +108,7 @@ func TestTsmpPing(t *testing.T) {
 		GetMachinePrivateKey: func() (key.MachinePrivate, error) {
 			return k, nil
 		},
+		Dialer: new(tsdial.Dialer),
 	}
 
 	c, err := NewDirect(opts)

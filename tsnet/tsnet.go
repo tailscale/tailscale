@@ -105,6 +105,7 @@ func (s *Server) Close() error {
 	s.shutdownCancel()
 	s.lb.Shutdown()
 	s.linkMon.Close()
+	s.dialer.Close()
 	s.localAPIListener.Close()
 
 	s.mu.Lock()
