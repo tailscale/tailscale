@@ -37,6 +37,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
@@ -488,7 +489,8 @@ func (srv *server) fetchPublicKeysURL(url string) ([]string, error) {
 // completed. It also handles SFTP requests.
 func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 	sshUser := s.User()
-	action, err := c.resolveTerminalAction(s)
+	cr := &contextReader{r: s}
+	action, err := c.resolveTerminalAction(s, cr)
 	if err != nil {
 		c.logf("resolveTerminalAction: %v", err)
 		io.WriteString(s.Stderr(), "Access Denied: failed during authorization check.\r\n")
@@ -499,6 +501,10 @@ func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 		c.logf("access denied for %v", c.info.uprof.LoginName)
 		s.Exit(1)
 		return
+	}
+
+	if cr.HasOutstandingRead() {
+		s = contextReaderSesssion{s, cr}
 	}
 
 	// Do this check after auth, but before starting the session.
@@ -522,8 +528,17 @@ func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 // Any action with a Message in the chain will be printed to s.
 //
 // The returned SSHAction will be either Reject or Accept.
-func (c *conn) resolveTerminalAction(s ssh.Session) (*tailcfg.SSHAction, error) {
+func (c *conn) resolveTerminalAction(s ssh.Session, cr *contextReader) (*tailcfg.SSHAction, error) {
 	action := c.action0
+
+	var awaitReadOnce sync.Once // to start Reads on cr
+	var sawInterrupt syncs.AtomicBool
+	var wg sync.WaitGroup
+	defer wg.Wait() // wait for awaitIntrOnce's goroutine to exit
+
+	ctx, cancel := context.WithCancel(s.Context())
+	defer cancel()
+
 	// Loop processing/fetching Actions until one reaches a
 	// terminal state (Accept, Reject, or invalid Action), or
 	// until fetchSSHAction times out due to the context being
@@ -541,10 +556,32 @@ func (c *conn) resolveTerminalAction(s ssh.Session) (*tailcfg.SSHAction, error) 
 		if url == "" {
 			return nil, errors.New("reached Action that lacked Accept, Reject, and HoldAndDelegate")
 		}
+		awaitReadOnce.Do(func() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				buf := make([]byte, 1)
+				for {
+					n, err := cr.ReadContext(ctx, buf)
+					if err != nil {
+						return
+					}
+					if n > 0 && buf[0] == 0x03 { // Ctrl-C
+						sawInterrupt.Set(true)
+						s.Stderr().Write([]byte("Canceled.\r\n"))
+						s.Exit(1)
+						return
+					}
+				}
+			}()
+		})
 		url = c.expandDelegateURL(url)
 		var err error
-		action, err = c.fetchSSHAction(s.Context(), url)
+		action, err = c.fetchSSHAction(ctx, url)
 		if err != nil {
+			if sawInterrupt.Get() {
+				return nil, fmt.Errorf("aborted by user")
+			}
 			return nil, fmt.Errorf("fetching SSHAction from %s: %w", url, err)
 		}
 	}
