@@ -24,7 +24,7 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
     - [GET tailnet ACL](#tailnet-acl-get)
     - [POST tailnet ACL](#tailnet-acl-post): set ACL for a tailnet
     - [POST tailnet ACL preview](#tailnet-acl-preview-post): preview rule matches on an ACL for a resource
-	- [POST tailnet ACL validate](#tailnet-acl-validate-post): run validation tests against the tailnet's existing ACL
+	- [POST tailnet ACL validate](#tailnet-acl-validate-post): run validation tests against a new or existing ACL
   - [Devices](#tailnet-devices)
     - [GET tailnet devices](#tailnet-devices-get)
   - [Keys](#tailnet-keys)
@@ -620,7 +620,12 @@ Response:
 
 #### `POST /api/v2/tailnet/:tailnet/acl/validate` - run validation tests against the tailnet's active ACL
 
-Runs the provided ACL tests against the tailnet's existing ACL. This endpoint does not modify the ACL in any way.
+This endpoint works in one of two modes:
+
+1. with a request body that's a JSON array, the body is interpreted as ACL tests to run against the domain's current ACLs.
+2. with a request body that's a JSON object, the body is interpreted as a hypothetical new JSON (HuJSON) body with new ACLs, including any tests.
+
+In either case, this endpoint does not modify the ACL in any way.
 
 ##### Parameters
 
@@ -630,7 +635,7 @@ The POST body should be a JSON formatted array of ACL Tests.
 
 See https://tailscale.com/kb/1018/acls for more information on the format of ACL tests.
 
-##### Example
+##### Example with tests
 ```
 POST /api/v2/tailnet/example.com/acl/validate
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
@@ -641,11 +646,28 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
   ]'
 ```
 
-Response:
-If all the tests pass, the response will be empty, with an http status code of 200.
+##### Example with an ACL body
+```
+POST /api/v2/tailnet/example.com/acl/validate
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
+  -u "tskey-yourapikey123:" \
+  --data-binary '
+  {
+    "ACLs": [
+     { "Action": "accept", "src": ["100.105.106.107"], "dst": ["1.2.3.4:*"] },
+    ],
+    "Tests", [
+      {"src": "100.105.106.107", "allow": ["1.2.3.4:80"]}
+    ],
+  }'
+```
 
-Failed test error response:
-A 400 http status code and the errors in the response body.  
+Response:
+
+The HTTP status code will be 200 if the request was well formed and there were no server errors, even in the case of failing tests or an invalid ACL. Look at the response body to determine whether there was a problem within your ACL or tests.
+
+If there's a problem, the response body will be a JSON object with a non-empty `message` property and optionally additional details in `data`:
+
 ```
 {
   "message":"test(s) failed",
@@ -657,6 +679,8 @@ A 400 http status code and the errors in the response body.
          ]
 }
 ```
+
+An empty body or a JSON object with no `message` is returned on success.
 
 <a name=tailnet-devices></a>
 
