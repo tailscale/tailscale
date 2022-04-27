@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -35,7 +34,6 @@ import (
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -66,7 +64,7 @@ const (
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16) (*controlbase.Conn, error) {
+func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -80,6 +78,7 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 		controlKey: controlKey,
 		version:    protocolVersion,
 		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
+		dialer:     dialer,
 	}
 	return a.dial()
 }
@@ -93,6 +92,7 @@ type dialParams struct {
 	controlKey key.MachinePublic
 	version    uint16
 	proxyFunc  func(*http.Request) (*url.URL, error) // or nil
+	dialer     dnscache.DialContextFunc
 
 	// For tests only
 	insecureTLS bool
@@ -196,12 +196,11 @@ func (a *dialParams) tryURL(ctx context.Context, u *url.URL, init []byte) (net.C
 		LookupIPFallback: dnsfallback.Lookup,
 		UseLastGood:      true,
 	}
-	dialer := netns.NewDialer(log.Printf)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	defer tr.CloseIdleConnections()
 	tr.Proxy = a.proxyFunc
 	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-	tr.DialContext = dnscache.Dialer(dialer.DialContext, dns)
+	tr.DialContext = dnscache.Dialer(a.dialer, dns)
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
@@ -210,7 +209,7 @@ func (a *dialParams) tryURL(ctx context.Context, u *url.URL, init []byte) (net.C
 		tr.TLSClientConfig.InsecureSkipVerify = true
 		tr.TLSClientConfig.VerifyConnection = nil
 	}
-	tr.DialTLSContext = dnscache.TLSDialer(dialer.DialContext, dns, tr.TLSClientConfig)
+	tr.DialTLSContext = dnscache.TLSDialer(a.dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
 
 	// (mis)use httptrace to extract the underlying net.Conn from the

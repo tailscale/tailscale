@@ -1034,6 +1034,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		LinkMonitor:          b.e.GetLinkMonitor(),
 		Pinger:               b.e,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
+		Dialer:               b.Dialer(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.

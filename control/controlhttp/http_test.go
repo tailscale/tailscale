@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/socks5"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/types/key"
 )
 
@@ -155,6 +156,7 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 		controlKey:  server.Public(),
 		version:     testProtocolVersion,
 		insecureTLS: true,
+		dialer:      new(tsdial.Dialer).SystemDial,
 	}
 
 	if proxy != nil {
