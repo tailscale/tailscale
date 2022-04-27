@@ -332,6 +332,7 @@ func run() error {
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
 	dialer := new(tsdial.Dialer) // mutated below (before used)
+	dialer.Logf = logf
 	e, useNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
 		return fmt.Errorf("createEngine: %w", err)
@@ -394,6 +395,7 @@ func run() error {
 	// want to keep running.
 	signal.Ignore(syscall.SIGPIPE)
 	go func() {
+		defer dialer.Close()
 		select {
 		case s := <-interrupt:
 			logf("tailscaled got signal %v; shutting down", s)
