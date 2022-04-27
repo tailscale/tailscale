@@ -376,7 +376,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		if err != nil {
 			return regen, opt.URL, err
 		}
-		c.logf("control server key %s from %s", serverKey.ShortString(), c.serverURL)
+		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
 		c.mu.Lock()
 		c.serverKey = keys.LegacyPublicKey
