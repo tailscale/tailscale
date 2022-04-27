@@ -651,6 +651,21 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 	r.Complete(false)
 
+	// SetKeepAlive so that idle connections to peers that have forgotten about
+	// the connection or gone completely offline eventually time out.
+	// Applications might be setting this on a forwarded connection, but from
+	// userspace we can not see those, so the best we can do is to always
+	// perform them with conservative timing.
+	// TODO(tailscale/tailscale#4522): Netstack defaults match the Linux
+	// defaults, and results in a little over two hours before the socket would
+	// be closed due to keepalive. A shorter default might be better, or seeking
+	// a default from the host IP stack. This also might be a useful
+	// user-tunable, as in userspace mode this can have broad implications such
+	// as lingering connections to fork style daemons. On the other side of the
+	// fence, the long duration timers are low impact values for battery powered
+	// peers.
+	ep.SocketOptions().SetKeepAlive(true)
+
 	// The ForwarderRequest.CreateEndpoint above asynchronously
 	// starts the TCP handshake. Note that the gonet.TCPConn
 	// methods c.RemoteAddr() and c.LocalAddr() will return nil
