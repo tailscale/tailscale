@@ -22,9 +22,9 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
 * **[Tailnets](#tailnet)**
   - ACLs
     - [GET tailnet ACL](#tailnet-acl-get)
-    - [POST tailnet ACL](#tailnet-acl-post): set ACL for a tailnet
-    - [POST tailnet ACL preview](#tailnet-acl-preview-post): preview rule matches on an ACL for a resource
-	- [POST tailnet ACL validate](#tailnet-acl-validate-post): run validation tests against a new or existing ACL
+    - [POST tailnet ACL](#tailnet-acl-post)
+    - [POST tailnet ACL preview](#tailnet-acl-preview-post)
+	- [POST tailnet ACL validate](#tailnet-acl-validate-post)
   - [Devices](#tailnet-devices)
     - [GET tailnet devices](#tailnet-devices-get)
   - [Keys](#tailnet-keys)
@@ -42,12 +42,12 @@ Currently based on {some authentication method}. Visit the [admin panel](https:/
 
 ## Device
 <!-- TODO: description about what devices are -->
-Each Tailscale-connected device has a globally-unique identifier number which we refer as the "deviceID" or sometimes, just "id". 
+Each Tailscale-connected device has a globally-unique identifier number which we refer as the "deviceID" or sometimes, just "id".
 You can use the deviceID to specify operations on a specific device, like retrieving its subnet routes.
 
-To find the deviceID of a particular device, you can use the ["GET /devices"](#getdevices) API call and generate a list of devices on your network. 
+To find the deviceID of a particular device, you can use the ["GET /devices"](#getdevices) API call and generate a list of devices on your network.
 Find the device you're looking for and get the "id" field.
-This is your deviceID. 
+This is your deviceID.
 
 <a name=device-get></a>
 
@@ -60,7 +60,7 @@ Use the `fields` query parameter to explicitly indicate which fields are returne
 ##### Parameters
 ##### Query Parameters
 `fields` - Controls which fields will be included in the returned response.
-Currently, supported options are: 
+Currently, supported options are:
 * `all`: returns all fields in the response.
 * `default`: return all fields except:
   * `enabledRoutes`
@@ -72,7 +72,7 @@ If more than one option is indicated, then the union is used.
 For example, for `fields=default,all`, all fields are returned.
 If the `fields` parameter is not provided, then the default option is used.
 
-##### Example 
+##### Example
 ```
 GET /api/v2/device/12345
 curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
@@ -102,10 +102,10 @@ Response
   "nodeKey":"nodekey:user1-node-key",
   "blocksIncomingConnections":false,
   "enabledRoutes":[
-    
+
   ],
   "advertisedRoutes":[
-    
+
   ],
   "clientConnectivity": {
     "endpoints":[
@@ -141,7 +141,7 @@ Response
 <a name=device-delete></a>
 
 #### `DELETE /api/v2/device/:deviceID` - deletes the device from its tailnet
-Deletes the provided device from its tailnet. 
+Deletes the provided device from its tailnet.
 The device must belong to the user's tailnet.
 Deleting shared/external devices is not supported.
 Supply the device of interest in the path using its ID.
@@ -159,7 +159,7 @@ curl -X DELETE 'https://api.tailscale.com/api/v2/device/12345' \
 
 Response
 
-If successful, the response should be empty: 
+If successful, the response should be empty:
 ```
 < HTTP/1.1 200 OK
 ...
@@ -167,7 +167,7 @@ If successful, the response should be empty:
 * Closing connection 0
 ```
 
-If the device is not owned by your tailnet: 
+If the device is not owned by your tailnet:
 ```
 < HTTP/1.1 501 Not Implemented
 ...
@@ -339,8 +339,8 @@ curl 'https://api.tailscale.com/api/v2/device/11055/key' \
 The response is 2xx on success. The response body is currently an empty JSON
 object.
 
-## Tailnet 
-A tailnet is the name of your Tailscale network. 
+## Tailnet
+A tailnet is the name of your Tailscale network.
 You can find it in the top left corner of the [Admin Panel](https://login.tailscale.com/admin) beside the Tailscale logo.
 
 
@@ -689,7 +689,7 @@ An empty body or a JSON object with no `message` is returned on success.
 <a name=tailnet-devices-get></a>
 
 #### <a name="getdevices"></a> `GET /api/v2/tailnet/:tailnet/devices` - list the devices for a tailnet
-Lists the devices in a tailnet. 
+Lists the devices in a tailnet.
 Supply the tailnet of interest in the path.
 Use the `fields` query parameter to explicitly indicate which fields are returned.
 
@@ -698,7 +698,7 @@ Use the `fields` query parameter to explicitly indicate which fields are returne
 
 ###### Query Parameters
 `fields` - Controls which fields will be included in the returned response.
-Currently, supported options are: 
+Currently, supported options are:
 * `all`: Returns all fields in the response.
 * `default`: return all fields except:
   * `enabledRoutes`
@@ -718,7 +718,7 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
   -u "tskey-yourapikey123:"
 ```
 
-Response 
+Response
 ```
 {
   "devices":[
@@ -928,13 +928,13 @@ curl -X DELETE 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k12345
 <a name=tailnet-dns-nameservers-get></a>
 
 #### `GET /api/v2/tailnet/:tailnet/dns/nameservers` - list the DNS nameservers for a tailnet
-Lists the DNS nameservers for a tailnet. 
+Lists the DNS nameservers for a tailnet.
 Supply the tailnet of interest in the path.
 
 ##### Parameters
 No parameters.
 
-##### Example 
+##### Example
 
 ```
 GET /api/v2/tailnet/example.com/dns/nameservers
@@ -942,7 +942,7 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
   -u "tskey-yourapikey123:"
 ```
 
-Response 
+Response
 ```
 {
   "dns": ["8.8.8.8"],
@@ -952,7 +952,7 @@ Response
 <a name=tailnet-dns-nameservers-post></a>
 
 #### `POST /api/v2/tailnet/:tailnet/dns/nameservers` - replaces the list of DNS nameservers for a tailnet
-Replaces the list of DNS nameservers for the given tailnet with the list supplied by the user. 
+Replaces the list of DNS nameservers for the given tailnet with the list supplied by the user.
 Supply the tailnet of interest in the path.
 Note that changing the list of DNS nameservers may also affect the status of MagicDNS (if MagicDNS is on).
 
@@ -966,7 +966,7 @@ Note that changing the list of DNS nameservers may also affect the status of Mag
 ```
 
 ##### Returns
-Returns the new list of nameservers and the status of MagicDNS. 
+Returns the new list of nameservers and the status of MagicDNS.
 
 If all nameservers have been removed, MagicDNS will be automatically disabled (until explicitly turned back on by the user).
 
@@ -1010,31 +1010,31 @@ Retrieves the DNS preferences that are currently set for the given tailnet.
 Supply the tailnet of interest in the path.
 
 ##### Parameters
-No parameters. 
+No parameters.
 
 ##### Example
 ```
 GET /api/v2/tailnet/example.com/dns/preferences
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
-  -u "tskey-yourapikey123:" 
+  -u "tskey-yourapikey123:"
 ```
 
 Response:
 ```
 {
-  "magicDNS":false, 
+  "magicDNS":false,
 }
 ```
 
 <a name=tailnet-dns-preferences-post></a>
 
-#### `POST /api/v2/tailnet/:tailnet/dns/preferences` - replaces the DNS preferences for a tailnet 
+#### `POST /api/v2/tailnet/:tailnet/dns/preferences` - replaces the DNS preferences for a tailnet
 Replaces the DNS preferences for a tailnet, specifically, the MagicDNS setting.
-Note that MagicDNS is dependent on DNS servers. 
+Note that MagicDNS is dependent on DNS servers.
 
-If there is at least one DNS server, then MagicDNS can be enabled. 
+If there is at least one DNS server, then MagicDNS can be enabled.
 Otherwise, it returns an error.
-Note that removing all nameservers will turn off MagicDNS. 
+Note that removing all nameservers will turn off MagicDNS.
 To reenable it, nameservers must be added back, and MagicDNS must be explicitly turned on.
 
 ##### Parameters
@@ -1065,7 +1065,7 @@ If there are no DNS servers, it returns an error message:
 }
 ```
 
-If there are DNS servers: 
+If there are DNS servers:
 ```
 {
   "magicDNS":true,
@@ -1074,8 +1074,8 @@ If there are DNS servers:
 
 <a name=tailnet-dns-searchpaths-get></a>
 
-#### `GET /api/v2/tailnet/:tailnet/dns/searchpaths` - retrieves the search paths for a tailnet 
-Retrieves the list of search paths that is currently set for the given tailnet. 
+#### `GET /api/v2/tailnet/:tailnet/dns/searchpaths` - retrieves the search paths for a tailnet
+Retrieves the list of search paths that is currently set for the given tailnet.
 Supply the tailnet of interest in the path.
 
 
@@ -1086,7 +1086,7 @@ No parameters.
 ```
 GET /api/v2/tailnet/example.com/dns/searchpaths
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
-  -u "tskey-yourapikey123:" 
+  -u "tskey-yourapikey123:"
 ```
 
 Response:
@@ -1098,7 +1098,7 @@ Response:
 
 <a name=tailnet-dns-searchpaths-post></a>
 
-#### `POST /api/v2/tailnet/:tailnet/dns/searchpaths` - replaces the search paths for a tailnet 
+#### `POST /api/v2/tailnet/:tailnet/dns/searchpaths` - replaces the search paths for a tailnet
 Replaces the list of searchpaths with the list supplied by the user and returns an error otherwise.
 
 ##### Parameters
