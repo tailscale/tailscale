@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/socks5"
@@ -24,15 +25,27 @@ import (
 	"tailscale.com/types/key"
 )
 
+type httpTestParam struct {
+	name  string
+	proxy proxy
+
+	// makeHTTPHangAfterUpgrade makes the HTTP response hang after sending a
+	// 101 switching protocols.
+	makeHTTPHangAfterUpgrade bool
+}
+
 func TestControlHTTP(t *testing.T) {
-	tests := []struct {
-		name  string
-		proxy proxy
-	}{
+	tests := []httpTestParam{
 		// direct connection
 		{
 			name:  "no_proxy",
 			proxy: nil,
+		},
+		// direct connection but port 80 is MITM'ed and broken
+		{
+			name:                     "port80_broken_mitm",
+			proxy:                    nil,
+			makeHTTPHangAfterUpgrade: true,
 		},
 		// SOCKS5
 		{
@@ -97,12 +110,13 @@ func TestControlHTTP(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			testControlHTTP(t, test.proxy)
+			testControlHTTP(t, test)
 		})
 	}
 }
 
-func testControlHTTP(t *testing.T, proxy proxy) {
+func testControlHTTP(t *testing.T, param httpTestParam) {
+	proxy := param.proxy
 	client, server := key.NewMachine(), key.NewMachine()
 
 	const testProtocolVersion = 1
@@ -133,7 +147,11 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 		t.Fatalf("HTTPS listen: %v", err)
 	}
 
-	httpServer := &http.Server{Handler: handler}
+	var httpHandler http.Handler = handler
+	if param.makeHTTPHangAfterUpgrade {
+		httpHandler = http.HandlerFunc(brokenMITMHandler)
+	}
+	httpServer := &http.Server{Handler: httpHandler}
 	go httpServer.Serve(httpLn)
 	defer httpServer.Close()
 
@@ -144,19 +162,24 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 	go httpsServer.ServeTLS(httpsLn, "", "")
 	defer httpsServer.Close()
 
-	//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	//defer cancel()
+	ctx := context.Background()
+	const debugTimeout = false
+	if debugTimeout {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+	}
 
 	a := dialParams{
-		ctx:         context.Background(), //ctx,
-		host:        "localhost",
-		httpPort:    strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
-		httpsPort:   strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
-		machineKey:  client,
-		controlKey:  server.Public(),
-		version:     testProtocolVersion,
-		insecureTLS: true,
-		dialer:      new(tsdial.Dialer).SystemDial,
+		host:              "localhost",
+		httpPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
+		httpsPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
+		machineKey:        client,
+		controlKey:        server.Public(),
+		version:           testProtocolVersion,
+		insecureTLS:       true,
+		dialer:            new(tsdial.Dialer).SystemDial,
+		testFallbackDelay: 50 * time.Millisecond,
 	}
 
 	if proxy != nil {
@@ -175,7 +198,7 @@ func testControlHTTP(t *testing.T, proxy proxy) {
 		}
 	}
 
-	conn, err := a.dial()
+	conn, err := a.dial(ctx)
 	if err != nil {
 		t.Fatalf("dialing controlhttp: %v", err)
 	}
@@ -217,6 +240,7 @@ type proxy interface {
 
 type socksProxy struct {
 	sync.Mutex
+	closed          bool
 	proxy           socks5.Server
 	ln              net.Listener
 	clientConnAddrs map[string]bool // addrs of the local end of outgoing conns from proxy
@@ -232,7 +256,14 @@ func (s *socksProxy) Start(t *testing.T) (url string) {
 	}
 	s.ln = ln
 	s.clientConnAddrs = map[string]bool{}
-	s.proxy.Logf = t.Logf
+	s.proxy.Logf = func(format string, a ...any) {
+		s.Lock()
+		defer s.Unlock()
+		if s.closed {
+			return
+		}
+		t.Logf(format, a...)
+	}
 	s.proxy.Dialer = s.dialAndRecord
 	go s.proxy.Serve(ln)
 	return fmt.Sprintf("socks5://%s", ln.Addr().String())
@@ -241,6 +272,10 @@ func (s *socksProxy) Start(t *testing.T) (url string) {
 func (s *socksProxy) Close() {
 	s.Lock()
 	defer s.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	s.ln.Close()
 }
 
@@ -399,4 +434,12 @@ EKTcWGekdmdDPsHloRNtsiCa697B2O9IFA==
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
+}
+
+func brokenMITMHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Upgrade", upgradeHeaderValue)
+	w.Header().Set("Connection", "upgrade")
+	w.WriteHeader(http.StatusSwitchingProtocols)
+	w.(http.Flusher).Flush()
+	<-r.Context().Done()
 }
