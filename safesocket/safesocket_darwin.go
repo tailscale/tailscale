@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func init() {
@@ -49,6 +50,8 @@ func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 	return port, auth, nil
 }
 
+var warnAboutRootOnce sync.Once
+
 func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 	// There are two ways this binary can be run: as the Mac App Store sandboxed binary,
 	// or a normal binary that somebody built or download and are being run from outside
@@ -82,6 +85,14 @@ func localTCPPortAndTokenDarwin() (port int, token string, err error) {
 					}
 				}
 			}
+		}
+		if os.Geteuid() == 0 {
+			// Log a warning as the clue to the user, in case the error
+			// message is swallowed. Only do this once since we may retry
+			// multiple times to connect, and don't want to spam.
+			warnAboutRootOnce.Do(func() {
+				fmt.Fprintf(os.Stderr, "Warning: The CLI is running as root from within a sandboxed binary. It cannot reach the local tailscaled, please try again as a regular user.\n")
+			})
 		}
 		return 0, "", fmt.Errorf("failed to find sandboxed sameuserproof-* file in TS_MACOS_CLI_SHARED_DIR %q", dir)
 	}
