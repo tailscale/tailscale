@@ -96,15 +96,15 @@ func parseSynologyConfig(r io.Reader) (*url.URL, error) {
 		return nil, nil
 	}
 
-	proxyURL := new(url.URL)
+	proxyURL := &url.URL{
+		Scheme: "http", // regardless of proxy type
+	}
 	if cfg["auth_enabled"] == "yes" {
 		proxyURL.User = url.UserPassword(cfg["proxy_user"], cfg["proxy_pwd"])
 	}
 
-	proxyURL.Scheme = "https"
 	host, port := cfg["https_host"], cfg["https_port"]
 	if host == "" {
-		proxyURL.Scheme = "http"
 		host, port = cfg["http_host"], cfg["http_port"]
 	}
 
