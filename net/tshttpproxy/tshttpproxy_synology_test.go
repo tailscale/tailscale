@@ -131,7 +131,7 @@ http_port=80
 			t.Fatalf("got %s, want %s", got, want)
 		}
 
-		if got, want := proxyURL, urlMustParse("https://foo:bar@10.0.0.66:8443"); got.String() != want.String() {
+		if got, want := proxyURL, urlMustParse("http://foo:bar@10.0.0.66:8443"); got.String() != want.String() {
 			t.Fatalf("got %s, want %s", got, want)
 		}
 
@@ -184,7 +184,7 @@ https_port=8443
 http_host=10.0.0.55
 http_port=80
 `,
-			url: urlMustParse("https://foo:bar@10.0.0.66:8443"),
+			url: urlMustParse("http://foo:bar@10.0.0.66:8443"),
 			err: nil,
 		},
 		"no-auth": {
@@ -200,7 +200,7 @@ https_port=8443
 http_host=10.0.0.55
 http_port=80
 `,
-			url: urlMustParse("https://10.0.0.66:8443"),
+			url: urlMustParse("http://10.0.0.66:8443"),
 			err: nil,
 		},
 		"http": {
@@ -257,7 +257,7 @@ http_port=
 				}
 			}
 
-			if got, want := example.url.String(), url.String(); got != want {
+			if got, want := url.String(), example.url.String(); got != want {
 				t.Fatalf("got %s, want %s", got, want)
 			}
 		})
