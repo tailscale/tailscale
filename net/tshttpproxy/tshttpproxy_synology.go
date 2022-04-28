@@ -33,8 +33,9 @@ var (
 
 var cache struct {
 	sync.Mutex
-	proxy   *url.URL
-	updated time.Time
+	httpProxy  *url.URL
+	httpsProxy *url.URL
+	updated    time.Time
 }
 
 func synologyProxyFromConfigCached(req *http.Request) (*url.URL, error) {
@@ -45,34 +46,36 @@ func synologyProxyFromConfigCached(req *http.Request) (*url.URL, error) {
 	cache.Lock()
 	defer cache.Unlock()
 
+	var err error
 	modtime := mtime(synologyProxyConfigPath)
 
-	if cache.updated == modtime {
-		return cache.proxy, nil
+	if modtime != cache.updated {
+		cache.httpProxy, cache.httpsProxy, err = synologyProxiesFromConfig()
+		cache.updated = modtime
 	}
 
-	val, err := synologyProxyFromConfig(req)
-	cache.proxy = val
-
-	cache.updated = modtime
-
-	return val, err
+	if req.URL.Scheme == "https" {
+		return cache.httpsProxy, err
+	}
+	return cache.httpProxy, err
 }
 
-func synologyProxyFromConfig(req *http.Request) (*url.URL, error) {
+func synologyProxiesFromConfig() (*url.URL, *url.URL, error) {
 	r, err := openSynologyProxyConf()
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	defer r.Close()
 
 	return parseSynologyConfig(r)
 }
 
-func parseSynologyConfig(r io.Reader) (*url.URL, error) {
+// parseSynologyConfig parses the Synology proxy configuration, and returns any
+// http proxy, and any https proxy respectively, or an error if parsing fails.
+func parseSynologyConfig(r io.Reader) (*url.URL, *url.URL, error) {
 	cfg := map[string]string{}
 
 	if err := lineread.Reader(r, func(line []byte) error {
@@ -89,36 +92,43 @@ func parseSynologyConfig(r io.Reader) (*url.URL, error) {
 		cfg[string(key)] = string(value)
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if cfg["proxy_enabled"] != "yes" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	proxyURL := &url.URL{
-		Scheme: "http", // regardless of proxy type
-	}
+	httpProxyURL := new(url.URL)
+	httpsProxyURL := new(url.URL)
 	if cfg["auth_enabled"] == "yes" {
-		proxyURL.User = url.UserPassword(cfg["proxy_user"], cfg["proxy_pwd"])
+		httpProxyURL.User = url.UserPassword(cfg["proxy_user"], cfg["proxy_pwd"])
+		httpsProxyURL.User = url.UserPassword(cfg["proxy_user"], cfg["proxy_pwd"])
 	}
 
-	host, port := cfg["https_host"], cfg["https_port"]
+	// As far as we are aware, synology does not support tls proxies.
+	httpProxyURL.Scheme = "http"
+	httpsProxyURL.Scheme = "http"
+
+	httpsProxyURL = addHostPort(httpsProxyURL, cfg["https_host"], cfg["https_port"])
+	httpProxyURL = addHostPort(httpProxyURL, cfg["http_host"], cfg["http_port"])
+
+	return httpProxyURL, httpsProxyURL, nil
+}
+
+// addHostPort adds to u the given host and port and returns the updated url, or
+// if host is empty, it returns nil.
+func addHostPort(u *url.URL, host, port string) *url.URL {
 	if host == "" {
-		host, port = cfg["http_host"], cfg["http_port"]
+		return nil
 	}
 
-	if host == "" {
-		return nil, nil
-	}
-
-	if port != "" {
-		proxyURL.Host = net.JoinHostPort(host, port)
+	if port == "" {
+		u.Host = host
 	} else {
-		proxyURL.Host = host
+		u.Host = net.JoinHostPort(host, port)
 	}
-
-	return proxyURL, nil
+	return u
 }
 
 // mtime stat's path and returns its modification time. If path does not exist,

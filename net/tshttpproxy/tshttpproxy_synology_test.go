@@ -22,7 +22,7 @@ import (
 )
 
 func TestSynologyProxyFromConfigCached(t *testing.T) {
-	req, err := http.NewRequest("GET", "https://example.org/", nil)
+	req, err := http.NewRequest("GET", "http://example.org/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,8 @@ func TestSynologyProxyFromConfigCached(t *testing.T) {
 		}
 
 		cache.updated = time.Time{}
-		cache.proxy = nil
+		cache.httpProxy = nil
+		cache.httpsProxy = nil
 
 		if val, err := synologyProxyFromConfigCached(req); val != nil || err != nil {
 			t.Fatalf("got %s, %v; want nil, nil", val, err)
@@ -46,19 +47,25 @@ func TestSynologyProxyFromConfigCached(t *testing.T) {
 		if got, want := cache.updated, time.Unix(0, 0); got != want {
 			t.Fatalf("got %s, want %s", got, want)
 		}
-		if cache.proxy != nil {
-			t.Fatalf("got %s, want nil", cache.proxy)
+		if cache.httpProxy != nil {
+			t.Fatalf("got %s, want nil", cache.httpProxy)
+		}
+		if cache.httpsProxy != nil {
+			t.Fatalf("got %s, want nil", cache.httpsProxy)
 		}
 	})
 
 	t.Run("config file updated", func(t *testing.T) {
 		cache.updated = time.Now()
-		cache.proxy = nil
+		cache.httpProxy = nil
+		cache.httpsProxy = nil
 
 		if err := ioutil.WriteFile(synologyProxyConfigPath, []byte(`
 proxy_enabled=yes
 http_host=10.0.0.55
 http_port=80
+https_host=10.0.0.66
+https_port=443
 		`), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -67,6 +74,14 @@ http_port=80
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		if cache.httpProxy == nil {
+			t.Fatal("http proxy was not cached")
+		}
+		if cache.httpsProxy == nil {
+			t.Fatal("https proxy was not cached")
+		}
+
 		if want := urlMustParse("http://10.0.0.55:80"); val.String() != want.String() {
 			t.Fatalf("got %s; want %s", val, want)
 		}
@@ -74,7 +89,8 @@ http_port=80
 
 	t.Run("config file removed", func(t *testing.T) {
 		cache.updated = time.Now()
-		cache.proxy = urlMustParse("http://127.0.0.1/")
+		cache.httpProxy = urlMustParse("http://127.0.0.1/")
+		cache.httpsProxy = urlMustParse("http://127.0.0.1/")
 
 		if err := os.Remove(synologyProxyConfigPath); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -87,13 +103,62 @@ http_port=80
 		if val != nil {
 			t.Fatalf("got %s; want nil", val)
 		}
-		if cache.proxy != nil {
-			t.Fatalf("got %s, want nil", cache.proxy)
+		if cache.httpProxy != nil {
+			t.Fatalf("got %s, want nil", cache.httpProxy)
+		}
+		if cache.httpsProxy != nil {
+			t.Fatalf("got %s, want nil", cache.httpsProxy)
+		}
+	})
+
+	t.Run("picks proxy from request scheme", func(t *testing.T) {
+		cache.updated = time.Now()
+		cache.httpProxy = nil
+		cache.httpsProxy = nil
+
+		if err := ioutil.WriteFile(synologyProxyConfigPath, []byte(`
+proxy_enabled=yes
+http_host=10.0.0.55
+http_port=80
+https_host=10.0.0.66
+https_port=443
+		`), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		httpReq, err := http.NewRequest("GET", "http://example.com", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		val, err := synologyProxyFromConfigCached(httpReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if val == nil {
+			t.Fatalf("got nil, want an http URL")
+		}
+		if got, want := val.String(), "http://10.0.0.55:80"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+
+		httpsReq, err := http.NewRequest("GET", "https://example.com", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		val, err = synologyProxyFromConfigCached(httpsReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if val == nil {
+			t.Fatalf("got nil, want an http URL")
+		}
+		if got, want := val.String(), "http://10.0.0.66:443"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
 		}
 	})
 }
 
-func TestSynologyProxyFromConfig(t *testing.T) {
+func TestSynologyProxiesFromConfig(t *testing.T) {
 	var (
 		openReader io.ReadCloser
 		openErr    error
@@ -103,11 +168,6 @@ func TestSynologyProxyFromConfig(t *testing.T) {
 		return openReader, openErr
 	}
 	defer func() { openSynologyProxyConf = origOpen }()
-
-	req, err := http.NewRequest("GET", "https://example.com/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	t.Run("with config", func(t *testing.T) {
 		mc := &mustCloser{Reader: strings.NewReader(`
@@ -125,13 +185,21 @@ http_port=80
 		defer mc.check(t)
 		openReader = mc
 
-		proxyURL, err := synologyProxyFromConfig(req)
+		httpProxy, httpsProxy, err := synologyProxiesFromConfig()
 
 		if got, want := err, openErr; got != want {
 			t.Fatalf("got %s, want %s", got, want)
 		}
 
-		if got, want := proxyURL, urlMustParse("http://foo:bar@10.0.0.66:8443"); got.String() != want.String() {
+		if got, want := httpsProxy, urlMustParse("http://foo:bar@10.0.0.66:8443"); got.String() != want.String() {
+			t.Fatalf("got %s, want %s", got, want)
+		}
+
+		if got, want := err, openErr; got != want {
+			t.Fatalf("got %s, want %s", got, want)
+		}
+
+		if got, want := httpProxy, urlMustParse("http://foo:bar@10.0.0.55:80"); got.String() != want.String() {
 			t.Fatalf("got %s, want %s", got, want)
 		}
 
@@ -141,12 +209,15 @@ http_port=80
 		openReader = nil
 		openErr = os.ErrNotExist
 
-		proxyURL, err := synologyProxyFromConfig(req)
+		httpProxy, httpsProxy, err := synologyProxiesFromConfig()
 		if err != nil {
 			t.Fatalf("expected no error, got %s", err)
 		}
-		if proxyURL != nil {
-			t.Fatalf("expected no url, got %s", proxyURL)
+		if httpProxy != nil {
+			t.Fatalf("expected no url, got %s", httpProxy)
+		}
+		if httpsProxy != nil {
+			t.Fatalf("expected no url, got %s", httpsProxy)
 		}
 	})
 
@@ -154,12 +225,15 @@ http_port=80
 		openReader = nil
 		openErr = errors.New("example error")
 
-		proxyURL, err := synologyProxyFromConfig(req)
+		httpProxy, httpsProxy, err := synologyProxiesFromConfig()
 		if err != openErr {
 			t.Fatalf("expected %s, got %s", openErr, err)
 		}
-		if proxyURL != nil {
-			t.Fatalf("expected no url, got %s", proxyURL)
+		if httpProxy != nil {
+			t.Fatalf("expected no url, got %s", httpProxy)
+		}
+		if httpsProxy != nil {
+			t.Fatalf("expected no url, got %s", httpsProxy)
 		}
 	})
 
@@ -167,9 +241,10 @@ http_port=80
 
 func TestParseSynologyConfig(t *testing.T) {
 	cases := map[string]struct {
-		input string
-		url   *url.URL
-		err   error
+		input      string
+		httpProxy  *url.URL
+		httpsProxy *url.URL
+		err        error
 	}{
 		"populated": {
 			input: `
@@ -184,8 +259,9 @@ https_port=8443
 http_host=10.0.0.55
 http_port=80
 `,
-			url: urlMustParse("http://foo:bar@10.0.0.66:8443"),
-			err: nil,
+			httpProxy:  urlMustParse("http://foo:bar@10.0.0.55:80"),
+			httpsProxy: urlMustParse("http://foo:bar@10.0.0.66:8443"),
+			err:        nil,
 		},
 		"no-auth": {
 			input: `
@@ -200,10 +276,11 @@ https_port=8443
 http_host=10.0.0.55
 http_port=80
 `,
-			url: urlMustParse("http://10.0.0.66:8443"),
-			err: nil,
+			httpProxy:  urlMustParse("http://10.0.0.55:80"),
+			httpsProxy: urlMustParse("http://10.0.0.66:8443"),
+			err:        nil,
 		},
-		"http": {
+		"http-only": {
 			input: `
 proxy_user=foo
 proxy_pwd=bar
@@ -216,8 +293,9 @@ https_port=8443
 http_host=10.0.0.55
 http_port=80
 `,
-			url: urlMustParse("http://foo:bar@10.0.0.55:80"),
-			err: nil,
+			httpProxy:  urlMustParse("http://foo:bar@10.0.0.55:80"),
+			httpsProxy: nil,
+			err:        nil,
 		},
 		"empty": {
 			input: `
@@ -232,14 +310,15 @@ https_port=
 http_host=
 http_port=
 `,
-			url: nil,
-			err: nil,
+			httpProxy:  nil,
+			httpsProxy: nil,
+			err:        nil,
 		},
 	}
 
 	for name, example := range cases {
 		t.Run(name, func(t *testing.T) {
-			url, err := parseSynologyConfig(strings.NewReader(example.input))
+			httpProxy, httpsProxy, err := parseSynologyConfig(strings.NewReader(example.input))
 			if err != example.err {
 				t.Fatal(err)
 			}
@@ -247,18 +326,32 @@ http_port=
 				return
 			}
 
-			if url == nil && example.url == nil {
-				return
+			if example.httpProxy == nil && httpProxy != nil {
+				t.Fatalf("got %s, want nil", httpProxy)
 			}
 
-			if example.url == nil {
-				if url != nil {
-					t.Fatalf("got %s, want nil", url)
+			if example.httpProxy != nil {
+				if httpProxy == nil {
+					t.Fatalf("got nil, want %s", example.httpProxy)
+				}
+
+				if got, want := example.httpProxy.String(), httpProxy.String(); got != want {
+					t.Fatalf("got %s, want %s", got, want)
 				}
 			}
 
-			if got, want := url.String(), example.url.String(); got != want {
-				t.Fatalf("got %s, want %s", got, want)
+			if example.httpsProxy == nil && httpsProxy != nil {
+				t.Fatalf("got %s, want nil", httpProxy)
+			}
+
+			if example.httpsProxy != nil {
+				if httpsProxy == nil {
+					t.Fatalf("got nil, want %s", example.httpsProxy)
+				}
+
+				if got, want := example.httpsProxy.String(), httpsProxy.String(); got != want {
+					t.Fatalf("got %s, want %s", got, want)
+				}
 			}
 		})
 	}
