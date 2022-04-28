@@ -70,7 +70,6 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 		return nil, err
 	}
 	a := &dialParams{
-		ctx:        ctx,
 		host:       host,
 		httpPort:   port,
 		httpsPort:  "443",
@@ -80,11 +79,10 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
 		dialer:     dialer,
 	}
-	return a.dial()
+	return a.dial(ctx)
 }
 
 type dialParams struct {
-	ctx        context.Context
 	host       string
 	httpPort   string
 	httpsPort  string
@@ -95,14 +93,24 @@ type dialParams struct {
 	dialer     dnscache.DialContextFunc
 
 	// For tests only
-	insecureTLS bool
+	insecureTLS       bool
+	testFallbackDelay time.Duration
 }
 
-func (a *dialParams) dial() (*controlbase.Conn, error) {
+// httpsFallbackDelay is how long we'll wait for a.httpPort to work before
+// starting to try a.httpsPort.
+func (a *dialParams) httpsFallbackDelay() time.Duration {
+	if v := a.testFallbackDelay; v != 0 {
+		return v
+	}
+	return 500 * time.Millisecond
+}
+
+func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 	// Create one shared context used by both port 80 and port 443 dials.
 	// If port 80 is still in flight when 443 returns, this deferred cancel
 	// will stop the port 80 dial.
-	ctx, cancel := context.WithCancel(a.ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// u80 and u443 are the URLs we'll try to hit over HTTP or HTTPS,
@@ -118,26 +126,20 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 		Host:   net.JoinHostPort(a.host, a.httpsPort),
 		Path:   serverUpgradePath,
 	}
+
 	type tryURLRes struct {
-		u    *url.URL
-		conn net.Conn
-		cont controlbase.HandshakeContinuation
+		u    *url.URL          // input (the URL conn+err are for/from)
+		conn *controlbase.Conn // result (mutually exclusive with err)
 		err  error
 	}
 	ch := make(chan tryURLRes) // must be unbuffered
-
 	try := func(u *url.URL) {
-		res := tryURLRes{u: u}
-		var init []byte
-		init, res.cont, res.err = controlbase.ClientDeferred(a.machineKey, a.controlKey, a.version)
-		if res.err == nil {
-			res.conn, res.err = a.tryURL(ctx, u, init)
-		}
+		cbConn, err := a.dialURL(ctx, u)
 		select {
-		case ch <- res:
+		case ch <- tryURLRes{u, cbConn, err}:
 		case <-ctx.Done():
-			if res.conn != nil {
-				res.conn.Close()
+			if cbConn != nil {
+				cbConn.Close()
 			}
 		}
 	}
@@ -147,7 +149,7 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 
 	// In case outbound port 80 blocked or MITM'ed poorly, start a backup timer
 	// to dial port 443 if port 80 doesn't either succeed or fail quickly.
-	try443Timer := time.AfterFunc(500*time.Millisecond, func() { try(u443) })
+	try443Timer := time.AfterFunc(a.httpsFallbackDelay(), func() { try(u443) })
 	defer try443Timer.Stop()
 
 	var err80, err443 error
@@ -157,12 +159,7 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 			return nil, fmt.Errorf("connection attempts aborted by context: %w", ctx.Err())
 		case res := <-ch:
 			if res.err == nil {
-				ret, err := res.cont(ctx, res.conn)
-				if err != nil {
-					res.conn.Close()
-					return nil, err
-				}
-				return ret, nil
+				return res.conn, nil
 			}
 			switch res.u {
 			case u80:
@@ -187,10 +184,28 @@ func (a *dialParams) dial() (*controlbase.Conn, error) {
 	}
 }
 
-// tryURL connects to u, and tries to upgrade it to a net.Conn.
+// dialURL attempts to connect to the given URL.
+func (a *dialParams) dialURL(ctx context.Context, u *url.URL) (*controlbase.Conn, error) {
+	init, cont, err := controlbase.ClientDeferred(a.machineKey, a.controlKey, a.version)
+	if err != nil {
+		return nil, err
+	}
+	netConn, err := a.tryURLUpgrade(ctx, u, init)
+	if err != nil {
+		return nil, err
+	}
+	cbConn, err := cont(ctx, netConn)
+	if err != nil {
+		netConn.Close()
+		return nil, err
+	}
+	return cbConn, nil
+}
+
+// tryURLUpgrade connects to u, and tries to upgrade it to a net.Conn.
 //
 // Only the provided ctx is used, not a.ctx.
-func (a *dialParams) tryURL(ctx context.Context, u *url.URL, init []byte) (net.Conn, error) {
+func (a *dialParams) tryURLUpgrade(ctx context.Context, u *url.URL, init []byte) (net.Conn, error) {
 	dns := &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward,
 		LookupIPFallback: dnsfallback.Lookup,
