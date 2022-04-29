@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/version"
 )
 
@@ -41,7 +40,7 @@ func runVersion(ctx context.Context, args []string) error {
 
 	printf("Client: %s\n", version.String())
 
-	st, err := tailscale.StatusWithoutPeers(ctx)
+	st, err := localClient.StatusWithoutPeers(ctx)
 	if err != nil {
 		return err
 	}

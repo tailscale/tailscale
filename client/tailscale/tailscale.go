@@ -38,24 +38,59 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-var (
-	// TailscaledSocket is the tailscaled Unix socket. It's used by the TailscaledDialer.
-	TailscaledSocket = paths.DefaultTailscaledSocket()
+// defaultLocalClient is the default LocalClient when using the legacy
+// package-level functions.
+var defaultLocalClient LocalClient
 
-	// TailscaledSocketSetExplicitly reports whether the user explicitly set TailscaledSocket.
-	TailscaledSocketSetExplicitly bool
+// LocalClient is a client to Tailscale's "local API", communicating with the
+// Tailscale daemon on the local machine. Its API is not necessarily stable and
+// subject to changes between releases. Some API calls have stricter
+// compatibility guarantees, once they've been widely adopted. See method docs
+// for details.
+//
+// Its zero value is valid to use.
+//
+// Any exported fields should be set before using methods on the type
+// and not changed thereafter.
+type LocalClient struct {
+	// Dial optionally specifies an alternate func that connects to the local
+	// machine's tailscaled or equivalent. If nil, a default is used.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// TailscaledDialer is the DialContext func that connects to the local machine's
-	// tailscaled or equivalent.
-	TailscaledDialer = defaultDialer
-)
+	// Socket specifies an alternate path to the local Tailscale socket.
+	// If empty, a platform-specific default is used.
+	Socket string
 
-func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) {
+	// UseSocketOnly, if true, tries to only connect to tailscaled via the
+	// Unix socket and not via fallback mechanisms as done on macOS when
+	// connecting to the GUI client variants.
+	UseSocketOnly bool
+
+	// tsClient does HTTP requests to the local Tailscale daemon.
+	// It's lazily initialized on first use.
+	tsClient     *http.Client
+	tsClientOnce sync.Once
+}
+
+func (lc *LocalClient) socket() string {
+	if lc.Socket != "" {
+		return lc.Socket
+	}
+	return paths.DefaultTailscaledSocket()
+}
+
+func (lc *LocalClient) dialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	if lc.Dial != nil {
+		return lc.Dial
+	}
+	return lc.defaultDialer
+}
+
+func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) {
 	if addr != "local-tailscaled.sock:80" {
 		return nil, fmt.Errorf("unexpected URL address %q", addr)
 	}
-	// TODO: make this part of a safesocket.ConnectionStrategy
-	if !TailscaledSocketSetExplicitly {
+	if !lc.UseSocketOnly {
 		// On macOS, when dialing from non-sandboxed program to sandboxed GUI running
 		// a TCP server on a random port, find the random port. For HTTP connections,
 		// we don't send the token. It gets added in an HTTP Basic-Auth header.
@@ -64,20 +99,12 @@ func defaultDialer(ctx context.Context, network, addr string) (net.Conn, error) 
 			return d.DialContext(ctx, "tcp", "localhost:"+strconv.Itoa(port))
 		}
 	}
-	s := safesocket.DefaultConnectionStrategy(TailscaledSocket)
+	s := safesocket.DefaultConnectionStrategy(lc.socket())
 	// The user provided a non-default tailscaled socket address.
 	// Connect only to exactly what they provided.
 	s.UseFallback(false)
 	return safesocket.Connect(s)
 }
-
-var (
-	// tsClient does HTTP requests to the local Tailscale daemon.
-	// We lazily initialize the client in case the caller wants to
-	// override TailscaledDialer.
-	tsClient     *http.Client
-	tsClientOnce sync.Once
-)
 
 // DoLocalRequest makes an HTTP request to the local machine's Tailscale daemon.
 //
@@ -88,22 +115,22 @@ var (
 // authenticating to the local Tailscale daemon vary by platform.
 //
 // DoLocalRequest may mutate the request to add Authorization headers.
-func DoLocalRequest(req *http.Request) (*http.Response, error) {
-	tsClientOnce.Do(func() {
-		tsClient = &http.Client{
+func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error) {
+	lc.tsClientOnce.Do(func() {
+		lc.tsClient = &http.Client{
 			Transport: &http.Transport{
-				DialContext: TailscaledDialer,
+				DialContext: lc.dialer(),
 			},
 		}
 	})
 	if _, token, err := safesocket.LocalTCPPortAndToken(); err == nil {
 		req.SetBasicAuth("", token)
 	}
-	return tsClient.Do(req)
+	return lc.tsClient.Do(req)
 }
 
-func doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
-	res, err := DoLocalRequest(req)
+func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
+	res, err := lc.DoLocalRequest(req)
 	if err == nil {
 		if server := res.Header.Get("Tailscale-Version"); server != "" && server != ipn.IPCVersion() && onVersionMismatch != nil {
 			onVersionMismatch(ipn.IPCVersion(), server)
@@ -169,12 +196,12 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 	onVersionMismatch = f
 }
 
-func send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
+func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
 	if err != nil {
 		return nil, err
 	}
-	res, err := doLocalRequestNiceError(req)
+	res, err := lc.doLocalRequestNiceError(req)
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +217,20 @@ func send(ctx context.Context, method, path string, wantStatus int, body io.Read
 	return slurp, nil
 }
 
-func get200(ctx context.Context, path string) ([]byte, error) {
-	return send(ctx, "GET", path, 200, nil)
+func (lc *LocalClient) get200(ctx context.Context, path string) ([]byte, error) {
+	return lc.send(ctx, "GET", path, 200, nil)
 }
 
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+//
+// Deprecated: use LocalClient.WhoIs.
 func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
-	body, err := get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
+	return defaultLocalClient.WhoIs(ctx, remoteAddr)
+}
+
+// WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
+func (lc *LocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
 		return nil, err
 	}
@@ -211,18 +245,18 @@ func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, erro
 }
 
 // Goroutines returns a dump of the Tailscale daemon's current goroutines.
-func Goroutines(ctx context.Context) ([]byte, error) {
-	return get200(ctx, "/localapi/v0/goroutines")
+func (lc *LocalClient) Goroutines(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/goroutines")
 }
 
 // DaemonMetrics returns the Tailscale daemon's metrics in
 // the Prometheus text exposition format.
-func DaemonMetrics(ctx context.Context) ([]byte, error) {
-	return get200(ctx, "/localapi/v0/metrics")
+func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
+	return lc.get200(ctx, "/localapi/v0/metrics")
 }
 
 // Profile returns a pprof profile of the Tailscale daemon.
-func Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
+func (lc *LocalClient) Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	var secArg string
 	if sec < 0 || sec > 300 {
 		return nil, errors.New("duration out of range")
@@ -230,12 +264,12 @@ func Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	if sec != 0 || pprofType == "profile" {
 		secArg = fmt.Sprint(sec)
 	}
-	return get200(ctx, fmt.Sprintf("/localapi/v0/profile?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
+	return lc.get200(ctx, fmt.Sprintf("/localapi/v0/profile?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
 }
 
 // BugReport logs and returns a log marker that can be shared by the user with support.
-func BugReport(ctx context.Context, note string) (string, error) {
-	body, err := send(ctx, "POST", "/localapi/v0/bugreport?note="+url.QueryEscape(note), 200, nil)
+func (lc *LocalClient) BugReport(ctx context.Context, note string) (string, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/bugreport?note="+url.QueryEscape(note), 200, nil)
 	if err != nil {
 		return "", err
 	}
@@ -244,8 +278,8 @@ func BugReport(ctx context.Context, note string) (string, error) {
 
 // DebugAction invokes a debug action, such as "rebind" or "restun".
 // These are development tools and subject to change or removal over time.
-func DebugAction(ctx context.Context, action string) error {
-	body, err := send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
 	if err != nil {
 		return fmt.Errorf("error %w: %s", err, body)
 	}
@@ -254,16 +288,26 @@ func DebugAction(ctx context.Context, action string) error {
 
 // Status returns the Tailscale daemon's status.
 func Status(ctx context.Context) (*ipnstate.Status, error) {
-	return status(ctx, "")
+	return defaultLocalClient.Status(ctx)
+}
+
+// Status returns the Tailscale daemon's status.
+func (lc *LocalClient) Status(ctx context.Context) (*ipnstate.Status, error) {
+	return lc.status(ctx, "")
 }
 
 // StatusWithoutPeers returns the Tailscale daemon's status, without the peer info.
 func StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
-	return status(ctx, "?peers=false")
+	return defaultLocalClient.StatusWithoutPeers(ctx)
 }
 
-func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
-	body, err := get200(ctx, "/localapi/v0/status"+queryString)
+// StatusWithoutPeers returns the Tailscale daemon's status, without the peer info.
+func (lc *LocalClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	return lc.status(ctx, "?peers=false")
+}
+
+func (lc *LocalClient) status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/status"+queryString)
 	if err != nil {
 		return nil, err
 	}
@@ -277,8 +321,8 @@ func status(ctx context.Context, queryString string) (*ipnstate.Status, error) {
 // IDToken is a request to get an OIDC ID token for an audience.
 // The token can be presented to any resource provider which offers OIDC
 // Federation.
-func IDToken(ctx context.Context, aud string) (*tailcfg.TokenResponse, error) {
-	body, err := get200(ctx, "/localapi/v0/id-token?aud="+url.QueryEscape(aud))
+func (lc *LocalClient) IDToken(ctx context.Context, aud string) (*tailcfg.TokenResponse, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/id-token?aud="+url.QueryEscape(aud))
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +333,8 @@ func IDToken(ctx context.Context, aud string) (*tailcfg.TokenResponse, error) {
 	return tr, nil
 }
 
-func WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
-	body, err := get200(ctx, "/localapi/v0/files/")
+func (lc *LocalClient) WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/files/")
 	if err != nil {
 		return nil, err
 	}
@@ -301,17 +345,17 @@ func WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
 	return wfs, nil
 }
 
-func DeleteWaitingFile(ctx context.Context, baseName string) error {
-	_, err := send(ctx, "DELETE", "/localapi/v0/files/"+url.PathEscape(baseName), http.StatusNoContent, nil)
+func (lc *LocalClient) DeleteWaitingFile(ctx context.Context, baseName string) error {
+	_, err := lc.send(ctx, "DELETE", "/localapi/v0/files/"+url.PathEscape(baseName), http.StatusNoContent, nil)
 	return err
 }
 
-func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, size int64, err error) {
+func (lc *LocalClient) GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, size int64, err error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/files/"+url.PathEscape(baseName), nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	res, err := doLocalRequestNiceError(req)
+	res, err := lc.doLocalRequestNiceError(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -327,8 +371,8 @@ func GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, siz
 	return res.Body, res.ContentLength, nil
 }
 
-func FileTargets(ctx context.Context) ([]apitype.FileTarget, error) {
-	body, err := get200(ctx, "/localapi/v0/file-targets")
+func (lc *LocalClient) FileTargets(ctx context.Context) ([]apitype.FileTarget, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/file-targets")
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +387,7 @@ func FileTargets(ctx context.Context) ([]apitype.FileTarget, error) {
 //
 // A size of -1 means unknown.
 // The name parameter is the original filename, not escaped.
-func PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name string, r io.Reader) error {
+func (lc *LocalClient) PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name string, r io.Reader) error {
 	req, err := http.NewRequestWithContext(ctx, "PUT", "http://local-tailscaled.sock/localapi/v0/file-put/"+string(target)+"/"+url.PathEscape(name), r)
 	if err != nil {
 		return err
@@ -351,7 +395,7 @@ func PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name
 	if size != -1 {
 		req.ContentLength = size
 	}
-	res, err := doLocalRequestNiceError(req)
+	res, err := lc.doLocalRequestNiceError(req)
 	if err != nil {
 		return err
 	}
@@ -363,8 +407,11 @@ func PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name
 	return bestError(fmt.Errorf("%s: %s", res.Status, all), all)
 }
 
-func CheckIPForwarding(ctx context.Context) error {
-	body, err := get200(ctx, "/localapi/v0/check-ip-forwarding")
+// CheckIPForwarding asks the local Tailscale daemon whether it looks like the
+// machine is properly configured to forward IP packets as a subnet router
+// or exit node.
+func (lc *LocalClient) CheckIPForwarding(ctx context.Context) error {
+	body, err := lc.get200(ctx, "/localapi/v0/check-ip-forwarding")
 	if err != nil {
 		return err
 	}
@@ -386,17 +433,17 @@ func CheckIPForwarding(ctx context.Context) error {
 // work. Currently (2022-04-18) this only checks for SSH server compatibility.
 // Note that EditPrefs does the same validation as this, so call CheckPrefs before
 // EditPrefs is not necessary.
-func CheckPrefs(ctx context.Context, p *ipn.Prefs) error {
+func (lc *LocalClient) CheckPrefs(ctx context.Context, p *ipn.Prefs) error {
 	pj, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	_, err = send(ctx, "POST", "/localapi/v0/check-prefs", http.StatusOK, bytes.NewReader(pj))
+	_, err = lc.send(ctx, "POST", "/localapi/v0/check-prefs", http.StatusOK, bytes.NewReader(pj))
 	return err
 }
 
-func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
-	body, err := get200(ctx, "/localapi/v0/prefs")
+func (lc *LocalClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
+	body, err := lc.get200(ctx, "/localapi/v0/prefs")
 	if err != nil {
 		return nil, err
 	}
@@ -407,12 +454,12 @@ func GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 	return &p, nil
 }
 
-func EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
+func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	mpj, err := json.Marshal(mp)
 	if err != nil {
 		return nil, err
 	}
-	body, err := send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
+	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
 	if err != nil {
 		return nil, err
 	}
@@ -423,8 +470,8 @@ func EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	return &p, nil
 }
 
-func Logout(ctx context.Context) error {
-	_, err := send(ctx, "POST", "/localapi/v0/logout", http.StatusNoContent, nil)
+func (lc *LocalClient) Logout(ctx context.Context) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/logout", http.StatusNoContent, nil)
 	return err
 }
 
@@ -442,11 +489,11 @@ func Logout(ctx context.Context) error {
 // This is a low-level interface; it's expected that most Tailscale
 // users use a higher level interface to getting/using TLS
 // certificates.
-func SetDNS(ctx context.Context, name, value string) error {
+func (lc *LocalClient) SetDNS(ctx context.Context, name, value string) error {
 	v := url.Values{}
 	v.Set("name", name)
 	v.Set("value", value)
-	_, err := send(ctx, "POST", "/localapi/v0/set-dns?"+v.Encode(), 200, nil)
+	_, err := lc.send(ctx, "POST", "/localapi/v0/set-dns?"+v.Encode(), 200, nil)
 	return err
 }
 
@@ -456,7 +503,7 @@ func SetDNS(ctx context.Context, name, value string) error {
 // tailscaled), a FQDN, or an IP address.
 //
 // The ctx is only used for the duration of the call, not the lifetime of the net.Conn.
-func DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
+func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
 	connCh := make(chan net.Conn, 1)
 	trace := httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -474,7 +521,7 @@ func DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
 		"Dial-Host":  []string{host},
 		"Dial-Port":  []string{fmt.Sprint(port)},
 	}
-	res, err := DoLocalRequest(req)
+	res, err := lc.DoLocalRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -506,9 +553,9 @@ func DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
 
 // CurrentDERPMap returns the current DERPMap that is being used by the local tailscaled.
 // It is intended to be used with netcheck to see availability of DERPs.
-func CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
+func (lc *LocalClient) CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
 	var derpMap tailcfg.DERPMap
-	res, err := send(ctx, "GET", "/localapi/v0/derpmap", 200, nil)
+	res, err := lc.send(ctx, "GET", "/localapi/v0/derpmap", 200, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -521,8 +568,19 @@ func CurrentDERPMap(ctx context.Context) (*tailcfg.DERPMap, error) {
 // CertPair returns a cert and private key for the provided DNS domain.
 //
 // It returns a cached certificate from disk if it's still valid.
+//
+// Deprecated: use LocalClient.CertPair.
 func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
-	res, err := send(ctx, "GET", "/localapi/v0/cert/"+domain+"?type=pair", 200, nil)
+	return defaultLocalClient.CertPair(ctx, domain)
+}
+
+// CertPair returns a cert and private key for the provided DNS domain.
+//
+// It returns a cached certificate from disk if it's still valid.
+//
+// API maturity: this is considered a stable API.
+func (lc *LocalClient) CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err error) {
+	res, err := lc.send(ctx, "GET", "/localapi/v0/cert/"+domain+"?type=pair", 200, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -546,7 +604,21 @@ func CertPair(ctx context.Context, domain string) (certPEM, keyPEM []byte, err e
 //
 // It's the right signature to use as the value of
 // tls.Config.GetCertificate.
+//
+// Deprecated: use LocalClient.GetCertificate.
 func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return defaultLocalClient.GetCertificate(hi)
+}
+
+// GetCertificate fetches a TLS certificate for the TLS ClientHello in hi.
+//
+// It returns a cached certificate from disk if it's still valid.
+//
+// It's the right signature to use as the value of
+// tls.Config.GetCertificate.
+//
+// API maturity: this is considered a stable API.
+func (lc *LocalClient) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	if hi == nil || hi.ServerName == "" {
 		return nil, errors.New("no SNI ServerName")
 	}
@@ -555,11 +627,11 @@ func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 
 	name := hi.ServerName
 	if !strings.Contains(name, ".") {
-		if v, ok := ExpandSNIName(ctx, name); ok {
+		if v, ok := lc.ExpandSNIName(ctx, name); ok {
 			name = v
 		}
 	}
-	certPEM, keyPEM, err := CertPair(ctx, name)
+	certPEM, keyPEM, err := lc.CertPair(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +643,14 @@ func GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 }
 
 // ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
+//
+// Deprecated: use LocalClient.ExpandSNIName.
 func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
+	return defaultLocalClient.ExpandSNIName(ctx, name)
+}
+
+// ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
+func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 	st, err := StatusWithoutPeers(ctx)
 	if err != nil {
 		return "", false

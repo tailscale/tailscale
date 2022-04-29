@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 )
 
@@ -26,7 +25,7 @@ func runDown(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("error fetching current status: %w", err)
 	}
@@ -34,7 +33,7 @@ func runDown(ctx context.Context, args []string) error {
 		fmt.Fprintf(Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
-	_, err = tailscale.EditPrefs(ctx, &ipn.MaskedPrefs{
+	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			WantRunning: false,
 		},

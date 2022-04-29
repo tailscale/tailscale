@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
@@ -63,7 +62,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 		fmt.Fprintln(Stderr, "# Warning: this JSON format is not yet considered a stable interface")
 	}
 
-	dm, err := tailscale.CurrentDERPMap(ctx)
+	dm, err := localClient.CurrentDERPMap(ctx)
 	noRegions := dm != nil && len(dm.Regions) == 0
 	if noRegions {
 		log.Printf("No DERP map from tailscaled; using default.")

@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 )
 
 var bugReportCmd = &ffcli.Command{
@@ -28,7 +27,7 @@ func runBugReport(ctx context.Context, args []string) error {
 	default:
 		return errors.New("unknown argumets")
 	}
-	logMarker, err := tailscale.BugReport(ctx, note)
+	logMarker, err := localClient.BugReport(ctx, note)
 	if err != nil {
 		return err
 	}

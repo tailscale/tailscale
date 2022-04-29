@@ -20,7 +20,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -47,7 +46,7 @@ func runSSH(ctx context.Context, args []string) error {
 		username = lu.Username
 	}
 
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return err
 	}

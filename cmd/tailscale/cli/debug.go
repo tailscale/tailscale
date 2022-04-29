@@ -23,7 +23,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
@@ -155,7 +154,7 @@ func runDebug(ctx context.Context, args []string) error {
 	if out := debugArgs.cpuFile; out != "" {
 		usedFlag = true // TODO(bradfitz): add "profile" subcommand
 		log.Printf("Capturing CPU profile for %v seconds ...", debugArgs.cpuSec)
-		if v, err := tailscale.Profile(ctx, "profile", debugArgs.cpuSec); err != nil {
+		if v, err := localClient.Profile(ctx, "profile", debugArgs.cpuSec); err != nil {
 			return err
 		} else {
 			if err := writeProfile(out, v); err != nil {
@@ -167,7 +166,7 @@ func runDebug(ctx context.Context, args []string) error {
 	if out := debugArgs.memFile; out != "" {
 		usedFlag = true // TODO(bradfitz): add "profile" subcommand
 		log.Printf("Capturing memory profile ...")
-		if v, err := tailscale.Profile(ctx, "heap", 0); err != nil {
+		if v, err := localClient.Profile(ctx, "heap", 0); err != nil {
 			return err
 		} else {
 			if err := writeProfile(out, v); err != nil {
@@ -179,7 +178,7 @@ func runDebug(ctx context.Context, args []string) error {
 	if debugArgs.file != "" {
 		usedFlag = true // TODO(bradfitz): add "file" subcommand
 		if debugArgs.file == "get" {
-			wfs, err := tailscale.WaitingFiles(ctx)
+			wfs, err := localClient.WaitingFiles(ctx)
 			if err != nil {
 				fatalf("%v\n", err)
 			}
@@ -190,9 +189,9 @@ func runDebug(ctx context.Context, args []string) error {
 		}
 		delete := strings.HasPrefix(debugArgs.file, "delete:")
 		if delete {
-			return tailscale.DeleteWaitingFile(ctx, strings.TrimPrefix(debugArgs.file, "delete:"))
+			return localClient.DeleteWaitingFile(ctx, strings.TrimPrefix(debugArgs.file, "delete:"))
 		}
-		rc, size, err := tailscale.GetWaitingFile(ctx, debugArgs.file)
+		rc, size, err := localClient.GetWaitingFile(ctx, debugArgs.file)
 		if err != nil {
 			return err
 		}
@@ -227,7 +226,7 @@ var prefsArgs struct {
 }
 
 func runPrefs(ctx context.Context, args []string) error {
-	prefs, err := tailscale.GetPrefs(ctx)
+	prefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
 		return err
 	}
@@ -261,7 +260,7 @@ func runWatchIPN(ctx context.Context, args []string) error {
 }
 
 func runDERPMap(ctx context.Context, args []string) error {
-	dm, err := tailscale.CurrentDERPMap(ctx)
+	dm, err := localClient.CurrentDERPMap(ctx)
 	if err != nil {
 		return fmt.Errorf(
 			"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
@@ -278,7 +277,7 @@ func localAPIAction(action string) func(context.Context, []string) error {
 		if len(args) > 0 {
 			return errors.New("unexpected arguments")
 		}
-		return tailscale.DebugAction(ctx, action)
+		return localClient.DebugAction(ctx, action)
 	}
 }
 
@@ -319,7 +318,7 @@ func runHostinfo(ctx context.Context, args []string) error {
 }
 
 func runDaemonGoroutines(ctx context.Context, args []string) error {
-	goroutines, err := tailscale.Goroutines(ctx)
+	goroutines, err := localClient.Goroutines(ctx)
 	if err != nil {
 		return err
 	}
@@ -334,7 +333,7 @@ var metricsArgs struct {
 func runDaemonMetrics(ctx context.Context, args []string) error {
 	last := map[string]int64{}
 	for {
-		out, err := tailscale.DaemonMetrics(ctx)
+		out, err := localClient.DaemonMetrics(ctx)
 		if err != nil {
 			return err
 		}

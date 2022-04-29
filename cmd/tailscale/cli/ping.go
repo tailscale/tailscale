@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 )
@@ -65,7 +64,7 @@ var pingArgs struct {
 }
 
 func runPing(ctx context.Context, args []string) error {
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
@@ -173,7 +172,7 @@ func tailscaleIPFromArg(ctx context.Context, hostOrIP string) (ip string, self b
 	}
 
 	// Otherwise, try to resolve it first from the network peer list.
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return "", false, err
 	}

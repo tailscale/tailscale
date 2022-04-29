@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 )
 
 var idTokenCmd = &ffcli.Command{
@@ -25,7 +24,7 @@ func runIDToken(ctx context.Context, args []string) error {
 		return errors.New("usage: id-token <aud>")
 	}
 
-	tr, err := tailscale.IDToken(ctx, args[0])
+	tr, err := localClient.IDToken(ctx, args[0])
 	if err != nil {
 		return err
 	}

@@ -24,7 +24,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/time/rate"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -157,7 +156,7 @@ func runCp(ctx context.Context, args []string) error {
 		if cpArgs.verbose {
 			log.Printf("sending %q to %v/%v/%v ...", name, target, ip, stableID)
 		}
-		err := tailscale.PushFile(ctx, stableID, contentLength, name, fileContents)
+		err := localClient.PushFile(ctx, stableID, contentLength, name, fileContents)
 		if err != nil {
 			return err
 		}
@@ -173,7 +172,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 	if err != nil {
 		return "", false, err
 	}
-	fts, err := tailscale.FileTargets(ctx)
+	fts, err := localClient.FileTargets(ctx)
 	if err != nil {
 		return "", false, err
 	}
@@ -194,7 +193,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 // invalid file sharing target.
 func fileTargetErrorDetail(ctx context.Context, ip netaddr.IP) error {
 	found := false
-	if st, err := tailscale.Status(ctx); err == nil && st.Self != nil {
+	if st, err := localClient.Status(ctx); err == nil && st.Self != nil {
 		for _, peer := range st.Peer {
 			for _, pip := range peer.TailscaleIPs {
 				if pip == ip {
@@ -261,7 +260,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("invalid arguments with --targets")
 	}
-	fts, err := tailscale.FileTargets(ctx)
+	fts, err := localClient.FileTargets(ctx)
 	if err != nil {
 		return err
 	}
@@ -385,7 +384,7 @@ func openFileOrSubstitute(dir, base string, action onConflict) (*os.File, error)
 }
 
 func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targetFile string, size int64, err error) {
-	rc, size, err := tailscale.GetWaitingFile(ctx, wf.Name)
+	rc, size, err := localClient.GetWaitingFile(ctx, wf.Name)
 	if err != nil {
 		return "", 0, fmt.Errorf("opening inbox file %q: %w", wf.Name, err)
 	}
@@ -407,7 +406,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 	var err error
 	var errs []error
 	for len(errs) == 0 {
-		wfs, err = tailscale.WaitingFiles(ctx)
+		wfs, err = localClient.WaitingFiles(ctx)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("getting WaitingFiles: %w", err))
 			break
@@ -439,7 +438,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 		if getArgs.verbose {
 			printf("wrote %v as %v (%d bytes)\n", wf.Name, writtenFile, size)
 		}
-		if err = tailscale.DeleteWaitingFile(ctx, wf.Name); err != nil {
+		if err = localClient.DeleteWaitingFile(ctx, wf.Name); err != nil {
 			errs = append(errs, fmt.Errorf("deleting %q from inbox: %v", wf.Name, err))
 			continue
 		}
@@ -503,7 +502,7 @@ func wipeInbox(ctx context.Context) error {
 	if getArgs.wait {
 		return errors.New("can't use --wait with /dev/null target")
 	}
-	wfs, err := tailscale.WaitingFiles(ctx)
+	wfs, err := localClient.WaitingFiles(ctx)
 	if err != nil {
 		return fmt.Errorf("getting WaitingFiles: %w", err)
 	}
@@ -512,7 +511,7 @@ func wipeInbox(ctx context.Context) error {
 		if getArgs.verbose {
 			log.Printf("deleting %v ...", wf.Name)
 		}
-		if err := tailscale.DeleteWaitingFile(ctx, wf.Name); err != nil {
+		if err := localClient.DeleteWaitingFile(ctx, wf.Name); err != nil {
 			return fmt.Errorf("deleting %q: %v", wf.Name, err)
 		}
 		deleted++

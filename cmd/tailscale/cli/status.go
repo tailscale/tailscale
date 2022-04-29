@@ -19,7 +19,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
@@ -73,9 +72,9 @@ func runStatus(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unexpected non-flag arguments to 'tailscale status'")
 	}
-	getStatus := tailscale.Status
+	getStatus := localClient.Status
 	if !statusArgs.peers {
-		getStatus = tailscale.StatusWithoutPeers
+		getStatus = localClient.StatusWithoutPeers
 	}
 	st, err := getStatus(ctx)
 	if err != nil {
@@ -115,7 +114,7 @@ func runStatus(ctx context.Context, args []string) error {
 				http.NotFound(w, r)
 				return
 			}
-			st, err := tailscale.Status(ctx)
+			st, err := localClient.Status(ctx)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
