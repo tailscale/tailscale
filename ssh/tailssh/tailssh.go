@@ -307,6 +307,9 @@ func (c *conn) havePubKeyPolicy(ci *sshConnInfo) bool {
 // if one is defined.
 func (c *conn) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
 	lb := c.srv.lb
+	if !lb.ShouldRunSSH() {
+		return nil, false
+	}
 	nm := lb.NetMap()
 	if nm == nil {
 		return nil, false
