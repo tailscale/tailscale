@@ -317,14 +317,9 @@ Allows for updating properties on the device key.
 - Provide `false` to enable the device's key expiry. Sets the key to expire at the original expiry time prior to disabling. The key may already have expired. In that case, the device must be re-authenticated.
 - Empty value will not change the key expiry.
 
-`preauthorized`
-
-- If `true`, don't require machine authorization (if enabled on the tailnet)
-
 ```
 {
-  "keyExpiryDisabled": true,
-  "preauthorized": true
+  "keyExpiryDisabled": true
 }
 ```
 
