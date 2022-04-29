@@ -8,12 +8,13 @@
 package tailcfg
 
 import (
+	"time"
+
 	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
-	"time"
 )
 
 // Clone makes a deep copy of User.
