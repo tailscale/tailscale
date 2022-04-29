@@ -13,6 +13,7 @@ import (
 	// process and can cache a prior success when a dependency changes.
 	_ "golang.org/x/sys/windows"
 	_ "golang.org/x/sys/windows/svc"
+	_ "golang.org/x/sys/windows/svc/eventlog"
 	_ "golang.org/x/sys/windows/svc/mgr"
 	_ "golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	_ "inet.af/netaddr"
