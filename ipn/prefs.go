@@ -584,10 +584,8 @@ func (p *Prefs) SetExitNodeIP(s string, st *ipnstate.Status) error {
 	return err
 }
 
-// PrefsFromBytes deserializes Prefs from a JSON blob. If
-// enforceDefaults is true, Prefs.RouteAll and Prefs.AllowSingleHosts
-// are forced on.
-func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
+// PrefsFromBytes deserializes Prefs from a JSON blob.
+func PrefsFromBytes(b []byte) (*Prefs, error) {
 	p := NewPrefs()
 	if len(b) == 0 {
 		return p, nil
@@ -602,10 +600,6 @@ func PrefsFromBytes(b []byte, enforceDefaults bool) (*Prefs, error) {
 		if err != nil {
 			log.Printf("Prefs parse: %v: %v\n", err, b)
 		}
-	}
-	if enforceDefaults {
-		p.RouteAll = true
-		p.AllowSingleHosts = true
 	}
 	return p, err
 }
@@ -625,7 +619,7 @@ func LoadPrefs(filename string) (*Prefs, error) {
 		// to log in again. (better than crashing)
 		return nil, os.ErrNotExist
 	}
-	p, err := PrefsFromBytes(data, false)
+	p, err := PrefsFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("LoadPrefs(%q) decode: %w", filename, err)
 	}

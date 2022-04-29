@@ -302,7 +302,7 @@ func checkPrefs(t *testing.T, p Prefs) {
 	if p.Equals(p2) {
 		t.Fatalf("p == p2\n")
 	}
-	p2b, err = PrefsFromBytes(p2.ToBytes(), false)
+	p2b, err = PrefsFromBytes(p2.ToBytes())
 	if err != nil {
 		t.Fatalf("PrefsFromBytes(p2) failed\n")
 	}
