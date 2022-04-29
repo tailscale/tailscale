@@ -174,7 +174,3 @@ func (h *Handle) Logout() {
 func (h *Handle) RequestEngineStatus() {
 	h.b.RequestEngineStatus()
 }
-
-func (h *Handle) FakeExpireAfter(x time.Duration) {
-	h.b.FakeExpireAfter(x)
-}

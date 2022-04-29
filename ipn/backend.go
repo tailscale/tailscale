@@ -245,11 +245,6 @@ type Backend interface {
 	// counts. Connection events are emitted automatically without
 	// polling.
 	RequestEngineStatus()
-	// FakeExpireAfter pretends that the current key is going to
-	// expire after duration x. This is useful for testing GUIs to
-	// make sure they react properly with keys that are going to
-	// expire.
-	FakeExpireAfter(x time.Duration)
 	// Ping attempts to start connecting to the given IP and sends a Notify
 	// with its PingResult. If the host is down, there might never
 	// be a PingResult sent. The cmd/tailscale CLI client adds a timeout.

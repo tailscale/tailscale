@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
@@ -52,10 +51,6 @@ type SetPrefsArgs struct {
 	New *Prefs
 }
 
-type FakeExpireAfterArgs struct {
-	Duration time.Duration
-}
-
 type PingArgs struct {
 	IP      string
 	UseTSMP bool
@@ -83,7 +78,6 @@ type Command struct {
 	SetPrefs              *SetPrefsArgs
 	RequestEngineStatus   *NoArgs
 	RequestStatus         *NoArgs
-	FakeExpireAfter       *FakeExpireAfterArgs
 	Ping                  *PingArgs
 }
 
@@ -205,9 +199,6 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	} else if c := cmd.SetPrefs; c != nil {
 		bs.b.SetPrefs(c.New)
 		return nil
-	} else if c := cmd.FakeExpireAfter; c != nil {
-		bs.b.FakeExpireAfter(c.Duration)
-		return nil
 	}
 	return fmt.Errorf("BackendServer.Do: no command specified")
 }
@@ -318,10 +309,6 @@ func (bc *BackendClient) RequestEngineStatus() {
 
 func (bc *BackendClient) RequestStatus() {
 	bc.send(Command{AllowVersionSkew: true, RequestStatus: &NoArgs{}})
-}
-
-func (bc *BackendClient) FakeExpireAfter(x time.Duration) {
-	bc.send(Command{FakeExpireAfter: &FakeExpireAfterArgs{Duration: x}})
 }
 
 func (bc *BackendClient) Ping(ip string, useTSMP bool) {

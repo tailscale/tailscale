@@ -1699,28 +1699,6 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
-// FakeExpireAfter implements Backend.
-func (b *LocalBackend) FakeExpireAfter(x time.Duration) {
-	b.logf("FakeExpireAfter: %v", x)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.netMap == nil {
-		return
-	}
-
-	// This function is called very rarely,
-	// so we prefer to fully copy the netmap over introducing in-place modification here.
-	mapCopy := *b.netMap
-	e := mapCopy.Expiry
-	if e.IsZero() || time.Until(e) > x {
-		mapCopy.Expiry = time.Now().Add(x)
-	}
-	b.setNetMapLocked(&mapCopy)
-	b.send(ipn.Notify{NetMap: b.netMap})
-}
-
 func (b *LocalBackend) Ping(ipStr string, useTSMP bool) {
 	ip, err := netaddr.ParseIP(ipStr)
 	if err != nil {
