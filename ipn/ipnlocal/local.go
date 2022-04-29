@@ -1934,6 +1934,10 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 		b.authReconfig()
 	}
 
+	if oldp.RunSSH && !newp.RunSSH && b.sshServer != nil {
+		go b.sshServer.OnPolicyChange()
+	}
+
 	b.send(ipn.Notify{Prefs: newp})
 }
 
