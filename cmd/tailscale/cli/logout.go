@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 )
 
 var logoutCmd = &ffcli.Command{
@@ -30,5 +29,5 @@ func runLogout(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
-	return tailscale.Logout(ctx)
+	return localClient.Logout(ctx)
 }

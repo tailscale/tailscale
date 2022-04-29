@@ -28,7 +28,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
@@ -318,7 +317,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})
 			return
 		}
-		prefs, err := tailscale.GetPrefs(r.Context())
+		prefs, err := localClient.GetPrefs(r.Context())
 		if err != nil && !postData.Reauthenticate {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})
@@ -348,12 +347,12 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := tailscale.Status(r.Context())
+	st, err := localClient.Status(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	prefs, err := tailscale.GetPrefs(r.Context())
+	prefs, err := localClient.GetPrefs(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -406,7 +405,7 @@ func tailscaleUp(ctx context.Context, prefs *ipn.Prefs, forceReauth bool) (authU
 		prefs.NetfilterMode = preftype.NetfilterOff
 	}
 
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return "", fmt.Errorf("can't fetch status: %v", err)
 	}

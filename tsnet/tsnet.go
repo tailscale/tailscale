@@ -75,6 +75,7 @@ type Server struct {
 	hostname         string
 	shutdownCtx      context.Context
 	shutdownCancel   context.CancelFunc
+	localClient      *tailscale.LocalClient
 
 	mu        sync.Mutex
 	listeners map[listenKey]*listener
@@ -88,6 +89,17 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 		return nil, err
 	}
 	return s.dialer.UserDial(ctx, network, address)
+}
+
+// LocalClient returns a LocalClient that speaks to s.
+//
+// It will start the server if it has not been started yet. If the server's
+// already been started successfully, it doesn't return an error.
+func (s *Server) LocalClient() (*tailscale.LocalClient, error) {
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+	return s.localClient, nil
 }
 
 // Start connects the server to the tailnet.
@@ -261,9 +273,7 @@ func (s *Server) start() error {
 	// TODO(maisem): Rename nettest package to remove "test".
 	lal := nettest.Listen("local-tailscaled.sock:80")
 	s.localAPIListener = lal
-
-	// Override the Tailscale client to use the in-process listener.
-	tailscale.TailscaledDialer = lal.Dial
+	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
 	go func() {
 		if err := http.Serve(lal, lah); err != nil {
 			logf("localapi serve error: %v", err)

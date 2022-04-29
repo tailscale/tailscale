@@ -24,7 +24,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -406,7 +405,7 @@ func runUp(ctx context.Context, args []string) error {
 		fatalf("too many non-flag arguments: %q", args)
 	}
 
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
@@ -447,12 +446,12 @@ func runUp(ctx context.Context, args []string) error {
 	}
 
 	if len(prefs.AdvertiseRoutes) > 0 {
-		if err := tailscale.CheckIPForwarding(context.Background()); err != nil {
+		if err := localClient.CheckIPForwarding(context.Background()); err != nil {
 			warnf("%v", err)
 		}
 	}
 
-	curPrefs, err := tailscale.GetPrefs(ctx)
+	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
 		return err
 	}
@@ -471,7 +470,7 @@ func runUp(ctx context.Context, args []string) error {
 		fatalf("%s", err)
 	}
 	if justEditMP != nil {
-		_, err := tailscale.EditPrefs(ctx, justEditMP)
+		_, err := localClient.EditPrefs(ctx, justEditMP)
 		return err
 	}
 
@@ -582,7 +581,7 @@ func runUp(ctx context.Context, args []string) error {
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
 	if simpleUp {
-		_, err := tailscale.EditPrefs(ctx, &ipn.MaskedPrefs{
+		_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
 			Prefs: ipn.Prefs{
 				WantRunning: true,
 			},
@@ -592,7 +591,7 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	} else {
-		if err := tailscale.CheckPrefs(ctx, prefs); err != nil {
+		if err := localClient.CheckPrefs(ctx, prefs); err != nil {
 			return err
 		}
 

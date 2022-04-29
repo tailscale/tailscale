@@ -13,7 +13,6 @@ import (
 	"strconv"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/client/tailscale"
 )
 
 var ncCmd = &ffcli.Command{
@@ -24,7 +23,7 @@ var ncCmd = &ffcli.Command{
 }
 
 func runNC(ctx context.Context, args []string) error {
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
@@ -45,7 +44,7 @@ func runNC(ctx context.Context, args []string) error {
 	}
 
 	// TODO(bradfitz): also add UDP too, via flag?
-	c, err := tailscale.DialTCP(ctx, hostOrIP, uint16(port))
+	c, err := localClient.DialTCP(ctx, hostOrIP, uint16(port))
 	if err != nil {
 		return fmt.Errorf("Dial(%q, %v): %w", hostOrIP, port, err)
 	}

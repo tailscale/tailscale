@@ -12,7 +12,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
 )
 
@@ -59,7 +58,7 @@ func runIP(ctx context.Context, args []string) error {
 	if !v4 && !v6 {
 		v4, v6 = true, true
 	}
-	st, err := tailscale.Status(ctx)
+	st, err := localClient.Status(ctx)
 	if err != nil {
 		return err
 	}

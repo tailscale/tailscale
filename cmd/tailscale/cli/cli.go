@@ -125,6 +125,8 @@ func CleanUpArgs(args []string) []string {
 	return out
 }
 
+var localClient tailscale.LocalClient
+
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
@@ -193,10 +195,10 @@ change in the future.
 		return err
 	}
 
-	tailscale.TailscaledSocket = rootArgs.socket
+	localClient.Socket = rootArgs.socket
 	rootfs.Visit(func(f *flag.Flag) {
 		if f.Name == "socket" {
-			tailscale.TailscaledSocketSetExplicitly = true
+			localClient.UseSocketOnly = true
 		}
 	})
 

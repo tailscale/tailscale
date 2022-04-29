@@ -50,7 +50,7 @@ func runCert(ctx context.Context, args []string) error {
 			},
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.TLS != nil && !strings.Contains(r.Host, ".") && r.Method == "GET" {
-					if v, ok := tailscale.ExpandSNIName(r.Context(), r.Host); ok {
+					if v, ok := localClient.ExpandSNIName(r.Context(), r.Host); ok {
 						http.Redirect(w, r, "https://"+v+r.URL.Path, http.StatusTemporaryRedirect)
 						return
 					}
@@ -64,7 +64,7 @@ func runCert(ctx context.Context, args []string) error {
 
 	if len(args) != 1 {
 		var hint bytes.Buffer
-		if st, err := tailscale.Status(ctx); err == nil {
+		if st, err := localClient.Status(ctx); err == nil {
 			if st.BackendState != ipn.Running.String() {
 				fmt.Fprintf(&hint, "\nTailscale is not running.\n")
 			} else if len(st.CertDomains) == 0 {
