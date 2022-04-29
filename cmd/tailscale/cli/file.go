@@ -428,7 +428,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 		if len(errs) > 100 {
 			// Likely, everything is broken.
 			// Don't try to receive any more files in this batch.
-			errs = append(errs, fmt.Errorf("too many errors in runFileGetOneBatch(). %d files unexamined", len(wfs) - i))
+			errs = append(errs, fmt.Errorf("too many errors in runFileGetOneBatch(). %d files unexamined", len(wfs)-i))
 			break
 		}
 		writtenFile, size, err := receiveFile(ctx, wf, dir)
