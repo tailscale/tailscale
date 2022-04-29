@@ -6,9 +6,10 @@ package winnet
 
 import (
 	"fmt"
-	"github.com/go-ole/go-ole"
 	"syscall"
 	"unsafe"
+
+	"github.com/go-ole/go-ole"
 )
 
 func (v *INetworkConnection) GetAdapterId() (string, error) {
