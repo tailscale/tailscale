@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
@@ -60,12 +61,31 @@ func isWindowsService() bool {
 	return v
 }
 
+// syslogf is a logger function that writes to the Windows event log (ie, the
+// one that you see in the Windows Event Viewer). tailscaled may optionally
+// generate diagnostic messages in the same event timeline as the Windows
+// Service Control Manager to assist with diagnosing issues with tailscaled's
+// lifetime (such as slow shutdowns).
+var syslogf logger.Logf = logger.Discard
+
 // runWindowsService starts running Tailscale under the Windows
 // Service environment.
 //
 // At this point we're still the parent process that
 // Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
+	if winutil.GetPolicyInteger("LogSCMInteractions", 0) != 0 {
+		syslog, err := eventlog.Open(serviceName)
+		if err == nil {
+			syslogf = func(format string, args ...any) {
+				syslog.Info(0, fmt.Sprintf(format, args...))
+			}
+			defer syslog.Close()
+		}
+	}
+
+	syslogf("Service entering svc.Run")
+	defer syslogf("Service exiting svc.Run")
 	return svc.Run(serviceName, &ipnService{Policy: pol})
 }
 
@@ -75,7 +95,10 @@ type ipnService struct {
 
 // Called by Windows to execute the windows service.
 func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+	defer syslogf("SvcStopped notification imminent")
+
 	changes <- svc.Status{State: svc.StartPending}
+	syslogf("Service start pending")
 
 	svcAccepts := svc.AcceptStop
 	if winutil.GetPolicyInteger("FlushDNSOnSessionUnlock", 0) != 0 {
@@ -98,26 +121,29 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	}()
 
 	changes <- svc.Status{State: svc.Running, Accepts: svcAccepts}
+	syslogf("Service running")
 
-	for ctx.Err() == nil {
+	for {
 		select {
 		case <-doneCh:
+			return false, windows.NO_ERROR
 		case cmd := <-r:
 			log.Printf("Got Windows Service event: %v", cmdName(cmd.Cmd))
 			switch cmd.Cmd {
 			case svc.Stop:
-				cancel()
+				changes <- svc.Status{State: svc.StopPending}
+				syslogf("Service stop pending")
+				cancel() // so BabysitProc will kill the child process
 			case svc.Interrogate:
+				syslogf("Service interrogation")
 				changes <- cmd.CurrentStatus
 			case svc.SessionChange:
+				syslogf("Service session change notification")
 				handleSessionChange(cmd)
 				changes <- cmd.CurrentStatus
 			}
 		}
 	}
-
-	changes <- svc.Status{State: svc.StopPending}
-	return false, windows.NO_ERROR
 }
 
 func cmdName(c svc.Cmd) string {
