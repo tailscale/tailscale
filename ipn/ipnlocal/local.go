@@ -1617,7 +1617,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 	case err != nil:
 		return fmt.Errorf("backend prefs: store.ReadState(%q): %v", key, err)
 	}
-	b.prefs, err = ipn.PrefsFromBytes(bs, false)
+	b.prefs, err = ipn.PrefsFromBytes(bs)
 	if err != nil {
 		b.logf("using backend prefs for %q", key)
 		return fmt.Errorf("PrefsFromBytes: %v", err)
