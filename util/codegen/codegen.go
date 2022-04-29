@@ -9,12 +9,12 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/token"
 	"go/types"
 	"os"
 
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/imports"
 )
 
 // WriteFormatted writes code to path.
@@ -29,7 +29,12 @@ import (
 // It is also easier to interpret gofmt errors
 // with an editor providing file and line numbers.
 func WriteFormatted(code []byte, path string) error {
-	out, fmterr := format.Source(code)
+	out, fmterr := imports.Process(path, code, &imports.Options{
+		Comments:   true,
+		TabIndent:  true,
+		TabWidth:   8,
+		FormatOnly: true, // fancy gofmt only
+	})
 	if fmterr != nil {
 		out = code
 	}
