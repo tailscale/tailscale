@@ -5,7 +5,6 @@
 //go:build go1.18
 // +build go1.18
 
-// Package tailscale contains Tailscale client code.
 package tailscale
 
 import (
