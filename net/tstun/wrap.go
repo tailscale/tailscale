@@ -692,7 +692,7 @@ func (t *Wrapper) SetFilter(filt *filter.Filter) {
 	t.filter.Store(filt)
 }
 
-// InjectInboundDirect makes the Wrapper device behave as if a packet
+// InjectInboundPacketBuffer makes the Wrapper device behave as if a packet
 // with the given contents was received from the network.
 // It takes ownership of one reference count on the packet. The injected
 // packet will not pass through inbound filters.
@@ -706,7 +706,7 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
 	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().View())
 	n += copy(buf[PacketStartOffset+n:], pkt.Data().AsRange().AsView())
 	if n != pkt.Size() {
-		panic("unexpected: revisit assumptions")
+		panic("unexpected packet size after copy")
 	}
 	pkt.DecRef()
 
