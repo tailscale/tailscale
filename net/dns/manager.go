@@ -64,7 +64,7 @@ const reconfigTimeout = time.Second
 
 type response struct {
 	pkt  []byte
-	from netaddr.IPPort // where the packet needs to be sent
+	to netaddr.IPPort // response destination (request source)
 }
 
 // Manager manages system DNS settings.
@@ -282,27 +282,27 @@ func (m *Manager) NextPacket() ([]byte, error) {
 
 	var buf []byte
 	switch {
-	case resp.from.IP().Is4():
+	case resp.to.IP().Is4():
 		h := packet.UDP4Header{
 			IP4Header: packet.IP4Header{
 				Src: magicDNSIP,
-				Dst: resp.from.IP(),
+				Dst: resp.to.IP(),
 			},
 			SrcPort: 53,
-			DstPort: resp.from.Port(),
+			DstPort: resp.to.Port(),
 		}
 		hlen := h.Len()
 		buf = make([]byte, offset+hlen+len(resp.pkt))
 		copy(buf[offset+hlen:], resp.pkt)
 		h.Marshal(buf[offset:])
-	case resp.from.IP().Is6():
+	case resp.to.IP().Is6():
 		h := packet.UDP6Header{
 			IP6Header: packet.IP6Header{
 				Src: magicDNSIPv6,
-				Dst: resp.from.IP(),
+				Dst: resp.to.IP(),
 			},
 			SrcPort: 53,
-			DstPort: resp.from.Port(),
+			DstPort: resp.to.Port(),
 		}
 		hlen := h.Len()
 		buf = make([]byte, offset+hlen+len(resp.pkt))
