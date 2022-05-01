@@ -125,8 +125,13 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				n := it.QualifiedName(ft.Elem())
 				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
 				writef("for i := range dst.%s {", fname)
-				if _, isPtr := ft.Elem().(*types.Pointer); isPtr {
-					writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
+				if ptr, isPtr := ft.Elem().(*types.Pointer); isPtr {
+					if _, isBasic := ptr.Elem().Underlying().(*types.Basic); isBasic {
+						writef("\tx := *src.%s[i]", fname)
+						writef("\tdst.%s[i] = &x", fname)
+					} else {
+						writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
+					}
 				} else {
 					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
 				}
