@@ -4,7 +4,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/cloner --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc
 
 import (
 	"encoding/hex"
@@ -529,6 +529,13 @@ type NetInfo struct {
 	DERPLatency map[string]float64 `json:",omitempty"`
 
 	// Update BasicallyEqual when adding fields.
+}
+
+// DERPLatencyForEach calls fn for each value in the DERPLatency map.
+func (v NetInfoView) DERPLatencyForEach(fn func(k string, v float64)) {
+	for k, v := range v.ж.DERPLatency {
+		fn(k, v)
+	}
 }
 
 func (ni *NetInfo) String() string {
