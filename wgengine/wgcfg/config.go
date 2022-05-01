@@ -10,7 +10,7 @@ import (
 	"tailscale.com/types/key"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Config,Peer -output=clone.go
+//go:generate go run tailscale.com/cmd/cloner -type=Config,Peer
 
 // Config is a WireGuard configuration.
 // It only supports the set of things Tailscale uses.

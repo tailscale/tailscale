@@ -13,7 +13,7 @@ import (
 	"tailscale.com/types/ipproto"
 )
 
-//go:generate go run tailscale.com/cmd/cloner --type=Match --output=match_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=Match
 
 // PortRange is a range of TCP and UDP ports.
 type PortRange struct {

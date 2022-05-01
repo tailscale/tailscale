@@ -5,7 +5,7 @@
 // Package dnstype defines types for working with DNS.
 package dnstype
 
-//go:generate go run tailscale.com/cmd/cloner --type=Resolver --clonefunc=true --output=dnstype_clone.go
+//go:generate go run tailscale.com/cmd/cloner --type=Resolver --clonefunc=true
 
 import "inet.af/netaddr"
 
