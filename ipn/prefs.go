@@ -27,7 +27,7 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Prefs -output=prefs_clone.go
+//go:generate go run tailscale.com/cmd/cloner -type=Prefs
 
 // DefaultControlURL is the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
