@@ -120,7 +120,7 @@ func (c *Client) Devices(ctx context.Context, fields *DeviceFieldsOpts) (deviceL
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/devices", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/devices", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -158,7 +158,7 @@ func (c *Client) Device(ctx context.Context, deviceID string, fields *DeviceFiel
 			err = fmt.Errorf("tailscale.Device: %w", err)
 		}
 	}()
-	path := fmt.Sprintf("%s/api/v2/device/%s", c.BaseURL, deviceID)
+	path := fmt.Sprintf("%s/api/v2/device/%s", c.baseURL(), deviceID)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/device/%s", c.BaseURL, url.PathEscape(deviceID))
+	path := fmt.Sprintf("%s/api/v2/device/%s", c.baseURL(), url.PathEscape(deviceID))
 	req, err := http.NewRequestWithContext(ctx, "DELETE", path, nil)
 	if err != nil {
 		return err
@@ -214,7 +214,7 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 
 // AuthorizeDevice marks a device as authorized.
 func (c *Client) AuthorizeDevice(ctx context.Context, deviceID string) error {
-	path := fmt.Sprintf("%s/api/v2/device/%s/authorized", c.BaseURL, url.PathEscape(deviceID))
+	path := fmt.Sprintf("%s/api/v2/device/%s/authorized", c.baseURL(), url.PathEscape(deviceID))
 	req, err := http.NewRequestWithContext(ctx, "POST", path, strings.NewReader(`{"authorized":true}`))
 	if err != nil {
 		return err
@@ -242,7 +242,7 @@ func (c *Client) SetTags(ctx context.Context, deviceID string, tags []string) er
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("%s/api/v2/device/%s/tags", c.BaseURL, url.PathEscape(deviceID))
+	path := fmt.Sprintf("%s/api/v2/device/%s/tags", c.baseURL(), url.PathEscape(deviceID))
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(data))
 	if err != nil {
 		return err

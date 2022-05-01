@@ -46,7 +46,7 @@ type DNSPreferences struct {
 }
 
 func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.BaseURL, c.Tailnet, endpoint)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.baseURL(), c.tailnet, endpoint)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, er
 }
 
 func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData interface{}) ([]byte, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.BaseURL, c.Tailnet, endpoint)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/dns/%s", c.baseURL(), c.tailnet, endpoint)
 	data, err := json.Marshal(&postData)
 	if err != nil {
 		return nil, err

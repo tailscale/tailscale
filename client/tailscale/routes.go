@@ -34,7 +34,7 @@ func (c *Client) Routes(ctx context.Context, deviceID string) (routes *Routes, e
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/device/%s/routes", c.BaseURL, deviceID)
+	path := fmt.Sprintf("%s/api/v2/device/%s/routes", c.baseURL(), deviceID)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netad
 	if err != nil {
 		return nil, err
 	}
-	path := fmt.Sprintf("%s/api/v2/device/%s/routes", c.BaseURL, deviceID)
+	path := fmt.Sprintf("%s/api/v2/device/%s/routes", c.baseURL(), deviceID)
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err

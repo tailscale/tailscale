@@ -64,7 +64,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (c *Client) ACLHuJSON(ctx context.Context) (acl *ACLHuJSON, err error) {
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl?details=1", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl?details=1", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
@@ -159,7 +159,7 @@ func (e ACLTestError) Error() string {
 }
 
 func (c *Client) aclPOSTRequest(ctx context.Context, body []byte, avoidCollisions bool, etag, acceptHeader string) ([]byte, string, error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, "", err
@@ -280,7 +280,7 @@ type ACLPreview struct {
 }
 
 func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, previewType string, previewFor string) (res *ACLPreviewResponse, err error) {
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/preview", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/preview", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
@@ -292,7 +292,7 @@ func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, preview
 	req.URL.RawQuery = q.Encode()
 
 	req.Header.Set("Content-Type", "application/hujson")
-	req.SetBasicAuth(c.APIKey, "")
+	c.setAuth(req)
 
 	b, resp, err := c.sendRequest(req)
 	if err != nil {
@@ -436,14 +436,14 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 		return nil, err
 	}
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/validate", c.BaseURL, c.Tailnet)
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s/acl/validate", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(postData))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(c.APIKey, "")
+	c.setAuth(req)
 
 	b, resp, err := c.sendRequest(req)
 	if err != nil {
