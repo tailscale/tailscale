@@ -30,45 +30,90 @@ var I_Acknowledge_This_API_Is_Unstable = false
 
 // TODO: use url.PathEscape() for deviceID and tailnets when constructing requests.
 
-// DefaultURL is the default base URL used for API calls.
-const DefaultURL = "https://api.tailscale.com"
+const defaultAPIBase = "https://api.tailscale.com"
 
 // maxSize is the maximum read size (10MB) of responses from the server.
-const maxReadSize int64 = 10 * 1024 * 1024
+const maxReadSize = 10 << 20
 
-// Client is needed to make different API calls to the Tailscale server.
-// It holds all the necessary information so that it can be reused to make
-// multiple requests for the same user.
-// Unless overridden, "api.tailscale.com" is the default BaseURL.
+// Client makes API calls to the Tailscale control plane API server.
+//
+// Use NewClient to instantiate one. Exported fields should be set before
+// the client is used and not changed thereafter.
 type Client struct {
-	// Tailnet is the globally unique identifier for a Tailscale network, such
+	// tailnet is the globally unique identifier for a Tailscale network, such
 	// as "example.com" or "user@gmail.com".
-	Tailnet    string
-	APIKey     string
-	BaseURL    string
+	tailnet string
+	// auth is the authentication method to use for this client.
+	// nil means none, which generally won't work, but won't crash.
+	auth AuthMethod
+
+	// BaseURL optionally specifies an alternate API server to use.
+	// If empty, "https://api.tailscale.com" is used.
+	BaseURL string
+
+	// HTTPClient optionally specifies an alternate HTTP client to use.
+	// If nil, http.DefaultClient is used.
 	HTTPClient *http.Client
 }
 
-// New is a convenience method for instantiating a new Client.
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return http.DefaultClient
+}
+
+func (c *Client) baseURL() string {
+	if c.BaseURL != "" {
+		return c.BaseURL
+	}
+	return defaultAPIBase
+}
+
+// AuthMethod is the interface for API authentication methods.
+//
+// Most users will use AuthKey.
+type AuthMethod interface {
+	modifyRequest(req *http.Request)
+}
+
+// APIKey is an AuthMethod for NewClient that authenticates requests
+// using an authkey.
+type APIKey string
+
+func (ak APIKey) modifyRequest(req *http.Request) {
+	req.SetBasicAuth(string(ak), "")
+}
+
+func (c *Client) setAuth(r *http.Request) {
+	if c.auth != nil {
+		c.auth.modifyRequest(r)
+	}
+}
+
+// NewClient is a convenience method for instantiating a new Client.
 //
 // tailnet is the globally unique identifier for a Tailscale network, such
 // as "example.com" or "user@gmail.com".
 // If httpClient is nil, then http.DefaultClient is used.
 // "api.tailscale.com" is set as the BaseURL for the returned client
 // and can be changed manually by the user.
-func New(tailnet string, key string, httpClient *http.Client) *Client {
-	c := &Client{
-		Tailnet:    tailnet,
-		APIKey:     key,
-		BaseURL:    DefaultURL,
-		HTTPClient: httpClient,
+func NewClient(tailnet string, auth AuthMethod) *Client {
+	return &Client{
+		tailnet: tailnet,
+		auth:    auth,
 	}
+}
 
-	if httpClient == nil {
-		c.HTTPClient = http.DefaultClient
+func (c *Client) Tailnet() string { return c.tailnet }
+
+// Do sends a raw HTTP request, after adding any authentication headers.
+func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	if !I_Acknowledge_This_API_Is_Unstable {
+		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
 	}
-
-	return c
+	c.setAuth(req)
+	return c.httpClient().Do(req)
 }
 
 // sendRequest add the authenication key to the request and sends it. It
@@ -77,16 +122,19 @@ func (c *Client) sendRequest(req *http.Request) ([]byte, *http.Response, error) 
 	if !I_Acknowledge_This_API_Is_Unstable {
 		return nil, nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
 	}
-	req.SetBasicAuth(c.APIKey, "")
-	resp, err := c.HTTPClient.Do(req)
+	c.setAuth(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, resp, err
 	}
 	defer resp.Body.Close()
 
 	// Read response. Limit the response to 10MB.
-	body := io.LimitReader(resp.Body, maxReadSize)
+	body := io.LimitReader(resp.Body, maxReadSize+1)
 	b, err := ioutil.ReadAll(body)
+	if len(b) > maxReadSize {
+		err = errors.New("API response too large")
+	}
 	return b, resp, err
 }
 

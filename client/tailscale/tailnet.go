@@ -22,13 +22,13 @@ func (c *Client) TailnetDeleteRequest(ctx context.Context, tailnetID string) (er
 		}
 	}()
 
-	path := fmt.Sprintf("%s/api/v2/tailnet/%s", c.BaseURL, url.PathEscape(string(tailnetID)))
+	path := fmt.Sprintf("%s/api/v2/tailnet/%s", c.baseURL(), url.PathEscape(string(tailnetID)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return err
 	}
 
-	req.SetBasicAuth(c.APIKey, "")
+	c.setAuth(req)
 	b, resp, err := c.sendRequest(req)
 	if err != nil {
 		return err
