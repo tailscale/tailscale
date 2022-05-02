@@ -66,6 +66,10 @@ type Server struct {
 	// as an Ephemeral node (https://tailscale.com/kb/1111/ephemeral-nodes/).
 	Ephemeral bool
 
+	// AdvertisedTags are tags to advertise for ACL enforcement.
+	// See ipn.Prefs.AdvertisedTags for more information.
+	AdvertiseTags []string
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -245,6 +249,7 @@ func (s *Server) start() error {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
+	prefs.AdvertiseTags = s.AdvertiseTags
 	authKey := os.Getenv("TS_AUTHKEY")
 	err = lb.Start(ipn.Options{
 		StateKey:    ipn.GlobalDaemonStateKey,
