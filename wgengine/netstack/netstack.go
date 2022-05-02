@@ -758,6 +758,11 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
+	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+		go ns.dns.HandleTCPConn(c, netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort))
+		return
+	}
+
 	if ns.lb != nil {
 		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {
 			if err := ns.lb.HandleSSHConn(c); err != nil {
