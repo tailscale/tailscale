@@ -45,9 +45,6 @@ const maxResponseBytes = 4095
 // defaultTTL is the TTL of all responses from Resolver.
 const defaultTTL = 600 * time.Second
 
-// ErrClosed indicates that the resolver has been closed and readers should exit.
-var ErrClosed = errors.New("closed")
-
 var (
 	errNotQuery   = errors.New("not a DNS query")
 	errNotOurName = errors.New("not a Tailscale DNS name")
@@ -264,7 +261,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([
 	select {
 	case <-r.closed:
 		metricDNSQueryErrorClosed.Add(1)
-		return nil, ErrClosed
+		return nil, net.ErrClosed
 	default:
 	}
 

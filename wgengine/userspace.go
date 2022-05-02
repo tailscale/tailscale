@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
 	"runtime"
 	"strings"
@@ -499,7 +500,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 func (e *userspaceEngine) pollResolver() {
 	for {
 		bs, err := e.dns.NextPacket()
-		if err == resolver.ErrClosed {
+		if errors.Is(err, net.ErrClosed) {
 			return
 		}
 		if err != nil {
