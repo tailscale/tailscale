@@ -1003,7 +1003,7 @@ var FilterAllowAll = []FilterRule{
 // DNSConfig is the DNS configuration.
 type DNSConfig struct {
 	// Resolvers are the DNS resolvers to use, in order of preference.
-	Resolvers []dnstype.Resolver `json:",omitempty"`
+	Resolvers []*dnstype.Resolver `json:",omitempty"`
 
 	// Routes maps DNS name suffixes to a set of DNS resolvers to
 	// use. It is used to implement "split DNS" and other advanced DNS
@@ -1015,13 +1015,13 @@ type DNSConfig struct {
 	// If the value is an empty slice, that means the suffix should still
 	// be handled by Tailscale's built-in resolver (100.100.100.100), such
 	// as for the purpose of handling ExtraRecords.
-	Routes map[string][]dnstype.Resolver `json:",omitempty"`
+	Routes map[string][]*dnstype.Resolver `json:",omitempty"`
 
 	// FallbackResolvers is like Resolvers, but is only used if a
 	// split DNS configuration is requested in a configuration that
 	// doesn't work yet without explicit default resolvers.
 	// https://github.com/tailscale/tailscale/issues/1743
-	FallbackResolvers []dnstype.Resolver `json:",omitempty"`
+	FallbackResolvers []*dnstype.Resolver `json:",omitempty"`
 	// Domains are the search domains to use.
 	// Search domains must be FQDNs, but *without* the trailing dot.
 	Domains []string `json:",omitempty"`

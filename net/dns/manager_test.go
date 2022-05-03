@@ -437,9 +437,9 @@ func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
 	return ret
 }
 
-func mustRes(strs ...string) (ret []dnstype.Resolver) {
+func mustRes(strs ...string) (ret []*dnstype.Resolver) {
 	for _, s := range strs {
-		ret = append(ret, dnstype.Resolver{Addr: s})
+		ret = append(ret, &dnstype.Resolver{Addr: s})
 	}
 	return ret
 }
@@ -495,9 +495,9 @@ func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 	return ret
 }
 
-func upstreams(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
+func upstreams(strs ...string) (ret map[dnsname.FQDN][]*dnstype.Resolver) {
 	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]dnstype.Resolver{}
+	ret = map[dnsname.FQDN][]*dnstype.Resolver{}
 	for _, s := range strs {
 		if s == "" {
 			if key == "" {
@@ -508,14 +508,14 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
-			ret[key] = append(ret[key], dnstype.Resolver{Addr: ipp.String()})
+			ret[key] = append(ret[key], &dnstype.Resolver{Addr: ipp.String()})
 		} else if _, err := netaddr.ParseIP(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
-			ret[key] = append(ret[key], dnstype.Resolver{Addr: s})
+			ret[key] = append(ret[key], &dnstype.Resolver{Addr: s})
 		} else if strings.HasPrefix(s, "http") {
-			ret[key] = append(ret[key], dnstype.Resolver{Addr: s})
+			ret[key] = append(ret[key], &dnstype.Resolver{Addr: s})
 		} else {
 			fqdn, err := dnsname.ToFQDN(s)
 			if err != nil {

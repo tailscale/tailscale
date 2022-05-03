@@ -144,7 +144,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// authoritative suffixes, even if we don't propagate MagicDNS to
 	// the OS.
 	rcfg.Hosts = cfg.Hosts
-	routes := map[dnsname.FQDN][]dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
+	routes := map[dnsname.FQDN][]*dnstype.Resolver{} // assigned conditionally to rcfg.Routes below.
 	for suffix, resolvers := range cfg.Routes {
 		if len(resolvers) == 0 {
 			rcfg.LocalDomains = append(rcfg.LocalDomains, suffix)
@@ -225,9 +225,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			health.SetDNSOSHealth(err)
 			return resolver.Config{}, OSConfig{}, err
 		}
-		var defaultRoutes []dnstype.Resolver
+		var defaultRoutes []*dnstype.Resolver
 		for _, ip := range bcfg.Nameservers {
-			defaultRoutes = append(defaultRoutes, dnstype.Resolver{Addr: ip.String()})
+			defaultRoutes = append(defaultRoutes, &dnstype.Resolver{Addr: ip.String()})
 		}
 		rcfg.Routes["."] = defaultRoutes
 		ocfg.SearchDomains = append(ocfg.SearchDomains, bcfg.SearchDomains...)
@@ -239,7 +239,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
 // Only safe to use if the resolvers slice has been cleared of
 // DoH or custom-port entries with something like hasDefaultIPResolversOnly.
-func toIPsOnly(resolvers []dnstype.Resolver) (ret []netaddr.IP) {
+func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
 	for _, r := range resolvers {
 		if ipp, ok := r.IPPort(); ok && ipp.Port() == 53 {
 			ret = append(ret, ipp.IP())
