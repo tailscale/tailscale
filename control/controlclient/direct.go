@@ -80,12 +80,12 @@ type Direct struct {
 	sfGroup     singleflight.Group // protects noiseClient creation.
 	noiseClient *noiseClient
 
-	persist      persist.Persist
-	authKey      string
-	tryingNewKey key.NodePrivate
-	expiry       *time.Time
-	// hostinfo is mutated in-place while mu is held.
+	persist       persist.Persist
+	authKey       string
+	tryingNewKey  key.NodePrivate
+	expiry        *time.Time
 	hostinfo      *tailcfg.Hostinfo // always non-nil
+	netinfo       *tailcfg.NetInfo
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	localPort     uint16 // or zero to mean auto
@@ -208,7 +208,12 @@ func NewDirect(opts Options) (*Direct, error) {
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
 	} else {
+		ni := opts.Hostinfo.NetInfo
+		opts.Hostinfo.NetInfo = nil
 		c.SetHostinfo(opts.Hostinfo)
+		if ni != nil {
+			c.SetNetInfo(ni)
+		}
 	}
 	return c, nil
 }
@@ -253,14 +258,11 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.hostinfo == nil {
-		c.logf("[unexpected] SetNetInfo called with no HostInfo; ignoring NetInfo update: %+v", ni)
+	if reflect.DeepEqual(ni, c.netinfo) {
 		return false
 	}
-	if reflect.DeepEqual(ni, c.hostinfo.NetInfo) {
-		return false
-	}
-	c.hostinfo.NetInfo = ni.Clone()
+	c.netinfo = ni.Clone()
+	c.logf("NetInfo: %v", ni)
 	return true
 }
 
@@ -337,6 +339,14 @@ type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// hostInfoLocked returns a Clone of c.hostinfo and c.netinfo.
+// It must only be called with c.mu held.
+func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
+	hi := c.hostinfo.Clone()
+	hi.NetInfo = c.netinfo.Clone()
+	return hi
+}
+
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, err error) {
 	c.mu.Lock()
 	persist := c.persist
@@ -344,7 +354,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
 	authKey := c.authKey
-	hi := c.hostinfo.Clone()
+	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
 	c.mu.Unlock()
@@ -646,7 +656,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, cb func(*netm
 	serverURL := c.serverURL
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
-	hi := c.hostinfo.Clone()
+	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	localPort := c.localPort
 	var epStrs []string
