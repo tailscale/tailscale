@@ -935,8 +935,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	httpTestClient := b.httpTestClient
 
 	if b.hostinfo != nil {
-		hostinfo.Services = b.hostinfo.Services // keep any previous session and netinfo
-		hostinfo.NetInfo = b.hostinfo.NetInfo
+		hostinfo.Services = b.hostinfo.Services // keep any previous services
 	}
 	b.hostinfo = hostinfo
 	b.state = ipn.NoState
@@ -2870,9 +2869,6 @@ func (b *LocalBackend) assertClientLocked() {
 func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	b.mu.Lock()
 	cc := b.cc
-	if b.hostinfo != nil {
-		b.hostinfo.NetInfo = ni.Clone()
-	}
 	b.mu.Unlock()
 
 	if cc == nil {

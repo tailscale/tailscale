@@ -61,10 +61,9 @@ type Auto struct {
 	loggedIn        bool       // true if currently logged in
 	loginGoal       *LoginGoal // non-nil if some login activity is desired
 	synced          bool       // true if our netmap is up-to-date
-	hostinfo        *tailcfg.Hostinfo
-	inPollNetMap    bool // true if currently running a PollNetMap
-	inLiteMapUpdate bool // true if a lite (non-streaming) map request is outstanding
-	inSendStatus    int  // number of sendStatus calls currently in progress
+	inPollNetMap    bool       // true if currently running a PollNetMap
+	inLiteMapUpdate bool       // true if a lite (non-streaming) map request is outstanding
+	inSendStatus    int        // number of sendStatus calls currently in progress
 	state           State
 
 	authCtx    context.Context // context used for auth requests
@@ -555,9 +554,8 @@ func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
 	if !c.direct.SetNetInfo(ni) {
 		return
 	}
-	c.logf("NetInfo: %v", ni)
 
-	// Send new Hostinfo (which includes NetInfo) to server
+	// Send new NetInfo to server
 	c.sendNewMapRequest()
 }
 
@@ -567,7 +565,6 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	loggedIn := c.loggedIn
 	synced := c.synced
 	statusFunc := c.statusFunc
-	hi := c.hostinfo
 	c.inSendStatus++
 	c.mu.Unlock()
 
@@ -595,7 +592,6 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		URL:            url,
 		Persist:        p,
 		NetMap:         nm,
-		Hostinfo:       hi,
 		State:          state,
 		Err:            err,
 	}

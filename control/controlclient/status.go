@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
@@ -75,9 +74,8 @@ type Status struct {
 	// package, but we have some automated tests elsewhere that need to
 	// use them. Please don't use these fields.
 	// TODO(apenwarr): Unexport or remove these.
-	State    State
-	Persist  *persist.Persist  // locally persisted configuration
-	Hostinfo *tailcfg.Hostinfo // current Hostinfo data
+	State   State
+	Persist *persist.Persist // locally persisted configuration
 }
 
 // Equal reports whether s and s2 are equal.
@@ -92,7 +90,6 @@ func (s *Status) Equal(s2 *Status) bool {
 		s.URL == s2.URL &&
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
 		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
-		reflect.DeepEqual(s.Hostinfo, s2.Hostinfo) &&
 		s.State == s2.State
 }
 
