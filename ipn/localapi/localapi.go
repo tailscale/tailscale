@@ -111,6 +111,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveLogout(w, r)
 	case "/localapi/v0/prefs":
 		h.servePrefs(w, r)
+	case "/localapi/v0/ping":
+		h.servePing(w, r)
 	case "/localapi/v0/check-prefs":
 		h.serveCheckPrefs(w, r)
 	case "/localapi/v0/check-ip-forwarding":
@@ -623,6 +625,36 @@ func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	ipStr := r.FormValue("ip")
+	if ipStr == "" {
+		http.Error(w, "missing 'ip' parameter", 400)
+		return
+	}
+	ip, err := netaddr.ParseIP(ipStr)
+	if err != nil {
+		http.Error(w, "invalid IP", 400)
+		return
+	}
+	pingTypeStr := r.FormValue("type")
+	if ipStr == "" {
+		http.Error(w, "missing 'type' parameter", 400)
+		return
+	}
+	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr))
+	if err != nil {
+		writeErrorJSON(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {

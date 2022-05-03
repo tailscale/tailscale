@@ -1698,15 +1698,20 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
-func (b *LocalBackend) Ping(ipStr string, pingType tailcfg.PingType) {
-	ip, err := netaddr.ParseIP(ipStr)
-	if err != nil {
-		b.logf("ignoring Ping request to invalid IP %q", ipStr)
-		return
-	}
+func (b *LocalBackend) Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
+	ch := make(chan *ipnstate.PingResult, 1)
 	b.e.Ping(ip, pingType, func(pr *ipnstate.PingResult) {
-		b.send(ipn.Notify{PingResult: pr})
+		select {
+		case ch <- pr:
+		default:
+		}
 	})
+	select {
+	case pr := <-ch:
+		return pr, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // parseWgStatusLocked returns an EngineStatus based on s.

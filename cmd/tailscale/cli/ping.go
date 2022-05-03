@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"tailscale.com/ipn"
+	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
@@ -87,24 +87,10 @@ func runPing(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
 	if len(args) != 1 || args[0] == "" {
 		return errors.New("usage: ping <hostname-or-IP>")
 	}
 	var ip string
-	prc := make(chan *ipnstate.PingResult, 1)
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			fatalf("Notify.ErrMessage: %v", *n.ErrMessage)
-		}
-		if pr := n.PingResult; pr != nil && pr.IP == ip {
-			prc <- pr
-		}
-	})
-	pumpErr := make(chan error, 1)
-	go func() { pumpErr <- pump(ctx, bc, c) }()
 
 	hostOrIP := args[0]
 	ip, self, err := tailscaleIPFromArg(ctx, hostOrIP)
@@ -124,48 +110,47 @@ func runPing(ctx context.Context, args []string) error {
 	anyPong := false
 	for {
 		n++
-		bc.Ping(ip, pingType())
-		timer := time.NewTimer(pingArgs.timeout)
-		select {
-		case <-timer.C:
-			printf("timeout waiting for ping reply\n")
-		case err := <-pumpErr:
+		ctx, cancel := context.WithTimeout(ctx, pingArgs.timeout)
+		pr, err := localClient.Ping(ctx, netaddr.MustParseIP(ip), pingType())
+		cancel()
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				printf("ping %q timed out\n", ip)
+				continue
+			}
 			return err
-		case pr := <-prc:
-			timer.Stop()
-			if pr.Err != "" {
-				if pr.IsLocalIP {
-					outln(pr.Err)
-					return nil
-				}
-				return errors.New(pr.Err)
-			}
-			latency := time.Duration(pr.LatencySeconds * float64(time.Second)).Round(time.Millisecond)
-			via := pr.Endpoint
-			if pr.DERPRegionID != 0 {
-				via = fmt.Sprintf("DERP(%s)", pr.DERPRegionCode)
-			}
-			if via == "" {
-				// TODO(bradfitz): populate the rest of ipnstate.PingResult for TSMP queries?
-				// For now just say which protocol it used.
-				via = string(pingType())
-			}
-			anyPong = true
-			extra := ""
-			if pr.PeerAPIPort != 0 {
-				extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
-			}
-			printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
-			if pingArgs.tsmp || pingArgs.icmp {
-				return nil
-			}
-			if pr.Endpoint != "" && pingArgs.untilDirect {
-				return nil
-			}
-			time.Sleep(time.Second)
-		case <-ctx.Done():
-			return ctx.Err()
 		}
+		if pr.Err != "" {
+			if pr.IsLocalIP {
+				outln(pr.Err)
+				return nil
+			}
+			return errors.New(pr.Err)
+		}
+		latency := time.Duration(pr.LatencySeconds * float64(time.Second)).Round(time.Millisecond)
+		via := pr.Endpoint
+		if pr.DERPRegionID != 0 {
+			via = fmt.Sprintf("DERP(%s)", pr.DERPRegionCode)
+		}
+		if via == "" {
+			// TODO(bradfitz): populate the rest of ipnstate.PingResult for TSMP queries?
+			// For now just say which protocol it used.
+			via = string(pingType())
+		}
+		anyPong = true
+		extra := ""
+		if pr.PeerAPIPort != 0 {
+			extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
+		}
+		printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
+		if pingArgs.tsmp || pingArgs.icmp {
+			return nil
+		}
+		if pr.Endpoint != "" && pingArgs.untilDirect {
+			return nil
+		}
+		time.Sleep(time.Second)
+
 		if n == pingArgs.num {
 			if !anyPong {
 				return errors.New("no reply")
