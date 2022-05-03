@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -660,6 +661,23 @@ func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn str
 		}
 	}
 	return "", false
+}
+
+// Ping sends a ping of the provided type to the provided IP and waits
+// for its response.
+func (lc *LocalClient) Ping(ctx context.Context, ip netaddr.IP, pingtype tailcfg.PingType) (*ipnstate.PingResult, error) {
+	v := url.Values{}
+	v.Set("ip", ip.String())
+	v.Set("type", string(pingtype))
+	body, err := lc.send(ctx, "POST", "/localapi/v0/ping?"+v.Encode(), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	pr := new(ipnstate.PingResult)
+	if err := json.Unmarshal(body, pr); err != nil {
+		return nil, err
+	}
+	return pr, nil
 }
 
 // tailscaledConnectHint gives a little thing about why tailscaled (or

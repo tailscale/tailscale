@@ -65,14 +65,13 @@ type Notify struct {
 	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
 	ErrMessage *string
 
-	LoginFinished *empty.Message       // non-nil when/if the login process succeeded
-	State         *State               // if non-nil, the new or current IPN state
-	Prefs         *Prefs               // if non-nil, the new or current preferences
-	NetMap        *netmap.NetworkMap   // if non-nil, the new or current netmap
-	Engine        *EngineStatus        // if non-nil, the new or urrent wireguard stats
-	BrowseToURL   *string              // if non-nil, UI should open a browser right now
-	BackendLogID  *string              // if non-nil, the public logtail ID used by backend
-	PingResult    *ipnstate.PingResult // if non-nil, a ping response arrived
+	LoginFinished *empty.Message     // non-nil when/if the login process succeeded
+	State         *State             // if non-nil, the new or current IPN state
+	Prefs         *Prefs             // if non-nil, the new or current preferences
+	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
+	Engine        *EngineStatus      // if non-nil, the new or urrent wireguard stats
+	BrowseToURL   *string            // if non-nil, UI should open a browser right now
+	BackendLogID  *string            // if non-nil, the public logtail ID used by backend
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
@@ -121,9 +120,6 @@ func (n Notify) String() string {
 	}
 	if n.BackendLogID != nil {
 		sb.WriteString("BackendLogID ")
-	}
-	if n.PingResult != nil {
-		fmt.Fprintf(&sb, "ping=%v ", *n.PingResult)
 	}
 	if n.FilesWaiting != nil {
 		sb.WriteString("FilesWaiting ")
@@ -245,8 +241,4 @@ type Backend interface {
 	// counts. Connection events are emitted automatically without
 	// polling.
 	RequestEngineStatus()
-	// Ping attempts to start connecting to the given IP and sends a Notify
-	// with its PingResult. If the host is down, there might never
-	// be a PingResult sent. The cmd/tailscale CLI client adds a timeout.
-	Ping(ip string, pingType tailcfg.PingType)
 }

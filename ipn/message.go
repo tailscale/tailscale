@@ -51,11 +51,6 @@ type SetPrefsArgs struct {
 	New *Prefs
 }
 
-type PingArgs struct {
-	IP   string
-	Type tailcfg.PingType
-}
-
 // Command is a command message that is JSON encoded and sent by a
 // frontend to a backend.
 type Command struct {
@@ -78,7 +73,6 @@ type Command struct {
 	SetPrefs              *SetPrefsArgs
 	RequestEngineStatus   *NoArgs
 	RequestStatus         *NoArgs
-	Ping                  *PingArgs
 }
 
 type BackendServer struct {
@@ -169,9 +163,6 @@ func (bs *BackendServer) GotCommand(ctx context.Context, cmd *Command) error {
 	// Actions permitted with a read-only context:
 	if c := cmd.RequestEngineStatus; c != nil {
 		bs.b.RequestEngineStatus()
-		return nil
-	} else if c := cmd.Ping; c != nil {
-		bs.b.Ping(c.IP, tailcfg.PingType(c.Type))
 		return nil
 	}
 
@@ -309,13 +300,6 @@ func (bc *BackendClient) RequestEngineStatus() {
 
 func (bc *BackendClient) RequestStatus() {
 	bc.send(Command{AllowVersionSkew: true, RequestStatus: &NoArgs{}})
-}
-
-func (bc *BackendClient) Ping(ip string, pingType tailcfg.PingType) {
-	bc.send(Command{Ping: &PingArgs{
-		IP:   ip,
-		Type: pingType,
-	}})
 }
 
 // MaxMessageSize is the maximum message size, in bytes.
