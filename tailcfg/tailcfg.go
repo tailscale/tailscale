@@ -1030,10 +1030,6 @@ type MapRequest struct {
 	//       router but their IP forwarding is broken.
 	//     * "warn-router-unhealthy": client's Router implementation is
 	//       having problems.
-	//     * "v6-overlay": IPv6 development flag to have control send
-	//       v6 node addrs
-	//     * "minimize-netmap": have control minimize the netmap, removing
-	//       peers that are unreachable per ACLS.
 	DebugFlags []string `json:",omitempty"`
 }
 
