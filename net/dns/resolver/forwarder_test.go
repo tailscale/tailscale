@@ -23,9 +23,9 @@ func (rr resolverAndDelay) String() string {
 
 func TestResolversWithDelays(t *testing.T) {
 	// query
-	q := func(ss ...string) (ipps []dnstype.Resolver) {
+	q := func(ss ...string) (ipps []*dnstype.Resolver) {
 		for _, host := range ss {
-			ipps = append(ipps, dnstype.Resolver{Addr: host})
+			ipps = append(ipps, &dnstype.Resolver{Addr: host})
 		}
 		return
 	}
@@ -42,7 +42,7 @@ func TestResolversWithDelays(t *testing.T) {
 				}
 			}
 			rr = append(rr, resolverAndDelay{
-				name:       dnstype.Resolver{Addr: s},
+				name:       &dnstype.Resolver{Addr: s},
 				startDelay: d,
 			})
 		}
@@ -51,7 +51,7 @@ func TestResolversWithDelays(t *testing.T) {
 
 	tests := []struct {
 		name string
-		in   []dnstype.Resolver
+		in   []*dnstype.Resolver
 		want []resolverAndDelay
 	}{
 		{

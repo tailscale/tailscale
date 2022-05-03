@@ -51,7 +51,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			nm:    &netmap.NetworkMap{},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 			},
 		},
@@ -77,7 +77,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netaddr.IP{
 					"b.net.":       ips("100.102.0.1", "100.102.0.2"),
 					"myname.net.":  ips("100.101.101.101"),
@@ -112,7 +112,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				OnlyIPv6: true,
-				Routes:   map[dnsname.FQDN][]dnstype.Resolver{},
+				Routes:   map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netaddr.IP{
 					"b.net.":       ips("fe75::2"),
 					"myname.net.":  ips("fe75::1"),
@@ -136,7 +136,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 				Hosts: map[dnsname.FQDN][]netaddr.IP{
 					"myname.net.": ips("100.101.101.101"),
 					"foo.com.":    ips("1.2.3.4"),
@@ -158,7 +158,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				Hosts: map[dnsname.FQDN][]netaddr.IP{},
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					"0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.": nil,
 					"100.100.in-addr.arpa.":             nil,
 					"101.100.in-addr.arpa.":             nil,
@@ -242,13 +242,13 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			os:   "android",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
-					Resolvers: []dnstype.Resolver{
+					Resolvers: []*dnstype.Resolver{
 						{Addr: "8.8.8.8"},
 					},
-					FallbackResolvers: []dnstype.Resolver{
+					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
-					Routes: map[string][]dnstype.Resolver{
+					Routes: map[string][]*dnstype.Resolver{
 						"foo.com.": {{Addr: "1.2.3.4"}},
 					},
 				},
@@ -258,10 +258,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				Hosts: map[dnsname.FQDN][]netaddr.IP{},
-				DefaultResolvers: []dnstype.Resolver{
+				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.8.8"},
 				},
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					"foo.com.": {{Addr: "1.2.3.4"}},
 				},
 			},
@@ -270,7 +270,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			name: "exit_nodes_need_fallbacks",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
-					FallbackResolvers: []dnstype.Resolver{
+					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
 				},
@@ -281,8 +281,8 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
-				DefaultResolvers: []dnstype.Resolver{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.4.4"},
 				},
 			},
@@ -291,7 +291,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			name: "not_exit_node_NOT_need_fallbacks",
 			nm: &netmap.NetworkMap{
 				DNS: tailcfg.DNSConfig{
-					FallbackResolvers: []dnstype.Resolver{
+					FallbackResolvers: []*dnstype.Resolver{
 						{Addr: "8.8.4.4"},
 					},
 				},
@@ -301,7 +301,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			},
 			want: &dns.Config{
 				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
-				Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
 	}

@@ -170,7 +170,7 @@ type route struct {
 // long to wait before querying it.
 type resolverAndDelay struct {
 	// name is the upstream resolver.
-	name dnstype.Resolver
+	name *dnstype.Resolver
 
 	// startDelay is an amount to delay this resolver at
 	// start. It's used when, say, there are four Google or
@@ -246,7 +246,7 @@ func (f *forwarder) Close() error {
 // resolversWithDelays maps from a set of DNS server names to a slice of a type
 // that included a startDelay, upgrading any well-known DoH (DNS-over-HTTP)
 // servers in the process, insert a DoH lookup first before UDP fallbacks.
-func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
+func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 	rr := make([]resolverAndDelay, 0, len(resolvers)+2)
 
 	// Add the known DoH ones first, starting immediately.
@@ -261,7 +261,7 @@ func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
 			continue
 		}
 		didDoH[dohBase] = true
-		rr = append(rr, resolverAndDelay{name: dnstype.Resolver{Addr: dohBase}})
+		rr = append(rr, resolverAndDelay{name: &dnstype.Resolver{Addr: dohBase}})
 	}
 
 	type hostAndFam struct {
@@ -300,7 +300,7 @@ func resolversWithDelays(resolvers []dnstype.Resolver) []resolverAndDelay {
 // Resolver.SetConfig on reconfig.
 //
 // The memory referenced by routesBySuffix should not be modified.
-func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]dnstype.Resolver) {
+func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver) {
 	routes := make([]route, 0, len(routesBySuffix))
 	for suffix, rs := range routesBySuffix {
 		routes = append(routes, route{

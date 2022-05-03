@@ -192,7 +192,7 @@ func getVal() []any {
 				},
 			},
 			DNSConfig: &tailcfg.DNSConfig{
-				Resolvers: []dnstype.Resolver{
+				Resolvers: []*dnstype.Resolver{
 					{Addr: "10.0.0.1"},
 				},
 			},

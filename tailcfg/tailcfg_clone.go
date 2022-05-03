@@ -193,19 +193,19 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	}
 	dst := new(DNSConfig)
 	*dst = *src
-	dst.Resolvers = make([]dnstype.Resolver, len(src.Resolvers))
+	dst.Resolvers = make([]*dnstype.Resolver, len(src.Resolvers))
 	for i := range dst.Resolvers {
-		dst.Resolvers[i] = *src.Resolvers[i].Clone()
+		dst.Resolvers[i] = src.Resolvers[i].Clone()
 	}
 	if dst.Routes != nil {
-		dst.Routes = map[string][]dnstype.Resolver{}
+		dst.Routes = map[string][]*dnstype.Resolver{}
 		for k := range src.Routes {
-			dst.Routes[k] = append([]dnstype.Resolver{}, src.Routes[k]...)
+			dst.Routes[k] = append([]*dnstype.Resolver{}, src.Routes[k]...)
 		}
 	}
-	dst.FallbackResolvers = make([]dnstype.Resolver, len(src.FallbackResolvers))
+	dst.FallbackResolvers = make([]*dnstype.Resolver, len(src.FallbackResolvers))
 	for i := range dst.FallbackResolvers {
-		dst.FallbackResolvers[i] = *src.FallbackResolvers[i].Clone()
+		dst.FallbackResolvers[i] = src.FallbackResolvers[i].Clone()
 	}
 	dst.Domains = append(src.Domains[:0:0], src.Domains...)
 	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
@@ -217,9 +217,9 @@ func (src *DNSConfig) Clone() *DNSConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
-	Resolvers           []dnstype.Resolver
-	Routes              map[string][]dnstype.Resolver
-	FallbackResolvers   []dnstype.Resolver
+	Resolvers           []*dnstype.Resolver
+	Routes              map[string][]*dnstype.Resolver
+	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
 	Nameservers         []netaddr.IP

@@ -66,7 +66,7 @@ type Config struct {
 	// queries within that suffix.
 	// Queries only match the most specific suffix.
 	// To register a "default route", add an entry for ".".
-	Routes map[dnsname.FQDN][]dnstype.Resolver
+	Routes map[dnsname.FQDN][]*dnstype.Resolver
 	// LocalHosts is a map of FQDNs to corresponding IPs.
 	Hosts map[dnsname.FQDN][]netaddr.IP
 	// LocalDomains is a list of DNS name suffixes that should not be
@@ -115,7 +115,7 @@ func WriteIPPorts(w *bufio.Writer, vv []netaddr.IPPort) {
 }
 
 // WriteDNSResolver writes r to w.
-func WriteDNSResolver(w *bufio.Writer, r dnstype.Resolver) {
+func WriteDNSResolver(w *bufio.Writer, r *dnstype.Resolver) {
 	io.WriteString(w, r.Addr)
 	if len(r.BootstrapResolution) > 0 {
 		w.WriteByte('(')
@@ -129,7 +129,7 @@ func WriteDNSResolver(w *bufio.Writer, r dnstype.Resolver) {
 }
 
 // WriteDNSResolvers writes resolvers to w.
-func WriteDNSResolvers(w *bufio.Writer, resolvers []dnstype.Resolver) {
+func WriteDNSResolvers(w *bufio.Writer, resolvers []*dnstype.Resolver) {
 	w.WriteByte('[')
 	for i, r := range resolvers {
 		if i > 0 {
@@ -142,7 +142,7 @@ func WriteDNSResolvers(w *bufio.Writer, resolvers []dnstype.Resolver) {
 
 // WriteRoutes writes routes to w, omitting *.arpa routes and instead
 // summarizing how many of them there were.
-func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]dnstype.Resolver) {
+func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]*dnstype.Resolver) {
 	var kk []dnsname.FQDN
 	arpa := 0
 	for k := range routes {
@@ -347,7 +347,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 			// will use its default ones from our DNS config.
 		} else {
 			resolvers = []resolverAndDelay{{
-				name: dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
+				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
 			}}
 		}
 

@@ -2112,7 +2112,7 @@ func (b *LocalBackend) authReconfig() {
 // a runtime.GOOS.
 func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf, versionOS string) *dns.Config {
 	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]dnstype.Resolver{},
+		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
 	}
 
@@ -2199,8 +2199,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		}
 	}
 
-	addDefault := func(resolvers []dnstype.Resolver) {
+	addDefault := func(resolvers []*dnstype.Resolver) {
 		for _, r := range resolvers {
+			r := r
 			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, r)
 		}
 	}
@@ -2208,7 +2209,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it.
 	if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
-		addDefault([]dnstype.Resolver{{Addr: dohURL}})
+		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
 		return dcfg
 	}
 
@@ -2227,7 +2228,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		//
 		// While we're already populating it, might as well size the
 		// slice appropriately.
-		dcfg.Routes[fqdn] = make([]dnstype.Resolver, 0, len(resolvers))
+		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
 
 		for _, r := range resolvers {
 			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], r)

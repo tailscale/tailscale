@@ -480,10 +480,10 @@ func TestDelegate(t *testing.T) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[dnsname.FQDN][]dnstype.Resolver{
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
 		".": {
-			dnstype.Resolver{Addr: v4server.PacketConn.LocalAddr().String()},
-			dnstype.Resolver{Addr: v6server.PacketConn.LocalAddr().String()},
+			&dnstype.Resolver{Addr: v4server.PacketConn.LocalAddr().String()},
+			&dnstype.Resolver{Addr: v6server.PacketConn.LocalAddr().String()},
 		},
 	}
 	r.SetConfig(cfg)
@@ -655,7 +655,7 @@ func TestDelegateSplitRoute(t *testing.T) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[dnsname.FQDN][]dnstype.Resolver{
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
 		".":      {{Addr: server1.PacketConn.LocalAddr().String()}},
 		"other.": {{Addr: server2.PacketConn.LocalAddr().String()}},
 	}
@@ -947,7 +947,7 @@ func BenchmarkFull(b *testing.B) {
 	defer r.Close()
 
 	cfg := dnsCfg
-	cfg.Routes = map[dnsname.FQDN][]dnstype.Resolver{
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
 		".": {{Addr: server.PacketConn.LocalAddr().String()}},
 	}
 

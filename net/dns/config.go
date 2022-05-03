@@ -22,14 +22,14 @@ type Config struct {
 	// which aren't covered by more specific per-domain routes below.
 	// If empty, the OS's default resolvers (the ones that predate
 	// Tailscale altering the configuration) are used.
-	DefaultResolvers []dnstype.Resolver
+	DefaultResolvers []*dnstype.Resolver
 	// Routes maps a DNS suffix to the resolvers that should be used
 	// for queries that fall within that suffix.
 	// If a query doesn't match any entry in Routes, the
 	// DefaultResolvers are used.
 	// A Routes entry with no resolvers means the route should be
 	// authoritatively answered using the contents of Hosts.
-	Routes map[dnsname.FQDN][]dnstype.Resolver
+	Routes map[dnsname.FQDN][]*dnstype.Resolver
 	// SearchDomains are DNS suffixes to try when expanding
 	// single-label queries.
 	SearchDomains []dnsname.FQDN
@@ -98,9 +98,9 @@ func (c Config) hasDefaultResolvers() bool {
 // singleResolverSet returns the resolvers used by c.Routes if all
 // routes use the same resolvers, or nil if multiple sets of resolvers
 // are specified.
-func (c Config) singleResolverSet() []dnstype.Resolver {
+func (c Config) singleResolverSet() []*dnstype.Resolver {
 	var (
-		prev            []dnstype.Resolver
+		prev            []*dnstype.Resolver
 		prevInitialized bool
 	)
 	for _, resolvers := range c.Routes {
@@ -128,7 +128,7 @@ func (c Config) matchDomains() []dnsname.FQDN {
 	return ret
 }
 
-func sameResolverNames(a, b []dnstype.Resolver) bool {
+func sameResolverNames(a, b []*dnstype.Resolver) bool {
 	if len(a) != len(b) {
 		return false
 	}

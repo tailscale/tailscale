@@ -1586,7 +1586,7 @@ func ipInPrefixes(ip netaddr.IP, pp []netaddr.IPPrefix) bool {
 func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []netaddr.IPPrefix) {
 	m := map[netaddr.IP]bool{}
 
-	add := func(resolvers []dnstype.Resolver) {
+	add := func(resolvers []*dnstype.Resolver) {
 		for _, r := range resolvers {
 			ip, err := netaddr.ParseIP(r.Addr)
 			if err != nil {
