@@ -162,7 +162,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	// registered to it. Since in some cases we dynamically register IPs
 	// based on the packets that arrive, the NIC needs to accept all
 	// incoming packets. The NIC won't receive anything it isn't meant to
-	// since Wireguard will only send us packets that are meant for us.
+	// since WireGuard will only send us packets that are meant for us.
 	ipstack.SetPromiscuousMode(nicID, true)
 	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
 	// are handled by the one fake NIC we use.

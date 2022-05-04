@@ -5,7 +5,7 @@
 // TSMP is our ICMP-like "Tailscale Message Protocol" for signaling
 // Tailscale-specific messages between nodes. It uses IP protocol 99
 // (reserved for "any private encryption scheme") within
-// Wireguard's normal encryption between peers and never hits the host
+// WireGuard's normal encryption between peers and never hits the host
 // network stack.
 
 package packet

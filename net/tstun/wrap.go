@@ -110,9 +110,9 @@ type Wrapper struct {
 	// inbound packets arrive via UDP and are written into the TUN device;
 	// outbound packets are read from the TUN device and sent out via UDP.
 	// This queue is needed because although inbound writes are synchronous,
-	// the other direction must wait on a Wireguard goroutine to poll it.
+	// the other direction must wait on a WireGuard goroutine to poll it.
 	//
-	// Empty reads are skipped by Wireguard, so it is always legal
+	// Empty reads are skipped by WireGuard, so it is always legal
 	// to discard an empty packet instead of sending it through t.outbound.
 	//
 	// Close closes outbound. There may be outstanding sends to outbound
@@ -554,7 +554,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		response := t.filterOut(p)
 		if response != filter.Accept {
 			metricPacketOutDrop.Add(1)
-			// Wireguard considers read errors fatal; pretend nothing was read
+			// WireGuard considers read errors fatal; pretend nothing was read
 			return 0, nil
 		}
 	}
@@ -713,7 +713,7 @@ func (t *Wrapper) SetFilter(filt *filter.Filter) {
 // This path is typically used to deliver synthesized packets to the
 // host networking stack.
 func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
-	buf := make([]byte, PacketStartOffset + pkt.Size())
+	buf := make([]byte, PacketStartOffset+pkt.Size())
 
 	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().View())
 	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().View())
@@ -733,7 +733,7 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
 //
 // The packet contents are to start at &buf[offset].
 // offset must be greater or equal to PacketStartOffset.
-// The space before &buf[offset] will be used by Wireguard.
+// The space before &buf[offset] will be used by WireGuard.
 func (t *Wrapper) InjectInboundDirect(buf []byte, offset int) error {
 	if len(buf) > MaxPacketSize {
 		return errPacketTooBig

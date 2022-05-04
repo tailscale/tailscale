@@ -49,7 +49,7 @@ func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
 	return true
 }
 
-// WGCfg returns the NetworkMaps's Wireguard configuration.
+// WGCfg returns the NetworkMaps's WireGuard configuration.
 func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, exitNode tailcfg.StableNodeID) (*wgcfg.Config, error) {
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
