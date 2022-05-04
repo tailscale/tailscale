@@ -189,7 +189,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 			// node.
 			return
 		}
-		e.logf("open-conn-track: timeout opening %v; target node %v in netmap but unknown to wireguard", flow, n.Key.ShortString())
+		e.logf("open-conn-track: timeout opening %v; target node %v in netmap but unknown to WireGuard", flow, n.Key.ShortString())
 		return
 	}
 

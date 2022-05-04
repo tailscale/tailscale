@@ -77,7 +77,7 @@ const (
 	// packetSendRecheckWireguardThreshold controls how long we can go
 	// between packet sends to an IP before checking to see
 	// whether this IP address needs to be added back to the
-	// Wireguard peer oconfig.
+	// WireGuard peer oconfig.
 	packetSendRecheckWireguardThreshold = 1 * time.Minute
 )
 
@@ -221,7 +221,7 @@ type Config struct {
 }
 
 func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
-	logf("Starting userspace wireguard engine (with fake TUN device)")
+	logf("Starting userspace WireGuard engine (with fake TUN device)")
 	return NewUserspaceEngine(logf, Config{
 		ListenPort:    listenPort,
 		RespondToPing: true,
@@ -410,7 +410,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 
 	// wgdev takes ownership of tundev, will close it when closed.
-	e.logf("Creating wireguard device...")
+	e.logf("Creating WireGuard device...")
 	e.wgdev = wgcfg.NewDevice(e.tundev, e.magicConn.Bind(), e.wgLogger.DeviceLogger)
 	closePool.addFunc(e.wgdev.Close)
 	closePool.addFunc(func() {
@@ -435,7 +435,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		}
 	}()
 
-	e.logf("Bringing wireguard device up...")
+	e.logf("Bringing WireGuard device up...")
 	if err := e.wgdev.Up(); err != nil {
 		return nil, fmt.Errorf("wgdev.Up: %w", err)
 	}
@@ -614,12 +614,12 @@ func (e *userspaceEngine) noteRecvActivity(nk key.NodePublic) {
 
 	// If the last activity time jumped a bunch (say, at least
 	// half the idle timeout) then see if we need to reprogram
-	// Wireguard. This could probably be just
+	// WireGuard. This could probably be just
 	// lazyPeerIdleThreshold without the divide by 2, but
 	// maybeReconfigWireguardLocked is cheap enough to call every
 	// couple minutes (just not on every packet).
 	if e.trimmedNodes[nk] {
-		e.logf("wgengine: idle peer %v now active, reconfiguring wireguard", nk.ShortString())
+		e.logf("wgengine: idle peer %v now active, reconfiguring WireGuard", nk.ShortString())
 		e.maybeReconfigWireguardLocked(nil)
 	}
 }
@@ -733,7 +733,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 		}
 	}
 
-	e.logf("wgengine: Reconfig: configuring userspace wireguard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
+	e.logf("wgengine: Reconfig: configuring userspace WireGuard config (with %d/%d peers)", len(min.Peers), len(full.Peers))
 	if err := wgcfg.ReconfigDevice(e.wgdev, &min, e.logf); err != nil {
 		e.logf("wgdev.Reconfig: %v", err)
 		return err

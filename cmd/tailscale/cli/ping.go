@@ -49,8 +49,8 @@ relay node.
 		fs := newFlagSet("ping")
 		fs.BoolVar(&pingArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
-		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through wireguard, but not either host OS stack)")
-		fs.BoolVar(&pingArgs.icmp, "icmp", false, "do a ICMP-level ping (through wireguard, but not the local host OS stack)")
+		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through WireGuard, but not either host OS stack)")
+		fs.BoolVar(&pingArgs.icmp, "icmp", false, "do a ICMP-level ping (through WireGuard, but not the local host OS stack)")
 		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
 		return fs

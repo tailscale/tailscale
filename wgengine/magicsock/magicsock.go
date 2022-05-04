@@ -493,7 +493,7 @@ type Options struct {
 	// whenever it receives a packet from a a peer if it's been more
 	// than ~10 seconds since the last one. (10 seconds is somewhat
 	// arbitrary; the sole user just doesn't need or want it called on
-	// every packet, just every minute or two for Wireguard timeouts,
+	// every packet, just every minute or two for WireGuard timeouts,
 	// and 10 seconds seems like a good trade-off between often enough
 	// and not too often.)
 	// The provided func is likely to call back into
@@ -1864,7 +1864,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 	}
 
 	// If the first four parts are the prefix of disco.Magic
-	// (0x5453f09f) then it's definitely not a valid Wireguard
+	// (0x5453f09f) then it's definitely not a valid WireGuard
 	// packet (which starts with little-endian uint32 1, 2, 3, 4).
 	// Use naked returns for all following paths.
 	isDiscoMsg = true

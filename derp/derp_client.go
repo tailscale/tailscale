@@ -485,7 +485,7 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			c.peeked = int(n)
 		} else {
 			// But if for some reason we read a large DERP message (which isn't necessarily
-			// a Wireguard packet), then just allocate memory for it.
+			// a WireGuard packet), then just allocate memory for it.
 			// TODO(bradfitz): use a pool if large frames ever happen in practice.
 			b = make([]byte, n)
 			_, err = io.ReadFull(c.br, b)
