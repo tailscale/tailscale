@@ -889,10 +889,22 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL' \
 Response:
 ```
 {
-	"id":           "k123456CNTRL",
-	"created":      "2021-12-09T22:13:53Z",
-	"expires":      "2022-03-09T22:13:53Z",
-	"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": false}}}
+  "id": "k123456CNTRL",
+  "created": "2022-05-05T18:55:44Z",
+  "expires": "2022-08-03T18:55:44Z",
+  "capabilities": {
+    "devices": {
+      "create": {
+        "reusable": false,
+        "ephemeral": true,
+        "preauthorized": false,
+        "tags": [
+          "tag:bar",
+          "tag:foo"
+        ]
+      }
+    }
+  }
 }
 ```
 
