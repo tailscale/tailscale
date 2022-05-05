@@ -651,7 +651,7 @@ func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 
 // ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
 func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
-	st, err := StatusWithoutPeers(ctx)
+	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return "", false
 	}
