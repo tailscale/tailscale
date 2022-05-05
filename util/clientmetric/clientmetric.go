@@ -200,7 +200,8 @@ const (
 )
 
 // EncodeLogTailMetricsDelta return an encoded string representing the metrics
-// differences since the previous call.
+// differences since the previous call. It can be read with the help of the
+// Reader type.
 //
 // It implements the requirements of a logtail.Config.MetricsDelta
 // func. Notably, its output is safe to embed in a JSON string literal
