@@ -34,6 +34,7 @@ import (
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 )
@@ -206,6 +207,7 @@ func (s *Server) start() error {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
 	ns.ProcessLocalIPs = true
+	ns.ProcessSubnets = true
 	ns.ForwardTCPIn = s.forwardTCP
 	if err := ns.Start(); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
@@ -313,13 +315,12 @@ func (s *Server) printAuthURLLoop() {
 	}
 }
 
-func (s *Server) forwardTCP(c net.Conn, port uint16) {
+func (s *Server) forwardTCP(c net.Conn, port uint16) filter.Response {
 	s.mu.Lock()
 	ln, ok := s.listeners[listenKey{"tcp", "", fmt.Sprint(port)}]
 	s.mu.Unlock()
 	if !ok {
-		c.Close()
-		return
+		return filter.Drop
 	}
 	t := time.NewTimer(time.Second)
 	defer t.Stop()
@@ -328,6 +329,7 @@ func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	case <-t.C:
 		c.Close()
 	}
+	return filter.Accept
 }
 
 // getTSNetDir usually just returns filepath.Join(confDir, "tsnet-"+prog)
