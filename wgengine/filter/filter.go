@@ -7,6 +7,7 @@ package filter
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 )
 
 // Filter is a stateful packet filter.
@@ -56,8 +58,106 @@ type Filter struct {
 
 // filterState is a state cache of past seen packets.
 type filterState struct {
-	mu  sync.Mutex
+	mu sync.Mutex // guards following
+
+	// lru is the flow track cached used by UDP & SCTP.
 	lru *flowtrack.Cache // from flowtrack.Tuple -> nil
+
+	// tcpFlows tracks open TCP flows, both inbound and outbound. Regardless of
+	// which direction initiated it, the Tuple's Src is always the remote side
+	// and Dst is the local side.
+	tcpFlows map[flowtrack.Tuple]*TCPFlow
+}
+
+// OpenTCPFlows returns the set of open TCP flows in an unsorted order.
+func (f *Filter) OpenTCPFlows() []*TCPFlow {
+	st := f.state
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	ret := make([]*TCPFlow, 0, len(st.tcpFlows))
+	for _, f := range st.tcpFlows {
+		ret = append(ret, f)
+	}
+	return ret
+}
+
+type TCPFlow struct {
+	flowtrack.Tuple
+	Out     bool // was an outbound connection (from local tailscale)
+	Created time.Time
+	// TODO(bradfitz): lastActivity mono.Time, once we can do it fast enough
+	// to update on all packets.
+
+	mu sync.Mutex // guards finIn/finOut; lock order: filterState.mu, then TCPFlow.mu
+	// finOut and finIn record whether we've seen a FIN packet in or out
+	// for this flow.
+	finOut bool
+	finIn  bool
+}
+
+func (s *filterState) addOutgoingTCPFlow(t flowtrack.Tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log.Printf("XXX adding out flow %v", t)
+	mak.Set(&s.tcpFlows, t, &TCPFlow{
+		Tuple:   t,
+		Out:     true,
+		Created: time.Now(),
+	})
+}
+
+func (s *filterState) addIncomingTCPFlow(t flowtrack.Tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log.Printf("XXX adding in flow %v", t)
+	mak.Set(&s.tcpFlows, t, &TCPFlow{
+		Tuple:   t,
+		Out:     false,
+		Created: time.Now(),
+	})
+}
+
+func (s *filterState) removeTCPFlow(t flowtrack.Tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tcpFlows, t)
+	log.Printf("XXX removing flow %v", t)
+}
+
+func (s *filterState) setFinOut(t flowtrack.Tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.tcpFlows[t]; ok {
+		f.mu.Lock()
+		f.finOut = true
+		done := f.finOut && f.finIn
+		f.mu.Unlock()
+		log.Printf("XXX FIN out for flow %v", t)
+		if done {
+			delete(s.tcpFlows, t)
+			log.Printf("XXX due to FINs, removing flow %v", t)
+		}
+	} else {
+		log.Printf("XXX FIN out for unknown flow %v", t)
+	}
+}
+
+func (s *filterState) setFinIn(t flowtrack.Tuple) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.tcpFlows[t]; ok {
+		f.mu.Lock()
+		f.finIn = true
+		done := f.finOut && f.finIn
+		f.mu.Unlock()
+		log.Printf("XXX FIN in for flow %v", t)
+		if done {
+			delete(s.tcpFlows, t)
+			log.Printf("XXX due to FINs, removing flow %v", t)
+		}
+	} else {
+		log.Printf("XXX FIN in for unknown flow %v", t)
+	}
 }
 
 // lruMax is the size of the LRU cache in filterState.
@@ -416,12 +516,25 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		// can't be initiated without first sending a SYN.
 		// It happens to also be much faster.
 		// TODO(apenwarr): Skip the rest of decoding in this path?
-		if !q.IsTCPSyn() {
-			return Accept, "tcp non-syn"
+		if q.IsTCPSyn() {
+			if f.matches4.match(q) {
+				t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+				f.state.addIncomingTCPFlow(t)
+				return Accept, "tcp ok"
+			}
+			return Drop, "no rules matched"
 		}
-		if f.matches4.match(q) {
-			return Accept, "tcp ok"
+		isFin := q.IsTCPFin()
+		isRst := q.IsTCPRst()
+		if isFin || isRst {
+			t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+			if isFin {
+				f.state.setFinIn(t)
+			} else if isRst {
+				f.state.removeTCPFlow(t)
+			}
 		}
+		return Accept, "tcp non-syn"
 	case ipproto.UDP, ipproto.SCTP:
 		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
@@ -476,12 +589,25 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		// can't be initiated without first sending a SYN.
 		// It happens to also be much faster.
 		// TODO(apenwarr): Skip the rest of decoding in this path?
-		if q.IPProto == ipproto.TCP && !q.IsTCPSyn() {
-			return Accept, "tcp non-syn"
+		if q.IsTCPSyn() {
+			if f.matches6.match(q) {
+				t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+				f.state.addIncomingTCPFlow(t)
+				return Accept, "tcp ok"
+			}
+			return Drop, "no rules matched"
 		}
-		if f.matches6.match(q) {
-			return Accept, "tcp ok"
+		isFin := q.IsTCPFin()
+		isRst := q.IsTCPRst()
+		if isFin || isRst {
+			t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
+			if isFin {
+				f.state.setFinIn(t)
+			} else if isRst {
+				f.state.removeTCPFlow(t)
+			}
 		}
+		return Accept, "tcp non-syn"
 	case ipproto.UDP, ipproto.SCTP:
 		t := flowtrack.Tuple{Proto: q.IPProto, Src: q.Src, Dst: q.Dst}
 
@@ -517,6 +643,23 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 		f.state.mu.Lock()
 		f.state.lru.Add(tuple, nil)
 		f.state.mu.Unlock()
+	case ipproto.TCP:
+		isSyn := q.IsTCPSyn()
+		isRst := q.IsTCPRst()
+		isFin := q.IsTCPFin()
+		if isSyn || isRst || isFin {
+			tuple := flowtrack.Tuple{
+				Proto: q.IPProto,
+				Src:   q.Dst, Dst: q.Src, // src/dst reversed
+			}
+			if isSyn {
+				f.state.addOutgoingTCPFlow(tuple)
+			} else if isRst {
+				f.state.removeTCPFlow(tuple)
+			} else if isFin {
+				f.state.setFinOut(tuple)
+			}
+		}
 	}
 	return Accept, "ok out"
 }

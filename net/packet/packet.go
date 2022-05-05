@@ -390,6 +390,16 @@ func (q *Parsed) IsTCPSyn() bool {
 	return (q.TCPFlags & TCPSynAck) == TCPSyn
 }
 
+// IsTCPRst reports whether q is a TCP RST packet.
+func (q *Parsed) IsTCPRst() bool {
+	return (q.TCPFlags & TCPRst) != 0
+}
+
+// IsTCPFin reports whether q is a TCP FIN packet.
+func (q *Parsed) IsTCPFin() bool {
+	return (q.TCPFlags & TCPFin) != 0
+}
+
 // IsError reports whether q is an ICMP "Error" packet.
 func (q *Parsed) IsError() bool {
 	switch q.IPProto {

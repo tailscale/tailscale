@@ -94,6 +94,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a magicsock rebind",
 		},
 		{
+			Name:      "kick-all-tcp-in",
+			Exec:      localAPIAction("kick-all-tcp-in"),
+			ShortHelp: "test TCP flow kick [incoming]",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",

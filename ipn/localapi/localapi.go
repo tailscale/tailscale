@@ -278,6 +278,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = h.b.DebugRebind()
 	case "restun":
 		err = h.b.DebugReSTUN()
+	case "kick-all-tcp-in":
+		err = h.b.DebugKickAllTCPIn()
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:

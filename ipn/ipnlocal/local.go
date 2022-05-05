@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -3280,6 +3281,17 @@ func (b *LocalBackend) DebugReSTUN() error {
 		return err
 	}
 	mc.ReSTUN("explicit-debug")
+	return nil
+}
+
+func (b *LocalBackend) DebugKickAllTCPIn() error {
+	filt, ok := b.filterAtomic.Load().(*filter.Filter)
+	if !ok {
+		return errors.New("no filter")
+	}
+	for _, flow := range filt.OpenTCPFlows() {
+		log.Printf("XXX: flow open: %+v", flow)
+	}
 	return nil
 }
 
