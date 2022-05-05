@@ -373,6 +373,19 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	if dst := p.Dst.IP(); dst != magicDNSIP && dst != magicDNSIPv6 {
 		return filter.Accept
 	}
+	// Of traffic to the service IP, we only care about UDP 53, and TCP
+	// on port 80 & 53.
+	switch p.IPProto {
+	case ipproto.TCP:
+		if port := p.Dst.Port(); port != 53 && port != 80 {
+			return filter.Accept
+		}
+	case ipproto.UDP:
+		if port := p.Dst.Port(); port != 53 {
+			return filter.Accept
+		}
+	}
+
 
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {
@@ -757,6 +770,11 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// directions to/from the gonet.TCPConn in forwardTCP will
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
+
+	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+		go ns.dns.HandleTCPConn(c, netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort))
+		return
+	}
 
 	if ns.lb != nil {
 		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {

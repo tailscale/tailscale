@@ -7,7 +7,9 @@ package dns
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"runtime"
 	"sync/atomic"
@@ -344,6 +346,123 @@ func (m *Manager) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
 	return m.resolver.Query(ctx, bs, from)
+}
+
+const (
+	// RFC 7766 6.2 recommends connection reuse & request pipelining
+	// be undertaken, and the connection be closed by the server
+	// using an idle timeout on the order of seconds.
+	idleTimeoutTCP = 45 * time.Second
+	// The RFCs don't specify the max size of a TCP-based DNS query,
+	// but we want to keep this reasonable. Given payloads are typically
+	// much larger and all known client send a single query, I've arbitrarily
+	// chosen 2k.
+	maxReqSizeTCP = 2048
+)
+
+// dnsTCPSession services DNS requests sent over TCP.
+type dnsTCPSession struct {
+	m *Manager
+
+	conn    net.Conn
+	srcAddr netaddr.IPPort
+
+	readClosing  chan struct{}
+	responses    chan []byte // DNS replies pending writing
+
+	ctx      context.Context
+	closeCtx context.CancelFunc
+}
+
+func (s *dnsTCPSession) handleWrites() {
+	defer s.conn.Close()
+	defer close(s.responses)
+	defer s.closeCtx()
+
+	for {
+		select {
+		case <-s.readClosing:
+			return // connection closed or timeout, teardown time
+
+		case resp := <-s.responses:
+			s.conn.SetWriteDeadline(time.Now().Add(idleTimeoutTCP))
+			if err := binary.Write(s.conn, binary.BigEndian, uint16(len(resp))); err != nil {
+				s.m.logf("tcp write (len): %v", err)
+				return
+			}
+			if _, err := s.conn.Write(resp); err != nil {
+				s.m.logf("tcp write (response): %v", err)
+				return
+			}
+		}
+	}
+}
+
+func (s *dnsTCPSession) handleQuery(q []byte) {
+	resp, err := s.m.Query(s.ctx, q, s.srcAddr)
+	if err != nil {
+		s.m.logf("tcp query: %v", err)
+		return
+	}
+
+	select {
+	case <-s.ctx.Done():
+	case s.responses <- resp:
+	}
+}
+
+func (s *dnsTCPSession) handleReads() {
+	defer close(s.readClosing)
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+
+		default:
+			s.conn.SetReadDeadline(time.Now().Add(idleTimeoutTCP))
+			var reqLen uint16
+			if err := binary.Read(s.conn, binary.BigEndian, &reqLen); err != nil {
+				if err == io.EOF || err == io.ErrClosedPipe {
+					return // connection closed nominally, we gucci
+				}
+				s.m.logf("tcp read (len): %v", err)
+				return
+			}
+			if int(reqLen) > maxReqSizeTCP {
+				s.m.logf("tcp request too large (%d > %d)", reqLen, maxReqSizeTCP)
+				return
+			}
+
+			buf := make([]byte, int(reqLen))
+			if _, err := io.ReadFull(s.conn, buf); err != nil {
+				s.m.logf("tcp read (payload): %v", err)
+				return
+			}
+
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+				go s.handleQuery(buf)
+			}
+		}
+	}
+}
+
+// HandleTCPConn implements magicDNS over TCP, taking a connection and
+// servicing DNS requests sent down it.
+func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netaddr.IPPort) {
+	s := dnsTCPSession{
+		m:            m,
+		conn:         conn,
+		srcAddr:      srcAddr,
+		responses:    make(chan []byte),
+		readClosing:  make(chan struct{}),
+	}
+	s.ctx, s.closeCtx = context.WithCancel(context.Background())
+	go s.handleReads()
+	s.handleWrites()
 }
 
 func (m *Manager) Down() error {
