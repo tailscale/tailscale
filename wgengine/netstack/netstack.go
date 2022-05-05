@@ -773,7 +773,12 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 				return
 			}
 		}
+		if reqDetails.LocalPort == 80 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+			ns.lb.HandleQuad100Port80Conn(c)
+			return
+		}
 	}
+
 	if ns.ForwardTCPIn != nil {
 		ns.ForwardTCPIn(c, reqDetails.LocalPort)
 		return

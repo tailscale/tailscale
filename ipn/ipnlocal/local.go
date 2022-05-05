@@ -3313,3 +3313,38 @@ func (b *LocalBackend) HandleSSHConn(c net.Conn) error {
 	}
 	return b.sshServer.HandleSSHConn(c)
 }
+
+// HandleQuad100Port80Conn serves http://100.100.100.100/ on port 80 (and
+// the equivalent tsaddr.TailscaleServiceIPv6 address).
+func (b *LocalBackend) HandleQuad100Port80Conn(c net.Conn) {
+	var s http.Server
+	s.Handler = http.HandlerFunc(b.handleQuad100Port80Conn)
+	s.Serve(netutil.NewOneConnListener(c, nil))
+}
+
+func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "default-src 'self';")
+	if r.Method != "GET" && r.Method != "HEAD" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	io.WriteString(w, "<h1>Tailscale</h1>\n")
+	if b.netMap == nil {
+		io.WriteString(w, "No netmap.\n")
+		return
+	}
+	if len(b.netMap.Addresses) == 0 {
+		io.WriteString(w, "No local addresses.\n")
+		return
+	}
+	io.WriteString(w, "<p>Local addresses:</p><ul>\n")
+	for _, ipp := range b.netMap.Addresses {
+		fmt.Fprintf(w, "<li>%v</li>\n", ipp.IP())
+	}
+	io.WriteString(w, "</ul>\n")
+}
