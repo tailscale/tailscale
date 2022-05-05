@@ -373,6 +373,19 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	if dst := p.Dst.IP(); dst != magicDNSIP && dst != magicDNSIPv6 {
 		return filter.Accept
 	}
+	// Of traffic to the service IP, we only care about UDP 53, and TCP
+	// on port 80 & 53.
+	switch p.IPProto {
+	case ipproto.TCP:
+		if port := p.Dst.Port(); port != 53 && port != 80 {
+			return filter.Accept
+		}
+	case ipproto.UDP:
+		if port := p.Dst.Port(); port != 53 {
+			return filter.Accept
+		}
+	}
+
 
 	var pn tcpip.NetworkProtocolNumber
 	switch p.IPVersion {

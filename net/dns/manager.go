@@ -434,8 +434,8 @@ func (s *dnsTCPSession) handleReads() {
 				return
 			}
 
-			buff := make([]byte, int(reqLen))
-			if _, err := io.ReadFull(s.conn, buff); err != nil {
+			buf := make([]byte, int(reqLen))
+			if _, err := io.ReadFull(s.conn, buf); err != nil {
 				s.m.logf("tcp read (payload): %v", err)
 				return
 			}
@@ -444,7 +444,7 @@ func (s *dnsTCPSession) handleReads() {
 			case <-s.ctx.Done():
 				return
 			default:
-				go s.handleQuery(buff)
+				go s.handleQuery(buf)
 			}
 		}
 	}
