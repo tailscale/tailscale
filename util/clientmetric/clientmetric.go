@@ -255,10 +255,6 @@ func EncodeLogTailMetricsDelta() string {
 	return enc.buf.String()
 }
 
-func ResetLastDeltaForTest() {
-	lastDelta = time.Time{}
-}
-
 var deltaPool = &sync.Pool{
 	New: func() any {
 		return new(deltaEncBuf)
@@ -307,4 +303,12 @@ func (b *deltaEncBuf) writeHexVarint(v int64) {
 	hexBuf := b.buf.Bytes()[oldLen : oldLen+hexLen]
 	hex.Encode(hexBuf, b.scratch[:n])
 	b.buf.Write(hexBuf)
+}
+
+var TestHooks testHooks
+
+type testHooks struct{}
+
+func (testHooks) ResetLastDelta() {
+	lastDelta = time.Time{}
 }
