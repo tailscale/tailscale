@@ -255,6 +255,10 @@ func EncodeLogTailMetricsDelta() string {
 	return enc.buf.String()
 }
 
+func ResetLastDeltaForTest() {
+	lastDelta = time.Time{}
+}
+
 var deltaPool = &sync.Pool{
 	New: func() any {
 		return new(deltaEncBuf)
