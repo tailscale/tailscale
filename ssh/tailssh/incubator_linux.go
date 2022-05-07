@@ -148,21 +148,21 @@ func releaseSession(sessionID string) error {
 }
 
 // maybeStartLoginSessionLinux is the linux implementation of maybeStartLoginSession.
-func maybeStartLoginSessionLinux(logf logger.Logf, uid uint32, localUser, remoteUser, remoteHost, tty string) (func() error, error) {
+func maybeStartLoginSessionLinux(logf logger.Logf, ia incubatorArgs) (func() error, error) {
 	if os.Geteuid() != 0 {
 		return nil, nil
 	}
-	logf("starting session for user %d", uid)
+	logf("starting session for user %d", ia.uid)
 	// The only way we can actually start a new session is if we are
 	// running outside one and are root, which is typically the case
 	// for systemd managed tailscaled.
-	resp, err := createSession(uint32(uid), remoteUser, remoteHost, tty)
+	resp, err := createSession(uint32(ia.uid), ia.remoteUser, ia.remoteIP, ia.ttyName)
 	if err != nil {
 		// TODO(maisem): figure out if we are running in a session.
 		// We can look at the DBus GetSessionByPID API.
 		// https://www.freedesktop.org/software/systemd/man/org.freedesktop.login1.html
 		// For now best effort is fine.
-		logf("ssh: failed to CreateSession for user %q (%d) %v", localUser, uid, err)
+		logf("ssh: failed to CreateSession for user %q (%d) %v", ia.localUser, ia.uid, err)
 		return nil, nil
 	}
 	os.Setenv("DBUS_SESSION_BUS_ADDRESS", fmt.Sprintf("unix:path=%v/bus", resp.runtimePath))
