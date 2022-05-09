@@ -62,9 +62,10 @@ var maybeStartLoginSession = func(logf logger.Logf, ia incubatorArgs) (close fun
 // exec.CommandContext.
 func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 	var (
-		name   string
-		args   []string
-		isSFTP bool
+		name    string
+		args    []string
+		isSFTP  bool
+		isShell bool
 	)
 	switch ss.Subsystem() {
 	case "sftp":
@@ -74,6 +75,7 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 		if rawCmd := ss.RawCommand(); rawCmd != "" {
 			args = append(args, "-c", rawCmd)
 		} else {
+			isShell = true
 			args = append(args, "-l") // login shell
 		}
 	default:
@@ -107,6 +109,13 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 	if isSFTP {
 		incubatorArgs = append(incubatorArgs, "--sftp")
 	} else {
+		if isShell {
+			incubatorArgs = append(incubatorArgs, "--shell")
+			// Currently (2022-05-09) `login` is only used for shells
+			if lp, err := exec.LookPath("login"); err == nil {
+				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
+			}
+		}
 		incubatorArgs = append(incubatorArgs, "--cmd="+name)
 		if len(args) > 0 {
 			incubatorArgs = append(incubatorArgs, "--")
@@ -144,6 +153,7 @@ type incubatorArgs struct {
 	hasTTY       bool
 	cmdName      string
 	isSFTP       bool
+	isShell      bool
 	loginCmdPath string
 	cmdArgs      []string
 }
@@ -159,7 +169,9 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 	flags.StringVar(&a.ttyName, "tty-name", "", "the tty name (pts/3)")
 	flags.BoolVar(&a.hasTTY, "has-tty", false, "is the output attached to a tty")
 	flags.StringVar(&a.cmdName, "cmd", "", "the cmd to launch (ignored in sftp mode)")
+	flags.BoolVar(&a.isShell, "shell", false, "is launching a shell (with no cmds)")
 	flags.BoolVar(&a.isSFTP, "sftp", false, "run sftp server (cmd is ignored)")
+	flags.StringVar(&a.loginCmdPath, "login-cmd", "", "the path to `login` cmd")
 	flags.Parse(args)
 	a.cmdArgs = flags.Args()
 	return a
@@ -176,6 +188,9 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 // `--groups` and then launches the requested `--cmd`.
 func beIncubator(args []string) error {
 	ia := parseIncubatorArgs(args)
+	if ia.isSFTP && ia.isShell {
+		return fmt.Errorf("--sftp and --shell are mutually exclusive")
+	}
 
 	logf := logger.Discard
 	if debugIncubator {
@@ -186,6 +201,11 @@ func beIncubator(args []string) error {
 	}
 
 	euid := uint64(os.Geteuid())
+	runningAsRoot := euid == 0
+	if runningAsRoot && ia.isShell && ia.loginCmdPath != "" {
+		// If we are trying to launch a login shell, just exec into login instead.
+		return unix.Exec(ia.loginCmdPath, []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}, os.Environ())
+	}
 
 	// Inform the system that we are about to log someone in.
 	// We can only do this if we are running as root.
