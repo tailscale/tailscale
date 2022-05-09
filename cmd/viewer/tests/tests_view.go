@@ -188,9 +188,57 @@ func (v *MapView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (v MapView) Int() views.Map[string, int] { return views.MapOf(v.ж.Int) }
+
+func (v MapView) SliceInt() views.MapFn[string, []int, views.Slice[int]] {
+	return views.MapFnOf(v.ж.SliceInt, func(t []int) views.Slice[int] {
+		return views.SliceOf(t)
+	})
+}
+
+func (v MapView) StructWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
+	return views.MapFnOf(v.ж.StructWithPtr, func(t *StructWithPtrs) StructWithPtrsView {
+		return t.View()
+	})
+}
+
+func (v MapView) StructWithoutPtr() views.MapFn[string, *StructWithoutPtrs, StructWithoutPtrsView] {
+	return views.MapFnOf(v.ж.StructWithoutPtr, func(t *StructWithoutPtrs) StructWithoutPtrsView {
+		return t.View()
+	})
+}
+
+func (v MapView) SlicesWithPtrs() views.MapFn[string, []*StructWithPtrs, views.SliceView[*StructWithPtrs, StructWithPtrsView]] {
+	return views.MapFnOf(v.ж.SlicesWithPtrs, func(t []*StructWithPtrs) views.SliceView[*StructWithPtrs, StructWithPtrsView] {
+		return views.SliceOfViews[*StructWithPtrs, StructWithPtrsView](t)
+	})
+}
+
+func (v MapView) SlicesWithoutPtrs() views.MapFn[string, []*StructWithoutPtrs, views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView]] {
+	return views.MapFnOf(v.ж.SlicesWithoutPtrs, func(t []*StructWithoutPtrs) views.SliceView[*StructWithoutPtrs, StructWithoutPtrsView] {
+		return views.SliceOfViews[*StructWithoutPtrs, StructWithoutPtrsView](t)
+	})
+}
+
+func (v MapView) StructWithoutPtrKey() views.Map[StructWithoutPtrs, int] {
+	return views.MapOf(v.ж.StructWithoutPtrKey)
+}
+func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported") }
+func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
+func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MapViewNeedsRegeneration = Map(struct {
-	M map[string]int
+	Int                 map[string]int
+	SliceInt            map[string][]int
+	StructWithPtr       map[string]*StructWithPtrs
+	StructWithoutPtr    map[string]*StructWithoutPtrs
+	SlicesWithPtrs      map[string][]*StructWithPtrs
+	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
+	StructWithoutPtrKey map[StructWithoutPtrs]int
+	SliceIntPtr         map[string][]*int
+	PointerKey          map[*string]int
+	StructWithPtrKey    map[StructWithPtrs]int
 }{})
 
 // View returns a readonly view of StructWithSlices.

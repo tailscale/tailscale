@@ -61,10 +61,64 @@ func (src *Map) Clone() *Map {
 	}
 	dst := new(Map)
 	*dst = *src
-	if dst.M != nil {
-		dst.M = map[string]int{}
-		for k, v := range src.M {
-			dst.M[k] = v
+	if dst.Int != nil {
+		dst.Int = map[string]int{}
+		for k, v := range src.Int {
+			dst.Int[k] = v
+		}
+	}
+	if dst.SliceInt != nil {
+		dst.SliceInt = map[string][]int{}
+		for k := range src.SliceInt {
+			dst.SliceInt[k] = append([]int{}, src.SliceInt[k]...)
+		}
+	}
+	if dst.StructWithPtr != nil {
+		dst.StructWithPtr = map[string]*StructWithPtrs{}
+		for k, v := range src.StructWithPtr {
+			dst.StructWithPtr[k] = v.Clone()
+		}
+	}
+	if dst.StructWithoutPtr != nil {
+		dst.StructWithoutPtr = map[string]*StructWithoutPtrs{}
+		for k, v := range src.StructWithoutPtr {
+			dst.StructWithoutPtr[k] = v.Clone()
+		}
+	}
+	if dst.SlicesWithPtrs != nil {
+		dst.SlicesWithPtrs = map[string][]*StructWithPtrs{}
+		for k := range src.SlicesWithPtrs {
+			dst.SlicesWithPtrs[k] = append([]*StructWithPtrs{}, src.SlicesWithPtrs[k]...)
+		}
+	}
+	if dst.SlicesWithoutPtrs != nil {
+		dst.SlicesWithoutPtrs = map[string][]*StructWithoutPtrs{}
+		for k := range src.SlicesWithoutPtrs {
+			dst.SlicesWithoutPtrs[k] = append([]*StructWithoutPtrs{}, src.SlicesWithoutPtrs[k]...)
+		}
+	}
+	if dst.StructWithoutPtrKey != nil {
+		dst.StructWithoutPtrKey = map[StructWithoutPtrs]int{}
+		for k, v := range src.StructWithoutPtrKey {
+			dst.StructWithoutPtrKey[k] = v
+		}
+	}
+	if dst.SliceIntPtr != nil {
+		dst.SliceIntPtr = map[string][]*int{}
+		for k := range src.SliceIntPtr {
+			dst.SliceIntPtr[k] = append([]*int{}, src.SliceIntPtr[k]...)
+		}
+	}
+	if dst.PointerKey != nil {
+		dst.PointerKey = map[*string]int{}
+		for k, v := range src.PointerKey {
+			dst.PointerKey[k] = v
+		}
+	}
+	if dst.StructWithPtrKey != nil {
+		dst.StructWithPtrKey = map[StructWithPtrs]int{}
+		for k, v := range src.StructWithPtrKey {
+			dst.StructWithPtrKey[k] = v
 		}
 	}
 	return dst
@@ -72,7 +126,16 @@ func (src *Map) Clone() *Map {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MapCloneNeedsRegeneration = Map(struct {
-	M map[string]int
+	Int                 map[string]int
+	SliceInt            map[string][]int
+	StructWithPtr       map[string]*StructWithPtrs
+	StructWithoutPtr    map[string]*StructWithoutPtrs
+	SlicesWithPtrs      map[string][]*StructWithPtrs
+	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
+	StructWithoutPtrKey map[StructWithoutPtrs]int
+	SliceIntPtr         map[string][]*int
+	PointerKey          map[*string]int
+	StructWithPtrKey    map[StructWithPtrs]int
 }{})
 
 // Clone makes a deep copy of StructWithSlices.

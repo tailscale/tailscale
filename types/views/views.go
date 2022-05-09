@@ -53,6 +53,8 @@ func SliceOfViews[T ViewCloner[T, V], V StructView[T]](x []T) SliceView[T, V] {
 // SliceView is a read-only wrapper around a struct which should only be exposed
 // as a View.
 type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
 	// It is named distinctively to make you think of how dangerous it is to escape
 	// to callers. You must not let callers be able to mutate it.
 	ж []T
@@ -88,6 +90,8 @@ func (v SliceView[T, V]) AsSlice() []V {
 
 // Slice is a read-only accessor for a slice.
 type Slice[T any] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
 	// It is named distinctively to make you think of how dangerous it is to escape
 	// to callers. You must not let callers be able to mutate it.
 	ж []T
@@ -180,4 +184,103 @@ func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
 	return v.ж.UnmarshalJSON(b)
+}
+
+// MapOf returns a read-only view over m.
+func MapOf[K comparable, V comparable](m map[K]V) Map[K, V] {
+	return Map[K, V]{m}
+}
+
+// Map is a read-only accessor over a map whose values are immutable.
+type Map[K comparable, V any] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж map[K]V
+}
+
+// Has reports whether k has an entry in the map.
+func (m Map[K, V]) Has(k K) bool {
+	_, ok := m.ж[k]
+	return ok
+}
+
+// IsNil reports whether the underlying map is nil.
+func (m Map[K, V]) IsNil() bool {
+	return m.ж == nil
+}
+
+// Len returns the number of elements in the map.
+func (m Map[K, V]) Len() int { return len(m.ж) }
+
+// Get returns the element with key k.
+func (m Map[K, V]) Get(k K) V {
+	return m.ж[k]
+}
+
+// GetOk returns the element with key k and a bool representing whether the key
+// is in map.
+func (m Map[K, V]) GetOk(k K) (V, bool) {
+	v, ok := m.ж[k]
+	return v, ok
+}
+
+// ForEach calls f for every k,v pair in the underlying map.
+func (m Map[K, V]) ForEach(f func(k K, v V)) {
+	for k, v := range m.ж {
+		f(k, v)
+	}
+}
+
+// MapFnOf returns a MapFn for m.
+func MapFnOf[K comparable, T any, V any](m map[K]T, f func(T) V) MapFn[K, T, V] {
+	return MapFn[K, T, V]{
+		ж:     m,
+		wrapv: f,
+	}
+}
+
+// MapFn is like Map but with a func to convert values from T to V.
+// It is used to provide map of slices and views.
+type MapFn[K comparable, T any, V any] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж     map[K]T
+	wrapv func(T) V
+}
+
+// Has reports whether k has an entry in the map.
+func (m MapFn[K, T, V]) Has(k K) bool {
+	_, ok := m.ж[k]
+	return ok
+}
+
+// Get returns the element with key k.
+func (m MapFn[K, T, V]) Get(k K) V {
+	return m.wrapv(m.ж[k])
+}
+
+// IsNil reports whether the underlying map is nil.
+func (m MapFn[K, T, V]) IsNil() bool {
+	return m.ж == nil
+}
+
+// Len returns the number of elements in the map.
+func (m MapFn[K, T, V]) Len() int { return len(m.ж) }
+
+// GetOk returns the element with key k and a bool representing whether the key
+// is in map.
+func (m MapFn[K, T, V]) GetOk(k K) (V, bool) {
+	v, ok := m.ж[k]
+	return m.wrapv(v), ok
+}
+
+// ForEach calls f for every k,v pair in the underlying map.
+func (m MapFn[K, T, V]) ForEach(f func(k K, v V)) {
+	for k, v := range m.ж {
+		f(k, m.wrapv(v))
+	}
 }

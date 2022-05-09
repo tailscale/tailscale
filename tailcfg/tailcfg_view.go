@@ -343,7 +343,9 @@ func (v NetInfoView) PMP() opt.Bool                   { return v.ж.PMP }
 func (v NetInfoView) PCP() opt.Bool                   { return v.ж.PCP }
 func (v NetInfoView) PreferredDERP() int              { return v.ж.PreferredDERP }
 func (v NetInfoView) LinkType() string                { return v.ж.LinkType }
-func (v NetInfoView) String() string                  { return v.ж.String() }
+
+func (v NetInfoView) DERPLatency() views.Map[string, float64] { return views.MapOf(v.ж.DERPLatency) }
+func (v NetInfoView) String() string                          { return v.ж.String() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoViewNeedsRegeneration = NetInfo(struct {
@@ -470,6 +472,12 @@ func (v *DNSConfigView) UnmarshalJSON(b []byte) error {
 
 func (v DNSConfigView) Resolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.Resolvers)
+}
+
+func (v DNSConfigView) Routes() views.MapFn[string, []*dnstype.Resolver, views.SliceView[*dnstype.Resolver, dnstype.ResolverView]] {
+	return views.MapFnOf(v.ж.Routes, func(t []*dnstype.Resolver) views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
+		return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](t)
+	})
 }
 func (v DNSConfigView) FallbackResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.FallbackResolvers)
@@ -667,6 +675,11 @@ func (v *DERPMapView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (v DERPMapView) Regions() views.MapFn[int, *DERPRegion, DERPRegionView] {
+	return views.MapFnOf(v.ж.Regions, func(t *DERPRegion) DERPRegionView {
+		return t.View()
+	})
+}
 func (v DERPMapView) OmitDefaultRegions() bool { return v.ж.OmitDefaultRegions }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.

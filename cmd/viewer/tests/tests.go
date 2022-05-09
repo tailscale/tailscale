@@ -19,7 +19,18 @@ type StructWithoutPtrs struct {
 }
 
 type Map struct {
-	M map[string]int
+	Int                 map[string]int
+	SliceInt            map[string][]int
+	StructWithPtr       map[string]*StructWithPtrs
+	StructWithoutPtr    map[string]*StructWithoutPtrs
+	SlicesWithPtrs      map[string][]*StructWithPtrs
+	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
+	StructWithoutPtrKey map[StructWithoutPtrs]int `json:"-"`
+
+	// Unsupported.
+	SliceIntPtr      map[string][]*int
+	PointerKey       map[*string]int        `json:"-"`
+	StructWithPtrKey map[StructWithPtrs]int `json:"-"`
 }
 
 type StructWithPtrs struct {
