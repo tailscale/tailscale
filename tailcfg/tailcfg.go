@@ -531,13 +531,6 @@ type NetInfo struct {
 	// Update BasicallyEqual when adding fields.
 }
 
-// DERPLatencyForEach calls fn for each value in the DERPLatency map.
-func (v NetInfoView) DERPLatencyForEach(fn func(k string, v float64)) {
-	for k, v := range v.ж.DERPLatency {
-		fn(k, v)
-	}
-}
-
 func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"

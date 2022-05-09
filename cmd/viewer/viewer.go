@@ -88,8 +88,12 @@ func (v *{{.ViewName}}) UnmarshalJSON(b []byte) error {
 
 {{end}}
 {{define "mapField"}}
-// Unsupported, panics.
-func(v {{.ViewName}}) {{.FieldName}}() {{.FieldType}} {panic("unsupported")}
+func(v {{.ViewName}}) {{.FieldName}}() views.Map[{{.MapKeyType}},{{.MapValueType}}] { return views.MapOf(v.ж.{{.FieldName}})}
+{{end}}
+{{define "mapFnField"}}
+func(v {{.ViewName}}) {{.FieldName}}() views.MapFn[{{.MapKeyType}},{{.MapValueType}},{{.MapValueView}}] { return views.MapFnOf(v.ж.{{.FieldName}}, func (t {{.MapValueType}}) {{.MapValueView}} {
+	return {{.MapFn}}
+})}
 {{end}}
 {{define "unsupportedField"}}func(v {{.ViewName}}) {{.FieldName}}() {{.FieldType}} {panic("unsupported")}
 {{end}}
@@ -132,6 +136,11 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 		FieldName     string
 		FieldType     string
 		FieldViewName string
+
+		MapKeyType   string
+		MapValueType string
+		MapValueView string
+		MapFn        string
 	}{
 		StructName: typ.Obj().Name(),
 		ViewName:   typ.Obj().Name() + "View",
@@ -194,7 +203,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				writeTemplate("sliceField")
 			}
 			continue
-		case *types.Struct:
+		case *types.Struct, *types.Named:
 			strucT := underlying
 			args.FieldType = it.QualifiedName(fieldType)
 			if codegen.ContainsPointers(strucT) {
@@ -204,9 +213,62 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			writeTemplate("valueField")
 			continue
 		case *types.Map:
-			// TODO(maisem): support this.
-			// args.FieldType = importedName(ft)
-			// writeTemplate("mapField")
+			m := underlying
+			args.FieldType = it.QualifiedName(fieldType)
+			shallow, deep, key := requiresCloning(m.Key())
+			if shallow || deep {
+				writeTemplate("unsupportedField")
+				continue
+			}
+			args.MapKeyType = it.QualifiedName(key)
+			mElem := m.Elem()
+			var template string
+			switch u := mElem.(type) {
+			case *types.Basic:
+				template = "mapField"
+				args.MapValueType = it.QualifiedName(mElem)
+			case *types.Slice:
+				slice := u
+				sElem := slice.Elem()
+				switch x := sElem.(type) {
+				case *types.Basic:
+					args.MapValueView = fmt.Sprintf("views.Slice[%v]", sElem)
+					args.MapValueType = "[]" + sElem.String()
+					args.MapFn = "views.SliceOf(t)"
+					template = "mapFnField"
+				case *types.Pointer:
+					ptr := x
+					pElem := ptr.Elem()
+					switch pElem.(type) {
+					case *types.Struct, *types.Named:
+						ptrType := it.QualifiedName(ptr)
+						viewType := it.QualifiedName(pElem) + "View"
+						args.MapFn = fmt.Sprintf("views.SliceOfViews[%v,%v](t)", ptrType, viewType)
+						args.MapValueView = fmt.Sprintf("views.SliceView[%v,%v]", ptrType, viewType)
+						args.MapValueType = "[]" + ptrType
+						template = "mapFnField"
+					default:
+						template = "unsupportedField"
+					}
+				default:
+					template = "unsupportedField"
+				}
+			case *types.Pointer:
+				ptr := u
+				pElem := ptr.Elem()
+				switch pElem.(type) {
+				case *types.Struct, *types.Named:
+					args.MapValueType = it.QualifiedName(ptr)
+					args.MapValueView = it.QualifiedName(pElem) + "View"
+					args.MapFn = "t.View()"
+					template = "mapFnField"
+				default:
+					template = "unsupportedField"
+				}
+			default:
+				template = "unsupportedField"
+			}
+			writeTemplate(template)
 			continue
 		case *types.Pointer:
 			ptr := underlying
