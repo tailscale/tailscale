@@ -52,7 +52,7 @@ require (
 	golang.org/x/crypto v0.0.0-20220427172511-eb4f295cb31f
 	golang.org/x/net v0.0.0-20220407224826-aac1ed45d8e3
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20220422013727-9388b58f7150
+	golang.org/x/sys v0.0.0-20220503163025-988cb79eb6c6
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.1.11-0.20220413170336-afc6aad76eb1
