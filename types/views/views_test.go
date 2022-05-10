@@ -10,42 +10,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"go4.org/mem"
 	"inet.af/netaddr"
-	"tailscale.com/types/structs"
 )
-
-func TestContainsPointers(t *testing.T) {
-	tests := []struct {
-		name string
-		in   any
-		want bool
-	}{
-		{name: "string", in: "foo", want: false},
-		{name: "int", in: 42, want: false},
-		{name: "struct", in: struct{ string }{"foo"}, want: false},
-		{name: "mem.RO", in: mem.B([]byte{1}), want: false},
-		{name: "time.Time", in: time.Now(), want: false},
-		{name: "netaddr.IP", in: netaddr.MustParseIP("1.1.1.1"), want: false},
-		{name: "netaddr.IPPrefix", in: netaddr.MustParseIP("1.1.1.1"), want: false},
-		{name: "structs.Incomparable", in: structs.Incomparable{}, want: false},
-
-		{name: "*int", in: (*int)(nil), want: true},
-		{name: "*string", in: (*string)(nil), want: true},
-		{name: "struct-with-pointer", in: struct{ X *string }{}, want: true},
-		{name: "slice-with-pointer", in: []struct{ X *string }{}, want: true},
-		{name: "slice-of-struct", in: []struct{ string }{}, want: true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if containsMutable(reflect.TypeOf(tc.in)) != tc.want {
-				t.Errorf("containsPointers %T; want %v", tc.in, tc.want)
-			}
-		})
-	}
-}
 
 func TestViewsJSON(t *testing.T) {
 	mustCIDR := func(cidrs ...string) (out []netaddr.IPPrefix) {

@@ -9,8 +9,6 @@ package views
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"reflect"
 
 	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -100,11 +98,8 @@ type Slice[T any] struct {
 }
 
 // SliceOf returns a Slice for the provided slice for immutable values.
-// It panics if the value type contains pointers.
+// It is the caller's responsibility to make sure V is immutable.
 func SliceOf[T any](x []T) Slice[T] {
-	if ev := reflect.TypeOf(x).Elem(); containsMutable(ev) {
-		panic(fmt.Sprintf("slice value type %q has pointers", ev.Name()))
-	}
 	return Slice[T]{x}
 }
 
@@ -194,56 +189,13 @@ func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
 	return v.ж.UnmarshalJSON(b)
 }
 
-// containsMutable reports whether the provided type has anything mutable.
-func containsMutable(t reflect.Type) bool {
-	switch x := fmt.Sprintf("%v.%v", t.PkgPath(), t.Name()); x {
-	case "time.Time",
-		"inet.af/netaddr.IP":
-		return false
-	}
-	k := t.Kind()
-	switch k {
-	case reflect.Bool,
-		reflect.Int,
-		reflect.Int8,
-		reflect.Int16,
-		reflect.Int32,
-		reflect.Int64,
-		reflect.Uint,
-		reflect.Uint8,
-		reflect.Uint16,
-		reflect.Uint32,
-		reflect.Uint64,
-		reflect.Float32,
-		reflect.Float64,
-		reflect.Complex64,
-		reflect.Complex128,
-		reflect.String:
-		return false
-	case reflect.Array: // Not a slice.
-		return containsMutable(t.Elem()) && t.Len() > 0
-	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			if containsMutable(f.Type) {
-				return true
-			}
-		}
-		return false
-	}
-	return true
-}
-
-// MapOf returns a read-only view over m for immutable values.
-// It panics if the value type contains pointers.
+// MapOf returns a view over m. It is the caller's responsibility to make sure K
+// and V is immutable, if this is being used to provide a read-only view over m.
 func MapOf[K comparable, V comparable](m map[K]V) Map[K, V] {
-	if ev := reflect.TypeOf(m).Elem(); containsMutable(ev) {
-		panic(fmt.Sprintf("map value type %q has pointers", ev.Name()))
-	}
 	return Map[K, V]{m}
 }
 
-// Map is a read-only accessor over a map whose values are immutable.
+// Map is a view over a map whose values are immutable.
 type Map[K comparable, V any] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
