@@ -11,9 +11,9 @@ import (
 
 func TestDeltaEncBuf(t *testing.T) {
 	var enc deltaEncBuf
-	enc.writeName("one_one")
+	enc.writeName("one_one", TypeCounter)
 	enc.writeValue(1, 1)
-	enc.writeName("two_zero")
+	enc.writeName("two_zero", TypeGauge)
 	enc.writeValue(2, 0)
 
 	enc.writeDelta(1, 63)
@@ -22,7 +22,7 @@ func TestDeltaEncBuf(t *testing.T) {
 	enc.writeDelta(2, -64)
 
 	got := enc.buf.String()
-	const want = "N0eone_oneS0202N10two_zeroS0400I027eI048001I028101I047f"
+	const want = "N0eone_oneS0202N1cgauge_two_zeroS0400I027eI048001I028101I047f"
 	if got != want {
 		t.Errorf("error\n got %q\nwant %q\n", got, want)
 	}
@@ -49,7 +49,7 @@ func TestEncodeLogTailMetricsDelta(t *testing.T) {
 	clearMetrics()
 
 	c1 := NewCounter("foo")
-	c2 := NewCounter("bar")
+	c2 := NewGauge("bar")
 	c1.Add(123)
 	if got, want := EncodeLogTailMetricsDelta(), "N06fooS02f601"; got != want {
 		t.Errorf("first = %q; want %q", got, want)
@@ -57,7 +57,7 @@ func TestEncodeLogTailMetricsDelta(t *testing.T) {
 
 	c2.Add(456)
 	advanceTime()
-	if got, want := EncodeLogTailMetricsDelta(), "N06barS049007"; got != want {
+	if got, want := EncodeLogTailMetricsDelta(), "N12gauge_barS049007"; got != want {
 		t.Errorf("second = %q; want %q", got, want)
 	}
 

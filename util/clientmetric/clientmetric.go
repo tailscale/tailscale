@@ -241,7 +241,7 @@ func EncodeLogTailMetricsDelta() string {
 			m.wireID = numWireID
 		}
 		if m.lastNamed.IsZero() || now.Sub(m.lastNamed) > metricLogNameFrequency {
-			enc.writeName(m.Name())
+			enc.writeName(m.Name(), m.Type())
 			m.lastNamed = now
 			enc.writeValue(m.wireID, val)
 		} else {
@@ -271,9 +271,16 @@ type deltaEncBuf struct {
 // writeName writes a "name" (N) record to the buffer, which notes
 // that the immediately following record's wireID has the provided
 // name.
-func (b *deltaEncBuf) writeName(name string) {
+func (b *deltaEncBuf) writeName(name string, typ Type) {
+	var namePrefix string
+	if typ == TypeGauge {
+		// Add the gauge_ prefix so that tsweb knows that this is a gauge metric
+		// when generating the Prometheus version.
+		namePrefix = "gauge_"
+	}
 	b.buf.WriteByte('N')
-	b.writeHexVarint(int64(len(name)))
+	b.writeHexVarint(int64(len(namePrefix) + len(name)))
+	b.buf.WriteString(namePrefix)
 	b.buf.WriteString(name)
 }
 
