@@ -1629,8 +1629,8 @@ func (ls fwdDNSLinkSelector) PickLink(ip netaddr.IP) (linkName string) {
 }
 
 var (
-	metricMagicDNSPacketIn = clientmetric.NewGauge("magicdns_packet_in") // for 100.100.100.100
-	metricReflectToOS      = clientmetric.NewGauge("packet_reflect_to_os")
+	metricMagicDNSPacketIn = clientmetric.NewCounter("magicdns_packet_in") // for 100.100.100.100
+	metricReflectToOS      = clientmetric.NewCounter("packet_reflect_to_os")
 
 	metricNumMajorChanges = clientmetric.NewCounter("wgengine_major_changes")
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")

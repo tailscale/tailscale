@@ -831,13 +831,13 @@ func (t *Wrapper) Unwrap() tun.Device {
 }
 
 var (
-	metricPacketIn              = clientmetric.NewGauge("tstun_in_from_wg")
-	metricPacketInDrop          = clientmetric.NewGauge("tstun_in_from_wg_drop")
-	metricPacketInDropFilter    = clientmetric.NewGauge("tstun_in_from_wg_drop_filter")
-	metricPacketInDropSelfDisco = clientmetric.NewGauge("tstun_in_from_wg_drop_self_disco")
+	metricPacketIn              = clientmetric.NewCounter("tstun_in_from_wg")
+	metricPacketInDrop          = clientmetric.NewCounter("tstun_in_from_wg_drop")
+	metricPacketInDropFilter    = clientmetric.NewCounter("tstun_in_from_wg_drop_filter")
+	metricPacketInDropSelfDisco = clientmetric.NewCounter("tstun_in_from_wg_drop_self_disco")
 
-	metricPacketOut              = clientmetric.NewGauge("tstun_out_to_wg")
-	metricPacketOutDrop          = clientmetric.NewGauge("tstun_out_to_wg_drop")
-	metricPacketOutDropFilter    = clientmetric.NewGauge("tstun_out_to_wg_drop_filter")
-	metricPacketOutDropSelfDisco = clientmetric.NewGauge("tstun_out_to_wg_drop_self_disco")
+	metricPacketOut              = clientmetric.NewCounter("tstun_out_to_wg")
+	metricPacketOutDrop          = clientmetric.NewCounter("tstun_out_to_wg_drop")
+	metricPacketOutDropFilter    = clientmetric.NewCounter("tstun_out_to_wg_drop_filter")
+	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
