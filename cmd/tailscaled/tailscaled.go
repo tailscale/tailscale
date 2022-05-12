@@ -598,9 +598,14 @@ func mustStartProxyListeners(socksAddr, httpAddr string) (socksListener, httpLis
 
 	var err error
 	if socksAddr != "" {
-		socksListener, err = net.Listen("tcp", socksAddr)
+		socksType := "tcp"
+		if strings.HasPrefix(socksAddr, "file:") {
+			socksType = "unix"
+			socksAddr = strings.TrimPrefix(socksAddr, "file:")
+		}
+		socksListener, err = net.Listen(socksType, socksAddr)
 		if err != nil {
-			log.Fatalf("SOCKS5 listener: %v", err)
+			log.Fatalf("SOCKS5 %s listener: %v", socksType, err)
 		}
 		if strings.HasSuffix(socksAddr, ":0") {
 			// Log kernel-selected port number so integration tests
