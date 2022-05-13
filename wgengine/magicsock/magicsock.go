@@ -4158,7 +4158,6 @@ var (
 	// Data packets (non-disco)
 	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
 	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvData            = clientmetric.NewCounter("magicsock_recv_data")
 	metricRecvDataDERP        = clientmetric.NewCounter("magicsock_recv_data_derp")
 	metricRecvDataIPv4        = clientmetric.NewCounter("magicsock_recv_data_ipv4")
 	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
