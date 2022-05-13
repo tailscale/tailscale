@@ -780,6 +780,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					Srcs: []netaddr.IPPrefix{
 						netaddr.MustParseIPPrefix("100.64.1.1/32"),
 					},
+					Caps: []CapMatch{},
 				},
 			},
 		},
@@ -809,6 +810,7 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					Srcs: []netaddr.IPPrefix{
 						netaddr.MustParseIPPrefix("100.64.1.1/32"),
 					},
+					Caps: []CapMatch{},
 				},
 			},
 		},
@@ -819,8 +821,11 @@ func TestMatchesFromFilterRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("wrong\n got: %v\nwant: %v\n", got, tt.want)
+
+			compareIP := cmp.Comparer(func(a, b netaddr.IP) bool { return a == b })
+			compareIPPrefix := cmp.Comparer(func(a, b netaddr.IPPrefix) bool { return a == b })
+			if diff := cmp.Diff(got, tt.want, compareIP, compareIPPrefix); diff != "" {
+				t.Errorf("wrong (-got+want)\n%s", diff)
 			}
 		})
 	}
