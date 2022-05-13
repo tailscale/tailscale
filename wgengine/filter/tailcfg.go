@@ -28,7 +28,14 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 	var erracc error
 
 	for _, r := range pf {
-		m := Match{}
+		// Profiling determined that this function was spending a lot
+		// of time in runtime.growslice. As such, we attempt to
+		// pre-allocate some slices. Multipliers were chosen arbitrarily.
+		m := Match{
+			Srcs: make([]netaddr.IPPrefix, 0, len(r.SrcIPs)),
+			Dsts: make([]NetPortRange, 0, 2*len(r.DstPorts)),
+			Caps: make([]CapMatch, 0, 3*len(r.CapGrant)),
+		}
 
 		if len(r.IPProto) == 0 {
 			m.IPProto = append([]ipproto.Proto(nil), defaultProtos...)
