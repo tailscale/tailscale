@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,7 +88,6 @@ func AllowDebugAccess(r *http.Request) bool {
 	}
 	return false
 }
-
 
 // AcceptsEncoding reports whether r accepts the named encoding
 // ("gzip", "br", etc).
@@ -192,6 +192,10 @@ type HandlerOptions struct {
 	// of status codes for handled responses.
 	// The keys are "1xx", "2xx", "3xx", "4xx", and "5xx".
 	StatusCodeCounters *expvar.Map
+	// If non-nil, StatusCodeCountersFull maintains counters of status
+	// codes for handled responses.
+	// The keys are HTTP numeric response codes e.g. 200, 404, ...
+	StatusCodeCountersFull *expvar.Map
 }
 
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
@@ -300,6 +304,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.opts.StatusCodeCounters != nil {
 		key := fmt.Sprintf("%dxx", msg.Code/100)
 		h.opts.StatusCodeCounters.Add(key, 1)
+	}
+
+	if h.opts.StatusCodeCountersFull != nil {
+		h.opts.StatusCodeCountersFull.Add(strconv.Itoa(msg.Code), 1)
 	}
 }
 
