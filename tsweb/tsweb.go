@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go4.org/mem"
@@ -302,14 +303,37 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.opts.StatusCodeCounters != nil {
-		key := fmt.Sprintf("%dxx", msg.Code/100)
-		h.opts.StatusCodeCounters.Add(key, 1)
+		h.opts.StatusCodeCounters.Add(responseCodeString(msg.Code/100), 1)
 	}
 
 	if h.opts.StatusCodeCountersFull != nil {
-		h.opts.StatusCodeCountersFull.Add(strconv.Itoa(msg.Code), 1)
+		h.opts.StatusCodeCountersFull.Add(responseCodeString(msg.Code), 1)
 	}
 }
+
+func responseCodeString(code int) string {
+	if v, ok := responseCodeCache.Load(code); ok {
+		return v.(string)
+	}
+
+	var ret string
+	if code < 10 {
+		ret = fmt.Sprintf("%dxx", code)
+	} else {
+		ret = strconv.Itoa(code)
+	}
+	responseCodeCache.Store(code, ret)
+	return ret
+}
+
+// responseCodeCache memoizes the string form of HTTP response codes,
+// so that the hot request-handling codepath doesn't have to allocate
+// in strconv/fmt for every request.
+//
+// Keys are either full HTTP response code ints (200, 404) or "family"
+// ints representing entire families (e.g. 2 for 2xx codes). Values
+// are the string form of that code/family.
+var responseCodeCache sync.Map
 
 // loggingResponseWriter wraps a ResponseWriter and record the HTTP
 // response code that gets sent, if any.
