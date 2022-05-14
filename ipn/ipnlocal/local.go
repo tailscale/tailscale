@@ -955,6 +955,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 				b.logf("failed to save UpdatePrefs state: %v", err)
 			}
 		}
+		b.setAtomicValuesFromPrefs(b.prefs)
 	}
 
 	wantRunning := b.prefs.WantRunning
