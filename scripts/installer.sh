@@ -161,6 +161,11 @@ main() {
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="yum"
 				;;
+			xenenterprise)
+				OS="centos"
+				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				PACKAGETYPE="yum"
+				;;
 			opensuse-leap)
 				OS="opensuse"
 				VERSION="leap/$VERSION_ID"
