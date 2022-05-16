@@ -88,6 +88,36 @@ func (v SliceView[T, V]) AsSlice() []V {
 	return v.AppendTo(nil)
 }
 
+func (v SliceView[T, V]) Iterator() SliceViewIterator[T, V] {
+	return SliceViewIterator[T, V]{}
+}
+
+// SliceViewIterator provides an iterator interface over a SliceView.
+//
+// A typical usage example is
+//   var s Slice[T]
+//   for i := s.Iterator(); i.Valid(); i = i.Next() {
+//     v := i.Val()
+//   }
+type SliceViewIterator[T ViewCloner[T, V], V StructView[T]] struct {
+	s SliceView[T, V]
+	i int
+}
+
+// Next increments the iterator.
+func (si SliceViewIterator[T, V]) Next() SliceViewIterator[T, V] {
+	si.i++
+	return si
+}
+
+// Valid reports whether the iterator points to a valid value.
+func (si SliceViewIterator[T, V]) Valid() bool {
+	return si.i < len(si.s.ж) // it's cheaper to use the underlying value here.
+}
+
+// Val returns the value at the iterator position.
+func (si SliceViewIterator[T, V]) Val() V { return si.s.At(si.i) }
+
 // Slice is a read-only accessor for a slice.
 type Slice[T any] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
@@ -131,6 +161,55 @@ func (v Slice[T]) AppendTo(dst []T) []T {
 func (v Slice[T]) AsSlice() []T {
 	return v.AppendTo(v.ж[:0:0])
 }
+
+// Iterator returns a new SliceIterator for the slice.
+func (v Slice[T]) Iterator() SliceIterator[T] {
+	return iteratorOf(v)
+}
+
+// Slicer is a generic Slice interface as implemented by SliceView[T,V] and Slice[T].,
+type Slicer[T any] interface {
+	// IsNil reports whether the underlying slice is nil.
+	IsNil() bool
+	// Len returns the length of the slice.
+	Len() int
+	// At returns the element at index `i` of the slice.
+	At(i int) T
+	// AppendTo appends the underlying slice values to dst.
+	AppendTo(dst []T) []T
+	// AsSlice returns a copy of underlying slice.
+	AsSlice() []T
+}
+
+// SliceIterator provides an iterator interface over a Slice.
+//
+// A typical usage example is
+//   var s Slice[T]
+//   for i := s.Iterator(); i.Valid(); i = i.Next() {
+//     v := i.Val()
+//   }
+type SliceIterator[T any] struct {
+	s Slice[T]
+	i int
+}
+
+func iteratorOf[T any](s Slice[T]) SliceIterator[T] {
+	return SliceIterator[T]{s: s}
+}
+
+// Next increments the iterator.
+func (si SliceIterator[T]) Next() SliceIterator[T] {
+	si.i++
+	return si
+}
+
+// Valid reports whether the iterator points to a valid value.
+func (si SliceIterator[T]) Valid() bool {
+	return si.i < len(si.s.ж) // it's cheaper to use the underlying value here.
+}
+
+// Val returns the value at the iterator position.
+func (si SliceIterator[T]) Val() T { return si.s.At(si.i) }
 
 // IPPrefixSlice is a read-only accessor for a slice of netaddr.IPPrefix.
 type IPPrefixSlice struct {
@@ -187,6 +266,11 @@ func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
 	return v.ж.UnmarshalJSON(b)
+}
+
+// Iterator returns a new SliceIterator for the slice.
+func (v *IPPrefixSlice) Iterator() SliceIterator[netaddr.IPPrefix] {
+	return iteratorOf(v.ж)
 }
 
 // MapOf returns a view over m. It is the caller's responsibility to make sure K

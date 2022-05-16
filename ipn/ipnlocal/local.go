@@ -3128,8 +3128,8 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	}
 	var p4, p6 uint16
 	svcs := peer.Hostinfo.Services()
-	for i, n := 0, svcs.Len(); i < n; i++ {
-		s := svcs.At(i)
+	for i := svcs.Iterator(); i.Valid(); i.Next() {
+		s := i.Val()
 		switch s.Proto {
 		case tailcfg.PeerAPI4:
 			p4 = s.Port
@@ -3256,9 +3256,9 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		if p.StableID != exitNodeID {
 			continue
 		}
-		services := p.Hostinfo.Services()
-		for i, n := 0, services.Len(); i < n; i++ {
-			s := services.At(i)
+		svcs := p.Hostinfo.Services()
+		for i := svcs.Iterator(); i.Valid(); i.Next() {
+			s := i.Val()
 			if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
 				return peerAPIBase(nm, p) + "/dns-query", true
 			}

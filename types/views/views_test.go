@@ -14,6 +14,44 @@ import (
 	"inet.af/netaddr"
 )
 
+func BenchmarkSliceIterator(b *testing.B) {
+	sl := make([]int, 1000)
+	v := SliceOf(sl)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var work int
+		for it := v.Iterator(); it.Valid(); it = it.Next() {
+			work += it.Val()
+		}
+	}
+}
+
+func BenchmarkSliceManualIteration(b *testing.B) {
+	sl := make([]int, 1000)
+	v := SliceOf(sl)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var work int
+		for i := 0; i < v.Len(); i++ {
+			work += v.At(i)
+		}
+	}
+}
+
+func BenchmarkSlice(b *testing.B) {
+	sl := make([]int, 1000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var work int
+		for _, v := range sl {
+			work += v
+		}
+	}
+}
+
 func TestViewsJSON(t *testing.T) {
 	mustCIDR := func(cidrs ...string) (out []netaddr.IPPrefix) {
 		for _, cidr := range cidrs {
