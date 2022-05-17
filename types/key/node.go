@@ -147,6 +147,18 @@ type NodePublic struct {
 	k [32]byte
 }
 
+// Shard returns a uint8 number from a public key with
+// mostly-uniform distribution, suitable for sharding.
+func (p NodePublic) Shard() uint8 {
+	// A 25519 public key isn't uniformly random, as it ultimately
+	// corresponds to a point on the curve.
+	// But we don't need perfectly uniformly-random, we need
+	// good-enough-for-sharding random, so we haphazardly
+	// combine raw values of the key to give us something sufficient.
+	s := uint8(p.k[31]) + uint8(p.k[30]) + uint8(p.k[20])
+	return s ^ uint8(p.k[2] + p.k[12])
+}
+
 // ParseNodePublicUntyped parses an untyped 64-character hex value
 // as a NodePublic.
 //
