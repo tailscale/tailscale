@@ -815,11 +815,15 @@ Supply the tailnet in the path.
 `capabilities` - A mapping of resources to permissible actions.
 ```
 {
-	"capabilities": {
+  "capabilities": {
     "devices": {
       "create": {
         "reusable": false,
-        "ephemeral": false
+        "ephemeral": false,
+        "preauthorized": false,
+        "tags": [
+          "tag:example"
+        ]
       }
     }
   }
@@ -839,11 +843,13 @@ The full key can no longer be retrieved by the server.
 
 ```
 echo '{
-	"capabilities": {
+  "capabilities": {
     "devices": {
       "create": {
         "reusable": false,
-        "ephemeral": false
+        "ephemeral": false,
+        "preauthorized": false,
+        "tags": [ "tag:example" ]
       }
     }
   }
@@ -859,7 +865,7 @@ Response:
 	"key":          "tskey-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
 	"created":      "2021-12-09T23:22:39Z",
 	"expires":      "2022-03-09T23:22:39Z",
-	"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": false}}}
+	"capabilities": {"devices": {"create": {"reusable": false, "ephemeral": false, "preauthorized": false, "tags": [ "tag:example" ]}}}
 }
 ```
 
