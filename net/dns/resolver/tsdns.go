@@ -256,6 +256,12 @@ func (r *Resolver) Close() {
 	r.forwarder.Close()
 }
 
+// dnsQueryTimeout is not intended to be user-visible (the users
+// DNS resolver will retry well before that), just put an upper
+// bound on per-query resource usage.
+const dnsQueryTimeout = 10 * time.Second
+
+
 func (r *Resolver) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]byte, error) {
 	metricDNSQueryLocal.Add(1)
 	select {
@@ -268,7 +274,7 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([
 	out, err := r.respond(bs)
 	if err == errNotOurName {
 		responses := make(chan packet, 1)
-		ctx, cancel := context.WithCancel(ctx)
+		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
 		defer close(responses)
 		defer cancel()
 		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, from}, responses)
