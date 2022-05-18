@@ -519,6 +519,8 @@ func New(collection string) *Policy {
 	}
 	if collection == logtail.CollectionNode {
 		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
+		c.IncludeProcID = true
+		c.IncludeProcSequence = true
 	}
 
 	if val := getLogTarget(); val != "" {

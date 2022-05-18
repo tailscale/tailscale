@@ -216,8 +216,10 @@ var sink []byte
 func TestLoggerEncodeTextAllocs(t *testing.T) {
 	lg := &Logger{timeNow: time.Now}
 	inBuf := []byte("some text to encode")
+	procID := uint32(0x24d32ee9)
+	procSequence := uint64(0x12346)
 	err := tstest.MinAllocsPerRun(t, 1, func() {
-		sink = lg.encodeText(inBuf, false, 0)
+		sink = lg.encodeText(inBuf, false, procID, procSequence, 0)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +335,7 @@ func unmarshalOne(t *testing.T, body []byte) map[string]any {
 func TestEncodeTextTruncation(t *testing.T) {
 	lg := &Logger{timeNow: time.Now, lowMem: true}
 	in := bytes.Repeat([]byte("a"), 300)
-	b := lg.encodeText(in, true, 0)
+	b := lg.encodeText(in, true, 0, 0, 0)
 	got := string(b)
 	want := `{"text": "` + strings.Repeat("a", 255) + `…+45"}` + "\n"
 	if got != want {
@@ -355,38 +357,40 @@ func TestEncode(t *testing.T) {
 	}{
 		{
 			"normal",
-			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "text": "normal"}` + "\n",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z","proc_id": 7,"proc_seq": 1}, "text": "normal"}` + "\n",
 		},
 		{
 			"and a [v1] level one",
-			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "v":1,"text": "and a level one"}` + "\n",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z","proc_id": 7,"proc_seq": 1}, "v":1,"text": "and a level one"}` + "\n",
 		},
 		{
 			"[v2] some verbose two",
-			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z"}, "v":2,"text": "some verbose two"}` + "\n",
+			`{"logtail": {"client_time": "1970-01-01T00:02:03.000000456Z","proc_id": 7,"proc_seq": 1}, "v":2,"text": "some verbose two"}` + "\n",
 		},
 		{
 			"{}",
-			`{"logtail":{"client_time":"1970-01-01T00:02:03.000000456Z"}}` + "\n",
+			`{"logtail":{"client_time":"1970-01-01T00:02:03.000000456Z","proc_id":7,"proc_seq":1}}` + "\n",
 		},
 		{
 			`{"foo":"bar"}`,
-			`{"foo":"bar","logtail":{"client_time":"1970-01-01T00:02:03.000000456Z"}}` + "\n",
+			`{"foo":"bar","logtail":{"client_time":"1970-01-01T00:02:03.000000456Z","proc_id":7,"proc_seq":1}}` + "\n",
 		},
 		{
 			"foo: [v\x00JSON]0{\"foo\":1}",
-			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\"}}\n",
+			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\",\"proc_id\":7,\"proc_seq\":1}}\n",
 		},
 		{
 			"foo: [v\x00JSON]2{\"foo\":1}",
-			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\"},\"v\":2}\n",
+			"{\"foo\":1,\"logtail\":{\"client_time\":\"1970-01-01T00:02:03.000000456Z\",\"proc_id\":7,\"proc_seq\":1},\"v\":2}\n",
 		},
 	}
 	for _, tt := range tests {
 		buf := new(simpleMemBuf)
 		lg := &Logger{
-			timeNow: func() time.Time { return time.Unix(123, 456).UTC() },
-			buffer:  buf,
+			timeNow:      func() time.Time { return time.Unix(123, 456).UTC() },
+			buffer:       buf,
+			procID:       7,
+			procSequence: 1,
 		}
 		io.WriteString(lg, tt.in)
 		got := buf.buf.String()
