@@ -298,3 +298,21 @@ func (m MapFn[K, T, V]) Range(f MapRangeFn[K, V]) {
 		}
 	}
 }
+
+type Ranger[K comparable, V any] interface {
+	Range(f MapRangeFn[K, V])
+}
+
+// Range is like Map.Range but it takes a func that breaks the range if it
+// returns an error.  It returns the error returned by f, if any.
+//
+// It is used to where errors may occur while ranging over maps and shadowing
+// errors gets tricky without it.
+func Range[R Ranger[K, V], K comparable, V any](r R, f func(k K, v V) error) error {
+	var err error
+	r.Range(func(k K, v V) bool {
+		err = f(k, v)
+		return err == nil
+	})
+	return err
+}

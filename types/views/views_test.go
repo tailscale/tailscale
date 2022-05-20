@@ -7,6 +7,7 @@ package views
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -71,5 +72,24 @@ func TestViewsJSON(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.in) {
 			t.Fatalf("unmarshal resulted in different output: %+v; want %+v", got, tc.in)
 		}
+	}
+}
+
+func TestRange(t *testing.T) {
+	m := MapOf(map[string]int{
+		"a":    1,
+		"boom": 2,
+		"c":    3,
+	})
+
+	want := errors.New("boom")
+	got := Range(m, func(k string, v int) error {
+		if k == "boom" {
+			return want
+		}
+		return nil
+	})
+	if got != want {
+		t.Errorf("got = %v, want %v", got, want)
 	}
 }
