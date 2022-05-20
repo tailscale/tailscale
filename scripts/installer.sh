@@ -299,7 +299,8 @@ main() {
 			fi
 		;;
 		rhel)
-			if [ "$VERSION" != "8" ]
+			if [ "$VERSION" != "8" ] && \
+                           [ "$VERSION" != "9" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
