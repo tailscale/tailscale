@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
@@ -116,24 +115,7 @@ func runSSH(ctx context.Context, args []string) error {
 		log.Printf("Running: %q, %q ...", ssh, argv)
 	}
 
-	if runtime.GOOS == "windows" {
-		// Don't use syscall.Exec on Windows.
-		cmd := exec.Command(ssh, argv[1:]...)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		var ee *exec.ExitError
-		err := cmd.Run()
-		if errors.As(err, &ee) {
-			os.Exit(ee.ExitCode())
-		}
-		return err
-	}
-
-	if err := syscall.Exec(ssh, argv, os.Environ()); err != nil {
-		return err
-	}
-	return errors.New("unreachable")
+	return execSSH(ssh, argv)
 }
 
 func writeKnownHosts(st *ipnstate.Status) (knownHostsFile string, err error) {
