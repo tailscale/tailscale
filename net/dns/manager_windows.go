@@ -20,17 +20,26 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/winutil"
 )
 
 const (
 	ipv4RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
 	ipv6RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
 
-	// the GUID is randomly generated. At present, Tailscale installs
-	// zero or one NRPT rules, so hardcoding a single GUID everywhere
-	// is fine.
-	nrptBase        = `SYSTEM\CurrentControlSet\services\Dnscache\Parameters\DnsPolicyConfig\{5abe529b-675b-4486-8459-25a634dacc23}`
+	nrptBase        = `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\`
 	nrptOverrideDNS = 0x8 // bitmask value for "use the provided override DNS resolvers"
+
+	// This is the legacy rule ID that previous versions used when we supported
+	// only a single rule. Now that we support multiple rules are required, we
+	// generate their GUIDs and store them under the Tailscale registry key.
+	nrptSingleRuleID = `{5abe529b-675b-4486-8459-25a634dacc23}`
+	// Apparently NRPT rules cannot handle > 50 domains.
+	nrptMaxDomainsPerRule = 50
+
+	// This is the name of the registry value we use to save Rule IDs under
+	// the Tailscale registry key.
+	nrptRuleIDValueName = `NRPTRuleIDs`
 
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
@@ -42,6 +51,15 @@ type windowsManager struct {
 	guid       string
 	nrptWorks  bool
 	wslManager *wslManager
+}
+
+func loadRuleSubkeyNames() []string {
+	result := winutil.GetRegStrings(nrptRuleIDValueName, nil)
+	if result == nil {
+		// Use the legacy rule ID if none are specified in our registry key
+		result = []string{nrptSingleRuleID}
+	}
+	return result
 }
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, error) {
@@ -59,7 +77,7 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	// boot up. The bootstrap resolver logic will save us, but it
 	// slows down start-up a bunch.
 	if ret.nrptWorks {
-		ret.delKey(nrptBase)
+		ret.delAllRuleKeys()
 	}
 
 	// Log WSL status once at startup.
@@ -90,9 +108,25 @@ func (m windowsManager) ifPath(basePath string) string {
 	return fmt.Sprintf(`%s\Interfaces\%s`, basePath, m.guid)
 }
 
-func (m windowsManager) delKey(path string) error {
-	if err := registry.DeleteKey(registry.LOCAL_MACHINE, path); err != nil && err != registry.ErrNotExist {
+func (m windowsManager) delAllRuleKeys() error {
+	nrptRuleIDs := loadRuleSubkeyNames()
+	if err := m.delRuleKeys(nrptRuleIDs); err != nil {
 		return err
+	}
+	if err := winutil.DeleteRegValue(nrptRuleIDValueName); err != nil {
+		m.logf("Error deleting registry value %q: %v", nrptRuleIDValueName, err)
+		return err
+	}
+	return nil
+}
+
+func (m windowsManager) delRuleKeys(nrptRuleIDs []string) error {
+	for _, rid := range nrptRuleIDs {
+		keyName := nrptBase + rid
+		if err := registry.DeleteKey(registry.LOCAL_MACHINE, keyName); err != nil && err != registry.ErrNotExist {
+			m.logf("Error deleting NRPT rule key %q: %v", keyName, err)
+			return err
+		}
 	}
 	return nil
 }
@@ -104,31 +138,91 @@ func delValue(key registry.Key, name string) error {
 	return nil
 }
 
-// setSplitDNS configures an NRPT (Name Resolution Policy Table) rule
+// setSplitDNS configures one or more NRPT (Name Resolution Policy Table) rules
 // to resolve queries for domains using resolvers, rather than the
 // system's "primary" resolver.
 //
-// If no resolvers are provided, the Tailscale NRPT rule is deleted.
+// If no resolvers are provided, the Tailscale NRPT rules are deleted.
 func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []dnsname.FQDN) error {
 	if len(resolvers) == 0 {
-		return m.delKey(nrptBase)
+		return m.delAllRuleKeys()
 	}
 
 	servers := make([]string, 0, len(resolvers))
 	for _, resolver := range resolvers {
 		servers = append(servers, resolver.String())
 	}
-	doms := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		// NRPT rules must have a leading dot, which is not usual for
-		// DNS search paths.
-		doms = append(doms, "."+domain.WithoutTrailingDot())
+
+	// NRPT has an undocumented restriction that each rule may only be associated
+	// with a maximum of 50 domains. If we are setting rules for more domains
+	// than that, we need to split domains into chunks and write out a rule per chunk.
+	dq := len(domains) / nrptMaxDomainsPerRule
+	dr := len(domains) % nrptMaxDomainsPerRule
+
+	domainRulesLen := dq
+	if dr > 0 {
+		domainRulesLen++
 	}
 
+	nrptRuleIDs := loadRuleSubkeyNames()
+	for len(nrptRuleIDs) < domainRulesLen {
+		guid, err := windows.GenerateGUID()
+		if err != nil {
+			return err
+		}
+		nrptRuleIDs = append(nrptRuleIDs, guid.String())
+	}
+
+	// Remove any surplus rules that are no longer needed.
+	ruleIDsToRemove := nrptRuleIDs[domainRulesLen:]
+	m.delRuleKeys(ruleIDsToRemove)
+
+	// We need to save the list of rule IDs to our Tailscale registry key so that
+	// we know which rules are ours during subsequent modifications to NRPT rules.
+	ruleIDsToWrite := nrptRuleIDs[:domainRulesLen]
+	if len(ruleIDsToWrite) > 0 {
+		if err := winutil.SetRegStrings(nrptRuleIDValueName, ruleIDsToWrite); err != nil {
+			return err
+		}
+	} else {
+		if err := winutil.DeleteRegValue(nrptRuleIDValueName); err != nil {
+			return err
+		}
+	}
+
+	doms := make([]string, 0, nrptMaxDomainsPerRule)
+	for i := 0; i < domainRulesLen; i++ {
+		// Each iteration consumes nrptMaxDomainsPerRule domains...
+		curLen := nrptMaxDomainsPerRule
+		// Except for the final iteration: when we have a remainder, use that instead.
+		if i == domainRulesLen-1 && dr > 0 {
+			curLen = dr
+		}
+
+		// Obtain the slice of domains to consume within the current iteration.
+		start := i * nrptMaxDomainsPerRule
+		end := start + curLen
+		for _, domain := range domains[start:end] {
+			// NRPT rules must have a leading dot, which is not usual for
+			// DNS search paths.
+			doms = append(doms, "."+domain.WithoutTrailingDot())
+		}
+
+		if err := writeNRPTRule(nrptRuleIDs[i], doms, servers); err != nil {
+			return err
+		}
+
+		doms = doms[:0]
+	}
+
+	return nil
+}
+
+func writeNRPTRule(ruleID string, doms, servers []string) error {
 	// CreateKey is actually open-or-create, which suits us fine.
-	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptBase, registry.SET_VALUE)
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptBase+ruleID, registry.SET_VALUE)
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", nrptBase, err)
+		return fmt.Errorf("opening %s: %w", nrptBase+ruleID, err)
 	}
 	defer key.Close()
 	if err := key.SetDWordValue("Version", 1); err != nil {

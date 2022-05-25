@@ -8,66 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"tailscale.com/util/winutil"
 )
-
-func getTokenInfo(token windows.Token, infoClass uint32) ([]byte, error) {
-	var desiredLen uint32
-	err := windows.GetTokenInformation(token, infoClass, nil, 0, &desiredLen)
-	if err != nil && err != windows.ERROR_INSUFFICIENT_BUFFER {
-		return nil, err
-	}
-
-	buf := make([]byte, desiredLen)
-	actualLen := desiredLen
-	err = windows.GetTokenInformation(token, infoClass, &buf[0], desiredLen, &actualLen)
-	return buf, err
-}
-
-func getTokenUserInfo(token windows.Token) (*windows.Tokenuser, error) {
-	buf, err := getTokenInfo(token, windows.TokenUser)
-	if err != nil {
-		return nil, err
-	}
-
-	return (*windows.Tokenuser)(unsafe.Pointer(&buf[0])), nil
-}
-
-func getTokenPrimaryGroupInfo(token windows.Token) (*windows.Tokenprimarygroup, error) {
-	buf, err := getTokenInfo(token, windows.TokenPrimaryGroup)
-	if err != nil {
-		return nil, err
-	}
-
-	return (*windows.Tokenprimarygroup)(unsafe.Pointer(&buf[0])), nil
-}
-
-type userSids struct {
-	User         *windows.SID
-	PrimaryGroup *windows.SID
-}
-
-func getCurrentUserSids() (*userSids, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, err
-	}
-	defer token.Close()
-
-	userInfo, err := getTokenUserInfo(token)
-	if err != nil {
-		return nil, err
-	}
-
-	primaryGroup, err := getTokenPrimaryGroupInfo(token)
-	if err != nil {
-		return nil, err
-	}
-
-	return &userSids{userInfo.User.Sid, primaryGroup.PrimaryGroup}, nil
-}
 
 // ensureStateDirPerms applies a restrictive ACL to the directory specified by dirPath.
 // It sets the following security attributes on the directory:
@@ -93,7 +37,7 @@ func ensureStateDirPerms(dirPath string) error {
 	}
 
 	// We need the info for our current user as SIDs
-	sids, err := getCurrentUserSids()
+	sids, err := winutil.GetCurrentUserSIDs()
 	if err != nil {
 		return err
 	}
