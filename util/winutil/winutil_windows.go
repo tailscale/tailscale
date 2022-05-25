@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -92,6 +93,70 @@ func getRegStringInternal(subKey, name string) (string, error) {
 		return "", err
 	}
 	return val, nil
+}
+
+// GetRegStrings looks up a registry value in the local machine path, or returns
+// the given default if it can't.
+func GetRegStrings(name string, defval []string) []string {
+	s, err := getRegStringsInternal(regBase, name)
+	if err != nil {
+		return defval
+	}
+	return s
+}
+
+func getRegStringsInternal(subKey, name string) ([]string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
+	if err != nil {
+		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		return nil, err
+	}
+	defer key.Close()
+
+	val, _, err := key.GetStringsValue(name)
+	if err != nil {
+		if err != registry.ErrNotExist {
+			log.Printf("registry.GetStringValue(%v): %v", name, err)
+		}
+		return nil, err
+	}
+	return val, nil
+}
+
+// SetRegStrings sets a MULTI_SZ value in the in the local machine path
+// to the strings specified by values.
+func SetRegStrings(name string, values []string) error {
+	return setRegStringsInternal(regBase, name, values)
+}
+
+func setRegStringsInternal(subKey, name string, values []string) error {
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
+	if err != nil {
+		log.Printf("registry.CreateKey(%v): %v", subKey, err)
+	}
+	defer key.Close()
+
+	return key.SetStringsValue(name, values)
+}
+
+// DeleteRegValue removes a registry value in the local machine path.
+func DeleteRegValue(name string) error {
+	return deleteRegValueInternal(regBase, name)
+}
+
+func deleteRegValueInternal(subKey, name string) error {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
+	if err != nil {
+		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		return err
+	}
+	defer key.Close()
+
+	err = key.DeleteValue(name)
+	if err == registry.ErrNotExist {
+		err = nil
+	}
+	return err
 }
 
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
@@ -253,4 +318,76 @@ func StartProcessAsCurrentGUIUser(exePath string, extraEnv []string) error {
 // be created for some other reason.
 func CreateAppMutex(name string) (windows.Handle, error) {
 	return windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(name))
+}
+
+func getTokenInfo(token windows.Token, infoClass uint32) ([]byte, error) {
+	var desiredLen uint32
+	err := windows.GetTokenInformation(token, infoClass, nil, 0, &desiredLen)
+	if err != nil && err != windows.ERROR_INSUFFICIENT_BUFFER {
+		return nil, err
+	}
+
+	buf := make([]byte, desiredLen)
+	actualLen := desiredLen
+	err = windows.GetTokenInformation(token, infoClass, &buf[0], desiredLen, &actualLen)
+	return buf, err
+}
+
+func getTokenUserInfo(token windows.Token) (*windows.Tokenuser, error) {
+	buf, err := getTokenInfo(token, windows.TokenUser)
+	if err != nil {
+		return nil, err
+	}
+
+	return (*windows.Tokenuser)(unsafe.Pointer(&buf[0])), nil
+}
+
+func getTokenPrimaryGroupInfo(token windows.Token) (*windows.Tokenprimarygroup, error) {
+	buf, err := getTokenInfo(token, windows.TokenPrimaryGroup)
+	if err != nil {
+		return nil, err
+	}
+
+	return (*windows.Tokenprimarygroup)(unsafe.Pointer(&buf[0])), nil
+}
+
+// UserSIDs contains the SIDs for a Windows NT token object's associated user
+// as well as its primary group.
+type UserSIDs struct {
+	User         *windows.SID
+	PrimaryGroup *windows.SID
+}
+
+// GetCurrentUserSIDs returns a UserSIDs struct containing SIDs for the
+// current process' user and primary group.
+func GetCurrentUserSIDs() (*UserSIDs, error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return nil, err
+	}
+	defer token.Close()
+
+	userInfo, err := getTokenUserInfo(token)
+	if err != nil {
+		return nil, err
+	}
+
+	primaryGroup, err := getTokenPrimaryGroupInfo(token)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UserSIDs{userInfo.User.Sid, primaryGroup.PrimaryGroup}, nil
+}
+
+// IsCurrentProcessElevated returns true when the current process is
+// running with an elevated token, implying Administrator access.
+func IsCurrentProcessElevated() bool {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return false
+	}
+	defer token.Close()
+
+	return token.IsElevated()
 }
