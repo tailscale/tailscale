@@ -109,6 +109,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveStatus(w, r)
 	case "/localapi/v0/logout":
 		h.serveLogout(w, r)
+	case "/localapi/v0/login-interactive":
+		h.serveLoginInteractive(w, r)
 	case "/localapi/v0/prefs":
 		h.servePrefs(w, r)
 	case "/localapi/v0/ping":
@@ -341,6 +343,20 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
+}
+
+func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "login access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	h.b.StartLoginInteractive()
+	w.WriteHeader(http.StatusNoContent)
+	return
 }
 
 func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
