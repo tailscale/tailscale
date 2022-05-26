@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !ios && !android
-// +build !ios,!android
+//go:build !ios && !android && !js
+// +build !ios,!android,!js
 
 // We don't include it on mobile where we're more memory constrained and
 // there's no CLI to get at the results anyway.
