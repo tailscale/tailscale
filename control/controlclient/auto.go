@@ -289,6 +289,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		if goal == nil {
+			health.SetAuthRoutineInError(nil)
 			// Wait for user to Login or Logout.
 			<-ctx.Done()
 			c.logf("[v1] authRoutine: context done.")
@@ -296,6 +297,7 @@ func (c *Auto) authRoutine() {
 		}
 
 		if !goal.wantLoggedIn {
+			health.SetAuthRoutineInError(nil)
 			err := c.direct.TryLogout(ctx)
 			goal.sendLogoutError(err)
 			if err != nil {
@@ -334,6 +336,7 @@ func (c *Auto) authRoutine() {
 				f = "TryLogin"
 			}
 			if err != nil {
+				health.SetAuthRoutineInError(err)
 				report(err, f)
 				bo.BackOff(ctx, err)
 				continue
@@ -358,6 +361,7 @@ func (c *Auto) authRoutine() {
 			}
 
 			// success
+			health.SetAuthRoutineInError(nil)
 			c.mu.Lock()
 			c.loggedIn = true
 			c.loginGoal = nil
