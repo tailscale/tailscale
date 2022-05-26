@@ -260,7 +260,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 
 	linkMon, err := monitor.New(logf)
 	if err != nil {
-		return err
+		return fmt.Errorf("monitor: %w", err)
 	}
 	dialer := new(tsdial.Dialer)
 
@@ -367,7 +367,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	}
 	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return err
+		return fmt.Errorf("store: %w", err)
 	}
 
 	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)

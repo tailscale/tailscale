@@ -158,13 +158,12 @@ func main() {
 		}
 	}
 
-	if beWindowsSubprocess() {
-		return
-	}
-
 	flag.Parse()
 	if flag.NArg() > 0 {
-		log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
+		// Windows subprocess is spawned with /subprocess, so we need to avoid this check there.
+		if runtime.GOOS != "windows" || flag.Arg(0) != "/subproc" {
+			log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
+		}
 	}
 
 	if printVersion {
@@ -191,6 +190,10 @@ func main() {
 	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
 		args.statepath = paths.DefaultTailscaledStateFile()
+	}
+
+	if beWindowsSubprocess() {
+		return
 	}
 
 	err := run()
