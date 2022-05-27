@@ -395,7 +395,11 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // origlen indicates the pre-compression body length.
 // origlen of -1 indicates that the body is not compressed.
 func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded bool, err error) {
-	req, err := http.NewRequest("POST", l.url, bytes.NewReader(body))
+	const maxUploadTime = 45 * time.Second
+	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", l.url, bytes.NewReader(body))
 	if err != nil {
 		// I know of no conditions under which this could fail.
 		// Report it very loudly.
@@ -407,11 +411,6 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded
 		req.Header.Add("Orig-Content-Length", strconv.Itoa(origlen))
 	}
 	req.Header["User-Agent"] = nil // not worth writing one; save some bytes
-
-	maxUploadTime := 45 * time.Second
-	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
-	defer cancel()
-	req = req.WithContext(ctx)
 
 	compressedNote := "not-compressed"
 	if origlen != -1 {
