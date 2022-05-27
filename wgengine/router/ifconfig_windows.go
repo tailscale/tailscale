@@ -27,6 +27,8 @@ import (
 	"tailscale.com/wgengine/winnet"
 )
 
+var wintunLinkLocal = netaddr.MustParseIP("fe80::99d0:ec2d:b2e7:536b")
+
 // monitorDefaultRoutes subscribes to route change events and updates
 // the Tailscale tunnel interface's MTU to match that of the
 // underlying default route.
@@ -576,7 +578,18 @@ func excludeIPv6LinkLocal(in []*net.IPNet) (out []*net.IPNet) {
 	out = in[:0]
 	for _, n := range in {
 		if len(n.IP) == 16 && n.IP.IsLinkLocalUnicast() {
-			continue
+			// Windows creates a fixed link-local address for wintun,
+			// which doesn't seem to route correctly. Unfortunately, LLMNR returns this
+			// address for lookups by the hostname, and Windows prefers using it.
+			// This means that local traffic addressed to the machine's hostname breaks.
+			//
+			// While we otherwise preserve link-local addresses, we delete
+			// this one to force lookups to use a working address.
+			//
+			// See: https://github.com/tailscale/tailscale/issues/4647
+			if ip, ok := netaddr.FromStdIP(n.IP); !ok || wintunLinkLocal != ip {
+				continue // filter this IPNet
+			}
 		}
 		out = append(out, n)
 	}
