@@ -508,6 +508,10 @@ type PingResult struct {
 	// running the server on.
 	PeerAPIPort uint16 `json:",omitempty"`
 
+	// PeerAPIURL is the URL that was hit for pings of type "peerapi" (tailcfg.PingPeerAPI).
+	// It's of the form "http://ip:port" (or [ip]:port for IPv6).
+	PeerAPIURL string `json:",omitempty"`
+
 	// IsLocalIP is whether the ping request error is due to it being
 	// a ping to the local node.
 	IsLocalIP bool `json:",omitempty"`

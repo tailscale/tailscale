@@ -1706,6 +1706,27 @@ func (b *LocalBackend) StartLoginInteractive() {
 }
 
 func (b *LocalBackend) Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
+	if pingType == tailcfg.PingPeerAPI {
+		t0 := time.Now()
+		node, base, err := b.pingPeerAPI(ctx, ip)
+		if err != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		d := time.Since(t0)
+		pr := &ipnstate.PingResult{
+			IP:             ip.String(),
+			NodeIP:         ip.String(),
+			LatencySeconds: d.Seconds(),
+			PeerAPIURL:     base,
+		}
+		if err != nil {
+			pr.Err = err.Error()
+		}
+		if node != nil {
+			pr.NodeName = node.Name
+		}
+		return pr, nil
+	}
 	ch := make(chan *ipnstate.PingResult, 1)
 	b.e.Ping(ip, pingType, func(pr *ipnstate.PingResult) {
 		select {
@@ -1719,6 +1740,37 @@ func (b *LocalBackend) Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netaddr.IP) (peer *tailcfg.Node, peerBase string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	nm := b.NetMap()
+	if nm == nil {
+		return nil, "", errors.New("no netmap")
+	}
+	peer, ok := nm.PeerByTailscaleIP(ip)
+	if !ok {
+		return nil, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
+	}
+	base := peerAPIBase(nm, peer)
+	if base == "" {
+		return nil, "", fmt.Errorf("no peer API base found for peer %v (%v)", peer.ID, ip)
+	}
+	outReq, err := http.NewRequestWithContext(ctx, "HEAD", base, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	tr := b.Dialer().PeerAPITransport()
+	res, err := tr.RoundTrip(outReq)
+	if err != nil {
+		return nil, "", err
+	}
+	defer res.Body.Close() // but unnecessary on HEAD responses
+	if res.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("HTTP status %v", res.Status)
+	}
+	return peer, base, nil
 }
 
 // parseWgStatusLocked returns an EngineStatus based on s.

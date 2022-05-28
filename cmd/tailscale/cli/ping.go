@@ -51,6 +51,7 @@ relay node.
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
 		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through WireGuard, but not either host OS stack)")
 		fs.BoolVar(&pingArgs.icmp, "icmp", false, "do a ICMP-level ping (through WireGuard, but not the local host OS stack)")
+		fs.BoolVar(&pingArgs.peerAPI, "peerapi", false, "try hitting the peer's peerapi HTTP server")
 		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
 		return fs
@@ -63,6 +64,7 @@ var pingArgs struct {
 	verbose     bool
 	tsmp        bool
 	icmp        bool
+	peerAPI     bool
 	timeout     time.Duration
 }
 
@@ -72,6 +74,9 @@ func pingType() tailcfg.PingType {
 	}
 	if pingArgs.icmp {
 		return tailcfg.PingICMP
+	}
+	if pingArgs.peerAPI {
+		return tailcfg.PingPeerAPI
 	}
 	return tailcfg.PingDisco
 }
@@ -136,6 +141,10 @@ func runPing(ctx context.Context, args []string) error {
 			// TODO(bradfitz): populate the rest of ipnstate.PingResult for TSMP queries?
 			// For now just say which protocol it used.
 			via = string(pingType())
+		}
+		if pingArgs.peerAPI {
+			printf("hit peerapi of %s (%s) at %s in %s\n", pr.NodeIP, pr.NodeName, pr.PeerAPIURL, latency)
+			return nil
 		}
 		anyPong = true
 		extra := ""

@@ -72,6 +72,24 @@ type NetworkMap struct {
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// PeerByTailscaleIP returns a peer's Node based on its Tailscale IP.
+//
+// If nm is nil or no peer is found, ok is false.
+func (nm *NetworkMap) PeerByTailscaleIP(ip netaddr.IP) (peer *tailcfg.Node, ok bool) {
+	// TODO(bradfitz):
+	if nm == nil {
+		return nil, false
+	}
+	for _, n := range nm.Peers {
+		for _, a := range n.Addresses {
+			if a.IP() == ip {
+				return n, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // MagicDNSSuffix returns the domain's MagicDNS suffix (even if
 // MagicDNS isn't necessarily in use).
 //
