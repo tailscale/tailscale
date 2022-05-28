@@ -1097,6 +1097,9 @@ const (
 	// PingICMP performs a ping between two tailscale nodes using ICMP that is
 	// received by the target systems IP stack.
 	PingICMP PingType = "ICMP"
+	// PingPeerAPI performs a ping between two tailscale nodes using ICMP that is
+	// received by the target systems IP stack.
+	PingPeerAPI PingType = "peerapi"
 )
 
 // PingRequest with no IP and Types is a request to send an HTTP request to prove the
