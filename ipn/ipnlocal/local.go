@@ -81,6 +81,9 @@ type SSHServer interface {
 	// so that existing sessions can be re-evaluated for validity
 	// and closed if they'd no longer be accepted.
 	OnPolicyChange()
+
+	// Shutdown is called when tailscaled is shutting down.
+	Shutdown()
 }
 
 type newSSHServerFunc func(logger.Logf, *LocalBackend) (SSHServer, error)
@@ -346,6 +349,9 @@ func (b *LocalBackend) Shutdown() {
 	b.mu.Lock()
 	b.shutdownCalled = true
 	cc := b.cc
+	if b.sshServer != nil {
+		b.sshServer.Shutdown()
+	}
 	b.closePeerAPIListenersLocked()
 	b.mu.Unlock()
 
