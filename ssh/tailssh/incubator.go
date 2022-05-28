@@ -202,8 +202,10 @@ func beIncubator(args []string) error {
 
 	euid := uint64(os.Geteuid())
 	runningAsRoot := euid == 0
-	if runningAsRoot && ia.isShell && ia.loginCmdPath != "" {
-		// If we are trying to launch a login shell, just exec into login instead.
+	if runningAsRoot && ia.isShell && ia.loginCmdPath != "" && ia.hasTTY {
+		// If we are trying to launch a login shell, just exec into login
+		// instead. We can only do this if a TTY was requested, otherwise login
+		// exits immediately, which breaks things likes mosh and VSCode.
 		return unix.Exec(ia.loginCmdPath, []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}, os.Environ())
 	}
 
