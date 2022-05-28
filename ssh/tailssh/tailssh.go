@@ -946,15 +946,17 @@ func (ss *sshSession) run() {
 		_, err := io.Copy(rec.writer("i", ss.stdin), ss)
 		if err != nil {
 			// TODO: don't log in the success case.
-			logf("ssh: stdin copy: %v", err)
+			logf("stdin copy: %v", err)
 		}
 		ss.stdin.Close()
 	}()
 	go func() {
 		_, err := io.Copy(rec.writer("o", ss), ss.stdout)
 		if err != nil {
-			// TODO: don't log in the success case.
-			logf("ssh: stdout copy: %v", err)
+			logf("stdout copy: %v", err)
+			// If we got an error here, it's probably because the client has
+			// disconnected.
+			ss.ctx.CloseWithError(err)
 		}
 	}()
 	// stderr is nil for ptys.
@@ -962,8 +964,7 @@ func (ss *sshSession) run() {
 		go func() {
 			_, err := io.Copy(ss.Stderr(), ss.stderr)
 			if err != nil {
-				// TODO: don't log in the success case.
-				logf("ssh: stderr copy: %v", err)
+				logf("stderr copy: %v", err)
 			}
 		}()
 	}
