@@ -584,6 +584,12 @@ func (p *Prefs) SetExitNodeIP(s string, st *ipnstate.Status) error {
 	return err
 }
 
+// ShouldSSHBeRunning reports whether the SSH server should be running based on
+// the prefs.
+func (p *Prefs) ShouldSSHBeRunning() bool {
+	return p.WantRunning && p.RunSSH
+}
+
 // PrefsFromBytes deserializes Prefs from a JSON blob.
 func PrefsFromBytes(b []byte) (*Prefs, error) {
 	p := NewPrefs()
