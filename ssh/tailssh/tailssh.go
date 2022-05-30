@@ -110,7 +110,7 @@ func (srv *server) Shutdown() {
 	srv.shutdownCalled = true
 	for _, s := range srv.activeSessionByH {
 		s.ctx.CloseWithError(userVisibleError{
-			fmt.Sprintf("Tailscale shutting down.\r\n"),
+			fmt.Sprintf("Tailscale SSH is shutting down.\r\n"),
 			context.Canceled,
 		})
 	}
@@ -876,7 +876,7 @@ func (ss *sshSession) run() {
 	if srv.shutdownCalled {
 		srv.mu.Unlock()
 		// Do not start any new sessions.
-		fmt.Fprintf(ss, "Tailscale is shutting down\r\n")
+		fmt.Fprintf(ss, "Tailscale SSH is shutting down\r\n")
 		ss.Exit(1)
 		return
 	}
