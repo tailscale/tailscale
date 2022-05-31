@@ -131,7 +131,7 @@ type Impl struct {
 var handleSSH func(logger.Logf, *ipnlocal.LocalBackend, net.Conn) error
 
 const nicID = 1
-const mtu = 1500
+const mtu = tstun.DefaultMTU
 
 // Create creates and populates a new Impl.
 func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager) (*Impl, error) {
@@ -1018,7 +1018,7 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 	}
 	go func() {
 		defer cancel() // tear down the other direction's copy
-		pkt := make([]byte, mtu)
+		pkt := make([]byte, 1500)
 		for {
 			select {
 			case <-ctx.Done():
