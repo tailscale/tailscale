@@ -13,7 +13,6 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
-	"syscall"
 
 	"tailscale.com/util/lineread"
 	"tailscale.com/version/distro"
@@ -68,8 +67,8 @@ func osVersionLinux() string {
 		return nil
 	})
 
-	var un syscall.Utsname
-	syscall.Uname(&un)
+	var un unix.Utsname
+	unix.Uname(&un)
 
 	var attrBuf strings.Builder
 	attrBuf.WriteString("; kernel=")
