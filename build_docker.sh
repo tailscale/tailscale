@@ -32,7 +32,7 @@ REPOS="${REPOS:-${DEFAULT_REPOS}}"
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
 
-go run github.com/tailscale/mkctr@latest \
+go run github.com/tailscale/mkctr \
   --gopaths="\
     tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
     tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
