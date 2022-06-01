@@ -22,11 +22,12 @@ func ExampleRequest() {
 }
 
 var responseTests = []struct {
-	name     string
-	data     []byte
-	wantTID  []byte
-	wantAddr []byte
-	wantPort uint16
+	name         string
+	data         []byte
+	wantTID      []byte
+	wantAddr     []byte
+	wantPort     uint16
+	wantSoftware string
 }{
 	{
 		name: "google-1",
@@ -77,8 +78,9 @@ var responseTests = []struct {
 			0x48, 0x2e, 0xb6, 0x47, 0x15, 0xe8, 0xb2, 0x8e,
 			0xae, 0xad, 0x64, 0x44,
 		},
-		wantAddr: []byte{72, 69, 33, 45},
-		wantPort: 58539,
+		wantAddr:     []byte{72, 69, 33, 45},
+		wantPort:     58539,
+		wantSoftware: "Vovida.org 0.96\x00",
 	},
 	{
 		name: "stun.powervoip.com:3478",
@@ -114,8 +116,9 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
-		wantPort: 61300,
+		wantAddr:     []byte{127, 0, 0, 1},
+		wantPort:     61300,
+		wantSoftware: "endpointer",
 	},
 	{
 		name: "stuntman-server ipv6",
@@ -156,8 +159,9 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
-		wantPort: 61300,
+		wantAddr:     []byte{127, 0, 0, 1},
+		wantPort:     61300,
+		wantSoftware: "a",
 	},
 	{
 		name: "software-abc",
@@ -172,15 +176,16 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
-		wantPort: 61300,
+		wantAddr:     []byte{127, 0, 0, 1},
+		wantPort:     61300,
+		wantSoftware: "abc",
 	},
 }
 
 func TestParseResponse(t *testing.T) {
 	subtest := func(t *testing.T, i int) {
 		test := responseTests[i]
-		tID, addr, port, err := stun.ParseResponse(test.data)
+		tID, software, addr, port, err := stun.ParseResponse(test.data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -193,6 +198,9 @@ func TestParseResponse(t *testing.T) {
 		}
 		if port != test.wantPort {
 			t.Errorf("port=%d, want %d", port, test.wantPort)
+		}
+		if string(software) != test.wantSoftware {
+			t.Errorf("software=%q, want %s", software, test.wantSoftware)
 		}
 	}
 	for i, test := range responseTests {
@@ -248,21 +256,25 @@ func TestResponse(t *testing.T) {
 		return
 	}
 	tests := []struct {
-		tx   stun.TxID
-		ip   net.IP
-		port uint16
+		tx       stun.TxID
+		software string
+		ip       net.IP
+		port     uint16
 	}{
-		{tx: txN(1), ip: net.ParseIP("1.2.3.4").To4(), port: 254},
-		{tx: txN(2), ip: net.ParseIP("1.2.3.4").To4(), port: 257},
-		{tx: txN(3), ip: net.ParseIP("1::4"), port: 254},
-		{tx: txN(4), ip: net.ParseIP("1::4"), port: 257},
+		{tx: txN(1), software: "derp3", ip: net.ParseIP("1.2.3.4").To4(), port: 254},
+		{tx: txN(2), software: "eightLen", ip: net.ParseIP("1.2.3.4").To4(), port: 257},
+		{tx: txN(3), software: "", ip: net.ParseIP("1::4"), port: 254},
+		{tx: txN(4), software: "💩", ip: net.ParseIP("1::4"), port: 257},
 	}
 	for _, tt := range tests {
-		res := stun.Response(tt.tx, tt.ip, tt.port)
-		tx2, ip2, port2, err := stun.ParseResponse(res)
+		res := stun.Response(tt.tx, tt.ip, tt.port, tt.software)
+		tx2, software2, ip2, port2, err := stun.ParseResponse(res)
 		if err != nil {
 			t.Errorf("TX %x: error: %v", tt.tx, err)
 			continue
+		}
+		if tt.software != string(software2) {
+			t.Errorf("TX %x: software=%v, want %v", tt.tx, software2, tt.software)
 		}
 		if tt.tx != tx2 {
 			t.Errorf("TX %x: got TxID = %v", tt.tx, tx2)

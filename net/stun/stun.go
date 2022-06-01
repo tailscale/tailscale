@@ -25,7 +25,7 @@ const (
 	// And servers appear to send it.
 	attrXorMappedAddressAlt = 0x8020
 
-	software       = "tailnode" // notably: 8 bytes long, so no padding
+	clientSoftware = "tailnode" // notably: 8 bytes long, so no padding
 	bindingRequest = "\x00\x01"
 	magicCookie    = "\x21\x12\xa4\x42"
 	lenFingerprint = 8 // 2+byte header + 2-byte length + 4-byte crc32
@@ -48,7 +48,7 @@ func NewTxID() TxID {
 // The transaction ID, tID, should be a random sequence of bytes.
 func Request(tID TxID) []byte {
 	// STUN header, RFC5389 Section 6.
-	const lenAttrSoftware = 4 + len(software)
+	const lenAttrSoftware = 4 + len(clientSoftware)
 	b := make([]byte, 0, headerLen+lenAttrSoftware+lenFingerprint)
 	b = append(b, bindingRequest...)
 	b = appendU16(b, uint16(lenAttrSoftware+lenFingerprint)) // number of bytes following header
@@ -57,8 +57,8 @@ func Request(tID TxID) []byte {
 
 	// Attribute SOFTWARE, RFC5389 Section 15.5.
 	b = appendU16(b, attrNumSoftware)
-	b = appendU16(b, uint16(len(software)))
-	b = append(b, software...)
+	b = appendU16(b, uint16(len(clientSoftware)))
+	b = append(b, clientSoftware...)
 
 	// Attribute FINGERPRINT, RFC5389 Section 15.5.
 	fp := fingerPrint(b)
@@ -97,7 +97,7 @@ func ParseBindingRequest(b []byte) (TxID, error) {
 	var gotFP uint32
 	if err := foreachAttr(b[headerLen:], func(attrType uint16, a []byte) error {
 		lastAttr = attrType
-		if attrType == attrNumSoftware && string(a) == software {
+		if attrType == attrNumSoftware && string(a) == clientSoftware {
 			softwareOK = true
 		}
 		if attrType == attrNumFingerprint && len(a) == 4 {
@@ -151,7 +151,7 @@ func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
 }
 
 // Response generates a binding response.
-func Response(txID TxID, ip net.IP, port uint16) []byte {
+func Response(txID TxID, ip net.IP, port uint16, resSoftware string) []byte {
 	if ip4 := ip.To4(); ip4 != nil {
 		ip = ip4
 	}
@@ -164,7 +164,13 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 	default:
 		return nil
 	}
-	attrsLen := 8 + len(ip)
+	lenAttrAddr := 8 + len(ip)
+	var lenAttrSoftware, lenAttrSoftwareWithPad int
+	if len(resSoftware) > 0 {
+		lenAttrSoftware = 4 + len(resSoftware)
+		lenAttrSoftwareWithPad = (lenAttrSoftware + 3) &^ 3
+	}
+	attrsLen := lenAttrAddr + lenAttrSoftwareWithPad
 	b := make([]byte, 0, headerLen+attrsLen)
 
 	// Header
@@ -173,7 +179,7 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 	b = append(b, magicCookie...)
 	b = append(b, txID[:]...)
 
-	// Attributes (well, one)
+	// Attribute XOR-MAPPED-ADDRESS
 	b = appendU16(b, attrXorMappedAddress)
 	b = appendU16(b, uint16(4+len(ip)))
 	b = append(b,
@@ -187,24 +193,35 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 			b = append(b, o^txID[i-len(magicCookie)])
 		}
 	}
+
+	// Attribute SOFTWARE
+	if len(resSoftware) > 0 {
+		b = appendU16(b, attrNumSoftware)
+		b = appendU16(b, uint16(len(resSoftware)))
+		b = append(b, resSoftware...)
+		for i := lenAttrSoftware; i < lenAttrSoftwareWithPad; i++ {
+			b = append(b, 0)
+		}
+	}
+
 	return b
 }
 
 // ParseResponse parses a successful binding response STUN packet.
 // The IP address is extracted from the XOR-MAPPED-ADDRESS attribute.
 // The returned addr slice is owned by the caller and does not alias b.
-func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
+func ParseResponse(b []byte) (tID TxID, software, addr []byte, port uint16, err error) {
 	if !Is(b) {
-		return tID, nil, 0, ErrNotSTUN
+		return tID, nil, nil, 0, ErrNotSTUN
 	}
 	copy(tID[:], b[8:8+len(tID)])
 	if b[0] != 0x01 || b[1] != 0x01 {
-		return tID, nil, 0, ErrNotSuccessResponse
+		return tID, nil, nil, 0, ErrNotSuccessResponse
 	}
 	attrsLen := int(binary.BigEndian.Uint16(b[2:4]))
 	b = b[headerLen:] // remove STUN header
 	if attrsLen > len(b) {
-		return tID, nil, 0, ErrMalformedAttrs
+		return tID, nil, nil, 0, ErrMalformedAttrs
 	} else if len(b) > attrsLen {
 		b = b[:attrsLen] // trim trailing packet bytes
 	}
@@ -239,26 +256,28 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 			} else {
 				fallbackAddr, fallbackPort = a, p
 			}
+		case attrNumSoftware:
+			software = append([]byte(nil), attr...)
 		}
 		return nil
 
 	}); err != nil {
-		return TxID{}, nil, 0, err
+		return TxID{}, nil, nil, 0, err
 	}
 
 	if addr != nil {
-		return tID, addr, port, nil
+		return tID, software, addr, port, nil
 	}
 	if fallbackAddr != nil {
-		return tID, append([]byte{}, fallbackAddr...), fallbackPort, nil
+		return tID, software, append([]byte{}, fallbackAddr...), fallbackPort, nil
 	}
 	if addr6 != nil {
-		return tID, addr6, port6, nil
+		return tID, software, addr6, port6, nil
 	}
 	if fallbackAddr6 != nil {
-		return tID, append([]byte{}, fallbackAddr6...), fallbackPort6, nil
+		return tID, software, append([]byte{}, fallbackAddr6...), fallbackPort6, nil
 	}
-	return tID, nil, 0, ErrMalformedAttrs
+	return tID, nil, nil, 0, ErrMalformedAttrs
 }
 
 func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) {
@@ -315,6 +334,21 @@ func mappedAddress(b []byte) (addr []byte, port uint16, err error) {
 	}
 	return append([]byte(nil), addrField[:addrLen]...), port, nil
 }
+
+/*func softwareString(b []byte) ([]byte, error) {
+	fmt.Printf("softwareString len(b)=%d\n", len(b))
+	if len(b) < 4 {
+		return nil, ErrMalformedAttrs
+	}
+	strLen := int(uint16(b[2])<<8 | uint16(b[3]))
+	fmt.Printf("softwareString b[2]=%d, b[3]=%d\n", b[2], b[3])
+	str := b[4:]
+	fmt.Printf("softwareString len(str)=%d, strLen=%d\n", len(str), strLen)
+	if len(str) < strLen {
+		return nil, ErrMalformedAttrs
+	}
+	return append([]byte(nil), str...), nil
+}*/
 
 // Is reports whether b is a STUN message.
 func Is(b []byte) bool {

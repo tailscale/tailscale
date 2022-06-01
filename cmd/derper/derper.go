@@ -81,6 +81,14 @@ func init() {
 	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
 }
 
+// parseRegion reports the region "derp<N>" by parsing the -mesh-with flag.
+func parseRegion() string {
+	// ExecStart=/home/derp/derper -c /home/derp/derper.conf --certdir=/home/derp/certs --hostname=derp.tailscale.com --mesh-with=derp4c.tailscale.com,derp4d.tailscale.com,derp4e.tailscale.com --stun --bootstrap-dns-names=log.tailscale.io,login.tailscale.com,controlplane.tailscale.com,login.us.tailscale.com
+	for _, host := range strings.Split(*meshWith, ",") {
+	}
+	return 0
+}
+
 type config struct {
 	PrivateKey key.NodePrivate
 }

@@ -251,7 +251,7 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
 		return
 	}
 
-	tx, addr, port, err := stun.ParseResponse(pkt)
+	tx, _, addr, port, err := stun.ParseResponse(pkt)
 	if err != nil {
 		if _, err := stun.ParseBindingRequest(pkt); err == nil {
 			// This was probably our own netcheck hairpin
@@ -1044,7 +1044,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	hc := &http.Client{Transport: tr}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://" + node.HostName + "/derp/latency-check", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+node.HostName+"/derp/latency-check", nil)
 	if err != nil {
 		return 0, ip, err
 	}
