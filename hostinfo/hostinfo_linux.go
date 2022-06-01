@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version/distro"
 )
@@ -72,12 +73,7 @@ func osVersionLinux() string {
 
 	var attrBuf strings.Builder
 	attrBuf.WriteString("; kernel=")
-	for _, b := range un.Release {
-		if b == 0 {
-			break
-		}
-		attrBuf.WriteByte(byte(b))
-	}
+	attrBuf.WriteString(unix.ByteSliceToString(un.Release[:]))
 	if inContainer() {
 		attrBuf.WriteString("; container")
 	}

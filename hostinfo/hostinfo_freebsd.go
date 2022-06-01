@@ -27,12 +27,7 @@ func osVersionFreebsd() string {
 
 	var attrBuf strings.Builder
 	attrBuf.WriteString("; version=")
-	for _, b := range un.Release {
-		if b == 0 {
-			break
-		}
-		attrBuf.WriteByte(byte(b))
-	}
+	attrBuf.WriteString(unix.ByteSliceToString(un.Release[:]))
 	attr := attrBuf.String()
 
 	version := "FreeBSD"
