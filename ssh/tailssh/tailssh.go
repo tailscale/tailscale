@@ -41,6 +41,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 )
 
@@ -92,6 +93,7 @@ func init() {
 
 // HandleSSHConn handles a Tailscale SSH connection from c.
 func (srv *server) HandleSSHConn(c net.Conn) error {
+	metricIncomingConnections.Add(1)
 	ss, err := srv.newConn()
 	if err != nil {
 		return err
@@ -301,7 +303,11 @@ func (srv *server) mayForwardLocalPortTo(ctx ssh.Context, destinationHost string
 	if !ok {
 		return false
 	}
-	return ss.action.AllowLocalPortForwarding
+	if !ss.action.AllowLocalPortForwarding {
+		return false
+	}
+	metricLocalPortForward.Add(1)
+	return true
 }
 
 // havePubKeyPolicy reports whether any policy rule may provide access by means
@@ -514,6 +520,9 @@ func (srv *server) fetchPublicKeysURL(url string) ([]string, error) {
 // but not necessarily before all the Tailscale-level extra verification has
 // completed. It also handles SFTP requests.
 func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
+	if s.PublicKey() != nil {
+		metricPublicKeyConnections.Add(1)
+	}
 	sshUser := s.User()
 	cr := &contextReader{r: s}
 	action, err := c.resolveTerminalAction(s, cr)
@@ -528,6 +537,9 @@ func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 		s.Exit(1)
 		return
 	}
+	if s.PublicKey() != nil {
+		metricPublicKeyAccepts.Add(1)
+	}
 
 	if cr.HasOutstandingRead() {
 		s = contextReaderSesssion{s, cr}
@@ -536,8 +548,9 @@ func (c *conn) handleConnPostSSHAuth(s ssh.Session) {
 	// Do this check after auth, but before starting the session.
 	switch s.Subsystem() {
 	case "sftp", "":
+		metricSFTP.Add(1)
 	default:
-		fmt.Fprintf(s.Stderr(), "Unsupported subsystem %q \r\n", s.Subsystem())
+		fmt.Fprintf(s.Stderr(), "Unsupported subsystem %q\r\n", s.Subsystem())
 		s.Exit(1)
 		return
 	}
@@ -576,12 +589,19 @@ func (c *conn) resolveTerminalAction(s ssh.Session, cr *contextReader) (*tailcfg
 			io.WriteString(s.Stderr(), strings.Replace(action.Message, "\n", "\r\n", -1))
 		}
 		if action.Accept || action.Reject {
+			if action.Reject {
+				metricTerminalReject.Add(1)
+			} else {
+				metricTerminalAccept.Add(1)
+			}
 			return action, nil
 		}
 		url := action.HoldAndDelegate
 		if url == "" {
+			metricTerminalMalformed.Add(1)
 			return nil, errors.New("reached Action that lacked Accept, Reject, and HoldAndDelegate")
 		}
+		metricHolds.Add(1)
 		awaitReadOnce.Do(func() {
 			wg.Add(1)
 			go func() {
@@ -606,7 +626,10 @@ func (c *conn) resolveTerminalAction(s ssh.Session, cr *contextReader) (*tailcfg
 		action, err = c.fetchSSHAction(ctx, url)
 		if err != nil {
 			if sawInterrupt.Get() {
+				metricTerminalInterrupt.Add(1)
 				return nil, fmt.Errorf("aborted by user")
+			} else {
+				metricTerminalFetchError.Add(1)
 			}
 			return nil, fmt.Errorf("fetching SSHAction from %s: %w", url, err)
 		}
@@ -707,6 +730,7 @@ func (ss *sshSession) checkStillValid() {
 	if ss.conn.isStillValid(ss.PublicKey()) {
 		return
 	}
+	metricPolicyChangeKick.Add(1)
 	ss.logf("session no longer valid per new SSH policy; closing")
 	ss.ctx.CloseWithError(userVisibleError{
 		fmt.Sprintf("Access revoked.\r\n"),
@@ -869,6 +893,8 @@ var recordSSH = envknob.Bool("TS_DEBUG_LOG_SSH")
 // It handles ss once it's been accepted and determined
 // that it should run.
 func (ss *sshSession) run() {
+	metricActiveSessions.Add(1)
+	defer metricActiveSessions.Add(-1)
 	defer ss.ctx.CloseWithError(errSessionDone)
 	srv := ss.conn.srv
 
@@ -1327,3 +1353,19 @@ func envEq(a, b string) bool {
 	}
 	return a == b
 }
+
+var (
+	metricActiveSessions       = clientmetric.NewGauge("ssh_active_sessions")
+	metricIncomingConnections  = clientmetric.NewCounter("ssh_incoming_connections")
+	metricPublicKeyConnections = clientmetric.NewCounter("ssh_publickey_connections") // total
+	metricPublicKeyAccepts     = clientmetric.NewCounter("ssh_publickey_accepts")     // accepted subset of ssh_publickey_connections
+	metricTerminalAccept       = clientmetric.NewCounter("ssh_terminalaction_accept")
+	metricTerminalReject       = clientmetric.NewCounter("ssh_terminalaction_reject")
+	metricTerminalInterrupt    = clientmetric.NewCounter("ssh_terminalaction_interrupt")
+	metricTerminalMalformed    = clientmetric.NewCounter("ssh_terminalaction_malformed")
+	metricTerminalFetchError   = clientmetric.NewCounter("ssh_terminalaction_fetch_error")
+	metricHolds                = clientmetric.NewCounter("ssh_holds")
+	metricPolicyChangeKick     = clientmetric.NewCounter("ssh_policy_change_kick")
+	metricSFTP                 = clientmetric.NewCounter("ssh_sftp_requests")
+	metricLocalPortForward     = clientmetric.NewCounter("ssh_local_port_forward_requests")
+)
