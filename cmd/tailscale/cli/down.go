@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -17,12 +18,25 @@ var downCmd = &ffcli.Command{
 	ShortUsage: "down",
 	ShortHelp:  "Disconnect from Tailscale",
 
-	Exec: runDown,
+	Exec:    runDown,
+	FlagSet: newDownFlagSet(),
+}
+
+func newDownFlagSet() *flag.FlagSet {
+	downf := newFlagSet("down")
+	registerAcceptRiskFlag(downf)
+	return downf
 }
 
 func runDown(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
+	}
+
+	if isSSHOverTailscale() {
+		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will disable Tailscale and result in your session disconnecting.`); err != nil {
+			return err
+		}
 	}
 
 	st, err := localClient.Status(ctx)
