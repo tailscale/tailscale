@@ -261,7 +261,6 @@ func (r *Resolver) Close() {
 // bound on per-query resource usage.
 const dnsQueryTimeout = 10 * time.Second
 
-
 func (r *Resolver) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]byte, error) {
 	metricDNSQueryLocal.Add(1)
 	select {
@@ -617,11 +616,16 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	}
 }
 
-// parseViaDomain synthesizes an IP address for quad-A DNS requests of
-// the form 'via-<X>.<IPv4-address>', where X is a decimal, or hex-encoded
-// number with a '0x' prefix.
+// parseViaDomain synthesizes an IP address for quad-A DNS requests of the form
+// `<IPv4-address>.via-<X>` and the deprecated form `via-<X>.<IPv4-address>`,
+// where X is a decimal, or hex-encoded number with a '0x' prefix.
 //
 // This exists as a convenient mapping into Tailscales 'Via Range'.
+//
+// TODO(maisem/bradfitz/tom): `<IPv4-address>.via-<X>` was introduced
+// (2022-06-02) to work around an issue in Chrome where it would treat
+// "http://via-1.1.2.3.4" as a search string instead of a URL. We should rip out
+// the old format in early 2023.
 func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, bool) {
 	fqdn := string(domain.WithoutTrailingDot())
 	if typ != dns.TypeAAAA {
@@ -630,17 +634,28 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP
 	if len(fqdn) < len("via-X.0.0.0.0") {
 		return netaddr.IP{}, false // too short to be valid
 	}
-	if !strings.HasPrefix(fqdn, "via-") {
-		return netaddr.IP{}, false
-	}
 
-	firstDot := strings.Index(fqdn, ".")
-	if firstDot < 0 {
-		return netaddr.IP{}, false // missing dot delimiters
+	var siteID string
+	var ip4Str string
+	if strings.HasPrefix(fqdn, "via-") {
+		firstDot := strings.Index(fqdn, ".")
+		if firstDot < 0 {
+			return netaddr.IP{}, false // missing dot delimiters
+		}
+		siteID = fqdn[len("via-"):firstDot]
+		ip4Str = fqdn[firstDot+1:]
+	} else {
+		lastDot := strings.LastIndex(fqdn, ".")
+		if lastDot < 0 {
+			return netaddr.IP{}, false // missing dot delimiters
+		}
+		suffix := fqdn[lastDot+1:]
+		if !strings.HasPrefix(suffix, "via-") {
+			return netaddr.IP{}, false
+		}
+		siteID = suffix[len("via-"):]
+		ip4Str = fqdn[:lastDot]
 	}
-
-	siteID := fqdn[len("via-"):firstDot]
-	ip4Str := fqdn[firstDot+1:]
 
 	ip4, err := netaddr.ParseIP(ip4Str)
 	if err != nil {

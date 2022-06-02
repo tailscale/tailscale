@@ -343,9 +343,12 @@ func TestResolveLocal(t *testing.T) {
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
 		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netaddr.MustParseIP("100.100.100.100"), dns.RCodeSuccess},
-		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:102:304"), dns.RCodeSuccess},
-		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:a00:1"), dns.RCodeSuccess},
-		{"via_invalid", dnsname.FQDN("via-."), dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
+		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
+		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
+		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
+		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
+		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
+		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
