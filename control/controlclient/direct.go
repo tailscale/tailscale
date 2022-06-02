@@ -1097,12 +1097,6 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	var out tailcfg.OverTLSPublicKeyResponse
 	jsonErr := json.Unmarshal(b, &out)
 	if jsonErr == nil {
-		if runtime.GOOS == "js" {
-			// As of 2022-05-20 it's not possible for js/wasm to make a bidi
-			// Noise connection to the control plane. Instead, for now, pretend
-			// like the server can't do Noise to force use of the old protocol.
-			out.PublicKey = key.MachinePublic{}
-		}
 		return &out, nil
 	}
 

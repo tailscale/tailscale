@@ -23,7 +23,7 @@ func New(c *websocket.Conn) net.Conn {
 	return &websocketConn{c: c}
 }
 
-// websocketConn implements derp.Conn around a *websocket.Conn,
+// websocketConn implements net.Conn around a *websocket.Conn,
 // treating a websocket.Conn as a byte stream, ignoring the WebSocket
 // frame/message boundaries.
 type websocketConn struct {

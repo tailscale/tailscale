@@ -13,7 +13,7 @@ import (
 
 	"nhooyr.io/websocket"
 	"tailscale.com/derp"
-	"tailscale.com/derp/wsconn"
+	"tailscale.com/net/wsconn"
 )
 
 var counterWebSocketAccepts = expvar.NewInt("derp_websocket_accepts")
