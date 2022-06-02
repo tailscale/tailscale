@@ -133,6 +133,11 @@ var handleSSH func(logger.Logf, *ipnlocal.LocalBackend, net.Conn) error
 const nicID = 1
 const mtu = tstun.DefaultMTU
 
+// maxUDPPacketSize is the maximum size of a UDP packet we copy in startPacketCopy
+// when relaying UDP packets. We don't use the 'mtu' const in anticipation of
+// one day making the MTU more dynamic.
+const maxUDPPacketSize = 1500
+
 // Create creates and populates a new Impl.
 func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager) (*Impl, error) {
 	if mc == nil {
@@ -1018,7 +1023,7 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 	}
 	go func() {
 		defer cancel() // tear down the other direction's copy
-		pkt := make([]byte, 1500)
+		pkt := make([]byte, maxUDPPacketSize)
 		for {
 			select {
 			case <-ctx.Done():
