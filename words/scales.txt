@@ -109,6 +109,10 @@ shark
 roach
 tyrannosaurus
 velociraptor
+bee
+bearded
+beardie
+pogona
 
 # Musical scales
 acoustic
@@ -154,4 +158,4 @@ tet
 tone
 tritone
 yo
-bee
+

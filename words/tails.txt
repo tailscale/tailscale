@@ -213,3 +213,7 @@ mudpuppy
 ferret
 roborovski
 bee
+dragon
+bearded
+beardie
+pogona
