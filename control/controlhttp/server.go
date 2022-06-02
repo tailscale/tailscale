@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"nhooyr.io/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/wsconn"
 	"tailscale.com/types/key"
 )
 
@@ -26,6 +28,9 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	if next == "" {
 		http.Error(w, "missing next protocol", http.StatusBadRequest)
 		return nil, errors.New("no next protocol in HTTP request")
+	}
+	if next == "websocket" {
+		return acceptWebsocket(ctx, w, r, private)
 	}
 	if next != upgradeHeaderValue {
 		http.Error(w, "unknown next protocol", http.StatusBadRequest)
@@ -63,6 +68,45 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	}
 	conn = netutil.NewDrainBufConn(conn, brw.Reader)
 
+	nc, err := controlbase.Server(ctx, conn, private, init)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("noise handshake failed: %w", err)
+	}
+
+	return nc, nil
+}
+
+// acceptWebsocket upgrades a WebSocket connection (from a client that cannot
+// speak HTTP) to a Tailscale control protocol base transport connection.
+func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:   []string{upgradeHeaderValue},
+		OriginPatterns: []string{"*"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Could not accept WebSocket connection %v", err)
+	}
+	if c.Subprotocol() != upgradeHeaderValue {
+		c.Close(websocket.StatusPolicyViolation, "client must speak the control subprotocol")
+		return nil, fmt.Errorf("Unexpected subprotocol %q", c.Subprotocol())
+	}
+	if err := r.ParseForm(); err != nil {
+		c.Close(websocket.StatusPolicyViolation, "Could not parse parameters")
+		return nil, fmt.Errorf("parse query parameters: %v", err)
+	}
+	initB64 := r.Form.Get(handshakeHeaderName)
+	if initB64 == "" {
+		c.Close(websocket.StatusPolicyViolation, "missing Tailscale handshake parameter")
+		return nil, errors.New("no tailscale handshake parameter in HTTP request")
+	}
+	init, err := base64.StdEncoding.DecodeString(initB64)
+	if err != nil {
+		c.Close(websocket.StatusPolicyViolation, "invalid tailscale handshake parameter")
+		return nil, fmt.Errorf("decoding base64 handshake parameter: %v", err)
+	}
+
+	conn := wsconn.New(c)
 	nc, err := controlbase.Server(ctx, conn, private, init)
 	if err != nil {
 		conn.Close()
