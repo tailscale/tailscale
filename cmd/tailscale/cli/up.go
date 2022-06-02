@@ -114,6 +114,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
+
+	registerAcceptRiskFlag(upf)
 	return upf
 }
 
@@ -465,6 +467,18 @@ func runUp(ctx context.Context, args []string) error {
 		backendState:  st.BackendState,
 		curExitNodeIP: exitNodeIP(curPrefs, st),
 	}
+
+	if upArgs.runSSH != curPrefs.RunSSH && isSSHOverTailscale() {
+		if upArgs.runSSH {
+			err = presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`)
+		} else {
+			err = presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
 	simpleUp, justEditMP, err := updatePrefs(prefs, curPrefs, env)
 	if err != nil {
 		fatalf("%s", err)
@@ -705,7 +719,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "json":
+	case "auth-key", "force-reauth", "reset", "qr", "json", "accept-risk":
 		return true
 	}
 	return false
