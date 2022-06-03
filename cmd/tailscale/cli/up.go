@@ -440,10 +440,7 @@ func runUp(ctx context.Context, args []string) error {
 			return errors.New("--exit-node is " + notSupported)
 		}
 		if upArgs.netfilterMode != "off" {
-			return errors.New("--netfilter-mode values besides \"off\" are " + notSupported)
-		}
-		if upArgs.runSSH {
-			return errors.New("--ssh is " + notSupported)
+			return errors.New("--netfilter-mode values besides \"off\" " + notSupported)
 		}
 	}
 
