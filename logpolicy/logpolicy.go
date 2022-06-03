@@ -95,6 +95,34 @@ type Policy struct {
 	PublicID logtail.PublicID
 }
 
+// Initialize the Config with the collection.
+// If the PrivateID is zero, it generates a new one.
+func (c *Config) Initialize(collection string) {
+	c.Collection = collection
+	if c.PrivateID.IsZero() {
+		var err error
+		c.PrivateID, err = logtail.NewPrivateID()
+		if err != nil {
+			panic("logtail.NewPrivateID should never fail")
+		}
+		c.PublicID = c.PrivateID.Public()
+	}
+}
+
+// Validate verifies that the Config matches the collection,
+// and that the PrivateID and PublicID pair are sensible.
+func (c *Config) Validate(collection string) error {
+	switch {
+	case c.Collection != collection:
+		return fmt.Errorf("config collection %q does not match %q", c.Collection, collection)
+	case c.PrivateID.IsZero():
+		return errors.New("config has zero PrivateID ")
+	case c.PrivateID.Public() != c.PublicID:
+		return errors.New("config PrivateID does not match PublicID")
+	}
+	return nil
+}
+
 // ToBytes returns the JSON representation of c.
 func (c *Config) ToBytes() []byte {
 	data, err := json.MarshalIndent(c, "", "\t")
@@ -105,7 +133,7 @@ func (c *Config) ToBytes() []byte {
 }
 
 // Save writes the JSON representation of c to stateFile.
-func (c *Config) save(stateFile string) error {
+func (c *Config) Save(stateFile string) error {
 	c.PublicID = c.PrivateID.Public()
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0750); err != nil {
 		return err
@@ -117,7 +145,16 @@ func (c *Config) save(stateFile string) error {
 	return nil
 }
 
-// ConfigFromBytes parses a a Config from its JSON encoding.
+// ConfigFromFile reads a Config from a JSON file.
+func ConfigFromFile(statefile string) (*Config, error) {
+	b, err := os.ReadFile(statefile)
+	if err != nil {
+		return nil, err
+	}
+	return ConfigFromBytes(b)
+}
+
+// ConfigFromBytes parses a Config from its JSON encoding.
 func ConfigFromBytes(jsonEnc []byte) (*Config, error) {
 	c := &Config{}
 	if err := json.Unmarshal(jsonEnc, c); err != nil {
@@ -470,38 +507,17 @@ func New(collection string) *Policy {
 		}
 	}
 
-	var oldc *Config
-	data, err := ioutil.ReadFile(cfgPath)
+	newc, err := ConfigFromFile(cfgPath)
 	if err != nil {
-		earlyLogf("logpolicy.Read %v: %v", cfgPath, err)
-		oldc = &Config{}
-		oldc.Collection = collection
-	} else {
-		oldc, err = ConfigFromBytes(data)
-		if err != nil {
-			earlyLogf("logpolicy.Config unmarshal: %v", err)
-			oldc = &Config{}
-		}
-	}
-
-	newc := *oldc
-	if newc.Collection != collection {
-		log.Printf("logpolicy.Config: config collection %q does not match %q", newc.Collection, collection)
-		// We picked up an incompatible config file.
-		// Regenerate the private ID.
-		newc.PrivateID = logtail.PrivateID{}
+		earlyLogf("logpolicy.ConfigFromFile %v: %v", cfgPath, err)
+		newc = &Config{}
 		newc.Collection = collection
 	}
-	if newc.PrivateID.IsZero() {
-		newc.PrivateID, err = logtail.NewPrivateID()
-		if err != nil {
-			log.Fatalf("logpolicy: NewPrivateID() should never fail")
-		}
-	}
-	newc.PublicID = newc.PrivateID.Public()
-	if newc != *oldc {
-		if err := newc.save(cfgPath); err != nil {
-			earlyLogf("logpolicy.Config.Save: %v", err)
+	if err := newc.Validate(collection); err != nil {
+		earlyLogf("logpolicy.Config.Validate for %q: %v", cfgPath, err)
+		newc.Initialize(collection)
+		if err := newc.Save(cfgPath); err != nil {
+			earlyLogf("logpolicy.Config.Save for %v: %v", cfgPath, err)
 		}
 	}
 
