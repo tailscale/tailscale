@@ -264,15 +264,15 @@ func startIPNServer(ctx context.Context, logid string) error {
 	}
 	dialer := new(tsdial.Dialer)
 
-	getEngineRaw := func() (wgengine.Engine, error) {
+	getEngineRaw := func() (wgengine.Engine, *netstack.Impl, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")
 		if err != nil {
-			return nil, fmt.Errorf("TUN: %w", err)
+			return nil, nil, fmt.Errorf("TUN: %w", err)
 		}
 		r, err := router.New(logf, dev, nil)
 		if err != nil {
 			dev.Close()
-			return nil, fmt.Errorf("router: %w", err)
+			return nil, nil, fmt.Errorf("router: %w", err)
 		}
 		if wrapNetstack {
 			r = netstack.NewSubnetRouterWrapper(r)
@@ -281,7 +281,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			r.Close()
 			dev.Close()
-			return nil, fmt.Errorf("DNS: %w", err)
+			return nil, nil, fmt.Errorf("DNS: %w", err)
 		}
 		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 			Tun:         dev,
@@ -294,23 +294,24 @@ func startIPNServer(ctx context.Context, logid string) error {
 		if err != nil {
 			r.Close()
 			dev.Close()
-			return nil, fmt.Errorf("engine: %w", err)
+			return nil, nil, fmt.Errorf("engine: %w", err)
 		}
 		ns, err := newNetstack(logf, dialer, eng)
 		if err != nil {
-			return nil, fmt.Errorf("newNetstack: %w", err)
+			return nil, nil, fmt.Errorf("newNetstack: %w", err)
 		}
 		ns.ProcessLocalIPs = false
 		ns.ProcessSubnets = wrapNetstack
 		if err := ns.Start(); err != nil {
-			return nil, fmt.Errorf("failed to start netstack: %w", err)
+			return nil, nil, fmt.Errorf("failed to start netstack: %w", err)
 		}
-		return wgengine.NewWatchdog(eng), nil
+		return wgengine.NewWatchdog(eng), ns, nil
 	}
 
 	type engineOrError struct {
-		Engine wgengine.Engine
-		Err    error
+		Engine   wgengine.Engine
+		Netstack *netstack.Impl
+		Err      error
 	}
 	engErrc := make(chan engineOrError)
 	t0 := time.Now()
@@ -319,7 +320,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 		for try := 1; ; try++ {
 			logf("tailscaled: getting engine... (try %v)", try)
 			t1 := time.Now()
-			eng, err := getEngineRaw()
+			eng, ns, err := getEngineRaw()
 			d, dt := time.Since(t1).Round(ms), time.Since(t1).Round(ms)
 			if err != nil {
 				logf("tailscaled: engine fetch error (try %v) in %v (total %v, sysUptime %v): %v",
@@ -332,7 +333,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 				}
 			}
 			timer := time.NewTimer(5 * time.Second)
-			engErrc <- engineOrError{eng, err}
+			engErrc <- engineOrError{eng, ns, err}
 			if err == nil {
 				timer.Stop()
 				return
@@ -344,14 +345,14 @@ func startIPNServer(ctx context.Context, logid string) error {
 	// getEngine is called by ipnserver to get the engine. It's
 	// not called concurrently and is not called again once it
 	// successfully returns an engine.
-	getEngine := func() (wgengine.Engine, error) {
+	getEngine := func() (wgengine.Engine, *netstack.Impl, error) {
 		if msg := envknob.String("TS_DEBUG_WIN_FAIL"); msg != "" {
-			return nil, fmt.Errorf("pretending to be a service failure: %v", msg)
+			return nil, nil, fmt.Errorf("pretending to be a service failure: %v", msg)
 		}
 		for {
 			res := <-engErrc
 			if res.Engine != nil {
-				return res.Engine, nil
+				return res.Engine, res.Netstack, nil
 			}
 			if time.Since(t0) < time.Minute || windowsUptime() < 10*time.Minute {
 				// Ignore errors during early boot. Windows 10 auto logs in the GUI
@@ -362,7 +363,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 			}
 			// Return nicer errors to users, annotated with logids, which helps
 			// when they file bugs.
-			return nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
+			return nil, nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
 		}
 	}
 	store, err := store.New(logf, statePathOrDefault())
