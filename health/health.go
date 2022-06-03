@@ -45,6 +45,7 @@ var (
 	anyInterfaceUp          = true // until told otherwise
 	udp4Unbound             bool
 	controlHealth           []string
+	lastLoginErr            error
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -287,6 +288,15 @@ func SetUDP4Unbound(unbound bool) {
 	selfCheckLocked()
 }
 
+// SetAuthRoutineInError records the latest error encountered as a result of a
+// login attempt. Providing a nil error indicates successful login, or that
+// being logged in w/coordination is not currently desired.
+func SetAuthRoutineInError(err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	lastLoginErr = err
+}
+
 func timerSelfCheck() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -321,8 +331,11 @@ func overallErrorLocked() error {
 	if !anyInterfaceUp {
 		return errors.New("network down")
 	}
-	if ipnState != "Running" || !ipnWantRunning {
+	if !ipnWantRunning {
 		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
+	}
+	if lastLoginErr != nil {
+		return fmt.Errorf("not logged in, last login error=%v", lastLoginErr)
 	}
 	now := time.Now()
 	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
