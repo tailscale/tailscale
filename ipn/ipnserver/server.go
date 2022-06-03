@@ -51,6 +51,7 @@ import (
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/monitor"
+	"tailscale.com/wgengine/netstack"
 )
 
 // Options is the configuration of the Tailscale node agent.
@@ -659,7 +660,7 @@ func (s *Server) writeToClients(n ipn.Notify) {
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 //
 // Deprecated: use New and Server.Run instead.
-func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, error), opts Options) error {
+func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, *netstack.Impl, error), opts Options) error {
 	getEngine = getEngineUntilItWorksWrapper(getEngine)
 	runDone := make(chan struct{})
 	defer close(runDone)
@@ -706,7 +707,7 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
 	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
 
-	eng, err := getEngine()
+	eng, ns, err := getEngine()
 	if err != nil {
 		logf("ipnserver: initial getEngine call: %v", err)
 		for i := 1; ctx.Err() == nil; i++ {
@@ -717,7 +718,7 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 				continue
 			}
 			logf("ipnserver: try%d: trying getEngine again...", i)
-			eng, err = getEngine()
+			eng, ns, err = getEngine()
 			if err == nil {
 				logf("%d: GetEngine worked; exiting failure loop", i)
 				unservedConn = c
@@ -746,6 +747,9 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	server, err := New(logf, logid, store, eng, dialer, serverModeUser, opts)
 	if err != nil {
 		return err
+	}
+	if ns != nil {
+		ns.SetLocalBackend(server.LocalBackend())
 	}
 	serverMu.Lock()
 	serverOrNil = server
@@ -996,29 +1000,26 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 	}
 }
 
-// FixedEngine returns a func that returns eng and a nil error.
-func FixedEngine(eng wgengine.Engine) func() (wgengine.Engine, error) {
-	return func() (wgengine.Engine, error) { return eng, nil }
-}
-
 // getEngineUntilItWorksWrapper returns a getEngine wrapper that does
 // not call getEngine concurrently and stops calling getEngine once
 // it's returned a working engine.
-func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, error)) func() (wgengine.Engine, error) {
+func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, *netstack.Impl, error)) func() (wgengine.Engine, *netstack.Impl, error) {
 	var mu sync.Mutex
 	var engGood wgengine.Engine
-	return func() (wgengine.Engine, error) {
+	var nsGood *netstack.Impl
+	return func() (wgengine.Engine, *netstack.Impl, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if engGood != nil {
-			return engGood, nil
+			return engGood, nsGood, nil
 		}
-		e, err := getEngine()
+		e, ns, err := getEngine()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		engGood = e
-		return e, nil
+		nsGood = ns
+		return e, ns, nil
 	}
 }
 
