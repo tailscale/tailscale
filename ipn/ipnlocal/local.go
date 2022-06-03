@@ -1833,7 +1833,10 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if p.RunSSH {
 		switch runtime.GOOS {
 		case "linux":
-			// okay
+			if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
+				return errors.New("The Tailscale SSH server does not run on Synology.")
+			}
+			// otherwise okay
 		case "darwin":
 			// okay only in tailscaled mode for now.
 			if version.IsSandboxedMacOS() {
