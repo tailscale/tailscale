@@ -162,7 +162,7 @@ func (h Port80Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	host := h.FQDN
 	if host == "" {
-		host = r.URL.Hostname()
+		host = r.Host
 	}
 	target := "https://" + host + path
 	http.Redirect(w, r, target, http.StatusFound)
