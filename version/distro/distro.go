@@ -14,16 +14,17 @@ import (
 type Distro string
 
 const (
-	Debian   = Distro("debian")
-	Arch     = Distro("arch")
-	Synology = Distro("synology")
-	OpenWrt  = Distro("openwrt")
-	NixOS    = Distro("nixos")
-	QNAP     = Distro("qnap")
-	Pfsense  = Distro("pfsense")
-	OPNsense = Distro("opnsense")
-	TrueNAS  = Distro("truenas")
-	Gokrazy  = Distro("gokrazy")
+	Debian    = Distro("debian")
+	Arch      = Distro("arch")
+	Synology  = Distro("synology")
+	OpenWrt   = Distro("openwrt")
+	NixOS     = Distro("nixos")
+	QNAP      = Distro("qnap")
+	Pfsense   = Distro("pfsense")
+	OPNsense  = Distro("opnsense")
+	TrueNAS   = Distro("truenas")
+	Gokrazy   = Distro("gokrazy")
+	WDMyCloud = Distro("wdmycloud")
 )
 
 var distroAtomic atomic.Value // of Distro
@@ -73,6 +74,10 @@ func linuxDistro() Distro {
 		return QNAP
 	case haveDir("/gokrazy"):
 		return Gokrazy
+	case have("/usr/local/wdmcserver/bin/wdmc.xml"): // Western Digital MyCloud OS3
+		return WDMyCloud
+	case have("/usr/sbin/wd_crontab.sh"): // Western Digital MyCloud OS5
+		return WDMyCloud
 	}
 	return ""
 }
