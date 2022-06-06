@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build (windows || freebsd || openbsd || darwin) && !ios
+//go:build (windows || freebsd || openbsd || darwin) && !ios && !js
 // +build windows freebsd openbsd darwin
 // +build !ios
+// +build !js
 
 package portlist
 
