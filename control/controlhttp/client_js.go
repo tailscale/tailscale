@@ -13,7 +13,6 @@ import (
 	"nhooyr.io/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/dnscache"
-	"tailscale.com/net/wsconn"
 	"tailscale.com/types/key"
 )
 
@@ -45,7 +44,7 @@ func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, contr
 	if err != nil {
 		return nil, err
 	}
-	netConn := wsconn.New(wsConn)
+	netConn := websocket.NetConn(context.Background(), wsConn, websocket.MessageBinary)
 	cbConn, err := cont(ctx, netConn)
 	if err != nil {
 		netConn.Close()
