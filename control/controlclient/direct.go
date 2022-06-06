@@ -124,11 +124,10 @@ type Options struct {
 	Pinger Pinger
 }
 
-// Pinger is a subset of the wgengine.Engine interface, containing just the Ping method.
+// Pinger is the LocalBackend.Ping method.
 type Pinger interface {
-	// Ping is a request to start a ping with the peer handling the given IP and
-	// then call cb with its ping latency & method.
-	Ping(ip netaddr.IP, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
+	// Ping is a request to do a ping with the peer handling the given IP.
+	Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg.PingType) (*ipnstate.PingResult, error)
 }
 
 type Decompressor interface {
@@ -1208,10 +1207,8 @@ func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinge
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
 		switch pt := tailcfg.PingType(t); pt {
-		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP:
+		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP, tailcfg.PingPeerAPI:
 			go doPingerPing(logf, c, pr, pinger, pt)
-		// TODO(tailscale/corp#754)
-		// case "peerapi":
 		default:
 			logf("unsupported ping request type: %q", t)
 		}
@@ -1417,10 +1414,17 @@ func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pin
 		return
 	}
 	start := time.Now()
-	pinger.Ping(pr.IP, pingType, func(res *ipnstate.PingResult) {
-		// Currently does not check for error since we just return if it fails.
-		postPingResult(start, logf, c, pr, res.ToPingResponse(pingType))
-	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := pinger.Ping(ctx, pr.IP, pingType)
+	if err != nil {
+		d := time.Since(start).Round(time.Millisecond)
+		logf("doPingerPing: ping error of type %q to %v after %v: %v", pingType, pr.IP, d, err)
+		return
+	}
+	postPingResult(start, logf, c, pr, res.ToPingResponse(pingType))
 }
 
 func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, res *tailcfg.PingResponse) error {
