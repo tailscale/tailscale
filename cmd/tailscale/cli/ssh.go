@@ -22,6 +22,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/version"
 )
 
 var sshCmd = &ffcli.Command{
@@ -32,6 +33,9 @@ var sshCmd = &ffcli.Command{
 }
 
 func runSSH(ctx context.Context, args []string) error {
+	if runtime.GOOS == "darwin" && version.IsSandboxedMacOS() && !envknob.UseWIPCode() {
+		return errors.New("The 'tailscale ssh' subcommand is not available on sandboxed macOS builds.\nUse the regular 'ssh' client instead.")
+	}
 	if len(args) == 0 {
 		return errors.New("usage: ssh [user@]<host>")
 	}
