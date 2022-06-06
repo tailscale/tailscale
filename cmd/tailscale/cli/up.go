@@ -106,7 +106,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	if safesocket.GOOSUsesPeerCreds(goos) {
-		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
+		upf.StringVar(&upArgs.opUser, "operator", os.Getenv("USER"), "Unix username to allow to operate on tailscaled without sudo")
 	}
 	switch goos {
 	case "linux":
@@ -362,7 +362,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 // without changing any settings.
 func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, justEditMP *ipn.MaskedPrefs, err error) {
 	if !env.upArgs.reset {
-		applyImplicitPrefs(prefs, curPrefs, env.user)
+		// applyImplicitPrefs(prefs, curPrefs, env.user)
 
 		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
 			return false, nil, err
@@ -857,7 +857,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 // this is just the operator user, which only needs to be set if it doesn't
 // match the current user.
 //
-// curUser is os.Getenv("USER"). It's pulled out for testability.
+// curUser is os.getenv("user"). It's pulled out for testability.
 func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, curUser string) {
 	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == curUser {
 		prefs.OperatorUser = oldPrefs.OperatorUser
