@@ -40,7 +40,9 @@ go run github.com/tailscale/mkctr \
     -X tailscale.com/version.Long=${VERSION_LONG} \
     -X tailscale.com/version.Short=${VERSION_SHORT} \
     -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" \
+  --files="docs/k8s/run.sh:/tailscale/run.sh" \
   --base="${BASE}" \
   --tags="${TAGS}" \
   --repos="${REPOS}" \
-  --push="${PUSH}"
+  --push="${PUSH}" \
+  /bin/sh /tailscale/run.sh

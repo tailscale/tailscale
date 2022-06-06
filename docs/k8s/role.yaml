@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+# Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -11,6 +11,6 @@ rules:
   # Create can not be restricted to a resource name.
   verbs: ["create"]
 - apiGroups: [""] # "" indicates the core API group
-  resourceNames: ["{{KUBE_SECRET}}"]
+  resourceNames: ["{{TS_KUBE_SECRET}}"]
   resources: ["secrets"]
   verbs: ["get", "update"]

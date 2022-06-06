@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+# Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 apiVersion: v1
@@ -12,21 +12,21 @@ spec:
   containers:
   - name: tailscale
     imagePullPolicy: Always
-    image: "{{IMAGE_TAG}}"
+    image: "ghcr.io/tailscale/tailscale:latest"
     env:
     # Store the state in a k8s secret
-    - name: KUBE_SECRET
-      value: "{{KUBE_SECRET}}"
-    - name: USERSPACE
+    - name: TS_KUBE_SECRET
+      value: "{{TS_KUBE_SECRET}}"
+    - name: TS_USERSPACE
       value: "true"
-    - name: AUTH_KEY
+    - name: TS_AUTH_KEY
       valueFrom:
         secretKeyRef:
           name: tailscale-auth
           key: AUTH_KEY
           optional: true
-    - name: ROUTES
-      value: "{{ROUTES}}"
+    - name: TS_ROUTES
+      value: "{{TS_ROUTES}}"
     securityContext:
       runAsUser: 1000
       runAsGroup: 1000

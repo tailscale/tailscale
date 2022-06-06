@@ -15,19 +15,12 @@ There are quite a few ways of running Tailscale inside a Kubernetes Cluster, som
      AUTH_KEY: tskey-...
    ```
 
-1. Build and push the container
-
-   ```bash
-   export IMAGE_TAG=tailscale-k8s:latest
-   make push
-   ```
-
 1. Tailscale (v1.16+) supports storing state inside a Kubernetes Secret.
 
    Configure RBAC to allow the Tailscale pod to read/write the `tailscale` secret.
    ```bash
    export SA_NAME=tailscale
-   export KUBE_SECRET=tailscale-auth
+   export TS_KUBE_SECRET=tailscale-auth
    make rbac
    ```
 
@@ -82,11 +75,11 @@ Running a Tailscale proxy allows you to provide inbound connectivity to a Kubern
    ```bash
    kubectl create deployment nginx --image nginx
    kubectl expose deployment nginx --port 80
-   export DEST_IP="$(kubectl get svc nginx -o=jsonpath='{.spec.clusterIP}')"
+   export TS_DEST_IP="$(kubectl get svc nginx -o=jsonpath='{.spec.clusterIP}')"
    ```
    **Using an existing service**
    ```bash
-   export DEST_IP="$(kubectl get svc <SVC_NAME> -o=jsonpath='{.spec.clusterIP}')"
+   export TS_DEST_IP="$(kubectl get svc <SVC_NAME> -o=jsonpath='{.spec.clusterIP}')"
    ```
 
 1. Deploy the proxy pod
@@ -114,12 +107,12 @@ Running a Tailscale proxy allows you to provide inbound connectivity to a Kubern
 Running a Tailscale [subnet router](https://tailscale.com/kb/1019/subnets/) allows you to access
 the entire Kubernetes cluster network (assuming NetworkPolicies allow) over Tailscale.
 
-1. Identify the Pod/Service CIDRs that cover your Kubernetes cluster.  These will vary depending on [which CNI](https://kubernetes.io/docs/concepts/cluster-administration/networking/) you are using and on the Cloud Provider you are using. Add these to the `ROUTES` variable as comma-separated values.
+1. Identify the Pod/Service CIDRs that cover your Kubernetes cluster.  These will vary depending on [which CNI](https://kubernetes.io/docs/concepts/cluster-administration/networking/) you are using and on the Cloud Provider you are using. Add these to the `TS_ROUTES` variable as comma-separated values.
 
    ```bash
    SERVICE_CIDR=10.20.0.0/16
    POD_CIDR=10.42.0.0/15
-   export ROUTES=$SERVICE_CIDR,$POD_CIDR
+   export TS_ROUTES=$SERVICE_CIDR,$POD_CIDR
    ```
 
 1. Deploy the subnet-router pod.
