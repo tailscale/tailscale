@@ -122,6 +122,16 @@ func (nm *NetworkMap) VeryConcise() string {
 	return buf.String()
 }
 
+// PeerWithStableID finds and returns the peer associated to the inputted StableNodeID.
+func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ *tailcfg.Node, ok bool) {
+	for _, p := range nm.Peers {
+		if p.StableID == pid {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
 // printConciseHeader prints a concise header line representing nm to buf.
 //
 // If this function is changed to access different fields of nm, keep

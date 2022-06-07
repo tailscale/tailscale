@@ -38,6 +38,10 @@ type Status struct {
 	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
+	// ExitNodeStatus describes the current exit node.
+	// If nil, an exit node is not in use.
+	ExitNodeStatus *ExitNodeStatus `json:"ExitNodeStatus,omitempty"`
+
 	// Health contains health check problems.
 	// Empty means everything is good. (or at least that no known
 	// problems are detected)
@@ -79,6 +83,18 @@ type TailnetStatus struct {
 	// Note that the current device may still not support MagicDNS if
 	// `--accept-dns=false` was used.
 	MagicDNSEnabled bool
+}
+
+// ExitNodeStatus describes the current exit node.
+type ExitNodeStatus struct {
+	// ID is the exit node's ID.
+	ID tailcfg.StableNodeID
+
+	// Online is whether the exit node is alive.
+	Online bool
+
+	// TailscaleIPs are the exit node's IP addresses assigned to the node.
+	TailscaleIPs []netaddr.IPPrefix
 }
 
 func (s *Status) Peers() []key.NodePublic {
