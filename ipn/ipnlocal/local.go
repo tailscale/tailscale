@@ -425,6 +425,20 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
 			s.CurrentTailnet.Name = b.netMap.Domain
+			if b.prefs != nil && !b.prefs.ExitNodeID.IsZero() {
+				if exitPeer, ok := b.netMap.PeerWithStableID(b.prefs.ExitNodeID); ok {
+					var online = false
+					if exitPeer.Online != nil {
+						online = *exitPeer.Online
+					}
+					s.ExitNodeStatus = &ipnstate.ExitNodeStatus{
+						ID:           b.prefs.ExitNodeID,
+						Online:       online,
+						TailscaleIPs: exitPeer.Addresses,
+					}
+				}
+
+			}
 		}
 	})
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
