@@ -95,17 +95,16 @@ type Policy struct {
 	PublicID logtail.PublicID
 }
 
-// Initialize the Config with the collection.
-// If the PrivateID is zero, it generates a new one.
-func (c *Config) Initialize(collection string) {
-	c.Collection = collection
-	if c.PrivateID.IsZero() {
-		var err error
-		c.PrivateID, err = logtail.NewPrivateID()
-		if err != nil {
-			panic("logtail.NewPrivateID should never fail")
-		}
-		c.PublicID = c.PrivateID.Public()
+// NewConfig creates a Config with collection and a newly generated PrivateID.
+func NewConfig(collection string) *Config {
+	id, err := logtail.NewPrivateID()
+	if err != nil {
+		panic("logtail.NewPrivateID should never fail")
+	}
+	return &Config{
+		Collection: collection,
+		PrivateID:  id,
+		PublicID:   id.Public(),
 	}
 }
 
@@ -116,7 +115,7 @@ func (c *Config) Validate(collection string) error {
 	case c.Collection != collection:
 		return fmt.Errorf("config collection %q does not match %q", c.Collection, collection)
 	case c.PrivateID.IsZero():
-		return errors.New("config has zero PrivateID ")
+		return errors.New("config has zero PrivateID")
 	case c.PrivateID.Public() != c.PublicID:
 		return errors.New("config PrivateID does not match PublicID")
 	}
@@ -510,12 +509,11 @@ func New(collection string) *Policy {
 	newc, err := ConfigFromFile(cfgPath)
 	if err != nil {
 		earlyLogf("logpolicy.ConfigFromFile %v: %v", cfgPath, err)
-		newc = &Config{}
-		newc.Collection = collection
+		newc = NewConfig(collection)
 	}
 	if err := newc.Validate(collection); err != nil {
 		earlyLogf("logpolicy.Config.Validate for %q: %v", cfgPath, err)
-		newc.Initialize(collection)
+		newc := NewConfig(collection)
 		if err := newc.Save(cfgPath); err != nil {
 			earlyLogf("logpolicy.Config.Save for %v: %v", cfgPath, err)
 		}

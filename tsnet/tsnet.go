@@ -188,12 +188,12 @@ func (s *Server) start() error {
 		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
-	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
+	cfgPath := filepath.Join(s.rootPath, "tsnet.log.conf")
 
 	lpc, err := logpolicy.ConfigFromFile(cfgPath)
 	switch {
 	case os.IsNotExist(err):
-		lpc.Initialize(logtail.CollectionNode)
+		lpc = logpolicy.NewConfig(logtail.CollectionNode)
 		if err := lpc.Save(cfgPath); err != nil {
 			return fmt.Errorf("logpolicy.Config.Save for %v: %w", cfgPath, err)
 		}
@@ -205,7 +205,7 @@ func (s *Server) start() error {
 	}
 	logid := lpc.PublicID.String()
 
-	f, err := filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
+	f, err := filch.New(filepath.Join(s.rootPath, "tsnet"), filch.Options{ReplaceStderr: false})
 	if err != nil {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
@@ -214,7 +214,14 @@ func (s *Server) start() error {
 		PrivateID:  lpc.PrivateID,
 		Stderr:     ioutil.Discard, // log everything to Buffer
 		Buffer:     f,
-		// TODO: consider adding compression. Look at logpolicy.go
+		NewZstdEncoder: func() logtail.Encoder {
+			w, err := smallzstd.NewEncoder(nil)
+			if err != nil {
+				panic(err)
+			}
+			return w
+		},
+		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
 	}
 	s.logtail = logtail.NewLogger(c, logf)
 
