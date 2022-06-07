@@ -1,0 +1,12 @@
+{
+  "name": "@tailscale/ssh",
+  "version": "0.0.1",
+  "devDependencies": {
+    "qrcode": "^1.5.0",
+    "xterm": "^4.18.0"
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 80
+  }
+}
