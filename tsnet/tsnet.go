@@ -56,6 +56,10 @@ type Server struct {
 	//
 	// If nil, a new FileStore is initialized at `Dir/tailscaled.state`.
 	// See tailscale.com/ipn/store for supported stores.
+	//
+	// Logs will automatically be uploaded to uploaded to log.tailscale.io,
+	// where the configuration file for logging will be saved at
+	// `Dir/tailscaled.log.conf`.
 	Store ipn.StateStore
 
 	// Hostname is the hostname to present to the control server.
@@ -188,7 +192,7 @@ func (s *Server) start() error {
 		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
-	cfgPath := filepath.Join(s.rootPath, "tsnet.log.conf")
+	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
 
 	lpc, err := logpolicy.ConfigFromFile(cfgPath)
 	switch {
@@ -205,7 +209,7 @@ func (s *Server) start() error {
 	}
 	logid := lpc.PublicID.String()
 
-	f, err := filch.New(filepath.Join(s.rootPath, "tsnet"), filch.Options{ReplaceStderr: false})
+	f, err := filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
 	if err != nil {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
