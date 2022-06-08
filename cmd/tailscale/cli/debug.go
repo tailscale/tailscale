@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -23,11 +25,14 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"inet.af/netaddr"
+	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 var debugCmd = &ffcli.Command{
@@ -117,6 +122,17 @@ var debugCmd = &ffcli.Command{
 			Name:      "via",
 			Exec:      runVia,
 			ShortHelp: "convert between site-specific IPv4 CIDRs and IPv6 'via' routes",
+		},
+		{
+			Name:      "ts2021",
+			Exec:      runTS2021,
+			ShortHelp: "debug ts2021 protocol connectivity",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("ts2021")
+				fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
+				fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
+				return fs
+			})(),
 		},
 	},
 }
@@ -423,5 +439,69 @@ func runVia(ctx context.Context, args []string) error {
 		}
 		fmt.Println(via)
 	}
+	return nil
+}
+
+var ts2021Args struct {
+	host    string // "controlplane.tailscale.com"
+	version int    // 27 or whatever
+}
+
+func runTS2021(ctx context.Context, args []string) error {
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	machinePrivate := key.NewMachine()
+	var dialer net.Dialer
+
+	var keys struct {
+		PublicKey key.MachinePublic
+	}
+	keysURL := "https://" + ts2021Args.host + "/key?v=" + strconv.Itoa(ts2021Args.version)
+	log.Printf("Fetching keys from %s ...", keysURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", keysURL, nil)
+	if err != nil {
+		return err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("Do: %v", err)
+		return err
+	}
+	if res.StatusCode != 200 {
+		log.Printf("Status: %v", res.Status)
+		return errors.New(res.Status)
+	}
+	if err := json.NewDecoder(res.Body).Decode(&keys); err != nil {
+		log.Printf("JSON: %v", err)
+		return fmt.Errorf("decoding /keys JSON: %w", err)
+	}
+	res.Body.Close()
+
+	dialFunc := func(ctx context.Context, network, address string) (net.Conn, error) {
+		log.Printf("Dial(%q, %q) ...", network, address)
+		c, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			log.Printf("Dial(%q, %q) = %v", network, address, err)
+		} else {
+			log.Printf("Dial(%q, %q) = %v / %v", network, address, c.LocalAddr(), c.RemoteAddr())
+		}
+		return c, err
+	}
+
+	conn, err := controlhttp.Dial(ctx, net.JoinHostPort(ts2021Args.host, "80"), machinePrivate, keys.PublicKey, uint16(ts2021Args.version), dialFunc)
+	log.Printf("controlhttp.Dial = %p, %v", conn, err)
+	if err != nil {
+		return err
+	}
+	log.Printf("did noise handshake")
+
+	gotPeer := conn.Peer()
+	if gotPeer != keys.PublicKey {
+		log.Printf("peer = %v, want %v", gotPeer, keys.PublicKey)
+		return errors.New("key mismatch")
+	}
+
+	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
 	return nil
 }
