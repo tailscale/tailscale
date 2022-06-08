@@ -511,13 +511,13 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 func TestFileTargets(t *testing.T) {
 	b := new(LocalBackend)
 	_, err := b.FileTargets()
-	if got, want := fmt.Sprint(err), "not connected"; got != want {
+	if got, want := fmt.Sprint(err), "not connected to the tailnet"; got != want {
 		t.Errorf("before connect: got %q; want %q", got, want)
 	}
 
 	b.netMap = new(netmap.NetworkMap)
 	_, err = b.FileTargets()
-	if got, want := fmt.Sprint(err), "not connected"; got != want {
+	if got, want := fmt.Sprint(err), "not connected to the tailnet"; got != want {
 		t.Errorf("non-running netmap: got %q; want %q", got, want)
 	}
 

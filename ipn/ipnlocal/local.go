@@ -3108,7 +3108,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	defer b.mu.Unlock()
 	nm := b.netMap
 	if b.state != ipn.Running || nm == nil {
-		return nil, errors.New("not connected")
+		return nil, errors.New("not connected to the tailnet")
 	}
 	if !b.capFileSharing {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
