@@ -197,7 +197,15 @@ type HandlerOptions struct {
 	// codes for handled responses.
 	// The keys are HTTP numeric response codes e.g. 200, 404, ...
 	StatusCodeCountersFull *expvar.Map
+
+	// OnError is called if the handler returned a HTTPError. This
+	// is intended to be used to present pretty error pages if
+	// the user agent is determined to be a browser.
+	OnError ErrorHandlerFunc
 }
+
+// ErrorHandlerFunc is called to present a error response.
+type ErrorHandlerFunc func(http.ResponseWriter, *http.Request, HTTPError)
 
 // ReturnHandlerFunc is an adapter to allow the use of ordinary
 // functions as ReturnHandlers. If f is a function with the
@@ -287,7 +295,11 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.opts.Logf("[unexpected] HTTPError %v did not contain an HTTP status code, sending internal server error", hErr)
 			msg.Code = http.StatusInternalServerError
 		}
-		http.Error(lw, hErr.Msg, msg.Code)
+		if h.opts.OnError != nil {
+			h.opts.OnError(lw, r, hErr)
+		} else {
+			http.Error(lw, hErr.Msg, msg.Code)
+		}
 	case err != nil:
 		// Handler returned a generic error. Serve an internal server
 		// error, if necessary.
