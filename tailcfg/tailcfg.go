@@ -483,6 +483,8 @@ func (hi *Hostinfo) TailscaleSSHEnabled() bool {
 	return hi != nil && len(hi.SSH_HostKeys) > 0
 }
 
+func (v HostinfoView) TailscaleSSHEnabled() bool { return v.ж.TailscaleSSHEnabled() }
+
 // NetInfo contains information about the host's network state.
 type NetInfo struct {
 	// MappingVariesByDestIP says whether the host's NAT mappings
