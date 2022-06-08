@@ -80,10 +80,6 @@ func (id PrivateID) String() string {
 }
 
 func (id PrivateID) Public() (pub PublicID) {
-	var emptyID PrivateID
-	if id == emptyID {
-		panic("invalid logtail.Public() on an empty private ID")
-	}
 	h := sha256.New()
 	h.Write(id[:])
 	if n := copy(pub[:], h.Sum(pub[:0])); n != len(pub) {
