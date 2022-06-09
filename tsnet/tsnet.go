@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -62,8 +61,8 @@ type Server struct {
 	// If empty, the binary name is used.
 	Hostname string
 
-	// Logf, if non-nil, specifies the logger to use. By default,
-	// log.Printf is used.
+	// Logf, if non-nil, specifies an additional logger to use such that
+	// logs are both written here and uploaded to log.tailscale.io.
 	Logf logger.Logf
 
 	// Ephemeral, if true, specifies that the instance should register
@@ -331,9 +330,7 @@ func (s *Server) logf(format string, a ...interface{}) {
 	}
 	if s.Logf != nil {
 		s.Logf(format, a...)
-		return
 	}
-	log.Printf(format, a...)
 }
 
 // printAuthURLLoop loops once every few seconds while the server is still running and
