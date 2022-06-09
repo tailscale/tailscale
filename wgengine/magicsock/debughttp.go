@@ -172,6 +172,11 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 				break
 			}
 			pos := (int(s.recentPong) - i) % len(s.recentPongs)
+			// If s.recentPongs wraps around pos will be negative, so start
+			// again from the end of the slice.
+			if pos < 0 {
+				pos += len(s.recentPongs)
+			}
 			pr := s.recentPongs[pos]
 			fmt.Fprintf(w, "<li>pong %v ago: in %v, from %v src %v</li>\n",
 				fmtMono(pr.pongAt), pr.latency.Round(time.Millisecond/10),
