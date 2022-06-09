@@ -2,6 +2,7 @@
   "name": "@tailscale/ssh",
   "version": "0.0.1",
   "devDependencies": {
+    "browserfs": "^1.4.3",
     "qrcode": "^1.5.0",
     "xterm": "^4.18.0"
   },

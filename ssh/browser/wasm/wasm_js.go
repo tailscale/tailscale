@@ -12,9 +12,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -99,6 +101,11 @@ func newIPN(jsConfig js.Value) map[string]any {
 		log.Fatalf("ipnserver.New: %v", err)
 	}
 	lb := srv.LocalBackend()
+
+	// Actual path does not matter, we're using an in-memory file system on the
+	// JS side.
+	lb.SetVarRoot("/")
+	ns.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{
 		dialer: dialer,
@@ -197,6 +204,32 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		}
 		if n.BrowseToURL != nil {
 			jsCallbacks.Call("notifyBrowseToURL", *n.BrowseToURL)
+		}
+		if n.IncomingFiles != nil {
+			jsFiles := mapSlice(n.IncomingFiles, func(f ipn.PartialFile) *jsFile {
+				if rc, size, err := i.lb.OpenFile(f.Name); err == nil {
+					defer rc.Close()
+					buf := make([]byte, size)
+					if _, err := io.ReadFull(rc, buf); err == nil {
+						return &jsFile{
+							Name: f.Name,
+							Size: size,
+							Data: base64.StdEncoding.EncodeToString(buf),
+						}
+					} else {
+						log.Printf("Could not read file %s: %v", f.Name, err)
+					}
+				} else {
+					log.Printf("Could not open file %s: %v", f.Name, err)
+				}
+				return nil
+			})
+			jsFiles = filterSlice(jsFiles, func(f *jsFile) bool { return f != nil })
+			if jsonFiles, err := json.Marshal(jsFiles); err == nil {
+				jsCallbacks.Call("notifyIncomingFiles", string(jsonFiles))
+			} else {
+				log.Printf("Could not generate JSON files: %v", err)
+			}
 		}
 	})
 
@@ -354,6 +387,12 @@ type jsNetMapPeerNode struct {
 
 type jsStateStore struct {
 	jsStateStorage js.Value
+}
+
+type jsFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Data string `json:"data"`
 }
 
 func (s *jsStateStore) ReadState(id ipn.StateKey) ([]byte, error) {

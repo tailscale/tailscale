@@ -4,14 +4,25 @@
 
 import "./wasm_exec"
 import wasmUrl from "./main.wasm"
-import { notifyState, notifyNetMap, notifyBrowseToURL } from "./notifier"
+import {
+  notifyState,
+  notifyNetMap,
+  notifyBrowseToURL,
+  notifyIncomingFiles,
+} from "./notifier"
 import { sessionStateStorage } from "./js-state-store"
+import { injectFS } from "./fs"
 
-const go = new window.Go()
-WebAssembly.instantiateStreaming(
-  fetch(`./dist/${wasmUrl}`),
-  go.importObject
-).then((result) => {
+async function main() {
+  // Inject in-memory filesystem (otherwise wasm_exec.js will use a stub that
+  // always returns errors).
+  await injectFS()
+
+  const go = new globalThis.Go()
+  const result = await WebAssembly.instantiateStreaming(
+    fetch(`./dist/${wasmUrl}`),
+    go.importObject
+  )
   go.run(result.instance)
   const ipn = newIPN({
     // Persist IPN state in sessionStorage in development, so that we don't need
@@ -22,5 +33,8 @@ WebAssembly.instantiateStreaming(
     notifyState: notifyState.bind(null, ipn),
     notifyNetMap: notifyNetMap.bind(null, ipn),
     notifyBrowseToURL: notifyBrowseToURL.bind(null, ipn),
+    notifyIncomingFiles: notifyIncomingFiles.bind(null, ipn),
   })
-})
+}
+
+main()

@@ -9,6 +9,7 @@ import {
   hideLogoutButton,
 } from "./login"
 import { showSSHPeers, hideSSHPeers } from "./ssh"
+import { handleFile } from "./files"
 
 /**
  * @fileoverview Notification callback functions (bridged from ipn.Notify)
@@ -72,4 +73,16 @@ export function notifyNetMap(ipn, netMapStr) {
 
 export function notifyBrowseToURL(ipn, url) {
   showLoginURL(url)
+}
+
+export function notifyIncomingFiles(ipn, filesStr) {
+  const files = JSON.parse(filesStr)
+
+  if (DEBUG) {
+    console.log("Files: " + JSON.stringify(files, null, 2))
+  }
+
+  for (const file of files) {
+    handleFile(file)
+  }
 }

@@ -89,3 +89,16 @@ button {
     min-height: 20px;
     background-color: #ffffff20;
 }
+
+.file {
+    margin: 12px;
+    padding: 8px;
+    border-radius: 8px;
+    box-shadow: 1px 1px 3px rgb(0 0 0 / 50%);
+}
+
+#files {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+}
