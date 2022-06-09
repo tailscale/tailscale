@@ -34,7 +34,7 @@ func TestDeps(t *testing.T) {
 	}
 	for _, dep := range res.Deps {
 		switch dep {
-		case "regexp", "regexp/syntax", "text/template", "html/template":
+		case "text/template", "html/template":
 			t.Errorf("package %q is not allowed as a dependency on iOS", dep)
 		}
 	}

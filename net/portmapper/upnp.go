@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !ios && !js
-// +build !ios,!js
-
-// (https://github.com/tailscale/tailscale/issues/2495)
+//go:build !js
+// +build !js
+// (no raw sockets in JS/WASM)
 
 package portmapper
 
