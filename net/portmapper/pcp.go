@@ -115,6 +115,9 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	if !ok {
 		return nil, fmt.Errorf("Invalid PCP common header")
 	}
+	if res.ResultCode == pcpCodeNotAuthorized {
+		return nil, fmt.Errorf("PCP is implemented but not enabled in the router")
+	}
 	if res.ResultCode != pcpCodeOK {
 		return nil, fmt.Errorf("PCP response not ok, code %d", res.ResultCode)
 	}
