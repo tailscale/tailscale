@@ -749,9 +749,16 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		// See https://github.com/tailscale/tailscale/issues/3197 for
 		// an example of a device that strictly implements UPnP, and
 		// only responds to multicast queries.
+		//
+		// Then we send a discovery packet looking for
+		// urn:schemas-upnp-org:device:InternetGatewayDevice:1 specifically, not
+		// just ssdp:all, because there appear to be devices which only send
+		// their first descriptor (like urn:schemas-wifialliance-org:device:WFADevice:1)
+		// in response to ssdp:all. https://github.com/tailscale/tailscale/issues/3557
 		metricUPnPSent.Add(1)
 		uc.WriteTo(uPnPPacket, upnpAddr)
 		uc.WriteTo(uPnPPacket, upnpMulticastAddr)
+		uc.WriteTo(uPnPIGDPacket, upnpMulticastAddr)
 	}
 
 	buf := make([]byte, 1500)
@@ -874,6 +881,15 @@ const (
 var uPnPPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
 	"HOST: 239.255.255.250:1900\r\n" +
 	"ST: ssdp:all\r\n" +
+	"MAN: \"ssdp:discover\"\r\n" +
+	"MX: 2\r\n\r\n")
+
+// Send a discovery frame for InternetGatewayDevice, since some devices respond
+// to ssdp:all with only their first descriptor (which is often not IGD).
+// https://github.com/tailscale/tailscale/issues/3557
+var uPnPIGDPacket = []byte("M-SEARCH * HTTP/1.1\r\n" +
+	"HOST: 239.255.255.250:1900\r\n" +
+	"ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n" +
 	"MAN: \"ssdp:discover\"\r\n" +
 	"MX: 2\r\n\r\n")
 
