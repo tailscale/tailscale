@@ -121,6 +121,12 @@ func runPing(ctx context.Context, args []string) error {
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				printf("ping %q timed out\n", ip)
+				if n == pingArgs.num {
+					if !anyPong {
+						return errors.New("no reply")
+					}
+					return nil
+				}
 				continue
 			}
 			return err
