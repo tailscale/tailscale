@@ -4,6 +4,7 @@
 
 //go:build !js
 // +build !js
+
 // (no raw sockets in JS/WASM)
 
 package portmapper
