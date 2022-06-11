@@ -35,6 +35,11 @@ const (
 <root xmlns="urn:schemas-upnp-org:device-1-0" configId="1337"><specVersion><major>1</major><minor>1</minor></specVersion><device><deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType><friendlyName>FreeBSD router</friendlyName><manufacturer>FreeBSD</manufacturer><manufacturerURL>http://www.freebsd.org/</manufacturerURL><modelDescription>FreeBSD router</modelDescription><modelName>FreeBSD router</modelName><modelNumber>2.5.0-RELEASE</modelNumber><modelURL>http://www.freebsd.org/</modelURL><serialNumber>BEE7052B</serialNumber><UDN>uuid:bee7052b-49e8-3597-b545-55a1e38ac11</UDN><serviceList><service><serviceType>urn:schemas-upnp-org:service:Layer3Forwarding:1</serviceType><serviceId>urn:upnp-org:serviceId:L3Forwarding1</serviceId><SCPDURL>/L3F.xml</SCPDURL><controlURL>/ctl/L3F</controlURL><eventSubURL>/evt/L3F</eventSubURL></service></serviceList><deviceList><device><deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType><friendlyName>WANDevice</friendlyName><manufacturer>MiniUPnP</manufacturer><manufacturerURL>http://miniupnp.free.fr/</manufacturerURL><modelDescription>WAN Device</modelDescription><modelName>WAN Device</modelName><modelNumber>20210205</modelNumber><modelURL>http://miniupnp.free.fr/</modelURL><serialNumber>BEE7052B</serialNumber><UDN>uuid:bee7052b-49e8-3597-b545-55a1e38ac12</UDN><UPC>000000000000</UPC><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1</serviceType><serviceId>urn:upnp-org:serviceId:WANCommonIFC1</serviceId><SCPDURL>/WANCfg.xml</SCPDURL><controlURL>/ctl/CmnIfCfg</controlURL><eventSubURL>/evt/CmnIfCfg</eventSubURL></service></serviceList><deviceList><device><deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType><friendlyName>WANConnectionDevice</friendlyName><manufacturer>MiniUPnP</manufacturer><manufacturerURL>http://miniupnp.free.fr/</manufacturerURL><modelDescription>MiniUPnP daemon</modelDescription><modelName>MiniUPnPd</modelName><modelNumber>20210205</modelNumber><modelURL>http://miniupnp.free.fr/</modelURL><serialNumber>BEE7052B</serialNumber><UDN>uuid:bee7052b-49e8-3597-b545-55a1e38ac13</UDN><UPC>000000000000</UPC><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId><SCPDURL>/WANIPCn.xml</SCPDURL><controlURL>/ctl/IPConn</controlURL><eventSubURL>/evt/IPConn</eventSubURL></service></serviceList></device></deviceList></device></deviceList><presentationURL>https://192.168.1.1/</presentationURL></device></root>`
 )
 
+// Sagemcom FAST3890V3, https://github.com/tailscale/tailscale/issues/3557
+const (
+	sagemcomUPnPDisco = "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=1800\r\nDATE: Tue, 14 Dec 2021 07:51:29 GMT\r\nEXT:\r\nLOCATION: http://192.168.0.1:49153/69692b70/gatedesc0b.xml\r\nOPT: \"http://schemas.upnp.org/upnp/1/0/\"; ns=01\r\n01-NLS: cabd6488-1dd1-11b2-9e52-a7461e1f098e\r\nSERVER: \r\nUser-Agent: redsonic\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\nUSN: uuid:75802409-bccb-40e7-8e6c-fa095ecce13e::urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n"
+)
+
 func TestParseUPnPDiscoResponse(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -50,6 +55,11 @@ func TestParseUPnPDiscoResponse(t *testing.T) {
 			Location: "http://192.168.1.1:2189/rootDesc.xml",
 			Server:   "FreeBSD/12.2-STABLE UPnP/1.1 MiniUPnPd/2.2.1",
 			USN:      "uuid:bee7052b-49e8-3597-b545-55a1e38ac11::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+		}},
+		{"sagemcom", sagemcomUPnPDisco, uPnPDiscoResponse{
+			Location: "http://192.168.0.1:49153/69692b70/gatedesc0b.xml",
+			Server:   "",
+			USN:      "uuid:75802409-bccb-40e7-8e6c-fa095ecce13e::urn:schemas-upnp-org:device:InternetGatewayDevice:1",
 		}},
 	}
 	for _, tt := range tests {
