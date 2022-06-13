@@ -494,7 +494,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			applyImplicitPrefs(newPrefs, tt.curPrefs, tt.curUser)
+			// applyImplicitPrefs(newPrefs, tt.curPrefs, tt.curUser)
 			var got string
 			if err := checkForAccidentalSettingReverts(newPrefs, tt.curPrefs, upCheckEnv{
 				goos:          goos,
@@ -779,6 +779,10 @@ func TestFlagAppliesToOS(t *testing.T) {
 }
 
 func TestUpdatePrefs(t *testing.T) {
+	os.Setenv("USER", "test_user")
+	t.Cleanup(func() {
+		os.Unsetenv("USER")
+	})
 	tests := []struct {
 		name     string
 		flags    []string // argv to be parsed into env.flagSet and env.upArgs
@@ -871,7 +875,10 @@ func TestUpdatePrefs(t *testing.T) {
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
 			},
-			env:            upCheckEnv{backendState: "Running"},
+			env: upCheckEnv{
+				backendState: "Running",
+				user:         os.Getenv("USER"),
+			},
 			wantSimpleUp:   true,
 			wantJustEditMP: &ipn.MaskedPrefs{WantRunningSet: true},
 			wantErrSubtr:   "can't change --login-server without --force-reauth",
@@ -886,34 +893,29 @@ func TestUpdatePrefs(t *testing.T) {
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
 			},
-			env: upCheckEnv{backendState: "Running"},
+			env: upCheckEnv{
+				backendState: "Running",
+				user:         os.Getenv("USER"),
+			},
 		},
 		{
 			name:  "operator_user_force_blank",
 			flags: []string{"--operator="},
 			curPrefs: &ipn.Prefs{
-				ControlURL:   ipn.DefaultControlURL,
-				Persist:      &persist.Persist{LoginName: "crawshaw.github"},
-				OperatorUser: os.Getenv("USER"),
+				ControlURL:       ipn.DefaultControlURL,
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				OperatorUser:     os.Getenv("USER"),
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
 			},
-			env: upCheckEnv{backendState: "Running"},
+			env: upCheckEnv{
+				backendState: "Running",
+				user:         os.Getenv("USER"),
+			},
 			wantJustEditMP: &ipn.MaskedPrefs{
-				AdvertiseRoutesSet:        true,
-				AdvertiseTagsSet:          true,
-				AllowSingleHostsSet:       true,
-				ControlURLSet:             true,
-				CorpDNSSet:                true,
-				ExitNodeAllowLANAccessSet: true,
-				ExitNodeIDSet:             true,
-				ExitNodeIPSet:             true,
-				HostnameSet:               true,
-				NetfilterModeSet:          true,
-				NoSNATSet:                 true,
-				OperatorUserSet:           true,
-				RouteAllSet:               true,
-				RunSSHSet:                 true,
-				ShieldsUpSet:              true,
-				WantRunningSet:            true,
+				WantRunningSet:  true,
+				OperatorUserSet: true,
 			},
 		},
 	}
@@ -943,112 +945,20 @@ func TestUpdatePrefs(t *testing.T) {
 			if simpleUp != tt.wantSimpleUp {
 				t.Fatalf("simpleUp=%v, want %v", simpleUp, tt.wantSimpleUp)
 			}
-			var oldEditPrefs ipn.Prefs
 			if justEditMP != nil {
-				oldEditPrefs = justEditMP.Prefs
 				if tt.wantOperatorChange {
 					if tt.curPrefs.OperatorUser == justEditMP.Prefs.OperatorUser {
-						t.Logf("current Operator User: %s, changes operator user: %s", tt.curPrefs.OperatorUser, justEditMP.OperatorUser)
+						t.Fatalf("current Operator User: %s, changes operator user: %s\n", tt.curPrefs.OperatorUser, justEditMP.OperatorUser)
 					}
 				}
 				justEditMP.Prefs = ipn.Prefs{} // uninteresting
 			}
 			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
-				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was %+v", oldEditPrefs)
-				t.Fatalf("justEditMP: %v\n\n: ", cmp.Diff(justEditMP, tt.wantJustEditMP, cmpIP))
+				t.Fatalf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was %+v\n", justEditMP)
 			}
 		})
 	}
 }
-
-// func TestOperatorEnv (t *testing.T){
-// 	tests := []struct {
-// 		name     string
-// 		flags    []string // argv to be parsed into env.flagSet and env.upArgs
-// 		curPrefs *ipn.Prefs
-// 		env      upCheckEnv // empty goos means "linux"
-
-// 		wantJustEditMP *ipn.MaskedPrefs
-// 		wantErrSubtr   string
-// 	}{
-// 		{
-// 			name:  "operator_user_ank",
-// 			flags: []string{"--operator="},
-// 			curPrefs: &ipn.Prefs{
-// 				ControlURL: ipn.DefaultControlURL,
-// 				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
-// 			},
-// 		},
-// 		{
-// 			name:  "operator_user_force_blank",
-// 			flags: []string{"--operator="},
-// 			curPrefs: &ipn.Prefs{
-// 				ControlURL: ipn.DefaultControlURL,
-// 				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
-// 			},
-// 		},
-// 		{
-// 			name:  "operator_user_reset",
-// 			flags: []string{"--reset"},
-// 			curPrefs: &ipn.Prefs{
-// 				ControlURL: ipn.DefaultControlURL,
-// 				Persist:    &persist.Persist{LoginName: "crawshaw.github"},
-// 			},
-// 			wantJustEditMP: &ipn.MaskedPrefs{
-// 				AdvertiseRoutesSet:        true,
-// 				AdvertiseTagsSet:          true,
-// 				AllowSingleHostsSet:       true,
-// 				ControlURLSet:             true,
-// 				CorpDNSSet:                true,
-// 				ExitNodeAllowLANAccessSet: true,
-// 				ExitNodeIDSet:             true,
-// 				ExitNodeIPSet:             true,
-// 				HostnameSet:               true,
-// 				NetfilterModeSet:          true,
-// 				NoSNATSet:                 true,
-// 				OperatorUserSet:           true,
-// 				RouteAllSet:               true,
-// 				RunSSHSet:                 true,
-// 				ShieldsUpSet:              true,
-// 				WantRunningSet:            true,
-// 			},
-// 		},
-// 	}
-// 	for _, tt := range tests {
-// 		t.Run(tt.name, func(t *testing.T) {
-// 			if tt.env.goos == "" {
-// 				tt.env.goos = "linux"
-// 			}
-// 			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
-// 			flags := CleanUpArgs(tt.flags)
-// 			tt.env.flagSet.Parse(flags)
-
-// 			newPrefs, err := prefsFromUpArgs(tt.env.upArgs, t.Logf, new(ipnstate.Status), tt.env.goos)
-// 			if err != nil {
-// 				t.Fatal(err)
-// 			}
-// 		_, justEditMP, err := updatePrefs(newPrefs, tt.curPrefs, tt.env)
-// 			if err != nil {
-// 				if tt.wantErrSubtr != "" {
-// 					if !strings.Contains(err.Error(), tt.wantErrSubtr) {
-// 						t.Fatalf("want error %q, got: %v", tt.wantErrSubtr, err)
-// 					}
-// 					return
-// 				}
-// 				t.Fatal(err)
-// 			}
-// 			var oldEditPrefs ipn.Prefs
-// 			if justEditMP != nil {
-// 				oldEditPrefs = justEditMP.Prefs
-// 				justEditMP.Prefs = ipn.Prefs{} // uninteresting
-// 			}
-// 			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
-// 				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was %+v", oldEditPrefs)
-// 				t.Fatalf("justEditMP: %v\n\n: ", cmp.Diff(justEditMP, tt.wantJustEditMP, cmpIP))
-// 			}
-// 		})
-// 	}
-// }
 
 var cmpIP = cmp.Comparer(func(a, b netaddr.IP) bool {
 	return a == b

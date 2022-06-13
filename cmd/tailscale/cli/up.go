@@ -362,8 +362,6 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 // without changing any settings.
 func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, justEditMP *ipn.MaskedPrefs, err error) {
 	if !env.upArgs.reset {
-		// applyImplicitPrefs(prefs, curPrefs, env.user)
-
 		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
 			return false, nil, err
 		}
@@ -818,8 +816,14 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 			// Issue 3176. Old prefs had 'RouteAll: true' on disk, so ignore that.
 			continue
 		}
+		if flagName == "operator" {
+			// Issue 3808 -- this is os.Getenv by default so always explicitly set.
+			continue
+		}
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
+
+	// this is the last non-error return
 	if len(missing) == 0 {
 		return nil
 	}
@@ -851,17 +855,6 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 	}
 	sb.WriteString("\n\n")
 	return errors.New(sb.String())
-}
-
-// applyImplicitPrefs mutates prefs to add implicit preferences. Currently
-// this is just the operator user, which only needs to be set if it doesn't
-// match the current user.
-//
-// curUser is os.getenv("user"). It's pulled out for testability.
-func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, curUser string) {
-	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == curUser {
-		prefs.OperatorUser = oldPrefs.OperatorUser
-	}
 }
 
 func flagAppliesToOS(flag, goos string) bool {
