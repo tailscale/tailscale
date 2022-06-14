@@ -888,13 +888,20 @@ type MapRequest struct {
 	// start-up before their first real endpoint update.
 	ReadOnly bool `json:",omitempty"`
 
-	// OmitPeers is whether the client is okay with the Peers list
-	// being omitted in the response. (For example, a client on
-	// start up using ReadOnly to get the DERP map.)
+	// OmitPeers is whether the client is okay with the Peers list being omitted
+	// in the response.
+	//
+	// The behavior of OmitPeers being true varies based on Stream and ReadOnly:
 	//
 	// If OmitPeers is true, Stream is false, and ReadOnly is false,
 	// then the server will let clients update their endpoints without
 	// breaking existing long-polling (Stream == true) connections.
+	// In this case, the server can omit the entire response; the client
+	// only checks the HTTP response status code.
+	//
+	// If OmitPeers is true, Stream is false, but ReadOnly is true,
+	// then all the response fields are included. (This is what the client does
+	// when initially fetching the DERP map.)
 	OmitPeers bool `json:",omitempty"`
 
 	// DebugFlags is a list of strings specifying debugging and
