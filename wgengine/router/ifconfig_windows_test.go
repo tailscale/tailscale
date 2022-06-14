@@ -164,11 +164,6 @@ func TestDeltaNets(t *testing.T) {
 			wantDel: nets("fe80::99d0:ec2d:b2e7:536b/64"),
 		},
 		{
-			a:       excludeIPv6LinkLocal(nets("100.84.36.11/32", "fe80::99d0:ec2d:b2e7:536b/64")),
-			b:       nets("100.84.36.11/32"),
-			wantDel: nets("fe80::99d0:ec2d:b2e7:536b/64"),
-		},
-		{
 			a: []*net.IPNet{
 				{
 					IP:   net.ParseIP("1.2.3.4"),
