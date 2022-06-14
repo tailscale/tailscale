@@ -14,17 +14,18 @@ TS_USERSPACE="${TS_USERSPACE:-true}"
 TS_STATE_DIR="${TS_STATE_DIR:-}"
 TS_ACCEPT_DNS="${TS_ACCEPT_DNS:-false}"
 TS_KUBE_SECRET="${TS_KUBE_SECRET:-tailscale}"
+TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS:-}"
 
 set -e
 
-TAILSCALED_ARGS="--socket=/tmp/tailscaled.sock"
+TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS} --socket=/tmp/tailscaled.sock"
 
 if [[ ! -z "${KUBERNETES_SERVICE_HOST}" ]]; then
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET}"
+  TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET}"
 elif [[ ! -z "${TS_STATE_DIR}" ]]; then
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --statedir=${TS_STATE_DIR}"
+  TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS} --statedir=${TS_STATE_DIR}"
 else
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=mem:"
+  TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS} --state=mem:"
 fi
 
 if [[ "${TS_USERSPACE}" == "true" ]]; then
@@ -32,7 +33,7 @@ if [[ "${TS_USERSPACE}" == "true" ]]; then
     echo "IP forwarding is not supported in userspace mode"
     exit 1
   fi
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --tun=userspace-networking"
+  TS_TAILSCALED_ARGS="${TS_TAILSCALED_ARGS} --tun=userspace-networking"
 else
   if [[ ! -d /dev/net ]]; then
     mkdir -p /dev/net
@@ -44,7 +45,7 @@ else
 fi
 
 echo "Starting tailscaled"
-tailscaled ${TAILSCALED_ARGS} &
+tailscaled ${TS_TAILSCALED_ARGS} &
 PID=$!
 
 UP_ARGS="--accept-dns=${TS_ACCEPT_DNS}"
