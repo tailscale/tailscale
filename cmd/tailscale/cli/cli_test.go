@@ -494,7 +494,6 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// applyImplicitPrefs(newPrefs, tt.curPrefs, tt.curUser)
 			var got string
 			if err := checkForAccidentalSettingReverts(newPrefs, tt.curPrefs, upCheckEnv{
 				goos:          goos,
