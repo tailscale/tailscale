@@ -6,6 +6,11 @@ ROUTES ?= ""
 SA_NAME ?= tailscale
 KUBE_SECRET ?= tailscale
 
+clean-rbac:
+	@sed -e "s;{{TS_KUBE_SECRET}};$(TS_KUBE_SECRET);g" role.yaml | kubectl delete -f - --ignore-not-found --grace-period=0
+	@sed -e "s;{{SA_NAME}};$(SA_NAME);g" rolebinding.yaml | kubectl delete -f - --ignore-not-found --grace-period=0
+	@sed -e "s;{{SA_NAME}};$(SA_NAME);g" sa.yaml | kubectl delete -f - --ignore-not-found --grace-period=0
+
 rbac:
 	@sed -e "s;{{TS_KUBE_SECRET}};$(TS_KUBE_SECRET);g" role.yaml | kubectl apply -f -
 	@sed -e "s;{{SA_NAME}};$(SA_NAME);g" rolebinding.yaml | kubectl apply -f -
