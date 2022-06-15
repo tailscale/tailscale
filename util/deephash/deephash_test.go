@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
+	"unsafe"
 
 	"go4.org/mem"
 	"inet.af/netaddr"
@@ -21,6 +23,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
+	"tailscale.com/types/structs"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -235,6 +238,41 @@ func getVal() []any {
 	}
 }
 
+func TestTypeIsRecursive(t *testing.T) {
+	type RecursiveStruct struct {
+		v *RecursiveStruct
+	}
+	type RecursiveChan chan *RecursiveChan
+
+	tests := []struct {
+		val  any
+		want bool
+	}{
+		{val: 42, want: false},
+		{val: "string", want: false},
+		{val: 1 + 2i, want: false},
+		{val: struct{}{}, want: false},
+		{val: (*RecursiveStruct)(nil), want: true},
+		{val: RecursiveStruct{}, want: true},
+		{val: time.Unix(0, 0), want: false},
+		{val: structs.Incomparable{}, want: false}, // ignore its [0]func()
+		{val: tailcfg.NetPortRange{}, want: false}, // uses structs.Incomparable
+		{val: (*tailcfg.Node)(nil), want: false},
+		{val: map[string]bool{}, want: false},
+		{val: func() {}, want: false},
+		{val: make(chan int), want: false},
+		{val: unsafe.Pointer(nil), want: false},
+		{val: make(RecursiveChan), want: true},
+		{val: make(chan int), want: false},
+	}
+	for _, tt := range tests {
+		got := typeIsRecursive(reflect.TypeOf(tt.val))
+		if got != tt.want {
+			t.Errorf("for type %T: got %v, want %v", tt.val, got, tt.want)
+		}
+	}
+}
+
 var sink = Hash("foo")
 
 func BenchmarkHash(b *testing.B) {
@@ -255,12 +293,14 @@ func TestHashMapAcyclic(t *testing.T) {
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
 
+	ti := getTypeInfo(reflect.TypeOf(m))
+
 	for i := 0; i < 20; i++ {
 		v := reflect.ValueOf(m)
 		buf.Reset()
 		bw.Reset(&buf)
 		h := &hasher{bw: bw}
-		h.hashMap(v)
+		h.hashMap(v, ti, false)
 		if got[string(buf.Bytes())] {
 			continue
 		}
@@ -279,7 +319,7 @@ func TestPrintArray(t *testing.T) {
 	var got bytes.Buffer
 	bw := bufio.NewWriter(&got)
 	h := &hasher{bw: bw}
-	h.hashValue(reflect.ValueOf(x))
+	h.hashValue(reflect.ValueOf(x), false)
 	bw.Flush()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
 	if got := got.Bytes(); string(got) != want {
@@ -297,13 +337,14 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
 	v := reflect.ValueOf(m)
+	ti := getTypeInfo(v.Type())
 
 	h := &hasher{bw: bw}
 
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		bw.Reset(&buf)
-		h.hashMap(v)
+		h.hashMap(v, ti, false)
 	}
 }
 
