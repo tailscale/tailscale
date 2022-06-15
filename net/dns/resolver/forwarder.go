@@ -518,6 +518,8 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 	return f.sendUDP(ctx, fq, rr)
 }
 
+var errServerFailure = errors.New("response code indicates server issue")
+
 func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
 	ipp, ok := rr.name.IPPort()
 	if !ok {
@@ -581,7 +583,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	if rcode == dns.RCodeServerFailure {
 		f.logf("recv: response code indicating server failure: %d", rcode)
 		metricDNSFwdUDPErrorServer.Add(1)
-		return nil, errors.New("response code indicates server issue")
+		return nil, errServerFailure
 	}
 
 	if truncated {
@@ -751,6 +753,20 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			numErr++
 			if numErr == len(resolvers) {
+				if firstErr == errServerFailure {
+					res, err := servfailResponse(query)
+					if err != nil {
+						f.logf("building servfail response: %v", err)
+						return firstErr
+					}
+
+					select {
+					case <-ctx.Done():
+						metricDNSFwdErrorContext.Add(1)
+						metricDNSFwdErrorContextGotError.Add(1)
+					case responseChan <- res:
+					}
+				}
 				return firstErr
 			}
 		case <-ctx.Done():
@@ -804,6 +820,27 @@ func nxDomainResponse(req packet) (res packet, err error) {
 	// TODO(bradfitz): should we add an SOA record in the Authority
 	// section too? (for the nxdomain negative caching TTL)
 	// For which zone? Does iOS care?
+	res.bs, err = b.Finish()
+	res.addr = req.addr
+	return res, err
+}
+
+// servfailResponse returns a SERVFAIL error reply for the provided request.
+func servfailResponse(req packet) (res packet, err error) {
+	p := dnsParserPool.Get().(*dnsParser)
+	defer dnsParserPool.Put(p)
+
+	if err := p.parseQuery(req.bs); err != nil {
+		return packet{}, err
+	}
+
+	h := p.Header
+	h.Response = true
+	h.Authoritative = true
+	h.RCode = dns.RCodeServerFailure
+	b := dns.NewBuilder(nil, h)
+	b.StartQuestions()
+	b.Question(p.Question)
 	res.bs, err = b.Finish()
 	res.addr = req.addr
 	return res, err

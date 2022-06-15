@@ -1417,3 +1417,45 @@ func TestUnARPA(t *testing.T) {
 		}
 	}
 }
+
+// TestServfail validates that a SERVFAIL error response is returned if
+// all upstream resolvers respond with SERVFAIL.
+//
+// See: https://github.com/tailscale/tailscale/issues/4722
+func TestServfail(t *testing.T) {
+	server := serveDNS(t, "127.0.0.1:0", "test.site.", miekdns.HandlerFunc(func(w miekdns.ResponseWriter, req *miekdns.Msg) {
+		m := new(miekdns.Msg)
+		m.Rcode = miekdns.RcodeServerFailure
+		w.WriteMsg(m)
+	}))
+	defer server.Shutdown()
+
+	r := newResolver(t)
+	defer r.Close()
+
+	cfg := dnsCfg
+	cfg.Routes = map[dnsname.FQDN][]*dnstype.Resolver{
+		".": {{Addr: server.PacketConn.LocalAddr().String()}},
+	}
+	r.SetConfig(cfg)
+
+	pkt, err := syncRespond(r, dnspacket("test.site.", dns.TypeA, noEdns))
+	if err != errServerFailure {
+		t.Errorf("err = %v, want %v", err, errServerFailure)
+	}
+
+	wantPkt := []byte{
+		0x00, 0x00, // transaction id: 0
+		0x84, 0x02, // flags: response, authoritative, error: servfail
+		0x00, 0x01, // one question
+		0x00, 0x00, // no answers
+		0x00, 0x00, 0x00, 0x00, // no authority or additional RRs
+		// Question:
+		0x04, 0x74, 0x65, 0x73, 0x74, 0x04, 0x73, 0x69, 0x74, 0x65, 0x00, // name
+		0x00, 0x01, 0x00, 0x01, // type A, class IN
+	}
+
+	if !bytes.Equal(pkt, wantPkt) {
+		t.Errorf("response was %X, want %X", pkt, wantPkt)
+	}
+}
