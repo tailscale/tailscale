@@ -784,6 +784,10 @@ func TestUpdatePrefs(t *testing.T) {
 		curPrefs *ipn.Prefs
 		env      upCheckEnv // empty goos means "linux"
 
+		// checkUpdatePrefsMutations, if non-nil, is run with the new prefs after
+		// updatePrefs might've mutated them (from applyImplicitPrefs).
+		checkUpdatePrefsMutations func(t *testing.T, newPrefs *ipn.Prefs)
+
 		wantSimpleUp   bool
 		wantJustEditMP *ipn.MaskedPrefs
 		wantErrSubtr   string
@@ -885,6 +889,28 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			env: upCheckEnv{backendState: "Running"},
 		},
+		{
+			// Issue 3808: explicitly empty --operator= should clear value.
+			name:  "explicit_empty_operator",
+			flags: []string{"--operator="},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				OperatorUser:     "somebody",
+			},
+			env: upCheckEnv{user: "somebody", backendState: "Running"},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				OperatorUserSet: true,
+				WantRunningSet:  true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, prefs *ipn.Prefs) {
+				if prefs.OperatorUser != "" {
+					t.Errorf("operator sent to backend should be empty; got %q", prefs.OperatorUser)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -908,6 +934,9 @@ func TestUpdatePrefs(t *testing.T) {
 					return
 				}
 				t.Fatal(err)
+			}
+			if tt.checkUpdatePrefsMutations != nil {
+				tt.checkUpdatePrefsMutations(t, newPrefs)
 			}
 			if simpleUp != tt.wantSimpleUp {
 				t.Fatalf("simpleUp=%v, want %v", simpleUp, tt.wantSimpleUp)
