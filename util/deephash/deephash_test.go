@@ -11,9 +11,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math"
+	"math/rand"
 	"reflect"
 	"runtime"
 	"testing"
+	"testing/quick"
 	"time"
 	"unsafe"
 
@@ -141,6 +143,40 @@ func TestIssue4868(t *testing.T) {
 	m2 := map[int]string{1: "bar"}
 	if Hash(m1) == Hash(m2) {
 		t.Error("bogus")
+	}
+}
+
+func TestIssue4871(t *testing.T) {
+	m1 := map[string]string{"": "", "x": "foo"}
+	m2 := map[string]string{}
+	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
+	}
+}
+
+func TestNilVsEmptymap(t *testing.T) {
+	m1 := map[string]string(nil)
+	m2 := map[string]string{}
+	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
+	}
+}
+
+func TestMapFraming(t *testing.T) {
+	m1 := map[string]string{"foo": "", "fo": "o"}
+	m2 := map[string]string{}
+	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
+	}
+}
+
+func TestQuick(t *testing.T) {
+	initSeed()
+	err := quick.Check(func(v, w map[string]string) bool {
+		return (Hash(v) == Hash(w)) == reflect.DeepEqual(v, w)
+	}, &quick.Config{MaxCount: 1000, Rand: rand.New(rand.NewSource(int64(seed)))})
+	if err != nil {
+		t.Fatalf("seed=%v, err=%v", seed, err)
 	}
 }
 
