@@ -98,9 +98,13 @@ func (s Sum) String() string {
 }
 
 var (
-	once sync.Once
-	seed uint64
+	seedOnce sync.Once
+	seed     uint64
 )
+
+func initSeed() {
+	seed = uint64(time.Now().UnixNano())
+}
 
 func (h *hasher) sum() (s Sum) {
 	h.bw.Flush()
@@ -121,9 +125,7 @@ func Hash(v any) (s Sum) {
 	h := hasherPool.Get().(*hasher)
 	defer hasherPool.Put(h)
 	h.reset()
-	once.Do(func() {
-		seed = uint64(time.Now().UnixNano())
-	})
+	seedOnce.Do(initSeed)
 	h.hashUint64(seed)
 	h.hashValue(reflect.ValueOf(v), false)
 	return h.sum()
@@ -425,9 +427,9 @@ func (h *hasher) hashValueWithType(v reflect.Value, ti *typeInfo, forceCycleChec
 }
 
 type mapHasher struct {
-	h    hasher
-	val  valueCache      // re-usable values for map iteration
-	iter reflect.MapIter // re-usable map iterator
+	h               hasher
+	valKey, valElem valueCache      // re-usable values for map iteration
+	iter            reflect.MapIter // re-usable map iterator
 }
 
 var mapHasherPool = &sync.Pool{
@@ -461,8 +463,12 @@ func (h *hasher) hashMap(v reflect.Value, ti *typeInfo, checkCycles bool) {
 	defer iter.Reset(reflect.Value{}) // avoid pinning v from mh.iter when we return
 
 	var sum Sum
-	k := mh.val.get(v.Type().Key())
-	e := mh.val.get(v.Type().Elem())
+	if v.IsNil() {
+		sum.sum[0] = 1 // something non-zero
+	}
+
+	k := mh.valKey.get(v.Type().Key())
+	e := mh.valElem.get(v.Type().Elem())
 	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
 	for iter.Next() {
 		k.SetIterKey(iter)
