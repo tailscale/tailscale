@@ -132,6 +132,15 @@ func TestDeepHash(t *testing.T) {
 	}
 }
 
+// Tests that we actually hash map elements. Whoops.
+func TestIssue4868(t *testing.T) {
+	m1 := map[int]string{1: "foo"}
+	m2 := map[int]string{1: "bar"}
+	if Hash(m1) == Hash(m2) {
+		t.Error("bogus")
+	}
+}
+
 func getVal() []any {
 	return []any{
 		&wgcfg.Config{

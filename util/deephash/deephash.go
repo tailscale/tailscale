@@ -342,7 +342,7 @@ func (h *hasher) hashMap(v reflect.Value) {
 		e.SetIterValue(iter)
 		mh.h.reset()
 		mh.h.hashValue(k)
-		mh.h.hashValue(v)
+		mh.h.hashValue(e)
 		sum.xor(mh.h.sum())
 	}
 	h.bw.Write(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
