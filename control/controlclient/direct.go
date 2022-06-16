@@ -242,7 +242,11 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	if hi.Equal(c.hostinfo) {
 		return false
 	}
-	c.hostinfo = hi.Clone()
+	hi = hi.Clone()
+	if c.hostinfo != nil && c.hostinfo.NetInfo != nil && hi.NetInfo == nil {
+		hi.NetInfo = c.hostinfo.NetInfo
+	}
+	c.hostinfo = hi
 	j, _ := json.Marshal(c.hostinfo)
 	c.logf("[v1] HostInfo: %s", j)
 	return true
