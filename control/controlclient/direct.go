@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"golang.org/x/sync/singleflight"
 	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
@@ -50,6 +49,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
+	"tailscale.com/util/singleflight"
 	"tailscale.com/util/systemd"
 	"tailscale.com/wgengine/monitor"
 )
@@ -77,7 +77,7 @@ type Direct struct {
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
 	serverNoiseKey key.MachinePublic
 
-	sfGroup     singleflight.Group // protects noiseClient creation.
+	sfGroup     singleflight.Group[struct{}, *noiseClient] // protects noiseClient creation.
 	noiseClient *noiseClient
 
 	persist       persist.Persist
@@ -1280,13 +1280,12 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	if nc != nil {
 		return nc, nil
 	}
-	np, err, _ := c.sfGroup.Do("noise", func() (any, error) {
+	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*noiseClient, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
 			return nil, err
 		}
-
-		nc, err = newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer)
+		nc, err := newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer)
 		if err != nil {
 			return nil, err
 		}
@@ -1298,7 +1297,7 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return np.(*noiseClient), nil
+	return nc, nil
 }
 
 // setDNSNoise sends the SetDNSRequest request to the control plane server over Noise,
