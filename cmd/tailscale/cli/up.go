@@ -404,7 +404,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	return simpleUp, justEditMP, nil
 }
 
-func runUp(ctx context.Context, args []string) error {
+func runUp(ctx context.Context, args []string) (retErr error) {
 	if len(args) > 0 {
 		fatalf("too many non-flag arguments: %q", args)
 	}
@@ -480,6 +480,12 @@ func runUp(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+
+	defer func() {
+		if retErr == nil {
+			checkSSHUpWarnings(ctx)
+		}
+	}()
 
 	simpleUp, justEditMP, err := updatePrefs(prefs, curPrefs, env)
 	if err != nil {
@@ -673,6 +679,28 @@ func runUp(ctx context.Context, args []string) error {
 		return err
 	case <-timeoutCh:
 		return errors.New(`timeout waiting for Tailscale service to enter a Running state; check health with "tailscale status"`)
+	}
+}
+
+func checkSSHUpWarnings(ctx context.Context) {
+	if !upArgs.runSSH {
+		return
+	}
+	st, err := localClient.Status(ctx)
+	if err != nil {
+		// Ignore. Don't spam more.
+		return
+	}
+	if len(st.Health) == 0 {
+		return
+	}
+	if len(st.Health) == 1 && strings.Contains(st.Health[0], "SSH") {
+		printf("%s\n", st.Health[0])
+		return
+	}
+	printf("# Health check:\n")
+	for _, m := range st.Health {
+		printf("    - %s\n", m)
 	}
 }
 
