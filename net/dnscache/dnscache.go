@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/util/singleflight"
 )
 
 var single = &Resolver{
@@ -81,10 +81,16 @@ type Resolver struct {
 	// It is required when SingleHostStaticResult is present.
 	SingleHost string
 
-	sf singleflight.Group
+	sf singleflight.Group[string, ipRes]
 
 	mu      sync.Mutex
 	ipCache map[string]ipCacheEntry
+}
+
+// ipRes is the type used by the Resolver.sf singleflight group.
+type ipRes struct {
+	ip, ip6 net.IP
+	allIPs  []net.IPAddr
 }
 
 type ipCacheEntry struct {
@@ -150,14 +156,10 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, al
 		return ip, ip6, allIPs, nil
 	}
 
-	type ipRes struct {
-		ip, ip6 net.IP
-		allIPs  []net.IPAddr
-	}
-	ch := r.sf.DoChan(host, func() (any, error) {
+	ch := r.sf.DoChan(host, func() (ret ipRes, _ error) {
 		ip, ip6, allIPs, err := r.lookupIP(host)
 		if err != nil {
-			return nil, err
+			return ret, err
 		}
 		return ipRes{ip, ip6, allIPs}, nil
 	})
@@ -177,7 +179,7 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, al
 			}
 			return nil, nil, nil, res.Err
 		}
-		r := res.Val.(ipRes)
+		r := res.Val
 		return r.ip, r.ip6, r.allIPs, nil
 	case <-ctx.Done():
 		if debug {
