@@ -416,6 +416,9 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 				s.Health = append(s.Health, err.Error())
 			}
 		}
+		if m := b.sshOnButUnusableHealthCheckMessageLocked(); m != "" {
+			s.Health = append(s.Health, m)
+		}
 		if b.netMap != nil {
 			s.CertDomains = append([]string(nil), b.netMap.DNS.CertDomains...)
 			s.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
@@ -1840,37 +1843,86 @@ func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
+	var errs []error
 	if p.Hostname == "badhostname.tailscale." {
 		// Keep this one just for testing.
-		return errors.New("bad hostname [test]")
+		errs = append(errs, errors.New("bad hostname [test]"))
 	}
-	if p.RunSSH {
-		switch runtime.GOOS {
-		case "linux":
-			if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
-				return errors.New("The Tailscale SSH server does not run on Synology.")
-			}
-			// otherwise okay
-		case "darwin":
-			// okay only in tailscaled mode for now.
-			if version.IsSandboxedMacOS() {
-				return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
-			}
-			if !envknob.UseWIPCode() {
-				return errors.New("The Tailscale SSH server is disabled on macOS tailscaled by default. To try, set env TAILSCALE_USE_WIP_CODE=1")
-			}
-		default:
-			return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
+	if err := b.checkSSHPrefsLocked(p); err != nil {
+		errs = append(errs, err)
+	}
+	return multierr.New(errs...)
+}
+
+func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
+	if !p.RunSSH {
+		return nil
+	}
+	switch runtime.GOOS {
+	case "linux":
+		if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
+			return errors.New("The Tailscale SSH server does not run on Synology.")
 		}
-		if !canSSH {
-			return errors.New("The Tailscale SSH server has been administratively disabled.")
+		// otherwise okay
+	case "darwin":
+		// okay only in tailscaled mode for now.
+		if version.IsSandboxedMacOS() {
+			return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
 		}
-		if b.netMap != nil && b.netMap.SSHPolicy == nil &&
-			envknob.SSHPolicyFile() == "" && !envknob.SSHIgnoreTailnetPolicy() {
-			return errors.New("Unable to enable local Tailscale SSH server; not enabled/configured on Tailnet.")
+		if !envknob.UseWIPCode() {
+			return errors.New("The Tailscale SSH server is disabled on macOS tailscaled by default. To try, set env TAILSCALE_USE_WIP_CODE=1")
+		}
+	default:
+		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
+	}
+	if !canSSH {
+		return errors.New("The Tailscale SSH server has been administratively disabled.")
+	}
+	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
+		return nil
+	}
+	if b.netMap != nil {
+		if !hasCapability(b.netMap, tailcfg.CapabilitySSH) {
+			if b.isDefaultServerLocked() {
+				return errors.New("Unable to enable local Tailscale SSH server; not enabled on Tailnet. See https://tailscale.com/s/ssh")
+			}
+			return errors.New("Unable to enable local Tailscale SSH server; not enabled on Tailnet.")
 		}
 	}
 	return nil
+}
+
+func (b *LocalBackend) sshOnButUnusableHealthCheckMessageLocked() (healthMessage string) {
+	if b.prefs == nil || !b.prefs.RunSSH {
+		return ""
+	}
+	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
+		return "development SSH policy in use"
+	}
+	nm := b.netMap
+	if nm == nil {
+		return ""
+	}
+	if nm.SSHPolicy != nil && len(nm.SSHPolicy.Rules) > 0 {
+		return ""
+	}
+	isDefault := b.isDefaultServerLocked()
+	isAdmin := hasCapability(nm, tailcfg.CapabilityAdmin)
+
+	if !isAdmin {
+		return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Ask your admin to update your tailnet's ACLs to allow access."
+	}
+	if !isDefault {
+		return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Update your tailnet's ACLs to allow access."
+	}
+	return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Update your tailnet's ACLs at https://tailscale.com/s/ssh-policy"
+}
+
+func (b *LocalBackend) isDefaultServerLocked() bool {
+	if b.prefs == nil {
+		return true // assume true until set otherwise
+	}
+	return b.prefs.ControlURLOrDefault() == ipn.DefaultControlURL
 }
 
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
