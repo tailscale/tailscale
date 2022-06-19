@@ -41,6 +41,8 @@ func (g *LoginGoal) sendLogoutError(err error) {
 	}
 }
 
+var _ Client = (*Auto)(nil)
+
 // Auto connects to a tailcontrol server for a node.
 // It's a concrete implementation of the Client interface.
 type Auto struct {
@@ -462,7 +464,7 @@ func (c *Auto) mapRoutine() {
 			c.mu.Unlock()
 			health.SetInPollNetMap(false)
 
-			err := c.direct.PollNetMap(ctx, -1, func(nm *netmap.NetworkMap) {
+			err := c.direct.PollNetMap(ctx, func(nm *netmap.NetworkMap) {
 				health.SetInPollNetMap(true)
 				c.mu.Lock()
 
