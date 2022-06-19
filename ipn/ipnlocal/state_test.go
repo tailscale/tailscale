@@ -258,9 +258,9 @@ func (cc *mockControl) SetNetInfo(ni *tailcfg.NetInfo) {
 	cc.called("SetNetInfo")
 }
 
-func (cc *mockControl) UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) {
+func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	// validate endpoint information here?
-	cc.logf("UpdateEndpoints: lp=%v ep=%v", localPort, endpoints)
+	cc.logf("UpdateEndpoints:  ep=%v", endpoints)
 	cc.called("UpdateEndpoints")
 }
 

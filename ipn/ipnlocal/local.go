@@ -796,7 +796,7 @@ func (b *LocalBackend) setWgengineStatus(s *wgengine.Status, err error) {
 
 	if cc != nil {
 		if needUpdateEndpoints {
-			cc.UpdateEndpoints(0, s.LocalAddrs)
+			cc.UpdateEndpoints(s.LocalAddrs)
 		}
 		b.stateMachine()
 	}
@@ -1070,7 +1070,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.mu.Unlock()
 
 	if endpoints != nil {
-		cc.UpdateEndpoints(0, endpoints)
+		cc.UpdateEndpoints(endpoints)
 	}
 
 	cc.SetStatusFunc(b.setClientStatus)
