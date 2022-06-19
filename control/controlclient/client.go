@@ -75,11 +75,10 @@ type Client interface {
 	SetNetInfo(*tailcfg.NetInfo)
 	// UpdateEndpoints changes the Endpoint structure that will be sent
 	// in subsequent node registration requests.
-	// The localPort field is unused except for integration tests in another repo.
 	// TODO: a server-side change would let us simply upload this
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
-	UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint)
+	UpdateEndpoints(endpoints []tailcfg.Endpoint)
 	// SetDNS sends the SetDNSRequest request to the control plane server,
 	// requesting a DNS record be created or updated.
 	SetDNS(context.Context, *tailcfg.SetDNSRequest) error

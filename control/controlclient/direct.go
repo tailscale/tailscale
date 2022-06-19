@@ -88,7 +88,6 @@ type Direct struct {
 	netinfo       *tailcfg.NetInfo
 	endpoints     []tailcfg.Endpoint
 	everEndpoints bool   // whether we've ever had non-empty endpoints
-	localPort     uint16 // or zero to mean auto
 	lastPingURL   string // last PingRequest.URL received, for dup suppression
 }
 
@@ -586,20 +585,19 @@ func sameEndpoints(a, b []tailcfg.Endpoint) bool {
 // whether they've changed.
 //
 // It does not retain the provided slice.
-func (c *Direct) newEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (changed bool) {
+func (c *Direct) newEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Nothing new?
-	if c.localPort == localPort && sameEndpoints(c.endpoints, endpoints) {
+	if sameEndpoints(c.endpoints, endpoints) {
 		return false // unchanged
 	}
 	var epStrs []string
 	for _, ep := range endpoints {
 		epStrs = append(epStrs, ep.Addr.String())
 	}
-	c.logf("[v2] client.newEndpoints(%v, %v)", localPort, epStrs)
-	c.localPort = localPort
+	c.logf("[v2] client.newEndpoints(%v)", epStrs)
 	c.endpoints = append(c.endpoints[:0], endpoints...)
 	if len(endpoints) > 0 {
 		c.everEndpoints = true
@@ -610,10 +608,10 @@ func (c *Direct) newEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (c
 // SetEndpoints updates the list of locally advertised endpoints.
 // It won't be replicated to the server until a *fresh* call to PollNetMap().
 // You don't need to restart PollNetMap if we return changed==false.
-func (c *Direct) SetEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) (changed bool) {
+func (c *Direct) SetEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	// (no log message on function entry, because it clutters the logs
 	//  if endpoints haven't changed. newEndpoints() will log it.)
-	return c.newEndpoints(localPort, endpoints)
+	return c.newEndpoints(endpoints)
 }
 
 func inTest() bool { return flag.Lookup("test.v") != nil }
@@ -666,7 +664,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	serverNoiseKey := c.serverNoiseKey
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
-	localPort := c.localPort
 	var epStrs []string
 	var epTypes []tailcfg.EndpointType
 	for _, ep := range c.endpoints {
@@ -692,7 +689,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	}
 
 	allowStream := maxPolls != 1
-	c.logf("[v1] PollNetMap: stream=%v :%v ep=%v", allowStream, localPort, epStrs)
+	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
 
 	vlogf := logger.Discard
 	if Debug.NetMap {
@@ -947,14 +944,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		if Debug.StripCaps {
 			nm.SelfNode.Capabilities = nil
 		}
-
-		// Get latest localPort. This might've changed if
-		// a lite map update occurred meanwhile. This only affects
-		// the end-to-end test.
-		// TODO(bradfitz): remove the NetworkMap.LocalPort field entirely.
-		c.mu.Lock()
-		nm.LocalPort = c.localPort
-		c.mu.Unlock()
 
 		// Occasionally print the netmap header.
 		// This is handy for debugging, and our logs processing

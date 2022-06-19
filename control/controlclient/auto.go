@@ -668,11 +668,8 @@ func (c *Auto) SetExpirySooner(ctx context.Context, expiry time.Time) error {
 // them to the control server if they've changed.
 //
 // It does not retain the provided slice.
-//
-// The localPort field is unused except for integration tests in
-// another repo.
-func (c *Auto) UpdateEndpoints(localPort uint16, endpoints []tailcfg.Endpoint) {
-	changed := c.direct.SetEndpoints(localPort, endpoints)
+func (c *Auto) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
+	changed := c.direct.SetEndpoints(endpoints)
 	if changed {
 		c.sendNewMapRequest()
 	}
