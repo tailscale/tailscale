@@ -114,10 +114,6 @@ func (cc *mockControl) logf(format string, args ...any) {
 	cc.logfActual(format, args...)
 }
 
-func (cc *mockControl) SetStatusFunc(fn func(controlclient.Status)) {
-	cc.statusFunc = fn
-}
-
 func (cc *mockControl) populateKeys() (newKeys bool) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
@@ -295,12 +291,15 @@ func TestStateMachine(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	cc := newMockControl(t)
-	t.Cleanup(func() { cc.preventLog.Set(true) }) // hacky way to pacify issue 3020
 	b, err := NewLocalBackend(logf, "logid", store, nil, e, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+
+	cc := newMockControl(t)
+	cc.statusFunc = b.setClientStatus
+	t.Cleanup(func() { cc.preventLog.Set(true) }) // hacky way to pacify issue 3020
+
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
 		cc.opts = opts

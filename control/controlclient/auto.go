@@ -6,6 +6,7 @@ package controlclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -46,17 +47,17 @@ var _ Client = (*Auto)(nil)
 // Auto connects to a tailcontrol server for a node.
 // It's a concrete implementation of the Client interface.
 type Auto struct {
-	direct   *Direct // our interface to the server APIs
-	timeNow  func() time.Time
-	logf     logger.Logf
-	expiry   *time.Time
-	closed   bool
-	newMapCh chan struct{} // readable when we must restart a map request
+	direct     *Direct // our interface to the server APIs
+	timeNow    func() time.Time
+	logf       logger.Logf
+	expiry     *time.Time
+	closed     bool
+	newMapCh   chan struct{} // readable when we must restart a map request
+	statusFunc func(Status)  // called to update Client status; always non-nil
 
 	unregisterHealthWatch func()
 
-	mu         sync.Mutex   // mutex guards the following fields
-	statusFunc func(Status) // called to update Client status
+	mu sync.Mutex // mutex guards the following fields
 
 	paused          bool // whether we should stop making HTTP requests
 	unpauseWaiters  []chan struct{}
@@ -92,6 +93,9 @@ func NewNoStart(opts Options) (*Auto, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Status == nil {
+		return nil, errors.New("missing required Options.Status")
+	}
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...any) {}
 	}
@@ -99,13 +103,14 @@ func NewNoStart(opts Options) (*Auto, error) {
 		opts.TimeNow = time.Now
 	}
 	c := &Auto{
-		direct:   direct,
-		timeNow:  opts.TimeNow,
-		logf:     opts.Logf,
-		newMapCh: make(chan struct{}, 1),
-		quit:     make(chan struct{}),
-		authDone: make(chan struct{}),
-		mapDone:  make(chan struct{}),
+		direct:     direct,
+		timeNow:    opts.TimeNow,
+		logf:       opts.Logf,
+		newMapCh:   make(chan struct{}, 1),
+		quit:       make(chan struct{}),
+		authDone:   make(chan struct{}),
+		mapDone:    make(chan struct{}),
+		statusFunc: opts.Status,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
@@ -533,13 +538,6 @@ func (c *Auto) AuthCantContinue() bool {
 	return !c.loggedIn && (c.loginGoal == nil || c.loginGoal.url != "")
 }
 
-// SetStatusFunc sets fn as the callback to run on any status change.
-func (c *Auto) SetStatusFunc(fn func(Status)) {
-	c.mu.Lock()
-	c.statusFunc = fn
-	c.mu.Unlock()
-}
-
 func (c *Auto) SetHostinfo(hi *tailcfg.Hostinfo) {
 	if hi == nil {
 		panic("nil Hostinfo")
@@ -567,10 +565,13 @@ func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
 
 func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
 	state := c.state
 	loggedIn := c.loggedIn
 	synced := c.synced
-	statusFunc := c.statusFunc
 	c.inSendStatus++
 	c.mu.Unlock()
 
@@ -601,9 +602,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		State:          state,
 		Err:            err,
 	}
-	if statusFunc != nil {
-		statusFunc(new)
-	}
+	c.statusFunc(new)
 
 	c.mu.Lock()
 	c.inSendStatus--
@@ -684,7 +683,6 @@ func (c *Auto) Shutdown() {
 	direct := c.direct
 	if !closed {
 		c.closed = true
-		c.statusFunc = nil
 	}
 	c.mu.Unlock()
 

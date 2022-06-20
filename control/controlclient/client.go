@@ -28,9 +28,6 @@ const (
 // Currently this is done through a pair of polling https requests in
 // the Auto client, but that might change eventually.
 type Client interface {
-	// SetStatusFunc provides a callback to call when control sends us
-	// a message.
-	SetStatusFunc(func(Status))
 	// Shutdown closes this session, which should not be used any further
 	// afterwards.
 	Shutdown()
