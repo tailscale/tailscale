@@ -1056,6 +1056,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
 		Dialer:               b.Dialer(),
+		Status:               b.setClientStatus,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -1075,7 +1076,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		cc.UpdateEndpoints(endpoints)
 	}
 
-	cc.SetStatusFunc(b.setClientStatus)
 	b.e.SetNetInfoCallback(b.setNetInfo)
 
 	b.mu.Lock()

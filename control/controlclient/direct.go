@@ -108,6 +108,9 @@ type Options struct {
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
 
+	// Status is called when there's a change in status.
+	Status func(Status)
+
 	// KeepSharerAndUserSplit controls whether the client
 	// understands Node.Sharer. If false, the Sharer is mapped to the User.
 	KeepSharerAndUserSplit bool
