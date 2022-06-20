@@ -11,7 +11,6 @@ package controlclient
 
 import (
 	"context"
-	"time"
 
 	"tailscale.com/tailcfg"
 )
@@ -43,9 +42,6 @@ type Client interface {
 	// Logout starts a synchronous logout process. It doesn't return
 	// until the logout operation has been completed.
 	Logout(context.Context) error
-	// SetExpirySooner sets the node's expiry time via the controlclient,
-	// as long as it's shorter than the current expiry time.
-	SetExpirySooner(context.Context, time.Time) error
 	// SetPaused pauses or unpauses the controlclient activity as much
 	// as possible, without losing its internal state, to minimize
 	// unnecessary network activity.
