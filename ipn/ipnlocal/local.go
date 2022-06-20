@@ -138,8 +138,9 @@ type LocalBackend struct {
 	sshServer      SSHServer    // or nil, initialized lazily.
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
-	stateKey       ipn.StateKey // computed in part from user-provided value
-	userID         string       // current controlling user ID (for Windows, primarily)
+	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
+	stateKey       ipn.StateKey        // computed in part from user-provided value
+	userID         string              // current controlling user ID (for Windows, primarily)
 	prefs          *ipn.Prefs
 	inServerMode   bool
 	machinePrivKey key.MachinePrivate
@@ -1066,6 +1067,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.mu.Lock()
 	b.cc = cc
+	b.ccAuto, _ = cc.(*controlclient.Auto)
 	endpoints := b.endpoints
 	b.mu.Unlock()
 
@@ -3199,7 +3201,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	}
 
 	b.mu.Lock()
-	cc := b.cc
+	cc := b.ccAuto
 	if prefs := b.prefs; prefs != nil {
 		req.NodeKey = prefs.Persist.PrivateNodeKey.Public()
 	}
@@ -3427,7 +3429,7 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 // Noise connection.
 func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	b.mu.Lock()
-	cc := b.cc
+	cc := b.ccAuto
 	b.mu.Unlock()
 	if cc == nil {
 		return nil, errors.New("no client")
