@@ -11,7 +11,6 @@ package controlclient
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -79,12 +78,6 @@ type Client interface {
 	// in a separate http request. It has nothing to do with the rest of
 	// the state machine.
 	UpdateEndpoints(endpoints []tailcfg.Endpoint)
-	// SetDNS sends the SetDNSRequest request to the control plane server,
-	// requesting a DNS record be created or updated.
-	SetDNS(context.Context, *tailcfg.SetDNSRequest) error
-	// DoNoiseRequest sends an HTTP request to the control plane
-	// over the Noise transport.
-	DoNoiseRequest(*http.Request) (*http.Response, error)
 }
 
 // UserVisibleError is an error that should be shown to users.
