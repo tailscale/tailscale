@@ -220,12 +220,6 @@ func (cc *mockControl) Logout(ctx context.Context) error {
 	return nil
 }
 
-func (cc *mockControl) SetExpirySooner(context.Context, time.Time) error {
-	cc.logf("SetExpirySooner")
-	cc.called("SetExpirySooner")
-	return nil
-}
-
 func (cc *mockControl) SetPaused(paused bool) {
 	cc.logf("SetPaused=%v", paused)
 	if paused {
