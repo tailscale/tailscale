@@ -1586,6 +1586,38 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	return nil
 }
 
+// ReportHealthChange reports to the control plane a change to this node's
+// health.
+func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
+	if sys == health.SysOverall {
+		// We don't report these. These include things like the network is down
+		// (in which case we can't report anyway) or the user wanted things
+		// stopped, as opposed to the more unexpected failure types in the other
+		// subsystems.
+		return
+	}
+	np, err := c.getNoiseClient()
+	if err != nil {
+		// Don't report errors to control if the server doesn't support noise.
+		return
+	}
+	req := &tailcfg.HealthChangeRequest{
+		Subsys: string(sys),
+	}
+	if sysErr != nil {
+		req.Error = sysErr.Error()
+	}
+
+	// Best effort, no logging:
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := np.post(ctx, "/machine/update-health", req)
+	if err != nil {
+		return
+	}
+	res.Body.Close()
+}
+
 var (
 	metricMapRequestsActive = clientmetric.NewGauge("controlclient_map_requests_active")
 

@@ -114,17 +114,9 @@ func NewNoStart(opts Options) (*Auto, error) {
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
-	c.unregisterHealthWatch = health.RegisterWatcher(c.onHealthChange)
+	c.unregisterHealthWatch = health.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
 
-}
-
-func (c *Auto) onHealthChange(sys health.Subsystem, err error) {
-	if sys == health.SysOverall {
-		return
-	}
-	c.logf("controlclient: restarting map request for %q health change to new state: %v", sys, err)
-	c.cancelMapSafely()
 }
 
 // SetPaused controls whether HTTP activity should be paused.

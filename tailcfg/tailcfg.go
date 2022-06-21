@@ -1684,6 +1684,13 @@ type SetDNSRequest struct {
 // SetDNSResponse is the response to a SetDNSRequest.
 type SetDNSResponse struct{}
 
+// HealthChangeRequest is the JSON request body type used to report
+// node health changes to https://<control>/machine/<mkey hex>/update-health.
+type HealthChangeRequest struct {
+	Subsys string // a health.Subsystem value in string form
+	Error  string // or empty if cleared
+}
+
 // SSHPolicy is the policy for how to handle incoming SSH connections
 // over Tailscale.
 type SSHPolicy struct {
