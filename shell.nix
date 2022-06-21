@@ -1,4 +1,3 @@
-# TODO(tom): Use system nixpkgs exclusively once 1.18 is in a stable release.
 # This is a shell.nix file used to describe the environment that tailscale needs
 # for development. This includes a lot of the basic tools that you need in order
 # to get started. We hope this file will be useful for users of Nix on macOS or
@@ -13,12 +12,11 @@
 
 {
 	pkgs ? import <nixpkgs> {},
-	nixosUnstable ? import (fetchTarball https://github.com/NixOS/nixpkgs/archive/refs/heads/nixpkgs-unstable.tar.gz) { },
 	tailscale-go-rev ? "710a0d861098c07540ad073bb73a42ce81bf54a8",
 	tailscale-go-sha ? "sha256-hnyddxiyqMFHGwV3I4wkBcYNd56schYFi0SL5/0PnMI=",
 }:
 let
-	tailscale-go = pkgs.lib.overrideDerivation nixosUnstable.go_1_18 (attrs: rec {
+	tailscale-go = pkgs.lib.overrideDerivation pkgs.go_1_18 (attrs: rec {
 		name = "tailscale-go-${version}";
 		version = tailscale-go-rev;
 		src = pkgs.fetchFromGitHub {
@@ -45,7 +43,7 @@ in
 	  #  - git, the version control program (used in some scripts)
 	  buildInputs = [
 	    pkgs.git
-	    nixosUnstable.gotools nixosUnstable.gopls
+	    pkgs.gotools pkgs.gopls
 	    tailscale-go
 	  ];
 	}
