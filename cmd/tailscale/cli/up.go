@@ -362,7 +362,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 // without changing any settings.
 func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, justEditMP *ipn.MaskedPrefs, err error) {
 	if !env.upArgs.reset {
-		applyImplicitPrefs(prefs, curPrefs, env.user)
+		applyImplicitPrefs(prefs, curPrefs, env)
 
 		if err := checkForAccidentalSettingReverts(prefs, curPrefs, env); err != nil {
 			return false, nil, err
@@ -881,13 +881,20 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 	return errors.New(sb.String())
 }
 
-// applyImplicitPrefs mutates prefs to add implicit preferences. Currently
-// this is just the operator user, which only needs to be set if it doesn't
+// applyImplicitPrefs mutates prefs to add implicit preferences for the user operator.
+// If the operator flag is passed no action is taken, otherwise this only needs to be set if it doesn't
 // match the current user.
 //
 // curUser is os.Getenv("USER"). It's pulled out for testability.
-func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, curUser string) {
-	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == curUser {
+func applyImplicitPrefs(prefs, oldPrefs *ipn.Prefs, env upCheckEnv) {
+	explicitOperator := false
+	env.flagSet.Visit(func(f *flag.Flag) {
+		if f.Name == "operator" {
+			explicitOperator = true
+		}
+	})
+
+	if prefs.OperatorUser == "" && oldPrefs.OperatorUser == env.user && !explicitOperator {
 		prefs.OperatorUser = oldPrefs.OperatorUser
 	}
 }
