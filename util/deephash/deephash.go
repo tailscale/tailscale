@@ -127,7 +127,18 @@ func Hash(v any) (s Sum) {
 	h.reset()
 	seedOnce.Do(initSeed)
 	h.hashUint64(seed)
-	h.hashValue(reflect.ValueOf(v), false)
+
+	rv := reflect.ValueOf(v)
+	if rv.IsValid() {
+		// Always treat the Hash input as an interface (it is), including hashing
+		// its type, otherwise two Hash calls of different types could hash to the
+		// same bytes off the different types and get equivalent Sum values. This is
+		// the same thing that we do for reflect.Kind Interface in hashValue, but
+		// the initial reflect.ValueOf from an interface value effectively strips
+		// the interface box off so we have to do it at the top level by hand.
+		h.hashType(rv.Type())
+		h.hashValue(rv, false)
+	}
 	return h.sum()
 }
 

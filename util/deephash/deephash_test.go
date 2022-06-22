@@ -61,6 +61,7 @@ func TestHash(t *testing.T) {
 	}
 	type MyBool bool
 	type MyHeader tar.Header
+	var zeroFloat64 float64
 	tests := []struct {
 		in     tuple
 		wantEq bool
@@ -102,6 +103,10 @@ func TestHash(t *testing.T) {
 		{in: tuple{iface{&MyHeader{}}, iface{&tar.Header{}}}, wantEq: false},
 		{in: tuple{iface{[]map[string]MyBool{}}, iface{[]map[string]MyBool{}}}, wantEq: true},
 		{in: tuple{iface{[]map[string]bool{}}, iface{[]map[string]MyBool{}}}, wantEq: false},
+		{in: tuple{zeroFloat64, -zeroFloat64}, wantEq: false}, // Issue 4883 (false alarm)
+		{in: tuple{[]any(nil), 0.0}, wantEq: false},           // Issue 4883
+		{in: tuple{[]any(nil), uint8(0)}, wantEq: false},      // Issue 4883
+		{in: tuple{nil, nil}, wantEq: true},                   // Issue 4883
 		{
 			in: func() tuple {
 				i1 := 1
@@ -117,7 +122,7 @@ func TestHash(t *testing.T) {
 	for _, tt := range tests {
 		gotEq := Hash(tt.in[0]) == Hash(tt.in[1])
 		if gotEq != tt.wantEq {
-			t.Errorf("(Hash(%v) == Hash(%v)) = %v, want %v", tt.in[0], tt.in[1], gotEq, tt.wantEq)
+			t.Errorf("(Hash(%T %v) == Hash(%T %v)) = %v, want %v", tt.in[0], tt.in[0], tt.in[1], tt.in[1], gotEq, tt.wantEq)
 		}
 	}
 }
