@@ -17,18 +17,27 @@ import (
 	"inet.af/netaddr"
 )
 
-// ACLRow defines a rule that grants access by a set of users or groups to a set of servers and ports.
+// ACLRow defines a rule that grants access by a set of users or groups to a set
+// of servers and ports.
+// Only one of Src/Dst or Users/Ports may be specified.
 type ACLRow struct {
 	Action string   `json:"action,omitempty"` // valid values: "accept"
-	Users  []string `json:"users,omitempty"`
-	Ports  []string `json:"ports,omitempty"`
+	Users  []string `json:"users,omitempty"`  // old name for src
+	Ports  []string `json:"ports,omitempty"`  // old name for dst
+	Src    []string `json:"src,omitempty"`
+	Dst    []string `json:"dst,omitempty"`
 }
 
-// ACLTest defines a test for your ACLs to prevent accidental exposure or revoking of access to key servers and ports.
+// ACLTest defines a test for your ACLs to prevent accidental exposure or
+// revoking of access to key servers and ports. Only one of Src or User may be
+// specified, and only one of Allow/Accept may be specified.
 type ACLTest struct {
-	User  string   `json:"user,omitempty"`  // source
-	Allow []string `json:"allow,omitempty"` // expected destination ip:port that user can access
-	Deny  []string `json:"deny,omitempty"`  // expected destination ip:port that user cannot access
+	Src    string   `json:"src,omitempty"`    // source
+	User   string   `json:"user,omitempty"`   // old name for source
+	Accept []string `json:"accept,omitempty"` // expected destination ip:port that user can access
+	Deny   []string `json:"deny,omitempty"`   // expected destination ip:port that user cannot access
+
+	Allow []string `json:"allow,omitempty"` // old name for accept
 }
 
 // ACLDetails contains all the details for an ACL.
