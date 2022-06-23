@@ -215,6 +215,11 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// configuration only, routing one set of things to the "split"
 	// resolver and the rest to the primary.
 
+	// Unconditionally disable dynamic DNS updates on our interfaces.
+	if err := m.disableDynamicUpdates(); err != nil {
+		m.logf("disableDynamicUpdates error: %v\n", err)
+	}
+
 	if len(cfg.MatchDomains) == 0 {
 		if err := m.setSplitDNS(nil, nil); err != nil {
 			return err
@@ -293,6 +298,29 @@ func (m windowsManager) SupportsSplitDNS() bool {
 
 func (m windowsManager) Close() error {
 	return m.SetDNS(OSConfig{})
+}
+
+// disableDynamicUpdates sets the appropriate registry values to prevent the
+// Windows DHCP client from sending dynamic DNS updates for our interface to
+// AD domain controllers.
+func (m windowsManager) disableDynamicUpdates() error {
+	setRegValue := func(regBase string) error {
+		key, err := m.openKey(m.ifPath(regBase))
+		if err != nil {
+			return err
+		}
+		defer key.Close()
+
+		return key.SetDWordValue("DisableDynamicUpdate", 1)
+	}
+
+	for _, regBase := range []string{ipv4RegBase, ipv6RegBase} {
+		if err := setRegValue(regBase); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (m windowsManager) GetBaseConfig() (OSConfig, error) {
