@@ -112,13 +112,12 @@ the entire Kubernetes cluster network (assuming NetworkPolicies allow) over Tail
    ```bash
    SERVICE_CIDR=10.20.0.0/16
    POD_CIDR=10.42.0.0/15
-   export TS_ROUTES=$SERVICE_CIDR,$POD_CIDR
    ```
 
 1. Deploy the subnet-router pod.
 
    ```bash
-   make subnet-router
+   make TS_ROUTES=$SERVICE_CIDR,$POD_CIDR subnet-router
    # If not using an auth key, authenticate by grabbing the Login URL here:
    kubectl logs subnet-router
    ```
