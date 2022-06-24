@@ -43,6 +43,9 @@ jobs:
         # TODO(raggi): add a go version here.
         key: ${{ runner.os }}-go-2-race-${{ hashFiles('**/go.sum') }}
 
+    - name: Print toolchain details
+      run: gcc -v
+
     - name: Test with -race flag
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
