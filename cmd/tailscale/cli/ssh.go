@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -63,7 +62,7 @@ func runSSH(ctx context.Context, args []string) error {
 		hostForSSH = v
 	}
 
-	ssh, err := exec.LookPath("ssh")
+	ssh, err := findSSH()
 	if err != nil {
 		// TODO(bradfitz): use Go's crypto/ssh client instead
 		// of failing. But for now:
