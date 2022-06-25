@@ -173,3 +173,7 @@ func maybeStartLoginSessionLinux(logf logger.Logf, ia incubatorArgs) (func() err
 	}
 	return nil, nil
 }
+
+func (ia *incubatorArgs) loginArgs() []string {
+	return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
+}
