@@ -180,6 +180,7 @@ var uint8Type = reflect.TypeOf(byte(0))
 // typeInfo describes properties of a type.
 type typeInfo struct {
 	rtype       reflect.Type
+	canMemHash  bool
 	isRecursive bool
 
 	// elemTypeInfo is the element type's typeInfo.
@@ -218,6 +219,7 @@ func getTypeInfoLocked(t reflect.Type, incomplete map[reflect.Type]*typeInfo) *t
 	ti := &typeInfo{
 		rtype:       t,
 		isRecursive: typeIsRecursive(t),
+		canMemHash:  canMemHash(t),
 	}
 	incomplete[t] = ti
 
@@ -309,6 +311,34 @@ func typeIsRecursive(t reflect.Type) bool {
 		return false
 	}
 	return visitType(t)
+}
+
+// canMemHash reports whether a slice of t can be hashed by looking at its
+// contiguous bytes in memory alone. (e.g. structs with gaps aren't memhashable)
+func canMemHash(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uintptr, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float64, reflect.Float32, reflect.Complex128, reflect.Complex64:
+		return true
+	case reflect.Array:
+		return canMemHash(t.Elem())
+	case reflect.Struct:
+		var sumFieldSize uintptr
+		for i, numField := 0, t.NumField(); i < numField; i++ {
+			sf := t.Field(i)
+			if !canMemHash(sf.Type) {
+				// Special case for 0-width fields that aren't at the end.
+				if sf.Type.Size() == 0 && i < numField-1 {
+					continue
+				}
+				return false
+			}
+			sumFieldSize += sf.Type.Size()
+		}
+		return sumFieldSize == t.Size() // else there are gaps
+	}
+	return false
 }
 
 func (h *hasher) hashValue(v reflect.Value, forceCycleChecking bool) {

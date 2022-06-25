@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"reflect"
@@ -308,6 +309,83 @@ func TestTypeIsRecursive(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got := typeIsRecursive(reflect.TypeOf(tt.val))
+		if got != tt.want {
+			t.Errorf("for type %T: got %v, want %v", tt.val, got, tt.want)
+		}
+	}
+}
+
+type IntThenByte struct {
+	i int
+	b byte
+}
+
+type TwoInts struct{ a, b int }
+
+type IntIntByteInt struct {
+	i1, i2 int32
+	b      byte // padding after
+	i3     int32
+}
+
+func TestCanMemHash(t *testing.T) {
+	tests := []struct {
+		val  any
+		want bool
+	}{
+		{true, true},
+		{uint(1), true},
+		{uint8(1), true},
+		{uint16(1), true},
+		{uint32(1), true},
+		{uint64(1), true},
+		{uintptr(1), true},
+		{int(1), true},
+		{int8(1), true},
+		{int16(1), true},
+		{int32(1), true},
+		{int64(1), true},
+		{float32(1), true},
+		{float64(1), true},
+		{complex64(1), true},
+		{complex128(1), true},
+		{[32]byte{}, true},
+		{func() {}, false},
+		{make(chan int), false},
+		{struct{ io.Writer }{nil}, false},
+		{unsafe.Pointer(nil), false},
+		{new(int), false},
+		{TwoInts{}, true},
+		{[4]TwoInts{}, true},
+		{IntThenByte{}, false},
+		{[4]IntThenByte{}, false},
+		{tailcfg.PortRange{}, true},
+		{int16(0), true},
+		{struct {
+			_ int
+			_ int
+		}{}, true},
+		{struct {
+			_ int
+			_ uint8
+			_ int
+		}{}, false}, // gap
+		{
+			struct {
+				_ structs.Incomparable // if not last, zero-width
+				x int
+			}{},
+			true,
+		},
+		{
+			struct {
+				x int
+				_ structs.Incomparable // zero-width last: has space, can't memhash
+			}{},
+			false,
+		}}
+	for _, tt := range tests {
+		got := canMemHash(reflect.TypeOf(tt.val))
 		if got != tt.want {
 			t.Errorf("for type %T: got %v, want %v", tt.val, got, tt.want)
 		}
