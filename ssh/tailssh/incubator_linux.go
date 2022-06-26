@@ -177,3 +177,7 @@ func maybeStartLoginSessionLinux(logf logger.Logf, ia incubatorArgs) (func() err
 func (ia *incubatorArgs) loginArgs() []string {
 	return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
 }
+
+func setGroups(groupIDs []int) error {
+	return syscall.Setgroups(groupIDs)
+}
