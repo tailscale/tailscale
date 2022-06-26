@@ -8,6 +8,10 @@ import (
 	"errors"
 )
 
+func findSSH() (string, error) {
+	return "", errors.New("Not implemented")
+}
+
 func execSSH(ssh string, argv []string) error {
 	return errors.New("Not implemented")
 }

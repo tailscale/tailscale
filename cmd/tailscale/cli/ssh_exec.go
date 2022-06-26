@@ -10,8 +10,13 @@ package cli
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"syscall"
 )
+
+func findSSH() (string, error) {
+	return exec.LookPath("ssh")
+}
 
 func execSSH(ssh string, argv []string) error {
 	if err := syscall.Exec(ssh, argv, os.Environ()); err != nil {
