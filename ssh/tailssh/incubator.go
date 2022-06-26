@@ -225,7 +225,8 @@ func beIncubator(args []string) error {
 		}
 		groupIDs = append(groupIDs, int(gid))
 	}
-	if err := syscall.Setgroups(groupIDs); err != nil {
+
+	if err := setGroups(groupIDs); err != nil {
 		return err
 	}
 	if egid := os.Getegid(); egid != ia.gid {
