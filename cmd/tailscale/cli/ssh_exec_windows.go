@@ -8,7 +8,20 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
+
+func findSSH() (string, error) {
+	// use C:\Windows\System32\OpenSSH\ssh.exe since unexpected behavior
+	// occured with ssh.exe provided by msys2/cygwin and other environments.
+	if systemRoot := os.Getenv("SystemRoot"); systemRoot != "" {
+		exe := filepath.Join(systemRoot, "System32", "OpenSSH", "ssh.exe")
+		if st, err := os.Stat(exe); err == nil && !st.IsDir() {
+			return exe, nil
+		}
+	}
+	return exec.LookPath("ssh")
+}
 
 func execSSH(ssh string, argv []string) error {
 	// Don't use syscall.Exec on Windows, it's not fully implemented.
