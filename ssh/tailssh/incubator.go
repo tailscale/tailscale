@@ -55,6 +55,12 @@ var maybeStartLoginSession = func(logf logger.Logf, ia incubatorArgs) (close fun
 	return nil, nil
 }
 
+// on some systems, we may be able to run the command with login easily
+// return true if is handled. err is ignored if false is returned.
+var maybeRunCommandWithLogin = func(logf logger.Logf, ia incubatorArgs) (bool, error) {
+	return false, nil
+}
+
 // newIncubatorCommand returns a new exec.Cmd configured with
 // `tailscaled be-child ssh` as the entrypoint.
 //
@@ -111,10 +117,9 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 	} else {
 		if isShell {
 			incubatorArgs = append(incubatorArgs, "--shell")
-			// Currently (2022-05-09) `login` is only used for shells
-			if lp, err := exec.LookPath("login"); err == nil {
-				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
-			}
+		}
+		if lp, err := exec.LookPath("login"); err == nil {
+			incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
 		}
 		incubatorArgs = append(incubatorArgs, "--cmd="+name)
 		if len(args) > 0 {
@@ -207,6 +212,13 @@ func beIncubator(args []string) error {
 		// instead. We can only do this if a TTY was requested, otherwise login
 		// exits immediately, which breaks things likes mosh and VSCode.
 		return unix.Exec(ia.loginCmdPath, ia.loginArgs(), os.Environ())
+	}
+
+	if runningAsRoot {
+		handled, err := maybeRunCommandWithLogin(logf, ia)
+		if handled {
+			return err
+		}
 	}
 
 	// Inform the system that we are about to log someone in.
