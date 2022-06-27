@@ -590,7 +590,7 @@ func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 
 	ss := c.newSSHSession(s)
 	ss.logf("handling new SSH connection from %v (%v) to ssh-user %q", c.info.uprof.LoginName, c.info.src.IP(), c.localUser.Username)
-	ss.logf("access granted to %v as ssh-user %q", c.info.uprof.LoginName, c.localUser.Name)
+	ss.logf("access granted to %v as ssh-user %q", c.info.uprof.LoginName, c.localUser.Username)
 	ss.run()
 }
 
