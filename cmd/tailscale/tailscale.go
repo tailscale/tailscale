@@ -17,7 +17,6 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	args = cli.CleanUpArgs(args)
 	if name, _ := os.Executable(); strings.HasSuffix(filepath.Base(name), ".cgi") {
 		args = []string{"web", "-cgi"}
 	}
