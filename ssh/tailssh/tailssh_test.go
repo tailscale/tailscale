@@ -179,7 +179,6 @@ func TestMatchRule(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &conn{
-				now:  time.Unix(200, 0),
 				info: tt.ci,
 			}
 			got, gotUser, err := c.matchRule(tt.rule, nil)
