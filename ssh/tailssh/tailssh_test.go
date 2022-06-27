@@ -238,9 +238,10 @@ func TestSSH(t *testing.T) {
 		node:    &tailcfg.Node{},
 		uprof:   &tailcfg.UserProfile{},
 	}
+	sc.finalAction = &tailcfg.SSHAction{Accept: true}
 
 	sc.Handler = func(s ssh.Session) {
-		sc.newSSHSession(s, &tailcfg.SSHAction{Accept: true}).run()
+		sc.newSSHSession(s).run()
 	}
 
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
