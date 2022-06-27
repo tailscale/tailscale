@@ -69,7 +69,7 @@ type server struct {
 }
 
 func (srv *server) now() time.Time {
-	if srv.timeNow != nil {
+	if srv != nil && srv.timeNow != nil {
 		return srv.timeNow()
 	}
 	return time.Now()
@@ -151,10 +151,6 @@ type conn struct {
 	*ssh.Server
 
 	insecureSkipTailscaleAuth bool // used by tests.
-
-	// now is the time to consider the present moment for the
-	// purposes of rule evaluation.
-	now time.Time
 
 	connID       string             // ID that's shared with control
 	action0      *tailcfg.SSHAction // first matching action
@@ -278,8 +274,9 @@ func (srv *server) newConn() (*conn, error) {
 		return nil, gossh.ErrDenied
 	}
 	srv.mu.Unlock()
-	c := &conn{srv: srv, now: srv.now()}
-	c.connID = fmt.Sprintf("conn-%s-%02x", c.now.UTC().Format("20060102T150405"), randBytes(5))
+	c := &conn{srv: srv}
+	now := srv.now()
+	c.connID = fmt.Sprintf("conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
 	c.Server = &ssh.Server{
 		Version:         "Tailscale",
 		Handler:         c.handleSessionPostSSHAuth,
@@ -751,7 +748,7 @@ func (ss *sshSession) vlogf(format string, args ...interface{}) {
 }
 
 func (c *conn) newSSHSession(s ssh.Session) *sshSession {
-	sharedID := fmt.Sprintf("sess-%s-%02x", c.now.UTC().Format("20060102T150405"), randBytes(5))
+	sharedID := fmt.Sprintf("sess-%s-%02x", c.srv.now().UTC().Format("20060102T150405"), randBytes(5))
 	c.logf("starting session: %v", sharedID)
 	return &sshSession{
 		Session:  s,
@@ -1087,7 +1084,7 @@ func (c *conn) ruleExpired(r *tailcfg.SSHRule) bool {
 	if r.RuleExpires == nil {
 		return false
 	}
-	return r.RuleExpires.Before(c.now)
+	return r.RuleExpires.Before(c.srv.now())
 }
 
 func (c *conn) evalSSHPolicy(pol *tailcfg.SSHPolicy, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, ok bool) {
