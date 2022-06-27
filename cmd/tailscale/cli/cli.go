@@ -129,6 +129,8 @@ var localClient tailscale.LocalClient
 
 // Run runs the CLI. The args do not include the binary name.
 func Run(args []string) (err error) {
+	args = CleanUpArgs(args)
+
 	if len(args) == 1 && (args[0] == "-V" || args[0] == "--version") {
 		args = []string{"version"}
 	}
