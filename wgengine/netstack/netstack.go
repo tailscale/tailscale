@@ -201,6 +201,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 
 func (ns *Impl) Close() error {
 	ns.ctxCancel()
+	ns.ipstack.Close()
 	return nil
 }
 
