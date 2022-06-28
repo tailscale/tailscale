@@ -74,6 +74,13 @@ type Server struct {
 	// as an Ephemeral node (https://tailscale.com/kb/1111/ephemeral-nodes/).
 	Ephemeral bool
 
+	// AuthKey, if non-empty, is the auth key to create the node
+	// and will be preferred over the TS_AUTHKEY environment
+	// variable. If the node is already created (from state
+	// previously stored in in Store), then this field is not
+	// used.
+	AuthKey string
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -149,6 +156,13 @@ func (s *Server) doInit() {
 	if err := s.start(); err != nil {
 		s.initErr = fmt.Errorf("tsnet: %w", err)
 	}
+}
+
+func (s *Server) getAuthKey() string {
+	if v := s.AuthKey; v != "" {
+		return v
+	}
+	return os.Getenv("TS_AUTHKEY")
 }
 
 func (s *Server) start() error {
@@ -292,7 +306,7 @@ func (s *Server) start() error {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
-	authKey := os.Getenv("TS_AUTHKEY")
+	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		StateKey:    ipn.GlobalDaemonStateKey,
 		UpdatePrefs: prefs,
@@ -306,7 +320,7 @@ func (s *Server) start() error {
 		logf("LocalBackend state is %v; running StartLoginInteractive...", st)
 		s.lb.StartLoginInteractive()
 	} else if authKey != "" {
-		logf("TS_AUTHKEY is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.", st)
+		logf("Authkey is set; but state is %v. Ignoring authkey. Re-run with TSNET_FORCE_LOGIN=1 to force use of authkey.", st)
 	}
 	go s.printAuthURLLoop()
 
