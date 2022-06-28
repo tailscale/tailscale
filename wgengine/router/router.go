@@ -7,6 +7,8 @@
 package router
 
 import (
+	"reflect"
+
 	"golang.zx2c4.com/wireguard/tun"
 	"inet.af/netaddr"
 	"tailscale.com/types/logger"
@@ -70,6 +72,16 @@ type Config struct {
 	SubnetRoutes     []netaddr.IPPrefix     // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
 	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
+}
+
+func (a *Config) Equal(b *Config) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // shutdownConfig is a routing configuration that removes all router
