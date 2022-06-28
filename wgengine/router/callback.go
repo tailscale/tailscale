@@ -13,7 +13,7 @@ import (
 // CallbackRouter is an implementation of both Router and dns.OSConfigurator.
 // When either network or DNS settings are changed, SetBoth is called with both configs.
 // Mainly used as a shim for OSes that want to set both network and
-// DNS configuration simultaneously (iOS, android).
+// DNS configuration simultaneously (Mac, iOS, Android).
 type CallbackRouter struct {
 	SetBoth  func(rcfg *Config, dcfg *dns.OSConfig) error
 	SplitDNS bool
@@ -39,6 +39,9 @@ func (r *CallbackRouter) Up() error {
 func (r *CallbackRouter) Set(rcfg *Config) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.rcfg.Equal(rcfg) {
+		return nil
+	}
 	r.rcfg = rcfg
 	return r.SetBoth(r.rcfg, r.dcfg)
 }
@@ -47,6 +50,9 @@ func (r *CallbackRouter) Set(rcfg *Config) error {
 func (r *CallbackRouter) SetDNS(dcfg dns.OSConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.dcfg != nil && r.dcfg.Equal(dcfg) {
+		return nil
+	}
 	r.dcfg = &dcfg
 	return r.SetBoth(r.rcfg, r.dcfg)
 }
