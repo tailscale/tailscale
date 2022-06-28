@@ -191,7 +191,7 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
-			arch)
+			arch|archarm)
 				OS="$ID"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
@@ -292,7 +292,8 @@ main() {
 			fi
 		;;
 		raspbian)
-			if [ "$VERSION" != "buster" ] && \
+			if [ "$VERSION" != "stretch" ] && \
+			   [ "$VERSION" != "buster" ] && \
 			   [ "$VERSION" != "bullseye" ]
 			then
 				OS_UNSUPPORTED=1
