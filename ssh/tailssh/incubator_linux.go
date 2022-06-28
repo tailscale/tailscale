@@ -17,6 +17,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"tailscale.com/types/logger"
+	"tailscale.com/version/distro"
 )
 
 func init() {
@@ -174,7 +175,20 @@ func maybeStartLoginSessionLinux(logf logger.Logf, ia incubatorArgs) (func() err
 	return nil, nil
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func (ia *incubatorArgs) loginArgs() []string {
+	if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
+		// See https://github.com/tailscale/tailscale/issues/4924
+		//
+		// Arch uses a different login binary that makes the -h flag set the PAM
+		// service to "remote". So if they don't have that configured, don't
+		// pass -h.
+		return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
+	}
 	return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
 }
 
