@@ -2175,7 +2175,6 @@ func (b *LocalBackend) authReconfig() {
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
 	disableSubnetsIfPAC := nm != nil && nm.Debug != nil && nm.Debug.DisableSubnetsIfPAC.EqualBool(true)
-	oneCGNATRoute := nm != nil && nm.Debug != nil && nm.Debug.OneCGNATRoute.EqualBool(true)
 	b.mu.Unlock()
 
 	if blocked {
@@ -2220,6 +2219,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
+	oneCGNATRoute := shouldUseOneCGNATRoute(nm, b.logf, version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
@@ -2230,6 +2230,38 @@ func (b *LocalBackend) authReconfig() {
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll, prefs.CorpDNS, flags, err)
 
 	b.initPeerAPIListener()
+}
+
+// shouldUseOneCGNATRoute reports whether we should prefer to make one big
+// CGNAT /10 route rather than a /32 per peer.
+//
+// The versionOS is a Tailscale-style version ("iOS", "macOS") and not
+// a runtime.GOOS.
+func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS string) bool {
+	// Explicit enabling or disabling always take precedence.
+	if nm.Debug != nil {
+		if v, ok := nm.Debug.OneCGNATRoute.Get(); ok {
+			logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
+			return v
+		}
+	}
+	// Also prefer to do this on the Mac, so that we don't need to constantly
+	// update the network extension configuration (which is disruptive to
+	// Chrome, see https://github.com/tailscale/tailscale/issues/3102). Only
+	// use fine-grained routes if another interfaces is also using the CGNAT
+	// IP range.
+	if versionOS == "macOS" {
+		hasCGNATInterface, err := interfaces.HasCGNATInterface()
+		if err != nil {
+			logf("shouldUseOneCGNATRoute: Could not determine if any interfaces use CGNAT: %v", err)
+			return false
+		}
+		logf("[v1] shouldUseOneCGNATRoute: macOS automatic=%v", !hasCGNATInterface)
+		if !hasCGNATInterface {
+			return true
+		}
+	}
+	return false
 }
 
 // dnsConfigForNetmap returns a *dns.Config for the given netmap,
