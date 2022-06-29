@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
 )
@@ -560,17 +561,38 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
+// gcpResolverFallback is the fallback resolver for Google Cloud.
+var gcpResolverFallback = []resolverAndDelay{{name: &dnstype.Resolver{Addr: cloudenv.GoogleMetadataAndDNSIP}}}
+
 // resolvers returns the resolvers to use for domain.
 func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	f.mu.Lock()
 	routes := f.routes
 	f.mu.Unlock()
+	var ret []resolverAndDelay
+	var matchedSuffix dnsname.FQDN
 	for _, route := range routes {
 		if route.Suffix == "." || route.Suffix.Contains(domain) {
-			return route.Resolvers
+			ret = route.Resolvers
+			matchedSuffix = route.Suffix
+			break
 		}
 	}
-	return nil
+
+	if len(ret) == 0 && cloudenv.Get() == cloudenv.GCP && (matchedSuffix == "" || matchedSuffix == ".") {
+		// If we're running on GCP where there's always a well-known IP of a
+		// recursive resolver, return that rather than having callers return
+		// errNoUpstreams. This fixes both normal 100.100.100.100 resolution
+		// when /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS
+		// stub resolver lookup.
+		//
+		// But we only do this if no route matched (matchedSuffix == "") or
+		// if we had no resolvers for the top-level route (matchedSuffix == ".").
+		// If they had an explicit empty route that we matched, don't do the auto
+		// fallback in that case.
+		ret = gcpResolverFallback
+	}
+	return ret
 }
 
 // forwardQuery is information and state about a forwarded DNS query that's

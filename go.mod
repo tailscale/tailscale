@@ -3,6 +3,7 @@ module tailscale.com
 go 1.18
 
 require (
+	cloud.google.com/go/compute v1.7.0
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
@@ -51,12 +52,12 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	golang.org/x/crypto v0.0.0-20220427172511-eb4f295cb31f
-	golang.org/x/net v0.0.0-20220516155154-20f960328961
-	golang.org/x/sync v0.0.0-20220513210516-0976fa681c29
-	golang.org/x/sys v0.0.0-20220513210249-45d2b4557a2a
+	golang.org/x/net v0.0.0-20220607020251-c690dde0001d
+	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
+	golang.org/x/sys v0.0.0-20220610221304-9f5ed59c137d
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
-	golang.org/x/tools v0.1.11-0.20220413170336-afc6aad76eb1
+	golang.org/x/tools v0.1.11
 	golang.zx2c4.com/wireguard v0.0.0-20220317000134-95b48cdb3961
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	gvisor.dev/gvisor v0.0.0-20220407223209-21871174d445
@@ -260,9 +261,8 @@ require (
 	go4.org/intern v0.0.0-20211027215823-ae77deb06f29 // indirect
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20220617031537-928513b29760 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
-	golang.org/x/mod v0.6.0-dev.0.20220106191415-9b9b3d81d5e3 // indirect
+	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
 	golang.org/x/text v0.3.7 // indirect
-	golang.org/x/xerrors v0.0.0-20220411194840-2f41105eb62f // indirect
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect
