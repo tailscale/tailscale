@@ -46,6 +46,14 @@ jobs:
     - name: Print toolchain details
       run: gcc -v
 
+    # There is currently an issue in the race detector in Go on Windows when
+    # used with a newer version of GCC.
+    # See https://github.com/tailscale/tailscale/issues/4926.
+    - name: Downgrade MinGW
+      shell: bash
+      run: |
+        choco install mingw --version 10.2.0 --allow-downgrade
+
     - name: Test with -race flag
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
