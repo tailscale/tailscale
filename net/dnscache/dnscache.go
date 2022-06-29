@@ -21,6 +21,7 @@ import (
 
 	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 )
 
@@ -105,6 +106,29 @@ func (r *Resolver) fwd() *net.Resolver {
 		return r.Forward
 	}
 	return net.DefaultResolver
+}
+
+// cloudHostResolver returns a Resolver for the current cloud hosting environment.
+// It currently only supports Google Cloud.
+func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
+	switch runtime.GOOS {
+	case "android", "ios", "darwin":
+		return nil, false
+	case "windows":
+		// TODO(bradfitz): remove this restriction once we're using Go 1.19
+		// which supports net.Resolver.PreferGo on Windows.
+		return nil, false
+	}
+	if cloudenv.Get() != cloudenv.GCP {
+		return nil, false
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, net.JoinHostPort(cloudenv.GoogleMetadataAndDNSIP, "53"))
+		},
+	}, true
 }
 
 func (r *Resolver) ttl() time.Duration {
@@ -235,6 +259,11 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, e
 	ctx, cancel := context.WithTimeout(context.Background(), r.lookupTimeoutForHost(host))
 	defer cancel()
 	ips, err := r.fwd().LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		if resolver, ok := r.cloudHostResolver(); ok {
+			ips, err = resolver.LookupIPAddr(ctx, host)
+		}
+	}
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
