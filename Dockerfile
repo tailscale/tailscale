@@ -39,6 +39,18 @@ WORKDIR /go/src/tailscale
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Pre-build some stuff before the following COPY line invalidates the Docker cache.
+RUN go install \
+    github.com/aws/aws-sdk-go-v2/aws \
+    github.com/aws/aws-sdk-go-v2/config \
+    gvisor.dev/gvisor/pkg/tcpip/adapters/gonet \
+    gvisor.dev/gvisor/pkg/tcpip/stack \
+    golang.org/x/crypto/ssh \
+    golang.org/x/crypto/acme \
+    nhooyr.io/websocket \
+    github.com/mdlayher/netlink \
+    golang.zx2c4.com/wireguard/device
+
 COPY . .
 
 # see build_docker.sh
@@ -56,5 +68,7 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
       -v ./cmd/tailscale ./cmd/tailscaled
 
-FROM ghcr.io/tailscale/alpine-base:3.14
+FROM alpine:3.16
+RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+
 COPY --from=build-env /go/bin/* /usr/local/bin/
