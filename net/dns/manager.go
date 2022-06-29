@@ -370,8 +370,8 @@ type dnsTCPSession struct {
 	conn    net.Conn
 	srcAddr netaddr.IPPort
 
-	readClosing  chan struct{}
-	responses    chan []byte // DNS replies pending writing
+	readClosing chan struct{}
+	responses   chan []byte // DNS replies pending writing
 
 	ctx      context.Context
 	closeCtx context.CancelFunc
@@ -457,11 +457,11 @@ func (s *dnsTCPSession) handleReads() {
 // servicing DNS requests sent down it.
 func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netaddr.IPPort) {
 	s := dnsTCPSession{
-		m:            m,
-		conn:         conn,
-		srcAddr:      srcAddr,
-		responses:    make(chan []byte),
-		readClosing:  make(chan struct{}),
+		m:           m,
+		conn:        conn,
+		srcAddr:     srcAddr,
+		responses:   make(chan []byte),
+		readClosing: make(chan struct{}),
 	}
 	s.ctx, s.closeCtx = context.WithCancel(m.ctx)
 	go s.handleReads()

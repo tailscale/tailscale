@@ -297,7 +297,11 @@ func (m windowsManager) SupportsSplitDNS() bool {
 }
 
 func (m windowsManager) Close() error {
-	return m.SetDNS(OSConfig{})
+	err := m.SetDNS(OSConfig{})
+	if m.nrptDB != nil {
+		m.nrptDB.Close()
+	}
+	return err
 }
 
 // disableDynamicUpdates sets the appropriate registry values to prevent the
