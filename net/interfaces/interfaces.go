@@ -720,3 +720,25 @@ func DefaultRouteInterface() (string, error) {
 func DefaultRoute() (DefaultRouteDetails, error) {
 	return defaultRoute()
 }
+
+// HasCGNATInterface reports whether there are any non-Tailscale interfaces that
+// use a CGNAT IP range.
+func HasCGNATInterface() (bool, error) {
+	hasCGNATInterface := false
+	cgnatRange := tsaddr.CGNATRange()
+	err := ForeachInterface(func(i Interface, pfxs []netaddr.IPPrefix) {
+		if hasCGNATInterface || !i.IsUp() || isTailscaleInterface(i.Name, pfxs) {
+			return
+		}
+		for _, pfx := range pfxs {
+			if cgnatRange.Overlaps(pfx) {
+				hasCGNATInterface = true
+				break
+			}
+		}
+	})
+	if err != nil {
+		return false, err
+	}
+	return hasCGNATInterface, nil
+}
