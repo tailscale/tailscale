@@ -6,6 +6,7 @@
 package cloudenv
 
 import (
+	"flag"
 	"os"
 	"runtime"
 	"strings"
@@ -77,9 +78,13 @@ func getCloud() Cloud {
 			return AWS
 		}
 	}
-	if gcpmetadata.OnGCE() {
+	// gcpmetadata.OnGCE leaks goroutines, avoid calling it in tests (which
+	// never run on GCP).
+	if !inTest() && gcpmetadata.OnGCE() {
 		return GCP
 	}
 	// TODO: more, as needed.
 	return ""
 }
+
+func inTest() bool { return flag.Lookup("test.v") != nil }
