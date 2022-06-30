@@ -48,7 +48,6 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
-	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/multierr"
@@ -2222,7 +2221,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
-	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS(), cloudenv.Get())
+	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
 	if err == wgengine.ErrNoChanges {
@@ -2238,7 +2237,7 @@ func (b *LocalBackend) authReconfig() {
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf, versionOS string, cloud cloudenv.Cloud) *dns.Config {
+func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf, versionOS string) *dns.Config {
 	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
@@ -2324,18 +2323,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	if nm.DNS.Proxied { // actually means "enable MagicDNS"
 		for _, dom := range magicDNSRootDomains(nm) {
 			dcfg.Routes[dom] = nil // resolve internally with dcfg.Hosts
-		}
-	}
-
-	// If we're running on Google Cloud Platform, add a DNS route for its
-	// *.internal DNS names to its metadata DNS IP, unless the tailnet already
-	// defines one. This is especially important on their standard VM images
-	// that don't included systemd-resolved, so we were effectively breaking
-	// their *.internal DNS names previously when the tailnet had explicit DNS
-	// servers set ("override local DNS" checked).
-	if cloud == cloudenv.GCP {
-		if _, ok := dcfg.Routes["internal."]; !ok {
-			dcfg.Routes["internal."] = []*dnstype.Resolver{{Addr: cloudenv.GoogleMetadataAndDNSIP}}
 		}
 	}
 
