@@ -321,6 +321,7 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	STUNOnly         bool
 	DERPPort         int
 	InsecureForTests bool
+	HTTPForTests     bool
 	STUNTestIP       string
 }{})
 

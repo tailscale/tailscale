@@ -178,7 +178,10 @@ func (c *Client) targetString(reg *tailcfg.DERPRegion) string {
 	return fmt.Sprintf("region %d (%v)", reg.RegionID, reg.RegionCode)
 }
 
-func (c *Client) useHTTPS() bool {
+func (c *Client) useHTTPS(node *tailcfg.DERPNode) bool {
+	if node.HTTPForTests {
+		return false
+	}
 	if c.url != nil && c.url.Scheme == "http" {
 		return false
 	}
@@ -364,7 +367,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	var serverPub key.NodePublic // or zero if unknown (if not using TLS or TLS middlebox eats it)
 	var serverProtoVersion int
 	var tlsState *tls.ConnectionState
-	if c.useHTTPS() {
+	if c.useHTTPS(node) {
 		tlsConn := c.tlsClient(tcpConn, node)
 		httpConn = tlsConn
 

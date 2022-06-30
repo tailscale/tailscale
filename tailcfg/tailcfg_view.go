@@ -743,6 +743,7 @@ func (v DERPNodeView) STUNPort() int          { return v.ж.STUNPort }
 func (v DERPNodeView) STUNOnly() bool         { return v.ж.STUNOnly }
 func (v DERPNodeView) DERPPort() int          { return v.ж.DERPPort }
 func (v DERPNodeView) InsecureForTests() bool { return v.ж.InsecureForTests }
+func (v DERPNodeView) HTTPForTests() bool     { return v.ж.HTTPForTests}
 func (v DERPNodeView) STUNTestIP() string     { return v.ж.STUNTestIP }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -757,5 +758,6 @@ var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
 	STUNOnly         bool
 	DERPPort         int
 	InsecureForTests bool
+	HTTPForTests     bool
 	STUNTestIP       string
 }{})
