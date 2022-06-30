@@ -18,6 +18,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
@@ -38,6 +39,7 @@ func New() *tailcfg.Hostinfo {
 		Package:     packageTypeCached(),
 		GoArch:      runtime.GOARCH,
 		DeviceModel: deviceModel(),
+		Cloud:       string(cloudenv.Get()),
 	}
 }
 

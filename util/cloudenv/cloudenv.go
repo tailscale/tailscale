@@ -6,13 +6,22 @@
 package cloudenv
 
 import (
+	"context"
+	"encoding/json"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
-
-	gcpmetadata "cloud.google.com/go/compute/metadata"
+	"time"
 )
+
+// CommonNonRoutableMetadataIP is the IP address of the metadata server
+// on Amazon EC2, Google Compute Engine, and Azure. It's not routable.
+// (169.254.0.0/16 is a Link Local range: RFC 3927)
+const CommonNonRoutableMetadataIP = "169.254.169.254"
 
 // GoogleMetadataAndDNSIP is the metadata IP used by Google Cloud.
 // It's also the *.internal DNS server, and proxies to 8.8.8.8.
@@ -22,13 +31,18 @@ const GoogleMetadataAndDNSIP = "169.254.169.254"
 // See https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html
 const AWSResolverIP = "169.254.169.253"
 
+// AzureResolverIP is Azure's DNS resolver IP.
+// See https://docs.microsoft.com/en-us/azure/virtual-network/what-is-ip-address-168-63-129-16
+const AzureResolverIP = "168.63.129.16"
+
 // Cloud is a recognize cloud environment with properties that
 // Tailscale can specialize for in places.
 type Cloud string
 
 const (
-	GCP = Cloud("gcp") // Google Cloud
-	AWS = Cloud("aws") // Amazon Web Services (EC2 in particular)
+	AWS   = Cloud("aws")   // Amazon Web Services (EC2 in particular)
+	Azure = Cloud("azure") // Microsoft Azure
+	GCP   = Cloud("gcp")   // Google Cloud
 )
 
 // ResolverIP returns the cloud host's recursive DNS server or the
@@ -39,6 +53,8 @@ func (c Cloud) ResolverIP() string {
 		return GoogleMetadataAndDNSIP
 	case AWS:
 		return AWSResolverIP
+	case Azure:
+		return AzureResolverIP
 	}
 	return ""
 }
@@ -66,20 +82,103 @@ func Get() Cloud {
 	return c
 }
 
+func readFileTrimmed(name string) string {
+	v, _ := os.ReadFile(name)
+	return strings.TrimSpace(string(v))
+}
+
 func getCloud() Cloud {
-	// TODO(bradfitz): also detect AWS on Windows, etc. Just try to hit the metadata server
-	// and see if it's there? But it might be turned off. Do some small-timeout DNS request
-	// to 169.254.169.253 and see if it replies? But which DNS request?
-	if runtime.GOOS == "linux" {
-		biosVendorB, _ := os.ReadFile("/sys/class/dmi/id/bios_vendor")
-		biosVendor := strings.TrimSpace(string(biosVendorB))
+	var hitMetadata bool
+	switch runtime.GOOS {
+	case "android", "ios", "darwin":
+		// Assume these aren't running on a cloud.
+		return ""
+	case "linux":
+		biosVendor := readFileTrimmed("/sys/class/dmi/id/bios_vendor")
 		if biosVendor == "Amazon EC2" || strings.HasSuffix(biosVendor, ".amazon") {
 			return AWS
 		}
+
+		prod := readFileTrimmed("/sys/class/dmi/id/product_name")
+		if prod == "Google Compute Engine" {
+			return GCP
+		}
+		if prod == "Google" { // old GCP VMs, it seems
+			hitMetadata = true
+		}
+		if prod == "Virtual Machine" || biosVendor == "Microsoft Corporation" {
+			// Azure, or maybe all Hyper-V?
+			hitMetadata = true
+		}
+	default:
+		// TODO(bradfitz): use Win32_SystemEnclosure from WMI or something on
+		// Windows to see if it's a physical machine and skip the cloud check
+		// early. Otherwise use similar clues as Linux about whether we should
+		// burn up to 2 seconds waiting for a metadata server that might not be
+		// there. And for BSDs, look where the /sys stuff is.
+		return ""
 	}
-	if gcpmetadata.OnGCE() {
+	if !hitMetadata {
+		return ""
+	}
+
+	const maxWait = 2 * time.Second
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+		Dial: (&net.Dialer{
+			Timeout: maxWait,
+		}).Dial,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), maxWait)
+	defer cancel()
+
+	// We want to hit CommonNonRoutableMetadataIP to see if we're on AWS, GCP,
+	// or Azure. All three (and many others) use the same metadata IP.
+	//
+	// But to avoid triggering the AWS CloudWatch "MetadataNoToken" metric (for which
+	// there might be an alert registered?), make our initial request be a token
+	// request. This only works on AWS, but the failing HTTP response on other clouds gives
+	// us enough clues about which cloud we're on.
+	req, err := http.NewRequestWithContext(ctx, "PUT", "http://"+CommonNonRoutableMetadataIP+"/latest/api/token", strings.NewReader(""))
+	if err != nil {
+		log.Printf("cloudenv: [unexpected] error creating request: %v", err)
+		return ""
+	}
+	req.Header.Set("X-Aws-Ec2-Metadata-Token-Ttl-Seconds", "5")
+
+	res, err := tr.RoundTrip(req)
+	if err != nil {
+		return ""
+	}
+	res.Body.Close()
+	if res.Header.Get("Metadata-Flavor") == "Google" {
 		return GCP
 	}
+	server := res.Header.Get("Server")
+	if server == "EC2ws" {
+		return AWS
+	}
+	if strings.HasPrefix(server, "Microsoft") {
+		// e.g. "Microsoft-IIS/10.0"
+		req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+CommonNonRoutableMetadataIP+"/metadata/instance/compute?api-version=2021-02-01", nil)
+		req.Header.Set("Metadata", "true")
+		res, err := tr.RoundTrip(req)
+		if err != nil {
+			return ""
+		}
+		defer res.Body.Close()
+		var meta struct {
+			AzEnvironment string `json:"azEnvironment"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+			return ""
+		}
+		if strings.HasPrefix(meta.AzEnvironment, "Azure") {
+			return Azure
+		}
+		return ""
+	}
+
 	// TODO: more, as needed.
 	return ""
 }

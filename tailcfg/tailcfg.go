@@ -470,6 +470,7 @@ type Hostinfo struct {
 	Services      []Service          `json:",omitempty"` // services advertised by this machine
 	NetInfo       *NetInfo           `json:",omitempty"`
 	SSH_HostKeys  []string           `json:"sshHostKeys,omitempty"` // if advertised
+	Cloud         string             `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.

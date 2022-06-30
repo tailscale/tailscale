@@ -3,7 +3,6 @@ module tailscale.com
 go 1.18
 
 require (
-	cloud.google.com/go/compute v1.7.0
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
