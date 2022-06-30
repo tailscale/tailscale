@@ -119,14 +119,15 @@ func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
 		// which supports net.Resolver.PreferGo on Windows.
 		return nil, false
 	}
-	if cloudenv.Get() != cloudenv.GCP {
+	ip := cloudenv.Get().ResolverIP()
+	if ip == "" {
 		return nil, false
 	}
 	return &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(cloudenv.GoogleMetadataAndDNSIP, "53"))
+			return d.DialContext(ctx, network, net.JoinHostPort(ip, "53"))
 		},
 	}, true
 }

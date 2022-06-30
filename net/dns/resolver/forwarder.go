@@ -198,6 +198,16 @@ type forwarder struct {
 	// routes are per-suffix resolvers to use, with
 	// the most specific routes first.
 	routes []route
+	// cloudHostFallback are last resort resolvers to use if no per-suffix
+	// resolver matches. These are only populated on cloud hosts where the
+	// platform provides a well-known recursive resolver.
+	//
+	// That is, if we're running on GCP or AWS where there's always a well-known
+	// IP of a recursive resolver, return that rather than having callers return
+	// errNoUpstreams. This fixes both normal 100.100.100.100 resolution when
+	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
+	// resolver lookup.
+	cloudHostFallback []resolverAndDelay
 }
 
 func init() {
@@ -297,18 +307,52 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 	return rr
 }
 
+var (
+	cloudResolversOnce sync.Once
+	cloudResolversLazy []resolverAndDelay
+)
+
+func cloudResolvers() []resolverAndDelay {
+	cloudResolversOnce.Do(func() {
+		if ip := cloudenv.Get().ResolverIP(); ip != "" {
+			cloudResolver := []*dnstype.Resolver{{Addr: ip}}
+			cloudResolversLazy = resolversWithDelays(cloudResolver)
+		}
+	})
+	return cloudResolversLazy
+}
+
 // setRoutes sets the routes to use for DNS forwarding. It's called by
 // Resolver.SetConfig on reconfig.
 //
 // The memory referenced by routesBySuffix should not be modified.
 func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolver) {
 	routes := make([]route, 0, len(routesBySuffix))
+
+	cloudHostFallback := cloudResolvers()
 	for suffix, rs := range routesBySuffix {
-		routes = append(routes, route{
-			Suffix:    suffix,
-			Resolvers: resolversWithDelays(rs),
-		})
+		if suffix == "." && len(rs) == 0 && len(cloudHostFallback) > 0 {
+			routes = append(routes, route{
+				Suffix:    suffix,
+				Resolvers: cloudHostFallback,
+			})
+		} else {
+			routes = append(routes, route{
+				Suffix:    suffix,
+				Resolvers: resolversWithDelays(rs),
+			})
+		}
 	}
+
+	if cloudenv.Get().HasInternalTLD() && len(cloudHostFallback) > 0 {
+		if _, ok := routesBySuffix["internal."]; !ok {
+			routes = append(routes, route{
+				Suffix:    "internal.",
+				Resolvers: cloudHostFallback,
+			})
+		}
+	}
+
 	// Sort from longest prefix to shortest.
 	sort.Slice(routes, func(i, j int) bool {
 		return routes[i].Suffix.NumLabels() > routes[j].Suffix.NumLabels()
@@ -317,6 +361,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.routes = routes
+	f.cloudHostFallback = cloudHostFallback
 }
 
 var stdNetPacketListener packetListener = new(net.ListenConfig)
@@ -561,38 +606,18 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	return out, nil
 }
 
-// gcpResolverFallback is the fallback resolver for Google Cloud.
-var gcpResolverFallback = []resolverAndDelay{{name: &dnstype.Resolver{Addr: cloudenv.GoogleMetadataAndDNSIP}}}
-
 // resolvers returns the resolvers to use for domain.
 func (f *forwarder) resolvers(domain dnsname.FQDN) []resolverAndDelay {
 	f.mu.Lock()
 	routes := f.routes
+	cloudHostFallback := f.cloudHostFallback
 	f.mu.Unlock()
-	var ret []resolverAndDelay
-	var matchedSuffix dnsname.FQDN
 	for _, route := range routes {
 		if route.Suffix == "." || route.Suffix.Contains(domain) {
-			ret = route.Resolvers
-			matchedSuffix = route.Suffix
-			break
+			return route.Resolvers
 		}
 	}
-
-	if len(ret) == 0 && cloudenv.Get() == cloudenv.GCP && (matchedSuffix == "" || matchedSuffix == ".") {
-		// If we're running on GCP where there's always a well-known IP of a
-		// recursive resolver, return that rather than having callers return
-		// errNoUpstreams. This fixes both normal 100.100.100.100 resolution
-		// when /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS
-		// stub resolver lookup.
-		//
-		// But we only do this if no route matched (matchedSuffix == "") or
-		// if we had no resolvers for the top-level route (matchedSuffix == ".").
-		// If they had an explicit empty route that we matched, don't do the auto
-		// fallback in that case.
-		ret = gcpResolverFallback
-	}
-	return ret
+	return cloudHostFallback // or nil if no fallback
 }
 
 // forwardQuery is information and state about a forwarded DNS query that's

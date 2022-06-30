@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
 )
@@ -96,6 +97,9 @@ func (c *Config) WriteToBufioWriter(w *bufio.Writer) {
 	w.WriteString("]")
 	if arpa > 0 {
 		fmt.Fprintf(w, "+%darpa", arpa)
+	}
+	if c := cloudenv.Get(); c != "" {
+		fmt.Fprintf(w, ", cloud=%q", string(c))
 	}
 	w.WriteString("}")
 }

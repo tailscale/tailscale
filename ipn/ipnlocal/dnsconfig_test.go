@@ -306,42 +306,6 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
-		{
-			name: "google_cloud",
-			nm: &netmap.NetworkMap{
-				DNS: tailcfg.DNSConfig{},
-			},
-			cloud: cloudenv.GCP,
-			prefs: &ipn.Prefs{
-				CorpDNS: true,
-			},
-			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netaddr.IP{},
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
-					"internal.": []*dnstype.Resolver{{Addr: cloudenv.GoogleMetadataAndDNSIP}},
-				},
-			},
-		},
-		{
-			name: "google_cloud_with_exiting_internal",
-			nm: &netmap.NetworkMap{
-				DNS: tailcfg.DNSConfig{
-					Routes: map[string][]*dnstype.Resolver{
-						".internal": []*dnstype.Resolver{{Addr: "1.2.3.4"}},
-					},
-				},
-			},
-			cloud: cloudenv.GCP,
-			prefs: &ipn.Prefs{
-				CorpDNS: true,
-			},
-			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netaddr.IP{},
-				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
-					"internal.": []*dnstype.Resolver{{Addr: "1.2.3.4"}},
-				},
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -350,7 +314,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				verOS = "linux"
 			}
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, tt.prefs, log.Logf, verOS, tt.cloud)
+			got := dnsConfigForNetmap(tt.nm, tt.prefs, log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
