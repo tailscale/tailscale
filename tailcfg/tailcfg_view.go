@@ -265,6 +265,7 @@ func (v HostinfoView) RequestTags() views.Slice[string]  { return views.SliceOf(
 func (v HostinfoView) Services() views.Slice[Service]    { return views.SliceOf(v.ж.Services) }
 func (v HostinfoView) NetInfo() NetInfoView              { return v.ж.NetInfo.View() }
 func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(v.ж.SSH_HostKeys) }
+func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
 func (v HostinfoView) Equal(v2 HostinfoView) bool        { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -286,6 +287,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Services      []Service
 	NetInfo       *NetInfo
 	SSH_HostKeys  []string
+	Cloud         string
 }{})
 
 // View returns a readonly view of NetInfo.

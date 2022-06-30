@@ -129,6 +129,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Services      []Service
 	NetInfo       *NetInfo
 	SSH_HostKeys  []string
+	Cloud         string
 }{})
 
 // Clone makes a deep copy of NetInfo.
