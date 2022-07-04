@@ -57,7 +57,7 @@ require (
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.1.11
-	golang.zx2c4.com/wireguard v0.0.0-20220317000134-95b48cdb3961
+	golang.zx2c4.com/wireguard v0.0.0-20220703234212-c31a7b1ab478
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	gvisor.dev/gvisor v0.0.0-20220407223209-21871174d445
 	honnef.co/go/tools v0.4.0-0.dev.0.20220404092545-59d7a2877f83
