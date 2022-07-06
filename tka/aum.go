@@ -7,6 +7,7 @@ package tka
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -104,8 +105,7 @@ type AUM struct {
 
 	// State describes the full state of the key authority.
 	// This field is used for Checkpoint AUMs.
-	// TODO(tom): Use type *State once a future PR brings in that type.
-	State interface{} `cbor:"5,keyasint,omitempty"`
+	State *State `cbor:"5,keyasint,omitempty"`
 
 	// DisablementSecret is used to transmit a secret for disabling
 	// the TKA.
@@ -121,6 +121,13 @@ type AUM struct {
 	// CBOR key 23 is the last key which can be encoded as a single byte.
 	Signatures []Signature `cbor:"23,keyasint,omitempty"`
 }
+
+// Upper bound on checkpoint elements, chosen arbitrarily. Intended to
+// cap out insanely large AUMs.
+const (
+	maxDisablementSecrets = 32
+	maxKeys               = 512
+)
 
 // StaticValidate returns a nil error if the AUM is well-formed.
 func (a *AUM) StaticValidate() error {
@@ -138,7 +145,36 @@ func (a *AUM) StaticValidate() error {
 		}
 	}
 
-	// TODO(tom): Validate State once a future PR brings in that type.
+	if a.State != nil {
+		if len(a.State.LastAUMHash) != 0 {
+			return errors.New("checkpoint state cannot specify a parent AUM")
+		}
+		if len(a.State.DisablementSecrets) == 0 {
+			return errors.New("at least one disablement secret required")
+		}
+		if numDS := len(a.State.DisablementSecrets); numDS > maxDisablementSecrets {
+			return fmt.Errorf("too many disablement secrets (%d, max %d)", numDS, maxDisablementSecrets)
+		}
+		for i, ds := range a.State.DisablementSecrets {
+			if len(ds) != disablementLength {
+				return fmt.Errorf("disablement[%d]: invalid length (got %d, want %d)", i, len(ds), disablementLength)
+			}
+		}
+		// TODO(tom): Check for duplicate disablement secrets.
+
+		if len(a.State.Keys) == 0 {
+			return errors.New("at least one key is required")
+		}
+		if numKeys := len(a.State.Keys); numKeys > maxKeys {
+			return fmt.Errorf("too many keys (%d, max %d)", numKeys, maxKeys)
+		}
+		for i, k := range a.State.Keys {
+			if err := k.StaticValidate(); err != nil {
+				return fmt.Errorf("key[%d]: %v", i, err)
+			}
+		}
+		// TODO(tom): Check for duplicate keys.
+	}
 
 	switch a.MessageKind {
 	case AUMAddKey:
@@ -253,4 +289,50 @@ func (a *AUM) sign25519(priv ed25519.PrivateKey) {
 	})
 }
 
-// TODO(tom): Implement Weight() once a future PR brings in the State type.
+// Weight computes the 'signature weight' of the AUM
+// based on keys in the state machine. The caller must
+// ensure that all signatures are valid.
+//
+// More formally: W = Sum(key.votes)
+//
+// AUMs with a higher weight than their siblings
+// are preferred when resolving forks in the AUM chain.
+func (a *AUM) Weight(state State) uint {
+	var weight uint
+
+	// Track the keys that have already been used, so two
+	// signatures with the same key do not result in 2x
+	// the weight.
+	//
+	// We use the first 8 bytes as the key for this map,
+	// because KeyIDs are either a blake2s hash or
+	// the 25519 public key, both of which approximate
+	// random distribution.
+	seenKeys := make(map[uint64]struct{}, 6)
+	for _, sig := range a.Signatures {
+		if len(sig.KeyID) < 8 {
+			// Invalid, don't count it
+			continue
+		}
+
+		keyID := binary.LittleEndian.Uint64(sig.KeyID)
+
+		key, err := state.GetKey(sig.KeyID)
+		if err != nil {
+			if err == ErrNoSuchKey {
+				// Signatures with an unknown key do not contribute
+				// to the weight.
+				continue
+			}
+			panic(err)
+		}
+		if _, seen := seenKeys[keyID]; seen {
+			continue
+		}
+
+		weight += key.Votes
+		seenKeys[keyID] = struct{}{}
+	}
+
+	return weight
+}
