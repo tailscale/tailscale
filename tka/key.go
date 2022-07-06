@@ -51,6 +51,29 @@ type Key struct {
 	Meta map[string]string `cbor:"12,keyasint,omitempty"`
 }
 
+// Clone makes an independent copy of Key.
+//
+// NOTE: There is a difference between a nil slice and an empty
+//       slice for encoding purposes, so an implementation of Clone()
+//       must take care to preserve this.
+func (k Key) Clone() Key {
+	out := k
+
+	if k.Public != nil {
+		out.Public = make([]byte, len(k.Public))
+		copy(out.Public, k.Public)
+	}
+
+	if k.Meta != nil {
+		out.Meta = make(map[string]string, len(k.Meta))
+		for k, v := range k.Meta {
+			out.Meta[k] = v
+		}
+	}
+
+	return out
+}
+
 func (k Key) ID() KeyID {
 	switch k.Kind {
 	// Because 25519 public keys are so short, we just use the 32-byte
