@@ -132,7 +132,13 @@ func applyNewACL(ctx context.Context, tailnet, apiKey, policyFname, oldEtag stri
 	got := resp.StatusCode
 	want := http.StatusOK
 	if got != want {
-		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
+		var ate ACLTestError
+		err := json.NewDecoder(resp.Body).Decode(&ate)
+		if err != nil {
+			return err
+		}
+
+		return ate
 	}
 
 	return nil
@@ -159,13 +165,19 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var ate ACLTestError
-		err := json.NewDecoder(resp.Body).Decode(&ate)
-		if err != nil {
-			return err
-		}
+	got := resp.StatusCode
+	want := http.StatusOK
+	if got != want {
+		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
+	}
 
+	var ate ACLTestError
+	err = json.NewDecoder(resp.Body).Decode(&ate)
+	if err != nil {
+		return err
+	}
+
+	if len(ate.Data) != 0 {
 		return ate
 	}
 
