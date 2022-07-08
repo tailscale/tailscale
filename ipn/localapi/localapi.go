@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"inet.af/netaddr"
@@ -40,6 +41,16 @@ func randHex(n int) string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+var (
+	// The clientmetrics package is stateful, but we want to expose a simple
+	// imperative API to local clients, so we need to keep track of
+	// clientmetric.Metric instances that we've created for them. These need to
+	// be globals because we end up creating many Handler instances for the
+	// lifetime of a client.
+	metricsMu sync.Mutex
+	metrics   = map[string]*clientmetric.Metric{}
+)
 
 func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, logID string) *Handler {
 	return &Handler{b: b, logf: logf, backendLogID: logID}
@@ -137,6 +148,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveDial(w, r)
 	case "/localapi/v0/id-token":
 		h.serveIDToken(w, r)
+	case "/localapi/v0/upload-client-metrics":
+		h.serveUploadClientMetrics(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -728,6 +741,54 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		errc <- err
 	}()
 	<-errc
+}
+
+func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
+	type clientMetricJSON struct {
+		Name string `json:"name"`
+		// One of "counter" or "gauge"
+		Type  string `json:"type"`
+		Value int    `json:"value"`
+	}
+
+	var clientMetrics []clientMetricJSON
+	if err := json.NewDecoder(r.Body).Decode(&clientMetrics); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	metricsMu.Lock()
+	defer metricsMu.Unlock()
+
+	for _, m := range clientMetrics {
+		if metric, ok := metrics[m.Name]; ok {
+			metric.Add(int64(m.Value))
+		} else {
+			if clientmetric.HasPublished(m.Name) {
+				http.Error(w, "Already have a metric named "+m.Name, 400)
+				return
+			}
+			var metric *clientmetric.Metric
+			switch m.Type {
+			case "counter":
+				metric = clientmetric.NewCounter(m.Name)
+			case "gauge":
+				metric = clientmetric.NewGauge(m.Name)
+			default:
+				http.Error(w, "Unknown metric type "+m.Type, 400)
+				return
+			}
+			metrics[m.Name] = metric
+			metric.Add(int64(m.Value))
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct{}{})
 }
 
 func defBool(a string, def bool) bool {

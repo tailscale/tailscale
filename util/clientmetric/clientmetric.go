@@ -136,6 +136,15 @@ func Metrics() []*Metric {
 	return sorted
 }
 
+// HasPublished reports whether a metric with the given name has already been
+// published.
+func HasPublished(name string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	_, ok := metrics[name]
+	return ok
+}
+
 // NewUnpublished initializes a new Metric without calling Publish on
 // it.
 func NewUnpublished(name string, typ Type) *Metric {
