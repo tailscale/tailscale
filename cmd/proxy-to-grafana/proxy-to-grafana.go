@@ -84,7 +84,7 @@ func main() {
 	if *useHTTPS {
 		ln, err = ts.Listen("tcp", ":443")
 		ln = tls.NewListener(ln, &tls.Config{
-			GetCertificate: tailscale.GetCertificate,
+			GetCertificate: localClient.GetCertificate,
 		})
 
 		go func() {
