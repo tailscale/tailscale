@@ -876,10 +876,18 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	for _, probeSet := range plan {
 		setCtx, cancelSet := context.WithCancel(ctx)
 		go func(probeSet []probe) {
-			for _, probe := range probeSet {
-				go rs.runProbe(setCtx, dm, probe, cancelSet)
+			pwg := syncs.NewWaitGroupChan()
+			pwg.Add(len(probeSet))
+			for _, p := range probeSet {
+				go func(probe probe) {
+					rs.runProbe(setCtx, dm, probe, cancelSet)
+					pwg.Decr()
+				}(p)
 			}
-			<-setCtx.Done()
+			select {
+			case <-setCtx.Done():
+			case <-pwg.DoneChan():
+			}
 			wg.Decr()
 		}(probeSet)
 	}
