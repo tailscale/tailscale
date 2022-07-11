@@ -73,6 +73,9 @@ const (
 
 	// SysTKA is the name of the tailnet key authority subsystem.
 	SysTKA = Subsystem("tailnet-lock")
+
+	// SysDNSForwarder is the name of the net/dns forwarder subsystem.
+	SysDNSForwarder = Subsystem("dns-forwarder")
 )
 
 // NewWarnable returns a new warnable item that the caller can mark
@@ -199,6 +202,12 @@ func DNSOSHealth() error { return get(SysDNSOS) }
 
 // SetTKAHealth sets the health of the tailnet key authority.
 func SetTKAHealth(err error) { setErr(SysTKA, err) }
+
+// DNSForwarderHealth returns the net/dns forwarder error state.
+func DNSForwarderHealth() error { return get(SysDNSForwarder) }
+
+// SetDNSForwarderHealth sets the state of the net/dns forwarder
+func SetDNSForwarderHealth(err error) { setErr(SysDNSForwarder, err) }
 
 // TKAHealth returns the tailnet key authority error state.
 func TKAHealth() error { return get(SysTKA) }

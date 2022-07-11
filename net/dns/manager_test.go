@@ -8,11 +8,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
 )
@@ -615,6 +618,7 @@ func TestManager(t *testing.T) {
 			}
 			m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil)
 			m.resolver.TestOnlySetHook(f.SetResolver)
+			m.skipHealthcheck = true
 
 			if err := m.Set(test.in); err != nil {
 				t.Fatalf("m.Set: %v", err)
@@ -731,4 +735,131 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]*dnstype.Resolver) {
 		}
 	}
 	return ret
+}
+
+func TestHasAnswerFor(t *testing.T) {
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const testName = "example.com."
+	tests := []struct {
+		name string
+		has  bool
+		err  string
+		msg  func() ([]byte, error)
+	}{
+		{
+			name: "has answer",
+			has:  true,
+			msg: func() ([]byte, error) {
+				builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+				must(builder.StartAnswers())
+				must(builder.AResource(dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(testName),
+					Class: dnsmessage.ClassINET,
+				}, dnsmessage.AResource{
+					A: [...]byte{127, 0, 0, 1},
+				}))
+				return builder.Finish()
+			},
+		},
+		{
+			name: "no answers",
+			has:  false,
+			msg: func() ([]byte, error) {
+				builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+				// Intentionally empty
+				return builder.Finish()
+			},
+		},
+		{
+			name: "wrong answer",
+			has:  false,
+			msg: func() ([]byte, error) {
+				builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+				must(builder.StartAnswers())
+				must(builder.AResource(dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName("tailscale.com."),
+					Class: dnsmessage.ClassINET,
+				}, dnsmessage.AResource{
+					A: [...]byte{127, 0, 0, 1},
+				}))
+				return builder.Finish()
+			},
+		},
+		{
+			name: "wrong type",
+			has:  false,
+			msg: func() ([]byte, error) {
+				builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+				must(builder.StartAnswers())
+				must(builder.AAAAResource(dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(testName),
+					Class: dnsmessage.ClassINET,
+				}, dnsmessage.AAAAResource{
+					AAAA: [...]byte{ // localhost
+						0, 0, 0, 0,
+						0, 0, 0, 0,
+						0, 0, 0, 0,
+						0, 0, 0, 1,
+					},
+				}))
+				return builder.Finish()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			msg, err := test.msg()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			has, err := hasAnswerFor(msg, testName, dnsmessage.TypeA)
+			if test.err != "" {
+				if err == nil {
+					t.Errorf("got err=nil, want err=%q", test.err)
+				} else if test.err != err.Error() {
+					t.Errorf("got err=%q, want err=%q", err.Error(), test.err)
+				}
+			} else {
+				if test.has != has {
+					t.Errorf("got has=%v, want has=%v", has, test.has)
+				}
+			}
+		})
+	}
+}
+
+func TestShouldHealthcheck(t *testing.T) {
+	clock := &tstest.Clock{}
+	f := fakeOSConfigurator{}
+	m := NewManager(t.Logf, &f, nil, new(tsdial.Dialer), nil)
+	m.resolver.TestOnlySetHook(f.SetResolver)
+	m.timeNow = clock.Now
+
+	if m.shouldHealthcheck() != true {
+		t.Errorf("got shouldHealthcheck=false; want true")
+	}
+
+	// Update the healthcheck time to now.
+	m.hcmu.Lock()
+	m.lastHealthcheck = clock.Now()
+	m.hcmu.Unlock()
+
+	// A follow-up before the timeout does not re-healthcheck
+	clock.Advance(healthcheckInterval - time.Second)
+	if m.shouldHealthcheck() != false {
+		t.Errorf("got shouldHealthcheck=true; want false")
+	}
+
+	// Moving past the interval does re-healthcheck
+	clock.Advance(time.Second + 1)
+	if m.shouldHealthcheck() != true {
+		t.Errorf("got shouldHealthcheck=false; want true")
+	}
 }
