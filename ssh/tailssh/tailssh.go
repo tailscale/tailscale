@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
@@ -830,9 +831,11 @@ func (c *conn) fetchSSHAction(ctx context.Context, url string) (*tailcfg.SSHActi
 // unless the process has already exited.
 func (ss *sshSession) killProcessOnContextDone() {
 	<-ss.ctx.Done()
+	ss.logf("XXX context done; killing process")
 	// Either the process has already exited, in which case this does nothing.
 	// Or, the process is still running in which case this will kill it.
 	ss.exitOnce.Do(func() {
+		ss.logf("XXX exitOnce Do via context done")
 		err := ss.ctx.Err()
 		if serr, ok := err.(SSHTerminationError); ok {
 			msg := serr.SSHTerminationMessage()
@@ -1005,6 +1008,7 @@ func (ss *sshSession) run() {
 
 	go func() {
 		_, err := io.Copy(rec.writer("i", ss.stdin), ss)
+		ss.logf("XXX copy stdin: %v", err)
 		if err != nil {
 			// TODO: don't log in the success case.
 			logf("stdin copy: %v", err)
@@ -1013,10 +1017,16 @@ func (ss *sshSession) run() {
 	}()
 	go func() {
 		_, err := io.Copy(rec.writer("o", ss), ss.stdout)
+		ss.logf("XXX copy stdout: %v", err)
 		if err != nil {
 			logf("stdout copy: %v", err)
 			// If we got an error here, it's probably because the client has
 			// disconnected.
+			if errors.Is(err, os.ErrClosed) {
+				// Harmless.
+				logf("XXX stdout copy just error closed")
+				return
+			}
 			ss.ctx.CloseWithError(err)
 		}
 	}()
@@ -1024,12 +1034,27 @@ func (ss *sshSession) run() {
 	if ss.stderr != nil {
 		go func() {
 			_, err := io.Copy(ss.Stderr(), ss.stderr)
+			ss.logf("XXX copy stderr: %v", err)
 			if err != nil {
 				logf("stderr copy: %v", err)
 			}
 		}()
 	}
+
+	logf("XXX sleeping ...")
+	time.Sleep(2 * time.Second)
 	err = ss.cmd.Wait()
+	logf("XXX wait: %v", err)
+
+	if sig, ok := processExitSignal(ss.cmd.ProcessState); ok {
+		switch sig {
+		case syscall.SIGHUP:
+			ss.logf("process exited SIGHUP, treating as err == nil")
+			err = nil
+		default:
+			ss.logf("process exited with signal %v", sig)
+		}
+	}
 	// This will either make the SSH Termination goroutine be a no-op,
 	// or itself will be a no-op because the process was killed by the
 	// aforementioned goroutine.
@@ -1048,6 +1073,18 @@ func (ss *sshSession) run() {
 
 	ss.logf("Wait: %v", err)
 	ss.Exit(1)
+	return
+}
+
+func processExitSignal(ps *os.ProcessState) (s syscall.Signal, ok bool) {
+	if ps == nil {
+		return
+	}
+	status := ps.Sys().(syscall.WaitStatus)
+	switch {
+	case status.Signaled():
+		return status.Signal(), true
+	}
 	return
 }
 
