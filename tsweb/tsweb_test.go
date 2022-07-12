@@ -334,6 +334,9 @@ func TestVarzHandler(t *testing.T) {
 		t.Logf("Got: %s", rec.Body.Bytes())
 	})
 
+	half := new(expvar.Float)
+	half.Set(0.5)
+
 	tests := []struct {
 		name string
 		k    string // key name
@@ -357,6 +360,31 @@ func TestVarzHandler(t *testing.T) {
 			"gauge_foo",
 			new(expvar.Int),
 			"# TYPE foo gauge\nfoo 0\n",
+		},
+		{
+			// For a float = 0.0, Prometheus client_golang outputs "0"
+			"float_zero",
+			"foo",
+			new(expvar.Float),
+			"# TYPE foo gauge\nfoo 0\n",
+		},
+		{
+			"float_point_5",
+			"foo",
+			half,
+			"# TYPE foo gauge\nfoo 0.5\n",
+		},
+		{
+			"float_with_type_counter",
+			"counter_foo",
+			half,
+			"# TYPE foo counter\nfoo 0.5\n",
+		},
+		{
+			"float_with_type_gauge",
+			"gauge_foo",
+			half,
+			"# TYPE foo gauge\nfoo 0.5\n",
 		},
 		{
 			"metrics_set",
