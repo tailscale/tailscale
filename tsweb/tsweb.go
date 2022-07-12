@@ -466,6 +466,12 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 		}
 		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
 		return
+	case *expvar.Float:
+		if typ == "" {
+			typ = "gauge"
+		}
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		return
 	case *metrics.Set:
 		v.Do(func(kv expvar.KeyValue) {
 			writePromExpVar(w, name+"_", kv)
