@@ -196,16 +196,20 @@ func (v MapView) SliceInt() views.MapFn[string, []int, views.Slice[int]] {
 	})
 }
 
-func (v MapView) StructWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
-	return views.MapFnOf(v.ж.StructWithPtr, func(t *StructWithPtrs) StructWithPtrsView {
+func (v MapView) StructPtrWithPtr() views.MapFn[string, *StructWithPtrs, StructWithPtrsView] {
+	return views.MapFnOf(v.ж.StructPtrWithPtr, func(t *StructWithPtrs) StructWithPtrsView {
 		return t.View()
 	})
 }
 
-func (v MapView) StructWithoutPtr() views.MapFn[string, *StructWithoutPtrs, StructWithoutPtrsView] {
-	return views.MapFnOf(v.ж.StructWithoutPtr, func(t *StructWithoutPtrs) StructWithoutPtrsView {
+func (v MapView) StructPtrWithoutPtr() views.MapFn[string, *StructWithoutPtrs, StructWithoutPtrsView] {
+	return views.MapFnOf(v.ж.StructPtrWithoutPtr, func(t *StructWithoutPtrs) StructWithoutPtrsView {
 		return t.View()
 	})
+}
+
+func (v MapView) StructWithoutPtr() views.Map[string, StructWithoutPtrs] {
+	return views.MapOf(v.ж.StructWithoutPtr)
 }
 
 func (v MapView) SlicesWithPtrs() views.MapFn[string, []*StructWithPtrs, views.SliceView[*StructWithPtrs, StructWithPtrsView]] {
@@ -231,8 +235,9 @@ func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported"
 var _MapViewNeedsRegeneration = Map(struct {
 	Int                 map[string]int
 	SliceInt            map[string][]int
-	StructWithPtr       map[string]*StructWithPtrs
-	StructWithoutPtr    map[string]*StructWithoutPtrs
+	StructPtrWithPtr    map[string]*StructWithPtrs
+	StructPtrWithoutPtr map[string]*StructWithoutPtrs
+	StructWithoutPtr    map[string]StructWithoutPtrs
 	SlicesWithPtrs      map[string][]*StructWithPtrs
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int

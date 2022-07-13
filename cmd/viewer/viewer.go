@@ -224,6 +224,15 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			mElem := m.Elem()
 			var template string
 			switch u := mElem.(type) {
+			case *types.Struct, *types.Named:
+				strucT := u
+				args.FieldType = it.QualifiedName(fieldType)
+				if codegen.ContainsPointers(strucT) {
+					writeTemplate("unsupportedField")
+					continue
+				}
+				template = "mapField"
+				args.MapValueType = it.QualifiedName(mElem)
 			case *types.Basic:
 				template = "mapField"
 				args.MapValueType = it.QualifiedName(mElem)

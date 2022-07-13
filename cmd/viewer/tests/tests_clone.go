@@ -73,16 +73,22 @@ func (src *Map) Clone() *Map {
 			dst.SliceInt[k] = append([]int{}, src.SliceInt[k]...)
 		}
 	}
-	if dst.StructWithPtr != nil {
-		dst.StructWithPtr = map[string]*StructWithPtrs{}
-		for k, v := range src.StructWithPtr {
-			dst.StructWithPtr[k] = v.Clone()
+	if dst.StructPtrWithPtr != nil {
+		dst.StructPtrWithPtr = map[string]*StructWithPtrs{}
+		for k, v := range src.StructPtrWithPtr {
+			dst.StructPtrWithPtr[k] = v.Clone()
+		}
+	}
+	if dst.StructPtrWithoutPtr != nil {
+		dst.StructPtrWithoutPtr = map[string]*StructWithoutPtrs{}
+		for k, v := range src.StructPtrWithoutPtr {
+			dst.StructPtrWithoutPtr[k] = v.Clone()
 		}
 	}
 	if dst.StructWithoutPtr != nil {
-		dst.StructWithoutPtr = map[string]*StructWithoutPtrs{}
+		dst.StructWithoutPtr = map[string]StructWithoutPtrs{}
 		for k, v := range src.StructWithoutPtr {
-			dst.StructWithoutPtr[k] = v.Clone()
+			dst.StructWithoutPtr[k] = v
 		}
 	}
 	if dst.SlicesWithPtrs != nil {
@@ -128,8 +134,9 @@ func (src *Map) Clone() *Map {
 var _MapCloneNeedsRegeneration = Map(struct {
 	Int                 map[string]int
 	SliceInt            map[string][]int
-	StructWithPtr       map[string]*StructWithPtrs
-	StructWithoutPtr    map[string]*StructWithoutPtrs
+	StructPtrWithPtr    map[string]*StructWithPtrs
+	StructPtrWithoutPtr map[string]*StructWithoutPtrs
+	StructWithoutPtr    map[string]StructWithoutPtrs
 	SlicesWithPtrs      map[string][]*StructWithPtrs
 	SlicesWithoutPtrs   map[string][]*StructWithoutPtrs
 	StructWithoutPtrKey map[StructWithoutPtrs]int
