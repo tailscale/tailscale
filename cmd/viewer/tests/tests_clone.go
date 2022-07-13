@@ -127,6 +127,13 @@ func (src *Map) Clone() *Map {
 			dst.StructWithPtrKey[k] = v
 		}
 	}
+	if dst.StructWithPtr != nil {
+		dst.StructWithPtr = map[string]StructWithPtrs{}
+		for k, v := range src.StructWithPtr {
+			v2 := v.Clone()
+			dst.StructWithPtr[k] = *v2
+		}
+	}
 	return dst
 }
 
@@ -143,6 +150,7 @@ var _MapCloneNeedsRegeneration = Map(struct {
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
+	StructWithPtr       map[string]StructWithPtrs
 }{})
 
 // Clone makes a deep copy of StructWithSlices.

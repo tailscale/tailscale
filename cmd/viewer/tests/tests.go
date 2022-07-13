@@ -32,6 +32,7 @@ type Map struct {
 	SliceIntPtr      map[string][]*int
 	PointerKey       map[*string]int        `json:"-"`
 	StructWithPtrKey map[StructWithPtrs]int `json:"-"`
+	StructWithPtr    map[string]StructWithPtrs
 }
 
 type StructWithPtrs struct {
