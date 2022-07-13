@@ -2580,28 +2580,49 @@ func (b *LocalBackend) initPeerAPIListener() {
 }
 
 // magicDNSRootDomains returns the subset of nm.DNS.Domains that are the search domains for MagicDNS.
-func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
-	if v := nm.MagicDNSSuffix(); v != "" {
-		fqdn, err := dnsname.ToFQDN(v)
+func magicDNSRootDomains(nm *netmap.NetworkMap) (ret []dnsname.FQDN) {
+	v := nm.MagicDNSSuffix()
+	if v == "" {
+		return nil
+	}
+	seen := map[dnsname.FQDN]bool{}
+	fqdn, err := dnsname.ToFQDN(v)
+	if err != nil {
+		// TODO: propagate error
+		return nil
+	}
+	ret = []dnsname.FQDN{
+		fqdn,
+		dnsname.FQDN("0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."),
+	}
+	seen[fqdn] = true
+	for i := 64; i <= 127; i++ {
+		fqdn, err = dnsname.ToFQDN(fmt.Sprintf("%d.100.in-addr.arpa.", i))
 		if err != nil {
 			// TODO: propagate error
-			return nil
+			continue
 		}
-		ret := []dnsname.FQDN{
-			fqdn,
-			dnsname.FQDN("0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa."),
+		ret = append(ret, fqdn)
+	}
+	for _, p := range nm.Peers {
+		if p.Sharer == 0 {
+			//	continue
 		}
-		for i := 64; i <= 127; i++ {
-			fqdn, err = dnsname.ToFQDN(fmt.Sprintf("%d.100.in-addr.arpa.", i))
-			if err != nil {
-				// TODO: propagate error
-				continue
-			}
+		if fqdn, ok := magicDNSSuffix(p); ok && !seen[fqdn] {
+			seen[fqdn] = true
 			ret = append(ret, fqdn)
 		}
-		return ret
 	}
-	return nil
+	return ret
+}
+
+func magicDNSSuffix(p *tailcfg.Node) (dnsname.FQDN, bool) {
+	if _, rest, ok := strings.Cut(p.Name, "."); ok {
+		if fqdn, err := dnsname.ToFQDN(rest); err == nil {
+			return fqdn, true
+		}
+	}
+	return "", false
 }
 
 var (
