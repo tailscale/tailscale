@@ -161,7 +161,7 @@ func main() {
 	flag.Parse()
 	if flag.NArg() > 0 {
 		// Windows subprocess is spawned with /subprocess, so we need to avoid this check there.
-		if runtime.GOOS != "windows" || flag.Arg(0) != "/subproc" {
+		if runtime.GOOS != "windows" || (flag.Arg(0) != "/subproc" && flag.Arg(0) != "/firewall") {
 			log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
 		}
 	}
