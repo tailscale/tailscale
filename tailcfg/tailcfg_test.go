@@ -502,6 +502,7 @@ func TestNetInfoFields(t *testing.T) {
 		"WorkingIPv6",
 		"OSHasIPv6",
 		"WorkingUDP",
+		"WorkingICMPv4",
 		"HavePortMap",
 		"UPnP",
 		"PMP",

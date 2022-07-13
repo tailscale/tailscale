@@ -524,7 +524,12 @@ func TestLogConciseReport(t *testing.T) {
 		{
 			name: "no_udp",
 			r:    &Report{},
-			want: "udp=false v4=false v6=false mapvarydest= hair= portmap=? derp=0",
+			want: "udp=false v4=false icmpv4=false v6=false mapvarydest= hair= portmap=? derp=0",
+		},
+		{
+			name: "no_udp_icmp",
+			r:    &Report{ICMPv4: true, IPv4: true},
+			want: "udp=false icmpv4=true v6=false mapvarydest= hair= portmap=? derp=0",
 		},
 		{
 			name: "ipv4_one_region",

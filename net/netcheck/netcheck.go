@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/ping"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 )
 
 // Debugging and experimentation tweakables.
@@ -54,6 +56,9 @@ const (
 	// switching to HTTP probing, on the assumption that outbound UDP
 	// is blocked.
 	stunProbeTimeout = 3 * time.Second
+	// icmpProbeTimeout is the maximum amount of time netcheck will spend
+	// probing with ICMP packets.
+	icmpProbeTimeout = 1 * time.Second
 	// hairpinCheckTimeout is the amount of time we wait for a
 	// hairpinned packet to come back.
 	hairpinCheckTimeout = 100 * time.Millisecond
@@ -79,6 +84,7 @@ type Report struct {
 	IPv6CanSend bool // an IPv6 packet was able to be sent
 	IPv4CanSend bool // an IPv4 packet was able to be sent
 	OSHasIPv6   bool // could bind a socket to ::1
+	ICMPv4      bool // an ICMPv4 round trip completed
 
 	// MappingVariesByDestIP is whether STUN results depend which
 	// STUN server you're talking to (on IPv4).
@@ -905,7 +911,8 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	}
 	rs.stopTimers()
 
-	// Try HTTPS latency check if all STUN probes failed due to UDP presumably being blocked.
+	// Try HTTPS and ICMP latency check if all STUN probes failed due to
+	// UDP presumably being blocked.
 	// TODO: this should be moved into the probePlan, using probeProto probeHTTPS.
 	if !rs.anyUDP() && ctx.Err() == nil {
 		var wg sync.WaitGroup
@@ -916,6 +923,19 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 			}
 		}
 		if len(need) > 0 {
+			// Kick off ICMP in parallel to HTTPS checks; we don't
+			// reuse the same WaitGroup for those probes because we
+			// need to close the underlying Pinger after a timeout
+			// or when all ICMP probes are done, regardless of
+			// whether the HTTPS probes have finished.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := c.measureAllICMPLatency(ctx, rs, need); err != nil {
+					c.logf("[v1] measureAllICMPLatency: %v", err)
+				}
+			}()
+
 			wg.Add(len(need))
 			c.logf("netcheck: UDP is blocked, trying HTTPS")
 		}
@@ -926,7 +946,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 					c.logf("[v1] netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
 				} else {
 					rs.mu.Lock()
-					rs.report.RegionLatency[reg.RegionID] = d
+					if l, ok := rs.report.RegionLatency[reg.RegionID]; !ok {
+						mak.Set(&rs.report.RegionLatency, reg.RegionID, d)
+					} else if l >= d {
+						rs.report.RegionLatency[reg.RegionID] = d
+					}
 					// We set these IPv4 and IPv6 but they're not really used
 					// and we don't necessarily set them both. If UDP is blocked
 					// and both IPv4 and IPv6 are available over TCP, it's basically
@@ -1086,11 +1110,84 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	return result.ServerProcessing, ip, nil
 }
 
+func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, need []*tailcfg.DERPRegion) error {
+	if len(need) == 0 {
+		return nil
+	}
+	ctx, done := context.WithTimeout(ctx, icmpProbeTimeout)
+	defer done()
+
+	p, err := ping.New(ctx, c.logf)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+
+	c.logf("UDP is blocked, trying ICMP")
+
+	var wg sync.WaitGroup
+	wg.Add(len(need))
+	for _, reg := range need {
+		go func(reg *tailcfg.DERPRegion) {
+			defer wg.Done()
+			if d, err := c.measureICMPLatency(ctx, reg, p); err != nil {
+				c.logf("[v1] measuring ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)
+			} else {
+				c.logf("[v1] ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, d)
+				rs.mu.Lock()
+				if l, ok := rs.report.RegionLatency[reg.RegionID]; !ok {
+					mak.Set(&rs.report.RegionLatency, reg.RegionID, d)
+				} else if l >= d {
+					rs.report.RegionLatency[reg.RegionID] = d
+				}
+
+				// We only send IPv4 ICMP right now
+				rs.report.IPv4 = true
+				rs.report.ICMPv4 = true
+
+				rs.mu.Unlock()
+			}
+		}(reg)
+	}
+
+	wg.Wait()
+	return nil
+}
+
+func (c *Client) measureICMPLatency(ctx context.Context, reg *tailcfg.DERPRegion, p *ping.Pinger) (time.Duration, error) {
+	if len(reg.Nodes) == 0 {
+		return 0, fmt.Errorf("no nodes for region %d (%v)", reg.RegionID, reg.RegionCode)
+	}
+
+	// Try pinging the first node in the region
+	node := reg.Nodes[0]
+
+	// Get the IPAddr by asking for the UDP address that we would use for
+	// STUN and then using that IP.
+	//
+	// TODO(andrew-d): this is a bit ugly
+	nodeAddr := c.nodeAddr(ctx, node, probeIPv4)
+	if !nodeAddr.IsValid() {
+		return 0, fmt.Errorf("no address for node %v", node.Name)
+	}
+	addr := &net.IPAddr{
+		IP:   net.IP(nodeAddr.Addr().AsSlice()),
+		Zone: nodeAddr.Addr().Zone(),
+	}
+
+	// Use the unique node.Name field as the packet data to reduce the
+	// likelihood that we get a mismatched echo response.
+	return p.Send(ctx, addr, []byte(node.Name))
+}
+
 func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 	c.logf("[v1] report: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		fmt.Fprintf(w, "udp=%v", r.UDP)
 		if !r.IPv4 {
 			fmt.Fprintf(w, " v4=%v", r.IPv4)
+		}
+		if !r.UDP {
+			fmt.Fprintf(w, " icmpv4=%v", r.ICMPv4)
 		}
 
 		fmt.Fprintf(w, " v6=%v", r.IPv6)
