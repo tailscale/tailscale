@@ -231,6 +231,12 @@ func (v MapView) SliceIntPtr() map[string][]*int           { panic("unsupported"
 func (v MapView) PointerKey() map[*string]int              { panic("unsupported") }
 func (v MapView) StructWithPtrKey() map[StructWithPtrs]int { panic("unsupported") }
 
+func (v MapView) StructWithPtr() views.MapFn[string, StructWithPtrs, StructWithPtrsView] {
+	return views.MapFnOf(v.ж.StructWithPtr, func(t StructWithPtrs) StructWithPtrsView {
+		return t.View()
+	})
+}
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MapViewNeedsRegeneration = Map(struct {
 	Int                 map[string]int
@@ -244,6 +250,7 @@ var _MapViewNeedsRegeneration = Map(struct {
 	SliceIntPtr         map[string][]*int
 	PointerKey          map[*string]int
 	StructWithPtrKey    map[StructWithPtrs]int
+	StructWithPtr       map[string]StructWithPtrs
 }{})
 
 // View returns a readonly view of StructWithSlices.
