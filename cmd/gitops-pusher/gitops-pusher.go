@@ -13,13 +13,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/tailscale/hujson"
 )
 
 var (
@@ -94,14 +95,18 @@ func main() {
 }
 
 func sumFile(fname string) (string, error) {
-	fin, err := os.Open(fname)
+	data, err := os.ReadFile(fname)
 	if err != nil {
 		return "", err
 	}
-	defer fin.Close()
+
+	formatted, err := hujson.Format(data)
+	if err != nil {
+		return "", err
+	}
 
 	h := sha256.New()
-	_, err = io.Copy(h, fin)
+	_, err = h.Write(formatted)
 	if err != nil {
 		return "", err
 	}
