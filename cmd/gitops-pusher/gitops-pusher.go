@@ -17,13 +17,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
 
 var (
-	policyFname = flag.String("policy-file", "./policy.hujson", "filename for policy file")
-	timeout     = flag.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
+	policyFname  = flag.String("policy-file", "./policy.hujson", "filename for policy file")
+	timeout      = flag.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
+	githubSyntax = flag.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
 )
 
 func main() {
@@ -177,12 +179,14 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 		return err
 	}
 
-	if len(ate.Data) != 0 {
+	if len(ate.Message) != 0 || len(ate.Data) != 0 {
 		return ate
 	}
 
 	return nil
 }
+
+var lineColMessageSplit = regexp.MustCompile(`^line ([0-9]+), column ([0-9]+): (.*)$`)
 
 type ACLTestError struct {
 	Message string               `json:"message"`
@@ -192,7 +196,17 @@ type ACLTestError struct {
 func (ate ACLTestError) Error() string {
 	var sb strings.Builder
 
-	fmt.Fprintln(&sb, ate.Message)
+	if *githubSyntax && lineColMessageSplit.MatchString(ate.Message) {
+		sp := lineColMessageSplit.FindStringSubmatch(ate.Message)
+
+		line := sp[1]
+		col := sp[2]
+		msg := sp[3]
+
+		fmt.Fprintf(&sb, "::error file=%s,line=%s,col=%s::%s", *policyFname, line, col, msg)
+	} else {
+		fmt.Fprintln(&sb, ate.Message)
+	}
 	fmt.Fprintln(&sb)
 
 	for _, data := range ate.Data {
