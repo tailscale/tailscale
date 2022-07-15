@@ -156,6 +156,8 @@ func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 }
 
 type clientInfo struct {
+	// Version is the DERP protocol version that the client was built with.
+	// See the ProtocolVersion const.
 	Version int `json:"version,omitempty"`
 
 	// MeshKey optionally specifies a pre-shared key used by
