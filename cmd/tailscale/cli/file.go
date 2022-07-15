@@ -141,8 +141,17 @@ func runCp(ctx context.Context, args []string) error {
 				return err
 			}
 			if fi.IsDir() {
-				// Insert code for handling folder
-				return errors.New("directories not supported")
+				name = fi.Name() + ".zip"
+				zipDirectory(name, fi.Name())
+			}
+			f, err = os.Open(name)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			fi, err = f.Stat()
+			if err != nil {
+				return err
 			}
 			contentLength = fi.Size()
 			fileContents = io.LimitReader(f, contentLength)
