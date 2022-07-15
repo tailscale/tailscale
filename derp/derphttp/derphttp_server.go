@@ -38,12 +38,19 @@ func Handler(s *derp.Server) http.Handler {
 			return
 		}
 
+		// Question for Brad about context and this here Hijack
+		// Currently wrapping the handler, but if this is gonna do
+		// special things should we start the trace after this
+		// instead.
+
 		netConn, conn, err := h.Hijack()
 		if err != nil {
 			log.Printf("Hijack failed: %v", err)
 			http.Error(w, "HTTP does not support general TCP support", 500)
 			return
 		}
+
+		// possible trace start here if Hijack gets in the way?
 
 		if !fastStart {
 			pubKey := s.PublicKey()
@@ -56,6 +63,6 @@ func Handler(s *derp.Server) http.Handler {
 				pubKey.UntypedHexString())
 		}
 
-		s.Accept(netConn, conn, netConn.RemoteAddr().String())
+		s.Accept(r.Context(), netConn, conn, netConn.RemoteAddr().String())
 	})
 }

@@ -46,7 +46,12 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/pad32"
 	"tailscale.com/version"
+
+	"go.opentelemetry.io/otel"
 )
+
+// Tracing name
+const name = "derp"
 
 var debug = envknob.Bool("DERP_DEBUG_LOGS")
 
@@ -410,7 +415,7 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 // on its own.
 //
 // Accept closes nc.
-func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
+func (s *Server) Accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
@@ -428,7 +433,7 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
+	if err := s.accept(ctx, nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
@@ -641,7 +646,11 @@ func (s *Server) addWatcher(c *sclient) {
 	go c.requestMeshUpdate()
 }
 
-func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
+// accept
+func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
+
+	fmt.Println("accept")
+
 	br := brw.Reader
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	bw := &lazyBufioWriter{w: nc, lbw: brw.Writer}
@@ -660,7 +669,8 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	//context time
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)
@@ -708,9 +718,14 @@ var (
 	timeNow   = time.Now
 )
 
+// TRACING: THIS IS PER CLIENT ENTIRE CONNECTION
+
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
 func (c *sclient) run(ctx context.Context) error {
+
+	fmt.Println("run")
+
 	// Launch sender, but don't return from run until sender goroutine is done.
 	var grp errgroup.Group
 	sendCtx, cancelSender := context.WithCancel(ctx)
@@ -722,7 +737,14 @@ func (c *sclient) run(ctx context.Context) error {
 		}
 	}()
 
+	tracer := otel.GetTracerProvider().Tracer(fmt.Sprintf("%d", c.info.Version))
+
 	for {
+		_, span := tracer.Start(ctx, "run")
+
+		// TRACING: wrap this in a function, with a start/end span within the function
+		// this allows us to use defer.
+		// only if putting a trace up here.
 		ft, fl, err := readFrameHeader(c.br)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -735,26 +757,44 @@ func (c *sclient) run(ctx context.Context) error {
 			}
 			return fmt.Errorf("client %x: readFrameHeader: %w", c.key, err)
 		}
+
+		// can we get some attributes? does c.info.version work?
+
+		// HANDLE TRACING FOR EACH OF THESE CASES?
 		c.s.noteClientActivity(c)
 		switch ft {
 		case frameNotePreferred:
+			span.SetName("note prefered")
 			err = c.handleFrameNotePreferred(ft, fl)
 		case frameSendPacket:
+			span.SetName("send packet")
+			//
 			err = c.handleFrameSendPacket(ft, fl)
 		case frameForwardPacket:
+			span.SetName("forward packet")
+			// meshed together, with magic permissions
 			err = c.handleFrameForwardPacket(ft, fl)
 		case frameWatchConns:
+			span.SetName("watch conns")
 			err = c.handleFrameWatchConns(ft, fl)
 		case frameClosePeer:
+			span.SetName("close peer")
 			err = c.handleFrameClosePeer(ft, fl)
 		case framePing:
+			span.SetName("frame ping")
 			err = c.handleFramePing(ft, fl)
 		default:
+			span.SetName("unknown frame")
 			err = c.handleUnknownFrame(ft, fl)
 		}
+
 		if err != nil {
+			span.RecordError(err)
+			span.End()
 			return err
 		}
+
+		span.End()
 	}
 }
 

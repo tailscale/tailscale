@@ -34,6 +34,15 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 var (
@@ -55,6 +64,9 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	// tracing flags
+	collectorAddr = flag.String("collector-addr", "", "optional tracing collector address, if empty tracing is no op")
 )
 
 var (
@@ -131,6 +143,78 @@ func writeNewConfig() config {
 	return cfg
 }
 
+// initTracing initializes a
+func initTracing(ctx context.Context) (func(context.Context) error, error) {
+
+	client := otlptracehttp.NewClient(otlptracehttp.WithInsecure())
+
+	// exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	// if err != nil {
+	// 	return nil, fmt.Errorf("creating stdout exporter: %w", err)
+	// }
+
+	fmt.Println("client", client)
+
+	exporter, err := otlptrace.New(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("creating OTLP trace exporter: %w", err)
+	}
+
+	fmt.Println("exporter", exporter)
+
+	res, err := resource.New(ctx,
+		// resource.withdetector?
+		resource.WithAttributes(
+			// the service name used to display traces in backends
+			semconv.ServiceNamespaceKey.String("derpers"),
+			semconv.ServiceNameKey.String("derp"),
+			// possibly from env
+			// semconv.ServiceInstanceIDKey.String("uniquederper"),
+			// semconv.ServiceVersionKey.String("whichversionisrunning"),
+		),
+	)
+	if err != nil {
+
+		log.Println("failed to create resource", err)
+
+		return nil, err
+	}
+
+	fmt.Println("res", res)
+
+	// Register the trace exporter with a TracerProvider, using a batch
+	// span processor to aggregate spans before export.
+	bsp := sdktrace.NewBatchSpanProcessor(exporter, sdktrace.WithMaxExportBatchSize(1))
+	tracerProvider := sdktrace.NewTracerProvider(
+		// question: should we send everything and tail based sampling in the collector
+		// or should we sample here and make it configurable
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(res),
+		sdktrace.WithSpanProcessor(bsp),
+	)
+
+	// tracerProvider := sdktrace.NewTracerProvider(
+	// 	sdktrace.WithBatcher(exporter),
+	// 	sdktrace.WithResource(res),
+	// )
+	otel.SetTracerProvider(tracerProvider)
+
+	return tracerProvider.Shutdown, nil
+
+	// set a flag with the collector address
+	// no scheme
+	// figure out grpc encryption details
+
+	// Set up a trace exporter
+
+	// sets the global tracer provder
+
+	// set global propagator to tracecontext (the default is no-op).
+	// what on earth is this?
+	// otel.SetTextMapPropagator(propagation.TraceContext{})
+
+}
+
 func main() {
 	flag.Parse()
 
@@ -154,10 +238,36 @@ func main() {
 
 	cfg := loadConfig()
 
+	// start the context, since if tracing is a no op
+	// we still need it
+	ctx := context.Background()
+
+	// tracing: init tracing
+	// if *collectorAddr != "" {
+
+	shutdown, err := initTracing(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		if err := shutdown(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// _, span := otel.GetTracerProvider().Tracer("test").Start(ctx, "start")
+	// time.Sleep(time.Millisecond * 100)
+
+	// span.End()
+
+	// }
+
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 
 	s := derp.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
+
+	fmt.Println("pk", s.PublicKey())
 
 	if *meshPSKFile != "" {
 		b, err := ioutil.ReadFile(*meshPSKFile)
@@ -179,6 +289,10 @@ func main() {
 	mux := http.NewServeMux()
 	derpHandler := derphttp.Handler(s)
 	derpHandler = addWebSocketSupport(s, derpHandler)
+	// wrap derp handler with a tracing thing
+	// Or
+
+	derpHandler = otelhttp.NewHandler(derpHandler, "derpHandler")
 	mux.Handle("/derp", derpHandler)
 	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()

@@ -86,7 +86,7 @@ func TestSendRecv(t *testing.T) {
 		}
 		defer cin.Close()
 		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
-		go s.Accept(cin, brwServer, fmt.Sprintf("test-client-%d", i))
+		go s.Accept(context.Background(), cin, brwServer, fmt.Sprintf("test-client-%d", i))
 
 		key := clientPrivateKeys[i]
 		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
@@ -234,7 +234,7 @@ func TestSendFreeze(t *testing.T) {
 	newClient := func(name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
 		t.Helper()
 		c1, c2 := nettest.NewConn(name, 1024)
-		go s.Accept(c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
+		go s.Accept(context.Background(), c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
 
 		brw := bufio.NewReadWriter(bufio.NewReader(c2), bufio.NewWriter(c2))
 		c, err := NewClient(k, c2, brw, t.Logf)
@@ -475,7 +475,7 @@ func newTestServer(t *testing.T) *testServer {
 			// TODO: register c in ts so Close also closes it?
 			go func(i int) {
 				brwServer := bufio.NewReadWriter(bufio.NewReader(c), bufio.NewWriter(c))
-				go s.Accept(c, brwServer, fmt.Sprintf("test-client-%d", i))
+				go s.Accept(context.Background(), c, brwServer, fmt.Sprintf("test-client-%d", i))
 			}(i)
 		}
 	}()
@@ -1198,7 +1198,7 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	defer connIn.Close()
 
 	brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
-	go s.Accept(connIn, brwServer, "test-client")
+	go s.Accept(context.Background(), connIn, brwServer, "test-client")
 
 	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
 	client, err := NewClient(k, connOut, brw, logger.Discard)

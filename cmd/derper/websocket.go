@@ -47,6 +47,6 @@ func addWebSocketSupport(s *derp.Server, base http.Handler) http.Handler {
 		counterWebSocketAccepts.Add(1)
 		wc := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
 		brw := bufio.NewReadWriter(bufio.NewReader(wc), bufio.NewWriter(wc))
-		s.Accept(wc, brw, r.RemoteAddr)
+		s.Accept(context.Background(), wc, brw, r.RemoteAddr)
 	})
 }

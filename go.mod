@@ -49,6 +49,11 @@ require (
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/u-root/u-root v0.8.0
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.32.0
+	go.opentelemetry.io/otel v1.8.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.8.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.8.0
+	go.opentelemetry.io/otel/sdk v1.8.0
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	golang.org/x/crypto v0.0.0-20220427172511-eb4f295cb31f
 	golang.org/x/net v0.0.0-20220516155154-20f960328961
@@ -104,6 +109,7 @@ require (
 	github.com/breml/bidichk v0.2.1 // indirect
 	github.com/butuzov/ireturn v0.1.1 // indirect
 	github.com/cavaliercoder/go-cpio v0.0.0-20180626203310-925f9528c45e // indirect
+	github.com/cenkalti/backoff/v4 v4.1.3 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/charithe/durationcheck v0.0.9 // indirect
 	github.com/chavacava/garif v0.0.0-20210405164556-e8a0a408d6af // indirect
@@ -120,6 +126,7 @@ require (
 	github.com/ettle/strcase v0.1.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
+	github.com/felixge/httpsnoop v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/fzipp/gocyclo v0.3.1 // indirect
 	github.com/gliderlabs/ssh v0.3.3 // indirect
@@ -127,6 +134,8 @@ require (
 	github.com/go-git/gcfg v1.5.0 // indirect
 	github.com/go-git/go-billy/v5 v5.3.1 // indirect
 	github.com/go-git/go-git/v5 v5.4.2 // indirect
+	github.com/go-logr/logr v1.2.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-toolsmith/astcast v1.0.0 // indirect
 	github.com/go-toolsmith/astcopy v1.0.0 // indirect
 	github.com/go-toolsmith/astequal v1.0.1 // indirect
@@ -159,6 +168,7 @@ require (
 	github.com/gostaticanalysis/comment v1.4.2 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.1.0 // indirect
 	github.com/gostaticanalysis/nilerr v0.1.1 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.7.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
@@ -240,7 +250,7 @@ require (
 	github.com/spf13/viper v1.9.0 // indirect
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stretchr/objx v0.3.0 // indirect
-	github.com/stretchr/testify v1.7.0 // indirect
+	github.com/stretchr/testify v1.7.1 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/sylvia7788/contextcheck v1.0.4 // indirect
 	github.com/tdakkota/asciicheck v0.1.1 // indirect
@@ -257,6 +267,10 @@ require (
 	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74 // indirect
 	github.com/xanzy/ssh-agent v0.3.1 // indirect
 	github.com/yeya24/promlinter v0.1.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/internal/retry v1.8.0 // indirect
+	go.opentelemetry.io/otel/metric v0.30.0 // indirect
+	go.opentelemetry.io/otel/trace v1.8.0 // indirect
+	go.opentelemetry.io/proto/otlp v0.18.0 // indirect
 	go4.org/intern v0.0.0-20211027215823-ae77deb06f29 // indirect
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20211027215541-db492cf91b37 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
@@ -264,6 +278,8 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20220411194840-2f41105eb62f // indirect
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224 // indirect
+	google.golang.org/genproto v0.0.0-20211118181313-81c1377c94b1 // indirect
+	google.golang.org/grpc v1.46.2 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
