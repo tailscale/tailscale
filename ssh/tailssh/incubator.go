@@ -310,15 +310,25 @@ func (ss *sshSession) launchProcess() error {
 	if err != nil {
 		return err
 	}
-	go resizeWindow(pty, winCh)
-	ss.stdout = pty // no stderr for a pty
+
+	// We need to be able to close stdin and stdout separately later so make a
+	// dup.
+	ptyDup, err := syscall.Dup(int(pty.Fd()))
+	if err != nil {
+		return err
+	}
+	go resizeWindow(ptyDup /* arbitrary fd */, winCh)
+
 	ss.stdin = pty
+	ss.stdout = os.NewFile(uintptr(ptyDup), pty.Name())
+	ss.stderr = nil // not available for pty
+
 	return nil
 }
 
-func resizeWindow(f *os.File, winCh <-chan ssh.Window) {
+func resizeWindow(fd int, winCh <-chan ssh.Window) {
 	for win := range winCh {
-		unix.IoctlSetWinsize(int(f.Fd()), syscall.TIOCSWINSZ, &unix.Winsize{
+		unix.IoctlSetWinsize(fd, syscall.TIOCSWINSZ, &unix.Winsize{
 			Row: uint16(win.Height),
 			Col: uint16(win.Width),
 		})
