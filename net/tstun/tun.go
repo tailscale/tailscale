@@ -74,15 +74,18 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 
 // tunDiagnoseFailure, if non-nil, does OS-specific diagnostics of why
 // TUN failed to work.
-var tunDiagnoseFailure func(tunName string, logf logger.Logf)
+var tunDiagnoseFailure func(tunName string, logf logger.Logf, err error)
 
 // Diagnose tries to explain a tuntap device creation failure.
 // It pokes around the system and logs some diagnostic info that might
 // help debug why tun creation failed. Because device creation has
 // already failed and the program's about to end, log a lot.
-func Diagnose(logf logger.Logf, tunName string) {
+//
+// The tunName is the name of the tun device that was requested but failed.
+// The err error is how the tun creation failed.
+func Diagnose(logf logger.Logf, tunName string, err error) {
 	if tunDiagnoseFailure != nil {
-		tunDiagnoseFailure(tunName, logf)
+		tunDiagnoseFailure(tunName, logf, err)
 	} else {
 		logf("no TUN failure diagnostics for OS %q", runtime.GOOS)
 	}
