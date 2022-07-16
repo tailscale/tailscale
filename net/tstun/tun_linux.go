@@ -6,6 +6,7 @@ package tstun
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,7 +20,14 @@ func init() {
 	tunDiagnoseFailure = diagnoseLinuxTUNFailure
 }
 
-func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf) {
+func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) {
+	if errors.Is(createErr, syscall.EBUSY) {
+		logf("TUN device %s is busy; another process probably still has it open (from old version of Tailscale that had a bug)", tunName)
+		logf("To fix, kill the process that has it open. Find with:\n\n$ sudo lsof -n /dev/net/tun\n\n")
+		logf("... and then kill those PID(s)")
+		return
+	}
+
 	var un syscall.Utsname
 	err := syscall.Uname(&un)
 	if err != nil {
