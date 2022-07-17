@@ -17,7 +17,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/atomicfile"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/version"
 )
@@ -46,7 +45,7 @@ func runCert(ctx context.Context, args []string) error {
 	if certArgs.serve {
 		s := &http.Server{
 			TLSConfig: &tls.Config{
-				GetCertificate: tailscale.GetCertificate,
+				GetCertificate: localClient.GetCertificate,
 			},
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.TLS != nil && !strings.Contains(r.Host, ".") && r.Method == "GET" {
@@ -90,7 +89,7 @@ func runCert(ctx context.Context, args []string) error {
 		certArgs.certFile = domain + ".crt"
 		certArgs.keyFile = domain + ".key"
 	}
-	certPEM, keyPEM, err := tailscale.CertPair(ctx, domain)
+	certPEM, keyPEM, err := localClient.CertPair(ctx, domain)
 	if err != nil {
 		return err
 	}
