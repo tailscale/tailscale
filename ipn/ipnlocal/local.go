@@ -174,11 +174,11 @@ type LocalBackend struct {
 	// same as the Network Extension lifetime and we can thus avoid
 	// double-copying files by writing them to the right location
 	// immediately.
-	// It's also used on Synology & TrueNAS, but in that case DoFinalRename
-	// is also set true, which moves the *.partial file to its final
-	// name on completion.
+	// It's also used on several NAS platforms (Synology, TrueNAS, etc)
+	// but in that case DoFinalRename is also set true, which moves the
+	// *.partial file to its final name on completion.
 	directFileRoot          string
-	directFileDoFinalRename bool // false on macOS, true on Synology & TrueNAS
+	directFileDoFinalRename bool // false on macOS, true on several NAS platforms
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
