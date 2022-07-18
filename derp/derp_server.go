@@ -410,7 +410,7 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 // on its own.
 //
 // Accept closes nc.
-func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
+func (s *Server) Accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
@@ -428,7 +428,7 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
+	if err := s.accept(ctx, nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
@@ -641,7 +641,7 @@ func (s *Server) addWatcher(c *sclient) {
 	go c.requestMeshUpdate()
 }
 
-func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
+func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
 	br := brw.Reader
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	bw := &lazyBufioWriter{w: nc, lbw: brw.Writer}
@@ -660,7 +660,7 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)

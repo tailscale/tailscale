@@ -85,8 +85,12 @@ func TestSendRecv(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cin.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		brwServer := bufio.NewReadWriter(bufio.NewReader(cin), bufio.NewWriter(cin))
-		go s.Accept(cin, brwServer, fmt.Sprintf("test-client-%d", i))
+		go s.Accept(ctx, cin, brwServer, fmt.Sprintf("test-client-%d", i))
 
 		key := clientPrivateKeys[i]
 		brw := bufio.NewReadWriter(bufio.NewReader(cout), bufio.NewWriter(cout))
@@ -231,10 +235,10 @@ func TestSendFreeze(t *testing.T) {
 	// Then cathy stops processing messsages.
 	// That should not interfere with alice talking to bob.
 
-	newClient := func(name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
+	newClient := func(ctx context.Context, name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
 		t.Helper()
 		c1, c2 := nettest.NewConn(name, 1024)
-		go s.Accept(c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
+		go s.Accept(ctx, c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
 
 		brw := bufio.NewReadWriter(bufio.NewReader(c2), bufio.NewWriter(c2))
 		c, err := NewClient(k, c2, brw, t.Logf)
@@ -245,14 +249,17 @@ func TestSendFreeze(t *testing.T) {
 		return c, c2
 	}
 
+	ctx, clientCtxCancel := context.WithCancel(context.Background())
+	defer clientCtxCancel()
+
 	aliceKey := key.NewNode()
-	aliceClient, aliceConn := newClient("alice", aliceKey)
+	aliceClient, aliceConn := newClient(ctx, "alice", aliceKey)
 
 	bobKey := key.NewNode()
-	bobClient, bobConn := newClient("bob", bobKey)
+	bobClient, bobConn := newClient(ctx, "bob", bobKey)
 
 	cathyKey := key.NewNode()
-	cathyClient, cathyConn := newClient("cathy", cathyKey)
+	cathyClient, cathyConn := newClient(ctx, "cathy", cathyKey)
 
 	var (
 		aliceCh = make(chan struct{}, 32)
@@ -455,7 +462,7 @@ func (ts *testServer) close(t *testing.T) error {
 	return nil
 }
 
-func newTestServer(t *testing.T) *testServer {
+func newTestServer(t *testing.T, ctx context.Context) *testServer {
 	t.Helper()
 	logf := logger.WithPrefix(t.Logf, "derp-server: ")
 	s := NewServer(key.NewNode(), logf)
@@ -475,7 +482,7 @@ func newTestServer(t *testing.T) *testServer {
 			// TODO: register c in ts so Close also closes it?
 			go func(i int) {
 				brwServer := bufio.NewReadWriter(bufio.NewReader(c), bufio.NewWriter(c))
-				go s.Accept(c, brwServer, fmt.Sprintf("test-client-%d", i))
+				go s.Accept(ctx, c, brwServer, fmt.Sprintf("test-client-%d", i))
 			}(i)
 		}
 	}()
@@ -610,7 +617,10 @@ func (c *testClient) close(t *testing.T) {
 // TestWatch tests the connection watcher mechanism used by regional
 // DERP nodes to mesh up with each other.
 func TestWatch(t *testing.T) {
-	ts := newTestServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ts := newTestServer(t, ctx)
 	defer ts.close(t)
 
 	w1 := newTestWatcher(t, ts, "w1")
@@ -1198,7 +1208,10 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 	defer connIn.Close()
 
 	brwServer := bufio.NewReadWriter(bufio.NewReader(connIn), bufio.NewWriter(connIn))
-	go s.Accept(connIn, brwServer, "test-client")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Accept(ctx, connIn, brwServer, "test-client")
 
 	brw := bufio.NewReadWriter(bufio.NewReader(connOut), bufio.NewWriter(connOut))
 	client, err := NewClient(k, connOut, brw, logger.Discard)
@@ -1354,7 +1367,10 @@ func TestClientSendRateLimiting(t *testing.T) {
 }
 
 func TestServerRepliesToPing(t *testing.T) {
-	ts := newTestServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ts := newTestServer(t, ctx)
 	defer ts.close(t)
 
 	tc := newRegularClient(t, ts, "alice")
