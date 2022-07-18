@@ -8,6 +8,7 @@ package distro
 import (
 	"os"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 )
 
@@ -93,4 +94,18 @@ func freebsdDistro() Distro {
 		return TrueNAS
 	}
 	return ""
+}
+
+// DSMVersion reports the Synology DSM major version.
+//
+// If not Synology, it reports 0.
+func DSMVersion() int {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	if Get() != Synology {
+		return 0
+	}
+	v, _ := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
+	return v
 }

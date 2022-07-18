@@ -182,11 +182,7 @@ func useAmbientCaps() bool {
 	if distro.Get() != distro.Synology {
 		return false
 	}
-	v, err := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
-	if err != nil {
-		return false
-	}
-	return v >= 7
+	return distro.DSMVersion() >= 7
 }
 
 var forceIPCommand = envknob.Bool("TS_DEBUG_USE_IP_COMMAND")

@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
+	"tailscale.com/version/distro"
 )
 
 // Process-wide cache. (A new *Handler is created per connection,
@@ -53,6 +55,13 @@ var (
 
 func (h *Handler) certDir() (string, error) {
 	d := h.b.TailscaleVarRoot()
+
+	// As a workaround for Synology DSM6 not having a "var" directory, use the
+	// app's "etc" directory (on a small partition) to hold certs at least.
+	// See https://github.com/tailscale/tailscale/issues/4060#issuecomment-1186592251
+	if d == "" && runtime.GOOS == "linux" && distro.Get() == distro.Synology && distro.DSMVersion() == 6 {
+		d = "/var/packages/Tailscale/etc" // base; we append "certs" below
+	}
 	if d == "" {
 		return "", errors.New("no TailscaleVarRoot")
 	}
