@@ -23,11 +23,11 @@ set -e
 TAILSCALED_ARGS="--socket=/tmp/tailscaled.sock"
 
 if [[ ! -z "${KUBERNETES_SERVICE_HOST}" ]]; then
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET}"
+  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET} --statedir=${TS_STATE_DIR:-/tmp}"
 elif [[ ! -z "${TS_STATE_DIR}" ]]; then
   TAILSCALED_ARGS="${TAILSCALED_ARGS} --statedir=${TS_STATE_DIR}"
 else
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=mem:"
+  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=mem: --statedir=/tmp"
 fi
 
 if [[ "${TS_USERSPACE}" == "true" ]]; then
