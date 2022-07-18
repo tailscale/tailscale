@@ -126,8 +126,10 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 		printf("\t* IPv6: yes, %v\n", report.GlobalV6)
 	} else if report.IPv6 {
 		printf("\t* IPv6: (no addr found)\n")
+	} else if report.OSHasIPv6 {
+		printf("\t* IPv6: no, but OS has support\n")
 	} else {
-		printf("\t* IPv6: no\n")
+		printf("\t* IPv6: no, unavailable in OS\n")
 	}
 	printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	printf("\t* HairPinning: %v\n", report.HairPinning)

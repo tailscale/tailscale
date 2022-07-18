@@ -111,6 +111,9 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	// That's not relevant to this test, so just accept what we're
 	// given.
 	want.IPv4CanSend = r.IPv4CanSend
+	// OS IPv6 test is irrelevant here, accept whatever the current
+	// machine has.
+	want.OSHasIPv6 = r.OSHasIPv6
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)

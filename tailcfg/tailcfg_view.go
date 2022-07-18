@@ -338,6 +338,7 @@ func (v *NetInfoView) UnmarshalJSON(b []byte) error {
 func (v NetInfoView) MappingVariesByDestIP() opt.Bool { return v.ж.MappingVariesByDestIP }
 func (v NetInfoView) HairPinning() opt.Bool           { return v.ж.HairPinning }
 func (v NetInfoView) WorkingIPv6() opt.Bool           { return v.ж.WorkingIPv6 }
+func (v NetInfoView) OSHasIPv6() opt.Bool             { return v.ж.OSHasIPv6 }
 func (v NetInfoView) WorkingUDP() opt.Bool            { return v.ж.WorkingUDP }
 func (v NetInfoView) HavePortMap() bool               { return v.ж.HavePortMap }
 func (v NetInfoView) UPnP() opt.Bool                  { return v.ж.UPnP }
@@ -354,6 +355,7 @@ var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
 	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
+	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
 	HavePortMap           bool
 	UPnP                  opt.Bool
