@@ -146,7 +146,7 @@ func (a *AUM) StaticValidate() error {
 	}
 
 	if a.State != nil {
-		if len(a.State.LastAUMHash) != 0 {
+		if a.State.LastAUMHash != nil {
 			return errors.New("checkpoint state cannot specify a parent AUM")
 		}
 		if len(a.State.DisablementSecrets) == 0 {

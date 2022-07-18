@@ -7,11 +7,26 @@ package tka
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
 	"sort"
 )
+
+// Authority is a Tailnet Key Authority. This type is the main coupling
+// point to the rest of the tailscale client.
+//
+// Authority objects can either be created from an existing, non-empty
+// tailchonk (via tka.Open()), or created from scratch using tka.Bootstrap()
+// or tka.Create().
+type Authority struct {
+	head           AUM
+	oldestAncestor AUM
+	state          State
+
+	storage Chonk
+}
 
 // A chain describes a linear sequence of updates from Oldest to Head,
 // resulting in some State at Head.
@@ -335,4 +350,196 @@ func computeActiveChain(storage Chonk, lastKnownOldest *AUMHash, maxIter int) (c
 		return chain{}, fmt.Errorf("fast forward: %v", err)
 	}
 	return out, nil
+}
+
+// aumVerify verifies if an AUM is well-formed, correctly signed, and
+// can be accepted for storage.
+func aumVerify(aum AUM, state State, isGenesisAUM bool) error {
+	if err := aum.StaticValidate(); err != nil {
+		return fmt.Errorf("invalid: %v", err)
+	}
+	if !isGenesisAUM {
+		if err := checkParent(aum, state); err != nil {
+			return err
+		}
+	}
+
+	if len(aum.Signatures) == 0 {
+		return errors.New("unsigned AUM")
+	}
+	sigHash := aum.SigHash()
+	for i, sig := range aum.Signatures {
+		key, err := state.GetKey(sig.KeyID)
+		if err != nil {
+			return fmt.Errorf("bad keyID on signature %d: %v", i, err)
+		}
+		if err := sig.Verify(sigHash, key); err != nil {
+			return fmt.Errorf("signature %d: %v", i, err)
+		}
+	}
+	return nil
+}
+
+func checkParent(aum AUM, state State) error {
+	parent, hasParent := aum.Parent()
+	if !hasParent {
+		return errors.New("aum has no parent")
+	}
+	if state.LastAUMHash == nil {
+		return errors.New("cannot check update parent hash against a state with no previous AUM")
+	}
+	if *state.LastAUMHash != parent {
+		return fmt.Errorf("aum with parent %x cannot be applied to a state with parent %x", state.LastAUMHash, parent)
+	}
+	return nil
+}
+
+// Head returns the AUM digest of the latest update applied to the state
+// machine.
+func (a *Authority) Head() AUMHash {
+	return *a.state.LastAUMHash
+}
+
+// Open initializes an existing TKA from the given tailchonk.
+//
+// Only use this if the current node has initialized an Authority before.
+// If a TKA exists on other nodes but theres nothing locally, use Bootstrap().
+// If no TKA exists anywhere and you are creating it for the first
+// time, use New().
+func Open(storage Chonk) (*Authority, error) {
+	a, err := storage.LastActiveAncestor()
+	if err != nil {
+		return nil, fmt.Errorf("reading last ancestor: %v", err)
+	}
+
+	c, err := computeActiveChain(storage, a, 2000)
+	if err != nil {
+		return nil, fmt.Errorf("active chain: %v", err)
+	}
+
+	return &Authority{
+		head:           c.Head,
+		oldestAncestor: c.Oldest,
+		storage:        storage,
+		state:          c.state,
+	}, nil
+}
+
+// Create initializes a brand-new TKA, generating a genesis update
+// and committing it to the given storage.
+//
+// The given signer must also be present in state as a trusted key.
+//
+// Do not use this to initialize a TKA that already exists, use Open()
+// or Bootstrap() instead.
+func Create(storage Chonk, state State, signer ed25519.PrivateKey) (*Authority, AUM, error) {
+	// Generate & sign a checkpoint, our genesis update.
+	genesis := AUM{
+		MessageKind: AUMCheckpoint,
+		State:       &state,
+	}
+	if err := genesis.StaticValidate(); err != nil {
+		// This serves as an easy way to validate the given state.
+		return nil, AUM{}, fmt.Errorf("invalid state: %v", err)
+	}
+	genesis.sign25519(signer)
+
+	a, err := Bootstrap(storage, genesis)
+	return a, genesis, err
+}
+
+// Bootstrap initializes a TKA based on the given checkpoint.
+//
+// Call this when setting up a new nodes' TKA, but other nodes
+// with initialized TKA's exist.
+//
+// Pass the returned genesis AUM from Create(), or a later checkpoint AUM.
+//
+// TODO(tom): We should test an authority bootstrapped from a later checkpoint
+// works fine with sync and everything.
+func Bootstrap(storage Chonk, bootstrap AUM) (*Authority, error) {
+	heads, err := storage.Heads()
+	if err != nil {
+		return nil, fmt.Errorf("reading heads: %v", err)
+	}
+	if len(heads) != 0 {
+		return nil, errors.New("tailchonk is not empty")
+	}
+
+	// Check the AUM is well-formed.
+	if bootstrap.MessageKind != AUMCheckpoint {
+		return nil, fmt.Errorf("bootstrap AUMs must be checkpoint messages, got %v", bootstrap.MessageKind)
+	}
+	if bootstrap.State == nil {
+		return nil, errors.New("bootstrap AUM is missing state")
+	}
+	if err := aumVerify(bootstrap, *bootstrap.State, true); err != nil {
+		return nil, fmt.Errorf("invalid bootstrap: %v", err)
+	}
+
+	// Everything looks good, write it to storage.
+	if err := storage.CommitVerifiedAUMs([]AUM{bootstrap}); err != nil {
+		return nil, fmt.Errorf("commit: %v", err)
+	}
+	if err := storage.SetLastActiveAncestor(bootstrap.Hash()); err != nil {
+		return nil, fmt.Errorf("set ancestor: %v", err)
+	}
+
+	return Open(storage)
+}
+
+// Inform is called to tell the authority about new updates. Updates
+// should be ordered oldest to newest. An error is returned if any
+// of the updates could not be processed.
+func (a *Authority) Inform(updates []AUM) error {
+	stateAt := make(map[AUMHash]State, len(updates)+1)
+	toCommit := make([]AUM, 0, len(updates))
+
+	for i, update := range updates {
+		hash := update.Hash()
+		if _, err := a.storage.AUM(hash); err == nil {
+			// Already have this AUM.
+			continue
+		}
+
+		parent, hasParent := update.Parent()
+		if !hasParent {
+			return fmt.Errorf("update %d: missing parent", i)
+		}
+
+		state, hasState := stateAt[parent]
+		var err error
+		if !hasState {
+			if state, err = computeStateAt(a.storage, 2000, parent); err != nil {
+				return fmt.Errorf("update %d computing state: %v", i, err)
+			}
+			stateAt[parent] = state
+		}
+
+		if err := aumVerify(update, state, false); err != nil {
+			return fmt.Errorf("update %d invalid: %v", i, err)
+		}
+		if stateAt[hash], err = state.applyVerifiedAUM(update); err != nil {
+			return fmt.Errorf("update %d cannot be applied: %v", i, err)
+		}
+		toCommit = append(toCommit, update)
+	}
+
+	if err := a.storage.CommitVerifiedAUMs(toCommit); err != nil {
+		return fmt.Errorf("commit: %v", err)
+	}
+
+	// TODO(tom): Theres no need to recompute the state from scratch
+	//            in every case. We should detect when updates were
+	//            a linear, non-forking series applied to head, and
+	//            just use the last State we computed.
+	oldestAncestor := a.oldestAncestor.Hash()
+	c, err := computeActiveChain(a.storage, &oldestAncestor, 2000)
+	if err != nil {
+		return fmt.Errorf("recomputing active chain: %v", err)
+	}
+	a.head = c.Head
+	a.oldestAncestor = c.Oldest
+	a.state = c.state
+	return nil
 }
