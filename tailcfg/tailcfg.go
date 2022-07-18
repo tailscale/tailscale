@@ -496,10 +496,14 @@ type NetInfo struct {
 	// It reports true even if there's no NAT involved.
 	HairPinning opt.Bool
 
-	// WorkingIPv6 is whether IPv6 works.
+	// WorkingIPv6 is whether the host has IPv6 internet connectivity.
 	WorkingIPv6 opt.Bool
 
-	// WorkingUDP is whether UDP works.
+	// OSHasIPv6 is whether the OS supports IPv6 at all, regardless of
+	// whether IPv6 internet connectivity is available.
+	OSHasIPv6 opt.Bool
+
+	// WorkingUDP is whether the host has UDP internet connectivity.
 	WorkingUDP opt.Bool
 
 	// HavePortMap is whether we have an existing portmap open
@@ -590,6 +594,7 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 	return ni.MappingVariesByDestIP == ni2.MappingVariesByDestIP &&
 		ni.HairPinning == ni2.HairPinning &&
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
+		ni.OSHasIPv6 == ni2.OSHasIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&
 		ni.HavePortMap == ni2.HavePortMap &&
 		ni.UPnP == ni2.UPnP &&

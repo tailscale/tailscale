@@ -500,6 +500,7 @@ func TestNetInfoFields(t *testing.T) {
 		"MappingVariesByDestIP",
 		"HairPinning",
 		"WorkingIPv6",
+		"OSHasIPv6",
 		"WorkingUDP",
 		"HavePortMap",
 		"UPnP",

@@ -76,6 +76,7 @@ type Report struct {
 	IPv4        bool // an IPv4 STUN round trip completed
 	IPv6CanSend bool // an IPv6 packet was able to be sent
 	IPv4CanSend bool // an IPv4 packet was able to be sent
+	OSHasIPv6   bool // could bind a socket to ::1
 
 	// MappingVariesByDestIP is whether STUN results depend which
 	// STUN server you're talking to (on IPv4).
@@ -804,6 +805,14 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	if err != nil {
 		c.logf("[v1] interfaces: %v", err)
 		return nil, err
+	}
+
+	// See if IPv6 works at all, or if it's been hard disabled at the
+	// OS level.
+	v6udp, err := netns.Listener(c.logf).ListenPacket(ctx, "udp6", "[::1]:0")
+	if err == nil {
+		rs.report.OSHasIPv6 = true
+		v6udp.Close()
 	}
 
 	// Create a UDP4 socket used for sending to our discovered IPv4 address.

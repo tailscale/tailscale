@@ -154,6 +154,7 @@ var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
 	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
+	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
 	HavePortMap           bool
 	UPnP                  opt.Bool
