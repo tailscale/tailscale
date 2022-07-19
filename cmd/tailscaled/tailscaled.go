@@ -404,7 +404,6 @@ func run() error {
 	// want to keep running.
 	signal.Ignore(syscall.SIGPIPE)
 	go func() {
-		defer dialer.Close()
 		select {
 		case s := <-interrupt:
 			logf("tailscaled got signal %v; shutting down", s)
@@ -437,6 +436,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+	defer dialer.Close()
 
 	err = srv.Run(ctx, ln)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
