@@ -342,7 +342,19 @@ func (b *LocalBackend) onHealthChange(sys health.Subsystem, err error) {
 // can no longer be used after Shutdown returns.
 func (b *LocalBackend) Shutdown() {
 	b.mu.Lock()
+	if b.shutdownCalled {
+		b.mu.Unlock()
+		return
+	}
 	b.shutdownCalled = true
+
+	if b.loginFlags&controlclient.LoginEphemeral != 0 {
+		b.mu.Unlock()
+		ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
+		defer cancel()
+		b.LogoutSync(ctx) // best effort
+		b.mu.Lock()
+	}
 	cc := b.cc
 	if b.sshServer != nil {
 		b.sshServer.Shutdown()
