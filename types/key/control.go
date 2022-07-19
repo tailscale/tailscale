@@ -56,6 +56,11 @@ func (k ControlPrivate) SealTo(p MachinePublic, cleartext []byte) (ciphertext []
 	return k.mkey.SealTo(p, cleartext)
 }
 
+// SharedKey returns the precomputed Nacl box shared key between k and p.
+func (k ControlPrivate) SharedKey(p MachinePublic) MachinePrecomputedSharedKey {
+	return k.mkey.SharedKey(p)
+}
+
 // OpenFrom opens the NaCl box ciphertext, which must be a value
 // created by SealTo, and returns the inner cleartext if ciphertext is
 // a valid box from p to k.
