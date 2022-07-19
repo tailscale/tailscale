@@ -1120,7 +1120,7 @@ Replaces the list of searchpaths with the list supplied by the user and returns 
 `searchPaths` - A list of searchpaths in JSON.
 ```
 {
-  "searchPaths: ["user1.example.com", "user2.example.com"]
+  "searchPaths": ["user1.example.com", "user2.example.com"]
 }
 ```
 
