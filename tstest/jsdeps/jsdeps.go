@@ -4,8 +4,8 @@
 
 // Package jsdeps is a just a list of the packages we import in the
 // JavaScript/WASM build, to let us test that our transitive closure of
-// dependencies on iOS doesn't accidentally grow too large, since binary size
-// is more of a concern there.
+// dependencies doesn't accidentally grow too large, since binary size
+// is more of a concern.
 package jsdeps
 
 import (
