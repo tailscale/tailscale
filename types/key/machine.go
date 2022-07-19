@@ -105,6 +105,33 @@ func (k MachinePrivate) SealTo(p MachinePublic, cleartext []byte) (ciphertext []
 	return box.Seal(nonce[:], cleartext, &nonce, &p.k, &k.k)
 }
 
+// SharedKey returns the precomputed Nacl box shared key between k and p.
+func (k MachinePrivate) SharedKey(p MachinePublic) MachinePrecomputedSharedKey {
+	var shared MachinePrecomputedSharedKey
+	box.Precompute(&shared.k, &p.k, &k.k)
+	return shared
+}
+
+// MachinePrecomputedSharedKey is a precomputed shared NaCl box shared key.
+type MachinePrecomputedSharedKey struct {
+	k [32]byte
+}
+
+// Seal wraps cleartext into a NaCl box (see
+// golang.org/x/crypto/nacl) using the shared key k as generated
+// by MachinePrivate.SharedKey.
+//
+// The returned ciphertext is a 24-byte nonce concatenated with the
+// box value.
+func (k MachinePrecomputedSharedKey) Seal(cleartext []byte) (ciphertext []byte) {
+	if k == (MachinePrecomputedSharedKey{}) {
+		panic("can't seal with zero keys")
+	}
+	var nonce [24]byte
+	rand(nonce[:])
+	return box.SealAfterPrecomputation(nonce[:], cleartext, &nonce, &k.k)
+}
+
 // OpenFrom opens the NaCl box ciphertext, which must be a value
 // created by SealTo, and returns the inner cleartext if ciphertext is
 // a valid box from p to k.
