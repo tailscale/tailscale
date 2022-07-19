@@ -1209,7 +1209,7 @@ type MapResponse struct {
 	// PopBrowserURL, if non-empty, is a URL for the client to
 	// open to complete an action. The client should dup suppress
 	// identical URLs and only open it once for the same URL.
-	PopBrowserURL string
+	PopBrowserURL string `json:",omitempty"`
 
 	// Networking
 
