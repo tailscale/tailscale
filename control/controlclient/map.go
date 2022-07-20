@@ -165,12 +165,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 		ms.addUserProfile(peer.User)
 	}
-	if len(resp.DNS) > 0 {
-		nm.DNS.Nameservers = resp.DNS
-	}
-	if len(resp.SearchPaths) > 0 {
-		nm.DNS.Domains = resp.SearchPaths
-	}
 	if Debug.ProxyDNS {
 		nm.DNS.Proxied = true
 	}
