@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"fmt"
 	"log"
 	"sort"
 
@@ -238,7 +239,7 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 		sortNodes(newFull)
 	}
 
-	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 {
+	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 || len(mapRes.PeersChangedPatch) != 0 {
 		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
 		for _, n := range newFull {
 			peerByID[n.ID] = n
@@ -257,6 +258,16 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 			if n, ok := peerByID[nodeID]; ok {
 				online := online
 				n.Online = &online
+			}
+		}
+		for _, ec := range mapRes.PeersChangedPatch {
+			if n, ok := peerByID[ec.NodeID]; ok {
+				if ec.DERPRegion != 0 {
+					n.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, ec.DERPRegion)
+				}
+				if ec.Endpoints != nil {
+					n.Endpoints = ec.Endpoints
+				}
 			}
 		}
 	}

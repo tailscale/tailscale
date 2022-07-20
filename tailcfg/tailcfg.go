@@ -67,7 +67,8 @@ type CapabilityVersion int
 //    30: 2022-03-22: client can request id tokens.
 //    31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
 //    32: 2022-04-17: client knows FilterRule.CapMatch
-const CurrentCapabilityVersion CapabilityVersion = 32
+//    33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
+const CurrentCapabilityVersion CapabilityVersion = 33
 
 type StableID string
 
@@ -1237,6 +1238,15 @@ type MapResponse struct {
 	// PeersRemoved are the NodeIDs that are no longer in the peer list.
 	PeersRemoved []NodeID `json:",omitempty"`
 
+	// PeersChangedPatch, if non-nil, means that node(s) have changed.
+	// This is a lighter version of the older PeersChanged support that
+	// only supports certain types of updates
+	//
+	// These are applied after Peers* above, but in practice the
+	// control server should only send these on their own, without
+	// the Peers* fields also set.
+	PeersChangedPatch []*PeerChange `json:",omitempty"`
+
 	// PeerSeenChange contains information on how to update peers' LastSeen
 	// times. If the value is false, the peer is gone. If the value is true,
 	// the LastSeen time is now. Absent means unchanged.
@@ -1724,3 +1734,27 @@ type TokenResponse struct {
 	//   `uid`       | user ID, if not tagged
 	IDToken string `json:"id_token"`
 }
+
+// PeerChange is an update to a node.
+type PeerChange struct {
+	// NodeID is the node ID being mutated. If the NodeID is not
+	// known in the current netmap, this update should be
+	// ignored. (But the server will try not to send such useless
+	// updates.)
+	NodeID NodeID
+
+	// DERPRegion, if non-zero, means that NodeID's home DERP
+	// region ID is now this number.
+	DERPRegion int `json:",omitempty"`
+
+	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
+	// have changed to these.
+	Endpoints []string `json:",omitempty"`
+}
+
+// DerpMagicIP is a fake WireGuard endpoint IP address that means to
+// use DERP. When used (in the Node.DERP field), the port number of
+// the WireGuard endpoint is the DERP region ID number to use.
+//
+// Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
+const DerpMagicIP = "127.3.3.40"
