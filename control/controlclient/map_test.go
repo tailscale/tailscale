@@ -34,6 +34,16 @@ func TestUndeltaPeers(t *testing.T) {
 			n.LastSeen = &t
 		}
 	}
+	withDERP := func(d string) func(*tailcfg.Node) {
+		return func(n *tailcfg.Node) {
+			n.DERP = d
+		}
+	}
+	withEP := func(ep string) func(*tailcfg.Node) {
+		return func(n *tailcfg.Node) {
+			n.Endpoints = []string{ep}
+		}
+	}
 	n := func(id tailcfg.NodeID, name string, mod ...func(*tailcfg.Node)) *tailcfg.Node {
 		n := &tailcfg.Node{ID: id, Name: name}
 		for _, f := range mod {
@@ -137,7 +147,53 @@ func TestUndeltaPeers(t *testing.T) {
 				n(2, "bar", seenAt(time.Unix(123, 0))),
 			),
 		},
+		{
+			name: "ep_change_derp",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:     1,
+					DERPRegion: 4,
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:4"))),
+		},
+		{
+			name: "ep_change_udp",
+			prev: peers(n(1, "foo", withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					Endpoints: []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withEP("1.2.3.4:56"))),
+		},
+		{
+			name: "ep_change_udp",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					Endpoints: []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
+		},
+		{
+			name: "ep_change_both",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:     1,
+					DERPRegion: 2,
+					Endpoints:  []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
+		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.curTime.IsZero() {

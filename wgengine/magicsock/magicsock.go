@@ -442,14 +442,7 @@ func (c *Conn) addDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Cl
 	mak.Set(&c.derpRoute, peer, derpRoute{derpID, dc})
 }
 
-// DerpMagicIP is a fake WireGuard endpoint IP address that means
-// to use DERP. When used, the port number of the WireGuard endpoint
-// is the DERP server number to use.
-//
-// Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
-const DerpMagicIP = "127.3.3.40"
-
-var derpMagicIPAddr = netaddr.MustParseIP(DerpMagicIP)
+var derpMagicIPAddr = netaddr.MustParseIP(tailcfg.DerpMagicIP)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
