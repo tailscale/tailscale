@@ -38,7 +38,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	return &esbuild.BuildOptions{
 		EntryPoints: []string{"src/index.js", "src/index.css"},
 		Loader:      map[string]esbuild.Loader{".wasm": esbuild.LoaderFile},
-		Outdir:      "./dist",
+		Outdir:      *distDir,
 		Bundle:      true,
 		Sourcemap:   esbuild.SourceMapLinked,
 		LogLevel:    esbuild.LogLevelInfo,
@@ -102,4 +102,13 @@ func installJSDeps() error {
 		log.Printf("yarn failed: %s", stdoutStderr)
 	}
 	return err
+}
+
+// EsbuildMetadata is the subset of metadata struct (described by
+// https://esbuild.github.io/api/#metafile) that we care about for mapping
+// from entry points to hashed file names.
+type EsbuildMetadata struct {
+	Outputs map[string]struct {
+		EntryPoint string `json:"entryPoint,omitempty"`
+	} `json:"outputs,omitempty"`
 }
