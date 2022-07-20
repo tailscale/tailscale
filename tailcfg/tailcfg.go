@@ -1245,14 +1245,6 @@ type MapResponse struct {
 	// OnlineChange changes the value of a Peer Node.Online value.
 	OnlineChange map[NodeID]bool `json:",omitempty"`
 
-	// DNS is the same as DNSConfig.Nameservers.
-	// Only populated if MapRequest.Version < 9.
-	DNS []netaddr.IP `json:",omitempty"`
-
-	// SearchPaths is the old way to specify DNS search domains.
-	// Only populated if MapRequest.Version < 9.
-	SearchPaths []string `json:",omitempty"`
-
 	// DNSConfig contains the DNS settings for the client to use.
 	// A nil value means no change from an earlier non-nil value.
 	DNSConfig *DNSConfig `json:",omitempty"`
