@@ -18,7 +18,8 @@ import (
 )
 
 var (
-	addr = flag.String("addr", ":9090", "address to listen on")
+	addr    = flag.String("addr", ":9090", "address to listen on")
+	distDir = flag.String("distdir", "./dist", "path of directory to place build output in")
 )
 
 func main() {

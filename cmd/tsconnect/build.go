@@ -7,11 +7,14 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/andybalholm/brotli"
@@ -26,7 +29,7 @@ func runBuild() {
 	}
 
 	if err := cleanDist(); err != nil {
-		log.Fatalf("Cannot clean dist/: %v", err)
+		log.Fatalf("Cannot clean %s: %v", *distDir, err)
 	}
 
 	buildOptions.Write = true
@@ -55,7 +58,11 @@ func runBuild() {
 	}
 
 	// Preserve build metadata so we can extract hashed file names for serving.
-	if err := ioutil.WriteFile("./dist/esbuild-metadata.json", []byte(result.Metafile), 0666); err != nil {
+	metadataBytes, err := fixEsbuildMetadataPaths(result.Metafile)
+	if err != nil {
+		log.Fatalf("Cannot fix esbuild metadata paths: %v", err)
+	}
+	if err := ioutil.WriteFile(path.Join(*distDir, "/esbuild-metadata.json"), metadataBytes, 0666); err != nil {
 		log.Fatalf("Cannot write metadata: %v", err)
 	}
 
@@ -64,18 +71,48 @@ func runBuild() {
 	}
 }
 
+// fixEsbuildMetadataPaths re-keys the esbuild metadata file to use paths
+// relative to the dist directory (it normally uses paths relative to the cwd,
+// which are akward if we're running with a different cwd at serving time).
+func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
+	var metadata EsbuildMetadata
+	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
+		return nil, fmt.Errorf("Cannot parse metadata: %w", err)
+	}
+	distAbsPath, err := filepath.Abs(*distDir)
+	if err != nil {
+		return nil, fmt.Errorf("Cannot get absolute path from %s: %w", *distDir, err)
+	}
+	for outputPath, output := range metadata.Outputs {
+		outputAbsPath, err := filepath.Abs(outputPath)
+		if err != nil {
+			return nil, fmt.Errorf("Cannot get absolute path from %s: %w", outputPath, err)
+		}
+		outputRelPath, err := filepath.Rel(distAbsPath, outputAbsPath)
+		if err != nil {
+			return nil, fmt.Errorf("Cannot get relative path from %s: %w", outputRelPath, err)
+		}
+		delete(metadata.Outputs, outputPath)
+		metadata.Outputs[outputRelPath] = output
+	}
+	return json.Marshal(metadata)
+}
+
 // cleanDist removes files from the dist build directory, except the placeholder
 // one that we keep to make sure Git still creates the directory.
 func cleanDist() error {
-	log.Printf("Cleaning dist/...\n")
-	files, err := os.ReadDir("dist")
+	log.Printf("Cleaning %s...\n", *distDir)
+	files, err := os.ReadDir(*distDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(*distDir, 0755)
+		}
 		return err
 	}
 
 	for _, file := range files {
 		if file.Name() != "placeholder" {
-			if err := os.Remove(filepath.Join("dist", file.Name())); err != nil {
+			if err := os.Remove(filepath.Join(*distDir, file.Name())); err != nil {
 				return err
 			}
 		}
@@ -84,22 +121,23 @@ func cleanDist() error {
 }
 
 func precompressDist() error {
-	log.Printf("Pre-compressing files in dist/...\n")
+	log.Printf("Pre-compressing files in %s/...\n", *distDir)
 	var eg errgroup.Group
-	err := fs.WalkDir(os.DirFS("./"), "dist", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(os.DirFS(*distDir), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		if !compressibleExtensions[filepath.Ext(path)] {
+		if !compressibleExtensions[filepath.Ext(p)] {
 			return nil
 		}
-		log.Printf("Pre-compressing %v\n", path)
+		p = path.Join(*distDir, p)
+		log.Printf("Pre-compressing %v\n", p)
 
 		eg.Go(func() error {
-			return precompress(path)
+			return precompress(p)
 		})
 		return nil
 	})
