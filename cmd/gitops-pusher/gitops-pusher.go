@@ -256,7 +256,7 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 	return nil
 }
 
-var lineColMessageSplit = regexp.MustCompile(`^line ([0-9]+), column ([0-9]+): (.*)$`)
+var lineColMessageSplit = regexp.MustCompile(`line ([0-9]+), column ([0-9]+): (.*)$`)
 
 type ACLTestError struct {
 	Message string               `json:"message"`
