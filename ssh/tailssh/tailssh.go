@@ -290,7 +290,7 @@ func (srv *server) newConn() (*conn, error) {
 	srv.mu.Unlock()
 	c := &conn{srv: srv}
 	now := srv.now()
-	c.connID = fmt.Sprintf("conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
+	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
 	c.Server = &ssh.Server{
 		Version:         "Tailscale",
 		Handler:         c.handleSessionPostSSHAuth,
