@@ -30,6 +30,20 @@ func TestNodeKey(t *testing.T) {
 	if full, got := string(bs), ":"+p.UntypedHexString(); !strings.HasSuffix(full, got) {
 		t.Fatalf("NodePublic.UntypedHexString is not a suffix of the typed serialization, got %q want suffix of %q", got, full)
 	}
+	bs, err = p.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bs, append([]byte(nodePublicBinaryPrefix), p.k[:]...); !bytes.Equal(got, want) {
+		t.Fatalf("Binary-encoded NodePublic = %x, want %x", got, want)
+	}
+	var decoded NodePublic
+	if err := decoded.UnmarshalBinary(bs); err != nil {
+		t.Fatalf("NodePublic.UnmarshalBinary(%x) failed: %v", bs, err)
+	}
+	if decoded != p {
+		t.Errorf("unmarshaled and original NodePublic differ:\noriginal = %v\ndecoded = %v", p, decoded)
+	}
 
 	z := NodePublic{}
 	if !z.IsZero() {
