@@ -86,8 +86,11 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 		// TODO(maisem): this doesn't work with sftp
 		return exec.CommandContext(ss.ctx, name, args...)
 	}
+	ss.conn.mu.Lock()
 	lu := ss.conn.localUser
 	ci := ss.conn.info
+	gids := strings.Join(ss.conn.userGroupIDs, ",")
+	ss.conn.mu.Unlock()
 	remoteUser := ci.uprof.LoginName
 	if len(ci.node.Tags) > 0 {
 		remoteUser = strings.Join(ci.node.Tags, ",")
@@ -98,7 +101,7 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 		"ssh",
 		"--uid=" + lu.Uid,
 		"--gid=" + lu.Gid,
-		"--groups=" + strings.Join(ss.conn.userGroupIDs, ","),
+		"--groups=" + gids,
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
 		"--remote-ip=" + ci.src.IP().String(),
