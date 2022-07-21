@@ -14,7 +14,6 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
@@ -290,7 +289,7 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 }
 
 func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst netaddr.IPPort) []byte {
-	buf := buffer.NewView(header.EthernetMinimumSize + header.UDPMinimumSize + header.IPv4MinimumSize + len(payload))
+	buf := make([]byte, header.EthernetMinimumSize+header.UDPMinimumSize+header.IPv4MinimumSize+len(payload))
 	payloadStart := len(buf) - len(payload)
 	copy(buf[payloadStart:], payload)
 	srcB := src.IP().As4()

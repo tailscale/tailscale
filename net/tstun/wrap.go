@@ -524,9 +524,10 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 
 	var n int
 	if res.packet != nil {
-		n = copy(buf[offset:], res.packet.NetworkHeader().View())
-		n += copy(buf[offset+n:], res.packet.TransportHeader().View())
-		n += copy(buf[offset+n:], res.packet.Data().AsRange().AsView())
+
+		n = copy(buf[offset:], res.packet.NetworkHeader().Slice())
+		n += copy(buf[offset+n:], res.packet.TransportHeader().Slice())
+		n += copy(buf[offset+n:], res.packet.Data().AsRange().ToSlice())
 
 		res.packet.DecRef()
 	} else {
@@ -715,9 +716,9 @@ func (t *Wrapper) SetFilter(filt *filter.Filter) {
 func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
 	buf := make([]byte, PacketStartOffset+pkt.Size())
 
-	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().View())
-	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().View())
-	n += copy(buf[PacketStartOffset+n:], pkt.Data().AsRange().AsView())
+	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().Slice())
+	n += copy(buf[PacketStartOffset+n:], pkt.TransportHeader().Slice())
+	n += copy(buf[PacketStartOffset+n:], pkt.Data().AsRange().ToSlice())
 	if n != pkt.Size() {
 		panic("unexpected packet size after copy")
 	}
