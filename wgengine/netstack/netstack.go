@@ -21,10 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/bufferv2"
 	"gvisor.dev/gvisor/pkg/refs"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
@@ -402,9 +402,9 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	if debugPackets {
 		ns.logf("[v2] service packet in (from %v): % x", p.Src, p.Buffer())
 	}
-	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
+
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Data: vv,
+		Payload: bufferv2.MakeWithData(append([]byte(nil), p.Buffer()...)),
 	})
 	ns.linkEP.InjectInbound(pn, packetBuf)
 	packetBuf.DecRef()
@@ -477,7 +477,7 @@ func (ns *Impl) inject() {
 		// TODO(tom): Figure out if its safe to modify packet.Parsed to fill in
 		//            the IP src/dest even if its missing the rest of the pkt.
 		//            That way we dont have to do this twitchy-af byte-yeeting.
-		if b := pkt.NetworkHeader().View(); len(b) >= 20 { // min ipv4 header
+		if b := pkt.NetworkHeader().Slice(); len(b) >= 20 { // min ipv4 header
 			switch b[0] >> 4 { // ip proto field
 			case 4:
 				if srcIP := netaddr.IPv4(b[12], b[13], b[14], b[15]); magicDNSIP == srcIP {
@@ -687,9 +687,8 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	if debugPackets {
 		ns.logf("[v2] packet in (from %v): % x", p.Src, p.Buffer())
 	}
-	vv := buffer.View(append([]byte(nil), p.Buffer()...)).ToVectorisedView()
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Data: vv,
+		Payload: bufferv2.MakeWithData(append([]byte(nil), p.Buffer()...)),
 	})
 	ns.linkEP.InjectInbound(pn, packetBuf)
 	packetBuf.DecRef()

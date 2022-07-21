@@ -14,9 +14,9 @@ import (
 // tests netstack's AlignedAtomicInt64.
 func TestAlignedAtomicInt64(t *testing.T) {
 	type T struct {
-		A atomicbitops.AlignedAtomicInt64
+		A atomicbitops.Int64
 		x int32
-		B atomicbitops.AlignedAtomicInt64
+		B atomicbitops.Int64
 	}
 
 	t.Logf("I am %v/%v\n", runtime.GOOS, runtime.GOARCH)

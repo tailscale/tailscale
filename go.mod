@@ -19,12 +19,14 @@ require (
 	github.com/dave/jennifer v1.4.1
 	github.com/evanw/esbuild v0.14.39
 	github.com/frankban/quicktest v1.14.0
+	github.com/fxamacker/cbor/v2 v2.4.0
 	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.0.6
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/google/go-cmp v0.5.8
 	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
+	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
@@ -61,7 +63,7 @@ require (
 	golang.org/x/tools v0.1.11
 	golang.zx2c4.com/wireguard v0.0.0-20220703234212-c31a7b1ab478
 	golang.zx2c4.com/wireguard/windows v0.4.10
-	gvisor.dev/gvisor v0.0.0-20220407223209-21871174d445
+	gvisor.dev/gvisor v0.0.0-20220721202624-0b2c11c2773c
 	honnef.co/go/tools v0.4.0-0.dev.0.20220404092545-59d7a2877f83
 	inet.af/netaddr v0.0.0-20220617031823-097006376321
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
@@ -124,7 +126,6 @@ require (
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/fxamacker/cbor/v2 v2.4.0 // indirect
 	github.com/fzipp/gocyclo v0.3.1 // indirect
 	github.com/gliderlabs/ssh v0.3.3 // indirect
 	github.com/go-critic/go-critic v0.6.1 // indirect
@@ -166,7 +167,6 @@ require (
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
-	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
 	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
