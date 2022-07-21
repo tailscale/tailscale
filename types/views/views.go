@@ -132,6 +132,43 @@ func (v Slice[T]) AsSlice() []T {
 	return v.AppendTo(v.ж[:0:0])
 }
 
+// IndexFunc returns the first index of an element in v satisfying f(e),
+// or -1 if none do.
+//
+// As it runs in O(n) time, use with care.
+func (v Slice[T]) IndexFunc(f func(T) bool) int {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// ContainsFunc reports whether any element in v satisfies f(e).
+//
+// As it runs in O(n) time, use with care.
+func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// SliceContains reports whether v contains element e.
+//
+// As it runs in O(n) time, use with care.
+func SliceContains[T comparable](v Slice[T], e T) bool {
+	for i := 0; i < v.Len(); i++ {
+		if v.At(i) == e {
+			return true
+		}
+	}
+	return false
+}
+
 // IPPrefixSlice is a read-only accessor for a slice of netaddr.IPPrefix.
 type IPPrefixSlice struct {
 	ж Slice[netaddr.IPPrefix]

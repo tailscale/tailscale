@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	qt "github.com/frankban/quicktest"
 	"inet.af/netaddr"
 )
 
@@ -72,4 +73,16 @@ func TestViewsJSON(t *testing.T) {
 			t.Fatalf("unmarshal resulted in different output: %+v; want %+v", got, tc.in)
 		}
 	}
+}
+
+func TestViewUtils(t *testing.T) {
+	v := SliceOf([]string{"foo", "bar"})
+	c := qt.New(t)
+
+	c.Check(v.ContainsFunc(func(s string) bool { return strings.HasPrefix(s, "f") }), qt.Equals, true)
+	c.Check(v.ContainsFunc(func(s string) bool { return strings.HasPrefix(s, "g") }), qt.Equals, false)
+	c.Check(v.IndexFunc(func(s string) bool { return strings.HasPrefix(s, "b") }), qt.Equals, 1)
+	c.Check(v.IndexFunc(func(s string) bool { return strings.HasPrefix(s, "z") }), qt.Equals, -1)
+	c.Check(SliceContains(v, "bar"), qt.Equals, true)
+	c.Check(SliceContains(v, "baz"), qt.Equals, false)
 }
