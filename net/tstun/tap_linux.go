@@ -94,7 +94,6 @@ const (
 // handleTAPFrame handles receiving a raw TAP ethernet frame and reports whether
 // it's been handled (that is, whether it should NOT be passed to wireguard).
 func (t *Wrapper) handleTAPFrame(ethBuf []byte) bool {
-
 	if len(ethBuf) < ethernetFrameSize {
 		// Corrupt. Ignore.
 		if tapDebug {

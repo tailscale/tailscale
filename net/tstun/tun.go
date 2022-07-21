@@ -31,6 +31,9 @@ func init() {
 // createTAP is non-nil on Linux.
 var createTAP func(tapName, bridgeName string) (tun.Device, error)
 
+// createVETH is non-nil on Linux.
+var createVETH func(tapName string) (tun.Device, error)
+
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
@@ -51,6 +54,15 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 			return nil, "", errors.New("bogus tap argument")
 		}
 		dev, err = createTAP(tapName, bridgeName)
+	} else if strings.HasPrefix(tunName, "veth:") {
+		if runtime.GOOS != "linux" {
+			return nil, "", errors.New("veth/xdp only works on Linux")
+		}
+		f := strings.Split(tunName, ":")
+		if len(f) != 2 {
+			return nil, "", errors.New("bogus veth argument")
+		}
+		dev, err = createVETH(f[1])
 	} else {
 		dev, err = tun.CreateTUN(tunName, tunMTU)
 	}

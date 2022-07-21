@@ -99,8 +99,8 @@ func defaultTunName() string {
 
 var args struct {
 	// tunname is a /dev/net/tun tunnel name ("tailscale0"), the
-	// string "userspace-networking", "tap:TAPNAME[:BRIDGENAME]"
-	// or comma-separated list thereof.
+	// string "userspace-networking", "tap:TAPNAME[:BRIDGENAME]",
+	// "veth:VETHNAME", or comma-separated list thereof.
 	tunname string
 
 	cleanup        bool
@@ -523,6 +523,10 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			conf.IsTAP = true
 			e, err := wgengine.NewUserspaceEngine(logf, conf)
 			return e, false, err
+		}
+		if strings.HasPrefix(name, "veth:") {
+			conf.IsVETH = true
+			// fall through, we want a router and DNS config.
 		}
 
 		r, err := router.New(logf, dev, linkMon)

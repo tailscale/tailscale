@@ -190,6 +190,10 @@ type Config struct {
 	// require ethernet headers.
 	IsTAP bool
 
+	// IsVETh is whether Tun is actually a veth/xdp (Layer 2) device
+	// that will require ethernet headers.
+	IsVETH bool
+
 	// Router interfaces the Engine to the OS network stack.
 	// If nil, a fake Router that does nothing is used.
 	Router router.Router
@@ -290,6 +294,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	var tsTUNDev *tstun.Wrapper
 	if conf.IsTAP {
 		tsTUNDev = tstun.WrapTAP(logf, conf.Tun)
+	} else if conf.IsVETH {
+		tsTUNDev = tstun.WrapVETH(logf, conf.Tun)
 	} else {
 		tsTUNDev = tstun.Wrap(logf, conf.Tun)
 	}

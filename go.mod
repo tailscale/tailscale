@@ -8,6 +8,7 @@ require (
 	github.com/alexbrainman/sspi v0.0.0-20210105120005-909beea2cc74
 	github.com/andybalholm/brotli v1.0.3
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
+	github.com/asavie/xdp v0.3.4-0.20220212172814-56d71236a029
 	github.com/aws/aws-sdk-go-v2 v1.11.2
 	github.com/aws/aws-sdk-go-v2/config v1.11.0
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.7.4
@@ -112,6 +113,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/charithe/durationcheck v0.0.9 // indirect
 	github.com/chavacava/garif v0.0.0-20210405164556-e8a0a408d6af // indirect
+	github.com/cilium/ebpf v0.8.1 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.11.4 // indirect
 	github.com/daixiang0/gci v0.2.9 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -282,3 +284,5 @@ require (
 	mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca // indirect
 	software.sslmate.com/src/go-pkcs12 v0.0.0-20210415151418-c5206de65a78 // indirect
 )
+
+//replace github.com/asavie/xdp => ./gohack/xdp

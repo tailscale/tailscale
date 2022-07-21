@@ -73,7 +73,7 @@ type Wrapper struct {
 	limitedLogf logger.Logf // aggressively rate-limited logf used for potentially high volume errors
 	// tdev is the underlying Wrapper device.
 	tdev  tun.Device
-	isTAP bool // whether tdev is a TAP device
+	isTAP bool // whether tdev is a TAP or veth+xdp device
 
 	closeOnce sync.Once
 
@@ -183,7 +183,25 @@ type tunReadResult struct {
 }
 
 func WrapTAP(logf logger.Logf, tdev tun.Device) *Wrapper {
-	return wrap(logf, tdev, true)
+	w := wrap(logf, tdev, true)
+	if name, _ := tdev.Name(); strings.HasPrefix(name, "veth:") {
+		var mac [6]byte
+		copy(mac[:], dstMAC)
+		w.destMACAtomic.Store(mac)
+		logf("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX destMACAtomic: %x", mac)
+	} else {
+		logf("XXXXXXXXXXXXXXXXXXXXXXXXX tdev name: %s", name)
+	}
+	return w
+}
+
+func WrapVETH(logf logger.Logf, tdev tun.Device) *Wrapper {
+	w := wrap(logf, tdev, true)
+	var mac [6]byte
+	copy(mac[:], dstMAC)
+	w.destMACAtomic.Store(mac)
+	logf("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX destMACAtomic: %x", mac)
+	return w
 }
 
 func Wrap(logf logger.Logf, tdev tun.Device) *Wrapper {
@@ -362,6 +380,9 @@ const ethernetFrameSize = 14 // 2 six byte MACs, 2 bytes ethertype
 // This is needed because t.tdev.Read in general may block (it does on Windows),
 // so packets may be stuck in t.outbound if t.Read called t.tdev.Read directly.
 func (t *Wrapper) poll() {
+	if t.isTAP { // TODO: only if isVETH
+		//runtime.LockOSThread()
+	}
 	for range t.bufferConsumed {
 	DoRead:
 		var n int
@@ -402,9 +423,38 @@ func (t *Wrapper) poll() {
 			if n >= ethernetFrameSize {
 				n -= ethernetFrameSize
 			}
+			ipbuf := t.buffer[PacketStartOffset : PacketStartOffset+n]
 			if tapDebug {
-				t.logf("tap regular frame: %x", t.buffer[PacketStartOffset:PacketStartOffset+n])
+				t.logf("tap regular frame: %x", ipbuf)
 			}
+			if len(ipbuf) == 0 { // hmmmmm
+				continue
+			}
+			// By default veth attempts to offload checksums to hardware,
+			// which doesn't exist. We fix this with ethtool.
+			// If ethtool isn't installed, we can fix it this way.
+			/*hdr := header.IPv4(ipbuf)
+			//t.logf("tap ipv4 checksum valid: %v", hdr.IsChecksumValid())
+			if hdr.Protocol() == 0x06 { // TCP
+				tcp := header.TCP(ipbuf[header.IPv4MinimumSize:])
+				payload := tcp.Payload()
+				payloadChecksum := header.Checksum(payload, 0)
+				valid := tcp.IsChecksumValid(hdr.SourceAddress(), hdr.DestinationAddress(), payloadChecksum, uint16(len(payload)))
+				//t.logf("tap tcp checksum valid: %v", valid)
+				if !valid {
+					xsum := header.PseudoHeaderChecksum(
+						header.TCPProtocolNumber,
+						hdr.SourceAddress(),
+						hdr.DestinationAddress(),
+						uint16(len(tcp)),
+					)
+					xsum = header.Checksum(payload, xsum)
+					tcp.SetChecksum(0)
+					tcp.SetChecksum(^tcp.CalculateChecksum(xsum))
+					valid = tcp.IsChecksumValid(hdr.SourceAddress(), hdr.DestinationAddress(), payloadChecksum, uint16(len(payload)))
+					//t.logf("tap tcp checksum valid after set: %v", valid)
+				}
+			}*/
 		}
 		t.sendOutbound(tunReadResult{data: t.buffer[PacketStartOffset : PacketStartOffset+n], err: err})
 	}
