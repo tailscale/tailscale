@@ -64,7 +64,8 @@ func main() {
 		}
 
 		if err := applyNewACL(ctx, tailnet, apiKey, *policyFname, controlEtag); err != nil {
-			log.Fatal(err)
+			fmt.Println(err)
+			os.Exit(1)
 		}
 
 	case "test":
@@ -87,7 +88,8 @@ func main() {
 		}
 
 		if err := testNewACLs(ctx, tailnet, apiKey, *policyFname); err != nil {
-			log.Fatal(err)
+			fmt.Println(err)
+			os.Exit(1)
 		}
 	default:
 		log.Fatalf("usage: %s [options] <test|apply>", os.Args[0])
@@ -191,7 +193,7 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 	return nil
 }
 
-var lineColMessageSplit = regexp.MustCompile(`^line ([0-9]+), column ([0-9]+): (.*)$`)
+var lineColMessageSplit = regexp.MustCompile(`line ([0-9]+), column ([0-9]+): (.*)$`)
 
 type ACLTestError struct {
 	Message string               `json:"message"`
