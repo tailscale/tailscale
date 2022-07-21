@@ -48,12 +48,25 @@ func TestMatchRule(t *testing.T) {
 		wantUser string
 	}{
 		{
+			name: "invalid-conn",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+				SSHUsers: map[string]string{
+					"*": "ubuntu",
+				},
+			},
+			wantErr: errInvalidConn,
+		},
+		{
 			name:    "nil-rule",
+			ci:      &sshConnInfo{},
 			rule:    nil,
 			wantErr: errNilRule,
 		},
 		{
 			name:    "nil-action",
+			ci:      &sshConnInfo{},
 			rule:    &tailcfg.SSHRule{},
 			wantErr: errNilAction,
 		},
@@ -180,6 +193,7 @@ func TestMatchRule(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &conn{
 				info: tt.ci,
+				srv:  &server{logf: t.Logf},
 			}
 			got, gotUser, err := c.matchRule(tt.rule, nil)
 			if err != tt.wantErr {
