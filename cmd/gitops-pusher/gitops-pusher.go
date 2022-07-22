@@ -20,20 +20,92 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/tailscale/hujson"
 )
 
 var (
-	policyFname  = flag.String("policy-file", "./policy.hujson", "filename for policy file")
-	timeout      = flag.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
-	githubSyntax = flag.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
+	rootFlagSet  = flag.NewFlagSet("gitops-pusher", flag.ExitOnError)
+	policyFname  = rootFlagSet.String("policy-file", "./policy.hujson", "filename for policy file")
+	timeout      = rootFlagSet.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
+	githubSyntax = rootFlagSet.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
 )
 
-func main() {
-	flag.Parse()
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
+func apply(tailnet, apiKey string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
+		if err != nil {
+			return err
+		}
 
+		localEtag, err := sumFile(*policyFname)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("control: %s", controlEtag)
+		log.Printf("local:   %s", localEtag)
+
+		if controlEtag == localEtag {
+			log.Println("no update needed, doing nothing")
+			return nil
+		}
+
+		if err := applyNewACL(ctx, tailnet, apiKey, *policyFname, controlEtag); err != nil {
+			return err
+		}
+
+		return nil
+	}
+}
+
+func test(tailnet, apiKey string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
+		if err != nil {
+			return err
+		}
+
+		localEtag, err := sumFile(*policyFname)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("control: %s", controlEtag)
+		log.Printf("local:   %s", localEtag)
+
+		if controlEtag == localEtag {
+			log.Println("no updates found, doing nothing")
+			return nil
+		}
+
+		if err := testNewACLs(ctx, tailnet, apiKey, *policyFname); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+func getChecksums(tailnet, apiKey string) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
+		if err != nil {
+			return err
+		}
+
+		localEtag, err := sumFile(*policyFname)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("control: %s", controlEtag)
+		log.Printf("local:   %s", localEtag)
+
+		return nil
+	}
+}
+
+func main() {
 	tailnet, ok := os.LookupEnv("TS_TAILNET")
 	if !ok {
 		log.Fatal("set envvar TS_TAILNET to your tailnet's name")
@@ -43,56 +115,47 @@ func main() {
 		log.Fatal("set envvar TS_API_KEY to your Tailscale API key")
 	}
 
-	switch flag.Arg(0) {
-	case "apply":
-		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
-		if err != nil {
-			log.Fatal(err)
-		}
+	applyCmd := &ffcli.Command{
+		Name:       "apply",
+		ShortUsage: "gitops-pusher [options] apply",
+		ShortHelp:  "Pushes changes to CONTROL",
+		LongHelp:   `Pushes changes to CONTROL`,
+		Exec:       apply(tailnet, apiKey),
+	}
 
-		localEtag, err := sumFile(*policyFname)
-		if err != nil {
-			log.Fatal(err)
-		}
+	testCmd := &ffcli.Command{
+		Name:       "test",
+		ShortUsage: "gitops-pusher [options] test",
+		ShortHelp:  "Tests ACL changes",
+		LongHelp:   "Tests ACL changes",
+		Exec:       test(tailnet, apiKey),
+	}
 
-		log.Printf("control: %s", controlEtag)
-		log.Printf("local:   %s", localEtag)
+	cksumCmd := &ffcli.Command{
+		Name:       "checksum",
+		ShortUsage: "Shows checksums of ACL files",
+		ShortHelp:  "Fetch checksum of CONTROL's ACL and the local ACL for comparison",
+		LongHelp:   "Fetch checksum of CONTROL's ACL and the local ACL for comparison",
+		Exec:       getChecksums(tailnet, apiKey),
+	}
 
-		if controlEtag == localEtag {
-			log.Println("no update needed, doing nothing")
-			os.Exit(0)
-		}
+	root := &ffcli.Command{
+		ShortUsage:  "gitops-pusher [options] <command>",
+		ShortHelp:   "Push Tailscale ACLs to CONTROL using a GitOps workflow",
+		Subcommands: []*ffcli.Command{applyCmd, cksumCmd, testCmd},
+		FlagSet:     rootFlagSet,
+	}
 
-		if err := applyNewACL(ctx, tailnet, apiKey, *policyFname, controlEtag); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
+	if err := root.Parse(os.Args[1:]); err != nil {
+		log.Fatal(err)
+	}
 
-	case "test":
-		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
-		if err != nil {
-			log.Fatal(err)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
 
-		localEtag, err := sumFile(*policyFname)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("control: %s", controlEtag)
-		log.Printf("local:   %s", localEtag)
-
-		if controlEtag == localEtag {
-			log.Println("no updates found, doing nothing")
-			os.Exit(0)
-		}
-
-		if err := testNewACLs(ctx, tailnet, apiKey, *policyFname); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-	default:
-		log.Fatalf("usage: %s [options] <test|apply>", os.Args[0])
+	if err := root.Run(ctx); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
