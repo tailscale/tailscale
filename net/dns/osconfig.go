@@ -17,6 +17,7 @@ type OSConfigurator interface {
 	// If cfg is the zero value, all Tailscale-related DNS
 	// configuration is removed.
 	// SetDNS must not be called after Close.
+	// SetDNS takes ownership of cfg.
 	SetDNS(cfg OSConfig) error
 	// SupportsSplitDNS reports whether the configurator is capable of
 	// installing a resolver only for specific DNS suffixes. If false,
