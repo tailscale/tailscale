@@ -97,11 +97,10 @@ func buildWasm(dev bool) error {
 // installJSDeps installs the JavaScript dependencies specified by package.json
 func installJSDeps() error {
 	log.Printf("Installing JS deps...\n")
-	stdoutStderr, err := exec.Command("yarn").CombinedOutput()
-	if err != nil {
-		log.Printf("yarn failed: %s", stdoutStderr)
-	}
-	return err
+	cmd := exec.Command(*yarnPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // EsbuildMetadata is the subset of metadata struct (described by

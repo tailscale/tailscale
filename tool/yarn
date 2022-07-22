@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# This script acts like the "yarn" command, but uses Tailscale's
+# currently-desired version, downloading it (and node) first if necessary.
+
+set -eu
+
+NODE_DIR="$HOME/.cache/tailscale-node"
+read -r YARN_REV < "$(dirname "$0")/yarn.rev"
+YARN_DIR="$HOME/.cache/tailscale-yarn"
+# This works for linux and darwin, which is sufficient
+# (we do not build for other targets).
+OS=$(uname -s | tr A-Z a-z)
+ARCH="$(uname -m)"
+if [ "$ARCH" = "aarch64" ]; then
+    # Go uses the name "arm64".
+    ARCH="arm64"
+elif [ "$ARCH" = "x86_64" ]; then
+    # Go uses the name "amd64".
+    ARCH="amd64"
+fi
+
+install_node() {
+    read -r NODE_REV < "$(dirname "$0")/node.rev"
+    NODE_URL="https://nodejs.org/dist/v${NODE_REV}/node-v${NODE_REV}-${OS}-${ARCH}.tar.gz"
+    install_tool "node" $NODE_REV $NODE_DIR $NODE_URL
+}
+
+install_yarn() {
+    YARN_URL="https://github.com/yarnpkg/yarn/releases/download/v$YARN_REV/yarn-v$YARN_REV.tar.gz"
+    install_tool "yarn" $YARN_REV $YARN_DIR $YARN_URL
+}
+
+install_tool() {
+    TOOL=$1
+    REV=$2
+    TOOLCHAIN=$3
+    URL=$4
+
+    archive="$TOOLCHAIN-$REV.tar.gz"
+    mark="$TOOLCHAIN.extracted"
+    extracted=
+    [ ! -e "$mark" ] || read -r extracted junk <$mark
+
+    if [ "$extracted" = "$REV" ] && [ -e "$TOOLCHAIN/bin/$TOOL" ]; then
+        # Already extracted, continue silently
+        return 0
+    fi
+
+    rm -f "$archive.new" "$TOOLCHAIN.extracted"
+    if [ ! -e "$archive" ]; then
+            log "Need to download $TOOL '$REV'."
+            curl -f -L -o "$archive.new" $URL
+            rm -f "$archive"
+            mv "$archive.new" "$archive"
+    fi
+
+    log "Extracting $TOOL '$REV' into '$TOOLCHAIN'." >&2
+    rm -rf "$TOOLCHAIN"
+    mkdir -p "$TOOLCHAIN"
+    (cd "$TOOLCHAIN" && tar --strip-components=1 -xf "$archive")
+    echo "$REV" >$mark
+}
+
+log() {
+    echo "$@" >&2
+}
+
+if [ "${YARN_REV}" = "SKIP" ] ||
+   [ "${OS}" != "darwin" -a "${OS}" != "linux" ] ||
+   [ "${ARCH}" != "amd64" -a "${ARCH}" != "arm64" ]; then
+    log "Using existing yarn (`which yarn`)."
+    exec yarn "$@"
+fi
+
+install_node
+install_yarn
+
+exec /usr/bin/env PATH="$NODE_DIR/bin:$PATH" "$YARN_DIR/bin/yarn" "$@"
