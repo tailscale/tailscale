@@ -107,6 +107,14 @@ func TestSealViaSharedKey(t *testing.T) {
 		t.Fatal("failed to decrypt")
 	}
 	if string(back) != clear {
-		t.Errorf("got %q; want cleartext %q", back, clear)
+		t.Errorf("OpenFrom got %q; want cleartext %q", back, clear)
+	}
+
+	backShared, ok := shared.Open(enc)
+	if !ok {
+		t.Fatal("failed to decrypt from shared key")
+	}
+	if string(backShared) != clear {
+		t.Errorf("Open got %q; want cleartext %q", back, clear)
 	}
 }

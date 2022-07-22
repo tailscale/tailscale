@@ -27,11 +27,23 @@ import (
 var (
 	rootFlagSet  = flag.NewFlagSet("gitops-pusher", flag.ExitOnError)
 	policyFname  = rootFlagSet.String("policy-file", "./policy.hujson", "filename for policy file")
+	cacheFname   = rootFlagSet.String("cache-file", "./version-cache.json", "filename for the previous known version hash")
 	timeout      = rootFlagSet.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
 	githubSyntax = rootFlagSet.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
+
+	modifiedExternallyFailure = make(chan struct{}, 1)
 )
 
-func apply(tailnet, apiKey string) func(context.Context, []string) error {
+func modifiedExternallyError() {
+	if *githubSyntax {
+		fmt.Printf("::error file=%s,line=1,col=1,title=Policy File Modified Externally::The policy file was modified externally in the admin console.\n", *policyFname)
+	} else {
+		fmt.Printf("The policy file was modified externally in the admin console.\n")
+	}
+	modifiedExternallyFailure <- struct{}{}
+}
+
+func apply(cache *Cache, tailnet, apiKey string) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
 		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
 		if err != nil {
@@ -50,6 +62,11 @@ func apply(tailnet, apiKey string) func(context.Context, []string) error {
 
 		log.Printf("control: %s", controlEtag)
 		log.Printf("local:   %s", localEtag)
+		log.Printf("cache:   %s", cache.PrevETag)
+
+		if cache.PrevETag != controlEtag {
+			modifiedExternallyError()
+		}
 
 		if controlEtag == localEtag {
 			cache.PrevETag = localEtag
@@ -67,7 +84,7 @@ func apply(tailnet, apiKey string) func(context.Context, []string) error {
 	}
 }
 
-func test(tailnet, apiKey string) func(context.Context, []string) error {
+func test(cache *Cache, tailnet, apiKey string) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
 		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
 		if err != nil {
@@ -86,6 +103,11 @@ func test(tailnet, apiKey string) func(context.Context, []string) error {
 
 		log.Printf("control: %s", controlEtag)
 		log.Printf("local:   %s", localEtag)
+		log.Printf("cache:   %s", cache.PrevETag)
+
+		if cache.PrevETag != controlEtag {
+			modifiedExternallyError()
+		}
 
 		if controlEtag == localEtag {
 			log.Println("no updates found, doing nothing")
@@ -99,7 +121,7 @@ func test(tailnet, apiKey string) func(context.Context, []string) error {
 	}
 }
 
-func getChecksums(tailnet, apiKey string) func(context.Context, []string) error {
+func getChecksums(cache *Cache, tailnet, apiKey string) func(context.Context, []string) error {
 	return func(ctx context.Context, args []string) error {
 		controlEtag, err := getACLETag(ctx, tailnet, apiKey)
 		if err != nil {
@@ -111,8 +133,14 @@ func getChecksums(tailnet, apiKey string) func(context.Context, []string) error 
 			return err
 		}
 
+		if cache.PrevETag == "" {
+			log.Println("no previous etag found, assuming local file is correct and recording that")
+			cache.PrevETag = Shuck(localEtag)
+		}
+
 		log.Printf("control: %s", controlEtag)
 		log.Printf("local:   %s", localEtag)
+		log.Printf("cache:   %s", cache.PrevETag)
 
 		return nil
 	}
@@ -127,13 +155,22 @@ func main() {
 	if !ok {
 		log.Fatal("set envvar TS_API_KEY to your Tailscale API key")
 	}
+	cache, err := LoadCache(*cacheFname)
+	if err != nil {
+		if os.IsNotExist(err) {
+			cache = &Cache{}
+		} else {
+			log.Fatalf("error loading cache: %v", err)
+		}
+	}
+	defer cache.Save(*cacheFname)
 
 	applyCmd := &ffcli.Command{
 		Name:       "apply",
 		ShortUsage: "gitops-pusher [options] apply",
 		ShortHelp:  "Pushes changes to CONTROL",
 		LongHelp:   `Pushes changes to CONTROL`,
-		Exec:       apply(tailnet, apiKey),
+		Exec:       apply(cache, tailnet, apiKey),
 	}
 
 	testCmd := &ffcli.Command{
@@ -141,7 +178,7 @@ func main() {
 		ShortUsage: "gitops-pusher [options] test",
 		ShortHelp:  "Tests ACL changes",
 		LongHelp:   "Tests ACL changes",
-		Exec:       test(tailnet, apiKey),
+		Exec:       test(cache, tailnet, apiKey),
 	}
 
 	cksumCmd := &ffcli.Command{
@@ -149,7 +186,7 @@ func main() {
 		ShortUsage: "Shows checksums of ACL files",
 		ShortHelp:  "Fetch checksum of CONTROL's ACL and the local ACL for comparison",
 		LongHelp:   "Fetch checksum of CONTROL's ACL and the local ACL for comparison",
-		Exec:       getChecksums(tailnet, apiKey),
+		Exec:       getChecksums(cache, tailnet, apiKey),
 	}
 
 	root := &ffcli.Command{
@@ -168,6 +205,10 @@ func main() {
 
 	if err := root.Run(ctx); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	if len(modifiedExternallyFailure) != 0 {
 		os.Exit(1)
 	}
 }
@@ -189,7 +230,7 @@ func sumFile(fname string) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("\"%x\"", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func applyNewACL(ctx context.Context, tailnet, apiKey, policyFname, oldEtag string) error {
@@ -250,12 +291,6 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 	}
 	defer resp.Body.Close()
 
-	got := resp.StatusCode
-	want := http.StatusOK
-	if got != want {
-		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
-	}
-
 	var ate ACLTestError
 	err = json.NewDecoder(resp.Body).Decode(&ate)
 	if err != nil {
@@ -264,6 +299,12 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 
 	if len(ate.Message) != 0 || len(ate.Data) != 0 {
 		return ate
+	}
+
+	got := resp.StatusCode
+	want := http.StatusOK
+	if got != want {
+		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
 	}
 
 	return nil
@@ -328,5 +369,5 @@ func getACLETag(ctx context.Context, tailnet, apiKey string) (string, error) {
 		return "", fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
 	}
 
-	return resp.Header.Get("ETag"), nil
+	return Shuck(resp.Header.Get("ETag")), nil
 }
