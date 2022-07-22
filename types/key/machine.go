@@ -132,6 +132,21 @@ func (k MachinePrecomputedSharedKey) Seal(cleartext []byte) (ciphertext []byte) 
 	return box.SealAfterPrecomputation(nonce[:], cleartext, &nonce, &k.k)
 }
 
+// Open opens the NaCl box ciphertext, which must be a value created by
+// MachinePrecomputedSharedKey.Seal or MachinePrivate.SealTo, and returns the
+// inner cleartext if ciphertext is a valid box for the shared key k.
+func (k MachinePrecomputedSharedKey) Open(ciphertext []byte) (cleartext []byte, ok bool) {
+	if k == (MachinePrecomputedSharedKey{}) {
+		panic("can't open with zero keys")
+	}
+	if len(ciphertext) < 24 {
+		return nil, false
+	}
+	var nonce [24]byte
+	copy(nonce[:], ciphertext)
+	return box.OpenAfterPrecomputation(nil, ciphertext[len(nonce):], &nonce, &k.k)
+}
+
 // OpenFrom opens the NaCl box ciphertext, which must be a value
 // created by SealTo, and returns the inner cleartext if ciphertext is
 // a valid box from p to k.
