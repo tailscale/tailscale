@@ -8,6 +8,7 @@
 package ipnlocal
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -119,7 +120,7 @@ func (b *LocalBackend) getSystemSSH_HostKeys() (ret []ssh.Signer, err error) {
 	for _, typ := range keyTypes {
 		filename := "/etc/ssh/ssh_host_" + typ + "_key"
 		hostKey, err := ioutil.ReadFile(filename)
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || len(bytes.TrimSpace(hostKey)) == 0 {
 			continue
 		}
 		if err != nil {
