@@ -117,7 +117,8 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 func (b *LocalBackend) getSystemSSH_HostKeys() (ret []ssh.Signer, err error) {
 	// TODO(bradfitz): cache this?
 	for _, typ := range keyTypes {
-		hostKey, err := ioutil.ReadFile("/etc/ssh/ssh_host_" + typ + "_key")
+		filename := "/etc/ssh/ssh_host_" + typ + "_key"
+		hostKey, err := ioutil.ReadFile(filename)
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -126,7 +127,7 @@ func (b *LocalBackend) getSystemSSH_HostKeys() (ret []ssh.Signer, err error) {
 		}
 		signer, err := ssh.ParsePrivateKey(hostKey)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error reading private key %s: %w", filename, err)
 		}
 		ret = append(ret, signer)
 	}
