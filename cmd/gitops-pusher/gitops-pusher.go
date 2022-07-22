@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"regexp"
 	"strings"
@@ -237,12 +238,6 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 	}
 	defer resp.Body.Close()
 
-	got := resp.StatusCode
-	want := http.StatusOK
-	if got != want {
-		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
-	}
-
 	var ate ACLTestError
 	err = json.NewDecoder(resp.Body).Decode(&ate)
 	if err != nil {
@@ -251,6 +246,14 @@ func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error
 
 	if len(ate.Message) != 0 || len(ate.Data) != 0 {
 		return ate
+	}
+
+	got := resp.StatusCode
+	want := http.StatusOK
+	if got != want {
+		data, _ := httputil.DumpResponse(resp, true)
+		os.Stderr.Write(data)
+		return fmt.Errorf("wanted HTTP status code %d but got %d", want, got)
 	}
 
 	return nil
