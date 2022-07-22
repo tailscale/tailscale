@@ -57,7 +57,7 @@ func apply(cache *Cache, tailnet, apiKey string) func(context.Context, []string)
 
 		if cache.PrevETag == "" {
 			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = Shuck(localEtag)
+			cache.PrevETag = localEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -69,6 +69,7 @@ func apply(cache *Cache, tailnet, apiKey string) func(context.Context, []string)
 		}
 
 		if controlEtag == localEtag {
+			cache.PrevETag = localEtag
 			log.Println("no update needed, doing nothing")
 			return nil
 		}
@@ -77,7 +78,7 @@ func apply(cache *Cache, tailnet, apiKey string) func(context.Context, []string)
 			return err
 		}
 
-		cache.PrevETag = Shuck(localEtag)
+		cache.PrevETag = localEtag
 
 		return nil
 	}
@@ -97,7 +98,7 @@ func test(cache *Cache, tailnet, apiKey string) func(context.Context, []string) 
 
 		if cache.PrevETag == "" {
 			log.Println("no previous etag found, assuming local file is correct and recording that")
-			cache.PrevETag = Shuck(localEtag)
+			cache.PrevETag = localEtag
 		}
 
 		log.Printf("control: %s", controlEtag)
@@ -246,7 +247,7 @@ func applyNewACL(ctx context.Context, tailnet, apiKey, policyFname, oldEtag stri
 
 	req.SetBasicAuth(apiKey, "")
 	req.Header.Set("Content-Type", "application/hujson")
-	req.Header.Set("If-Match", oldEtag)
+	req.Header.Set("If-Match", `"`+oldEtag+`"`)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
