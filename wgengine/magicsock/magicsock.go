@@ -1185,45 +1185,37 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
 var errNoUDP = errors.New("no UDP available on platform")
 
-var udpAddrPool = &sync.Pool{
-	New: func() any { return new(net.UDPAddr) },
-}
-
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
 func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
 	if runtime.GOOS == "js" {
 		return false, errNoUDP
 	}
-	ua := udpAddrPool.Get().(*net.UDPAddr)
-	sent, err = c.sendUDPStd(ipp.UDPAddrAt(ua), b)
+	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
 		metricSendUDPError.Add(1)
-	} else {
-		// Only return it to the pool on success; Issue 3122.
-		udpAddrPool.Put(ua)
-		if sent {
-			metricSendUDP.Add(1)
-		}
+	} else if sent {
+		metricSendUDP.Add(1)
 	}
 	return
 }
 
 // sendUDP sends UDP packet b to addr.
 // See sendAddr's docs on the return value meanings.
-func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
+func (c *Conn) sendUDPStd(addr netaddr.IPPort, b []byte) (sent bool, err error) {
+	ap := netip.AddrPortFrom(netip.AddrFrom16(addr.IP().As16()), addr.Port())
 	switch {
-	case addr.IP.To4() != nil:
-		_, err = c.pconn4.WriteTo(b, addr)
+	case addr.IP().Is4():
+		_, err = c.pconn4.WriteToUDPAddrPort(b, ap)
 		if err != nil && (c.noV4.Get() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
-	case len(addr.IP) == net.IPv6len:
+	case addr.IP().Is6():
 		if c.pconn6 == nil {
 			// ignore IPv6 dest if we don't have an IPv6 address.
 			return false, nil
 		}
-		_, err = c.pconn6.WriteTo(b, addr)
+		_, err = c.pconn6.WriteToUDPAddrPort(b, ap)
 		if err != nil && (c.noV6.Get() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
@@ -2868,7 +2860,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 			continue
 		}
 		// Success.
-		ruc.pconn = pconn
+		ruc.pconn = pconn.(*net.UDPConn)
 		if network == "udp4" {
 			health.SetUDP4Unbound(false)
 		}
@@ -2979,11 +2971,16 @@ func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
 	return ep, nil
 }
 
+type packetConnWriteToUDPAddrPort interface {
+	net.PacketConn
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+}
+
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
 	mu    sync.Mutex
-	pconn net.PacketConn
+	pconn packetConnWriteToUDPAddrPort
 }
 
 // currentConn returns c's current pconn.
@@ -3074,6 +3071,26 @@ func (c *RebindingUDPConn) closeLocked() error {
 	return c.pconn.Close()
 }
 
+func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
+	for {
+		c.mu.Lock()
+		pconn := c.pconn
+		c.mu.Unlock()
+
+		n, err := pconn.WriteToUDPAddrPort(b, addr)
+		if err != nil {
+			c.mu.Lock()
+			pconn2 := c.pconn
+			c.mu.Unlock()
+
+			if pconn != pconn2 {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
 func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	for {
 		c.mu.Lock()
@@ -3105,6 +3122,11 @@ type blockForeverConn struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
 	closed bool
+}
+
+func (c *blockForeverConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
+	// Silently drop writes.
+	return len(b), nil
 }
 
 func (c *blockForeverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
