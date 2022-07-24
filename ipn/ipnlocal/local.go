@@ -1877,6 +1877,9 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 		if distro.Get() == distro.Synology && !envknob.UseWIPCode() {
 			return errors.New("The Tailscale SSH server does not run on Synology.")
 		}
+		if distro.Get() == distro.QNAP && !envknob.UseWIPCode() {
+			return errors.New("The Tailscale SSH server does not run on QNAP.")
+		}
 		// otherwise okay
 	case "darwin":
 		// okay only in tailscaled mode for now.
