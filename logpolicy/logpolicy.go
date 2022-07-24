@@ -551,12 +551,12 @@ func New(collection string) *Policy {
 	}
 	filchPrefix := filepath.Join(dir, cmdName)
 
-	// Synology disks cannot hibernate if we're writing logs to them all the time.
+	// NAS disks cannot hibernate if we're writing logs to them all the time.
 	// https://github.com/tailscale/tailscale/issues/3551
-	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-		synologyTmpfsLogs := "/tmp/tailscale-logs"
-		if err := os.MkdirAll(synologyTmpfsLogs, 0755); err == nil {
-			filchPrefix = filepath.Join(synologyTmpfsLogs, cmdName)
+	if runtime.GOOS == "linux" && (distro.Get() == distro.Synology || distro.Get() == distro.QNAP) {
+		tmpfsLogs := "/tmp/tailscale-logs"
+		if err := os.MkdirAll(tmpfsLogs, 0755); err == nil {
+			filchPrefix = filepath.Join(tmpfsLogs, cmdName)
 			filchOptions.MaxFileSize = 1 << 20
 		} else {
 			// not a fatal error, we can leave the log files on the spinning disk
