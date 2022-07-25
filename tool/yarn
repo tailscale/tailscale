@@ -13,11 +13,11 @@ YARN_DIR="$HOME/.cache/tailscale-yarn"
 OS=$(uname -s | tr A-Z a-z)
 ARCH="$(uname -m)"
 if [ "$ARCH" = "aarch64" ]; then
-    # Go uses the name "arm64".
+    # Node uses the name "arm64".
     ARCH="arm64"
 elif [ "$ARCH" = "x86_64" ]; then
-    # Go uses the name "amd64".
-    ARCH="amd64"
+    # Node uses the name "x64".
+    ARCH="x64"
 fi
 
 install_node() {
@@ -49,7 +49,7 @@ install_tool() {
 
     rm -f "$archive.new" "$TOOLCHAIN.extracted"
     if [ ! -e "$archive" ]; then
-            log "Need to download $TOOL '$REV'."
+            log "Need to download $TOOL '$REV' from $URL."
             curl -f -L -o "$archive.new" $URL
             rm -f "$archive"
             mv "$archive.new" "$archive"
@@ -68,7 +68,7 @@ log() {
 
 if [ "${YARN_REV}" = "SKIP" ] ||
    [ "${OS}" != "darwin" -a "${OS}" != "linux" ] ||
-   [ "${ARCH}" != "amd64" -a "${ARCH}" != "arm64" ]; then
+   [ "${ARCH}" != "x64" -a "${ARCH}" != "arm64" ]; then
     log "Using existing yarn (`which yarn`)."
     exec yarn "$@"
 fi
