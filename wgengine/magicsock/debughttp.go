@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -195,7 +195,7 @@ func peerDebugName(p *tailcfg.Node) string {
 }
 
 func ipPortLess(a, b netaddr.IPPort) bool {
-	if v := a.IP().Compare(b.IP()); v != 0 {
+	if v := a.Addr().Compare(b.Addr()); v != 0 {
 		return v < 0
 	}
 	return a.Port() < b.Port()

@@ -13,8 +13,9 @@ import (
 	"os/exec"
 	"runtime"
 
+	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -91,7 +92,7 @@ func (r *userspaceBSDRouter) Up() error {
 }
 
 func inet(p netaddr.IPPrefix) string {
-	if p.IP().Is6() {
+	if p.Addr().Is6() {
 		return "inet6"
 	}
 	return "inet"
@@ -120,15 +121,15 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	}
 	for _, addr := range r.addrsToAdd(cfg.LocalAddrs) {
 		var arg []string
-		if runtime.GOOS == "freebsd" && addr.IP().Is6() && addr.Bits() == 128 {
+		if runtime.GOOS == "freebsd" && addr.Addr().Is6() && addr.Bits() == 128 {
 			// FreeBSD rejects tun addresses of the form fc00::1/128 -> fc00::1,
 			// https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=218508
 			// Instead add our whole /48, which works because we use a /48 route.
 			// Full history: https://github.com/tailscale/tailscale/issues/1307
-			tmp := netaddr.IPPrefixFrom(addr.IP(), 48)
+			tmp := netaddr.IPPrefixFrom(addr.Addr(), 48)
 			arg = []string{"ifconfig", r.tunname, inet(tmp), tmp.String()}
 		} else {
-			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.IP().String()}
+			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.Addr().String()}
 		}
 		out, err := cmd(arg...).CombinedOutput()
 		if err != nil {
@@ -150,7 +151,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	// Delete any pre-existing routes.
 	for route := range r.routes {
 		if _, keep := newRoutes[route]; !keep {
-			net := route.IPNet()
+			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			del := "del"
@@ -170,7 +171,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	// Add the routes.
 	for route := range newRoutes {
 		if _, exists := r.routes[route]; !exists {
-			net := route.IPNet()
+			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
 			routeadd := []string{"route", "-q", "-n",

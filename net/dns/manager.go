@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -242,7 +242,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
 	for _, r := range resolvers {
 		if ipp, ok := r.IPPort(); ok && ipp.Port() == 53 {
-			ret = append(ret, ipp.IP())
+			ret = append(ret, ipp.Addr())
 		}
 	}
 	return ret
@@ -299,11 +299,11 @@ func (m *Manager) NextPacket() ([]byte, error) {
 
 	var buf []byte
 	switch {
-	case resp.to.IP().Is4():
+	case resp.to.Addr().Is4():
 		h := packet.UDP4Header{
 			IP4Header: packet.IP4Header{
 				Src: magicDNSIP,
-				Dst: resp.to.IP(),
+				Dst: resp.to.Addr(),
 			},
 			SrcPort: 53,
 			DstPort: resp.to.Port(),
@@ -312,11 +312,11 @@ func (m *Manager) NextPacket() ([]byte, error) {
 		buf = make([]byte, offset+hlen+len(resp.pkt))
 		copy(buf[offset+hlen:], resp.pkt)
 		h.Marshal(buf[offset:])
-	case resp.to.IP().Is6():
+	case resp.to.Addr().Is6():
 		h := packet.UDP6Header{
 			IP6Header: packet.IP6Header{
 				Src: magicDNSIPv6,
-				Dst: resp.to.IP(),
+				Dst: resp.to.Addr(),
 			},
 			SrcPort: 53,
 			DstPort: resp.to.Port(),

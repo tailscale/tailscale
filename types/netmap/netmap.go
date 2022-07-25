@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
@@ -81,7 +81,7 @@ func (nm *NetworkMap) PeerByTailscaleIP(ip netaddr.IP) (peer *tailcfg.Node, ok b
 	}
 	for _, n := range nm.Peers {
 		for _, a := range n.Addresses {
-			if a.IP() == ip {
+			if a.Addr() == ip {
 				return n, true
 			}
 		}

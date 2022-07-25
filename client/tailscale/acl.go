@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // ACLRow defines a rule that grants access by a set of users or groups to a set

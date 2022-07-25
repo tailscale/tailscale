@@ -11,7 +11,7 @@ import (
 	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func newAddrMsg(iface uint32, addr string, typ netlink.HeaderType) netlink.Message {

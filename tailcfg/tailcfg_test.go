@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/version"

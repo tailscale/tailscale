@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"

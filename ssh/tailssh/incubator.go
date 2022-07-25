@@ -104,7 +104,7 @@ func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
 		"--groups=" + gids,
 		"--local-user=" + lu.Username,
 		"--remote-user=" + remoteUser,
-		"--remote-ip=" + ci.src.IP().String(),
+		"--remote-ip=" + ci.src.Addr().String(),
 		"--has-tty=false", // updated in-place by startWithPTY
 		"--tty-name=",     // updated in-place by startWithPTY
 	}
@@ -295,8 +295,8 @@ func (ss *sshSession) launchProcess() error {
 
 	ci := ss.conn.info
 	cmd.Env = append(cmd.Env,
-		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.IP(), ci.src.Port(), ci.dst.Port()),
-		fmt.Sprintf("SSH_CONNECTION=%s %d %s %d", ci.src.IP(), ci.src.Port(), ci.dst.IP(), ci.dst.Port()),
+		fmt.Sprintf("SSH_CLIENT=%s %d %d", ci.src.Addr(), ci.src.Port(), ci.dst.Port()),
+		fmt.Sprintf("SSH_CONNECTION=%s %d %s %d", ci.src.Addr(), ci.src.Port(), ci.dst.Addr(), ci.dst.Port()),
 	)
 
 	if ss.agentListener != nil {

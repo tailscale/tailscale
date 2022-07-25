@@ -19,7 +19,7 @@ func socks5Server(listener net.Listener) {
 	if err != nil {
 		panic(err)
 	}
-        listener.Close()
+	listener.Close()
 }
 
 func backendServer(listener net.Listener) {
@@ -29,7 +29,7 @@ func backendServer(listener net.Listener) {
 	}
 	conn.Write([]byte("Test"))
 	conn.Close()
-        listener.Close()
+	listener.Close()
 }
 
 func TestRead(t *testing.T) {

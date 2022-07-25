@@ -23,7 +23,7 @@ import (
 	miekdns "github.com/miekg/dns"
 	"golang.org/x/net/dns/dnsmessage"
 	dns "golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"

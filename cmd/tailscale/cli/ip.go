@@ -11,8 +11,8 @@ import (
 	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 )
 
 var ipCmd = &ffcli.Command{

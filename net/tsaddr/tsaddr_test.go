@@ -7,7 +7,7 @@ package tsaddr
 import (
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func TestInCrostiniRange(t *testing.T) {

@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"inet.af/netaddr"
+	"go4.org/netipx"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
@@ -140,7 +141,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		if err != nil {
 			return nil, err
 		}
-		r := netaddr.IPRangeFrom(ip1, ip2)
+		r := netipx.IPRangeFrom(ip1, ip2)
 		if !r.Valid() {
 			return nil, fmt.Errorf("invalid IP range %q", arg)
 		}
@@ -150,7 +151,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid IP address %q", arg)
 	}
-	bits8 := ip.BitLen()
+	bits8 := uint8(ip.BitLen())
 	if bits != nil {
 		if *bits < 0 || *bits > int(bits8) {
 			return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)

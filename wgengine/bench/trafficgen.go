@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )

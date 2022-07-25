@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
@@ -1408,7 +1408,7 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
 // pr.URL with ping response data.
 func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType tailcfg.PingType) {
-	if pr.URL == "" || pr.IP.IsZero() || pinger == nil {
+	if pr.URL == "" || !pr.IP.IsValid() || pinger == nil {
 		logf("invalid ping request: missing url, ip or pinger")
 		return
 	}

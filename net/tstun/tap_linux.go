@@ -17,7 +17,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -292,9 +292,9 @@ func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst net
 	buf := make([]byte, header.EthernetMinimumSize+header.UDPMinimumSize+header.IPv4MinimumSize+len(payload))
 	payloadStart := len(buf) - len(payload)
 	copy(buf[payloadStart:], payload)
-	srcB := src.IP().As4()
+	srcB := src.Addr().As4()
 	srcIP := tcpip.Address(srcB[:])
-	dstB := dst.IP().As4()
+	dstB := dst.Addr().As4()
 	dstIP := tcpip.Address(dstB[:])
 	// Ethernet header
 	eth := header.Ethernet(buf)

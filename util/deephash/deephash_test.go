@@ -21,7 +21,7 @@ import (
 	"unsafe"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"

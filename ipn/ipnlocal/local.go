@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"inet.af/netaddr"
+	"go4.org/netipx"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -33,6 +34,7 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -231,7 +233,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
-	b.setFilter(filter.NewAllowNone(logf, &netaddr.IPSet{}))
+	b.setFilter(filter.NewAllowNone(logf, &netipx.IPSet{}))
 
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
@@ -498,8 +500,8 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		}
 		var tailscaleIPs = make([]netaddr.IP, 0, len(p.Addresses))
 		for _, addr := range p.Addresses {
-			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.IP()) {
-				tailscaleIPs = append(tailscaleIPs, addr.IP())
+			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
 		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netaddr.IPPrefix) bool {
@@ -543,7 +545,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 func (b *LocalBackend) WhoIs(ipp netaddr.IPPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	n, ok = b.nodeByAddr[ipp.IP()]
+	n, ok = b.nodeByAddr[ipp.Addr()]
 	if !ok {
 		var ip netaddr.IP
 		if ipp.Port() != 0 {
@@ -580,9 +582,9 @@ func (b *LocalBackend) PeerCaps(src netaddr.IP) []string {
 		if !a.IsSingleIP() {
 			continue
 		}
-		dstIP := a.IP()
+		dstIP := a.Addr()
 		if dstIP.BitLen() == src.BitLen() {
-			return filt.AppendCaps(nil, src, a.IP())
+			return filt.AppendCaps(nil, src, a.Addr())
 		}
 	}
 	return nil
@@ -750,7 +752,7 @@ func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged
 
 	// If we have a desired IP on file, try to find the corresponding
 	// node.
-	if b.prefs.ExitNodeIP.IsZero() {
+	if !b.prefs.ExitNodeIP.IsValid() {
 		return false
 	}
 
@@ -762,7 +764,7 @@ func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged
 
 	for _, peer := range nm.Peers {
 		for _, addr := range peer.Addresses {
-			if !addr.IsSingleIP() || addr.IP() != b.prefs.ExitNodeIP {
+			if !addr.IsSingleIP() || addr.Addr() != b.prefs.ExitNodeIP {
 				continue
 			}
 			// Found the node being referenced, upgrade prefs to
@@ -1123,8 +1125,8 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs *ipn.
 		haveNetmap   = netMap != nil
 		addrs        []netaddr.IPPrefix
 		packetFilter []filter.Match
-		localNetsB   netaddr.IPSetBuilder
-		logNetsB     netaddr.IPSetBuilder
+		localNetsB   netipx.IPSetBuilder
+		logNetsB     netipx.IPSetBuilder
 		shieldsUp    = prefs == nil || prefs.ShieldsUp // Be conservative when not ready
 	)
 	// Log traffic for Tailscale IPs.
@@ -1241,9 +1243,9 @@ func internalAndExternalInterfaces() (internal, external []netaddr.IPPrefix, err
 func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (internal, external []netaddr.IPPrefix, err error) {
 	// We use an IPSetBuilder here to canonicalize the prefixes
 	// and to remove any duplicate entries.
-	var internalBuilder, externalBuilder netaddr.IPSetBuilder
+	var internalBuilder, externalBuilder netipx.IPSetBuilder
 	if err := il.ForeachInterfaceAddress(func(iface interfaces.Interface, pfx netaddr.IPPrefix) {
-		if tsaddr.IsTailscaleIP(pfx.IP()) {
+		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
 		if pfx.IsSingleIP() {
@@ -1284,16 +1286,16 @@ func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (interna
 	return iSet.Prefixes(), eSet.Prefixes(), nil
 }
 
-func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
-	var b netaddr.IPSetBuilder
+func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netaddr.IP, err error) {
+	var b netipx.IPSetBuilder
 	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
-		if tsaddr.IsTailscaleIP(pfx.IP()) {
+		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
 		if pfx.IsSingleIP() {
 			return
 		}
-		hostIPs = append(hostIPs, pfx.IP())
+		hostIPs = append(hostIPs, pfx.Addr())
 		b.AddPrefix(pfx)
 	}); err != nil {
 		return nil, nil, err
@@ -1306,8 +1308,8 @@ func interfaceRoutes() (ips *netaddr.IPSet, hostIPs []netaddr.IP, err error) {
 // shrinkDefaultRoute returns an IPSet representing the IPs in route,
 // minus those in removeFromDefaultRoute and localInterfaceRoutes,
 // plus the IPs in hostIPs.
-func shrinkDefaultRoute(route netaddr.IPPrefix, localInterfaceRoutes *netaddr.IPSet, hostIPs []netaddr.IP) (*netaddr.IPSet, error) {
-	var b netaddr.IPSetBuilder
+func shrinkDefaultRoute(route netaddr.IPPrefix, localInterfaceRoutes *netipx.IPSet, hostIPs []netaddr.IP) (*netipx.IPSet, error) {
+	var b netipx.IPSetBuilder
 	// Add the default route.
 	b.AddPrefix(route)
 	// Remove the local interface routes.
@@ -2089,7 +2091,7 @@ func (b *LocalBackend) ServePeerAPIConnection(remote, local netaddr.IPPort, c ne
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
-		if pln.ip == local.IP() {
+		if pln.ip == local.Addr() {
 			go pln.ServeConn(remote, c)
 			return
 		}
@@ -2312,8 +2314,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 		var ips []netaddr.IP
 		for _, addr := range addrs {
 			if selfV6Only {
-				if addr.IP().Is6() {
-					ips = append(ips, addr.IP())
+				if addr.Addr().Is6() {
+					ips = append(ips, addr.Addr())
 				}
 				continue
 			}
@@ -2325,10 +2327,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 			// https://github.com/tailscale/tailscale/issues/1152
 			// tracks adding the right capability reporting to
 			// enable AAAA in MagicDNS.
-			if addr.IP().Is6() && have4 {
+			if addr.Addr().Is6() && have4 {
 				continue
 			}
-			ips = append(ips, addr.IP())
+			ips = append(ips, addr.Addr())
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
@@ -2520,7 +2522,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	if len(b.netMap.Addresses) == len(b.peerAPIListeners) {
 		allSame := true
 		for i, pln := range b.peerAPIListeners {
-			if pln.ip != b.netMap.Addresses[i].IP() {
+			if pln.ip != b.netMap.Addresses[i].Addr() {
 				allSame = false
 				break
 			}
@@ -2563,20 +2565,20 @@ func (b *LocalBackend) initPeerAPIListener() {
 		var err error
 		skipListen := i > 0 && isNetstack
 		if !skipListen {
-			ln, err = ps.listen(a.IP(), b.prevIfState)
+			ln, err = ps.listen(a.Addr(), b.prevIfState)
 			if err != nil {
 				if peerAPIListenAsync {
 					// Expected. But we fix it later in linkChange
 					// ("peerAPIListeners too low").
 					continue
 				}
-				b.logf("[unexpected] peerapi listen(%q) error: %v", a.IP(), err)
+				b.logf("[unexpected] peerapi listen(%q) error: %v", a.Addr(), err)
 				continue
 			}
 		}
 		pln := &peerAPIListener{
 			ps: ps,
-			ip: a.IP(),
+			ip: a.Addr(),
 			ln: ln, // nil for 2nd+ on netstack
 			lb: b,
 		}
@@ -2585,7 +2587,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		} else {
 			pln.port = ln.Addr().(*net.TCPAddr).Port
 		}
-		pln.urlStr = "http://" + net.JoinHostPort(a.IP().String(), strconv.Itoa(pln.port))
+		pln.urlStr = "http://" + net.JoinHostPort(a.Addr().String(), strconv.Itoa(pln.port))
 		b.logf("peerapi: serving on %s", pln.urlStr)
 		go pln.serve()
 		b.peerAPIListeners = append(b.peerAPIListeners, pln)
@@ -2636,14 +2638,14 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPref
 		for _, aip := range peer.AllowedIPs {
 			aip = unmapIPPrefix(aip)
 			// Only add the Tailscale IPv6 ULA once, if we see anybody using part of it.
-			if aip.IP().Is6() && aip.IsSingleIP() && tsULA.Contains(aip.IP()) {
+			if aip.Addr().Is6() && aip.IsSingleIP() && tsULA.Contains(aip.Addr()) {
 				if !didULA {
 					didULA = true
 					routes = append(routes, tsULA)
 				}
 				continue
 			}
-			if aip.IsSingleIP() && cgNAT.Contains(aip.IP()) {
+			if aip.IsSingleIP() && cgNAT.Contains(aip.Addr()) {
 				cgNATIPs = append(cgNATIPs, aip)
 			} else {
 				routes = append(routes, aip)
@@ -2664,10 +2666,10 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPref
 }
 
 func ipPrefixLess(ri, rj netaddr.IPPrefix) bool {
-	if ri.IP() == rj.IP() {
+	if ri.Addr() == rj.Addr() {
 		return ri.Bits() < rj.Bits()
 	}
-	return ri.IP().Less(rj.IP())
+	return ri.Addr().Less(rj.Addr())
 }
 
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
@@ -2695,7 +2697,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNA
 	// likely to break some functionality, but if the user expressed a
 	// preference for routing remotely, we want to avoid leaking
 	// traffic at the expense of functionality.
-	if prefs.ExitNodeID != "" || !prefs.ExitNodeIP.IsZero() {
+	if prefs.ExitNodeID != "" || prefs.ExitNodeIP.IsValid() {
 		var default4, default6 bool
 		for _, route := range rs.Routes {
 			switch route {
@@ -2741,7 +2743,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNA
 }
 
 func unmapIPPrefix(ipp netaddr.IPPrefix) netaddr.IPPrefix {
-	return netaddr.IPPrefixFrom(ipp.IP().Unmap(), ipp.Bits())
+	return netip.PrefixFrom(ipp.Addr().Unmap(), ipp.Bits())
 }
 
 func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
@@ -2828,7 +2830,7 @@ func (b *LocalBackend) enterState(newState ipn.State) {
 	case ipn.Running:
 		var addrs []string
 		for _, addr := range netMap.Addresses {
-			addrs = append(addrs, addr.IP().String())
+			addrs = append(addrs, addr.Addr().String())
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrs, " "))
 	default:
@@ -3114,7 +3116,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	addNode := func(n *tailcfg.Node) {
 		for _, ipp := range n.Addresses {
 			if ipp.IsSingleIP() {
-				b.nodeByAddr[ipp.IP()] = n
+				b.nodeByAddr[ipp.Addr()] = n
 			}
 		}
 	}
@@ -3294,9 +3296,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 			continue
 		}
 		switch {
-		case a.IP().Is4():
+		case a.Addr().Is4():
 			have4 = true
-		case a.IP().Is6():
+		case a.Addr().Is6():
 			have6 = true
 		}
 	}
@@ -3318,7 +3320,7 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	case have6 && p6 != 0:
 		ipp = netaddr.IPPortFrom(nodeIP(peer, netaddr.IP.Is6), p6)
 	}
-	if ipp.IP().IsZero() {
+	if !ipp.Addr().IsValid() {
 		return ""
 	}
 	return fmt.Sprintf("http://%v", ipp)
@@ -3326,8 +3328,8 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 
 func nodeIP(n *tailcfg.Node, pred func(netaddr.IP) bool) netaddr.IP {
 	for _, a := range n.Addresses {
-		if a.IsSingleIP() && pred(a.IP()) {
-			return a.IP()
+		if a.IsSingleIP() && pred(a.Addr()) {
+			return a.Addr()
 		}
 	}
 	return netaddr.IP{}
@@ -3369,9 +3371,9 @@ func (b *LocalBackend) OfferingExitNode() bool {
 		if r.Bits() != 0 {
 			continue
 		}
-		if r.IP().Is4() {
+		if r.Addr().Is4() {
 			def4 = true
-		} else if r.IP().Is6() {
+		} else if r.Addr().Is6() {
 			def6 = true
 		}
 	}
@@ -3543,7 +3545,7 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 	}
 	io.WriteString(w, "<p>Local addresses:</p><ul>\n")
 	for _, ipp := range b.netMap.Addresses {
-		fmt.Fprintf(w, "<li>%v</li>\n", ipp.IP())
+		fmt.Fprintf(w, "<li>%v</li>\n", ipp.Addr())
 	}
 	io.WriteString(w, "</ul>\n")
 }

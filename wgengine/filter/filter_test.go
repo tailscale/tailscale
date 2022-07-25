@@ -13,7 +13,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"inet.af/netaddr"
+	"go4.org/netipx"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -58,12 +59,12 @@ func newFilter(logf logger.Logf) *Filter {
 
 	// Expects traffic to 100.122.98.50, 1.2.3.4, 5.6.7.8,
 	// 102.102.102.102, 119.119.119.119, 8.1.0.0/16
-	var localNets netaddr.IPSetBuilder
+	var localNets netipx.IPSetBuilder
 	for _, n := range nets("100.122.98.50", "1.2.3.4", "5.6.7.8", "102.102.102.102", "119.119.119.119", "8.1.0.0/16", "2001::/16") {
 		localNets.AddPrefix(n)
 	}
 
-	var logB netaddr.IPSetBuilder
+	var logB netipx.IPSetBuilder
 	logB.Complement()
 	localNetsSet, _ := localNets.IPSet()
 	logBSet, _ := logB.IPSet()
@@ -140,9 +141,9 @@ func TestFilter(t *testing.T) {
 		if test.p.IPProto == ipproto.TCP {
 			var got Response
 			if test.p.IPVersion == 4 {
-				got = acl.CheckTCP(test.p.Src.IP(), test.p.Dst.IP(), test.p.Dst.Port())
+				got = acl.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
 			} else {
-				got = acl.CheckTCP(test.p.Src.IP(), test.p.Dst.IP(), test.p.Dst.Port())
+				got = acl.CheckTCP(test.p.Src.Addr(), test.p.Dst.Addr(), test.p.Dst.Port())
 			}
 			if test.want != got {
 				t.Errorf("#%d CheckTCP got=%v want=%v packet:%v", i, got, test.want, test.p)
@@ -340,7 +341,7 @@ func TestPreFilter(t *testing.T) {
 		{"udp", noVerdict, raw4default(ipproto.UDP, 0)},
 		{"icmp", noVerdict, raw4default(ipproto.ICMPv4, 0)},
 	}
-	f := NewAllowNone(t.Logf, &netaddr.IPSet{})
+	f := NewAllowNone(t.Logf, &netipx.IPSet{})
 	for _, testPacket := range packets {
 		p := &packet.Parsed{}
 		p.Decode(testPacket.b)
@@ -437,16 +438,16 @@ func TestLoggingPrivacy(t *testing.T) {
 		logged = true
 	}
 
-	var logB netaddr.IPSetBuilder
+	var logB netipx.IPSetBuilder
 	logB.AddPrefix(netaddr.MustParseIPPrefix("100.64.0.0/10"))
 	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
 	f.logIPs, _ = logB.IPSet()
 
 	var (
-		ts4       = netaddr.IPPortFrom(tsaddr.CGNATRange().IP().Next(), 1234)
+		ts4       = netaddr.IPPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
 		internet4 = netaddr.IPPortFrom(netaddr.MustParseIP("8.8.8.8"), 1234)
-		ts6       = netaddr.IPPortFrom(tsaddr.TailscaleULARange().IP().Next(), 1234)
+		ts6       = netaddr.IPPortFrom(tsaddr.TailscaleULARange().Addr().Next(), 1234)
 		internet6 = netaddr.IPPortFrom(netaddr.MustParseIP("2001::1"), 1234)
 	)
 

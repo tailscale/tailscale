@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func TestViewsJSON(t *testing.T) {

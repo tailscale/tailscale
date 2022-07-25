@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -92,11 +92,11 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 				}
 				fmt.Fprintf(skippedUnselected, "%q (%v)", nodeDebugName(peer), peer.Key.ShortString())
 				continue
-			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP()) && (flags&netmap.AllowSingleHosts) == 0 {
+			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.Addr()) && (flags&netmap.AllowSingleHosts) == 0 {
 				if skippedIPs.Len() > 0 {
 					skippedIPs.WriteString(", ")
 				}
-				fmt.Fprintf(skippedIPs, "%v from %q (%v)", allowedIP.IP(), nodeDebugName(peer), peer.Key.ShortString())
+				fmt.Fprintf(skippedIPs, "%v from %q (%v)", allowedIP.Addr(), nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & netmap.AllowSubnetRoutes) == 0 {

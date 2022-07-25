@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"

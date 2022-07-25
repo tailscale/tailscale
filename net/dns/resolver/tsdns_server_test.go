@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // This file exists to isolate the test infrastructure
@@ -41,7 +41,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeA,
 					Class:  dns.ClassINET,
 				},
-				A: ipv4.IPAddr().IP,
+				A: ipv4.AsSlice(),
 			}
 		case dns.TypeAAAA:
 			ans = &dns.AAAA{
@@ -50,7 +50,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeAAAA,
 					Class:  dns.ClassINET,
 				},
-				AAAA: ipv6.IPAddr().IP,
+				AAAA: ipv6.AsSlice(),
 			}
 		case dns.TypeNS:
 			ans = &dns.NS{
@@ -93,7 +93,7 @@ func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeA,
 					Class:  dns.ClassINET,
 				},
-				A: ipv4.IPAddr().IP,
+				A: ipv4.AsSlice(),
 			}
 		case dns.TypeAAAA:
 			ans = &dns.AAAA{
@@ -102,7 +102,7 @@ func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeAAAA,
 					Class:  dns.ClassINET,
 				},
-				AAAA: ipv6.IPAddr().IP,
+				AAAA: ipv6.AsSlice(),
 			}
 		case dns.TypeNS:
 			ans = &dns.NS{
@@ -244,7 +244,7 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 							Rrtype: dns.TypeA,
 							Class:  dns.ClassINET,
 						},
-						A: ip.IPAddr().IP,
+						A: ip.AsSlice(),
 					})
 				} else if ip.Is6() {
 					m.Answer = append(m.Answer, &dns.AAAA{
@@ -253,7 +253,7 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 							Rrtype: dns.TypeAAAA,
 							Class:  dns.ClassINET,
 						},
-						AAAA: ip.IPAddr().IP,
+						AAAA: ip.AsSlice(),
 					})
 				}
 			case dns.PTR:

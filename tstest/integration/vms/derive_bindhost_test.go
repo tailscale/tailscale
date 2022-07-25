@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 )
 
 func deriveBindhost(t *testing.T) string {
@@ -26,7 +26,7 @@ func deriveBindhost(t *testing.T) string {
 		if ret != "" || i.Name != ifName {
 			return
 		}
-		ret = prefix.IP().String()
+		ret = prefix.Addr().String()
 	})
 	if ret != "" {
 		return ret

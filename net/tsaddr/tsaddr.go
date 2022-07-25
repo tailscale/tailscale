@@ -8,9 +8,10 @@ package tsaddr
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"sync"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // ChromeOSVMRange returns the subset of the CGNAT IPv4 range used by
@@ -56,7 +57,7 @@ func TailscaleServiceIP() netaddr.IP {
 // For IPv4, use TailscaleServiceIP.
 func TailscaleServiceIPv6() netaddr.IP {
 	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, "fd7a:115c:a1e0::53/128") })
-	return serviceIPv6.v.IP()
+	return serviceIPv6.v.Addr()
 }
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
@@ -112,7 +113,7 @@ func TailscaleEphemeral6Range() netaddr.IPPrefix {
 // Currently used to work around a Windows limitation when programming
 // IPv6 routes in corner cases.
 func Tailscale4To6Placeholder() netaddr.IP {
-	return Tailscale4To6Range().IP()
+	return Tailscale4To6Range().Addr()
 }
 
 // Tailscale4To6 returns a Tailscale IPv6 address that maps 1:1 to the
@@ -122,7 +123,7 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 	if !ipv4.Is4() || !IsTailscaleIP(ipv4) {
 		return netaddr.IP{}
 	}
-	ret := Tailscale4To6Range().IP().As16()
+	ret := Tailscale4To6Range().Addr().As16()
 	v4 := ipv4.As4()
 	copy(ret[13:], v4[1:])
 	return netaddr.IPFrom16(ret)
@@ -186,16 +187,16 @@ func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
 	// Fast paths for 1 and 2 IPs:
 	if len(addrs) == 1 {
 		a := addrs[0]
-		return func(ip netaddr.IP) bool { return ip == a.IP() }
+		return func(ip netaddr.IP) bool { return ip == a.Addr() }
 	}
 	if len(addrs) == 2 {
 		a, b := addrs[0], addrs[1]
-		return func(ip netaddr.IP) bool { return ip == a.IP() || ip == b.IP() }
+		return func(ip netaddr.IP) bool { return ip == a.Addr() || ip == b.Addr() }
 	}
 	// General case:
 	m := map[netaddr.IP]bool{}
 	for _, a := range addrs {
-		m[a.IP()] = true
+		m[a.Addr()] = true
 	}
 	return func(ip netaddr.IP) bool { return m[ip] }
 }
@@ -232,10 +233,10 @@ func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
 }
 
 // PrefixIs4 reports whether p is an IPv4 prefix.
-func PrefixIs4(p netaddr.IPPrefix) bool { return p.IP().Is4() }
+func PrefixIs4(p netaddr.IPPrefix) bool { return p.Addr().Is4() }
 
 // PrefixIs6 reports whether p is an IPv6 prefix.
-func PrefixIs6(p netaddr.IPPrefix) bool { return p.IP().Is6() }
+func PrefixIs6(p netaddr.IPPrefix) bool { return p.Addr().Is6() }
 
 // ContainsExitRoutes reports whether rr contains both the IPv4 and
 // IPv6 /0 route.
@@ -280,7 +281,7 @@ func FilterPrefixesCopy(in []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool) []
 // IsViaPrefix reports whether p is a CIDR in the Tailscale "via" range.
 // See TailscaleViaRange.
 func IsViaPrefix(p netaddr.IPPrefix) bool {
-	return TailscaleViaRange().Contains(p.IP())
+	return TailscaleViaRange().Contains(p.Addr())
 }
 
 // UnmapVia returns the IPv4 address that corresponds to the provided Tailscale
@@ -297,14 +298,14 @@ func UnmapVia(ip netaddr.IP) netaddr.IP {
 
 // MapVia returns an IPv6 "via" route for an IPv4 CIDR in a given siteID.
 func MapVia(siteID uint32, v4 netaddr.IPPrefix) (via netaddr.IPPrefix, err error) {
-	if !v4.IP().Is4() {
+	if !v4.Addr().Is4() {
 		return via, errors.New("want IPv4 CIDR with a site ID")
 	}
-	viaRange16 := TailscaleViaRange().IP().As16()
+	viaRange16 := TailscaleViaRange().Addr().As16()
 	var a [16]byte
 	copy(a[:], viaRange16[:8])
 	binary.BigEndian.PutUint32(a[8:], siteID)
-	ip4a := v4.IP().As4()
+	ip4a := v4.Addr().As4()
 	copy(a[12:], ip4a[:])
-	return netaddr.IPPrefixFrom(netaddr.IPFrom16(a), v4.Bits()+64+32), nil
+	return netip.PrefixFrom(netaddr.IPFrom16(a), v4.Bits()+64+32), nil
 }

@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"

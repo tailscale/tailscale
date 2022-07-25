@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 const timeout = 15 * time.Second

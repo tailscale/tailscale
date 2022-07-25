@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version/distro"

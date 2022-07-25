@@ -7,7 +7,7 @@ package dnstype
 
 //go:generate go run tailscale.com/cmd/cloner --type=Resolver --clonefunc=true
 
-import "inet.af/netaddr"
+import "tailscale.com/net/netaddr"
 
 // Resolver is the configuration for one DNS resolver.
 type Resolver struct {

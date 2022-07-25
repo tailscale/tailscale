@@ -22,8 +22,8 @@ import (
 
 	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
@@ -174,7 +174,7 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, gw netaddr.IP, meta uP
 	if err != nil {
 		return nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
 	}
-	if ipp.IP() != gw {
+	if ipp.Addr() != gw {
 		return nil, fmt.Errorf("UPnP discovered root %q does not match gateway IP %v; ignoring UPnP",
 			meta.Location, gw)
 	}
@@ -274,7 +274,7 @@ func (c *Client) getUPnPPortMapping(
 		client,
 		prevPort,
 		internal.Port(),
-		internal.IP().String(),
+		internal.Addr().String(),
 		time.Second*pmpMapLifetimeSec,
 	)
 	if VerboseLogs {

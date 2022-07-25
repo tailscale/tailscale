@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"

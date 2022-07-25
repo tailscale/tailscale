@@ -28,7 +28,7 @@ import (
 	expect "github.com/tailscale/goexpect"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/semaphore"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"

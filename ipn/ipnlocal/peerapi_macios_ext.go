@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"net"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 )
 

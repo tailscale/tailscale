@@ -14,7 +14,7 @@ import (
 	"container/list"
 	"fmt"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 

@@ -25,11 +25,11 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"

@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func defaultRoute() (d DefaultRouteDetails, err error) {

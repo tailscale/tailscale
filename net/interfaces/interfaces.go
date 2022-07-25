@@ -14,8 +14,8 @@ import (
 	"sort"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 )
@@ -248,7 +248,7 @@ func (ifaces List) ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) erro
 			}
 		}
 		sort.Slice(pfxs, func(i, j int) bool {
-			return pfxs[i].IP().Less(pfxs[j].IP())
+			return pfxs[i].Addr().Less(pfxs[j].Addr())
 		})
 		fn(iface, pfxs)
 	}
@@ -326,7 +326,7 @@ func (s *State) String() string {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
 			for _, pfx := range s.InterfaceIPs[ifName] {
-				if !isInterestingIP(pfx.IP()) {
+				if !isInterestingIP(pfx.Addr()) {
 					continue
 				}
 				if needSpace {
@@ -413,7 +413,7 @@ func filteredIPPs(ipps []netaddr.IPPrefix, useIP IPFilter) []netaddr.IPPrefix {
 	// TODO: rewrite prefixesEqualFiltered to avoid making copies
 	x := make([]netaddr.IPPrefix, 0, len(ipps))
 	for _, ipp := range ipps {
-		if useIP(ipp.IP()) {
+		if useIP(ipp.Addr()) {
 			x = append(x, ipp)
 		}
 	}
@@ -467,7 +467,7 @@ func (s *State) AnyInterfaceUp() bool {
 
 func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {
 	for _, pfx := range pfxs {
-		if tsaddr.IsTailscaleIP(pfx.IP()) {
+		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return true
 		}
 	}
@@ -507,11 +507,11 @@ func GetState() (*State, error) {
 			return
 		}
 		for _, pfx := range pfxs {
-			if pfx.IP().IsLoopback() {
+			if pfx.Addr().IsLoopback() {
 				continue
 			}
-			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.IP())
-			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.IP())
+			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.Addr())
+			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.Addr())
 		}
 	}); err != nil {
 		return nil, err
@@ -556,7 +556,7 @@ func HTTPOfListener(ln net.Listener) string {
 	var goodIP string
 	var privateIP string
 	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP()
+		ip := pfx.Addr()
 		if ip.IsPrivate() {
 			if privateIP == "" {
 				privateIP = ip.String()
@@ -593,8 +593,8 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 		return
 	}
 	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP()
-		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
+		ip := pfx.Addr()
+		if !i.IsUp() || !ip.IsValid() || myIP.IsValid() {
 			return
 		}
 		if gateway.IsPrivate() && ip.IsPrivate() {
@@ -603,7 +603,7 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 			return
 		}
 	})
-	return gateway, myIP, !myIP.IsZero()
+	return gateway, myIP, myIP.IsValid()
 }
 
 // isUsableV4 reports whether ip is a usable IPv4 address which could
@@ -637,7 +637,7 @@ var (
 // isInterestingIP.
 func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
 	for _, pfx := range pfxs {
-		if isInterestingIP(pfx.IP()) {
+		if isInterestingIP(pfx.Addr()) {
 			return true
 		}
 	}

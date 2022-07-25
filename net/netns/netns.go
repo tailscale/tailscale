@@ -18,7 +18,7 @@ import (
 	"context"
 	"net"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netknob"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"

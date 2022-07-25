@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/winutil"
 )

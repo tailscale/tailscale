@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 var dialTest = flag.String("dial-test", "", "if non-empty, addr:port to test dial")

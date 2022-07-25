@@ -17,9 +17,9 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/version"
 )
@@ -166,7 +166,7 @@ func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok boo
 	argIP, _ := netaddr.ParseIP(arg)
 	for _, ps := range st.Peer {
 		dnsName = ps.DNSName
-		if !argIP.IsZero() {
+		if argIP.IsValid() {
 			for _, ip := range ps.TailscaleIPs {
 				if ip == argIP {
 					return dnsName, true

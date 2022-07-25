@@ -13,7 +13,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/endian"
 )
 

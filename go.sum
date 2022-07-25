@@ -1248,6 +1248,8 @@ go4.org/intern v0.0.0-20211027215823-ae77deb06f29 h1:UXLjNohABv4S58tHmeuIZDO6e3m
 go4.org/intern v0.0.0-20211027215823-ae77deb06f29/go.mod h1:cS2ma+47FKrLPdXFpr7CuxiTW3eyJbWew4qx0qtQWDA=
 go4.org/mem v0.0.0-20210711025021-927187094b94 h1:OAAkygi2Js191AJP1Ds42MhJRgeofeKGjuoUqNp1QC4=
 go4.org/mem v0.0.0-20210711025021-927187094b94/go.mod h1:reUoABIJ9ikfM5sgtSF3Wushcza7+WeD01VB9Lirh3g=
+go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf h1:IdwJUzqoIo5lkr2EOyKoe5qipUaEjbOKKY5+fzPBZ3A=
+go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf/go.mod h1:+QXzaoURFd0rGDIjDNpyIkv+F9R7EmeKorvlKRnhqgA=
 go4.org/unsafe/assume-no-moving-gc v0.0.0-20201222175341-b30ae309168e/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=
 go4.org/unsafe/assume-no-moving-gc v0.0.0-20201222180813-1025295fd063/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=
 go4.org/unsafe/assume-no-moving-gc v0.0.0-20211027215541-db492cf91b37/go.mod h1:FftLjUGFEDu5k8lt0ddY+HcrH/qU/0qk+H8j9/nTl3E=

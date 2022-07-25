@@ -7,7 +7,8 @@
 package filter
 
 import (
-	"inet.af/netaddr"
+	"net/netip"
+
 	"tailscale.com/types/ipproto"
 )
 
@@ -29,7 +30,7 @@ func (src *Match) Clone() *Match {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _MatchCloneNeedsRegeneration = Match(struct {
 	IPProto []ipproto.Proto
-	Srcs    []netaddr.IPPrefix
+	Srcs    []netip.Prefix
 	Dsts    []NetPortRange
 	Caps    []CapMatch
 }{})

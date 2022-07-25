@@ -21,10 +21,10 @@ import (
 	_ "time"
 
 	_ "golang.org/x/crypto/ssh"
-	_ "inet.af/netaddr"
 	_ "tailscale.com/control/controlclient"
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnserver"
+	_ "tailscale.com/net/netaddr"
 	_ "tailscale.com/net/netns"
 	_ "tailscale.com/net/tsdial"
 	_ "tailscale.com/safesocket"

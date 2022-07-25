@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -87,7 +87,7 @@ func main() {
 	}
 
 	logf("initialized ok.")
-	traf.Start(Addr1.IP(), Addr2.IP(), PayloadSize+ICMPMinSize, 0)
+	traf.Start(Addr1.Addr(), Addr2.Addr(), PayloadSize+ICMPMinSize, 0)
 
 	var cur, prev Snapshot
 	var pps int64

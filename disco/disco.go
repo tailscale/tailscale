@@ -26,7 +26,7 @@ import (
 	"net"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -180,7 +180,7 @@ const epLength = 16 + 2 // 16 byte IP address + 2 byte port
 func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
 	for _, ipp := range m.MyNumber {
-		a := ipp.IP().As16()
+		a := ipp.Addr().As16()
 		copy(p[:], a[:])
 		binary.BigEndian.PutUint16(p[16:], ipp.Port())
 		p = p[epLength:]
@@ -219,7 +219,7 @@ const pongLen = 12 + 16 + 2
 func (m *Pong) AppendMarshal(b []byte) []byte {
 	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
 	d = d[copy(d, m.TxID[:]):]
-	ip16 := m.Src.IP().As16()
+	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
 	binary.BigEndian.PutUint16(d, m.Src.Port())
 	return ret

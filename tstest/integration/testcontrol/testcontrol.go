@@ -27,7 +27,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
@@ -475,7 +475,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
 	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
-	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
+	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
 	allowedIPs := []netaddr.IPPrefix{
 		v4Prefix,
@@ -761,7 +761,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	})
 
 	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
-	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.IP()), 128)
+	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
 	res.Node.Addresses = []netaddr.IPPrefix{
 		v4Prefix,
@@ -865,7 +865,7 @@ func keepClientEndpoint(ep string) bool {
 		// the incoming JSON response.
 		return false
 	}
-	ip := ipp.IP()
+	ip := ipp.Addr()
 	if ip.Zone() != "" {
 		return false
 	}

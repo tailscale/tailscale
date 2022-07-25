@@ -14,8 +14,8 @@ import (
 	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
@@ -167,7 +167,7 @@ func (c *nlConn) Receive() (message, error) {
 
 		if msg.Header.Type == unix.RTM_NEWROUTE &&
 			(rmsg.Attributes.Table == 255 || rmsg.Attributes.Table == 254) &&
-			(dst.IP().IsMulticast() || dst.IP().IsLinkLocalUnicast()) {
+			(dst.Addr().IsMulticast() || dst.Addr().IsLinkLocalUnicast()) {
 
 			if debugNetlinkMessages {
 				c.logf("%s ignored", typeStr)
@@ -180,7 +180,7 @@ func (c *nlConn) Receive() (message, error) {
 		if rmsg.Table == tsTable && dst.IsSingleIP() {
 			// Don't log. Spammy and normal to see a bunch of these on start-up,
 			// which we make ourselves.
-		} else if tsaddr.IsTailscaleIP(dst.IP()) {
+		} else if tsaddr.IsTailscaleIP(dst.Addr()) {
 			// Verbose only.
 			c.logf("%s: [v1] src=%v, dst=%v, gw=%v, outif=%v, table=%v", typeStr,
 				condNetAddrPrefix(src), condNetAddrPrefix(dst), condNetAddrIP(gw),
@@ -246,14 +246,14 @@ func netaddrIPPrefix(std net.IP, bits uint8) netaddr.IPPrefix {
 }
 
 func condNetAddrPrefix(ipp netaddr.IPPrefix) string {
-	if ipp.IP().IsZero() {
+	if !ipp.Addr().IsValid() {
 		return ""
 	}
 	return ipp.String()
 }
 
 func condNetAddrIP(ip netaddr.IP) string {
-	if ip.IsZero() {
+	if !ip.IsValid() {
 		return ""
 	}
 	return ip.String()
@@ -269,7 +269,7 @@ type newRouteMessage struct {
 const tsTable = 52
 
 func (m *newRouteMessage) ignore() bool {
-	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.IP())
+	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.Addr())
 }
 
 // newAddrMessage is a message for a new address being added.

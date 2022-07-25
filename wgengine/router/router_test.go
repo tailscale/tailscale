@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/preftype"
 )
 

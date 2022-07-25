@@ -21,7 +21,7 @@ import (
 	"github.com/mdlayher/netlink"
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/util/lineread"
 )
@@ -98,7 +98,7 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 		}
 		log.Printf("interfaces: failed to read /proc/net/route: %v", err)
 	}
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 // Android apps don't have permission to read /proc/net/route, at
@@ -133,7 +133,7 @@ func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
 	})
 	cmd.Process.Kill()
 	cmd.Wait()
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 func defaultRoute() (d DefaultRouteDetails, err error) {

@@ -20,9 +20,9 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )

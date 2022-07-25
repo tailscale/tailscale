@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 

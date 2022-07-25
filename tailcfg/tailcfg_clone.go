@@ -7,9 +7,9 @@
 package tailcfg
 
 import (
+	"net/netip"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -76,14 +76,14 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	KeyExpiry               time.Time
 	Machine                 key.MachinePublic
 	DiscoKey                key.DiscoPublic
-	Addresses               []netaddr.IPPrefix
-	AllowedIPs              []netaddr.IPPrefix
+	Addresses               []netip.Prefix
+	AllowedIPs              []netip.Prefix
 	Endpoints               []string
 	DERP                    string
 	Hostinfo                HostinfoView
 	Created                 time.Time
 	Tags                    []string
-	PrimaryRoutes           []netaddr.IPPrefix
+	PrimaryRoutes           []netip.Prefix
 	LastSeen                *time.Time
 	Online                  *bool
 	KeepAlive               bool
@@ -124,7 +124,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp     bool
 	ShareeNode    bool
 	GoArch        string
-	RoutableIPs   []netaddr.IPPrefix
+	RoutableIPs   []netip.Prefix
 	RequestTags   []string
 	Services      []Service
 	NetInfo       *NetInfo
@@ -224,7 +224,7 @@ var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
 	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
-	Nameservers         []netaddr.IP
+	Nameservers         []netip.Addr
 	PerDomain           bool
 	CertDomains         []string
 	ExtraRecords        []DNSRecord

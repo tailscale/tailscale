@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -99,11 +99,11 @@ func (ms matches) match(q *packet.Parsed) bool {
 		if !protoInList(q.IPProto, m.IPProto) {
 			continue
 		}
-		if !ipInList(q.Src.IP(), m.Srcs) {
+		if !ipInList(q.Src.Addr(), m.Srcs) {
 			continue
 		}
 		for _, dst := range m.Dsts {
-			if !dst.Net.Contains(q.Dst.IP()) {
+			if !dst.Net.Contains(q.Dst.Addr()) {
 				continue
 			}
 			if !dst.Ports.contains(q.Dst.Port()) {
@@ -117,11 +117,11 @@ func (ms matches) match(q *packet.Parsed) bool {
 
 func (ms matches) matchIPsOnly(q *packet.Parsed) bool {
 	for _, m := range ms {
-		if !ipInList(q.Src.IP(), m.Srcs) {
+		if !ipInList(q.Src.Addr(), m.Srcs) {
 			continue
 		}
 		for _, dst := range m.Dsts {
-			if dst.Net.Contains(q.Dst.IP()) {
+			if dst.Net.Contains(q.Dst.Addr()) {
 				return true
 			}
 		}
@@ -137,14 +137,14 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 		if !protoInList(q.IPProto, m.IPProto) {
 			continue
 		}
-		if !ipInList(q.Src.IP(), m.Srcs) {
+		if !ipInList(q.Src.Addr(), m.Srcs) {
 			continue
 		}
 		for _, dst := range m.Dsts {
 			if dst.Ports != allPorts {
 				continue
 			}
-			if dst.Net.Contains(q.Dst.IP()) {
+			if dst.Net.Contains(q.Dst.Addr()) {
 				return true
 			}
 		}

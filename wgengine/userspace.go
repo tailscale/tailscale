@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -31,6 +31,7 @@ import (
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -486,7 +487,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 	// Handle traffic to the service IP.
 	// TODO(tom): Netstack handles this when it is installed. Rip all
 	//            this out once netstack is used on all platforms.
-	switch p.Dst.IP() {
+	switch p.Dst.Addr() {
 	case magicDNSIP, magicDNSIPv6:
 		err := e.dns.EnqueuePacket(append([]byte(nil), p.Payload()...), p.IPProto, p.Src, p.Dst)
 		if err != nil {
@@ -500,7 +501,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 		isLocalAddr, ok := e.isLocalAddr.Load().(func(netaddr.IP) bool)
 		if !ok {
 			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
-		} else if isLocalAddr(p.Dst.IP()) {
+		} else if isLocalAddr(p.Dst.Addr()) {
 			// macOS NetworkExtension directs packets destined to the
 			// tunnel's local IP address into the tunnel, instead of
 			// looping back within the kernel network stack. We have to
@@ -690,8 +691,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 		trackNodes = append(trackNodes, nk)
 		recentlyActive := false
 		for _, cidr := range p.AllowedIPs {
-			trackIPs = append(trackIPs, cidr.IP())
-			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.IP(), activeCutoff)
+			trackIPs = append(trackIPs, cidr.Addr())
+			recentlyActive = recentlyActive || e.isActiveSinceLocked(nk, cidr.Addr(), activeCutoff)
 		}
 		if recentlyActive {
 			min.Peers = append(min.Peers, *p)
@@ -1324,8 +1325,8 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netaddr.IP) (src netaddr.IP
 		return netaddr.IP{}, errors.New("no netmap")
 	}
 	for _, a := range e.netMap.Addresses {
-		if a.IsSingleIP() && a.IP().BitLen() == dst.BitLen() {
-			return a.IP(), nil
+		if a.IsSingleIP() && a.Addr().BitLen() == dst.BitLen() {
+			return a.Addr(), nil
 		}
 	}
 	if len(e.netMap.Addresses) == 0 {
@@ -1518,13 +1519,13 @@ func (e *userspaceEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
 	// TODO(bradfitz): add maps for these. on NetworkMap?
 	for _, p := range nm.Peers {
 		for _, a := range p.Addresses {
-			if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+			if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 				return PeerForIP{Node: p, Route: a}, true
 			}
 		}
 	}
 	for _, a := range nm.Addresses {
-		if a.IP() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+		if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
 		}
 	}
@@ -1540,7 +1541,7 @@ func (e *userspaceEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
 			if !cidr.Contains(ip) {
 				continue
 			}
-			if best.IsZero() || cidr.Bits() > best.Bits() {
+			if !best.IsValid() || cidr.Bits() > best.Bits() {
 				best = cidr
 				bestKey = p.PublicKey
 			}
@@ -1591,7 +1592,7 @@ func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []ne
 			ip, err := netaddr.ParseIP(r.Addr)
 			if err != nil {
 				if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil {
-					ip = ipp.IP()
+					ip = ipp.Addr()
 				} else {
 					continue
 				}
@@ -1609,7 +1610,7 @@ func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []ne
 
 	ret = make([]netaddr.IPPrefix, 0, len(m))
 	for ip := range m {
-		ret = append(ret, netaddr.IPPrefixFrom(ip, ip.BitLen()))
+		ret = append(ret, netip.PrefixFrom(ip, ip.BitLen()))
 	}
 	return ret
 }

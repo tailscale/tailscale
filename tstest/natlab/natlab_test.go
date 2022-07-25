@@ -7,10 +7,12 @@ package natlab
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/netip"
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 )
 
@@ -63,7 +65,7 @@ func TestSendPacket(t *testing.T) {
 	}
 
 	const msg = "some message"
-	if _, err := fooPC.WriteTo([]byte(msg), barAddr.UDPAddr()); err != nil {
+	if _, err := fooPC.WriteTo([]byte(msg), net.UDPAddrFromAddrPort(barAddr)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,10 +119,10 @@ func TestMultiNetwork(t *testing.T) {
 	serverAddr := netaddr.IPPortFrom(ifServer.V4(), 789)
 
 	const msg1, msg2 = "hello", "world"
-	if _, err := natPC.WriteTo([]byte(msg1), clientAddr.UDPAddr()); err != nil {
+	if _, err := natPC.WriteTo([]byte(msg1), net.UDPAddrFromAddrPort(clientAddr)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := natPC.WriteTo([]byte(msg2), serverAddr.UDPAddr()); err != nil {
+	if _, err := natPC.WriteTo([]byte(msg2), net.UDPAddrFromAddrPort(serverAddr)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,8 +156,8 @@ type trivialNAT struct {
 }
 
 func (n *trivialNAT) HandleIn(p *Packet, iface *Interface) *Packet {
-	if iface == n.wanIf && p.Dst.IP() == n.wanIf.V4() {
-		p.Dst = p.Dst.WithIP(n.clientIP)
+	if iface == n.wanIf && p.Dst.Addr() == n.wanIf.V4() {
+		p.Dst = netip.AddrPortFrom(n.clientIP, p.Dst.Port())
 	}
 	return p
 }
@@ -167,13 +169,13 @@ func (n trivialNAT) HandleOut(p *Packet, iface *Interface) *Packet {
 func (n *trivialNAT) HandleForward(p *Packet, iif, oif *Interface) *Packet {
 	// Outbound from LAN -> apply NAT, continue
 	if iif == n.lanIf && oif == n.wanIf {
-		if p.Src.IP() == n.clientIP {
-			p.Src = p.Src.WithIP(n.wanIf.V4())
+		if p.Src.Addr() == n.clientIP {
+			p.Src = netip.AddrPortFrom(n.wanIf.V4(), p.Src.Port())
 		}
 		return p
 	}
 	// Return traffic to LAN, allow if right dst.
-	if iif == n.wanIf && oif == n.lanIf && p.Dst.IP() == n.clientIP {
+	if iif == n.wanIf && oif == n.lanIf && p.Dst.Addr() == n.clientIP {
 		return p
 	}
 	// Else drop.
@@ -217,7 +219,7 @@ func TestPacketHandler(t *testing.T) {
 
 	const msg = "some message"
 	serverAddr := netaddr.IPPortFrom(ifServer.V4(), 456)
-	if _, err := clientPC.WriteTo([]byte(msg), serverAddr.UDPAddr()); err != nil {
+	if _, err := clientPC.WriteTo([]byte(msg), net.UDPAddrFromAddrPort(serverAddr)); err != nil {
 		t.Fatal(err)
 	}
 

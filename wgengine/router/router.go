@@ -10,7 +10,7 @@ import (
 	"reflect"
 
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/wgengine/monitor"

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"gvisor.dev/gvisor/pkg/refs"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"

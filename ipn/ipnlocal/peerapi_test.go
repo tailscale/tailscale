@@ -19,8 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"inet.af/netaddr"
+	"go4.org/netipx"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -607,7 +608,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 		t.Errorf("unexpectedly doing DNS without filter")
 	}
 
-	h.ps.b.setFilter(filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)))
+	h.ps.b.setFilter(filter.NewAllowNone(logger.Discard, new(netipx.IPSet)))
 	if h.replyToDNSQueries() {
 		t.Errorf("unexpectedly doing DNS without filter")
 	}

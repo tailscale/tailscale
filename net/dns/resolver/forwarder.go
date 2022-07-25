@@ -24,16 +24,17 @@ import (
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -267,7 +268,7 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 		if !ok {
 			continue
 		}
-		dohBase, ok := publicdns.KnownDoH()[ipp.IP()]
+		dohBase, ok := publicdns.KnownDoH()[ipp.Addr()]
 		if !ok || didDoH[dohBase] {
 			continue
 		}
@@ -288,12 +289,12 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 			rr = append(rr, resolverAndDelay{name: r})
 			continue
 		}
-		ip := ipp.IP()
+		ip := ipp.Addr()
 		var startDelay time.Duration
 		if host, ok := publicdns.KnownDoH()[ip]; ok {
 			// We already did the DoH query early. These
 			startDelay = dohHeadStart
-			key := hostAndFam{host, ip.BitLen()}
+			key := hostAndFam{host, uint8(ip.BitLen())}
 			if done[key] > 0 {
 				startDelay += wellKnownHostBackupDelay
 			}
@@ -364,13 +365,9 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.cloudHostFallback = cloudHostFallback
 }
 
-var stdNetPacketListener packetListener = new(net.ListenConfig)
+var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
 
-type packetListener interface {
-	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
-}
-
-func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
+func (f *forwarder) packetListener(ip netaddr.IP) (nettype.PacketListenerWithNetIP, error) {
 	if f.linkSel == nil || initListenConfig == nil {
 		return stdNetPacketListener, nil
 	}
@@ -382,7 +379,7 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 	if err := initListenConfig(lc, f.linkMon, linkName); err != nil {
 		return nil, err
 	}
-	return lc, nil
+	return nettype.MakePacketListenerWithNetIP(lc), nil
 }
 
 // getKnownDoHClientForProvider returns an HTTP client for a specific DoH
@@ -528,11 +525,17 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	}
 	metricDNSFwdUDP.Add(1)
 
-	ln, err := f.packetListener(ipp.IP())
+	ln, err := f.packetListener(ipp.Addr())
 	if err != nil {
 		return nil, err
 	}
-	conn, err := ln.ListenPacket(ctx, "udp", ":0")
+
+	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
+	udpFam := "udp4"
+	if ipp.Addr().Is6() {
+		udpFam = "udp6"
+	}
+	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
 	if err != nil {
 		f.logf("ListenPacket failed: %v", err)
 		return nil, err
@@ -542,7 +545,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
 
-	if _, err := conn.WriteTo(fq.packet, ipp.UDPAddr()); err != nil {
+	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
 		metricDNSFwdUDPErrorWrite.Add(1)
 		if err := ctx.Err(); err != nil {
 			return nil, err

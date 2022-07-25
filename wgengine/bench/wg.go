@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"

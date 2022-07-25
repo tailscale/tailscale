@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"

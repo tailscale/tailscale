@@ -9,7 +9,7 @@ import (
 	"net"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func TestGetState(t *testing.T) {

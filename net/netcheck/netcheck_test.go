@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"

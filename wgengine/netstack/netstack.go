@@ -34,10 +34,10 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -255,7 +255,7 @@ func (ns *Impl) addSubnetAddress(ip netaddr.IP) {
 	if needAdd {
 		pa := tcpip.ProtocolAddress{
 			AddressWithPrefix: tcpip.AddressWithPrefix{
-				Address:   tcpip.Address(ip.IPAddr().IP),
+				Address:   tcpip.Address(ip.AsSlice()),
 				PrefixLen: int(ip.BitLen()),
 			},
 		}
@@ -277,14 +277,14 @@ func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
 	ns.connsOpenBySubnetIP[ip]--
 	// Only unregister address from netstack after last concurrent connection.
 	if ns.connsOpenBySubnetIP[ip] == 0 {
-		ns.ipstack.RemoveAddress(nicID, tcpip.Address(ip.IPAddr().IP))
+		ns.ipstack.RemoveAddress(nicID, tcpip.Address(ip.AsSlice()))
 		delete(ns.connsOpenBySubnetIP, ip)
 	}
 }
 
 func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
 	return tcpip.AddressWithPrefix{
-		Address:   tcpip.Address(ipp.IP().IPAddr().IP),
+		Address:   tcpip.Address(ipp.Addr().AsSlice()),
 		PrefixLen: int(ipp.Bits()),
 	}
 }
@@ -335,7 +335,7 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 	ns.mu.Lock()
 	for ip := range ns.connsOpenBySubnetIP {
-		ipp := tcpip.Address(ip.IPAddr().IP).WithPrefix()
+		ipp := tcpip.Address(ip.AsSlice()).WithPrefix()
 		delete(ipsToBeRemoved, ipp)
 	}
 	ns.mu.Unlock()
@@ -376,7 +376,7 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	// If it's not traffic to the service IP (i.e. magicDNS) we don't
 	// care; resume processing.
-	if dst := p.Dst.IP(); dst != magicDNSIP && dst != magicDNSIPv6 {
+	if dst := p.Dst.Addr(); dst != magicDNSIP && dst != magicDNSIPv6 {
 		return filter.Accept
 	}
 	// Of traffic to the service IP, we only care about UDP 53, and TCP
@@ -414,11 +414,11 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.TCPConn, error) {
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(ipp.IP().IPAddr().IP),
+		Addr: tcpip.Address(ipp.Addr().AsSlice()),
 		Port: ipp.Port(),
 	}
 	var ipType tcpip.NetworkProtocolNumber
-	if ipp.IP().Is4() {
+	if ipp.Addr().Is4() {
 		ipType = ipv4.ProtocolNumber
 	} else {
 		ipType = ipv6.ProtocolNumber
@@ -430,11 +430,11 @@ func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.
 func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.UDPConn, error) {
 	remoteAddress := &tcpip.FullAddress{
 		NIC:  nicID,
-		Addr: tcpip.Address(ipp.IP().IPAddr().IP),
+		Addr: tcpip.Address(ipp.Addr().AsSlice()),
 		Port: ipp.Port(),
 	}
 	var ipType tcpip.NetworkProtocolNumber
-	if ipp.IP().Is4() {
+	if ipp.Addr().Is4() {
 		ipType = ipv4.ProtocolNumber
 	} else {
 		ipType = ipv6.ProtocolNumber
@@ -534,9 +534,9 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	// Handle incoming peerapi connections in netstack.
 	if ns.lb != nil && p.IPProto == ipproto.TCP {
 		var peerAPIPort uint16
-		dstIP := p.Dst.IP()
+		dstIP := p.Dst.Addr()
 		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn && ns.isLocalIP(dstIP) {
-			if port, ok := ns.lb.GetPeerAPIPort(p.Dst.IP()); ok {
+			if port, ok := ns.lb.GetPeerAPIPort(p.Dst.Addr()); ok {
 				peerAPIPort = port
 				atomic.StoreUint32(ns.peerAPIPortAtomic(dstIP), uint32(port))
 			}
@@ -550,15 +550,15 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	if ns.isInboundTSSH(p) && ns.processSSH() {
 		return true
 	}
-	if p.IPVersion == 6 && viaRange.Contains(p.Dst.IP()) {
-		return ns.lb != nil && ns.lb.ShouldHandleViaIP(p.Dst.IP())
+	if p.IPVersion == 6 && viaRange.Contains(p.Dst.Addr()) {
+		return ns.lb != nil && ns.lb.ShouldHandleViaIP(p.Dst.Addr())
 	}
 	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
 		// Fast path for common case (e.g. Linux server in TUN mode) where
 		// netstack isn't used at all; don't even do an isLocalIP lookup.
 		return false
 	}
-	isLocal := ns.isLocalIP(p.Dst.IP())
+	isLocal := ns.isLocalIP(p.Dst.Addr())
 	if ns.ProcessLocalIPs && isLocal {
 		return true
 	}
@@ -647,7 +647,7 @@ func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
 func (ns *Impl) isInboundTSSH(p *packet.Parsed) bool {
 	return p.IPProto == ipproto.TCP &&
 		p.Dst.Port() == 22 &&
-		ns.isLocalIP(p.Dst.IP())
+		ns.isLocalIP(p.Dst.Addr())
 }
 
 // injectInbound is installed as a packet hook on the 'inbound' (from a
@@ -661,7 +661,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 		return filter.Accept
 	}
 
-	destIP := p.Dst.IP()
+	destIP := p.Dst.Addr()
 	if p.IsEchoRequest() && ns.ProcessSubnets && !tsaddr.IsTailscaleIP(destIP) {
 		var pong []byte // the reply to the ping, if our relayed ping works
 		if destIP.Is4() {
@@ -886,7 +886,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 
 	// Handle magicDNS traffic (via UDP) here.
-	if dst := dstAddr.IP(); dst == magicDNSIP || dst == magicDNSIPv6 {
+	if dst := dstAddr.Addr(); dst == magicDNSIP || dst == magicDNSIPv6 {
 		if dstAddr.Port() != 53 {
 			return // Only MagicDNS traffic runs on the service IPs for now.
 		}
@@ -949,16 +949,16 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 
 	var backendListenAddr *net.UDPAddr
 	var backendRemoteAddr *net.UDPAddr
-	isLocal := ns.isLocalIP(dstAddr.IP())
+	isLocal := ns.isLocalIP(dstAddr.Addr())
 	if isLocal {
 		backendRemoteAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(port)}
 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
 	} else {
-		if dstIP := dstAddr.IP(); viaRange.Contains(dstIP) {
+		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
 			dstAddr = netaddr.IPPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
 		}
-		backendRemoteAddr = dstAddr.UDPAddr()
-		if dstAddr.IP().Is4() {
+		backendRemoteAddr = net.UDPAddrFromAddrPort(dstAddr)
+		if dstAddr.Addr().Is4() {
 			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: int(srcPort)}
 		} else {
 			backendListenAddr = &net.UDPAddr{IP: net.ParseIP("::"), Port: int(srcPort)}
@@ -981,7 +981,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.e.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.IP())
+		ns.e.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1007,13 +1007,13 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 	extend := func() {
 		timer.Reset(idleTimeout)
 	}
-	startPacketCopy(ctx, cancel, client, clientAddr.UDPAddr(), backendConn, ns.logf, extend)
+	startPacketCopy(ctx, cancel, client, net.UDPAddrFromAddrPort(clientAddr), backendConn, ns.logf, extend)
 	startPacketCopy(ctx, cancel, backendConn, backendRemoteAddr, client, ns.logf, extend)
 	if isLocal {
 		// Wait for the copies to be done before decrementing the
 		// subnet address count to potentially remove the route.
 		<-ctx.Done()
-		ns.removeSubnetAddress(dstAddr.IP())
+		ns.removeSubnetAddress(dstAddr.Addr())
 	}
 }
 

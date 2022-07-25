@@ -6,12 +6,13 @@ package ipnlocal
 
 import (
 	"encoding/json"
+	"net/netip"
 	"reflect"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
@@ -23,7 +24,7 @@ import (
 func ipps(ippStrs ...string) (ipps []netaddr.IPPrefix) {
 	for _, s := range ippStrs {
 		if ip, err := netaddr.ParseIP(s); err == nil {
-			ipps = append(ipps, netaddr.IPPrefixFrom(ip, ip.BitLen()))
+			ipps = append(ipps, netip.PrefixFrom(ip, ip.BitLen()))
 			continue
 		}
 		ipps = append(ipps, netaddr.MustParseIPPrefix(s))

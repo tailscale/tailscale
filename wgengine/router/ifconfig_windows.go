@@ -11,17 +11,19 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"runtime"
 	"sort"
 	"time"
 
 	ole "github.com/go-ole/go-ole"
+	"go4.org/netipx"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
 	"tailscale.com/health"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/winnet"
@@ -326,16 +328,16 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	var firstGateway6 *net.IP
 	addresses := make([]*net.IPNet, 0, len(cfg.LocalAddrs))
 	for _, addr := range cfg.LocalAddrs {
-		if (addr.IP().Is4() && ipif4 == nil) || (addr.IP().Is6() && ipif6 == nil) {
+		if (addr.Addr().Is4() && ipif4 == nil) || (addr.Addr().Is6() && ipif6 == nil) {
 			// Can't program addresses for disabled protocol.
 			continue
 		}
-		ipnet := addr.IPNet()
+		ipnet := netipx.PrefixIPNet(addr)
 		addresses = append(addresses, ipnet)
 		gateway := ipnet.IP
-		if addr.IP().Is4() && firstGateway4 == nil {
+		if addr.Addr().Is4() && firstGateway4 == nil {
 			firstGateway4 = &gateway
-		} else if addr.IP().Is6() && firstGateway6 == nil {
+		} else if addr.Addr().Is6() && firstGateway6 == nil {
 			firstGateway6 = &gateway
 		}
 	}
@@ -344,31 +346,31 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 	foundDefault4 := false
 	foundDefault6 := false
 	for _, route := range cfg.Routes {
-		if (route.IP().Is4() && ipif4 == nil) || (route.IP().Is6() && ipif6 == nil) {
+		if (route.Addr().Is4() && ipif4 == nil) || (route.Addr().Is6() && ipif6 == nil) {
 			// Can't program routes for disabled protocol.
 			continue
 		}
 
-		if route.IP().Is6() && firstGateway6 == nil {
+		if route.Addr().Is6() && firstGateway6 == nil {
 			// Windows won't let us set IPv6 routes without having an
 			// IPv6 local address set. However, when we've configured
 			// a default route, we want to forcibly grab IPv6 traffic
 			// even if the v6 overlay network isn't configured. To do
 			// that, we add a dummy local IPv6 address to serve as a
 			// route source.
-			ipnet := &net.IPNet{tsaddr.Tailscale4To6Placeholder().IPAddr().IP, net.CIDRMask(128, 128)}
+			ipnet := &net.IPNet{tsaddr.Tailscale4To6Placeholder().AsSlice(), net.CIDRMask(128, 128)}
 			addresses = append(addresses, ipnet)
 			firstGateway6 = &ipnet.IP
-		} else if route.IP().Is4() && firstGateway4 == nil {
+		} else if route.Addr().Is4() && firstGateway4 == nil {
 			// TODO: do same dummy behavior as v6?
 			return errors.New("due to a Windows limitation, one cannot have interface routes without an interface address")
 		}
 
-		ipn := route.IPNet()
+		ipn := netipx.PrefixIPNet(route)
 		var gateway net.IP
-		if route.IP().Is4() {
+		if route.Addr().Is4() {
 			gateway = *firstGateway4
-		} else if route.IP().Is6() {
+		} else if route.Addr().Is6() {
 			gateway = *firstGateway6
 		}
 		r := winipcfg.RouteData{
@@ -387,12 +389,12 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 			// then the interface's IP won't be pingable.
 			continue
 		}
-		if route.IP().Is4() {
+		if route.Addr().Is4() {
 			if route.Bits() == 0 {
 				foundDefault4 = true
 			}
 			r.NextHop = *firstGateway4
-		} else if route.IP().Is6() {
+		} else if route.Addr().Is6() {
 			if route.Bits() == 0 {
 				foundDefault6 = true
 			}
@@ -782,8 +784,8 @@ func filterRoutes(routes []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) [
 		if nr.IsSingleIP() {
 			continue
 		}
-		lastIP := nr.Range().To()
-		ddm[netaddr.IPPrefixFrom(lastIP, lastIP.BitLen())] = true
+		lastIP := netipx.RangeOfPrefix(nr).To()
+		ddm[netip.PrefixFrom(lastIP, lastIP.BitLen())] = true
 	}
 	filtered := make([]*winipcfg.RouteData, 0, len(routes))
 	for _, r := range routes {

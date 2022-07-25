@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
@@ -144,7 +144,7 @@ func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *wini
 func (m *winMon) routeChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibIPforwardRow2) {
 	what := "route"
 	ipn := row.DestinationPrefix.IPNet()
-	if cidr, ok := netaddr.FromStdIPNet(&ipn); ok && tsaddr.IsTailscaleIP(cidr.IP()) {
+	if cidr, ok := netaddr.FromStdIPNet(&ipn); ok && tsaddr.IsTailscaleIP(cidr.Addr()) {
 		what = "tsroute"
 	}
 	// start a goroutine to finish our work, to return to Windows out of this callback

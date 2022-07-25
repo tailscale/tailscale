@@ -16,8 +16,8 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // References:
@@ -69,8 +69,8 @@ func (p *pcpMapping) Release(ctx context.Context) {
 		return
 	}
 	defer uc.Close()
-	pkt := buildPCPRequestMappingPacket(p.internal.IP(), p.internal.Port(), p.external.Port(), 0, p.external.IP())
-	uc.WriteTo(pkt, p.gw.UDPAddr())
+	pkt := buildPCPRequestMappingPacket(p.internal.Addr(), p.internal.Port(), p.external.Port(), 0, p.external.Addr())
+	uc.WriteToUDPAddrPort(pkt, p.gw)
 }
 
 // buildPCPRequestMappingPacket generates a PCP packet with a MAP opcode.

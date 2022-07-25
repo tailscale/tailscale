@@ -8,7 +8,7 @@ package tests
 import (
 	"fmt"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 //go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices

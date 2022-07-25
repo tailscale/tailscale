@@ -17,7 +17,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )

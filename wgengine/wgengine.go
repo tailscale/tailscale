@@ -8,9 +8,9 @@ import (
 	"errors"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"

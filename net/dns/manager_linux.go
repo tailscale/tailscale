@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 )

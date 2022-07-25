@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
 )
@@ -80,7 +80,7 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 		}
 		return nil
 	})
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 func TestFetchRoutingTable(t *testing.T) {

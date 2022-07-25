@@ -7,7 +7,7 @@ package dns
 import (
 	"errors"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 )
 
