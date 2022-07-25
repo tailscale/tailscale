@@ -30,13 +30,21 @@ type testchainNode struct {
 	HashSeed   int
 	Template   string
 	SignedWith string
+
+	// When set, uses this hash as the parent hash when
+	// Parent is not set.
+	//
+	// Set when a testChain is based on a different one
+	// (in scenario_test.go).
+	ParentHash *AUMHash
 }
 
 // testChain represents a constructed web of AUMs for testing purposes.
 type testChain struct {
-	Nodes     map[string]*testchainNode
-	AUMs      map[string]AUM
-	AUMHashes map[string]AUMHash
+	FirstIdent string
+	Nodes      map[string]*testchainNode
+	AUMs       map[string]AUM
+	AUMHashes  map[string]AUMHash
 
 	// Configured by options to NewTestchain()
 	Template    map[string]AUM
@@ -131,6 +139,9 @@ func newTestchain(t *testing.T, input string, options ...testchainOpt) *testChai
 				out.recordParent(t, s.TokenText(), lastIdent)
 			}
 			lastIdent = s.TokenText()
+			if out.FirstIdent == "" {
+				out.FirstIdent = s.TokenText()
+			}
 
 		case '-': // handle '->'
 			switch s.Peek() {
@@ -240,6 +251,8 @@ func (c *testChain) makeAUM(v *testchainNode) AUM {
 	if v.Parent != "" {
 		parentHash := c.AUMHashes[v.Parent]
 		aum.PrevAUMHash = parentHash[:]
+	} else if v.ParentHash != nil {
+		aum.PrevAUMHash = (*v.ParentHash)[:]
 	}
 	if seed := v.HashSeed; seed != 0 {
 		aum.KeyID = []byte{byte(seed)}
