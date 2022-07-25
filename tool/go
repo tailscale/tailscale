@@ -45,7 +45,9 @@ get_cached() {
     archive="$TOOLCHAIN-$REV.tar.gz"
     mark="$TOOLCHAIN.extracted"
     extracted=
-    [ ! -e "$mark" ] || read -r extracted junk <$mark
+
+    # Ignore the error from read, which may error if the mark file does not contain a line end.
+    read -r extracted < "$mark" || true
 
     if [ "$extracted" = "$REV" ] && [ -e "${TOOLCHAIN_GO}" ]; then
         # already ok
