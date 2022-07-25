@@ -21,8 +21,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/smallzstd"
 	"tailscale.com/syncs"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
@@ -44,17 +46,18 @@ type Encoder interface {
 }
 
 type Config struct {
-	Collection     string           // collection name, a domain name
-	PrivateID      PrivateID        // machine-specific private identifier
-	BaseURL        string           // if empty defaults to "https://log.tailscale.io"
-	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
-	SkipClientTime bool             // if true, client_time is not written to logs
-	LowMemory      bool             // if true, logtail minimizes memory use
-	TimeNow        func() time.Time // if set, subsitutes uses of time.Now
-	Stderr         io.Writer        // if set, logs are sent here instead of os.Stderr
-	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
-	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
-	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
+	Collection        string           // collection name, a domain name
+	PrivateID         PrivateID        // machine-specific private identifier
+	BaseURL           string           // if empty defaults to "https://log.tailscale.io"
+	HTTPC             *http.Client     // if empty defaults to http.DefaultClient
+	SkipClientTime    bool             // if true, client_time is not written to logs
+	LowMemory         bool             // if true, logtail minimizes memory use
+	TimeNow           func() time.Time // if set, subsitutes uses of time.Now
+	Stderr            io.Writer        // if set, logs are sent here instead of os.Stderr
+	StderrLevel       int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
+	Buffer            Buffer           // temp storage, if nil a MemoryBuffer
+	NewZstdEncoder    func() Encoder   // if set, used to compress logs for transmission
+	CompressTransport bool             // if true, uses compression for logs transmission
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -130,6 +133,19 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 
 		shutdownStart: make(chan struct{}),
 		shutdownDone:  make(chan struct{}),
+	}
+	if cfg.CompressTransport && cfg.NewZstdEncoder == nil {
+		cfg.NewZstdEncoder = func() Encoder {
+			// Per RFC 8478, section 3.1.1.1.1.1, the "SingleSegment" format
+			// ensures that the frame contains the uncompressed content size.
+			// This is a useful signal to the server for what
+			// uncompressed output size to expect.
+			w, err := smallzstd.NewEncoder(nil, zstd.WithSingleSegment(true))
+			if err != nil {
+				panic(err)
+			}
+			return w
+		}
 	}
 	if cfg.NewZstdEncoder != nil {
 		l.zstdEncoder = cfg.NewZstdEncoder()

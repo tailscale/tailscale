@@ -43,7 +43,6 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/racebuild"
@@ -520,17 +519,11 @@ func New(collection string) *Policy {
 	}
 
 	c := logtail.Config{
-		Collection: newc.Collection,
-		PrivateID:  newc.PrivateID,
-		Stderr:     logWriter{console},
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
-		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
+		Collection:        newc.Collection,
+		PrivateID:         newc.PrivateID,
+		Stderr:            logWriter{console},
+		CompressTransport: true,
+		HTTPC:             &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
 	}
 	if collection == logtail.CollectionNode {
 		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
