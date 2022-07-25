@@ -112,10 +112,6 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			dbg("resolved", "not-in-use")
 			return "direct", nil
 		}
-		if !resolvedUp {
-			dbg("resolved", "no")
-			return "direct", nil
-		}
 		if err := env.dbusPing("org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager/DnsManager"); err != nil {
 			dbg("nm", "no")
 			return "systemd-resolved", nil
@@ -216,11 +212,6 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 			return "direct", nil
 		}
 		dbg("nm-resolved", "yes")
-
-		if !resolvedUp {
-			dbg("resolved", "no")
-			return "direct", nil
-		}
 
 		// See large comment above for reasons we'd use NM rather than
 		// resolved. systemd-resolved is actually in charge of DNS
