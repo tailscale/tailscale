@@ -142,13 +142,17 @@ func pickNextAUM(state State, candidates []AUM) AUM {
 	return candidates[0]
 }
 
-// advanceChain computes the next AUM to advance with based on all child
-// AUMs, returning the chosen AUM & the state obtained by applying that
+// advanceByPrimary computes the next AUM to advance with based on
+// deterministic fork-resolution rules. All nodes should apply this logic
+// when computing the primary chain, hence achieving consensus on what the
+// primary chain (and hence, the shared state) is.
+//
+// This method returns the chosen AUM & the state obtained by applying that
 // AUM.
 //
 // The return value for next is nil if there are no children AUMs, hence
 // the provided state is at head (up to date).
-func advanceChain(state State, candidates []AUM) (next *AUM, out State, err error) {
+func advanceByPrimary(state State, candidates []AUM) (next *AUM, out State, err error) {
 	if len(candidates) == 0 {
 		return nil, state, nil
 	}
@@ -160,12 +164,18 @@ func advanceChain(state State, candidates []AUM) (next *AUM, out State, err erro
 	return &aum, state, nil
 }
 
-// fastForward iteratively advances the current state based on known AUMs until
-// the given termination function returns true or there is no more progress possible.
+// fastForwardWithAdvancer iteratively advances the current state by calling
+// the given advancer to get+apply the next update. This process is repeated
+// until the given termination function returns true or there is no more
+// progress possible.
 //
 // The last-processed AUM, and the state computed after applying the last AUM,
 // are returned.
-func fastForward(storage Chonk, maxIter int, startState State, done func(curAUM AUM, curState State) bool) (AUM, State, error) {
+func fastForwardWithAdvancer(
+	storage Chonk, maxIter int, startState State,
+	advancer func(state State, candidates []AUM) (next *AUM, out State, err error),
+	done func(curAUM AUM, curState State) bool,
+) (AUM, State, error) {
 	if startState.LastAUMHash == nil {
 		return AUM{}, State{}, errors.New("invalid initial state")
 	}
@@ -185,7 +195,7 @@ func fastForward(storage Chonk, maxIter int, startState State, done func(curAUM 
 		if err != nil {
 			return AUM{}, State{}, fmt.Errorf("getting children of %X: %v", curs.Hash(), err)
 		}
-		next, nextState, err := advanceChain(state, children)
+		next, nextState, err := advancer(state, children)
 		if err != nil {
 			return AUM{}, State{}, fmt.Errorf("advance %X: %v", curs.Hash(), err)
 		}
@@ -198,6 +208,15 @@ func fastForward(storage Chonk, maxIter int, startState State, done func(curAUM 
 	}
 
 	return AUM{}, State{}, fmt.Errorf("iteration limit exceeded (%d)", maxIter)
+}
+
+// fastForward iteratively advances the current state based on known AUMs until
+// the given termination function returns true or there is no more progress possible.
+//
+// The last-processed AUM, and the state computed after applying the last AUM,
+// are returned.
+func fastForward(storage Chonk, maxIter int, startState State, done func(curAUM AUM, curState State) bool) (AUM, State, error) {
+	return fastForwardWithAdvancer(storage, maxIter, startState, advanceByPrimary, done)
 }
 
 // computeStateAt returns the State at wantHash.
@@ -216,12 +235,16 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 	//
 	// Valid starting points are either a checkpoint AUM, or a
 	// genesis AUM.
-	curs := topAUM
-	var state State
+	var (
+		curs  = topAUM
+		state State
+		path  = make(map[AUMHash]struct{}, 32) // 32 chosen arbitrarily.
+	)
 	for i := 0; true; i++ {
 		if i > maxIter {
 			return State{}, fmt.Errorf("iteration limit exceeded (%d)", maxIter)
 		}
+		path[curs.Hash()] = struct{}{}
 
 		// Checkpoints encapsulate the state at that point, dope.
 		if curs.MessageKind == AUMCheckpoint {
@@ -255,7 +278,24 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 
 	// We now know some starting point state. Iterate forward till we
 	// are at the AUM we want state for.
-	_, state, err = fastForward(storage, maxIter, state, func(curs AUM, _ State) bool {
+	//
+	// We want to fast forward based on the path we took above, which
+	// (in the case of a non-primary fork) may differ from a regular
+	// fast-forward (which follows standard fork-resolution rules). As
+	// such, we use a custom advancer here.
+	advancer := func(state State, candidates []AUM) (next *AUM, out State, err error) {
+		for _, c := range candidates {
+			if _, inPath := path[c.Hash()]; inPath {
+				if state, err = state.applyVerifiedAUM(c); err != nil {
+					return nil, State{}, fmt.Errorf("advancing state: %v", err)
+				}
+				return &c, state, nil
+			}
+		}
+
+		return nil, State{}, errors.New("no candidate matching path")
+	}
+	_, state, err = fastForwardWithAdvancer(storage, maxIter, state, advancer, func(curs AUM, _ State) bool {
 		return curs.Hash() == wantHash
 	})
 	// fastForward only terminates before the done condition if it
@@ -263,6 +303,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 	// as we've already iterated through them above so they must exist,
 	// but we check anyway to be super duper sure.
 	if err == nil && *state.LastAUMHash != wantHash {
+		// TODO(tom): Error instead of panic before GA.
 		panic("unexpected fastForward outcome")
 	}
 	return state, err
