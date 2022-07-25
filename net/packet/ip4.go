@@ -8,7 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 

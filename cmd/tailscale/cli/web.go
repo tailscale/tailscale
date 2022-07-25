@@ -27,8 +27,8 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/groupmember"

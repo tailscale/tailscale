@@ -24,12 +24,12 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
@@ -175,7 +175,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
 						Name:       nm.Name,
-						Addresses:  mapSlice(nm.Addresses, func(a netaddr.IPPrefix) string { return a.IP().String() }),
+						Addresses:  mapSlice(nm.Addresses, func(a netaddr.IPPrefix) string { return a.Addr().String() }),
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
 					},
@@ -185,7 +185,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
 							Name:       p.Name,
-							Addresses:  mapSlice(p.Addresses, func(a netaddr.IPPrefix) string { return a.IP().String() }),
+							Addresses:  mapSlice(p.Addresses, func(a netaddr.IPPrefix) string { return a.Addr().String() }),
 							MachineKey: p.Machine.String(),
 							NodeKey:    p.Key.String(),
 						},

@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
@@ -396,7 +396,7 @@ func TestManager(t *testing.T) {
 	trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
 	trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string {
 		if ipp.Port() == 53 {
-			return ipp.IP().String()
+			return ipp.Addr().String()
 		}
 		return ipp.String()
 	})

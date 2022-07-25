@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/nettype"

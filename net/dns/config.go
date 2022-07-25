@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"sort"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"

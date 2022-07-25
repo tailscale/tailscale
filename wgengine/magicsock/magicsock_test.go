@@ -30,10 +30,10 @@ import (
 	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
-	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -44,7 +44,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cibuild"
-	"tailscale.com/util/netconv"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -511,7 +510,7 @@ func TestConnClosed(t *testing.T) {
 	cleanup = meshStacks(t.Logf, nil, ms1, ms2)
 	defer cleanup()
 
-	pkt := tuntest.Ping(netconv.AsAddr(ms2.IP()), netconv.AsAddr(ms1.IP()))
+	pkt := tuntest.Ping(ms2.IP(), ms1.IP())
 
 	if len(ms1.conn.activeDerp) == 0 {
 		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
@@ -643,7 +642,7 @@ func TestNoDiscoKey(t *testing.T) {
 		break
 	}
 
-	pkt := tuntest.Ping(netconv.AsAddr(m2.IP()), netconv.AsAddr(m1.IP()))
+	pkt := tuntest.Ping(m2.IP(), m1.IP())
 	m1.tun.Outbound <- pkt
 	select {
 	case <-m2.tun.Inbound:
@@ -856,7 +855,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 		// failure). Figure out what kind of thing would be
 		// acceptable to test instead of "every ping must
 		// transit".
-		pkt := tuntest.Ping(netconv.AsAddr(dst.IP()), netconv.AsAddr(src.IP()))
+		pkt := tuntest.Ping(dst.IP(), src.IP())
 		select {
 		case src.tun.Outbound <- pkt:
 		case <-ctx.Done():

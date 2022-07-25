@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"

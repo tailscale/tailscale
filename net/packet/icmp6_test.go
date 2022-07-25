@@ -7,7 +7,7 @@ package packet
 import (
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 

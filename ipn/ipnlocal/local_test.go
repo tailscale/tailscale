@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
+	"go4.org/netipx"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -173,7 +174,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 			out: []string{
 				"fe80::1",
 				"ff00::1",
-				tsaddr.TailscaleULARange().IP().String(),
+				tsaddr.TailscaleULARange().Addr().String(),
 			},
 			localIPFn: func(ip netaddr.IP) bool { return !inRemove(ip) && ip.Is6() },
 		},
@@ -182,7 +183,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 	// Construct a fake local network environment to make this test hermetic.
 	// localInterfaceRoutes and hostIPs would normally come from calling interfaceRoutes,
 	// and localAddresses would normally come from calling interfaces.LocalAddresses.
-	var b netaddr.IPSetBuilder
+	var b netipx.IPSetBuilder
 	for _, c := range []string{"127.0.0.0/8", "192.168.9.0/24", "fe80::/32"} {
 		p := netaddr.MustParseIPPrefix(c)
 		b.AddPrefix(p)
@@ -561,7 +562,7 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 		ip := interfaces.Interface{
 			Interface: &net.Interface{},
 			AltAddrs: []net.Addr{
-				ippfx.IPNet(),
+				netipx.PrefixIPNet(ippfx),
 			},
 		}
 		if loopback {

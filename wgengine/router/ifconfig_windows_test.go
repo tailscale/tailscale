@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func randIP() net.IP {
@@ -38,7 +39,7 @@ func TestRouteLess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("error parsing test data %q: %v", s, err)
 		}
-		return *ipp.IPNet()
+		return *netipx.PrefixIPNet(ipp)
 	}
 
 	tests := []struct {

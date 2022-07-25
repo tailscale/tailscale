@@ -15,9 +15,9 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"

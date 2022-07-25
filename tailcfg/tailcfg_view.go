@@ -9,9 +9,9 @@ package tailcfg
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -183,14 +183,14 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	KeyExpiry               time.Time
 	Machine                 key.MachinePublic
 	DiscoKey                key.DiscoPublic
-	Addresses               []netaddr.IPPrefix
-	AllowedIPs              []netaddr.IPPrefix
+	Addresses               []netip.Prefix
+	AllowedIPs              []netip.Prefix
 	Endpoints               []string
 	DERP                    string
 	Hostinfo                HostinfoView
 	Created                 time.Time
 	Tags                    []string
-	PrimaryRoutes           []netaddr.IPPrefix
+	PrimaryRoutes           []netip.Prefix
 	LastSeen                *time.Time
 	Online                  *bool
 	KeepAlive               bool
@@ -282,7 +282,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ShieldsUp     bool
 	ShareeNode    bool
 	GoArch        string
-	RoutableIPs   []netaddr.IPPrefix
+	RoutableIPs   []netip.Prefix
 	RequestTags   []string
 	Services      []Service
 	NetInfo       *NetInfo
@@ -488,7 +488,7 @@ func (v DNSConfigView) FallbackResolvers() views.SliceView[*dnstype.Resolver, dn
 }
 func (v DNSConfigView) Domains() views.Slice[string]         { return views.SliceOf(v.ж.Domains) }
 func (v DNSConfigView) Proxied() bool                        { return v.ж.Proxied }
-func (v DNSConfigView) Nameservers() views.Slice[netaddr.IP] { return views.SliceOf(v.ж.Nameservers) }
+func (v DNSConfigView) Nameservers() views.Slice[netip.Addr] { return views.SliceOf(v.ж.Nameservers) }
 func (v DNSConfigView) PerDomain() bool                      { return v.ж.PerDomain }
 func (v DNSConfigView) CertDomains() views.Slice[string]     { return views.SliceOf(v.ж.CertDomains) }
 func (v DNSConfigView) ExtraRecords() views.Slice[DNSRecord] { return views.SliceOf(v.ж.ExtraRecords) }
@@ -503,7 +503,7 @@ var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
 	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
-	Nameservers         []netaddr.IP
+	Nameservers         []netip.Addr
 	PerDomain           bool
 	CertDomains         []string
 	ExtraRecords        []DNSRecord

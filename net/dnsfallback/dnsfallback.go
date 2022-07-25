@@ -21,7 +21,7 @@ import (
 	"net/url"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -29,7 +29,7 @@ import (
 )
 
 func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
-	if ip, err := netaddr.ParseIP(host); err == nil && !ip.IsZero() {
+	if ip, err := netaddr.ParseIP(host); err == nil && ip.IsValid() {
 		return []netaddr.IP{ip}, nil
 	}
 

@@ -8,10 +8,11 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // mapping is the state of an allocated NAT session.
@@ -62,7 +63,7 @@ func (t NATType) key(src, dst netaddr.IPPort) natKey {
 	switch t {
 	case EndpointIndependentNAT:
 	case AddressDependentNAT:
-		k.dst = k.dst.WithIP(dst.IP())
+		k.dst = netip.AddrPortFrom(dst.Addr(), k.dst.Port())
 	case AddressAndPortDependentNAT:
 		k.dst = dst
 	default:
@@ -171,7 +172,7 @@ func (n *SNAT44) HandleIn(p *Packet, iif *Interface) *Packet {
 func (n *SNAT44) HandleForward(p *Packet, iif, oif *Interface) *Packet {
 	switch {
 	case oif == n.ExternalInterface:
-		if p.Src.IP() == oif.V4() {
+		if p.Src.Addr() == oif.V4() {
 			// Packet already NATed and is just retraversing Forward,
 			// don't touch it again.
 			return p

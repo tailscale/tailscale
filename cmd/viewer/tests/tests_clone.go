@@ -7,7 +7,7 @@
 package tests
 
 import (
-	"inet.af/netaddr"
+	"net/netip"
 )
 
 // Clone makes a deep copy of StructWithPtrs.
@@ -50,7 +50,7 @@ func (src *StructWithoutPtrs) Clone() *StructWithoutPtrs {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithoutPtrsCloneNeedsRegeneration = StructWithoutPtrs(struct {
 	Int int
-	Pfx netaddr.IPPrefix
+	Pfx netip.Prefix
 }{})
 
 // Clone makes a deep copy of Map.
@@ -178,6 +178,6 @@ var _StructWithSlicesCloneNeedsRegeneration = StructWithSlices(struct {
 	Structs        []StructWithPtrs
 	Ints           []*int
 	Slice          []string
-	Prefixes       []netaddr.IPPrefix
+	Prefixes       []netip.Prefix
 	Data           []byte
 }{})

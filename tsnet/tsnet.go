@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -33,6 +32,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/nettest"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"

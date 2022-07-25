@@ -7,7 +7,7 @@ package packet
 import (
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func TestTailscaleRejectedHeader(t *testing.T) {

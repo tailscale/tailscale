@@ -9,8 +9,8 @@ import (
 	"log"
 	"sort"
 
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -309,7 +309,7 @@ func filterSelfAddresses(in []netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
 		return in
 	case debugSelfIPv6Only:
 		for _, a := range in {
-			if a.IP().Is6() {
+			if a.Addr().Is6() {
 				ret = append(ret, a)
 			}
 		}

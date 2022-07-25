@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -24,10 +25,10 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -408,19 +409,19 @@ func runVia(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		if !ipp.IP().Is6() {
+		if !ipp.Addr().Is6() {
 			return errors.New("with one argument, expect an IPv6 CIDR")
 		}
-		if !tsaddr.TailscaleViaRange().Contains(ipp.IP()) {
+		if !tsaddr.TailscaleViaRange().Contains(ipp.Addr()) {
 			return errors.New("not a via route")
 		}
 		if ipp.Bits() < 96 {
 			return errors.New("short length, want /96 or more")
 		}
-		v4 := tsaddr.UnmapVia(ipp.IP())
-		a := ipp.IP().As16()
+		v4 := tsaddr.UnmapVia(ipp.Addr())
+		a := ipp.Addr().As16()
 		siteID := binary.BigEndian.Uint32(a[8:12])
-		fmt.Printf("site %v (0x%x), %v\n", siteID, siteID, netaddr.IPPrefixFrom(v4, ipp.Bits()-96))
+		fmt.Printf("site %v (0x%x), %v\n", siteID, siteID, netip.PrefixFrom(v4, ipp.Bits()-96))
 	case 2:
 		siteID, err := strconv.ParseUint(args[0], 0, 32)
 		if err != nil {

@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
@@ -309,7 +309,7 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.IP()) {
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
 		}
@@ -334,7 +334,7 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 	if err != nil {
 		return nil, fmt.Errorf("peerAPI dial requires ip:port, not name resolution: %w", err)
 	}
-	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.IP()) {
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
 		}

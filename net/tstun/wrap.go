@@ -20,8 +20,8 @@ import (
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"inet.af/netaddr"
 	"tailscale.com/disco"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstime/mono"
@@ -545,7 +545,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	p.Decode(buf[offset : offset+n])
 
 	if m, ok := t.destIPActivity.Load().(map[netaddr.IP]func()); ok {
-		if fn := m[p.Dst.IP()]; fn != nil {
+		if fn := m[p.Dst.Addr()]; fn != nil {
 			fn()
 		}
 	}
@@ -620,7 +620,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 		p.IPProto == ipproto.TCP &&
 		p.TCPFlags&packet.TCPSyn != 0 &&
 		t.PeerAPIPort != nil {
-		if port, ok := t.PeerAPIPort(p.Dst.IP()); ok && port == p.Dst.Port() {
+		if port, ok := t.PeerAPIPort(p.Dst.Addr()); ok && port == p.Dst.Port() {
 			outcome = filter.Accept
 		}
 	}
@@ -634,8 +634,8 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 		// can show them a rejection history with reasons.
 		if p.IPVersion == 4 && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPSyn != 0 && !t.disableTSMPRejected {
 			rj := packet.TailscaleRejectedHeader{
-				IPSrc:  p.Dst.IP(),
-				IPDst:  p.Src.IP(),
+				IPSrc:  p.Dst.Addr(),
+				IPDst:  p.Src.Addr(),
 				Src:    p.Src,
 				Dst:    p.Dst,
 				Proto:  p.IPProto,
@@ -775,7 +775,7 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 		Data: req.Data,
 	}
 	if t.PeerAPIPort != nil {
-		pong.PeerAPIPort, _ = t.PeerAPIPort(pp.Dst.IP())
+		pong.PeerAPIPort, _ = t.PeerAPIPort(pp.Dst.Addr())
 	}
 	switch pp.IPVersion {
 	case 4:

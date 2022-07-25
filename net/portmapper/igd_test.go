@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
@@ -214,10 +214,10 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netaddr.IPPort) {
 	pktSrcBytes := [16]byte{}
 	copy(pktSrcBytes[:], pkt[8:24])
 	pktSrc := netaddr.IPFrom16(pktSrcBytes)
-	if pktSrc != src.IP() {
+	if pktSrc != src.Addr() {
 		// TODO this error isn't fatal but should be rejected by server.
 		// Since it's a test it's difficult to get them the same though.
-		d.logf("mismatch of packet source and source IP: got %v, expected %v", pktSrc, src.IP())
+		d.logf("mismatch of packet source and source IP: got %v, expected %v", pktSrc, src.Addr())
 	}
 	switch op {
 	case pcpOpAnnounce:
@@ -226,7 +226,7 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netaddr.IPPort) {
 			return
 		}
 		resp := buildPCPDiscoResponse(pkt)
-		if _, err := d.pxpConn.WriteTo(resp, src.UDPAddr()); err != nil {
+		if _, err := d.pxpConn.WriteTo(resp, net.UDPAddrFromAddrPort(src)); err != nil {
 			d.inc(&d.counters.numFailedWrites)
 		}
 	case pcpOpMap:
@@ -240,7 +240,7 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netaddr.IPPort) {
 			return
 		}
 		resp := buildPCPMapResponse(pkt)
-		d.pxpConn.WriteTo(resp, src.UDPAddr())
+		d.pxpConn.WriteTo(resp, net.UDPAddrFromAddrPort(src))
 	default:
 		// unknown op code, ignore it for now.
 		d.inc(&d.counters.numPCPOtherRecv)

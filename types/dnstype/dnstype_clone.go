@@ -7,7 +7,7 @@
 package dnstype
 
 import (
-	"inet.af/netaddr"
+	"net/netip"
 )
 
 // Clone makes a deep copy of Resolver.
@@ -25,7 +25,7 @@ func (src *Resolver) Clone() *Resolver {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverCloneNeedsRegeneration = Resolver(struct {
 	Addr                string
-	BootstrapResolution []netaddr.IP
+	BootstrapResolution []netip.Addr
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.

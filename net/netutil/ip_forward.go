@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 )
 
 // protocolsRequiredForForwarding reports whether IPv4 and/or IPv6 protocols are
@@ -31,7 +31,7 @@ func protocolsRequiredForForwarding(routes []netaddr.IPPrefix, state *interfaces
 	localIPs := make(map[netaddr.IP]bool)
 	for _, addrs := range state.InterfaceIPs {
 		for _, pfx := range addrs {
-			localIPs[pfx.IP()] = true
+			localIPs[pfx.Addr()] = true
 		}
 	}
 
@@ -39,10 +39,10 @@ func protocolsRequiredForForwarding(routes []netaddr.IPPrefix, state *interfaces
 		// It's possible to advertise a route to one of the local
 		// machine's local IPs. IP forwarding isn't required for this
 		// to work, so we shouldn't warn for such exports.
-		if r.IsSingleIP() && localIPs[r.IP()] {
+		if r.IsSingleIP() && localIPs[r.Addr()] {
 			continue
 		}
-		if r.IP().Is4() {
+		if r.Addr().Is4() {
 			v4 = true
 		} else {
 			v6 = true

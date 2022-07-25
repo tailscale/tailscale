@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 )
@@ -37,13 +37,13 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	suffix := nm.MagicDNSSuffix()
 	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
-		ip := nm.Addresses[0].IP()
+		ip := nm.Addresses[0].Addr()
 		ret[canonMapKey(nm.Name)] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
 		}
 		for _, a := range nm.Addresses {
-			if a.IP().Is4() {
+			if a.Addr().Is4() {
 				have4 = true
 			}
 		}
@@ -53,7 +53,7 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 			continue
 		}
 		for _, a := range p.Addresses {
-			ip := a.IP()
+			ip := a.Addr()
 			if ip.Is4() && !have4 {
 				continue
 			}
@@ -112,7 +112,7 @@ func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ neta
 
 	// Try MagicDNS first, otherwise a real DNS lookup.
 	ip := m[canonMapKey(host)]
-	if !ip.IsZero() {
+	if ip.IsValid() {
 		return netaddr.IPPortFrom(ip, port), nil
 	}
 

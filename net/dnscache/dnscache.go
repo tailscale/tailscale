@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 )
@@ -153,7 +153,10 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, al
 			return nil, nil, nil, fmt.Errorf("dnscache: unexpected hostname %q doesn't match expected %q", host, r.SingleHost)
 		}
 		for _, naIP := range r.SingleHostStaticResult {
-			ipa := naIP.IPAddr()
+			ipa := &net.IPAddr{
+				IP:   naIP.AsSlice(),
+				Zone: naIP.Zone(),
+			}
 			if ip == nil && naIP.Is4() {
 				ip = ipa.IP
 			}
@@ -273,7 +276,10 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, e
 		if err == nil {
 			ips = nil
 			for _, fip := range fips {
-				ips = append(ips, *fip.IPAddr())
+				ips = append(ips, net.IPAddr{
+					IP:   fip.AsSlice(),
+					Zone: fip.Zone(),
+				})
 			}
 		}
 	}

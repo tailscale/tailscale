@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"sort"
@@ -24,8 +25,8 @@ import (
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolvconffile"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
@@ -680,8 +681,8 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP
 	}
 
 	// MapVia will never error when given an ipv4 netaddr.IPPrefix.
-	out, _ := tsaddr.MapVia(uint32(prefix), netaddr.IPPrefixFrom(ip4, ip4.BitLen()))
-	return out.IP(), true
+	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
+	return out.Addr(), true
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.

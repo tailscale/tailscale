@@ -9,9 +9,9 @@ package tests
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/types/views"
 )
 
@@ -134,13 +134,13 @@ func (v *StructWithoutPtrsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v StructWithoutPtrsView) Int() int              { return v.ж.Int }
-func (v StructWithoutPtrsView) Pfx() netaddr.IPPrefix { return v.ж.Pfx }
+func (v StructWithoutPtrsView) Int() int          { return v.ж.Int }
+func (v StructWithoutPtrsView) Pfx() netip.Prefix { return v.ж.Pfx }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithoutPtrsViewNeedsRegeneration = StructWithoutPtrs(struct {
 	Int int
-	Pfx netaddr.IPPrefix
+	Pfx netip.Prefix
 }{})
 
 // View returns a readonly view of Map.
@@ -311,6 +311,6 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Structs        []StructWithPtrs
 	Ints           []*int
 	Slice          []string
-	Prefixes       []netaddr.IPPrefix
+	Prefixes       []netip.Prefix
 	Data           []byte
 }{})

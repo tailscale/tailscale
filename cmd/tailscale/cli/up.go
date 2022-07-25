@@ -24,9 +24,9 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -210,7 +210,7 @@ func validateViaPrefix(ipp netaddr.IPPrefix) error {
 	if ipp.Bits() < (128 - 32) {
 		return fmt.Errorf("%v 4-in-6 prefix must be at least a /%v", ipp, 128-32)
 	}
-	a := ipp.IP().As16()
+	a := ipp.Addr().As16()
 	// The first 64 bits of a are the via prefix.
 	// The next 32 bits are the "site ID".
 	// The last 32 bits are the IPv4.
@@ -266,7 +266,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		if routes[i].Bits() != routes[j].Bits() {
 			return routes[i].Bits() < routes[j].Bits()
 		}
-		return routes[i].IP().Less(routes[j].IP())
+		return routes[i].Addr().Less(routes[j].Addr())
 	})
 	return routes, nil
 }
@@ -913,10 +913,10 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 	ret := make(map[string]any)
 
 	exitNodeIPStr := func() string {
-		if !prefs.ExitNodeIP.IsZero() {
+		if prefs.ExitNodeIP.IsValid() {
 			return prefs.ExitNodeIP.String()
 		}
-		if prefs.ExitNodeID.IsZero() || env.curExitNodeIP.IsZero() {
+		if prefs.ExitNodeID.IsZero() || !env.curExitNodeIP.IsValid() {
 			return ""
 		}
 		return env.curExitNodeIP.String()
@@ -995,9 +995,9 @@ func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
 	var v4, v6 bool
 	for _, r := range rr {
 		if r.Bits() == 0 {
-			if r.IP().Is4() {
+			if r.Addr().Is4() {
 				v4 = true
-			} else if r.IP().Is6() {
+			} else if r.Addr().Is6() {
 				v6 = true
 			}
 		}
@@ -1027,7 +1027,7 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netaddr.IP) {
 	if p == nil {
 		return
 	}
-	if !p.ExitNodeIP.IsZero() {
+	if p.ExitNodeIP.IsValid() {
 		return p.ExitNodeIP
 	}
 	id := p.ExitNodeID

@@ -32,10 +32,10 @@ import (
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -424,10 +424,10 @@ func (c *conn) setInfo(cm gossh.ConnMetadata) error {
 		src:     toIPPort(cm.RemoteAddr()),
 		dst:     toIPPort(cm.LocalAddr()),
 	}
-	if !tsaddr.IsTailscaleIP(ci.dst.IP()) {
+	if !tsaddr.IsTailscaleIP(ci.dst.Addr()) {
 		return fmt.Errorf("tailssh: rejecting non-Tailscale local address %v", ci.dst)
 	}
-	if !tsaddr.IsTailscaleIP(ci.src.IP()) {
+	if !tsaddr.IsTailscaleIP(ci.src.Addr()) {
 		return fmt.Errorf("tailssh: rejecting non-Tailscale remote address %v", ci.src)
 	}
 	node, uprof, ok := c.srv.lb.WhoIs(ci.src)
@@ -612,7 +612,7 @@ func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 
 	ss := c.newSSHSession(s)
 	c.mu.Lock()
-	ss.logf("handling new SSH connection from %v (%v) to ssh-user %q", c.info.uprof.LoginName, c.info.src.IP(), c.localUser.Username)
+	ss.logf("handling new SSH connection from %v (%v) to ssh-user %q", c.info.uprof.LoginName, c.info.src.Addr(), c.localUser.Username)
 	ss.logf("access granted to %v as ssh-user %q", c.info.uprof.LoginName, c.localUser.Username)
 	c.mu.Unlock()
 	ss.run()
@@ -721,9 +721,9 @@ func (c *conn) expandDelegateURL(actionURL string) string {
 		dstNodeID = fmt.Sprint(int64(nm.SelfNode.ID))
 	}
 	return strings.NewReplacer(
-		"$SRC_NODE_IP", url.QueryEscape(ci.src.IP().String()),
+		"$SRC_NODE_IP", url.QueryEscape(ci.src.Addr().String()),
 		"$SRC_NODE_ID", fmt.Sprint(int64(ci.node.ID)),
-		"$DST_NODE_IP", url.QueryEscape(ci.dst.IP().String()),
+		"$DST_NODE_IP", url.QueryEscape(ci.dst.Addr().String()),
 		"$DST_NODE_ID", dstNodeID,
 		"$SSH_USER", url.QueryEscape(ci.sshUser),
 		"$LOCAL_USER", url.QueryEscape(lu.Username),
@@ -871,7 +871,7 @@ func (ss *sshSession) killProcessOnContextDone() {
 				io.WriteString(ss.Stderr(), "\r\n\r\n"+msg+"\r\n\r\n")
 			}
 		}
-		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.IP(), err)
+		ss.logf("terminating SSH session from %v: %v", ss.conn.info.src.Addr(), err)
 		// We don't need to Process.Wait here, sshSession.run() does
 		// the waiting regardless of termination reason.
 
@@ -1227,7 +1227,7 @@ func (c *conn) principalMatchesTailscaleIdentity(p *tailcfg.SSHPrincipal) bool {
 		return true
 	}
 	if p.NodeIP != "" {
-		if ip, _ := netaddr.ParseIP(p.NodeIP); ip == ci.src.IP() {
+		if ip, _ := netaddr.ParseIP(p.NodeIP); ip == ci.src.Addr() {
 			return true
 		}
 	}

@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 )
 

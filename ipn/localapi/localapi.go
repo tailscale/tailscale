@@ -24,11 +24,11 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -242,7 +242,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	res := &apitype.WhoIsResponse{
 		Node:        n,
 		UserProfile: &u,
-		Caps:        b.PeerCaps(ipp.IP()),
+		Caps:        b.PeerCaps(ipp.Addr()),
 	}
 	j, err := json.MarshalIndent(res, "", "\t")
 	if err != nil {

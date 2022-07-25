@@ -17,7 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"

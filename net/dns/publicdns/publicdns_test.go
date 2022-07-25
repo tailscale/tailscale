@@ -7,7 +7,7 @@ package publicdns
 import (
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func TestInit(t *testing.T) {

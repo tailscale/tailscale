@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
 )

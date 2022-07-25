@@ -9,7 +9,7 @@ import (
 	"errors"
 	"runtime"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 var ErrNotImplemented = errors.New("not implemented for GOOS=" + runtime.GOOS)

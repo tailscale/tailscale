@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/logtail/backoff"
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
 	"tailscale.com/health"
+	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -78,7 +78,7 @@ type resolvedLinkDomain struct {
 // changeRequest tracks latest OSConfig and related error responses to update.
 type changeRequest struct {
 	config OSConfig     // configs OSConfigs, one per each SetDNS call
-	res    chan <- error // response channel
+	res    chan<- error // response channel
 }
 
 // resolvedManager is an OSConfigurator which uses the systemd-resolved DBus API.
@@ -139,8 +139,8 @@ func (m *resolvedManager) SetDNS(config OSConfig) error {
 
 func (m *resolvedManager) run(ctx context.Context) {
 	var (
-		conn      *dbus.Conn
-		signals   chan *dbus.Signal
+		conn     *dbus.Conn
+		signals  chan *dbus.Signal
 		rManager dbus.BusObject // rManager is the Resolved DBus connection
 	)
 	bo := backoff.NewBackoff("resolved-dbus", m.logf, 30*time.Second)

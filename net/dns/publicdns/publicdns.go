@@ -9,7 +9,7 @@ package publicdns
 import (
 	"sync"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 var knownDoH = map[netaddr.IP]string{} // 8.8.8.8 => "https://..."

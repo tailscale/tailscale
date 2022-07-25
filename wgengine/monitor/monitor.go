@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
 

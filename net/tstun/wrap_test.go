@@ -14,9 +14,10 @@ import (
 	"unsafe"
 
 	"go4.org/mem"
+	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
-	"inet.af/netaddr"
 	"tailscale.com/disco"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
@@ -148,7 +149,7 @@ func setfilter(logf logger.Logf, tun *Wrapper) {
 		{IPProto: protos, Srcs: nets("5.6.7.8"), Dsts: netports("1.2.3.4:89-90")},
 		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
 	}
-	var sb netaddr.IPSetBuilder
+	var sb netipx.IPSetBuilder
 	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))
 	ipSet, _ := sb.IPSet()
 	tun.SetFilter(filter.New(matches, ipSet, ipSet, nil, logf))
@@ -454,28 +455,28 @@ func TestPeerAPIBypass(t *testing.T) {
 		{
 			name:   "reject_with_filter",
 			w:      &Wrapper{},
-			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want:   filter.Drop,
 		},
 		{
 			name:   "peerapi_bypass_filter",
 			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60000),
 			want:   filter.Accept,
 		},
 		{
 			name:   "peerapi_dont_bypass_filter_wrong_port",
 			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.2", 1234, 60001),
 			want:   filter.Drop,
 		},
 		{
 			name:   "peerapi_dont_bypass_filter_wrong_dst_ip",
 			w:      wrapperWithPeerAPI,
-			filter: filter.NewAllowNone(logger.Discard, new(netaddr.IPSet)),
+			filter: filter.NewAllowNone(logger.Discard, new(netipx.IPSet)),
 			pkt:    tcp4syn("1.2.3.4", "100.64.1.3", 1234, 60000),
 			want:   filter.Drop,
 		},

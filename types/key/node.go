@@ -156,7 +156,7 @@ func (p NodePublic) Shard() uint8 {
 	// good-enough-for-sharding random, so we haphazardly
 	// combine raw values of the key to give us something sufficient.
 	s := uint8(p.k[31]) + uint8(p.k[30]) + uint8(p.k[20])
-	return s ^ uint8(p.k[2] + p.k[12])
+	return s ^ uint8(p.k[2]+p.k[12])
 }
 
 // ParseNodePublicUntyped parses an untyped 64-character hex value

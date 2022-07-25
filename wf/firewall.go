@@ -12,8 +12,8 @@ import (
 	"os"
 
 	"golang.org/x/sys/windows"
-	"inet.af/netaddr"
 	"inet.af/wf"
+	"tailscale.com/net/netaddr"
 )
 
 // Known addresses.
@@ -219,7 +219,7 @@ func (f *Firewall) UpdatePermittedRoutes(newRoutes []netaddr.IPPrefix) error {
 			},
 		}
 		var p protocol
-		if r.IP().Is4() {
+		if r.Addr().Is4() {
 			p = protocolV4
 		} else {
 			p = protocolV6

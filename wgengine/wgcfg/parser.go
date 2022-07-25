@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 

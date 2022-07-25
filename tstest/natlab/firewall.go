@@ -6,10 +6,11 @@ package natlab
 
 import (
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 // FirewallType is the type of filtering a stateful firewall
@@ -52,7 +53,7 @@ func (s FirewallType) key(src, dst netaddr.IPPort) fwKey {
 	switch s {
 	case EndpointIndependentFirewall:
 	case AddressDependentFirewall:
-		k.dst = k.dst.WithIP(dst.IP())
+		k.dst = netip.AddrPortFrom(dst.Addr(), k.dst.Port())
 	case AddressAndPortDependentFirewall:
 		k.dst = dst
 	default:

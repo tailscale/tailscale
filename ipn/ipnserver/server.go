@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
@@ -154,7 +154,7 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	if err != nil {
 		return ci, fmt.Errorf("parsing local remote: %w", err)
 	}
-	if !la.IP().IsLoopback() || !ra.IP().IsLoopback() {
+	if !la.Addr().IsLoopback() || !ra.Addr().IsLoopback() {
 		return ci, errors.New("non-loopback connection")
 	}
 	tab, err := netstat.Get()
@@ -1168,7 +1168,7 @@ func findTrueNASTaildropDir(name string) (dir string, err error) {
 // findQnapTaildropDir checks if a Shared Folder named "Taildrop" exists.
 func findQnapTaildropDir(name string) (string, error) {
 	dir := fmt.Sprintf("/share/%s", name)
-        fi, err := os.Stat(dir)
+	fi, err := os.Stat(dir)
 	if err != nil {
 		return "", fmt.Errorf("shared folder %q not found", name)
 	}
@@ -1181,7 +1181,7 @@ func findQnapTaildropDir(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("symlink to shared folder %q not found", name)
 	}
-        if fi, err = os.Stat(fullpath); err == nil && fi.IsDir() {
+	if fi, err = os.Stat(fullpath); err == nil && fi.IsDir() {
 		return dir, nil // return the symlink, how QNAP set it up
 	}
 	return "", fmt.Errorf("shared folder %q not found", name)

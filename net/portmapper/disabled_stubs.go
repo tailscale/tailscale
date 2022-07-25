@@ -10,7 +10,7 @@ package portmapper
 import (
 	"context"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 type upnpClient any

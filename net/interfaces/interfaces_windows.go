@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tsconst"
 )
 
@@ -92,12 +92,12 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 		}
 	}
 
-	if !ret.IsZero() && !ret.IsPrivate() {
+	if ret.IsValid() && !ret.IsPrivate() {
 		// Default route has a non-private gateway
 		return netaddr.IP{}, false
 	}
 
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 // NonTailscaleMTUs returns a map of interface LUID to interface MTU,

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 )
 

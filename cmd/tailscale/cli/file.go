@@ -23,10 +23,10 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/time/rate"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/version"
@@ -179,7 +179,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 	for _, ft := range fts {
 		n := ft.Node
 		for _, a := range n.Addresses {
-			if a.IP() != ip {
+			if a.Addr() != ip {
 				continue
 			}
 			isOffline = n.Online != nil && !*n.Online
@@ -281,7 +281,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 		if detail != "" {
 			detail = "\t" + detail
 		}
-		printf("%s\t%s%s\n", n.Addresses[0].IP(), n.ComputedName, detail)
+		printf("%s\t%s%s\n", n.Addresses[0].Addr(), n.ComputedName, detail)
 	}
 	return nil
 }

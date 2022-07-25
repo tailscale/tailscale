@@ -31,7 +31,6 @@ import (
 
 	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -577,7 +577,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 <body>
 <h1>Hello, %s (%v)</h1>
 This is my Tailscale device. Your device is %v.
-`, html.EscapeString(who), h.remoteAddr.IP(), html.EscapeString(h.peerNode.ComputedName))
+`, html.EscapeString(who), h.remoteAddr.Addr(), html.EscapeString(h.peerNode.ComputedName))
 
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
@@ -693,7 +693,7 @@ func (h *peerAPIHandler) canWakeOnLAN() bool {
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
-	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.IP()) {
+	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
 		if hasCap == wantCap {
 			return true
 		}
@@ -801,7 +801,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := time.Since(t0).Round(time.Second / 10)
-	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.IP, h.peerNode.ComputedName)
+	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
@@ -925,12 +925,11 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 	}
 	for ifName, ips := range st.InterfaceIPs {
 		for _, ip := range ips {
-			if ip.IP().IsLoopback() || ip.IP().Is6() {
+			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
 				continue
 			}
-			ipa := ip.IP().IPAddr()
 			local := &net.UDPAddr{
-				IP:   ipa.IP,
+				IP:   ip.Addr().AsSlice(),
 				Port: 0,
 			}
 			remote := &net.UDPAddr{
@@ -982,7 +981,7 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// arbitrary. DNS runs over TCP and UDP, so sure... we check
 	// TCP.
 	dstIP := netaddr.IPv4(0, 0, 0, 0)
-	remoteIP := h.remoteAddr.IP()
+	remoteIP := h.remoteAddr.Addr()
 	if remoteIP.Is6() {
 		// autogroup:internet for IPv6 is defined to start with 2000::/3,
 		// so use 2000::0 as the probe "the internet" address.
@@ -1171,7 +1170,7 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 // See docs on fakePeerAPIListener.
 func newFakePeerAPIListener(ip netaddr.IP) net.Listener {
 	return &fakePeerAPIListener{
-		addr:   netaddr.IPPortFrom(ip, 1).TCPAddr(),
+		addr:   net.TCPAddrFromAddrPort(netaddr.IPPortFrom(ip, 1)),
 		closed: make(chan struct{}),
 	}
 }

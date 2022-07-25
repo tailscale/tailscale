@@ -11,15 +11,16 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
@@ -308,7 +309,7 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
-	if !p.ExitNodeIP.IsZero() {
+	if p.ExitNodeIP.IsValid() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
 	} else if !p.ExitNodeID.IsZero() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
@@ -478,7 +479,7 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 	}
 	p.AdvertiseRoutes = append(p.AdvertiseRoutes,
 		netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
-		netaddr.IPPrefixFrom(netaddr.IPv6Unspecified(), 0))
+		netaddr.IPPrefixFrom(netip.IPv6Unspecified(), 0))
 }
 
 // peerWithTailscaleIP returns the peer in st with the provided

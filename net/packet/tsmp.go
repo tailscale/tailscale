@@ -15,8 +15,8 @@ import (
 	"errors"
 	"fmt"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/flowtrack"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 
@@ -143,7 +143,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 	if len(buf) > maxPacketLength {
 		return errLargePacket
 	}
-	if h.Src.IP().Is4() {
+	if h.Src.Addr().Is4() {
 		iph := IP4Header{
 			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
@@ -151,7 +151,7 @@ func (h TailscaleRejectedHeader) Marshal(buf []byte) error {
 		}
 		iph.Marshal(buf)
 		buf = buf[ip4HeaderLength:]
-	} else if h.Src.IP().Is6() {
+	} else if h.Src.Addr().Is6() {
 		iph := IP6Header{
 			IPProto: ipproto.TSMP,
 			Src:     h.IPSrc,
@@ -190,10 +190,10 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 	h = TailscaleRejectedHeader{
 		Proto:  ipproto.Proto(p[1]),
 		Reason: TailscaleRejectReason(p[2]),
-		IPSrc:  pp.Src.IP(),
-		IPDst:  pp.Dst.IP(),
-		Src:    netaddr.IPPortFrom(pp.Dst.IP(), binary.BigEndian.Uint16(p[3:5])),
-		Dst:    netaddr.IPPortFrom(pp.Src.IP(), binary.BigEndian.Uint16(p[5:7])),
+		IPSrc:  pp.Src.Addr(),
+		IPDst:  pp.Dst.Addr(),
+		Src:    netaddr.IPPortFrom(pp.Dst.Addr(), binary.BigEndian.Uint16(p[3:5])),
+		Dst:    netaddr.IPPortFrom(pp.Src.Addr(), binary.BigEndian.Uint16(p[5:7])),
 	}
 	if len(p) > 7 {
 		flags := p[7]

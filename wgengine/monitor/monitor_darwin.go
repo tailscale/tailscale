@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -190,7 +190,7 @@ func fmtAddr(a route.Addr) any {
 	if a == nil {
 		return nil
 	}
-	if ip := ipOfAddr(a); !ip.IsZero() {
+	if ip := ipOfAddr(a); ip.IsValid() {
 		return ip
 	}
 	switch a := a.(type) {
