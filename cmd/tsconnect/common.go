@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"time"
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
 )
@@ -44,6 +45,12 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 		LogLevel:    esbuild.LogLevelInfo,
 		Define:      map[string]string{"DEBUG": strconv.FormatBool(dev)},
 		Target:      esbuild.ES2017,
+		Plugins: []esbuild.Plugin{{
+			Name: "tailscale-tailwind",
+			Setup: func(build esbuild.PluginBuild) {
+				setupEsbuildTailwind(build, dev)
+			},
+		}},
 	}, nil
 }
 
@@ -110,4 +117,31 @@ type EsbuildMetadata struct {
 	Outputs map[string]struct {
 		EntryPoint string `json:"entryPoint,omitempty"`
 	} `json:"outputs,omitempty"`
+}
+
+func setupEsbuildTailwind(build esbuild.PluginBuild, dev bool) {
+	build.OnLoad(esbuild.OnLoadOptions{
+		Filter: "./src/index.css$",
+	}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
+		start := time.Now()
+		yarnArgs := []string{"--silent", "tailwind", "-i", args.Path}
+		if !dev {
+			yarnArgs = append(yarnArgs, "--minify")
+		}
+		cmd := exec.Command(*yarnPath, yarnArgs...)
+		tailwindOutput, err := cmd.Output()
+		log.Printf("Ran tailwind in %v\n", time.Since(start))
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				log.Printf("Tailwind stderr: %s", exitErr.Stderr)
+			}
+			return esbuild.OnLoadResult{}, fmt.Errorf("Cannot run tailwind: %w", err)
+		}
+		tailwindOutputStr := string(tailwindOutput)
+		return esbuild.OnLoadResult{
+			Contents: &tailwindOutputStr,
+			Loader:   esbuild.LoaderCSS,
+		}, nil
+
+	})
 }
