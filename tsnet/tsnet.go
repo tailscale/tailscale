@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,6 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/nettest"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
@@ -272,11 +272,11 @@ func (s *Server) start() error {
 	if err := ns.Start(); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
-	s.dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
 		return ok
 	}
-	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
 	}
 

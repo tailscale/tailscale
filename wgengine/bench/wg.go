@@ -8,12 +8,12 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net/netip"
 	"os"
 	"sync"
 	"testing"
 
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
@@ -26,14 +26,14 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
-func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netaddr.IPPrefix) {
+func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.Prefix) {
 	l1 := logger.WithPrefix(logf, "e1: ")
 	k1 := key.NewNode()
 
 	c1 := wgcfg.Config{
 		Name:       "e1",
 		PrivateKey: k1,
-		Addresses:  []netaddr.IPPrefix{a1},
+		Addresses:  []netip.Prefix{a1},
 	}
 	t1 := &sourceTun{
 		logf: logger.WithPrefix(logf, "tun1: "),
@@ -57,7 +57,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 	c2 := wgcfg.Config{
 		Name:       "e2",
 		PrivateKey: k2,
-		Addresses:  []netaddr.IPPrefix{a2},
+		Addresses:  []netip.Prefix{a2},
 	}
 	t2 := &sinkTun{
 		logf: logger.WithPrefix(logf, "tun2: "),
@@ -100,8 +100,8 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		n := tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n1",
-			Addresses:  []netaddr.IPPrefix{a1},
-			AllowedIPs: []netaddr.IPPrefix{a1},
+			Addresses:  []netip.Prefix{a1},
+			AllowedIPs: []netip.Prefix{a1},
 			Endpoints:  eps,
 		}
 		e2.SetNetworkMap(&netmap.NetworkMap{
@@ -112,7 +112,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 		p := wgcfg.Peer{
 			PublicKey:  c1.PrivateKey.Public(),
-			AllowedIPs: []netaddr.IPPrefix{a1},
+			AllowedIPs: []netip.Prefix{a1},
 		}
 		c2.Peers = []wgcfg.Peer{p}
 		e2.Reconfig(&c2, &router.Config{}, new(dns.Config), nil)
@@ -137,8 +137,8 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 		n := tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n2",
-			Addresses:  []netaddr.IPPrefix{a2},
-			AllowedIPs: []netaddr.IPPrefix{a2},
+			Addresses:  []netip.Prefix{a2},
+			AllowedIPs: []netip.Prefix{a2},
 			Endpoints:  eps,
 		}
 		e1.SetNetworkMap(&netmap.NetworkMap{
@@ -149,7 +149,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netadd
 
 		p := wgcfg.Peer{
 			PublicKey:  c2.PrivateKey.Public(),
-			AllowedIPs: []netaddr.IPPrefix{a2},
+			AllowedIPs: []netip.Prefix{a2},
 		}
 		c1.Peers = []wgcfg.Peer{p}
 		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)

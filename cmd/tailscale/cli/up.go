@@ -27,7 +27,6 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -204,7 +203,7 @@ var (
 	ipv6default = netip.MustParsePrefix("::/0")
 )
 
-func validateViaPrefix(ipp netaddr.IPPrefix) error {
+func validateViaPrefix(ipp netip.Prefix) error {
 	if !tsaddr.IsViaPrefix(ipp) {
 		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
 	}
@@ -224,8 +223,8 @@ func validateViaPrefix(ipp netaddr.IPPrefix) error {
 	return nil
 }
 
-func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netaddr.IPPrefix, error) {
-	routeMap := map[netaddr.IPPrefix]bool{}
+func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
+	routeMap := map[netip.Prefix]bool{}
 	if advertiseRoutes != "" {
 		var default4, default6 bool
 		advroutes := strings.Split(advertiseRoutes, ",")
@@ -259,7 +258,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
 		routeMap[netip.MustParsePrefix("::/0")] = true
 	}
-	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
+	routes := make([]netip.Prefix, 0, len(routeMap))
 	for r := range routeMap {
 		routes = append(routes, r)
 	}
@@ -791,7 +790,7 @@ type upCheckEnv struct {
 	flagSet       *flag.FlagSet
 	upArgs        upArgsT
 	backendState  string
-	curExitNodeIP netaddr.IP
+	curExitNodeIP netip.Addr
 	distro        distro.Distro
 }
 
@@ -992,7 +991,7 @@ func fmtFlagValueArg(flagName string, val any) string {
 	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(fmt.Sprint(val)))
 }
 
-func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
+func hasExitNodeRoutes(rr []netip.Prefix) bool {
 	var v4, v6 bool
 	for _, r := range rr {
 		if r.Bits() == 0 {
@@ -1009,11 +1008,11 @@ func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
 // withoutExitNodes returns rr unchanged if it has only 1 or 0 /0
 // routes. If it has both IPv4 and IPv6 /0 routes, then it returns
 // a copy with all /0 routes removed.
-func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
+func withoutExitNodes(rr []netip.Prefix) []netip.Prefix {
 	if !hasExitNodeRoutes(rr) {
 		return rr
 	}
-	var out []netaddr.IPPrefix
+	var out []netip.Prefix
 	for _, r := range rr {
 		if r.Bits() > 0 {
 			out = append(out, r)
@@ -1024,7 +1023,7 @@ func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
 
 // exitNodeIP returns the exit node IP from p, using st to map
 // it from its ID form to an IP address if needed.
-func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netaddr.IP) {
+func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 	if p == nil {
 		return
 	}

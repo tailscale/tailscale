@@ -9,6 +9,7 @@ package wgengine
 
 import (
 	"log"
+	"net/netip"
 	"runtime/pprof"
 	"strings"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -120,16 +120,16 @@ func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k
 }
-func (e *watchdogEngine) Ping(ip netaddr.IP, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
+func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
 	e.watchdog("Ping", func() { e.wrap.Ping(ip, pingType, cb) })
 }
-func (e *watchdogEngine) RegisterIPPortIdentity(ipp netaddr.IPPort, tsIP netaddr.IP) {
+func (e *watchdogEngine) RegisterIPPortIdentity(ipp netip.AddrPort, tsIP netip.Addr) {
 	e.watchdog("RegisterIPPortIdentity", func() { e.wrap.RegisterIPPortIdentity(ipp, tsIP) })
 }
-func (e *watchdogEngine) UnregisterIPPortIdentity(ipp netaddr.IPPort) {
+func (e *watchdogEngine) UnregisterIPPortIdentity(ipp netip.AddrPort) {
 	e.watchdog("UnregisterIPPortIdentity", func() { e.wrap.UnregisterIPPortIdentity(ipp) })
 }
-func (e *watchdogEngine) WhoIsIPPort(ipp netaddr.IPPort) (tsIP netaddr.IP, ok bool) {
+func (e *watchdogEngine) WhoIsIPPort(ipp netip.AddrPort) (tsIP netip.Addr, ok bool) {
 	e.watchdog("UnregisterIPPortIdentity", func() { tsIP, ok = e.wrap.WhoIsIPPort(ipp) })
 	return tsIP, ok
 }
@@ -148,7 +148,7 @@ func (e *watchdogEngine) GetResolver() (r *resolver.Resolver, ok bool) {
 	}
 	return nil, false
 }
-func (e *watchdogEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
+func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	e.watchdog("PeerForIP", func() { ret, ok = e.wrap.PeerForIP(ip) })
 	return ret, ok
 }

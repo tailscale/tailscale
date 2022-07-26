@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,7 +39,6 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
@@ -366,11 +366,11 @@ func run() error {
 	ns.ProcessSubnets = useNetstack || wrapNetstack
 
 	if useNetstack {
-		dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 			_, ok := e.PeerForIP(ip)
 			return ok
 		}
-		dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 			return ns.DialContextTCP(ctx, dst)
 		}
 	}

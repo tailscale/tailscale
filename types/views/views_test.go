@@ -13,11 +13,10 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
-	"tailscale.com/net/netaddr"
 )
 
 func TestViewsJSON(t *testing.T) {
-	mustCIDR := func(cidrs ...string) (out []netaddr.IPPrefix) {
+	mustCIDR := func(cidrs ...string) (out []netip.Prefix) {
 		for _, cidr := range cidrs {
 			out = append(out, netip.MustParsePrefix(cidr))
 		}

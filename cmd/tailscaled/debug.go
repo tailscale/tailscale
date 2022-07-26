@@ -30,7 +30,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
@@ -267,7 +266,7 @@ func debugPortmap(ctx context.Context) error {
 		return err
 	}
 
-	gatewayAndSelfIP := func() (gw, self netaddr.IP, ok bool) {
+	gatewayAndSelfIP := func() (gw, self netip.Addr, ok bool) {
 		if v := os.Getenv("TS_DEBUG_GW_SELF"); strings.Contains(v, "/") {
 			i := strings.Index(v, "/")
 			gw = netip.MustParseAddr(v[:i])

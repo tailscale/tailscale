@@ -34,7 +34,7 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		// of time in runtime.growslice. As such, we attempt to
 		// pre-allocate some slices. Multipliers were chosen arbitrarily.
 		m := Match{
-			Srcs: make([]netaddr.IPPrefix, 0, len(r.SrcIPs)),
+			Srcs: make([]netip.Prefix, 0, len(r.SrcIPs)),
 			Dsts: make([]NetPortRange, 0, 2*len(r.DstPorts)),
 			Caps: make([]CapMatch, 0, 3*len(r.CapGrant)),
 		}
@@ -114,12 +114,12 @@ var (
 // around, and ultimately use a new version of IPSet.ContainsFunc like
 // Contains16Func that works in [16]byte address, so we we can match
 // at runtime without allocating?
-func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
+func parseIPSet(arg string, bits *int) ([]netip.Prefix, error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
-		return []netaddr.IPPrefix{
-			netaddr.IPPrefixFrom(zeroIP4, 0),
-			netaddr.IPPrefixFrom(zeroIP6, 0),
+		return []netip.Prefix{
+			netip.PrefixFrom(zeroIP4, 0),
+			netip.PrefixFrom(zeroIP6, 0),
 		}, nil
 	}
 	if strings.Contains(arg, "/") {
@@ -130,7 +130,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		if pfx != pfx.Masked() {
 			return nil, fmt.Errorf("%v contains non-network bits set", pfx)
 		}
-		return []netaddr.IPPrefix{pfx}, nil
+		return []netip.Prefix{pfx}, nil
 	}
 	if strings.Count(arg, "-") == 1 {
 		ip1s, ip2s, _ := strings.Cut(arg, "-")
@@ -159,5 +159,5 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		}
 		bits8 = uint8(*bits)
 	}
-	return []netaddr.IPPrefix{netaddr.IPPrefixFrom(ip, bits8)}, nil
+	return []netip.Prefix{netip.PrefixFrom(ip, int(bits8))}, nil
 }

@@ -13,8 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	"tailscale.com/net/netaddr"
+	"net/netip"
 )
 
 // ACLRow defines a rule that grants access by a set of users or groups to a set
@@ -354,7 +353,7 @@ func (c *Client) PreviewACLForUser(ctx context.Context, acl ACL, user string) (r
 // Returns ACLPreview on success with matches in a slice. If there are no matches,
 // the call is still successful but Matches will be an empty slice.
 // Returns error if the provided ACL is invalid.
-func (c *Client) PreviewACLForIPPort(ctx context.Context, acl ACL, ipport netaddr.IPPort) (res *ACLPreview, err error) {
+func (c *Client) PreviewACLForIPPort(ctx context.Context, acl ACL, ipport netip.AddrPort) (res *ACLPreview, err error) {
 	// Format return errors to be descriptive.
 	defer func() {
 		if err != nil {

@@ -17,7 +17,7 @@ import (
 // ChromeOSVMRange returns the subset of the CGNAT IPv4 range used by
 // ChromeOS to interconnect the host OS to containers and VMs. We
 // avoid allocating Tailscale IPs from it, to avoid conflicts.
-func ChromeOSVMRange() netaddr.IPPrefix {
+func ChromeOSVMRange() netip.Prefix {
 	chromeOSRange.Do(func() { mustPrefix(&chromeOSRange.v, "100.115.92.0/23") })
 	return chromeOSRange.v
 }
@@ -28,7 +28,7 @@ var chromeOSRange oncePrefix
 // is the superset range that Tailscale assigns out of.
 // See https://tailscale.com/kb/1015/100.x-addresses.
 // Note that Tailscale does not assign out of the ChromeOSVMRange.
-func CGNATRange() netaddr.IPPrefix {
+func CGNATRange() netip.Prefix {
 	cgnatRange.Do(func() { mustPrefix(&cgnatRange.v, "100.64.0.0/10") })
 	return cgnatRange.v
 }
@@ -47,7 +47,7 @@ var (
 // provided by Tailscale itself such as the MagicDNS proxy.
 //
 // For IPv6, use TailscaleServiceIPv6.
-func TailscaleServiceIP() netaddr.IP {
+func TailscaleServiceIP() netip.Addr {
 	return netaddr.IPv4(100, 100, 100, 100) // "100.100.100.100" for those grepping
 }
 
@@ -55,14 +55,14 @@ func TailscaleServiceIP() netaddr.IP {
 // provided by Tailscale itself such as the MagicDNS proxy.
 //
 // For IPv4, use TailscaleServiceIP.
-func TailscaleServiceIPv6() netaddr.IP {
+func TailscaleServiceIPv6() netip.Addr {
 	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, "fd7a:115c:a1e0::53/128") })
 	return serviceIPv6.v.Addr()
 }
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
-func IsTailscaleIP(ip netaddr.IP) bool {
+func IsTailscaleIP(ip netip.Addr) bool {
 	if ip.Is4() {
 		return CGNATRange().Contains(ip) && !ChromeOSVMRange().Contains(ip)
 	}
@@ -71,14 +71,14 @@ func IsTailscaleIP(ip netaddr.IP) bool {
 
 // TailscaleULARange returns the IPv6 Unique Local Address range that
 // is the superset range that Tailscale assigns out of.
-func TailscaleULARange() netaddr.IPPrefix {
+func TailscaleULARange() netip.Prefix {
 	tsUlaRange.Do(func() { mustPrefix(&tsUlaRange.v, "fd7a:115c:a1e0::/48") })
 	return tsUlaRange.v
 }
 
 // TailscaleViaRange returns the IPv6 Unique Local Address subset range
 // TailscaleULARange that's used for IPv4 tunneling via IPv6.
-func TailscaleViaRange() netaddr.IPPrefix {
+func TailscaleViaRange() netip.Prefix {
 	// Mnemonic: "b1a" sounds like "via".
 	tsViaRange.Do(func() { mustPrefix(&tsViaRange.v, "fd7a:115c:a1e0:b1a::/64") })
 	return tsViaRange.v
@@ -86,7 +86,7 @@ func TailscaleViaRange() netaddr.IPPrefix {
 
 // Tailscale4To6Range returns the subset of TailscaleULARange used for
 // auto-translated Tailscale ipv4 addresses.
-func Tailscale4To6Range() netaddr.IPPrefix {
+func Tailscale4To6Range() netip.Prefix {
 	// This IP range has no significance, beyond being a subset of
 	// TailscaleULARange. The bits from /48 to /104 were picked at
 	// random.
@@ -96,7 +96,7 @@ func Tailscale4To6Range() netaddr.IPPrefix {
 
 // TailscaleEphemeral6Range returns the subset of TailscaleULARange
 // used for ephemeral IPv6-only Tailscale nodes.
-func TailscaleEphemeral6Range() netaddr.IPPrefix {
+func TailscaleEphemeral6Range() netip.Prefix {
 	// This IP range has no significance, beyond being a subset of
 	// TailscaleULARange. The bits from /48 to /64 were picked at
 	// random, with the only criterion being to not be the conflict
@@ -112,16 +112,16 @@ func TailscaleEphemeral6Range() netaddr.IPPrefix {
 //
 // Currently used to work around a Windows limitation when programming
 // IPv6 routes in corner cases.
-func Tailscale4To6Placeholder() netaddr.IP {
+func Tailscale4To6Placeholder() netip.Addr {
 	return Tailscale4To6Range().Addr()
 }
 
 // Tailscale4To6 returns a Tailscale IPv6 address that maps 1:1 to the
 // given Tailscale IPv4 address. Returns a zero IP if ipv4 isn't a
 // Tailscale IPv4 address.
-func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
+func Tailscale4To6(ipv4 netip.Addr) netip.Addr {
 	if !ipv4.Is4() || !IsTailscaleIP(ipv4) {
-		return netaddr.IP{}
+		return netip.Addr{}
 	}
 	ret := Tailscale4To6Range().Addr().As16()
 	v4 := ipv4.As4()
@@ -133,15 +133,15 @@ func Tailscale4To6(ipv4 netaddr.IP) netaddr.IP {
 // tailscale IPv6 address within the 4To6 range. The IPv4 address
 // and true are returned if the given address was in the correct range,
 // false if not.
-func Tailscale6to4(ipv6 netaddr.IP) (netaddr.IP, bool) {
+func Tailscale6to4(ipv6 netip.Addr) (netip.Addr, bool) {
 	if !ipv6.Is6() || !Tailscale4To6Range().Contains(ipv6) {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 	v6 := ipv6.As16()
 	return netaddr.IPv4(100, v6[13], v6[14], v6[15]), true
 }
 
-func mustPrefix(v *netaddr.IPPrefix, prefix string) {
+func mustPrefix(v *netip.Prefix, prefix string) {
 	var err error
 	*v, err = netip.ParsePrefix(prefix)
 	if err != nil {
@@ -151,7 +151,7 @@ func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 
 type oncePrefix struct {
 	sync.Once
-	v netaddr.IPPrefix
+	v netip.Prefix
 }
 
 // NewContainsIPFunc returns a func that reports whether ip is in addrs.
@@ -161,11 +161,11 @@ type oncePrefix struct {
 // one IPv6 address).
 //
 // Otherwise the implementation is somewhat slow.
-func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
+func NewContainsIPFunc(addrs []netip.Prefix) func(ip netip.Addr) bool {
 	// Specialize the three common cases: no address, just IPv4
 	// (or just IPv6), and both IPv4 and IPv6.
 	if len(addrs) == 0 {
-		return func(netaddr.IP) bool { return false }
+		return func(netip.Addr) bool { return false }
 	}
 	// If any addr is more than a single IP, then just do the slow
 	// linear thing until
@@ -174,8 +174,8 @@ func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
 		if a.IsSingleIP() {
 			continue
 		}
-		acopy := append([]netaddr.IPPrefix(nil), addrs...)
-		return func(ip netaddr.IP) bool {
+		acopy := append([]netip.Prefix(nil), addrs...)
+		return func(ip netip.Addr) bool {
 			for _, a := range acopy {
 				if a.Contains(ip) {
 					return true
@@ -187,23 +187,23 @@ func NewContainsIPFunc(addrs []netaddr.IPPrefix) func(ip netaddr.IP) bool {
 	// Fast paths for 1 and 2 IPs:
 	if len(addrs) == 1 {
 		a := addrs[0]
-		return func(ip netaddr.IP) bool { return ip == a.Addr() }
+		return func(ip netip.Addr) bool { return ip == a.Addr() }
 	}
 	if len(addrs) == 2 {
 		a, b := addrs[0], addrs[1]
-		return func(ip netaddr.IP) bool { return ip == a.Addr() || ip == b.Addr() }
+		return func(ip netip.Addr) bool { return ip == a.Addr() || ip == b.Addr() }
 	}
 	// General case:
-	m := map[netaddr.IP]bool{}
+	m := map[netip.Addr]bool{}
 	for _, a := range addrs {
 		m[a.Addr()] = true
 	}
-	return func(ip netaddr.IP) bool { return m[ip] }
+	return func(ip netip.Addr) bool { return m[ip] }
 }
 
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in
 // ipp.
-func PrefixesContainsFunc(ipp []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool) bool {
+func PrefixesContainsFunc(ipp []netip.Prefix, f func(netip.Prefix) bool) bool {
 	for _, v := range ipp {
 		if f(v) {
 			return true
@@ -213,7 +213,7 @@ func PrefixesContainsFunc(ipp []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool)
 }
 
 // PrefixesContainsIP reports whether any prefix in ipp contains ip.
-func PrefixesContainsIP(ipp []netaddr.IPPrefix, ip netaddr.IP) bool {
+func PrefixesContainsIP(ipp []netip.Prefix, ip netip.Addr) bool {
 	for _, r := range ipp {
 		if r.Contains(ip) {
 			return true
@@ -223,7 +223,7 @@ func PrefixesContainsIP(ipp []netaddr.IPPrefix, ip netaddr.IP) bool {
 }
 
 // IPsContainsFunc reports whether f is true for any IP in ips.
-func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
+func IPsContainsFunc(ips []netip.Addr, f func(netip.Addr) bool) bool {
 	for _, v := range ips {
 		if f(v) {
 			return true
@@ -233,14 +233,14 @@ func IPsContainsFunc(ips []netaddr.IP, f func(netaddr.IP) bool) bool {
 }
 
 // PrefixIs4 reports whether p is an IPv4 prefix.
-func PrefixIs4(p netaddr.IPPrefix) bool { return p.Addr().Is4() }
+func PrefixIs4(p netip.Prefix) bool { return p.Addr().Is4() }
 
 // PrefixIs6 reports whether p is an IPv6 prefix.
-func PrefixIs6(p netaddr.IPPrefix) bool { return p.Addr().Is6() }
+func PrefixIs6(p netip.Prefix) bool { return p.Addr().Is6() }
 
 // ContainsExitRoutes reports whether rr contains both the IPv4 and
 // IPv6 /0 route.
-func ContainsExitRoutes(rr []netaddr.IPPrefix) bool {
+func ContainsExitRoutes(rr []netip.Prefix) bool {
 	var v4, v6 bool
 	for _, r := range rr {
 		if r == allIPv4 {
@@ -258,18 +258,18 @@ var (
 )
 
 // AllIPv4 returns 0.0.0.0/0.
-func AllIPv4() netaddr.IPPrefix { return allIPv4 }
+func AllIPv4() netip.Prefix { return allIPv4 }
 
 // AllIPv6 returns ::/0.
-func AllIPv6() netaddr.IPPrefix { return allIPv6 }
+func AllIPv6() netip.Prefix { return allIPv6 }
 
 // ExitRoutes returns a slice containing AllIPv4 and AllIPv6.
-func ExitRoutes() []netaddr.IPPrefix { return []netaddr.IPPrefix{allIPv4, allIPv6} }
+func ExitRoutes() []netip.Prefix { return []netip.Prefix{allIPv4, allIPv6} }
 
 // FilterPrefixes returns a new slice, not aliasing in, containing elements of
 // in that match f.
-func FilterPrefixesCopy(in []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool) []netaddr.IPPrefix {
-	var out []netaddr.IPPrefix
+func FilterPrefixesCopy(in []netip.Prefix, f func(netip.Prefix) bool) []netip.Prefix {
+	var out []netip.Prefix
 	for _, v := range in {
 		if f(v) {
 			out = append(out, v)
@@ -280,7 +280,7 @@ func FilterPrefixesCopy(in []netaddr.IPPrefix, f func(netaddr.IPPrefix) bool) []
 
 // IsViaPrefix reports whether p is a CIDR in the Tailscale "via" range.
 // See TailscaleViaRange.
-func IsViaPrefix(p netaddr.IPPrefix) bool {
+func IsViaPrefix(p netip.Prefix) bool {
 	return TailscaleViaRange().Contains(p.Addr())
 }
 
@@ -288,16 +288,16 @@ func IsViaPrefix(p netaddr.IPPrefix) bool {
 // "via" IPv4-in-IPv6 address.
 //
 // If ip is not a via address, it returns ip unchanged.
-func UnmapVia(ip netaddr.IP) netaddr.IP {
+func UnmapVia(ip netip.Addr) netip.Addr {
 	if TailscaleViaRange().Contains(ip) {
 		a := ip.As16()
-		return netaddr.IPFrom4(*(*[4]byte)(a[12:16]))
+		return netip.AddrFrom4(*(*[4]byte)(a[12:16]))
 	}
 	return ip
 }
 
 // MapVia returns an IPv6 "via" route for an IPv4 CIDR in a given siteID.
-func MapVia(siteID uint32, v4 netaddr.IPPrefix) (via netaddr.IPPrefix, err error) {
+func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	if !v4.Addr().Is4() {
 		return via, errors.New("want IPv4 CIDR with a site ID")
 	}

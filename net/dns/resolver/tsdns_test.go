@@ -43,7 +43,7 @@ var (
 )
 
 var dnsCfg = Config{
-	Hosts: map[dnsname.FQDN][]netaddr.IP{
+	Hosts: map[dnsname.FQDN][]netip.Addr{
 		"test1.ipn.dev.": {testipv4},
 		"test2.ipn.dev.": {testipv6},
 	},
@@ -92,7 +92,7 @@ func dnspacket(domain dnsname.FQDN, tp dns.Type, ednsSize uint16) []byte {
 }
 
 type dnsResponse struct {
-	ip               netaddr.IP
+	ip               netip.Addr
 	txt              []string
 	name             dnsname.FQDN
 	rcode            dns.RCode
@@ -157,7 +157,7 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 			if err != nil {
 				return response, err
 			}
-			response.ip = netaddr.IPv6Raw(res.AAAA)
+			response.ip = netip.AddrFrom16(res.AAAA)
 		case dns.TypeTXT:
 			res, err := parser.TXTResource()
 			if err != nil {
@@ -234,10 +234,10 @@ func unpackResponse(payload []byte) (dnsResponse, error) {
 }
 
 func syncRespond(r *Resolver, query []byte) ([]byte, error) {
-	return r.Query(context.Background(), query, netaddr.IPPort{})
+	return r.Query(context.Background(), query, netip.AddrPort{})
 }
 
-func mustIP(str string) netaddr.IP {
+func mustIP(str string) netip.Addr {
 	ip, err := netip.ParseAddr(str)
 	if err != nil {
 		panic(err)
@@ -249,13 +249,13 @@ func TestRDNSNameToIPv4(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  dnsname.FQDN
-		wantIP netaddr.IP
+		wantIP netip.Addr
 		wantOK bool
 	}{
 		{"valid", "4.123.24.1.in-addr.arpa.", netaddr.IPv4(1, 24, 123, 4), true},
-		{"double_dot", "1..2.3.in-addr.arpa.", netaddr.IP{}, false},
-		{"overflow", "1.256.3.4.in-addr.arpa.", netaddr.IP{}, false},
-		{"not_ip", "sub.do.ma.in.in-addr.arpa.", netaddr.IP{}, false},
+		{"double_dot", "1..2.3.in-addr.arpa.", netip.Addr{}, false},
+		{"overflow", "1.256.3.4.in-addr.arpa.", netip.Addr{}, false},
+		{"not_ip", "sub.do.ma.in.in-addr.arpa.", netip.Addr{}, false},
 	}
 
 	for _, tt := range tests {
@@ -274,7 +274,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  dnsname.FQDN
-		wantIP netaddr.IP
+		wantIP netip.Addr
 		wantOK bool
 	}{
 		{
@@ -286,19 +286,19 @@ func TestRDNSNameToIPv6(t *testing.T) {
 		{
 			"double_dot",
 			"b..9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
-			netaddr.IP{},
+			netip.Addr{},
 			false,
 		},
 		{
 			"double_hex",
 			"b.a.98.0.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
-			netaddr.IP{},
+			netip.Addr{},
 			false,
 		},
 		{
 			"not_hex",
 			"b.a.g.0.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
-			netaddr.IP{},
+			netip.Addr{},
 			false,
 		},
 	}
@@ -329,27 +329,27 @@ func TestResolveLocal(t *testing.T) {
 		name  string
 		qname dnsname.FQDN
 		qtype dns.Type
-		ip    netaddr.IP
+		ip    netip.Addr
 		code  dns.RCode
 	}{
 		{"ipv4", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
 		{"ipv6", "test2.ipn.dev.", dns.TypeAAAA, testipv6, dns.RCodeSuccess},
-		{"no-ipv6", "test1.ipn.dev.", dns.TypeAAAA, netaddr.IP{}, dns.RCodeSuccess},
-		{"nxdomain", "test3.ipn.dev.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
-		{"foreign domain", "google.com.", dns.TypeA, netaddr.IP{}, dns.RCodeRefused},
+		{"no-ipv6", "test1.ipn.dev.", dns.TypeAAAA, netip.Addr{}, dns.RCodeSuccess},
+		{"nxdomain", "test3.ipn.dev.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
+		{"foreign domain", "google.com.", dns.TypeA, netip.Addr{}, dns.RCodeRefused},
 		{"all", "test1.ipn.dev.", dns.TypeA, testipv4, dns.RCodeSuccess},
-		{"mx-ipv4", "test1.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeSuccess},
-		{"mx-ipv6", "test2.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeSuccess},
-		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeNameError},
-		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
-		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
+		{"mx-ipv4", "test1.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeSuccess},
+		{"mx-ipv6", "test2.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeSuccess},
+		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netip.Addr{}, dns.RCodeNameError},
+		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netip.Addr{}, dns.RCodeNameError},
+		{"onion-domain", "footest.onion.", dns.TypeA, netip.Addr{}, dns.RCodeNameError},
 		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netip.MustParseAddr("100.100.100.100"), dns.RCodeSuccess},
 		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
 		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
 		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
 		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
-		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
-		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
+		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {
@@ -1003,7 +1003,7 @@ func TestForwardLinkSelection(t *testing.T) {
 	// routes differently.
 	specialIP := netaddr.IPv4(1, 2, 3, 4)
 
-	fwd := newForwarder(t.Logf, nil, linkSelFunc(func(ip netaddr.IP) string {
+	fwd := newForwarder(t.Logf, nil, linkSelFunc(func(ip netip.Addr) string {
 		if ip == netaddr.IPv4(1, 2, 3, 4) {
 			return "special"
 		}
@@ -1011,7 +1011,7 @@ func TestForwardLinkSelection(t *testing.T) {
 	}), new(tsdial.Dialer))
 
 	// Test non-special IP.
-	if got, err := fwd.packetListener(netaddr.IP{}); err != nil {
+	if got, err := fwd.packetListener(netip.Addr{}); err != nil {
 		t.Fatal(err)
 	} else if got != stdNetPacketListener {
 		t.Errorf("for IP zero value, didn't get expected packet listener")
@@ -1035,9 +1035,9 @@ func TestForwardLinkSelection(t *testing.T) {
 	}
 }
 
-type linkSelFunc func(ip netaddr.IP) string
+type linkSelFunc func(ip netip.Addr) string
 
-func (f linkSelFunc) PickLink(ip netaddr.IP) string { return f(ip) }
+func (f linkSelFunc) PickLink(ip netip.Addr) string { return f(ip) }
 
 func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 	if runtime.GOOS == "windows" {

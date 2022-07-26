@@ -16,7 +16,6 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
 )
@@ -294,7 +293,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 	}
 
 	type dnsPrio struct {
-		resolvers []netaddr.IP
+		resolvers []netip.Addr
 		domains   []string
 		priority  int32
 	}
@@ -342,7 +341,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 
 	var (
 		ret           OSConfig
-		seenResolvers = map[netaddr.IP]bool{}
+		seenResolvers = map[netip.Addr]bool{}
 		seenSearch    = map[string]bool{}
 	)
 

@@ -7,10 +7,10 @@ package controlclient
 import (
 	"fmt"
 	"log"
+	"net/netip"
 	"sort"
 
 	"tailscale.com/envknob"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -303,7 +303,7 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 
 var debugSelfIPv6Only = envknob.Bool("TS_DEBUG_SELF_V6_ONLY")
 
-func filterSelfAddresses(in []netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
+func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 	switch {
 	default:
 		return in

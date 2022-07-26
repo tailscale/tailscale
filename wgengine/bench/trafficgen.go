@@ -8,10 +8,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"net/netip"
 	"sync"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -94,7 +94,7 @@ func NewTrafficGen(onFirstPacket func()) *TrafficGen {
 
 // Start starts the traffic generator. It assumes mu is already locked,
 // and unlocks it.
-func (t *TrafficGen) Start(src, dst netaddr.IP, bytesPerPacket int, maxPackets int64) {
+func (t *TrafficGen) Start(src, dst netip.Addr, bytesPerPacket int, maxPackets int64) {
 	h12 := packet.ICMP4Header{
 		IP4Header: packet.IP4Header{
 			IPProto: ipproto.ICMPv4,

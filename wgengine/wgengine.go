@@ -6,11 +6,11 @@ package wgengine
 
 import (
 	"errors"
+	"net/netip"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -62,7 +62,7 @@ type PeerForIP struct {
 
 	// Route is the route that matched the IP provided
 	// to Engine.PeerForIP.
-	Route netaddr.IPPrefix
+	Route netip.Prefix
 }
 
 // Engine is the Tailscale WireGuard engine interface.
@@ -80,7 +80,7 @@ type Engine interface {
 
 	// PeerForIP returns the node to which the provided IP routes,
 	// if any. If none is found, (nil, nil) is returned.
-	PeerForIP(netaddr.IP) (_ PeerForIP, ok bool)
+	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
 	GetFilter() *filter.Filter
@@ -156,20 +156,20 @@ type Engine interface {
 
 	// Ping is a request to start a ping with the peer handling the given IP and
 	// then call cb with its ping latency & method.
-	Ping(ip netaddr.IP, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
+	Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
 
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
 	// The IP:port is generally a localhost IP and an ephemeral port, used
 	// while proxying connections to localhost when tailscaled is running
 	// in netstack mode.
-	RegisterIPPortIdentity(netaddr.IPPort, netaddr.IP)
+	RegisterIPPortIdentity(netip.AddrPort, netip.Addr)
 
 	// UnregisterIPPortIdentity removes a temporary IP:port registration
 	// made previously by RegisterIPPortIdentity.
-	UnregisterIPPortIdentity(netaddr.IPPort)
+	UnregisterIPPortIdentity(netip.AddrPort)
 
 	// WhoIsIPPort looks up an IP:port in the temporary registrations,
 	// and returns a matching Tailscale IP, if it exists.
-	WhoIsIPPort(netaddr.IPPort) (netaddr.IP, bool)
+	WhoIsIPPort(netip.AddrPort) (netip.Addr, bool)
 }

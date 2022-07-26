@@ -27,7 +27,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/version"
@@ -192,7 +191,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 
 // fileTargetErrorDetail returns a non-nil error saying why ip is an
 // invalid file sharing target.
-func fileTargetErrorDetail(ctx context.Context, ip netaddr.IP) error {
+func fileTargetErrorDetail(ctx context.Context, ip netip.Addr) error {
 	found := false
 	if st, err := localClient.Status(ctx); err == nil && st.Self != nil {
 		for _, peer := range st.Peer {

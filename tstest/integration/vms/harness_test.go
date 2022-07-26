@@ -26,7 +26,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -43,7 +42,7 @@ type Harness struct {
 	signer         ssh.Signer
 	cs             *testcontrol.Server
 	loginServerURL string
-	testerV4       netaddr.IP
+	testerV4       netip.Addr
 	ipMu           *sync.Mutex
 	ipMap          map[string]ipMapping
 }
@@ -240,6 +239,6 @@ outer:
 	h.testerV4 = bytes2Netaddr(h.Tailscale(t, "ip", "-4"))
 }
 
-func bytes2Netaddr(inp []byte) netaddr.IP {
+func bytes2Netaddr(inp []byte) netip.Addr {
 	return netip.MustParseAddr(string(bytes.TrimSpace(inp)))
 }

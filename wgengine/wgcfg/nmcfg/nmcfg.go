@@ -8,9 +8,9 @@ package nmcfg
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"strings"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -34,7 +34,7 @@ func nodeDebugName(n *tailcfg.Node) string {
 
 // cidrIsSubnet reports whether cidr is a non-default-route subnet
 // exported by node that is not one of its own self addresses.
-func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
+func cidrIsSubnet(node *tailcfg.Node, cidr netip.Prefix) bool {
 	if cidr.Bits() == 0 {
 		return false
 	}

@@ -5,10 +5,10 @@
 package ipn
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -126,7 +126,7 @@ func (h *Handle) EngineStatus() EngineStatus {
 	return h.engineStatusCache
 }
 
-func (h *Handle) LocalAddrs() []netaddr.IPPrefix {
+func (h *Handle) LocalAddrs() []netip.Prefix {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -134,7 +134,7 @@ func (h *Handle) LocalAddrs() []netaddr.IPPrefix {
 	if nm != nil {
 		return nm.Addresses
 	}
-	return []netaddr.IPPrefix{}
+	return []netip.Prefix{}
 }
 
 func (h *Handle) NetMap() *netmap.NetworkMap {

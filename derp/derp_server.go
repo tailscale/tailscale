@@ -41,7 +41,6 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -163,8 +162,8 @@ type Server struct {
 	// src.
 	sentTo map[key.NodePublic]map[key.NodePublic]int64 // src => dst => dst's latest sclient.connNum
 
-	// maps from netaddr.IPPort to a client's public key
-	keyOfAddr map[netaddr.IPPort]key.NodePublic
+	// maps from netip.AddrPort to a client's public key
+	keyOfAddr map[netip.AddrPort]key.NodePublic
 }
 
 // clientSet represents 1 or more *sclients.
@@ -315,7 +314,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
 		avgQueueDuration:     new(uint64),
-		keyOfAddr:            map[netaddr.IPPort]key.NodePublic{},
+		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -1247,7 +1246,7 @@ type sclient struct {
 	logf           logger.Logf
 	done           <-chan struct{}     // closed when connection closes
 	remoteAddr     string              // usually ip:port from net.Conn.RemoteAddr().String()
-	remoteIPPort   netaddr.IPPort      // zero if remoteAddr is not ip:port.
+	remoteIPPort   netip.AddrPort      // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt            // packets queued to this client; never closed
 	discoSendQueue chan pkt            // important packets queued to this client; never closed
 	sendPongCh     chan [8]byte        // pong replies to send to the client; never closed
@@ -1760,8 +1759,8 @@ type BytesSentRecv struct {
 
 // parseSSOutput parses the output from the specific call to ss in ServeDebugTraffic.
 // Separated out for ease of testing.
-func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
-	newState := map[netaddr.IPPort]BytesSentRecv{}
+func parseSSOutput(raw string) map[netip.AddrPort]BytesSentRecv {
+	newState := map[netip.AddrPort]BytesSentRecv{}
 	// parse every 2 lines and get src and dst ips, and kv pairs
 	lines := strings.Split(raw, "\n")
 	for i := 0; i < len(lines); i += 2 {
@@ -1794,7 +1793,7 @@ func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
 }
 
 func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
-	prevState := map[netaddr.IPPort]BytesSentRecv{}
+	prevState := map[netip.AddrPort]BytesSentRecv{}
 	enc := json.NewEncoder(w)
 	for r.Context().Err() == nil {
 		output, err := exec.Command("ss", "-i", "-H", "-t").Output()

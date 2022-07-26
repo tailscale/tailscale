@@ -18,7 +18,6 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -598,17 +597,17 @@ func (c *Client) setSendRateLimiter(sm ServerInfoMessage) {
 //
 // If the client is broken in some previously detectable way, it
 // returns an error.
-func (c *Client) LocalAddr() (netaddr.IPPort, error) {
+func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	readErr, _ := c.readErr.Load().(error)
 	if readErr != nil {
-		return netaddr.IPPort{}, readErr
+		return netip.AddrPort{}, readErr
 	}
 	if c.nc == nil {
-		return netaddr.IPPort{}, errors.New("nil conn")
+		return netip.AddrPort{}, errors.New("nil conn")
 	}
 	a := c.nc.LocalAddr()
 	if a == nil {
-		return netaddr.IPPort{}, errors.New("nil addr")
+		return netip.AddrPort{}, errors.New("nil addr")
 	}
 	return netip.ParseAddrPort(a.String())
 }

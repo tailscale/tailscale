@@ -34,7 +34,6 @@ import (
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -130,7 +129,7 @@ type LocalBackend struct {
 	shutdownCalled        bool // if Shutdown has been called
 
 	filterAtomic            atomic.Value // of *filter.Filter
-	containsViaIPFuncAtomic atomic.Value // of func(netaddr.IP) bool
+	containsViaIPFuncAtomic atomic.Value // of func(netip.Addr) bool
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -152,7 +151,7 @@ type LocalBackend struct {
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap           *netmap.NetworkMap
-	nodeByAddr       map[netaddr.IP]*tailcfg.Node
+	nodeByAddr       map[netip.Addr]*tailcfg.Node
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
@@ -498,13 +497,13 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if p.LastSeen != nil {
 			lastSeen = *p.LastSeen
 		}
-		var tailscaleIPs = make([]netaddr.IP, 0, len(p.Addresses))
+		var tailscaleIPs = make([]netip.Addr, 0, len(p.Addresses))
 		for _, addr := range p.Addresses {
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
-		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netaddr.IPPrefix) bool {
+		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netip.Prefix) bool {
 			return r.Bits() == 0
 		})
 		var tags *views.Slice[string]
@@ -542,12 +541,12 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
 // If ok == true, n and u are valid.
-func (b *LocalBackend) WhoIs(ipp netaddr.IPPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
+func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	n, ok = b.nodeByAddr[ipp.Addr()]
 	if !ok {
-		var ip netaddr.IP
+		var ip netip.Addr
 		if ipp.Port() != 0 {
 			ip, ok = b.e.WhoIsIPPort(ipp)
 		}
@@ -568,7 +567,7 @@ func (b *LocalBackend) WhoIs(ipp netaddr.IPPort) (n *tailcfg.Node, u tailcfg.Use
 
 // PeerCaps returns the capabilities that remote src IP has to
 // ths current node.
-func (b *LocalBackend) PeerCaps(src netaddr.IP) []string {
+func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.netMap == nil {
@@ -770,7 +769,7 @@ func (b *LocalBackend) findExitNodeIDLocked(nm *netmap.NetworkMap) (prefsChanged
 			// Found the node being referenced, upgrade prefs to
 			// reference it directly for next time.
 			b.prefs.ExitNodeID = peer.StableID
-			b.prefs.ExitNodeIP = netaddr.IP{}
+			b.prefs.ExitNodeIP = netip.Addr{}
 			return true
 		}
 	}
@@ -1123,7 +1122,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs *ipn.
 	// quite hard to debug, so save yourself the trouble.
 	var (
 		haveNetmap   = netMap != nil
-		addrs        []netaddr.IPPrefix
+		addrs        []netip.Prefix
 		packetFilter []filter.Match
 		localNetsB   netipx.IPSetBuilder
 		logNetsB     netipx.IPSetBuilder
@@ -1206,7 +1205,7 @@ func (b *LocalBackend) setFilter(f *filter.Filter) {
 	b.e.SetFilter(f)
 }
 
-var removeFromDefaultRoute = []netaddr.IPPrefix{
+var removeFromDefaultRoute = []netip.Prefix{
 	// RFC1918 LAN ranges
 	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("172.16.0.0/12"),
@@ -1232,7 +1231,7 @@ var removeFromDefaultRoute = []netaddr.IPPrefix{
 //
 // Given that "internal" routes don't leave the device, we choose to
 // trust them more, allowing access to them when an Exit Node is enabled.
-func internalAndExternalInterfaces() (internal, external []netaddr.IPPrefix, err error) {
+func internalAndExternalInterfaces() (internal, external []netip.Prefix, err error) {
 	il, err := interfaces.GetList()
 	if err != nil {
 		return nil, nil, err
@@ -1240,11 +1239,11 @@ func internalAndExternalInterfaces() (internal, external []netaddr.IPPrefix, err
 	return internalAndExternalInterfacesFrom(il, runtime.GOOS)
 }
 
-func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (internal, external []netaddr.IPPrefix, err error) {
+func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (internal, external []netip.Prefix, err error) {
 	// We use an IPSetBuilder here to canonicalize the prefixes
 	// and to remove any duplicate entries.
 	var internalBuilder, externalBuilder netipx.IPSetBuilder
-	if err := il.ForeachInterfaceAddress(func(iface interfaces.Interface, pfx netaddr.IPPrefix) {
+	if err := il.ForeachInterfaceAddress(func(iface interfaces.Interface, pfx netip.Prefix) {
 		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
@@ -1286,9 +1285,9 @@ func internalAndExternalInterfacesFrom(il interfaces.List, goos string) (interna
 	return iSet.Prefixes(), eSet.Prefixes(), nil
 }
 
-func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netaddr.IP, err error) {
+func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netip.Addr, err error) {
 	var b netipx.IPSetBuilder
-	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netaddr.IPPrefix) {
+	if err := interfaces.ForeachInterfaceAddress(func(_ interfaces.Interface, pfx netip.Prefix) {
 		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return
 		}
@@ -1308,7 +1307,7 @@ func interfaceRoutes() (ips *netipx.IPSet, hostIPs []netaddr.IP, err error) {
 // shrinkDefaultRoute returns an IPSet representing the IPs in route,
 // minus those in removeFromDefaultRoute and localInterfaceRoutes,
 // plus the IPs in hostIPs.
-func shrinkDefaultRoute(route netaddr.IPPrefix, localInterfaceRoutes *netipx.IPSet, hostIPs []netaddr.IP) (*netipx.IPSet, error) {
+func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, hostIPs []netip.Addr) (*netipx.IPSet, error) {
 	var b netipx.IPSetBuilder
 	// Add the default route.
 	b.AddPrefix(route)
@@ -1335,7 +1334,7 @@ func shrinkDefaultRoute(route netaddr.IPPrefix, localInterfaceRoutes *netipx.IPS
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
 // for DNS map construction purposes (that is, only the first entry counts).
-func dnsCIDRsEqual(newAddr, oldAddr []netaddr.IPPrefix) bool {
+func dnsCIDRsEqual(newAddr, oldAddr []netip.Prefix) bool {
 	if len(newAddr) != len(oldAddr) {
 		return false
 	}
@@ -1733,7 +1732,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
-func (b *LocalBackend) Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
+func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
 	if pingType == tailcfg.PingPeerAPI {
 		t0 := time.Now()
 		node, base, err := b.pingPeerAPI(ctx, ip)
@@ -1770,7 +1769,7 @@ func (b *LocalBackend) Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg
 	}
 }
 
-func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netaddr.IP) (peer *tailcfg.Node, peerBase string, err error) {
+func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer *tailcfg.Node, peerBase string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	nm := b.NetMap()
@@ -2069,7 +2068,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 
 // GetPeerAPIPort returns the port number for the peerapi server
 // running on the provided IP.
-func (b *LocalBackend) GetPeerAPIPort(ip netaddr.IP) (port uint16, ok bool) {
+func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
@@ -2087,7 +2086,7 @@ func (b *LocalBackend) GetPeerAPIPort(ip netaddr.IP) (port uint16, ok bool) {
 // or IPv6 IP and the peerapi port for that address).
 //
 // The connection will be closed by ServePeerAPIConnection.
-func (b *LocalBackend) ServePeerAPIConnection(remote, local netaddr.IPPort, c net.Conn) {
+func (b *LocalBackend) ServePeerAPIConnection(remote, local netip.AddrPort, c net.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
@@ -2289,7 +2288,7 @@ func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS s
 func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Logf, versionOS string) *dns.Config {
 	dcfg := &dns.Config{
 		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+		Hosts:  map[dnsname.FQDN][]netip.Addr{},
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
@@ -2302,7 +2301,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	// isn't configured to make MagicDNS resolution truly
 	// magic. Details in
 	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs []netaddr.IPPrefix) {
+	set := func(name string, addrs []netip.Prefix) {
 		if len(addrs) == 0 || name == "" {
 			return
 		}
@@ -2311,7 +2310,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 			return // TODO: propagate error?
 		}
 		have4 := tsaddr.PrefixesContainsFunc(addrs, tsaddr.PrefixIs4)
-		var ips []netaddr.IP
+		var ips []netip.Addr
 		for _, addr := range addrs {
 			if selfV6Only {
 				if addr.Addr().Is6() {
@@ -2629,11 +2628,11 @@ var (
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
 // is used instead.
-func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPrefix) {
+func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) {
 	tsULA := tsaddr.TailscaleULARange()
 	cgNAT := tsaddr.CGNATRange()
 	var didULA bool
-	var cgNATIPs []netaddr.IPPrefix
+	var cgNATIPs []netip.Prefix
 	for _, peer := range peers {
 		for _, aip := range peer.AllowedIPs {
 			aip = unmapIPPrefix(aip)
@@ -2665,7 +2664,7 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netaddr.IPPref
 	return routes
 }
 
-func ipPrefixLess(ri, rj netaddr.IPPrefix) bool {
+func ipPrefixLess(ri, rj netip.Prefix) bool {
 	if ri.Addr() == rj.Addr() {
 		return ri.Bits() < rj.Bits()
 	}
@@ -2736,17 +2735,17 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNA
 	}
 
 	if tsaddr.PrefixesContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
-		rs.Routes = append(rs.Routes, netaddr.IPPrefixFrom(tsaddr.TailscaleServiceIP(), 32))
+		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
 	}
 
 	return rs
 }
 
-func unmapIPPrefix(ipp netaddr.IPPrefix) netaddr.IPPrefix {
+func unmapIPPrefix(ipp netip.Prefix) netip.Prefix {
 	return netip.PrefixFrom(ipp.Addr().Unmap(), ipp.Bits())
 }
 
-func unmapIPPrefixes(ippsList ...[]netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
+func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	for _, ipps := range ippsList {
 		for _, ipp := range ipps {
 			ret = append(ret, unmapIPPrefix(ipp))
@@ -2989,8 +2988,8 @@ func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Get() && can
 // ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
-func (b *LocalBackend) ShouldHandleViaIP(ip netaddr.IP) bool {
-	if f, ok := b.containsViaIPFuncAtomic.Load().(func(netaddr.IP) bool); ok {
+func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
+	if f, ok := b.containsViaIPFuncAtomic.Load().(func(netip.Addr) bool); ok {
 		return f(ip)
 	}
 	return false
@@ -3107,7 +3106,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	// Update the nodeByAddr index.
 	if b.nodeByAddr == nil {
-		b.nodeByAddr = map[netaddr.IP]*tailcfg.Node{}
+		b.nodeByAddr = map[netip.Addr]*tailcfg.Node{}
 	}
 	// First pass, mark everything unwanted.
 	for k := range b.nodeByAddr {
@@ -3313,12 +3312,12 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 			p6 = s.Port
 		}
 	}
-	var ipp netaddr.IPPort
+	var ipp netip.AddrPort
 	switch {
 	case have4 && p4 != 0:
-		ipp = netaddr.IPPortFrom(nodeIP(peer, netaddr.IP.Is4), p4)
+		ipp = netip.AddrPortFrom(nodeIP(peer, netip.Addr.Is4), p4)
 	case have6 && p6 != 0:
-		ipp = netaddr.IPPortFrom(nodeIP(peer, netaddr.IP.Is6), p6)
+		ipp = netip.AddrPortFrom(nodeIP(peer, netip.Addr.Is6), p6)
 	}
 	if !ipp.Addr().IsValid() {
 		return ""
@@ -3326,13 +3325,13 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	return fmt.Sprintf("http://%v", ipp)
 }
 
-func nodeIP(n *tailcfg.Node, pred func(netaddr.IP) bool) netaddr.IP {
+func nodeIP(n *tailcfg.Node, pred func(netip.Addr) bool) netip.Addr {
 	for _, a := range n.Addresses {
 		if a.IsSingleIP() && pred(a.Addr()) {
 			return a.Addr()
 		}
 	}
-	return netaddr.IP{}
+	return netip.Addr{}
 }
 
 func (b *LocalBackend) CheckIPForwarding() error {

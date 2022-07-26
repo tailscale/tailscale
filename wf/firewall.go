@@ -85,7 +85,7 @@ type Firewall struct {
 	sublayerID wf.SublayerID
 	session    *wf.Session
 
-	permittedRoutes map[netaddr.IPPrefix][]*wf.Rule
+	permittedRoutes map[netip.Prefix][]*wf.Rule
 }
 
 // New returns a new Firewall for the provdied interface ID.
@@ -125,7 +125,7 @@ func New(luid uint64) (*Firewall, error) {
 		session:         session,
 		providerID:      providerID,
 		sublayerID:      sublayerID,
-		permittedRoutes: make(map[netaddr.IPPrefix][]*wf.Rule),
+		permittedRoutes: make(map[netip.Prefix][]*wf.Rule),
 	}
 	if err := f.enable(); err != nil {
 		return nil, err
@@ -188,16 +188,16 @@ func (f *Firewall) enable() error {
 // UpdatedPermittedRoutes adds rules to allow incoming and outgoing connections
 // from the provided prefixes. It will also remove rules for routes that were
 // previously added but have been removed.
-func (f *Firewall) UpdatePermittedRoutes(newRoutes []netaddr.IPPrefix) error {
-	var routesToAdd []netaddr.IPPrefix
-	routeMap := make(map[netaddr.IPPrefix]bool)
+func (f *Firewall) UpdatePermittedRoutes(newRoutes []netip.Prefix) error {
+	var routesToAdd []netip.Prefix
+	routeMap := make(map[netip.Prefix]bool)
 	for _, r := range newRoutes {
 		routeMap[r] = true
 		if _, ok := f.permittedRoutes[r]; !ok {
 			routesToAdd = append(routesToAdd, r)
 		}
 	}
-	var routesToRemove []netaddr.IPPrefix
+	var routesToRemove []netip.Prefix
 	for r := range f.permittedRoutes {
 		if !routeMap[r] {
 			routesToRemove = append(routesToRemove, r)

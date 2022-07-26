@@ -7,10 +7,10 @@ package dns
 import (
 	"bufio"
 	"fmt"
+	"net/netip"
 	"sort"
 
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
@@ -40,13 +40,13 @@ type Config struct {
 	// Adding an entry to Hosts merely creates the record. If you want
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
-	Hosts map[dnsname.FQDN][]netaddr.IP
+	Hosts map[dnsname.FQDN][]netip.Addr
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
 }
 
-func (c *Config) serviceIP() netaddr.IP {
+func (c *Config) serviceIP() netip.Addr {
 	if c.OnlyIPv6 {
 		return tsaddr.TailscaleServiceIPv6()
 	}
@@ -143,7 +143,7 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 	return true
 }
 
-func sameIPs(a, b []netaddr.IP) bool {
+func sameIPs(a, b []netip.Addr) bool {
 	if len(a) != len(b) {
 		return false
 	}

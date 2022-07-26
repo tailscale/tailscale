@@ -57,7 +57,7 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 // Client is a port mapping client.
 type Client struct {
 	logf         logger.Logf
-	ipAndGateway func() (gw, ip netaddr.IP, ok bool)
+	ipAndGateway func() (gw, ip netip.Addr, ok bool)
 	onChange     func() // or nil
 	testPxPPort  uint16 // if non-zero, pxpPort to use for tests
 	testUPnPPort uint16 // if non-zero, uPnPPort to use for tests
@@ -69,13 +69,13 @@ type Client struct {
 	// off a createMapping goroutine).
 	runningCreate bool
 
-	lastMyIP netaddr.IP
-	lastGW   netaddr.IP
+	lastMyIP netip.Addr
+	lastGW   netip.Addr
 	closed   bool
 
 	lastProbe time.Time
 
-	pmpPubIP     netaddr.IP // non-zero if known
+	pmpPubIP     netip.Addr // non-zero if known
 	pmpPubIPTime time.Time  // time pmpPubIP last verified
 	pmpLastEpoch uint32
 
@@ -105,7 +105,7 @@ type mapping interface {
 	// renewAfter returns the earliest time that the mapping should be renewed.
 	RenewAfter() time.Time
 	// externalIPPort indicates what port the mapping can be reached from on the outside.
-	External() netaddr.IPPort
+	External() netip.AddrPort
 }
 
 // HaveMapping reports whether we have a current valid mapping.
@@ -120,9 +120,9 @@ func (c *Client) HaveMapping() bool {
 // All fields are immutable once created.
 type pmpMapping struct {
 	c          *Client
-	gw         netaddr.IPPort
-	external   netaddr.IPPort
-	internal   netaddr.IPPort
+	gw         netip.AddrPort
+	external   netip.AddrPort
+	internal   netip.AddrPort
 	renewAfter time.Time // the time at which we want to renew the mapping
 	goodUntil  time.Time // the mapping's total lifetime
 	epoch      uint32
@@ -135,7 +135,7 @@ func (m *pmpMapping) externalValid() bool {
 
 func (p *pmpMapping) GoodUntil() time.Time     { return p.goodUntil }
 func (p *pmpMapping) RenewAfter() time.Time    { return p.renewAfter }
-func (p *pmpMapping) External() netaddr.IPPort { return p.external }
+func (p *pmpMapping) External() netip.AddrPort { return p.external }
 
 // Release does a best effort fire-and-forget release of the PMP mapping m.
 func (m *pmpMapping) Release(ctx context.Context) {
@@ -164,7 +164,7 @@ func NewClient(logf logger.Logf, onChange func()) *Client {
 // SetGatewayLookupFunc set the func that returns the machine's default gateway IP, and
 // the primary IP address for that gateway. It must be called before the client is used.
 // If not called, interfaces.LikelyHomeRouterIP is used.
-func (c *Client) SetGatewayLookupFunc(f func() (gw, myIP netaddr.IP, ok bool)) {
+func (c *Client) SetGatewayLookupFunc(f func() (gw, myIP netip.Addr, ok bool)) {
 	c.ipAndGateway = f
 }
 
@@ -203,11 +203,11 @@ func (c *Client) SetLocalPort(localPort uint16) {
 	c.invalidateMappingsLocked(true)
 }
 
-func (c *Client) gatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
+func (c *Client) gatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 	gw, myIP, ok = c.ipAndGateway()
 	if !ok {
-		gw = netaddr.IP{}
-		myIP = netaddr.IP{}
+		gw = netip.Addr{}
+		myIP = netip.Addr{}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -273,7 +273,7 @@ func (c *Client) invalidateMappingsLocked(releaseOld bool) {
 		}
 		c.mapping = nil
 	}
-	c.pmpPubIP = netaddr.IP{}
+	c.pmpPubIP = netip.Addr{}
 	c.pmpPubIPTime = time.Time{}
 	c.pcpSawTime = time.Time{}
 	c.uPnPSawTime = time.Time{}
@@ -350,7 +350,7 @@ var (
 // If there's not one, it starts up a background goroutine to create one.
 // If the background goroutine ends up creating one, the onChange hook registered with the
 // NewClient constructor (if any) will fire.
-func (c *Client) GetCachedMappingOrStartCreatingOne() (external netaddr.IPPort, ok bool) {
+func (c *Client) GetCachedMappingOrStartCreatingOne() (external netip.AddrPort, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -366,7 +366,7 @@ func (c *Client) GetCachedMappingOrStartCreatingOne() (external netaddr.IPPort, 
 	}
 
 	c.maybeStartMappingLocked()
-	return netaddr.IPPort{}, false
+	return netip.AddrPort{}, false
 }
 
 // maybeStartMappingLocked starts a createMapping goroutine up, if one isn't already running.
@@ -404,21 +404,21 @@ var wildcardIP = netip.MustParseAddr("0.0.0.0")
 //
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
-func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPort, err error) {
+func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPort, err error) {
 	if DisableUPnP && DisablePCP && DisablePMP {
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
 	if !ok {
-		return netaddr.IPPort{}, NoMappingError{ErrGatewayRange}
+		return netip.AddrPort{}, NoMappingError{ErrGatewayRange}
 	}
 	if gw.Is6() {
-		return netaddr.IPPort{}, NoMappingError{ErrGatewayIPv6}
+		return netip.AddrPort{}, NoMappingError{ErrGatewayIPv6}
 	}
 
 	c.mu.Lock()
 	localPort := c.localPort
-	internalAddr := netaddr.IPPortFrom(myIP, localPort)
+	internalAddr := netip.AddrPortFrom(myIP, localPort)
 
 	// prevPort is the port we had most previously, if any. We try
 	// to ask for the same port. 0 means to give us any port.
@@ -440,7 +440,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return external, nil
 		}
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 
 	// If we just did a Probe (e.g. via netchecker) but didn't
@@ -457,7 +457,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 	// construct it upon receiving that packet.
 	m := &pmpMapping{
 		c:        c,
-		gw:       netaddr.IPPortFrom(gw, c.pxpPort()),
+		gw:       netip.AddrPortFrom(gw, c.pxpPort()),
 		internal: internalAddr,
 	}
 	if haveRecentPMP {
@@ -469,20 +469,20 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return external, nil
 		}
-		return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	c.mu.Unlock()
 
 	uc, err := c.listenPacket(ctx, "udp4", ":0")
 	if err != nil {
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 	defer uc.Close()
 
 	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pxpAddr := netaddr.IPPortFrom(gw, c.pxpPort())
+	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
 
 	preferPCP := !DisablePCP && (DisablePMP || (!haveRecentPMP && haveRecentPCP))
 
@@ -495,7 +495,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
-			return netaddr.IPPort{}, err
+			return netip.AddrPort{}, err
 		}
 	} else {
 		// Ask for our external address if needed.
@@ -504,7 +504,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 				if neterror.TreatAsLostUDP(err) {
 					err = NoMappingError{ErrNoPortMappingServices}
 				}
-				return netaddr.IPPort{}, err
+				return netip.AddrPort{}, err
 			}
 		}
 
@@ -513,7 +513,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 			if neterror.TreatAsLostUDP(err) {
 				err = NoMappingError{ErrNoPortMappingServices}
 			}
-			return netaddr.IPPort{}, err
+			return netip.AddrPort{}, err
 		}
 	}
 
@@ -522,13 +522,13 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 		n, srci, err := uc.ReadFrom(res)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
-				return netaddr.IPPort{}, err
+				return netip.AddrPort{}, err
 			}
 			// fallback to UPnP portmapping
 			if mapping, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 				return mapping, nil
 			}
-			return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+			return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 		}
 		srcu := srci.(*net.UDPAddr)
 		src, ok := netaddr.FromStdAddr(srcu.IP, srcu.Port, srcu.Zone)
@@ -545,7 +545,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 					continue
 				}
 				if pres.ResultCode != 0 {
-					return netaddr.IPPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
+					return netip.AddrPort{}, NoMappingError{fmt.Errorf("PMP response Op=0x%x,Res=0x%x", pres.OpCode, pres.ResultCode)}
 				}
 				if pres.OpCode == pmpOpReply|pmpOpMapPublicAddr {
 					m.external = netip.AddrPortFrom(pres.PublicAddr, m.external.Port())
@@ -563,18 +563,18 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netaddr.IPPor
 				if err != nil {
 					c.logf("failed to get PCP mapping: %v", err)
 					// PCP should only have a single packet response
-					return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+					return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 				}
 				pcpMapping.c = c
 				pcpMapping.internal = m.internal
-				pcpMapping.gw = netaddr.IPPortFrom(gw, c.pxpPort())
+				pcpMapping.gw = netip.AddrPortFrom(gw, c.pxpPort())
 				c.mu.Lock()
 				defer c.mu.Unlock()
 				c.mapping = pcpMapping
 				return pcpMapping.external, nil
 			default:
 				c.logf("unknown PMP/PCP version number: %d %v", version, res[:n])
-				return netaddr.IPPort{}, NoMappingError{ErrNoPortMappingServices}
+				return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 			}
 		}
 
@@ -632,7 +632,7 @@ type pmpResponse struct {
 	ExternalPort        uint16
 
 	// For public addr ops:
-	PublicAddr netaddr.IP
+	PublicAddr netip.Addr
 }
 
 func parsePMPResponse(pkt []byte) (res pmpResponse, ok bool) {
@@ -701,9 +701,9 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	defer cancel()
 	defer closeCloserOnContextDone(ctx, uc)()
 
-	pxpAddr := netaddr.IPPortFrom(gw, c.pxpPort())
-	upnpAddr := netaddr.IPPortFrom(gw, c.upnpPort())
-	upnpMulticastAddr := netaddr.IPPortFrom(netaddr.IPv4(239, 255, 255, 250), c.upnpPort())
+	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
+	upnpAddr := netip.AddrPortFrom(gw, c.upnpPort())
+	upnpMulticastAddr := netip.AddrPortFrom(netaddr.IPv4(239, 255, 255, 250), c.upnpPort())
 
 	// Don't send probes to services that we recently learned (for
 	// the same gw/myIP) are available. See

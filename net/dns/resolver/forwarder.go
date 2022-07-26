@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime"
 	"sort"
@@ -28,7 +29,6 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
@@ -367,7 +367,7 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 
 var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
 
-func (f *forwarder) packetListener(ip netaddr.IP) (nettype.PacketListenerWithNetIP, error) {
+func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
 	if f.linkSel == nil || initListenConfig == nil {
 		return stdNetPacketListener, nil
 	}

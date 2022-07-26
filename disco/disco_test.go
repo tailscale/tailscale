@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"go4.org/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -61,7 +60,7 @@ func TestMarshalAndParse(t *testing.T) {
 		{
 			name: "call_me_maybe_endpoints",
 			m: &CallMeMaybe{
-				MyNumber: []netaddr.IPPort{
+				MyNumber: []netip.AddrPort{
 					netip.MustParseAddrPort("1.2.3.4:567"),
 					netip.MustParseAddrPort("[2001::3456]:789"),
 				},
@@ -94,7 +93,7 @@ func TestMarshalAndParse(t *testing.T) {
 	}
 }
 
-func mustIPPort(s string) netaddr.IPPort {
+func mustIPPort(s string) netip.AddrPort {
 	ipp, err := netip.ParseAddrPort(s)
 	if err != nil {
 		panic(err)

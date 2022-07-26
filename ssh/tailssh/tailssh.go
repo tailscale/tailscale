@@ -405,7 +405,7 @@ func (c *conn) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
 	return nil, false
 }
 
-func toIPPort(a net.Addr) (ipp netaddr.IPPort) {
+func toIPPort(a net.Addr) (ipp netip.AddrPort) {
 	ta, ok := a.(*net.TCPAddr)
 	if !ok {
 		return
@@ -414,7 +414,7 @@ func toIPPort(a net.Addr) (ipp netaddr.IPPort) {
 	if !ok {
 		return
 	}
-	return netaddr.IPPortFrom(tanetaddr, uint16(ta.Port))
+	return netip.AddrPortFrom(tanetaddr, uint16(ta.Port))
 }
 
 // connInfo returns a populated sshConnInfo from the provided arguments,
@@ -1103,10 +1103,10 @@ type sshConnInfo struct {
 	sshUser string
 
 	// src is the Tailscale IP and port that the connection came from.
-	src netaddr.IPPort
+	src netip.AddrPort
 
 	// dst is the Tailscale IP and port that the connection came for.
-	dst netaddr.IPPort
+	dst netip.AddrPort
 
 	// node is srcIP's node.
 	node *tailcfg.Node

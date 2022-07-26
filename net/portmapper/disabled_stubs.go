@@ -9,8 +9,7 @@ package portmapper
 
 import (
 	"context"
-
-	"tailscale.com/net/netaddr"
+	"net/netip"
 )
 
 type upnpClient any
@@ -23,9 +22,9 @@ func parseUPnPDiscoResponse([]byte) (uPnPDiscoResponse, error) {
 
 func (c *Client) getUPnPPortMapping(
 	ctx context.Context,
-	gw netaddr.IP,
-	internal netaddr.IPPort,
+	gw netip.Addr,
+	internal netip.AddrPort,
 	prevPort uint16,
-) (external netaddr.IPPort, ok bool) {
-	return netaddr.IPPort{}, false
+) (external netip.AddrPort, ok bool) {
+	return netip.AddrPort{}, false
 }

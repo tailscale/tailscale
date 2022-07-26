@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,7 +23,6 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -93,7 +93,7 @@ func (r *winRouter) Set(cfg *Config) error {
 	return nil
 }
 
-func hasDefaultRoute(routes []netaddr.IPPrefix) bool {
+func hasDefaultRoute(routes []netip.Prefix) bool {
 	for _, route := range routes {
 		if route.Bits() == 0 {
 			return true
@@ -132,8 +132,8 @@ type firewallTweaker struct {
 	wantLocal   []string // next value we want, or "" to delete the firewall rule
 	lastLocal   []string // last set value, if known
 
-	localRoutes     []netaddr.IPPrefix
-	lastLocalRoutes []netaddr.IPPrefix
+	localRoutes     []netip.Prefix
+	lastLocalRoutes []netip.Prefix
 
 	wantKillswitch bool
 	lastKillswitch bool
@@ -156,7 +156,7 @@ func (ft *firewallTweaker) clear() { ft.set(nil, nil, nil) }
 // Empty slices remove firewall rules.
 //
 // set takes ownership of cidrs, but not routes.
-func (ft *firewallTweaker) set(cidrs []string, routes, localRoutes []netaddr.IPPrefix) {
+func (ft *firewallTweaker) set(cidrs []string, routes, localRoutes []netip.Prefix) {
 	ft.mu.Lock()
 	defer ft.mu.Unlock()
 
@@ -236,7 +236,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 // process to dial out as it pleases.
 //
 // Must only be invoked from doAsyncSet.
-func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool, allowedRoutes []netaddr.IPPrefix) error {
+func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, procRule bool, allowedRoutes []netip.Prefix) error {
 	if clear {
 		ft.logf("clearing Tailscale-In firewall rules...")
 		// We ignore the error here, because netsh returns an error for
@@ -343,7 +343,7 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 	return ft.fwProcEncoder.Encode(allowedRoutes)
 }
 
-func routesEqual(a, b []netaddr.IPPrefix) bool {
+func routesEqual(a, b []netip.Prefix) bool {
 	if len(a) != len(b) {
 		return false
 	}

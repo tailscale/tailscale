@@ -24,7 +24,6 @@ import (
 	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
 	"tailscale.com/control/controlknobs"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
@@ -36,9 +35,9 @@ import (
 // upnpMapping is a port mapping over the upnp protocol. After being created it is immutable,
 // but the client field may be shared across mapping instances.
 type upnpMapping struct {
-	gw         netaddr.IP
-	external   netaddr.IPPort
-	internal   netaddr.IPPort
+	gw         netip.Addr
+	external   netip.AddrPort
+	internal   netip.AddrPort
 	goodUntil  time.Time
 	renewAfter time.Time
 
@@ -48,7 +47,7 @@ type upnpMapping struct {
 
 func (u *upnpMapping) GoodUntil() time.Time     { return u.goodUntil }
 func (u *upnpMapping) RenewAfter() time.Time    { return u.renewAfter }
-func (u *upnpMapping) External() netaddr.IPPort { return u.external }
+func (u *upnpMapping) External() netip.AddrPort { return u.external }
 func (u *upnpMapping) Release(ctx context.Context) {
 	u.client.DeletePortMapping(ctx, "", u.external.Port(), "udp")
 }
@@ -154,7 +153,7 @@ func addAnyPortMapping(
 //
 // The provided ctx is not retained in the returned upnpClient, but
 // its associated HTTP client is (if set via goupnp.WithHTTPClient).
-func getUPnPClient(ctx context.Context, logf logger.Logf, gw netaddr.IP, meta uPnPDiscoResponse) (client upnpClient, err error) {
+func getUPnPClient(ctx context.Context, logf logger.Logf, gw netip.Addr, meta uPnPDiscoResponse) (client upnpClient, err error) {
 	if controlknobs.DisableUPnP() || DisableUPnP {
 		return nil, nil
 	}
@@ -233,12 +232,12 @@ func (c *Client) upnpHTTPClientLocked() *http.Client {
 // port and an error.
 func (c *Client) getUPnPPortMapping(
 	ctx context.Context,
-	gw netaddr.IP,
-	internal netaddr.IPPort,
+	gw netip.Addr,
+	internal netip.AddrPort,
 	prevPort uint16,
-) (external netaddr.IPPort, ok bool) {
+) (external netip.AddrPort, ok bool) {
 	if controlknobs.DisableUPnP() || DisableUPnP {
-		return netaddr.IPPort{}, false
+		return netip.AddrPort{}, false
 	}
 	now := time.Now()
 	upnp := &upnpMapping{
@@ -262,11 +261,11 @@ func (c *Client) getUPnPPortMapping(
 			c.logf("getUPnPClient: %T, %v", client, err)
 		}
 		if err != nil {
-			return netaddr.IPPort{}, false
+			return netip.AddrPort{}, false
 		}
 	}
 	if client == nil {
-		return netaddr.IPPort{}, false
+		return netip.AddrPort{}, false
 	}
 
 	var newPort uint16
@@ -282,7 +281,7 @@ func (c *Client) getUPnPPortMapping(
 		c.logf("addAnyPortMapping: %v, %v", newPort, err)
 	}
 	if err != nil {
-		return netaddr.IPPort{}, false
+		return netip.AddrPort{}, false
 	}
 	// TODO cache this ip somewhere?
 	extIP, err := client.GetExternalIPAddress(ctx)
@@ -291,14 +290,14 @@ func (c *Client) getUPnPPortMapping(
 	}
 	if err != nil {
 		// TODO this doesn't seem right
-		return netaddr.IPPort{}, false
+		return netip.AddrPort{}, false
 	}
 	externalIP, err := netip.ParseAddr(extIP)
 	if err != nil {
-		return netaddr.IPPort{}, false
+		return netip.AddrPort{}, false
 	}
 
-	upnp.external = netaddr.IPPortFrom(externalIP, newPort)
+	upnp.external = netip.AddrPortFrom(externalIP, newPort)
 	d := time.Duration(pmpMapLifetimeSec) * time.Second
 	upnp.goodUntil = now.Add(d)
 	upnp.renewAfter = now.Add(d / 2)

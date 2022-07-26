@@ -6,7 +6,8 @@
 package wgcfg
 
 import (
-	"tailscale.com/net/netaddr"
+	"net/netip"
+
 	"tailscale.com/types/key"
 )
 
@@ -17,16 +18,16 @@ import (
 type Config struct {
 	Name       string
 	PrivateKey key.NodePrivate
-	Addresses  []netaddr.IPPrefix
+	Addresses  []netip.Prefix
 	MTU        uint16
-	DNS        []netaddr.IP
+	DNS        []netip.Addr
 	Peers      []Peer
 }
 
 type Peer struct {
 	PublicKey           key.NodePublic
 	DiscoKey            key.DiscoPublic // present only so we can handle restarts within wgengine, not passed to WireGuard
-	AllowedIPs          []netaddr.IPPrefix
+	AllowedIPs          []netip.Prefix
 	PersistentKeepalive uint16
 	// wireguard-go's endpoint for this peer. It should always equal Peer.PublicKey.
 	// We represent it explicitly so that we can detect if they diverge and recover.

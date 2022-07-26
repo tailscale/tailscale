@@ -19,6 +19,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/netip"
 	"strings"
 	"syscall/js"
 	"time"
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
@@ -78,10 +78,10 @@ func newIPN(jsConfig js.Value) map[string]any {
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
-	dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		return true
 	}
-	dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
@@ -175,7 +175,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
 						Name:       nm.Name,
-						Addresses:  mapSlice(nm.Addresses, func(a netaddr.IPPrefix) string { return a.Addr().String() }),
+						Addresses:  mapSlice(nm.Addresses, func(a netip.Prefix) string { return a.Addr().String() }),
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
 					},
@@ -185,7 +185,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
 							Name:       p.Name,
-							Addresses:  mapSlice(p.Addresses, func(a netaddr.IPPrefix) string { return a.Addr().String() }),
+							Addresses:  mapSlice(p.Addresses, func(a netip.Prefix) string { return a.Addr().String() }),
 							MachineKey: p.Machine.String(),
 							NodeKey:    p.Key.String(),
 						},

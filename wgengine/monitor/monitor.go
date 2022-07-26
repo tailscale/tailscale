@@ -10,12 +10,12 @@ package monitor
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"runtime"
 	"sync"
 	"time"
 
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -69,8 +69,8 @@ type Mon struct {
 	ruleDelCB  map[*callbackHandle]RuleDeleteCallback
 	ifState    *interfaces.State
 	gwValid    bool       // whether gw and gwSelfIP are valid
-	gw         netaddr.IP // our gateway's IP
-	gwSelfIP   netaddr.IP // our own IP address (that corresponds to gw)
+	gw         netip.Addr // our gateway's IP
+	gwSelfIP   netip.Addr // our own IP address (that corresponds to gw)
 	started    bool
 	closed     bool
 	goroutines sync.WaitGroup
@@ -127,7 +127,7 @@ func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
 //
 // It's the same as interfaces.LikelyHomeRouterIP, but it caches the
 // result until the monitor detects a network change.
-func (m *Mon) GatewayAndSelfIP() (gw, myIP netaddr.IP, ok bool) {
+func (m *Mon) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.gwValid {
@@ -289,7 +289,7 @@ func (m *Mon) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 // isInterestingInterface reports whether the provided interface should be
 // considered when checking for network state changes.
 // The ips parameter should be the IPs of the provided interface.
-func (m *Mon) isInterestingInterface(i interfaces.Interface, ips []netaddr.IPPrefix) bool {
+func (m *Mon) isInterestingInterface(i interfaces.Interface, ips []netip.Prefix) bool {
 	return m.om.IsInterestingInterface(i.Name) && interfaces.UseInterestingInterfaces(i, ips)
 }
 

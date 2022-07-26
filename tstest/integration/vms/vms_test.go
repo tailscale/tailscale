@@ -29,7 +29,6 @@ import (
 	expect "github.com/tailscale/goexpect"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/semaphore"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"
@@ -441,7 +440,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 
 	for _, tt := range []struct {
 		ipProto string
-		addr    netaddr.IP
+		addr    netip.Addr
 	}{
 		{"ipv4", h.testerV4},
 	} {

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -116,14 +117,14 @@ type Impl struct {
 	// is a local (non-subnet) Tailscale IP address of this
 	// machine. It's always a non-nil func. It's changed on netmap
 	// updates.
-	atomicIsLocalIPFunc atomic.Value // of func(netaddr.IP) bool
+	atomicIsLocalIPFunc atomic.Value // of func(netip.Addr) bool
 
 	mu sync.Mutex
 	// connsOpenBySubnetIP keeps track of number of connections open
 	// for each subnet IP temporarily registered on netstack for active
 	// TCP connections, so they can be unregistered when connections are
 	// closed.
-	connsOpenBySubnetIP map[netaddr.IP]int
+	connsOpenBySubnetIP map[netip.Addr]int
 }
 
 // handleSSH is initialized in ssh.go (on Linux only) to register an SSH server
@@ -191,7 +192,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		e:                   e,
 		mc:                  mc,
 		dialer:              dialer,
-		connsOpenBySubnetIP: make(map[netaddr.IP]int),
+		connsOpenBySubnetIP: make(map[netip.Addr]int),
 		dns:                 dns,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
@@ -246,7 +247,7 @@ func (ns *Impl) Start() error {
 	return nil
 }
 
-func (ns *Impl) addSubnetAddress(ip netaddr.IP) {
+func (ns *Impl) addSubnetAddress(ip netip.Addr) {
 	ns.mu.Lock()
 	ns.connsOpenBySubnetIP[ip]++
 	needAdd := ns.connsOpenBySubnetIP[ip] == 1
@@ -271,7 +272,7 @@ func (ns *Impl) addSubnetAddress(ip netaddr.IP) {
 	}
 }
 
-func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
+func (ns *Impl) removeSubnetAddress(ip netip.Addr) {
 	ns.mu.Lock()
 	defer ns.mu.Unlock()
 	ns.connsOpenBySubnetIP[ip]--
@@ -282,7 +283,7 @@ func (ns *Impl) removeSubnetAddress(ip netaddr.IP) {
 	}
 }
 
-func ipPrefixToAddressWithPrefix(ipp netaddr.IPPrefix) tcpip.AddressWithPrefix {
+func ipPrefixToAddressWithPrefix(ipp netip.Prefix) tcpip.AddressWithPrefix {
 	return tcpip.AddressWithPrefix{
 		Address:   tcpip.Address(ipp.Addr().AsSlice()),
 		PrefixLen: int(ipp.Bits()),
@@ -308,7 +309,7 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	}
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
-	isAddr := map[netaddr.IPPrefix]bool{}
+	isAddr := map[netip.Prefix]bool{}
 	if nm.SelfNode != nil {
 		for _, ipp := range nm.SelfNode.Addresses {
 			isAddr[ipp] = true
@@ -411,7 +412,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	return filter.DropSilently
 }
 
-func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.TCPConn, error) {
+func (ns *Impl) DialContextTCP(ctx context.Context, ipp netip.AddrPort) (*gonet.TCPConn, error) {
 	remoteAddress := tcpip.FullAddress{
 		NIC:  nicID,
 		Addr: tcpip.Address(ipp.Addr().AsSlice()),
@@ -427,7 +428,7 @@ func (ns *Impl) DialContextTCP(ctx context.Context, ipp netaddr.IPPort) (*gonet.
 	return gonet.DialContextTCP(ctx, ns.ipstack, remoteAddress, ipType)
 }
 
-func (ns *Impl) DialContextUDP(ctx context.Context, ipp netaddr.IPPort) (*gonet.UDPConn, error) {
+func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.UDPConn, error) {
 	remoteAddress := &tcpip.FullAddress{
 		NIC:  nicID,
 		Addr: tcpip.Address(ipp.Addr().AsSlice()),
@@ -510,15 +511,15 @@ func (ns *Impl) inject() {
 
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
 // node directly (but not a subnet-routed IP).
-func (ns *Impl) isLocalIP(ip netaddr.IP) bool {
-	return ns.atomicIsLocalIPFunc.Load().(func(netaddr.IP) bool)(ip)
+func (ns *Impl) isLocalIP(ip netip.Addr) bool {
+	return ns.atomicIsLocalIPFunc.Load().(func(netip.Addr) bool)(ip)
 }
 
 func (ns *Impl) processSSH() bool {
 	return ns.lb != nil && ns.lb.ShouldRunSSH()
 }
 
-func (ns *Impl) peerAPIPortAtomic(ip netaddr.IP) *uint32 {
+func (ns *Impl) peerAPIPortAtomic(ip netip.Addr) *uint32 {
 	if ip.Is4() {
 		return &ns.peerapiPort4Atomic
 	} else {
@@ -588,7 +589,7 @@ var isSynology = runtime.GOOS == "linux" && distro.Get() == distro.Synology
 //
 // TODO(bradfitz): when we're running on Windows as the system user, use
 // raw socket APIs instead of ping child processes.
-func (ns *Impl) userPing(dstIP netaddr.IP, pingResPkt []byte) {
+func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 	if !userPingSem.TryAcquire() {
 		return
 	}
@@ -702,7 +703,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	return filter.DropSilently
 }
 
-func netaddrIPFromNetstackIP(s tcpip.Address) netaddr.IP {
+func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	switch len(s) {
 	case 4:
 		return netaddr.IPv4(s[0], s[1], s[2], s[3])
@@ -711,7 +712,7 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netaddr.IP {
 		copy(a[:], s)
 		return netaddr.IPFrom16(a)
 	}
-	return netaddr.IP{}
+	return netip.Addr{}
 }
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
@@ -776,7 +777,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	c := gonet.NewTCPConn(&wq, ep)
 
 	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
-		go ns.dns.HandleTCPConn(c, netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort))
+		go ns.dns.HandleTCPConn(c, netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort))
 		return
 	}
 
@@ -789,8 +790,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
 			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
-				src := netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort)
-				dst := netaddr.IPPortFrom(dialIP, port)
+				src := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
+				dst := netip.AddrPortFrom(dialIP, port)
 				ns.lb.ServePeerAPIConnection(src, dst, c)
 				return
 			}
@@ -808,11 +809,11 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	if isTailscaleIP {
 		dialIP = netaddr.IPv4(127, 0, 0, 1)
 	}
-	dialAddr := netaddr.IPPortFrom(dialIP, uint16(reqDetails.LocalPort))
+	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
 	ns.forwardTCP(c, clientRemoteIP, &wq, dialAddr)
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netaddr.IP, wq *waiter.Queue, dialAddr netaddr.IPPort) {
+func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) {
 	defer client.Close()
 	dialAddrStr := dialAddr.String()
 	if debugNetstack {
@@ -900,7 +901,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	go ns.forwardUDP(c, &wq, srcAddr, dstAddr)
 }
 
-func (ns *Impl) handleMagicDNSUDP(srcAddr netaddr.IPPort, c *gonet.UDPConn) {
+func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 	// In practice, implementations are advised not to exceed 512 bytes
 	// due to fragmenting. Just to be sure, we bump all the way to the MTU.
 	const maxUDPReqSize = mtu
@@ -941,7 +942,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netaddr.IPPort, c *gonet.UDPConn) {
 // dstAddr may be either a local Tailscale IP, in which we case we proxy to
 // 127.0.0.1, or any other IP (from an advertised subnet), in which case we
 // proxy to it directly.
-func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netaddr.IPPort) {
+func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netip.AddrPort) {
 	port, srcPort := dstAddr.Port(), clientAddr.Port()
 	if debugNetstack {
 		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
@@ -955,7 +956,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 		backendListenAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(srcPort)}
 	} else {
 		if dstIP := dstAddr.Addr(); viaRange.Contains(dstIP) {
-			dstAddr = netaddr.IPPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
+			dstAddr = netip.AddrPortFrom(tsaddr.UnmapVia(dstIP), dstAddr.Port())
 		}
 		backendRemoteAddr = net.UDPAddrFromAddrPort(dstAddr)
 		if dstAddr.Addr().Is4() {
@@ -1058,6 +1059,6 @@ func stringifyTEI(tei stack.TransportEndpointID) string {
 	return fmt.Sprintf("%s -> %s", remoteHostPort, localHostPort)
 }
 
-func ipPortOfNetstackAddr(a tcpip.Address, port uint16) (ipp netaddr.IPPort, ok bool) {
+func ipPortOfNetstackAddr(a tcpip.Address, port uint16) (ipp netip.AddrPort, ok bool) {
 	return netaddr.FromStdAddr(net.IP(a), int(port), "") // TODO(bradfitz): can do without allocs
 }

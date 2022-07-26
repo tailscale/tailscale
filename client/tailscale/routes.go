@@ -13,15 +13,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	"tailscale.com/net/netaddr"
+	"net/netip"
 )
 
 // Routes contains the lists of subnet routes that are currently advertised by a device,
 // as well as the subnets that are enabled to be routed by the device.
 type Routes struct {
-	AdvertisedRoutes []netaddr.IPPrefix `json:"advertisedRoutes"`
-	EnabledRoutes    []netaddr.IPPrefix `json:"enabledRoutes"`
+	AdvertisedRoutes []netip.Prefix `json:"advertisedRoutes"`
+	EnabledRoutes    []netip.Prefix `json:"enabledRoutes"`
 }
 
 // Routes retrieves the list of subnet routes that have been enabled for a device.
@@ -56,14 +55,14 @@ func (c *Client) Routes(ctx context.Context, deviceID string) (routes *Routes, e
 }
 
 type postRoutesParams struct {
-	Routes []netaddr.IPPrefix `json:"routes"`
+	Routes []netip.Prefix `json:"routes"`
 }
 
 // SetRoutes updates the list of subnets that are enabled for a device.
 // Subnets must be parsable by net/netip.ParsePrefix.
 // Subnets do not have to be currently advertised by a device, they may be pre-enabled.
 // Returns the updated list of enabled and advertised subnet routes in a *Routes object.
-func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netaddr.IPPrefix) (routes *Routes, err error) {
+func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netip.Prefix) (routes *Routes, err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("tailscale.SetRoutes: %w", err)

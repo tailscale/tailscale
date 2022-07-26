@@ -13,16 +13,16 @@ package flowtrack
 import (
 	"container/list"
 	"fmt"
+	"net/netip"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 
 // Tuple is a 5-tuple of proto, source and destination IP and port.
 type Tuple struct {
 	Proto ipproto.Proto
-	Src   netaddr.IPPort
-	Dst   netaddr.IPPort
+	Src   netip.AddrPort
+	Dst   netip.AddrPort
 }
 
 func (t Tuple) String() string {

@@ -6,8 +6,8 @@ package packet
 
 import (
 	"encoding/binary"
+	"net/netip"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 
@@ -18,8 +18,8 @@ const ip6HeaderLength = 40
 type IP6Header struct {
 	IPProto ipproto.Proto
 	IPID    uint32 // only lower 20 bits used
-	Src     netaddr.IP
-	Dst     netaddr.IP
+	Src     netip.Addr
+	Dst     netip.Addr
 }
 
 // Len implements Header.

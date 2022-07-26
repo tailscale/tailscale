@@ -7,6 +7,7 @@ package filter
 
 import (
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -107,12 +108,12 @@ const (
 // everything. Use in tests only, as it permits some kinds of spoofing
 // attacks to reach the OS network stack.
 func NewAllowAllForTest(logf logger.Logf) *Filter {
-	any4 := netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0)
-	any6 := netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{}), 0)
+	any4 := netip.PrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0)
+	any6 := netip.PrefixFrom(netaddr.IPFrom16([16]byte{}), 0)
 	ms := []Match{
 		{
 			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4},
-			Srcs:    []netaddr.IPPrefix{any4},
+			Srcs:    []netip.Prefix{any4},
 			Dsts: []NetPortRange{
 				{
 					Net: any4,
@@ -125,7 +126,7 @@ func NewAllowAllForTest(logf logger.Logf) *Filter {
 		},
 		{
 			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv6},
-			Srcs:    []netaddr.IPPrefix{any6},
+			Srcs:    []netip.Prefix{any6},
 			Dsts: []NetPortRange{
 				{
 					Net: any6,
@@ -180,10 +181,10 @@ func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareSt
 	}
 	f := &Filter{
 		logf:     logf,
-		matches4: matchesFamily(matches, netaddr.IP.Is4),
-		matches6: matchesFamily(matches, netaddr.IP.Is6),
-		cap4:     capMatchesFunc(matches, netaddr.IP.Is4),
-		cap6:     capMatchesFunc(matches, netaddr.IP.Is6),
+		matches4: matchesFamily(matches, netip.Addr.Is4),
+		matches6: matchesFamily(matches, netip.Addr.Is6),
+		cap4:     capMatchesFunc(matches, netip.Addr.Is4),
+		cap6:     capMatchesFunc(matches, netip.Addr.Is6),
 		local:    localNets,
 		logIPs:   logIPs,
 		state:    state,
@@ -193,7 +194,7 @@ func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareSt
 
 // matchesFamily returns the subset of ms for which keep(srcNet.IP)
 // and keep(dstNet.IP) are both true.
-func matchesFamily(ms matches, keep func(netaddr.IP) bool) matches {
+func matchesFamily(ms matches, keep func(netip.Addr) bool) matches {
 	var ret matches
 	for _, m := range ms {
 		var retm Match
@@ -217,7 +218,7 @@ func matchesFamily(ms matches, keep func(netaddr.IP) bool) matches {
 
 // capMatchesFunc returns a copy of the subset of ms for which keep(srcNet.IP)
 // and the match is a capability grant.
-func capMatchesFunc(ms matches, keep func(netaddr.IP) bool) matches {
+func capMatchesFunc(ms matches, keep func(netip.Addr) bool) matches {
 	var ret matches
 	for _, m := range ms {
 		if len(m.Caps) == 0 {
@@ -299,7 +300,7 @@ var dummyPacket = []byte{
 
 // CheckTCP determines whether TCP traffic from srcIP to dstIP:dstPort
 // is allowed.
-func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
+func (f *Filter) CheckTCP(srcIP, dstIP netip.Addr, dstPort uint16) Response {
 	pkt := &packet.Parsed{}
 	pkt.Decode(dummyPacket) // initialize private fields
 	switch {
@@ -314,8 +315,8 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 	default:
 		panic("unreachable")
 	}
-	pkt.Src = netaddr.IPPortFrom(srcIP, 0)
-	pkt.Dst = netaddr.IPPortFrom(dstIP, dstPort)
+	pkt.Src = netip.AddrPortFrom(srcIP, 0)
+	pkt.Dst = netip.AddrPortFrom(dstIP, dstPort)
 	pkt.IPProto = ipproto.TCP
 	pkt.TCPFlags = packet.TCPSyn
 
@@ -324,7 +325,7 @@ func (f *Filter) CheckTCP(srcIP, dstIP netaddr.IP, dstPort uint16) Response {
 
 // AppendCaps appends to base the capabilities that srcIP has talking
 // to dstIP.
-func (f *Filter) AppendCaps(base []string, srcIP, dstIP netaddr.IP) []string {
+func (f *Filter) AppendCaps(base []string, srcIP, dstIP netip.Addr) []string {
 	ret := base
 	var mm matches
 	switch {

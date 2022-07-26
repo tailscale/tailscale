@@ -48,7 +48,7 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
+var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
 
 // addH2C is non-nil on platforms where we want to add H2C
 // ("cleartext" HTTP/2) support to the peerAPI.
@@ -387,7 +387,7 @@ func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64,
 	return f, fi.Size(), nil
 }
 
-func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
+func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
 	// But since we started intercepting it with netstack, it's not even important that
 	// we have a real kernel-level listener. So just create a dummy listener on Android
@@ -451,7 +451,7 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 
 type peerAPIListener struct {
 	ps *peerAPIServer
-	ip netaddr.IP
+	ip netip.Addr
 	lb *LocalBackend
 
 	// ln is the Listener. It can be nil in netstack mode if there are more than
@@ -503,7 +503,7 @@ func (pln *peerAPIListener) serve() {
 	}
 }
 
-func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
+func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 	logf := pln.lb.logf
 	peerNode, peerUser, ok := pln.lb.WhoIs(src)
 	if !ok {
@@ -530,7 +530,7 @@ func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
 // peerAPIHandler serves the Peer API for a source specific client.
 type peerAPIHandler struct {
 	ps         *peerAPIServer
-	remoteAddr netaddr.IPPort
+	remoteAddr netip.AddrPort
 	isSelf     bool                // whether peerNode is owned by same user as this node
 	peerNode   *tailcfg.Node       // peerNode is who's making the request
 	peerUser   tailcfg.UserProfile // profile of peerNode
@@ -609,7 +609,7 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<th>%v</th> ", v)
 	}
 	fmt.Fprint(w, "</tr>\n")
-	i.ForeachInterface(func(iface interfaces.Interface, ipps []netaddr.IPPrefix) {
+	i.ForeachInterface(func(iface interfaces.Interface, ipps []netip.Prefix) {
 		fmt.Fprint(w, "<tr>")
 		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
 			fmt.Fprintf(w, "<td>%v</td> ", v)
@@ -1169,9 +1169,9 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 // it's listening on the provided IP address and on TCP port 1.
 //
 // See docs on fakePeerAPIListener.
-func newFakePeerAPIListener(ip netaddr.IP) net.Listener {
+func newFakePeerAPIListener(ip netip.Addr) net.Listener {
 	return &fakePeerAPIListener{
-		addr:   net.TCPAddrFromAddrPort(netaddr.IPPortFrom(ip, 1)),
+		addr:   net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 1)),
 		closed: make(chan struct{}),
 	}
 }

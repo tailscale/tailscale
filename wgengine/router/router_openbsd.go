@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os/exec"
 
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -25,9 +25,9 @@ type openbsdRouter struct {
 	logf    logger.Logf
 	linkMon *monitor.Mon
 	tunname string
-	local4  netaddr.IPPrefix
-	local6  netaddr.IPPrefix
-	routes  map[netaddr.IPPrefix]struct{}
+	local4  netip.Prefix
+	local6  netip.Prefix
+	routes  map[netip.Prefix]struct{}
 }
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
@@ -59,7 +59,7 @@ func (r *openbsdRouter) Up() error {
 	return nil
 }
 
-func inet(p netaddr.IPPrefix) string {
+func inet(p netip.Prefix) string {
 	if p.Addr().Is6() {
 		return "inet6"
 	}
@@ -77,8 +77,8 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 	}
 	numIPv4 := 0
 	numIPv6 := 0
-	localAddr4 := netaddr.IPPrefix{}
-	localAddr6 := netaddr.IPPrefix{}
+	localAddr4 := netip.Prefix{}
+	localAddr6 := netip.Prefix{}
 	for _, addr := range cfg.LocalAddrs {
 		if addr.Addr().Is4() {
 			numIPv4++
@@ -145,7 +145,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 		// in https://github.com/tailscale/tailscale/issues/1307 we made
 		// FreeBSD use a /48 for IPv6 addresses, which is nice because we
 		// don't need to additionally add routing entries. Do that here too.
-		localAddr6 = netaddr.IPPrefixFrom(localAddr6.Addr(), 48)
+		localAddr6 = netip.PrefixFrom(localAddr6.Addr(), 48)
 	}
 
 	if localAddr6 != r.local6 {
@@ -174,7 +174,7 @@ func (r *openbsdRouter) Set(cfg *Config) error {
 		}
 	}
 
-	newRoutes := make(map[netaddr.IPPrefix]struct{})
+	newRoutes := make(map[netip.Prefix]struct{})
 	for _, route := range cfg.Routes {
 		newRoutes[route] = struct{}{}
 	}

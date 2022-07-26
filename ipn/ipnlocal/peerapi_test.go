@@ -22,7 +22,6 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -596,7 +595,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 		t.Fatal("unexpectedly offering exit node")
 	}
 	h.ps.b.prefs = &ipn.Prefs{
-		AdvertiseRoutes: []netaddr.IPPrefix{
+		AdvertiseRoutes: []netip.Prefix{
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},

@@ -77,7 +77,7 @@ func tcp4syn(src, dst string, sport, dport uint16) []byte {
 	return both
 }
 
-func nets(nets ...string) (ret []netaddr.IPPrefix) {
+func nets(nets ...string) (ret []netip.Prefix) {
 	for _, s := range nets {
 		if i := strings.IndexByte(s, '/'); i == -1 {
 			ip, err := netip.ParseAddr(s)
@@ -88,7 +88,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 			if ip.Is6() {
 				bits = 128
 			}
-			ret = append(ret, netaddr.IPPrefixFrom(ip, bits))
+			ret = append(ret, netip.PrefixFrom(ip, int(bits)))
 		} else {
 			pfx, err := netip.ParsePrefix(s)
 			if err != nil {
@@ -428,7 +428,7 @@ func TestAtomic64Alignment(t *testing.T) {
 
 func TestPeerAPIBypass(t *testing.T) {
 	wrapperWithPeerAPI := &Wrapper{
-		PeerAPIPort: func(ip netaddr.IP) (port uint16, ok bool) {
+		PeerAPIPort: func(ip netip.Addr) (port uint16, ok bool) {
 			if ip == netip.MustParseAddr("100.64.1.2") {
 				return 60000, true
 			}
@@ -446,7 +446,7 @@ func TestPeerAPIBypass(t *testing.T) {
 		{
 			name: "reject_nil_filter",
 			w: &Wrapper{
-				PeerAPIPort: func(netaddr.IP) (port uint16, ok bool) {
+				PeerAPIPort: func(netip.Addr) (port uint16, ok bool) {
 					return 60000, true
 				},
 			},

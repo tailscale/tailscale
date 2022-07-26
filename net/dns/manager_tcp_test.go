@@ -8,11 +8,11 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	dns "golang.org/x/net/dns/dnsmessage"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/util/dnsname"
 )
@@ -73,7 +73,7 @@ func TestDNSOverTCP(t *testing.T) {
 
 	c, s := net.Pipe()
 	defer s.Close()
-	go m.HandleTCPConn(s, netaddr.IPPort{})
+	go m.HandleTCPConn(s, netip.AddrPort{})
 	defer c.Close()
 
 	wantResults := map[dnsname.FQDN]string{

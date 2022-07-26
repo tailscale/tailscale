@@ -11,15 +11,13 @@ import (
 	"net/netip"
 	"sync"
 	"time"
-
-	"tailscale.com/net/netaddr"
 )
 
 // mapping is the state of an allocated NAT session.
 type mapping struct {
-	lanSrc   netaddr.IPPort
-	lanDst   netaddr.IPPort
-	wanSrc   netaddr.IPPort
+	lanSrc   netip.AddrPort
+	lanDst   netip.AddrPort
+	wanSrc   netip.AddrPort
 	deadline time.Time
 
 	// pc is a PacketConn that reserves an outbound port on the NAT's
@@ -55,10 +53,10 @@ const (
 // fields, so in practice the key is either a 2-tuple (src only),
 // 3-tuple (src ip+port and dst ip) or 4-tuple (src+dst ip+port).
 type natKey struct {
-	src, dst netaddr.IPPort
+	src, dst netip.AddrPort
 }
 
-func (t NATType) key(src, dst netaddr.IPPort) natKey {
+func (t NATType) key(src, dst netip.AddrPort) natKey {
 	k := natKey{src: src}
 	switch t {
 	case EndpointIndependentNAT:
@@ -102,7 +100,7 @@ type SNAT44 struct {
 
 	mu    sync.Mutex
 	byLAN map[natKey]*mapping         // lookup by outbound packet tuple
-	byWAN map[netaddr.IPPort]*mapping // lookup by wan ip:port only
+	byWAN map[netip.AddrPort]*mapping // lookup by wan ip:port only
 }
 
 func (n *SNAT44) timeNow() time.Time {
@@ -122,7 +120,7 @@ func (n *SNAT44) mappingTimeout() time.Duration {
 func (n *SNAT44) initLocked() {
 	if n.byLAN == nil {
 		n.byLAN = map[natKey]*mapping{}
-		n.byWAN = map[netaddr.IPPort]*mapping{}
+		n.byWAN = map[netip.AddrPort]*mapping{}
 	}
 	if n.ExternalInterface.Machine() != n.Machine {
 		panic(fmt.Sprintf("NAT given interface %s that is not part of given machine %s", n.ExternalInterface, n.Machine.Name))
@@ -228,7 +226,7 @@ func (n *SNAT44) HandleForward(p *Packet, iif, oif *Interface) *Packet {
 	}
 }
 
-func (n *SNAT44) allocateMappedPort() (net.PacketConn, netaddr.IPPort) {
+func (n *SNAT44) allocateMappedPort() (net.PacketConn, netip.AddrPort) {
 	// Clean up old entries before trying to allocate, to free up any
 	// expired ports.
 	n.gc()
@@ -238,7 +236,7 @@ func (n *SNAT44) allocateMappedPort() (net.PacketConn, netaddr.IPPort) {
 	if err != nil {
 		panic(fmt.Sprintf("ran out of NAT ports: %v", err))
 	}
-	addr := netaddr.IPPortFrom(ip, uint16(pc.LocalAddr().(*net.UDPAddr).Port))
+	addr := netip.AddrPortFrom(ip, uint16(pc.LocalAddr().(*net.UDPAddr).Port))
 	return pc, addr
 }
 

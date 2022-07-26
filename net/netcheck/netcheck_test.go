@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"reflect"
 	"sort"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
@@ -28,14 +28,14 @@ func TestHairpinSTUN(t *testing.T) {
 	c := &Client{
 		curState: &reportState{
 			hairTX:      tx,
-			gotHairSTUN: make(chan netaddr.IPPort, 1),
+			gotHairSTUN: make(chan netip.AddrPort, 1),
 		},
 	}
 	req := stun.Request(tx)
 	if !stun.Is(req) {
 		t.Fatal("expected STUN message")
 	}
-	if !c.handleHairSTUNLocked(req, netaddr.IPPort{}) {
+	if !c.handleHairSTUNLocked(req, netip.AddrPort{}) {
 		t.Fatal("expected true")
 	}
 	select {

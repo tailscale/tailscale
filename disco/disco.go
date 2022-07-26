@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"go4.org/mem"
 	"tailscale.com/net/netaddr"
@@ -172,7 +173,7 @@ type CallMeMaybe struct {
 	// in this field, but might not yet be in control's endpoints.
 	// (And in the future, control will stop distributing endpoints
 	// when clients are suitably new.)
-	MyNumber []netaddr.IPPort
+	MyNumber []netip.AddrPort
 }
 
 const epLength = 16 + 2 // 16 byte IP address + 2 byte port
@@ -193,11 +194,11 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
 		return m, nil
 	}
-	m.MyNumber = make([]netaddr.IPPort, 0, len(p)/epLength)
+	m.MyNumber = make([]netip.AddrPort, 0, len(p)/epLength)
 	for len(p) > 0 {
 		var a [16]byte
 		copy(a[:], p)
-		m.MyNumber = append(m.MyNumber, netaddr.IPPortFrom(
+		m.MyNumber = append(m.MyNumber, netip.AddrPortFrom(
 			netaddr.IPFrom16(a),
 			binary.BigEndian.Uint16(p[16:18])))
 		p = p[epLength:]
@@ -211,7 +212,7 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 // STUN response.
 type Pong struct {
 	TxID [12]byte
-	Src  netaddr.IPPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
+	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
 }
 
 const pongLen = 12 + 16 + 2
@@ -236,7 +237,7 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	srcIP, _ := netaddr.FromStdIP(net.IP(p[:16]))
 	p = p[16:]
 	port := binary.BigEndian.Uint16(p)
-	m.Src = netaddr.IPPortFrom(srcIP, port)
+	m.Src = netip.AddrPortFrom(srcIP, port)
 	return m, nil
 }
 

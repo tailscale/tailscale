@@ -11,13 +11,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"runtime"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -67,7 +67,7 @@ const reconfigTimeout = time.Second
 
 type response struct {
 	pkt []byte
-	to  netaddr.IPPort // response destination (request source)
+	to  netip.AddrPort // response destination (request source)
 }
 
 // Manager manages system DNS settings.
@@ -175,7 +175,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// through quad-100.
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
-		ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
+		ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
 		return rcfg, ocfg, nil
 	}
 
@@ -212,7 +212,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
 	rcfg.Routes = routes
-	ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
+	ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
 
 	// If the OS can't do native split-dns, read out the underlying
 	// resolver config and blend it into our config.
@@ -239,7 +239,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
 // Only safe to use if the resolvers slice has been cleared of
 // DoH or custom-port entries with something like hasDefaultIPResolversOnly.
-func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
+func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 	for _, r := range resolvers {
 		if ipp, ok := r.IPPort(); ok && ipp.Port() == 53 {
 			ret = append(ret, ipp.Addr())
@@ -252,7 +252,7 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
 // called with a DNS request payload.
 //
 // TODO(tom): Rip out once all platforms use netstack.
-func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
+func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netip.AddrPort) error {
 	if to.Port() != 53 || proto != ipproto.UDP {
 		return nil
 	}
@@ -334,7 +334,7 @@ func (m *Manager) NextPacket() ([]byte, error) {
 // Query executes a DNS query recieved from the given address. The query is
 // provided in bs as a wire-encoded DNS query without any transport header.
 // This method is called for requests arriving over UDP and TCP.
-func (m *Manager) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]byte, error) {
+func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
 	select {
 	case <-m.ctx.Done():
 		return nil, net.ErrClosed
@@ -368,7 +368,7 @@ type dnsTCPSession struct {
 	m *Manager
 
 	conn    net.Conn
-	srcAddr netaddr.IPPort
+	srcAddr netip.AddrPort
 
 	readClosing chan struct{}
 	responses   chan []byte // DNS replies pending writing
@@ -455,7 +455,7 @@ func (s *dnsTCPSession) handleReads() {
 
 // HandleTCPConn implements magicDNS over TCP, taking a connection and
 // servicing DNS requests sent down it.
-func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netaddr.IPPort) {
+func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netip.AddrPort) {
 	s := dnsTCPSession{
 		m:           m,
 		conn:        conn,

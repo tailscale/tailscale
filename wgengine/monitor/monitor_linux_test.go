@@ -6,12 +6,12 @@ package monitor
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
-	"tailscale.com/net/netaddr"
 )
 
 func newAddrMsg(iface uint32, addr string, typ netlink.HeaderType) netlink.Message {
@@ -54,7 +54,7 @@ func TestIgnoreDuplicateNEWADDR(t *testing.T) {
 				newAddrMsg(1, "192.168.0.5", unix.RTM_NEWADDR),
 				newAddrMsg(1, "192.168.0.5", unix.RTM_NEWADDR),
 			},
-			addrCache: make(map[uint32]map[netaddr.IP]bool),
+			addrCache: make(map[uint32]map[netip.Addr]bool),
 		}
 
 		msg := mustReceive(&c)
@@ -75,7 +75,7 @@ func TestIgnoreDuplicateNEWADDR(t *testing.T) {
 				newAddrMsg(1, "192.168.0.5", unix.RTM_DELADDR),
 				newAddrMsg(1, "192.168.0.5", unix.RTM_NEWADDR),
 			},
-			addrCache: make(map[uint32]map[netaddr.IP]bool),
+			addrCache: make(map[uint32]map[netip.Addr]bool),
 		}
 
 		msg := mustReceive(&c)

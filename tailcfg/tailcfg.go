@@ -10,11 +10,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -170,10 +170,10 @@ type Node struct {
 	KeyExpiry  time.Time
 	Machine    key.MachinePublic
 	DiscoKey   key.DiscoPublic
-	Addresses  []netaddr.IPPrefix // IP addresses of this Node directly
-	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
-	Endpoints  []string           `json:",omitempty"` // IP+port (public via STUN, and local LANs)
-	DERP       string             `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+	Addresses  []netip.Prefix // IP addresses of this Node directly
+	AllowedIPs []netip.Prefix // range of IP addresses to route to this node
+	Endpoints  []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	DERP       string         `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
 	Hostinfo   HostinfoView
 	Created    time.Time
 
@@ -190,7 +190,7 @@ type Node struct {
 	// is currently the primary subnet router for, as determined
 	// by the control plane. It does not include the self address
 	// values from Addresses that are in AllowedIPs.
-	PrimaryRoutes []netaddr.IPPrefix `json:",omitempty"`
+	PrimaryRoutes []netip.Prefix `json:",omitempty"`
 
 	// LastSeen is when the node was last online. It is not
 	// updated when Online is true. It is nil if the current
@@ -454,24 +454,24 @@ type Service struct {
 // Because it contains pointers (slices), this type should not be used
 // as a value type.
 type Hostinfo struct {
-	IPNVersion    string             `json:",omitempty"` // version of this code
-	FrontendLogID string             `json:",omitempty"` // logtail ID of frontend instance
-	BackendLogID  string             `json:",omitempty"` // logtail ID of backend instance
-	OS            string             `json:",omitempty"` // operating system the client runs on (a version.OS value)
-	OSVersion     string             `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
-	Desktop       opt.Bool           `json:",omitempty"` // if a desktop was detected on Linux
-	Package       string             `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
-	DeviceModel   string             `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
-	Hostname      string             `json:",omitempty"` // name of the host the client runs on
-	ShieldsUp     bool               `json:",omitempty"` // indicates whether the host is blocking incoming connections
-	ShareeNode    bool               `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
-	GoArch        string             `json:",omitempty"` // the host's GOARCH value (of the running binary)
-	RoutableIPs   []netaddr.IPPrefix `json:",omitempty"` // set of IP ranges this client can route
-	RequestTags   []string           `json:",omitempty"` // set of ACL tags this node wants to claim
-	Services      []Service          `json:",omitempty"` // services advertised by this machine
-	NetInfo       *NetInfo           `json:",omitempty"`
-	SSH_HostKeys  []string           `json:"sshHostKeys,omitempty"` // if advertised
-	Cloud         string             `json:",omitempty"`
+	IPNVersion    string         `json:",omitempty"` // version of this code
+	FrontendLogID string         `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID  string         `json:",omitempty"` // logtail ID of backend instance
+	OS            string         `json:",omitempty"` // operating system the client runs on (a version.OS value)
+	OSVersion     string         `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	Desktop       opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
+	Package       string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
+	DeviceModel   string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
+	Hostname      string         `json:",omitempty"` // name of the host the client runs on
+	ShieldsUp     bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
+	ShareeNode    bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+	GoArch        string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
+	RoutableIPs   []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
+	RequestTags   []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	Services      []Service      `json:",omitempty"` // services advertised by this machine
+	NetInfo       *NetInfo       `json:",omitempty"`
+	SSH_HostKeys  []string       `json:"sshHostKeys,omitempty"` // if advertised
+	Cloud         string         `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -854,7 +854,7 @@ func (et EndpointType) String() string {
 // broken up into two parallel slices in MapRequest, for compatibility
 // reasons. But this type is used in the codebase.
 type Endpoint struct {
-	Addr netaddr.IPPort
+	Addr netip.AddrPort
 	Type EndpointType
 }
 
@@ -946,7 +946,7 @@ type NetPortRange struct {
 type CapGrant struct {
 	// Dsts are the destination IP ranges that this capabilty
 	// grant matches.
-	Dsts []netaddr.IPPrefix
+	Dsts []netip.Prefix
 
 	// Caps are the capabilities the source IP matched by
 	// FilterRule.SrcIPs are granted to the destination IP,
@@ -1059,7 +1059,7 @@ type DNSConfig struct {
 	// MapRequest.Version >=9 and <14.
 
 	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP `json:",omitempty"`
+	Nameservers []netip.Addr `json:",omitempty"`
 
 	// PerDomain is not set by the control server, and does nothing.
 	PerDomain bool `json:",omitempty"`
@@ -1149,7 +1149,7 @@ type PingRequest struct {
 
 	// IP is the ping target.
 	// It is used in TSMP pings, if IP is invalid or empty then do a HEAD request to the URL.
-	IP netaddr.IP
+	IP netip.Addr
 }
 
 // PingResponse provides result information for a TSMP or Disco PingRequest.
@@ -1446,7 +1446,7 @@ func eqStrings(a, b []string) bool {
 	return true
 }
 
-func eqCIDRs(a, b []netaddr.IPPrefix) bool {
+func eqCIDRs(a, b []netip.Prefix) bool {
 	if len(a) != len(b) || ((a == nil) != (b == nil)) {
 		return false
 	}

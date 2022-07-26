@@ -15,14 +15,8 @@ import (
 	"net/netip"
 )
 
-type (
-	IP       = netip.Addr
-	IPPort   = netip.AddrPort
-	IPPrefix = netip.Prefix
-)
-
 // IPv4 returns the IP of the IPv4 address a.b.c.d.
-func IPv4(a, b, c, d uint8) IP {
+func IPv4(a, b, c, d uint8) netip.Addr {
 	return netip.AddrFrom4([4]byte{a, b, c, d})
 }
 
@@ -30,39 +24,8 @@ func IPv4(a, b, c, d uint8) IP {
 // v6-mapped IPv4 address.
 //
 // It is equivalent to calling IPv6Raw(addr).Unmap().
-func IPFrom16(a [16]byte) IP {
+func IPFrom16(a [16]byte) netip.Addr {
 	return netip.AddrFrom16(a).Unmap()
-}
-
-// IPv6Raw returns the IPv6 address given by the bytes in addr, without an
-// implicit Unmap call to unmap any v6-mapped IPv4 address.
-func IPv6Raw(a [16]byte) IP {
-	return netip.AddrFrom16(a) // no implicit unmapping
-}
-
-// IPFrom4 returns the IPv4 address given by the bytes in addr. It is equivalent
-// to calling IPv4(addr[0], addr[1], addr[2], addr[3]).
-func IPFrom4(a [4]byte) IP {
-	return netip.AddrFrom4(a)
-}
-
-// IPPrefixFrom returns an IPPrefix with IP ip and provided bits prefix length.
-// It does not allocate.
-func IPPrefixFrom(ip IP, bits uint8) IPPrefix {
-	return netip.PrefixFrom(ip, int(bits))
-}
-
-// IPPortFrom returns an IPPort with IP ip and port port. It does not allocate.
-func IPPortFrom(ip IP, port uint16) IPPort {
-	return netip.AddrPortFrom(ip, port)
-}
-
-// FromStdIPRaw returns an IP from the standard library's IP type.
-// If std is invalid, ok is false.
-// Unlike FromStdIP, FromStdIPRaw does not do an implicit Unmap if
-// len(std) == 16 and contains an IPv6-mapped IPv4 address.
-func FromStdIPRaw(std net.IP) (ip IP, ok bool) {
-	return netip.AddrFromSlice(std)
 }
 
 // FromStdIP returns an IP from the standard library's IP type.
@@ -74,9 +37,9 @@ func FromStdIPRaw(std net.IP) (ip IP, ok bool) {
 // returned, without the IPv6 wrapper. This is the common form returned by
 // the standard library's ParseIP: https://play.golang.org/p/qdjylUkKWxl.
 // To convert a standard library IP without the implicit unmapping, use
-// FromStdIPRaw.
-func FromStdIP(std net.IP) (ip IP, ok bool) {
-	ret, ok := FromStdIPRaw(std)
+// netip.AddrFromSlice.
+func FromStdIP(std net.IP) (ip netip.Addr, ok bool) {
+	ret, ok := netip.AddrFromSlice(std)
 	if !ok {
 		return ret, false
 	}
@@ -88,21 +51,21 @@ func FromStdIP(std net.IP) (ip IP, ok bool) {
 
 // FromStdIPNet returns an IPPrefix from the standard library's IPNet type.
 // If std is invalid, ok is false.
-func FromStdIPNet(std *net.IPNet) (prefix IPPrefix, ok bool) {
+func FromStdIPNet(std *net.IPNet) (prefix netip.Prefix, ok bool) {
 	ip, ok := FromStdIP(std.IP)
 	if !ok {
-		return IPPrefix{}, false
+		return netip.Prefix{}, false
 	}
 
 	if l := len(std.Mask); l != net.IPv4len && l != net.IPv6len {
 		// Invalid mask.
-		return IPPrefix{}, false
+		return netip.Prefix{}, false
 	}
 
 	ones, bits := std.Mask.Size()
 	if ones == 0 && bits == 0 {
 		// IPPrefix does not support non-contiguous masks.
-		return IPPrefix{}, false
+		return netip.Prefix{}, false
 	}
 
 	return netip.PrefixFrom(ip, ones), true
@@ -110,7 +73,7 @@ func FromStdIPNet(std *net.IPNet) (prefix IPPrefix, ok bool) {
 
 // FromStdAddr maps the components of a standard library TCPAddr or
 // UDPAddr into an IPPort.
-func FromStdAddr(stdIP net.IP, port int, zone string) (_ IPPort, ok bool) {
+func FromStdAddr(stdIP net.IP, port int, zone string) (_ netip.AddrPort, ok bool) {
 	ip, ok := FromStdIP(stdIP)
 	if !ok || port < 0 || port > math.MaxUint16 {
 		return

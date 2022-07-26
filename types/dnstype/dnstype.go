@@ -9,8 +9,6 @@ package dnstype
 
 import (
 	"net/netip"
-
-	"tailscale.com/net/netaddr"
 )
 
 // Resolver is the configuration for one DNS resolver.
@@ -29,20 +27,20 @@ type Resolver struct {
 	// BootstrapResolution may be empty, in which case clients should
 	// look up the DoT/DoH server using their local "classic" DNS
 	// resolver.
-	BootstrapResolution []netaddr.IP `json:",omitempty"`
+	BootstrapResolution []netip.Addr `json:",omitempty"`
 }
 
 // IPPort returns r.Addr as an IP address and port if either
 // r.Addr is an IP address (the common case) or if r.Addr
 // is an IP:port (as done in tests).
-func (r *Resolver) IPPort() (ipp netaddr.IPPort, ok bool) {
+func (r *Resolver) IPPort() (ipp netip.AddrPort, ok bool) {
 	if r.Addr == "" || r.Addr[0] == 'h' || r.Addr[0] == 't' {
 		// Fast path to avoid ParseIP error allocation for obviously not IP
 		// cases.
 		return
 	}
 	if ip, err := netip.ParseAddr(r.Addr); err == nil {
-		return netaddr.IPPortFrom(ip, 53), true
+		return netip.AddrPortFrom(ip, 53), true
 	}
 	if ipp, err := netip.ParseAddrPort(r.Addr); err == nil {
 		return ipp, true

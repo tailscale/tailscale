@@ -7,6 +7,7 @@ package tstun
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 
@@ -246,8 +247,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 		pkt := packLayer2UDP(
 			offer.ToBytes(),
 			ourMAC, ethSrcMAC,
-			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
+			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
+			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		if tapDebug {
@@ -273,8 +274,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 		pkt := packLayer2UDP(
 			ack.ToBytes(),
 			ourMAC, ethSrcMAC,
-			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
+			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
+			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		if tapDebug {
@@ -288,7 +289,7 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 	return consumePacket
 }
 
-func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst netaddr.IPPort) []byte {
+func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst netip.AddrPort) []byte {
 	buf := make([]byte, header.EthernetMinimumSize+header.UDPMinimumSize+header.IPv4MinimumSize+len(payload))
 	payloadStart := len(buf) - len(payload)
 	copy(buf[payloadStart:], payload)

@@ -768,8 +768,8 @@ func getAllInterfaceRoutes(ifc *winipcfg.IPAdapterAddresses) ([]*winipcfg.RouteD
 
 // filterRoutes removes routes that have been added by Windows and should not
 // be managed by us.
-func filterRoutes(routes []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) []*winipcfg.RouteData {
-	ddm := make(map[netaddr.IPPrefix]bool)
+func filterRoutes(routes []*winipcfg.RouteData, dontDelete []netip.Prefix) []*winipcfg.RouteData {
+	ddm := make(map[netip.Prefix]bool)
 	for _, dd := range dontDelete {
 		// See issue 1448: we don't want to touch the routes added
 		// by Windows for our interface addresses.
@@ -802,7 +802,7 @@ func filterRoutes(routes []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) [
 // This avoids a full ifc.FlushRoutes call.
 // dontDelete is a list of interface address routes that the
 // synchronization logic should never delete.
-func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, dontDelete []netaddr.IPPrefix) error {
+func syncRoutes(ifc *winipcfg.IPAdapterAddresses, want []*winipcfg.RouteData, dontDelete []netip.Prefix) error {
 	existingRoutes, err := getAllInterfaceRoutes(ifc)
 	if err != nil {
 		return err

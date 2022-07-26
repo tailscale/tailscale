@@ -31,7 +31,7 @@ var traceOn, _ = strconv.ParseBool(os.Getenv("NATLAB_TRACE"))
 
 // Packet represents a UDP packet flowing through the virtual network.
 type Packet struct {
-	Src, Dst netaddr.IPPort
+	Src, Dst netip.AddrPort
 	Payload  []byte
 
 	// Prefix set by various internal methods of natlab, to locate
@@ -80,7 +80,7 @@ func (p *Packet) setLocator(msg string, args ...any) {
 	p.locator = fmt.Sprintf(" "+msg, args...)
 }
 
-func mustPrefix(s string) netaddr.IPPrefix {
+func mustPrefix(s string) netip.Prefix {
 	ipp, err := netip.ParsePrefix(s)
 	if err != nil {
 		panic(err)
@@ -100,14 +100,14 @@ func NewInternet() *Network {
 
 type Network struct {
 	Name    string
-	Prefix4 netaddr.IPPrefix
-	Prefix6 netaddr.IPPrefix
+	Prefix4 netip.Prefix
+	Prefix6 netip.Prefix
 
 	mu        sync.Mutex
-	machine   map[netaddr.IP]*Interface
+	machine   map[netip.Addr]*Interface
 	defaultGW *Interface // optional
-	lastV4    netaddr.IP
-	lastV6    netaddr.IP
+	lastV4    netip.Addr
+	lastV6    netip.Addr
 }
 
 func (n *Network) SetDefaultGateway(gwIf *Interface) {
@@ -119,21 +119,21 @@ func (n *Network) SetDefaultGateway(gwIf *Interface) {
 	n.defaultGW = gwIf
 }
 
-func (n *Network) addMachineLocked(ip netaddr.IP, iface *Interface) {
+func (n *Network) addMachineLocked(ip netip.Addr, iface *Interface) {
 	if iface == nil {
 		return // for tests
 	}
 	if n.machine == nil {
-		n.machine = map[netaddr.IP]*Interface{}
+		n.machine = map[netip.Addr]*Interface{}
 	}
 	n.machine[ip] = iface
 }
 
-func (n *Network) allocIPv4(iface *Interface) netaddr.IP {
+func (n *Network) allocIPv4(iface *Interface) netip.Addr {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if !n.Prefix4.IsValid() {
-		return netaddr.IP{}
+		return netip.Addr{}
 	}
 	if !n.lastV4.IsValid() {
 		n.lastV4 = n.Prefix4.Addr()
@@ -148,11 +148,11 @@ func (n *Network) allocIPv4(iface *Interface) netaddr.IP {
 	return n.lastV4
 }
 
-func (n *Network) allocIPv6(iface *Interface) netaddr.IP {
+func (n *Network) allocIPv6(iface *Interface) netip.Addr {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if !n.Prefix6.IsValid() {
-		return netaddr.IP{}
+		return netip.Addr{}
 	}
 	if !n.lastV6.IsValid() {
 		n.lastV6 = n.Prefix6.Addr()
@@ -212,7 +212,7 @@ type Interface struct {
 	machine *Machine
 	net     *Network
 	name    string       // optional
-	ips     []netaddr.IP // static; not mutated once created
+	ips     []netip.Addr // static; not mutated once created
 }
 
 func (f *Interface) Machine() *Machine {
@@ -224,18 +224,18 @@ func (f *Interface) Network() *Network {
 }
 
 // V4 returns the machine's first IPv4 address, or the zero value if none.
-func (f *Interface) V4() netaddr.IP { return f.pickIP(netaddr.IP.Is4) }
+func (f *Interface) V4() netip.Addr { return f.pickIP(netip.Addr.Is4) }
 
 // V6 returns the machine's first IPv6 address, or the zero value if none.
-func (f *Interface) V6() netaddr.IP { return f.pickIP(netaddr.IP.Is6) }
+func (f *Interface) V6() netip.Addr { return f.pickIP(netip.Addr.Is6) }
 
-func (f *Interface) pickIP(pred func(netaddr.IP) bool) netaddr.IP {
+func (f *Interface) pickIP(pred func(netip.Addr) bool) netip.Addr {
 	for _, ip := range f.ips {
 		if pred(ip) {
 			return ip
 		}
 	}
-	return netaddr.IP{}
+	return netip.Addr{}
 }
 
 func (f *Interface) String() string {
@@ -247,7 +247,7 @@ func (f *Interface) String() string {
 }
 
 // Contains reports whether f contains ip as an IP.
-func (f *Interface) Contains(ip netaddr.IP) bool {
+func (f *Interface) Contains(ip netip.Addr) bool {
 	for _, v := range f.ips {
 		if ip == v {
 			return true
@@ -257,7 +257,7 @@ func (f *Interface) Contains(ip netaddr.IP) bool {
 }
 
 type routeEntry struct {
-	prefix netaddr.IPPrefix
+	prefix netip.Prefix
 	iface  *Interface
 }
 
@@ -341,11 +341,11 @@ type Machine struct {
 	interfaces []*Interface
 	routes     []routeEntry // sorted by longest prefix to shortest
 
-	conns4 map[netaddr.IPPort]*conn // conns that want IPv4 packets
-	conns6 map[netaddr.IPPort]*conn // conns that want IPv6 packets
+	conns4 map[netip.AddrPort]*conn // conns that want IPv4 packets
+	conns6 map[netip.AddrPort]*conn // conns that want IPv6 packets
 }
 
-func (m *Machine) isLocalIP(ip netaddr.IP) bool {
+func (m *Machine) isLocalIP(ip netip.Addr) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, intf := range m.interfaces {
@@ -392,10 +392,10 @@ func (m *Machine) deliverLocalPacket(p *Packet, iface *Interface) {
 	if p.Dst.Addr().Is6() {
 		conns = m.conns6
 	}
-	possibleDsts := []netaddr.IPPort{
+	possibleDsts := []netip.AddrPort{
 		p.Dst,
-		netaddr.IPPortFrom(v6unspec, p.Dst.Port()),
-		netaddr.IPPortFrom(v4unspec, p.Dst.Port()),
+		netip.AddrPortFrom(v6unspec, p.Dst.Port()),
+		netip.AddrPortFrom(v4unspec, p.Dst.Port()),
 	}
 	for _, dest := range possibleDsts {
 		c, ok := conns[dest]
@@ -443,7 +443,7 @@ func (m *Machine) forwardPacket(p *Packet, iif *Interface) {
 	oif.net.write(p)
 }
 
-func unspecOf(ip netaddr.IP) netaddr.IP {
+func unspecOf(ip netip.Addr) netip.Addr {
 	if ip.Is4() {
 		return v4unspec
 	}
@@ -562,7 +562,7 @@ func (m *Machine) writePacket(p *Packet) (n int, err error) {
 	return iface.net.write(p)
 }
 
-func (m *Machine) interfaceForIP(ip netaddr.IP) (*Interface, error) {
+func (m *Machine) interfaceForIP(ip netip.Addr) (*Interface, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, re := range m.routes {
@@ -642,12 +642,12 @@ func (m *Machine) unregisterConn6(c *conn) {
 	delete(m.conns6, c.ipp)
 }
 
-func registerConn(conns *map[netaddr.IPPort]*conn, c *conn) error {
+func registerConn(conns *map[netip.AddrPort]*conn, c *conn) error {
 	if _, ok := (*conns)[c.ipp]; ok {
 		return fmt.Errorf("duplicate conn listening on %v", c.ipp)
 	}
 	if *conns == nil {
-		*conns = map[netaddr.IPPort]*conn{}
+		*conns = map[netip.AddrPort]*conn{}
 	}
 	(*conns)[c.ipp] = c
 	return nil
@@ -659,7 +659,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 	// if udp4, udp6, etc... look at address IP vs unspec
 	var (
 		fam uint8
-		ip  netaddr.IP
+		ip  netip.Addr
 	)
 	switch network {
 	default:
@@ -705,7 +705,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 			return nil, nil
 		}
 	}
-	ipp := netaddr.IPPortFrom(ip, port)
+	ipp := netip.AddrPortFrom(ip, port)
 
 	c := &conn{
 		m:   m,
@@ -738,7 +738,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 type conn struct {
 	m   *Machine
 	fam uint8 // 0, 4, or 6
-	ipp netaddr.IPPort
+	ipp netip.AddrPort
 
 	mu           sync.Mutex
 	closed       bool

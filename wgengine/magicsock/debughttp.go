@@ -9,11 +9,11 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -73,7 +73,7 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<h2 id=ipport><a href=#ipport>#</a> ip:port to endpoint</h2><ul>")
 	{
 		type kv struct {
-			ipp netaddr.IPPort
+			ipp netip.AddrPort
 			pi  *peerInfo
 		}
 		ent := make([]kv, 0, len(c.peerMap.byIPPort))
@@ -147,7 +147,7 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 	fmt.Fprintf(w, "<p>lastSend: %v ago</p>\n", fmtMono(ep.lastSend))
 	fmt.Fprintf(w, "<p>lastFullPing: %v ago</p>\n", fmtMono(ep.lastFullPing))
 
-	eps := make([]netaddr.IPPort, 0, len(ep.endpointState))
+	eps := make([]netip.AddrPort, 0, len(ep.endpointState))
 	for ipp := range ep.endpointState {
 		eps = append(eps, ipp)
 	}
@@ -155,7 +155,7 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 	io.WriteString(w, "<p>Endpoints:</p><ul>")
 	for _, ipp := range eps {
 		s := ep.endpointState[ipp]
-		if ipp == ep.bestAddr.IPPort {
+		if ipp == ep.bestAddr.AddrPort {
 			fmt.Fprintf(w, "<li><b>%s</b>: (best)<ul>", ipp)
 		} else {
 			fmt.Fprintf(w, "<li>%s: ...<ul>", ipp)
@@ -194,7 +194,7 @@ func peerDebugName(p *tailcfg.Node) string {
 	return p.Hostinfo.Hostname()
 }
 
-func ipPortLess(a, b netaddr.IPPort) bool {
+func ipPortLess(a, b netip.AddrPort) bool {
 	if v := a.Addr().Compare(b.Addr()); v != 0 {
 		return v < 0
 	}
