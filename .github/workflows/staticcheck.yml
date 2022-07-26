@@ -21,6 +21,9 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v3
 
+    - name: Run gofmt (goimports)
+      run: go run golang.org/x/tools/cmd/goimports -d --format-only .
+
     - name: Run go vet
       run: go vet ./...
 
