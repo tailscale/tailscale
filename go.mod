@@ -66,7 +66,6 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.4.10
 	gvisor.dev/gvisor v0.0.0-20220721202624-0b2c11c2773c
 	honnef.co/go/tools v0.4.0-0.dev.0.20220404092545-59d7a2877f83
-	inet.af/netaddr v0.0.0-20220617031823-097006376321
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/wf v0.0.0-20211204062712-86aaea0a7310
 	nhooyr.io/websocket v1.8.7
@@ -276,6 +275,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	howett.net/plist v1.0.0 // indirect
+	inet.af/netaddr v0.0.0-20220617031823-097006376321 // indirect
 	mvdan.cc/gofumpt v0.2.0 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
