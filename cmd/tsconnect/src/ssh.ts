@@ -16,14 +16,15 @@ export function showSSHPeers(peers: IPNNetMapPeerNode[], ipn: IPN) {
 
   for (const peer of sshPeers) {
     const peerNode = document.createElement("div")
-    peerNode.className = "peer"
+    peerNode.className = "flex justify-between p-0.5 hover:bg-gray-100"
     const nameNode = document.createElement("div")
-    nameNode.className = "name"
+    nameNode.className = "font-mono"
     nameNode.textContent = peer.name
     peerNode.appendChild(nameNode)
 
     const sshButtonNode = document.createElement("button")
-    sshButtonNode.className = "ssh"
+    sshButtonNode.className =
+      "py-1 px-2 rounded bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600"
     sshButtonNode.addEventListener("click", function () {
       ssh(peer.name, ipn)
     })
@@ -41,7 +42,7 @@ export function hideSSHPeers() {
 
 function ssh(hostname: string, ipn: IPN) {
   const termContainerNode = document.createElement("div")
-  termContainerNode.className = "term-container"
+  termContainerNode.className = "p-3"
   document.body.appendChild(termContainerNode)
 
   const term = new Terminal({

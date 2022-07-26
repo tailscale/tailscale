@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" type="text/css" href="dist/index.css" />
   </head>
-  <body>
-    <div id="header">
-      <h1>Tailscale Connect</h1>
-      <div id="state">Loading…</div>
+  <body class="flex flex-col min-h-screen">
+    <div class="bg-gray-100 border-b border-gray-200 pt-4 pb-2 mb-6">
+      <header class="container mx-auto px-4 flex flex-row items-center">
+        <h1 class="text-3xl font-bold grow">Tailscale Connect</h1>
+        <div class="text-gray-600" id="state">Loading…</div>
+      </header>
     </div>
-    <div id="peers"></div>
+    <div id="peers" class="container mx-auto px-4"></div>
     <script src="dist/index.js"></script>
   </body>
 </html>
