@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -32,13 +33,13 @@ import (
 )
 
 var (
-	testipv4 = netaddr.MustParseIP("1.2.3.4")
-	testipv6 = netaddr.MustParseIP("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
+	testipv4 = netip.MustParseAddr("1.2.3.4")
+	testipv6 = netip.MustParseAddr("0001:0203:0405:0607:0809:0a0b:0c0d:0e0f")
 
 	testipv4Arpa = dnsname.FQDN("4.3.2.1.in-addr.arpa.")
 	testipv6Arpa = dnsname.FQDN("f.0.e.0.d.0.c.0.b.0.a.0.9.0.8.0.7.0.6.0.5.0.4.0.3.0.2.0.1.0.0.0.ip6.arpa.")
 
-	magicDNSv4Port = netaddr.MustParseIPPort("100.100.100.100:53")
+	magicDNSv4Port = netip.MustParseAddrPort("100.100.100.100:53")
 )
 
 var dnsCfg = Config{
@@ -237,7 +238,7 @@ func syncRespond(r *Resolver, query []byte) ([]byte, error) {
 }
 
 func mustIP(str string) netaddr.IP {
-	ip, err := netaddr.ParseIP(str)
+	ip, err := netip.ParseAddr(str)
 	if err != nil {
 		panic(err)
 	}
@@ -342,11 +343,11 @@ func TestResolveLocal(t *testing.T) {
 		{"mx-nxdomain", "test3.ipn.dev.", dns.TypeMX, netaddr.IP{}, dns.RCodeNameError},
 		{"ns-nxdomain", "test3.ipn.dev.", dns.TypeNS, netaddr.IP{}, dns.RCodeNameError},
 		{"onion-domain", "footest.onion.", dns.TypeA, netaddr.IP{}, dns.RCodeNameError},
-		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netaddr.MustParseIP("100.100.100.100"), dns.RCodeSuccess},
-		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
-		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
-		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
-		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netaddr.MustParseIP("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
+		{"magicdns", dnsSymbolicFQDN, dns.TypeA, netip.MustParseAddr("100.100.100.100"), dns.RCodeSuccess},
+		{"via_hex", dnsname.FQDN("via-0xff.1.2.3.4."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
+		{"via_dec", dnsname.FQDN("via-1.10.0.0.1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:10.0.0.1"), dns.RCodeSuccess},
+		{"x_via_hex", dnsname.FQDN("4.3.2.1.via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:4.3.2.1"), dns.RCodeSuccess},
+		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
 		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
 		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netaddr.IP{}, dns.RCodeRefused},
 	}
@@ -644,8 +645,8 @@ func TestDelegate(t *testing.T) {
 }
 
 func TestDelegateSplitRoute(t *testing.T) {
-	test4 := netaddr.MustParseIP("2.3.4.5")
-	test6 := netaddr.MustParseIP("ff::1")
+	test4 := netip.MustParseAddr("2.3.4.5")
+	test6 := netip.MustParseAddr("ff::1")
 
 	server1 := serveDNS(t, "127.0.0.1:0",
 		"test.site.", resolveToIP(testipv4, testipv6, "dns.test.site."))
@@ -1048,16 +1049,16 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 		dnsHandler(),
 
 		"one-a.test.",
-		dnsHandler(netaddr.MustParseIP("1.2.3.4")),
+		dnsHandler(netip.MustParseAddr("1.2.3.4")),
 
 		"two-a.test.",
-		dnsHandler(netaddr.MustParseIP("1.2.3.4"), netaddr.MustParseIP("5.6.7.8")),
+		dnsHandler(netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("5.6.7.8")),
 
 		"one-aaaa.test.",
-		dnsHandler(netaddr.MustParseIP("1::2")),
+		dnsHandler(netip.MustParseAddr("1::2")),
 
 		"two-aaaa.test.",
-		dnsHandler(netaddr.MustParseIP("1::2"), netaddr.MustParseIP("3::4")),
+		dnsHandler(netip.MustParseAddr("1::2"), netip.MustParseAddr("3::4")),
 
 		"nx-domain.test.",
 		resolveToNXDOMAIN,

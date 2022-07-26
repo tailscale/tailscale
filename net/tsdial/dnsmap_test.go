@@ -5,6 +5,7 @@
 package tsdial
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -14,8 +15,8 @@ import (
 )
 
 func TestDNSMapFromNetworkMap(t *testing.T) {
-	pfx := netaddr.MustParseIPPrefix
-	ip := netaddr.MustParseIP
+	pfx := netip.MustParsePrefix
+	ip := netip.MustParseAddr
 	tests := []struct {
 		name string
 		nm   *netmap.NetworkMap

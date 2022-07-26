@@ -467,7 +467,7 @@ func nodeMight6(n *tailcfg.DERPNode) bool {
 	if n.IPv6 == "" {
 		return true
 	}
-	ip, _ := netaddr.ParseIP(n.IPv6)
+	ip, _ := netip.ParseAddr(n.IPv6)
 	return ip.Is6()
 
 }
@@ -479,7 +479,7 @@ func nodeMight4(n *tailcfg.DERPNode) bool {
 	if n.IPv4 == "" {
 		return true
 	}
-	ip, _ := netaddr.ParseIP(n.IPv4)
+	ip, _ := netip.ParseAddr(n.IPv4)
 	return ip.Is4()
 }
 
@@ -1290,7 +1290,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		return
 	}
 	if n.STUNTestIP != "" {
-		ip, err := netaddr.ParseIP(n.STUNTestIP)
+		ip, err := netip.ParseAddr(n.STUNTestIP)
 		if err != nil {
 			return
 		}
@@ -1306,7 +1306,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	switch proto {
 	case probeIPv4:
 		if n.IPv4 != "" {
-			ip, _ := netaddr.ParseIP(n.IPv4)
+			ip, _ := netip.ParseAddr(n.IPv4)
 			if !ip.Is4() {
 				return
 			}
@@ -1314,7 +1314,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		}
 	case probeIPv6:
 		if n.IPv6 != "" {
-			ip, _ := netaddr.ParseIP(n.IPv6)
+			ip, _ := netip.ParseAddr(n.IPv6)
 			if !ip.Is6() {
 				return
 			}

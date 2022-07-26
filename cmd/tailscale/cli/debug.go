@@ -28,7 +28,6 @@ import (
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -405,7 +404,7 @@ func runVia(ctx context.Context, args []string) error {
 	default:
 		return errors.New("expect either <site-id> <v4-cidr> or <v6-route>")
 	case 1:
-		ipp, err := netaddr.ParseIPPrefix(args[0])
+		ipp, err := netip.ParsePrefix(args[0])
 		if err != nil {
 			return err
 		}
@@ -430,7 +429,7 @@ func runVia(ctx context.Context, args []string) error {
 		if siteID > 0xff {
 			return fmt.Errorf("site-id values over 255 are currently reserved")
 		}
-		ipp, err := netaddr.ParseIPPrefix(args[1])
+		ipp, err := netip.ParsePrefix(args[1])
 		if err != nil {
 			return err
 		}

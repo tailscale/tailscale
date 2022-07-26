@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"runtime"
@@ -225,7 +226,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 	var ipp netaddr.IPPort
 	if v := r.FormValue("addr"); v != "" {
 		var err error
-		ipp, err = netaddr.ParseIPPort(v)
+		ipp, err = netip.ParseAddrPort(v)
 		if err != nil {
 			http.Error(w, "invalid 'addr' parameter", 400)
 			return
@@ -667,7 +668,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'ip' parameter", 400)
 		return
 	}
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		http.Error(w, "invalid IP", 400)
 		return

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
@@ -330,7 +331,7 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 	default:
 		return nil, fmt.Errorf("peerAPI dial requires tcp; %q not supported", network)
 	}
-	ipp, err := netaddr.ParseIPPort(addr)
+	ipp, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("peerAPI dial requires ip:port, not name resolution: %w", err)
 	}

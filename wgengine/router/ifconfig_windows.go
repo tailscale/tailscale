@@ -29,7 +29,7 @@ import (
 	"tailscale.com/wgengine/winnet"
 )
 
-var wintunLinkLocal = netaddr.MustParseIP("fe80::99d0:ec2d:b2e7:536b")
+var wintunLinkLocal = netip.MustParseAddr("fe80::99d0:ec2d:b2e7:536b")
 
 // monitorDefaultRoutes subscribes to route change events and updates
 // the Tailscale tunnel interface's MTU to match that of the

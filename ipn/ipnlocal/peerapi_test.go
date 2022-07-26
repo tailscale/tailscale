@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -583,7 +584,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 		t.Errorf("for isSelf = false; want true")
 	}
 	h.isSelf = false
-	h.remoteAddr = netaddr.MustParseIPPort("100.150.151.152:12345")
+	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
 	h.ps = &peerAPIServer{
@@ -596,8 +597,8 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	}
 	h.ps.b.prefs = &ipn.Prefs{
 		AdvertiseRoutes: []netaddr.IPPrefix{
-			netaddr.MustParseIPPrefix("0.0.0.0/0"),
-			netaddr.MustParseIPPrefix("::/0"),
+			netip.MustParsePrefix("0.0.0.0/0"),
+			netip.MustParsePrefix("::/0"),
 		},
 	}
 	if !h.ps.b.OfferingExitNode() {
@@ -621,7 +622,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	}
 
 	// Also test IPv6.
-	h.remoteAddr = netaddr.MustParseIPPort("[fe70::1]:12345")
+	h.remoteAddr = netip.MustParseAddrPort("[fe70::1]:12345")
 	if !h.replyToDNSQueries() {
 		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
 	}

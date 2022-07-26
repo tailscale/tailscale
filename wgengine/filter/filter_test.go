@@ -7,6 +7,7 @@ package filter
 import (
 	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -439,16 +440,16 @@ func TestLoggingPrivacy(t *testing.T) {
 	}
 
 	var logB netipx.IPSetBuilder
-	logB.AddPrefix(netaddr.MustParseIPPrefix("100.64.0.0/10"))
+	logB.AddPrefix(netip.MustParsePrefix("100.64.0.0/10"))
 	logB.AddPrefix(tsaddr.TailscaleULARange())
 	f := newFilter(logf)
 	f.logIPs, _ = logB.IPSet()
 
 	var (
 		ts4       = netaddr.IPPortFrom(tsaddr.CGNATRange().Addr().Next(), 1234)
-		internet4 = netaddr.IPPortFrom(netaddr.MustParseIP("8.8.8.8"), 1234)
+		internet4 = netaddr.IPPortFrom(netip.MustParseAddr("8.8.8.8"), 1234)
 		ts6       = netaddr.IPPortFrom(tsaddr.TailscaleULARange().Addr().Next(), 1234)
-		internet6 = netaddr.IPPortFrom(netaddr.MustParseIP("2001::1"), 1234)
+		internet6 = netaddr.IPPortFrom(netip.MustParseAddr("2001::1"), 1234)
 	)
 
 	tests := []struct {
@@ -551,7 +552,7 @@ func TestLoggingPrivacy(t *testing.T) {
 	}
 }
 
-var mustIP = netaddr.MustParseIP
+var mustIP = netip.MustParseAddr
 
 func parsed(proto ipproto.Proto, src, dst string, sport, dport uint16) packet.Parsed {
 	sip, dip := mustIP(src), mustIP(dst)
@@ -657,7 +658,7 @@ func parseHexPkt(t *testing.T, h string) *packet.Parsed {
 }
 
 func mustIPPort(s string) netaddr.IPPort {
-	ipp, err := netaddr.ParseIPPort(s)
+	ipp, err := netip.ParseAddrPort(s)
 	if err != nil {
 		panic(err)
 	}
@@ -666,7 +667,7 @@ func mustIPPort(s string) netaddr.IPPort {
 
 func pfx(strs ...string) (ret []netaddr.IPPrefix) {
 	for _, s := range strs {
-		pfx, err := netaddr.ParseIPPrefix(s)
+		pfx, err := netip.ParsePrefix(s)
 		if err != nil {
 			panic(err)
 		}
@@ -678,7 +679,7 @@ func pfx(strs ...string) (ret []netaddr.IPPrefix) {
 func nets(nets ...string) (ret []netaddr.IPPrefix) {
 	for _, s := range nets {
 		if !strings.Contains(s, "/") {
-			ip, err := netaddr.ParseIP(s)
+			ip, err := netip.ParseAddr(s)
 			if err != nil {
 				panic(err)
 			}
@@ -688,7 +689,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 			}
 			ret = append(ret, netaddr.IPPrefixFrom(ip, bits))
 		} else {
-			pfx, err := netaddr.ParseIPPrefix(s)
+			pfx, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -770,16 +771,16 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					},
 					Dsts: []NetPortRange{
 						{
-							Net:   netaddr.MustParseIPPrefix("0.0.0.0/0"),
+							Net:   netip.MustParsePrefix("0.0.0.0/0"),
 							Ports: PortRange{22, 22},
 						},
 						{
-							Net:   netaddr.MustParseIPPrefix("::0/0"),
+							Net:   netip.MustParsePrefix("::0/0"),
 							Ports: PortRange{22, 22},
 						},
 					},
 					Srcs: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("100.64.1.1/32"),
 					},
 					Caps: []CapMatch{},
 				},
@@ -804,12 +805,12 @@ func TestMatchesFromFilterRules(t *testing.T) {
 					},
 					Dsts: []NetPortRange{
 						{
-							Net:   netaddr.MustParseIPPrefix("1.2.0.0/16"),
+							Net:   netip.MustParsePrefix("1.2.0.0/16"),
 							Ports: PortRange{22, 22},
 						},
 					},
 					Srcs: []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("100.64.1.1/32"),
 					},
 					Caps: []CapMatch{},
 				},
@@ -834,8 +835,8 @@ func TestMatchesFromFilterRules(t *testing.T) {
 
 func TestNewAllowAllForTest(t *testing.T) {
 	f := NewAllowAllForTest(logger.Discard)
-	src := netaddr.MustParseIP("100.100.2.3")
-	dst := netaddr.MustParseIP("100.100.1.2")
+	src := netip.MustParseAddr("100.100.2.3")
+	dst := netip.MustParseAddr("100.100.1.2")
 	res := f.CheckTCP(src, dst, 80)
 	if res.IsDrop() {
 		t.Fatalf("unexpected drop verdict: %v", res)
@@ -885,7 +886,7 @@ func TestCaps(t *testing.T) {
 			SrcIPs: []string{"*"},
 			CapGrant: []tailcfg.CapGrant{{
 				Dsts: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("0.0.0.0/0"),
 				},
 				Caps: []string{"is_ipv4"},
 			}},
@@ -894,7 +895,7 @@ func TestCaps(t *testing.T) {
 			SrcIPs: []string{"*"},
 			CapGrant: []tailcfg.CapGrant{{
 				Dsts: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("::/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 				Caps: []string{"is_ipv6"},
 			}},
@@ -903,7 +904,7 @@ func TestCaps(t *testing.T) {
 			SrcIPs: []string{"100.199.0.0/16"},
 			CapGrant: []tailcfg.CapGrant{{
 				Dsts: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.200.0.0/16"),
+					netip.MustParsePrefix("100.200.0.0/16"),
 				},
 				Caps: []string{"some_super_admin"},
 			}},
@@ -951,7 +952,7 @@ func TestCaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := filt.AppendCaps(nil, netaddr.MustParseIP(tt.src), netaddr.MustParseIP(tt.dst))
+			got := filt.AppendCaps(nil, netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst))
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}

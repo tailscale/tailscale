@@ -143,7 +143,7 @@ func Tailscale6to4(ipv6 netaddr.IP) (netaddr.IP, bool) {
 
 func mustPrefix(v *netaddr.IPPrefix, prefix string) {
 	var err error
-	*v, err = netaddr.ParseIPPrefix(prefix)
+	*v, err = netip.ParsePrefix(prefix)
 	if err != nil {
 		panic(err)
 	}
@@ -253,8 +253,8 @@ func ContainsExitRoutes(rr []netaddr.IPPrefix) bool {
 }
 
 var (
-	allIPv4 = netaddr.MustParseIPPrefix("0.0.0.0/0")
-	allIPv6 = netaddr.MustParseIPPrefix("::/0")
+	allIPv4 = netip.MustParsePrefix("0.0.0.0/0")
+	allIPv6 = netip.MustParsePrefix("::/0")
 )
 
 // AllIPv4 returns 0.0.0.0/0.

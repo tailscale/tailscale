@@ -11,13 +11,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 )
 
@@ -116,7 +116,7 @@ func runPing(ctx context.Context, args []string) error {
 	for {
 		n++
 		ctx, cancel := context.WithTimeout(ctx, pingArgs.timeout)
-		pr, err := localClient.Ping(ctx, netaddr.MustParseIP(ip), pingType())
+		pr, err := localClient.Ping(ctx, netip.MustParseAddr(ip), pingType())
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

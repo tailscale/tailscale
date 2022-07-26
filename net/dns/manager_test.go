@@ -5,6 +5,7 @@
 package dns
 
 import (
+	"net/netip"
 	"runtime"
 	"strings"
 	"testing"
@@ -425,14 +426,14 @@ func TestManager(t *testing.T) {
 
 func mustIPs(strs ...string) (ret []netaddr.IP) {
 	for _, s := range strs {
-		ret = append(ret, netaddr.MustParseIP(s))
+		ret = append(ret, netip.MustParseAddr(s))
 	}
 	return ret
 }
 
 func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
 	for _, s := range strs {
-		ret = append(ret, netaddr.MustParseIPPort(s))
+		ret = append(ret, netip.MustParseAddrPort(s))
 	}
 	return ret
 }
@@ -459,7 +460,7 @@ func hosts(strs ...string) (ret map[dnsname.FQDN][]netaddr.IP) {
 	var key dnsname.FQDN
 	ret = map[dnsname.FQDN][]netaddr.IP{}
 	for _, s := range strs {
-		if ip, err := netaddr.ParseIP(s); err == nil {
+		if ip, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IP provided before name")
 			}
@@ -479,7 +480,7 @@ func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 	var key dnsname.FQDN
 	ret = map[dnsname.FQDN][]dnstype.Resolver{}
 	for _, s := range strs {
-		if ip, err := netaddr.ParseIP(s); err == nil {
+		if ip, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IP provided before name")
 			}
@@ -504,12 +505,12 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]*dnstype.Resolver) {
 				panic("IPPort provided before suffix")
 			}
 			ret[key] = nil
-		} else if ipp, err := netaddr.ParseIPPort(s); err == nil {
+		} else if ipp, err := netip.ParseAddrPort(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
 			ret[key] = append(ret[key], &dnstype.Resolver{Addr: ipp.String()})
-		} else if _, err := netaddr.ParseIP(s); err == nil {
+		} else if _, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}

@@ -5,6 +5,7 @@
 package publicdns
 
 import (
+	"net/netip"
 	"testing"
 
 	"tailscale.com/net/netaddr"
@@ -26,8 +27,8 @@ func TestDohV6(t *testing.T) {
 		firstIP netaddr.IP
 		want    bool
 	}{
-		{"https://cloudflare-dns.com/dns-query", netaddr.MustParseIP("2606:4700:4700::1111"), true},
-		{"https://dns.google/dns-query", netaddr.MustParseIP("2001:4860:4860::8888"), true},
+		{"https://cloudflare-dns.com/dns-query", netip.MustParseAddr("2606:4700:4700::1111"), true},
+		{"https://dns.google/dns-query", netip.MustParseAddr("2001:4860:4860::8888"), true},
 		{"bogus", netaddr.IP{}, false},
 	}
 	for _, test := range tests {

@@ -60,7 +60,7 @@ type postRoutesParams struct {
 }
 
 // SetRoutes updates the list of subnets that are enabled for a device.
-// Subnets must be parsable by tailscale.com/net/netaddr.ParseIPPrefix.
+// Subnets must be parsable by net/netip.ParsePrefix.
 // Subnets do not have to be currently advertised by a device, they may be pre-enabled.
 // Returns the updated list of enabled and advertised subnet routes in a *Routes object.
 func (c *Client) SetRoutes(ctx context.Context, deviceID string, subnets []netaddr.IPPrefix) (routes *Routes, err error) {

@@ -23,18 +23,18 @@ import (
 
 func ipps(ippStrs ...string) (ipps []netaddr.IPPrefix) {
 	for _, s := range ippStrs {
-		if ip, err := netaddr.ParseIP(s); err == nil {
+		if ip, err := netip.ParseAddr(s); err == nil {
 			ipps = append(ipps, netip.PrefixFrom(ip, ip.BitLen()))
 			continue
 		}
-		ipps = append(ipps, netaddr.MustParseIPPrefix(s))
+		ipps = append(ipps, netip.MustParsePrefix(s))
 	}
 	return
 }
 
 func ips(ss ...string) (ips []netaddr.IP) {
 	for _, s := range ss {
-		ips = append(ips, netaddr.MustParseIP(s))
+		ips = append(ips, netip.MustParseAddr(s))
 	}
 	return
 }

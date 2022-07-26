@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/netip"
 	"os"
 	"sort"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
@@ -711,7 +711,7 @@ func TestDelRouteIdempotent(t *testing.T) {
 		"192.0.2.0/24",  // RFC 5737
 		"2001:DB8::/32", // RFC 3849
 	} {
-		cidr := netaddr.MustParseIPPrefix(s)
+		cidr := netip.MustParsePrefix(s)
 		if err := lt.r.addRoute(cidr); err != nil {
 			t.Error(err)
 			continue

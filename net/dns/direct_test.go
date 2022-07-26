@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +82,7 @@ func testDirect(t *testing.T, fs wholeFileFS) {
 
 	m := directManager{logf: t.Logf, fs: fs}
 	if err := m.SetDNS(OSConfig{
-		Nameservers:   []netaddr.IP{netaddr.MustParseIP("8.8.8.8"), netaddr.MustParseIP("8.8.4.4")},
+		Nameservers:   []netaddr.IP{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("8.8.4.4")},
 		SearchDomains: []dnsname.FQDN{"ts.net.", "ts-dns.test."},
 		MatchDomains:  []dnsname.FQDN{"ignored."},
 	}); err != nil {
@@ -108,7 +109,7 @@ search ts.net ts-dns.test
 	assertBaseState(t)
 
 	// Test that Close cleans up resolv.conf.
-	if err := m.SetDNS(OSConfig{Nameservers: []netaddr.IP{netaddr.MustParseIP("8.8.8.8")}}); err != nil {
+	if err := m.SetDNS(OSConfig{Nameservers: []netaddr.IP{netip.MustParseAddr("8.8.8.8")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Close(); err != nil {
@@ -150,21 +151,21 @@ func TestReadResolve(t *testing.T) {
 		{in: `nameserver 192.168.0.100`,
 			want: OSConfig{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},
 		{in: `nameserver 192.168.0.100 # comment`,
 			want: OSConfig{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},
 		{in: `nameserver 192.168.0.100#`,
 			want: OSConfig{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},

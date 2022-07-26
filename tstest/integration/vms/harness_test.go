@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -240,5 +241,5 @@ outer:
 }
 
 func bytes2Netaddr(inp []byte) netaddr.IP {
-	return netaddr.MustParseIP(string(bytes.TrimSpace(inp)))
+	return netip.MustParseAddr(string(bytes.TrimSpace(inp)))
 }

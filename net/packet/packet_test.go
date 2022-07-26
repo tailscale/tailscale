@@ -6,6 +6,7 @@ package packet
 
 import (
 	"bytes"
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -27,7 +28,7 @@ const (
 )
 
 func mustIPPort(s string) netaddr.IPPort {
-	ipp, err := netaddr.ParseIPPort(s)
+	ipp, err := netip.ParseAddrPort(s)
 	if err != nil {
 		panic(err)
 	}

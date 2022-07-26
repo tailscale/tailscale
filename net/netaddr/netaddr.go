@@ -125,11 +125,3 @@ func FromStdAddr(stdIP net.IP, port int, zone string) (_ IPPort, ok bool) {
 	}
 	return netip.AddrPortFrom(ip, uint16(port)), true
 }
-
-func ParseIP(s string) (IP, error)             { return netip.ParseAddr(s) }
-func ParseIPPrefix(s string) (IPPrefix, error) { return netip.ParsePrefix(s) }
-func ParseIPPort(s string) (IPPort, error)     { return netip.ParseAddrPort(s) }
-
-func MustParseIP(s string) IP             { return netip.MustParseAddr(s) }
-func MustParseIPPrefix(s string) IPPrefix { return netip.MustParsePrefix(s) }
-func MustParseIPPort(s string) IPPort     { return netip.MustParseAddrPort(s) }

@@ -6,6 +6,7 @@ package interfaces
 
 import (
 	"errors"
+	"net/netip"
 	"os/exec"
 	"testing"
 
@@ -72,7 +73,7 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 		if !mem.Contains(flagsm, mem.S("G")) {
 			return nil
 		}
-		ip, err := netaddr.ParseIP(string(mem.Append(nil, ipm)))
+		ip, err := netip.ParseAddr(string(mem.Append(nil, ipm)))
 		if err == nil && ip.IsPrivate() {
 			ret = ip
 			// We've found what we're looking for.

@@ -7,6 +7,7 @@ package tailcfg
 import (
 	"encoding"
 	"encoding/json"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestHostinfoEqual(t *testing.T) {
 
 	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
 		for _, s := range strs {
-			n, err := netaddr.ParseIPPrefix(s)
+			n, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -224,12 +225,12 @@ func TestHostinfoHowEqual(t *testing.T) {
 			a: &Hostinfo{
 				IPNVersion:  "1",
 				ShieldsUp:   false,
-				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/24")},
+				RoutableIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.2.3.0/24")},
 			},
 			b: &Hostinfo{
 				IPNVersion:  "2",
 				ShieldsUp:   true,
-				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/25")},
+				RoutableIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.2.3.0/25")},
 			},
 			want: []string{"IPNVersion", "ShieldsUp", "RoutableIPs"},
 		},

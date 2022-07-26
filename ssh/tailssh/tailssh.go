@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1227,7 +1228,7 @@ func (c *conn) principalMatchesTailscaleIdentity(p *tailcfg.SSHPrincipal) bool {
 		return true
 	}
 	if p.NodeIP != "" {
-		if ip, _ := netaddr.ParseIP(p.NodeIP); ip == ci.src.Addr() {
+		if ip, _ := netip.ParseAddr(p.NodeIP); ip == ci.src.Addr() {
 			return true
 		}
 	}

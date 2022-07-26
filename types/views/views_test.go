@@ -7,6 +7,7 @@ package views
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ import (
 func TestViewsJSON(t *testing.T) {
 	mustCIDR := func(cidrs ...string) (out []netaddr.IPPrefix) {
 		for _, cidr := range cidrs {
-			out = append(out, netaddr.MustParseIPPrefix(cidr))
+			out = append(out, netip.MustParsePrefix(cidr))
 		}
 		return
 	}

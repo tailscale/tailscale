@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -609,5 +610,5 @@ func (c *Client) LocalAddr() (netaddr.IPPort, error) {
 	if a == nil {
 		return netaddr.IPPort{}, errors.New("nil addr")
 	}
-	return netaddr.ParseIPPort(a.String())
+	return netip.ParseAddrPort(a.String())
 }

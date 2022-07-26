@@ -81,7 +81,7 @@ func (p *Packet) setLocator(msg string, args ...any) {
 }
 
 func mustPrefix(s string) netaddr.IPPrefix {
-	ipp, err := netaddr.ParseIPPrefix(s)
+	ipp, err := netip.ParsePrefix(s)
 	if err != nil {
 		panic(err)
 	}
@@ -680,7 +680,7 @@ func (m *Machine) ListenPacket(ctx context.Context, network, address string) (ne
 		return nil, err
 	}
 	if host != "" {
-		ip, err = netaddr.ParseIP(host)
+		ip, err = netip.ParseAddr(host)
 		if err != nil {
 			return nil, err
 		}
@@ -841,7 +841,7 @@ func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *conn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	ipp, err := netaddr.ParseIPPort(addr.String())
+	ipp, err := netip.ParseAddrPort(addr.String())
 	if err != nil {
 		return 0, fmt.Errorf("bogus addr %T %q", addr, addr.String())
 	}

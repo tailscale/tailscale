@@ -524,7 +524,7 @@ func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netaddr.IP, err error) {
 	if s == "" {
 		return ip, os.ErrInvalid
 	}
-	ip, err = netaddr.ParseIP(s)
+	ip, err = netip.ParseAddr(s)
 	if err == nil {
 		// If we're online already and have a netmap, double check that the IP
 		// address specified is valid.

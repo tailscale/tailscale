@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -68,7 +69,7 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 		if rec.Type != "" {
 			continue
 		}
-		ip, err := netaddr.ParseIP(rec.Value)
+		ip, err := netip.ParseAddr(rec.Value)
 		if err != nil {
 			continue
 		}
@@ -103,7 +104,7 @@ func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ neta
 		// addr malformed or invalid port.
 		return netaddr.IPPort{}, err
 	}
-	if ip, err := netaddr.ParseIP(host); err == nil {
+	if ip, err := netip.ParseAddr(host); err == nil {
 		// addr was literal ip:port.
 		return netaddr.IPPortFrom(ip, port), nil
 	}

@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -830,7 +831,7 @@ func (n *testNode) AwaitIPs() []netaddr.IP {
 		addrs = make([]netaddr.IP, len(ipslice))
 
 		for i, ip := range ipslice {
-			netIP, err := netaddr.ParseIP(ip)
+			netIP, err := netip.ParseAddr(ip)
 			if err != nil {
 				t.Fatal(err)
 			}

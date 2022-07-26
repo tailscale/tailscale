@@ -25,6 +25,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -663,7 +664,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)
+	remoteIPPort, _ := netip.ParseAddrPort(remoteAddr)
 
 	c := &sclient{
 		connNum:        connNum,
@@ -1768,7 +1769,7 @@ func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
 		if len(ipInfo) < 5 {
 			continue
 		}
-		src, err := netaddr.ParseIPPort(ipInfo[4])
+		src, err := netip.ParseAddrPort(ipInfo[4])
 		if err != nil {
 			continue
 		}

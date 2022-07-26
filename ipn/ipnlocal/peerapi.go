@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -985,7 +986,7 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	if remoteIP.Is6() {
 		// autogroup:internet for IPv6 is defined to start with 2000::/3,
 		// so use 2000::0 as the probe "the internet" address.
-		dstIP = netaddr.MustParseIP("2000::")
+		dstIP = netip.MustParseAddr("2000::")
 	}
 	verdict := f.CheckTCP(remoteIP, dstIP, 53)
 	return verdict == filter.Accept

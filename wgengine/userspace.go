@@ -1589,9 +1589,9 @@ func dnsIPsOverTailscale(dnsCfg *dns.Config, routerCfg *router.Config) (ret []ne
 
 	add := func(resolvers []*dnstype.Resolver) {
 		for _, r := range resolvers {
-			ip, err := netaddr.ParseIP(r.Addr)
+			ip, err := netip.ParseAddr(r.Addr)
 			if err != nil {
-				if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil {
+				if ipp, err := netip.ParseAddrPort(r.Addr); err == nil {
 					ip = ipp.Addr()
 				} else {
 					continue

@@ -6,6 +6,7 @@ package wgengine
 
 import (
 	"fmt"
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -223,9 +224,9 @@ func nkFromHex(hex string) key.NodePublic {
 // an experiment to see if genLocalAddrFunc was worth it. As of Go
 // 1.16, it still very much is. (30-40x faster)
 func BenchmarkGenLocalAddrFunc(b *testing.B) {
-	la1 := netaddr.MustParseIP("1.2.3.4")
-	la2 := netaddr.MustParseIP("::4")
-	lanot := netaddr.MustParseIP("5.5.5.5")
+	la1 := netip.MustParseAddr("1.2.3.4")
+	la2 := netip.MustParseAddr("::4")
+	lanot := netip.MustParseAddr("5.5.5.5")
 	var x bool
 	b.Run("map1", func(b *testing.B) {
 		b.ReportAllocs()
