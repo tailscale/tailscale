@@ -6,12 +6,22 @@ package dns
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -82,6 +92,11 @@ type Manager struct {
 	// TODO(tom): Rip out once all platforms use netstack.
 	responses           chan response
 	activeQueriesAtomic int32
+
+	// DNS-over-TLS cached value.
+	dotCertMu   sync.Mutex
+	dotCertLast time.Time
+	dotCertVal  tls.Certificate
 
 	ctx       context.Context    // good until Down
 	ctxCancel context.CancelFunc // closes ctx
@@ -466,6 +481,76 @@ func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netaddr.IPPort) {
 	s.ctx, s.closeCtx = context.WithCancel(m.ctx)
 	go s.handleReads()
 	s.handleWrites()
+}
+
+const dotCertValidity = time.Hour * 24 * 30 // arbitrary; LetsEncrypt-ish
+
+func (m *Manager) dotCert() (tls.Certificate, error) {
+	m.dotCertMu.Lock()
+	defer m.dotCertMu.Unlock()
+
+	if !m.dotCertLast.IsZero() && time.Since(m.dotCertLast) < dotCertValidity {
+		return m.dotCertVal, nil
+	}
+
+	cert, err := genSelfSignedDoTCert()
+	if err == nil {
+		m.dotCertVal = cert
+		m.dotCertLast = time.Now()
+	}
+	return cert, err
+}
+
+// genSelfSignedDoTCert generates a self-signed certificate for DNS-over-TLS
+// (DoT) queries on 100.100.100.100.
+//
+// This exists for Android Private DNS, which in "Automatic" (aka opportunistic)
+// mode doesn't verify certs.
+//
+// See https://github.com/tailscale/tailscale/issues/915.
+func genSelfSignedDoTCert() (tls.Certificate, error) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Tailscale MagicDNS"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(dotCertValidity),
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	privKeyBytes, _ := x509.MarshalECPrivateKey(privKey)
+	pemCert := new(bytes.Buffer)
+	pemKey := new(bytes.Buffer)
+	pem.Encode(pemCert, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	pem.Encode(pemKey, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privKeyBytes})
+	return tls.X509KeyPair(pemCert.Bytes(), pemKey.Bytes())
+}
+
+// HandleDNSoverTLSConn implements magicDNS over DNS-over-TLS, taking a
+// connection and servicing DNS requests sent down it.
+//
+// It uses a self-signed cert; see genSelfSignedDoTCert for backbground.
+func (m *Manager) HandleDNSoverTLSConn(conn net.Conn, srcAddr netaddr.IPPort) {
+	tlsCert, err := m.dotCert()
+	if err != nil {
+		m.logf("[unexpected] HandleDNSoverTLSConn.dotCert: %v", err)
+		conn.Close()
+	}
+	tlsConn := tls.Server(conn, &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	m.HandleTCPConn(tlsConn, srcAddr)
 }
 
 func (m *Manager) Down() error {

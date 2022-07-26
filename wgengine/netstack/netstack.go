@@ -383,7 +383,10 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 	// on port 80 & 53.
 	switch p.IPProto {
 	case ipproto.TCP:
-		if port := p.Dst.Port(); port != 53 && port != 80 {
+		switch p.Dst.Port() {
+		case 80, 53, 853:
+			// Handle below.
+		default:
 			return filter.Accept
 		}
 	case ipproto.UDP:
@@ -775,8 +778,17 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// block until the TCP handshake is complete.
 	c := gonet.NewTCPConn(&wq, ep)
 
-	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
-		go ns.dns.HandleTCPConn(c, netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort))
+	if dialIP == magicDNSIP || dialIP == magicDNSIPv6 {
+		src := netaddr.IPPortFrom(clientRemoteIP, reqDetails.RemotePort)
+		switch reqDetails.LocalPort {
+		case 53:
+			go ns.dns.HandleTCPConn(c, src)
+		case 853:
+			go ns.dns.HandleDNSoverTLSConn(c, src)
+		default:
+			ns.logf("[unexpected] TCP connection to service IP on port %d", reqDetails.LocalPort)
+			c.Close() // should be unreachable
+		}
 		return
 	}
 
