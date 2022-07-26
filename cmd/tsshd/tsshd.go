@@ -11,3 +11,4 @@
 // Its functionality moved into tailscaled.
 //
 // See https://github.com/tailscale/tailscale/issues/3802
+package main
