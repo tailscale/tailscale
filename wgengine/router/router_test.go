@@ -9,12 +9,11 @@ import (
 	"reflect"
 	"testing"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/preftype"
 )
 
-func mustCIDRs(ss ...string) []netaddr.IPPrefix {
-	var ret []netaddr.IPPrefix
+func mustCIDRs(ss ...string) []netip.Prefix {
+	var ret []netip.Prefix
 	for _, s := range ss {
 		ret = append(ret, netip.MustParsePrefix(s))
 	}
@@ -36,7 +35,7 @@ func TestConfigEqual(t *testing.T) {
 			configFields, testedFields)
 	}
 
-	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
+	nets := func(strs ...string) (ns []netip.Prefix) {
 		for _, s := range strs {
 			n, err := netip.ParsePrefix(s)
 			if err != nil {

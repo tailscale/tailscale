@@ -12,7 +12,6 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
@@ -21,7 +20,7 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-func ipps(ippStrs ...string) (ipps []netaddr.IPPrefix) {
+func ipps(ippStrs ...string) (ipps []netip.Prefix) {
 	for _, s := range ippStrs {
 		if ip, err := netip.ParseAddr(s); err == nil {
 			ipps = append(ipps, netip.PrefixFrom(ip, ip.BitLen()))
@@ -32,7 +31,7 @@ func ipps(ippStrs ...string) (ipps []netaddr.IPPrefix) {
 	return
 }
 
-func ips(ss ...string) (ips []netaddr.IP) {
+func ips(ss ...string) (ips []netip.Addr) {
 	for _, s := range ss {
 		ips = append(ips, netip.MustParseAddr(s))
 	}
@@ -55,7 +54,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+				Hosts:  map[dnsname.FQDN][]netip.Addr{},
 			},
 		},
 		{
@@ -81,7 +80,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts: map[dnsname.FQDN][]netaddr.IP{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"b.net.":       ips("100.102.0.1", "100.102.0.2"),
 					"myname.net.":  ips("100.101.101.101"),
 					"peera.net.":   ips("100.102.0.1", "100.102.0.2"),
@@ -116,7 +115,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			want: &dns.Config{
 				OnlyIPv6: true,
 				Routes:   map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts: map[dnsname.FQDN][]netaddr.IP{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"b.net.":       ips("fe75::2"),
 					"myname.net.":  ips("fe75::1"),
 					"peera.net.":   ips("fe75::1001"),
@@ -140,7 +139,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-				Hosts: map[dnsname.FQDN][]netaddr.IP{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
 					"myname.net.": ips("100.101.101.101"),
 					"foo.com.":    ips("1.2.3.4"),
 					"bar.com.":    ips("1::6"),
@@ -160,7 +159,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netaddr.IP{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
 					"0.e.1.a.c.5.1.1.a.7.d.f.ip6.arpa.": nil,
 					"100.100.in-addr.arpa.":             nil,
@@ -260,7 +259,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts: map[dnsname.FQDN][]netaddr.IP{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{},
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.8.8"},
 				},
@@ -283,7 +282,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				ExitNodeID: "some-id",
 			},
 			want: &dns.Config{
-				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+				Hosts:  map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 				DefaultResolvers: []*dnstype.Resolver{
 					{Addr: "8.8.4.4"},
@@ -303,7 +302,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				CorpDNS: true,
 			},
 			want: &dns.Config{
-				Hosts:  map[dnsname.FQDN][]netaddr.IP{},
+				Hosts:  map[dnsname.FQDN][]netip.Addr{},
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},

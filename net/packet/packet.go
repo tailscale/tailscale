@@ -54,9 +54,9 @@ type Parsed struct {
 	IPProto ipproto.Proto
 	// SrcIP4 is the source address. Family matches IPVersion. Port is
 	// valid iff IPProto == TCP || IPProto == UDP.
-	Src netaddr.IPPort
+	Src netip.AddrPort
 	// DstIP4 is the destination address. Family matches IPVersion.
-	Dst netaddr.IPPort
+	Dst netip.AddrPort
 	// TCPFlags is the packet's TCP flag bits. Valid iff IPProto == TCP.
 	TCPFlags TCPFlag
 }

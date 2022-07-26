@@ -113,8 +113,8 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			Peers: []wgcfg.Peer{
 				{
 					PublicKey: nk,
-					AllowedIPs: []netaddr.IPPrefix{
-						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+					AllowedIPs: []netip.Prefix{
+						netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
 				},
 			},
@@ -173,8 +173,8 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey: nodeKey,
-				AllowedIPs: []netaddr.IPPrefix{
-					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+				AllowedIPs: []netip.Prefix{
+					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},
 			},
 		},
@@ -231,7 +231,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("map1", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		m := map[netaddr.IP]bool{
+		m := map[netip.Addr]bool{
 			la1: true,
 		}
 		for i := 0; i < b.N; i++ {
@@ -242,7 +242,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("map2", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		m := map[netaddr.IP]bool{
+		m := map[netip.Addr]bool{
 			la1: true,
 			la2: true,
 		}
@@ -254,7 +254,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("or1", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		f := func(t netaddr.IP) bool {
+		f := func(t netip.Addr) bool {
 			return t == la1
 		}
 		for i := 0; i < b.N; i++ {
@@ -265,7 +265,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("or2", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		f := func(t netaddr.IP) bool {
+		f := func(t netip.Addr) bool {
 			return t == la1 || t == la2
 		}
 		for i := 0; i < b.N; i++ {

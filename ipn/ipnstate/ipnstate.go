@@ -12,12 +12,12 @@ import (
 	"html"
 	"io"
 	"log"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
@@ -35,7 +35,7 @@ type Status struct {
 	BackendState string
 
 	AuthURL      string       // current URL provided by control to authorize client
-	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
 	// ExitNodeStatus describes the current exit node.
@@ -94,7 +94,7 @@ type ExitNodeStatus struct {
 	Online bool
 
 	// TailscaleIPs are the exit node's IP addresses assigned to the node.
-	TailscaleIPs []netaddr.IPPrefix
+	TailscaleIPs []netip.Prefix
 }
 
 func (s *Status) Peers() []key.NodePublic {
@@ -124,7 +124,7 @@ type PeerStatus struct {
 	DNSName      string
 	OS           string // HostInfo.OS
 	UserID       tailcfg.UserID
-	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
@@ -240,7 +240,7 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 }
 
 // AddIP adds a Tailscale IP address to the status.
-func (sb *StatusBuilder) AddTailscaleIP(ip netaddr.IP) {
+func (sb *StatusBuilder) AddTailscaleIP(ip netip.Addr) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	if sb.locked {

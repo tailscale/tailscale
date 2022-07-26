@@ -7,8 +7,8 @@ package packet
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 
@@ -19,8 +19,8 @@ const ip4HeaderLength = 20
 type IP4Header struct {
 	IPProto ipproto.Proto
 	IPID    uint16
-	Src     netaddr.IP
-	Dst     netaddr.IP
+	Src     netip.Addr
+	Dst     netip.Addr
 }
 
 // Len implements Header.

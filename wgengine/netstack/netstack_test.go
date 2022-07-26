@@ -5,11 +5,11 @@
 package netstack
 
 import (
+	"net/netip"
 	"runtime"
 	"testing"
 
 	"gvisor.dev/gvisor/pkg/refs"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
@@ -53,7 +53,7 @@ func TestInjectInboundLeak(t *testing.T) {
 	if err := ns.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	ns.atomicIsLocalIPFunc.Store(func(netaddr.IP) bool { return true })
+	ns.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return true })
 
 	pkt := &packet.Parsed{}
 	const N = 10_000

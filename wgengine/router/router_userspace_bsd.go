@@ -10,12 +10,12 @@ package router
 import (
 	"fmt"
 	"log"
+	"net/netip"
 	"os/exec"
 	"runtime"
 
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -26,8 +26,8 @@ type userspaceBSDRouter struct {
 	logf    logger.Logf
 	linkMon *monitor.Mon
 	tunname string
-	local   []netaddr.IPPrefix
-	routes  map[netaddr.IPPrefix]struct{}
+	local   []netip.Prefix
+	routes  map[netip.Prefix]struct{}
 }
 
 func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
@@ -43,7 +43,7 @@ func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor
 	}, nil
 }
 
-func (r *userspaceBSDRouter) addrsToRemove(newLocalAddrs []netaddr.IPPrefix) (remove []netaddr.IPPrefix) {
+func (r *userspaceBSDRouter) addrsToRemove(newLocalAddrs []netip.Prefix) (remove []netip.Prefix) {
 	for _, cur := range r.local {
 		found := false
 		for _, v := range newLocalAddrs {
@@ -59,7 +59,7 @@ func (r *userspaceBSDRouter) addrsToRemove(newLocalAddrs []netaddr.IPPrefix) (re
 	return
 }
 
-func (r *userspaceBSDRouter) addrsToAdd(newLocalAddrs []netaddr.IPPrefix) (add []netaddr.IPPrefix) {
+func (r *userspaceBSDRouter) addrsToAdd(newLocalAddrs []netip.Prefix) (add []netip.Prefix) {
 	for _, cur := range newLocalAddrs {
 		found := false
 		for _, v := range r.local {
@@ -91,7 +91,7 @@ func (r *userspaceBSDRouter) Up() error {
 	return nil
 }
 
-func inet(p netaddr.IPPrefix) string {
+func inet(p netip.Prefix) string {
 	if p.Addr().Is6() {
 		return "inet6"
 	}
@@ -126,7 +126,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 			// https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=218508
 			// Instead add our whole /48, which works because we use a /48 route.
 			// Full history: https://github.com/tailscale/tailscale/issues/1307
-			tmp := netaddr.IPPrefixFrom(addr.Addr(), 48)
+			tmp := netip.PrefixFrom(addr.Addr(), 48)
 			arg = []string{"ifconfig", r.tunname, inet(tmp), tmp.String()}
 		} else {
 			arg = []string{"ifconfig", r.tunname, inet(addr), addr.String(), addr.Addr().String()}
@@ -138,7 +138,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		}
 	}
 
-	newRoutes := make(map[netaddr.IPPrefix]struct{})
+	newRoutes := make(map[netip.Prefix]struct{})
 	for _, route := range cfg.Routes {
 		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
 			// Because we added the interface address as a /48 above,
@@ -187,7 +187,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 
 	// Store the interface and routes so we know what to change on an update.
 	if errq == nil {
-		r.local = append([]netaddr.IPPrefix{}, cfg.LocalAddrs...)
+		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
 	}
 	r.routes = newRoutes
 

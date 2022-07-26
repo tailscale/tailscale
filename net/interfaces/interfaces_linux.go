@@ -46,7 +46,7 @@ Iface   Destination     Gateway         Flags   RefCnt  Use     Metric  Mask    
 ens18   00000000        0100000A        0003    0       0       0       00000000        0       0       0
 ens18   0000000A        00000000        0001    0       0       0       0000FFFF        0       0       0
 */
-func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPLinux() (ret netip.Addr, ok bool) {
 	if procNetRouteErr.Get() {
 		// If we failed to read /proc/net/route previously, don't keep trying.
 		// But if we're on Android, go into the Android path.
@@ -104,7 +104,7 @@ func likelyHomeRouterIPLinux() (ret netaddr.IP, ok bool) {
 
 // Android apps don't have permission to read /proc/net/route, at
 // least on Google devices and the Android emulator.
-func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPAndroid() (ret netip.Addr, ok bool) {
 	cmd := exec.Command("/system/bin/ip", "route", "show", "table", "0")
 	out, err := cmd.StdoutPipe()
 	if err != nil {

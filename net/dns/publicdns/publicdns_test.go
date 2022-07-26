@@ -7,8 +7,6 @@ package publicdns
 import (
 	"net/netip"
 	"testing"
-
-	"tailscale.com/net/netaddr"
 )
 
 func TestInit(t *testing.T) {
@@ -24,12 +22,12 @@ func TestInit(t *testing.T) {
 func TestDohV6(t *testing.T) {
 	tests := []struct {
 		in      string
-		firstIP netaddr.IP
+		firstIP netip.Addr
 		want    bool
 	}{
 		{"https://cloudflare-dns.com/dns-query", netip.MustParseAddr("2606:4700:4700::1111"), true},
 		{"https://dns.google/dns-query", netip.MustParseAddr("2001:4860:4860::8888"), true},
-		{"bogus", netaddr.IP{}, false},
+		{"bogus", netip.Addr{}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.in, func(t *testing.T) {

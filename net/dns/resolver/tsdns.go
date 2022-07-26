@@ -54,7 +54,7 @@ var (
 
 type packet struct {
 	bs   []byte
-	addr netaddr.IPPort // src for a request, dst for a response
+	addr netip.AddrPort // src for a request, dst for a response
 }
 
 // Config is a resolver configuration.
@@ -70,7 +70,7 @@ type Config struct {
 	// To register a "default route", add an entry for ".".
 	Routes map[dnsname.FQDN][]*dnstype.Resolver
 	// LocalHosts is a map of FQDNs to corresponding IPs.
-	Hosts map[dnsname.FQDN][]netaddr.IP
+	Hosts map[dnsname.FQDN][]netip.Addr
 	// LocalDomains is a list of DNS name suffixes that should not be
 	// routed to upstream resolvers.
 	LocalDomains []dnsname.FQDN
@@ -106,7 +106,7 @@ func (c *Config) WriteToBufioWriter(w *bufio.Writer) {
 }
 
 // WriteIPPorts writes vv to w.
-func WriteIPPorts(w *bufio.Writer, vv []netaddr.IPPort) {
+func WriteIPPorts(w *bufio.Writer, vv []netip.AddrPort) {
 	w.WriteByte('[')
 	var b []byte
 	for i, v := range vv {
@@ -193,15 +193,15 @@ type Resolver struct {
 	// mu guards the following fields from being updated while used.
 	mu           sync.Mutex
 	localDomains []dnsname.FQDN
-	hostToIP     map[dnsname.FQDN][]netaddr.IP
-	ipToHost     map[netaddr.IP]dnsname.FQDN
+	hostToIP     map[dnsname.FQDN][]netip.Addr
+	ipToHost     map[netip.Addr]dnsname.FQDN
 }
 
 type ForwardLinkSelector interface {
 	// PickLink returns which network device should be used to query
 	// the DNS server at the given IP.
 	// The empty string means to use an unspecified default.
-	PickLink(netaddr.IP) (linkName string)
+	PickLink(netip.Addr) (linkName string)
 }
 
 // New returns a new resolver.
@@ -214,8 +214,8 @@ func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector, di
 		logf:     logger.WithPrefix(logf, "resolver: "),
 		linkMon:  linkMon,
 		closed:   make(chan struct{}),
-		hostToIP: map[dnsname.FQDN][]netaddr.IP{},
-		ipToHost: map[netaddr.IP]dnsname.FQDN{},
+		hostToIP: map[dnsname.FQDN][]netip.Addr{},
+		ipToHost: map[netip.Addr]dnsname.FQDN{},
 		dialer:   dialer,
 	}
 	r.forwarder = newForwarder(r.logf, linkMon, linkSel, dialer)
@@ -229,7 +229,7 @@ func (r *Resolver) SetConfig(cfg Config) error {
 		r.saveConfigForTests(cfg)
 	}
 
-	reverse := make(map[netaddr.IP]dnsname.FQDN, len(cfg.Hosts))
+	reverse := make(map[netip.Addr]dnsname.FQDN, len(cfg.Hosts))
 
 	for host, ips := range cfg.Hosts {
 		for _, ip := range ips {
@@ -266,7 +266,7 @@ func (r *Resolver) Close() {
 // bound on per-query resource usage.
 const dnsQueryTimeout = 10 * time.Second
 
-func (r *Resolver) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]byte, error) {
+func (r *Resolver) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
 	metricDNSQueryLocal.Add(1)
 	select {
 	case <-r.closed:
@@ -323,7 +323,7 @@ func parseExitNodeQuery(q []byte) *response {
 // still result in a response DNS packet (saying there's a failure)
 // and a nil error.
 // TODO: figure out if we even need an error result.
-func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netaddr.IPPort, allowName func(name string) bool) (res []byte, err error) {
+func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from netip.AddrPort, allowName func(name string) bool) (res []byte, err error) {
 	metricDNSExitProxyQuery.Add(1)
 	ch := make(chan packet, 1)
 
@@ -489,7 +489,7 @@ func isGoNoSuchHostError(err error) bool {
 type resolvConfCache struct {
 	mod  time.Time
 	size int64
-	ip   netaddr.IP
+	ip   netip.Addr
 	// TODO: inode/dev?
 }
 
@@ -501,10 +501,10 @@ var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 
 // stubResolverForOS returns the IP address of the first nameserver in
 // /etc/resolv.conf.
-func stubResolverForOS() (ip netaddr.IP, err error) {
+func stubResolverForOS() (ip netip.Addr, err error) {
 	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
-		return netaddr.IP{}, err
+		return netip.Addr{}, err
 	}
 	cur := resolvConfCache{
 		mod:  fi.ModTime(),
@@ -515,10 +515,10 @@ func stubResolverForOS() (ip netaddr.IP, err error) {
 	}
 	conf, err := resolvconffile.ParseFile(resolvconffile.Path)
 	if err != nil {
-		return netaddr.IP{}, err
+		return netip.Addr{}, err
 	}
 	if len(conf.Nameservers) == 0 {
-		return netaddr.IP{}, errEmptyResolvConf
+		return netip.Addr{}, errEmptyResolvConf
 	}
 	ip = conf.Nameservers[0]
 	cur.ip = ip
@@ -531,12 +531,12 @@ func stubResolverForOS() (ip netaddr.IP, err error) {
 // typ (A, AAAA, ALL).
 // Returns dns.RCodeRefused to indicate that the local map is not
 // authoritative for domain.
-func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, dns.RCode) {
+func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, dns.RCode) {
 	metricDNSResolveLocal.Add(1)
 	// Reject .onion domains per RFC 7686.
 	if dnsname.HasSuffix(domain.WithoutTrailingDot(), ".onion") {
 		metricDNSResolveLocalErrorOnion.Add(1)
-		return netaddr.IP{}, dns.RCodeNameError
+		return netip.Addr{}, dns.RCodeNameError
 	}
 
 	// We return a symbolic domain if someone does a reverse lookup on the
@@ -566,11 +566,11 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 			if suffix.Contains(domain) {
 				// We are authoritative for the queried domain.
 				metricDNSResolveLocalErrorMissing.Add(1)
-				return netaddr.IP{}, dns.RCodeNameError
+				return netip.Addr{}, dns.RCodeNameError
 			}
 		}
 		// Not authoritative, signal that forwarding is advisable.
-		return netaddr.IP{}, dns.RCodeRefused
+		return netip.Addr{}, dns.RCodeRefused
 	}
 
 	// Refactoring note: this must happen after we check suffixes,
@@ -588,7 +588,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 			}
 		}
 		metricDNSResolveLocalNoA.Add(1)
-		return netaddr.IP{}, dns.RCodeSuccess
+		return netip.Addr{}, dns.RCodeSuccess
 	case dns.TypeAAAA:
 		for _, ip := range addrs {
 			if ip.Is6() {
@@ -597,14 +597,14 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 			}
 		}
 		metricDNSResolveLocalNoAAAA.Add(1)
-		return netaddr.IP{}, dns.RCodeSuccess
+		return netip.Addr{}, dns.RCodeSuccess
 	case dns.TypeALL:
 		// Answer with whatever we've got.
 		// It could be IPv4, IPv6, or a zero addr.
 		// TODO: Return all available resolutions (A and AAAA, if we have them).
 		if len(addrs) == 0 {
 			metricDNSResolveLocalNoAll.Add(1)
-			return netaddr.IP{}, dns.RCodeSuccess
+			return netip.Addr{}, dns.RCodeSuccess
 		}
 		metricDNSResolveLocalOKAll.Add(1)
 		return addrs[0], dns.RCodeSuccess
@@ -614,7 +614,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	// DNS semantics and might be implemented in the future.
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:
 		metricDNSResolveNotImplType.Add(1)
-		return netaddr.IP{}, dns.RCodeNotImplemented
+		return netip.Addr{}, dns.RCodeNotImplemented
 
 	// For everything except for the few types above that are explicitly not implemented, return no records.
 	// This is what other DNS systems do: always return NOERROR
@@ -625,7 +625,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 	default:
 		metricDNSResolveNoRecordType.Add(1)
 		// The name exists, but no records exist of the requested type.
-		return netaddr.IP{}, dns.RCodeSuccess
+		return netip.Addr{}, dns.RCodeSuccess
 	}
 }
 
@@ -639,13 +639,13 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, 
 // (2022-06-02) to work around an issue in Chrome where it would treat
 // "http://via-1.1.2.3.4" as a search string instead of a URL. We should rip out
 // the old format in early 2023.
-func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP, bool) {
+func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr, bool) {
 	fqdn := string(domain.WithoutTrailingDot())
 	if typ != dns.TypeAAAA {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 	if len(fqdn) < len("via-X.0.0.0.0") {
-		return netaddr.IP{}, false // too short to be valid
+		return netip.Addr{}, false // too short to be valid
 	}
 
 	var siteID string
@@ -653,18 +653,18 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP
 	if strings.HasPrefix(fqdn, "via-") {
 		firstDot := strings.Index(fqdn, ".")
 		if firstDot < 0 {
-			return netaddr.IP{}, false // missing dot delimiters
+			return netip.Addr{}, false // missing dot delimiters
 		}
 		siteID = fqdn[len("via-"):firstDot]
 		ip4Str = fqdn[firstDot+1:]
 	} else {
 		lastDot := strings.LastIndex(fqdn, ".")
 		if lastDot < 0 {
-			return netaddr.IP{}, false // missing dot delimiters
+			return netip.Addr{}, false // missing dot delimiters
 		}
 		suffix := fqdn[lastDot+1:]
 		if !strings.HasPrefix(suffix, "via-") {
-			return netaddr.IP{}, false
+			return netip.Addr{}, false
 		}
 		siteID = suffix[len("via-"):]
 		ip4Str = fqdn[:lastDot]
@@ -672,22 +672,22 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP
 
 	ip4, err := netip.ParseAddr(ip4Str)
 	if err != nil {
-		return netaddr.IP{}, false // badly formed, dont respond
+		return netip.Addr{}, false // badly formed, dont respond
 	}
 
 	prefix, err := strconv.ParseUint(siteID, 0, 32)
 	if err != nil {
-		return netaddr.IP{}, false // badly formed, dont respond
+		return netip.Addr{}, false // badly formed, dont respond
 	}
 
-	// MapVia will never error when given an ipv4 netaddr.IPPrefix.
+	// MapVia will never error when given an ipv4 netip.Prefix.
 	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
 	return out.Addr(), true
 }
 
 // resolveReverse returns the unique domain name that maps to the given address.
 func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
-	var ip netaddr.IP
+	var ip netip.Addr
 	var ok bool
 	switch {
 	case strings.HasSuffix(name.WithTrailingDot(), rdnsv4Suffix):
@@ -717,7 +717,7 @@ func (r *Resolver) resolveLocalReverse(name dnsname.FQDN) (dnsname.FQDN, dns.RCo
 }
 
 // r.mu must be held.
-func (r *Resolver) fqdnForIPLocked(ip netaddr.IP, name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
+func (r *Resolver) fqdnForIPLocked(ip netip.Addr, name dnsname.FQDN) (dnsname.FQDN, dns.RCode) {
 	// If someone curiously does a reverse lookup on the DNS IP, we
 	// return a domain that helps indicate that Tailscale is using
 	// this IP for a special purpose and it is not a node on their
@@ -749,8 +749,8 @@ type response struct {
 
 	// IP and IPs are the responses to an A, AAAA, or ALL query.
 	// Either/both/neither can be populated.
-	IP  netaddr.IP
-	IPs []netaddr.IP
+	IP  netip.Addr
+	IPs []netip.Addr
 
 	// TXT is the response to a TXT query.
 	// Each one is its own RR with one string.
@@ -809,7 +809,7 @@ func (p *dnsParser) parseQuery(query []byte) error {
 
 // marshalARecord serializes an A record into an active builder.
 // The caller may continue using the builder following the call.
-func marshalARecord(name dns.Name, ip netaddr.IP, builder *dns.Builder) error {
+func marshalARecord(name dns.Name, ip netip.Addr, builder *dns.Builder) error {
 	var answer dns.AResource
 
 	answerHeader := dns.ResourceHeader{
@@ -825,7 +825,7 @@ func marshalARecord(name dns.Name, ip netaddr.IP, builder *dns.Builder) error {
 
 // marshalAAAARecord serializes an AAAA record into an active builder.
 // The caller may continue using the builder following the call.
-func marshalAAAARecord(name dns.Name, ip netaddr.IP, builder *dns.Builder) error {
+func marshalAAAARecord(name dns.Name, ip netip.Addr, builder *dns.Builder) error {
 	var answer dns.AAAAResource
 
 	answerHeader := dns.ResourceHeader{
@@ -839,7 +839,7 @@ func marshalAAAARecord(name dns.Name, ip netaddr.IP, builder *dns.Builder) error
 	return builder.AAAAResource(answerHeader, answer)
 }
 
-func marshalIP(name dns.Name, ip netaddr.IP, builder *dns.Builder) error {
+func marshalIP(name dns.Name, ip netip.Addr, builder *dns.Builder) error {
 	if ip.Is4() {
 		return marshalARecord(name, ip, builder)
 	}
@@ -1066,14 +1066,14 @@ func rawNameToLower(name []byte) string {
 //   4.3.2.1.in-addr.arpa
 // is transformed to
 //   1.2.3.4
-func rdnsNameToIPv4(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
+func rdnsNameToIPv4(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 	s := strings.TrimSuffix(name.WithTrailingDot(), rdnsv4Suffix)
 	ip, err := netip.ParseAddr(s)
 	if err != nil {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 	if !ip.Is4() {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 	b := ip.As4()
 	return netaddr.IPv4(b[3], b[2], b[1], b[0]), true
@@ -1085,14 +1085,14 @@ func rdnsNameToIPv4(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
 //   b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
 // is transformed to
 //   2001:db8::567:89ab
-func rdnsNameToIPv6(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
+func rdnsNameToIPv6(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 	var b [32]byte
 	var ipb [16]byte
 
 	s := strings.TrimSuffix(name.WithTrailingDot(), rdnsv6Suffix)
 	// 32 nibbles and 31 dots between them.
 	if len(s) != 63 {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 
 	// Dots and hex digits alternate.
@@ -1101,7 +1101,7 @@ func rdnsNameToIPv6(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
 	for i, j := len(s)-1, 0; i >= 0; i-- {
 		thisDot := (s[i] == '.')
 		if prevDot == thisDot {
-			return netaddr.IP{}, false
+			return netip.Addr{}, false
 		}
 		prevDot = thisDot
 
@@ -1115,7 +1115,7 @@ func rdnsNameToIPv6(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
 
 	_, err := hex.Decode(ipb[:], b[:])
 	if err != nil {
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 
 	return netaddr.IPFrom16(ipb), true

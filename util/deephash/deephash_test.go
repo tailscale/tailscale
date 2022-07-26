@@ -191,7 +191,7 @@ func getVal() []any {
 	return []any{
 		&wgcfg.Config{
 			Name:      "foo",
-			Addresses: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
+			Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
 			Peers: []wgcfg.Peer{
 				{
 					PublicKey: key.NodePublic{},
@@ -199,12 +199,12 @@ func getVal() []any {
 			},
 		},
 		&router.Config{
-			Routes: []netaddr.IPPrefix{
+			Routes: []netip.Prefix{
 				netip.MustParsePrefix("1.2.3.0/24"),
 				netip.MustParsePrefix("1234::/64"),
 			},
 		},
-		map[dnsname.FQDN][]netaddr.IP{
+		map[dnsname.FQDN][]netip.Addr{
 			dnsname.FQDN("a."): {netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("4.3.2.1")},
 			dnsname.FQDN("b."): {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("9.9.9.9")},
 			dnsname.FQDN("c."): {netip.MustParseAddr("6.6.6.6"), netip.MustParseAddr("7.7.7.7")},
@@ -212,7 +212,7 @@ func getVal() []any {
 			dnsname.FQDN("e."): {netip.MustParseAddr("6.8.6.6"), netip.MustParseAddr("7.7.7.9")},
 			dnsname.FQDN("f."): {netip.MustParseAddr("6.9.6.6"), netip.MustParseAddr("7.7.7.0")},
 		},
-		map[dnsname.FQDN][]netaddr.IPPort{
+		map[dnsname.FQDN][]netip.AddrPort{
 			dnsname.FQDN("a."): {netip.MustParseAddrPort("1.2.3.4:11"), netip.MustParseAddrPort("4.3.2.1:22")},
 			dnsname.FQDN("b."): {netip.MustParseAddrPort("8.8.8.8:11"), netip.MustParseAddrPort("9.9.9.9:22")},
 			dnsname.FQDN("c."): {netip.MustParseAddrPort("8.8.8.8:12"), netip.MustParseAddrPort("9.9.9.9:23")},
@@ -497,18 +497,18 @@ func TestGetTypeHasher(t *testing.T) {
 			out32: "\x04\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00*\v\x00\x00\x00\x00\x00\x00\x0010.1.3.4/32\v\x00\x00\x00\x00\x00\x00\x0010.0.0.0/24\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x001.2.3.4/32\x01 \x00\x00\x00\x01\x00\x02\x00\x04\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x001.2.3.4/32\x01\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00foo\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\v\x00\x00\x00\x00\x00\x00\x00foooooooooo\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\f\x00\x00\x00\x00\x00\x00\x00baaaaaarrrrr\x00\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
 		},
 		{
-			name: "netaddr.IP",
+			name: "netip.Addr",
 			val:  netip.MustParseAddr("fe80::123%foo"),
 			out:  "\r\x00\x00\x00\x00\x00\x00\x00fe80::123%foo",
 		},
 		{
-			name: "ptr-netaddr.IP",
+			name: "ptr-netip.Addr",
 			val:  &someIP,
 			out:  "\x01\a\x00\x00\x00\x00\x00\x00\x001.2.3.4",
 		},
 		{
-			name: "ptr-nil-netaddr.IP",
-			val:  (*netaddr.IP)(nil),
+			name: "ptr-nil-netip.Addr",
+			val:  (*netip.Addr)(nil),
 			out:  "\x00",
 		},
 		{
@@ -651,7 +651,7 @@ var filterRules = []tailcfg.FilterRule{
 		}},
 		IPProto: []int{1, 2, 3, 4},
 		CapGrant: []tailcfg.CapGrant{{
-			Dsts: []netaddr.IPPrefix{netip.MustParsePrefix("1.2.3.4/32")},
+			Dsts: []netip.Prefix{netip.MustParsePrefix("1.2.3.4/32")},
 			Caps: []string{"foo"},
 		}},
 	},

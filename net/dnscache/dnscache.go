@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"runtime"
 	"sync"
 	"time"
@@ -62,7 +63,7 @@ type Resolver struct {
 
 	// LookupIPFallback optionally provides a backup DNS mechanism
 	// to use if Forward returns an error or no results.
-	LookupIPFallback func(ctx context.Context, host string) ([]netaddr.IP, error)
+	LookupIPFallback func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	// TTL is how long to keep entries cached
 	//
@@ -76,7 +77,7 @@ type Resolver struct {
 	// SingleHostStaticResult, if non-nil, is the static result of IPs that is returned
 	// by Resolver.LookupIP for any hostname. When non-nil, SingleHost must also be
 	// set with the expected name.
-	SingleHostStaticResult []netaddr.IP
+	SingleHostStaticResult []netip.Addr
 
 	// SingleHost is the hostname that SingleHostStaticResult is for.
 	// It is required when SingleHostStaticResult is present.
@@ -271,7 +272,7 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, e
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		var fips []netaddr.IP
+		var fips []netip.Addr
 		fips, err = r.LookupIPFallback(ctx, host)
 		if err == nil {
 			ips = nil
@@ -344,7 +345,7 @@ func Dialer(fwd DialContextFunc, dnsCache *Resolver) DialContextFunc {
 	d := &dialer{
 		fwd:         fwd,
 		dnsCache:    dnsCache,
-		pastConnect: map[netaddr.IP]time.Time{},
+		pastConnect: map[netip.Addr]time.Time{},
 	}
 	return d.DialContext
 }
@@ -355,7 +356,7 @@ type dialer struct {
 	dnsCache *Resolver
 
 	mu          sync.Mutex
-	pastConnect map[netaddr.IP]time.Time
+	pastConnect map[netip.Addr]time.Time
 }
 
 func (d *dialer) DialContext(ctx context.Context, network, address string) (retConn net.Conn, ret error) {
@@ -426,7 +427,7 @@ type dialCall struct {
 	network, address, host, port string
 
 	mu    sync.Mutex           // lock ordering: dialer.mu, then dialCall.mu
-	fails map[netaddr.IP]error // set of IPs that failed to dial thus far
+	fails map[netip.Addr]error // set of IPs that failed to dial thus far
 }
 
 // dnsWasTrustworthy reports whether we think the IP address(es) we
@@ -453,7 +454,7 @@ func (dc *dialCall) dnsWasTrustworthy() bool {
 	return false
 }
 
-func (dc *dialCall) dialOne(ctx context.Context, ip netaddr.IP) (net.Conn, error) {
+func (dc *dialCall) dialOne(ctx context.Context, ip netip.Addr) (net.Conn, error) {
 	c, err := dc.d.fwd(ctx, dc.network, net.JoinHostPort(ip.String(), dc.port))
 	dc.noteDialResult(ip, err)
 	return c, err
@@ -461,7 +462,7 @@ func (dc *dialCall) dialOne(ctx context.Context, ip netaddr.IP) (net.Conn, error
 
 // noteDialResult records that a dial to ip either succeeded or
 // failed.
-func (dc *dialCall) noteDialResult(ip netaddr.IP, err error) {
+func (dc *dialCall) noteDialResult(ip netip.Addr, err error) {
 	if err == nil {
 		d := dc.d
 		d.mu.Lock()
@@ -472,17 +473,17 @@ func (dc *dialCall) noteDialResult(ip netaddr.IP, err error) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 	if dc.fails == nil {
-		dc.fails = map[netaddr.IP]error{}
+		dc.fails = map[netip.Addr]error{}
 	}
 	dc.fails[ip] = err
 }
 
 // uniqueIPs returns a possibly-mutated subslice of ips, filtering out
 // dups and ones that have already failed previously.
-func (dc *dialCall) uniqueIPs(ips []netaddr.IP) (ret []netaddr.IP) {
+func (dc *dialCall) uniqueIPs(ips []netip.Addr) (ret []netip.Addr) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	seen := map[netaddr.IP]bool{}
+	seen := map[netip.Addr]bool{}
 	ret = ips[:0]
 	for _, ip := range ips {
 		if seen[ip] {
@@ -504,7 +505,7 @@ const fallbackDelay = 300 * time.Millisecond
 
 // raceDial tries to dial port on each ip in ips, starting a new race
 // dial every fallbackDelay apart, returning whichever completes first.
-func (dc *dialCall) raceDial(ctx context.Context, ips []netaddr.IP) (net.Conn, error) {
+func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -536,7 +537,7 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netaddr.IP) (net.Conn, e
 					return
 				}
 			}
-			go func(ip netaddr.IP) {
+			go func(ip netip.Addr) {
 				c, err := dc.dialOne(ctx, ip)
 				if err != nil {
 					// Best effort wake-up a pending dial.
@@ -580,7 +581,7 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netaddr.IP) (net.Conn, e
 	}
 }
 
-func v4addrs(aa []net.IPAddr) (ret []netaddr.IP) {
+func v4addrs(aa []net.IPAddr) (ret []netip.Addr) {
 	for _, a := range aa {
 		if ip, ok := netaddr.FromStdIP(a.IP); ok && ip.Is4() {
 			ret = append(ret, ip)
@@ -589,7 +590,7 @@ func v4addrs(aa []net.IPAddr) (ret []netaddr.IP) {
 	return ret
 }
 
-func v6addrs(aa []net.IPAddr) (ret []netaddr.IP) {
+func v6addrs(aa []net.IPAddr) (ret []netip.Addr) {
 	for _, a := range aa {
 		if ip, ok := netaddr.FromStdIP(a.IP); ok && ip.Is6() {
 			ret = append(ret, ip)

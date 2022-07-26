@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 )
@@ -23,7 +22,7 @@ import (
 //
 // Example keys are "foo.domain.tld.beta.tailscale.net" and "foo",
 // both without trailing dots, and both always lowercase.
-type dnsMap map[string]netaddr.IP
+type dnsMap map[string]netip.Addr
 
 // canonMapKey canonicalizes its input s to be a dnsMap map key.
 func canonMapKey(s string) string {
@@ -98,15 +97,15 @@ func splitHostPort(addr string) (host string, port uint16, err error) {
 //
 // The error is [exactly] errUnresolved if the addr is a name that isn't known
 // in the map.
-func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ netaddr.IPPort, err error) {
+func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ netip.AddrPort, err error) {
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr malformed or invalid port.
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
 		// addr was literal ip:port.
-		return netaddr.IPPortFrom(ip, port), nil
+		return netip.AddrPortFrom(ip, port), nil
 	}
 
 	// Host is not an IP, so assume it's a DNS name.
@@ -114,8 +113,8 @@ func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ neta
 	// Try MagicDNS first, otherwise a real DNS lookup.
 	ip := m[canonMapKey(host)]
 	if ip.IsValid() {
-		return netaddr.IPPortFrom(ip, port), nil
+		return netip.AddrPortFrom(ip, port), nil
 	}
 
-	return netaddr.IPPort{}, errUnresolved
+	return netip.AddrPort{}, errUnresolved
 }

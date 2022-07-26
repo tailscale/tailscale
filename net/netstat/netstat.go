@@ -7,15 +7,14 @@ package netstat
 
 import (
 	"errors"
+	"net/netip"
 	"runtime"
-
-	"tailscale.com/net/netaddr"
 )
 
 var ErrNotImplemented = errors.New("not implemented for GOOS=" + runtime.GOOS)
 
 type Entry struct {
-	Local, Remote netaddr.IPPort
+	Local, Remote netip.AddrPort
 	Pid           int
 	State         string // TODO: type?
 }

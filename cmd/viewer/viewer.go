@@ -177,7 +177,7 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			case "byte":
 				it.Import("go4.org/mem")
 				writeTemplate("byteSliceField")
-			case "inet.af/netaddr.IPPrefix", "net/netip.Prefix":
+			case "inet.af/netip.Prefix", "net/netip.Prefix":
 				it.Import("tailscale.com/types/views")
 				writeTemplate("ipPrefixSliceField")
 			default:

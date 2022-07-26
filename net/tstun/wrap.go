@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -21,7 +22,6 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tstime/mono"
@@ -82,7 +82,7 @@ type Wrapper struct {
 	// you might need to add a pad32.Four field here.
 	lastActivityAtomic mono.Time // time of last send or receive
 
-	destIPActivity atomic.Value // of map[netaddr.IP]func()
+	destIPActivity atomic.Value // of map[netip.Addr]func()
 	destMACAtomic  atomic.Value // of [6]byte
 	discoKey       atomic.Value // of key.DiscoPublic
 
@@ -158,7 +158,7 @@ type Wrapper struct {
 
 	// PeerAPIPort, if non-nil, returns the peerapi port that's
 	// running for the given IP address.
-	PeerAPIPort func(netaddr.IP) (port uint16, ok bool)
+	PeerAPIPort func(netip.Addr) (port uint16, ok bool)
 
 	// disableFilter disables all filtering when set. This should only be used in tests.
 	disableFilter bool
@@ -222,7 +222,7 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 // destination (the map keys).
 //
 // The map ownership passes to the Wrapper. It must be non-nil.
-func (t *Wrapper) SetDestIPActivityFuncs(m map[netaddr.IP]func()) {
+func (t *Wrapper) SetDestIPActivityFuncs(m map[netip.Addr]func()) {
 	t.destIPActivity.Store(m)
 }
 
@@ -429,8 +429,8 @@ func (t *Wrapper) sendOutbound(r tunReadResult) {
 }
 
 var (
-	magicDNSIPPort   = netaddr.IPPortFrom(tsaddr.TailscaleServiceIP(), 0) // 100.100.100.100:0
-	magicDNSIPPortv6 = netaddr.IPPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
+	magicDNSIPPort   = netip.AddrPortFrom(tsaddr.TailscaleServiceIP(), 0) // 100.100.100.100:0
+	magicDNSIPPortv6 = netip.AddrPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
 )
 
 func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
@@ -544,7 +544,7 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
 
-	if m, ok := t.destIPActivity.Load().(map[netaddr.IP]func()); ok {
+	if m, ok := t.destIPActivity.Load().(map[netip.Addr]func()); ok {
 		if fn := m[p.Dst.Addr()]; fn != nil {
 			fn()
 		}

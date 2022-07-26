@@ -14,9 +14,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"tailscale.com/net/flowtrack"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/ipproto"
 )
 
@@ -36,10 +36,10 @@ import (
 // In the future it might also accept 16 byte IP flow src/dst IPs
 // after the header, if they're different than the IP-level ones.
 type TailscaleRejectedHeader struct {
-	IPSrc  netaddr.IP            // IPv4 or IPv6 header's src IP
-	IPDst  netaddr.IP            // IPv4 or IPv6 header's dst IP
-	Src    netaddr.IPPort        // rejected flow's src
-	Dst    netaddr.IPPort        // rejected flow's dst
+	IPSrc  netip.Addr            // IPv4 or IPv6 header's src IP
+	IPDst  netip.Addr            // IPv4 or IPv6 header's dst IP
+	Src    netip.AddrPort        // rejected flow's src
+	Dst    netip.AddrPort        // rejected flow's dst
 	Proto  ipproto.Proto         // proto that was rejected (TCP or UDP)
 	Reason TailscaleRejectReason // why the connection was rejected
 
@@ -192,8 +192,8 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 		Reason: TailscaleRejectReason(p[2]),
 		IPSrc:  pp.Src.Addr(),
 		IPDst:  pp.Dst.Addr(),
-		Src:    netaddr.IPPortFrom(pp.Dst.Addr(), binary.BigEndian.Uint16(p[3:5])),
-		Dst:    netaddr.IPPortFrom(pp.Src.Addr(), binary.BigEndian.Uint16(p[5:7])),
+		Src:    netip.AddrPortFrom(pp.Dst.Addr(), binary.BigEndian.Uint16(p[3:5])),
+		Dst:    netip.AddrPortFrom(pp.Src.Addr(), binary.BigEndian.Uint16(p[5:7])),
 	}
 	if len(p) > 7 {
 		flags := p[7]

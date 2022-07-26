@@ -37,7 +37,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
@@ -1066,7 +1065,7 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	st.WriteHTML(w)
 }
 
-func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
+func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
 	for _, e := range entries {
 		if e.Local == ra && e.Remote == la {
 			return e.Pid

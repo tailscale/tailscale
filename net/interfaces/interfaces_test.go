@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/netip"
 	"testing"
-
-	"tailscale.com/net/netaddr"
 )
 
 func TestGetState(t *testing.T) {
@@ -76,7 +74,7 @@ func TestStateEqualFilteredIPFilter(t *testing.T) {
 	// has gained an "uninteresting" IP address.
 
 	s1 := &State{
-		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
+		InterfaceIPs: map[string][]netip.Prefix{"x": {
 			netip.MustParsePrefix("42.0.0.0/8"),
 			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
 		}},
@@ -84,7 +82,7 @@ func TestStateEqualFilteredIPFilter(t *testing.T) {
 	}
 
 	s2 := &State{
-		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
+		InterfaceIPs: map[string][]netip.Prefix{"x": {
 			netip.MustParsePrefix("42.0.0.0/8"),
 			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
 			netip.MustParsePrefix("127.0.0.0/8"),    // loopback (added)
@@ -126,8 +124,8 @@ func TestStateString(t *testing.T) {
 						Interface: &net.Interface{},
 					},
 				},
-				InterfaceIPs: map[string][]netaddr.IPPrefix{
-					"eth0": []netaddr.IPPrefix{
+				InterfaceIPs: map[string][]netip.Prefix{
+					"eth0": []netip.Prefix{
 						netip.MustParsePrefix("10.0.0.2/8"),
 					},
 				},

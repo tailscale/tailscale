@@ -9,8 +9,6 @@ import (
 	"net/netip"
 	"sync"
 	"time"
-
-	"tailscale.com/net/netaddr"
 )
 
 // FirewallType is the type of filtering a stateful firewall
@@ -38,8 +36,8 @@ const (
 // some fields, so in practice the key is either a 2-tuple (src only),
 // 3-tuple (src ip+port and dst ip) or 4-tuple (src+dst ip+port).
 type fwKey struct {
-	src netaddr.IPPort
-	dst netaddr.IPPort
+	src netip.AddrPort
+	dst netip.AddrPort
 }
 
 // key returns an fwKey for the given src and dst, trimmed according
@@ -48,7 +46,7 @@ type fwKey struct {
 // world), it's the caller's responsibility to swap src and dst in the
 // call to key when processing packets inbound from the "untrusted"
 // world.
-func (s FirewallType) key(src, dst netaddr.IPPort) fwKey {
+func (s FirewallType) key(src, dst netip.AddrPort) fwKey {
 	k := fwKey{src: src}
 	switch s {
 	case EndpointIndependentFirewall:

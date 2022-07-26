@@ -7,6 +7,7 @@ package interfaces
 import (
 	"log"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 	"syscall"
@@ -27,7 +28,7 @@ func init() {
 	getPAC = getPACWindows
 }
 
-func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
 	rs, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
 		log.Printf("routerIP/GetIPForwardTable2 error: %v", err)
@@ -94,7 +95,7 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 
 	if ret.IsValid() && !ret.IsPrivate() {
 		// Default route has a non-private gateway
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 
 	return ret, ret.IsValid()

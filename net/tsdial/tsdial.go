@@ -38,11 +38,11 @@ type Dialer struct {
 	Logf logger.Logf
 	// UseNetstackForIP if non-nil is whether NetstackDialTCP (if
 	// it's non-nil) should be used to dial the provided IP.
-	UseNetstackForIP func(netaddr.IP) bool
+	UseNetstackForIP func(netip.Addr) bool
 
 	// NetstackDialTCP dials the provided IPPort using netstack.
 	// If nil, it's not used.
-	NetstackDialTCP func(context.Context, netaddr.IPPort) (net.Conn, error)
+	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
 
 	peerDialControlFuncAtomic atomic.Value // of func() func(network, address string, c syscall.RawConn) error
 
@@ -208,7 +208,7 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netaddr.IPPort, error) {
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
@@ -227,7 +227,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 
 	var r net.Resolver
@@ -245,13 +245,13 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 	if len(ips) == 0 {
-		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
 	ip, _ := netaddr.FromStdIP(ips[0])
-	return netaddr.IPPortFrom(ip, port), nil
+	return netip.AddrPortFrom(ip, port), nil
 }
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding

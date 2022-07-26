@@ -9,8 +9,8 @@ package dnstype
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/views"
 )
 
@@ -58,12 +58,12 @@ func (v *ResolverView) UnmarshalJSON(b []byte) error {
 }
 
 func (v ResolverView) Addr() string { return v.ж.Addr }
-func (v ResolverView) BootstrapResolution() views.Slice[netaddr.IP] {
+func (v ResolverView) BootstrapResolution() views.Slice[netip.Addr] {
 	return views.SliceOf(v.ж.BootstrapResolution)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ResolverViewNeedsRegeneration = Resolver(struct {
 	Addr                string
-	BootstrapResolution []netaddr.IP
+	BootstrapResolution []netip.Addr
 }{})

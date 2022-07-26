@@ -312,7 +312,7 @@ func (s *Server) AddFakeNode() {
 	r := nk.Raw32()
 	id := int64(binary.LittleEndian.Uint64(r[:]))
 	ip := netaddr.IPv4(r[0], r[1], r[2], r[3])
-	addr := netaddr.IPPrefixFrom(ip, 32)
+	addr := netip.PrefixFrom(ip, 32)
 	s.nodes[nk] = &tailcfg.Node{
 		ID:                tailcfg.NodeID(id),
 		StableID:          tailcfg.StableNodeID(fmt.Sprintf("TESTCTRL%08x", id)),
@@ -321,8 +321,8 @@ func (s *Server) AddFakeNode() {
 		Key:               nk,
 		MachineAuthorized: true,
 		DiscoKey:          dk,
-		Addresses:         []netaddr.IPPrefix{addr},
-		AllowedIPs:        []netaddr.IPPrefix{addr},
+		Addresses:         []netip.Prefix{addr},
+		AllowedIPs:        []netip.Prefix{addr},
 	}
 	// TODO: send updates to other (non-fake?) nodes
 }
@@ -475,10 +475,10 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 
 	machineAuthorized := true // TODO: add Server.RequireMachineAuth
 
-	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
-	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
+	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
-	allowedIPs := []netaddr.IPPrefix{
+	allowedIPs := []netip.Prefix{
 		v4Prefix,
 		v6Prefix,
 	}
@@ -761,10 +761,10 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		return res.Peers[i].ID < res.Peers[j].ID
 	})
 
-	v4Prefix := netaddr.IPPrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
-	v6Prefix := netaddr.IPPrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
+	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
+	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
 
-	res.Node.Addresses = []netaddr.IPPrefix{
+	res.Node.Addresses = []netip.Prefix{
 		v4Prefix,
 		v6Prefix,
 	}

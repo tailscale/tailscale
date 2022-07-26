@@ -6,9 +6,9 @@ package filter
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -39,7 +39,7 @@ func (pr PortRange) contains(port uint16) bool {
 
 // NetPortRange combines an IP address prefix and PortRange.
 type NetPortRange struct {
-	Net   netaddr.IPPrefix
+	Net   netip.Prefix
 	Ports PortRange
 }
 
@@ -51,7 +51,7 @@ func (npr NetPortRange) String() string {
 type CapMatch struct {
 	// Dst is the IP prefix that the destination IP address matches against
 	// to get the capability.
-	Dst netaddr.IPPrefix
+	Dst netip.Prefix
 
 	// Cap is the capability that's granted if the destination IP addresses
 	// matches Dst.
@@ -62,7 +62,7 @@ type CapMatch struct {
 // Dsts.
 type Match struct {
 	IPProto []ipproto.Proto // required set (no default value at this layer)
-	Srcs    []netaddr.IPPrefix
+	Srcs    []netip.Prefix
 	Dsts    []NetPortRange // optional, if Srcs match
 	Caps    []CapMatch     // optional, if Srcs match
 }
@@ -152,7 +152,7 @@ func (ms matches) matchProtoAndIPsOnlyIfAllPorts(q *packet.Parsed) bool {
 	return false
 }
 
-func ipInList(ip netaddr.IP, netlist []netaddr.IPPrefix) bool {
+func ipInList(ip netip.Addr, netlist []netip.Prefix) bool {
 	for _, net := range netlist {
 		if net.Contains(ip) {
 			return true

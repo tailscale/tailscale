@@ -211,7 +211,7 @@ func (c *Client) vlogf(format string, a ...any) {
 
 // handleHairSTUN reports whether pkt (from src) was our magic hairpin
 // probe packet that we sent to ourselves.
-func (c *Client) handleHairSTUNLocked(pkt []byte, src netaddr.IPPort) bool {
+func (c *Client) handleHairSTUNLocked(pkt []byte, src netip.AddrPort) bool {
 	rs := c.curState
 	if rs == nil {
 		return false
@@ -234,7 +234,7 @@ func (c *Client) MakeNextReportFull() {
 	c.nextFull = true
 }
 
-func (c *Client) ReceiveSTUNPacket(pkt []byte, src netaddr.IPPort) {
+func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	c.vlogf("received STUN packet from %s", src)
 
 	if src.Addr().Is4() {
@@ -526,7 +526,7 @@ func (c *Client) readPackets(ctx context.Context, pc net.PacketConn) {
 type reportState struct {
 	c           *Client
 	hairTX      stun.TxID
-	gotHairSTUN chan netaddr.IPPort
+	gotHairSTUN chan netip.AddrPort
 	hairTimeout chan struct{} // closed on timeout
 	pc4         STUNConn
 	pc6         STUNConn
@@ -538,7 +538,7 @@ type reportState struct {
 	mu            sync.Mutex
 	sentHairCheck bool
 	report        *Report                            // to be returned by GetReport
-	inFlight      map[stun.TxID]func(netaddr.IPPort) // called without c.mu held
+	inFlight      map[stun.TxID]func(netip.AddrPort) // called without c.mu held
 	gotEP4        string
 	timers        []*time.Timer
 }
@@ -590,7 +590,7 @@ func (rs *reportState) probeWouldHelp(probe probe, node *tailcfg.DERPNode) bool 
 	return false
 }
 
-func (rs *reportState) startHairCheckLocked(dst netaddr.IPPort) {
+func (rs *reportState) startHairCheckLocked(dst netip.AddrPort) {
 	if rs.sentHairCheck || rs.incremental {
 		return
 	}
@@ -642,9 +642,9 @@ func (rs *reportState) stopTimers() {
 // addNodeLatency updates rs to note that node's latency is d. If ipp
 // is non-zero (for all but HTTPS replies), it's recorded as our UDP
 // IP:port.
-func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netaddr.IPPort, d time.Duration) {
+func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort, d time.Duration) {
 	var ipPortStr string
-	if ipp != (netaddr.IPPort{}) {
+	if ipp != (netip.AddrPort{}) {
 		ipPortStr = net.JoinHostPort(ipp.Addr().String(), fmt.Sprint(ipp.Port()))
 	}
 
@@ -772,9 +772,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	rs := &reportState{
 		c:           c,
 		report:      newReport(),
-		inFlight:    map[stun.TxID]func(netaddr.IPPort){},
+		inFlight:    map[stun.TxID]func(netip.AddrPort){},
 		hairTX:      stun.NewTxID(), // random payload
-		gotHairSTUN: make(chan netaddr.IPPort, 1),
+		gotHairSTUN: make(chan netip.AddrPort, 1),
 		hairTimeout: make(chan struct{}),
 		stopProbeCh: make(chan struct{}, 1),
 	}
@@ -1008,20 +1008,20 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 				return
 			}
 			d := c.timeNow().Sub(t0)
-			rs.addNodeLatency(node, netaddr.IPPort{}, d)
+			rs.addNodeLatency(node, netip.AddrPort{}, d)
 		}()
 	}
 	wg.Wait()
 	return nil
 }
 
-func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netaddr.IP, error) {
+func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegion) (time.Duration, netip.Addr, error) {
 	metricHTTPSend.Add(1)
 	var result httpstat.Result
 	ctx, cancel := context.WithTimeout(httpstat.WithHTTPStat(ctx, &result), overallProbeTimeout)
 	defer cancel()
 
-	var ip netaddr.IP
+	var ip netip.Addr
 
 	dc := derphttp.NewNetcheckClient(c.logf)
 	tlsConn, tcpConn, node, err := dc.DialRegionTLS(ctx, reg)
@@ -1033,7 +1033,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	if ta, ok := tlsConn.RemoteAddr().(*net.TCPAddr); ok {
 		ip, _ = netaddr.FromStdIP(ta.IP)
 	}
-	if ip == (netaddr.IP{}) {
+	if ip == (netip.Addr{}) {
 		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", tlsConn.RemoteAddr())
 	}
 
@@ -1250,7 +1250,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	sent := time.Now() // after DNS lookup above
 
 	rs.mu.Lock()
-	rs.inFlight[txID] = func(ipp netaddr.IPPort) {
+	rs.inFlight[txID] = func(ipp netip.AddrPort) {
 		rs.addNodeLatency(node, ipp, time.Since(sent))
 		cancelSet() // abort other nodes in this set
 	}

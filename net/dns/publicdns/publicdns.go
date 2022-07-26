@@ -9,31 +9,29 @@ package publicdns
 import (
 	"net/netip"
 	"sync"
-
-	"tailscale.com/net/netaddr"
 )
 
-var knownDoH = map[netaddr.IP]string{} // 8.8.8.8 => "https://..."
-var dohIPsOfBase = map[string][]netaddr.IP{}
+var knownDoH = map[netip.Addr]string{} // 8.8.8.8 => "https://..."
+var dohIPsOfBase = map[string][]netip.Addr{}
 var populateOnce sync.Once
 
 // KnownDoH returns a map of well-known public DNS IPs to their DoH URL.
 // The returned map should not be modified.
-func KnownDoH() map[netaddr.IP]string {
+func KnownDoH() map[netip.Addr]string {
 	populateOnce.Do(populate)
 	return knownDoH
 }
 
 // DoHIPsOfBase returns a map of DNS server IP addresses keyed
 // by their DoH URL. It is the inverse of KnownDoH.
-func DoHIPsOfBase() map[string][]netaddr.IP {
+func DoHIPsOfBase() map[string][]netip.Addr {
 	populateOnce.Do(populate)
 	return dohIPsOfBase
 }
 
 // DoHV6 returns the first IPv6 DNS address from a given public DNS provider
 // if found, along with a boolean indicating success.
-func DoHV6(base string) (ip netaddr.IP, ok bool) {
+func DoHV6(base string) (ip netip.Addr, ok bool) {
 	populateOnce.Do(populate)
 	for _, ip := range dohIPsOfBase[base] {
 		if ip.Is6() {
@@ -43,7 +41,7 @@ func DoHV6(base string) (ip netaddr.IP, ok bool) {
 	return ip, false
 }
 
-// addDoH parses a given well-formed ip string into a netaddr.IP type and
+// addDoH parses a given well-formed ip string into a netip.Addr type and
 // adds it to both knownDoH and dohIPsOFBase maps.
 func addDoH(ipStr, base string) {
 	ip := netip.MustParseAddr(ipStr)

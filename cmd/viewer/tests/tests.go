@@ -7,15 +7,14 @@ package tests
 
 import (
 	"fmt"
-
-	"tailscale.com/net/netaddr"
+	"net/netip"
 )
 
 //go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices
 
 type StructWithoutPtrs struct {
 	Int int
-	Pfx netaddr.IPPrefix
+	Pfx netip.Prefix
 }
 
 type Map struct {
@@ -54,6 +53,6 @@ type StructWithSlices struct {
 	Ints           []*int
 
 	Slice    []string
-	Prefixes []netaddr.IPPrefix
+	Prefixes []netip.Prefix
 	Data     []byte
 }

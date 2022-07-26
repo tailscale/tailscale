@@ -82,7 +82,7 @@ func (c *Conn) WaitReady(t testing.TB) {
 	}
 }
 
-func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netaddr.IP) (derpMap *tailcfg.DERPMap, cleanup func()) {
+func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
 	d := derp.NewServer(key.NewNode(), logf)
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
@@ -222,7 +222,7 @@ func (s *magicStack) Status() *ipnstate.Status {
 // Something external needs to provide a NetworkMap and WireGuard
 // configs to the magicStack in order for it to acquire an IP
 // address. See meshStacks for one possible source of netmaps and IPs.
-func (s *magicStack) IP() netaddr.IP {
+func (s *magicStack) IP() netip.Addr {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		st := s.Status()
 		if len(st.TailscaleIPs) > 0 {
@@ -251,13 +251,13 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    me.privateKey.Public(),
-			Addresses:  []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
+			Addresses:  []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 		}
 		for i, peer := range ms {
 			if i == myIdx {
 				continue
 			}
-			addrs := []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(i+1)), 32)}
+			addrs := []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(i+1)), 32)}
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
@@ -833,13 +833,13 @@ func TestActiveDiscovery(t *testing.T) {
 
 type devices struct {
 	m1   nettype.PacketListener
-	m1IP netaddr.IP
+	m1IP netip.Addr
 
 	m2   nettype.PacketListener
-	m2IP netaddr.IP
+	m2IP netip.Addr
 
 	stun   nettype.PacketListener
-	stunIP netaddr.IP
+	stunIP netip.Addr
 }
 
 // newPinger starts continuously sending test packets from srcM to
@@ -1010,24 +1010,24 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	m1cfg := &wgcfg.Config{
 		Name:       "peer1",
 		PrivateKey: m1.privateKey,
-		Addresses:  []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.1/32")},
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m2.privateKey.Public(),
 				DiscoKey:   m2.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.2/32")},
+				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 			},
 		},
 	}
 	m2cfg := &wgcfg.Config{
 		Name:       "peer2",
 		PrivateKey: m2.privateKey,
-		Addresses:  []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.2/32")},
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m1.privateKey.Public(),
 				DiscoKey:   m1.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.1/32")},
+				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 			},
 		},
 	}
@@ -1157,7 +1157,7 @@ func TestDiscoMessage(t *testing.T) {
 
 	box := peer1Priv.Shared(c.discoPrivate.Public()).Seal([]byte(payload))
 	pkt = append(pkt, box...)
-	got := c.handleDiscoMessage(pkt, netaddr.IPPort{}, key.NodePublic{})
+	got := c.handleDiscoMessage(pkt, netip.AddrPort{}, key.NodePublic{})
 	if !got {
 		t.Error("failed to open it")
 	}
@@ -1538,7 +1538,7 @@ func TestEndpointSetsEqual(t *testing.T) {
 	s := func(ports ...uint16) (ret []tailcfg.Endpoint) {
 		for _, port := range ports {
 			ret = append(ret, tailcfg.Endpoint{
-				Addr: netaddr.IPPortFrom(netaddr.IP{}, port),
+				Addr: netip.AddrPortFrom(netip.Addr{}, port),
 			})
 		}
 		return

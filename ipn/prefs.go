@@ -99,7 +99,7 @@ type Prefs struct {
 	// blackhole route will be installed on the local system to
 	// prevent any traffic escaping to the local network.
 	ExitNodeID tailcfg.StableNodeID
-	ExitNodeIP netaddr.IP
+	ExitNodeIP netip.Addr
 
 	// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
 	// routed directly or via the exit node.
@@ -168,7 +168,7 @@ type Prefs struct {
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current
 	// node.
-	AdvertiseRoutes []netaddr.IPPrefix
+	AdvertiseRoutes []netip.Prefix
 
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
@@ -383,7 +383,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist)
 }
 
-func compareIPNets(a, b []netaddr.IPPrefix) bool {
+func compareIPNets(a, b []netip.Prefix) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -478,13 +478,13 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 		return
 	}
 	p.AdvertiseRoutes = append(p.AdvertiseRoutes,
-		netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
-		netaddr.IPPrefixFrom(netip.IPv6Unspecified(), 0))
+		netip.PrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
+		netip.PrefixFrom(netip.IPv6Unspecified(), 0))
 }
 
 // peerWithTailscaleIP returns the peer in st with the provided
 // Tailscale IP.
-func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerStatus, ok bool) {
+func peerWithTailscaleIP(st *ipnstate.Status, ip netip.Addr) (ps *ipnstate.PeerStatus, ok bool) {
 	for _, ps := range st.Peer {
 		for _, ip2 := range ps.TailscaleIPs {
 			if ip == ip2 {
@@ -495,7 +495,7 @@ func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerS
 	return nil, false
 }
 
-func isRemoteIP(st *ipnstate.Status, ip netaddr.IP) bool {
+func isRemoteIP(st *ipnstate.Status, ip netip.Addr) bool {
 	for _, selfIP := range st.TailscaleIPs {
 		if ip == selfIP {
 			return false
@@ -507,7 +507,7 @@ func isRemoteIP(st *ipnstate.Status, ip netaddr.IP) bool {
 // ClearExitNode sets the ExitNodeID and ExitNodeIP to their zero values.
 func (p *Prefs) ClearExitNode() {
 	p.ExitNodeID = ""
-	p.ExitNodeIP = netaddr.IP{}
+	p.ExitNodeIP = netip.Addr{}
 }
 
 // ExitNodeLocalIPError is returned when the requested IP address for an exit
@@ -520,7 +520,7 @@ func (e ExitNodeLocalIPError) Error() string {
 	return fmt.Sprintf("cannot use %s as an exit node as it is a local IP address to this machine", e.hostOrIP)
 }
 
-func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netaddr.IP, err error) {
+func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	if s == "" {
 		return ip, os.ErrInvalid
 	}

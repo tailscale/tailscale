@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"go4.org/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
 )
@@ -42,7 +41,7 @@ default            link#14            UCSI         utun2
 ...
 
 */
-func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPDarwinExec() (ret netip.Addr, ok bool) {
 	if version.IsMobile() {
 		// Don't try to do subprocesses on iOS. Ends up with log spam like:
 		// kernel: "Sandbox: IPNExtension(86580) deny(1) process-fork"

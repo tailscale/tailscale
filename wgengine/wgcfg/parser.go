@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"go4.org/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -163,7 +163,7 @@ func (cfg *Config) handlePeerLine(peer *Peer, k, value mem.RO, valueBytes []byte
 		}
 		peer.PersistentKeepalive = uint16(n)
 	case k.EqualString("allowed_ip"):
-		ipp := netaddr.IPPrefix{}
+		ipp := netip.Prefix{}
 		err := ipp.UnmarshalText(valueBytes)
 		if err != nil {
 			return err

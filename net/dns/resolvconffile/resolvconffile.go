@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 )
 
@@ -30,7 +29,7 @@ const Path = "/etc/resolv.conf"
 // Config represents a resolv.conf(5) file.
 type Config struct {
 	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP
+	Nameservers []netip.Addr
 
 	// SearchDomains are the domain suffixes to use when expanding
 	// single-label name queries. SearchDomains is additive to

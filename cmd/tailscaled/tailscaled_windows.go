@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"time"
 
@@ -37,7 +38,6 @@ import (
 	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/safesocket"
@@ -245,7 +245,7 @@ func beFirewallKillswitch() bool {
 	// is passed in via stdin encoded in json.
 	dcd := json.NewDecoder(os.Stdin)
 	for {
-		var routes []netaddr.IPPrefix
+		var routes []netip.Prefix
 		if err := dcd.Decode(&routes); err != nil {
 			log.Fatalf("parent process died or requested exit, exiting (%v)", err)
 		}

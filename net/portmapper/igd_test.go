@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync"
 	"testing"
 
@@ -101,7 +102,7 @@ func (d *TestIGD) TestUPnPPort() uint16 {
 	return uint16(d.upnpConn.LocalAddr().(*net.UDPAddr).Port)
 }
 
-func testIPAndGateway() (gw, ip netaddr.IP, ok bool) {
+func testIPAndGateway() (gw, ip netip.Addr, ok bool) {
 	return netaddr.IPv4(127, 0, 0, 1), netaddr.IPv4(1, 2, 3, 4), true
 }
 
@@ -187,7 +188,7 @@ func (d *TestIGD) servePxP() {
 	}
 }
 
-func (d *TestIGD) handlePMPQuery(pkt []byte, src netaddr.IPPort) {
+func (d *TestIGD) handlePMPQuery(pkt []byte, src netip.AddrPort) {
 	d.inc(&d.counters.numPMPRecv)
 	if len(pkt) < 2 {
 		return
@@ -205,7 +206,7 @@ func (d *TestIGD) handlePMPQuery(pkt []byte, src netaddr.IPPort) {
 	// TODO
 }
 
-func (d *TestIGD) handlePCPQuery(pkt []byte, src netaddr.IPPort) {
+func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 	d.inc(&d.counters.numPCPRecv)
 	if len(pkt) < 24 {
 		return

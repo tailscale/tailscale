@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -86,7 +86,7 @@ func TestNewDirect(t *testing.T) {
 func fakeEndpoints(ports ...uint16) (ret []tailcfg.Endpoint) {
 	for _, port := range ports {
 		ret = append(ret, tailcfg.Endpoint{
-			Addr: netaddr.IPPortFrom(netaddr.IP{}, port),
+			Addr: netip.AddrPortFrom(netip.Addr{}, port),
 		})
 	}
 	return

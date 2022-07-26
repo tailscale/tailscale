@@ -19,7 +19,6 @@ import (
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -42,7 +41,7 @@ func TestDeviceConfig(t *testing.T) {
 		PrivateKey: pk1,
 		Peers: []Peer{{
 			PublicKey:  k2,
-			AllowedIPs: []netaddr.IPPrefix{ip2},
+			AllowedIPs: []netip.Prefix{ip2},
 		}},
 	}
 
@@ -50,7 +49,7 @@ func TestDeviceConfig(t *testing.T) {
 		PrivateKey: pk2,
 		Peers: []Peer{{
 			PublicKey:           k1,
-			AllowedIPs:          []netaddr.IPPrefix{ip1},
+			AllowedIPs:          []netip.Prefix{ip1},
 			PersistentKeepalive: 5,
 		}},
 	}
@@ -143,7 +142,7 @@ func TestDeviceConfig(t *testing.T) {
 	t.Run("device1 add new peer", func(t *testing.T) {
 		cfg1.Peers = append(cfg1.Peers, Peer{
 			PublicKey:  k3,
-			AllowedIPs: []netaddr.IPPrefix{ip3},
+			AllowedIPs: []netip.Prefix{ip3},
 		})
 		sort.Slice(cfg1.Peers, func(i, j int) bool {
 			return cfg1.Peers[i].PublicKey.Less(cfg1.Peers[j].PublicKey)

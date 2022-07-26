@@ -29,7 +29,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -223,7 +222,7 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := h.b
-	var ipp netaddr.IPPort
+	var ipp netip.AddrPort
 	if v := r.FormValue("addr"); v != "" {
 		var err error
 		ipp, err = netip.ParseAddrPort(v)

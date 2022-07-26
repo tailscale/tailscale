@@ -15,7 +15,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/winutil"
 )
@@ -92,7 +91,7 @@ func TestManagerWindowsGPMove(t *testing.T) {
 	// Upon initialization of cfg, we should not have any NRPT rules
 	ensureNoRules(t)
 
-	resolvers := []netaddr.IP{netip.MustParseAddr("1.1.1.1")}
+	resolvers := []netip.Addr{netip.MustParseAddr("1.1.1.1")}
 	domains := genRandomSubdomains(t, 1)
 
 	// 1. Populate local NRPT
@@ -216,7 +215,7 @@ func runTest(t *testing.T, isLocal bool) {
 	// Upon initialization of cfg, we should not have any NRPT rules
 	ensureNoRules(t)
 
-	resolvers := []netaddr.IP{netip.MustParseAddr("1.1.1.1")}
+	resolvers := []netip.Addr{netip.MustParseAddr("1.1.1.1")}
 
 	domains := genRandomSubdomains(t, 2*nrptMaxDomainsPerRule+1)
 

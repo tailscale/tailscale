@@ -8,6 +8,7 @@ package netutil
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,19 +17,18 @@ import (
 	"strings"
 
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 )
 
 // protocolsRequiredForForwarding reports whether IPv4 and/or IPv6 protocols are
 // required to forward the specified routes.
 // The state param must be specified.
-func protocolsRequiredForForwarding(routes []netaddr.IPPrefix, state *interfaces.State) (v4, v6 bool) {
+func protocolsRequiredForForwarding(routes []netip.Prefix, state *interfaces.State) (v4, v6 bool) {
 	if len(routes) == 0 {
 		// Nothing to route, so no need to warn.
 		return false, false
 	}
 
-	localIPs := make(map[netaddr.IP]bool)
+	localIPs := make(map[netip.Addr]bool)
 	for _, addrs := range state.InterfaceIPs {
 		for _, pfx := range addrs {
 			localIPs[pfx.Addr()] = true
@@ -59,7 +59,7 @@ func protocolsRequiredForForwarding(routes []netaddr.IPPrefix, state *interfaces
 // It returns an error if it is unable to determine if IP forwarding is enabled.
 // It returns a warning describing configuration issues if IP forwarding is
 // non-functional or partly functional.
-func CheckIPForwarding(routes []netaddr.IPPrefix, state *interfaces.State) (warn, err error) {
+func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, err error) {
 	if runtime.GOOS != "linux" {
 		switch runtime.GOOS {
 		case "dragonfly", "freebsd", "netbsd", "openbsd":

@@ -9,6 +9,7 @@ package monitor
 
 import (
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/jsimonetti/rtnetlink"
@@ -43,7 +44,7 @@ type nlConn struct {
 	// used to suppress duplicate RTM_NEWADDR messages. It is populated
 	// by RTM_NEWADDR messages and de-populated by RTM_DELADDR. See
 	// issue #4282.
-	addrCache map[uint32]map[netaddr.IP]bool
+	addrCache map[uint32]map[netip.Addr]bool
 }
 
 func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
@@ -61,7 +62,7 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
 		return newPollingMon(logf, m)
 	}
-	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netaddr.IP]bool)}, nil
+	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netip.Addr]bool)}, nil
 }
 
 func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
@@ -120,7 +121,7 @@ func (c *nlConn) Receive() (message, error) {
 		// detect them. See nlConn.addrcache and issue #4282.
 		if msg.Header.Type == unix.RTM_NEWADDR {
 			if addrs == nil {
-				addrs = make(map[netaddr.IP]bool)
+				addrs = make(map[netip.Addr]bool)
 				c.addrCache[rmsg.Index] = addrs
 			}
 
@@ -235,24 +236,24 @@ func (c *nlConn) Receive() (message, error) {
 	}
 }
 
-func netaddrIP(std net.IP) netaddr.IP {
+func netaddrIP(std net.IP) netip.Addr {
 	ip, _ := netaddr.FromStdIP(std)
 	return ip
 }
 
-func netaddrIPPrefix(std net.IP, bits uint8) netaddr.IPPrefix {
+func netaddrIPPrefix(std net.IP, bits uint8) netip.Prefix {
 	ip, _ := netaddr.FromStdIP(std)
-	return netaddr.IPPrefixFrom(ip, bits)
+	return netip.PrefixFrom(ip, int(bits))
 }
 
-func condNetAddrPrefix(ipp netaddr.IPPrefix) string {
+func condNetAddrPrefix(ipp netip.Prefix) string {
 	if !ipp.Addr().IsValid() {
 		return ""
 	}
 	return ipp.String()
 }
 
-func condNetAddrIP(ip netaddr.IP) string {
+func condNetAddrIP(ip netip.Addr) string {
 	if !ip.IsValid() {
 		return ""
 	}
@@ -261,8 +262,8 @@ func condNetAddrIP(ip netaddr.IP) string {
 
 // newRouteMessage is a message for a new route being added.
 type newRouteMessage struct {
-	Src, Dst netaddr.IPPrefix
-	Gateway  netaddr.IP
+	Src, Dst netip.Prefix
+	Gateway  netip.Addr
 	Table    uint8
 }
 
@@ -275,7 +276,7 @@ func (m *newRouteMessage) ignore() bool {
 // newAddrMessage is a message for a new address being added.
 type newAddrMessage struct {
 	Delete  bool
-	Addr    netaddr.IP
+	Addr    netip.Addr
 	IfIndex uint32 // interface index
 }
 

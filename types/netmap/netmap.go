@@ -8,11 +8,11 @@ package netmap
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 	"time"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
@@ -31,7 +31,7 @@ type NetworkMap struct {
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
 	Name          string
-	Addresses     []netaddr.IPPrefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
+	Addresses     []netip.Prefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
 	MachineStatus tailcfg.MachineStatus
 	MachineKey    key.MachinePublic
 	Peers         []*tailcfg.Node // sorted by Node.ID
@@ -74,7 +74,7 @@ type NetworkMap struct {
 // PeerByTailscaleIP returns a peer's Node based on its Tailscale IP.
 //
 // If nm is nil or no peer is found, ok is false.
-func (nm *NetworkMap) PeerByTailscaleIP(ip netaddr.IP) (peer *tailcfg.Node, ok bool) {
+func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer *tailcfg.Node, ok bool) {
 	// TODO(bradfitz):
 	if nm == nil {
 		return nil, false
@@ -305,7 +305,7 @@ func eqStringsIgnoreNil(a, b []string) bool {
 
 // eqCIDRsIgnoreNil reports whether a and b have the same length and
 // contents, but ignore whether a or b are nil.
-func eqCIDRsIgnoreNil(a, b []netaddr.IPPrefix) bool {
+func eqCIDRsIgnoreNil(a, b []netip.Prefix) bool {
 	if len(a) != len(b) {
 		return false
 	}

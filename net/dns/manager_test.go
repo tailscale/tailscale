@@ -13,7 +13,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
@@ -394,8 +393,8 @@ func TestManager(t *testing.T) {
 		},
 	}
 
-	trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
-	trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string {
+	trIP := cmp.Transformer("ipStr", func(ip netip.Addr) string { return ip.String() })
+	trIPPort := cmp.Transformer("ippStr", func(ipp netip.AddrPort) string {
 		if ipp.Port() == 53 {
 			return ipp.Addr().String()
 		}
@@ -424,14 +423,14 @@ func TestManager(t *testing.T) {
 	}
 }
 
-func mustIPs(strs ...string) (ret []netaddr.IP) {
+func mustIPs(strs ...string) (ret []netip.Addr) {
 	for _, s := range strs {
 		ret = append(ret, netip.MustParseAddr(s))
 	}
 	return ret
 }
 
-func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
+func mustIPPs(strs ...string) (ret []netip.AddrPort) {
 	for _, s := range strs {
 		ret = append(ret, netip.MustParseAddrPort(s))
 	}
@@ -456,9 +455,9 @@ func fqdns(strs ...string) (ret []dnsname.FQDN) {
 	return ret
 }
 
-func hosts(strs ...string) (ret map[dnsname.FQDN][]netaddr.IP) {
+func hosts(strs ...string) (ret map[dnsname.FQDN][]netip.Addr) {
 	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]netaddr.IP{}
+	ret = map[dnsname.FQDN][]netip.Addr{}
 	for _, s := range strs {
 		if ip, err := netip.ParseAddr(s); err == nil {
 			if key == "" {

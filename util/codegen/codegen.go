@@ -226,7 +226,7 @@ func ContainsPointers(typ types.Type) bool {
 	case "time.Time":
 		// time.Time contains a pointer that does not need copying
 		return false
-	case "inet.af/netaddr.IP", "net/netip.Addr", "net/netip.Prefix", "net/netip.AddrPort":
+	case "inet.af/netip.Addr", "net/netip.Addr", "net/netip.Prefix", "net/netip.AddrPort":
 		return false
 	}
 	switch ft := typ.Underlying().(type) {

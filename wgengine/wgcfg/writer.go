@@ -7,9 +7,9 @@ package wgcfg
 import (
 	"fmt"
 	"io"
+	"net/netip"
 	"strconv"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -101,7 +101,7 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 	return stickyErr
 }
 
-func cidrsEqual(x, y []netaddr.IPPrefix) bool {
+func cidrsEqual(x, y []netip.Prefix) bool {
 	// TODO: re-implement using netaddr.IPSet.Equal.
 	if len(x) != len(y) {
 		return false
@@ -119,7 +119,7 @@ func cidrsEqual(x, y []netaddr.IPPrefix) bool {
 	}
 
 	// Otherwise, see if they're the same, but out of order.
-	m := make(map[netaddr.IPPrefix]bool)
+	m := make(map[netip.Prefix]bool)
 	for _, v := range x {
 		m[v] = true
 	}

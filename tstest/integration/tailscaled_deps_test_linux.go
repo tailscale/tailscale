@@ -23,7 +23,6 @@ import (
 	_ "tailscale.com/logtail"
 	_ "tailscale.com/net/dns"
 	_ "tailscale.com/net/interfaces"
-	_ "tailscale.com/net/netaddr"
 	_ "tailscale.com/net/netns"
 	_ "tailscale.com/net/portmapper"
 	_ "tailscale.com/net/proxymux"

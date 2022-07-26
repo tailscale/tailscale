@@ -7,10 +7,10 @@
 package router
 
 import (
+	"net/netip"
 	"reflect"
 
 	"golang.zx2c4.com/wireguard/tun"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/wgengine/monitor"
@@ -55,21 +55,21 @@ type Config struct {
 	// LocalAddrs are the address(es) for this node. This is
 	// typically one IPv4/32 (the 100.x.y.z CGNAT) and one
 	// IPv6/128 (Tailscale ULA).
-	LocalAddrs []netaddr.IPPrefix
+	LocalAddrs []netip.Prefix
 
 	// Routes are the routes that point into the Tailscale
 	// interface.  These are the /32 and /128 routes to peers, as
 	// well as any other subnets that peers are advertising and
 	// this node has chosen to use.
-	Routes []netaddr.IPPrefix
+	Routes []netip.Prefix
 
 	// LocalRoutes are the routes that should not be routed through Tailscale.
 	// There are no priorities set in how these routes are added, normal
 	// routing rules apply.
-	LocalRoutes []netaddr.IPPrefix
+	LocalRoutes []netip.Prefix
 
 	// Linux-only things below, ignored on other platforms.
-	SubnetRoutes     []netaddr.IPPrefix     // subnets being advertised to other Tailscale nodes
+	SubnetRoutes     []netip.Prefix         // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
 	NetfilterMode    preftype.NetfilterMode // how much to manage netfilter rules
 }
