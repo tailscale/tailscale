@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import QRCode from "qrcode"
+import * as qrcode from "qrcode"
 
-export async function showLoginURL(url) {
+export async function showLoginURL(url: string) {
   if (loginNode) {
     loginNode.remove()
   }
@@ -16,7 +16,7 @@ export async function showLoginURL(url) {
   loginNode.appendChild(linkNode)
 
   try {
-    const dataURL = await QRCode.toDataURL(url, { width: 512 })
+    const dataURL = await qrcode.toDataURL(url, { width: 512 })
     const imageNode = document.createElement("img")
     imageNode.src = dataURL
     imageNode.width = 256
@@ -41,9 +41,9 @@ export function hideLoginURL() {
   loginNode = undefined
 }
 
-let loginNode
+let loginNode: HTMLDivElement | undefined
 
-export function showLogoutButton(ipn) {
+export function showLogoutButton(ipn: IPN) {
   if (logoutButtonNode) {
     logoutButtonNode.remove()
   }
@@ -57,7 +57,8 @@ export function showLogoutButton(ipn) {
     },
     { once: true }
   )
-  document.getElementById("header").appendChild(logoutButtonNode)
+  const headerNode = document.getElementById("header") as HTMLDivElement
+  headerNode.appendChild(logoutButtonNode)
 }
 
 export function hideLogoutButton() {
@@ -68,4 +69,4 @@ export function hideLogoutButton() {
   logoutButtonNode = undefined
 }
 
-let logoutButtonNode
+let logoutButtonNode: HTMLButtonElement | undefined

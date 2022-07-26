@@ -7,7 +7,7 @@ import wasmUrl from "./main.wasm"
 import { notifyState, notifyNetMap, notifyBrowseToURL } from "./notifier"
 import { sessionStateStorage } from "./js-state-store"
 
-const go = new window.Go()
+const go = new Go()
 WebAssembly.instantiateStreaming(
   fetch(`./dist/${wasmUrl}`),
   go.importObject

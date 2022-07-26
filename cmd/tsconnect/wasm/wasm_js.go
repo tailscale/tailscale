@@ -339,11 +339,10 @@ type jsNetMap struct {
 }
 
 type jsNetMapNode struct {
-	Name          string   `json:"name"`
-	Addresses     []string `json:"addresses"`
-	MachineStatus int      `json:"machineStatus"`
-	MachineKey    string   `json:"machineKey"`
-	NodeKey       string   `json:"nodeKey"`
+	Name       string   `json:"name"`
+	Addresses  []string `json:"addresses"`
+	MachineKey string   `json:"machineKey"`
+	NodeKey    string   `json:"nodeKey"`
 }
 
 type jsNetMapSelfNode struct {
