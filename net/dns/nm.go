@@ -10,6 +10,7 @@ package dns
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -312,7 +313,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 		if v, ok := cfg["nameservers"]; ok {
 			if ips, ok := v.Value().([]string); ok {
 				for _, s := range ips {
-					ip, err := netaddr.ParseIP(s)
+					ip, err := netip.ParseAddr(s)
 					if err != nil {
 						// hmm, what do? Shouldn't really happen.
 						continue

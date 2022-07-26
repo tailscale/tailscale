@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime"
 	"strings"
@@ -583,7 +584,7 @@ func shouldDialProto(s string, pred func(netaddr.IP) bool) bool {
 	if s == "" {
 		return true
 	}
-	ip, _ := netaddr.ParseIP(s)
+	ip, _ := netip.ParseAddr(s)
 	return pred(ip)
 }
 

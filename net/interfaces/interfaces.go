@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"sort"
 	"strings"
@@ -630,7 +631,7 @@ func isUsableV6(ip netaddr.IP) bool {
 }
 
 var (
-	v6Global1 = netaddr.MustParseIPPrefix("2000::/3")
+	v6Global1 = netip.MustParsePrefix("2000::/3")
 )
 
 // anyInterestingIP reports whether pfxs contains any IP that matches

@@ -6,6 +6,7 @@ package portmapper
 
 import (
 	"encoding/binary"
+	"net/netip"
 	"testing"
 
 	"tailscale.com/net/netaddr"
@@ -21,7 +22,7 @@ func TestParsePCPMapResponse(t *testing.T) {
 	if mapping == nil {
 		t.Fatalf("got nil mapping when expected non-nil")
 	}
-	expectedAddr := netaddr.MustParseIPPort("135.180.175.246:1234")
+	expectedAddr := netip.MustParseAddrPort("135.180.175.246:1234")
 	if mapping.external != expectedAddr {
 		t.Errorf("mismatched external address, got: %v, want: %v", mapping.external, expectedAddr)
 	}

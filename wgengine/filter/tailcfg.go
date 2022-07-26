@@ -6,6 +6,7 @@ package filter
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"go4.org/netipx"
@@ -122,7 +123,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		}, nil
 	}
 	if strings.Contains(arg, "/") {
-		pfx, err := netaddr.ParseIPPrefix(arg)
+		pfx, err := netip.ParsePrefix(arg)
 		if err != nil {
 			return nil, err
 		}
@@ -133,11 +134,11 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 	}
 	if strings.Count(arg, "-") == 1 {
 		ip1s, ip2s, _ := strings.Cut(arg, "-")
-		ip1, err := netaddr.ParseIP(ip1s)
+		ip1, err := netip.ParseAddr(ip1s)
 		if err != nil {
 			return nil, err
 		}
-		ip2, err := netaddr.ParseIP(ip2s)
+		ip2, err := netip.ParseAddr(ip2s)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +148,7 @@ func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
 		}
 		return r.Prefixes(), nil
 	}
-	ip, err := netaddr.ParseIP(arg)
+	ip, err := netip.ParseAddr(arg)
 	if err != nil {
 		return nil, fmt.Errorf("invalid IP address %q", arg)
 	}

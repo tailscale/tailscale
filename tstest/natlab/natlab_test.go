@@ -342,7 +342,7 @@ func testFirewall(t *testing.T, f *Firewall, tests []fwTest) {
 }
 
 func ipp(str string) netaddr.IPPort {
-	ipp, err := netaddr.ParseIPPort(str)
+	ipp, err := netip.ParseAddrPort(str)
 	if err != nil {
 		panic(err)
 	}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -170,7 +171,7 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, gw netaddr.IP, meta uP
 		return nil, err
 	}
 
-	ipp, err := netaddr.ParseIPPort(u.Host)
+	ipp, err := netip.ParseAddrPort(u.Host)
 	if err != nil {
 		return nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
 	}
@@ -292,7 +293,7 @@ func (c *Client) getUPnPPortMapping(
 		// TODO this doesn't seem right
 		return netaddr.IPPort{}, false
 	}
-	externalIP, err := netaddr.ParseIP(extIP)
+	externalIP, err := netip.ParseAddr(extIP)
 	if err != nil {
 		return netaddr.IPPort{}, false
 	}

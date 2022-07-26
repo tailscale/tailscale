@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -125,7 +126,7 @@ func likelyHomeRouterIPAndroid() (ret netaddr.IP, ok bool) {
 			return nil
 		}
 		ipb := line[:sp]
-		if ip, err := netaddr.ParseIP(string(ipb)); err == nil && ip.Is4() {
+		if ip, err := netip.ParseAddr(string(ipb)); err == nil && ip.Is4() {
 			ret = ip
 			log.Printf("interfaces: found Android default route %v", ip)
 		}

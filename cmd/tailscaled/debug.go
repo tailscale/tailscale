@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -269,8 +270,8 @@ func debugPortmap(ctx context.Context) error {
 	gatewayAndSelfIP := func() (gw, self netaddr.IP, ok bool) {
 		if v := os.Getenv("TS_DEBUG_GW_SELF"); strings.Contains(v, "/") {
 			i := strings.Index(v, "/")
-			gw = netaddr.MustParseIP(v[:i])
-			self = netaddr.MustParseIP(v[i+1:])
+			gw = netip.MustParseAddr(v[:i])
+			self = netip.MustParseAddr(v[i+1:])
 			return gw, self, true
 		}
 		return linkMon.GatewayAndSelfIP()

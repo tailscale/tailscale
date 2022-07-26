@@ -14,6 +14,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
@@ -85,7 +86,7 @@ func runCp(ctx context.Context, args []string) error {
 		hadBrackets = true
 		target = strings.TrimSuffix(strings.TrimPrefix(target, "["), "]")
 	}
-	if ip, err := netaddr.ParseIP(target); err == nil && ip.Is6() && !hadBrackets {
+	if ip, err := netip.ParseAddr(target); err == nil && ip.Is6() && !hadBrackets {
 		return fmt.Errorf("an IPv6 literal must be written as [%s]", ip)
 	} else if hadBrackets && (err != nil || !ip.Is6()) {
 		return errors.New("unexpected brackets around target")
@@ -168,7 +169,7 @@ func runCp(ctx context.Context, args []string) error {
 }
 
 func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNodeID, isOffline bool, err error) {
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return "", false, err
 	}

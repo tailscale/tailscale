@@ -30,13 +30,13 @@ func TestDeviceConfig(t *testing.T) {
 		return k.Public(), k
 	}
 	k1, pk1 := newK()
-	ip1 := netaddr.MustParseIPPrefix("10.0.0.1/32")
+	ip1 := netip.MustParsePrefix("10.0.0.1/32")
 
 	k2, pk2 := newK()
-	ip2 := netaddr.MustParseIPPrefix("10.0.0.2/32")
+	ip2 := netip.MustParsePrefix("10.0.0.2/32")
 
 	k3, _ := newK()
-	ip3 := netaddr.MustParseIPPrefix("10.0.0.3/32")
+	ip3 := netip.MustParsePrefix("10.0.0.3/32")
 
 	cfg1 := &Config{
 		PrivateKey: pk1,

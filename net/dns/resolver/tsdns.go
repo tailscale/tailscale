@@ -670,7 +670,7 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netaddr.IP
 		ip4Str = fqdn[:lastDot]
 	}
 
-	ip4, err := netaddr.ParseIP(ip4Str)
+	ip4, err := netip.ParseAddr(ip4Str)
 	if err != nil {
 		return netaddr.IP{}, false // badly formed, dont respond
 	}
@@ -1068,7 +1068,7 @@ func rawNameToLower(name []byte) string {
 //   1.2.3.4
 func rdnsNameToIPv4(name dnsname.FQDN) (ip netaddr.IP, ok bool) {
 	s := strings.TrimSuffix(name.WithTrailingDot(), rdnsv4Suffix)
-	ip, err := netaddr.ParseIP(s)
+	ip, err := netip.ParseAddr(s)
 	if err != nil {
 		return netaddr.IP{}, false
 	}
@@ -1196,7 +1196,7 @@ func unARPA(a string) (ipStr string, ok bool) {
 	if strings.HasSuffix(a, suf4) {
 		s := strings.TrimSuffix(a, suf4)
 		// Parse and reverse octets.
-		ip, err := netaddr.ParseIP(s)
+		ip, err := netip.ParseAddr(s)
 		if err != nil || !ip.Is4() {
 			return "", false
 		}

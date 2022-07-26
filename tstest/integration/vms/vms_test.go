@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -452,7 +453,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 				t.Fatalf("can't get IP: %v", err)
 			}
 
-			netaddr.MustParseIP(string(bytes.TrimSpace(ipBytes)))
+			netip.MustParseAddr(string(bytes.TrimSpace(ipBytes)))
 		})
 
 		t.Run("ping-"+tt.ipProto, func(t *testing.T) {

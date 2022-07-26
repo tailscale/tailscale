@@ -17,8 +17,8 @@ package netns
 import (
 	"context"
 	"net"
+	"net/netip"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netknob"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
@@ -100,6 +100,6 @@ func isLocalhost(addr string) bool {
 		return true
 	}
 
-	ip, _ := netaddr.ParseIP(host)
+	ip, _ := netip.ParseAddr(host)
 	return ip.IsLoopback()
 }

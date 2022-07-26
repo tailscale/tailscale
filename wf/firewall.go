@@ -9,6 +9,7 @@ package wf
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -18,10 +19,10 @@ import (
 
 // Known addresses.
 var (
-	linkLocalRange           = netaddr.MustParseIPPrefix("ff80::/10")
-	linkLocalDHCPMulticast   = netaddr.MustParseIP("ff02::1:2")
-	siteLocalDHCPMulticast   = netaddr.MustParseIP("ff05::1:3")
-	linkLocalRouterMulticast = netaddr.MustParseIP("ff02::2")
+	linkLocalRange           = netip.MustParsePrefix("ff80::/10")
+	linkLocalDHCPMulticast   = netip.MustParseAddr("ff02::1:2")
+	siteLocalDHCPMulticast   = netip.MustParseAddr("ff05::1:3")
+	linkLocalRouterMulticast = netip.MustParseAddr("ff02::2")
 )
 
 type direction int

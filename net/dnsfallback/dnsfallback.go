@@ -18,6 +18,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 )
 
 func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
-	if ip, err := netaddr.ParseIP(host); err == nil && ip.IsValid() {
+	if ip, err := netip.ParseAddr(host); err == nil && ip.IsValid() {
 		return []netaddr.IP{ip}, nil
 	}
 
@@ -42,10 +43,10 @@ func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
 	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
-			if ip, err := netaddr.ParseIP(n.IPv4); err == nil {
+			if ip, err := netip.ParseAddr(n.IPv4); err == nil {
 				cands4 = append(cands4, nameIP{n.HostName, ip})
 			}
-			if ip, err := netaddr.ParseIP(n.IPv6); err == nil {
+			if ip, err := netip.ParseAddr(n.IPv6); err == nil {
 				cands6 = append(cands6, nameIP{n.HostName, ip})
 			}
 		}

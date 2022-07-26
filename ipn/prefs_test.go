@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/netip"
 	"os"
 	"reflect"
 	"strings"
@@ -64,7 +65,7 @@ func TestPrefsEqual(t *testing.T) {
 
 	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
 		for _, s := range strs {
-			n, err := netaddr.ParseIPPrefix(s)
+			n, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -137,13 +138,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
 			&Prefs{},
 			false,
 		},
 		{
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
 			true,
 		},
 
@@ -415,7 +416,7 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
-				ExitNodeIP: netaddr.MustParseIP("1.2.3.4"),
+				ExitNodeIP: netip.MustParseAddr("1.2.3.4"),
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off Persist=nil}`,
@@ -659,7 +660,7 @@ func TestPrefsExitNode(t *testing.T) {
 		t.Errorf("default shouldn't advertise exit node")
 	}
 	p.AdvertiseRoutes = []netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix("10.0.0.0/16"),
+		netip.MustParsePrefix("10.0.0.0/16"),
 	}
 	p.SetAdvertiseExitNode(true)
 	if got, want := len(p.AdvertiseRoutes), 3; got != want {
@@ -682,7 +683,7 @@ func TestPrefsExitNode(t *testing.T) {
 }
 
 func TestExitNodeIPOfArg(t *testing.T) {
-	mustIP := netaddr.MustParseIP
+	mustIP := netip.MustParseAddr
 	tests := []struct {
 		name    string
 		arg     string

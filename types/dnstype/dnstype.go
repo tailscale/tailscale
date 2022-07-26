@@ -7,7 +7,11 @@ package dnstype
 
 //go:generate go run tailscale.com/cmd/cloner --type=Resolver --clonefunc=true
 
-import "tailscale.com/net/netaddr"
+import (
+	"net/netip"
+
+	"tailscale.com/net/netaddr"
+)
 
 // Resolver is the configuration for one DNS resolver.
 type Resolver struct {
@@ -37,10 +41,10 @@ func (r *Resolver) IPPort() (ipp netaddr.IPPort, ok bool) {
 		// cases.
 		return
 	}
-	if ip, err := netaddr.ParseIP(r.Addr); err == nil {
+	if ip, err := netip.ParseAddr(r.Addr); err == nil {
 		return netaddr.IPPortFrom(ip, 53), true
 	}
-	if ipp, err := netaddr.ParseIPPort(r.Addr); err == nil {
+	if ipp, err := netip.ParseAddrPort(r.Addr); err == nil {
 		return ipp, true
 	}
 	return

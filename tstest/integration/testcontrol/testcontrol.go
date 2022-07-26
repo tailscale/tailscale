@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -859,7 +860,7 @@ func filterInvalidIPv6Endpoints(eps []string) []string {
 }
 
 func keepClientEndpoint(ep string) bool {
-	ipp, err := netaddr.ParseIPPort(ep)
+	ipp, err := netip.ParseAddrPort(ep)
 	if err != nil {
 		// Shouldn't have made it this far if we unmarshalled
 		// the incoming JSON response.

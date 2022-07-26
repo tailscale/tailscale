@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/user"
@@ -27,7 +28,6 @@ import (
 
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
@@ -153,7 +153,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{src: netaddr.MustParseIPPort("1.2.3.4:30343")},
+			ci:       &sshConnInfo{src: netip.MustParseAddrPort("1.2.3.4:30343")},
 			wantUser: "ubuntu",
 		},
 		{
@@ -246,8 +246,8 @@ func TestSSH(t *testing.T) {
 	sc.localUser = u
 	sc.info = &sshConnInfo{
 		sshUser: "test",
-		src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
-		dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
+		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
+		dst:     netip.MustParseAddrPort("1.2.3.5:22"),
 		node:    &tailcfg.Node{},
 		uprof:   &tailcfg.UserProfile{},
 	}

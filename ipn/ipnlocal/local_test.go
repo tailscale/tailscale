@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
@@ -26,13 +27,13 @@ import (
 )
 
 func TestNetworkMapCompare(t *testing.T) {
-	prefix1, err := netaddr.ParseIPPrefix("192.168.0.0/24")
+	prefix1, err := netip.ParsePrefix("192.168.0.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
 	node1 := &tailcfg.Node{Addresses: []netaddr.IPPrefix{prefix1}}
 
-	prefix2, err := netaddr.ParseIPPrefix("10.0.0.0/8")
+	prefix2, err := netip.ParsePrefix("10.0.0.0/8")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 	// and localAddresses would normally come from calling interfaces.LocalAddresses.
 	var b netipx.IPSetBuilder
 	for _, c := range []string{"127.0.0.0/8", "192.168.9.0/24", "fe80::/32"} {
-		p := netaddr.MustParseIPPrefix(c)
+		p := netip.MustParsePrefix(c)
 		b.AddPrefix(p)
 	}
 	localInterfaceRoutes, err := b.IPSet()
@@ -193,28 +194,28 @@ func TestShrinkDefaultRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostIPs := []netaddr.IP{
-		netaddr.MustParseIP("127.0.0.1"),
-		netaddr.MustParseIP("192.168.9.39"),
-		netaddr.MustParseIP("fe80::1"),
-		netaddr.MustParseIP("fe80::437d:feff:feca:49a7"),
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("192.168.9.39"),
+		netip.MustParseAddr("fe80::1"),
+		netip.MustParseAddr("fe80::437d:feff:feca:49a7"),
 	}
 	localAddresses := []netaddr.IP{
-		netaddr.MustParseIP("192.168.9.39"),
+		netip.MustParseAddr("192.168.9.39"),
 	}
 
 	for _, test := range tests {
-		def := netaddr.MustParseIPPrefix(test.route)
+		def := netip.MustParsePrefix(test.route)
 		got, err := shrinkDefaultRoute(def, localInterfaceRoutes, hostIPs)
 		if err != nil {
 			t.Fatalf("shrinkDefaultRoute(%q): %v", test.route, err)
 		}
 		for _, ip := range test.in {
-			if !got.Contains(netaddr.MustParseIP(ip)) {
+			if !got.Contains(netip.MustParseAddr(ip)) {
 				t.Errorf("shrink(%q).Contains(%v) = false, want true", test.route, ip)
 			}
 		}
 		for _, ip := range test.out {
-			if got.Contains(netaddr.MustParseIP(ip)) {
+			if got.Contains(netip.MustParseAddr(ip)) {
 				t.Errorf("shrink(%q).Contains(%v) = true, want false", test.route, ip)
 			}
 		}
@@ -228,7 +229,7 @@ func TestShrinkDefaultRoute(t *testing.T) {
 }
 
 func TestPeerRoutes(t *testing.T) {
-	pp := netaddr.MustParseIPPrefix
+	pp := netip.MustParsePrefix
 	tests := []struct {
 		name  string
 		peers []wgcfg.Peer
@@ -363,13 +364,13 @@ func TestPeerAPIBase(t *testing.T) {
 			name: "self_only_4_them_both",
 			nm: &netmap.NetworkMap{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.1/32"),
+					netip.MustParsePrefix("100.64.1.1/32"),
 				},
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.2/32"),
-					netaddr.MustParseIPPrefix("fe70::2/128"),
+					netip.MustParsePrefix("100.64.1.2/32"),
+					netip.MustParsePrefix("fe70::2/128"),
 				},
 				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
@@ -384,13 +385,13 @@ func TestPeerAPIBase(t *testing.T) {
 			name: "self_only_6_them_both",
 			nm: &netmap.NetworkMap{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("fe70::1/128"),
+					netip.MustParsePrefix("fe70::1/128"),
 				},
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.2/32"),
-					netaddr.MustParseIPPrefix("fe70::2/128"),
+					netip.MustParsePrefix("100.64.1.2/32"),
+					netip.MustParsePrefix("fe70::2/128"),
 				},
 				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
@@ -405,14 +406,14 @@ func TestPeerAPIBase(t *testing.T) {
 			name: "self_both_them_only_4",
 			nm: &netmap.NetworkMap{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.1/32"),
-					netaddr.MustParseIPPrefix("fe70::1/128"),
+					netip.MustParsePrefix("100.64.1.1/32"),
+					netip.MustParsePrefix("fe70::1/128"),
 				},
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.2/32"),
-					netaddr.MustParseIPPrefix("fe70::2/128"),
+					netip.MustParsePrefix("100.64.1.2/32"),
+					netip.MustParsePrefix("fe70::2/128"),
 				},
 				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
@@ -426,14 +427,14 @@ func TestPeerAPIBase(t *testing.T) {
 			name: "self_both_them_only_6",
 			nm: &netmap.NetworkMap{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.1/32"),
-					netaddr.MustParseIPPrefix("fe70::1/128"),
+					netip.MustParsePrefix("100.64.1.1/32"),
+					netip.MustParsePrefix("fe70::1/128"),
 				},
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.2/32"),
-					netaddr.MustParseIPPrefix("fe70::2/128"),
+					netip.MustParsePrefix("100.64.1.2/32"),
+					netip.MustParsePrefix("fe70::2/128"),
 				},
 				Hostinfo: (&tailcfg.Hostinfo{
 					Services: []tailcfg.Service{
@@ -447,14 +448,14 @@ func TestPeerAPIBase(t *testing.T) {
 			name: "self_both_them_no_peerapi_service",
 			nm: &netmap.NetworkMap{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.1/32"),
-					netaddr.MustParseIPPrefix("fe70::1/128"),
+					netip.MustParsePrefix("100.64.1.1/32"),
+					netip.MustParsePrefix("fe70::1/128"),
 				},
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("100.64.1.2/32"),
-					netaddr.MustParseIPPrefix("fe70::2/128"),
+					netip.MustParsePrefix("100.64.1.2/32"),
+					netip.MustParsePrefix("fe70::2/128"),
 				},
 			},
 			want: "",
@@ -558,7 +559,7 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 		return il
 	}
 	newInterface := func(name, pfx string, wsl2, loopback bool) interfacePrefix {
-		ippfx := netaddr.MustParseIPPrefix(pfx)
+		ippfx := netip.MustParsePrefix(pfx)
 		ip := interfaces.Interface{
 			Interface: &net.Interface{},
 			AltAddrs: []net.Addr{

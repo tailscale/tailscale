@@ -787,11 +787,11 @@ func TestActiveDiscovery(t *testing.T) {
 		inet := natlab.NewInternet()
 		lan1 := &natlab.Network{
 			Name:    "lan1",
-			Prefix4: netaddr.MustParseIPPrefix("192.168.0.0/24"),
+			Prefix4: netip.MustParsePrefix("192.168.0.0/24"),
 		}
 		lan2 := &natlab.Network{
 			Name:    "lan2",
-			Prefix4: netaddr.MustParseIPPrefix("192.168.1.0/24"),
+			Prefix4: netip.MustParsePrefix("192.168.1.0/24"),
 		}
 
 		sif := mstun.Attach("eth0", inet)
@@ -1010,24 +1010,24 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	m1cfg := &wgcfg.Config{
 		Name:       "peer1",
 		PrivateKey: m1.privateKey,
-		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+		Addresses:  []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m2.privateKey.Public(),
 				DiscoKey:   m2.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+				AllowedIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.2/32")},
 			},
 		},
 	}
 	m2cfg := &wgcfg.Config{
 		Name:       "peer2",
 		PrivateKey: m2.privateKey,
-		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+		Addresses:  []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m1.privateKey.Public(),
 				DiscoKey:   m1.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+				AllowedIPs: []netaddr.IPPrefix{netip.MustParsePrefix("1.0.0.1/32")},
 			},
 		},
 	}
@@ -1247,7 +1247,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	if err != nil {
 		tb.Fatal(err)
 	}
-	conn.addValidDiscoPathForTest(nodeKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	conn.addValidDiscoPathForTest(nodeKey, netip.MustParseAddrPort(sendConn.LocalAddr().String()))
 	return nodeKey, discoKey
 }
 
@@ -1597,7 +1597,7 @@ func TestEndpointSetsEqual(t *testing.T) {
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
 	al := func(ipps string, d time.Duration) addrLatency {
-		return addrLatency{netaddr.MustParseIPPort(ipps), d}
+		return addrLatency{netip.MustParseAddrPort(ipps), d}
 	}
 	zero := addrLatency{}
 	tests := []struct {

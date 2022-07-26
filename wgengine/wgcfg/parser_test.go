@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"testing"
@@ -67,7 +68,7 @@ func BenchmarkFromUAPI(b *testing.B) {
 		return k.Public(), k
 	}
 	k1, pk1 := newK()
-	ip1 := netaddr.MustParseIPPrefix("10.0.0.1/32")
+	ip1 := netip.MustParsePrefix("10.0.0.1/32")
 
 	peer := Peer{
 		PublicKey:  k1,

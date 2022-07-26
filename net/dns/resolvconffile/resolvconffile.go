@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 
@@ -74,7 +75,7 @@ func Parse(r io.Reader) (*Config, error) {
 			if len(nameserver) == len(s) {
 				return nil, fmt.Errorf("missing space after \"nameserver\" in %q", line)
 			}
-			ip, err := netaddr.ParseIP(nameserver)
+			ip, err := netip.ParseAddr(nameserver)
 			if err != nil {
 				return nil, err
 			}

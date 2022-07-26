@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,7 +30,6 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -70,7 +70,7 @@ func AllowDebugAccess(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return false
 	}

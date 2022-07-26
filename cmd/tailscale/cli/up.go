@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"reflect"
 	"runtime"
@@ -199,8 +200,8 @@ func warnf(format string, args ...any) {
 }
 
 var (
-	ipv4default = netaddr.MustParseIPPrefix("0.0.0.0/0")
-	ipv6default = netaddr.MustParseIPPrefix("::/0")
+	ipv4default = netip.MustParsePrefix("0.0.0.0/0")
+	ipv6default = netip.MustParsePrefix("::/0")
 )
 
 func validateViaPrefix(ipp netaddr.IPPrefix) error {
@@ -229,7 +230,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		var default4, default6 bool
 		advroutes := strings.Split(advertiseRoutes, ",")
 		for _, s := range advroutes {
-			ipp, err := netaddr.ParseIPPrefix(s)
+			ipp, err := netip.ParsePrefix(s)
 			if err != nil {
 				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)
 			}
@@ -255,8 +256,8 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		}
 	}
 	if advertiseDefaultRoute {
-		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
-		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
+		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
+		routeMap[netip.MustParsePrefix("::/0")] = true
 	}
 	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
 	for r := range routeMap {

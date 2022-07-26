@@ -441,7 +441,7 @@ func (c *Conn) addDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Cl
 	mak.Set(&c.derpRoute, peer, derpRoute{derpID, dc})
 }
 
-var derpMagicIPAddr = netaddr.MustParseIP(tailcfg.DerpMagicIP)
+var derpMagicIPAddr = netip.MustParseAddr(tailcfg.DerpMagicIP)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
@@ -1034,7 +1034,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// back.
 		return []tailcfg.Endpoint{
 			{
-				Addr: netaddr.MustParseIPPort("[fe80:123:456:789::1]:12345"),
+				Addr: netip.MustParseAddrPort("[fe80:123:456:789::1]:12345"),
 				Type: tailcfg.EndpointLocal,
 			},
 		}, nil
@@ -1044,7 +1044,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	var eps []tailcfg.Endpoint                          // unique endpoints
 
 	ipp := func(s string) (ipp netaddr.IPPort) {
-		ipp, _ = netaddr.ParseIPPort(s)
+		ipp, _ = netip.ParseAddrPort(s)
 		return
 	}
 	addAddr := func(ipp netaddr.IPPort, et tailcfg.EndpointType) {
@@ -2359,7 +2359,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 				const derpPrefix = "127.3.3.40:"
 				if strings.HasPrefix(n.DERP, derpPrefix) {
-					ipp, _ := netaddr.ParseIPPort(n.DERP)
+					ipp, _ := netip.ParseAddrPort(n.DERP)
 					regionID := int(ipp.Port())
 					code := c.derpRegionCodeLocked(regionID)
 					if code != "" {
@@ -3751,7 +3751,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 	if n.DERP == "" {
 		de.derpAddr = netaddr.IPPort{}
 	} else {
-		de.derpAddr, _ = netaddr.ParseIPPort(n.DERP)
+		de.derpAddr, _ = netip.ParseAddrPort(n.DERP)
 	}
 
 	for _, st := range de.endpointState {
@@ -3762,7 +3762,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 			// Seems unlikely.
 			continue
 		}
-		ipp, err := netaddr.ParseIPPort(epStr)
+		ipp, err := netip.ParseAddrPort(epStr)
 		if err != nil {
 			de.c.logf("magicsock: bogus netmap endpoint %q", epStr)
 			continue

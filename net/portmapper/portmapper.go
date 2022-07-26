@@ -397,7 +397,7 @@ func (c *Client) createMapping() {
 }
 
 // wildcardIP is used when the previous external IP is not known for PCP port mapping.
-var wildcardIP = netaddr.MustParseIP("0.0.0.0")
+var wildcardIP = netip.MustParseAddr("0.0.0.0")
 
 // createOrGetMapping either creates a new mapping or returns a cached
 // valid one.

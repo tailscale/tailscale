@@ -13,6 +13,7 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"net/netip"
 	"reflect"
 	"runtime"
 	"testing"
@@ -199,24 +200,24 @@ func getVal() []any {
 		},
 		&router.Config{
 			Routes: []netaddr.IPPrefix{
-				netaddr.MustParseIPPrefix("1.2.3.0/24"),
-				netaddr.MustParseIPPrefix("1234::/64"),
+				netip.MustParsePrefix("1.2.3.0/24"),
+				netip.MustParsePrefix("1234::/64"),
 			},
 		},
 		map[dnsname.FQDN][]netaddr.IP{
-			dnsname.FQDN("a."): {netaddr.MustParseIP("1.2.3.4"), netaddr.MustParseIP("4.3.2.1")},
-			dnsname.FQDN("b."): {netaddr.MustParseIP("8.8.8.8"), netaddr.MustParseIP("9.9.9.9")},
-			dnsname.FQDN("c."): {netaddr.MustParseIP("6.6.6.6"), netaddr.MustParseIP("7.7.7.7")},
-			dnsname.FQDN("d."): {netaddr.MustParseIP("6.7.6.6"), netaddr.MustParseIP("7.7.7.8")},
-			dnsname.FQDN("e."): {netaddr.MustParseIP("6.8.6.6"), netaddr.MustParseIP("7.7.7.9")},
-			dnsname.FQDN("f."): {netaddr.MustParseIP("6.9.6.6"), netaddr.MustParseIP("7.7.7.0")},
+			dnsname.FQDN("a."): {netip.MustParseAddr("1.2.3.4"), netip.MustParseAddr("4.3.2.1")},
+			dnsname.FQDN("b."): {netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("9.9.9.9")},
+			dnsname.FQDN("c."): {netip.MustParseAddr("6.6.6.6"), netip.MustParseAddr("7.7.7.7")},
+			dnsname.FQDN("d."): {netip.MustParseAddr("6.7.6.6"), netip.MustParseAddr("7.7.7.8")},
+			dnsname.FQDN("e."): {netip.MustParseAddr("6.8.6.6"), netip.MustParseAddr("7.7.7.9")},
+			dnsname.FQDN("f."): {netip.MustParseAddr("6.9.6.6"), netip.MustParseAddr("7.7.7.0")},
 		},
 		map[dnsname.FQDN][]netaddr.IPPort{
-			dnsname.FQDN("a."): {netaddr.MustParseIPPort("1.2.3.4:11"), netaddr.MustParseIPPort("4.3.2.1:22")},
-			dnsname.FQDN("b."): {netaddr.MustParseIPPort("8.8.8.8:11"), netaddr.MustParseIPPort("9.9.9.9:22")},
-			dnsname.FQDN("c."): {netaddr.MustParseIPPort("8.8.8.8:12"), netaddr.MustParseIPPort("9.9.9.9:23")},
-			dnsname.FQDN("d."): {netaddr.MustParseIPPort("8.8.8.8:13"), netaddr.MustParseIPPort("9.9.9.9:24")},
-			dnsname.FQDN("e."): {netaddr.MustParseIPPort("8.8.8.8:14"), netaddr.MustParseIPPort("9.9.9.9:25")},
+			dnsname.FQDN("a."): {netip.MustParseAddrPort("1.2.3.4:11"), netip.MustParseAddrPort("4.3.2.1:22")},
+			dnsname.FQDN("b."): {netip.MustParseAddrPort("8.8.8.8:11"), netip.MustParseAddrPort("9.9.9.9:22")},
+			dnsname.FQDN("c."): {netip.MustParseAddrPort("8.8.8.8:12"), netip.MustParseAddrPort("9.9.9.9:23")},
+			dnsname.FQDN("d."): {netip.MustParseAddrPort("8.8.8.8:13"), netip.MustParseAddrPort("9.9.9.9:24")},
+			dnsname.FQDN("e."): {netip.MustParseAddrPort("8.8.8.8:14"), netip.MustParseAddrPort("9.9.9.9:25")},
 		},
 		map[key.DiscoPublic]bool{
 			key.DiscoPublicFromRaw32(mem.B([]byte{1: 1, 31: 0})): true,
@@ -405,7 +406,7 @@ func TestGetTypeHasher(t *testing.T) {
 	var (
 		someInt        = int('A')
 		someComplex128 = complex128(1 + 2i)
-		someIP         = netaddr.MustParseIP("1.2.3.4")
+		someIP         = netip.MustParseAddr("1.2.3.4")
 	)
 	tests := []struct {
 		name  string
@@ -497,7 +498,7 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "netaddr.IP",
-			val:  netaddr.MustParseIP("fe80::123%foo"),
+			val:  netip.MustParseAddr("fe80::123%foo"),
 			out:  "\r\x00\x00\x00\x00\x00\x00\x00fe80::123%foo",
 		},
 		{
@@ -650,7 +651,7 @@ var filterRules = []tailcfg.FilterRule{
 		}},
 		IPProto: []int{1, 2, 3, 4},
 		CapGrant: []tailcfg.CapGrant{{
-			Dsts: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.4/32")},
+			Dsts: []netaddr.IPPrefix{netip.MustParsePrefix("1.2.3.4/32")},
 			Caps: []string{"foo"},
 		}},
 	},

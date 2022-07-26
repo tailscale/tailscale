@@ -7,6 +7,7 @@ package interfaces
 import (
 	"encoding/json"
 	"net"
+	"net/netip"
 	"testing"
 
 	"tailscale.com/net/netaddr"
@@ -64,7 +65,7 @@ func TestIsUsableV6(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		if got := isUsableV6(netaddr.MustParseIP(test.ip)); got != test.want {
+		if got := isUsableV6(netip.MustParseAddr(test.ip)); got != test.want {
 			t.Errorf("isUsableV6(%s) = %v, want %v", test.name, got, test.want)
 		}
 	}
@@ -76,17 +77,17 @@ func TestStateEqualFilteredIPFilter(t *testing.T) {
 
 	s1 := &State{
 		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
-			netaddr.MustParseIPPrefix("42.0.0.0/8"),
-			netaddr.MustParseIPPrefix("169.254.0.0/16"), // link local unicast
+			netip.MustParsePrefix("42.0.0.0/8"),
+			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
 		}},
 		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
 	}
 
 	s2 := &State{
 		InterfaceIPs: map[string][]netaddr.IPPrefix{"x": {
-			netaddr.MustParseIPPrefix("42.0.0.0/8"),
-			netaddr.MustParseIPPrefix("169.254.0.0/16"), // link local unicast
-			netaddr.MustParseIPPrefix("127.0.0.0/8"),    // loopback (added)
+			netip.MustParsePrefix("42.0.0.0/8"),
+			netip.MustParsePrefix("169.254.0.0/16"), // link local unicast
+			netip.MustParsePrefix("127.0.0.0/8"),    // loopback (added)
 		}},
 		Interface: map[string]Interface{"x": {Interface: &net.Interface{Name: "x"}}},
 	}
@@ -127,7 +128,7 @@ func TestStateString(t *testing.T) {
 				},
 				InterfaceIPs: map[string][]netaddr.IPPrefix{
 					"eth0": []netaddr.IPPrefix{
-						netaddr.MustParseIPPrefix("10.0.0.2/8"),
+						netip.MustParsePrefix("10.0.0.2/8"),
 					},
 				},
 				HaveV4: true,

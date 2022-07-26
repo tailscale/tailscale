@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -146,11 +147,11 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 		ci.Creds, _ = peercred.Get(c)
 		return ci, nil
 	}
-	la, err := netaddr.ParseIPPort(c.LocalAddr().String())
+	la, err := netip.ParseAddrPort(c.LocalAddr().String())
 	if err != nil {
 		return ci, fmt.Errorf("parsing local address: %w", err)
 	}
-	ra, err := netaddr.ParseIPPort(c.RemoteAddr().String())
+	ra, err := netip.ParseAddrPort(c.RemoteAddr().String())
 	if err != nil {
 		return ci, fmt.Errorf("parsing local remote: %w", err)
 	}

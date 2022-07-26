@@ -7,6 +7,7 @@ package dns
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"sort"
 	"strings"
@@ -422,9 +423,9 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err er
 }
 
 var siteLocalResolvers = []netaddr.IP{
-	netaddr.MustParseIP("fec0:0:0:ffff::1"),
-	netaddr.MustParseIP("fec0:0:0:ffff::2"),
-	netaddr.MustParseIP("fec0:0:0:ffff::3"),
+	netip.MustParseAddr("fec0:0:0:ffff::1"),
+	netip.MustParseAddr("fec0:0:0:ffff::2"),
+	netip.MustParseAddr("fec0:0:0:ffff::3"),
 }
 
 func isWindows10OrBetter() bool {

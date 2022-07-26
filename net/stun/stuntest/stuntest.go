@@ -9,12 +9,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/nettype"
@@ -106,7 +106,7 @@ func DERPMapOf(stun ...string) *tailcfg.DERPMap {
 			panic(fmt.Sprintf("bogus port %q in %q", portStr, hostPortStr))
 		}
 		var ipv4, ipv6 string
-		ip, err := netaddr.ParseIP(host)
+		ip, err := netip.ParseAddr(host)
 		if err != nil {
 			panic(fmt.Sprintf("bogus non-IP STUN host %q in %q", host, hostPortStr))
 		}

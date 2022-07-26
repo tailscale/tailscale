@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,11 +29,11 @@ import (
 )
 
 func udp4(src, dst string, sport, dport uint16) []byte {
-	sip, err := netaddr.ParseIP(src)
+	sip, err := netip.ParseAddr(src)
 	if err != nil {
 		panic(err)
 	}
-	dip, err := netaddr.ParseIP(dst)
+	dip, err := netip.ParseAddr(dst)
 	if err != nil {
 		panic(err)
 	}
@@ -49,11 +50,11 @@ func udp4(src, dst string, sport, dport uint16) []byte {
 }
 
 func tcp4syn(src, dst string, sport, dport uint16) []byte {
-	sip, err := netaddr.ParseIP(src)
+	sip, err := netip.ParseAddr(src)
 	if err != nil {
 		panic(err)
 	}
-	dip, err := netaddr.ParseIP(dst)
+	dip, err := netip.ParseAddr(dst)
 	if err != nil {
 		panic(err)
 	}
@@ -79,7 +80,7 @@ func tcp4syn(src, dst string, sport, dport uint16) []byte {
 func nets(nets ...string) (ret []netaddr.IPPrefix) {
 	for _, s := range nets {
 		if i := strings.IndexByte(s, '/'); i == -1 {
-			ip, err := netaddr.ParseIP(s)
+			ip, err := netip.ParseAddr(s)
 			if err != nil {
 				panic(err)
 			}
@@ -89,7 +90,7 @@ func nets(nets ...string) (ret []netaddr.IPPrefix) {
 			}
 			ret = append(ret, netaddr.IPPrefixFrom(ip, bits))
 		} else {
-			pfx, err := netaddr.ParseIPPrefix(s)
+			pfx, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -150,7 +151,7 @@ func setfilter(logf logger.Logf, tun *Wrapper) {
 		{IPProto: protos, Srcs: nets("1.2.3.4"), Dsts: netports("5.6.7.8:98")},
 	}
 	var sb netipx.IPSetBuilder
-	sb.AddPrefix(netaddr.MustParseIPPrefix("1.2.0.0/16"))
+	sb.AddPrefix(netip.MustParsePrefix("1.2.0.0/16"))
 	ipSet, _ := sb.IPSet()
 	tun.SetFilter(filter.New(matches, ipSet, ipSet, nil, logf))
 }
@@ -428,7 +429,7 @@ func TestAtomic64Alignment(t *testing.T) {
 func TestPeerAPIBypass(t *testing.T) {
 	wrapperWithPeerAPI := &Wrapper{
 		PeerAPIPort: func(ip netaddr.IP) (port uint16, ok bool) {
-			if ip == netaddr.MustParseIP("100.64.1.2") {
+			if ip == netip.MustParseAddr("100.64.1.2") {
 				return 60000, true
 			}
 			return

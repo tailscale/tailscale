@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"reflect"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestDialCall_DNSWasTrustworthy(t *testing.T) {
 		ip  netaddr.IP // IP we pretended to dial
 		err error      // the dial error or nil for success
 	}
-	mustIP := netaddr.MustParseIP
+	mustIP := netip.MustParseAddr
 	errFail := errors.New("some connect failure")
 	tests := []struct {
 		name  string
@@ -90,7 +91,7 @@ func TestDialCall_DNSWasTrustworthy(t *testing.T) {
 
 func TestDialCall_uniqueIPs(t *testing.T) {
 	dc := &dialCall{}
-	mustIP := netaddr.MustParseIP
+	mustIP := netip.MustParseAddr
 	errFail := errors.New("some connect failure")
 	dc.noteDialResult(mustIP("2003::1"), errFail)
 	dc.noteDialResult(mustIP("2003::2"), errFail)
@@ -116,10 +117,10 @@ func TestResolverAllHostStaticResult(t *testing.T) {
 	r := &Resolver{
 		SingleHost: "foo.bar",
 		SingleHostStaticResult: []netaddr.IP{
-			netaddr.MustParseIP("2001:4860:4860::8888"),
-			netaddr.MustParseIP("2001:4860:4860::8844"),
-			netaddr.MustParseIP("8.8.8.8"),
-			netaddr.MustParseIP("8.8.4.4"),
+			netip.MustParseAddr("2001:4860:4860::8888"),
+			netip.MustParseAddr("2001:4860:4860::8844"),
+			netip.MustParseAddr("8.8.8.8"),
+			netip.MustParseAddr("8.8.4.4"),
 		},
 	}
 	ip4, ip6, allIPs, err := r.LookupIP(context.Background(), "foo.bar")

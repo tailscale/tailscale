@@ -1208,19 +1208,19 @@ func (b *LocalBackend) setFilter(f *filter.Filter) {
 
 var removeFromDefaultRoute = []netaddr.IPPrefix{
 	// RFC1918 LAN ranges
-	netaddr.MustParseIPPrefix("192.168.0.0/16"),
-	netaddr.MustParseIPPrefix("172.16.0.0/12"),
-	netaddr.MustParseIPPrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("10.0.0.0/8"),
 	// IPv4 link-local
-	netaddr.MustParseIPPrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("169.254.0.0/16"),
 	// IPv4 multicast
-	netaddr.MustParseIPPrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("224.0.0.0/4"),
 	// Tailscale IPv4 range
 	tsaddr.CGNATRange(),
 	// IPv6 Link-local addresses
-	netaddr.MustParseIPPrefix("fe80::/10"),
+	netip.MustParsePrefix("fe80::/10"),
 	// IPv6 multicast
-	netaddr.MustParseIPPrefix("ff00::/8"),
+	netip.MustParsePrefix("ff00::/8"),
 	// Tailscale IPv6 range
 	tsaddr.TailscaleULARange(),
 }
@@ -2346,7 +2346,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 			// TODO: more
 			continue
 		}
-		ip, err := netaddr.ParseIP(rec.Value)
+		ip, err := netip.ParseAddr(rec.Value)
 		if err != nil {
 			// Ignore.
 			continue
@@ -2622,8 +2622,8 @@ func magicDNSRootDomains(nm *netmap.NetworkMap) []dnsname.FQDN {
 }
 
 var (
-	ipv4Default = netaddr.MustParseIPPrefix("0.0.0.0/0")
-	ipv6Default = netaddr.MustParseIPPrefix("::/0")
+	ipv4Default = netip.MustParsePrefix("0.0.0.0/0")
+	ipv6Default = netip.MustParsePrefix("::/0")
 )
 
 // peerRoutes returns the routerConfig.Routes to access peers.

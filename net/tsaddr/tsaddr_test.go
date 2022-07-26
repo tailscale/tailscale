@@ -5,6 +5,7 @@
 package tsaddr
 
 import (
+	"net/netip"
 	"testing"
 
 	"tailscale.com/net/netaddr"
@@ -52,30 +53,30 @@ func TestCGNATRange(t *testing.T) {
 }
 
 func TestNewContainsIPFunc(t *testing.T) {
-	f := NewContainsIPFunc([]netaddr.IPPrefix{netaddr.MustParseIPPrefix("10.0.0.0/8")})
-	if f(netaddr.MustParseIP("8.8.8.8")) {
+	f := NewContainsIPFunc([]netaddr.IPPrefix{netip.MustParsePrefix("10.0.0.0/8")})
+	if f(netip.MustParseAddr("8.8.8.8")) {
 		t.Fatal("bad")
 	}
-	if !f(netaddr.MustParseIP("10.1.2.3")) {
+	if !f(netip.MustParseAddr("10.1.2.3")) {
 		t.Fatal("bad")
 	}
-	f = NewContainsIPFunc([]netaddr.IPPrefix{netaddr.MustParseIPPrefix("10.1.2.3/32")})
-	if !f(netaddr.MustParseIP("10.1.2.3")) {
-		t.Fatal("bad")
-	}
-	f = NewContainsIPFunc([]netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix("10.1.2.3/32"),
-		netaddr.MustParseIPPrefix("::2/128"),
-	})
-	if !f(netaddr.MustParseIP("::2")) {
+	f = NewContainsIPFunc([]netaddr.IPPrefix{netip.MustParsePrefix("10.1.2.3/32")})
+	if !f(netip.MustParseAddr("10.1.2.3")) {
 		t.Fatal("bad")
 	}
 	f = NewContainsIPFunc([]netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix("10.1.2.3/32"),
-		netaddr.MustParseIPPrefix("10.1.2.4/32"),
-		netaddr.MustParseIPPrefix("::2/128"),
+		netip.MustParsePrefix("10.1.2.3/32"),
+		netip.MustParsePrefix("::2/128"),
 	})
-	if !f(netaddr.MustParseIP("10.1.2.4")) {
+	if !f(netip.MustParseAddr("::2")) {
+		t.Fatal("bad")
+	}
+	f = NewContainsIPFunc([]netaddr.IPPrefix{
+		netip.MustParsePrefix("10.1.2.3/32"),
+		netip.MustParsePrefix("10.1.2.4/32"),
+		netip.MustParsePrefix("::2/128"),
+	})
+	if !f(netip.MustParseAddr("10.1.2.4")) {
 		t.Fatal("bad")
 	}
 }
@@ -99,7 +100,7 @@ func TestUnmapVia(t *testing.T) {
 		{"fd7a:115c:a1e0:b1b::bb:10.2.1.4", "fd7a:115c:a1e0:b1b:0:bb:a02:104"}, // "b1b",not "bia"
 	}
 	for _, tt := range tests {
-		if got := UnmapVia(netaddr.MustParseIP(tt.ip)).String(); got != tt.want {
+		if got := UnmapVia(netip.MustParseAddr(tt.ip)).String(); got != tt.want {
 			t.Errorf("for %q: got %q, want %q", tt.ip, got, tt.want)
 		}
 	}

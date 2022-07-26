@@ -5,19 +5,19 @@
 package flowtrack
 
 import (
+	"net/netip"
 	"testing"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 )
 
 func TestCache(t *testing.T) {
 	c := &Cache{MaxEntries: 2}
 
-	k1 := Tuple{Src: netaddr.MustParseIPPort("1.1.1.1:1"), Dst: netaddr.MustParseIPPort("1.1.1.1:1")}
-	k2 := Tuple{Src: netaddr.MustParseIPPort("1.1.1.1:1"), Dst: netaddr.MustParseIPPort("2.2.2.2:2")}
-	k3 := Tuple{Src: netaddr.MustParseIPPort("1.1.1.1:1"), Dst: netaddr.MustParseIPPort("3.3.3.3:3")}
-	k4 := Tuple{Src: netaddr.MustParseIPPort("1.1.1.1:1"), Dst: netaddr.MustParseIPPort("4.4.4.4:4")}
+	k1 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("1.1.1.1:1")}
+	k2 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("2.2.2.2:2")}
+	k3 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("3.3.3.3:3")}
+	k4 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("4.4.4.4:4")}
 
 	wantLen := func(want int) {
 		t.Helper()

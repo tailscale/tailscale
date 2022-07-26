@@ -7,6 +7,7 @@
 package publicdns
 
 import (
+	"net/netip"
 	"sync"
 
 	"tailscale.com/net/netaddr"
@@ -45,7 +46,7 @@ func DoHV6(base string) (ip netaddr.IP, ok bool) {
 // addDoH parses a given well-formed ip string into a netaddr.IP type and
 // adds it to both knownDoH and dohIPsOFBase maps.
 func addDoH(ipStr, base string) {
-	ip := netaddr.MustParseIP(ipStr)
+	ip := netip.MustParseAddr(ipStr)
 	knownDoH[ip] = base
 	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
 }

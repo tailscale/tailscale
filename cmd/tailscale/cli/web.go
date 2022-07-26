@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -28,7 +29,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/groupmember"
@@ -393,8 +393,8 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
 	}
-	exitNodeRouteV4 := netaddr.MustParseIPPrefix("0.0.0.0/0")
-	exitNodeRouteV6 := netaddr.MustParseIPPrefix("::/0")
+	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
+	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
 			data.AdvertiseExitNode = true

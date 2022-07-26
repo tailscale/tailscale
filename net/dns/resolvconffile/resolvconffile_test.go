@@ -5,6 +5,7 @@
 package resolvconffile
 
 import (
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,21 +23,21 @@ func TestParse(t *testing.T) {
 		{in: `nameserver 192.168.0.100`,
 			want: &Config{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},
 		{in: `nameserver 192.168.0.100 # comment`,
 			want: &Config{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},
 		{in: `nameserver 192.168.0.100#`,
 			want: &Config{
 				Nameservers: []netaddr.IP{
-					netaddr.MustParseIP("192.168.0.100"),
+					netip.MustParseAddr("192.168.0.100"),
 				},
 			},
 		},
