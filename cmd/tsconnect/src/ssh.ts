@@ -4,8 +4,8 @@
 
 import { Terminal } from "xterm"
 
-export function showSSHPeers(peers, ipn) {
-  const peersNode = document.getElementById("peers")
+export function showSSHPeers(peers: IPNNetMapPeerNode[], ipn: IPN) {
+  const peersNode = document.getElementById("peers") as HTMLDivElement
   peersNode.innerHTML = ""
 
   const sshPeers = peers.filter((p) => p.tailscaleSSHEnabled)
@@ -35,11 +35,11 @@ export function showSSHPeers(peers, ipn) {
 }
 
 export function hideSSHPeers() {
-  const peersNode = document.getElementById("peers")
+  const peersNode = document.getElementById("peers") as HTMLDivElement
   peersNode.innerHTML = ""
 }
 
-function ssh(hostname, ipn) {
+function ssh(hostname: string, ipn: IPN) {
   const termContainerNode = document.createElement("div")
   termContainerNode.className = "term-container"
   document.body.appendChild(termContainerNode)
@@ -56,7 +56,7 @@ function ssh(hostname, ipn) {
     }
   })
 
-  let onDataHook
+  let onDataHook: ((data: string) => void) | undefined
   term.onData((e) => {
     onDataHook?.(e)
   })

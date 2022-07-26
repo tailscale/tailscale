@@ -36,7 +36,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	}
 
 	return &esbuild.BuildOptions{
-		EntryPoints: []string{"src/index.js", "src/index.css"},
+		EntryPoints: []string{"src/index.ts", "src/index.css"},
 		Loader:      map[string]esbuild.Loader{".wasm": esbuild.LoaderFile},
 		Outdir:      *distDir,
 		Bundle:      true,

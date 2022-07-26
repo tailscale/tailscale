@@ -2,11 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-/**
- * @fileoverview Callbacks used by jsStateStore to persist IPN state.
- */
+/** @fileoverview Callbacks used by jsStateStore to persist IPN state. */
 
-export const sessionStateStorage = {
+export const sessionStateStorage: IPNStateStorage = {
   setState(id, value) {
     window.sessionStorage[`ipn-state-${id}`] = value
   },

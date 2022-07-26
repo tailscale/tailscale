@@ -9,60 +9,50 @@ import {
   hideLogoutButton,
 } from "./login"
 import { showSSHPeers, hideSSHPeers } from "./ssh"
+import { IPNState } from "./wasm_js"
 
 /**
  * @fileoverview Notification callback functions (bridged from ipn.Notify)
  */
 
-/** Mirrors values from ipn/backend.go */
-const State = {
-  NoState: 0,
-  InUseOtherUser: 1,
-  NeedsLogin: 2,
-  NeedsMachineAuth: 3,
-  Stopped: 4,
-  Starting: 5,
-  Running: 6,
-}
-
-export function notifyState(ipn, state) {
+export function notifyState(ipn: IPN, state: IPNState) {
   let stateLabel
   switch (state) {
-    case State.NoState:
+    case IPNState.NoState:
       stateLabel = "Initializing…"
       break
-    case State.InUseOtherUser:
+    case IPNState.InUseOtherUser:
       stateLabel = "In-use by another user"
       break
-    case State.NeedsLogin:
+    case IPNState.NeedsLogin:
       stateLabel = "Needs Login"
       hideLogoutButton()
       hideSSHPeers()
       ipn.login()
       break
-    case State.NeedsMachineAuth:
+    case IPNState.NeedsMachineAuth:
       stateLabel = "Needs authorization"
       break
-    case State.Stopped:
+    case IPNState.Stopped:
       stateLabel = "Stopped"
       hideLogoutButton()
       hideSSHPeers()
       break
-    case State.Starting:
+    case IPNState.Starting:
       stateLabel = "Starting…"
       break
-    case State.Running:
+    case IPNState.Running:
       stateLabel = "Running"
       hideLoginURL()
       showLogoutButton(ipn)
       break
   }
-  const stateNode = document.getElementById("state")
+  const stateNode = document.getElementById("state") as HTMLDivElement
   stateNode.textContent = stateLabel ?? ""
 }
 
-export function notifyNetMap(ipn, netMapStr) {
-  const netMap = JSON.parse(netMapStr)
+export function notifyNetMap(ipn: IPN, netMapStr: string) {
+  const netMap = JSON.parse(netMapStr) as IPNNetMap
   if (DEBUG) {
     console.log("Received net map: " + JSON.stringify(netMap, null, 2))
   }
@@ -70,6 +60,6 @@ export function notifyNetMap(ipn, netMapStr) {
   showSSHPeers(netMap.peers, ipn)
 }
 
-export function notifyBrowseToURL(ipn, url) {
+export function notifyBrowseToURL(ipn: IPN, url: string) {
   showLoginURL(url)
 }
