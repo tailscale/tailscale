@@ -44,6 +44,9 @@ for file in $(find $1 -name '*.go' -not -path '*/.git/*'); do
 		$1/control/controlbase/noiseexplorer_test.go)
 			# Noiseexplorer.com copyright.
 		;;
+        */zsyscall_windows.go)
+            # Generated syscall wrappers
+        ;;
         *)
             header="$(head -3 $file)"
             if ! check_file "$header"; then
