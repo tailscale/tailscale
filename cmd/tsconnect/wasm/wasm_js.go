@@ -114,6 +114,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 					notifyState(state: int): void,
 					notifyNetMap(netMap: object): void,
 					notifyBrowseToURL(url: string): void,
+					notifyPanicRecover(err: string): void,
 				})`)
 				return nil
 			}
@@ -166,6 +167,16 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 	notifyState(ipn.NoState)
 
 	i.lb.SetNotifyCallback(func(n ipn.Notify) {
+		// Panics in the notify callback are likely due to be due to bugs in
+		// this bridging module (as opposed to actual bugs in Tailscale) and
+		// thus may be recoverable. Let the UI know, and allow the user to
+		// choose if they want to reload the page.
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("Panic recovered:", r)
+				jsCallbacks.Call("notifyPanicRecover", fmt.Sprint(r))
+			}
+		}()
 		log.Printf("NOTIFY: %+v", n)
 		if n.State != nil {
 			notifyState(*n.State)
@@ -189,7 +200,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 							MachineKey: p.Machine.String(),
 							NodeKey:    p.Key.String(),
 						},
-						Online:              *p.Online,
+						Online:              p.Online,
 						TailscaleSSHEnabled: p.Hostinfo.TailscaleSSHEnabled(),
 					}
 				}),
@@ -352,8 +363,8 @@ type jsNetMapSelfNode struct {
 
 type jsNetMapPeerNode struct {
 	jsNetMapNode
-	Online              bool `json:"online"`
-	TailscaleSSHEnabled bool `json:"tailscaleSSHEnabled"`
+	Online              *bool `json:"online,omitempty"`
+	TailscaleSSHEnabled bool  `json:"tailscaleSSHEnabled"`
 }
 
 type jsStateStore struct {
