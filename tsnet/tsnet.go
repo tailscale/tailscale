@@ -228,18 +228,12 @@ func (s *Server) start() error {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
 	c := logtail.Config{
-		Collection: lpc.Collection,
-		PrivateID:  lpc.PrivateID,
-		Stderr:     ioutil.Discard, // log everything to Buffer
-		Buffer:     f,
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
+		Collection:        lpc.Collection,
+		PrivateID:         lpc.PrivateID,
+		Stderr:            ioutil.Discard, // log everything to Buffer
+		Buffer:            f,
+		CompressTransport: true,
+		HTTPC:             &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
 	}
 	s.logtail = logtail.NewLogger(c, logf)
 
