@@ -326,9 +326,67 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	STUNTestIP       string
 }{})
 
+// Clone makes a deep copy of SSHRule.
+// The result aliases no memory with the original.
+func (src *SSHRule) Clone() *SSHRule {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHRule)
+	*dst = *src
+	if dst.RuleExpires != nil {
+		dst.RuleExpires = new(time.Time)
+		*dst.RuleExpires = *src.RuleExpires
+	}
+	dst.Principals = make([]*SSHPrincipal, len(src.Principals))
+	for i := range dst.Principals {
+		dst.Principals[i] = src.Principals[i].Clone()
+	}
+	if dst.SSHUsers != nil {
+		dst.SSHUsers = map[string]string{}
+		for k, v := range src.SSHUsers {
+			dst.SSHUsers[k] = v
+		}
+	}
+	if dst.Action != nil {
+		dst.Action = new(SSHAction)
+		*dst.Action = *src.Action
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
+	RuleExpires *time.Time
+	Principals  []*SSHPrincipal
+	SSHUsers    map[string]string
+	Action      *SSHAction
+}{})
+
+// Clone makes a deep copy of SSHPrincipal.
+// The result aliases no memory with the original.
+func (src *SSHPrincipal) Clone() *SSHPrincipal {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHPrincipal)
+	*dst = *src
+	dst.PubKeys = append(src.PubKeys[:0:0], src.PubKeys...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
+	Node      StableNodeID
+	NodeIP    string
+	UserLogin string
+	Any       bool
+	PubKeys   []string
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -418,6 +476,24 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **DERPNode:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHRule:
+		switch dst := dst.(type) {
+		case *SSHRule:
+			*dst = *src.Clone()
+			return true
+		case **SSHRule:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHPrincipal:
+		switch dst := dst.(type) {
+		case *SSHPrincipal:
+			*dst = *src.Clone()
+			return true
+		case **SSHPrincipal:
 			*dst = src.Clone()
 			return true
 		}
