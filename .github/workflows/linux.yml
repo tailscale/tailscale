@@ -28,6 +28,11 @@ jobs:
     - name: Basic build
       run: go build ./cmd/...
 
+    - name: Build variants
+      run: |
+        go install --tags=ts_include_cli ./cmd/tailscaled
+        go install --tags=ts_omit_aws ./cmd/tailscaled
+
     - name: Get QEMU
       run: |
         # The qemu in Ubuntu 20.04 (Focal) is too old; we need 5.x something
