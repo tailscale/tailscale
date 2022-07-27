@@ -28,6 +28,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
+	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -517,6 +518,21 @@ func TestGetTypeHasher(t *testing.T) {
 			out:  "\x141970-01-01T00:00:00Z",
 		},
 		{
+			name: "time_ptr", // addressable, as opposed to "time" test above
+			val:  ptrTo(time.Unix(0, 0).In(time.UTC)),
+			out:  "\x01\x141970-01-01T00:00:00Z",
+		},
+		{
+			name: "time_ptr_via_unexported",
+			val:  testtype.NewUnexportedAddressableTime(time.Unix(0, 0).In(time.UTC)),
+			out:  "\x01\x141970-01-01T00:00:00Z",
+		},
+		{
+			name: "time_ptr_via_unexported_value",
+			val:  *testtype.NewUnexportedAddressableTime(time.Unix(0, 0).In(time.UTC)),
+			want: false, // neither addressable nor interface-able
+		},
+		{
 			name: "time_custom_zone",
 			val:  time.Unix(1655311822, 0).In(time.FixedZone("FOO", -60*60)),
 			out:  "\x192022-06-15T15:50:22-01:00",
@@ -815,6 +831,26 @@ func TestArrayAllocs(t *testing.T) {
 	if got > want {
 		t.Errorf("allocs = %v; want %v", got, want)
 	}
+}
+
+// Test for http://go/corp/6311 issue.
+func TestHashThroughView(t *testing.T) {
+	type sshPolicyOut struct {
+		Rules []tailcfg.SSHRuleView
+	}
+	type mapResponseOut struct {
+		SSHPolicy *sshPolicyOut
+	}
+	// Just test we don't panic:
+	_ = Hash(&mapResponseOut{
+		SSHPolicy: &sshPolicyOut{
+			Rules: []tailcfg.SSHRuleView{
+				(&tailcfg.SSHRule{
+					RuleExpires: ptrTo(time.Unix(123, 0)),
+				}).View(),
+			},
+		},
+	})
 }
 
 func BenchmarkHashArray(b *testing.B) {
