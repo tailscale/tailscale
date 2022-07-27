@@ -7,8 +7,10 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 )
 
 var bugReportCmd = &ffcli.Command{
@@ -16,6 +18,15 @@ var bugReportCmd = &ffcli.Command{
 	Exec:       runBugReport,
 	ShortHelp:  "Print a shareable identifier to help diagnose issues",
 	ShortUsage: "bugreport [note]",
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("bugreport")
+		fs.BoolVar(&bugReportArgs.diagnose, "diagnose", false, "run additional in-depth checks")
+		return fs
+	})(),
+}
+
+var bugReportArgs struct {
+	diagnose bool
 }
 
 func runBugReport(ctx context.Context, args []string) error {
@@ -27,7 +38,10 @@ func runBugReport(ctx context.Context, args []string) error {
 	default:
 		return errors.New("unknown argumets")
 	}
-	logMarker, err := localClient.BugReport(ctx, note)
+	logMarker, err := localClient.BugReportWithOpts(ctx, tailscale.BugReportOpts{
+		Note:     note,
+		Diagnose: bugReportArgs.diagnose,
+	})
 	if err != nil {
 		return err
 	}
