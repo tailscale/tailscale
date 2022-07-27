@@ -15,18 +15,57 @@ import (
 	qt "github.com/frankban/quicktest"
 )
 
+type viewStruct struct {
+	Int        int
+	Addrs      IPPrefixSlice
+	Strings    Slice[string]
+	AddrsPtr   *IPPrefixSlice `json:",omitempty"`
+	StringsPtr *Slice[string] `json:",omitempty"`
+}
+
+func BenchmarkSliceIteration(b *testing.B) {
+	var data []viewStruct
+	for i := 0; i < 10000; i++ {
+		data = append(data, viewStruct{Int: i})
+	}
+	b.ResetTimer()
+	b.Run("Len", func(b *testing.B) {
+		b.ReportAllocs()
+		dv := SliceOf(data)
+		for it := 0; it < b.N; it++ {
+			sum := 0
+			for i := 0; i < dv.Len(); i++ {
+				sum += dv.At(i).Int
+			}
+		}
+	})
+	b.Run("Cached-Len", func(b *testing.B) {
+		b.ReportAllocs()
+		dv := SliceOf(data)
+		for it := 0; it < b.N; it++ {
+			sum := 0
+			for i, n := 0, dv.Len(); i < n; i++ {
+				sum += dv.At(i).Int
+			}
+		}
+	})
+	b.Run("direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for it := 0; it < b.N; it++ {
+			sum := 0
+			for _, d := range data {
+				sum += d.Int
+			}
+		}
+	})
+}
+
 func TestViewsJSON(t *testing.T) {
 	mustCIDR := func(cidrs ...string) (out []netip.Prefix) {
 		for _, cidr := range cidrs {
 			out = append(out, netip.MustParsePrefix(cidr))
 		}
 		return
-	}
-	type viewStruct struct {
-		Addrs      IPPrefixSlice
-		Strings    Slice[string]
-		AddrsPtr   *IPPrefixSlice `json:",omitempty"`
-		StringsPtr *Slice[string] `json:",omitempty"`
 	}
 	ipp := IPPrefixSliceOf(mustCIDR("192.168.0.0/24"))
 	ss := SliceOf([]string{"bar"})
@@ -38,17 +77,18 @@ func TestViewsJSON(t *testing.T) {
 		{
 			name:     "empty",
 			in:       viewStruct{},
-			wantJSON: `{"Addrs":null,"Strings":null}`,
+			wantJSON: `{"Int":0,"Addrs":null,"Strings":null}`,
 		},
 		{
 			name: "everything",
 			in: viewStruct{
+				Int:        1234,
 				Addrs:      ipp,
 				AddrsPtr:   &ipp,
 				StringsPtr: &ss,
 				Strings:    ss,
 			},
-			wantJSON: `{"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
+			wantJSON: `{"Int":1234,"Addrs":["192.168.0.0/24"],"Strings":["bar"],"AddrsPtr":["192.168.0.0/24"],"StringsPtr":["bar"]}`,
 		},
 	}
 
