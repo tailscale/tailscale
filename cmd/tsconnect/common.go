@@ -104,7 +104,11 @@ func buildWasm(dev bool) error {
 // installJSDeps installs the JavaScript dependencies specified by package.json
 func installJSDeps() error {
 	log.Printf("Installing JS deps...\n")
-	cmd := exec.Command(*yarnPath)
+	return runYarn()
+}
+
+func runYarn(args ...string) error {
+	cmd := exec.Command(*yarnPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
