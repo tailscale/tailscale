@@ -128,6 +128,8 @@ var subCommands = map[string]*func([]string) error{
 	"be-child":                &beChildFunc,
 }
 
+var beCLI func() // non-nil if CLI is linked in
+
 func main() {
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
@@ -142,6 +144,11 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
+		beCLI()
+		return
+	}
 
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
