@@ -26,13 +26,6 @@ import (
 	"tailscale.com/util/cmpver"
 )
 
-var (
-	winHTTP            = windows.NewLazySystemDLL("winhttp.dll")
-	httpOpenProc       = winHTTP.NewProc("WinHttpOpen")
-	closeHandleProc    = winHTTP.NewProc("WinHttpCloseHandle")
-	getProxyForUrlProc = winHTTP.NewProc("WinHttpGetProxyForUrl")
-)
-
 func init() {
 	sysProxyFromEnv = proxyFromWinHTTPOrCache
 	sysAuthHeader = sysAuthHeaderWindows
@@ -116,7 +109,7 @@ func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err e
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	whi, err := winHTTPOpen()
+	whi, err := httpOpen()
 	if err != nil {
 		proxyErrorf("winhttp: Open: %v", err)
 		return nil, err
@@ -178,38 +171,25 @@ func getAccessFlag() uint32 {
 	return flag
 }
 
-func winHTTPOpen() (winHTTPInternet, error) {
-	if err := httpOpenProc.Find(); err != nil {
-		return 0, err
-	}
-	r, _, err := httpOpenProc.Call(
-		uintptr(unsafe.Pointer(userAgent)),
-		uintptr(getAccessFlag()),
-		0, /* WINHTTP_NO_PROXY_NAME */
-		0, /* WINHTTP_NO_PROXY_BYPASS */
-		0)
-	if r == 0 {
-		return 0, err
-	}
-	return winHTTPInternet(r), nil
+func httpOpen() (winHTTPInternet, error) {
+	return winHTTPOpen(
+		userAgent,
+		getAccessFlag(),
+		nil, /* WINHTTP_NO_PROXY_NAME */
+		nil, /* WINHTTP_NO_PROXY_BYPASS */
+		0,
+	)
 }
 
 type winHTTPInternet windows.Handle
 
 func (hi winHTTPInternet) Close() error {
-	if err := closeHandleProc.Find(); err != nil {
-		return err
-	}
-	r, _, err := closeHandleProc.Call(uintptr(hi))
-	if r == 1 {
-		return nil
-	}
-	return err
+	return winHTTPCloseHandle(hi)
 }
 
 // WINHTTP_AUTOPROXY_OPTIONS
 // https://docs.microsoft.com/en-us/windows/win32/api/winhttp/ns-winhttp-winhttp_autoproxy_options
-type autoProxyOptions struct {
+type winHTTPAutoProxyOptions struct {
 	DwFlags                uint32
 	DwAutoDetectFlags      uint32
 	AutoConfigUrl          *uint16
@@ -221,30 +201,46 @@ type autoProxyOptions struct {
 // WINHTTP_PROXY_INFO
 // https://docs.microsoft.com/en-us/windows/win32/api/winhttp/ns-winhttp-winhttp_proxy_info
 type winHTTPProxyInfo struct {
-	AccessType  uint16
+	AccessType  uint32
 	Proxy       *uint16
 	ProxyBypass *uint16
 }
 
-var proxyForURLOpts = &autoProxyOptions{
+type winHGlobal windows.Handle
+
+func globalFreeUTF16Ptr(p *uint16) error {
+	return globalFree((winHGlobal)(unsafe.Pointer(p)))
+}
+
+func (pi *winHTTPProxyInfo) free() {
+	if pi.Proxy != nil {
+		globalFreeUTF16Ptr(pi.Proxy)
+		pi.Proxy = nil
+	}
+	if pi.ProxyBypass != nil {
+		globalFreeUTF16Ptr(pi.ProxyBypass)
+		pi.ProxyBypass = nil
+	}
+}
+
+var proxyForURLOpts = &winHTTPAutoProxyOptions{
 	DwFlags:           winHTTP_AUTOPROXY_ALLOW_AUTOCONFIG | winHTTP_AUTOPROXY_AUTO_DETECT,
 	DwAutoDetectFlags: winHTTP_AUTO_DETECT_TYPE_DHCP, // | winHTTP_AUTO_DETECT_TYPE_DNS_A,
 }
 
 func (hi winHTTPInternet) GetProxyForURL(urlStr string) (string, error) {
-	if err := getProxyForUrlProc.Find(); err != nil {
+	var out winHTTPProxyInfo
+	err := winHTTPGetProxyForURL(
+		hi,
+		windows.StringToUTF16Ptr(urlStr),
+		proxyForURLOpts,
+		&out,
+	)
+	if err != nil {
 		return "", err
 	}
-	var out winHTTPProxyInfo
-	r, _, err := getProxyForUrlProc.Call(
-		uintptr(hi),
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(urlStr))),
-		uintptr(unsafe.Pointer(proxyForURLOpts)),
-		uintptr(unsafe.Pointer(&out)))
-	if r == 1 {
-		return windows.UTF16PtrToString(out.Proxy), nil
-	}
-	return "", err
+	defer out.free()
+	return windows.UTF16PtrToString(out.Proxy), nil
 }
 
 func sysAuthHeaderWindows(u *url.URL) (string, error) {
