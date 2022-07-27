@@ -28,6 +28,11 @@ func runBuild() {
 		log.Fatalf("Cannot setup: %v", err)
 	}
 
+	log.Printf("Linting...\n")
+	if err := runYarn("lint"); err != nil {
+		log.Fatalf("Linting failed: %v", err)
+	}
+
 	if err := cleanDist(); err != nil {
 		log.Fatalf("Cannot clean %s: %v", *distDir, err)
 	}
