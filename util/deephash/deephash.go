@@ -544,9 +544,11 @@ func (h *hasher) hashComplex128v(v reflect.Value) bool {
 func (h *hasher) hashTimev(v reflect.Value) bool {
 	var t time.Time
 	if v.CanAddr() {
-		t = *(v.Addr().Interface().(*time.Time))
-	} else {
+		t = *(*time.Time)(v.Addr().UnsafePointer())
+	} else if v.CanInterface() {
 		t = v.Interface().(time.Time)
+	} else {
+		return false
 	}
 	b := t.AppendFormat(h.scratch[:1], time.RFC3339Nano)
 	b[0] = byte(len(b) - 1) // more than sufficient width; if not, good enough.
