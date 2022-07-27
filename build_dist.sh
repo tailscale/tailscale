@@ -45,4 +45,25 @@ EOF
 	exit 0
 fi
 
-exec ./tool/go build -ldflags "-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}" "$@"
+tags=""
+ldflags="-X tailscale.com/version.Long=${LONG} -X tailscale.com/version.Short=${SHORT} -X tailscale.com/version.GitCommit=${GIT_HASH}"
+
+# build_dist.sh arguments must precede go build arguments.
+while [ "$#" -gt 1 ]; do
+	case "$1" in
+	--extra-small)
+		shift
+		ldflags="$ldflags -w -s"
+		tags="${tags:+$tags,}ts_omit_aws"
+		;;
+	--box)
+		shift
+		tags="${tags:+$tags,}ts_include_cli"
+		;;
+	*)
+		break
+		;;
+	esac
+done
+
+exec ./tool/go build ${tags:+-tags=$tags} -ldflags "$ldflags" "$@"
