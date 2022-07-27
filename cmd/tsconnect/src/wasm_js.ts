@@ -38,6 +38,7 @@ declare global {
     notifyState: (state: IPNState) => void
     notifyNetMap: (netMapStr: string) => void
     notifyBrowseToURL: (url: string) => void
+    notifyPanicRecover: (err: string) => void
   }
 
   type IPNNetMap = {
@@ -57,7 +58,7 @@ declare global {
   }
 
   type IPNNetMapPeerNode = IPNNetMapNode & {
-    online: boolean
+    online?: boolean
     tailscaleSSHEnabled: boolean
   }
 }
