@@ -21,6 +21,8 @@ type Buffer interface {
 	TryReadLine() ([]byte, error)
 
 	// Write writes a log line into the ring buffer.
+	//
+	// Write takes ownership of the provided slice.
 	Write([]byte) (int, error)
 }
 
