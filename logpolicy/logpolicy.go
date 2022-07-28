@@ -520,7 +520,7 @@ func New(collection string) *Policy {
 		}
 	}
 
-	c := logtail.Config{
+	conf := logtail.Config{
 		Collection: newc.Collection,
 		PrivateID:  newc.PrivateID,
 		Stderr:     logWriter{console},
@@ -534,16 +534,16 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
 	}
 	if collection == logtail.CollectionNode {
-		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
-		c.IncludeProcID = true
-		c.IncludeProcSequence = true
+		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
+		conf.IncludeProcID = true
+		conf.IncludeProcSequence = true
 	}
 
 	if val := getLogTarget(); val != "" {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-		c.BaseURL = val
+		conf.BaseURL = val
 		u, _ := url.Parse(val)
-		c.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
 	}
 
 	filchOptions := filch.Options{
@@ -566,16 +566,16 @@ func New(collection string) *Policy {
 
 	filchBuf, filchErr := filch.New(filchPrefix, filchOptions)
 	if filchBuf != nil {
-		c.Buffer = filchBuf
+		conf.Buffer = filchBuf
 		if filchBuf.OrigStderr != nil {
-			c.Stderr = filchBuf.OrigStderr
+			conf.Stderr = filchBuf.OrigStderr
 		}
 	}
-	lw := logtail.NewLogger(c, log.Printf)
+	lw := logtail.NewLogger(conf, log.Printf)
 
 	var logOutput io.Writer = lw
 
-	if runtime.GOOS == "windows" && c.Collection == logtail.CollectionNode {
+	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
 		logID := newc.PublicID.String()
 		exe, _ := os.Executable()
 		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {

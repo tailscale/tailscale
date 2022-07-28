@@ -167,8 +167,9 @@ type Logger struct {
 
 	procID              uint32
 	includeProcSequence bool
-	writeLock           sync.Mutex // guards increments of procSequence
-	procSequence        uint64
+
+	writeLock    sync.Mutex // guards increments of procSequence
+	procSequence uint64
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closed when shutdown complete
@@ -454,7 +455,7 @@ func Disable() {
 	logtailDisabled.Set(true)
 }
 
-func (l *Logger) send(jsonBlob []byte) (int, error) {
+func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 	if logtailDisabled.Get() {
 		return len(jsonBlob), nil
 	}
@@ -578,7 +579,7 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool, procID uint32, proc
 	return b
 }
 
-func (l *Logger) encode(buf []byte, level int) []byte {
+func (l *Logger) encodeLocked(buf []byte, level int) []byte {
 	if l.includeProcSequence {
 		l.procSequence++
 	}
@@ -659,10 +660,12 @@ func (l *Logger) Write(buf []byte) (int, error) {
 			l.stderr.Write(withNL)
 		}
 	}
+
 	l.writeLock.Lock()
-	b := l.encode(buf, level)
-	_, err := l.send(b)
-	l.writeLock.Unlock()
+	defer l.writeLock.Unlock()
+
+	b := l.encodeLocked(buf, level)
+	_, err := l.sendLocked(b)
 	return len(buf), err
 }
 
