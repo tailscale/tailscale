@@ -979,6 +979,25 @@ type MapRequest struct {
 	Stream      bool // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
 
+	// MapSessionHandle, if non-empty, is a request to reattach to a previous
+	// map session after a previous map session was interrupted for whatever
+	// reason. Its value is an opaque string as returned by
+	// MapResponse.MapSessionHandle.
+	//
+	// When set, the client must also send MapSessionSeq to specify the last
+	// processed message in that prior session.
+	//
+	// The server may choose to ignore the request for any reason and start a
+	// new map session. This is only applicable when Stream is true.
+	MapSessionHandle string `json:",omitempty"`
+
+	// MapSessionSeq is the sequence number in the map session identified by
+	// MapSesssionHandle that was most recently processed by the client.
+	// It is only applicable when MapSessionHandle is specified.
+	// If the server chooses to honor the MapSessionHandle request, only sequence
+	// numbers greater than this value will be returned.
+	MapSessionSeq int64 `json:",omitempty"`
+
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
 	Endpoints []string
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
@@ -1313,6 +1332,20 @@ type PingResponse struct {
 }
 
 type MapResponse struct {
+	// MapSessionHandle optionally specifies a unique opaque handle for this
+	// stateful MapResponse session. Servers may choose not to send it, and it's
+	// only sent on the first MapResponse in a stream. The client can determine
+	// whether it's reattaching to a prior stream by seeing whether this value
+	// matches the requested MapRequest.MapSessionHandle.
+	MapSessionHandle string `json:",omitempty"`
+
+	// Seq is a sequence number within a named map session (a response where the
+	// first message contains a MapSessionHandle). The Seq number may be omitted
+	// on responses that don't change the state of the stream, such as KeepAlive
+	// or certain types of PingRequests. This is the value to be sent in
+	// MapRequest.MapSessionSeq to resume after this message.
+	Seq int64 `json:",omitempty"`
+
 	// KeepAlive, if set, represents an empty message just to keep
 	// the connection alive. When true, all other fields except
 	// PingRequest, ControlTime, and PopBrowserURL are ignored.
