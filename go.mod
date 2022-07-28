@@ -67,7 +67,7 @@ require (
 	gvisor.dev/gvisor v0.0.0-20220721202624-0b2c11c2773c
 	honnef.co/go/tools v0.4.0-0.dev.0.20220404092545-59d7a2877f83
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
-	inet.af/wf v0.0.0-20211204062712-86aaea0a7310
+	inet.af/wf v0.0.0-20220728202103-50d96caab2f6
 	nhooyr.io/websocket v1.8.7
 )
 
@@ -263,8 +263,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xanzy/ssh-agent v0.3.1 // indirect
 	github.com/yeya24/promlinter v0.1.0 // indirect
-	go4.org/intern v0.0.0-20211027215823-ae77deb06f29 // indirect
-	go4.org/unsafe/assume-no-moving-gc v0.0.0-20220617031537-928513b29760 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
 	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
 	golang.org/x/text v0.3.7 // indirect
@@ -275,7 +273,6 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	howett.net/plist v1.0.0 // indirect
-	inet.af/netaddr v0.0.0-20220617031823-097006376321 // indirect
 	mvdan.cc/gofumpt v0.2.0 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
