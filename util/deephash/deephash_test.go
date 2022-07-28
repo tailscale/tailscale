@@ -317,6 +317,45 @@ func TestTypeIsRecursive(t *testing.T) {
 	}
 }
 
+func TestCanMaybeFastPath(t *testing.T) {
+	type RecursiveStruct struct {
+		v *RecursiveStruct
+	}
+	type RecursiveChan chan *RecursiveChan
+	type FastStruct struct{ _, _ string }
+
+	tests := []struct {
+		val  any
+		want bool
+	}{
+		{val: 42, want: true},
+		{val: "string", want: true},
+		{val: 1 + 2i, want: true},
+		{val: struct{}{}, want: true},
+		{val: (*RecursiveStruct)(nil), want: false},
+		{val: RecursiveStruct{}, want: false},
+		{val: FastStruct{}, want: true},
+		{val: time.Unix(0, 0), want: true},
+		{val: structs.Incomparable{}, want: true}, // ignore its [0]func()
+		{val: tailcfg.NetPortRange{}, want: true}, // uses structs.Incomparable
+		{val: (*tailcfg.Node)(nil), want: true},
+		{val: map[string]bool{}, want: false},
+		{val: func() {}, want: false},
+		{val: make(chan int), want: false},
+		{val: unsafe.Pointer(nil), want: false},
+		{val: make(RecursiveChan), want: false},
+		{val: make(chan int), want: false},
+		{val: tailcfg.SSHRule{}, want: false}, // contains a map
+		{val: (*tailcfg.SSHRule)(nil), want: false},
+	}
+	for _, tt := range tests {
+		got := canMaybeFastPath(reflect.TypeOf(tt.val))
+		if got != tt.want {
+			t.Errorf("for type %T: got %v, want %v", tt.val, got, tt.want)
+		}
+	}
+}
+
 type IntThenByte struct {
 	i int
 	b byte
@@ -610,6 +649,17 @@ func TestGetTypeHasher(t *testing.T) {
 			name: "tailcfg.Node",
 			val:  &tailcfg.Node{},
 			out:  "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x140001-01-01T00:00:00Z\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x140001-01-01T00:00:00Z\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+		},
+		{
+			name: "no_hashing_for_mixed_fast_slow_type",
+			val: struct {
+				A, B string
+				M    map[string]string
+			}{
+				"foo", "bar", map[string]string{"alice": "bob"},
+			},
+			want: false,
+			out:  "", // no "foo" or "bar" included
 		},
 	}
 	for _, tt := range tests {

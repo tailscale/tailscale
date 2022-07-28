@@ -424,11 +424,56 @@ func genHashPtrToMemoryRange(eleType reflect.Type) typeHasherFunc {
 	}
 }
 
-const debug = false
+const debug = true
+
+// canMaybeFastPath reports whether t is a type that we might be able to
+// hash quickly at runtime with a typeHasherFunc.
+//
+// If it returns false, the slow path should be used directly.
+func canMaybeFastPath(t reflect.Type) (ret bool) {
+	defer func() {
+		if !ret {
+			log.Printf("Can't on %v", t)
+		}
+	}()
+	ti := getTypeInfo(t)
+	if ti.isRecursive {
+		return false
+	}
+	switch t.Kind() {
+	case reflect.Map, reflect.Interface, reflect.Func, reflect.UnsafePointer, reflect.Chan:
+		return false
+	case reflect.Array:
+		return t.Size() == 0 || canMaybeFastPath(t.Elem())
+	case reflect.Slice, reflect.Pointer:
+		return canMaybeFastPath(t.Elem())
+	case reflect.Struct:
+		if t == timeTimeType || t.Implements(appenderToType) {
+			return true
+		}
+		for i, n := 0, t.NumField(); i < n; i++ {
+			sf := t.Field(i)
+			if sf.Type.Size() == 0 {
+				continue
+			}
+			if !canMaybeFastPath(sf.Type) {
+				return false
+			}
+		}
+		return true
+	}
+	return true
+}
 
 func genTypeHasher(t reflect.Type) typeHasherFunc {
+	fastable := canMaybeFastPath(t)
 	if debug {
-		log.Printf("generating func for %v", t)
+		log.Printf("generating func for %v; fastable=%v", t, fastable)
+	}
+	if !fastable {
+		return func(h *hasher, v reflect.Value) bool {
+			return false
+		}
 	}
 
 	switch t.Kind() {
