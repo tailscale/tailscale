@@ -191,13 +191,13 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm)
-				OS="$ID"
+			arch|archarm|endeavouros)
+				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
-			manjaro)
-				OS="$ID"
+			manjaro|manjaro-arm)
+				OS="manjaro"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
