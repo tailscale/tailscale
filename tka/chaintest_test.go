@@ -58,15 +58,15 @@ type testChain struct {
 //
 // Input is expected to be a graph & tweaks, looking like this:
 //
-//   G1 -> A -> B
-//         | -> C
+//	G1 -> A -> B
+//	      | -> C
 //
 // which defines AUMs G1, A, B, and C; with G1 having no parent, A having
 // G1 as a parent, and both B & C having A as a parent.
 //
 // Tweaks are specified like this:
 //
-//   <AUM>.<tweak> = <value>
+//	<AUM>.<tweak> = <value>
 //
 // for example: G1.hashSeed = 2
 //

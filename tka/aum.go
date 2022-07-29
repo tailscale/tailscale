@@ -77,20 +77,20 @@ func (k AUMKind) String() string {
 // AUM describes an Authority Update Message.
 //
 // The rules for adding new types of AUMs (MessageKind):
-// - CBOR key IDs must never be changed.
-// - New AUM types must not change semantics that are manipulated by other
-//   AUM types.
-// - The serialization of existing data cannot change (in other words, if
-//   an existing serialization test in aum_test.go fails, you need to try a
-//   different approach).
+//   - CBOR key IDs must never be changed.
+//   - New AUM types must not change semantics that are manipulated by other
+//     AUM types.
+//   - The serialization of existing data cannot change (in other words, if
+//     an existing serialization test in aum_test.go fails, you need to try a
+//     different approach).
 //
 // The rules for adding new fields are as follows:
-// - Must all be optional.
-// - An unset value must not result in serialization overhead. This is
-//   necessary so the serialization of older AUMs stays the same.
-// - New processing semantics of the new fields must be compatible with the
-//   behavior of old clients (which will ignore the field).
-// - No floats!
+//   - Must all be optional.
+//   - An unset value must not result in serialization overhead. This is
+//     necessary so the serialization of older AUMs stays the same.
+//   - New processing semantics of the new fields must be compatible with the
+//     behavior of old clients (which will ignore the field).
+//   - No floats!
 type AUM struct {
 	MessageKind AUMKind `cbor:"1,keyasint"`
 	PrevAUMHash []byte  `cbor:"2,keyasint"`

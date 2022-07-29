@@ -53,8 +53,8 @@ func (s State) GetKey(key KeyID) (Key, error) {
 // Clone makes an independent copy of State.
 //
 // NOTE: There is a difference between a nil slice and an empty
-//       slice for encoding purposes, so an implementation of Clone()
-//       must take care to preserve this.
+// slice for encoding purposes, so an implementation of Clone()
+// must take care to preserve this.
 func (s State) Clone() State {
 	out := State{}
 
@@ -117,9 +117,9 @@ func (s State) checkDisablement(secret []byte) bool {
 // to the current state.
 //
 // Specifically, the rules are:
-//  - The last AUM hash must match (transitively, this implies that this
-//    update follows the last update message applied to the state machine)
-//  - Or, the state machine knows no parent (its brand new).
+//   - The last AUM hash must match (transitively, this implies that this
+//     update follows the last update message applied to the state machine)
+//   - Or, the state machine knows no parent (its brand new).
 func (s State) parentMatches(update AUM) bool {
 	if s.LastAUMHash == nil {
 		return true
