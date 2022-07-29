@@ -17,11 +17,14 @@ declare global {
     logout(): void
     ssh(
       host: string,
-      writeFn: (data: string) => void,
-      setReadFn: (readFn: (data: string) => void) => void,
-      rows: number,
-      cols: number,
-      onDone: () => void
+      username: string,
+      termConfig: {
+        writeFn: (data: string) => void
+        setReadFn: (readFn: (data: string) => void) => void
+        rows: number
+        cols: number
+        onDone: () => void
+      }
     ): void
   }
 

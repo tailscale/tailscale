@@ -4,43 +4,46 @@
 
 import { Terminal } from "xterm"
 
-export function showSSHPeers(peers: IPNNetMapPeerNode[], ipn: IPN) {
-  const peersNode = document.getElementById("peers") as HTMLDivElement
-  peersNode.innerHTML = ""
+export function showSSHForm(peers: IPNNetMapPeerNode[], ipn: IPN) {
+  const formNode = document.getElementById("ssh-form") as HTMLDivElement
+  const noSSHNode = document.getElementById("no-ssh") as HTMLDivElement
 
-  const sshPeers = peers.filter((p) => p.tailscaleSSHEnabled)
-  if (!sshPeers.length) {
-    peersNode.textContent = "No machines have Tailscale SSH installed."
+  const sshPeers = peers.filter(
+    (p) => p.tailscaleSSHEnabled && p.online !== false
+  )
+  if (sshPeers.length == 0) {
+    formNode.classList.add("hidden")
+    noSSHNode.classList.remove("hidden")
     return
   }
+  sshPeers.sort((a, b) => a.name.localeCompare(b.name))
 
-  for (const peer of sshPeers) {
-    const peerNode = document.createElement("div")
-    peerNode.className = "flex justify-between p-0.5 hover:bg-gray-100"
-    const nameNode = document.createElement("div")
-    nameNode.className = "font-mono"
-    nameNode.textContent = peer.name
-    peerNode.appendChild(nameNode)
-
-    const sshButtonNode = document.createElement("button")
-    sshButtonNode.className =
-      "py-1 px-2 rounded bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600"
-    sshButtonNode.addEventListener("click", function () {
-      ssh(peer.name, ipn)
-    })
-    sshButtonNode.textContent = "SSH"
-    peerNode.appendChild(sshButtonNode)
-
-    peersNode.appendChild(peerNode)
+  const selectNode = formNode.querySelector("select")!
+  selectNode.innerHTML = ""
+  for (const p of sshPeers) {
+    const option = document.createElement("option")
+    option.textContent = p.name.split(".")[0]
+    option.value = p.name
+    selectNode.appendChild(option)
   }
+
+  const usernameNode = formNode.querySelector(".username") as HTMLInputElement
+  formNode.onsubmit = (e) => {
+    e.preventDefault()
+    const hostname = selectNode.value
+    ssh(hostname, usernameNode.value, ipn)
+  }
+
+  noSSHNode.classList.add("hidden")
+  formNode.classList.remove("hidden")
 }
 
-export function hideSSHPeers() {
-  const peersNode = document.getElementById("peers") as HTMLDivElement
-  peersNode.innerHTML = ""
+export function hideSSHForm() {
+  const formNode = document.getElementById("ssh-form") as HTMLDivElement
+  formNode.classList.add("hidden")
 }
 
-function ssh(hostname: string, ipn: IPN) {
+function ssh(hostname: string, username: string, ipn: IPN) {
   const termContainerNode = document.createElement("div")
   termContainerNode.className = "p-3"
   document.body.appendChild(termContainerNode)
@@ -64,15 +67,14 @@ function ssh(hostname: string, ipn: IPN) {
 
   term.focus()
 
-  ipn.ssh(
-    hostname,
-    (input) => term.write(input),
-    (hook) => (onDataHook = hook),
-    term.rows,
-    term.cols,
-    () => {
+  ipn.ssh(hostname, username, {
+    writeFn: (input) => term.write(input),
+    setReadFn: (hook) => (onDataHook = hook),
+    rows: term.rows,
+    cols: term.cols,
+    onDone: () => {
       term.dispose()
       termContainerNode.remove()
-    }
-  )
+    },
+  })
 }

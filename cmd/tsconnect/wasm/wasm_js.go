@@ -138,17 +138,14 @@ func newIPN(jsConfig js.Value) map[string]any {
 			return nil
 		}),
 		"ssh": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-			if len(args) != 6 {
-				log.Printf("Usage: ssh(hostname, writeFn, readFn, rows, cols, onDone)")
+			if len(args) != 3 {
+				log.Printf("Usage: ssh(hostname, userName, termConfig)")
 				return nil
 			}
 			go jsIPN.ssh(
 				args[0].String(),
-				args[1],
-				args[2],
-				args[3].Int(),
-				args[4].Int(),
-				args[5])
+				args[1].String(),
+				args[2])
 			return nil
 		}),
 	}
@@ -181,7 +178,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		if n.State != nil {
 			notifyState(*n.State)
 		}
-		if nm := n.NetMap; nm != nil {
+		if nm := n.NetMap; nm != nil && i.lb.State() == ipn.Running {
 			jsNetMap := jsNetMap{
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
@@ -193,9 +190,14 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 					MachineStatus: int(nm.MachineStatus),
 				},
 				Peers: mapSlice(nm.Peers, func(p *tailcfg.Node) jsNetMapPeerNode {
+					name := p.Name
+					if name == "" {
+						// In practice this should only happen for Hello.
+						name = p.Hostinfo.Hostname()
+					}
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
-							Name:       p.Name,
+							Name:       name,
 							Addresses:  mapSlice(p.Addresses, func(a netip.Prefix) string { return a.Addr().String() }),
 							MachineKey: p.Machine.String(),
 							NodeKey:    p.Key.String(),
@@ -254,7 +256,13 @@ func (i *jsIPN) logout() {
 	go i.lb.Logout()
 }
 
-func (i *jsIPN) ssh(host string, writeFn js.Value, setReadFn js.Value, rows, cols int, onDone js.Value) {
+func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
+	writeFn := termConfig.Get("writeFn")
+	setReadFn := termConfig.Get("setReadFn")
+	rows := termConfig.Get("rows").Int()
+	cols := termConfig.Get("cols").Int()
+	onDone := termConfig.Get("onDone")
+
 	defer onDone.Invoke()
 
 	write := func(s string) {
@@ -275,6 +283,7 @@ func (i *jsIPN) ssh(host string, writeFn js.Value, setReadFn js.Value, rows, col
 
 	config := &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            username,
 	}
 
 	sshConn, _, _, err := ssh.NewClientConn(c, host, config)

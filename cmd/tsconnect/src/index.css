@@ -7,3 +7,69 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.link {
+  @apply text-blue-600;
+}
+
+.link:hover {
+  @apply underline;
+}
+
+.button {
+  @apply font-medium py-1 px-2 rounded-md border border-transparent text-center cursor-pointer;
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: 120ms;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  min-width: 80px;
+}
+.button:focus {
+  @apply outline-none ring;
+}
+.button:disabled {
+  @apply pointer-events-none select-none;
+}
+
+.input {
+  @apply appearance-none leading-tight rounded-md bg-white border border-gray-300 hover:border-gray-400 transition-colors px-3;
+  height: 2.375rem;
+}
+
+.input::placeholder {
+  @apply text-gray-400;
+}
+
+.input:disabled {
+  @apply border-gray-200;
+  @apply bg-gray-50;
+  @apply cursor-not-allowed;
+}
+
+.input:focus {
+  @apply outline-none ring border-transparent;
+}
+
+.select {
+  @apply appearance-none py-2 px-3 leading-tight rounded-md bg-white border border-gray-300;
+}
+
+.select-with-arrow {
+  @apply relative;
+}
+
+.select-with-arrow .select {
+  width: 100%;
+}
+
+.select-with-arrow::after {
+  @apply absolute;
+  content: "";
+  top: 50%;
+  right: 0.5rem;
+  transform: translate(-0.3em, -0.15em);
+  width: 0.6em;
+  height: 0.4em;
+  opacity: 0.6;
+  background-color: currentColor;
+  clip-path: polygon(100% 0%, 0 0%, 50% 100%);
+}
