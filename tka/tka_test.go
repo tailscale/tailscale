@@ -301,7 +301,7 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	a1, genesisAUM, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}

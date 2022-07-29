@@ -5,10 +5,18 @@
 package tka
 
 import (
+	"crypto/ed25519"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+type signer25519 ed25519.PrivateKey
+
+func (s signer25519) SignAUM(update *AUM) error {
+	update.sign25519(ed25519.PrivateKey(s))
+	return nil
+}
 
 func TestAuthorityBuilderAddKey(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
@@ -17,7 +25,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	a, _, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -25,10 +33,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	pub2, _ := testingKey25519(t, 2)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	b := a.NewUpdater(func(update *AUM) error {
-		update.sign25519(priv)
-		return nil
-	})
+	b := a.NewUpdater(signer25519(priv))
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}
@@ -56,15 +61,12 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	a, _, err := Create(&Mem{}, State{
 		Keys:               []Key{key, key2},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(func(update *AUM) error {
-		update.sign25519(priv)
-		return nil
-	})
+	b := a.NewUpdater(signer25519(priv))
 	if err := b.RemoveKey(key2.ID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key2, err)
 	}
@@ -90,15 +92,12 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	a, _, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(func(update *AUM) error {
-		update.sign25519(priv)
-		return nil
-	})
+	b := a.NewUpdater(signer25519(priv))
 	if err := b.SetKeyVote(key.ID(), 5); err != nil {
 		t.Fatalf("SetKeyVote(%v) failed: %v", key.ID(), err)
 	}
@@ -128,15 +127,12 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	a, _, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	b := a.NewUpdater(func(update *AUM) error {
-		update.sign25519(priv)
-		return nil
-	})
+	b := a.NewUpdater(signer25519(priv))
 	if err := b.SetKeyMeta(key.ID(), map[string]string{"b": "c"}); err != nil {
 		t.Fatalf("SetKeyMeta(%v) failed: %v", key, err)
 	}
@@ -166,7 +162,7 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	a, _, err := Create(&Mem{}, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
-	}, priv)
+	}, signer25519(priv))
 	if err != nil {
 		t.Fatalf("Create() failed: %v", err)
 	}
@@ -174,10 +170,7 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	pub2, _ := testingKey25519(t, 2)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	b := a.NewUpdater(func(update *AUM) error {
-		update.sign25519(priv)
-		return nil
-	})
+	b := a.NewUpdater(signer25519(priv))
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}

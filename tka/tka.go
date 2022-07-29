@@ -7,7 +7,6 @@ package tka
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
@@ -99,9 +98,10 @@ func computeChainCandidates(storage Chonk, lastKnownOldest *AUMHash, maxIter int
 // AUM in the chain, possibly applying fork resolution logic.
 //
 // In other words: given an AUM with 3 children like this:
-//    / - 1
-//  P   - 2
-//    \ - 3
+//
+//	  / - 1
+//	P   - 2
+//	  \ - 3
 //
 // pickNextAUM will determine and return the correct branch.
 //
@@ -354,13 +354,13 @@ func computeActiveAncestor(storage Chonk, chains []chain) (AUMHash, error) {
 // the ancestor.
 //
 // The algorithm is as follows:
-// 1. Determine all possible 'head' (like in git) states.
-// 2. Filter these possible chains based on whether the ancestor was
-//    formerly (in a previous run) part of the chain.
-// 3. Compute the state of the state machine at this ancestor. This is
-//    needed for fast-forward, as each update operates on the state of
-//    the update preceeding it.
-// 4. Iteratively apply updates till we reach head ('fast forward').
+//  1. Determine all possible 'head' (like in git) states.
+//  2. Filter these possible chains based on whether the ancestor was
+//     formerly (in a previous run) part of the chain.
+//  3. Compute the state of the state machine at this ancestor. This is
+//     needed for fast-forward, as each update operates on the state of
+//     the update preceeding it.
+//  4. Iteratively apply updates till we reach head ('fast forward').
 func computeActiveChain(storage Chonk, lastKnownOldest *AUMHash, maxIter int) (chain, error) {
 	chains, err := computeChainCandidates(storage, lastKnownOldest, maxIter)
 	if err != nil {
@@ -473,7 +473,7 @@ func Open(storage Chonk) (*Authority, error) {
 //
 // Do not use this to initialize a TKA that already exists, use Open()
 // or Bootstrap() instead.
-func Create(storage Chonk, state State, signer ed25519.PrivateKey) (*Authority, AUM, error) {
+func Create(storage Chonk, state State, signer Signer) (*Authority, AUM, error) {
 	// Generate & sign a checkpoint, our genesis update.
 	genesis := AUM{
 		MessageKind: AUMCheckpoint,
@@ -483,7 +483,9 @@ func Create(storage Chonk, state State, signer ed25519.PrivateKey) (*Authority, 
 		// This serves as an easy way to validate the given state.
 		return nil, AUM{}, fmt.Errorf("invalid state: %v", err)
 	}
-	genesis.sign25519(signer)
+	if err := signer.SignAUM(&genesis); err != nil {
+		return nil, AUM{}, fmt.Errorf("signing failed: %v", err)
+	}
 
 	a, err := Bootstrap(storage, genesis)
 	return a, genesis, err

@@ -53,9 +53,8 @@ type Key struct {
 
 // Clone makes an independent copy of Key.
 //
-// NOTE: There is a difference between a nil slice and an empty
-//       slice for encoding purposes, so an implementation of Clone()
-//       must take care to preserve this.
+// NOTE: There is a difference between a nil slice and an empty slice for encoding purposes,
+// so an implementation of Clone() must take care to preserve this.
 func (k Key) Clone() Key {
 	out := k
 

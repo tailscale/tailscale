@@ -42,9 +42,9 @@ func rand(b []byte) {
 // existing uses and whether you should clamp private keys at
 // creation.
 //
-//  - NaCl box: yes, clamp at creation.
-//  - WireGuard (userspace uapi or kernel): no, do not clamp.
-//  - Noise protocols: no, do not clamp.
+//   - NaCl box: yes, clamp at creation.
+//   - WireGuard (userspace uapi or kernel): no, do not clamp.
+//   - Noise protocols: no, do not clamp.
 func clamp25519Private(b []byte) {
 	b[0] &= 248
 	b[31] = (b[31] & 127) | 64

@@ -8,6 +8,11 @@ import (
 	"fmt"
 )
 
+// Types implementing Signer can sign update messages.
+type Signer interface {
+	SignAUM(*AUM) error
+}
+
 // UpdateBuilder implements a builder for changes to the tailnet
 // key authority.
 //
@@ -15,7 +20,7 @@ import (
 // must then be applied to all Authority objects using Inform().
 type UpdateBuilder struct {
 	a      *Authority
-	signer func(*AUM) error
+	signer Signer
 
 	state  State
 	parent AUMHash
@@ -29,7 +34,7 @@ func (b *UpdateBuilder) mkUpdate(update AUM) error {
 	update.PrevAUMHash = prevHash
 
 	if b.signer != nil {
-		if err := b.signer(&update); err != nil {
+		if err := b.signer.SignAUM(&update); err != nil {
 			return fmt.Errorf("signing failed: %v", err)
 		}
 	}
@@ -101,7 +106,7 @@ func (b *UpdateBuilder) Finalize() ([]AUM, error) {
 // Updates are specified by calling methods on the returned UpdatedBuilder.
 // Call Finalize() when you are done to obtain the specific update messages
 // which actuate the changes.
-func (a *Authority) NewUpdater(signer func(*AUM) error) *UpdateBuilder {
+func (a *Authority) NewUpdater(signer Signer) *UpdateBuilder {
 	return &UpdateBuilder{
 		a:      a,
 		signer: signer,
