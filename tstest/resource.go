@@ -30,6 +30,9 @@ func ResourceCheck(tb testing.TB) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		endN, endStacks := goroutines()
+		if endN <= startN {
+			return
+		}
 		tb.Logf("goroutine diff:\n%v\n", cmp.Diff(startStacks, endStacks))
 		tb.Fatalf("goroutine count: expected %d, got %d\n", startN, endN)
 	})
