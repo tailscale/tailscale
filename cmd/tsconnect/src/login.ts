@@ -11,7 +11,7 @@ export async function showLoginURL(url: string) {
   loginNode = document.createElement("div")
   loginNode.className = "flex flex-col items-center justify-items-center"
   const linkNode = document.createElement("a")
-  linkNode.className = "text-blue-600 hover:underline"
+  linkNode.className = "link"
   linkNode.href = url
   linkNode.target = "_blank"
   loginNode.appendChild(linkNode)
@@ -49,7 +49,7 @@ export function showLogoutButton(ipn: IPN) {
   }
   logoutButtonNode = document.createElement("button")
   logoutButtonNode.className =
-    "py-1 px-2 rounded bg-gray-500 border-gray-500 text-white hover:bg-gray-600 hover:border-gray-600 ml-2 font-bold"
+    "button bg-gray-500 border-gray-500 text-white hover:bg-gray-600 hover:border-gray-600 ml-2 font-bold"
   logoutButtonNode.textContent = "Logout"
   logoutButtonNode.addEventListener(
     "click",

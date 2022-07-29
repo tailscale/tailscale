@@ -8,7 +8,7 @@ import {
   showLogoutButton,
   hideLogoutButton,
 } from "./login"
-import { showSSHPeers, hideSSHPeers } from "./ssh"
+import { showSSHForm, hideSSHForm } from "./ssh"
 import { IPNState } from "./wasm_js"
 
 /**
@@ -27,7 +27,7 @@ export function notifyState(ipn: IPN, state: IPNState) {
     case IPNState.NeedsLogin:
       stateLabel = "Needs Login"
       hideLogoutButton()
-      hideSSHPeers()
+      hideSSHForm()
       ipn.login()
       break
     case IPNState.NeedsMachineAuth:
@@ -36,7 +36,7 @@ export function notifyState(ipn: IPN, state: IPNState) {
     case IPNState.Stopped:
       stateLabel = "Stopped"
       hideLogoutButton()
-      hideSSHPeers()
+      hideSSHForm()
       break
     case IPNState.Starting:
       stateLabel = "Starting…"
@@ -57,7 +57,7 @@ export function notifyNetMap(ipn: IPN, netMapStr: string) {
     console.log("Received net map: " + JSON.stringify(netMap, null, 2))
   }
 
-  showSSHPeers(netMap.peers, ipn)
+  showSSHForm(netMap.peers, ipn)
 }
 
 export function notifyBrowseToURL(ipn: IPN, url: string) {
