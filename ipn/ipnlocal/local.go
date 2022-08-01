@@ -41,6 +41,7 @@ import (
 	"tailscale.com/portlist"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -145,6 +146,8 @@ type LocalBackend struct {
 	prefs          *ipn.Prefs
 	inServerMode   bool
 	machinePrivKey key.MachinePrivate
+	nlPrivKey      key.NLPrivate
+	tka            *tka.Authority
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	// hostinfo is mutated in-place while mu is held.
@@ -996,6 +999,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 	}
+	if err := b.initNLKeyLocked(); err != nil {
+		return fmt.Errorf("initNLKeyLocked: %w", err)
+	}
 
 	loggedOut := b.prefs.LoggedOut
 
@@ -1055,6 +1061,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
+		GetNLPublicKey:       b.createGetNLPublicKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
 		ServerURL:            b.serverURL,
@@ -1514,6 +1521,21 @@ func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePriva
 	}
 }
 
+func (b *LocalBackend) createGetNLPublicKeyFunc() func() (key.NLPublic, error) {
+	var cache atomic.Value
+	return func() (key.NLPublic, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if v, ok := cache.Load().(key.NLPublic); ok {
+			return v, nil
+		}
+
+		pub := b.nlPrivKey.Public()
+		cache.Store(pub)
+		return pub, nil
+	}
+}
+
 // initMachineKeyLocked is called to initialize b.machinePrivKey.
 //
 // b.prefs must already be initialized.
@@ -1569,6 +1591,45 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	b.logf("machine key written to store")
+	return nil
+}
+
+// initNLKeyLocked is called to initialize b.nlPrivKey.
+//
+// b.prefs must already be initialized.
+// b.stateKey should be set too, but just for nicer log messages.
+// b.mu must be held.
+func (b *LocalBackend) initNLKeyLocked() (err error) {
+	if !b.nlPrivKey.IsZero() {
+		// Already set.
+		return nil
+	}
+
+	keyText, err := b.store.ReadState(ipn.NLKeyStateKey)
+	if err == nil {
+		if err := b.nlPrivKey.UnmarshalText(keyText); err != nil {
+			return fmt.Errorf("invalid key in %s key of %v: %w", ipn.NLKeyStateKey, b.store, err)
+		}
+		if b.nlPrivKey.IsZero() {
+			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.NLKeyStateKey, b.store)
+		}
+		return nil
+	}
+	if err != ipn.ErrStateNotExist {
+		return fmt.Errorf("error reading %v key of %v: %w", ipn.NLKeyStateKey, b.store, err)
+	}
+
+	// If we didn't find one already on disk, generate a new one.
+	b.logf("generating new network-lock key")
+	b.nlPrivKey = key.NewNLPrivate()
+
+	keyText, _ = b.nlPrivKey.MarshalText()
+	if err := b.store.WriteState(ipn.NLKeyStateKey, keyText); err != nil {
+		b.logf("error writing network-lock key to store: %v", err)
+		return err
+	}
+
+	b.logf("network-lock key written to store")
 	return nil
 }
 
@@ -2434,6 +2495,14 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 	}
 
 	return dcfg
+}
+
+// SetTailnetKeyAuthority sets the key authority which should be
+// used for locked tailnets.
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetTailnetKeyAuthority(a *tka.Authority) {
+	b.tka = a
 }
 
 // SetVarRoot sets the root directory of Tailscale's writable

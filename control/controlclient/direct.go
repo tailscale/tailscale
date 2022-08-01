@@ -67,6 +67,7 @@ type Direct struct {
 	linkMon                *monitor.Mon // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
+	getNLPublicKey         func() (key.NLPublic, error)
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
@@ -107,6 +108,7 @@ type Options struct {
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
+	GetNLPublicKey       func() (key.NLPublic, error)
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -190,6 +192,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	c := &Direct{
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
+		getNLPublicKey:         opts.GetNLPublicKey,
 		serverURL:              opts.ServerURL,
 		timeNow:                opts.TimeNow,
 		logf:                   opts.Logf,
@@ -424,6 +427,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
+	nlPub, err := c.getNLPublicKey()
+	if err != nil {
+		return false, "", fmt.Errorf("get nl key: %v", err)
+	}
+
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
 			return false, "", errors.New("no nodekey to log out")
@@ -439,6 +447,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Version:    1,
 		OldNodeKey: oldNodeKey,
 		NodeKey:    tryingNewKey.Public(),
+		NLKey:      nlPub,
 		Hostinfo:   hi,
 		Followup:   opt.URL,
 		Timestamp:  &now,
