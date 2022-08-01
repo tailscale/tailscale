@@ -16,6 +16,10 @@ const (
 	// nlPrivateHexPrefix is the prefix used to identify a
 	// hex-encoded network-lock key.
 	nlPrivateHexPrefix = "nlpriv:"
+
+	// nlPublicHexPrefix is the prefix used to identify the public
+	// side of a hex-encoded network-lock key.
+	nlPublicHexPrefix = "nlpub:"
 )
 
 // NLPrivate is a node-managed network-lock key, used for signing
@@ -50,15 +54,18 @@ func (k NLPrivate) MarshalText() ([]byte, error) {
 }
 
 // Public returns the public component of this key.
-func (k NLPrivate) Public() ed25519.PublicKey {
-	return ed25519.PrivateKey(k.k[:]).Public().(ed25519.PublicKey)
+func (k NLPrivate) Public() NLPublic {
+	var out NLPublic
+	copy(out.k[:], ed25519.PrivateKey(k.k[:]).Public().(ed25519.PublicKey))
+	return out
 }
 
 // KeyID returns an identifier for this key.
 func (k NLPrivate) KeyID() tka.KeyID {
+	pub := k.Public()
 	return tka.Key{
 		Kind:   tka.Key25519,
-		Public: k.Public(),
+		Public: pub.k[:],
 	}.ID()
 }
 
@@ -71,4 +78,25 @@ func (k NLPrivate) SignAUM(a *tka.AUM) error {
 		Signature: ed25519.Sign(k.k[:], sigHash[:]),
 	})
 	return nil
+}
+
+// NLPublic is the public portion of a a NLPrivate.
+type NLPublic struct {
+	k [ed25519.PublicKeySize]byte
+}
+
+// MarshalText implements encoding.TextUnmarshaler.
+func (k *NLPublic) UnmarshalText(b []byte) error {
+	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (k NLPublic) MarshalText() ([]byte, error) {
+	return toHex(k.k[:], nlPublicHexPrefix), nil
+}
+
+// Verifier returns a ed25519.PublicKey that can be used to
+// verify signatures.
+func (k NLPublic) Verifier() ed25519.PublicKey {
+	return ed25519.PublicKey(k.k[:])
 }

@@ -26,9 +26,23 @@ func TestNLPrivate(t *testing.T) {
 		t.Error("decoded and generated NLPrivate bytes differ")
 	}
 
+	// Test NLPublic
+	pub := p.Public()
+	encoded, err = pub.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedPub NLPublic
+	if err := decodedPub.UnmarshalText(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decodedPub.k[:], pub.k[:]) {
+		t.Error("decoded and generated NLPublic bytes differ")
+	}
+
 	// Test that NLPrivate implements tka.Signer by making a new
 	// authority.
-	k := tka.Key{Kind: tka.Key25519, Public: p.Public(), Votes: 1}
+	k := tka.Key{Kind: tka.Key25519, Public: pub.Verifier(), Votes: 1}
 	_, aum, err := tka.Create(&tka.Mem{}, tka.State{
 		Keys:               []tka.Key{k},
 		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
