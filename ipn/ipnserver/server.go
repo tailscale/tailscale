@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tka"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
@@ -769,6 +770,25 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	b.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
+
+	if root := b.TailscaleVarRoot(); root != "" {
+		chonkDir := filepath.Join(root, "chonk")
+		if _, err := os.Stat(chonkDir); err == nil {
+			// The directory exists, which means network-lock has been initialized.
+			chonk, err := tka.ChonkDir(chonkDir)
+			if err != nil {
+				return nil, fmt.Errorf("opening tailchonk: %v", err)
+			}
+			authority, err := tka.Open(chonk)
+			if err != nil {
+				return nil, fmt.Errorf("initializing tka: %v", err)
+			}
+			b.SetTailnetKeyAuthority(authority)
+			logf("tka initialized at head %x", authority.Head())
+		}
+	} else {
+		logf("network-lock unavailable; no state directory")
+	}
 
 	dg := distro.Get()
 	switch dg {

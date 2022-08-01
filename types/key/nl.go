@@ -6,6 +6,7 @@ package key
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 
 	"go4.org/mem"
 	"tailscale.com/tka"
@@ -27,6 +28,12 @@ const (
 type NLPrivate struct {
 	_ structs.Incomparable // because == isn't constant-time
 	k [ed25519.PrivateKeySize]byte
+}
+
+// IsZero reports whether k is the zero value.
+func (k NLPrivate) IsZero() bool {
+	empty := NLPrivate{}
+	return subtle.ConstantTimeCompare(k.k[:], empty.k[:]) == 1
 }
 
 // NewNLPrivate creates and returns a new network-lock key.

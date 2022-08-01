@@ -174,6 +174,19 @@ type FS struct {
 	mu   sync.RWMutex
 }
 
+// ChonkDir returns an implementation of Chonk which uses the
+// given directory to store TKA state.
+func ChonkDir(dir string) (*FS, error) {
+	stat, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !stat.IsDir() {
+		return nil, fmt.Errorf("chonk directory %q is a file", dir)
+	}
+	return &FS{base: dir}, nil
+}
+
 // fsHashInfo describes how information about an AUMHash is represented
 // on disk.
 //

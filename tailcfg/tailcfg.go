@@ -763,6 +763,7 @@ type RegisterRequest struct {
 
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
+	NLKey      key.NLPublic
 	Auth       struct {
 		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
