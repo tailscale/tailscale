@@ -186,6 +186,7 @@ type ReturnHandler interface {
 
 type HandlerOptions struct {
 	Quiet200s bool // if set, do not log successfully handled HTTP requests
+	Quiet499s bool // if set, do not log client-canceled HTTP requests
 	Logf      logger.Logf
 	Now       func() time.Time // if nil, defaults to time.Now
 
@@ -310,7 +311,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if msg.Code != 200 || !h.opts.Quiet200s {
+	switch {
+	case msg.Code == 200 && h.opts.Quiet200s:
+	case msg.Code == 499 && h.opts.Quiet499s:
+	default:
 		h.opts.Logf("%s", msg)
 	}
 
