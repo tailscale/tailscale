@@ -308,18 +308,18 @@ func runStat(ctx context.Context, args []string) error {
 	for _, a := range args {
 		fi, err := os.Lstat(a)
 		if err != nil {
-			fmt.Printf("%s: %v\n", a, err)
+			printf("%s: %v\n", a, err)
 			continue
 		}
-		fmt.Printf("%s: %v, %v\n", a, fi.Mode(), fi.Size())
+		printf("%s: %v, %v\n", a, fi.Mode(), fi.Size())
 		if fi.IsDir() {
 			ents, _ := os.ReadDir(a)
 			for i, ent := range ents {
 				if i == 25 {
-					fmt.Printf("  ...\n")
+					printf("  ...\n")
 					break
 				}
-				fmt.Printf("  - %s\n", ent.Name())
+				printf("  - %s\n", ent.Name())
 			}
 		}
 	}
@@ -420,7 +420,7 @@ func runVia(ctx context.Context, args []string) error {
 		v4 := tsaddr.UnmapVia(ipp.Addr())
 		a := ipp.Addr().As16()
 		siteID := binary.BigEndian.Uint32(a[8:12])
-		fmt.Printf("site %v (0x%x), %v\n", siteID, siteID, netip.PrefixFrom(v4, ipp.Bits()-96))
+		printf("site %v (0x%x), %v\n", siteID, siteID, netip.PrefixFrom(v4, ipp.Bits()-96))
 	case 2:
 		siteID, err := strconv.ParseUint(args[0], 0, 32)
 		if err != nil {
@@ -437,7 +437,7 @@ func runVia(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(via)
+		outln(via)
 	}
 	return nil
 }
