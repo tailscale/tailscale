@@ -83,9 +83,18 @@ func generateServeIndex(distFS fs.FS) ([]byte, error) {
 		return nil, fmt.Errorf("Could not parse esbuild-metadata.json: %w", err)
 	}
 	entryPointsToHashedDistPaths := make(map[string]string)
+	mainWasmPath := ""
 	for outputPath, output := range esbuildMetadata.Outputs {
 		if output.EntryPoint != "" {
 			entryPointsToHashedDistPaths[output.EntryPoint] = path.Join("dist", outputPath)
+		}
+		if path.Ext(outputPath) == ".wasm" {
+			for input := range output.Inputs {
+				if input == "src/main.wasm" {
+					mainWasmPath = path.Join("dist", outputPath)
+					break
+				}
+			}
 		}
 	}
 
@@ -95,6 +104,10 @@ func generateServeIndex(distFS fs.FS) ([]byte, error) {
 		if hashedDistPath != "" {
 			indexBytes = bytes.ReplaceAll(indexBytes, []byte(defaultDistPath), []byte(hashedDistPath))
 		}
+	}
+	if mainWasmPath != "" {
+		mainWasmPrefetch := fmt.Sprintf("</title>\n<link rel='preload' as='fetch' crossorigin='anonymous' href='%s'>", mainWasmPath)
+		indexBytes = bytes.ReplaceAll(indexBytes, []byte("</title>"), []byte(mainWasmPrefetch))
 	}
 
 	return indexBytes, nil
