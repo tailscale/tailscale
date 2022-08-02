@@ -216,11 +216,11 @@ const (
 // without further escaping.
 //
 // The current encoding is:
-//   * name immediately following metric:
+//   - name immediately following metric:
 //     'N' + hex(varint(len(name))) + name
-//   * set value of a metric:
+//   - set value of a metric:
 //     'S' + hex(varint(wireid)) + hex(varint(value))
-//   * increment a metric: (decrements if negative)
+//   - increment a metric: (decrements if negative)
 //     'I' + hex(varint(wireid)) + hex(varint(value))
 func EncodeLogTailMetricsDelta() string {
 	mu.Lock()

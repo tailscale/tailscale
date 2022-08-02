@@ -883,11 +883,11 @@ func (b *LocalBackend) getNewControlClientFunc() clientGen {
 // startIsNoopLocked reports whether a Start call on this LocalBackend
 // with the provided Start Options would be a useless no-op.
 //
-// TODO(apenwarr): we shouldn't need this.
-//  The state machine is now nearly clean enough where it can accept a new
-//  connection while in any state, not just Running, and on any platform.
-//  We'd want to add a few more tests to state_test.go to ensure this continues
-//  to work as expected.
+// TODO(apenwarr): we shouldn't need this. The state machine is now
+// nearly clean enough where it can accept a new connection while in
+// any state, not just Running, and on any platform.  We'd want to add
+// a few more tests to state_test.go to ensure this continues to work
+// as expected.
 //
 // b.mu must be held.
 func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
@@ -2926,7 +2926,7 @@ func (b *LocalBackend) RequestEngineStatus() {
 // feed events into LocalBackend.
 //
 // TODO(apenwarr): use a channel or something to prevent re-entrancy?
-//  Or maybe just call the state machine from fewer places.
+// Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	b.enterState(b.nextState())
 }

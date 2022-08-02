@@ -164,19 +164,20 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 letsEncryptX1 is the LetsEncrypt X1 root:
 
 Certificate:
-    Data:
-        Version: 3 (0x2)
-        Serial Number:
-            82:10:cf:b0:d2:40:e3:59:44:63:e0:bb:63:82:8b:00
-        Signature Algorithm: sha256WithRSAEncryption
-        Issuer: C = US, O = Internet Security Research Group, CN = ISRG Root X1
-        Validity
-            Not Before: Jun  4 11:04:38 2015 GMT
-            Not After : Jun  4 11:04:38 2035 GMT
-        Subject: C = US, O = Internet Security Research Group, CN = ISRG Root X1
-        Subject Public Key Info:
-            Public Key Algorithm: rsaEncryption
-                RSA Public-Key: (4096 bit)
+
+	Data:
+	    Version: 3 (0x2)
+	    Serial Number:
+	        82:10:cf:b0:d2:40:e3:59:44:63:e0:bb:63:82:8b:00
+	    Signature Algorithm: sha256WithRSAEncryption
+	    Issuer: C = US, O = Internet Security Research Group, CN = ISRG Root X1
+	    Validity
+	        Not Before: Jun  4 11:04:38 2015 GMT
+	        Not After : Jun  4 11:04:38 2035 GMT
+	    Subject: C = US, O = Internet Security Research Group, CN = ISRG Root X1
+	    Subject Public Key Info:
+	        Public Key Algorithm: rsaEncryption
+	            RSA Public-Key: (4096 bit)
 
 We bake it into the binary as a fallback verification root,
 in case the system we're running on doesn't have it.
@@ -189,7 +190,6 @@ $ sudo update-ca-certificates
 
 Then restart tailscaled. To also test dnsfallback's use of it, nuke
 your /etc/resolv.conf and it should still start & run fine.
-
 */
 const letsEncryptX1 = `
 -----BEGIN CERTIFICATE-----

@@ -102,10 +102,10 @@ var (
 
 // parseIPSet parses arg as one:
 //
-//     * an IP address (IPv4 or IPv6)
-//     * the string "*" to match everything (both IPv4 & IPv6)
-//     * a CIDR (e.g. "192.168.0.0/16")
-//     * a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
+//   - an IP address (IPv4 or IPv6)
+//   - the string "*" to match everything (both IPv4 & IPv6)
+//   - a CIDR (e.g. "192.168.0.0/16")
+//   - a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
 //
 // bits, if non-nil, is the legacy SrcBits CIDR length to make a IP
 // address (without a slash) treated as a CIDR of *bits length.

@@ -7,16 +7,17 @@
 // A discovery message is:
 //
 // Header:
-//     magic          [6]byte  // “TS💬” (0x54 53 f0 9f 92 ac)
-//     senderDiscoPub [32]byte // nacl public key
-//     nonce          [24]byte
+//
+//	magic          [6]byte  // “TS💬” (0x54 53 f0 9f 92 ac)
+//	senderDiscoPub [32]byte // nacl public key
+//	nonce          [24]byte
 //
 // The recipient then decrypts the bytes following (the nacl secretbox)
 // and then the inner payload structure is:
 //
-//     messageType    byte  (the MessageType constants below)
-//     messageVersion byte  (0 for now; but always ignore bytes at the end)
-//     message-paylod [...]byte
+//	messageType    byte  (the MessageType constants below)
+//	messageVersion byte  (0 for now; but always ignore bytes at the end)
+//	message-paylod [...]byte
 package disco
 
 import (

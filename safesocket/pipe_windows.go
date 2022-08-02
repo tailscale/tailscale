@@ -27,11 +27,12 @@ func setFlags(network, address string, c syscall.RawConn) error {
 }
 
 // TODO(apenwarr): use named pipes instead of sockets?
-//   I tried to use winio.ListenPipe() here, but that code is a disaster,
-//   built on top of an API that's a disaster. So for now we'll hack it by
-//   just always using a TCP session on a fixed port on localhost. As a
-//   result, on Windows we ignore the vendor and name strings.
-//   NOTE(bradfitz): Jason did a new pipe package: https://go-review.googlesource.com/c/sys/+/299009
+//
+//	I tried to use winio.ListenPipe() here, but that code is a disaster,
+//	built on top of an API that's a disaster. So for now we'll hack it by
+//	just always using a TCP session on a fixed port on localhost. As a
+//	result, on Windows we ignore the vendor and name strings.
+//	NOTE(bradfitz): Jason did a new pipe package: https://go-review.googlesource.com/c/sys/+/299009
 func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
 	lc := net.ListenConfig{
 		Control: setFlags,

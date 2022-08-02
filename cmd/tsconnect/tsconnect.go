@@ -4,10 +4,10 @@
 
 // The tsconnect command builds and serves the static site that is generated for
 // the Tailscale Connect JS/WASM client. Can be run in 3 modes:
-// - dev: builds the site and serves it. JS and CSS changes can be picked up
-//   with a reload.
-// - build: builds the site and writes it to dist/
-// - serve: serves the site from dist/ (embedded in the binary)
+//   - dev: builds the site and serves it. JS and CSS changes can be picked up
+//     with a reload.
+//   - build: builds the site and writes it to dist/
+//   - serve: serves the site from dist/ (embedded in the binary)
 package main // import "tailscale.com/cmd/tsconnect"
 
 import (

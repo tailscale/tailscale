@@ -59,18 +59,18 @@ func Ready() {
 // Status sends a single line status update to systemd so that information shows up
 // in systemctl output. For example:
 //
-//    $ systemctl status tailscale
-//    ● tailscale.service - Tailscale client daemon
-//    Loaded: loaded (/nix/store/qc312qcy907wz80fqrgbbm8a9djafmlg-unit-tailscale.service/tailscale.service; enabled; vendor preset: enabled)
-//    Active: active (running) since Tue 2020-11-24 17:54:07 EST; 13h ago
-//    Main PID: 26741 (.tailscaled-wra)
-//    Status: "Connected; user@host.domain.tld; 100.101.102.103"
-//    IP: 0B in, 0B out
-//    Tasks: 22 (limit: 4915)
-//    Memory: 30.9M
-//    CPU: 2min 38.469s
-//    CGroup: /system.slice/tailscale.service
-//    └─26741 /nix/store/sv6cj4mw2jajm9xkbwj07k29dj30lh0n-tailscale-date.20200727/bin/tailscaled --port 41641
+//	$ systemctl status tailscale
+//	● tailscale.service - Tailscale client daemon
+//	Loaded: loaded (/nix/store/qc312qcy907wz80fqrgbbm8a9djafmlg-unit-tailscale.service/tailscale.service; enabled; vendor preset: enabled)
+//	Active: active (running) since Tue 2020-11-24 17:54:07 EST; 13h ago
+//	Main PID: 26741 (.tailscaled-wra)
+//	Status: "Connected; user@host.domain.tld; 100.101.102.103"
+//	IP: 0B in, 0B out
+//	Tasks: 22 (limit: 4915)
+//	Memory: 30.9M
+//	CPU: 2min 38.469s
+//	CGroup: /system.slice/tailscale.service
+//	└─26741 /nix/store/sv6cj4mw2jajm9xkbwj07k29dj30lh0n-tailscale-date.20200727/bin/tailscaled --port 41641
 func Status(format string, args ...any) {
 	err := notifier().Notify(sdnotify.Statusf(format, args...))
 	if err != nil {

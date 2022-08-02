@@ -31,7 +31,9 @@ import (
 // In other cases, resolved may be managing the system DNS configuration directly.
 // Then the nameserver list will be a concatenation of those for all
 // the interfaces that register their interest in being a default resolver with
-//   SetLinkDomains([]{{"~.", true}, ...})
+//
+//	SetLinkDomains([]{{"~.", true}, ...})
+//
 // which includes at least the interface with the default route, i.e. not us.
 // This does not work for us: there is a possibility of getting NXDOMAIN
 // from the other nameservers before we are asked or get a chance to respond.

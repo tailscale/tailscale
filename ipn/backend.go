@@ -162,12 +162,12 @@ type PartialFile struct {
 //
 // Various platforms currently set StateKey in different ways:
 //
-// * the macOS/iOS GUI apps set it to "ipn-go-bridge"
-// * the Android app sets it to "ipn-android"
-// * on Windows, it's the empty string (in client mode) or, via
-//   LocalBackend.userID, a string like "user-$USER_ID" (used in
-//   server mode).
-// * on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
+//   - the macOS/iOS GUI apps set it to "ipn-go-bridge"
+//   - the Android app sets it to "ipn-android"
+//   - on Windows, it's the empty string (in client mode) or, via
+//     LocalBackend.userID, a string like "user-$USER_ID" (used in
+//     server mode).
+//   - on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
 type StateKey string
 
 type Options struct {

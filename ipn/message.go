@@ -305,8 +305,8 @@ func (bc *BackendClient) RequestStatus() {
 // MaxMessageSize is the maximum message size, in bytes.
 const MaxMessageSize = 10 << 20
 
-// TODO(apenwarr): incremental json decode?
-//  That would let us avoid storing the whole byte array uselessly in RAM.
+// TODO(apenwarr): incremental json decode? That would let us avoid
+// storing the whole byte array uselessly in RAM.
 func ReadMsg(r io.Reader) ([]byte, error) {
 	cb := make([]byte, 4)
 	_, err := io.ReadFull(r, cb)
@@ -328,10 +328,11 @@ func ReadMsg(r io.Reader) ([]byte, error) {
 	return b, nil
 }
 
-// TODO(apenwarr): incremental json encode?
-//  That would save RAM, at the expense of having to encode once so that
-//  we can produce the initial byte count.
 func WriteMsg(w io.Writer, b []byte) error {
+	// TODO(apenwarr): incremental json encode? That would save RAM, at the
+	// expense of having to encode once so that we can produce the initial byte
+	// count.
+
 	// TODO(bradfitz): this does two writes to w, which likely
 	// does two writes on the wire, two frame generations, etc. We
 	// should take a concrete buffered type, or use a sync.Pool to

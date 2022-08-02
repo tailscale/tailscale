@@ -37,37 +37,38 @@ type CapabilityVersion int
 // CurrentCapabilityVersion is the current capability version of the codebase.
 //
 // History of versions:
-//     3: implicit compression, keep-alives
-//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
-//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
-//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
-//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
-//     8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
-//     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
-//    10: 2021-01-17: client understands MapResponse.PeerSeenChange
-//    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
-//    12: 2021-03-04: client understands PingRequest
-//    13: 2021-03-19: client understands FilterRule.IPProto
-//    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
-//    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
-//    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
-//    17: 2021-04-18: MapResponse.Domain empty means unchanged
-//    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
-//    19: 2021-04-21: MapResponse.Debug.SleepSeconds
-//    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
-//    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
-//    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
-//    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
-//    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
-//    25: 2021-11-01: MapResponse.Debug.Exit
-//    26: 2022-01-12: (nothing, just bumping for 1.20.0)
-//    27: 2022-02-18: start of SSHPolicy being respected
-//    28: 2022-03-09: client can communicate over Noise.
-//    29: 2022-03-21: MapResponse.PopBrowserURL
-//    30: 2022-03-22: client can request id tokens.
-//    31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
-//    32: 2022-04-17: client knows FilterRule.CapMatch
-//    33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
+//
+//	 3: implicit compression, keep-alives
+//	 4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
+//	 5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
+//	 6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
+//	 7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
+//	 8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
+//	 9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
+//	10: 2021-01-17: client understands MapResponse.PeerSeenChange
+//	11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
+//	12: 2021-03-04: client understands PingRequest
+//	13: 2021-03-19: client understands FilterRule.IPProto
+//	14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
+//	15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
+//	16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
+//	17: 2021-04-18: MapResponse.Domain empty means unchanged
+//	18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
+//	19: 2021-04-21: MapResponse.Debug.SleepSeconds
+//	20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
+//	21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
+//	22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
+//	23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
+//	24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
+//	25: 2021-11-01: MapResponse.Debug.Exit
+//	26: 2022-01-12: (nothing, just bumping for 1.20.0)
+//	27: 2022-02-18: start of SSHPolicy being respected
+//	28: 2022-03-09: client can communicate over Noise.
+//	29: 2022-03-21: MapResponse.PopBrowserURL
+//	30: 2022-03-22: client can request id tokens.
+//	31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
+//	32: 2022-04-17: client knows FilterRule.CapMatch
+//	33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
 const CurrentCapabilityVersion CapabilityVersion = 33
 
 type StableID string
@@ -746,6 +747,7 @@ func (st SignatureType) String() string {
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>
 type RegisterRequest struct {
 	_ structs.Incomparable
@@ -864,6 +866,7 @@ type Endpoint struct {
 //
 // The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
 	// Version is incremented whenever the client code changes enough that
@@ -1514,6 +1517,7 @@ const (
 //
 // The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>/set-dns
 type SetDNSRequest struct {
 	// Version is the client's capabilities
