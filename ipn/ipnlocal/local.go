@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"go4.org/netipx"
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -3215,7 +3216,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
-		if p.User != nm.User {
+		if p.User != nm.User || !slices.Contains(p.Capabilities, tailcfg.CapabilityFileSharingTarget) {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)

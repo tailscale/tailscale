@@ -69,7 +69,8 @@ type CapabilityVersion int
 //	31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
 //	32: 2022-04-17: client knows FilterRule.CapMatch
 //	33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
-const CurrentCapabilityVersion CapabilityVersion = 33
+//	34: 2022-08-02: client understands CapabilityFileSharingTarget
+const CurrentCapabilityVersion CapabilityVersion = 34
 
 type StableID string
 
@@ -1491,14 +1492,22 @@ type Oauth2Token struct {
 }
 
 const (
-	// MapResponse.Node self capabilities.
+	// These are the capabilities that the self node has as listed in
+	// MapResponse.Node.Capabilities.
 
 	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
 	CapabilitySSH         = "https://tailscale.com/cap/ssh"         // feature enabled/available
 	CapabilitySSHRuleIn   = "https://tailscale.com/cap/ssh-rule-in" // some SSH rule reach this node
 
-	// Inter-node capabilities.
+	// These are the capabilities that the peer nodes have as listed in
+	// MapResponse.Peers[].Capabilities.
+
+	// CapabilityFileSharingTarget grants the current node the ability to send
+	// files to the peer which has this capability.
+	CapabilityFileSharingTarget = "https://tailscale.com/cap/file-sharing-target"
+
+	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 
 	// CapabilityFileSharingSend grants the ability to receive files from a
 	// node that's owned by a different user.
