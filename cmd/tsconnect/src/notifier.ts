@@ -47,7 +47,7 @@ export function notifyState(ipn: IPN, state: IPNState) {
       showLogoutButton(ipn)
       break
   }
-  const stateNode = document.getElementById("state") as HTMLDivElement
+  const stateNode = document.querySelector("#state") as HTMLDivElement
   stateNode.textContent = stateLabel ?? ""
 }
 

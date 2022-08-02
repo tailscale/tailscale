@@ -3,10 +3,12 @@
 // license that can be found in the LICENSE file.
 
 import { Terminal } from "xterm"
+import { FitAddon } from "xterm-addon-fit"
+import { getContentNode } from "./index"
 
 export function showSSHForm(peers: IPNNetMapPeerNode[], ipn: IPN) {
-  const formNode = document.getElementById("ssh-form") as HTMLDivElement
-  const noSSHNode = document.getElementById("no-ssh") as HTMLDivElement
+  const formNode = document.querySelector("#ssh-form") as HTMLDivElement
+  const noSSHNode = document.querySelector("#no-ssh") as HTMLDivElement
 
   const sshPeers = peers.filter(
     (p) => p.tailscaleSSHEnabled && p.online !== false
@@ -39,26 +41,23 @@ export function showSSHForm(peers: IPNNetMapPeerNode[], ipn: IPN) {
 }
 
 export function hideSSHForm() {
-  const formNode = document.getElementById("ssh-form") as HTMLDivElement
+  const formNode = document.querySelector("#ssh-form") as HTMLDivElement
   formNode.classList.add("hidden")
 }
 
 function ssh(hostname: string, username: string, ipn: IPN) {
+  document.body.classList.add("ssh-active")
   const termContainerNode = document.createElement("div")
-  termContainerNode.className = "p-3"
-  document.body.appendChild(termContainerNode)
+  termContainerNode.className = "flex-grow bg-black p-2 overflow-hidden"
+  getContentNode().appendChild(termContainerNode)
 
   const term = new Terminal({
     cursorBlink: true,
   })
+  const fitAddon = new FitAddon()
+  term.loadAddon(fitAddon)
   term.open(termContainerNode)
-
-  // Cancel wheel events from scrolling the page if the terminal has scrollback
-  termContainerNode.addEventListener("wheel", (e) => {
-    if (term.buffer.active.baseY > 0) {
-      e.preventDefault()
-    }
-  })
+  fitAddon.fit()
 
   let onDataHook: ((data: string) => void) | undefined
   term.onData((e) => {
@@ -67,14 +66,33 @@ function ssh(hostname: string, username: string, ipn: IPN) {
 
   term.focus()
 
-  ipn.ssh(hostname, username, {
+  const sshSession = ipn.ssh(hostname, username, {
     writeFn: (input) => term.write(input),
     setReadFn: (hook) => (onDataHook = hook),
     rows: term.rows,
     cols: term.cols,
     onDone: () => {
+      resizeObserver.disconnect()
       term.dispose()
       termContainerNode.remove()
+      document.body.classList.remove("ssh-active")
+      window.removeEventListener("beforeunload", beforeUnloadListener)
     },
   })
+
+  // Make terminal and SSH session track the size of the containing DOM node.
+  const resizeObserver = new ResizeObserver((entries) => {
+    fitAddon.fit()
+  })
+  resizeObserver.observe(termContainerNode)
+  term.onResize(({ rows, cols }) => {
+    sshSession.resize(rows, cols)
+  })
+
+  // Close the session if the user closes the window without an explicit
+  // exit.
+  const beforeUnloadListener = () => {
+    sshSession.close()
+  }
+  window.addEventListener("beforeunload", beforeUnloadListener)
 }

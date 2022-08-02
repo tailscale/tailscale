@@ -142,11 +142,10 @@ func newIPN(jsConfig js.Value) map[string]any {
 				log.Printf("Usage: ssh(hostname, userName, termConfig)")
 				return nil
 			}
-			go jsIPN.ssh(
+			return jsIPN.ssh(
 				args[0].String(),
 				args[1].String(),
 				args[2])
-			return nil
 		}),
 	}
 }
@@ -256,13 +255,42 @@ func (i *jsIPN) logout() {
 	go i.lb.Logout()
 }
 
-func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
-	writeFn := termConfig.Get("writeFn")
-	setReadFn := termConfig.Get("setReadFn")
-	rows := termConfig.Get("rows").Int()
-	cols := termConfig.Get("cols").Int()
-	onDone := termConfig.Get("onDone")
+func (i *jsIPN) ssh(host, username string, termConfig js.Value) map[string]any {
+	jsSSHSession := &jsSSHSession{
+		jsIPN:      i,
+		host:       host,
+		username:   username,
+		termConfig: termConfig,
+	}
 
+	go jsSSHSession.Run()
+
+	return map[string]any{
+		"close": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			return jsSSHSession.Close() != nil
+		}),
+		"resize": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			rows := args[0].Int()
+			cols := args[1].Int()
+			return jsSSHSession.Resize(rows, cols) != nil
+		}),
+	}
+}
+
+type jsSSHSession struct {
+	jsIPN      *jsIPN
+	host       string
+	username   string
+	termConfig js.Value
+	session    *ssh.Session
+}
+
+func (s *jsSSHSession) Run() {
+	writeFn := s.termConfig.Get("writeFn")
+	setReadFn := s.termConfig.Get("setReadFn")
+	rows := s.termConfig.Get("rows").Int()
+	cols := s.termConfig.Get("cols").Int()
+	onDone := s.termConfig.Get("onDone")
 	defer onDone.Invoke()
 
 	write := func(s string) {
@@ -274,7 +302,7 @@ func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := i.dialer.UserDial(ctx, "tcp", net.JoinHostPort(host, "22"))
+	c, err := s.jsIPN.dialer.UserDial(ctx, "tcp", net.JoinHostPort(s.host, "22"))
 	if err != nil {
 		writeError("Dial", err)
 		return
@@ -283,10 +311,10 @@ func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
 
 	config := &ssh.ClientConfig{
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		User:            username,
+		User:            s.username,
 	}
 
-	sshConn, _, _, err := ssh.NewClientConn(c, host, config)
+	sshConn, _, _, err := ssh.NewClientConn(c, s.host, config)
 	if err != nil {
 		writeError("SSH Connection", err)
 		return
@@ -302,6 +330,7 @@ func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
 		writeError("SSH Session", err)
 		return
 	}
+	s.session = session
 	write("Session Established\r\n")
 	defer session.Close()
 
@@ -338,9 +367,17 @@ func (i *jsIPN) ssh(host, username string, termConfig js.Value) {
 
 	err = session.Wait()
 	if err != nil {
-		writeError("Exit", err)
+		writeError("Wait", err)
 		return
 	}
+}
+
+func (s *jsSSHSession) Close() error {
+	return s.session.Close()
+}
+
+func (s *jsSSHSession) Resize(rows, cols int) error {
+	return s.session.WindowChange(rows, cols)
 }
 
 type termWriter struct {

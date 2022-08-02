@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 import * as qrcode from "qrcode"
+import { getContentNode } from "./index"
 
 export async function showLoginURL(url: string) {
   if (loginNode) {
@@ -30,7 +31,7 @@ export async function showLoginURL(url: string) {
 
   linkNode.appendChild(document.createTextNode(url))
 
-  document.body.appendChild(loginNode)
+  getContentNode().appendChild(loginNode)
 }
 
 export function hideLoginURL() {
