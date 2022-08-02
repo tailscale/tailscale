@@ -39,7 +39,6 @@ default            link#14            UCSI         utun2
 10/16              link#4             UCS            en0      !
 10.0.0.1/32        link#4             UCS            en0      !
 ...
-
 */
 func likelyHomeRouterIPDarwinExec() (ret netip.Addr, ok bool) {
 	if version.IsMobile() {

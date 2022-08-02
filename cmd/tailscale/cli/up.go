@@ -178,15 +178,16 @@ var upArgs upArgsT
 // JSON block will be output. The AuthURL and QR fields will not be present, the
 // BackendState and Error fields will give the result of the authentication.
 // Ex:
-// {
-//    "AuthURL": "https://login.tailscale.com/a/0123456789abcdef",
-//    "QR": "data:image/png;base64,0123...cdef"
-//    "BackendState": "NeedsLogin"
-// }
-// {
-//    "BackendState": "Running"
-// }
 //
+//	{
+//	   "AuthURL": "https://login.tailscale.com/a/0123456789abcdef",
+//	   "QR": "data:image/png;base64,0123...cdef"
+//	   "BackendState": "NeedsLogin"
+//	}
+//
+//	{
+//	   "BackendState": "Running"
+//	}
 type upOutputJSON struct {
 	AuthURL      string `json:",omitempty"` // Authentication URL of the form https://login.tailscale.com/a/0123456789
 	QR           string `json:",omitempty"` // a DataURL (base64) PNG of a QR code AuthURL

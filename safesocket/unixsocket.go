@@ -118,11 +118,11 @@ func socketPermissionsForOS() os.FileMode {
 // homebrew or go install). This little dance to connect a regular user binary
 // to the sandboxed network extension is:
 //
-//   * the sandboxed IPNExtension picks a random localhost:0 TCP port
+//   - the sandboxed IPNExtension picks a random localhost:0 TCP port
 //     to listen on
-//   * it also picks a random hex string that acts as an auth token
-//   * the CLI looks on disk for that TCP port + auth token (see localTCPPortAndTokenDarwin)
-//   * we send it upon TCP connect to prove to the Tailscale daemon that
+//   - it also picks a random hex string that acts as an auth token
+//   - the CLI looks on disk for that TCP port + auth token (see localTCPPortAndTokenDarwin)
+//   - we send it upon TCP connect to prove to the Tailscale daemon that
 //     we're a suitably privileged user to have access the files on disk
 //     which the Network/App Extension wrote.
 func connectMacOSAppSandbox() (net.Conn, error) {

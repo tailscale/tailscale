@@ -25,13 +25,13 @@ import (
 // TCP RST, this includes a reason.
 //
 // On the wire, after the IP header, it's currently 7 or 8 bytes:
-//     * '!'
-//     * IPProto byte (IANA protocol number: TCP or UDP)
-//     * 'A' or 'S' (RejectedDueToACLs, RejectedDueToShieldsUp)
-//     * srcPort big endian uint16
-//     * dstPort big endian uint16
-//     * [optional] byte of flag bits:
-//          lowest bit (0x1): MaybeBroken
+//   - '!'
+//   - IPProto byte (IANA protocol number: TCP or UDP)
+//   - 'A' or 'S' (RejectedDueToACLs, RejectedDueToShieldsUp)
+//   - srcPort big endian uint16
+//   - dstPort big endian uint16
+//   - [optional] byte of flag bits:
+//     lowest bit (0x1): MaybeBroken
 //
 // In the future it might also accept 16 byte IP flow src/dst IPs
 // after the header, if they're different than the IP-level ones.
@@ -205,8 +205,8 @@ func (pp *Parsed) AsTailscaleRejectedHeader() (h TailscaleRejectedHeader, ok boo
 // TSMPPingRequest is a TSMP message that's like an ICMP ping request.
 //
 // On the wire, after the IP header, it's currently 9 bytes:
-//     * 'p' (TSMPTypePing)
-//     * 8 opaque ping bytes to copy back in the response
+//   - 'p' (TSMPTypePing)
+//   - 8 opaque ping bytes to copy back in the response
 type TSMPPingRequest struct {
 	Data [8]byte
 }

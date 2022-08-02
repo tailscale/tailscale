@@ -582,17 +582,17 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 // VarzHandler is an HTTP handler to write expvar values into the
 // prometheus export format:
 //
-//   https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
+//	https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
 //
 // It makes the following assumptions:
 //
-//   * *expvar.Int are counters (unless marked as a gauge_; see below)
-//   * a *tailscale/metrics.Set is descended into, joining keys with
+//   - *expvar.Int are counters (unless marked as a gauge_; see below)
+//   - a *tailscale/metrics.Set is descended into, joining keys with
 //     underscores. So use underscores as your metric names.
-//   * an expvar named starting with "gauge_" or "counter_" is of that
+//   - an expvar named starting with "gauge_" or "counter_" is of that
 //     Prometheus type, and has that prefix stripped.
-//   * anything else is untyped and thus not exported.
-//   * expvar.Func can return an int or int64 (for now) and anything else
+//   - anything else is untyped and thus not exported.
+//   - expvar.Func can return an int or int64 (for now) and anything else
 //     is not exported.
 //
 // This will evolve over time, or perhaps be replaced.

@@ -9,11 +9,11 @@
 // Hash(x) == Hash(y) is an appropriate replacement for x == y.
 //
 // The definition of equality is identical to reflect.DeepEqual except:
-//	* Floating-point values are compared based on the raw bits,
-//	  which means that NaNs (with the same bit pattern) are treated as equal.
-//	* Types which implement interface { AppendTo([]byte) []byte } use
-//	  the AppendTo method to produce a textual representation of the value.
-//	  Thus, two values are equal if AppendTo produces the same bytes.
+//   - Floating-point values are compared based on the raw bits,
+//     which means that NaNs (with the same bit pattern) are treated as equal.
+//   - Types which implement interface { AppendTo([]byte) []byte } use
+//     the AppendTo method to produce a textual representation of the value.
+//     Thus, two values are equal if AppendTo produces the same bytes.
 //
 // WARNING: This package, like most of the tailscale.com Go module,
 // should be considered Tailscale-internal; we make no API promises.

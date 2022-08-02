@@ -517,8 +517,8 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 
 // pollResolver reads packets from the DNS resolver and injects them inbound.
 //
-// TODO(tom): Remove this fallback path (via NextPacket()) once
-//            all platforms use netstack.
+// TODO(tom): Remove this fallback path (via NextPacket()) once all
+// platforms use netstack.
 func (e *userspaceEngine) pollResolver() {
 	for {
 		bs, err := e.dns.NextPacket()
@@ -1502,7 +1502,6 @@ func (e *userspaceEngine) WhoIsIPPort(ipport netip.AddrPort) (tsIP netip.Addr, o
 //
 // If none is found in the wireguard config but one is found in
 // the netmap, it's described in an error.
-//
 //
 // peerForIP acquires both e.mu and e.wgLock, but neither at the same
 // time.

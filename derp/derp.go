@@ -40,8 +40,8 @@ const (
 )
 
 // ProtocolVersion is bumped whenever there's a wire-incompatible change.
-//   * version 1 (zero on wire): consistent box headers, in use by employee dev nodes a bit
-//   * version 2: received packets have src addrs in frameRecvPacket at beginning
+//   - version 1 (zero on wire): consistent box headers, in use by employee dev nodes a bit
+//   - version 2: received packets have src addrs in frameRecvPacket at beginning
 const ProtocolVersion = 2
 
 // frameType is the one byte frame type at the beginning of the frame

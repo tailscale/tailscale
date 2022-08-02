@@ -545,7 +545,7 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 //
 // URL format:
 //
-//    * PUT /localapi/v0/file-put/:stableID/:escaped-filename
+//   - PUT /localapi/v0/file-put/:stableID/:escaped-filename
 func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "file access denied", http.StatusForbidden)

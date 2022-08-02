@@ -239,13 +239,13 @@ func (v varExporter) String() string {
 // WritePrometheus writes the the state of all probes to w.
 //
 // For each probe, WritePrometheus exports 5 variables:
-//  - <prefix>_interval_secs, how frequently the probe runs.
-//  - <prefix>_start_secs, when the probe last started running, in seconds since epoch.
-//  - <prefix>_end_secs, when the probe last finished running, in seconds since epoch.
-//  - <prefix>_latency_millis, how long the last probe cycle took, in
-//    milliseconds. This is just (end_secs-start_secs) in an easier to
-//    graph form.
-//  - <prefix>_result, 1 if the last probe succeeded, 0 if it failed.
+//   - <prefix>_interval_secs, how frequently the probe runs.
+//   - <prefix>_start_secs, when the probe last started running, in seconds since epoch.
+//   - <prefix>_end_secs, when the probe last finished running, in seconds since epoch.
+//   - <prefix>_latency_millis, how long the last probe cycle took, in
+//     milliseconds. This is just (end_secs-start_secs) in an easier to
+//     graph form.
+//   - <prefix>_result, 1 if the last probe succeeded, 0 if it failed.
 //
 // Each probe has a set of static key/value labels (defined once at
 // probe creation), which are added as Prometheus metric labels to

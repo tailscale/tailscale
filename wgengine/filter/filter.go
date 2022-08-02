@@ -245,17 +245,17 @@ func maybeHexdump(flag RunFlags, b []byte) string {
 }
 
 // TODO(apenwarr): use a bigger bucket for specifically TCP SYN accept logging?
-//   Logging is a quick way to record every newly opened TCP connection, but
-//   we have to be cautious about flooding the logs vs letting people use
-//   flood protection to hide their traffic. We could use a rate limiter in
-//   the actual *filter* for SYN accepts, perhaps.
+// Logging is a quick way to record every newly opened TCP connection, but
+// we have to be cautious about flooding the logs vs letting people use
+// flood protection to hide their traffic. We could use a rate limiter in
+// the actual *filter* for SYN accepts, perhaps.
 var acceptBucket = rate.NewLimiter(rate.Every(10*time.Second), 3)
 var dropBucket = rate.NewLimiter(rate.Every(5*time.Second), 10)
 
 // NOTE(Xe): This func init is used to detect
-//   TS_DEBUG_FILTER_RATE_LIMIT_LOGS=all, and if it matches, to
-//   effectively disable the limits on the log rate by setting the limit
-//   to 1 millisecond. This should capture everything.
+// TS_DEBUG_FILTER_RATE_LIMIT_LOGS=all, and if it matches, to
+// effectively disable the limits on the log rate by setting the limit
+// to 1 millisecond. This should capture everything.
 func init() {
 	if envknob.String("TS_DEBUG_FILTER_RATE_LIMIT_LOGS") != "all" {
 		return

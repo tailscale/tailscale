@@ -49,13 +49,13 @@ var knownStores map[string]Provider
 //
 // By default the following stores are registered:
 //
-//   * if the string begins with "mem:", the suffix
+//   - if the string begins with "mem:", the suffix
 //     is ignored and an in-memory store is used.
-//   * (Linux-only) if the string begins with "arn:",
+//   - (Linux-only) if the string begins with "arn:",
 //     the suffix an AWS ARN for an SSM.
-//   * (Linux-only) if the string begins with "kube:",
+//   - (Linux-only) if the string begins with "kube:",
 //     the suffix is a Kubernetes secret name
-//   * In all other cases, the path is treated as a filepath.
+//   - In all other cases, the path is treated as a filepath.
 func New(logf logger.Logf, path string) (ipn.StateStore, error) {
 	regOnce.Do(registerDefaultStores)
 	for prefix, sf := range knownStores {

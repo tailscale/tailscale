@@ -20,7 +20,7 @@ type DERPMap struct {
 	OmitDefaultRegions bool `json:"omitDefaultRegions,omitempty"`
 }
 
-/// RegionIDs returns the sorted region IDs.
+// / RegionIDs returns the sorted region IDs.
 func (m *DERPMap) RegionIDs() []int {
 	ret := make([]int, 0, len(m.Regions))
 	for rid := range m.Regions {

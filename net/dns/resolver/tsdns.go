@@ -1025,11 +1025,11 @@ const (
 // https://tools.ietf.org/html/rfc6763 lists
 // "five special RR names" for Bonjour service discovery:
 //
-//   b._dns-sd._udp.<domain>.
-//  db._dns-sd._udp.<domain>.
-//   r._dns-sd._udp.<domain>.
-//  dr._dns-sd._udp.<domain>.
-//  lb._dns-sd._udp.<domain>.
+//	 b._dns-sd._udp.<domain>.
+//	db._dns-sd._udp.<domain>.
+//	 r._dns-sd._udp.<domain>.
+//	dr._dns-sd._udp.<domain>.
+//	lb._dns-sd._udp.<domain>.
 func hasRDNSBonjourPrefix(name dnsname.FQDN) bool {
 	s := name.WithTrailingDot()
 	base, rest, ok := strings.Cut(s, ".")
@@ -1063,9 +1063,12 @@ func rawNameToLower(name []byte) string {
 // ptrNameToIPv4 transforms a PTR name representing an IPv4 address to said address.
 // Such names are IPv4 labels in reverse order followed by .in-addr.arpa.
 // For example,
-//   4.3.2.1.in-addr.arpa
+//
+//	4.3.2.1.in-addr.arpa
+//
 // is transformed to
-//   1.2.3.4
+//
+//	1.2.3.4
 func rdnsNameToIPv4(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 	s := strings.TrimSuffix(name.WithTrailingDot(), rdnsv4Suffix)
 	ip, err := netip.ParseAddr(s)
@@ -1082,9 +1085,12 @@ func rdnsNameToIPv4(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 // ptrNameToIPv6 transforms a PTR name representing an IPv6 address to said address.
 // Such names are dot-separated nibbles in reverse order followed by .ip6.arpa.
 // For example,
-//   b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+//
+//	b.a.9.8.7.6.5.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+//
 // is transformed to
-//   2001:db8::567:89ab
+//
+//	2001:db8::567:89ab
 func rdnsNameToIPv6(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 	var b [32]byte
 	var ipb [16]byte

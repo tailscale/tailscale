@@ -1833,10 +1833,10 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 //
 // A discovery message has the form:
 //
-//  * magic             [6]byte
-//  * senderDiscoPubKey [32]byte
-//  * nonce             [24]byte
-//  * naclbox of payload (see tailscale.com/disco package for inner payload format)
+//   - magic             [6]byte
+//   - senderDiscoPubKey [32]byte
+//   - nonce             [24]byte
+//   - naclbox of payload (see tailscale.com/disco package for inner payload format)
 //
 // For messages received over DERP, the src.Addr() will be derpMagicIP (with
 // src.Port() being the region ID) and the derpNodeSrc will be the node key

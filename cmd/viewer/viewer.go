@@ -342,8 +342,7 @@ func main() {
 	it := codegen.NewImportTracker(pkg.Types)
 
 	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, `//go:generate go run tailscale.com/cmd/cloner  %s`, strings.Join(flagArgs, " "))
-	fmt.Fprintln(buf)
+	fmt.Fprintf(buf, "//go:generate go run tailscale.com/cmd/cloner  %s\n\n", strings.Join(flagArgs, " "))
 	runCloner := false
 	for _, typeName := range typeNames {
 		typ, ok := namedTypes[typeName]
