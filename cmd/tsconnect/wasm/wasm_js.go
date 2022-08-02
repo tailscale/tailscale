@@ -19,6 +19,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"syscall/js"
@@ -100,6 +101,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		log.Fatalf("ipnserver.New: %v", err)
 	}
 	lb := srv.LocalBackend()
+	ns.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{
 		dialer: dialer,
@@ -146,6 +148,15 @@ func newIPN(jsConfig js.Value) map[string]any {
 				args[0].String(),
 				args[1].String(),
 				args[2])
+		}),
+		"fetch": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			if len(args) != 1 {
+				log.Printf("Usage: fetch(url)")
+				return nil
+			}
+
+			url := args[0].String()
+			return jsIPN.fetch(url)
 		}),
 	}
 }
@@ -380,6 +391,36 @@ func (s *jsSSHSession) Resize(rows, cols int) error {
 	return s.session.WindowChange(rows, cols)
 }
 
+func (i *jsIPN) fetch(url string) js.Value {
+	return makePromise(func() (any, error) {
+		c := &http.Client{
+			Transport: &http.Transport{
+				DialContext: i.dialer.UserDial,
+			},
+		}
+		res, err := c.Get(url)
+		if err != nil {
+			return nil, err
+		}
+
+		return map[string]any{
+			"status":     res.StatusCode,
+			"statusText": res.Status,
+			"text": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+				return makePromise(func() (any, error) {
+					defer res.Body.Close()
+					buf := new(bytes.Buffer)
+					if _, err := buf.ReadFrom(res.Body); err != nil {
+						return nil, err
+					}
+					return buf.String(), nil
+				})
+			}),
+			// TODO: populate a more complete JS Response object
+		}, nil
+	})
+}
+
 type termWriter struct {
 	f js.Value
 }
@@ -464,4 +505,25 @@ func generateHostname() string {
 	tail := tails[rand.Intn(len(tails))]
 	scale := scales[rand.Intn(len(scales))]
 	return fmt.Sprintf("%s-%s", tail, scale)
+}
+
+// makePromise handles the boilerplate of wrapping goroutines with JS promises.
+// f is run on a goroutine and its return value is used to resolve the promise
+// (or reject it if an error is returned).
+func makePromise(f func() (any, error)) js.Value {
+	handler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		resolve := args[0]
+		reject := args[1]
+		go func() {
+			if res, err := f(); err == nil {
+				resolve.Invoke(res)
+			} else {
+				reject.Invoke(err.Error())
+			}
+		}()
+		return nil
+	})
+
+	promiseConstructor := js.Global().Get("Promise")
+	return promiseConstructor.New(handler)
 }
