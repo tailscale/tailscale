@@ -571,9 +571,9 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 
 				data, err := json.MarshalIndent(js, "", "\t")
 				if err != nil {
-					log.Printf("upOutputJSON marshalling error: %v", err)
+					printf("upOutputJSON marshalling error: %v", err)
 				} else {
-					fmt.Println(string(data))
+					outln(string(data))
 				}
 			} else {
 				fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
@@ -711,7 +711,7 @@ func printUpDoneJSON(state ipn.State, errorString string) {
 	if err != nil {
 		log.Printf("printUpDoneJSON marshalling error: %v", err)
 	} else {
-		fmt.Println(string(data))
+		outln(string(data))
 	}
 }
 

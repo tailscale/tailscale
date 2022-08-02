@@ -66,7 +66,7 @@ func runConfigureHost(ctx context.Context, args []string) error {
 		return err
 	}
 	if isDSM6 {
-		fmt.Printf("/dev/net/tun exists and has permissions 0666. Skipping setcap on DSM6.\n")
+		printf("/dev/net/tun exists and has permissions 0666. Skipping setcap on DSM6.\n")
 		return nil
 	}
 
@@ -80,6 +80,6 @@ func runConfigureHost(ctx context.Context, args []string) error {
 	if out, err := exec.Command("/bin/setcap", "cap_net_admin,cap_net_raw+eip", daemonBin).CombinedOutput(); err != nil {
 		return fmt.Errorf("setcap: %v, %s", err, out)
 	}
-	fmt.Printf("Done. To restart Tailscale to use the new permissions, run:\n\n  sudo synosystemctl restart pkgctl-Tailscale.service\n\n")
+	printf("Done. To restart Tailscale to use the new permissions, run:\n\n  sudo synosystemctl restart pkgctl-Tailscale.service\n\n")
 	return nil
 }
