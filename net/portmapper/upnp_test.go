@@ -11,11 +11,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"testing"
 
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tstest"
 )
 
@@ -106,7 +106,8 @@ func TestGetUPnPClient(t *testing.T) {
 				http.NotFound(w, r)
 			}))
 			defer ts.Close()
-			gw, _ := netaddr.FromStdIP(ts.Listener.Addr().(*net.TCPAddr).IP)
+			gw, _ := netip.AddrFromSlice(ts.Listener.Addr().(*net.TCPAddr).IP)
+			gw = gw.Unmap()
 			var logBuf tstest.MemLogger
 			c, err := getUPnPClient(context.Background(), logBuf.Logf, gw, uPnPDiscoResponse{
 				Location: ts.URL + "/rootDesc.xml",

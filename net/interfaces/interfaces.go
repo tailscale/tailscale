@@ -44,7 +44,8 @@ func Tailscale() ([]netip.Addr, *net.Interface, error) {
 		var tsIPs []netip.Addr
 		for _, a := range addrs {
 			if ipnet, ok := a.(*net.IPNet); ok {
-				nip, ok := netaddr.FromStdIP(ipnet.IP)
+				nip, ok := netip.AddrFromSlice(ipnet.IP)
+				nip = nip.Unmap()
 				if ok && tsaddr.IsTailscaleIP(nip) {
 					tsIPs = append(tsIPs, nip)
 				}
@@ -110,10 +111,11 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				ip, ok := netaddr.FromStdIP(v.IP)
+				ip, ok := netip.AddrFromSlice(v.IP)
 				if !ok {
 					continue
 				}
+				ip = ip.Unmap()
 				// TODO(apenwarr): don't special case cgNAT.
 				// In the general wireguard case, it might
 				// very well be something we can route to

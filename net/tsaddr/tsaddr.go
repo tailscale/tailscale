@@ -126,7 +126,7 @@ func Tailscale4To6(ipv4 netip.Addr) netip.Addr {
 	ret := Tailscale4To6Range().Addr().As16()
 	v4 := ipv4.As4()
 	copy(ret[13:], v4[1:])
-	return netaddr.IPFrom16(ret)
+	return netip.AddrFrom16(ret)
 }
 
 // Tailscale6to4 returns the IPv4 address corresponding to the given
@@ -138,7 +138,7 @@ func Tailscale6to4(ipv6 netip.Addr) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	v6 := ipv6.As16()
-	return netaddr.IPv4(100, v6[13], v6[14], v6[15]), true
+	return netip.AddrFrom4([4]byte{100, v6[13], v6[14], v6[15]}), true
 }
 
 func mustPrefix(v *netip.Prefix, prefix string) {
@@ -307,5 +307,5 @@ func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	binary.BigEndian.PutUint32(a[8:], siteID)
 	ip4a := v4.Addr().As4()
 	copy(a[12:], ip4a[:])
-	return netip.PrefixFrom(netaddr.IPFrom16(a), v4.Bits()+64+32), nil
+	return netip.PrefixFrom(netip.AddrFrom16(a), v4.Bits()+64+32), nil
 }

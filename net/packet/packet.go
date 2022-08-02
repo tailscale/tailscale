@@ -250,8 +250,8 @@ func (q *Parsed) decode6(b []byte) {
 
 	// okay to ignore `ok` here, because IPs pulled from packets are
 	// always well-formed stdlib IPs.
-	srcIP, _ := netaddr.FromStdIP(net.IP(b[8:24]))
-	dstIP, _ := netaddr.FromStdIP(net.IP(b[24:40]))
+	srcIP, _ := netip.AddrFromSlice(net.IP(b[8:24]))
+	dstIP, _ := netip.AddrFromSlice(net.IP(b[24:40]))
 	q.Src = withIP(q.Src, srcIP)
 	q.Dst = withIP(q.Dst, dstIP)
 

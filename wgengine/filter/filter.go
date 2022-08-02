@@ -109,7 +109,7 @@ const (
 // attacks to reach the OS network stack.
 func NewAllowAllForTest(logf logger.Logf) *Filter {
 	any4 := netip.PrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0)
-	any6 := netip.PrefixFrom(netaddr.IPFrom16([16]byte{}), 0)
+	any6 := netip.PrefixFrom(netip.AddrFrom16([16]byte{}), 0)
 	ms := []Match{
 		{
 			IPProto: []ipproto.Proto{ipproto.TCP, ipproto.UDP, ipproto.ICMPv4},

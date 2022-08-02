@@ -1031,7 +1031,8 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	defer tcpConn.Close()
 
 	if ta, ok := tlsConn.RemoteAddr().(*net.TCPAddr); ok {
-		ip, _ = netaddr.FromStdIP(ta.IP)
+		ip, _ = netip.AddrFromSlice(ta.IP)
+		ip = ip.Unmap()
 	}
 	if ip == (netip.Addr{}) {
 		return 0, ip, fmt.Errorf("no unexpected RemoteAddr %#v", tlsConn.RemoteAddr())
@@ -1328,8 +1329,8 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 	addrs, _ := net.DefaultResolver.LookupIPAddr(ctx, n.HostName)
 	for _, a := range addrs {
 		if (a.IP.To4() != nil) == (proto == probeIPv4) {
-			na, _ := netaddr.FromStdIP(a.IP.To4())
-			return netip.AddrPortFrom(na, uint16(port))
+			na, _ := netip.AddrFromSlice(a.IP.To4())
+			return netip.AddrPortFrom(na.Unmap(), uint16(port))
 		}
 	}
 	return

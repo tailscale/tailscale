@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"net/netip"
 	"time"
-
-	"tailscale.com/net/netaddr"
 )
 
 // References:
@@ -126,7 +124,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	externalPort := binary.BigEndian.Uint16(resp[42:44])
 	externalIPBytes := [16]byte{}
 	copy(externalIPBytes[:], resp[44:])
-	externalIP := netaddr.IPFrom16(externalIPBytes)
+	externalIP := netip.AddrFrom16(externalIPBytes).Unmap()
 
 	external := netip.AddrPortFrom(externalIP, externalPort)
 

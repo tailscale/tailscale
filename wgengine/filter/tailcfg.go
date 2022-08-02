@@ -97,7 +97,7 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 
 var (
 	zeroIP4 = netaddr.IPv4(0, 0, 0, 0)
-	zeroIP6 = netaddr.IPFrom16([16]byte{})
+	zeroIP6 = netip.AddrFrom16([16]byte{})
 )
 
 // parseIPSet parses arg as one:

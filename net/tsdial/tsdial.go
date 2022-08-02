@@ -21,7 +21,6 @@ import (
 
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
@@ -250,8 +249,8 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	if len(ips) == 0 {
 		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
-	ip, _ := netaddr.FromStdIP(ips[0])
-	return netip.AddrPortFrom(ip, port), nil
+	ip, _ := netip.AddrFromSlice(ips[0])
+	return netip.AddrPortFrom(ip.Unmap(), port), nil
 }
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding

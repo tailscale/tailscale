@@ -218,11 +218,12 @@ func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, *stack.PacketBuffer) bool) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
 	return func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
 		addr := tei.LocalAddress
-		ip, ok := netaddr.FromStdIP(net.IP(addr))
+		ip, ok := netip.AddrFromSlice(net.IP(addr))
 		if !ok {
 			ns.logf("netstack: could not parse local address for incoming connection")
 			return false
 		}
+		ip = ip.Unmap()
 		if !ns.isLocalIP(ip) {
 			ns.addSubnetAddress(ip)
 		}
@@ -486,7 +487,7 @@ func (ns *Impl) inject() {
 				}
 			case 6:
 				if len(b) >= 40 { // min ipv6 header
-					if srcIP, ok := netaddr.FromStdIP(net.IP(b[8:24])); ok && magicDNSIPv6 == srcIP {
+					if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && magicDNSIPv6 == srcIP {
 						sendToHost = true
 					}
 				}
@@ -710,7 +711,7 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	case 16:
 		var a [16]byte
 		copy(a[:], s)
-		return netaddr.IPFrom16(a)
+		return netip.AddrFrom16(a).Unmap()
 	}
 	return netip.Addr{}
 }

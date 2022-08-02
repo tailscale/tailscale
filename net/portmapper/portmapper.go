@@ -788,10 +788,11 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			}
 			return res, err
 		}
-		ip, ok := netaddr.FromStdIP(addr.(*net.UDPAddr).IP)
+		ip, ok := netip.AddrFromSlice(addr.(*net.UDPAddr).IP)
 		if !ok {
 			continue
 		}
+		ip = ip.Unmap()
 		port := uint16(addr.(*net.UDPAddr).Port)
 		switch port {
 		case c.upnpPort():

@@ -22,7 +22,6 @@ import (
 	"unsafe"
 
 	"go4.org/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -192,7 +191,7 @@ func getVal() []any {
 	return []any{
 		&wgcfg.Config{
 			Name:      "foo",
-			Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPFrom16([16]byte{3: 3}), 5)},
+			Addresses: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom16([16]byte{3: 3}).Unmap(), 5)},
 			Peers: []wgcfg.Peer{
 				{
 					PublicKey: key.NodePublic{},

@@ -7,6 +7,7 @@ package monitor
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -132,7 +133,7 @@ func (m *winMon) Receive() (message, error) {
 // unicastAddressChanged is the callback we register with Windows to call when unicast address changes.
 func (m *winMon) unicastAddressChanged(_ winipcfg.MibNotificationType, row *winipcfg.MibUnicastIPAddressRow) {
 	what := "addr"
-	if ip, ok := netaddr.FromStdIP(row.Address.IP()); ok && tsaddr.IsTailscaleIP(ip) {
+	if ip, ok := netip.AddrFromSlice(row.Address.IP()); ok && tsaddr.IsTailscaleIP(ip.Unmap()) {
 		what = "tsaddr"
 	}
 

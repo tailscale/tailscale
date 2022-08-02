@@ -214,7 +214,7 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 	op := pkt[1]
 	pktSrcBytes := [16]byte{}
 	copy(pktSrcBytes[:], pkt[8:24])
-	pktSrc := netaddr.IPFrom16(pktSrcBytes)
+	pktSrc := netip.AddrFrom16(pktSrcBytes).Unmap()
 	if pktSrc != src.Addr() {
 		// TODO this error isn't fatal but should be rejected by server.
 		// Since it's a test it's difficult to get them the same though.
