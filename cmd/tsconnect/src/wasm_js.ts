@@ -26,6 +26,13 @@ declare global {
         onDone: () => void
       }
     ): IPNSSHSession
+    fetch(
+      url: string
+    ): Promise<{
+      status: number
+      statusText: string
+      text: () => Promise<string>
+    }>
   }
 
   interface IPNSSHSession {
