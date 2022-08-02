@@ -51,7 +51,7 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
-	github.com/u-root/u-root v0.8.0
+	github.com/u-root/u-root v0.9.0
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf
@@ -254,7 +254,7 @@ require (
 	github.com/timakin/bodyclose v0.0.0-20210704033933-f49887972144 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.4.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.4.0 // indirect
-	github.com/u-root/uio v0.0.0-20210528151154-e40b768296a7 // indirect
+	github.com/u-root/uio v0.0.0-20220204230159-dac05f7d2cb4 // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/ultraware/funlen v0.0.3 // indirect
 	github.com/ultraware/whitespace v0.0.4 // indirect
