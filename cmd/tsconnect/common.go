@@ -119,6 +119,9 @@ func runYarn(args ...string) error {
 // from entry points to hashed file names.
 type EsbuildMetadata struct {
 	Outputs map[string]struct {
+		Inputs map[string]struct {
+			BytesInOutput int64 `json:"bytesInOutput"`
+		} `json:"inputs,omitempty"`
 		EntryPoint string `json:"entryPoint,omitempty"`
 	} `json:"outputs,omitempty"`
 }
