@@ -274,13 +274,6 @@ func ipnServerOpts() (o ipnserver.Options) {
 	}
 
 	switch goos {
-	case "js":
-		// The js/wasm client has no state storage so for now
-		// treat all interactive logins as ephemeral.
-		// TODO(bradfitz): if we start using browser LocalStorage
-		// or something, then rethink this.
-		o.LoginFlags = controlclient.LoginEphemeral
-		fallthrough
 	default:
 		o.SurviveDisconnects = true
 		o.AutostartStateKey = ipn.GlobalDaemonStateKey

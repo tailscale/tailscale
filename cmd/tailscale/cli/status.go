@@ -46,7 +46,7 @@ https://github.com/tailscale/tailscale/blob/main/ipn/ipnstate/ipnstate.go
 `),
 	Exec: runStatus,
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("status")
+		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		fs.BoolVar(&statusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		fs.BoolVar(&statusArgs.web, "web", false, "run webserver with HTML showing status")
 		fs.BoolVar(&statusArgs.active, "active", false, "filter output to only peers with active sessions (not applicable to web mode)")
@@ -92,7 +92,7 @@ func runStatus(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		printf("%s", j)
+		fmt.Printf("%s", j)
 		return nil
 	}
 	if statusArgs.web {
@@ -101,7 +101,7 @@ func runStatus(ctx context.Context, args []string) error {
 			return err
 		}
 		statusURL := interfaces.HTTPOfListener(ln)
-		printf("Serving Tailscale status at %v ...\n", statusURL)
+		fmt.Printf("Serving Tailscale status at %v ...\n", statusURL)
 		go func() {
 			<-ctx.Done()
 			ln.Close()
@@ -131,16 +131,16 @@ func runStatus(ctx context.Context, args []string) error {
 	// print health check information prior to checking LocalBackend state as
 	// it may provide an explanation to the user if we choose to exit early
 	if len(st.Health) > 0 {
-		printf("# Health check:\n")
+		fmt.Printf("# Health check:\n")
 		for _, m := range st.Health {
-			printf("#     - %s\n", m)
+			fmt.Printf("#     - %s\n", m)
 		}
-		outln()
+		fmt.Println()
 	}
 
 	description, ok := isRunningOrStarting(st)
 	if !ok {
-		outln(description)
+		fmt.Println(description)
 		os.Exit(1)
 	}
 
@@ -213,7 +213,7 @@ func runStatus(ctx context.Context, args []string) error {
 			printPS(ps)
 		}
 	}
-	Stdout.Write(buf.Bytes())
+	os.Stdout.Write(buf.Bytes())
 	return nil
 }
 

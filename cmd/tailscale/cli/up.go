@@ -85,7 +85,7 @@ var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
 func inTest() bool { return flag.Lookup("test.v") != nil }
 
 func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
-	upf := newFlagSet("up")
+	upf := flag.NewFlagSet("up", flag.ExitOnError)
 
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
@@ -195,7 +195,7 @@ type upOutputJSON struct {
 }
 
 func warnf(format string, args ...any) {
-	printf("Warning: "+format+"\n", args...)
+	fmt.Printf("Warning: "+format+"\n", args...)
 }
 
 var (
@@ -538,7 +538,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 				if env.upArgs.json {
 					printUpDoneJSON(ipn.NeedsMachineAuth, "")
 				} else {
-					fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+					fmt.Fprintf(os.Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
 				}
 			case ipn.Running:
 				// Done full authentication process
@@ -546,7 +546,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 					printUpDoneJSON(ipn.Running, "")
 				} else if printed {
 					// Only need to print an update if we printed the "please click" message earlier.
-					fmt.Fprintf(Stderr, "Success.\n")
+					fmt.Fprintf(os.Stderr, "Success.\n")
 				}
 				select {
 				case running <- true:
@@ -575,13 +575,13 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 					fmt.Println(string(data))
 				}
 			} else {
-				fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+				fmt.Fprintf(os.Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
 				if upArgs.qr {
 					q, err := qrcode.New(*url, qrcode.Medium)
 					if err != nil {
 						log.Printf("QR code error: %v", err)
 					} else {
-						fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+						fmt.Fprintf(os.Stderr, "%s\n", q.ToString(false))
 					}
 				}
 			}
@@ -695,12 +695,12 @@ func checkSSHUpWarnings(ctx context.Context) {
 		return
 	}
 	if len(st.Health) == 1 && strings.Contains(st.Health[0], "SSH") {
-		printf("%s\n", st.Health[0])
+		fmt.Printf("%s\n", st.Health[0])
 		return
 	}
-	printf("# Health check:\n")
+	fmt.Printf("# Health check:\n")
 	for _, m := range st.Health {
-		printf("    - %s\n", m)
+		fmt.Printf("    - %s\n", m)
 	}
 }
 

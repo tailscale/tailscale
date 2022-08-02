@@ -18,7 +18,7 @@ var versionCmd = &ffcli.Command{
 	ShortUsage: "version [flags]",
 	ShortHelp:  "Print Tailscale version",
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("version")
+		fs := flag.NewFlagSet("version", flag.ExitOnError)
 		fs.BoolVar(&versionArgs.daemon, "daemon", false, "also print local node's daemon version")
 		return fs
 	})(),
@@ -34,16 +34,16 @@ func runVersion(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 	if !versionArgs.daemon {
-		outln(version.String())
+		fmt.Println(version.String())
 		return nil
 	}
 
-	printf("Client: %s\n", version.String())
+	fmt.Printf("Client: %s\n", version.String())
 
 	st, err := localClient.StatusWithoutPeers(ctx)
 	if err != nil {
 		return err
 	}
-	printf("Daemon: %s\n", st.Version)
+	fmt.Printf("Daemon: %s\n", st.Version)
 	return nil
 }

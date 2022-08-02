@@ -40,7 +40,7 @@ var debugCmd = &ffcli.Command{
 	Exec:     runDebug,
 	LongHelp: `"tailscale debug" contains misc debug facilities; it is not a stable interface.`,
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("debug")
+		fs := flag.NewFlagSet("debug", flag.ExitOnError)
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
 		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-sec seconds and write it to this file; - for stdout")
 		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
@@ -63,7 +63,7 @@ var debugCmd = &ffcli.Command{
 			Exec:      runDaemonMetrics,
 			ShortHelp: "print tailscaled's metrics",
 			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("metrics")
+				fs := flag.NewFlagSet("metrics", flag.ExitOnError)
 				fs.BoolVar(&metricsArgs.watch, "watch", false, "print JSON dump of delta values")
 				return fs
 			})(),
@@ -103,7 +103,7 @@ var debugCmd = &ffcli.Command{
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
 			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("prefs")
+				fs := flag.NewFlagSet("prefs", flag.ExitOnError)
 				fs.BoolVar(&prefsArgs.pretty, "pretty", false, "If true, pretty-print output")
 				return fs
 			})(),
@@ -113,7 +113,7 @@ var debugCmd = &ffcli.Command{
 			Exec:      runWatchIPN,
 			ShortHelp: "subscribe to IPN message bus",
 			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("watch-ipn")
+				fs := flag.NewFlagSet("watch-ipn", flag.ExitOnError)
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				return fs
 			})(),
@@ -128,7 +128,7 @@ var debugCmd = &ffcli.Command{
 			Exec:      runTS2021,
 			ShortHelp: "debug ts2021 protocol connectivity",
 			FlagSet: (func() *flag.FlagSet {
-				fs := newFlagSet("ts2021")
+				fs := flag.NewFlagSet("ts2021", flag.ExitOnError)
 				fs.StringVar(&ts2021Args.host, "host", "controlplane.tailscale.com", "hostname of control plane")
 				fs.IntVar(&ts2021Args.version, "version", int(tailcfg.CurrentCapabilityVersion), "protocol version")
 				return fs
@@ -146,7 +146,7 @@ var debugArgs struct {
 
 func writeProfile(dst string, v []byte) error {
 	if dst == "-" {
-		_, err := Stdout.Write(v)
+		_, err := os.Stdout.Write(v)
 		return err
 	}
 	return os.WriteFile(dst, v, 0600)
@@ -198,7 +198,7 @@ func runDebug(ctx context.Context, args []string) error {
 			if err != nil {
 				fatalf("%v\n", err)
 			}
-			e := json.NewEncoder(Stdout)
+			e := json.NewEncoder(os.Stdout)
 			e.SetIndent("", "\t")
 			e.Encode(wfs)
 			return nil
@@ -212,7 +212,7 @@ func runDebug(ctx context.Context, args []string) error {
 			return err
 		}
 		log.Printf("Size: %v\n", size)
-		io.Copy(Stdout, rc)
+		io.Copy(os.Stdout, rc)
 		return nil
 	}
 	if usedFlag {
@@ -226,14 +226,14 @@ func runDebug(ctx context.Context, args []string) error {
 func runLocalCreds(ctx context.Context, args []string) error {
 	port, token, err := safesocket.LocalTCPPortAndToken()
 	if err == nil {
-		printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
+		fmt.Printf("curl -u:%s http://localhost:%d/localapi/v0/status\n", token, port)
 		return nil
 	}
 	if runtime.GOOS == "windows" {
-		printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
+		fmt.Printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
 		return nil
 	}
-	printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
+	fmt.Printf("curl --unix-socket %s http://foo/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 	return nil
 }
 
@@ -247,10 +247,10 @@ func runPrefs(ctx context.Context, args []string) error {
 		return err
 	}
 	if prefsArgs.pretty {
-		outln(prefs.Pretty())
+		fmt.Println(prefs.Pretty())
 	} else {
 		j, _ := json.MarshalIndent(prefs, "", "\t")
-		outln(string(j))
+		fmt.Println(string(j))
 	}
 	return nil
 }
@@ -268,7 +268,7 @@ func runWatchIPN(ctx context.Context, args []string) error {
 			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
-		printf("%s\n", j)
+		fmt.Printf("%s\n", j)
 	})
 	bc.RequestEngineStatus()
 	pump(ctx, bc, c)
@@ -282,7 +282,7 @@ func runDERPMap(ctx context.Context, args []string) error {
 			"failed to get local derp map, instead `curl %s/derpmap/default`: %w", ipn.DefaultControlURL, err,
 		)
 	}
-	enc := json.NewEncoder(Stdout)
+	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(dm)
 	return nil
@@ -299,7 +299,7 @@ func localAPIAction(action string) func(context.Context, []string) error {
 
 func runEnv(ctx context.Context, args []string) error {
 	for _, e := range os.Environ() {
-		outln(e)
+		fmt.Println(e)
 	}
 	return nil
 }
@@ -338,7 +338,7 @@ func runDaemonGoroutines(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	Stdout.Write(goroutines)
+	os.Stdout.Write(goroutines)
 	return nil
 }
 
@@ -354,7 +354,7 @@ func runDaemonMetrics(ctx context.Context, args []string) error {
 			return err
 		}
 		if !metricsArgs.watch {
-			Stdout.Write(out)
+			os.Stdout.Write(out)
 			return nil
 		}
 		bs := bufio.NewScanner(bytes.NewReader(out))
@@ -391,9 +391,9 @@ func runDaemonMetrics(ctx context.Context, args []string) error {
 		if len(changes) > 0 {
 			format := fmt.Sprintf("%%-%ds %%+5d => %%v\n", maxNameLen)
 			for _, c := range changes {
-				fmt.Fprintf(Stdout, format, c.name, c.to-c.from, c.to)
+				fmt.Fprintf(os.Stdout, format, c.name, c.to-c.from, c.to)
 			}
-			io.WriteString(Stdout, "\n")
+			io.WriteString(os.Stdout, "\n")
 		}
 		time.Sleep(time.Second)
 	}

@@ -31,7 +31,7 @@ permission to use it.
 See: https://tailscale.com/kb/1152/synology-outbound/
 `),
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("configure-host")
+		fs := flag.NewFlagSet("configure-host", flag.ExitOnError)
 		return fs
 	})(),
 }

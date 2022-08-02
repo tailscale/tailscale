@@ -27,7 +27,7 @@ var certCmd = &ffcli.Command{
 	ShortHelp:  "get TLS certs",
 	ShortUsage: "cert [flags] <domain>",
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("cert")
+		fs := flag.NewFlagSet("cert", flag.ExitOnError)
 		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
 		fs.StringVar(&certArgs.keyFile, "key-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
 		fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
@@ -79,7 +79,7 @@ func runCert(ctx context.Context, args []string) error {
 	domain := args[0]
 
 	printf := func(format string, a ...any) {
-		printf(format, a...)
+		fmt.Printf(format, a...)
 	}
 	if certArgs.certFile == "-" || certArgs.keyFile == "-" {
 		printf = log.Printf
@@ -138,7 +138,7 @@ func runCert(ctx context.Context, args []string) error {
 
 func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed bool, err error) {
 	if filename == "-" {
-		Stdout.Write(contents)
+		os.Stdout.Write(contents)
 		return false, nil
 	}
 	if old, err := os.ReadFile(filename); err == nil && bytes.Equal(contents, old) {

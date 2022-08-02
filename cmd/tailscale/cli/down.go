@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
@@ -23,7 +24,7 @@ var downCmd = &ffcli.Command{
 }
 
 func newDownFlagSet() *flag.FlagSet {
-	downf := newFlagSet("down")
+	downf := flag.NewFlagSet("down", flag.ExitOnError)
 	registerAcceptRiskFlag(downf)
 	return downf
 }
@@ -44,7 +45,7 @@ func runDown(ctx context.Context, args []string) error {
 		return fmt.Errorf("error fetching current status: %w", err)
 	}
 	if st.BackendState == "Stopped" {
-		fmt.Fprintf(Stderr, "Tailscale was already stopped.\n")
+		fmt.Fprintf(os.Stderr, "Tailscale was already stopped.\n")
 		return nil
 	}
 	_, err = localClient.EditPrefs(ctx, &ipn.MaskedPrefs{

@@ -46,7 +46,7 @@ relay node.
 `),
 	Exec: runPing,
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("ping")
+		fs := flag.NewFlagSet("ping", flag.ExitOnError)
 		fs.BoolVar(&pingArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&pingArgs.untilDirect, "until-direct", true, "stop once a direct path is established")
 		fs.BoolVar(&pingArgs.tsmp, "tsmp", false, "do a TSMP-level ping (through WireGuard, but not either host OS stack)")
@@ -88,7 +88,7 @@ func runPing(ctx context.Context, args []string) error {
 	}
 	description, ok := isRunningOrStarting(st)
 	if !ok {
-		printf("%s\n", description)
+		fmt.Printf("%s\n", description)
 		os.Exit(1)
 	}
 
@@ -103,7 +103,7 @@ func runPing(ctx context.Context, args []string) error {
 		return err
 	}
 	if self {
-		printf("%v is local Tailscale IP\n", ip)
+		fmt.Printf("%v is local Tailscale IP\n", ip)
 		return nil
 	}
 
@@ -120,7 +120,7 @@ func runPing(ctx context.Context, args []string) error {
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				printf("ping %q timed out\n", ip)
+				fmt.Printf("ping %q timed out\n", ip)
 				if n == pingArgs.num {
 					if !anyPong {
 						return errors.New("no reply")
@@ -133,7 +133,7 @@ func runPing(ctx context.Context, args []string) error {
 		}
 		if pr.Err != "" {
 			if pr.IsLocalIP {
-				outln(pr.Err)
+				fmt.Println(pr.Err)
 				return nil
 			}
 			return errors.New(pr.Err)
@@ -149,7 +149,7 @@ func runPing(ctx context.Context, args []string) error {
 			via = string(pingType())
 		}
 		if pingArgs.peerAPI {
-			printf("hit peerapi of %s (%s) at %s in %s\n", pr.NodeIP, pr.NodeName, pr.PeerAPIURL, latency)
+			fmt.Printf("hit peerapi of %s (%s) at %s in %s\n", pr.NodeIP, pr.NodeName, pr.PeerAPIURL, latency)
 			return nil
 		}
 		anyPong = true
@@ -157,7 +157,7 @@ func runPing(ctx context.Context, args []string) error {
 		if pr.PeerAPIPort != 0 {
 			extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
 		}
-		printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
+		fmt.Printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
 		if pingArgs.tsmp || pingArgs.icmp {
 			return nil
 		}

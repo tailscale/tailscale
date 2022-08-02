@@ -29,7 +29,7 @@ func runNC(ctx context.Context, args []string) error {
 	}
 	description, ok := isRunningOrStarting(st)
 	if !ok {
-		printf("%s\n", description)
+		fmt.Printf("%s\n", description)
 		os.Exit(1)
 	}
 

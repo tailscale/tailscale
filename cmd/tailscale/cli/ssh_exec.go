@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !js && !windows
-// +build !js,!windows
+//go:build !windows
+// +build !windows
 
 package cli
 

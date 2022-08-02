@@ -54,7 +54,7 @@ var fileCpCmd = &ffcli.Command{
 	ShortHelp:  "Copy file(s) to a host",
 	Exec:       runCp,
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("cp")
+		fs := flag.NewFlagSet("cp", flag.ExitOnError)
 		fs.StringVar(&cpArgs.name, "name", "", "alternate filename to use, especially useful when <file> is \"-\" (stdin)")
 		fs.BoolVar(&cpArgs.verbose, "verbose", false, "verbose output")
 		fs.BoolVar(&cpArgs.targets, "targets", false, "list possible file cp targets")
@@ -100,7 +100,7 @@ func runCp(ctx context.Context, args []string) error {
 		return fmt.Errorf("can't send to %s: %v", target, err)
 	}
 	if isOffline {
-		fmt.Fprintf(Stderr, "# warning: %s is offline\n", target)
+		fmt.Fprintf(os.Stderr, "# warning: %s is offline\n", target)
 	}
 
 	if len(files) > 1 {
@@ -281,7 +281,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 		if detail != "" {
 			detail = "\t" + detail
 		}
-		printf("%s\t%s%s\n", n.Addresses[0].Addr(), n.ComputedName, detail)
+		fmt.Printf("%s\t%s%s\n", n.Addresses[0].Addr(), n.ComputedName, detail)
 	}
 	return nil
 }
@@ -315,7 +315,7 @@ var fileGetCmd = &ffcli.Command{
 	ShortHelp:  "Move files out of the Tailscale file inbox",
 	Exec:       runFileGet,
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("get")
+		fs := flag.NewFlagSet("get", flag.ExitOnError)
 		fs.BoolVar(&getArgs.wait, "wait", false, "wait for a file to arrive if inbox is empty")
 		fs.BoolVar(&getArgs.loop, "loop", false, "run get in a loop, receiving files as they come in")
 		fs.BoolVar(&getArgs.verbose, "verbose", false, "verbose output")
@@ -415,7 +415,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 			break
 		}
 		if getArgs.verbose {
-			printf("waiting for file...")
+			fmt.Printf("waiting for file...")
 		}
 		if err := waitForFile(ctx); err != nil {
 			errs = append(errs, err)
@@ -436,7 +436,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 			continue
 		}
 		if getArgs.verbose {
-			printf("wrote %v as %v (%d bytes)\n", wf.Name, writtenFile, size)
+			fmt.Printf("wrote %v as %v (%d bytes)\n", wf.Name, writtenFile, size)
 		}
 		if err = localClient.DeleteWaitingFile(ctx, wf.Name); err != nil {
 			errs = append(errs, fmt.Errorf("deleting %q from inbox: %v", wf.Name, err))
@@ -448,7 +448,7 @@ func runFileGetOneBatch(ctx context.Context, dir string) []error {
 		// persistently stuck files are basically an error
 		errs = append(errs, fmt.Errorf("moved %d/%d files", deleted, len(wfs)))
 	} else if getArgs.verbose {
-		printf("moved %d/%d files\n", deleted, len(wfs))
+		fmt.Printf("moved %d/%d files\n", deleted, len(wfs))
 	}
 	return errs
 }
@@ -471,7 +471,7 @@ func runFileGet(ctx context.Context, args []string) error {
 		for {
 			errs := runFileGetOneBatch(ctx, dir)
 			for _, err := range errs {
-				outln(err)
+				fmt.Println(err)
 			}
 			if len(errs) > 0 {
 				// It's possible whatever caused the error(s) (e.g. conflicting target file,
@@ -493,7 +493,7 @@ func runFileGet(ctx context.Context, args []string) error {
 		return nil
 	}
 	for _, err := range errs[:len(errs)-1] {
-		outln(err)
+		fmt.Println(err)
 	}
 	return errs[len(errs)-1]
 }

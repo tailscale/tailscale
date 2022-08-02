@@ -7,6 +7,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
@@ -31,6 +32,6 @@ func runBugReport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	outln(logMarker)
+	fmt.Println(logMarker)
 	return nil
 }

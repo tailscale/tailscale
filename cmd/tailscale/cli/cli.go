@@ -33,22 +33,6 @@ import (
 	"tailscale.com/version/distro"
 )
 
-var Stderr io.Writer = os.Stderr
-var Stdout io.Writer = os.Stdout
-
-func printf(format string, a ...any) {
-	fmt.Fprintf(Stdout, format, a...)
-}
-
-// outln is like fmt.Println in the common case, except when Stdout is
-// changed (as in js/wasm).
-//
-// It's not named println because that looks like the Go built-in
-// which goes to stderr and formats slightly differently.
-func outln(a ...any) {
-	fmt.Fprintln(Stdout, a...)
-}
-
 // ActLikeCLI reports whether a GUI application should act like the
 // CLI based on os.Args, GOOS, the context the process is running in
 // (pty, parent PID), etc.
@@ -95,16 +79,6 @@ func ActLikeCLI() bool {
 	return false
 }
 
-func newFlagSet(name string) *flag.FlagSet {
-	onError := flag.ExitOnError
-	if runtime.GOOS == "js" {
-		onError = flag.ContinueOnError
-	}
-	fs := flag.NewFlagSet(name, onError)
-	fs.SetOutput(Stderr)
-	return fs
-}
-
 // CleanUpArgs rewrites command line arguments for simplicity and backwards compatibility.
 // In particular, it rewrites --authkey to --auth-key.
 func CleanUpArgs(args []string) []string {
@@ -138,11 +112,11 @@ func Run(args []string) (err error) {
 	var warnOnce sync.Once
 	tailscale.SetVersionMismatchHandler(func(clientVer, serverVer string) {
 		warnOnce.Do(func() {
-			fmt.Fprintf(Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
+			fmt.Fprintf(os.Stderr, "Warning: client version %q != tailscaled server version %q\n", clientVer, serverVer)
 		})
 	})
 
-	rootfs := newFlagSet("tailscale")
+	rootfs := flag.NewFlagSet("tailscale", flag.ExitOnError)
 	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
 
 	rootCmd := &ffcli.Command{
