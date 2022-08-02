@@ -428,8 +428,8 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 			return handleError(err)
 		}
 		for _, stdIP := range ips {
-			if ip, ok := netaddr.FromStdIP(stdIP); ok {
-				resp.IPs = append(resp.IPs, ip)
+			if ip, ok := netip.AddrFromSlice(stdIP); ok {
+				resp.IPs = append(resp.IPs, ip.Unmap())
 			}
 		}
 	case dns.TypeTXT:
@@ -1124,7 +1124,7 @@ func rdnsNameToIPv6(name dnsname.FQDN) (ip netip.Addr, ok bool) {
 		return netip.Addr{}, false
 	}
 
-	return netaddr.IPFrom16(ipb), true
+	return netip.AddrFrom16(ipb), true
 }
 
 // respondReverse returns a DNS response to a PTR query.
@@ -1221,7 +1221,7 @@ func unARPA(a string) (ipStr string, ok bool) {
 			}
 		}
 		hex.Decode(a16[:], hx[:])
-		return netaddr.IPFrom16(a16).String(), true
+		return netip.AddrFrom16(a16).Unmap().String(), true
 	}
 	return "", false
 

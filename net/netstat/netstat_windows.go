@@ -164,7 +164,7 @@ func ipport4(addr uint32, port uint16) netip.AddrPort {
 }
 
 func ipport6(addr [16]byte, scope uint32, port uint16) netip.AddrPort {
-	ip := netaddr.IPFrom16(addr)
+	ip := netip.AddrFrom16(addr).Unmap()
 	if scope != 0 {
 		// TODO: something better here?
 		ip = ip.WithZone(fmt.Sprint(scope))

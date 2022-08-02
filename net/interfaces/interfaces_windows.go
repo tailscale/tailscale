@@ -15,7 +15,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/tsconst"
 )
 
@@ -65,11 +64,12 @@ func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
 			continue
 		}
 
-		ip, ok := netaddr.FromStdIP(r.NextHop.IP())
+		ip, ok := netip.AddrFromSlice(r.NextHop.IP())
 		if !ok {
 			// Not a valid gateway, so skip (won't happen though)
 			continue
 		}
+		ip = ip.Unmap()
 
 		if best == nil {
 			best = r

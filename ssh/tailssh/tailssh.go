@@ -36,7 +36,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
@@ -410,11 +409,11 @@ func toIPPort(a net.Addr) (ipp netip.AddrPort) {
 	if !ok {
 		return
 	}
-	tanetaddr, ok := netaddr.FromStdIP(ta.IP)
+	tanetaddr, ok := netip.AddrFromSlice(ta.IP)
 	if !ok {
 		return
 	}
-	return netip.AddrPortFrom(tanetaddr, uint16(ta.Port))
+	return netip.AddrPortFrom(tanetaddr.Unmap(), uint16(ta.Port))
 }
 
 // connInfo returns a populated sshConnInfo from the provided arguments,

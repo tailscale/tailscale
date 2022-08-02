@@ -16,7 +16,6 @@ import (
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 	"tailscale.com/envknob"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
@@ -237,13 +236,13 @@ func (c *nlConn) Receive() (message, error) {
 }
 
 func netaddrIP(std net.IP) netip.Addr {
-	ip, _ := netaddr.FromStdIP(std)
-	return ip
+	ip, _ := netip.AddrFromSlice(std)
+	return ip.Unmap()
 }
 
 func netaddrIPPrefix(std net.IP, bits uint8) netip.Prefix {
-	ip, _ := netaddr.FromStdIP(std)
-	return netip.PrefixFrom(ip, int(bits))
+	ip, _ := netip.AddrFromSlice(std)
+	return netip.PrefixFrom(ip.Unmap(), int(bits))
 }
 
 func condNetAddrPrefix(ipp netip.Prefix) string {

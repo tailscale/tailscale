@@ -140,7 +140,7 @@ func (n *Network) allocIPv4(iface *Interface) netip.Addr {
 	}
 	a := n.lastV4.As16()
 	addOne(&a, 15)
-	n.lastV4 = netaddr.IPFrom16(a)
+	n.lastV4 = netip.AddrFrom16(a).Unmap()
 	if !n.Prefix4.Contains(n.lastV4) {
 		panic("pool exhausted")
 	}
@@ -159,7 +159,7 @@ func (n *Network) allocIPv6(iface *Interface) netip.Addr {
 	}
 	a := n.lastV6.As16()
 	addOne(&a, 15)
-	n.lastV6 = netaddr.IPFrom16(a)
+	n.lastV6 = netip.AddrFrom16(a).Unmap()
 	if !n.Prefix6.Contains(n.lastV6) {
 		panic("pool exhausted")
 	}

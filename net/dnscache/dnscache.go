@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 )
@@ -312,7 +311,7 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 net.IP, allIPs []net.IPAddr, e
 }
 
 func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, allIPs []net.IPAddr, d time.Duration) {
-	if naIP, _ := netaddr.FromStdIP(ip); naIP.IsPrivate() {
+	if ip.IsPrivate() {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
 		if debug {
@@ -400,16 +399,16 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		if debug {
 			log.Printf("dnscache: dialing %s, %s for %s", network, ip, address)
 		}
-		ipNA, ok := netaddr.FromStdIP(ip)
+		ipNA, ok := netip.AddrFromSlice(ip)
 		if !ok {
 			return nil, fmt.Errorf("invalid IP %q", ip)
 		}
-		c, err := dc.dialOne(ctx, ipNA)
+		c, err := dc.dialOne(ctx, ipNA.Unmap())
 		if err == nil || ctx.Err() != nil {
 			return c, err
 		}
 		// Fall back to trying IPv6, if any.
-		ip6NA, ok := netaddr.FromStdIP(ip6)
+		ip6NA, ok := netip.AddrFromSlice(ip6)
 		if !ok {
 			return nil, err
 		}
@@ -583,7 +582,9 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 
 func v4addrs(aa []net.IPAddr) (ret []netip.Addr) {
 	for _, a := range aa {
-		if ip, ok := netaddr.FromStdIP(a.IP); ok && ip.Is4() {
+		ip, ok := netip.AddrFromSlice(a.IP)
+		ip = ip.Unmap()
+		if ok {
 			ret = append(ret, ip)
 		}
 	}
@@ -592,7 +593,7 @@ func v4addrs(aa []net.IPAddr) (ret []netip.Addr) {
 
 func v6addrs(aa []net.IPAddr) (ret []netip.Addr) {
 	for _, a := range aa {
-		if ip, ok := netaddr.FromStdIP(a.IP); ok && ip.Is6() {
+		if ip, ok := netip.AddrFromSlice(a.IP); ok && ip.Is6() {
 			ret = append(ret, ip)
 		}
 	}

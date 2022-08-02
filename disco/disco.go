@@ -28,7 +28,6 @@ import (
 	"net/netip"
 
 	"go4.org/mem"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -200,7 +199,7 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 		var a [16]byte
 		copy(a[:], p)
 		m.MyNumber = append(m.MyNumber, netip.AddrPortFrom(
-			netaddr.IPFrom16(a),
+			netip.AddrFrom16(a).Unmap(),
 			binary.BigEndian.Uint16(p[16:18])))
 		p = p[epLength:]
 	}
@@ -235,10 +234,10 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	copy(m.TxID[:], p)
 	p = p[12:]
 
-	srcIP, _ := netaddr.FromStdIP(net.IP(p[:16]))
+	srcIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
 	p = p[16:]
 	port := binary.BigEndian.Uint16(p)
-	m.Src = netip.AddrPortFrom(srcIP, port)
+	m.Src = netip.AddrPortFrom(srcIP.Unmap(), port)
 	return m, nil
 }
 

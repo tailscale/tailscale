@@ -18,7 +18,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/envknob"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 )
@@ -394,10 +393,11 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netip.Addr, err er
 
 	ipLoop:
 		for _, stdip := range ips {
-			ip, ok := netaddr.FromStdIP(stdip)
+			ip, ok := netip.AddrFromSlice(stdip)
 			if !ok {
 				continue
 			}
+			ip = ip.Unmap()
 			// Skip IPv6 site-local resolvers. These are an ancient
 			// and obsolete IPv6 RFC, which Windows still faithfully
 			// implements. The net result is that some low-metric

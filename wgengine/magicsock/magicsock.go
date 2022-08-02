@@ -3425,7 +3425,7 @@ func (de *endpoint) initFakeUDPAddr() {
 	addr[0] = 0xfd
 	addr[1] = 0x00
 	binary.BigEndian.PutUint64(addr[2:], uint64(reflect.ValueOf(de).Pointer()))
-	de.fakeWGAddr = netip.AddrPortFrom(netaddr.IPFrom16(addr), 12345)
+	de.fakeWGAddr = netip.AddrPortFrom(netip.AddrFrom16(addr).Unmap(), 12345)
 }
 
 // noteRecvActivity records receive activity on de, and invokes
