@@ -298,7 +298,14 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.opts.OnError != nil {
 			h.opts.OnError(lw, r, hErr)
 		} else {
-			http.Error(lw, hErr.Msg, msg.Code)
+			// Default headers set by http.Error.
+			lw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			lw.Header().Set("X-Content-Type-Options", "nosniff")
+			for k, vs := range hErr.Header {
+				lw.Header()[k] = vs
+			}
+			lw.WriteHeader(msg.Code)
+			fmt.Fprintln(lw, hErr.Msg)
 		}
 	case err != nil:
 		// Handler returned a generic error. Serve an internal server
@@ -405,9 +412,10 @@ func (l loggingResponseWriter) Flush() {
 //
 // It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
-	Code int    // HTTP response code to send to client; 0 means means 500
-	Msg  string // Response body to send to client
-	Err  error  // Detailed error to log on the server
+	Code   int         // HTTP response code to send to client; 0 means means 500
+	Msg    string      // Response body to send to client
+	Err    error       // Detailed error to log on the server
+	Header http.Header // Optional set of HTTP headers to set in the response
 }
 
 // Error implements the error interface.
