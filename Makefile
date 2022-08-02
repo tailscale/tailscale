@@ -9,7 +9,7 @@ vet:
 	./tool/go vet ./...
 
 tidy:
-	./tool/go mod tidy -compat=1.17
+	./tool/go mod tidy
 
 updatedeps:
 	./tool/go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscaled
