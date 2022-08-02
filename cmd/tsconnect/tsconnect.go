@@ -18,9 +18,10 @@ import (
 )
 
 var (
-	addr     = flag.String("addr", ":9090", "address to listen on")
-	distDir  = flag.String("distdir", "./dist", "path of directory to place build output in")
-	yarnPath = flag.String("yarnpath", "../../tool/yarn", "path yarn executable used to install JavaScript dependencies")
+	addr            = flag.String("addr", ":9090", "address to listen on")
+	distDir         = flag.String("distdir", "./dist", "path of directory to place build output in")
+	yarnPath        = flag.String("yarnpath", "../../tool/yarn", "path yarn executable used to install JavaScript dependencies")
+	fastCompression = flag.Bool("fast-compression", false, "Use faster compression when building, to speed up build time. Meant to iterative/debugging use only.")
 )
 
 func main() {

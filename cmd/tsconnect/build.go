@@ -71,7 +71,7 @@ func runBuild() {
 		log.Fatalf("Cannot write metadata: %v", err)
 	}
 
-	if er := precompressDist(); err != nil {
+	if er := precompressDist(*fastCompression); err != nil {
 		log.Fatalf("Cannot precompress resources: %v", er)
 	}
 }
@@ -125,7 +125,7 @@ func cleanDist() error {
 	return nil
 }
 
-func precompressDist() error {
+func precompressDist(fastCompression bool) error {
 	log.Printf("Pre-compressing files in %s/...\n", *distDir)
 	var eg errgroup.Group
 	err := fs.WalkDir(os.DirFS(*distDir), ".", func(p string, d fs.DirEntry, err error) error {
@@ -142,7 +142,7 @@ func precompressDist() error {
 		log.Printf("Pre-compressing %v\n", p)
 
 		eg.Go(func() error {
-			return precompress(p)
+			return precompress(p, fastCompression)
 		})
 		return nil
 	})
@@ -158,7 +158,7 @@ var compressibleExtensions = map[string]bool{
 	".wasm": true,
 }
 
-func precompress(path string) error {
+func precompress(path string, fastCompression bool) error {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -168,14 +168,22 @@ func precompress(path string) error {
 		return err
 	}
 
+	gzipLevel := gzip.BestCompression
+	if fastCompression {
+		gzipLevel = gzip.BestSpeed
+	}
 	err = writeCompressed(contents, func(w io.Writer) (io.WriteCloser, error) {
-		return gzip.NewWriterLevel(w, gzip.BestCompression)
+		return gzip.NewWriterLevel(w, gzipLevel)
 	}, path+".gz", fi.Mode())
 	if err != nil {
 		return err
 	}
+	brotliLevel := brotli.BestCompression
+	if fastCompression {
+		brotliLevel = brotli.BestSpeed
+	}
 	return writeCompressed(contents, func(w io.Writer) (io.WriteCloser, error) {
-		return brotli.NewWriterLevel(w, brotli.BestCompression), nil
+		return brotli.NewWriterLevel(w, brotliLevel), nil
 	}, path+".br", fi.Mode())
 }
 
