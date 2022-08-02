@@ -52,3 +52,7 @@ function handleGoPanic(err?: string) {
 }
 
 let panicNode: HTMLDivElement | undefined
+
+export function getContentNode(): HTMLDivElement {
+  return document.querySelector("#content") as HTMLDivElement
+}

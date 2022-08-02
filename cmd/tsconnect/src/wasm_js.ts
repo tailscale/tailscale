@@ -25,7 +25,12 @@ declare global {
         cols: number
         onDone: () => void
       }
-    ): void
+    ): IPNSSHSession
+  }
+
+  interface IPNSSHSession {
+    resize(rows: number, cols: number): boolean
+    close(): boolean
   }
 
   interface IPNStateStorage {
