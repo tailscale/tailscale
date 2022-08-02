@@ -696,7 +696,7 @@ func (c *conn) resolveTerminalActionLocked(s ssh.Session, cr *contextReader) (ac
 				}
 			}()
 		})
-		url = c.expandDelegateURL(url)
+		url = c.expandDelegateURLLocked(url)
 		var err error
 		action, err = c.fetchSSHAction(ctx, url)
 		if err != nil {
@@ -711,12 +711,10 @@ func (c *conn) resolveTerminalActionLocked(s ssh.Session, cr *contextReader) (ac
 	}
 }
 
-func (c *conn) expandDelegateURL(actionURL string) string {
+func (c *conn) expandDelegateURLLocked(actionURL string) string {
 	nm := c.srv.lb.NetMap()
-	c.mu.Lock()
 	ci := c.info
 	lu := c.localUser
-	c.mu.Unlock()
 	var dstNodeID string
 	if nm != nil {
 		dstNodeID = fmt.Sprint(int64(nm.SelfNode.ID))
