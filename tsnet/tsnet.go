@@ -130,6 +130,25 @@ func (s *Server) Start() error {
 //
 // It must not be called before or concurrently with Start.
 func (s *Server) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Perform a best-effort final flush.
+		s.logtail.Shutdown(ctx)
+	}()
+
+	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Perform a best-effort logout.
+			s.lb.LogoutSync(ctx)
+		}()
+	}
+
 	s.shutdownCancel()
 	s.lb.Shutdown()
 	s.linkMon.Close()
@@ -143,11 +162,7 @@ func (s *Server) Close() error {
 	}
 	s.listeners = nil
 
-	// Perform a best-effort final flush.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	s.logtail.Shutdown(ctx)
-
+	wg.Wait()
 	return nil
 }
 
