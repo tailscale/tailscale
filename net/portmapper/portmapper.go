@@ -531,8 +531,8 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 		}
 		srcu := srci.(*net.UDPAddr)
-		src, ok := netaddr.FromStdAddr(srcu.IP, srcu.Port, srcu.Zone)
-		if !ok {
+		src := netaddr.Unmap(srcu.AddrPort())
+		if !src.IsValid() {
 			continue
 		}
 		if src == pxpAddr {

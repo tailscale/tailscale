@@ -3037,8 +3037,8 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netip.AddrPort,
 				return 0, netip.AddrPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
 			}
 			if pAddr != nil {
-				ipp, ok = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
-				if !ok {
+				ipp = netaddr.Unmap(pAddr.AddrPort())
+				if !ipp.IsValid() {
 					return 0, netip.AddrPort{}, errors.New("netaddr.FromStdAddr failed")
 				}
 			}

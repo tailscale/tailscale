@@ -273,7 +273,8 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	}
 	rs.mu.Unlock()
 	if ok {
-		if ipp, ok := netaddr.FromStdAddr(addr, int(port), ""); ok {
+		ta := net.TCPAddr{IP: addr, Port: int(port)}
+		if ipp := netaddr.Unmap(ta.AddrPort()); ipp.IsValid() {
 			onDone(ipp)
 		}
 	}
@@ -516,8 +517,8 @@ func (c *Client) readPackets(ctx context.Context, pc net.PacketConn) {
 		if !stun.Is(pkt) {
 			continue
 		}
-		if ipp, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone); ok {
-			c.ReceiveSTUNPacket(pkt, ipp)
+		if ap := netaddr.Unmap(ua.AddrPort()); ap.IsValid() {
+			c.ReceiveSTUNPacket(pkt, ap)
 		}
 	}
 }
