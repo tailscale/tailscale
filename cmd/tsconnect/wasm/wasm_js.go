@@ -31,11 +31,12 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/logpolicy"
+	"tailscale.com/logtail"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/words"
@@ -56,7 +57,25 @@ func main() {
 
 func newIPN(jsConfig js.Value) map[string]any {
 	netns.SetEnabled(false)
-	var logf logger.Logf = log.Printf
+
+	jsStateStorage := jsConfig.Get("stateStorage")
+	var store ipn.StateStore
+	if jsStateStorage.IsUndefined() {
+		store = new(mem.Store)
+	} else {
+		store = &jsStateStore{jsStateStorage}
+	}
+
+	lpc := getOrCreateLogPolicyConfig(store)
+	c := logtail.Config{
+		Collection: lpc.Collection,
+		PrivateID:  lpc.PrivateID,
+		// NewZstdEncoder is intentionally not passed in, compressed requests
+		// set HTTP headers that are not supported by the no-cors fetching mode.
+		HTTPC: &http.Client{Transport: &noCORSTransport{http.DefaultTransport}},
+	}
+	logtail := logtail.NewLogger(c, log.Printf)
+	logf := logtail.Logf
 
 	dialer := new(tsdial.Dialer)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
@@ -86,14 +105,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
-	jsStateStorage := jsConfig.Get("stateStorage")
-	var store ipn.StateStore
-	if jsStateStorage.IsUndefined() {
-		store = new(mem.Store)
-	} else {
-		store = &jsStateStore{jsStateStorage}
-	}
-	srv, err := ipnserver.New(log.Printf, "some-logid", store, eng, dialer, nil, ipnserver.Options{
+	srv, err := ipnserver.New(logf, lpc.PublicID.String(), store, eng, dialer, nil, ipnserver.Options{
 		SurviveDisconnects: true,
 		LoginFlags:         controlclient.LoginEphemeral,
 	})
@@ -526,4 +538,41 @@ func makePromise(f func() (any, error)) js.Value {
 
 	promiseConstructor := js.Global().Get("Promise")
 	return promiseConstructor.New(handler)
+}
+
+const logPolicyStateKey = "log-policy"
+
+func getOrCreateLogPolicyConfig(state ipn.StateStore) *logpolicy.Config {
+	if configBytes, err := state.ReadState(logPolicyStateKey); err == nil {
+		if config, err := logpolicy.ConfigFromBytes(configBytes); err == nil {
+			return config
+		} else {
+			log.Printf("Could not parse log policy config: %v", err)
+		}
+	} else if err != ipn.ErrStateNotExist {
+		log.Printf("Could not get log policy config from state store: %v", err)
+	}
+	config := logpolicy.NewConfig(logtail.CollectionNode)
+	if err := state.WriteState(logPolicyStateKey, config.ToBytes()); err != nil {
+		log.Printf("Could not save log policy config to state store: %v", err)
+	}
+	return config
+}
+
+// noCORSTransport wraps a RoundTripper and forces the no-cors mode on requests,
+// so that we can use it with non-CORS-aware servers.
+type noCORSTransport struct {
+	http.RoundTripper
+}
+
+func (t *noCORSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("js.fetch:mode", "no-cors")
+	resp, err := t.RoundTripper.RoundTrip(req)
+	if err == nil {
+		// In no-cors mode no response properties are returned. Populate just
+		// the status so that callers do not think this was an error.
+		resp.StatusCode = http.StatusOK
+		resp.Status = http.StatusText(http.StatusOK)
+	}
+	return resp, err
 }
