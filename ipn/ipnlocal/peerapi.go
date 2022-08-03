@@ -493,8 +493,8 @@ func (pln *peerAPIListener) serve() {
 			logf("peerapi: unexpected RemoteAddr %#v", c.RemoteAddr())
 			continue
 		}
-		ipp, ok := netaddr.FromStdAddr(ta.IP, ta.Port, "")
-		if !ok {
+		ipp := netaddr.Unmap(ta.AddrPort())
+		if !ipp.IsValid() {
 			logf("peerapi: bogus TCPAddr %#v", ta)
 			c.Close()
 			continue

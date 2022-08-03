@@ -848,7 +848,7 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netip.Addr, wq 
 	}
 	defer server.Close()
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
-	backendLocalIPPort, _ := netaddr.FromStdAddr(backendLocalAddr.IP, backendLocalAddr.Port, backendLocalAddr.Zone)
+	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
 	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
 	defer ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
 	connClosed := make(chan error, 2)
@@ -978,8 +978,9 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 		}
 	}
 	backendLocalAddr := backendConn.LocalAddr().(*net.UDPAddr)
-	backendLocalIPPort, ok := netaddr.FromStdAddr(backendListenAddr.IP, backendLocalAddr.Port, backendLocalAddr.Zone)
-	if !ok {
+
+	backendLocalIPPort := netip.AddrPortFrom(backendListenAddr.AddrPort().Addr().Unmap().WithZone(backendLocalAddr.Zone), backendLocalAddr.AddrPort().Port())
+	if !backendLocalIPPort.IsValid() {
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
@@ -1061,5 +1062,17 @@ func stringifyTEI(tei stack.TransportEndpointID) string {
 }
 
 func ipPortOfNetstackAddr(a tcpip.Address, port uint16) (ipp netip.AddrPort, ok bool) {
-	return netaddr.FromStdAddr(net.IP(a), int(port), "") // TODO(bradfitz): can do without allocs
+	var a16 [16]byte
+	copy(a16[:], a)
+	switch len(a) {
+	case 4:
+		return netip.AddrPortFrom(
+			netip.AddrFrom4(*(*[4]byte)(a16[:4])).Unmap(),
+			port,
+		), true
+	case 16:
+		return netip.AddrPortFrom(netip.AddrFrom16(a16).Unmap(), port), true
+	default:
+		return ipp, false
+	}
 }

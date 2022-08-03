@@ -167,9 +167,8 @@ func (d *TestIGD) servePxP() {
 			}
 			return
 		}
-		ua := a.(*net.UDPAddr)
-		src, ok := netaddr.FromStdAddr(ua.IP, ua.Port, ua.Zone)
-		if !ok {
+		src := netaddr.Unmap(a.(*net.UDPAddr).AddrPort())
+		if !src.IsValid() {
 			panic("bogus addr")
 		}
 		pkt := buf[:n]
