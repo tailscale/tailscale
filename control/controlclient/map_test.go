@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -192,7 +193,90 @@ func TestUndeltaPeers(t *testing.T) {
 			},
 			want: peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
 		},
-	}
+		{
+			name: "change_key",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID: 1,
+					Key:    ptrTo(key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:   1,
+				Name: "foo",
+				Key:  key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
+			}),
+		},
+		{
+			name: "change_disco_key",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:   1,
+					DiscoKey: ptrTo(key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:       1,
+				Name:     "foo",
+				DiscoKey: key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
+			}),
+		},
+		{
+			name: "change_online",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID: 1,
+					Online: ptrTo(true),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:     1,
+				Name:   "foo",
+				Online: ptrTo(true),
+			}),
+		},
+		{
+			name: "change_last_seen",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:   1,
+					LastSeen: ptrTo(time.Unix(123, 0).UTC()),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:       1,
+				Name:     "foo",
+				LastSeen: ptrTo(time.Unix(123, 0).UTC()),
+			}),
+		},
+		{
+			name: "change_key_expiry",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					KeyExpiry: ptrTo(time.Unix(123, 0).UTC()),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:        1,
+				Name:      "foo",
+				KeyExpiry: time.Unix(123, 0).UTC(),
+			}),
+		},
+		{
+			name: "change_capabilities",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:       1,
+					Capabilities: ptrTo([]string{"foo"}),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:           1,
+				Name:         "foo",
+				Capabilities: []string{"foo"},
+			}),
+		}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -205,6 +289,10 @@ func TestUndeltaPeers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
 }
 
 func formatNodes(nodes []*tailcfg.Node) string {
