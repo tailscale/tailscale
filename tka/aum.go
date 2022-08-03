@@ -7,7 +7,6 @@ package tka
 import (
 	"bytes"
 	"crypto/ed25519"
-	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -122,13 +121,6 @@ type AUM struct {
 	Signatures []Signature `cbor:"23,keyasint,omitempty"`
 }
 
-// Upper bound on checkpoint elements, chosen arbitrarily. Intended to
-// cap out insanely large AUMs.
-const (
-	maxDisablementSecrets = 32
-	maxKeys               = 512
-)
-
 // StaticValidate returns a nil error if the AUM is well-formed.
 func (a *AUM) StaticValidate() error {
 	if a.Key != nil {
@@ -146,34 +138,9 @@ func (a *AUM) StaticValidate() error {
 	}
 
 	if a.State != nil {
-		if a.State.LastAUMHash != nil {
-			return errors.New("checkpoint state cannot specify a parent AUM")
+		if err := a.State.staticValidateCheckpoint(); err != nil {
+			return fmt.Errorf("checkpoint state: %v", err)
 		}
-		if len(a.State.DisablementSecrets) == 0 {
-			return errors.New("at least one disablement secret required")
-		}
-		if numDS := len(a.State.DisablementSecrets); numDS > maxDisablementSecrets {
-			return fmt.Errorf("too many disablement secrets (%d, max %d)", numDS, maxDisablementSecrets)
-		}
-		for i, ds := range a.State.DisablementSecrets {
-			if len(ds) != disablementLength {
-				return fmt.Errorf("disablement[%d]: invalid length (got %d, want %d)", i, len(ds), disablementLength)
-			}
-		}
-		// TODO(tom): Check for duplicate disablement secrets.
-
-		if len(a.State.Keys) == 0 {
-			return errors.New("at least one key is required")
-		}
-		if numKeys := len(a.State.Keys); numKeys > maxKeys {
-			return fmt.Errorf("too many keys (%d, max %d)", numKeys, maxKeys)
-		}
-		for i, k := range a.State.Keys {
-			if err := k.StaticValidate(); err != nil {
-				return fmt.Errorf("key[%d]: %v", i, err)
-			}
-		}
-		// TODO(tom): Check for duplicate keys.
 	}
 
 	switch a.MessageKind {
@@ -213,7 +180,7 @@ func (a *AUM) StaticValidate() error {
 			return errors.New("DisableNL AUMs must specify a disablement secret")
 		}
 		if a.KeyID != nil || a.State != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
-			return errors.New("DisableNL AUMs may only a disablement secret")
+			return errors.New("DisableNL AUMs may only specify a disablement secret")
 		}
 	}
 
@@ -304,18 +271,17 @@ func (a *AUM) Weight(state State) uint {
 	// signatures with the same key do not result in 2x
 	// the weight.
 	//
-	// We use the first 8 bytes as the key for this map,
-	// because KeyIDs are either a blake2s hash or
-	// the 25519 public key, both of which approximate
-	// random distribution.
-	seenKeys := make(map[uint64]struct{}, 6)
+	// Despite the wire encoding being []byte, all KeyIDs are
+	// 32 bytes. As such, we use that as the key for the map,
+	// because map keys cannot be slices.
+	seenKeys := make(map[[32]byte]struct{}, 6)
 	for _, sig := range a.Signatures {
-		if len(sig.KeyID) < 8 {
-			// Invalid, don't count it
-			continue
+		if len(sig.KeyID) != 32 {
+			panic("unexpected: keyIDs are 32 bytes")
 		}
 
-		keyID := binary.LittleEndian.Uint64(sig.KeyID)
+		var keyID [32]byte
+		copy(keyID[:], sig.KeyID)
 
 		key, err := state.GetKey(sig.KeyID)
 		if err != nil {
