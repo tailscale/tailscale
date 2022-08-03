@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"tailscale.com/tsweb"
+	"tailscale.com/util/precompress"
 )
 
 //go:embed index.html
@@ -120,28 +121,10 @@ var entryPointsToDefaultDistPaths = map[string]string{
 
 func handleServeDist(w http.ResponseWriter, r *http.Request, distFS fs.FS) {
 	path := r.URL.Path
-	var f fs.File
-	// Prefer pre-compressed versions generated during the build step.
-	if tsweb.AcceptsEncoding(r, "br") {
-		if brotliFile, err := distFS.Open(path + ".br"); err == nil {
-			f = brotliFile
-			w.Header().Set("Content-Encoding", "br")
-		}
-	}
-	if f == nil && tsweb.AcceptsEncoding(r, "gzip") {
-		if gzipFile, err := distFS.Open(path + ".gz"); err == nil {
-			f = gzipFile
-			w.Header().Set("Content-Encoding", "gzip")
-		}
-	}
-
-	if f == nil {
-		if rawFile, err := distFS.Open(path); err == nil {
-			f = rawFile
-		} else {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
+	f, err := precompress.OpenPrecompressedFile(w, r, path, distFS)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
 	}
 	defer f.Close()
 
