@@ -5,21 +5,16 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"io"
-	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 
-	"github.com/andybalholm/brotli"
 	esbuild "github.com/evanw/esbuild/pkg/api"
-	"golang.org/x/sync/errgroup"
+	"tailscale.com/util/precompress"
 )
 
 func runBuild() {
@@ -127,77 +122,10 @@ func cleanDist() error {
 
 func precompressDist(fastCompression bool) error {
 	log.Printf("Pre-compressing files in %s/...\n", *distDir)
-	var eg errgroup.Group
-	err := fs.WalkDir(os.DirFS(*distDir), ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !compressibleExtensions[filepath.Ext(p)] {
-			return nil
-		}
-		p = path.Join(*distDir, p)
-		log.Printf("Pre-compressing %v\n", p)
-
-		eg.Go(func() error {
-			return precompress(p, fastCompression)
-		})
-		return nil
+	return precompress.PrecompressDir(*distDir, precompress.Options{
+		FastCompression: fastCompression,
+		ProgressFn: func(path string) {
+			log.Printf("Pre-compressing %v\n", path)
+		},
 	})
-	if err != nil {
-		return err
-	}
-	return eg.Wait()
-}
-
-var compressibleExtensions = map[string]bool{
-	".js":   true,
-	".css":  true,
-	".wasm": true,
-}
-
-func precompress(path string, fastCompression bool) error {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	fi, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-
-	gzipLevel := gzip.BestCompression
-	if fastCompression {
-		gzipLevel = gzip.BestSpeed
-	}
-	err = writeCompressed(contents, func(w io.Writer) (io.WriteCloser, error) {
-		return gzip.NewWriterLevel(w, gzipLevel)
-	}, path+".gz", fi.Mode())
-	if err != nil {
-		return err
-	}
-	brotliLevel := brotli.BestCompression
-	if fastCompression {
-		brotliLevel = brotli.BestSpeed
-	}
-	return writeCompressed(contents, func(w io.Writer) (io.WriteCloser, error) {
-		return brotli.NewWriterLevel(w, brotliLevel), nil
-	}, path+".br", fi.Mode())
-}
-
-func writeCompressed(contents []byte, compressedWriterCreator func(io.Writer) (io.WriteCloser, error), outputPath string, outputMode fs.FileMode) error {
-	var buf bytes.Buffer
-	compressedWriter, err := compressedWriterCreator(&buf)
-	if err != nil {
-		return err
-	}
-	if _, err := compressedWriter.Write(contents); err != nil {
-		return err
-	}
-	if err := compressedWriter.Close(); err != nil {
-		return err
-	}
-	return os.WriteFile(outputPath, buf.Bytes(), outputMode)
 }
