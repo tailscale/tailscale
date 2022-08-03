@@ -268,6 +268,24 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 				if ec.Endpoints != nil {
 					n.Endpoints = ec.Endpoints
 				}
+				if ec.Key != nil {
+					n.Key = *ec.Key
+				}
+				if ec.DiscoKey != nil {
+					n.DiscoKey = *ec.DiscoKey
+				}
+				if v := ec.Online; v != nil {
+					n.Online = ptrCopy(v)
+				}
+				if v := ec.LastSeen; v != nil {
+					n.LastSeen = ptrCopy(v)
+				}
+				if v := ec.KeyExpiry; v != nil {
+					n.KeyExpiry = *v
+				}
+				if v := ec.Capabilities; v != nil {
+					n.Capabilities = *v
+				}
 			}
 		}
 	}
@@ -275,6 +293,16 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 	mapRes.Peers = newFull
 	mapRes.PeersChanged = nil
 	mapRes.PeersRemoved = nil
+}
+
+// ptrCopy returns a pointer to a newly allocated shallow copy of *v.
+func ptrCopy[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	ret := new(T)
+	*ret = *v
+	return ret
 }
 
 func nodesSorted(v []*tailcfg.Node) bool {

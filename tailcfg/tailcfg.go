@@ -70,7 +70,8 @@ type CapabilityVersion int
 //	32: 2022-04-17: client knows FilterRule.CapMatch
 //	33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
 //	34: 2022-08-02: client understands CapabilityFileSharingTarget
-const CurrentCapabilityVersion CapabilityVersion = 34
+//	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
+const CurrentCapabilityVersion CapabilityVersion = 36
 
 type StableID string
 
@@ -1763,6 +1764,26 @@ type PeerChange struct {
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.
 	Endpoints []string `json:",omitempty"`
+
+	// Key, if non-nil, means that the NodeID's wireguard public key changed.
+	Key *key.NodePublic `json:",omitempty"`
+
+	// DiscoKey, if non-nil, means that the NodeID's discokey changed.
+	DiscoKey *key.DiscoPublic `json:",omitempty"`
+
+	// Online, if non-nil, means that the NodeID's online status changed.
+	Online *bool `json:",omitempty"`
+
+	// LastSeen, if non-nil, means that the NodeID's online status changed.
+	LastSeen *time.Time `json:",omitempty"`
+
+	// KeyExpiry, if non-nil, changes the NodeID's key expiry.
+	KeyExpiry *time.Time `json:",omitempty"`
+
+	// Capabilities, if non-nil, means that the NodeID's capabilities changed.
+	// It's a pointer to a slice for "omitempty", to allow differentiating
+	// a change to empty from no change.
+	Capabilities *[]string `json:",omitempty"`
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to
