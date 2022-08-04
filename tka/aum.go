@@ -12,14 +12,11 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/tkatype"
 )
 
 // AUMHash represents the BLAKE2s digest of an Authority Update Message (AUM).
 type AUMHash [blake2s.Size]byte
-
-// AUMSigHash represents the BLAKE2s digest of an Authority Update
-// Message (AUM), sans any signatures.
-type AUMSigHash [blake2s.Size]byte
 
 // AUMKind describes valid AUM types.
 type AUMKind uint8
@@ -100,7 +97,7 @@ type AUM struct {
 
 	// KeyID references a public key which is part of the key authority.
 	// This field is used for RemoveKey and UpdateKey AUMs.
-	KeyID KeyID `cbor:"4,keyasint,omitempty"`
+	KeyID tkatype.KeyID `cbor:"4,keyasint,omitempty"`
 
 	// State describes the full state of the key authority.
 	// This field is used for Checkpoint AUMs.
@@ -118,7 +115,7 @@ type AUM struct {
 
 	// Signatures lists the signatures over this AUM.
 	// CBOR key 23 is the last key which can be encoded as a single byte.
-	Signatures []Signature `cbor:"23,keyasint,omitempty"`
+	Signatures []tkatype.Signature `cbor:"23,keyasint,omitempty"`
 }
 
 // StaticValidate returns a nil error if the AUM is well-formed.
@@ -230,7 +227,7 @@ func (a *AUM) Hash() AUMHash {
 // This is identical to Hash() except the Signatures are not
 // serialized. Without this, the hash used for signatures
 // would be circularly dependent on the signatures.
-func (a AUM) SigHash() AUMSigHash {
+func (a AUM) SigHash() tkatype.AUMSigHash {
 	dupe := a
 	dupe.Signatures = nil
 	return blake2s.Sum256(dupe.Serialize())
@@ -250,7 +247,7 @@ func (a *AUM) sign25519(priv ed25519.PrivateKey) {
 	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
 	sigHash := a.SigHash()
 
-	a.Signatures = append(a.Signatures, Signature{
+	a.Signatures = append(a.Signatures, tkatype.Signature{
 		KeyID:     key.ID(),
 		Signature: ed25519.Sign(priv, sigHash[:]),
 	})

@@ -13,6 +13,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/hdevalence/ed25519consensus"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/tkatype"
 )
 
 // SigKind describes valid NodeKeySignature types.
@@ -67,7 +68,7 @@ func (s NodeKeySignature) sigHash() [blake2s.Size]byte {
 }
 
 // Serialize returns the given NKS in a serialized format.
-func (s *NodeKeySignature) Serialize() []byte {
+func (s *NodeKeySignature) Serialize() tkatype.MarshaledSignature {
 	out := bytes.NewBuffer(make([]byte, 0, 128)) // 64byte sig + 32byte keyID + 32byte headroom
 	encoder, err := cbor.CTAP2EncOptions().EncMode()
 	if err != nil {

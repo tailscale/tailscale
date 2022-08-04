@@ -9,8 +9,8 @@ import (
 	"crypto/subtle"
 
 	"go4.org/mem"
-	"tailscale.com/tka"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/tkatype"
 )
 
 const (
@@ -68,23 +68,26 @@ func (k NLPrivate) Public() NLPublic {
 }
 
 // KeyID returns an identifier for this key.
-func (k NLPrivate) KeyID() tka.KeyID {
-	pub := k.Public()
-	return tka.Key{
-		Kind:   tka.Key25519,
-		Public: pub.k[:],
-	}.ID()
+func (k NLPrivate) KeyID() tkatype.KeyID {
+	// The correct way to compute this is:
+	// return tka.Key{
+	// 	Kind:   tka.Key25519,
+	// 	Public: pub.k[:],
+	// }.ID()
+	//
+	// However, under the hood the key id for a 25519
+	// key is just the public key, so we avoid the
+	// dependency on tka by just doing this ourselves.
+	pub := k.Public().k
+	return pub[:]
 }
 
 // SignAUM implements tka.UpdateSigner.
-func (k NLPrivate) SignAUM(a *tka.AUM) error {
-	sigHash := a.SigHash()
-
-	a.Signatures = append(a.Signatures, tka.Signature{
+func (k NLPrivate) SignAUM(sigHash tkatype.AUMSigHash) ([]tkatype.Signature, error) {
+	return []tkatype.Signature{{
 		KeyID:     k.KeyID(),
-		Signature: ed25519.Sign(k.k[:], sigHash[:]),
-	})
-	return nil
+		Signature: ed25519.Sign(ed25519.PrivateKey(k.k[:]), sigHash[:]),
+	}}, nil
 }
 
 // NLPublic is the public portion of a a NLPrivate.

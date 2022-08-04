@@ -11,6 +11,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/tkatype"
 )
 
 func TestSerialization(t *testing.T) {
@@ -137,7 +138,7 @@ func TestSerialization(t *testing.T) {
 		},
 		{
 			"Signature",
-			AUM{MessageKind: AUMAddKey, Signatures: []Signature{{KeyID: []byte{1}}}},
+			AUM{MessageKind: AUMAddKey, Signatures: []tkatype.Signature{{KeyID: []byte{1}}}},
 			[]byte{
 				0xa3, // major type 5 (map), 3 items
 				0x01, // |- major type 0 (int), value 1 (first key, MessageKind)
@@ -198,7 +199,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Key unknown",
 			AUM{
-				Signatures: []Signature{{KeyID: fakeKeyID[:]}},
+				Signatures: []tkatype.Signature{{KeyID: fakeKeyID[:]}},
 			},
 			State{},
 			0,
@@ -206,7 +207,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Unary key",
 			AUM{
-				Signatures: []Signature{{KeyID: key.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.ID()}},
 			},
 			State{
 				Keys: []Key{key},
@@ -216,7 +217,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Multiple keys",
 			AUM{
-				Signatures: []Signature{{KeyID: key.ID()}, {KeyID: key2.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.ID()}, {KeyID: key2.ID()}},
 			},
 			State{
 				Keys: []Key{key, key2},
@@ -226,7 +227,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Double use",
 			AUM{
-				Signatures: []Signature{{KeyID: key.ID()}, {KeyID: key.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.ID()}, {KeyID: key.ID()}},
 			},
 			State{
 				Keys: []Key{key},
@@ -255,7 +256,7 @@ func TestAUMHashes(t *testing.T) {
 	sigHash1 := aum.SigHash()
 	aumHash1 := aum.Hash()
 
-	aum.Signatures = []Signature{{KeyID: []byte{1, 2, 3, 4}}}
+	aum.Signatures = []tkatype.Signature{{KeyID: []byte{1, 2, 3, 4}}}
 	sigHash2 := aum.SigHash()
 	aumHash2 := aum.Hash()
 	if len(aum.Signatures) != 1 {

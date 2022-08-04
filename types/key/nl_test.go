@@ -6,6 +6,7 @@ package key
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"testing"
 
 	"tailscale.com/tka"
@@ -55,7 +56,14 @@ func TestNLPrivate(t *testing.T) {
 	if got, want := len(aum.Signatures), 1; got != want {
 		t.Fatalf("len(signatures) = %d, want %d", got, want)
 	}
-	if err := aum.Signatures[0].Verify(aum.SigHash(), k); err != nil {
-		t.Errorf("signature did not verify: %v", err)
+	sigHash := aum.SigHash()
+	if ok := ed25519.Verify(pub.Verifier(), sigHash[:], aum.Signatures[0].Signature); !ok {
+		t.Error("signature did not verify")
+	}
+
+	// We manually compute the keyID, so make sure its consistent with
+	// tka.Key.ID().
+	if !bytes.Equal(k.ID(), p.KeyID()) {
+		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.ID(), p.KeyID())
 	}
 }

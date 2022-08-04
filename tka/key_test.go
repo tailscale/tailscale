@@ -10,6 +10,8 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"testing"
+
+	"tailscale.com/types/tkatype"
 )
 
 // returns a random source based on the test name + extraSeed.
@@ -41,24 +43,24 @@ func TestVerify25519(t *testing.T) {
 		MessageKind: AUMRemoveKey,
 		KeyID:       []byte{1, 2, 3, 4},
 		// Signatures is set to crap so we are sure its ignored in the sigHash computation.
-		Signatures: []Signature{{KeyID: []byte{45, 42}}},
+		Signatures: []tkatype.Signature{{KeyID: []byte{45, 42}}},
 	}
 	sigHash := aum.SigHash()
-	aum.Signatures = []Signature{
+	aum.Signatures = []tkatype.Signature{
 		{
 			KeyID:     key.ID(),
 			Signature: ed25519.Sign(priv, sigHash[:]),
 		},
 	}
 
-	if err := aum.Signatures[0].Verify(aum.SigHash(), key); err != nil {
+	if err := signatureVerify(&aum.Signatures[0], aum.SigHash(), key); err != nil {
 		t.Errorf("signature verification failed: %v", err)
 	}
 
 	// Make sure it fails with a different public key.
 	pub2, _ := testingKey25519(t, 2)
 	key2 := Key{Kind: Key25519, Public: pub2}
-	if err := aum.Signatures[0].Verify(aum.SigHash(), key2); err == nil {
+	if err := signatureVerify(&aum.Signatures[0], aum.SigHash(), key2); err == nil {
 		t.Error("signature verification with different key did not fail")
 	}
 }
