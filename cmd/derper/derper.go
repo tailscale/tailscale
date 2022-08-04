@@ -35,6 +35,18 @@ import (
 	"tailscale.com/types/key"
 )
 
+//*
+/* in part it ends up being a preference thing vs. the reviewers,
+/* but yeah one of the more ongoing flexible ways is to pull it out into a struct that you can configure before you run it,
+/* so a really simple transition is to effectively take the flags and put them in a struct rather than globals,
+/* and then take the parts of main that do more configuration/defaults setup
+/* and put that in something like func (s *Struct) Configure()
+/* and then finally put the part of main that actually runs it in to a func (s *Struct) Run()
+/* that way a test / benchmark would mostly set the fields on the struct
+/* and/or call configure, and then call run
+/* the other thing we needed that we didn't have from main was a way to stop it after starting it
+**/
+
 var (
 	dev        = flag.Bool("dev", false, "run in localhost development mode")
 	addr       = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
@@ -71,93 +83,69 @@ var (
 	stunIPv6 = stunAddrFamily.Get("ipv6")
 )
 
-func init() {
-	stats.Set("counter_requests", stunDisposition)
-	stats.Set("counter_addrfamily", stunAddrFamily)
-	expvar.Publish("stun", stats)
-	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
-	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
+type Derper struct {
+	flagCfg   DerperFlagConfig
+	derpSrv   *derp.Server
+	httpSrv   *http.Server
+	port80srv *http.Server
 }
 
-type config struct {
-	PrivateKey key.NodePrivate
+type DerperFlagConfig struct {
+	dev  bool
+	addr string
+
+	httpPort   int
+	stunPort   int
+	configPath string
+	certMode   string
+	certDir    string
+	hostname   string
+	runSTUN    bool
+
+	meshPSKFile string
+
+	meshWith      string
+	bootstrapDNS  string
+	verifyClients bool
+
+	acceptConnLimit float64
+	acceptConnBurst int
 }
 
-func loadConfig() config {
-	if *dev {
-		return config{PrivateKey: key.NewNode()}
-	}
-	if *configPath == "" {
-		if os.Getuid() == 0 {
-			*configPath = "/var/lib/derper/derper.key"
-		} else {
-			log.Fatalf("derper: -c <config path> not specified")
-		}
-		log.Printf("no config path specified; using %s", *configPath)
-	}
-	b, err := ioutil.ReadFile(*configPath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return writeNewConfig()
-	case err != nil:
-		log.Fatal(err)
-		panic("unreachable")
-	default:
-		var cfg config
-		if err := json.Unmarshal(b, &cfg); err != nil {
-			log.Fatalf("derper: config: %v", err)
-		}
-		return cfg
-	}
+func (d *Derper) Configure() error {
+
+	return nil
 }
 
-func writeNewConfig() config {
-	k := key.NewNode()
-	if err := os.MkdirAll(filepath.Dir(*configPath), 0777); err != nil {
-		log.Fatal(err)
-	}
-	cfg := config{
-		PrivateKey: k,
-	}
-	b, err := json.MarshalIndent(cfg, "", "\t")
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := atomicfile.WriteFile(*configPath, b, 0600); err != nil {
-		log.Fatal(err)
-	}
-	return cfg
-}
-
-func main() {
-	flag.Parse()
-
-	if *dev {
-		*addr = ":3340" // above the keys DERP
+func (d *Derper) Run() error {
+	if d.flagCfg.dev {
+		d.flagCfg.addr = ":3340" // above the keys DERP
 		log.Printf("Running in dev mode.")
 		tsweb.DevMode = true
 	}
 
-	listenHost, _, err := net.SplitHostPort(*addr)
+	listenHost, _, err := net.SplitHostPort(d.flagCfg.addr)
 	if err != nil {
 		log.Fatalf("invalid server address: %v", err)
 	}
 
-	cfg := loadConfig()
+	cfg := d.loadConfig()
 
-	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
+	serveTLS := tsweb.IsProd443(d.flagCfg.addr) || d.flagCfg.certMode == "manual"
 
 	s := derp.NewServer(cfg.PrivateKey, log.Printf)
-	s.SetVerifyClient(*verifyClients)
+	s.SetVerifyClient(d.flagCfg.verifyClients)
 
-	if *meshPSKFile != "" {
-		b, err := ioutil.ReadFile(*meshPSKFile)
+	d.derpSrv = s
+
+	if d.flagCfg.meshPSKFile != "" {
+		b, err := ioutil.ReadFile(d.flagCfg.meshPSKFile)
 		if err != nil {
 			log.Fatal(err)
 		}
 		key := strings.TrimSpace(string(b))
 		if matched, _ := regexp.MatchString(`(?i)^[0-9a-f]{64,}$`, key); !matched {
-			log.Fatalf("key in %s must contain 64+ hex digits", *meshPSKFile)
+			log.Fatalf("key in %s must contain 64+ hex digits", d.flagCfg.meshPSKFile)
 		}
 		s.SetMeshKey(key)
 		log.Printf("DERP mesh key configured")
@@ -191,7 +179,7 @@ func main() {
 		}
 	}))
 	debug := tsweb.Debugger(mux)
-	debug.KV("TLS hostname", *hostname)
+	debug.KV("TLS hostname", d.flagCfg.hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
 	debug.Handle("check", "Consistency check", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := s.ConsistencyCheck()
@@ -203,12 +191,12 @@ func main() {
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
-	if *runSTUN {
-		go serveSTUN(listenHost, *stunPort)
+	if d.flagCfg.runSTUN {
+		go serveSTUN(listenHost, d.flagCfg.stunPort)
 	}
 
 	httpsrv := &http.Server{
-		Addr:    *addr,
+		Addr:    d.flagCfg.addr,
 		Handler: mux,
 
 		// Set read/write timeout. For derper, this basically
@@ -222,10 +210,12 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	d.httpSrv = httpsrv
+
 	if serveTLS {
-		log.Printf("derper: serving on %s with TLS", *addr)
+		log.Printf("derper: serving on %s with TLS", d.flagCfg.addr)
 		var certManager certProvider
-		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname)
+		certManager, err = certProviderByCertMode(d.flagCfg.certMode, d.flagCfg.certDir, d.flagCfg.hostname)
 		if err != nil {
 			log.Fatalf("derper: can not start cert provider: %v", err)
 		}
@@ -273,18 +263,19 @@ func main() {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
 			mux.ServeHTTP(w, r)
 		})
-		if *httpPort > -1 {
+		if d.flagCfg.httpPort > -1 {
+			port80srv := &http.Server{
+				Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", d.flagCfg.httpPort)),
+				Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+				ReadTimeout: 30 * time.Second,
+				// Crank up WriteTimeout a bit more than usually
+				// necessary just so we can do long CPU profiles
+				// and not hit net/http/pprof's "profile
+				// duration exceeds server's WriteTimeout".
+				WriteTimeout: 5 * time.Minute,
+			}
+			d.port80srv = port80srv
 			go func() {
-				port80srv := &http.Server{
-					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
-					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
-					ReadTimeout: 30 * time.Second,
-					// Crank up WriteTimeout a bit more than usually
-					// necessary just so we can do long CPU profiles
-					// and not hit net/http/pprof's "profile
-					// duration exceeds server's WriteTimeout".
-					WriteTimeout: 5 * time.Minute,
-				}
 				err := port80srv.ListenAndServe()
 				if err != nil {
 					if err != http.ErrServerClosed {
@@ -295,11 +286,133 @@ func main() {
 		}
 		err = rateLimitedListenAndServeTLS(httpsrv)
 	} else {
-		log.Printf("derper: serving on %s", *addr)
+		log.Printf("derper: serving on %s", d.flagCfg.addr)
 		err = httpsrv.ListenAndServe()
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
+	}
+
+	return nil
+}
+
+func (d *Derper) Stop() error {
+	var httpSrvErr, port80srvErr error
+
+	if d.derpSrv != nil {
+		err := d.derpSrv.Close()
+		if err != nil {
+			return fmt.Errorf("damn")
+		}
+	}
+
+	if d.httpSrv != nil {
+		httpSrvErr = d.httpSrv.Close()
+	}
+
+	if d.port80srv != nil {
+		port80srvErr = d.port80srv.Close()
+	}
+
+	switch {
+	case httpSrvErr != nil && port80srvErr != nil:
+		log.Println("failed to close port80srv:", port80srvErr)
+		return fmt.Errorf("failed to close httpsrv: %w", httpSrvErr)
+	case httpSrvErr != nil:
+		return fmt.Errorf("failed to close httpsrv: %w", httpSrvErr)
+	case port80srvErr != nil:
+		return fmt.Errorf("failed to close port80srv: %w", port80srvErr)
+	}
+
+	return nil
+}
+
+func init() {
+	stats.Set("counter_requests", stunDisposition)
+	stats.Set("counter_addrfamily", stunAddrFamily)
+	expvar.Publish("stun", stats)
+	expvar.Publish("derper_tls_request_version", tlsRequestVersion)
+	expvar.Publish("gauge_derper_tls_active_version", tlsActiveVersion)
+}
+
+type config struct {
+	PrivateKey key.NodePrivate
+}
+
+func (d *Derper) loadConfig() config {
+	if d.flagCfg.dev {
+		return config{PrivateKey: key.NewNode()}
+	}
+	if d.flagCfg.configPath == "" {
+		if os.Getuid() == 0 {
+			d.flagCfg.configPath = "/var/lib/derper/derper.key"
+		} else {
+			log.Fatalf("derper: -c <config path> not specified")
+		}
+		log.Printf("no config path specified; using %s", d.flagCfg.configPath)
+	}
+	b, err := ioutil.ReadFile(d.flagCfg.configPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return writeNewConfig()
+	case err != nil:
+		log.Fatal(err)
+		panic("unreachable")
+	default:
+		var cfg config
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			log.Fatalf("derper: config: %v", err)
+		}
+		return cfg
+	}
+}
+
+func writeNewConfig() config {
+	k := key.NewNode()
+	if err := os.MkdirAll(filepath.Dir(*configPath), 0777); err != nil {
+		log.Fatal(err)
+	}
+	cfg := config{
+		PrivateKey: k,
+	}
+	b, err := json.MarshalIndent(cfg, "", "\t")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := atomicfile.WriteFile(*configPath, b, 0600); err != nil {
+		log.Fatal(err)
+	}
+	return cfg
+}
+
+func main() {
+	flag.Parse()
+
+	derper := &Derper{flagCfg: DerperFlagConfig{
+		dev:  *dev,
+		addr: *addr,
+
+		httpPort:   *httpPort,
+		stunPort:   *stunPort,
+		configPath: *configPath,
+		certMode:   *certMode,
+		certDir:    *certDir,
+		hostname:   *hostname,
+		runSTUN:    *runSTUN,
+
+		meshPSKFile: *meshPSKFile,
+
+		meshWith:      *meshWith,
+		bootstrapDNS:  *bootstrapDNS,
+		verifyClients: *verifyClients,
+
+		acceptConnLimit: *acceptConnLimit,
+		acceptConnBurst: *acceptConnBurst,
+	},
+	}
+
+	if err := derper.Run(); err != nil {
+		log.Fatal("unable to run derper")
 	}
 }
 
