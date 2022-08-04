@@ -22,6 +22,7 @@ var (
 	distDir         = flag.String("distdir", "./dist", "path of directory to place build output in")
 	yarnPath        = flag.String("yarnpath", "../../tool/yarn", "path yarn executable used to install JavaScript dependencies")
 	fastCompression = flag.Bool("fast-compression", false, "Use faster compression when building, to speed up build time. Meant to iterative/debugging use only.")
+	devControl      = flag.String("dev-control", "", "URL of a development control server to be used with dev. If provided without specifying dev, an error will be returned.")
 )
 
 func main() {
