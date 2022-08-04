@@ -126,7 +126,7 @@ type Wrapper struct {
 	eventsOther chan tun.Event
 
 	// filter atomically stores the currently active packet filter
-	filter atomic.Value // of *filter.Filter
+	filter atomic.Pointer[filter.Filter]
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
 
@@ -477,8 +477,7 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 		}
 	}
 
-	filt, _ := t.filter.Load().(*filter.Filter)
-
+	filt := t.filter.Load()
 	if filt == nil {
 		return filter.Drop
 	}
@@ -606,8 +605,7 @@ func (t *Wrapper) filterIn(buf []byte) filter.Response {
 		}
 	}
 
-	filt, _ := t.filter.Load().(*filter.Filter)
-
+	filt := t.filter.Load()
 	if filt == nil {
 		return filter.Drop
 	}
@@ -698,8 +696,7 @@ func (t *Wrapper) tdevWrite(buf []byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) GetFilter() *filter.Filter {
-	filt, _ := t.filter.Load().(*filter.Filter)
-	return filt
+	return t.filter.Load()
 }
 
 func (t *Wrapper) SetFilter(filt *filter.Filter) {

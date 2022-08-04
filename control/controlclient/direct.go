@@ -1151,8 +1151,8 @@ var clockNow = time.Now
 
 // opt.Bool configs from control.
 var (
-	controlUseDERPRoute atomic.Value
-	controlTrimWGConfig atomic.Value
+	controlUseDERPRoute atomic.Value // of opt.Bool
+	controlTrimWGConfig atomic.Value // of opt.Bool
 )
 
 func setControlAtomic(dst *atomic.Value, v opt.Bool) {

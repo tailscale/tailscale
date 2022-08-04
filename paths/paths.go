@@ -17,7 +17,7 @@ import (
 
 // AppSharedDir is a string set by the iOS or Android app on start
 // containing a directory we can read/write in.
-var AppSharedDir atomic.Value
+var AppSharedDir atomic.Value // of string
 
 // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
 // or the empty string if there's no reasonable default.

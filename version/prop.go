@@ -43,7 +43,7 @@ func IsSandboxedMacOS() bool {
 	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
 }
 
-var isMacSysExt atomic.Value
+var isMacSysExt atomic.Value // of bool
 
 // IsMacSysExt whether this binary is from the standalone "System
 // Extension" (a.k.a. "macsys") version of Tailscale for macOS.
