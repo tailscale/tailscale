@@ -73,7 +73,3 @@
   background-color: currentColor;
   clip-path: polygon(100% 0%, 0 0%, 50% 100%);
 }
-
-body.ssh-active #ssh-form {
-  @apply hidden;
-}

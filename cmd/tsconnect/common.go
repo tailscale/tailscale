@@ -51,6 +51,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 				setupEsbuildTailwind(build, dev)
 			},
 		}},
+		JSXMode: esbuild.JSXModeAutomatic,
 	}, nil
 }
 

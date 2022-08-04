@@ -6,7 +6,9 @@
     "isolatedModules": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
