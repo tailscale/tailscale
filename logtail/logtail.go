@@ -270,7 +270,7 @@ func (l *Logger) drainPending(scratch []byte) (res []byte) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			b = []byte(fmt.Sprintf("reading ringbuffer: %v", err))
+			b = fmt.Appendf(nil, "reading ringbuffer: %v", err)
 			batchDone = true
 		} else if b == nil {
 			if entries > 0 {

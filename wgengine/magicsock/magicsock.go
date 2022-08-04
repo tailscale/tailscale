@@ -811,7 +811,7 @@ func (c *Conn) pickDERPFallback() int {
 	}
 
 	h := fnv.New64()
-	h.Write([]byte(fmt.Sprintf("%p/%d", c, processStartUnixNano))) // arbitrary
+	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
 	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
 }
 

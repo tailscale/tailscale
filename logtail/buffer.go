@@ -5,7 +5,6 @@
 package logtail
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"sync"
@@ -51,9 +50,7 @@ func (m *memBuffer) TryReadLine() ([]byte, error) {
 	case ent := <-m.pending:
 		if ent.dropCount > 0 {
 			m.next = ent.msg
-			buf := new(bytes.Buffer)
-			fmt.Fprintf(buf, "----------- %d logs dropped ----------", ent.dropCount)
-			return buf.Bytes(), nil
+			return fmt.Appendf(nil, "----------- %d logs dropped ----------", ent.dropCount), nil
 		}
 		return ent.msg, nil
 	default:
