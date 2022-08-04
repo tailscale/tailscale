@@ -12,10 +12,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"tailscale.com/net/netaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
@@ -26,7 +26,7 @@ type TestIGD struct {
 	pxpConn  net.PacketConn // for NAT-PMP and/or PCP
 	ts       *httptest.Server
 	logf     logger.Logf
-	closed   syncs.AtomicBool
+	closed   atomic.Bool
 
 	// do* will log which packets are sent, but will not reply to unexpected packets.
 
@@ -71,7 +71,7 @@ func NewTestIGD(logf logger.Logf, t TestIGDOptions) (*TestIGD, error) {
 	d.logf = func(msg string, args ...any) {
 		// Don't log after the device has closed;
 		// stray trailing logging angers testing.T.Logf.
-		if d.closed.Get() {
+		if d.closed.Load() {
 			return
 		}
 		logf(msg, args...)
@@ -107,7 +107,7 @@ func testIPAndGateway() (gw, ip netip.Addr, ok bool) {
 }
 
 func (d *TestIGD) Close() error {
-	d.closed.Set(true)
+	d.closed.Store(true)
 	d.ts.Close()
 	d.upnpConn.Close()
 	d.pxpConn.Close()
@@ -135,7 +135,7 @@ func (d *TestIGD) serveUPnPDiscovery() {
 	for {
 		n, src, err := d.upnpConn.ReadFrom(buf)
 		if err != nil {
-			if !d.closed.Get() {
+			if !d.closed.Load() {
 				d.logf("serveUPnP failed: %v", err)
 			}
 			return
@@ -162,7 +162,7 @@ func (d *TestIGD) servePxP() {
 	for {
 		n, a, err := d.pxpConn.ReadFrom(buf)
 		if err != nil {
-			if !d.closed.Get() {
+			if !d.closed.Load() {
 				d.logf("servePxP failed: %v", err)
 			}
 			return

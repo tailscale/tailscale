@@ -41,7 +41,6 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
-	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/pad32"
@@ -232,7 +231,7 @@ type dupClientSet struct {
 }
 
 func (s *dupClientSet) ActiveClient() *sclient {
-	if s.last != nil && !s.last.isDisabled.Get() {
+	if s.last != nil && !s.last.isDisabled.Load() {
 		return s.last
 	}
 	return nil
@@ -499,8 +498,8 @@ func (s *Server) registerClient(c *sclient) {
 		s.dupClientConns.Add(2) // both old and new count
 		s.dupClientConnTotal.Add(1)
 		old := set.ActiveClient()
-		old.isDup.Set(true)
-		c.isDup.Set(true)
+		old.isDup.Store(true)
+		c.isDup.Store(true)
 		s.clients[c.key] = &dupClientSet{
 			last: c,
 			set: map[*sclient]bool{
@@ -512,7 +511,7 @@ func (s *Server) registerClient(c *sclient) {
 	case *dupClientSet:
 		s.dupClientConns.Add(1)     // the gauge
 		s.dupClientConnTotal.Add(1) // the counter
-		c.isDup.Set(true)
+		c.isDup.Store(true)
 		set.set[c] = true
 		set.last = c
 		set.sendHistory = append(set.sendHistory, c)
@@ -571,8 +570,8 @@ func (s *Server) unregisterClient(c *sclient) {
 			if remain == nil {
 				panic("unexpected nil remain from single element dup set")
 			}
-			remain.isDisabled.Set(false)
-			remain.isDup.Set(false)
+			remain.isDisabled.Store(false)
+			remain.isDup.Store(false)
 			s.clients[c.key] = singleClient{remain}
 		}
 	}
@@ -1073,11 +1072,11 @@ func (s *Server) sendServerKey(lw *lazyBufioWriter) error {
 }
 
 func (s *Server) noteClientActivity(c *sclient) {
-	if !c.isDup.Get() {
+	if !c.isDup.Load() {
 		// Fast path for clients that aren't in a dup set.
 		return
 	}
-	if c.isDisabled.Get() {
+	if c.isDisabled.Load() {
 		// If they're already disabled, no point checking more.
 		return
 	}
@@ -1112,7 +1111,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 		for _, prior := range ds.sendHistory {
 			if prior == c {
 				ds.ForeachClient(func(c *sclient) {
-					c.isDisabled.Set(true)
+					c.isDisabled.Store(true)
 				})
 				break
 			}
@@ -1253,8 +1252,8 @@ type sclient struct {
 	peerGone       chan key.NodePublic // write request that a previous sender has disconnected (not used by mesh peers)
 	meshUpdate     chan struct{}       // write request to write peerStateChange
 	canMesh        bool                // clientInfo had correct mesh token for inter-region routing
-	isDup          syncs.AtomicBool    // whether more than 1 sclient for key is connected
-	isDisabled     syncs.AtomicBool    // whether sends to this peer are disabled due to active/active dups
+	isDup          atomic.Bool         // whether more than 1 sclient for key is connected
+	isDisabled     atomic.Bool         // whether sends to this peer are disabled due to active/active dups
 
 	// replaceLimiter controls how quickly two connections with
 	// the same client key can kick each other off the server by

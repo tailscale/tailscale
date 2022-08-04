@@ -7,12 +7,13 @@
 package controlknobs
 
 import (
+	"sync/atomic"
+
 	"tailscale.com/envknob"
-	"tailscale.com/syncs"
 )
 
 // disableUPnP indicates whether to attempt UPnP mapping.
-var disableUPnP syncs.AtomicBool
+var disableUPnP atomic.Bool
 
 func init() {
 	SetDisableUPnP(envknob.Bool("TS_DISABLE_UPNP"))
@@ -21,11 +22,11 @@ func init() {
 // DisableUPnP reports the last reported value from control
 // whether UPnP portmapping should be disabled.
 func DisableUPnP() bool {
-	return disableUPnP.Get()
+	return disableUPnP.Load()
 }
 
 // SetDisableUPnP sets whether control says that UPnP should be
 // disabled.
 func SetDisableUPnP(v bool) {
-	disableUPnP.Set(v)
+	disableUPnP.Store(v)
 }

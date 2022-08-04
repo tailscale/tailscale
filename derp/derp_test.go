@@ -958,10 +958,10 @@ func TestServerDupClients(t *testing.T) {
 				t.Error("wrong single client")
 				return
 			}
-			if want.isDup.Get() {
+			if want.isDup.Load() {
 				t.Errorf("unexpected isDup on singleClient")
 			}
-			if want.isDisabled.Get() {
+			if want.isDisabled.Load() {
 				t.Errorf("unexpected isDisabled on singleClient")
 			}
 		case nil:
@@ -1004,13 +1004,13 @@ func TestServerDupClients(t *testing.T) {
 	}
 	checkDup := func(t *testing.T, c *sclient, want bool) {
 		t.Helper()
-		if got := c.isDup.Get(); got != want {
+		if got := c.isDup.Load(); got != want {
 			t.Errorf("client %q isDup = %v; want %v", clientName[c], got, want)
 		}
 	}
 	checkDisabled := func(t *testing.T, c *sclient, want bool) {
 		t.Helper()
-		if got := c.isDisabled.Get(); got != want {
+		if got := c.isDisabled.Load(); got != want {
 			t.Errorf("client %q isDisabled = %v; want %v", clientName[c], got, want)
 		}
 	}

@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/syncs"
 	"tailscale.com/tstest"
 	"tailscale.com/tsweb"
 )
@@ -131,10 +131,10 @@ func TestExpvar(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
 
-	var succeed syncs.AtomicBool
+	var succeed atomic.Bool
 	p.Run("probe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
 		clk.Advance(aFewMillis)
-		if succeed.Get() {
+		if succeed.Load() {
 			return nil
 		}
 		return errors.New("failing, as instructed by test")
@@ -172,7 +172,7 @@ func TestExpvar(t *testing.T) {
 		Result:  false,
 	})
 
-	succeed.Set(true)
+	succeed.Store(true)
 	clk.Advance(probeInterval + halfProbeInterval)
 
 	st := epoch.Add(probeInterval + halfProbeInterval + aFewMillis)
@@ -189,10 +189,10 @@ func TestPrometheus(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
 
-	var succeed syncs.AtomicBool
+	var succeed atomic.Bool
 	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
 		clk.Advance(aFewMillis)
-		if succeed.Get() {
+		if succeed.Load() {
 			return nil
 		}
 		return errors.New("failing, as instructed by test")
@@ -219,7 +219,7 @@ probe_result{name="testprobe",label="value"} 0
 		t.Fatal(err)
 	}
 
-	succeed.Set(true)
+	succeed.Store(true)
 	clk.Advance(probeInterval + halfProbeInterval)
 
 	err = tstest.WaitFor(convergenceTimeout, func() error {

@@ -40,7 +40,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/dnstype"
@@ -127,7 +126,7 @@ type LocalBackend struct {
 	serverURL             string           // tailcontrol URL
 	newDecompressor       func() (controlclient.Decompressor, error)
 	varRoot               string // or empty if SetVarRoot never called
-	sshAtomicBool         syncs.AtomicBool
+	sshAtomicBool         atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 
 	filterAtomic            atomic.Pointer[filter.Filter]
@@ -1740,7 +1739,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 // setAtomicValuesFromPrefs populates sshAtomicBool and containsViaIPFuncAtomic
 // from the prefs p, which may be nil.
 func (b *LocalBackend) setAtomicValuesFromPrefs(p *ipn.Prefs) {
-	b.sshAtomicBool.Set(p != nil && p.RunSSH && canSSH)
+	b.sshAtomicBool.Store(p != nil && p.RunSSH && canSSH)
 
 	if p == nil {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
@@ -3053,7 +3052,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.setAtomicValuesFromPrefs(nil)
 }
 
-func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Get() && canSSH }
+func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && canSSH }
 
 // ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to

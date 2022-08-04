@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
@@ -37,7 +38,6 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
@@ -645,7 +645,7 @@ func (c *conn) resolveTerminalActionLocked(s ssh.Session, cr *contextReader) (ac
 	action = c.action0
 
 	var awaitReadOnce sync.Once // to start Reads on cr
-	var sawInterrupt syncs.AtomicBool
+	var sawInterrupt atomic.Bool
 	var wg sync.WaitGroup
 	defer wg.Wait() // wait for awaitIntrOnce's goroutine to exit
 
@@ -687,7 +687,7 @@ func (c *conn) resolveTerminalActionLocked(s ssh.Session, cr *contextReader) (ac
 						return
 					}
 					if n > 0 && buf[0] == 0x03 { // Ctrl-C
-						sawInterrupt.Set(true)
+						sawInterrupt.Store(true)
 						s.Stderr().Write([]byte("Canceled.\r\n"))
 						s.Exit(1)
 						return
@@ -699,7 +699,7 @@ func (c *conn) resolveTerminalActionLocked(s ssh.Session, cr *contextReader) (ac
 		var err error
 		action, err = c.fetchSSHAction(ctx, url)
 		if err != nil {
-			if sawInterrupt.Get() {
+			if sawInterrupt.Load() {
 				metricTerminalInterrupt.Add(1)
 				return nil, fmt.Errorf("aborted by user")
 			} else {
