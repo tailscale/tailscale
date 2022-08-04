@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/types/tkatype"
 )
 
 func TestComputeChainCandidates(t *testing.T) {
@@ -232,7 +233,7 @@ func TestOpenAuthority(t *testing.T) {
 
 	i2, i2H := fakeAUM(t, 2, &i1H)
 	i3, i3H := fakeAUM(t, 5, &i2H)
-	l2, l2H := fakeAUM(t, AUM{MessageKind: AUMNoOp, KeyID: []byte{7}, Signatures: []Signature{{KeyID: key.ID()}}}, &i3H)
+	l2, l2H := fakeAUM(t, AUM{MessageKind: AUMNoOp, KeyID: []byte{7}, Signatures: []tkatype.Signature{{KeyID: key.ID()}}}, &i3H)
 	l3, l3H := fakeAUM(t, 4, &i3H)
 
 	g2, g2H := fakeAUM(t, 8, nil)

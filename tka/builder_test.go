@@ -9,13 +9,19 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/types/tkatype"
 )
 
 type signer25519 ed25519.PrivateKey
 
-func (s signer25519) SignAUM(update *AUM) error {
-	update.sign25519(ed25519.PrivateKey(s))
-	return nil
+func (s signer25519) SignAUM(sigHash tkatype.AUMSigHash) ([]tkatype.Signature, error) {
+	priv := ed25519.PrivateKey(s)
+	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
+
+	return []tkatype.Signature{{
+		KeyID:     key.ID(),
+		Signature: ed25519.Sign(priv, sigHash[:]),
+	}}, nil
 }
 
 func TestAuthorityBuilderAddKey(t *testing.T) {

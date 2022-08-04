@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/hdevalence/ed25519consensus"
+	"tailscale.com/types/tkatype"
 )
 
 // KeyKind describes the different varieties of a Key.
@@ -73,12 +74,12 @@ func (k Key) Clone() Key {
 	return out
 }
 
-func (k Key) ID() KeyID {
+func (k Key) ID() tkatype.KeyID {
 	switch k.Kind {
 	// Because 25519 public keys are so short, we just use the 32-byte
 	// public as their 'key ID'.
 	case Key25519:
-		return KeyID(k.Public)
+		return tkatype.KeyID(k.Public)
 	default:
 		panic("unsupported key kind")
 	}
@@ -112,21 +113,9 @@ func (k Key) StaticValidate() error {
 	return nil
 }
 
-// KeyID references a verification key stored in the key authority.
-//
-// For 25519 keys: The 32-byte public key.
-type KeyID []byte
-
-// Signature describes a signature over an AUM, which can be verified
-// using the key referenced by KeyID.
-type Signature struct {
-	KeyID     KeyID  `cbor:"1,keyasint"`
-	Signature []byte `cbor:"2,keyasint"`
-}
-
 // Verify returns a nil error if the signature is valid over the
 // provided AUM BLAKE2s digest, using the given key.
-func (s *Signature) Verify(aumDigest AUMSigHash, key Key) error {
+func signatureVerify(s *tkatype.Signature, aumDigest tkatype.AUMSigHash, key Key) error {
 	// NOTE(tom): Even if we can compute the public from the KeyID,
 	//            its possible for the KeyID to be attacker-controlled
 	//            so we should use the public contained in the state machine.

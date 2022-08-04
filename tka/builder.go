@@ -6,11 +6,13 @@ package tka
 
 import (
 	"fmt"
+
+	"tailscale.com/types/tkatype"
 )
 
 // Types implementing Signer can sign update messages.
 type Signer interface {
-	SignAUM(*AUM) error
+	SignAUM(tkatype.AUMSigHash) ([]tkatype.Signature, error)
 }
 
 // UpdateBuilder implements a builder for changes to the tailnet
@@ -34,9 +36,11 @@ func (b *UpdateBuilder) mkUpdate(update AUM) error {
 	update.PrevAUMHash = prevHash
 
 	if b.signer != nil {
-		if err := b.signer.SignAUM(&update); err != nil {
+		sigs, err := b.signer.SignAUM(update.SigHash())
+		if err != nil {
 			return fmt.Errorf("signing failed: %v", err)
 		}
+		update.Signatures = append(update.Signatures, sigs...)
 	}
 	if err := update.StaticValidate(); err != nil {
 		return fmt.Errorf("generated update was invalid: %v", err)
@@ -61,7 +65,7 @@ func (b *UpdateBuilder) AddKey(key Key) error {
 }
 
 // RemoveKey removes a key from the authority.
-func (b *UpdateBuilder) RemoveKey(keyID KeyID) error {
+func (b *UpdateBuilder) RemoveKey(keyID tkatype.KeyID) error {
 	if _, err := b.state.GetKey(keyID); err != nil {
 		return fmt.Errorf("failed reading key %x: %v", keyID, err)
 	}
@@ -69,7 +73,7 @@ func (b *UpdateBuilder) RemoveKey(keyID KeyID) error {
 }
 
 // SetKeyVote updates the number of votes of an existing key.
-func (b *UpdateBuilder) SetKeyVote(keyID KeyID, votes uint) error {
+func (b *UpdateBuilder) SetKeyVote(keyID tkatype.KeyID, votes uint) error {
 	if _, err := b.state.GetKey(keyID); err != nil {
 		return fmt.Errorf("failed reading key %x: %v", keyID, err)
 	}
@@ -80,7 +84,7 @@ func (b *UpdateBuilder) SetKeyVote(keyID KeyID, votes uint) error {
 //
 // TODO(tom): Provide an API to update specific values rather than the whole
 // map.
-func (b *UpdateBuilder) SetKeyMeta(keyID KeyID, meta map[string]string) error {
+func (b *UpdateBuilder) SetKeyMeta(keyID tkatype.KeyID, meta map[string]string) error {
 	if _, err := b.state.GetKey(keyID); err != nil {
 		return fmt.Errorf("failed reading key %x: %v", keyID, err)
 	}

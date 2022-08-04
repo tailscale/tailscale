@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
+	"tailscale.com/types/tkatype"
 )
 
 // ErrNoSuchKey is returned if the key referenced by a KeyID does not exist.
@@ -40,7 +41,7 @@ type State struct {
 }
 
 // GetKey returns the trusted key with the specified KeyID.
-func (s State) GetKey(key KeyID) (Key, error) {
+func (s State) GetKey(key tkatype.KeyID) (Key, error) {
 	for _, k := range s.Keys {
 		if bytes.Equal(k.ID(), key) {
 			return k, nil

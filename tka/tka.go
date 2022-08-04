@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/fxamacker/cbor/v2"
+	"tailscale.com/types/tkatype"
 )
 
 // Authority is a Tailnet Key Authority. This type is the main coupling
@@ -416,7 +417,7 @@ func aumVerify(aum AUM, state State, isGenesisAUM bool) error {
 		if err != nil {
 			return fmt.Errorf("bad keyID on signature %d: %v", i, err)
 		}
-		if err := sig.Verify(sigHash, key); err != nil {
+		if err := signatureVerify(&sig, sigHash, key); err != nil {
 			return fmt.Errorf("signature %d: %v", i, err)
 		}
 	}
@@ -485,9 +486,11 @@ func Create(storage Chonk, state State, signer Signer) (*Authority, AUM, error) 
 		// This serves as an easy way to validate the given state.
 		return nil, AUM{}, fmt.Errorf("invalid state: %v", err)
 	}
-	if err := signer.SignAUM(&genesis); err != nil {
+	sigs, err := signer.SignAUM(genesis.SigHash())
+	if err != nil {
 		return nil, AUM{}, fmt.Errorf("signing failed: %v", err)
 	}
+	genesis.Signatures = append(genesis.Signatures, sigs...)
 
 	a, err := Bootstrap(storage, genesis)
 	return a, genesis, err
@@ -591,7 +594,7 @@ func (a *Authority) Inform(updates []AUM) error {
 
 // VerifySignature returns true if the provided nodeKeySignature is signed
 // correctly by a trusted key.
-func (a *Authority) VerifySignature(nodeKeySignature []byte) error {
+func (a *Authority) VerifySignature(nodeKeySignature tkatype.MarshaledSignature) error {
 	var decoded NodeKeySignature
 	if err := cbor.Unmarshal(nodeKeySignature, &decoded); err != nil {
 		return fmt.Errorf("unmarshal: %v", err)

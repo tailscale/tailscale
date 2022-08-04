@@ -204,7 +204,7 @@ func TestScenarioHelpers(t *testing.T) {
 	if _, ok := n.AUMs["L3"]; !ok {
 		t.Errorf("node n is missing %s", "L3")
 	}
-	if err := n.AUMs["L3"].Signatures[0].Verify(n.AUMs["L3"].SigHash(), *s.defaultKey); err != nil {
+	if err := signatureVerify(&n.AUMs["L3"].Signatures[0], n.AUMs["L3"].SigHash(), *s.defaultKey); err != nil {
 		t.Errorf("chained AUM was not signed: %v", err)
 	}
 
