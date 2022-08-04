@@ -91,6 +91,7 @@ type Server struct {
 	shutdownCtx      context.Context
 	shutdownCancel   context.CancelFunc
 	localClient      *tailscale.LocalClient
+	logbuffer        *filch.Filch
 	logtail          *logtail.Logger
 
 	mu        sync.Mutex
@@ -138,6 +139,7 @@ func (s *Server) Close() error {
 		defer wg.Done()
 		// Perform a best-effort final flush.
 		s.logtail.Shutdown(ctx)
+		s.logbuffer.Close()
 	}()
 
 	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral {
@@ -238,7 +240,7 @@ func (s *Server) start() error {
 	}
 	logid := lpc.PublicID.String()
 
-	f, err := filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
+	s.logbuffer, err = filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
 	if err != nil {
 		return fmt.Errorf("error creating filch: %w", err)
 	}
@@ -246,7 +248,7 @@ func (s *Server) start() error {
 		Collection: lpc.Collection,
 		PrivateID:  lpc.PrivateID,
 		Stderr:     ioutil.Discard, // log everything to Buffer
-		Buffer:     f,
+		Buffer:     s.logbuffer,
 		NewZstdEncoder: func() logtail.Encoder {
 			w, err := smallzstd.NewEncoder(nil)
 			if err != nil {
