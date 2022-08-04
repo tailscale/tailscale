@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/syncs"
 	"tailscale.com/version/distro"
 )
 
@@ -230,7 +230,7 @@ var rootArgs struct {
 	socket string
 }
 
-var gotSignal syncs.AtomicBool
+var gotSignal atomic.Bool
 
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
 	s := safesocket.DefaultConnectionStrategy(rootArgs.socket)

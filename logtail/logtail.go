@@ -23,7 +23,6 @@ import (
 
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/syncs"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -448,15 +447,15 @@ func (l *Logger) Flush() error {
 }
 
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.
-var logtailDisabled syncs.AtomicBool
+var logtailDisabled atomic.Bool
 
 // Disable disables logtail uploads for the lifetime of the process.
 func Disable() {
-	logtailDisabled.Set(true)
+	logtailDisabled.Store(true)
 }
 
 func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
-	if logtailDisabled.Get() {
+	if logtailDisabled.Load() {
 		return len(jsonBlob), nil
 	}
 	n, err := l.buffer.Write(jsonBlob)

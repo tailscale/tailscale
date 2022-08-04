@@ -68,42 +68,6 @@ func (wg *WaitGroupChan) Decr() {
 // Wait blocks until the WaitGroupChan counter is zero.
 func (wg *WaitGroupChan) Wait() { <-wg.done }
 
-// AtomicBool is an atomic boolean.
-type AtomicBool int32
-
-func (b *AtomicBool) Set(v bool) {
-	var n int32
-	if v {
-		n = 1
-	}
-	atomic.StoreInt32((*int32)(b), n)
-}
-
-// Swap sets b to v and reports whether it changed.
-func (b *AtomicBool) Swap(v bool) (changed bool) {
-	var n int32
-	if v {
-		n = 1
-	}
-	old := atomic.SwapInt32((*int32)(b), n)
-	return old != n
-}
-
-func (b *AtomicBool) Get() bool {
-	return atomic.LoadInt32((*int32)(b)) != 0
-}
-
-// AtomicUint32 is an atomic uint32.
-type AtomicUint32 uint32
-
-func (b *AtomicUint32) Set(v uint32) {
-	atomic.StoreUint32((*uint32)(b), v)
-}
-
-func (b *AtomicUint32) Get() uint32 {
-	return atomic.LoadUint32((*uint32)(b))
-}
-
 // Semaphore is a counting semaphore.
 //
 // Use NewSemaphore to create one.

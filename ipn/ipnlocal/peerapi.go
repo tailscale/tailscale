@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -41,7 +42,6 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine"
@@ -58,7 +58,7 @@ type peerAPIServer struct {
 	b          *LocalBackend
 	rootDir    string // empty means file receiving unavailable
 	selfNode   *tailcfg.Node
-	knownEmpty syncs.AtomicBool
+	knownEmpty atomic.Bool
 	resolver   *resolver.Resolver
 
 	// directFileMode is whether we're writing files directly to a
@@ -144,7 +144,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 	if s == nil || s.rootDir == "" || s.directFileMode {
 		return false
 	}
-	if s.knownEmpty.Get() {
+	if s.knownEmpty.Load() {
 		// Optimization: this is usually empty, so avoid opening
 		// the directory and checking. We can't cache the actual
 		// has-files-or-not values as the macOS/iOS client might
@@ -185,7 +185,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 			}
 		}
 		if err == io.EOF {
-			s.knownEmpty.Set(true)
+			s.knownEmpty.Store(true)
 		}
 		if err != nil {
 			break
@@ -808,7 +808,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	// TODO: some real response
 	success = true
 	io.WriteString(w, "{}\n")
-	h.ps.knownEmpty.Set(false)
+	h.ps.knownEmpty.Store(false)
 	h.ps.b.sendFileNotify()
 }
 

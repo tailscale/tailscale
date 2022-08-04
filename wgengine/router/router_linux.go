@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,7 +26,6 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/multierr"
@@ -84,7 +84,7 @@ type netfilterRunner interface {
 }
 
 type linuxRouter struct {
-	closed           syncs.AtomicBool
+	closed           atomic.Bool
 	logf             func(fmt string, args ...any)
 	tunname          string
 	linkMon          *monitor.Mon
@@ -97,7 +97,7 @@ type linuxRouter struct {
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
-	ruleRestorePending syncs.AtomicBool
+	ruleRestorePending atomic.Bool
 	ipRuleFixLimiter   *rate.Limiter
 
 	// Various feature checks for the network stack.
@@ -233,7 +233,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		return
 	}
 	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
-		if r.ruleRestorePending.Swap(false) && !r.closed.Get() {
+		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
 		}
@@ -258,7 +258,7 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
-	r.closed.Set(true)
+	r.closed.Store(true)
 	if r.unregLinkMon != nil {
 		r.unregLinkMon()
 	}

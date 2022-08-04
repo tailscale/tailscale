@@ -7,6 +7,7 @@ package ipnlocal
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -91,7 +91,7 @@ type mockControl struct {
 	opts       controlclient.Options
 	logfActual logger.Logf
 	statusFunc func(controlclient.Status)
-	preventLog syncs.AtomicBool
+	preventLog atomic.Bool
 
 	mu          sync.Mutex
 	calls       []string
@@ -920,7 +920,7 @@ func TestStateMachine(t *testing.T) {
 
 type testStateStorage struct {
 	mem     mem.Store
-	written syncs.AtomicBool
+	written atomic.Bool
 }
 
 func (s *testStateStorage) ReadState(id ipn.StateKey) ([]byte, error) {

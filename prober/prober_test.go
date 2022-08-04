@@ -12,11 +12,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"tailscale.com/syncs"
 	"tailscale.com/tstest"
 	"tailscale.com/tsweb"
 )
@@ -131,7 +131,7 @@ func TestExpvar(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
 
-	var succeed syncs.AtomicBool
+	var succeed atomic.Bool
 	p.Run("probe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
 		clk.Advance(aFewMillis)
 		if succeed.Get() {
@@ -189,7 +189,7 @@ func TestPrometheus(t *testing.T) {
 	clk := newFakeTime()
 	p := newForTest(clk.Now, clk.NewTicker)
 
-	var succeed syncs.AtomicBool
+	var succeed atomic.Bool
 	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
 		clk.Advance(aFewMillis)
 		if succeed.Get() {
