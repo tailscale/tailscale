@@ -88,9 +88,14 @@ func buildWasm(dev bool) error {
 	log.Printf("Building wasm...\n")
 	args := []string{"build", "-tags", "tailscale_go,osusergo,netgo,nethttpomithttp2,omitidna,omitpemdecrypt"}
 	if !dev {
+		if *devControl != "" {
+			return fmt.Errorf("Development control URL can only be used in dev mode.")
+		}
 		// Omit long paths and debug symbols in release builds, to reduce the
 		// generated WASM binary size.
 		args = append(args, "-trimpath", "-ldflags", "-s -w")
+	} else if *devControl != "" {
+		args = append(args, "-ldflags", fmt.Sprintf("-X 'main.ControlURL=%v'", *devControl))
 	}
 	args = append(args, "-o", "src/main.wasm", "./wasm")
 	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), args...)

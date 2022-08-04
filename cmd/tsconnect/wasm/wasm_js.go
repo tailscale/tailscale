@@ -42,6 +42,9 @@ import (
 	"tailscale.com/words"
 )
 
+// ControlURL defines the URL to be used for connection to Control.
+var ControlURL = ipn.DefaultControlURL
+
 func main() {
 	js.Global().Set("newIPN", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) != 1 {
@@ -244,7 +247,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		err := i.lb.Start(ipn.Options{
 			StateKey: "wasm",
 			UpdatePrefs: &ipn.Prefs{
-				ControlURL:       ipn.DefaultControlURL,
+				ControlURL:       ControlURL,
 				RouteAll:         false,
 				AllowSingleHosts: true,
 				WantRunning:      true,
