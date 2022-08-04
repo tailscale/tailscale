@@ -340,6 +340,7 @@ func (v NetInfoView) HairPinning() opt.Bool           { return v.ж.HairPinning 
 func (v NetInfoView) WorkingIPv6() opt.Bool           { return v.ж.WorkingIPv6 }
 func (v NetInfoView) OSHasIPv6() opt.Bool             { return v.ж.OSHasIPv6 }
 func (v NetInfoView) WorkingUDP() opt.Bool            { return v.ж.WorkingUDP }
+func (v NetInfoView) WorkingICMPv4() opt.Bool         { return v.ж.WorkingICMPv4 }
 func (v NetInfoView) HavePortMap() bool               { return v.ж.HavePortMap }
 func (v NetInfoView) UPnP() opt.Bool                  { return v.ж.UPnP }
 func (v NetInfoView) PMP() opt.Bool                   { return v.ж.PMP }
@@ -357,6 +358,7 @@ var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	WorkingIPv6           opt.Bool
 	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
+	WorkingICMPv4         opt.Bool
 	HavePortMap           bool
 	UPnP                  opt.Bool
 	PMP                   opt.Bool

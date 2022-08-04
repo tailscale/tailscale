@@ -510,6 +510,10 @@ type NetInfo struct {
 	// WorkingUDP is whether the host has UDP internet connectivity.
 	WorkingUDP opt.Bool
 
+	// WorkingICMPv4 is whether ICMPv4 works.
+	// Empty means not checked.
+	WorkingICMPv4 opt.Bool
+
 	// HavePortMap is whether we have an existing portmap open
 	// (UPnP, PMP, or PCP).
 	HavePortMap bool `json:",omitempty"`
@@ -554,9 +558,9 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v portmap=%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
-		ni.WorkingUDP, ni.PreferredDERP,
+		ni.WorkingUDP, ni.WorkingICMPv4, ni.PreferredDERP,
 		ni.portMapSummary(),
 		ni.LinkType)
 }
@@ -600,6 +604,7 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
 		ni.OSHasIPv6 == ni2.OSHasIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&
+		ni.WorkingICMPv4 == ni2.WorkingICMPv4 &&
 		ni.HavePortMap == ni2.HavePortMap &&
 		ni.UPnP == ni2.UPnP &&
 		ni.PMP == ni2.PMP &&

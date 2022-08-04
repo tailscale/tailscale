@@ -757,6 +757,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	}
 	ni.WorkingIPv6.Set(report.IPv6)
 	ni.WorkingUDP.Set(report.UDP)
+	ni.WorkingICMPv4.Set(report.ICMPv4)
 	ni.PreferredDERP = report.PreferredDERP
 
 	if ni.PreferredDERP == 0 {

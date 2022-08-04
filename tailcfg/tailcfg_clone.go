@@ -156,6 +156,7 @@ var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	WorkingIPv6           opt.Bool
 	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
+	WorkingICMPv4         opt.Bool
 	HavePortMap           bool
 	UPnP                  opt.Bool
 	PMP                   opt.Bool
