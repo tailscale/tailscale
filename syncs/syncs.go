@@ -21,6 +21,49 @@ func initClosedChan() <-chan struct{} {
 	return ch
 }
 
+// AtomicValue is the generic version of atomic.Value.
+type AtomicValue[T any] struct {
+	v atomic.Value
+}
+
+// Load returns the value set by the most recent Store.
+// It returns the zero value for T if the value is empty.
+func (v *AtomicValue[T]) Load() T {
+	x, _ := v.LoadOk()
+	return x
+}
+
+// LoadOk is like Load but returns a boolean indicating whether the value was
+// loaded.
+func (v *AtomicValue[T]) LoadOk() (_ T, ok bool) {
+	x := v.v.Load()
+	if x != nil {
+		return x.(T), true
+	}
+	var zero T
+	return zero, false
+}
+
+// Store sets the value of the Value to x.
+func (v *AtomicValue[T]) Store(x T) {
+	v.v.Store(x)
+}
+
+// Swap stores new into Value and returns the previous value.
+// It returns the zero value for T if the value is empty.
+func (v *AtomicValue[T]) Swap(x T) (old T) {
+	oldV := v.v.Swap(x)
+	if oldV != nil {
+		return oldV.(T)
+	}
+	return old
+}
+
+// CompareAndSwap executes the compare-and-swap operation for the Value.
+func (v *AtomicValue[T]) CompareAndSwap(oldV, newV T) (swapped bool) {
+	return v.v.CompareAndSwap(oldV, newV)
+}
+
 // WaitGroupChan is like a sync.WaitGroup, but has a chan that closes
 // on completion that you can wait on. (This, you can only use the
 // value once)
