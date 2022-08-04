@@ -203,7 +203,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		if n.State != nil {
 			notifyState(*n.State)
 		}
-		if nm := n.NetMap; nm != nil && i.lb.State() == ipn.Running {
+		if nm := n.NetMap; nm != nil {
 			jsNetMap := jsNetMap{
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
