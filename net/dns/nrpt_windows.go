@@ -63,8 +63,8 @@ const _RP_FORCE = 1 // Flag for RefreshPolicyEx
 type nrptRuleDatabase struct {
 	logf               logger.Logf
 	watcher            *gpNotificationWatcher
-	isGPRefreshPending atomic.Value // of bool
-	mu                 sync.Mutex   // protects the fields below
+	isGPRefreshPending atomic.Bool
+	mu                 sync.Mutex // protects the fields below
 	ruleIDs            []string
 	isGPDirty          bool
 	writeAsGP          bool

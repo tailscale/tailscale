@@ -27,7 +27,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -69,7 +69,7 @@ type Client struct {
 	// by SetAddressFamilySelector. It's an atomic because it needs
 	// to be accessed by multiple racing routines started while
 	// Client.conn holds mu.
-	addrFamSelAtomic atomic.Value // of AddressFamilySelector
+	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
 	mu           sync.Mutex
 	preferred    bool

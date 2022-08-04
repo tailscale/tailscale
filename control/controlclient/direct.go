@@ -23,7 +23,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -41,6 +40,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -939,8 +939,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			if resp.Debug.GoroutineDumpURL != "" {
 				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
-			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
-			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
+			controlUseDERPRoute.Store(resp.Debug.DERPRoute)
+			controlTrimWGConfig.Store(resp.Debug.TrimWGConfig)
 			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep); err != nil {
 					return err
@@ -1151,29 +1151,20 @@ var clockNow = time.Now
 
 // opt.Bool configs from control.
 var (
-	controlUseDERPRoute atomic.Value // of opt.Bool
-	controlTrimWGConfig atomic.Value // of opt.Bool
+	controlUseDERPRoute syncs.AtomicValue[opt.Bool]
+	controlTrimWGConfig syncs.AtomicValue[opt.Bool]
 )
-
-func setControlAtomic(dst *atomic.Value, v opt.Bool) {
-	old, ok := dst.Load().(opt.Bool)
-	if !ok || old != v {
-		dst.Store(v)
-	}
-}
 
 // DERPRouteFlag reports the last reported value from control for whether
 // DERP route optimization (Issue 150) should be enabled.
 func DERPRouteFlag() opt.Bool {
-	v, _ := controlUseDERPRoute.Load().(opt.Bool)
-	return v
+	return controlUseDERPRoute.Load()
 }
 
 // TrimWGConfig reports the last reported value from control for whether
 // we should do lazy wireguard configuration.
 func TrimWGConfig() opt.Bool {
-	v, _ := controlTrimWGConfig.Load().(opt.Bool)
-	return v
+	return controlTrimWGConfig.Load()
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled

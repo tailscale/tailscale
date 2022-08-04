@@ -341,8 +341,7 @@ func run(prog string, args ...string) error {
 }
 
 func (t *Wrapper) destMAC() [6]byte {
-	mac, _ := t.destMACAtomic.Load().([6]byte)
-	return mac
+	return t.destMACAtomic.Load()
 }
 
 func (t *Wrapper) tapWrite(buf []byte, offset int) (int, error) {

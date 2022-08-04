@@ -17,7 +17,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -36,6 +35,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
@@ -107,11 +107,11 @@ type userspaceEngine struct {
 	// isLocalAddr reports the whether an IP is assigned to the local
 	// tunnel interface. It's used to reflect local packets
 	// incorrectly sent to us.
-	isLocalAddr atomic.Value // of func(netip.Addr)bool
+	isLocalAddr syncs.AtomicValue[func(netip.Addr) bool]
 
 	// isDNSIPOverTailscale reports the whether a DNS resolver's IP
 	// is being routed over Tailscale.
-	isDNSIPOverTailscale atomic.Value // of func(netip.Addr)bool
+	isDNSIPOverTailscale syncs.AtomicValue[func(netip.Addr) bool]
 
 	wgLock              sync.Mutex // serializes all wgdev operations; see lock order comment below
 	lastCfgFull         wgcfg.Config
@@ -497,7 +497,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 	}
 
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		isLocalAddr, ok := e.isLocalAddr.Load().(func(netip.Addr) bool)
+		isLocalAddr, ok := e.isLocalAddr.LoadOk()
 		if !ok {
 			e.logf("[unexpected] e.isLocalAddr was nil, can't check for loopback packet")
 		} else if isLocalAddr(p.Dst.Addr()) {
@@ -1621,7 +1621,7 @@ type fwdDNSLinkSelector struct {
 }
 
 func (ls fwdDNSLinkSelector) PickLink(ip netip.Addr) (linkName string) {
-	if ls.ue.isDNSIPOverTailscale.Load().(func(netip.Addr) bool)(ip) {
+	if ls.ue.isDNSIPOverTailscale.Load()(ip) {
 		return ls.tunName
 	}
 	return ""

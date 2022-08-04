@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -22,6 +21,7 @@ import (
 	"github.com/alexbrainman/sspi/negotiate"
 	"golang.org/x/sys/windows"
 	"tailscale.com/hostinfo"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpver"
 )
@@ -155,10 +155,10 @@ const win8dot1Ver = "6.3"
 
 // accessType is the flag we must pass to WinHttpOpen for proxy resolution
 // depending on whether or not we're running Windows < 8.1
-var accessType atomic.Value // of uint32
+var accessType syncs.AtomicValue[uint32]
 
 func getAccessFlag() uint32 {
-	if flag, ok := accessType.Load().(uint32); ok {
+	if flag, ok := accessType.LoadOk(); ok {
 		return flag
 	}
 	var flag uint32

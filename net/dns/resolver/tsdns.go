@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -29,6 +28,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/syncs"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
@@ -495,7 +495,7 @@ type resolvConfCache struct {
 
 // resolvConfCacheValue contains the most recent stat metadata and parsed
 // version of /etc/resolv.conf.
-var resolvConfCacheValue atomic.Value // of resolvConfCache
+var resolvConfCacheValue syncs.AtomicValue[resolvConfCache]
 
 var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 
@@ -510,7 +510,7 @@ func stubResolverForOS() (ip netip.Addr, err error) {
 		mod:  fi.ModTime(),
 		size: fi.Size(),
 	}
-	if c, ok := resolvConfCacheValue.Load().(resolvConfCache); ok && c.mod == cur.mod && c.size == cur.size {
+	if c, ok := resolvConfCacheValue.LoadOk(); ok && c.mod == cur.mod && c.size == cur.size {
 		return c.ip, nil
 	}
 	conf, err := resolvconffile.ParseFile(resolvconffile.Path)

@@ -40,6 +40,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/paths"
 	"tailscale.com/portlist"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/dnstype"
@@ -130,7 +131,7 @@ type LocalBackend struct {
 	shutdownCalled        bool // if Shutdown has been called
 
 	filterAtomic            atomic.Pointer[filter.Filter]
-	containsViaIPFuncAtomic atomic.Value // of func(netip.Addr) bool
+	containsViaIPFuncAtomic syncs.AtomicValue[func(netip.Addr) bool]
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -1500,17 +1501,17 @@ func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 var panicOnMachineKeyGeneration = envknob.Bool("TS_DEBUG_PANIC_MACHINE_KEY")
 
 func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePrivate, error) {
-	var cache atomic.Value
+	var cache syncs.AtomicValue[key.MachinePrivate]
 	return func() (key.MachinePrivate, error) {
 		if panicOnMachineKeyGeneration {
 			panic("machine key generated")
 		}
-		if v, ok := cache.Load().(key.MachinePrivate); ok {
+		if v, ok := cache.LoadOk(); ok {
 			return v, nil
 		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		if v, ok := cache.Load().(key.MachinePrivate); ok {
+		if v, ok := cache.LoadOk(); ok {
 			return v, nil
 		}
 		if err := b.initMachineKeyLocked(); err != nil {
@@ -1522,11 +1523,11 @@ func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePriva
 }
 
 func (b *LocalBackend) createGetNLPublicKeyFunc() func() (key.NLPublic, error) {
-	var cache atomic.Value
+	var cache syncs.AtomicValue[key.NLPublic]
 	return func() (key.NLPublic, error) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		if v, ok := cache.Load().(key.NLPublic); ok {
+		if v, ok := cache.LoadOk(); ok {
 			return v, nil
 		}
 
@@ -2524,8 +2525,7 @@ func (b *LocalBackend) TailscaleVarRoot() string {
 	}
 	switch runtime.GOOS {
 	case "ios", "android", "darwin":
-		dir, _ := paths.AppSharedDir.Load().(string)
-		return dir
+		return paths.AppSharedDir.Load()
 	}
 	return ""
 }
@@ -3058,7 +3058,7 @@ func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && ca
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
 func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
-	if f, ok := b.containsViaIPFuncAtomic.Load().(func(netip.Addr) bool); ok {
+	if f, ok := b.containsViaIPFuncAtomic.LoadOk(); ok {
 		return f(ip)
 	}
 	return false

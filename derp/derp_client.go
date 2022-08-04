@@ -13,11 +13,11 @@ import (
 	"io"
 	"net/netip"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -39,8 +39,8 @@ type Client struct {
 	rate *rate.Limiter // if non-nil, rate limiter to use
 
 	// Owned by Recv:
-	peeked  int          // bytes to discard on next Recv
-	readErr atomic.Value // of error; sticky (set by Recv)
+	peeked  int                      // bytes to discard on next Recv
+	readErr syncs.AtomicValue[error] // sticky (set by Recv)
 }
 
 // ClientOpt is an option passed to NewClient.
@@ -445,7 +445,7 @@ func (c *Client) Recv() (m ReceivedMessage, err error) {
 }
 
 func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err error) {
-	readErr, _ := c.readErr.Load().(error)
+	readErr := c.readErr.Load()
 	if readErr != nil {
 		return nil, readErr
 	}

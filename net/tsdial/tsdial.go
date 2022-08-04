@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,8 +41,6 @@ type Dialer struct {
 	// NetstackDialTCP dials the provided IPPort using netstack.
 	// If nil, it's not used.
 	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
-
-	peerDialControlFuncAtomic atomic.Value // of func() func(network, address string, c syscall.RawConn) error
 
 	peerClientOnce sync.Once
 	peerClient     *http.Client

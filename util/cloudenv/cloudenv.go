@@ -14,8 +14,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	"tailscale.com/syncs"
 )
 
 // CommonNonRoutableMetadataIP is the IP address of the metadata server
@@ -69,15 +70,14 @@ func (c Cloud) HasInternalTLD() bool {
 	return false
 }
 
-var cloudAtomic atomic.Value // of Cloud
+var cloudAtomic syncs.AtomicValue[Cloud]
 
 // Get returns the current cloud, or the empty string if unknown.
 func Get() Cloud {
-	c, ok := cloudAtomic.Load().(Cloud)
-	if ok {
+	if c, ok := cloudAtomic.LoadOk(); ok {
 		return c
 	}
-	c = getCloud()
+	c := getCloud()
 	cloudAtomic.Store(c) // even if empty
 	return c
 }

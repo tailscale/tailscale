@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -46,7 +47,7 @@ var (
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 )
 
-var mainError atomic.Value // of error
+var mainError syncs.AtomicValue[error]
 
 func TestMain(m *testing.M) {
 	// Have to disable UPnP which hits the network, otherwise it fails due to HTTP proxy.
@@ -57,7 +58,7 @@ func TestMain(m *testing.M) {
 	if v != 0 {
 		os.Exit(v)
 	}
-	if err, ok := mainError.Load().(error); ok {
+	if err := mainError.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
@@ -936,14 +937,11 @@ func (n *testNode) MustStatus() *ipnstate.Status {
 // HTTP traffic tries to leave localhost from tailscaled. We don't
 // expect any, so any request triggers a failure.
 type trafficTrap struct {
-	atomicErr atomic.Value // of error
+	atomicErr syncs.AtomicValue[error]
 }
 
 func (tt *trafficTrap) Err() error {
-	if err, ok := tt.atomicErr.Load().(error); ok {
-		return err
-	}
-	return nil
+	return tt.atomicErr.Load()
 }
 
 func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {

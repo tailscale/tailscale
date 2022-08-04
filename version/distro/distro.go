@@ -9,7 +9,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync/atomic"
+
+	"tailscale.com/syncs"
 )
 
 type Distro string
@@ -28,14 +29,14 @@ const (
 	WDMyCloud = Distro("wdmycloud")
 )
 
-var distroAtomic atomic.Value // of Distro
+var distroAtomic syncs.AtomicValue[Distro]
 
 // Get returns the current distro, or the empty string if unknown.
 func Get() Distro {
-	d, ok := distroAtomic.Load().(Distro)
-	if ok {
+	if d, ok := distroAtomic.LoadOk(); ok {
 		return d
 	}
+	var d Distro
 	switch runtime.GOOS {
 	case "linux":
 		d = linuxDistro()
