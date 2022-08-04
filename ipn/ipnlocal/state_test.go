@@ -7,6 +7,7 @@ package ipnlocal
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -91,7 +91,7 @@ type mockControl struct {
 	opts       controlclient.Options
 	logfActual logger.Logf
 	statusFunc func(controlclient.Status)
-	preventLog syncs.AtomicBool
+	preventLog atomic.Bool
 
 	mu          sync.Mutex
 	calls       []string
@@ -108,7 +108,7 @@ func newMockControl(tb testing.TB) *mockControl {
 }
 
 func (cc *mockControl) logf(format string, args ...any) {
-	if cc.preventLog.Get() || cc.logfActual == nil {
+	if cc.preventLog.Load() || cc.logfActual == nil {
 		return
 	}
 	cc.logfActual(format, args...)
@@ -292,7 +292,7 @@ func TestStateMachine(t *testing.T) {
 
 	cc := newMockControl(t)
 	cc.statusFunc = b.setClientStatus
-	t.Cleanup(func() { cc.preventLog.Set(true) }) // hacky way to pacify issue 3020
+	t.Cleanup(func() { cc.preventLog.Store(true) }) // hacky way to pacify issue 3020
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
@@ -311,7 +311,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(0)
 
 	b.SetNotifyCallback(func(n ipn.Notify) {
-		if cc.preventLog.Get() {
+		if cc.preventLog.Load() {
 			return
 		}
 		if n.State != nil ||
@@ -920,7 +920,7 @@ func TestStateMachine(t *testing.T) {
 
 type testStateStorage struct {
 	mem     mem.Store
-	written syncs.AtomicBool
+	written atomic.Bool
 }
 
 func (s *testStateStorage) ReadState(id ipn.StateKey) ([]byte, error) {
@@ -928,18 +928,18 @@ func (s *testStateStorage) ReadState(id ipn.StateKey) ([]byte, error) {
 }
 
 func (s *testStateStorage) WriteState(id ipn.StateKey, bs []byte) error {
-	s.written.Set(true)
+	s.written.Store(true)
 	return s.mem.WriteState(id, bs)
 }
 
 // awaitWrite clears the "I've seen writes" bit, in prep for a future
 // call to sawWrite to see if a write arrived.
-func (s *testStateStorage) awaitWrite() { s.written.Set(false) }
+func (s *testStateStorage) awaitWrite() { s.written.Store(false) }
 
 // sawWrite reports whether there's been a WriteState call since the most
 // recent awaitWrite call.
 func (s *testStateStorage) sawWrite() bool {
-	v := s.written.Get()
+	v := s.written.Load()
 	s.awaitWrite()
 	return v
 }

@@ -29,7 +29,6 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/syncs"
 	"tailscale.com/version/distro"
 )
 
@@ -230,8 +229,6 @@ var rootArgs struct {
 	socket string
 }
 
-var gotSignal syncs.AtomicBool
-
 func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
 	s := safesocket.DefaultConnectionStrategy(rootArgs.socket)
 	c, err := safesocket.Connect(s)
@@ -257,7 +254,6 @@ func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context
 			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 			return
 		}
-		gotSignal.Set(true)
 		c.Close()
 		cancel()
 	}()

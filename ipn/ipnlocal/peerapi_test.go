@@ -504,7 +504,7 @@ func TestDeletedMarkers(t *testing.T) {
 
 	nothingWaiting := func() {
 		t.Helper()
-		ps.knownEmpty.Set(false)
+		ps.knownEmpty.Store(false)
 		if ps.hasFilesWaiting() {
 			t.Fatal("unexpected files waiting")
 		}

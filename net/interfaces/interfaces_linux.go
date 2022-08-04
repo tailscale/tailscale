@@ -17,13 +17,13 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/util/lineread"
 )
 
@@ -31,7 +31,7 @@ func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPLinux
 }
 
-var procNetRouteErr syncs.AtomicBool
+var procNetRouteErr atomic.Bool
 
 // errStopReading is a sentinel error value used internally by
 // lineread.File callers to stop reading. It doesn't escape to
@@ -47,7 +47,7 @@ ens18   00000000        0100000A        0003    0       0       0       00000000
 ens18   0000000A        00000000        0001    0       0       0       0000FFFF        0       0       0
 */
 func likelyHomeRouterIPLinux() (ret netip.Addr, ok bool) {
-	if procNetRouteErr.Get() {
+	if procNetRouteErr.Load() {
 		// If we failed to read /proc/net/route previously, don't keep trying.
 		// But if we're on Android, go into the Android path.
 		if runtime.GOOS == "android" {
@@ -93,7 +93,7 @@ func likelyHomeRouterIPLinux() (ret netip.Addr, ok bool) {
 		err = nil
 	}
 	if err != nil {
-		procNetRouteErr.Set(true)
+		procNetRouteErr.Store(true)
 		if runtime.GOOS == "android" {
 			return likelyHomeRouterIPAndroid()
 		}
