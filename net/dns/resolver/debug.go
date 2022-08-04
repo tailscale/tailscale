@@ -24,8 +24,8 @@ func init() {
 		} else if n > 10000 {
 			n = 10000
 		}
-		fl, ok := fwdLogAtomic.Load().(*fwdLog)
-		if !ok || n != len(fl.ent) {
+		fl := fwdLogAtomic.Load()
+		if fl == nil || n != len(fl.ent) {
 			fl = &fwdLog{ent: make([]fwdLogEntry, n)}
 			fwdLogAtomic.Store(fl)
 		}
@@ -33,7 +33,7 @@ func init() {
 	}))
 }
 
-var fwdLogAtomic atomic.Value // of *fwdLog
+var fwdLogAtomic atomic.Pointer[fwdLog]
 
 type fwdLog struct {
 	mu  sync.Mutex

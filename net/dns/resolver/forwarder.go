@@ -688,7 +688,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 	}
 
-	if fl, ok := fwdLogAtomic.Load().(*fwdLog); ok {
+	if fl := fwdLogAtomic.Load(); fl != nil {
 		fl.addName(string(domain))
 	}
 

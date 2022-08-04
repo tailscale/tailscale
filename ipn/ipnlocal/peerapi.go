@@ -973,8 +973,8 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// ourselves. As a proxy for autogroup:internet access, we see
 	// if we would've accepted a packet to 0.0.0.0:53. We treat
 	// the IP 0.0.0.0 as being "the internet".
-	f, ok := b.filterAtomic.Load().(*filter.Filter)
-	if !ok {
+	f := b.filterAtomic.Load()
+	if f == nil {
 		return false
 	}
 	// Note: we check TCP here because the Filter type already had

@@ -130,7 +130,7 @@ type LocalBackend struct {
 	sshAtomicBool         syncs.AtomicBool
 	shutdownCalled        bool // if Shutdown has been called
 
-	filterAtomic            atomic.Value // of *filter.Filter
+	filterAtomic            atomic.Pointer[filter.Filter]
 	containsViaIPFuncAtomic atomic.Value // of func(netip.Addr) bool
 
 	// The mutex protects the following elements.
@@ -577,8 +577,8 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 	if b.netMap == nil {
 		return nil
 	}
-	filt, ok := b.filterAtomic.Load().(*filter.Filter)
-	if !ok {
+	filt := b.filterAtomic.Load()
+	if filt == nil {
 		return nil
 	}
 	for _, a := range b.netMap.Addresses {

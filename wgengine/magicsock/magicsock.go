@@ -305,9 +305,9 @@ type Conn struct {
 	// derpMapAtomic is the same as derpMap, but without requiring
 	// sync.Mutex. For use with NewRegionClient's callback, to avoid
 	// lock ordering deadlocks. See issue 3726 and mu field docs.
-	derpMapAtomic atomic.Value // of *tailcfg.DERPMap
+	derpMapAtomic atomic.Pointer[tailcfg.DERPMap]
 
-	lastNetCheckReport atomic.Value // of *netcheck.Report
+	lastNetCheckReport atomic.Pointer[netcheck.Report]
 
 	// port is the preferred port from opts.Port; 0 means auto.
 	port syncs.AtomicUint32
@@ -1357,7 +1357,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 			// We're closing anyway; return nil to stop dialing.
 			return nil
 		}
-		derpMap, _ := c.derpMapAtomic.Load().(*tailcfg.DERPMap)
+		derpMap := c.derpMapAtomic.Load()
 		if derpMap == nil {
 			return nil
 		}
@@ -4142,7 +4142,7 @@ func (di *discoInfo) setNodeKey(nk key.NodePublic) {
 type derpAddrFamSelector struct{ c *Conn }
 
 func (s derpAddrFamSelector) PreferIPv6() bool {
-	if r, ok := s.c.lastNetCheckReport.Load().(*netcheck.Report); ok {
+	if r := s.c.lastNetCheckReport.Load(); r != nil {
 		return r.IPv6
 	}
 	return false
