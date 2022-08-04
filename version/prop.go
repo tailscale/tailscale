@@ -9,7 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
+
+	"tailscale.com/syncs"
 )
 
 // IsMobile reports whether this is a mobile client build.
@@ -43,7 +44,7 @@ func IsSandboxedMacOS() bool {
 	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
 }
 
-var isMacSysExt atomic.Value // of bool
+var isMacSysExt syncs.AtomicValue[bool]
 
 // IsMacSysExt whether this binary is from the standalone "System
 // Extension" (a.k.a. "macsys") version of Tailscale for macOS.
@@ -51,7 +52,7 @@ func IsMacSysExt() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
-	if b, ok := isMacSysExt.Load().(bool); ok {
+	if b, ok := isMacSysExt.LoadOk(); ok {
 		return b
 	}
 	exe, err := os.Executable()

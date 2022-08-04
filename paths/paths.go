@@ -10,14 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
 
+	"tailscale.com/syncs"
 	"tailscale.com/version/distro"
 )
 
 // AppSharedDir is a string set by the iOS or Android app on start
 // containing a directory we can read/write in.
-var AppSharedDir atomic.Value // of string
+var AppSharedDir syncs.AtomicValue[string]
 
 // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
 // or the empty string if there's no reasonable default.

@@ -107,3 +107,13 @@ func (k NLPublic) MarshalText() ([]byte, error) {
 func (k NLPublic) Verifier() ed25519.PublicKey {
 	return ed25519.PublicKey(k.k[:])
 }
+
+// IsZero reports whether k is the zero value.
+func (k NLPublic) IsZero() bool {
+	return k.Equal(NLPublic{})
+}
+
+// Equal reports whether k and other are the same key.
+func (k NLPublic) Equal(other NLPublic) bool {
+	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
+}

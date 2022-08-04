@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"tailscale.com/syncs"
 	"tailscale.com/util/winutil"
 )
 
@@ -20,10 +20,10 @@ func init() {
 	packageType = packageTypeWindows
 }
 
-var winVerCache atomic.Value // of string
+var winVerCache syncs.AtomicValue[string]
 
 func osVersionWindows() string {
-	if s, ok := winVerCache.Load().(string); ok {
+	if s, ok := winVerCache.LoadOk(); ok {
 		return s
 	}
 	major, minor, build := windows.RtlGetNtVersionNumbers()

@@ -264,7 +264,7 @@ type Conn struct {
 
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
-	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
+	stunReceiveFunc syncs.AtomicValue[func(p []byte, fromAddr netip.AddrPort)]
 
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
@@ -300,7 +300,7 @@ type Conn struct {
 
 	// havePrivateKey is whether privateKey is non-zero.
 	havePrivateKey  atomic.Bool
-	publicKeyAtomic atomic.Value // of key.NodePublic (or NodeKey zero value if !havePrivateKey)
+	publicKeyAtomic syncs.AtomicValue[key.NodePublic] // or NodeKey zero value if !havePrivateKey
 
 	// derpMapAtomic is the same as derpMap, but without requiring
 	// sync.Mutex. For use with NewRegionClient's callback, to avoid
@@ -1668,7 +1668,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 // caller).
 func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
 	if stun.Is(b) {
-		c.stunReceiveFunc.Load().(func([]byte, netip.AddrPort))(b, ipp)
+		c.stunReceiveFunc.Load()(b, ipp)
 		return nil, false
 	}
 	if c.handleDiscoMessage(b, ipp, key.NodePublic{}) {
@@ -2979,10 +2979,8 @@ type RebindingUDPConn struct {
 	// check pconn (after acquiring mu) to see if there's been a rebind
 	// meanwhile.
 	// pconn isn't really needed, but makes some of the code simpler
-	// to keep it in a type safe form. TODO(bradfitz): really we should make a generic
-	// atomic.Value. Unfortunately Go 1.19's atomic.Pointer[T] is only for pointers,
-	// not interfaces.
-	pconnAtomic atomic.Value // of nettype.PacketConn
+	// to keep it in a type safe form.
+	pconnAtomic syncs.AtomicValue[nettype.PacketConn]
 
 	mu    sync.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
@@ -3004,7 +3002,7 @@ func (c *RebindingUDPConn) currentConn() nettype.PacketConn {
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
-		pconn := c.pconnAtomic.Load().(nettype.PacketConn)
+		pconn := c.pconnAtomic.Load()
 		n, addr, err := pconn.ReadFrom(b)
 		if err != nil && pconn != c.currentConn() {
 			continue
@@ -3022,7 +3020,7 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 // when c's underlying connection is a net.UDPConn.
 func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netip.AddrPort, err error) {
 	for {
-		pconn := c.pconnAtomic.Load().(nettype.PacketConn)
+		pconn := c.pconnAtomic.Load()
 
 		// Optimization: Treat *net.UDPConn specially.
 		// This lets us avoid allocations by calling ReadFromUDPAddrPort.
@@ -3081,7 +3079,7 @@ func (c *RebindingUDPConn) closeLocked() error {
 
 func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	for {
-		pconn := c.pconnAtomic.Load().(nettype.PacketConn)
+		pconn := c.pconnAtomic.Load()
 
 		n, err := pconn.WriteTo(b, addr)
 		if err != nil {
@@ -3095,7 +3093,7 @@ func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 
 func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
 	for {
-		pconn := c.pconnAtomic.Load().(nettype.PacketConn)
+		pconn := c.pconnAtomic.Load()
 
 		n, err := pconn.WriteToUDPAddrPort(b, addr)
 		if err != nil {
@@ -3643,10 +3641,9 @@ func (de *endpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 // The caller should use de.discoKey as the discoKey argument.
 // It is passed in so that sendDiscoPing doesn't need to lock de.mu.
 func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, txid stun.TxID, logLevel discoLogLevel) {
-	selfPubKey, _ := de.c.publicKeyAtomic.Load().(key.NodePublic)
 	sent, _ := de.c.sendDiscoMessage(ep, de.publicKey, discoKey, &disco.Ping{
 		TxID:    [12]byte(txid),
-		NodeKey: selfPubKey,
+		NodeKey: de.c.publicKeyAtomic.Load(),
 	}, logLevel)
 	if !sent {
 		de.forgetPing(txid)

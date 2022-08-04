@@ -117,7 +117,7 @@ type Impl struct {
 	// is a local (non-subnet) Tailscale IP address of this
 	// machine. It's always a non-nil func. It's changed on netmap
 	// updates.
-	atomicIsLocalIPFunc atomic.Value // of func(netip.Addr) bool
+	atomicIsLocalIPFunc syncs.AtomicValue[func(netip.Addr) bool]
 
 	mu sync.Mutex
 	// connsOpenBySubnetIP keeps track of number of connections open
@@ -513,7 +513,7 @@ func (ns *Impl) inject() {
 // isLocalIP reports whether ip is a Tailscale IP assigned to this
 // node directly (but not a subnet-routed IP).
 func (ns *Impl) isLocalIP(ip netip.Addr) bool {
-	return ns.atomicIsLocalIPFunc.Load().(func(netip.Addr) bool)(ip)
+	return ns.atomicIsLocalIPFunc.Load()(ip)
 }
 
 func (ns *Impl) processSSH() bool {
