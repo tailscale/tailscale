@@ -29,6 +29,7 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derptrace"
 	"tailscale.com/metrics"
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
@@ -53,6 +54,10 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	// Tracing
+	collectorAddr = flag.String("collector-addr", "", "optional tracing collector address, if empty tracing is no op.")
+	sampleRate    = flag.Float64("sample-rate", 0.01, "adjust sample rate of tracing. default at 1%")
 )
 
 var (
@@ -72,6 +77,7 @@ var (
 )
 
 func init() {
+
 	stats.Set("counter_requests", stunDisposition)
 	stats.Set("counter_addrfamily", stunAddrFamily)
 	expvar.Publish("stun", stats)
@@ -144,6 +150,19 @@ func main() {
 	}
 
 	cfg := loadConfig()
+
+	if *collectorAddr != "" || *dev {
+		ctx := context.Background()
+		shutdown, err := derptrace.InitTracing(ctx, *collectorAddr, *hostname, *sampleRate)
+		if err != nil {
+			log.Fatalf("unable to initialize tracing: %v", err)
+		}
+		defer func() {
+			if err := shutdown(ctx); err != nil {
+				log.Fatalf("failed to shut down TracerProvider: %v", err)
+			}
+		}()
+	}
 
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
 

@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"tailscale.com/derp"
 )
 
@@ -56,6 +59,10 @@ func Handler(s *derp.Server) http.Handler {
 				pubKey.UntypedHexString())
 		}
 
-		s.Accept(r.Context(), netConn, conn, netConn.RemoteAddr().String())
+		tracer := otel.Tracer("")
+		ctx, span := tracer.Start(r.Context(), "/derp", trace.WithAttributes(attribute.KeyValue{Key: "ID", Value: attribute.StringValue("a")}))
+		defer span.End()
+
+		s.Accept(ctx, netConn, conn, netConn.RemoteAddr().String())
 	})
 }

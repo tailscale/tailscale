@@ -34,6 +34,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
@@ -710,6 +713,11 @@ var (
 // run serves the client until there's an error.
 // If the client hangs up or the server is closed, run returns nil, otherwise run returns an error.
 func (c *sclient) run(ctx context.Context) error {
+
+	tracer := otel.Tracer("")
+	ctx, span := tracer.Start(ctx, "run", trace.WithAttributes(attribute.KeyValue{Key: "NodeKey", Value: attribute.StringValue(c.key.String())}))
+	defer span.End()
+
 	// Launch sender, but don't return from run until sender goroutine is done.
 	var grp errgroup.Group
 	sendCtx, cancelSender := context.WithCancel(ctx)
@@ -732,26 +740,42 @@ func (c *sclient) run(ctx context.Context) error {
 				c.logf("closing; server closed")
 				return nil
 			}
+			span.RecordError(err)
 			return fmt.Errorf("client %x: readFrameHeader: %w", c.key, err)
 		}
 		c.s.noteClientActivity(c)
 		switch ft {
 		case frameNotePreferred:
+			_, span := tracer.Start(ctx, "note preferred")
 			err = c.handleFrameNotePreferred(ft, fl)
+			span.End()
 		case frameSendPacket:
+			_, span := tracer.Start(ctx, "send packet")
 			err = c.handleFrameSendPacket(ft, fl)
+			span.End()
 		case frameForwardPacket:
+			_, span := tracer.Start(ctx, "forward packet")
 			err = c.handleFrameForwardPacket(ft, fl)
+			span.End()
 		case frameWatchConns:
+			_, span := tracer.Start(ctx, "watch conns")
 			err = c.handleFrameWatchConns(ft, fl)
+			span.End()
 		case frameClosePeer:
+			_, span := tracer.Start(ctx, "close peer")
 			err = c.handleFrameClosePeer(ft, fl)
+			span.End()
 		case framePing:
+			_, span := tracer.Start(ctx, "ping")
 			err = c.handleFramePing(ft, fl)
+			span.End()
 		default:
+			_, span := tracer.Start(ctx, "unknown")
 			err = c.handleUnknownFrame(ft, fl)
+			span.End()
 		}
 		if err != nil {
+			span.RecordError(err)
 			return err
 		}
 	}

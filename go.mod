@@ -2,6 +2,22 @@ module tailscale.com
 
 go 1.19
 
+replace go.opentelemetry.io/otel/exporters/otlp/otlptrace => github.com/tailscale/opentelemetry-go/exporters/otlp/otlptrace v1.9.0-ts
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp => github.com/tailscale/opentelemetry-go/exporters/otlp/otlptrace/otlptracehttp v1.9.0-ts
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlpconfig => github.com/tailscale/opentelemetry-go/exporters/otlp/otlpconfig v1.9.0-ts
+
+replace go.opentelemetry.io/otel => github.com/tailscale/opentelemetry-go v1.9.0-ts
+
+replace go.opentelemetry.io/otel/sdk => github.com/tailscale/opentelemetry-go/sdk v1.9.0-ts
+
+replace go.opentelemetry.io/otel/trace => github.com/tailscale/opentelemetry-go/trace v1.9.0-ts
+
+replace go.opentelemetry.io/otel/exporters/otlp/internal/retry => github.com/tailscale/opentelemetry-go/exporters/otlp/internal/retry v1.9.0-ts
+
+replace go.opentelemetry.io/proto/otlp => github.com/tailscale/opentelemetry-proto-go/otlp v0.18.0-ts
+
 require (
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0
@@ -53,6 +69,11 @@ require (
 	github.com/toqueteos/webbrowser v1.2.0
 	github.com/u-root/u-root v0.8.0
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
+	go.opentelemetry.io/otel v1.9.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.9.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.8.0
+	go.opentelemetry.io/otel/sdk v1.9.0
+	go.opentelemetry.io/otel/trace v1.9.0
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf
 	golang.org/x/crypto v0.0.0-20220427172511-eb4f295cb31f
@@ -110,6 +131,7 @@ require (
 	github.com/breml/bidichk v0.2.1 // indirect
 	github.com/butuzov/ireturn v0.1.1 // indirect
 	github.com/cavaliercoder/go-cpio v0.0.0-20180626203310-925f9528c45e // indirect
+	github.com/cenkalti/backoff/v4 v4.1.3 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/charithe/durationcheck v0.0.9 // indirect
 	github.com/chavacava/garif v0.0.0-20210405164556-e8a0a408d6af // indirect
@@ -133,6 +155,8 @@ require (
 	github.com/go-git/gcfg v1.5.0 // indirect
 	github.com/go-git/go-billy/v5 v5.3.1 // indirect
 	github.com/go-git/go-git/v5 v5.4.2 // indirect
+	github.com/go-logr/logr v1.2.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-toolsmith/astcast v1.0.0 // indirect
 	github.com/go-toolsmith/astcopy v1.0.0 // indirect
 	github.com/go-toolsmith/astequal v1.0.1 // indirect
@@ -226,7 +250,7 @@ require (
 	github.com/quasilyte/go-ruleguard v0.3.13 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
-	github.com/rogpeppe/go-internal v1.8.1-0.20211023094830-115ce09fd6b4 // indirect
+	github.com/rogpeppe/go-internal v1.8.1 // indirect
 	github.com/ryancurrah/gomodguard v1.2.3 // indirect
 	github.com/ryanrolds/sqlclosecheck v0.3.0 // indirect
 	github.com/sanposhiho/wastedassign/v2 v2.0.7 // indirect
@@ -245,8 +269,8 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.9.0 // indirect
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
-	github.com/stretchr/objx v0.3.0 // indirect
-	github.com/stretchr/testify v1.7.0 // indirect
+	github.com/stretchr/objx v0.4.0 // indirect
+	github.com/stretchr/testify v1.7.5 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/sylvia7788/contextcheck v1.0.4 // indirect
 	github.com/tdakkota/asciicheck v0.1.1 // indirect
@@ -264,6 +288,8 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xanzy/ssh-agent v0.3.1 // indirect
 	github.com/yeya24/promlinter v0.1.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/internal/retry v1.9.0 // indirect
+	go.opentelemetry.io/proto/otlp v0.18.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
 	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
 	golang.org/x/text v0.3.7 // indirect
@@ -272,7 +298,7 @@ require (
 	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect
 	mvdan.cc/gofumpt v0.2.0 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect

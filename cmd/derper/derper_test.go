@@ -65,5 +65,4 @@ func BenchmarkServerSTUN(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-
 }
