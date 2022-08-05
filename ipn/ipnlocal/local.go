@@ -2792,14 +2792,12 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNA
 			rs.LocalRoutes = internalIPs // unconditionally allow access to guest VM networks
 			if prefs.ExitNodeAllowLANAccess {
 				rs.LocalRoutes = append(rs.LocalRoutes, externalIPs...)
-				if len(externalIPs) != 0 {
-					b.logf("allowing exit node access to internal IPs: %v", internalIPs)
-				}
 			} else {
 				// Explicitly add routes to the local network so that we do not
 				// leak any traffic.
 				rs.Routes = append(rs.Routes, externalIPs...)
 			}
+			b.logf("allowing exit node access to local IPs: %v", rs.LocalRoutes)
 		}
 	}
 
