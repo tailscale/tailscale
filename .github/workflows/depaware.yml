@@ -21,8 +21,8 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v3
 
-    - name: depaware tailscaled
-      run: go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
-
-    - name: depaware tailscale
-      run: go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscale
+    - name: depaware
+      run: go run github.com/tailscale/depaware --check
+        tailscale.com/cmd/tailscaled
+        tailscale.com/cmd/tailscale
+        tailscale.com/cmd/derper

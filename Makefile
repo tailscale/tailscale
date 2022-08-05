@@ -12,12 +12,16 @@ tidy:
 	./tool/go mod tidy
 
 updatedeps:
-	./tool/go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscaled
-	./tool/go run github.com/tailscale/depaware --update tailscale.com/cmd/tailscale
+	./tool/go run github.com/tailscale/depaware --update \
+		tailscale.com/cmd/tailscaled \
+		tailscale.com/cmd/tailscale \
+		tailscale.com/cmd/derper
 
 depaware:
-	./tool/go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscaled
-	./tool/go run github.com/tailscale/depaware --check tailscale.com/cmd/tailscale
+	./tool/go run github.com/tailscale/depaware --check \
+		tailscale.com/cmd/tailscaled \
+		tailscale.com/cmd/tailscale \
+		tailscale.com/cmd/derper
 
 buildwindows:
 	GOOS=windows GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
