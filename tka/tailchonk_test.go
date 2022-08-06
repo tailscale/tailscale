@@ -146,13 +146,17 @@ func TestTailchonkFS_Commit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := chonk.filename(aum.Hash()), "HJX3LPJJQVRFSQX4QONESBU4DUO5JPORA66ZUCFS6NHZWDZTP4"; got != want {
-		t.Errorf("aum filename = %q, want %q", got, want)
+	dir, base := chonk.aumDir(aum.Hash())
+	if got, want := dir, filepath.Join(chonk.base, "VU"); got != want {
+		t.Errorf("aum dir=%s, want %s", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(chonk.base, "ad", "HJX3LPJJQVRFSQX4QONESBU4DUO5JPORA66ZUCFS6NHZWDZTP4")); err != nil {
+	if want := "VU5G7NN5FGCWEWKC7SBZUSIGTQOR3VF52ED33GQIWLZU7GYPGN7Q"; base != want {
+		t.Errorf("aum base=%s, want %s", base, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, base)); err != nil {
 		t.Errorf("stat of AUM file failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(chonk.base, "67", "226TIYPDKQWKFD5MXUI3GRVDSDFXRBABNINTFIT5ADMCLZ464U")); err != nil {
+	if _, err := os.Stat(filepath.Join(chonk.base, "M7", "M7LL2NDB4NKCZIUPVS6RDM2GUOIMW6EEAFVBWMVCPUANQJPHT3SQ")); err != nil {
 		t.Errorf("stat of AUM parent failed: %v", err)
 	}
 }

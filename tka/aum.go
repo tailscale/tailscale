@@ -7,6 +7,7 @@ package tka
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base32"
 	"errors"
 	"fmt"
 
@@ -17,6 +18,32 @@ import (
 
 // AUMHash represents the BLAKE2s digest of an Authority Update Message (AUM).
 type AUMHash [blake2s.Size]byte
+
+var base32StdNoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// String returns the AUMHash encoded as base32.
+// This is suitable for use as a filename, and for storing in text-preferred media.
+func (h AUMHash) String() string {
+	return base32StdNoPad.EncodeToString(h[:])
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (h *AUMHash) UnmarshalText(text []byte) error {
+	if l := base32StdNoPad.DecodedLen(len(text)); l != len(h) {
+		return fmt.Errorf("tka.AUMHash.UnmarshalText: text wrong length: %d, want %d", l, len(text))
+	}
+	if _, err := base32StdNoPad.Decode(h[:], text); err != nil {
+		return fmt.Errorf("tka.AUMHash.UnmarshalText: %w", err)
+	}
+	return nil
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (h AUMHash) MarshalText() ([]byte, error) {
+	b := make([]byte, base32StdNoPad.EncodedLen(len(h)))
+	base32StdNoPad.Encode(b, h[:])
+	return b, nil
+}
 
 // AUMKind describes valid AUM types.
 type AUMKind uint8
