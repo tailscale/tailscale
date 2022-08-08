@@ -2,6 +2,8 @@ module tailscale.com
 
 go 1.19
 
+replace golang.zx2c4.com/wireguard => /Users/jwhited/code/wireguard-go
+
 require (
 	filippo.io/mkcert v1.4.3
 	github.com/akutz/memconn v0.1.0

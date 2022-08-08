@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"golang.org/x/net/ipv6"
 	"hash/fnv"
 	"math"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"golang.org/x/net/ipv4"
 	"golang.zx2c4.com/wireguard/conn"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
@@ -1179,6 +1181,25 @@ func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	return ep.(*endpoint).send(b)
 }
 
+func (c *Conn) SendV(buffs [][]byte, ep conn.Endpoint) error {
+	n := int64(len(buffs))
+	metricSendData.Add(n)
+	if n > 1 {
+		metricSendDataMultiPackets.Add(1)
+	} else {
+		metricSendDataSinglePacket.Add(1)
+	}
+	if c.networkDown() {
+		metricSendDataNetworkDown.Add(n)
+		return errNetworkDown
+	}
+	return ep.(*endpoint).sendv(buffs)
+}
+
+func (c *Conn) MaxVectorSize() int {
+	return maxVectorSize
+}
+
 var errConnClosed = errors.New("Conn closed")
 
 var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
@@ -1200,6 +1221,84 @@ func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 		}
 	}
 	return
+}
+
+const (
+	maxVectorSize = 20
+)
+
+type ipv4SendBatch struct {
+	ua   *net.UDPAddr
+	msgs []ipv4.Message
+}
+
+var ipv4SendBatchPool = &sync.Pool{
+	New: func() any {
+		ua := &net.UDPAddr{
+			IP: make([]byte, 4),
+		}
+		msgs := make([]ipv4.Message, maxVectorSize)
+		for i := range msgs {
+			msgs[i].Buffers = make([][]byte, 1)
+			msgs[i].Addr = ua
+		}
+		return &ipv4SendBatch{
+			ua:   ua,
+			msgs: msgs,
+		}
+	},
+}
+
+type ipv6SendBatch struct {
+	ua   *net.UDPAddr
+	msgs []ipv6.Message
+}
+
+var ipv6SendBatchPool = &sync.Pool{
+	New: func() any {
+		ua := &net.UDPAddr{
+			IP: make([]byte, 4),
+		}
+		msgs := make([]ipv6.Message, maxVectorSize)
+		for i := range msgs {
+			msgs[i].Buffers = make([][]byte, 1)
+			msgs[i].Addr = ua
+		}
+		return &ipv6SendBatch{
+			ua:   ua,
+			msgs: msgs,
+		}
+	},
+}
+
+func (c *Conn) sendUDPBatch(addr netip.AddrPort, buffs [][]byte) (sent bool, err error) {
+	switch {
+	case addr.Addr().Is4():
+		batch := ipv4SendBatchPool.Get().(*ipv4SendBatch)
+		as4 := addr.Addr().As4()
+		copy(batch.ua.IP, as4[:])
+		batch.ua.Port = int(addr.Port())
+		for i, buff := range buffs {
+			batch.msgs[i].Buffers[0] = buff
+		}
+		_, err := c.pconn4.WriteBatchIPv4(batch.msgs[:len(buffs)], 0)
+		ipv4SendBatchPool.Put(batch)
+		return err == nil, err
+	case addr.Addr().Is6():
+		batch := ipv6SendBatchPool.Get().(*ipv6SendBatch)
+		as16 := addr.Addr().As16()
+		copy(batch.ua.IP, as16[:])
+		batch.ua.Port = int(addr.Port())
+		for i, buff := range buffs {
+			batch.msgs[i].Buffers[0] = buff
+		}
+		_, err := c.pconn6.WriteBatchIPv6(batch.msgs[:len(buffs)], 0)
+		ipv6SendBatchPool.Put(batch)
+		return err == nil, err
+	default:
+		panic("bogus sendUDPBatch addr type")
+	}
+	return err == nil, err
 }
 
 // sendUDP sends UDP packet b to addr.
@@ -1631,6 +1730,77 @@ func (c *Conn) runDerpWriter(ctx context.Context, dc *derphttp.Client, ch <-chan
 	}
 }
 
+type ipv4ReceiveBatch struct {
+	msgs      []ipv4.Message
+	sizes     []int
+	endpoints []conn.Endpoint
+}
+
+type ipv6ReceiveBatch struct {
+	msgs      []ipv6.Message
+	sizes     []int
+	endpoints []conn.Endpoint
+}
+
+var (
+	ipv4RB *ipv4ReceiveBatch
+	ipv6RB *ipv6ReceiveBatch
+)
+
+func init() {
+	ipv4Msgs := make([]ipv4.Message, maxVectorSize)
+	ipv6Msgs := make([]ipv4.Message, maxVectorSize)
+	for i := range ipv4Msgs {
+		ipv4Msgs[i].Buffers = make([][]byte, 1)
+		ipv6Msgs[i].Buffers = make([][]byte, 1)
+	}
+	ipv4RB = &ipv4ReceiveBatch{
+		msgs:      ipv4Msgs,
+		sizes:     make([]int, maxVectorSize),
+		endpoints: make([]conn.Endpoint, maxVectorSize),
+	}
+	ipv6RB = &ipv6ReceiveBatch{
+		msgs:      ipv6Msgs,
+		sizes:     make([]int, maxVectorSize),
+		endpoints: make([]conn.Endpoint, maxVectorSize),
+	}
+}
+
+func (c *Conn) receiveMultipleIPv6(buffs [][]byte) (sizes []int, eps []conn.Endpoint, err error) {
+	health.ReceiveIPv6.Enter()
+	defer health.ReceiveIPv6.Exit()
+	for {
+		batch := ipv6RB
+		for i := range buffs {
+			batch.msgs[i].Buffers[0] = buffs[i]
+		}
+		numMsgs, err := c.pconn6.ReadBatchIPv6(batch.msgs, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := 0; i < numMsgs; i++ {
+			msg := &batch.msgs[i]
+			msg.Buffers[0] = msg.Buffers[0][:msg.N]
+			ipp := msg.Addr.(*net.UDPAddr).AddrPort()
+			if ep, ok := c.receiveIP(msg.Buffers[0], ipp, &c.ippEndpoint6); ok {
+				metricRecvDataIPv6.Add(1)
+				if numMsgs > 1 {
+					metricRecvDataMultiPackets.Add(1)
+				} else {
+					metricRecvDataSinglePacket.Add(1)
+				}
+				batch.sizes[i] = msg.N
+				batch.endpoints[i] = ep
+			} else {
+				batch.sizes[i] = 0
+			}
+		}
+		if len(batch.sizes) > 0 {
+			return batch.sizes[:numMsgs], batch.endpoints[:numMsgs], nil
+		}
+	}
+}
+
 // receiveIPv6 receives a UDP IPv6 packet. It is called by wireguard-go.
 func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 	health.ReceiveIPv6.Enter()
@@ -1643,6 +1813,41 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
 			metricRecvDataIPv6.Add(1)
 			return n, ep, nil
+		}
+	}
+}
+
+func (c *Conn) receiveMultipleIPv4(buffs [][]byte) ([]int, []conn.Endpoint, error) {
+	health.ReceiveIPv4.Enter()
+	defer health.ReceiveIPv4.Exit()
+	for {
+		batch := ipv4RB
+		for i := range buffs {
+			batch.msgs[i].Buffers[0] = buffs[i]
+		}
+		numMsgs, err := c.pconn4.ReadBatchIPv4(batch.msgs, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := 0; i < numMsgs; i++ {
+			msg := &batch.msgs[i]
+			msg.Buffers[0] = msg.Buffers[0][:msg.N]
+			ipp := msg.Addr.(*net.UDPAddr).AddrPort()
+			if ep, ok := c.receiveIP(msg.Buffers[0], ipp, &c.ippEndpoint4); ok {
+				metricRecvDataIPv4.Add(1)
+				if numMsgs > 1 {
+					metricRecvDataMultiPackets.Add(1)
+				} else {
+					metricRecvDataSinglePacket.Add(1)
+				}
+				batch.sizes[i] = msg.N
+				batch.endpoints[i] = ep
+			} else {
+				batch.sizes[i] = 0
+			}
+		}
+		if len(batch.sizes) > 0 {
+			return batch.sizes[:numMsgs], batch.endpoints[:numMsgs], nil
 		}
 	}
 }
@@ -1697,6 +1902,11 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 	}
 	ep.noteRecvActivity()
 	return ep, true
+}
+
+func (c *connBind) receiveMultipleDERP(b [][]byte) (sizes []int, eps []conn.Endpoint, err error) {
+	n, ep, err := c.receiveDERP(b[0])
+	return []int{n}, []conn.Endpoint{ep}, err
 }
 
 // receiveDERP reads a packet from c.derpRecvCh into b and returns the associated endpoint.
@@ -2594,6 +2804,17 @@ type connBind struct {
 	closed bool
 }
 
+func (c *connBind) OpenV(_ uint16) ([]conn.ReceiveVFunc, uint16, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		return nil, 0, errors.New("magicsock: connBind already open")
+	}
+	c.closed = false
+	fns := []conn.ReceiveVFunc{c.receiveMultipleIPv4, c.receiveMultipleIPv6, c.receiveMultipleDERP}
+	return fns, c.LocalPort(), nil
+}
+
 // Open is called by WireGuard to create a UDP binding.
 // The ignoredPort comes from wireguard-go, via the wgcfg config.
 // We ignore that port value here, since we have the local port available easily.
@@ -3012,6 +3233,36 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	}
 }
 
+func (c *RebindingUDPConn) ReadBatchIPv4(msgs []ipv4.Message, flags int) (int, error) {
+	for {
+		pconn := c.pconnAtomic.Load()
+		br, ok := pconn.(nettype.BatchReader)
+		if !ok {
+			panic("pconn is not a nettype.BatchReader")
+		}
+		n, err := br.ReadBatchIPv4(msgs, flags)
+		if err != nil && pconn != c.currentConn() {
+			continue
+		}
+		return n, err
+	}
+}
+
+func (c *RebindingUDPConn) ReadBatchIPv6(msgs []ipv6.Message, flags int) (int, error) {
+	for {
+		pconn := c.pconnAtomic.Load()
+		br, ok := pconn.(nettype.BatchReader)
+		if !ok {
+			panic("pconn is not a nettype.BatchReader")
+		}
+		n, err := br.ReadBatchIPv6(msgs, flags)
+		if err != nil && pconn != c.currentConn() {
+			continue
+		}
+		return n, err
+	}
+}
+
 // ReadFromNetaddr reads a packet from c into b.
 // It returns the number of bytes copied and the return address.
 // It is identical to c.ReadFrom, except that it returns a netip.AddrPort instead of a net.Addr.
@@ -3106,6 +3357,42 @@ func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (in
 	}
 }
 
+func (c *RebindingUDPConn) WriteBatchIPv4(msgs []ipv4.Message, flags int) (int, error) {
+	for {
+		pconn := c.pconnAtomic.Load()
+		bw, ok := pconn.(nettype.BatchWriter)
+		if !ok {
+			return 0, errors.New("pconn is not a nettype.BatchWriter()")
+		}
+
+		n, err := bw.WriteBatchIPv4(msgs, flags)
+		if err != nil {
+			if pconn != c.currentConn() {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
+func (c *RebindingUDPConn) WriteBatchIPv6(msgs []ipv6.Message, flags int) (int, error) {
+	for {
+		pconn := c.pconnAtomic.Load()
+		bw, ok := pconn.(nettype.BatchWriter)
+		if !ok {
+			return 0, errors.New("pconn is not a nettype.BatchWriter()")
+		}
+
+		n, err := bw.WriteBatchIPv6(msgs, flags)
+		if err != nil {
+			if pconn != c.currentConn() {
+				continue
+			}
+		}
+		return n, err
+	}
+}
+
 func newBlockForeverConn() *blockForeverConn {
 	c := new(blockForeverConn)
 	c.cond = sync.NewCond(&c.mu)
@@ -3134,6 +3421,11 @@ func (c *blockForeverConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 }
 
 func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {
+	// Silently drop writes.
+	return len(p), nil
+}
+
+func (c *blockForeverConn) WriteBatch(p []ipv4.Message, flags int) (int, error) {
 	// Silently drop writes.
 	return len(p), nil
 }
@@ -3575,6 +3867,39 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 		}
 	}
 	de.noteActiveLocked()
+}
+
+func (de *endpoint) sendv(buffs [][]byte) error {
+	now := mono.Now()
+
+	de.mu.Lock()
+	udpAddr, derpAddr := de.addrForSendLocked(now)
+	if de.canP2P() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
+		de.sendPingsLocked(now, true)
+	}
+	de.noteActiveLocked()
+	de.mu.Unlock()
+
+	if !udpAddr.IsValid() && !derpAddr.IsValid() {
+		return errors.New("no UDP or DERP addr")
+	}
+	var err error
+	if udpAddr.IsValid() {
+		_, err = de.c.sendUDPBatch(udpAddr, buffs)
+	}
+	if derpAddr.IsValid() {
+		allOk := true
+		for _, buff := range buffs {
+			ok, _ := de.c.sendAddr(derpAddr, de.publicKey, buff)
+			if !ok {
+				allOk = false
+			}
+		}
+		if allOk {
+			return nil
+		}
+	}
+	return err
 }
 
 func (de *endpoint) send(b []byte) error {
@@ -4165,11 +4490,15 @@ var (
 	metricSendDERPError       = clientmetric.NewCounter("magicsock_send_derp_error")
 
 	// Data packets (non-disco)
-	metricSendData            = clientmetric.NewCounter("magicsock_send_data")
-	metricSendDataNetworkDown = clientmetric.NewCounter("magicsock_send_data_network_down")
-	metricRecvDataDERP        = clientmetric.NewCounter("magicsock_recv_data_derp")
-	metricRecvDataIPv4        = clientmetric.NewCounter("magicsock_recv_data_ipv4")
-	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
+	metricSendData             = clientmetric.NewCounter("magicsock_send_data")
+	metricSendDataNetworkDown  = clientmetric.NewCounter("magicsock_send_data_network_down")
+	metricSendDataMultiPackets = clientmetric.NewCounter("magicsock_send_data_multiple_packets")
+	metricSendDataSinglePacket = clientmetric.NewCounter("magicsock_send_data_single_packet")
+	metricRecvDataDERP         = clientmetric.NewCounter("magicsock_recv_data_derp")
+	metricRecvDataIPv4         = clientmetric.NewCounter("magicsock_recv_data_ipv4")
+	metricRecvDataIPv6         = clientmetric.NewCounter("magicsock_recv_data_ipv6")
+	metricRecvDataMultiPackets = clientmetric.NewCounter("magicsock_recv_data_multiple_packets")
+	metricRecvDataSinglePacket = clientmetric.NewCounter("magicsock_recv_data_single_packet")
 
 	// Disco packets
 	metricSendDiscoUDP         = clientmetric.NewCounter("magicsock_disco_send_udp")

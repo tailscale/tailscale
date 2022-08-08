@@ -9,6 +9,9 @@ import (
 	"context"
 	"net"
 	"net/netip"
+
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 // PacketListener defines the ListenPacket method as implemented
@@ -42,10 +45,46 @@ type packetListenerAdapter struct {
 	PacketListener
 }
 
+type packetConnWithBatch struct {
+	PacketConn
+	xpc4 *ipv4.PacketConn
+	xpc6 *ipv6.PacketConn
+}
+
+func (p packetConnWithBatch) WriteBatchIPv4(ms []ipv4.Message, flags int) (int, error) {
+	return p.xpc4.WriteBatch(ms, flags)
+}
+
+func (p packetConnWithBatch) ReadBatchIPv4(ms []ipv4.Message, flags int) (int, error) {
+	return p.xpc4.ReadBatch(ms, flags)
+}
+
+func (p packetConnWithBatch) WriteBatchIPv6(ms []ipv6.Message, flags int) (int, error) {
+	return p.xpc6.WriteBatch(ms, flags)
+}
+
+func (p packetConnWithBatch) ReadBatchIPv6(ms []ipv6.Message, flags int) (int, error) {
+	return p.xpc6.ReadBatch(ms, flags)
+}
+
 func (a packetListenerAdapter) ListenPacket(ctx context.Context, network, address string) (PacketConn, error) {
 	pc, err := a.PacketListener.ListenPacket(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	return pc.(PacketConn), nil
+	return packetConnWithBatch{
+		PacketConn: pc.(PacketConn),
+		xpc4:       ipv4.NewPacketConn(pc),
+		xpc6:       ipv6.NewPacketConn(pc),
+	}, nil
+}
+
+type BatchWriter interface {
+	WriteBatchIPv4([]ipv4.Message, int) (int, error)
+	WriteBatchIPv6([]ipv6.Message, int) (int, error)
+}
+
+type BatchReader interface {
+	ReadBatchIPv4([]ipv4.Message, int) (int, error)
+	ReadBatchIPv6([]ipv6.Message, int) (int, error)
 }
