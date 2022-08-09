@@ -15,6 +15,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -46,6 +47,7 @@ type mapSession struct {
 	lastDomain             string
 	lastHealth             []string
 	lastPopBrowserURL      string
+	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -114,6 +116,28 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastHealth = resp.Health
 	}
 
+	debug := resp.Debug
+	if debug != nil {
+		if debug.RandomizeClientPort {
+			debug.SetRandomizeClientPort.Set(true)
+		}
+		if debug.ForceBackgroundSTUN {
+			debug.SetForceBackgroundSTUN.Set(true)
+		}
+		copyDebugOptBools(&ms.stickyDebug, debug)
+	} else if ms.stickyDebug != (tailcfg.Debug{}) {
+		debug = new(tailcfg.Debug)
+	}
+	if debug != nil {
+		copyDebugOptBools(debug, &ms.stickyDebug)
+		if !debug.ForceBackgroundSTUN {
+			debug.ForceBackgroundSTUN, _ = ms.stickyDebug.SetForceBackgroundSTUN.Get()
+		}
+		if !debug.RandomizeClientPort {
+			debug.RandomizeClientPort, _ = ms.stickyDebug.SetRandomizeClientPort.Get()
+		}
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:         ms.privateNodeKey.Public(),
 		PrivateKey:      ms.privateNodeKey,
@@ -126,7 +150,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		SSHPolicy:       ms.lastSSHPolicy,
 		CollectServices: ms.collectServices,
 		DERPMap:         ms.lastDERPMap,
-		Debug:           resp.Debug,
+		Debug:           debug,
 		ControlHealth:   ms.lastHealth,
 	}
 	ms.netMapBuilding = nm
@@ -166,7 +190,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 		ms.addUserProfile(peer.User)
 	}
-	if Debug.ProxyDNS {
+	if DevKnob.ForceProxyDNS {
 		nm.DNS.Proxied = true
 	}
 	ms.netMapBuilding = nil
@@ -343,4 +367,19 @@ func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 		}
 		return ret
 	}
+}
+
+func copyDebugOptBools(dst, src *tailcfg.Debug) {
+	copy := func(v *opt.Bool, s opt.Bool) {
+		if s != "" {
+			*v = s
+		}
+	}
+	copy(&dst.DERPRoute, src.DERPRoute)
+	copy(&dst.DisableSubnetsIfPAC, src.DisableSubnetsIfPAC)
+	copy(&dst.DisableUPnP, src.DisableUPnP)
+	copy(&dst.OneCGNATRoute, src.OneCGNATRoute)
+	copy(&dst.SetForceBackgroundSTUN, src.SetForceBackgroundSTUN)
+	copy(&dst.SetRandomizeClientPort, src.SetRandomizeClientPort)
+	copy(&dst.TrimWGConfig, src.TrimWGConfig)
 }
