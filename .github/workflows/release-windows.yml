@@ -39,7 +39,7 @@ jobs:
 
     - name: Compute Tag
       shell: bash
-      run: echo "tag=${git rev-parse --short HEAD}" >> $GITHUB_ENV
+      run: echo "tag=$(echo ${GITHUB_SHA} | cut -c1-7" >> $GITHUB_ENV
 
     - name: Create Zip Release
       uses: thedoctor0/zip-release@master
