@@ -27,7 +27,7 @@ func parseWindowsLocalPort(args []string) ([]string, uint16, error) {
 	if index == -1 {
 		return args, safesocket.WindowsLocalPort, nil
 	}
-	port, err := strconv.Atoi(args[index+1])
+	port, err := strconv.ParseUint(args[index+1], 10, 16)
 	if err != nil {
 		return args, safesocket.WindowsLocalPort, err
 	}
