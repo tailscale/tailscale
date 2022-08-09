@@ -69,6 +69,12 @@ func newIPN(jsConfig js.Value) map[string]any {
 		store = &jsStateStore{jsStateStorage}
 	}
 
+	jsAuthKey := jsConfig.Get("authKey")
+	var authKey string
+	if jsAuthKey.Type() == js.TypeString {
+		authKey = jsAuthKey.String()
+	}
+
 	lpc := getOrCreateLogPolicyConfig(store)
 	c := logtail.Config{
 		Collection: lpc.Collection,
@@ -135,7 +141,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 				})`)
 				return nil
 			}
-			jsIPN.run(args[0])
+			jsIPN.run(args[0], authKey)
 			return nil
 		}),
 		"login": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -182,7 +188,7 @@ type jsIPN struct {
 	lb     *ipnlocal.LocalBackend
 }
 
-func (i *jsIPN) run(jsCallbacks js.Value) {
+func (i *jsIPN) run(jsCallbacks js.Value, authKey string) {
 	notifyState := func(state ipn.State) {
 		jsCallbacks.Call("notifyState", int(state))
 	}
@@ -253,6 +259,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				WantRunning:      true,
 				Hostname:         generateHostname(),
 			},
+			AuthKey: authKey,
 		})
 		if err != nil {
 			log.Printf("Start error: %v", err)

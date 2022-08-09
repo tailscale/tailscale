@@ -47,6 +47,7 @@ declare global {
 
   type IPNConfig = {
     stateStorage?: IPNStateStorage
+    authKey?: string
   }
 
   type IPNCallbacks = {
