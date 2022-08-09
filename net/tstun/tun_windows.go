@@ -10,9 +10,11 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-func init() {
+var WindowsStaticId = "{37217669-42da-4657-a55b-0d995d328250}"
+
+func InitWindowsTunnel() {
 	tun.WintunTunnelType = "Tailscale"
-	guid, err := windows.GUIDFromString("{37217669-42da-4657-a55b-0d995d328250}")
+	guid, err := windows.GUIDFromString(WindowsStaticId)
 	if err != nil {
 		panic(err)
 	}
