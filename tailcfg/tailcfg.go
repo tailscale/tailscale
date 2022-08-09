@@ -71,6 +71,7 @@ type CapabilityVersion int
 //	33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
 //	34: 2022-08-02: client understands CapabilityFileSharingTarget
 //	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
+//	37: 2022-08-09: added Debug.{SetForceBackgroundSTUN,SetRandomizeClientPort}; Debug are sticky
 const CurrentCapabilityVersion CapabilityVersion = 36
 
 type StableID string
@@ -1335,6 +1336,15 @@ type Debug struct {
 	// periodicReSTUN), regardless of inactivity.
 	ForceBackgroundSTUN bool `json:",omitempty"`
 
+	// SetForceBackgroundSTUN controls whether magicsock should always do its
+	// background STUN queries (see magicsock's periodicReSTUN), regardless of
+	// inactivity.
+	//
+	// As of capver 37, this field is the preferred field for control to set on
+	// the wire and ForceBackgroundSTUN is only used within the code as the
+	// current map session value. But ForceBackgroundSTUN can still be used too.
+	SetForceBackgroundSTUN opt.Bool `json:",omitempty"`
+
 	// DERPRoute controls whether the DERP reverse path
 	// optimization (see Issue 150) should be enabled or
 	// disabled. The environment variable in magicsock is the
@@ -1364,6 +1374,14 @@ type Debug struct {
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
+
+	// SetRandomizeClientPort is whether magicsock should UDP bind to :0 to get
+	// a random local port, ignoring any configured fixed port.
+	//
+	// As of capver 37, this field is the preferred field for control to set on
+	// the wire and RandomizeClientPort is only used within the code as the
+	// current map session value. But RandomizeClientPort can still be used too.
+	SetRandomizeClientPort opt.Bool `json:",omitempty"`
 
 	// OneCGNATRoute controls whether the client should prefer to make one
 	// big CGNAT /10 route rather than a /32 per peer.
