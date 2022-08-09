@@ -1039,10 +1039,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		})
 	}
 
-	var discoPublic key.DiscoPublic
-	if controlclient.Debug.Disco {
-		discoPublic = b.e.DiscoPublicKey()
-	}
+	discoPublic := b.e.DiscoPublicKey()
 
 	var err error
 	if persistv == nil {

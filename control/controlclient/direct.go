@@ -710,7 +710,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
 
 	vlogf := logger.Discard
-	if Debug.NetMap {
+	if DevKnob.DumpNetMaps {
 		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
 		// want to upload it always.
 		vlogf = c.logf
@@ -939,8 +939,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			if resp.Debug.GoroutineDumpURL != "" {
 				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
-			controlUseDERPRoute.Store(resp.Debug.DERPRoute)
-			controlTrimWGConfig.Store(resp.Debug.TrimWGConfig)
 			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep); err != nil {
 					return err
@@ -954,12 +952,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			return errors.New("MapResponse lacked node")
 		}
 
-		if Debug.StripEndpoints {
+		if d := nm.Debug; d != nil {
+			controlUseDERPRoute.Store(d.DERPRoute)
+			controlTrimWGConfig.Store(d.TrimWGConfig)
+		}
+
+		if DevKnob.StripEndpoints {
 			for _, p := range resp.Peers {
 				p.Endpoints = nil
 			}
 		}
-		if Debug.StripCaps {
+		if DevKnob.StripCaps {
 			nm.SelfNode.Capabilities = nil
 		}
 
@@ -1125,25 +1128,23 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	return &out, nil
 }
 
-// Debug contains temporary internal-only debug knobs.
+// DevKnob contains temporary internal-only debug knobs.
 // They're unexported to not draw attention to them.
-var Debug = initDebug()
+var DevKnob = initDevKnob()
 
-type debug struct {
-	NetMap         bool
-	ProxyDNS       bool
-	Disco          bool
+type devKnobs struct {
+	DumpNetMaps    bool
+	ForceProxyDNS  bool
 	StripEndpoints bool // strip endpoints from control (only use disco messages)
 	StripCaps      bool // strip all local node's control-provided capabilities
 }
 
-func initDebug() debug {
-	return debug{
-		NetMap:         envknob.Bool("TS_DEBUG_NETMAP"),
-		ProxyDNS:       envknob.Bool("TS_DEBUG_PROXY_DNS"),
+func initDevKnob() devKnobs {
+	return devKnobs{
+		DumpNetMaps:    envknob.Bool("TS_DEBUG_NETMAP"),
+		ForceProxyDNS:  envknob.Bool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints: envknob.Bool("TS_DEBUG_STRIP_ENDPOINTS"),
 		StripCaps:      envknob.Bool("TS_DEBUG_STRIP_CAPS"),
-		Disco:          envknob.BoolDefaultTrue("TS_DEBUG_USE_DISCO"),
 	}
 }
 
