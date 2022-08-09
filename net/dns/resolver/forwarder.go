@@ -676,6 +676,8 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		res, err := nxDomainResponse(query)
 		if err != nil {
 			f.logf("error parsing bonjour query: %v", err)
+			// Returning an error will cause an internal retry, there is
+			// nothing we can do if parsing failed. Just drop the packet.
 			return nil
 		}
 		select {
@@ -700,6 +702,8 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			res, err := servfailResponse(query)
 			if err != nil {
 				f.logf("building servfail response: %v", err)
+				// Returning an error will cause an internal retry, there is
+				// nothing we can do if parsing failed. Just drop the packet.
 				return nil
 			}
 			select {
