@@ -187,8 +187,16 @@ func TestQuick(t *testing.T) {
 	}
 }
 
-func getVal() []any {
-	return []any{
+func getVal() any {
+	return &struct {
+		WGConfig         *wgcfg.Config
+		RouterConfig     *router.Config
+		MapFQDNAddrs     map[dnsname.FQDN][]netip.Addr
+		MapFQDNAddrPorts map[dnsname.FQDN][]netip.AddrPort
+		MapDiscoPublics  map[key.DiscoPublic]bool
+		MapResponse      *tailcfg.MapResponse
+		FilterMatch      filter.Match
+	}{
 		&wgcfg.Config{
 			Name:      "foo",
 			Addresses: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom16([16]byte{3: 3}).Unmap(), 5)},
@@ -467,7 +475,8 @@ func TestGetTypeHasher(t *testing.T) {
 				a, b int
 				c    uint16
 			}{1, -1, 2},
-			out: "\x01\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00",
+			out:   "\x01\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\x02\x00",
+			out32: "\x01\x00\x00\x00\xff\xff\xff\xff\x02\x00",
 		},
 		{
 			name: "nil_int_ptr",
@@ -529,7 +538,7 @@ func TestGetTypeHasher(t *testing.T) {
 		{
 			name: "time_ptr_via_unexported_value",
 			val:  *testtype.NewUnexportedAddressableTime(time.Unix(0, 0).In(time.UTC)),
-			want: false, // neither addressable nor interface-able
+			out:  "\x141970-01-01T00:00:00Z",
 		},
 		{
 			name: "time_custom_zone",
@@ -614,12 +623,14 @@ func TestGetTypeHasher(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rv := reflect.ValueOf(tt.val)
-			fn := getTypeInfo(rv.Type()).hasher()
+			va := newAddressableValue(rv.Type())
+			va.Set(rv)
+			fn := getTypeInfo(va.Type()).hasher()
 			var buf bytes.Buffer
 			h := &hasher{
 				bw: bufio.NewWriter(&buf),
 			}
-			got := fn(h, rv)
+			got := fn(h, va)
 			const ptrSize = 32 << uintptr(^uintptr(0)>>63)
 			if tt.out32 != "" && ptrSize == 32 {
 				tt.out = tt.out32
@@ -640,7 +651,7 @@ func TestGetTypeHasher(t *testing.T) {
 	}
 }
 
-var sink = Hash("foo")
+var sink Sum
 
 func BenchmarkHash(b *testing.B) {
 	b.ReportAllocs()
@@ -696,9 +707,9 @@ var filterRules = []tailcfg.FilterRule{
 func BenchmarkHashPacketFilter(b *testing.B) {
 	b.ReportAllocs()
 
-	hash := HasherForType[[]tailcfg.FilterRule]()
+	hash := HasherForType[*[]tailcfg.FilterRule]()
 	for i := 0; i < b.N; i++ {
-		sink = hash(filterRules)
+		sink = hash(&filterRules)
 	}
 }
 
@@ -715,7 +726,7 @@ func TestHashMapAcyclic(t *testing.T) {
 	ti := getTypeInfo(reflect.TypeOf(m))
 
 	for i := 0; i < 20; i++ {
-		v := reflect.ValueOf(m)
+		v := addressableValue{reflect.ValueOf(&m).Elem()}
 		buf.Reset()
 		bw.Reset(&buf)
 		h := &hasher{bw: bw}
@@ -738,7 +749,7 @@ func TestPrintArray(t *testing.T) {
 	var got bytes.Buffer
 	bw := bufio.NewWriter(&got)
 	h := &hasher{bw: bw}
-	h.hashValue(reflect.ValueOf(x), false)
+	h.hashValue(addressableValue{reflect.ValueOf(&x).Elem()}, false)
 	bw.Flush()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
 	if got := got.Bytes(); string(got) != want {
@@ -755,7 +766,7 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 
 	var buf bytes.Buffer
 	bw := bufio.NewWriter(&buf)
-	v := reflect.ValueOf(m)
+	v := addressableValue{reflect.ValueOf(&m).Elem()}
 	ti := getTypeInfo(v.Type())
 
 	h := &hasher{bw: bw}
