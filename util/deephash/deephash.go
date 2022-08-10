@@ -918,8 +918,7 @@ func (h *hasher) hashValueWithType(v addressableValue, ti *typeInfo, forceCycleC
 
 type mapHasher struct {
 	h               hasher
-	valKey, valElem valueCache      // re-usable values for map iteration
-	iter            reflect.MapIter // re-usable map iterator
+	valKey, valElem valueCache // re-usable values for map iteration
 }
 
 var mapHasherPool = &sync.Pool{
@@ -948,10 +947,6 @@ func (h *hasher) hashMap(v addressableValue, ti *typeInfo, checkCycles bool) {
 	mh := mapHasherPool.Get().(*mapHasher)
 	defer mapHasherPool.Put(mh)
 
-	iter := &mh.iter
-	iter.Reset(v.Value)
-	defer iter.Reset(reflect.Value{}) // avoid pinning v from mh.iter when we return
-
 	var sum Sum
 	if v.IsNil() {
 		sum.sum[0] = 1 // something non-zero
@@ -960,7 +955,7 @@ func (h *hasher) hashMap(v addressableValue, ti *typeInfo, checkCycles bool) {
 	k := mh.valKey.get(v.Type().Key())
 	e := mh.valElem.get(v.Type().Elem())
 	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
-	for iter.Next() {
+	for iter := v.MapRange(); iter.Next(); {
 		k.SetIterKey(iter)
 		e.SetIterValue(iter)
 		mh.h.reset()
