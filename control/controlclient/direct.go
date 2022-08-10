@@ -885,7 +885,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
 			metricMapResponsePings.Add(1)
-			go answerPing(c.logf, c.httpc, pr, c.pinger)
+			go c.answerPing(pr)
 		}
 		if u := resp.PopBrowserURL; u != "" && u != sess.lastPopBrowserURL {
 			sess.lastPopBrowserURL = u
@@ -1203,21 +1203,30 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 	return true
 }
 
-func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) {
+func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
+	httpc := c.httpc
+	if pr.URLIsNoise {
+		nc, err := c.getNoiseClient()
+		if err != nil {
+			c.logf("failed to get noise client for ping request: %v", err)
+			return
+		}
+		httpc = nc.Client
+	}
 	if pr.URL == "" {
-		logf("invalid PingRequest with no URL")
+		c.logf("invalid PingRequest with no URL")
 		return
 	}
 	if pr.Types == "" {
-		answerHeadPing(logf, c, pr)
+		answerHeadPing(c.logf, httpc, pr)
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
 		switch pt := tailcfg.PingType(t); pt {
 		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP, tailcfg.PingPeerAPI:
-			go doPingerPing(logf, c, pr, pinger, pt)
+			go doPingerPing(c.logf, httpc, pr, c.pinger, pt)
 		default:
-			logf("unsupported ping request type: %q", t)
+			c.logf("unsupported ping request type: %q", t)
 		}
 	}
 }
