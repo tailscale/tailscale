@@ -72,7 +72,8 @@ type CapabilityVersion int
 //	34: 2022-08-02: client understands CapabilityFileSharingTarget
 //	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
 //	37: 2022-08-09: added Debug.{SetForceBackgroundSTUN,SetRandomizeClientPort}; Debug are sticky
-const CurrentCapabilityVersion CapabilityVersion = 37
+//	38: 2022-08-11: added PingRequest.URLIsNoise
+const CurrentCapabilityVersion CapabilityVersion = 38
 
 type StableID string
 
@@ -1150,6 +1151,10 @@ type PingRequest struct {
 	// subsequent ones should be ignored.
 	// If Types and IP are defined, then URL is the URL to send a POST request to.
 	URL string
+
+	// URLIsNoise, if true, means that the client should hit URL over the Noise
+	// transport instead of TLS.
+	URLIsNoise bool `json:",omitempty"`
 
 	// Log is whether to log about this ping in the success case.
 	// For failure cases, the client will log regardless.
