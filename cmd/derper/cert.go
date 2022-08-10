@@ -20,6 +20,11 @@ var unsafeHostnameCharacters = regexp.MustCompile(`[^a-zA-Z0-9-\.]`)
 
 type certProvider interface {
 	// TLSConfig creates a new TLS config suitable for net/http.Server servers.
+	//
+	// The returned Config must have a GetCertificate function set and that
+	// function must return a unique *tls.Certificate for each call. The
+	// returned *tls.Certificate will be mutated by the caller to append to the
+	// (*tls.Certificate).Certificate field.
 	TLSConfig() *tls.Config
 	// HTTPHandler handle ACME related request, if any.
 	HTTPHandler(fallback http.Handler) http.Handler
@@ -87,7 +92,13 @@ func (m *manualCertManager) getCertificate(hi *tls.ClientHelloInfo) (*tls.Certif
 	if hi.ServerName != m.hostname {
 		return nil, fmt.Errorf("cert mismatch with hostname: %q", hi.ServerName)
 	}
-	return m.cert, nil
+
+	// Return a shallow copy of the cert so the caller can append to its
+	// Certificate field.
+	certCopy := new(tls.Certificate)
+	*certCopy = *m.cert
+	certCopy.Certificate = certCopy.Certificate[:len(certCopy.Certificate):len(certCopy.Certificate)]
+	return certCopy, nil
 }
 
 func (m *manualCertManager) HTTPHandler(fallback http.Handler) http.Handler {
