@@ -158,7 +158,7 @@ func TestSerialization(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.Name, func(t *testing.T) {
-			data := tc.AUM.Serialize()
+			data := []byte(tc.AUM.Serialize())
 			if diff := cmp.Diff(tc.Expect, data); diff != "" {
 				t.Errorf("serialization differs (-want, +got):\n%s", diff)
 			}

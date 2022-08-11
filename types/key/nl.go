@@ -82,12 +82,17 @@ func (k NLPrivate) KeyID() tkatype.KeyID {
 	return pub[:]
 }
 
-// SignAUM implements tka.UpdateSigner.
+// SignAUM implements tka.Signer.
 func (k NLPrivate) SignAUM(sigHash tkatype.AUMSigHash) ([]tkatype.Signature, error) {
 	return []tkatype.Signature{{
 		KeyID:     k.KeyID(),
 		Signature: ed25519.Sign(ed25519.PrivateKey(k.k[:]), sigHash[:]),
 	}}, nil
+}
+
+// SignNKS signs the tka.NodeKeySignature identified by sigHash.
+func (k NLPrivate) SignNKS(sigHash tkatype.NKSSigHash) ([]byte, error) {
+	return ed25519.Sign(ed25519.PrivateKey(k.k[:]), sigHash[:]), nil
 }
 
 // NLPublic is the public portion of a a NLPrivate.

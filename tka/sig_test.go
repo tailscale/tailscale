@@ -23,11 +23,11 @@ func TestSigDirect(t *testing.T) {
 		KeyID:   key.ID(),
 		Pubkey:  nodeKeyPub,
 	}
-	sigHash := sig.sigHash()
+	sigHash := sig.SigHash()
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 
-	if sig.sigHash() != sigHash {
-		t.Errorf("sigHash changed after signing: %x != %x", sig.sigHash(), sigHash)
+	if sig.SigHash() != sigHash {
+		t.Errorf("sigHash changed after signing: %x != %x", sig.SigHash(), sigHash)
 	}
 
 	if err := sig.verifySignature(key); err != nil {
@@ -44,7 +44,7 @@ func TestSigSerializeUnserialize(t *testing.T) {
 		KeyID:   key.ID(),
 		Pubkey:  nodeKeyPub,
 	}
-	sigHash := sig.sigHash()
+	sigHash := sig.SigHash()
 	sig.Signature = ed25519.Sign(priv, sigHash[:])
 
 	var decoded NodeKeySignature

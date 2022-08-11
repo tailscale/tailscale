@@ -55,13 +55,13 @@ type NodeKeySignature struct {
 	Signature []byte `cbor:"4,keyasint,omitempty"`
 }
 
-// sigHash returns the cryptographic digest which a signature
+// SigHash returns the cryptographic digest which a signature
 // is over.
 //
 // This is a hash of the serialized structure, sans the signature.
 // Without this exclusion, the hash used for the signature
 // would be circularly dependent on the signature.
-func (s NodeKeySignature) sigHash() [blake2s.Size]byte {
+func (s NodeKeySignature) SigHash() [blake2s.Size]byte {
 	dupe := s
 	dupe.Signature = nil
 	return blake2s.Sum256(dupe.Serialize())
@@ -100,7 +100,7 @@ func (s *NodeKeySignature) Unserialize(data []byte) error {
 // verifySignature checks that the NodeKeySignature is authentic and certified
 // by the given verificationKey.
 func (s *NodeKeySignature) verifySignature(verificationKey Key) error {
-	sigHash := s.sigHash()
+	sigHash := s.SigHash()
 	switch verificationKey.Kind {
 	case Key25519:
 		if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {

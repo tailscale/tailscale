@@ -14,4 +14,9 @@ func TestSigHashSize(t *testing.T) {
 	if len(sigHash) != blake2s.Size {
 		t.Errorf("AUMSigHash is wrong size: got %d, want %d", len(sigHash), blake2s.Size)
 	}
+
+	var nksHash NKSSigHash
+	if len(nksHash) != blake2s.Size {
+		t.Errorf("NKSSigHash is wrong size: got %d, want %d", len(nksHash), blake2s.Size)
+	}
 }

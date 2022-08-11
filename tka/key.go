@@ -91,6 +91,9 @@ func (k Key) StaticValidate() error {
 	if k.Votes > 4096 {
 		return fmt.Errorf("excessive key weight: %d > 4096", k.Votes)
 	}
+	if k.Votes == 0 {
+		return errors.New("key votes must be non-zero")
+	}
 
 	// We have an arbitrary upper limit on the amount
 	// of metadata that can be associated with a key, so

@@ -1826,6 +1826,32 @@ type PeerChange struct {
 	Capabilities *[]string `json:",omitempty"`
 }
 
+// TKAInitBeginRequest submits a genesis AUM to seed the creation of the
+// tailnet's key authority.
+type TKAInitBeginRequest struct {
+	NodeID NodeID
+
+	GenesisAUM tkatype.MarshaledAUM
+}
+
+// TKAInitBeginResponse describes a set of NodeKeys which must be signed to
+// complete initialization of the tailnets' key authority.
+type TKAInitBeginResponse struct {
+	NodeID NodeID
+
+	NeedSignatures []key.NodePublic
+}
+
+// TKAInitFinishRequest finalizes initialization of the tailnet key authority
+// by submitting node-key signatures for all existing nodes.
+type TKAInitFinishRequest struct {
+	Signatures []tkatype.MarshaledSignature
+}
+
+// TKAInitFinishResponse describes the successful enablement of the tailnet's
+// key authority.
+type TKAInitFinishResponse struct{}
+
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to
 // use DERP. When used (in the Node.DERP field), the port number of
 // the WireGuard endpoint is the DERP region ID number to use.
