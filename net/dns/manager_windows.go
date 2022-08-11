@@ -485,11 +485,7 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netip.Addr, err er
 		}
 
 	ipLoop:
-		for _, stdip := range ips {
-			ip, ok := netip.AddrFromSlice(stdip)
-			if !ok {
-				continue
-			}
+		for _, ip := range ips {
 			ip = ip.Unmap()
 			// Skip IPv6 site-local resolvers. These are an ancient
 			// and obsolete IPv6 RFC, which Windows still faithfully
