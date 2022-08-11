@@ -140,3 +140,27 @@ func TestResolverAllHostStaticResult(t *testing.T) {
 		t.Errorf("bad dial error got %q; want %q", got, want)
 	}
 }
+
+func TestInterleaveSlices(t *testing.T) {
+	testCases := []struct {
+		name string
+		a, b []int
+		want []int
+	}{
+		{name: "equal", a: []int{1, 3, 5}, b: []int{2, 4, 6}, want: []int{1, 2, 3, 4, 5, 6}},
+		{name: "short_b", a: []int{1, 3, 5}, b: []int{2, 4}, want: []int{1, 2, 3, 4, 5}},
+		{name: "short_a", a: []int{1, 3}, b: []int{2, 4, 6}, want: []int{1, 2, 3, 4, 6}},
+		{name: "len_1", a: []int{1}, b: []int{2, 4, 6}, want: []int{1, 2, 4, 6}},
+		{name: "nil_a", a: nil, b: []int{2, 4, 6}, want: []int{2, 4, 6}},
+		{name: "nil_all", a: nil, b: nil, want: []int{}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := interleaveSlices(tc.a, tc.b)
+			if !reflect.DeepEqual(merged, tc.want) {
+				t.Errorf("got %v; want %v", merged, tc.want)
+			}
+		})
+	}
+}
