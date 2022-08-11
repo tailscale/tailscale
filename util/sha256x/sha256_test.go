@@ -17,7 +17,7 @@ import (
 // naiveHash is an obviously correct implementation of Hash.
 type naiveHash struct {
 	hash.Hash
-	scratch [8]byte
+	scratch [256]byte
 }
 
 func newNaive() *naiveHash               { return &naiveHash{Hash: sha256.New()} }
@@ -26,6 +26,7 @@ func (h *naiveHash) HashUint16(n uint16) { h.Write(binary.LittleEndian.AppendUin
 func (h *naiveHash) HashUint32(n uint32) { h.Write(binary.LittleEndian.AppendUint32(h.scratch[:0], n)) }
 func (h *naiveHash) HashUint64(n uint64) { h.Write(binary.LittleEndian.AppendUint64(h.scratch[:0], n)) }
 func (h *naiveHash) HashBytes(b []byte)  { h.Write(b) }
+func (h *naiveHash) HashString(s string) { h.Write(append(h.scratch[:0], s...)) }
 
 var bytes = func() (out []byte) {
 	out = make([]byte, 130)
@@ -41,6 +42,7 @@ type hasher interface {
 	HashUint32(uint32)
 	HashUint64(uint64)
 	HashBytes([]byte)
+	HashString(string)
 }
 
 func hashSuite(h hasher) {
@@ -61,7 +63,12 @@ func hashSuite(h hasher) {
 			h.HashUint16(0x89ab)
 			h.HashUint8(0xcd)
 		}
-		h.HashBytes(bytes[:(i+1)*13])
+		b := bytes[:(i+1)*13]
+		if i%2 == 0 {
+			h.HashBytes(b)
+		} else {
+			h.HashString(string(b))
+		}
 	}
 }
 
@@ -74,14 +81,51 @@ func Test(t *testing.T) {
 	c.Assert(h1.Sum(nil), qt.DeepEquals, h2.Sum(nil))
 }
 
-func TestSumAllocations(t *testing.T) {
+func TestAllocations(t *testing.T) {
 	c := qt.New(t)
-	h := New()
-	n := testing.AllocsPerRun(100, func() {
-		var a [sha256.Size]byte
-		h.Sum(a[:0])
+	c.Run("Sum", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			var a [sha256.Size]byte
+			h.Sum(a[:0])
+		}), qt.Equals, 0.0)
 	})
-	c.Assert(n, qt.Equals, 0.0)
+	c.Run("HashUint8", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashUint8(0x01)
+		}), qt.Equals, 0.0)
+	})
+	c.Run("HashUint16", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashUint16(0x0123)
+		}), qt.Equals, 0.0)
+	})
+	c.Run("HashUint32", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashUint32(0x01234567)
+		}), qt.Equals, 0.0)
+	})
+	c.Run("HashUint64", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashUint64(0x0123456789abcdef)
+		}), qt.Equals, 0.0)
+	})
+	c.Run("HashBytes", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashBytes(bytes)
+		}), qt.Equals, 0.0)
+	})
+	c.Run("HashString", func(c *qt.C) {
+		h := New()
+		c.Assert(testing.AllocsPerRun(100, func() {
+			h.HashString("abcdefghijklmnopqrstuvwxyz")
+		}), qt.Equals, 0.0)
+	})
 }
 
 func Fuzz(f *testing.F) {
