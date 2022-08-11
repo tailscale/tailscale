@@ -8,13 +8,17 @@ import (
 	"encoding"
 	"encoding/json"
 	"net/netip"
+	"os"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/util/must"
 	"tailscale.com/version"
 )
 
@@ -649,5 +653,22 @@ func TestRegisterRequestNilClone(t *testing.T) {
 	got := nilReq.Clone()
 	if got != nil {
 		t.Errorf("got = %v; want nil", got)
+	}
+}
+
+// Tests that CurrentCapabilityVersion is bumped when the comment block above it gets bumped.
+// We've screwed this up several times.
+func TestCurrentCapabilityVersion(t *testing.T) {
+	f := must.Get(os.ReadFile("tailcfg.go"))
+	matches := regexp.MustCompile(`(?m)^//\s+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
+	max := 0
+	for _, m := range matches {
+		n := must.Get(strconv.Atoi(m[1]))
+		if n > max {
+			max = n
+		}
+	}
+	if CapabilityVersion(max) != CurrentCapabilityVersion {
+		t.Errorf("CurrentCapabilityVersion = %d; want %d", CurrentCapabilityVersion, max)
 	}
 }

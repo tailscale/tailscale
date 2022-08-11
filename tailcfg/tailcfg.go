@@ -72,7 +72,7 @@ type CapabilityVersion int
 //	34: 2022-08-02: client understands CapabilityFileSharingTarget
 //	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
 //	37: 2022-08-09: added Debug.{SetForceBackgroundSTUN,SetRandomizeClientPort}; Debug are sticky
-const CurrentCapabilityVersion CapabilityVersion = 36
+const CurrentCapabilityVersion CapabilityVersion = 37
 
 type StableID string
 
