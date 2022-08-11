@@ -523,6 +523,21 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 		return nil, errors.New("no IPs")
 	}
 
+	// Partition candidate list and then merge such that an IPv6 address is
+	// in the first spot if present, and then addresses are interleaved.
+	// This ensures that we're trying an IPv6 address first, then
+	// alternating between v4 and v6 in case one of the two networks is
+	// broken.
+	var iv4, iv6 []netip.Addr
+	for _, ip := range ips {
+		if ip.Is6() {
+			iv6 = append(iv6, ip)
+		} else {
+			iv4 = append(iv4, ip)
+		}
+	}
+	ips = interleaveSlices(iv6, iv4)
+
 	go func() {
 		for i, ip := range ips {
 			if i != 0 {
@@ -578,6 +593,21 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// interleaveSlices combines two slices of the form [a, b, c] and [x, y, z]
+// into a slice with elements interleaved; i.e. [a, x, b, y, c, z].
+func interleaveSlices[T any](a, b []T) []T {
+	var (
+		i   int
+		ret = make([]T, 0, len(a)+len(b))
+	)
+	for i = 0; i < len(a) && i < len(b); i++ {
+		ret = append(ret, a[i], b[i])
+	}
+	ret = append(ret, a[i:]...)
+	ret = append(ret, b[i:]...)
+	return ret
 }
 
 func v4addrs(aa []net.IPAddr) (ret []netip.Addr) {
