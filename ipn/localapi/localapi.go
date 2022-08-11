@@ -31,6 +31,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/version"
@@ -150,6 +151,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIDToken(w, r)
 	case "/localapi/v0/upload-client-metrics":
 		h.serveUploadClientMetrics(w, r)
+	case "/localapi/v0/tka/status":
+		h.serveTkaStatus(w, r)
+	case "/localapi/v0/tka/init":
+		h.serveTkaInit(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -789,6 +794,58 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct{}{})
+}
+
+func (h *Handler) serveTkaStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "lock status access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "use Get", http.StatusMethodNotAllowed)
+		return
+	}
+
+	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
+}
+
+func (h *Handler) serveTkaInit(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "lock init access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type initRequest struct {
+		Keys []tka.Key
+	}
+	var req initRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockInit(req.Keys); err != nil {
+		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
 
 func defBool(a string, def bool) bool {

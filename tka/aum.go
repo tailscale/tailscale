@@ -216,7 +216,7 @@ func (a *AUM) StaticValidate() error {
 // We would implement encoding.BinaryMarshaler, except that would
 // unfortunately get called by the cbor marshaller resulting in infinite
 // recursion.
-func (a *AUM) Serialize() []byte {
+func (a *AUM) Serialize() tkatype.MarshaledAUM {
 	// Why CBOR and not something like JSON?
 	//
 	// The main function of an AUM is to carry signed data. Signatures are

@@ -67,6 +67,21 @@ type Status struct {
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// NetworkLockStatus represents whether network-lock is enabled,
+// along with details about the locally-known state of the tailnet
+// key authority.
+type NetworkLockStatus struct {
+	// Enabled is true if network lock is enabled.
+	Enabled bool
+
+	// Head describes the AUM hash of the leaf AUM. Head is nil
+	// if network lock is not enabled.
+	Head *[32]byte
+
+	// PublicKey describes the nodes' network-lock public key.
+	PublicKey key.NLPublic
+}
+
 // TailnetStatus is information about a Tailscale network ("tailnet").
 type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.

@@ -36,6 +36,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -674,6 +675,42 @@ func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
 	pr := new(ipnstate.PingResult)
+	if err := json.Unmarshal(body, pr); err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
+
+// NetworkLockStatus fetches information about the tailnet key authority, if one is configured.
+func (lc *LocalClient) NetworkLockStatus(ctx context.Context) (*ipnstate.NetworkLockStatus, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/tka/status", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error: %w", err)
+	}
+	pr := new(ipnstate.NetworkLockStatus)
+	if err := json.Unmarshal(body, pr); err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
+
+// NetworkLockInit initializes the tailnet key authority.
+func (lc *LocalClient) NetworkLockInit(ctx context.Context, keys []tka.Key) (*ipnstate.NetworkLockStatus, error) {
+	var b bytes.Buffer
+	type initRequest struct {
+		Keys []tka.Key
+	}
+
+	if err := json.NewEncoder(&b).Encode(initRequest{Keys: keys}); err != nil {
+		return nil, err
+	}
+
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/init", 200, &b)
+	if err != nil {
+		return nil, fmt.Errorf("error: %w", err)
+	}
+
+	pr := new(ipnstate.NetworkLockStatus)
 	if err := json.Unmarshal(body, pr); err != nil {
 		return nil, err
 	}

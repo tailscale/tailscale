@@ -12,6 +12,7 @@ import (
 
 // Types implementing Signer can sign update messages.
 type Signer interface {
+	// SignAUM returns signatures for the AUM encoded by the given AUMSigHash.
 	SignAUM(tkatype.AUMSigHash) ([]tkatype.Signature, error)
 }
 
