@@ -45,10 +45,19 @@ func (h *Hash) Sum(b []byte) []byte {
 		h.h.Write(h.x[:h.nx])
 		h.nx = 0
 	}
-	return h.h.Sum(b)
+
+	// Unfortunately hash.Hash.Sum always causes the input to escape since
+	// escape analysis cannot prove anything past an interface method call.
+	// Assuming h already escapes, we call Sum with h.x first,
+	// and then the copy the result to b.
+	sum := h.h.Sum(h.x[:0])
+	return append(b, sum...)
 }
 
 func (h *Hash) Reset() {
+	if h.h == nil {
+		h.h = sha256.New()
+	}
 	h.h.Reset()
 	h.nx = 0
 }
