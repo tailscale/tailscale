@@ -64,6 +64,7 @@ func hashSuite(h hasher) {
 		h.HashBytes(bytes[:(i+1)*13])
 	}
 }
+
 func Test(t *testing.T) {
 	c := qt.New(t)
 	h1 := New()
@@ -71,6 +72,16 @@ func Test(t *testing.T) {
 	hashSuite(h1)
 	hashSuite(h2)
 	c.Assert(h1.Sum(nil), qt.DeepEquals, h2.Sum(nil))
+}
+
+func TestSumAllocations(t *testing.T) {
+	c := qt.New(t)
+	h := New()
+	n := testing.AllocsPerRun(100, func() {
+		var a [sha256.Size]byte
+		h.Sum(a[:0])
+	})
+	c.Assert(n, qt.Equals, 0.0)
 }
 
 func Fuzz(f *testing.F) {
