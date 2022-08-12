@@ -250,20 +250,31 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 	return nil
 }
 
+// isSmartNameResolutionDisabled reports whether Multi-homed Smart Name
+// Resolution is enabled in the Windows Registry. We use this to decide
+// how to configure the DNS servers on the Tailscale interface.
+func (m windowsManager) isSmartNameResolutionDisabled() bool {
+	key, err := winutil.OpenKeyWait(registry.LOCAL_MACHINE, `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient`, registry.SET_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	val, _, err := key.GetIntegerValue("DisableSmartNameResolution")
+	return err == nil && val == 1
+}
+
 func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// We can configure Windows DNS in one of two ways:
 	//
-	//  - In primary DNS mode, we set the NameServer and SearchList
-	//    registry keys on our interface. Because our interface metric
-	//    is very low, this turns us into the one and only "primary"
-	//    resolver for the OS, i.e. all queries flow to the
-	//    resolver(s) we specify.
-	//  - In split DNS mode, we set the Domain registry key on our
-	//    interface (which adds that domain to the global search list,
-	//    but does not contribute other DNS configuration from the
-	//    interface), and configure an NRPT (Name Resolution Policy
-	//    Table) rule to route queries for our suffixes to the
-	//    provided resolver.
+	// - Primary DNS mode, we set the NameServer and SearchList registry keys
+	// on our interface. Because our interface metric is very low, this turns us
+	// into the "primary" resolver for the OS.
+	//
+	// - Split DNS mode, we only set the Domain registry key on our interface
+	// (which adds that domain to the global search list, but does not
+	// contribute other DNS configuration from the interface), and configure an
+	// NRPT (Name Resolution Policy Table) rule to route queries for our
+	// suffixes to the provided resolver.
 	//
 	// When switching modes, we delete all the configuration related
 	// to the other mode, so these two are an XOR.
@@ -273,6 +284,17 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// resolvers. However, we use it in a "simple" split domain
 	// configuration only, routing one set of things to the "split"
 	// resolver and the rest to the primary.
+	//
+	// In Split DNS mode, short name DNS queries for MagicDNS names are issued
+	// to all resolvers including ours but Windows prioritizes other resolvers
+	// over us, and thus introduces a resolution delay. To work around this, we
+	// set /etc/hosts entries for the MagicDNS names.
+	//
+	// This delay also disappears when we are the primary resolver, but it
+	// introduces delays for other resolvers. Turns out this delay is because of
+	// a Windows feature called Multi-homed Smart Name Resolution and all
+	// resolutions are fast when that feature is disabled. See #5366 for more
+	// details.
 
 	// Unconditionally disable dynamic DNS updates and NetBIOS on our
 	// interfaces.
@@ -283,22 +305,39 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		m.logf("disableNetBIOS error: %v\n", err)
 	}
 
+	if m.nrptDB == nil && len(cfg.MatchDomains) > 0 {
+		return errors.New("cannot set per-domain resolvers on Windows 7")
+	}
 	if len(cfg.MatchDomains) == 0 {
 		if err := m.setSplitDNS(nil, nil); err != nil {
+			return err
+		}
+	} else {
+		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
+			return err
+		}
+	}
+
+	// We still need to set both the search domains and nameservers on the
+	// interface. NRPT only handles query routing and not search domain
+	// expansion, and if we do not set the nameservers on the interface our
+	// searches are not prioritized when compared to the primary resolver.
+	//
+	// However, if SmartNameResolution is enabled, setting the nameservers
+	// introduces a large amount of latency, as it waits for MDNS sent over
+	// the Tailscale interface queries to timeout. So do not set nameservers
+	// in that case.
+	//
+	// When cfg.MatchDomains is empty, we are in override DNS mode and we need
+	// to be the primary resolver.
+	if len(cfg.MatchDomains) == 0 || m.isSmartNameResolutionDisabled() {
+		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
 			return err
 		}
 		if err := m.setHosts(nil); err != nil {
 			return err
 		}
-		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
-			return err
-		}
-	} else if m.nrptDB == nil {
-		return errors.New("cannot set per-domain resolvers on Windows 7")
 	} else {
-		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
-			return err
-		}
 		// Unset the resolver on the interface to ensure that we do not become
 		// the primary resolver. Although this is what we want, at the moment
 		// (2022-08-13) it causes single label resolutions from the OS resolver
