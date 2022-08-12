@@ -11,6 +11,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"net"
+	"net/netip"
 )
 
 const (
@@ -151,20 +152,18 @@ func foreachAttr(b []byte, fn func(attrType uint16, a []byte) error) error {
 }
 
 // Response generates a binding response.
-func Response(txID TxID, ip net.IP, port uint16) []byte {
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
+func Response(txID TxID, addrPort netip.AddrPort) []byte {
+	addr := addrPort.Addr()
+
 	var fam byte
-	switch len(ip) {
-	case net.IPv4len:
+	if addr.Is4() {
 		fam = 1
-	case net.IPv6len:
+	} else if addr.Is6() {
 		fam = 2
-	default:
+	} else {
 		return nil
 	}
-	attrsLen := 8 + len(ip)
+	attrsLen := 8 + addr.BitLen()/8
 	b := make([]byte, 0, headerLen+attrsLen)
 
 	// Header
@@ -175,12 +174,13 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 
 	// Attributes (well, one)
 	b = appendU16(b, attrXorMappedAddress)
-	b = appendU16(b, uint16(4+len(ip)))
+	b = appendU16(b, uint16(4+addr.BitLen()/8))
 	b = append(b,
 		0, // unused byte
 		fam)
-	b = appendU16(b, port^0x2112) // first half of magicCookie
-	for i, o := range []byte(ip) {
+	b = appendU16(b, addrPort.Port()^0x2112) // first half of magicCookie
+	ipa := addr.As16()
+	for i, o := range ipa[16-addr.BitLen()/8:] {
 		if i < 4 {
 			b = append(b, o^magicCookie[i])
 		} else {
@@ -192,25 +192,23 @@ func Response(txID TxID, ip net.IP, port uint16) []byte {
 
 // ParseResponse parses a successful binding response STUN packet.
 // The IP address is extracted from the XOR-MAPPED-ADDRESS attribute.
-// The returned addr slice is owned by the caller and does not alias b.
-func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
+func ParseResponse(b []byte) (tID TxID, addr netip.AddrPort, err error) {
 	if !Is(b) {
-		return tID, nil, 0, ErrNotSTUN
+		return tID, netip.AddrPort{}, ErrNotSTUN
 	}
 	copy(tID[:], b[8:8+len(tID)])
 	if b[0] != 0x01 || b[1] != 0x01 {
-		return tID, nil, 0, ErrNotSuccessResponse
+		return tID, netip.AddrPort{}, ErrNotSuccessResponse
 	}
 	attrsLen := int(binary.BigEndian.Uint16(b[2:4]))
 	b = b[headerLen:] // remove STUN header
 	if attrsLen > len(b) {
-		return tID, nil, 0, ErrMalformedAttrs
+		return tID, netip.AddrPort{}, ErrMalformedAttrs
 	} else if len(b) > attrsLen {
 		b = b[:attrsLen] // trim trailing packet bytes
 	}
 
-	var addr6, fallbackAddr, fallbackAddr6 []byte
-	var port6, fallbackPort, fallbackPort6 uint16
+	var addr6, fallbackAddr, fallbackAddr6 netip.AddrPort
 
 	// Read through the attributes.
 	// The the addr+port reported by XOR-MAPPED-ADDRESS
@@ -225,9 +223,9 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 				return err
 			}
 			if len(a) == 16 {
-				addr6, port6 = a, p
+				addr6 = netip.AddrPortFrom(netip.AddrFrom16(*(*[16]byte)([]byte(a))), p)
 			} else {
-				addr, port = a, p
+				addr = netip.AddrPortFrom(netip.AddrFrom4(*(*[4]byte)([]byte(a))), p)
 			}
 		case attrMappedAddress:
 			a, p, err := mappedAddress(attr)
@@ -235,30 +233,30 @@ func ParseResponse(b []byte) (tID TxID, addr []byte, port uint16, err error) {
 				return ErrMalformedAttrs
 			}
 			if len(a) == 16 {
-				fallbackAddr6, fallbackPort6 = a, p
+				fallbackAddr6 = netip.AddrPortFrom(netip.AddrFrom16(*(*[16]byte)([]byte(a))), p)
 			} else {
-				fallbackAddr, fallbackPort = a, p
+				fallbackAddr = netip.AddrPortFrom(netip.AddrFrom4(*(*[4]byte)([]byte(a))), p)
 			}
 		}
 		return nil
 
 	}); err != nil {
-		return TxID{}, nil, 0, err
+		return TxID{}, netip.AddrPort{}, err
 	}
 
-	if addr != nil {
-		return tID, addr, port, nil
+	if addr.IsValid() {
+		return tID, addr, nil
 	}
-	if fallbackAddr != nil {
-		return tID, append([]byte{}, fallbackAddr...), fallbackPort, nil
+	if fallbackAddr.IsValid() {
+		return tID, fallbackAddr, nil
 	}
-	if addr6 != nil {
-		return tID, addr6, port6, nil
+	if addr6.IsValid() {
+		return tID, addr6, nil
 	}
-	if fallbackAddr6 != nil {
-		return tID, append([]byte{}, fallbackAddr6...), fallbackPort6, nil
+	if fallbackAddr6.IsValid() {
+		return tID, fallbackAddr6, nil
 	}
-	return tID, nil, 0, ErrMalformedAttrs
+	return tID, netip.AddrPort{}, ErrMalformedAttrs
 }
 
 func xorMappedAddress(tID TxID, b []byte) (addr []byte, port uint16, err error) {

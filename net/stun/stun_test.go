@@ -7,7 +7,7 @@ package stun_test
 import (
 	"bytes"
 	"fmt"
-	"net"
+	"net/netip"
 	"testing"
 
 	"tailscale.com/net/stun"
@@ -25,7 +25,7 @@ var responseTests = []struct {
 	name     string
 	data     []byte
 	wantTID  []byte
-	wantAddr []byte
+	wantAddr netip.Addr
 	wantPort uint16
 }{
 	{
@@ -40,7 +40,7 @@ var responseTests = []struct {
 			0x23, 0x60, 0xb1, 0x1e, 0x3e, 0xc6, 0x8f, 0xfa,
 			0x93, 0xe0, 0x80, 0x07,
 		},
-		wantAddr: []byte{72, 69, 33, 45},
+		wantAddr: netip.AddrFrom4([4]byte{72, 69, 33, 45}),
 		wantPort: 59028,
 	},
 	{
@@ -55,7 +55,7 @@ var responseTests = []struct {
 			0xf9, 0xf1, 0x21, 0xcb, 0xde, 0x7d, 0x7c, 0x75,
 			0x92, 0x3c, 0xe2, 0x71,
 		},
-		wantAddr: []byte{72, 69, 33, 45},
+		wantAddr: netip.AddrFrom4([4]byte{72, 69, 33, 45}),
 		wantPort: 59029,
 	},
 	{
@@ -77,7 +77,7 @@ var responseTests = []struct {
 			0x48, 0x2e, 0xb6, 0x47, 0x15, 0xe8, 0xb2, 0x8e,
 			0xae, 0xad, 0x64, 0x44,
 		},
-		wantAddr: []byte{72, 69, 33, 45},
+		wantAddr: netip.AddrFrom4([4]byte{72, 69, 33, 45}),
 		wantPort: 58539,
 	},
 	{
@@ -95,7 +95,7 @@ var responseTests = []struct {
 			0x7e, 0x57, 0x96, 0x68, 0x29, 0xf4, 0x44, 0x60,
 			0x9d, 0x1d, 0xea, 0xa6,
 		},
-		wantAddr: []byte{72, 69, 33, 45},
+		wantAddr: netip.AddrFrom4([4]byte{72, 69, 33, 45}),
 		wantPort: 59859,
 	},
 	{
@@ -114,7 +114,7 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
+		wantAddr: netip.AddrFrom4([4]byte{127, 0, 0, 1}),
 		wantPort: 61300,
 	},
 	{
@@ -137,7 +137,7 @@ var responseTests = []struct {
 			6, 245, 102, 133, 210, 138, 243, 230, 156, 227,
 			65, 226,
 		},
-		wantAddr: net.ParseIP("2602:d1:b4cf:c100:38b2:31ff:feef:96f6"),
+		wantAddr: netip.MustParseAddr("2602:d1:b4cf:c100:38b2:31ff:feef:96f6"),
 		wantPort: 37070,
 	},
 
@@ -156,7 +156,7 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
+		wantAddr: netip.AddrFrom4([4]byte{127, 0, 0, 1}),
 		wantPort: 61300,
 	},
 	{
@@ -172,7 +172,7 @@ var responseTests = []struct {
 			0xeb, 0xc2, 0xd3, 0x6e, 0xf4, 0x71, 0x21, 0x7c,
 			0x4f, 0x3e, 0x30, 0x8e,
 		},
-		wantAddr: []byte{127, 0, 0, 1},
+		wantAddr: netip.AddrFrom4([4]byte{127, 0, 0, 1}),
 		wantPort: 61300,
 	},
 }
@@ -180,7 +180,7 @@ var responseTests = []struct {
 func TestParseResponse(t *testing.T) {
 	subtest := func(t *testing.T, i int) {
 		test := responseTests[i]
-		tID, addr, port, err := stun.ParseResponse(test.data)
+		tID, addrPort, err := stun.ParseResponse(test.data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -188,11 +188,11 @@ func TestParseResponse(t *testing.T) {
 		if !bytes.Equal(tID[:], test.wantTID) {
 			t.Errorf("tid=%v, want %v", tID[:], test.wantTID)
 		}
-		if !bytes.Equal(addr, test.wantAddr) {
-			t.Errorf("addr=%v (%v), want %v", addr, net.IP(addr), test.wantAddr)
+		if addrPort.Addr().Compare(test.wantAddr) != 0 {
+			t.Errorf("addr=%v, want %v", addrPort.Addr(), test.wantAddr)
 		}
-		if port != test.wantPort {
-			t.Errorf("port=%d, want %d", port, test.wantPort)
+		if addrPort.Port() != test.wantPort {
+			t.Errorf("port=%d, want %d", addrPort.Port(), test.wantPort)
 		}
 	}
 	for i, test := range responseTests {
@@ -249,17 +249,17 @@ func TestResponse(t *testing.T) {
 	}
 	tests := []struct {
 		tx   stun.TxID
-		ip   net.IP
+		addr netip.Addr
 		port uint16
 	}{
-		{tx: txN(1), ip: net.ParseIP("1.2.3.4").To4(), port: 254},
-		{tx: txN(2), ip: net.ParseIP("1.2.3.4").To4(), port: 257},
-		{tx: txN(3), ip: net.ParseIP("1::4"), port: 254},
-		{tx: txN(4), ip: net.ParseIP("1::4"), port: 257},
+		{tx: txN(1), addr: netip.MustParseAddr("1.2.3.4"), port: 254},
+		{tx: txN(2), addr: netip.MustParseAddr("1.2.3.4"), port: 257},
+		{tx: txN(3), addr: netip.MustParseAddr("1::4"), port: 254},
+		{tx: txN(4), addr: netip.MustParseAddr("1::4"), port: 257},
 	}
 	for _, tt := range tests {
-		res := stun.Response(tt.tx, tt.ip, tt.port)
-		tx2, ip2, port2, err := stun.ParseResponse(res)
+		res := stun.Response(tt.tx, netip.AddrPortFrom(tt.addr, tt.port))
+		tx2, addr2, err := stun.ParseResponse(res)
 		if err != nil {
 			t.Errorf("TX %x: error: %v", tt.tx, err)
 			continue
@@ -267,11 +267,11 @@ func TestResponse(t *testing.T) {
 		if tt.tx != tx2 {
 			t.Errorf("TX %x: got TxID = %v", tt.tx, tx2)
 		}
-		if !bytes.Equal([]byte(tt.ip), ip2) {
-			t.Errorf("TX %x: ip = %v (%v); want %v (%v)", tt.tx, ip2, net.IP(ip2), []byte(tt.ip), tt.ip)
+		if tt.addr.Compare(addr2.Addr()) != 0 {
+			t.Errorf("TX %x: addr = %v; want %v", tt.tx, addr2.Addr(), tt.addr)
 		}
-		if tt.port != port2 {
-			t.Errorf("TX %x: port = %v; want %v", tt.tx, port2, tt.port)
+		if tt.port != addr2.Port() {
+			t.Errorf("TX %x: port = %v; want %v", tt.tx, addr2.Port(), tt.port)
 		}
 	}
 }
