@@ -261,8 +261,13 @@ func (c *FS) get(h AUMHash) (*fsHashInfo, error) {
 	}
 	defer f.Close()
 
+	m, err := cborDecOpts.DecMode()
+	if err != nil {
+		return nil, err
+	}
+
 	var out fsHashInfo
-	if err := cbor.NewDecoder(f).Decode(&out); err != nil {
+	if err := m.NewDecoder(f).Decode(&out); err != nil {
 		return nil, err
 	}
 	if out.AUM != nil && out.AUM.Hash() != h {
@@ -420,8 +425,13 @@ func (c *FS) commit(h AUMHash, updater func(*fsHashInfo)) error {
 		return fmt.Errorf("creating directory: %v", err)
 	}
 
+	m, err := cbor.CTAP2EncOptions().EncMode()
+	if err != nil {
+		return fmt.Errorf("cbor EncMode: %v", err)
+	}
+
 	var buff bytes.Buffer
-	if err := cbor.NewEncoder(&buff).Encode(toCommit); err != nil {
+	if err := m.NewEncoder(&buff).Encode(toCommit); err != nil {
 		return fmt.Errorf("encoding: %v", err)
 	}
 	return atomicfile.WriteFile(filepath.Join(dir, base), buff.Bytes(), 0644)

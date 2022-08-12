@@ -212,6 +212,10 @@ func (a *AUM) StaticValidate() error {
 }
 
 // Serialize returns the given AUM in a serialized format.
+//
+// We would implement encoding.BinaryMarshaler, except that would
+// unfortunately get called by the cbor marshaller resulting in infinite
+// recursion.
 func (a *AUM) Serialize() []byte {
 	// Why CBOR and not something like JSON?
 	//
@@ -241,6 +245,16 @@ func (a *AUM) Serialize() []byte {
 		panic(err)
 	}
 	return out.Bytes()
+}
+
+// Unserialize decodes bytes representing a marshaled AUM.
+//
+// We would implement encoding.BinaryUnmarshaler, except that would
+// unfortunately get called by the cbor unmarshaller resulting in infinite
+// recursion.
+func (a *AUM) Unserialize(data []byte) error {
+	dec, _ := cborDecOpts.DecMode()
+	return dec.Unmarshal(data, a)
 }
 
 // Hash returns a cryptographic digest of all AUM contents.

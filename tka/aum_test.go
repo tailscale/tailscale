@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/types/tkatype"
@@ -165,7 +164,7 @@ func TestSerialization(t *testing.T) {
 			}
 
 			var decodedAUM AUM
-			if err := cbor.Unmarshal(data, &decodedAUM); err != nil {
+			if err := decodedAUM.Unserialize(data); err != nil {
 				t.Fatalf("Unmarshal failed: %v", err)
 			}
 			if diff := cmp.Diff(tc.AUM, decodedAUM); diff != "" {

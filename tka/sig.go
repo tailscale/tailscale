@@ -68,6 +68,10 @@ func (s NodeKeySignature) sigHash() [blake2s.Size]byte {
 }
 
 // Serialize returns the given NKS in a serialized format.
+//
+// We would implement encoding.BinaryMarshaler, except that would
+// unfortunately get called by the cbor marshaller resulting in infinite
+// recursion.
 func (s *NodeKeySignature) Serialize() tkatype.MarshaledSignature {
 	out := bytes.NewBuffer(make([]byte, 0, 128)) // 64byte sig + 32byte keyID + 32byte headroom
 	encoder, err := cbor.CTAP2EncOptions().EncMode()
@@ -81,6 +85,16 @@ func (s *NodeKeySignature) Serialize() tkatype.MarshaledSignature {
 		panic(err)
 	}
 	return out.Bytes()
+}
+
+// Unserialize decodes bytes representing a marshaled NKS.
+//
+// We would implement encoding.BinaryUnmarshaler, except that would
+// unfortunately get called by the cbor unmarshaller resulting in infinite
+// recursion.
+func (s *NodeKeySignature) Unserialize(data []byte) error {
+	dec, _ := cborDecOpts.DecMode()
+	return dec.Unmarshal(data, s)
 }
 
 // verifySignature checks that the NodeKeySignature is authentic and certified
