@@ -7,6 +7,7 @@ package deephash
 import (
 	"archive/tar"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"hash"
 	"io"
@@ -400,6 +401,11 @@ func TestCanMemHash(t *testing.T) {
 	}
 }
 
+func u8(n uint8) string   { return string([]byte{n}) }
+func u16(n uint16) string { return string(binary.LittleEndian.AppendUint16(nil, n)) }
+func u32(n uint32) string { return string(binary.LittleEndian.AppendUint32(nil, n)) }
+func u64(n uint64) string { return string(binary.LittleEndian.AppendUint64(nil, n)) }
+
 func TestGetTypeHasher(t *testing.T) {
 	switch runtime.GOARCH {
 	case "amd64", "arm64", "arm", "386", "riscv64":
@@ -521,28 +527,28 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "time",
-			val:  time.Unix(0, 0).In(time.UTC),
-			out:  "\x141970-01-01T00:00:00Z",
+			val:  time.Unix(1234, 5678).In(time.UTC),
+			out:  u64(1234) + u32(5678) + u32(0),
 		},
 		{
 			name: "time_ptr", // addressable, as opposed to "time" test above
-			val:  ptrTo(time.Unix(0, 0).In(time.UTC)),
-			out:  "\x01\x141970-01-01T00:00:00Z",
+			val:  ptrTo(time.Unix(1234, 5678).In(time.UTC)),
+			out:  u8(1) + u64(1234) + u32(5678) + u32(0),
 		},
 		{
 			name: "time_ptr_via_unexported",
-			val:  testtype.NewUnexportedAddressableTime(time.Unix(0, 0).In(time.UTC)),
-			out:  "\x01\x141970-01-01T00:00:00Z",
+			val:  testtype.NewUnexportedAddressableTime(time.Unix(1234, 5678).In(time.UTC)),
+			out:  u8(1) + u64(1234) + u32(5678) + u32(0),
 		},
 		{
 			name: "time_ptr_via_unexported_value",
-			val:  *testtype.NewUnexportedAddressableTime(time.Unix(0, 0).In(time.UTC)),
-			out:  "\x141970-01-01T00:00:00Z",
+			val:  *testtype.NewUnexportedAddressableTime(time.Unix(1234, 5678).In(time.UTC)),
+			out:  u64(1234) + u32(5678) + u32(0),
 		},
 		{
 			name: "time_custom_zone",
 			val:  time.Unix(1655311822, 0).In(time.FixedZone("FOO", -60*60)),
-			out:  "\x192022-06-15T15:50:22-01:00",
+			out:  u64(1655311822) + u32(0) + u32(math.MaxUint32-60*60+1),
 		},
 		{
 			name: "time_nil",
@@ -616,7 +622,7 @@ func TestGetTypeHasher(t *testing.T) {
 		{
 			name: "tailcfg.Node",
 			val:  &tailcfg.Node{},
-			out:  "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x140001-01-01T00:00:00Z\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x140001-01-01T00:00:00Z\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+			out:  "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" + u64(uint64(time.Time{}.Unix())) + u32(0) + u32(0) + "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" + u64(uint64(time.Time{}.Unix())) + u32(0) + u32(0) + "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
 		},
 	}
 	for _, tt := range tests {
@@ -884,4 +890,49 @@ func (h *hashBuffer) Write(b []byte) (int, error) {
 func (h *hashBuffer) Reset() {
 	h.Hash.Reset()
 	h.B = h.B[:0]
+}
+
+func FuzzTime(f *testing.F) {
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(0), false, "", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(0), true, "", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(0), true, "hello", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(0), true, "", 1234)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(0), true, "hello", 1234)
+
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(1), false, "", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(1), true, "", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(1), true, "hello", 0)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(1), true, "", 1234)
+	f.Add(int64(0), int64(0), false, "", 0, int64(0), int64(1), true, "hello", 1234)
+
+	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0, int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0)
+	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0, int64(math.MaxInt64), int64(math.MaxInt64), true, "", 0)
+	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0, int64(math.MaxInt64), int64(math.MaxInt64), true, "hello", 0)
+	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0, int64(math.MaxInt64), int64(math.MaxInt64), true, "", 1234)
+	f.Add(int64(math.MaxInt64), int64(math.MaxInt64), false, "", 0, int64(math.MaxInt64), int64(math.MaxInt64), true, "hello", 1234)
+
+	f.Add(int64(math.MinInt64), int64(math.MinInt64), false, "", 0, int64(math.MinInt64), int64(math.MinInt64), false, "", 0)
+	f.Add(int64(math.MinInt64), int64(math.MinInt64), false, "", 0, int64(math.MinInt64), int64(math.MinInt64), true, "", 0)
+	f.Add(int64(math.MinInt64), int64(math.MinInt64), false, "", 0, int64(math.MinInt64), int64(math.MinInt64), true, "hello", 0)
+	f.Add(int64(math.MinInt64), int64(math.MinInt64), false, "", 0, int64(math.MinInt64), int64(math.MinInt64), true, "", 1234)
+	f.Add(int64(math.MinInt64), int64(math.MinInt64), false, "", 0, int64(math.MinInt64), int64(math.MinInt64), true, "hello", 1234)
+
+	f.Fuzz(func(t *testing.T,
+		s1, ns1 int64, loc1 bool, name1 string, off1 int,
+		s2, ns2 int64, loc2 bool, name2 string, off2 int,
+	) {
+		t1 := time.Unix(s1, ns1)
+		if loc1 {
+			t1.In(time.FixedZone(name1, off1))
+		}
+		t2 := time.Unix(s2, ns2)
+		if loc2 {
+			t2.In(time.FixedZone(name2, off2))
+		}
+		got := Hash(&t1) == Hash(&t2)
+		want := t1.Format(time.RFC3339Nano) == t2.Format(time.RFC3339Nano)
+		if got != want {
+			t.Errorf("time.Time(%s) == time.Time(%s) mismatches hash equivalent", t1.Format(time.RFC3339Nano), t2.Format(time.RFC3339Nano))
+		}
+	})
 }

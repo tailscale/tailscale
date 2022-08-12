@@ -11,6 +11,9 @@
 // The definition of equality is identical to reflect.DeepEqual except:
 //   - Floating-point values are compared based on the raw bits,
 //     which means that NaNs (with the same bit pattern) are treated as equal.
+//   - time.Time are compared based on whether they are the same instant in time
+//     and also in the same zone offset. Monotonic measurements and zone names
+//     are ignored as part of the hash.
 //   - Types which implement interface { AppendTo([]byte) []byte } use
 //     the AppendTo method to produce a textual representation of the value.
 //     Thus, two values are equal if AppendTo produces the same bytes.
@@ -522,12 +525,16 @@ func (h *hasher) hashComplex128v(v addressableValue) bool {
 	return true
 }
 
-// hashString hashes v, of kind time.Time.
+// hashTimev hashes v, of kind time.Time.
 func (h *hasher) hashTimev(v addressableValue) bool {
+	// Include the zone offset (but not the name) to keep
+	// Hash(t1) == Hash(t2) being semantically equivalent to
+	// t1.Format(time.RFC3339Nano) == t2.Format(time.RFC3339Nano).
 	t := *(*time.Time)(v.Addr().UnsafePointer())
-	b := t.AppendFormat(h.scratch[:1], time.RFC3339Nano)
-	b[0] = byte(len(b) - 1) // more than sufficient width; if not, good enough.
-	h.HashBytes(b)
+	_, offset := t.Zone()
+	h.HashUint64(uint64(t.Unix()))
+	h.HashUint32(uint32(t.Nanosecond()))
+	h.HashUint32(uint32(offset))
 	return true
 }
 
