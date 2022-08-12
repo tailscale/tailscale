@@ -214,12 +214,11 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	rcfg.Routes = routes
 	ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
 
-	// If the OS can't do native split-dns, read out the underlying
-	// resolver config and blend it into our config.
 	if m.os.SupportsSplitDNS() {
 		ocfg.MatchDomains = cfg.matchDomains()
-	}
-	if !m.os.SupportsSplitDNS() || isWindows {
+	} else {
+		// If the OS can't do native split-dns, read out the underlying
+		// resolver config and blend it into our config.
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
 			health.SetDNSOSHealth(err)
