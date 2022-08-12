@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"hash"
+	"unsafe"
 )
 
 var _ hash.Hash = (*Hash)(nil)
@@ -24,13 +25,16 @@ type Hash struct {
 	// However, it does mean that sha256.digest.x goes unused,
 	// which is a waste of 64B.
 
-	h  hash.Hash              // always *sha256.digest
+	// H is the underlying hash.Hash.
+	// The hash.Hash.BlockSize must be equal to sha256.BlockSize.
+	// It is exported only for testing purposes.
+	H  hash.Hash              // usually a *sha256.digest
 	x  [sha256.BlockSize]byte // equivalent to sha256.digest.x
 	nx int                    // equivalent to sha256.digest.nx
 }
 
 func New() *Hash {
-	return &Hash{h: sha256.New()}
+	return &Hash{H: sha256.New()}
 }
 
 func (h *Hash) Write(b []byte) (int, error) {
@@ -42,32 +46,32 @@ func (h *Hash) Sum(b []byte) []byte {
 	if h.nx > 0 {
 		// This causes block mis-alignment. Future operations will be correct,
 		// but are less efficient until Reset is called.
-		h.h.Write(h.x[:h.nx])
+		h.H.Write(h.x[:h.nx])
 		h.nx = 0
 	}
 
 	// Unfortunately hash.Hash.Sum always causes the input to escape since
 	// escape analysis cannot prove anything past an interface method call.
 	// Assuming h already escapes, we call Sum with h.x first,
-	// and then the copy the result to b.
-	sum := h.h.Sum(h.x[:0])
+	// and then copy the result to b.
+	sum := h.H.Sum(h.x[:0])
 	return append(b, sum...)
 }
 
 func (h *Hash) Reset() {
-	if h.h == nil {
-		h.h = sha256.New()
+	if h.H == nil {
+		h.H = sha256.New()
 	}
-	h.h.Reset()
+	h.H.Reset()
 	h.nx = 0
 }
 
 func (h *Hash) Size() int {
-	return h.h.Size()
+	return h.H.Size()
 }
 
 func (h *Hash) BlockSize() int {
-	return h.h.BlockSize()
+	return h.H.BlockSize()
 }
 
 func (h *Hash) HashUint8(n uint8) {
@@ -125,7 +129,7 @@ func (h *Hash) hashUint64Slow(n uint64) { h.hashUint(uint64(n), 8) }
 func (h *Hash) hashUint(n uint64, i int) {
 	for ; i > 0; i-- {
 		if h.nx == len(h.x) {
-			h.h.Write(h.x[:])
+			h.H.Write(h.x[:])
 			h.nx = 0
 		}
 		h.x[h.nx] = byte(n)
@@ -140,19 +144,29 @@ func (h *Hash) HashBytes(b []byte) {
 		n := copy(h.x[h.nx:], b)
 		h.nx += n
 		if h.nx == len(h.x) {
-			h.h.Write(h.x[:])
+			h.H.Write(h.x[:])
 			h.nx = 0
 		}
 		b = b[n:]
 	}
 	if len(b) >= len(h.x) {
 		n := len(b) &^ (len(h.x) - 1) // n is a multiple of len(h.x)
-		h.h.Write(b[:n])
+		h.H.Write(b[:n])
 		b = b[n:]
 	}
 	if len(b) > 0 {
 		h.nx = copy(h.x[:], b)
 	}
+}
+
+func (h *Hash) HashString(s string) {
+	type stringHeader struct {
+		p unsafe.Pointer
+		n int
+	}
+	p := (*stringHeader)(unsafe.Pointer(&s))
+	b := unsafe.Slice((*byte)(p.p), p.n)
+	h.HashBytes(b)
 }
 
 // TODO: Add Hash.MarshalBinary and Hash.UnmarshalBinary?

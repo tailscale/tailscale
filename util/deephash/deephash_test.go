@@ -6,10 +6,9 @@ package deephash
 
 import (
 	"archive/tar"
-	"bufio"
-	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"math/rand"
@@ -626,10 +625,9 @@ func TestGetTypeHasher(t *testing.T) {
 			va := newAddressableValue(rv.Type())
 			va.Set(rv)
 			fn := getTypeInfo(va.Type()).hasher()
-			var buf bytes.Buffer
-			h := &hasher{
-				bw: bufio.NewWriter(&buf),
-			}
+			hb := &hashBuffer{Hash: sha256.New()}
+			h := new(hasher)
+			h.Hash.H = hb
 			got := fn(h, va)
 			const ptrSize = 32 << uintptr(^uintptr(0)>>63)
 			if tt.out32 != "" && ptrSize == 32 {
@@ -641,10 +639,8 @@ func TestGetTypeHasher(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("func returned %v; want %v", got, tt.want)
 			}
-			if err := h.bw.Flush(); err != nil {
-				t.Fatal(err)
-			}
-			if got := buf.String(); got != tt.out {
+			h.sum()
+			if got := string(hb.B); got != tt.out {
 				t.Fatalf("got %q; want %q", got, tt.out)
 			}
 		})
@@ -720,21 +716,21 @@ func TestHashMapAcyclic(t *testing.T) {
 	}
 	got := map[string]bool{}
 
-	var buf bytes.Buffer
-	bw := bufio.NewWriter(&buf)
+	hb := &hashBuffer{Hash: sha256.New()}
 
 	ti := getTypeInfo(reflect.TypeOf(m))
 
 	for i := 0; i < 20; i++ {
 		v := addressableValue{reflect.ValueOf(&m).Elem()}
-		buf.Reset()
-		bw.Reset(&buf)
-		h := &hasher{bw: bw}
+		hb.Reset()
+		h := new(hasher)
+		h.Hash.H = hb
 		h.hashMap(v, ti, false)
-		if got[string(buf.Bytes())] {
+		h.sum()
+		if got[string(hb.B)] {
 			continue
 		}
-		got[string(buf.Bytes())] = true
+		got[string(hb.B)] = true
 	}
 	if len(got) != 1 {
 		t.Errorf("got %d results; want 1", len(got))
@@ -746,13 +742,13 @@ func TestPrintArray(t *testing.T) {
 		X [32]byte
 	}
 	x := T{X: [32]byte{1: 1, 31: 31}}
-	var got bytes.Buffer
-	bw := bufio.NewWriter(&got)
-	h := &hasher{bw: bw}
+	hb := &hashBuffer{Hash: sha256.New()}
+	h := new(hasher)
+	h.Hash.H = hb
 	h.hashValue(addressableValue{reflect.ValueOf(&x).Elem()}, false)
-	bw.Flush()
+	h.sum()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
-	if got := got.Bytes(); string(got) != want {
+	if got := hb.B; string(got) != want {
 		t.Errorf("wrong:\n got: %q\nwant: %q\n", got, want)
 	}
 }
@@ -764,16 +760,15 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 		m[i] = fmt.Sprint(i)
 	}
 
-	var buf bytes.Buffer
-	bw := bufio.NewWriter(&buf)
+	hb := &hashBuffer{Hash: sha256.New()}
 	v := addressableValue{reflect.ValueOf(&m).Elem()}
 	ti := getTypeInfo(v.Type())
 
-	h := &hasher{bw: bw}
+	h := new(hasher)
+	h.Hash.H = hb
 
 	for i := 0; i < b.N; i++ {
-		buf.Reset()
-		bw.Reset(&buf)
+		h.Reset()
 		h.hashMap(v, ti, false)
 	}
 }
@@ -873,4 +868,20 @@ func BenchmarkHashArray(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sink = Hash(x)
 	}
+}
+
+// hashBuffer is a hash.Hash that buffers all written data.
+type hashBuffer struct {
+	hash.Hash
+	B []byte
+}
+
+func (h *hashBuffer) Write(b []byte) (int, error) {
+	n, err := h.Hash.Write(b)
+	h.B = append(h.B, b[:n]...)
+	return n, err
+}
+func (h *hashBuffer) Reset() {
+	h.Hash.Reset()
+	h.B = h.B[:0]
 }
