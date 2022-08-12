@@ -7,10 +7,10 @@ package dns
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os/exec"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -118,14 +118,23 @@ func (m windowsManager) setSplitDNS(resolvers []netip.Addr, domains []dnsname.FQ
 // domains can be set without resolvers, which just contributes new
 // paths to the global DNS search list.
 func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.FQDN) error {
-	var ipsv4 []string
-	var ipsv6 []string
-
+	tsGUID, err := windows.GUIDFromString(m.guid)
+	if err != nil {
+		return err
+	}
+	tsLUID, err := winipcfg.LUIDFromGUID(&tsGUID)
+	if err != nil {
+		return err
+	}
+	ips4 := make([]net.IP, 0, len(resolvers))
+	ips6 := make([]net.IP, 0, len(resolvers))
 	for _, ip := range resolvers {
 		if ip.Is4() {
-			ipsv4 = append(ipsv4, ip.String())
+			b := ip.As4()
+			ips4 = append(ips4, net.IP(b[:]))
 		} else {
-			ipsv6 = append(ipsv6, ip.String())
+			b := ip.As16()
+			ips6 = append(ips6, net.IP(b[:]))
 		}
 	}
 
@@ -134,27 +143,28 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 		domStrs = append(domStrs, dom.WithoutTrailingDot())
 	}
 
+	if err := tsLUID.SetDNS(winipcfg.AddressFamily(windows.AF_INET), ips4, domStrs); err != nil {
+		return err
+	}
+
+	if err := tsLUID.SetDNS(winipcfg.AddressFamily(windows.AF_INET6), ips6, domStrs); err != nil {
+		return err
+	}
+
+	// Disable LLMNR on the Tailscale interface. We don't do
+	// multicast, and we certainly don't do LLMNR, so it's pointless
+	// to make Windows try it.
+	//
+	// TODO(maisem): The same effect can be achieved by setting
+	// winipcfg.DnsInterfaceSettings.EnableLLMNR to 0. Currently upstream does
+	// not support setting the DnsInterfaceSettingsFlagEnableLLMNR flag, use it
+	// when it does supports it. Or write something that does.
+
 	key4, err := m.openKey(m.ifPath(ipv4RegBase))
 	if err != nil {
 		return err
 	}
 	defer key4.Close()
-
-	if len(ipsv4) == 0 {
-		if err := delValue(key4, "NameServer"); err != nil {
-			return err
-		}
-	} else if err := key4.SetStringValue("NameServer", strings.Join(ipsv4, ",")); err != nil {
-		return err
-	}
-
-	if len(domains) == 0 {
-		if err := delValue(key4, "SearchList"); err != nil {
-			return err
-		}
-	} else if err := key4.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
-		return err
-	}
 
 	key6, err := m.openKey(m.ifPath(ipv6RegBase))
 	if err != nil {
@@ -162,25 +172,6 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 	}
 	defer key6.Close()
 
-	if len(ipsv6) == 0 {
-		if err := delValue(key6, "NameServer"); err != nil {
-			return err
-		}
-	} else if err := key6.SetStringValue("NameServer", strings.Join(ipsv6, ",")); err != nil {
-		return err
-	}
-
-	if len(domains) == 0 {
-		if err := delValue(key6, "SearchList"); err != nil {
-			return err
-		}
-	} else if err := key6.SetStringValue("SearchList", strings.Join(domStrs, ",")); err != nil {
-		return err
-	}
-
-	// Disable LLMNR on the Tailscale interface. We don't do
-	// multicast, and we certainly don't do LLMNR, so it's pointless
-	// to make Windows try it.
 	if err := key4.SetDWordValue("EnableMulticast", 0); err != nil {
 		return err
 	}
