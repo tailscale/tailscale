@@ -167,9 +167,9 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 		return err
 	}
 
-	// Disable LLMNR on the Tailscale interface. We don't do
-	// multicast, and we certainly don't do LLMNR, so it's pointless
-	// to make Windows try it.
+	// Disable LLMNR on the Tailscale interface. We don't do multicast, and we
+	// certainly don't do LLMNR, so it's pointless to make Windows try it. It is
+	// being deprecated.
 	if err := key4.SetDWordValue("EnableMulticast", 0); err != nil {
 		return err
 	}
@@ -204,9 +204,13 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// configuration only, routing one set of things to the "split"
 	// resolver and the rest to the primary.
 
-	// Unconditionally disable dynamic DNS updates on our interfaces.
+	// Unconditionally disable dynamic DNS updates and NetBIOS on our
+	// interfaces.
 	if err := m.disableDynamicUpdates(); err != nil {
 		m.logf("disableDynamicUpdates error: %v\n", err)
+	}
+	if err := m.disableNetBIOS(); err != nil {
+		m.logf("disableNetBIOS error: %v\n", err)
 	}
 
 	if len(cfg.MatchDomains) == 0 {
@@ -315,6 +319,18 @@ func (m windowsManager) setSingleDWORD(prefix winutil.RegistryPathPrefix, value 
 	}
 	defer k.Close()
 	return k.SetDWordValue(value, data)
+}
+
+// disableNetBIOS sets the appropriate registry values to prevent Windows from
+// sending NetBIOS name resolution requests for our interface which we do not
+// handle nor want to. By leaving it enabled and not handling it we introduce
+// short-name resolution delays in certain conditions as Windows waits for
+// NetBIOS responses from our interface (#1659).
+//
+// Further, LLMNR and NetBIOS are being deprecated anyway in favor of MDNS.
+// https://techcommunity.microsoft.com/t5/networking-blog/aligning-on-mdns-ramping-down-netbios-name-resolution-and-llmnr/ba-p/3290816
+func (m windowsManager) disableNetBIOS() error {
+	return m.setSingleDWORD(winutil.NetBTInterfacePrefix, "NetbiosOptions", 2)
 }
 
 func (m windowsManager) GetBaseConfig() (OSConfig, error) {
