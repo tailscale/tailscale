@@ -10,7 +10,9 @@ import (
 	"log"
 	"os/exec"
 	"runtime"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -390,4 +392,94 @@ func IsCurrentProcessElevated() bool {
 	defer token.Close()
 
 	return token.IsElevated()
+}
+
+// keyOpenTimeout is how long we wait for a registry key to appear. For some
+// reason, registry keys tied to ephemeral interfaces can take a long while to
+// appear after interface creation, and we can end up racing with that.
+const keyOpenTimeout = 20 * time.Second
+
+// RegistryPath represents a path inside a root registry.Key.
+type RegistryPath string
+
+// RegistryPathPrefix specifies a RegistryPath prefix that must be suffixed with
+// another RegistryPath to make a valid RegistryPath.
+type RegistryPathPrefix string
+
+// WithSuffix returns a RegistryPath with the given suffix appended.
+func (p RegistryPathPrefix) WithSuffix(suf string) RegistryPath {
+	return RegistryPath(string(p) + suf)
+}
+
+const (
+	IPv4TCPIPBase RegistryPath = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
+	IPv6TCPIPBase RegistryPath = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
+	NetBTBase     RegistryPath = `SYSTEM\CurrentControlSet\Services\NetBT\Parameters`
+
+	IPv4TCPIPInterfacePrefix RegistryPathPrefix = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\`
+	IPv6TCPIPInterfacePrefix RegistryPathPrefix = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\`
+	NetBTInterfacePrefix     RegistryPathPrefix = `SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces\Tcpip_`
+)
+
+// ErrKeyWaitTimeout is returned by OpenKeyWait when calls timeout.
+var ErrKeyWaitTimeout = errors.New("timeout waiting for registry key")
+
+// OpenKeyWait opens a registry key, waiting for it to appear if necessary. It
+// returns the opened key, or ErrKeyWaitTimeout if the key does not appear
+// within 20s. The caller must call Close on the returned key.
+func OpenKeyWait(k registry.Key, path RegistryPath, access uint32) (registry.Key, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	deadline := time.Now().Add(keyOpenTimeout)
+	pathSpl := strings.Split(string(path), "\\")
+	for i := 0; ; i++ {
+		keyName := pathSpl[i]
+		isLast := i+1 == len(pathSpl)
+
+		event, err := windows.CreateEvent(nil, 0, 0, nil)
+		if err != nil {
+			return 0, fmt.Errorf("windows.CreateEvent: %w", err)
+		}
+		defer windows.CloseHandle(event)
+
+		var key registry.Key
+		for {
+			err = windows.RegNotifyChangeKeyValue(windows.Handle(k), false, windows.REG_NOTIFY_CHANGE_NAME, event, true)
+			if err != nil {
+				return 0, fmt.Errorf("windows.RegNotifyChangeKeyValue: %w", err)
+			}
+
+			var accessFlags uint32
+			if isLast {
+				accessFlags = access
+			} else {
+				accessFlags = registry.NOTIFY
+			}
+			key, err = registry.OpenKey(k, keyName, accessFlags)
+			if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
+				timeout := time.Until(deadline) / time.Millisecond
+				if timeout < 0 {
+					timeout = 0
+				}
+				s, err := windows.WaitForSingleObject(event, uint32(timeout))
+				if err != nil {
+					return 0, fmt.Errorf("windows.WaitForSingleObject: %w", err)
+				}
+				if s == uint32(windows.WAIT_TIMEOUT) { // windows.WAIT_TIMEOUT status const is misclassified as error in golang.org/x/sys/windows
+					return 0, ErrKeyWaitTimeout
+				}
+			} else if err != nil {
+				return 0, fmt.Errorf("registry.OpenKey(%v): %w", path, err)
+			} else {
+				if isLast {
+					return key, nil
+				}
+				defer key.Close()
+				break
+			}
+		}
+
+		k = key
+	}
 }

@@ -339,11 +339,12 @@ func deleteFakeGPKey(t *testing.T) {
 }
 
 func createFakeInterfaceKey(t *testing.T, guid windows.GUID) (func(), error) {
-	basePaths := []string{ipv4RegBase, ipv6RegBase}
+	basePaths := []winutil.RegistryPathPrefix{winutil.IPv4TCPIPInterfacePrefix, winutil.IPv6TCPIPInterfacePrefix}
 	keyPaths := make([]string, 0, len(basePaths))
 
+	guidStr := guid.String()
 	for _, basePath := range basePaths {
-		keyPath := fmt.Sprintf(`%s\Interfaces\%s`, basePath, guid)
+		keyPath := string(basePath.WithSuffix(guidStr))
 		key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, keyPath, registry.SET_VALUE)
 		if err != nil {
 			return nil, err

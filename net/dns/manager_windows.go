@@ -20,12 +20,10 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/winutil"
 )
 
 const (
-	ipv4RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
-	ipv6RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
-
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
@@ -59,22 +57,13 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	return ret, nil
 }
 
-// keyOpenTimeout is how long we wait for a registry key to
-// appear. For some reason, registry keys tied to ephemeral interfaces
-// can take a long while to appear after interface creation, and we
-// can end up racing with that.
-const keyOpenTimeout = 20 * time.Second
-
-func (m windowsManager) openKey(path string) (registry.Key, error) {
-	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
+func (m windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (registry.Key, error) {
+	path := pfx.WithSuffix(m.guid)
+	key, err := winutil.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
 	if err != nil {
 		return 0, fmt.Errorf("opening %s: %w", path, err)
 	}
 	return key, nil
-}
-
-func (m windowsManager) ifPath(basePath string) string {
-	return fmt.Sprintf(`%s\Interfaces\%s`, basePath, m.guid)
 }
 
 func delValue(key registry.Key, name string) error {
@@ -134,7 +123,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 		domStrs = append(domStrs, dom.WithoutTrailingDot())
 	}
 
-	key4, err := m.openKey(m.ifPath(ipv4RegBase))
+	key4, err := m.openInterfaceKey(winutil.IPv4TCPIPInterfacePrefix)
 	if err != nil {
 		return err
 	}
@@ -156,7 +145,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.
 		return err
 	}
 
-	key6, err := m.openKey(m.ifPath(ipv6RegBase))
+	key6, err := m.openInterfaceKey(winutil.IPv6TCPIPInterfacePrefix)
 	if err != nil {
 		return err
 	}
@@ -308,23 +297,24 @@ func (m windowsManager) Close() error {
 // Windows DHCP client from sending dynamic DNS updates for our interface to
 // AD domain controllers.
 func (m windowsManager) disableDynamicUpdates() error {
-	setRegValue := func(regBase string) error {
-		key, err := m.openKey(m.ifPath(regBase))
-		if err != nil {
-			return err
-		}
-		defer key.Close()
-
-		return key.SetDWordValue("DisableDynamicUpdate", 1)
+	if err := m.setSingleDWORD(winutil.IPv4TCPIPInterfacePrefix, "EnableDNSUpdate", 0); err != nil {
+		return err
 	}
-
-	for _, regBase := range []string{ipv4RegBase, ipv6RegBase} {
-		if err := setRegValue(regBase); err != nil {
-			return err
-		}
+	if err := m.setSingleDWORD(winutil.IPv6TCPIPInterfacePrefix, "EnableDNSUpdate", 0); err != nil {
+		return err
 	}
-
 	return nil
+}
+
+// setSingleDWORD opens the Registry Key in HKLM for the interface associated
+// with the windowsManager and sets the "keyPrefix\value" to data.
+func (m windowsManager) setSingleDWORD(prefix winutil.RegistryPathPrefix, value string, data uint32) error {
+	k, err := m.openInterfaceKey(prefix)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetDWordValue(value, data)
 }
 
 func (m windowsManager) GetBaseConfig() (OSConfig, error) {
