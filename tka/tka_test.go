@@ -317,11 +317,11 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	}
 
 	// Both authorities should trust the key laid down in the genesis state.
-	if _, err := a1.state.GetKey(key.ID()); err != nil {
-		t.Errorf("reading genesis key from a1: %v", err)
+	if !a1.KeyTrusted(key.ID()) {
+		t.Error("a1 did not trust genesis key")
 	}
-	if _, err := a2.state.GetKey(key.ID()); err != nil {
-		t.Errorf("reading genesis key from a2: %v", err)
+	if !a2.KeyTrusted(key.ID()) {
+		t.Error("a2 did not trust genesis key")
 	}
 }
 

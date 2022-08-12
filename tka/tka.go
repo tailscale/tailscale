@@ -16,6 +16,18 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
+// Strict settings for the CBOR decoder.
+var cborDecOpts = cbor.DecOptions{
+	DupMapKey:   cbor.DupMapKeyEnforcedAPF,
+	IndefLength: cbor.IndefLengthForbidden,
+	TagsMd:      cbor.TagsForbidden,
+
+	// Arbitrarily-chosen maximums.
+	MaxNestedLevels:  8,
+	MaxArrayElements: 4096,
+	MaxMapPairs:      1024,
+}
+
 // Authority is a Tailnet Key Authority. This type is the main coupling
 // point to the rest of the tailscale client.
 //
@@ -596,8 +608,8 @@ func (a *Authority) Inform(updates []AUM) error {
 // correctly by a trusted key.
 func (a *Authority) VerifySignature(nodeKeySignature tkatype.MarshaledSignature) error {
 	var decoded NodeKeySignature
-	if err := cbor.Unmarshal(nodeKeySignature, &decoded); err != nil {
-		return fmt.Errorf("unmarshal: %v", err)
+	if err := decoded.Unserialize(nodeKeySignature); err != nil {
+		return fmt.Errorf("unserialize: %v", err)
 	}
 	key, err := a.state.GetKey(decoded.KeyID)
 	if err != nil {
@@ -605,4 +617,11 @@ func (a *Authority) VerifySignature(nodeKeySignature tkatype.MarshaledSignature)
 	}
 
 	return decoded.verifySignature(key)
+}
+
+// KeyTrusted returns true if the given keyID is trusted by the tailnet
+// key authority.
+func (a *Authority) KeyTrusted(keyID tkatype.KeyID) bool {
+	_, err := a.state.GetKey(keyID)
+	return err == nil
 }
