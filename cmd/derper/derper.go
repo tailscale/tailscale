@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -356,7 +357,8 @@ func serverSTUNListener(ctx context.Context, pc *net.UDPConn) {
 		} else {
 			stunIPv6.Add(1)
 		}
-		res := stun.Response(txid, ua.IP, uint16(ua.Port))
+		addr, _ := netip.AddrFromSlice(ua.IP)
+		res := stun.Response(txid, netip.AddrPortFrom(addr, uint16(ua.Port)))
 		_, err = pc.WriteTo(res, ua)
 		if err != nil {
 			stunWriteError.Add(1)

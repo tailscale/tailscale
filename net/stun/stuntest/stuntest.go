@@ -84,7 +84,8 @@ func runSTUN(t testing.TB, pc net.PacketConn, stats *stunStats, done chan<- stru
 		}
 		stats.mu.Unlock()
 
-		res := stun.Response(txid, ua.IP, uint16(ua.Port))
+		nia, _ := netip.AddrFromSlice(ua.IP)
+		res := stun.Response(txid, netip.AddrPortFrom(nia, uint16(ua.Port)))
 		if _, err := pc.WriteTo(res, addr); err != nil {
 			t.Logf("STUN server write failed: %v", err)
 		}

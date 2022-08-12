@@ -261,7 +261,7 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 		return
 	}
 
-	tx, addr, port, err := stun.ParseResponse(pkt)
+	tx, addrPort, err := stun.ParseResponse(pkt)
 	if err != nil {
 		if _, err := stun.ParseBindingRequest(pkt); err == nil {
 			// This was probably our own netcheck hairpin
@@ -279,10 +279,7 @@ func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	}
 	rs.mu.Unlock()
 	if ok {
-		ta := net.TCPAddr{IP: addr, Port: int(port)}
-		if ipp := netaddr.Unmap(ta.AddrPort()); ipp.IsValid() {
-			onDone(ipp)
-		}
+		onDone(addrPort)
 	}
 }
 

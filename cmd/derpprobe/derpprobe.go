@@ -360,7 +360,7 @@ func probeUDP(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (la
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			txBack, _, _, err := stun.ParseResponse(buf[:n])
+			txBack, _, err := stun.ParseResponse(buf[:n])
 			if err != nil {
 				return 0, fmt.Errorf("parsing STUN response from %v: %v", ip, err)
 			}
