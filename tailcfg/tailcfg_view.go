@@ -12,10 +12,12 @@ import (
 	"net/netip"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/tkatype"
 	"tailscale.com/types/views"
 )
 
@@ -137,6 +139,7 @@ func (v NodeView) User() UserID                    { return v.ж.User }
 func (v NodeView) Sharer() UserID                  { return v.ж.Sharer }
 func (v NodeView) Key() key.NodePublic             { return v.ж.Key }
 func (v NodeView) KeyExpiry() time.Time            { return v.ж.KeyExpiry }
+func (v NodeView) KeySignature() mem.RO            { return mem.B(v.ж.KeySignature) }
 func (v NodeView) Machine() key.MachinePublic      { return v.ж.Machine }
 func (v NodeView) DiscoKey() key.DiscoPublic       { return v.ж.DiscoKey }
 func (v NodeView) Addresses() views.IPPrefixSlice  { return views.IPPrefixSliceOf(v.ж.Addresses) }
@@ -181,6 +184,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	Sharer                  UserID
 	Key                     key.NodePublic
 	KeyExpiry               time.Time
+	KeySignature            tkatype.MarshaledSignature
 	Machine                 key.MachinePublic
 	DiscoKey                key.DiscoPublic
 	Addresses               []netip.Prefix

@@ -14,6 +14,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/tkatype"
 )
 
 // Clone makes a deep copy of User.
@@ -47,6 +48,7 @@ func (src *Node) Clone() *Node {
 	}
 	dst := new(Node)
 	*dst = *src
+	dst.KeySignature = append(src.KeySignature[:0:0], src.KeySignature...)
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
@@ -74,6 +76,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Sharer                  UserID
 	Key                     key.NodePublic
 	KeyExpiry               time.Time
+	KeySignature            tkatype.MarshaledSignature
 	Machine                 key.MachinePublic
 	DiscoKey                key.DiscoPublic
 	Addresses               []netip.Prefix
