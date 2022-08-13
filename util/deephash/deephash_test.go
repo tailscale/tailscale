@@ -7,8 +7,6 @@ package deephash
 import (
 	"archive/tar"
 	"crypto/sha256"
-	"encoding/binary"
-	"fmt"
 	"hash"
 	"io"
 	"math"
@@ -27,7 +25,6 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
-	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
@@ -401,6 +398,7 @@ func TestCanMemHash(t *testing.T) {
 	}
 }
 
+/*
 func u8(n uint8) string   { return string([]byte{n}) }
 func u16(n uint16) string { return string(binary.LittleEndian.AppendUint16(nil, n)) }
 func u32(n uint32) string { return string(binary.LittleEndian.AppendUint32(nil, n)) }
@@ -652,6 +650,7 @@ func TestGetTypeHasher(t *testing.T) {
 		})
 	}
 }
+*/
 
 var sink Sum
 
@@ -715,6 +714,7 @@ func BenchmarkHashPacketFilter(b *testing.B) {
 	}
 }
 
+/*
 func TestHashMapAcyclic(t *testing.T) {
 	m := map[int]string{}
 	for i := 0; i < 100; i++ {
@@ -778,6 +778,7 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 		h.hashMap(v, ti, false)
 	}
 }
+*/
 
 func BenchmarkTailcfgNode(b *testing.B) {
 	b.ReportAllocs()

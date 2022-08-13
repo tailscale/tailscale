@@ -14,9 +14,6 @@
 //   - time.Time are compared based on whether they are the same instant in time
 //     and also in the same zone offset. Monotonic measurements and zone names
 //     are ignored as part of the hash.
-//   - Types which implement interface { AppendTo([]byte) []byte } use
-//     the AppendTo method to produce a textual representation of the value.
-//     Thus, two values are equal if AppendTo produces the same bytes.
 //
 // WARNING: This package, like most of the tailscale.com Go module,
 // should be considered Tailscale-internal; we make no API promises.
@@ -27,8 +24,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"log"
-	"math"
+	"net/netip"
 	"reflect"
 	"sync"
 	"time"
@@ -64,26 +60,10 @@ import (
 //	  theoretically "parsable" by looking up the hash in a magical map that
 //	  returns the set of entries for that given hash.
 
-// addressableValue is a reflect.Value that is guaranteed to be addressable
-// such that calling the Addr and Set methods do not panic.
-//
-// There is no compile magic that enforces this property,
-// but rather the need to construct this type makes it easier to examine each
-// construction site to ensure that this property is upheld.
-type addressableValue struct{ reflect.Value }
-
-// newAddressableValue constructs a new addressable value of type t.
-func newAddressableValue(t reflect.Type) addressableValue {
-	return addressableValue{reflect.New(t).Elem()} // dereferenced pointer is always addressable
-}
-
-const scratchSize = 128
-
 // hasher is reusable state for hashing a value.
 // Get one via hasherPool.
 type hasher struct {
 	sha256x.Hash
-	scratch    [scratchSize]byte
 	visitStack visitStack
 }
 
@@ -93,7 +73,7 @@ type Sum struct {
 }
 
 func (s1 *Sum) xor(s2 Sum) {
-	for i := 0; i < sha256.Size; i++ {
+	for i := 0; i < len(Sum{}.sum); i++ {
 		s1.sum[i] ^= s2.sum[i]
 	}
 }
@@ -131,12 +111,16 @@ func Hash(v any) (s Sum) {
 
 	rv := reflect.ValueOf(v)
 	if rv.IsValid() {
-		var va addressableValue
+		var t reflect.Type
+		var p pointer
 		if rv.Kind() == reflect.Pointer && !rv.IsNil() {
-			va = addressableValue{rv.Elem()} // dereferenced pointer is always addressable
+			t = rv.Type().Elem()
+			p = pointerOf(rv)
 		} else {
-			va = newAddressableValue(rv.Type())
+			t = rv.Type()
+			va := reflect.New(t).Elem()
 			va.Set(rv)
+			p = pointerOf(va.Addr())
 		}
 
 		// Always treat the Hash input as an interface (it is), including hashing
@@ -145,21 +129,25 @@ func Hash(v any) (s Sum) {
 		// the same thing that we do for reflect.Kind Interface in hashValue, but
 		// the initial reflect.ValueOf from an interface value effectively strips
 		// the interface box off so we have to do it at the top level by hand.
-		h.hashType(va.Type())
-		h.hashValue(va, false)
+		h.hashType(t)
+		hash := lookupTypeHasher(t)
+		hash(h, p)
 	}
 	return h.sum()
 }
 
-// HasherForType is like Hash, but it returns a Hash func that's specialized for
-// the provided reflect type, avoiding a map lookup per value.
+// HasherForType is like Hash, but it returns a Hash func that is
+// specialized for the provided type. The type must not be an interface kind.
 func HasherForType[T any]() func(T) Sum {
 	var zeroT T
-	t := reflect.TypeOf(zeroT)
-	ti := getTypeInfo(t)
-	var tiElem *typeInfo
+	t := reflect.TypeOf(&zeroT).Elem()
+	if t.Kind() == reflect.Interface {
+		panic(fmt.Sprintf("%v must not be an interface", t))
+	}
+	hash := lookupTypeHasher(t)
+	var hashElem typeHasherFunc
 	if t.Kind() == reflect.Pointer {
-		tiElem = getTypeInfo(t.Elem())
+		hashElem = lookupTypeHasher(t.Elem())
 	}
 	seedOnce.Do(initSeed)
 
@@ -170,17 +158,17 @@ func HasherForType[T any]() func(T) Sum {
 		h.HashUint64(seed)
 
 		rv := reflect.ValueOf(v)
-
 		if rv.IsValid() {
 			if rv.Kind() == reflect.Pointer && !rv.IsNil() {
-				va := addressableValue{rv.Elem()} // dereferenced pointer is always addressable
-				h.hashType(va.Type())
-				h.hashValueWithType(va, tiElem, false)
+				p := pointerOf(rv)
+				h.hashType(t.Elem())
+				hashElem(h, p)
 			} else {
-				va := newAddressableValue(rv.Type())
+				va := reflect.New(t).Elem()
 				va.Set(rv)
-				h.hashType(va.Type())
-				h.hashValueWithType(va, ti, false)
+				p := pointerOf(va.Addr())
+				h.hashType(t)
+				hash(h, p)
 			}
 		}
 		return h.sum()
@@ -198,447 +186,322 @@ func Update(last *Sum, v ...any) (changed bool) {
 	return true
 }
 
-var appenderToType = reflect.TypeOf((*appenderTo)(nil)).Elem()
-
-type appenderTo interface {
-	AppendTo([]byte) []byte
-}
-
 var (
-	uint8Type    = reflect.TypeOf(byte(0))
-	timeTimeType = reflect.TypeOf(time.Time{})
+	timeTimeType  = reflect.TypeOf((*time.Time)(nil)).Elem()
+	netipAddrType = reflect.TypeOf((*netip.Addr)(nil)).Elem()
 )
 
-// typeInfo describes properties of a type.
-//
-// A non-nil typeInfo is populated into the typeHasher map
-// when its type is first requested, before its func is created.
-// Its func field fn is only populated once the type has been created.
-// This is used for recursive types.
-type typeInfo struct {
-	rtype       reflect.Type
-	canMemHash  bool
-	isRecursive bool
+// typeHasherFunc hashes the value pointed at by p for a given type.
+// For example, if t is a bool, then p is a *bool.
+// The provided pointer is always non-nil.
+type typeHasherFunc func(h *hasher, p pointer)
 
-	// elemTypeInfo is the element type's typeInfo.
-	// It's set when rtype is of Kind Ptr, Slice, Array, Map.
-	elemTypeInfo *typeInfo
+var typeHasherCache sync.Map // map[reflect.Type]typeHasher
 
-	// keyTypeInfo is the map key type's typeInfo.
-	// It's set when rtype is of Kind Map.
-	keyTypeInfo *typeInfo
-
-	hashFuncOnce sync.Once
-	hashFuncLazy typeHasherFunc // nil until created
-}
-
-// returns ok if it was handled; else slow path runs
-type typeHasherFunc func(h *hasher, v addressableValue) (ok bool)
-
-var typeInfoMap sync.Map           // map[reflect.Type]*typeInfo
-var typeInfoMapPopulate sync.Mutex // just for adding to typeInfoMap
-
-func (ti *typeInfo) hasher() typeHasherFunc {
-	ti.hashFuncOnce.Do(ti.buildHashFuncOnce)
-	return ti.hashFuncLazy
-}
-
-func (ti *typeInfo) buildHashFuncOnce() {
-	ti.hashFuncLazy = genTypeHasher(ti.rtype)
-}
-
-func (h *hasher) hashBoolv(v addressableValue) bool {
-	var b byte
-	if v.Bool() {
-		b = 1
+func lookupTypeHasher(t reflect.Type) typeHasherFunc {
+	if v, ok := typeHasherCache.Load(t); ok {
+		return v.(typeHasherFunc)
 	}
-	h.HashUint8(b)
-	return true
+	hash := makeTypeHasher(t)
+	v, _ := typeHasherCache.LoadOrStore(t, hash)
+	return v.(typeHasherFunc)
 }
 
-func (h *hasher) hashUint8v(v addressableValue) bool {
-	h.HashUint8(uint8(v.Uint()))
-	return true
-}
-
-func (h *hasher) hashInt8v(v addressableValue) bool {
-	h.HashUint8(uint8(v.Int()))
-	return true
-}
-
-func (h *hasher) hashUint16v(v addressableValue) bool {
-	h.HashUint16(uint16(v.Uint()))
-	return true
-}
-
-func (h *hasher) hashInt16v(v addressableValue) bool {
-	h.HashUint16(uint16(v.Int()))
-	return true
-}
-
-func (h *hasher) hashUint32v(v addressableValue) bool {
-	h.HashUint32(uint32(v.Uint()))
-	return true
-}
-
-func (h *hasher) hashInt32v(v addressableValue) bool {
-	h.HashUint32(uint32(v.Int()))
-	return true
-}
-
-func (h *hasher) hashUint64v(v addressableValue) bool {
-	h.HashUint64(v.Uint())
-	return true
-}
-
-func (h *hasher) hashInt64v(v addressableValue) bool {
-	h.HashUint64(uint64(v.Int()))
-	return true
-}
-
-func hashStructAppenderTo(h *hasher, v addressableValue) bool {
-	if !v.CanInterface() {
-		return false // slow path
+func makeTypeHasher(t reflect.Type) typeHasherFunc {
+	// Types with specific hashing.
+	switch t {
+	case timeTimeType:
+		return hashTime
+	case netipAddrType:
+		return hashAddr
 	}
-	a := v.Addr().Interface().(appenderTo)
-	size := h.scratch[:8]
-	record := a.AppendTo(size)
-	binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
-	h.HashBytes(record)
-	return true
-}
 
-// hashPointerAppenderTo hashes v, a reflect.Ptr, that implements appenderTo.
-func hashPointerAppenderTo(h *hasher, v addressableValue) bool {
-	if !v.CanInterface() {
-		return false // slow path
-	}
-	if v.IsNil() {
-		h.HashUint8(0) // indicates nil
-		return true
-	}
-	h.HashUint8(1) // indicates visiting a pointer
-	a := v.Interface().(appenderTo)
-	size := h.scratch[:8]
-	record := a.AppendTo(size)
-	binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
-	h.HashBytes(record)
-	return true
-}
-
-// fieldInfo describes a struct field.
-type fieldInfo struct {
-	index      int // index of field for reflect.Value.Field(n); -1 if invalid
-	typeInfo   *typeInfo
-	canMemHash bool
-	offset     uintptr // when we can memhash the field
-	size       uintptr // when we can memhash the field
-}
-
-// mergeContiguousFieldsCopy returns a copy of f with contiguous memhashable fields
-// merged together. Such fields get a bogus index and fu value.
-func mergeContiguousFieldsCopy(in []fieldInfo) []fieldInfo {
-	ret := make([]fieldInfo, 0, len(in))
-	var last *fieldInfo
-	for _, f := range in {
-		// Combine two fields if they're both contiguous & memhash-able.
-		if f.canMemHash && last != nil && last.canMemHash && last.offset+last.size == f.offset {
-			last.size += f.size
-			last.index = -1
-			last.typeInfo = nil
-		} else {
-			ret = append(ret, f)
-			last = &ret[len(ret)-1]
-		}
-	}
-	return ret
-}
-
-// genHashStructFields generates a typeHasherFunc for t, which must be of kind Struct.
-func genHashStructFields(t reflect.Type) typeHasherFunc {
-	fields := make([]fieldInfo, 0, t.NumField())
-	for i, n := 0, t.NumField(); i < n; i++ {
-		sf := t.Field(i)
-		if sf.Type.Size() == 0 {
-			continue
-		}
-		fields = append(fields, fieldInfo{
-			index:      i,
-			typeInfo:   getTypeInfo(sf.Type),
-			canMemHash: canMemHash(sf.Type),
-			offset:     sf.Offset,
-			size:       sf.Type.Size(),
-		})
-	}
-	fields = mergeContiguousFieldsCopy(fields)
-	return structHasher{fields}.hash
-}
-
-type structHasher struct {
-	fields []fieldInfo
-}
-
-func (sh structHasher) hash(h *hasher, v addressableValue) bool {
-	base := v.Addr().UnsafePointer()
-	for _, f := range sh.fields {
-		if f.canMemHash {
-			h.HashBytes(unsafe.Slice((*byte)(unsafe.Pointer(uintptr(base)+f.offset)), f.size))
-			continue
-		}
-		va := addressableValue{v.Field(f.index)} // field is addressable if parent struct is addressable
-		if !f.typeInfo.hasher()(h, va) {
-			return false
-		}
-	}
-	return true
-}
-
-// genHashPtrToMemoryRange returns a hasher where the reflect.Value is a Ptr to
-// the provided eleType.
-func genHashPtrToMemoryRange(eleType reflect.Type) typeHasherFunc {
-	size := eleType.Size()
-	return func(h *hasher, v addressableValue) bool {
-		if v.IsNil() {
-			h.HashUint8(0) // indicates nil
-		} else {
-			h.HashUint8(1) // indicates visiting a pointer
-			h.HashBytes(unsafe.Slice((*byte)(v.UnsafePointer()), size))
-		}
-		return true
-	}
-}
-
-const debug = false
-
-func genTypeHasher(t reflect.Type) typeHasherFunc {
-	if debug {
-		log.Printf("generating func for %v", t)
+	// Types that can have their memory representation directly hashed.
+	if canMemHash(t) {
+		return makeMemHasher(t.Size())
 	}
 
 	switch t.Kind() {
-	case reflect.Bool:
-		return (*hasher).hashBoolv
-	case reflect.Int8:
-		return (*hasher).hashInt8v
-	case reflect.Int16:
-		return (*hasher).hashInt16v
-	case reflect.Int32:
-		return (*hasher).hashInt32v
-	case reflect.Int, reflect.Int64:
-		return (*hasher).hashInt64v
-	case reflect.Uint8:
-		return (*hasher).hashUint8v
-	case reflect.Uint16:
-		return (*hasher).hashUint16v
-	case reflect.Uint32:
-		return (*hasher).hashUint32v
-	case reflect.Uint, reflect.Uintptr, reflect.Uint64:
-		return (*hasher).hashUint64v
-	case reflect.Float32:
-		return (*hasher).hashFloat32v
-	case reflect.Float64:
-		return (*hasher).hashFloat64v
-	case reflect.Complex64:
-		return (*hasher).hashComplex64v
-	case reflect.Complex128:
-		return (*hasher).hashComplex128v
 	case reflect.String:
-		return (*hasher).hashString
-	case reflect.Slice:
-		et := t.Elem()
-		if canMemHash(et) {
-			return (*hasher).hashSliceMem
-		}
-		eti := getTypeInfo(et)
-		return genHashSliceElements(eti)
+		return hashString
 	case reflect.Array:
-		et := t.Elem()
-		eti := getTypeInfo(et)
-		return genHashArray(t, eti)
+		return makeArrayHasher(t)
+	case reflect.Slice:
+		return makeSliceHasher(t)
 	case reflect.Struct:
-		if t == timeTimeType {
-			return (*hasher).hashTimev
-		}
-		if t.Implements(appenderToType) {
-			return hashStructAppenderTo
-		}
-		return genHashStructFields(t)
+		return makeStructHasher(t)
+	case reflect.Map:
+		return makeMapHasher(t)
 	case reflect.Pointer:
-		et := t.Elem()
-		if canMemHash(et) {
-			return genHashPtrToMemoryRange(et)
-		}
-		if t.Implements(appenderToType) {
-			return hashPointerAppenderTo
-		}
-		if !typeIsRecursive(t) {
-			eti := getTypeInfo(et)
-			return func(h *hasher, v addressableValue) bool {
-				if v.IsNil() {
-					h.HashUint8(0) // indicates nil
-					return true
-				}
-				h.HashUint8(1)                   // indicates visiting a pointer
-				va := addressableValue{v.Elem()} // dereferenced pointer is always addressable
-				return eti.hasher()(h, va)
-			}
-		}
-	}
-
-	return func(h *hasher, v addressableValue) bool {
-		if debug {
-			log.Printf("unhandled type %v", v.Type())
-		}
-		return false
+		return makePointerHasher(t)
+	case reflect.Interface:
+		return makeInterfaceHasher(t)
+	default: // Chan, Func, UnsafePointer
+		return func(*hasher, pointer) {}
 	}
 }
 
-// hashString hashes v, of kind String.
-func (h *hasher) hashString(v addressableValue) bool {
-	s := v.String()
-	h.HashUint64(uint64(len(s)))
-	h.HashString(s)
-	return true
-}
-
-func (h *hasher) hashFloat32v(v addressableValue) bool {
-	h.HashUint32(math.Float32bits(float32(v.Float())))
-	return true
-}
-
-func (h *hasher) hashFloat64v(v addressableValue) bool {
-	h.HashUint64(math.Float64bits(v.Float()))
-	return true
-}
-
-func (h *hasher) hashComplex64v(v addressableValue) bool {
-	c := complex64(v.Complex())
-	h.HashUint32(math.Float32bits(real(c)))
-	h.HashUint32(math.Float32bits(imag(c)))
-	return true
-}
-
-func (h *hasher) hashComplex128v(v addressableValue) bool {
-	c := v.Complex()
-	h.HashUint64(math.Float64bits(real(c)))
-	h.HashUint64(math.Float64bits(imag(c)))
-	return true
-}
-
-// hashTimev hashes v, of kind time.Time.
-func (h *hasher) hashTimev(v addressableValue) bool {
+func hashTime(h *hasher, p pointer) {
 	// Include the zone offset (but not the name) to keep
 	// Hash(t1) == Hash(t2) being semantically equivalent to
 	// t1.Format(time.RFC3339Nano) == t2.Format(time.RFC3339Nano).
-	t := *(*time.Time)(v.Addr().UnsafePointer())
+	t := *p.asTime()
 	_, offset := t.Zone()
 	h.HashUint64(uint64(t.Unix()))
 	h.HashUint32(uint32(t.Nanosecond()))
 	h.HashUint32(uint32(offset))
-	return true
 }
 
-// hashSliceMem hashes v, of kind Slice, with a memhash-able element type.
-func (h *hasher) hashSliceMem(v addressableValue) bool {
-	vLen := v.Len()
-	h.HashUint64(uint64(vLen))
-	if vLen == 0 {
-		return true
+func hashAddr(h *hasher, p pointer) {
+	// The formatting of netip.Addr covers the
+	// IP version, the address, and the optional zone name (for v6).
+	// This is equivalent to a1.MarshalBinary() == a2.MarshalBinary().
+	ip := *p.asAddr()
+	switch {
+	case !ip.IsValid():
+		h.HashUint8(0)
+	case ip.Is4():
+		h.HashUint8(4)
+		b := ip.As4()
+		h.HashUint32(binary.LittleEndian.Uint32(b[:]))
+	case ip.Is6():
+		b := ip.As16()
+		z := ip.Zone()
+		if z == "" {
+			h.HashUint8(16)
+			h.HashUint64(binary.LittleEndian.Uint64(b[:8]))
+			h.HashUint64(binary.LittleEndian.Uint64(b[8:]))
+		} else {
+			h.HashUint8(24)
+			h.HashUint64(binary.LittleEndian.Uint64(b[:8]))
+			h.HashUint64(binary.LittleEndian.Uint64(b[8:]))
+			h.HashUint64(uint64(len(z)))
+			h.HashString(z)
+		}
 	}
-	h.HashBytes(unsafe.Slice((*byte)(v.UnsafePointer()), v.Type().Elem().Size()*uintptr(vLen)))
-	return true
 }
 
-func genHashArrayMem(n int, arraySize uintptr, efu *typeInfo) typeHasherFunc {
-	return func(h *hasher, v addressableValue) bool {
-		h.HashBytes(unsafe.Slice((*byte)(v.Addr().UnsafePointer()), arraySize))
-		return true
+func hashString(h *hasher, p pointer) {
+	s := *p.asString()
+	h.HashUint64(uint64(len(s)))
+	h.HashString(s)
+}
+
+func makeMemHasher(n uintptr) typeHasherFunc {
+	return func(h *hasher, p pointer) {
+		h.HashBytes(p.asMemory(n))
 	}
 }
 
-func genHashArrayElements(n int, eti *typeInfo) typeHasherFunc {
-	return func(h *hasher, v addressableValue) bool {
+func makeArrayHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashElem typeHasherFunc
+	init := func() {
+		hashElem = lookupTypeHasher(t.Elem())
+	}
+
+	n := t.Len()          // number of array elements
+	nb := t.Elem().Size() // byte size of each array element
+	return func(h *hasher, p pointer) {
+		once.Do(init)
 		for i := 0; i < n; i++ {
-			va := addressableValue{v.Index(i)} // element is addressable if parent array is addressable
-			if !eti.hasher()(h, va) {
-				return false
+			hashElem(h, p.arrayIndex(i, nb))
+		}
+	}
+}
+
+func makeSliceHasher(t reflect.Type) typeHasherFunc {
+	nb := t.Elem().Size() // byte size of each slice element
+	if canMemHash(t.Elem()) {
+		return func(h *hasher, p pointer) {
+			pa := p.sliceArray()
+			n := p.sliceLen()
+			b := pa.asMemory(uintptr(n) * nb)
+			h.HashUint64(uint64(len(b)))
+			h.HashBytes(b)
+		}
+	}
+
+	var once sync.Once
+	var hashElem typeHasherFunc
+	var isRecursive bool
+	init := func() {
+		hashElem = lookupTypeHasher(t.Elem())
+		isRecursive = typeIsRecursive(t)
+	}
+
+	return func(h *hasher, p pointer) {
+		pa := p.sliceArray()
+		n := p.sliceLen()
+		if pa.isNil() {
+			h.HashUint8(0) // indicates nil
+		} else {
+			h.HashUint8(1) // visiting slice
+		}
+		once.Do(init)
+		h.HashUint64(uint64(n))
+		for i := 0; i < n; i++ {
+			pe := pa.arrayIndex(i, nb)
+			if isRecursive {
+				if idx, ok := h.visitStack.seen(pe.p); ok {
+					h.HashUint8(2) // indicates cycle
+					h.HashUint64(uint64(idx))
+					return
+				}
+				h.HashUint8(1) // indicates visiting slice element
+				h.visitStack.push(pe.p)
+				defer h.visitStack.pop(pe.p)
+			}
+			hashElem(h, pe)
+		}
+	}
+}
+
+func makeStructHasher(t reflect.Type) typeHasherFunc {
+	type fieldHasher struct {
+		hash   typeHasherFunc
+		offset uintptr
+		size   uintptr
+		idx    int // index of field for reflect.Type.Field(n); negative if memory is directly hashable
+	}
+	var once sync.Once
+	var fields []fieldHasher
+	init := func() {
+		structFields := make([]fieldHasher, 0, t.NumField())
+		var last *fieldHasher
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if sf.Type.Size() == 0 {
+				continue
+			}
+			f := fieldHasher{nil, sf.Offset, sf.Type.Size(), i}
+			if canMemHash(sf.Type) {
+				f.idx = -1
+			}
+
+			// Combine two fields if they're both contiguous & memhash-able.
+			if f.idx < 0 && last != nil && last.idx < 0 && last.offset+last.size == f.offset {
+				last.size += f.size
+				last.idx = -1
+			} else {
+				structFields = append(structFields, f)
+				last = &structFields[len(structFields)-1]
 			}
 		}
-		return true
-	}
-}
 
-func noopHasherFunc(h *hasher, v addressableValue) bool { return true }
-
-func genHashArray(t reflect.Type, eti *typeInfo) typeHasherFunc {
-	if t.Size() == 0 {
-		return noopHasherFunc
-	}
-	et := t.Elem()
-	if canMemHash(et) {
-		return genHashArrayMem(t.Len(), t.Size(), eti)
-	}
-	n := t.Len()
-	return genHashArrayElements(n, eti)
-}
-
-func genHashSliceElements(eti *typeInfo) typeHasherFunc {
-	return sliceElementHasher{eti}.hash
-}
-
-type sliceElementHasher struct {
-	eti *typeInfo
-}
-
-func (seh sliceElementHasher) hash(h *hasher, v addressableValue) bool {
-	vLen := v.Len()
-	h.HashUint64(uint64(vLen))
-	for i := 0; i < vLen; i++ {
-		va := addressableValue{v.Index(i)} // slice elements are always addressable
-		if !seh.eti.hasher()(h, va) {
-			return false
+		fields = make([]fieldHasher, 0, len(structFields))
+		for _, f := range structFields {
+			if f.idx < 0 {
+				f.hash = makeMemHasher(f.size)
+			} else {
+				f.hash = lookupTypeHasher(t.Field(f.idx).Type)
+			}
+			fields = append(fields, f)
 		}
 	}
-	return true
+
+	return func(h *hasher, p pointer) {
+		once.Do(init)
+		for _, field := range fields {
+			pf := p.structField(field.idx, field.offset, field.size)
+			field.hash(h, pf)
+		}
+	}
 }
 
-func getTypeInfo(t reflect.Type) *typeInfo {
-	if f, ok := typeInfoMap.Load(t); ok {
-		return f.(*typeInfo)
+func makeMapHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashKey, hashValue typeHasherFunc
+	var isRecursive bool
+	init := func() {
+		hashKey = lookupTypeHasher(t.Key())
+		hashValue = lookupTypeHasher(t.Elem())
+		isRecursive = typeIsRecursive(t)
 	}
-	typeInfoMapPopulate.Lock()
-	defer typeInfoMapPopulate.Unlock()
-	newTypes := map[reflect.Type]*typeInfo{}
-	ti := getTypeInfoLocked(t, newTypes)
-	for t, ti := range newTypes {
-		typeInfoMap.Store(t, ti)
+
+	return func(h *hasher, p pointer) {
+		v := p.asValue(t).Elem()
+		if v.IsNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		once.Do(init)
+		if isRecursive {
+			pm := v.UnsafePointer()
+			if idx, ok := h.visitStack.seen(pm); ok {
+				h.HashUint8(2) // indicates cycle
+				h.HashUint64(uint64(idx))
+				return
+			}
+			h.visitStack.push(pm)
+			defer h.visitStack.pop(pm)
+		}
+		h.HashUint8(1) // visiting map
+		h.HashUint64(uint64(v.Len()))
+
+		mh := mapHasherPool.Get().(*mapHasher)
+		defer mapHasherPool.Put(mh)
+
+		k := mh.valKey.get(v.Type().Key())
+		e := mh.valElem.get(v.Type().Elem())
+		mh.sum = Sum{}
+		mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
+		for iter := v.MapRange(); iter.Next(); {
+			k.SetIterKey(iter)
+			e.SetIterValue(iter)
+			mh.h.Reset()
+			hashKey(&mh.h, pointerOf(k.Addr()))
+			hashValue(&mh.h, pointerOf(e.Addr()))
+			mh.sum.xor(mh.h.sum())
+		}
+		h.HashBytes(mh.sum.sum[:])
 	}
-	return ti
 }
 
-func getTypeInfoLocked(t reflect.Type, incomplete map[reflect.Type]*typeInfo) *typeInfo {
-	if v, ok := typeInfoMap.Load(t); ok {
-		return v.(*typeInfo)
+func makePointerHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashElem typeHasherFunc
+	var isRecursive bool
+	init := func() {
+		hashElem = lookupTypeHasher(t.Elem())
+		isRecursive = typeIsRecursive(t)
 	}
-	if ti, ok := incomplete[t]; ok {
-		return ti
+	return func(h *hasher, p pointer) {
+		pe := p.pointerElem()
+		if pe.isNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		once.Do(init)
+		if isRecursive {
+			if idx, ok := h.visitStack.seen(pe.p); ok {
+				h.HashUint8(2) // indicates cycle
+				h.HashUint64(uint64(idx))
+				return
+			}
+			h.visitStack.push(pe.p)
+			defer h.visitStack.pop(pe.p)
+		}
+		h.HashUint8(1) // visiting pointer
+		hashElem(h, pe)
 	}
-	ti := &typeInfo{
-		rtype:       t,
-		isRecursive: typeIsRecursive(t),
-		canMemHash:  canMemHash(t),
-	}
-	incomplete[t] = ti
+}
 
-	switch t.Kind() {
-	case reflect.Map:
-		ti.keyTypeInfo = getTypeInfoLocked(t.Key(), incomplete)
-		fallthrough
-	case reflect.Ptr, reflect.Slice, reflect.Array:
-		ti.elemTypeInfo = getTypeInfoLocked(t.Elem(), incomplete)
+func makeInterfaceHasher(t reflect.Type) typeHasherFunc {
+	return func(h *hasher, p pointer) {
+		v := p.asValue(t).Elem()
+		if v.IsNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		h.HashUint8(1) // visiting interface
+		v = v.Elem()
+		h.hashType(v.Type())
+		hashElem := lookupTypeHasher(v.Type())
+		va := reflect.New(v.Type()).Elem()
+		va.Set(v)
+		hashElem(h, pointerOf(va.Addr()))
 	}
-
-	return ti
 }
 
 // typeIsRecursive reports whether t has a path back to itself.
@@ -651,6 +514,11 @@ func typeIsRecursive(t reflect.Type) bool {
 
 	var visitType func(t reflect.Type) (isRecursiveSoFar bool)
 	visitType = func(t reflect.Type) (isRecursiveSoFar bool) {
+		switch t {
+		case timeTimeType, netipAddrType:
+			return false
+		}
+
 		switch t.Kind() {
 		case reflect.Bool,
 			reflect.Int,
@@ -690,9 +558,9 @@ func typeIsRecursive(t reflect.Type) bool {
 		default:
 			panic("unhandled kind " + t.Kind().String())
 		case reflect.Interface:
-			// Assume the worst for now. TODO(bradfitz): in some cases
-			// we should be able to prove that it's not recursive. Not worth
-			// it for now.
+			// Assume the worst.
+			// TODO(joetsai): Consider special-casing any interface that
+			// implements interface{ DeepHash() Sum }.
 			return true
 		case reflect.Array, reflect.Chan, reflect.Pointer, reflect.Slice:
 			return visitType(t.Elem())
@@ -704,10 +572,6 @@ func typeIsRecursive(t reflect.Type) bool {
 				return true
 			}
 		case reflect.Struct:
-			if t.String() == "intern.Value" {
-				// Otherwise its interface{} makes this return true.
-				return false
-			}
 			for i, numField := 0, t.NumField(); i < numField; i++ {
 				if visitType(t.Field(i).Type) {
 					return true
@@ -723,10 +587,18 @@ func typeIsRecursive(t reflect.Type) bool {
 // canMemHash reports whether a slice of t can be hashed by looking at its
 // contiguous bytes in memory alone. (e.g. structs with gaps aren't memhashable)
 func canMemHash(t reflect.Type) bool {
+	switch t {
+	case timeTimeType, netipAddrType:
+		return false
+	}
+
+	if t.Size() == 0 {
+		return true
+	}
 	switch t.Kind() {
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uintptr, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float64, reflect.Float32, reflect.Complex128, reflect.Complex64:
+		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
 		return true
 	case reflect.Array:
 		return canMemHash(t.Elem())
@@ -735,157 +607,17 @@ func canMemHash(t reflect.Type) bool {
 		for i, numField := 0, t.NumField(); i < numField; i++ {
 			sf := t.Field(i)
 			if !canMemHash(sf.Type) {
-				// Special case for 0-width fields that aren't at the end.
-				if sf.Type.Size() == 0 && i < numField-1 {
-					continue
-				}
 				return false
 			}
 			sumFieldSize += sf.Type.Size()
 		}
-		return sumFieldSize == t.Size() // else there are gaps
+		return sumFieldSize == t.Size() // there are gaps
 	}
 	return false
 }
 
-func (h *hasher) hashValue(v addressableValue, forceCycleChecking bool) {
-	if !v.IsValid() {
-		return
-	}
-	ti := getTypeInfo(v.Type())
-	h.hashValueWithType(v, ti, forceCycleChecking)
-}
-
-func (h *hasher) hashValueWithType(v addressableValue, ti *typeInfo, forceCycleChecking bool) {
-	doCheckCycles := forceCycleChecking || ti.isRecursive
-
-	if !doCheckCycles {
-		hf := ti.hasher()
-		if hf(h, v) {
-			return
-		}
-	}
-
-	// Generic handling.
-	switch v.Kind() {
-	default:
-		panic(fmt.Sprintf("unhandled kind %v for type %v", v.Kind(), v.Type()))
-	case reflect.Ptr:
-		if v.IsNil() {
-			h.HashUint8(0) // indicates nil
-			return
-		}
-
-		if doCheckCycles {
-			ptr := pointerOf(v)
-			if idx, ok := h.visitStack.seen(ptr); ok {
-				h.HashUint8(2) // indicates cycle
-				h.HashUint64(uint64(idx))
-				return
-			}
-			h.visitStack.push(ptr)
-			defer h.visitStack.pop(ptr)
-		}
-
-		h.HashUint8(1)                   // indicates visiting a pointer
-		va := addressableValue{v.Elem()} // dereferenced pointer is always addressable
-		h.hashValueWithType(va, ti.elemTypeInfo, doCheckCycles)
-	case reflect.Struct:
-		for i, n := 0, v.NumField(); i < n; i++ {
-			va := addressableValue{v.Field(i)} // field is addressable if parent struct is addressable
-			h.hashValue(va, doCheckCycles)
-		}
-	case reflect.Slice, reflect.Array:
-		vLen := v.Len()
-		if v.Kind() == reflect.Slice {
-			h.HashUint64(uint64(vLen))
-		}
-		if v.Type().Elem() == uint8Type && v.CanInterface() {
-			if vLen > 0 && vLen <= scratchSize {
-				// If it fits in scratch, avoid the Interface allocation.
-				// It seems tempting to do this for all sizes, doing
-				// scratchSize bytes at a time, but reflect.Slice seems
-				// to allocate, so it's not a win.
-				n := reflect.Copy(reflect.ValueOf(&h.scratch).Elem(), v.Value)
-				h.HashBytes(h.scratch[:n])
-				return
-			}
-			fmt.Fprintf(h, "%s", v.Interface())
-			return
-		}
-		for i := 0; i < vLen; i++ {
-			// TODO(dsnet): Perform cycle detection for slices,
-			// which is functionally a list of pointers.
-			// See https://github.com/google/go-cmp/blob/402949e8139bb890c71a707b6faf6dd05c92f4e5/cmp/compare.go#L438-L450
-			va := addressableValue{v.Index(i)} // slice elements are always addressable
-			h.hashValueWithType(va, ti.elemTypeInfo, doCheckCycles)
-		}
-	case reflect.Interface:
-		if v.IsNil() {
-			h.HashUint8(0) // indicates nil
-			return
-		}
-		// TODO: Use a valueCache here?
-		va := newAddressableValue(v.Elem().Type())
-		va.Set(v.Elem())
-
-		h.HashUint8(1) // indicates visiting interface value
-		h.hashType(va.Type())
-		h.hashValue(va, doCheckCycles)
-	case reflect.Map:
-		// Check for cycle.
-		if doCheckCycles {
-			ptr := pointerOf(v)
-			if idx, ok := h.visitStack.seen(ptr); ok {
-				h.HashUint8(2) // indicates cycle
-				h.HashUint64(uint64(idx))
-				return
-			}
-			h.visitStack.push(ptr)
-			defer h.visitStack.pop(ptr)
-		}
-		h.HashUint8(1) // indicates visiting a map
-		h.hashMap(v, ti, doCheckCycles)
-	case reflect.String:
-		s := v.String()
-		h.HashUint64(uint64(len(s)))
-		h.HashString(s)
-	case reflect.Bool:
-		if v.Bool() {
-			h.HashUint8(1)
-		} else {
-			h.HashUint8(0)
-		}
-	case reflect.Int8:
-		h.HashUint8(uint8(v.Int()))
-	case reflect.Int16:
-		h.HashUint16(uint16(v.Int()))
-	case reflect.Int32:
-		h.HashUint32(uint32(v.Int()))
-	case reflect.Int64, reflect.Int:
-		h.HashUint64(uint64(v.Int()))
-	case reflect.Uint8:
-		h.HashUint8(uint8(v.Uint()))
-	case reflect.Uint16:
-		h.HashUint16(uint16(v.Uint()))
-	case reflect.Uint32:
-		h.HashUint32(uint32(v.Uint()))
-	case reflect.Uint64, reflect.Uint, reflect.Uintptr:
-		h.HashUint64(uint64(v.Uint()))
-	case reflect.Float32:
-		h.HashUint32(math.Float32bits(float32(v.Float())))
-	case reflect.Float64:
-		h.HashUint64(math.Float64bits(float64(v.Float())))
-	case reflect.Complex64:
-		h.HashUint32(math.Float32bits(real(complex64(v.Complex()))))
-		h.HashUint32(math.Float32bits(imag(complex64(v.Complex()))))
-	case reflect.Complex128:
-		h.HashUint64(math.Float64bits(real(complex128(v.Complex()))))
-		h.HashUint64(math.Float64bits(imag(complex128(v.Complex()))))
-	}
-}
-
 type mapHasher struct {
+	sum             Sum
 	h               hasher
 	valKey, valElem valueCache // re-usable values for map iteration
 }
@@ -894,12 +626,12 @@ var mapHasherPool = &sync.Pool{
 	New: func() any { return new(mapHasher) },
 }
 
-type valueCache map[reflect.Type]addressableValue
+type valueCache map[reflect.Type]reflect.Value
 
-func (c *valueCache) get(t reflect.Type) addressableValue {
+func (c *valueCache) get(t reflect.Type) reflect.Value {
 	v, ok := (*c)[t]
 	if !ok {
-		v = newAddressableValue(t)
+		v = reflect.New(t).Elem()
 		if *c == nil {
 			*c = make(valueCache)
 		}
@@ -908,62 +640,26 @@ func (c *valueCache) get(t reflect.Type) addressableValue {
 	return v
 }
 
-// hashMap hashes a map in a sort-free manner.
-// It relies on a map being a functionally an unordered set of KV entries.
-// So long as we hash each KV entry together, we can XOR all
-// of the individual hashes to produce a unique hash for the entire map.
-func (h *hasher) hashMap(v addressableValue, ti *typeInfo, checkCycles bool) {
-	mh := mapHasherPool.Get().(*mapHasher)
-	defer mapHasherPool.Put(mh)
-
-	var sum Sum
-	if v.IsNil() {
-		sum.sum[0] = 1 // something non-zero
-	}
-
-	k := mh.valKey.get(v.Type().Key())
-	e := mh.valElem.get(v.Type().Elem())
-	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
-	for iter := v.MapRange(); iter.Next(); {
-		k.SetIterKey(iter)
-		e.SetIterValue(iter)
-		mh.h.Reset()
-		mh.h.hashValueWithType(k, ti.keyTypeInfo, checkCycles)
-		mh.h.hashValueWithType(e, ti.elemTypeInfo, checkCycles)
-		sum.xor(mh.h.sum())
-	}
-	h.HashBytes(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
-}
-
 // visitStack is a stack of pointers visited.
 // Pointers are pushed onto the stack when visited, and popped when leaving.
 // The integer value is the depth at which the pointer was visited.
 // The length of this stack should be zero after every hashing operation.
-type visitStack map[pointer]int
+type visitStack map[unsafe.Pointer]int
 
-func (v visitStack) seen(p pointer) (int, bool) {
+func (v visitStack) seen(p unsafe.Pointer) (int, bool) {
 	idx, ok := v[p]
 	return idx, ok
 }
 
-func (v *visitStack) push(p pointer) {
+func (v *visitStack) push(p unsafe.Pointer) {
 	if *v == nil {
-		*v = make(map[pointer]int)
+		*v = make(map[unsafe.Pointer]int)
 	}
 	(*v)[p] = len(*v)
 }
 
-func (v visitStack) pop(p pointer) {
+func (v visitStack) pop(p unsafe.Pointer) {
 	delete(v, p)
-}
-
-// pointer is a thin wrapper over unsafe.Pointer.
-// We only rely on comparability of pointers; we cannot rely on uintptr since
-// that would break if Go ever switched to a moving GC.
-type pointer struct{ p unsafe.Pointer }
-
-func pointerOf(v addressableValue) pointer {
-	return pointer{unsafe.Pointer(v.Value.Pointer())}
 }
 
 // hashType hashes a reflect.Type.
