@@ -704,8 +704,12 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	}
 	e.lastNMinPeers = len(min.Peers)
 
-	if !deephash.Update(&e.lastEngineSigTrim, &min, trimmedNodes, trackNodes, trackIPs) {
-		// No changes
+	if changed := deephash.Update(&e.lastEngineSigTrim, &struct {
+		WGConfig     *wgcfg.Config
+		TrimmedNodes map[key.NodePublic]bool
+		TrackNodes   []key.NodePublic
+		TrackIPs     []netip.Addr
+	}{&min, trimmedNodes, trackNodes, trackIPs}); !changed {
 		return nil
 	}
 
@@ -856,7 +860,10 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter
 
 	engineChanged := deephash.Update(&e.lastEngineSigFull, cfg)
-	routerChanged := deephash.Update(&e.lastRouterSig, routerCfg, dnsCfg)
+	routerChanged := deephash.Update(&e.lastRouterSig, &struct {
+		RouterConfig *router.Config
+		DNSConfig    *dns.Config
+	}{routerCfg, dnsCfg})
 	if !engineChanged && !routerChanged && listenPort == e.magicConn.LocalPort() && !isSubnetRouterChanged {
 		return ErrNoChanges
 	}
