@@ -18,25 +18,20 @@ import (
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
 // bi-directional communication over an HTTP connection when in JS.
-func Dial(ctx context.Context, addr string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
+func Dial(ctx context.Context, host string, httpPort string, httpsPort string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
 	init, cont, err := controlbase.ClientDeferred(machineKey, controlKey, protocolVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
 	wsScheme := "wss"
-	wsHost := host
 	if host == "localhost" {
 		wsScheme = "ws"
-		wsHost = addr
+		host = net.JoinHostPort(host, httpPort)
 	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,
-		Host:   wsHost,
+		Host:   host,
 		Path:   serverUpgradePath,
 		// Can't set HTTP headers on the websocket request, so we have to to send
 		// the handshake via an HTTP header.
