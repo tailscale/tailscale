@@ -1526,10 +1526,11 @@ const (
 	// These are the capabilities that the self node has as listed in
 	// MapResponse.Node.Capabilities.
 
-	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
-	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
-	CapabilitySSH         = "https://tailscale.com/cap/ssh"         // feature enabled/available
-	CapabilitySSHRuleIn   = "https://tailscale.com/cap/ssh-rule-in" // some SSH rule reach this node
+	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
+	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
+	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
+	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
+	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 
 	// These are the capabilities that the peer nodes have as listed in
 	// MapResponse.Peers[].Capabilities.
