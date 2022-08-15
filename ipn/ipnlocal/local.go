@@ -1180,7 +1180,15 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs *ipn.
 		sshPol = *netMap.SSHPolicy
 	}
 
-	changed := deephash.Update(&b.filterHash, haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp, sshPol)
+	changed := deephash.Update(&b.filterHash, &struct {
+		HaveNetmap  bool
+		Addrs       []netip.Prefix
+		FilterMatch []filter.Match
+		LocalNets   []netipx.IPRange
+		LogNets     []netipx.IPRange
+		ShieldsUp   bool
+		SSHPolicy   tailcfg.SSHPolicy
+	}{haveNetmap, addrs, packetFilter, localNets.Ranges(), logNets.Ranges(), shieldsUp, sshPol})
 	if !changed {
 		return
 	}
