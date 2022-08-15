@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -32,65 +33,91 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 			return nil, fmt.Errorf("Cannot change cwd: %w", err)
 		}
 	}
-	if err := buildDeps(dev); err != nil {
-		return nil, fmt.Errorf("Cannot build deps: %w", err)
+	if err := installJSDeps(); err != nil {
+		return nil, fmt.Errorf("Cannot install JS deps: %w", err)
 	}
 
 	return &esbuild.BuildOptions{
 		EntryPoints: []string{"src/index.ts", "src/index.css"},
-		Loader:      map[string]esbuild.Loader{".wasm": esbuild.LoaderFile},
 		Outdir:      *distDir,
 		Bundle:      true,
 		Sourcemap:   esbuild.SourceMapLinked,
 		LogLevel:    esbuild.LogLevelInfo,
 		Define:      map[string]string{"DEBUG": strconv.FormatBool(dev)},
 		Target:      esbuild.ES2017,
-		Plugins: []esbuild.Plugin{{
-			Name: "tailscale-tailwind",
-			Setup: func(build esbuild.PluginBuild) {
-				setupEsbuildTailwind(build, dev)
+		Plugins: []esbuild.Plugin{
+			{
+				Name: "tailscale-tailwind",
+				Setup: func(build esbuild.PluginBuild) {
+					setupEsbuildTailwind(build, dev)
+				},
 			},
-		}},
+			{
+				Name:  "tailscale-go-wasm-exec-js",
+				Setup: setupEsbuildWasmExecJS,
+			},
+			{
+				Name: "tailscale-wasm",
+				Setup: func(build esbuild.PluginBuild) {
+					setupEsbuildWasm(build, dev)
+				},
+			},
+		},
 		JSXMode: esbuild.JSXModeAutomatic,
 	}, nil
 }
 
-// buildDeps builds the static assets that are needed for the server (except for
-// JS/CSS bundling, which is  handled by esbuild).
-func buildDeps(dev bool) error {
-	if err := copyWasmExec(); err != nil {
-		return fmt.Errorf("Cannot copy wasm_exec.js: %w", err)
-	}
-	if err := buildWasm(dev); err != nil {
-		return fmt.Errorf("Cannot build main.wasm: %w", err)
-	}
-	if err := installJSDeps(); err != nil {
-		return fmt.Errorf("Cannot install JS deps: %w", err)
-	}
-	return nil
-}
-
-// copyWasmExec grabs the current wasm_exec.js runtime helper library from the
-// Go toolchain.
-func copyWasmExec() error {
-	log.Printf("Copying wasm_exec.js...\n")
+// setupEsbuildWasmExecJS generates an esbuild plugin that serves the current
+// wasm_exec.js runtime helper library from the Go toolchain.
+func setupEsbuildWasmExecJS(build esbuild.PluginBuild) {
 	wasmExecSrcPath := filepath.Join(runtime.GOROOT(), "misc", "wasm", "wasm_exec.js")
-	wasmExecDstPath := filepath.Join("src", "wasm_exec.js")
-	contents, err := os.ReadFile(wasmExecSrcPath)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(wasmExecDstPath, contents, 0600)
+	build.OnResolve(esbuild.OnResolveOptions{
+		Filter: "./wasm_exec$",
+	}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
+		return esbuild.OnResolveResult{Path: wasmExecSrcPath}, nil
+	})
 }
 
-// buildWasm builds the Tailscale wasm binary and places it where the JS can
-// load it.
-func buildWasm(dev bool) error {
-	log.Printf("Building wasm...\n")
+// setupEsbuildWasm generates an esbuild plugin that builds the Tailscale wasm
+// binary and serves it as a file that the JS can load.
+func setupEsbuildWasm(build esbuild.PluginBuild, dev bool) {
+	// Add a resolve hook to convince esbuild that the path exists.
+	build.OnResolve(esbuild.OnResolveOptions{
+		Filter: "./main.wasm$",
+	}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
+		return esbuild.OnResolveResult{
+			Path:      "./src/main.wasm",
+			Namespace: "generated",
+		}, nil
+	})
+	build.OnLoad(esbuild.OnLoadOptions{
+		Filter: "./src/main.wasm$",
+	}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
+		contents, err := buildWasm(dev)
+		if err != nil {
+			return esbuild.OnLoadResult{}, fmt.Errorf("Cannot build main.wasm: %w", err)
+		}
+		contentsStr := string(contents)
+		return esbuild.OnLoadResult{
+			Contents: &contentsStr,
+			Loader:   esbuild.LoaderFile,
+		}, nil
+	})
+}
+
+func buildWasm(dev bool) ([]byte, error) {
+	start := time.Now()
+	outputFile, err := ioutil.TempFile("", "main.*.wasm")
+	if err != nil {
+		return nil, fmt.Errorf("Cannot create main.wasm output file: %w", err)
+	}
+	outputPath := outputFile.Name()
+	defer os.Remove(outputPath)
+
 	args := []string{"build", "-tags", "tailscale_go,osusergo,netgo,nethttpomithttp2,omitidna,omitpemdecrypt"}
 	if !dev {
 		if *devControl != "" {
-			return fmt.Errorf("Development control URL can only be used in dev mode.")
+			return nil, fmt.Errorf("Development control URL can only be used in dev mode.")
 		}
 		// Omit long paths and debug symbols in release builds, to reduce the
 		// generated WASM binary size.
@@ -98,13 +125,19 @@ func buildWasm(dev bool) error {
 	} else if *devControl != "" {
 		args = append(args, "-ldflags", fmt.Sprintf("-X 'main.ControlURL=%v'", *devControl))
 	}
-	args = append(args, "-o", "src/main.wasm", "./wasm")
+
+	args = append(args, "-o", outputPath, "./wasm")
 	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), args...)
 	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	err = cmd.Run()
+	if err != nil {
+		return nil, fmt.Errorf("Cannot build main.wasm: %w", err)
+	}
+	log.Printf("Built wasm in %v\n", time.Since(start))
+	return os.ReadFile(outputPath)
 }
 
 // installJSDeps installs the JavaScript dependencies specified by package.json

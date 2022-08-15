@@ -1,4 +1,2 @@
-src/wasm_exec.js
-src/main.wasm
 node_modules/
 dist/
