@@ -480,7 +480,7 @@ main() {
 		;;
 		yum)
 			set -x
-			$SUDO yum install yum-utils
+			$SUDO yum install yum-utils -y
 			$SUDO yum-config-manager -y --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO yum install tailscale -y
 			$SUDO systemctl enable --now tailscaled
