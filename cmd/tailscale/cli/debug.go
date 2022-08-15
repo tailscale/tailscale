@@ -489,7 +489,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		return c, err
 	}
 
-	conn, err := controlhttp.Dial(ctx, net.JoinHostPort(ts2021Args.host, "80"), machinePrivate, keys.PublicKey, uint16(ts2021Args.version), dialFunc)
+	conn, err := controlhttp.Dial(ctx, ts2021Args.host, "80", "443", machinePrivate, keys.PublicKey, uint16(ts2021Args.version), dialFunc)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {
 		return err
