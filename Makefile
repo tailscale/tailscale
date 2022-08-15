@@ -32,10 +32,13 @@ build386:
 buildlinuxarm:
 	GOOS=linux GOARCH=arm ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
+buildwasm:
+	GOOS=js GOARCH=wasm ./tool/go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
+
 buildmultiarchimage:
 	./build_docker.sh
 
-check: staticcheck vet depaware buildwindows build386 buildlinuxarm
+check: staticcheck vet depaware buildwindows build386 buildlinuxarm buildwasm
 
 staticcheck:
 	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go list ./... | grep -v tempfork)
