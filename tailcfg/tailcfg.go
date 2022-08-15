@@ -73,7 +73,8 @@ type CapabilityVersion int
 //	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
 //	37: 2022-08-09: added Debug.{SetForceBackgroundSTUN,SetRandomizeClientPort}; Debug are sticky
 //	38: 2022-08-11: added PingRequest.URLIsNoise
-const CurrentCapabilityVersion CapabilityVersion = 38
+//	39: 2022-08-15: clients can talk Noise over arbitrary HTTPS port
+const CurrentCapabilityVersion CapabilityVersion = 39
 
 type StableID string
 
