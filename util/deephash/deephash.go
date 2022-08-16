@@ -34,7 +34,7 @@ import (
 	"time"
 	"unsafe"
 
-	hashx "tailscale.com/util/sha256x"
+	"tailscale.com/util/hashx"
 )
 
 // There is much overlap between the theory of serialization and hashing.
