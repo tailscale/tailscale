@@ -614,7 +614,7 @@ func v4addrs(aa []net.IPAddr) (ret []netip.Addr) {
 	for _, a := range aa {
 		ip, ok := netip.AddrFromSlice(a.IP)
 		ip = ip.Unmap()
-		if ok {
+		if ok && ip.Is4() {
 			ret = append(ret, ip)
 		}
 	}
