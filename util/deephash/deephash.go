@@ -646,8 +646,6 @@ func getTypeInfoLocked(t reflect.Type, incomplete map[reflect.Type]*typeInfo) *t
 func typeIsRecursive(t reflect.Type) bool {
 	inStack := map[reflect.Type]bool{}
 
-	var stack []reflect.Type
-
 	var visitType func(t reflect.Type) (isRecursiveSoFar bool)
 	visitType = func(t reflect.Type) (isRecursiveSoFar bool) {
 		switch t.Kind() {
@@ -678,11 +676,9 @@ func typeIsRecursive(t reflect.Type) bool {
 		if inStack[t] {
 			return true
 		}
-		stack = append(stack, t)
 		inStack[t] = true
 		defer func() {
 			delete(inStack, t)
-			stack = stack[:len(stack)-1]
 		}()
 
 		switch t.Kind() {
