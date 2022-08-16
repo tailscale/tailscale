@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package sha256x
+package hashx
 
 import (
 	"crypto/sha256"
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/util/must"
 )
 
 // naiveHash is an obviously correct implementation of Hash.
@@ -74,7 +75,7 @@ func hashSuite(h hasher) {
 
 func Test(t *testing.T) {
 	c := qt.New(t)
-	h1 := New()
+	h1 := must.Get(New512(sha256.New()))
 	h2 := newNaive()
 	hashSuite(h1)
 	hashSuite(h2)
@@ -84,44 +85,44 @@ func Test(t *testing.T) {
 func TestAllocations(t *testing.T) {
 	c := qt.New(t)
 	c.Run("Sum", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			var a [sha256.Size]byte
 			h.Sum(a[:0])
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashUint8", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashUint8(0x01)
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashUint16", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashUint16(0x0123)
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashUint32", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashUint32(0x01234567)
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashUint64", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashUint64(0x0123456789abcdef)
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashBytes", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashBytes(bytes)
 		}), qt.Equals, 0.0)
 	})
 	c.Run("HashString", func(c *qt.C) {
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		c.Assert(testing.AllocsPerRun(100, func() {
 			h.HashString("abcdefghijklmnopqrstuvwxyz")
 		}), qt.Equals, 0.0)
@@ -158,7 +159,7 @@ func Fuzz(f *testing.F) {
 		r1 := rand.New(rand.NewSource(seed))
 		r2 := rand.New(rand.NewSource(seed))
 
-		h1 := New()
+		h1 := must.Get(New512(sha256.New()))
 		h2 := newNaive()
 
 		execute(h1, r1)
@@ -185,7 +186,7 @@ func Benchmark(b *testing.B) {
 	var sum [sha256.Size]byte
 	b.Run("Hash", func(b *testing.B) {
 		b.ReportAllocs()
-		h := New()
+		h := must.Get(New512(sha256.New()))
 		for i := 0; i < b.N; i++ {
 			h.Reset()
 			hashSuite(h)

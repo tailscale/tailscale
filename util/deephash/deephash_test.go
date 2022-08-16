@@ -531,7 +531,7 @@ func TestGetTypeHasher(t *testing.T) {
 			fn := getTypeInfo(va.Type()).hasher()
 			hb := &hashBuffer{Hash: sha256.New()}
 			h := new(hasher)
-			h.Hash.H = hb
+			h.Block512.Hash = hb
 			got := fn(h, va)
 			const ptrSize = 32 << uintptr(^uintptr(0)>>63)
 			if tt.out32 != "" && ptrSize == 32 {
@@ -628,7 +628,7 @@ func TestHashMapAcyclic(t *testing.T) {
 		v := addressableValue{reflect.ValueOf(&m).Elem()}
 		hb.Reset()
 		h := new(hasher)
-		h.Hash.H = hb
+		h.Block512.Hash = hb
 		h.hashMap(v, ti, false)
 		h.sum()
 		if got[string(hb.B)] {
@@ -648,7 +648,7 @@ func TestPrintArray(t *testing.T) {
 	x := T{X: [32]byte{1: 1, 31: 31}}
 	hb := &hashBuffer{Hash: sha256.New()}
 	h := new(hasher)
-	h.Hash.H = hb
+	h.Block512.Hash = hb
 	h.hashValue(addressableValue{reflect.ValueOf(&x).Elem()}, false)
 	h.sum()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
@@ -669,7 +669,7 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	ti := getTypeInfo(v.Type())
 
 	h := new(hasher)
-	h.Hash.H = hb
+	h.Block512.Hash = hb
 
 	for i := 0; i < b.N; i++ {
 		h.Reset()

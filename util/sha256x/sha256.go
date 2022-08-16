@@ -2,51 +2,76 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package sha256x is like crypto/sha256 with extra methods.
-// It exports a concrete Hash type
-// rather than only returning an interface implementation.
-package sha256x
+// Package hashx provides a concrete implementation of [hash.Hash]
+// that operates on a particular block size.
+package hashx
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"hash"
 	"unsafe"
 )
 
-var _ hash.Hash = (*Hash)(nil)
+var _ hash.Hash = (*Block512)(nil)
 
-// Hash is a hash.Hash for SHA-256,
-// but has efficient methods for hashing fixed-width integers.
-type Hash struct {
-	// The optimization is to maintain our own block and
-	// only call h.Write with entire blocks.
-	// This avoids double-copying of buffers within sha256.digest itself.
-	// However, it does mean that sha256.digest.x goes unused,
-	// which is a waste of 64B.
+// Block512 wraps a [hash.Hash] for functions that operate on 512-bit block sizes.
+// It has efficient methods for hashing fixed-width integers.
+//
+// A hashing algorithm that operates on 512-bit block sizes should be used.
+// The hash still operates correctly even with misaligned block sizes,
+// but operates less efficiently.
+//
+// Example algorithms with 512-bit block sizes include:
+//   - MD4 (https://golang.org/x/crypto/md4)
+//   - MD5 (https://golang.org/pkg/crypto/md5)
+//   - BLAKE2s (https://golang.org/x/crypto/blake2s)
+//   - BLAKE3
+//   - RIPEMD (https://golang.org/x/crypto/ripemd160)
+//   - SHA-0
+//   - SHA-1 (https://golang.org/pkg/crypto/sha1)
+//   - SHA-2 (https://golang.org/pkg/crypto/sha256)
+//   - Whirlpool
+//
+// See https://en.wikipedia.org/wiki/Comparison_of_cryptographic_hash_functions#Parameters
+// for a list of hash functions and their block sizes.
+//
+// Block512 assumes that [hash.Hash.Write] never fails and
+// never allows the provided buffer to escape.
+type Block512 struct {
+	hash.Hash
 
-	// H is the underlying hash.Hash.
-	// The hash.Hash.BlockSize must be equal to sha256.BlockSize.
-	// It is exported only for testing purposes.
-	H  hash.Hash              // usually a *sha256.digest
-	x  [sha256.BlockSize]byte // equivalent to sha256.digest.x
-	nx int                    // equivalent to sha256.digest.nx
+	x  [512 / 8]byte
+	nx int
 }
 
-func New() *Hash {
-	return &Hash{H: sha256.New()}
+// New512 constructs a new Block512 that wraps h.
+//
+// It reports an error if the block sizes do not match.
+// Misaligned block sizes perform poorly, but execute correctly.
+// The error may be ignored if performance is not a concern.
+func New512(h hash.Hash) (*Block512, error) {
+	b := &Block512{Hash: h}
+	if len(b.x)%h.BlockSize() != 0 {
+		return b, fmt.Errorf("hashx.Block512: inefficient use of hash.Hash with %d-bit block size", 8*h.BlockSize())
+	}
+	return b, nil
 }
 
-func (h *Hash) Write(b []byte) (int, error) {
+// Write hashes the contents of b.
+func (h *Block512) Write(b []byte) (int, error) {
 	h.HashBytes(b)
 	return len(b), nil
 }
 
-func (h *Hash) Sum(b []byte) []byte {
+// Sum appends the current hash to b and returns the resulting slice.
+//
+// It flushes any partially completed blocks to the underlying [hash.Hash],
+// which may cause future operations to be misaligned and less efficient
+// until [Block512.Reset] is called.
+func (h *Block512) Sum(b []byte) []byte {
 	if h.nx > 0 {
-		// This causes block mis-alignment. Future operations will be correct,
-		// but are less efficient until Reset is called.
-		h.H.Write(h.x[:h.nx])
+		h.Hash.Write(h.x[:h.nx])
 		h.nx = 0
 	}
 
@@ -54,27 +79,19 @@ func (h *Hash) Sum(b []byte) []byte {
 	// escape analysis cannot prove anything past an interface method call.
 	// Assuming h already escapes, we call Sum with h.x first,
 	// and then copy the result to b.
-	sum := h.H.Sum(h.x[:0])
+	sum := h.Hash.Sum(h.x[:0])
 	return append(b, sum...)
 }
 
-func (h *Hash) Reset() {
-	if h.H == nil {
-		h.H = sha256.New()
-	}
-	h.H.Reset()
+// Reset resets Block512 to its initial state.
+// It recursively resets the underlying [hash.Hash].
+func (h *Block512) Reset() {
+	h.Hash.Reset()
 	h.nx = 0
 }
 
-func (h *Hash) Size() int {
-	return h.H.Size()
-}
-
-func (h *Hash) BlockSize() int {
-	return h.H.BlockSize()
-}
-
-func (h *Hash) HashUint8(n uint8) {
+// HashUint8 hashes n as a 1-byte integer.
+func (h *Block512) HashUint8(n uint8) {
 	// NOTE: This method is carefully written to be inlineable.
 	if h.nx <= len(h.x)-1 {
 		h.x[h.nx] = n
@@ -85,9 +102,10 @@ func (h *Hash) HashUint8(n uint8) {
 }
 
 //go:noinline
-func (h *Hash) hashUint8Slow(n uint8) { h.hashUint(uint64(n), 1) }
+func (h *Block512) hashUint8Slow(n uint8) { h.hashUint(uint64(n), 1) }
 
-func (h *Hash) HashUint16(n uint16) {
+// HashUint16 hashes n as a 2-byte little-endian integer.
+func (h *Block512) HashUint16(n uint16) {
 	// NOTE: This method is carefully written to be inlineable.
 	if h.nx <= len(h.x)-2 {
 		binary.LittleEndian.PutUint16(h.x[h.nx:], n)
@@ -98,9 +116,10 @@ func (h *Hash) HashUint16(n uint16) {
 }
 
 //go:noinline
-func (h *Hash) hashUint16Slow(n uint16) { h.hashUint(uint64(n), 2) }
+func (h *Block512) hashUint16Slow(n uint16) { h.hashUint(uint64(n), 2) }
 
-func (h *Hash) HashUint32(n uint32) {
+// HashUint32 hashes n as a 4-byte little-endian integer.
+func (h *Block512) HashUint32(n uint32) {
 	// NOTE: This method is carefully written to be inlineable.
 	if h.nx <= len(h.x)-4 {
 		binary.LittleEndian.PutUint32(h.x[h.nx:], n)
@@ -111,9 +130,10 @@ func (h *Hash) HashUint32(n uint32) {
 }
 
 //go:noinline
-func (h *Hash) hashUint32Slow(n uint32) { h.hashUint(uint64(n), 4) }
+func (h *Block512) hashUint32Slow(n uint32) { h.hashUint(uint64(n), 4) }
 
-func (h *Hash) HashUint64(n uint64) {
+// HashUint64 hashes n as a 8-byte little-endian integer.
+func (h *Block512) HashUint64(n uint64) {
 	// NOTE: This method is carefully written to be inlineable.
 	if h.nx <= len(h.x)-8 {
 		binary.LittleEndian.PutUint64(h.x[h.nx:], n)
@@ -124,12 +144,12 @@ func (h *Hash) HashUint64(n uint64) {
 }
 
 //go:noinline
-func (h *Hash) hashUint64Slow(n uint64) { h.hashUint(uint64(n), 8) }
+func (h *Block512) hashUint64Slow(n uint64) { h.hashUint(uint64(n), 8) }
 
-func (h *Hash) hashUint(n uint64, i int) {
+func (h *Block512) hashUint(n uint64, i int) {
 	for ; i > 0; i-- {
 		if h.nx == len(h.x) {
-			h.H.Write(h.x[:])
+			h.Hash.Write(h.x[:])
 			h.nx = 0
 		}
 		h.x[h.nx] = byte(n)
@@ -138,20 +158,22 @@ func (h *Hash) hashUint(n uint64, i int) {
 	}
 }
 
-func (h *Hash) HashBytes(b []byte) {
+// HashBytes hashes the contents of b.
+// It does not explicitly hash the length separately.
+func (h *Block512) HashBytes(b []byte) {
 	// Nearly identical to sha256.digest.Write.
 	if h.nx > 0 {
 		n := copy(h.x[h.nx:], b)
 		h.nx += n
 		if h.nx == len(h.x) {
-			h.H.Write(h.x[:])
+			h.Hash.Write(h.x[:])
 			h.nx = 0
 		}
 		b = b[n:]
 	}
 	if len(b) >= len(h.x) {
 		n := len(b) &^ (len(h.x) - 1) // n is a multiple of len(h.x)
-		h.H.Write(b[:n])
+		h.Hash.Write(b[:n])
 		b = b[n:]
 	}
 	if len(b) > 0 {
@@ -159,7 +181,11 @@ func (h *Hash) HashBytes(b []byte) {
 	}
 }
 
-func (h *Hash) HashString(s string) {
+// HashString hashes the contents of s.
+// It does not explicitly hash the length separately.
+func (h *Block512) HashString(s string) {
+	// TODO: Avoid unsafe when standard hashers implement io.StringWriter.
+	// See https://go.dev/issue/38776.
 	type stringHeader struct {
 		p unsafe.Pointer
 		n int
