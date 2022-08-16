@@ -421,20 +421,18 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
-	// if len(s.allClients) > 0 {
-	// 	var active connIdentity
-	// 	for _, active = range s.allClients {
-	// 		break
-	// 	}
-	// 	if ci.UserID != active.UserID {
-	// 		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
-	// 	}
-	// }
+	if len(s.allClients) > 0 {
+		var active connIdentity
+		for _, active = range s.allClients {
+			break
+		}
+		if ci.UserID != active.UserID {
+			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
+		}
+	}
 	// if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
 	// 	return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
 	// }
-
-	// always allow for gfi tailscale
 	return nil
 }
 
