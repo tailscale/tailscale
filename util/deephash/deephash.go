@@ -648,31 +648,7 @@ func typeIsRecursive(t reflect.Type) bool {
 
 	var visitType func(t reflect.Type) (isRecursiveSoFar bool)
 	visitType = func(t reflect.Type) (isRecursiveSoFar bool) {
-		switch t.Kind() {
-		case reflect.Bool,
-			reflect.Int,
-			reflect.Int8,
-			reflect.Int16,
-			reflect.Int32,
-			reflect.Int64,
-			reflect.Uint,
-			reflect.Uint8,
-			reflect.Uint16,
-			reflect.Uint32,
-			reflect.Uint64,
-			reflect.Uintptr,
-			reflect.Float32,
-			reflect.Float64,
-			reflect.Complex64,
-			reflect.Complex128,
-			reflect.String,
-			reflect.UnsafePointer,
-			reflect.Func:
-			return false
-		}
-		if t.Size() == 0 {
-			return false
-		}
+		// Check whether we have seen this type before.
 		if inStack[t] {
 			return true
 		}
@@ -681,9 +657,18 @@ func typeIsRecursive(t reflect.Type) bool {
 			delete(inStack, t)
 		}()
 
+		// Any type that is memory hashable must not be recursive since
+		// cycles can only occur if pointers are involved.
+		if canMemHash(t) {
+			return false
+		}
+
+		// Recursively check types that may contain pointers.
 		switch t.Kind() {
 		default:
 			panic("unhandled kind " + t.Kind().String())
+		case reflect.String, reflect.UnsafePointer, reflect.Func:
+			return false
 		case reflect.Interface:
 			// Assume the worst for now. TODO(bradfitz): in some cases
 			// we should be able to prove that it's not recursive. Not worth
@@ -692,12 +677,7 @@ func typeIsRecursive(t reflect.Type) bool {
 		case reflect.Array, reflect.Chan, reflect.Pointer, reflect.Slice:
 			return visitType(t.Elem())
 		case reflect.Map:
-			if visitType(t.Key()) {
-				return true
-			}
-			if visitType(t.Elem()) {
-				return true
-			}
+			return visitType(t.Key()) || visitType(t.Elem())
 		case reflect.Struct:
 			if t.String() == "intern.Value" {
 				// Otherwise its interface{} makes this return true.
@@ -710,7 +690,6 @@ func typeIsRecursive(t reflect.Type) bool {
 			}
 			return false
 		}
-		return false
 	}
 	return visitType(t)
 }
