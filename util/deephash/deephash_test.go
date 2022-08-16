@@ -379,20 +379,18 @@ func TestCanMemHash(t *testing.T) {
 			_ uint8
 			_ int
 		}{}, false}, // gap
-		{
-			struct {
-				_ structs.Incomparable // if not last, zero-width
-				x int
-			}{},
-			true,
-		},
-		{
-			struct {
-				x int
-				_ structs.Incomparable // zero-width last: has space, can't memhash
-			}{},
-			false,
-		}}
+		{struct {
+			_ structs.Incomparable // if not last, zero-width
+			x int
+		}{}, true},
+		{struct {
+			x int
+			_ structs.Incomparable // zero-width last: has space, can't memhash
+		}{},
+			false},
+		{[0]chan bool{}, true},
+		{struct{ f [0]func() }{}, true},
+	}
 	for _, tt := range tests {
 		got := canMemHash(reflect.TypeOf(tt.val))
 		if got != tt.want {

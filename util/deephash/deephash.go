@@ -722,10 +722,15 @@ func typeIsRecursive(t reflect.Type) bool {
 // canMemHash reports whether a slice of t can be hashed by looking at its
 // contiguous bytes in memory alone. (e.g. structs with gaps aren't memhashable)
 func canMemHash(t reflect.Type) bool {
+	if t.Size() == 0 {
+		return true
+	}
 	switch t.Kind() {
-	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uintptr, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float64, reflect.Float32, reflect.Complex128, reflect.Complex64:
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64,
+		reflect.Complex64, reflect.Complex128:
 		return true
 	case reflect.Array:
 		return canMemHash(t.Elem())
@@ -734,15 +739,11 @@ func canMemHash(t reflect.Type) bool {
 		for i, numField := 0, t.NumField(); i < numField; i++ {
 			sf := t.Field(i)
 			if !canMemHash(sf.Type) {
-				// Special case for 0-width fields that aren't at the end.
-				if sf.Type.Size() == 0 && i < numField-1 {
-					continue
-				}
 				return false
 			}
 			sumFieldSize += sf.Type.Size()
 		}
-		return sumFieldSize == t.Size() // else there are gaps
+		return sumFieldSize == t.Size() // ensure no gaps
 	}
 	return false
 }
