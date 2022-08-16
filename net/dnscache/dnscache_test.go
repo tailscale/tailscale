@@ -131,7 +131,7 @@ func TestResolverAllHostStaticResult(t *testing.T) {
 	if got, want := ip6.String(), "2001:4860:4860::8888"; got != want {
 		t.Errorf("ip4 got %q; want %q", got, want)
 	}
-	if got, want := fmt.Sprintf("%q", allIPs), `[{"2001:4860:4860::8888" ""} {"2001:4860:4860::8844" ""} {"8.8.8.8" ""} {"8.8.4.4" ""}]`; got != want {
+	if got, want := fmt.Sprintf("%q", allIPs), `["2001:4860:4860::8888" "2001:4860:4860::8844" "8.8.8.8" "8.8.4.4"]`; got != want {
 		t.Errorf("allIPs got %q; want %q", got, want)
 	}
 
