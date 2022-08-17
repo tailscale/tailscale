@@ -196,3 +196,19 @@ var _StructWithSlicesCloneNeedsRegeneration = StructWithSlices(struct {
 	Prefixes       []netip.Prefix
 	Data           []byte
 }{})
+
+// Clone makes a deep copy of OnlyGetClone.
+// The result aliases no memory with the original.
+func (src *OnlyGetClone) Clone() *OnlyGetClone {
+	if src == nil {
+		return nil
+	}
+	dst := new(OnlyGetClone)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _OnlyGetCloneCloneNeedsRegeneration = OnlyGetClone(struct {
+	SinViewerPorFavor bool
+}{})

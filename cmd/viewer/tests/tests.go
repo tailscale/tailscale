@@ -10,7 +10,7 @@ import (
 	"net/netip"
 )
 
-//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices
+//go:generate go run tailscale.com/cmd/viewer --type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone --clone-only-type=OnlyGetClone
 
 type StructWithoutPtrs struct {
 	Int int
@@ -57,4 +57,8 @@ type StructWithSlices struct {
 	Slice    []string
 	Prefixes []netip.Prefix
 	Data     []byte
+}
+
+type OnlyGetClone struct {
+	SinViewerPorFavor bool
 }
