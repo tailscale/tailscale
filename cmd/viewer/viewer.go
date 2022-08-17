@@ -327,6 +327,8 @@ var (
 	flagTypes     = flag.String("type", "", "comma-separated list of types; required")
 	flagBuildTags = flag.String("tags", "", "compiler build tags to apply")
 	flagCloneFunc = flag.Bool("clonefunc", false, "add a top-level Clone func")
+
+	flagCloneOnlyTypes = flag.String("clone-only-type", "", "comma-separated list of types (a subset of --type) that should only generate a go:generate clone line and not actual views")
 )
 
 func main() {
@@ -353,10 +355,18 @@ func main() {
 	}
 	it := codegen.NewImportTracker(pkg.Types)
 
+	cloneOnlyType := map[string]bool{}
+	for _, t := range strings.Split(*flagCloneOnlyTypes, ",") {
+		cloneOnlyType[t] = true
+	}
+
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "//go:generate go run tailscale.com/cmd/cloner  %s\n\n", strings.Join(flagArgs, " "))
 	runCloner := false
 	for _, typeName := range typeNames {
+		if cloneOnlyType[typeName] {
+			continue
+		}
 		typ, ok := namedTypes[typeName]
 		if !ok {
 			log.Fatalf("could not find type %s", typeName)
