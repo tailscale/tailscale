@@ -4,11 +4,34 @@
 
 package deephash
 
-import "reflect"
+import (
+	"net/netip"
+	"reflect"
+	"time"
+)
+
+var (
+	timeTimeType  = reflect.TypeOf((*time.Time)(nil)).Elem()
+	netipAddrType = reflect.TypeOf((*netip.Addr)(nil)).Elem()
+)
+
+// typeIsSpecialized reports whether this type has specialized hashing.
+// These are never memory hashable and never considered recursive.
+func typeIsSpecialized(t reflect.Type) bool {
+	switch t {
+	case timeTimeType, netipAddrType:
+		return true
+	default:
+		return false
+	}
+}
 
 // typeIsMemHashable reports whether t can be hashed by directly hashing its
 // contiguous bytes in memory (e.g. structs with gaps are not mem-hashable).
 func typeIsMemHashable(t reflect.Type) bool {
+	if typeIsSpecialized(t) {
+		return false
+	}
 	if t.Size() == 0 {
 		return true
 	}
@@ -50,6 +73,11 @@ func typeIsRecursive(t reflect.Type) bool {
 			delete(inStack, t)
 		}()
 
+		// Types with specialized hashing are never considered recursive.
+		if typeIsSpecialized(t) {
+			return false
+		}
+
 		// Any type that is memory hashable must not be recursive since
 		// cycles can only occur if pointers are involved.
 		if typeIsMemHashable(t) {
@@ -72,10 +100,6 @@ func typeIsRecursive(t reflect.Type) bool {
 		case reflect.Map:
 			return visitType(t.Key()) || visitType(t.Elem())
 		case reflect.Struct:
-			if t.String() == "intern.Value" {
-				// Otherwise its interface{} makes this return true.
-				return false
-			}
 			for i, numField := 0, t.NumField(); i < numField; i++ {
 				if visitType(t.Field(i).Type) {
 					return true

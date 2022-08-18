@@ -14,9 +14,7 @@
 //   - time.Time are compared based on whether they are the same instant in time
 //     and also in the same zone offset. Monotonic measurements and zone names
 //     are ignored as part of the hash.
-//   - Types which implement interface { AppendTo([]byte) []byte } use
-//     the AppendTo method to produce a textual representation of the value.
-//     Thus, two values are equal if AppendTo produces the same bytes.
+//   - netip.Addr are compared based on a shallow comparison of the struct. 
 //
 // WARNING: This package, like most of the tailscale.com Go module,
 // should be considered Tailscale-internal; we make no API promises.
@@ -29,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/netip"
 	"reflect"
 	"sync"
 	"time"
@@ -210,10 +209,7 @@ type appenderTo interface {
 	AppendTo([]byte) []byte
 }
 
-var (
-	uint8Type    = reflect.TypeOf(byte(0))
-	timeTimeType = reflect.TypeOf(time.Time{})
-)
+var uint8Type = reflect.TypeOf(byte(0))
 
 // typeInfo describes properties of a type.
 //
@@ -299,36 +295,6 @@ func (h *hasher) hashUint64v(v addressableValue) bool {
 
 func (h *hasher) hashInt64v(v addressableValue) bool {
 	h.HashUint64(uint64(v.Int()))
-	return true
-}
-
-func hashStructAppenderTo(h *hasher, v addressableValue) bool {
-	if !v.CanInterface() {
-		return false // slow path
-	}
-	a := v.Addr().Interface().(appenderTo)
-	size := h.scratch[:8]
-	record := a.AppendTo(size)
-	binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
-	h.HashBytes(record)
-	return true
-}
-
-// hashPointerAppenderTo hashes v, a reflect.Ptr, that implements appenderTo.
-func hashPointerAppenderTo(h *hasher, v addressableValue) bool {
-	if !v.CanInterface() {
-		return false // slow path
-	}
-	if v.IsNil() {
-		h.HashUint8(0) // indicates nil
-		return true
-	}
-	h.HashUint8(1) // indicates visiting a pointer
-	a := v.Interface().(appenderTo)
-	size := h.scratch[:8]
-	record := a.AppendTo(size)
-	binary.LittleEndian.PutUint64(record, uint64(len(record)-len(size)))
-	h.HashBytes(record)
 	return true
 }
 
@@ -462,20 +428,18 @@ func genTypeHasher(t reflect.Type) typeHasherFunc {
 		eti := getTypeInfo(et)
 		return genHashArray(t, eti)
 	case reflect.Struct:
-		if t == timeTimeType {
+		switch t {
+		case timeTimeType:
 			return (*hasher).hashTimev
+		case netipAddrType:
+			return (*hasher).hashAddrv
+		default:
+			return genHashStructFields(t)
 		}
-		if t.Implements(appenderToType) {
-			return hashStructAppenderTo
-		}
-		return genHashStructFields(t)
 	case reflect.Pointer:
 		et := t.Elem()
 		if typeIsMemHashable(et) {
 			return genHashPtrToMemoryRange(et)
-		}
-		if t.Implements(appenderToType) {
-			return hashPointerAppenderTo
 		}
 		if !typeIsRecursive(t) {
 			eti := getTypeInfo(et)
@@ -541,6 +505,30 @@ func (h *hasher) hashTimev(v addressableValue) bool {
 	h.HashUint64(uint64(t.Unix()))
 	h.HashUint32(uint32(t.Nanosecond()))
 	h.HashUint32(uint32(offset))
+	return true
+}
+
+// hashAddrv hashes v, of type netip.Addr.
+func (h *hasher) hashAddrv(v addressableValue) bool {
+	// The formatting of netip.Addr covers the
+	// IP version, the address, and the optional zone name (for v6).
+	// This is equivalent to a1.MarshalBinary() == a2.MarshalBinary().
+	ip := *(*netip.Addr)(v.Addr().UnsafePointer())
+	switch {
+	case !ip.IsValid():
+		h.HashUint64(0)
+	case ip.Is4():
+		b := ip.As4()
+		h.HashUint64(4)
+		h.HashUint32(binary.LittleEndian.Uint32(b[:]))
+	case ip.Is6():
+		b := ip.As16()
+		z := ip.Zone()
+		h.HashUint64(16 + uint64(len(z)))
+		h.HashUint64(binary.LittleEndian.Uint64(b[:8]))
+		h.HashUint64(binary.LittleEndian.Uint64(b[8:]))
+		h.HashString(z)
+	}
 	return true
 }
 
