@@ -62,6 +62,9 @@ func runConfigureHost(ctx context.Context, args []string) error {
 			return fmt.Errorf("creating /dev/net/tun: %v, %s", err, out)
 		}
 	}
+	if err := os.Chmod("/dev/net", 0755); err != nil {
+		return err
+	}
 	if err := os.Chmod("/dev/net/tun", 0666); err != nil {
 		return err
 	}
