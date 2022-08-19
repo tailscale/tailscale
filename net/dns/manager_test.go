@@ -48,6 +48,112 @@ func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 
 func (c *fakeOSConfigurator) Close() error { return nil }
 
+func TestCompileHostEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want []*HostEntry
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "no-search-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"a.b.c.": {netip.MustParseAddr("1.1.1.1")},
+				},
+			},
+		},
+		{
+			name: "search-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"a.foo.ts.net.":             {netip.MustParseAddr("1.1.1.1")},
+					"b.foo.ts.net.":             {netip.MustParseAddr("1.1.1.2")},
+					"c.foo.ts.net.":             {netip.MustParseAddr("1.1.1.3")},
+					"d.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.4")},
+					"d.foo.ts.net.":             {netip.MustParseAddr("1.1.1.4")},
+					"e.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.5")},
+					"random.example.com.":       {netip.MustParseAddr("1.1.1.1")},
+					"other.example.com.":        {netip.MustParseAddr("1.1.1.2")},
+					"othertoo.example.com.":     {netip.MustParseAddr("1.1.5.2")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"a.foo.ts.net.", "a"}},
+				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"b.foo.ts.net.", "b"}},
+				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"c.foo.ts.net.", "c"}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net.", "e"}},
+			},
+		},
+		{
+			name: "only-exact-subdomain-match",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"e.foo.ts.net.":                     {netip.MustParseAddr("1.1.1.5")},
+					"e.foo.beta.tailscale.net.":         {netip.MustParseAddr("1.1.1.5")},
+					"e.ignored.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.6")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.ts.net.", "e"}},
+			},
+		},
+		{
+			name: "unmatched-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"d.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.4")},
+					"d.foo.ts.net.":             {netip.MustParseAddr("1.1.1.4")},
+					"random.example.com.":       {netip.MustParseAddr("1.1.1.1")},
+					"other.example.com.":        {netip.MustParseAddr("1.1.1.2")},
+					"othertoo.example.com.":     {netip.MustParseAddr("1.1.5.2")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+			},
+		},
+		{
+			name: "overlaps",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"h1.foo.ts.net.":             {netip.MustParseAddr("1.1.1.3")},
+					"h1.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.2")},
+					"h2.foo.ts.net.":             {netip.MustParseAddr("1.1.1.1")},
+					"h2.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.1")},
+					"example.com":                {netip.MustParseAddr("1.1.1.1")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"h1.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"h1.foo.ts.net.", "h1"}},
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.ts.net.", "h2"}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compileHostEntries(tc.cfg)
+			if diff := cmp.Diff(tc.want, got, cmp.Comparer(func(a, b netip.Addr) bool {
+				return a == b
+			})); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestManager(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("test's assumptions break because of https://github.com/tailscale/corp/issues/1662")

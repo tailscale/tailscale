@@ -5,6 +5,7 @@
 package dns
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -20,6 +21,19 @@ import (
 )
 
 const testGPRuleID = "{7B1B6151-84E6-41A3-8967-62F7F7B45687}"
+
+func TestHostFileNewLines(t *testing.T) {
+	in := []byte("#foo\r\n#bar\n#baz\n")
+	want := []byte("#foo\r\n#bar\r\n#baz\r\n")
+
+	got, err := setTailscaleHosts(in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q\n", got, want)
+	}
+}
 
 func TestManagerWindowsLocal(t *testing.T) {
 	if !isWindows10OrBetter() || !winutil.IsCurrentProcessElevated() {

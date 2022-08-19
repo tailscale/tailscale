@@ -5,10 +5,14 @@
 package dns
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -17,6 +21,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -98,6 +103,71 @@ func (m windowsManager) setSplitDNS(resolvers []netip.Addr, domains []dnsname.FQ
 	}
 
 	return m.nrptDB.WriteSplitDNSConfig(servers, domains)
+}
+
+func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error) {
+	b := bytes.ReplaceAll(prevHostsFile, []byte("\r\n"), []byte("\n"))
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	const (
+		header = "# TailscaleHostsSectionStart"
+		footer = "# TailscaleHostsSectionEnd"
+	)
+	var comments = []string{
+		"# This section contains MagicDNS entries for Tailscale.",
+		"# Do not edit this section manually.",
+	}
+	var out bytes.Buffer
+	var inSection bool
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == header {
+			inSection = true
+			continue
+		}
+		if line == footer {
+			inSection = false
+			continue
+		}
+		if inSection {
+			continue
+		}
+		fmt.Fprintln(&out, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(hosts) > 0 {
+		fmt.Fprintln(&out, header)
+		for _, c := range comments {
+			fmt.Fprintln(&out, c)
+		}
+		fmt.Fprintln(&out)
+		for _, he := range hosts {
+			fmt.Fprintf(&out, "%s %s\n", he.Addr, strings.Join(he.Hosts, " "))
+		}
+		fmt.Fprintln(&out)
+		fmt.Fprintln(&out, footer)
+	}
+	return bytes.ReplaceAll(out.Bytes(), []byte("\n"), []byte("\r\n")), nil
+}
+
+// setHosts sets the hosts file to contain the given host entries.
+func (m windowsManager) setHosts(hosts []*HostEntry) error {
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return err
+	}
+	hostsFile := filepath.Join(systemDir, "drivers", "etc", "hosts")
+	b, err := os.ReadFile(hostsFile)
+	if err != nil {
+		return err
+	}
+	outB, err := setTailscaleHosts(b, hosts)
+	if err != nil {
+		return err
+	}
+	const fileMode = 0 // ignored on windows.
+	return atomicfile.WriteFile(hostsFile, outB, fileMode)
 }
 
 // setPrimaryDNS sets the given resolvers and domains as the Tailscale
@@ -217,6 +287,9 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		if err := m.setSplitDNS(nil, nil); err != nil {
 			return err
 		}
+		if err := m.setHosts(nil); err != nil {
+			return err
+		}
 		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
 			return err
 		}
@@ -226,9 +299,23 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
 			return err
 		}
-		// Still set search domains on the interface, since NRPT only
-		// handles query routing and not search domain expansion.
+		// Unset the resolver on the interface to ensure that we do not become
+		// the primary resolver. Although this is what we want, at the moment
+		// (2022-08-13) it causes single label resolutions from the OS resolver
+		// to wait for a MDNS response from the Tailscale interface.
+		// See #1659 and #5366 for more details.
+		//
+		// Still set search domains on the interface, since NRPT only handles
+		// query routing and not search domain expansion.
 		if err := m.setPrimaryDNS(nil, cfg.SearchDomains); err != nil {
+			return err
+		}
+
+		// As we are not the primary resolver in this setup, we need to
+		// explicitly set some single name hosts to ensure that we can resolve
+		// them quickly and get around the 2.3s delay that otherwise occurs due
+		// to multicast timeouts.
+		if err := m.setHosts(cfg.Hosts); err != nil {
 			return err
 		}
 	}
