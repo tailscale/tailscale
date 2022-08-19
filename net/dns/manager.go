@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
@@ -137,6 +138,47 @@ func (m *Manager) Set(cfg Config) error {
 	return nil
 }
 
+// compileHostEntries creates a list of single-label resolutions possible
+// from the configured hosts and search domains.
+// The entries are compiled in the order of the search domains, then the hosts.
+// The returned list is sorted by the first hostname in each entry.
+func compileHostEntries(cfg Config) (hosts []*HostEntry) {
+	didLabel := make(map[string]bool, len(cfg.Hosts))
+	for _, sd := range cfg.SearchDomains {
+		for h, ips := range cfg.Hosts {
+			if !sd.Contains(h) || h.NumLabels() != (sd.NumLabels()+1) {
+				continue
+			}
+			ipHosts := []string{string(h.WithTrailingDot())}
+			if label := dnsname.FirstLabel(string(h)); !didLabel[label] {
+				didLabel[label] = true
+				ipHosts = append(ipHosts, label)
+			}
+			for _, ip := range ips {
+				if cfg.OnlyIPv6 && ip.Is4() {
+					continue
+				}
+				hosts = append(hosts, &HostEntry{
+					Addr:  ip,
+					Hosts: ipHosts,
+				})
+				// Only add IPv4 or IPv6 per host, like we do in the resolver.
+				break
+			}
+		}
+	}
+	slices.SortFunc(hosts, func(a, b *HostEntry) bool {
+		if len(a.Hosts) == 0 {
+			return false
+		}
+		if len(b.Hosts) == 0 {
+			return true
+		}
+		return a.Hosts[0] < b.Hosts[0]
+	})
+	return hosts
+}
+
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
 func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig, err error) {
@@ -154,6 +196,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
+	if runtime.GOOS == "windows" {
+		ocfg.Hosts = compileHostEntries(cfg)
+	}
 
 	// Deal with trivial configs first.
 	switch {

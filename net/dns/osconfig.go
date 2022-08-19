@@ -37,8 +37,18 @@ type OSConfigurator interface {
 	Close() error
 }
 
+// HostEntry represents a single line in the OS's hosts file.
+type HostEntry struct {
+	Addr  netip.Addr
+	Hosts []string
+}
+
 // OSConfig is an OS DNS configuration.
 type OSConfig struct {
+	// Hosts is a map of DNS FQDNs to their IPs, which should be added to the
+	// OS's hosts file. Currently, (2022-08-12) it is only populated for Windows
+	// in SplitDNS mode and with Smart Name Resolution turned on.
+	Hosts []*HostEntry
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netip.Addr
 	// SearchDomains are the domain suffixes to use when expanding
