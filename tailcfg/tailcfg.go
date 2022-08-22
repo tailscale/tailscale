@@ -1829,25 +1829,31 @@ type PeerChange struct {
 // TKAInitBeginRequest submits a genesis AUM to seed the creation of the
 // tailnet's key authority.
 type TKAInitBeginRequest struct {
-	NodeID NodeID
+	NodeID NodeID // NodeID of the initiating client
 
 	GenesisAUM tkatype.MarshaledAUM
 }
 
-// TKAInitBeginResponse describes a set of NodeKeys which must be signed to
+// TKASignInfo describes information about an existing node that needs
+// to be signed into a node-key signature.
+type TKASignInfo struct {
+	NodeID         NodeID // NodeID of the node-key being signed
+	NodePublic     key.NodePublic
+	RotationPubkey []byte
+}
+
+// TKAInitBeginResponse describes node information which must be signed to
 // complete initialization of the tailnets' key authority.
 type TKAInitBeginResponse struct {
-	NodeID NodeID
-
-	NeedSignatures []key.NodePublic
+	NeedSignatures []TKASignInfo
 }
 
 // TKAInitFinishRequest finalizes initialization of the tailnet key authority
 // by submitting node-key signatures for all existing nodes.
 type TKAInitFinishRequest struct {
-	NodeID NodeID
-	
-	Signatures []tkatype.MarshaledSignature
+	NodeID NodeID // NodeID of the initiating client
+
+	Signatures map[NodeID]tkatype.MarshaledSignature
 }
 
 // TKAInitFinishResponse describes the successful enablement of the tailnet's

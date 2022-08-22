@@ -553,13 +553,31 @@ func Bootstrap(storage Chonk, bootstrap AUM) (*Authority, error) {
 // should be ordered oldest to newest. An error is returned if any
 // of the updates could not be processed.
 func (a *Authority) Inform(updates []AUM) error {
+	if len(updates) == 0 {
+		return errors.New("inform called with empty slice")
+	}
 	stateAt := make(map[AUMHash]State, len(updates)+1)
 	toCommit := make([]AUM, 0, len(updates))
+	prevHash := a.Head()
+
+	// The state at HEAD is the current state of the authority. Its likely
+	// to be needed, so we prefill it rather than computing it.
+	stateAt[prevHash] = a.state
+
+	// Optimization: If the set of updates is a chain building from
+	// the current head, EG:
+	//   <a.Head()> ==> updates[0] ==> updates[1] ...
+	// Then theres no need to recompute the resulting state from the
+	// stored ancestor, because the last state computed during iteration
+	// is the new state. This should be the common case.
+	// isHeadChain keeps track of this.
+	isHeadChain := true
 
 	for i, update := range updates {
 		hash := update.Hash()
+		// Check if we already have this AUM thus don't need to process it.
 		if _, err := a.storage.AUM(hash); err == nil {
-			// Already have this AUM.
+			isHeadChain = false // Disable the head-chain optimization.
 			continue
 		}
 
@@ -583,6 +601,11 @@ func (a *Authority) Inform(updates []AUM) error {
 		if stateAt[hash], err = state.applyVerifiedAUM(update); err != nil {
 			return fmt.Errorf("update %d cannot be applied: %v", i, err)
 		}
+
+		if isHeadChain && parent != prevHash {
+			isHeadChain = false
+		}
+		prevHash = hash
 		toCommit = append(toCommit, update)
 	}
 
@@ -590,18 +613,22 @@ func (a *Authority) Inform(updates []AUM) error {
 		return fmt.Errorf("commit: %v", err)
 	}
 
-	// TODO(tom): Theres no need to recompute the state from scratch
-	//            in every case. We should detect when updates were
-	//            a linear, non-forking series applied to head, and
-	//            just use the last State we computed.
-	oldestAncestor := a.oldestAncestor.Hash()
-	c, err := computeActiveChain(a.storage, &oldestAncestor, 2000)
-	if err != nil {
-		return fmt.Errorf("recomputing active chain: %v", err)
+	if isHeadChain {
+		// Head-chain fastpath: We can use the state we computed
+		// in the last iteration.
+		a.head = updates[len(updates)-1]
+		a.state = stateAt[prevHash]
+	} else {
+		oldestAncestor := a.oldestAncestor.Hash()
+		c, err := computeActiveChain(a.storage, &oldestAncestor, 2000)
+		if err != nil {
+			return fmt.Errorf("recomputing active chain: %v", err)
+		}
+		a.head = c.Head
+		a.oldestAncestor = c.Oldest
+		a.state = c.state
 	}
-	a.head = c.Head
-	a.oldestAncestor = c.Oldest
-	a.state = c.state
+
 	return nil
 }
 
