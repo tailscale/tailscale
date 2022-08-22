@@ -20,6 +20,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/netmap"
 	"tailscale.com/types/tkatype"
 )
 
@@ -82,6 +83,11 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	if !b.CanSupportNetworkLock() {
 		return errors.New("network-lock is not supported in this configuration. Did you supply a --statedir?")
 	}
+	nm := b.NetMap()
+	if nm == nil {
+		return errors.New("no netmap: are you logged into tailscale?")
+	}
+
 
 	// Generates a genesis AUM representing trust in the provided keys.
 	// We use an in-memory tailchonk because we don't want to commit to
@@ -102,7 +108,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	}
 
 	// Phase 1/2 of initialization: Transmit the genesis AUM to Control.
-	initResp, err := b.tkaInitBegin(genesisAUM)
+	initResp, err := b.tkaInitBegin(nm, genesisAUM)
 	if err != nil {
 		return fmt.Errorf("tka init-begin RPC: %w", err)
 	}
@@ -123,7 +129,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	}
 
 	// Finalize enablement by transmitting signature for all nodes to Control.
-	_, err = b.tkaInitFinish(sigs)
+	_, err = b.tkaInitFinish(nm, sigs)
 	return err
 }
 
@@ -145,9 +151,10 @@ func signNodeKey(nk key.NodePublic, signer key.NLPrivate) (*tka.NodeKeySignature
 	return &sig, nil
 }
 
-func (b *LocalBackend) tkaInitBegin(aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
+func (b *LocalBackend) tkaInitBegin(nm *netmap.NetworkMap, aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitBeginRequest{
+		NodeID: nm.SelfNode.ID,
 		GenesisAUM: aum.Serialize(),
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
@@ -185,9 +192,10 @@ func (b *LocalBackend) tkaInitBegin(aum tka.AUM) (*tailcfg.TKAInitBeginResponse,
 	}
 }
 
-func (b *LocalBackend) tkaInitFinish(nks []tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
+func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks []tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
+		NodeID: nm.SelfNode.ID,
 		Signatures: nks,
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)

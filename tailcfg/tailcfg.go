@@ -1845,6 +1845,8 @@ type TKAInitBeginResponse struct {
 // TKAInitFinishRequest finalizes initialization of the tailnet key authority
 // by submitting node-key signatures for all existing nodes.
 type TKAInitFinishRequest struct {
+	NodeID NodeID
+	
 	Signatures []tkatype.MarshaledSignature
 }
 
