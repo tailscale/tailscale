@@ -325,7 +325,7 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	}
 }
 
-func TestAuthorityInform(t *testing.T) {
+func TestAuthorityInformNonLinear(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
@@ -351,7 +351,52 @@ func TestAuthorityInform(t *testing.T) {
 		t.Fatalf("Bootstrap() failed: %v", err)
 	}
 
+	// L2 does not chain from L1, disabling the isHeadChain optimization
+	// and forcing Inform() to take the slow path.
 	informAUMs := []AUM{c.AUMs["L1"], c.AUMs["L2"], c.AUMs["L3"], c.AUMs["L4"], c.AUMs["L5"]}
+
+	if err := a.Inform(informAUMs); err != nil {
+		t.Fatalf("Inform() failed: %v", err)
+	}
+	for i, update := range informAUMs {
+		stored, err := storage.AUM(update.Hash())
+		if err != nil {
+			t.Errorf("reading stored update %d: %v", i, err)
+			continue
+		}
+		if diff := cmp.Diff(update, stored); diff != "" {
+			t.Errorf("update %d differs (-want, +got):\n%s", i, diff)
+		}
+	}
+
+	if a.Head() != c.AUMHashes["L3"] {
+		t.Fatal("authority did not converge to correct AUM")
+	}
+}
+
+func TestAuthorityInformLinear(t *testing.T) {
+	pub, priv := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	c := newTestchain(t, `
+        G1 -> L1 -> L2 -> L3
+
+        G1.template = genesis
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{key},
+			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+		}}),
+		optKey("key", key, priv),
+		optSignAllUsing("key"))
+
+	storage := &Mem{}
+	a, err := Bootstrap(storage, c.AUMs["G1"])
+	if err != nil {
+		t.Fatalf("Bootstrap() failed: %v", err)
+	}
+
+	informAUMs := []AUM{c.AUMs["L1"], c.AUMs["L2"], c.AUMs["L3"]}
 
 	if err := a.Inform(informAUMs); err != nil {
 		t.Fatalf("Inform() failed: %v", err)

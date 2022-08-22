@@ -88,7 +88,6 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 		return errors.New("no netmap: are you logged into tailscale?")
 	}
 
-
 	// Generates a genesis AUM representing trust in the provided keys.
 	// We use an in-memory tailchonk because we don't want to commit to
 	// the filesystem until we've finished the initialization sequence,
@@ -118,14 +117,14 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	// If we don't get these signatures ahead of time, everyone will loose
 	// connectivity because control won't have any signatures to send which
 	// satisfy network-lock checks.
-	var sigs []tkatype.MarshaledSignature
-	for _, nkp := range initResp.NeedSignatures {
-		nks, err := signNodeKey(nkp, b.nlPrivKey)
+	sigs := make(map[tailcfg.NodeID]tkatype.MarshaledSignature, len(initResp.NeedSignatures))
+	for _, nodeInfo := range initResp.NeedSignatures {
+		nks, err := signNodeKey(nodeInfo, b.nlPrivKey)
 		if err != nil {
 			return fmt.Errorf("generating signature: %v", err)
 		}
 
-		sigs = append(sigs, nks.Serialize())
+		sigs[nodeInfo.NodeID] = nks.Serialize()
 	}
 
 	// Finalize enablement by transmitting signature for all nodes to Control.
@@ -133,16 +132,17 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	return err
 }
 
-func signNodeKey(nk key.NodePublic, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
-	p, err := nk.MarshalBinary()
+func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
+	p, err := nodeInfo.NodePublic.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
 
 	sig := tka.NodeKeySignature{
-		SigKind: tka.SigDirect,
-		KeyID:   signer.KeyID(),
-		Pubkey:  p,
+		SigKind:        tka.SigDirect,
+		KeyID:          signer.KeyID(),
+		Pubkey:         p,
+		RotationPubkey: nodeInfo.RotationPubkey,
 	}
 	sig.Signature, err = signer.SignNKS(sig.SigHash())
 	if err != nil {
@@ -154,7 +154,7 @@ func signNodeKey(nk key.NodePublic, signer key.NLPrivate) (*tka.NodeKeySignature
 func (b *LocalBackend) tkaInitBegin(nm *netmap.NetworkMap, aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitBeginRequest{
-		NodeID: nm.SelfNode.ID,
+		NodeID:     nm.SelfNode.ID,
 		GenesisAUM: aum.Serialize(),
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
@@ -192,10 +192,10 @@ func (b *LocalBackend) tkaInitBegin(nm *netmap.NetworkMap, aum tka.AUM) (*tailcf
 	}
 }
 
-func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks []tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
+func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks map[tailcfg.NodeID]tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
-		NodeID: nm.SelfNode.ID,
+		NodeID:     nm.SelfNode.ID,
 		Signatures: nks,
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
