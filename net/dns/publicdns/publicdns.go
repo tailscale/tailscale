@@ -95,4 +95,14 @@ func populate() {
 	addDoH("149.112.112.10", "https://dns10.quad9.net/dns-query")
 	addDoH("2620:fe::10", "https://dns10.quad9.net/dns-query")
 	addDoH("2620:fe::fe:10", "https://dns10.quad9.net/dns-query")
+
+	// Mullvad
+	addDoH("194.242.2.2", "https://doh.mullvad.net/dns-query")
+	addDoH("193.19.108.2", "https://doh.mullvad.net/dns-query")
+	addDoH("2a07:e340::2", "https://doh.mullvad.net/dns-query")
+
+	// Mullvad -Ads
+	addDoH("194.242.2.3", "https://adblock.doh.mullvad.net/dns-query")
+	addDoH("193.19.108.3", "https://adblock.doh.mullvad.net/dns-query")
+	addDoH("2a07:e340::3", "https://adblock.doh.mullvad.net/dns-query")
 }
