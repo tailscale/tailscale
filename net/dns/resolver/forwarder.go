@@ -406,6 +406,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	})
 	c = &http.Client{
 		Transport: &http.Transport{
+			ForceAttemptHTTP2: true,
 			IdleConnTimeout: dohTransportTimeout,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
