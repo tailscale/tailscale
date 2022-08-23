@@ -13,6 +13,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/hdevalence/ed25519consensus"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -21,9 +22,17 @@ type SigKind uint8
 
 const (
 	SigInvalid SigKind = iota
-	// SigDirect describes a signature over a specific node key, using
-	// the keyID specified.
+	// SigDirect describes a signature over a specific node key, signed
+	// by a key in the tailnet key authority referenced by the specified keyID.
 	SigDirect
+	// SigRotation describes a signature over a specific node key, signed
+	// by the rotation key authorized by a nested NodeKeySignature structure.
+	//
+	// While it is possible to nest rotations multiple times up to the CBOR
+	// nesting limit, it is intended that nodes simply regenerate their outer
+	// SigRotation signature and sign it again with their rotation key. That
+	// way, SigRotation nesting should only be 2 deep in the common case.
+	SigRotation
 )
 
 func (s SigKind) String() string {
@@ -32,6 +41,8 @@ func (s SigKind) String() string {
 		return "invalid"
 	case SigDirect:
 		return "direct"
+	case SigRotation:
+		return "rotation"
 	default:
 		return fmt.Sprintf("Sig?<%d>", int(s))
 	}
@@ -42,7 +53,7 @@ func (s SigKind) String() string {
 type NodeKeySignature struct {
 	// SigKind identifies the variety of signature.
 	SigKind SigKind `cbor:"1,keyasint"`
-	// Pubkey identifies the public key which is being certified.
+	// Pubkey identifies the public key which is being authorized.
 	Pubkey []byte `cbor:"2,keyasint"`
 
 	// KeyID identifies which key in the tailnet key authority should
@@ -50,9 +61,39 @@ type NodeKeySignature struct {
 	// SigCredential signature kinds.
 	KeyID []byte `cbor:"3,keyasint,omitempty"`
 
-	// Signature is the packed (R, S) ed25519 signature over the rest
-	// of the structure.
+	// Signature is the packed (R, S) ed25519 signature over all other
+	// fields of the structure.
 	Signature []byte `cbor:"4,keyasint,omitempty"`
+
+	// Nested describes a NodeKeySignature which authorizes the node-key
+	// used as Pubkey. Only used for SigRotation signatures.
+	Nested *NodeKeySignature `cbor:"5,keyasint,omitempty"`
+
+	// RotationPubkey specifies the ed25519 public key which may sign a
+	// SigRotation signature, which embeds this one.
+	//
+	// Intermediate SigRotation signatures may omit this value to use the
+	// parent one.
+	RotationPubkey []byte `cbor:"6,keyasint,omitempty"`
+}
+
+// rotationPublic returns the public key which must sign a SigRotation
+// signature that embeds this signature, if any.
+func (s NodeKeySignature) rotationPublic() (pub ed25519.PublicKey, ok bool) {
+	if len(s.RotationPubkey) > 0 {
+		return ed25519.PublicKey(s.RotationPubkey), true
+	}
+
+	switch s.SigKind {
+	case SigRotation:
+		if s.Nested == nil {
+			return nil, false
+		}
+		return s.Nested.rotationPublic()
+
+	default:
+		return nil, false
+	}
 }
 
 // SigHash returns the cryptographic digest which a signature
@@ -97,18 +138,56 @@ func (s *NodeKeySignature) Unserialize(data []byte) error {
 	return dec.Unmarshal(data, s)
 }
 
-// verifySignature checks that the NodeKeySignature is authentic and certified
-// by the given verificationKey.
-func (s *NodeKeySignature) verifySignature(verificationKey Key) error {
+// verifySignature checks that the NodeKeySignature is authentic, certified
+// by the given verificationKey, and authorizes the given nodeKey.
+func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationKey Key) error {
+	nodeBytes, err := nodeKey.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshalling pubkey: %v", err)
+	}
+	if !bytes.Equal(nodeBytes, s.Pubkey) {
+		return errors.New("signature does not authorize nodeKey")
+	}
+
 	sigHash := s.SigHash()
-	switch verificationKey.Kind {
-	case Key25519:
-		if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {
-			return nil
+	switch s.SigKind {
+	case SigRotation:
+		if s.Nested == nil {
+			return errors.New("nested signatures must nest a signature")
 		}
-		return errors.New("invalid signature")
+
+		// Verify the signature using the nested rotation key.
+		verifyPub, ok := s.Nested.rotationPublic()
+		if !ok {
+			return errors.New("missing rotation key")
+		}
+		if !ed25519.Verify(ed25519.PublicKey(verifyPub[:]), sigHash[:], s.Signature) {
+			return errors.New("invalid signature")
+		}
+
+		// Recurse to verify the signature on the nested structure.
+		var nestedPub key.NodePublic
+		if err := nestedPub.UnmarshalBinary(s.Nested.Pubkey); err != nil {
+			return fmt.Errorf("nested pubkey: %v", err)
+		}
+		if err := s.Nested.verifySignature(nestedPub, verificationKey); err != nil {
+			return fmt.Errorf("nested: %v", err)
+		}
+		return nil
+
+	case SigDirect:
+		switch verificationKey.Kind {
+		case Key25519:
+			if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {
+				return nil
+			}
+			return errors.New("invalid signature")
+
+		default:
+			return fmt.Errorf("unhandled key type: %v", verificationKey.Kind)
+		}
 
 	default:
-		return fmt.Errorf("unhandled key type: %v", verificationKey.Kind)
+		return fmt.Errorf("unhandled signature type: %v", s.SigKind)
 	}
 }

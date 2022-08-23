@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -62,5 +63,36 @@ func TestVerify25519(t *testing.T) {
 	key2 := Key{Kind: Key25519, Public: pub2}
 	if err := signatureVerify(&aum.Signatures[0], aum.SigHash(), key2); err == nil {
 		t.Error("signature verification with different key did not fail")
+	}
+}
+
+func TestNLPrivate(t *testing.T) {
+	p := key.NewNLPrivate()
+	pub := p.Public()
+
+	// Test that key.NLPrivate implements Signer by making a new
+	// authority.
+	k := Key{Kind: Key25519, Public: pub.Verifier(), Votes: 1}
+	_, aum, err := Create(&Mem{}, State{
+		Keys:               []Key{k},
+		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+	}, p)
+	if err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	// Make sure the generated genesis AUM was signed.
+	if got, want := len(aum.Signatures), 1; got != want {
+		t.Fatalf("len(signatures) = %d, want %d", got, want)
+	}
+	sigHash := aum.SigHash()
+	if ok := ed25519.Verify(pub.Verifier(), sigHash[:], aum.Signatures[0].Signature); !ok {
+		t.Error("signature did not verify")
+	}
+
+	// We manually compute the keyID, so make sure its consistent with
+	// tka.Key.ID().
+	if !bytes.Equal(k.ID(), p.KeyID()) {
+		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.ID(), p.KeyID())
 	}
 }
