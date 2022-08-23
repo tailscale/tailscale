@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/fxamacker/cbor/v2"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -23,7 +24,7 @@ var cborDecOpts = cbor.DecOptions{
 	TagsMd:      cbor.TagsForbidden,
 
 	// Arbitrarily-chosen maximums.
-	MaxNestedLevels:  8,
+	MaxNestedLevels:  16, // Most likely to be hit for SigRotation sigs.
 	MaxArrayElements: 4096,
 	MaxMapPairs:      1024,
 }
@@ -604,9 +605,9 @@ func (a *Authority) Inform(updates []AUM) error {
 	return nil
 }
 
-// VerifySignature returns true if the provided nodeKeySignature is signed
-// correctly by a trusted key.
-func (a *Authority) VerifySignature(nodeKeySignature tkatype.MarshaledSignature) error {
+// NodeKeyAuthorized checks if the provided nodeKeySignature authorizes
+// the given node key.
+func (a *Authority) NodeKeyAuthorized(nodeKey key.NodePublic, nodeKeySignature tkatype.MarshaledSignature) error {
 	var decoded NodeKeySignature
 	if err := decoded.Unserialize(nodeKeySignature); err != nil {
 		return fmt.Errorf("unserialize: %v", err)
@@ -616,7 +617,7 @@ func (a *Authority) VerifySignature(nodeKeySignature tkatype.MarshaledSignature)
 		return fmt.Errorf("key: %v", err)
 	}
 
-	return decoded.verifySignature(key)
+	return decoded.verifySignature(nodeKey, key)
 }
 
 // KeyTrusted returns true if the given keyID is trusted by the tailnet
