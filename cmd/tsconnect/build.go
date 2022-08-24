@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 
-	esbuild "github.com/evanw/esbuild/pkg/api"
 	"tailscale.com/util/precompress"
 )
 
@@ -28,7 +27,7 @@ func runBuild() {
 		log.Fatalf("Linting failed: %v", err)
 	}
 
-	if err := cleanDist(); err != nil {
+	if err := cleanDir(*distDir, "placeholder"); err != nil {
 		log.Fatalf("Cannot clean %s: %v", *distDir, err)
 	}
 
@@ -41,21 +40,7 @@ func runBuild() {
 	buildOptions.AssetNames = "[name]-[hash]"
 	buildOptions.Metafile = true
 
-	log.Printf("Running esbuild...\n")
-	result := esbuild.Build(*buildOptions)
-	if len(result.Errors) > 0 {
-		log.Printf("ESBuild Error:\n")
-		for _, e := range result.Errors {
-			log.Printf("%v", e)
-		}
-		log.Fatal("Build failed")
-	}
-	if len(result.Warnings) > 0 {
-		log.Printf("ESBuild Warnings:\n")
-		for _, w := range result.Warnings {
-			log.Printf("%v", w)
-		}
-	}
+	result := runEsbuild(*buildOptions)
 
 	// Preserve build metadata so we can extract hashed file names for serving.
 	metadataBytes, err := fixEsbuildMetadataPaths(result.Metafile)
@@ -98,8 +83,6 @@ func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 	return json.Marshal(metadata)
 }
 
-// cleanDist removes files from the dist build directory, except the placeholder
-// one that we keep to make sure Git still creates the directory.
 func cleanDist() error {
 	log.Printf("Cleaning %s...\n", *distDir)
 	files, err := os.ReadDir(*distDir)

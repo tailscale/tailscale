@@ -69,6 +69,12 @@ func newIPN(jsConfig js.Value) map[string]any {
 		store = &jsStateStore{jsStateStorage}
 	}
 
+	jsControlURL := jsConfig.Get("controlURL")
+	controlURL := ControlURL
+	if jsControlURL.Type() == js.TypeString {
+		controlURL = jsControlURL.String()
+	}
+
 	jsAuthKey := jsConfig.Get("authKey")
 	var authKey string
 	if jsAuthKey.Type() == js.TypeString {
@@ -125,9 +131,11 @@ func newIPN(jsConfig js.Value) map[string]any {
 	ns.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{
-		dialer: dialer,
-		srv:    srv,
-		lb:     lb,
+		dialer:     dialer,
+		srv:        srv,
+		lb:         lb,
+		controlURL: controlURL,
+		authKey:    authKey,
 	}
 
 	return map[string]any{
@@ -141,7 +149,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 				})`)
 				return nil
 			}
-			jsIPN.run(args[0], authKey)
+			jsIPN.run(args[0])
 			return nil
 		}),
 		"login": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -183,14 +191,33 @@ func newIPN(jsConfig js.Value) map[string]any {
 }
 
 type jsIPN struct {
-	dialer *tsdial.Dialer
-	srv    *ipnserver.Server
-	lb     *ipnlocal.LocalBackend
+	dialer     *tsdial.Dialer
+	srv        *ipnserver.Server
+	lb         *ipnlocal.LocalBackend
+	controlURL string
+	authKey    string
 }
 
-func (i *jsIPN) run(jsCallbacks js.Value, authKey string) {
+var jsIPNState = map[ipn.State]string{
+	ipn.NoState:          "NoState",
+	ipn.InUseOtherUser:   "InUseOtherUser",
+	ipn.NeedsLogin:       "NeedsLogin",
+	ipn.NeedsMachineAuth: "NeedsMachineAuth",
+	ipn.Stopped:          "Stopped",
+	ipn.Starting:         "Starting",
+	ipn.Running:          "Running",
+}
+
+var jsMachineStatus = map[tailcfg.MachineStatus]string{
+	tailcfg.MachineUnknown:      "MachineUnknown",
+	tailcfg.MachineUnauthorized: "MachineUnauthorized",
+	tailcfg.MachineAuthorized:   "MachineAuthorized",
+	tailcfg.MachineInvalid:      "MachineInvalid",
+}
+
+func (i *jsIPN) run(jsCallbacks js.Value) {
 	notifyState := func(state ipn.State) {
-		jsCallbacks.Call("notifyState", int(state))
+		jsCallbacks.Call("notifyState", jsIPNState[state])
 	}
 	notifyState(ipn.NoState)
 
@@ -218,7 +245,7 @@ func (i *jsIPN) run(jsCallbacks js.Value, authKey string) {
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
 					},
-					MachineStatus: int(nm.MachineStatus),
+					MachineStatus: jsMachineStatus[nm.MachineStatus],
 				},
 				Peers: mapSlice(nm.Peers, func(p *tailcfg.Node) jsNetMapPeerNode {
 					name := p.Name
@@ -253,13 +280,13 @@ func (i *jsIPN) run(jsCallbacks js.Value, authKey string) {
 		err := i.lb.Start(ipn.Options{
 			StateKey: "wasm",
 			UpdatePrefs: &ipn.Prefs{
-				ControlURL:       ControlURL,
+				ControlURL:       i.controlURL,
 				RouteAll:         false,
 				AllowSingleHosts: true,
 				WantRunning:      true,
 				Hostname:         generateHostname(),
 			},
-			AuthKey: authKey,
+			AuthKey: i.authKey,
 		})
 		if err != nil {
 			log.Printf("Start error: %v", err)
@@ -467,7 +494,7 @@ type jsNetMapNode struct {
 
 type jsNetMapSelfNode struct {
 	jsNetMapNode
-	MachineStatus int `json:"machineStatus"`
+	MachineStatus string `json:"machineStatus"`
 }
 
 type jsNetMapPeerNode struct {

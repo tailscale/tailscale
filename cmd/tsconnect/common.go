@@ -17,6 +17,7 @@ import (
 	"time"
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -38,7 +39,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	}
 
 	return &esbuild.BuildOptions{
-		EntryPoints: []string{"src/index.ts", "src/index.css"},
+		EntryPoints: []string{"src/app/index.ts", "src/app/index.css"},
 		Outdir:      *distDir,
 		Bundle:      true,
 		Sourcemap:   esbuild.SourceMapLinked,
@@ -65,6 +66,47 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 		},
 		JSXMode: esbuild.JSXModeAutomatic,
 	}, nil
+}
+
+// cleanDir removes files from dirPath, except the ones specified by
+// preserveFiles.
+func cleanDir(dirPath string, preserveFiles ...string) error {
+	log.Printf("Cleaning %s...\n", dirPath)
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(dirPath, 0755)
+		}
+		return err
+	}
+
+	for _, file := range files {
+		if !slices.Contains(preserveFiles, file.Name()) {
+			if err := os.Remove(filepath.Join(dirPath, file.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
+	log.Printf("Running esbuild...\n")
+	result := esbuild.Build(buildOptions)
+	if len(result.Errors) > 0 {
+		log.Printf("ESBuild Error:\n")
+		for _, e := range result.Errors {
+			log.Printf("%v", e)
+		}
+		log.Fatal("Build failed")
+	}
+	if len(result.Warnings) > 0 {
+		log.Printf("ESBuild Warnings:\n")
+		for _, w := range result.Warnings {
+			log.Printf("%v", w)
+		}
+	}
+	return result
 }
 
 // setupEsbuildWasmExecJS generates an esbuild plugin that serves the current
@@ -167,7 +209,7 @@ type EsbuildMetadata struct {
 
 func setupEsbuildTailwind(build esbuild.PluginBuild, dev bool) {
 	build.OnLoad(esbuild.OnLoadOptions{
-		Filter: "./src/index.css$",
+		Filter: "./src/.*\\.css$",
 	}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
 		start := time.Now()
 		yarnArgs := []string{"--silent", "tailwind", "-i", args.Path}

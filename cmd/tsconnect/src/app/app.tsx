@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 import { render, Component } from "preact"
-import { IPNState } from "./wasm_js"
 import { URLDisplay } from "./url-display"
 import { Header } from "./header"
 import { GoPanicDisplay } from "./go-panic-display"
@@ -18,7 +17,7 @@ type AppState = {
 }
 
 class App extends Component<{}, AppState> {
-  state: AppState = { ipnState: IPNState.NoState }
+  state: AppState = { ipnState: "NoState" }
   #goPanicTimeout?: number
 
   render() {
@@ -37,7 +36,7 @@ class App extends Component<{}, AppState> {
     }
 
     let machineAuthInstructions
-    if (ipnState === IPNState.NeedsMachineAuth) {
+    if (ipnState === "NeedsMachineAuth") {
       machineAuthInstructions = (
         <div class="container mx-auto px-4 text-center">
           An administrator needs to authorize this device.
@@ -46,7 +45,7 @@ class App extends Component<{}, AppState> {
     }
 
     let ssh
-    if (ipn && ipnState === IPNState.Running && netMap) {
+    if (ipn && ipnState === "Running" && netMap) {
       ssh = <SSH netMap={netMap} ipn={ipn} />
     }
 
@@ -77,9 +76,9 @@ class App extends Component<{}, AppState> {
   handleIPNState = (state: IPNState) => {
     const { ipn } = this.state
     this.setState({ ipnState: state })
-    if (state == IPNState.NeedsLogin) {
+    if (state === "NeedsLogin") {
       ipn?.login()
-    } else if ([IPNState.Running, IPNState.NeedsMachineAuth].includes(state)) {
+    } else if (["Running", "NeedsMachineAuth"].includes(state)) {
       this.setState({ browseToURL: undefined })
     }
   }
