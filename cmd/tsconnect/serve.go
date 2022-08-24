@@ -115,8 +115,8 @@ func generateServeIndex(distFS fs.FS) ([]byte, error) {
 }
 
 var entryPointsToDefaultDistPaths = map[string]string{
-	"src/index.css": "dist/index.css",
-	"src/index.ts":  "dist/index.js",
+	"src/app/index.css": "dist/index.css",
+	"src/app/index.ts":  "dist/index.js",
 }
 
 func handleServeDist(w http.ResponseWriter, r *http.Request, distFS fs.FS) {

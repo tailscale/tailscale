@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import "./wasm_exec"
+import "../wasm_exec"
 import wasmUrl from "./main.wasm"
-import { sessionStateStorage } from "./js-state-store"
+import { sessionStateStorage } from "../lib/js-state-store"
 import { renderApp } from "./app"
 
 async function main() {

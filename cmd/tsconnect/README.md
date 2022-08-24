@@ -28,3 +28,13 @@ To serve them, run:
 ```
 
 By default the build output is placed in the `dist/` directory and embedded in the binary, but this can be controlled by the `-distdir` flag. The `-addr` flag controls the interface and port that the serve listens on.
+
+# Library / NPM Package
+
+The client is also available as an NPM package. To build it, run:
+
+```
+./tool/go run ./cmd/tsconnect build-pkg
+```
+
+That places the output in the `pkg/` directory, which may then be uploaded to a package registry (or installed from the file path directly).

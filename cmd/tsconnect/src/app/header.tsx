@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import { IPNState } from "./wasm_js"
-
 export function Header({ state, ipn }: { state: IPNState; ipn?: IPN }) {
   const stateText = STATE_LABELS[state]
 
   let logoutButton
-  if (state === IPNState.Running) {
+  if (state === "Running") {
     logoutButton = (
       <button
         class="button bg-gray-500 border-gray-500 text-white hover:bg-gray-600 hover:border-gray-600 ml-2 font-bold"
@@ -30,11 +28,11 @@ export function Header({ state, ipn }: { state: IPNState; ipn?: IPN }) {
 }
 
 const STATE_LABELS = {
-  [IPNState.NoState]: "Initializing…",
-  [IPNState.InUseOtherUser]: "In-use by another user",
-  [IPNState.NeedsLogin]: "Needs login",
-  [IPNState.NeedsMachineAuth]: "Needs authorization",
-  [IPNState.Stopped]: "Stopped",
-  [IPNState.Starting]: "Starting…",
-  [IPNState.Running]: "Running",
+  NoState: "Initializing…",
+  InUseOtherUser: "In-use by another user",
+  NeedsLogin: "Needs login",
+  NeedsMachineAuth: "Needs authorization",
+  Stopped: "Stopped",
+  Starting: "Starting…",
+  Running: "Running",
 } as const
