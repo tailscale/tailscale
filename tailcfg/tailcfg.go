@@ -899,6 +899,11 @@ type MapRequest struct {
 	Stream      bool // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
 
+	// TKA describes request parameters relating to a local instance of
+	// the tailnet key authority. This field is omitted if a local instance
+	// is not running.
+	TKA *TKAMapRequest `json:",omitempty"`
+
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
 	Endpoints []string
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
@@ -1323,6 +1328,10 @@ type MapResponse struct {
 
 	// ControlTime, if non-zero, is the current timestamp according to the control server.
 	ControlTime *time.Time `json:",omitempty"`
+
+	// TKA, if non-nil, describes updates for the local instance of the
+	// tailnet key authority.
+	TKA *TKAMapResponse `json:",omitempty"`
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
@@ -1837,8 +1846,18 @@ type TKAInitBeginRequest struct {
 // TKASignInfo describes information about an existing node that needs
 // to be signed into a node-key signature.
 type TKASignInfo struct {
-	NodeID         NodeID // NodeID of the node-key being signed
-	NodePublic     key.NodePublic
+	NodeID     NodeID // NodeID of the node-key being signed
+	NodePublic key.NodePublic
+
+	// RotationPubkey specifies the public key which may sign
+	// a NodeKeySignature (NKS), which rotates the node key.
+	//
+	// This is necessary so the node can rotate its node-key without
+	// talking to a node which holds a trusted network-lock key.
+	// It does this by nesting the original NKS in a 'rotation' NKS,
+	// which it then signs with the key corresponding to RotationPubkey.
+	//
+	// This field expects a raw ed25519 public key.
 	RotationPubkey []byte
 }
 
@@ -1859,6 +1878,41 @@ type TKAInitFinishRequest struct {
 // TKAInitFinishResponse describes the successful enablement of the tailnet's
 // key authority.
 type TKAInitFinishResponse struct{}
+
+// TKAMapRequest describes request parameters relating to the tailnet key
+// authority instance on this node. This information is transmitted as
+// part of the MapRequest.
+type TKAMapRequest struct {
+	// Head is the AUMHash of the latest authority update message committed
+	// by this node.
+	Head string // tka.AUMHash.String
+}
+
+// TKAMapResponse encodes information for the tailnet key authority
+// instance on the node. This information is transmitted as
+// part of the MapResponse.
+//
+// If there are no updates to be transmitted (in other words, if both
+// control and the node have the same head hash), len(Updates) == 0 and
+// WantSync is false.
+//
+// If control has updates that build off the head hash reported by the
+// node, they are simply transmitted in Updates (avoiding the more
+// expensive synchronization process).
+//
+// In all other cases, WantSync is set to true, and the node is expected
+// to reach out to control separately to synchronize.
+type TKAMapResponse struct {
+	// Updates is any AUMs that control believes the node should apply.
+	Updates []tkatype.MarshaledAUM `json:",omitempty"`
+
+	// WantSync is set by control to request the node complete AUM
+	// synchronization.
+	//
+	// TODO(tom): Implement AUM synchronization, probably as noise endpoints
+	// /machine/tka/sync/offer & /machine/tka/sync/send.
+	WantSync bool `json:",omitempty"`
+}
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to
 // use DERP. When used (in the Node.DERP field), the port number of
