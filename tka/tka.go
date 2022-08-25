@@ -35,6 +35,11 @@ var cborDecOpts = cbor.DecOptions{
 // Authority objects can either be created from an existing, non-empty
 // tailchonk (via tka.Open()), or created from scratch using tka.Bootstrap()
 // or tka.Create().
+//
+// The Authority is NOT thread-safe. Specifically:
+//   - Calls to Inform() must be done in an exclusive section
+//   - No method calls may be pending during a call to Thaw()
+//   - All other methods are safe for concurrent use with other methods.
 type Authority struct {
 	head           AUM
 	oldestAncestor AUM
@@ -652,4 +657,45 @@ func (a *Authority) NodeKeyAuthorized(nodeKey key.NodePublic, nodeKeySignature t
 func (a *Authority) KeyTrusted(keyID tkatype.KeyID) bool {
 	_, err := a.state.GetKey(keyID)
 	return err == nil
+}
+
+// FrozenAuthority encapsulates the runtime state of an Authority, sans
+// a Chonk storage backend. Call Thaw() to turn it back into an Authority
+// object.
+//
+// 'freezing' and 'thawing' an Authority is intended to help out with
+// storage implementations based on SQL transactions. Long-lived transactions
+// are bad, so you can freeze the authority to get the Chonk back out (and
+// close any resources it uses), and then 'thaw' it by providing a new Chonk
+// (presumably based on a fresh transaction).
+type FrozenAuthority struct {
+	a *Authority
+}
+
+// Thaw returns the Authority for use, based on the provided chonk.
+//
+// The FrozenAuthority object should be subsequently discarded and
+// MUST NOT be used again.
+func (f *FrozenAuthority) Thaw(chonk Chonk) *Authority {
+	f.a.storage = chonk
+	return f.a
+}
+
+// Freeze puts the authority 'on ice', preserving the runtime state
+// of the Authority, but returning the storage backend so it can be
+// shutdown. You can return the authority back to a usable state by
+// calling Thaw() on the FrozenAuthority object with a new storage backend.
+//
+// 'Freezing' and 'Thawing' an Authority is intended to help out with
+// storage implementations based on SQL transactions. Long-lived transactions
+// are bad, so you can freeze the authority to get the Chonk back out (and
+// close any resources it uses), and then 'thaw' it by providing a new Chonk
+// (presumably based on a fresh transaction).
+//
+// The caller MUST ensure that no method calls are pending on the authority
+// when/after it is being frozen.
+func (a *Authority) Freeze() (chonk Chonk, iceCube *FrozenAuthority) {
+	chonk = a.storage
+	a.storage = nil
+	return chonk, &FrozenAuthority{a}
 }

@@ -416,3 +416,37 @@ func TestAuthorityInformLinear(t *testing.T) {
 		t.Fatal("authority did not converge to correct AUM")
 	}
 }
+
+func TestAuthorityFreezeThaw(t *testing.T) {
+	pub, priv := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	c := newTestchain(t, `
+        G1 -> L1 -> L2
+
+        G1.template = genesis
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{key},
+			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+		}}),
+		optKey("key", key, priv),
+		optSignAllUsing("key"))
+
+	storage := &Mem{}
+	a, err := Bootstrap(storage, c.AUMs["G1"])
+	if err != nil {
+		t.Fatalf("Bootstrap() failed: %v", err)
+	}
+
+	chonk, ice := a.Freeze()
+	a = ice.Thaw(chonk)
+
+	// Exercise a 'write' operation that touches most internal state.
+	if err := a.Inform([]AUM{c.AUMs["L1"], c.AUMs["L2"]}); err != nil {
+		t.Fatalf("Inform() failed: %v", err)
+	}
+	if a.Head() != c.AUMHashes["L2"] {
+		t.Fatal("authority did not converge to correct AUM")
+	}
+}
