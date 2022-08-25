@@ -549,6 +549,14 @@ func Bootstrap(storage Chonk, bootstrap AUM) (*Authority, error) {
 	return Open(storage)
 }
 
+// ValidDisablement returns true if the disablement secret was correct.
+//
+// If this method returns true, the caller should shut down the authority
+// and purge all network-lock state.
+func (a *Authority) ValidDisablement(secret []byte) bool {
+	return a.state.checkDisablement(secret)
+}
+
 // Inform is called to tell the authority about new updates. Updates
 // should be ordered oldest to newest. An error is returned if any
 // of the updates could not be processed.

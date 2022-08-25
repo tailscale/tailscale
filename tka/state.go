@@ -192,14 +192,6 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		out.Keys = append(out.Keys[:idx], out.Keys[idx+1:]...)
 		return out, nil
 
-	case AUMDisableNL:
-		// TODO(tom): We should handle this at a higher level than State.
-		if !s.checkDisablement(update.DisablementSecret) {
-			return State{}, errors.New("incorrect disablement secret")
-		}
-		// Valid disablement secret, lets reset
-		return State{}, nil
-
 	default:
 		// TODO(tom): Instead of erroring, update lastHash and
 		// continue (to preserve future compatibility).

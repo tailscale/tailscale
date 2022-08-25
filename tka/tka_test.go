@@ -35,10 +35,10 @@ func TestComputeChainCandidates(t *testing.T) {
 	}
 
 	want := []chain{
-		{Oldest: c.AUMs["G1"], Head: c.AUMs["L1"], chainsThroughActive: true},
-		{Oldest: c.AUMs["G1"], Head: c.AUMs["L3"], chainsThroughActive: true},
-		{Oldest: c.AUMs["G1"], Head: c.AUMs["L2"], chainsThroughActive: true},
 		{Oldest: c.AUMs["G2"], Head: c.AUMs["L4"]},
+		{Oldest: c.AUMs["G1"], Head: c.AUMs["L3"], chainsThroughActive: true},
+		{Oldest: c.AUMs["G1"], Head: c.AUMs["L1"], chainsThroughActive: true},
+		{Oldest: c.AUMs["G1"], Head: c.AUMs["L2"], chainsThroughActive: true},
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(chain{})); diff != "" {
 		t.Errorf("chains differ (-want, +got):\n%s", diff)
@@ -82,7 +82,7 @@ func TestForkResolutionSigWeight(t *testing.T) {
          | -> L2
 
         G1.template = addKey
-        L1.hashSeed = 2
+        L1.hashSeed = 11
         L2.signedWith = key
     `,
 		optTemplate("addKey", AUM{MessageKind: AUMAddKey, Key: &key}),
@@ -295,6 +295,26 @@ func TestAuthorityHead(t *testing.T) {
 	}
 }
 
+func TestAuthorityValidDisablement(t *testing.T) {
+	pub, _ := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+	c := newTestchain(t, `
+        G1 -> L1
+
+        G1.template = genesis
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{key},
+			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+		}}),
+	)
+
+	a, _ := Open(c.Chonk())
+	if valid := a.ValidDisablement([]byte{1, 2, 3}); !valid {
+		t.Error("ValidDisablement() returned false, want true")
+	}
+}
+
 func TestCreateBootstrapAuthority(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
@@ -335,7 +355,8 @@ func TestAuthorityInformNonLinear(t *testing.T) {
                | -> L4 -> L5
 
         G1.template = genesis
-        L2.hashSeed = 1
+        L1.hashSeed = 3
+        L2.hashSeed = 2
         L4.hashSeed = 2
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{

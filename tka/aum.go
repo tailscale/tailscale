@@ -59,10 +59,6 @@ const (
 	//
 	// Only the KeyID optional field may be set.
 	AUMRemoveKey
-	// A DisableNL AUM describes the disablement of TKA.
-	//
-	// Only the DisablementSecret optional field may be set.
-	AUMDisableNL
 	// A NoOp AUM carries no information and is used in tests.
 	AUMNoOp
 	// A UpdateKey AUM updates the metadata or votes of an existing key.
@@ -84,8 +80,6 @@ func (k AUMKind) String() string {
 		return "add-key"
 	case AUMRemoveKey:
 		return "remove-key"
-	case AUMDisableNL:
-		return "disable-nl"
 	case AUMNoOp:
 		return "no-op"
 	case AUMCheckpoint:
@@ -130,15 +124,10 @@ type AUM struct {
 	// This field is used for Checkpoint AUMs.
 	State *State `cbor:"5,keyasint,omitempty"`
 
-	// DisablementSecret is used to transmit a secret for disabling
-	// the TKA.
-	// This field is used for DisableNL AUMs.
-	DisablementSecret []byte `cbor:"6,keyasint,omitempty"`
-
 	// Votes and Meta describe properties of a key in the key authority.
 	// These fields are used for UpdateKey AUMs.
-	Votes *uint             `cbor:"7,keyasint,omitempty"`
-	Meta  map[string]string `cbor:"8,keyasint,omitempty"`
+	Votes *uint             `cbor:"6,keyasint,omitempty"`
+	Meta  map[string]string `cbor:"7,keyasint,omitempty"`
 
 	// Signatures lists the signatures over this AUM.
 	// CBOR key 23 is the last key which can be encoded as a single byte.
@@ -172,14 +161,14 @@ func (a *AUM) StaticValidate() error {
 		if a.Key == nil {
 			return errors.New("AddKey AUMs must contain a key")
 		}
-		if a.KeyID != nil || a.DisablementSecret != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("AddKey AUMs may only specify a Key")
 		}
 	case AUMRemoveKey:
 		if len(a.KeyID) == 0 {
 			return errors.New("RemoveKey AUMs must specify a key ID")
 		}
-		if a.Key != nil || a.DisablementSecret != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.Key != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("RemoveKey AUMs may only specify a KeyID")
 		}
 	case AUMUpdateKey:
@@ -189,23 +178,21 @@ func (a *AUM) StaticValidate() error {
 		if a.Meta == nil && a.Votes == nil {
 			return errors.New("UpdateKey AUMs must contain an update to votes or key metadata")
 		}
-		if a.Key != nil || a.DisablementSecret != nil || a.State != nil {
+		if a.Key != nil || a.State != nil {
 			return errors.New("UpdateKey AUMs may only specify KeyID, Votes, and Meta")
 		}
 	case AUMCheckpoint:
 		if a.State == nil {
 			return errors.New("Checkpoint AUMs must specify the state")
 		}
-		if a.KeyID != nil || a.DisablementSecret != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("Checkpoint AUMs may only specify State")
 		}
-	case AUMDisableNL:
-		if len(a.DisablementSecret) == 0 {
-			return errors.New("DisableNL AUMs must specify a disablement secret")
-		}
-		if a.KeyID != nil || a.State != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
-			return errors.New("DisableNL AUMs may only specify a disablement secret")
-		}
+
+	case AUMNoOp:
+	default:
+		// TODO(tom): Ignore unknown AUMs for GA.
+		return fmt.Errorf("unknown AUM kind: %v", a.MessageKind)
 	}
 
 	return nil
