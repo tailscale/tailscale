@@ -170,6 +170,7 @@ change in the future.
 			bugReportCmd,
 			certCmd,
 			netlockCmd,
+			licensesCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
