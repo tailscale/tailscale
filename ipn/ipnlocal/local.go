@@ -3287,7 +3287,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
-		if p.User != nm.User || !slices.Contains(p.Capabilities, tailcfg.CapabilityFileSharingTarget) {
+		if p.User != nm.User && !slices.Contains(p.Capabilities, tailcfg.CapabilityFileSharingTarget) {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)
