@@ -37,3 +37,5 @@ export async function createIPN(config: IPNPackageConfig): Promise<IPN> {
 
   return newIPN(config)
 }
+
+export { runSSHSession } from "../lib/ssh"
