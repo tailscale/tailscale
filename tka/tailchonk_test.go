@@ -147,10 +147,10 @@ func TestTailchonkFS_Commit(t *testing.T) {
 	}
 
 	dir, base := chonk.aumDir(aum.Hash())
-	if got, want := dir, filepath.Join(chonk.base, "VU"); got != want {
+	if got, want := dir, filepath.Join(chonk.base, "PD"); got != want {
 		t.Errorf("aum dir=%s, want %s", got, want)
 	}
-	if want := "VU5G7NN5FGCWEWKC7SBZUSIGTQOR3VF52ED33GQIWLZU7GYPGN7Q"; base != want {
+	if want := "PD57DVP6GKC76OOZMXFFZUSOEFQXOLAVT7N2ZM5KB3HDIMCANF4A"; base != want {
 		t.Errorf("aum base=%s, want %s", base, want)
 	}
 	if _, err := os.Stat(filepath.Join(dir, base)); err != nil {
