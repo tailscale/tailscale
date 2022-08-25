@@ -47,7 +47,7 @@ for [macOS][] and [iOS][].  See also the dependencies in the [Tailscale CLI][].
  - [golang.zx2c4.com/wireguard](https://pkg.go.dev/golang.zx2c4.com/wireguard) ([MIT](https://git.zx2c4.com/wireguard-go/tree/LICENSE?id=c31a7b1ab478))
  - [gvisor.dev/gvisor/pkg](https://pkg.go.dev/gvisor.dev/gvisor/pkg) ([Apache-2.0](https://github.com/google/gvisor/blob/850e42eb4444/LICENSE))
  - [nhooyr.io/websocket](https://pkg.go.dev/nhooyr.io/websocket) ([MIT](https://github.com/nhooyr/websocket/blob/v1.8.7/LICENSE.txt))
- - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/f81723ceac3f/LICENSE))
+ - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/ff97a97f088e/LICENSE))
 
 ## Additional Dependencies
 
