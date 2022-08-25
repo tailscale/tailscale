@@ -36,7 +36,7 @@ jobs:
       - name: Run go-licenses
         env:
           # include all build tags to include platform-specific dependencies
-          GOFLAGS: "-tags=cgo,darwin,freebsd,ios,js,linux,openbsd,wasm,windows"
+          GOFLAGS: "-tags=android,cgo,darwin,freebsd,ios,js,linux,openbsd,wasm,windows"
         run: |
           [ -d licenses ] || mkdir licenses
           go-licenses report tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled > licenses/tailscale.md --template .github/licenses.tmpl
