@@ -38,7 +38,7 @@ jobs:
           # include all build tags to include platform-specific dependencies
           GOFLAGS: "-tags=cgo,darwin,freebsd,ios,js,linux,openbsd,wasm,windows"
         run: |
-          mkdir -p licenses
+          [ -d licenses ] || mkdir licenses
           go-licenses report tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled > licenses/tailscale.md --template .github/licenses.tmpl
 
       - name: Get access token
