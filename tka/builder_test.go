@@ -28,7 +28,8 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	a, _, err := Create(&Mem{}, State{
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -50,7 +51,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 
 	// See if the update is valid by applying it to the authority
 	// + checking if the new key is there.
-	if err := a.Inform(updates); err != nil {
+	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
 	if _, err := a.state.GetKey(key2.ID()); err != nil {
@@ -64,7 +65,8 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	pub2, _ := testingKey25519(t, 2)
 	key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
 
-	a, _, err := Create(&Mem{}, State{
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
 		Keys:               []Key{key, key2},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -83,7 +85,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 
 	// See if the update is valid by applying it to the authority
 	// + checking if the key has been removed.
-	if err := a.Inform(updates); err != nil {
+	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
 	if _, err := a.state.GetKey(key2.ID()); err != ErrNoSuchKey {
@@ -95,7 +97,8 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	a, _, err := Create(&Mem{}, State{
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -114,7 +117,7 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 
 	// See if the update is valid by applying it to the authority
 	// + checking if the update is there.
-	if err := a.Inform(updates); err != nil {
+	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
 	k, err := a.state.GetKey(key.ID())
@@ -130,7 +133,8 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2, Meta: map[string]string{"a": "b"}}
 
-	a, _, err := Create(&Mem{}, State{
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -149,7 +153,7 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 
 	// See if the update is valid by applying it to the authority
 	// + checking if the update is there.
-	if err := a.Inform(updates); err != nil {
+	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
 	k, err := a.state.GetKey(key.ID())
@@ -165,7 +169,8 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	pub, priv := testingKey25519(t, 1)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
-	a, _, err := Create(&Mem{}, State{
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
 		Keys:               []Key{key},
 		DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
 	}, signer25519(priv))
@@ -193,7 +198,7 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 
 	// See if the update is valid by applying it to the authority
 	// + checking if the update is there.
-	if err := a.Inform(updates); err != nil {
+	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
 	k, err := a.state.GetKey(key2.ID())

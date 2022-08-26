@@ -18,11 +18,12 @@ func TestSyncOffer(t *testing.T) {
         A10 -> A11 -> A12 -> A13 -> A14 -> A15 -> A16 -> A17 -> A18
         A18 -> A19 -> A20 -> A21 -> A22 -> A23 -> A24 -> A25
     `)
-	a, err := Open(c.Chonk())
+	storage := c.Chonk()
+	a, err := Open(storage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := a.SyncOffer()
+	got, err := a.SyncOffer(storage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer1, err := n1.SyncOffer()
+	offer1, err := n1.SyncOffer(chonk1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer2, err := n2.SyncOffer()
+	offer2, err := n2.SyncOffer(chonk2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	// Node 1 only knows about the first two nodes, so the head of n2 is
 	// alien to it.
 	t.Run("n1", func(t *testing.T) {
-		got, err := computeSyncIntersection(n1, offer1, offer2)
+		got, err := computeSyncIntersection(chonk1, offer1, offer2)
 		if err != nil {
 			t.Fatalf("computeSyncIntersection() failed: %v", err)
 		}
@@ -89,7 +90,7 @@ func TestComputeSyncIntersection_FastForward(t *testing.T) {
 	// Node 2 knows about the full chain, so it can see that the head of n1
 	// intersects with a subset of its chain (a Head Intersection).
 	t.Run("n2", func(t *testing.T) {
-		got, err := computeSyncIntersection(n2, offer2, offer1)
+		got, err := computeSyncIntersection(chonk2, offer2, offer1)
 		if err != nil {
 			t.Fatalf("computeSyncIntersection() failed: %v", err)
 		}
@@ -122,11 +123,12 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 		t.Fatal("failed assert: h(a9) > h(f1H)\nTweak hashSeed till this passes")
 	}
 
-	n1, err := Open(c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "F1"))
+	chonk1 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "F1")
+	n1, err := Open(chonk1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer1, err := n1.SyncOffer()
+	offer1, err := n1.SyncOffer(chonk1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,11 +142,12 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 		t.Errorf("offer1 diff (-want, +got):\n%s", diff)
 	}
 
-	n2, err := Open(c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10"))
+	chonk2 := c.ChonkWith("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10")
+	n2, err := Open(chonk2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer2, err := n2.SyncOffer()
+	offer2, err := n2.SyncOffer(chonk2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +167,7 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 		// n2 has 10 nodes, so the first common ancestor should be 10-ancestorsSkipStart
 		wantIntersection := c.AUMHashes["A"+strconv.Itoa(10-ancestorsSkipStart)]
 
-		got, err := computeSyncIntersection(n1, offer1, offer2)
+		got, err := computeSyncIntersection(chonk1, offer1, offer2)
 		if err != nil {
 			t.Fatalf("computeSyncIntersection() failed: %v", err)
 		}
@@ -181,7 +184,7 @@ func TestComputeSyncIntersection_ForkSmallDiff(t *testing.T) {
 		// n1 has 9 nodes, so the first common ancestor should be 9-ancestorsSkipStart
 		wantIntersection := c.AUMHashes["A"+strconv.Itoa(9-ancestorsSkipStart)]
 
-		got, err := computeSyncIntersection(n2, offer2, offer1)
+		got, err := computeSyncIntersection(chonk2, offer2, offer1)
 		if err != nil {
 			t.Fatalf("computeSyncIntersection() failed: %v", err)
 		}
@@ -210,7 +213,7 @@ func TestMissingAUMs_FastForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer1, err := n1.SyncOffer()
+	offer1, err := n1.SyncOffer(chonk1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +223,7 @@ func TestMissingAUMs_FastForward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer2, err := n2.SyncOffer()
+	offer2, err := n2.SyncOffer(chonk2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +232,7 @@ func TestMissingAUMs_FastForward(t *testing.T) {
 	// alien to it. As such, it should send history from the newest ancestor,
 	// A1 (if the chain was longer there would be one in the middle).
 	t.Run("n1", func(t *testing.T) {
-		got, err := n1.MissingAUMs(offer2)
+		got, err := n1.MissingAUMs(chonk1, offer2)
 		if err != nil {
 			t.Fatalf("MissingAUMs() failed: %v", err)
 		}
@@ -245,7 +248,7 @@ func TestMissingAUMs_FastForward(t *testing.T) {
 	// Node 2 knows about the full chain, so it can see that the head of n1
 	// intersects with a subset of its chain (a Head Intersection).
 	t.Run("n2", func(t *testing.T) {
-		got, err := n2.MissingAUMs(offer1)
+		got, err := n2.MissingAUMs(chonk2, offer1)
 		if err != nil {
 			t.Fatalf("MissingAUMs() failed: %v", err)
 		}
@@ -277,7 +280,7 @@ func TestMissingAUMs_Fork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer1, err := n1.SyncOffer()
+	offer1, err := n1.SyncOffer(chonk1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,13 +290,13 @@ func TestMissingAUMs_Fork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offer2, err := n2.SyncOffer()
+	offer2, err := n2.SyncOffer(chonk2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Run("n1", func(t *testing.T) {
-		got, err := n1.MissingAUMs(offer2)
+		got, err := n1.MissingAUMs(chonk1, offer2)
 		if err != nil {
 			t.Fatalf("MissingAUMs() failed: %v", err)
 		}
@@ -311,7 +314,7 @@ func TestMissingAUMs_Fork(t *testing.T) {
 	})
 
 	t.Run("n2", func(t *testing.T) {
-		got, err := n2.MissingAUMs(offer1)
+		got, err := n2.MissingAUMs(chonk2, offer1)
 		if err != nil {
 			t.Fatalf("MissingAUMs() failed: %v", err)
 		}
@@ -344,26 +347,28 @@ func TestSyncSimpleE2E(t *testing.T) {
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
 
-	node, err := Bootstrap(&Mem{}, c.AUMs["G1"])
+	nodeStorage := &Mem{}
+	node, err := Bootstrap(nodeStorage, c.AUMs["G1"])
 	if err != nil {
 		t.Fatalf("node Bootstrap() failed: %v", err)
 	}
-	control, err := Open(c.Chonk())
+	controlStorage := c.Chonk()
+	control, err := Open(controlStorage)
 	if err != nil {
 		t.Fatalf("control Open() failed: %v", err)
 	}
 
 	// Control knows the full chain, node only knows the genesis. Lets see
 	// if they can sync.
-	nodeOffer, err := node.SyncOffer()
+	nodeOffer, err := node.SyncOffer(nodeStorage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlAUMs, err := control.MissingAUMs(nodeOffer)
+	controlAUMs, err := control.MissingAUMs(controlStorage, nodeOffer)
 	if err != nil {
 		t.Fatalf("control.MissingAUMs(%v) failed: %v", nodeOffer, err)
 	}
-	if err := node.Inform(controlAUMs); err != nil {
+	if err := node.Inform(nodeStorage, controlAUMs); err != nil {
 		t.Fatalf("node.Inform(%v) failed: %v", controlAUMs, err)
 	}
 

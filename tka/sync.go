@@ -43,7 +43,19 @@ const (
 	ancestorsSkipShift = 2
 )
 
-func (a *Authority) syncOffer() (SyncOffer, error) {
+// SyncOffer returns an abbreviated description of the current AUM
+// chain, which can be used to synchronize with another (untrusted)
+// Authority instance.
+//
+// The returned SyncOffer structure should be transmitted to the remote
+// Authority, which should call MissingAUMs() using it to determine
+// AUMs which need to be transmitted. This list of AUMs from the remote
+// can then be applied locally with Inform().
+//
+// This SyncOffer + AUM exchange should be performed by both ends,
+// because its possible that either end has AUMs that the other needs
+// to find out about.
+func (a *Authority) SyncOffer(storage Chonk) (SyncOffer, error) {
 	oldest := a.oldestAncestor.Hash()
 
 	out := SyncOffer{
@@ -65,7 +77,7 @@ func (a *Authority) syncOffer() (SyncOffer, error) {
 			skipAmount = skipAmount << ancestorsSkipShift
 		}
 
-		parent, err := a.storage.AUM(curs)
+		parent, err := storage.AUM(curs)
 		if err != nil {
 			if err != os.ErrNotExist {
 				return SyncOffer{}, err
@@ -82,22 +94,6 @@ func (a *Authority) syncOffer() (SyncOffer, error) {
 
 	out.Ancestors = append(out.Ancestors, oldest)
 	return out, nil
-}
-
-// SyncOffer returns an abbreviated description of the current AUM
-// chain, which can be used to synchronize with another (untrusted)
-// Authority instance.
-//
-// The returned SyncOffer structure should be transmitted to the remote
-// Authority, which should call MissingAUMs() using it to determine
-// AUMs which need to be transmitted. This list of AUMs from the remote
-// can then be applied locally with Inform().
-//
-// This SyncOffer + AUM exchange should be performed by both ends,
-// because its possible that either end has AUMs that the other needs
-// to find out about.
-func (a *Authority) SyncOffer() (SyncOffer, error) {
-	return a.syncOffer()
 }
 
 // intersection describes how to synchronize AUMs with a remote
@@ -119,7 +115,7 @@ type intersection struct {
 // computeSyncIntersection determines the common AUMs between a local and
 // remote SyncOffer. This intersection can be used to synchronize both
 // sides.
-func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncOffer) (*intersection, error) {
+func computeSyncIntersection(storage Chonk, localOffer, remoteOffer SyncOffer) (*intersection, error) {
 	// Simple case: up to date.
 	if remoteOffer.Head == localOffer.Head {
 		return &intersection{upToDate: true, headIntersection: &localOffer.Head}, nil
@@ -136,7 +132,7 @@ func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncO
 	// <Them> A -> B
 	//   ∴ their head intersects with our chain, we need to send C
 	var hasRemoteHead bool
-	_, err := authority.storage.AUM(remoteOffer.Head)
+	_, err := storage.AUM(remoteOffer.Head)
 	if err != nil {
 		if err != os.ErrNotExist {
 			return nil, err
@@ -148,7 +144,7 @@ func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncO
 	if hasRemoteHead {
 		curs := localOffer.Head
 		for i := 0; i < maxSyncHeadIntersectionIter; i++ {
-			parent, err := authority.storage.AUM(curs)
+			parent, err := storage.AUM(curs)
 			if err != nil {
 				if err != os.ErrNotExist {
 					return nil, err
@@ -176,7 +172,7 @@ func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncO
 	// a bit of luck we can use an earlier one and hence do less work /
 	// transmit fewer AUMs.
 	for _, a := range remoteOffer.Ancestors {
-		state, err := computeStateAt(authority.storage, maxSyncIter, a)
+		state, err := computeStateAt(storage, maxSyncIter, a)
 		if err != nil {
 			if err != os.ErrNotExist {
 				return nil, fmt.Errorf("computeStateAt: %v", err)
@@ -184,7 +180,7 @@ func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncO
 			continue
 		}
 
-		end, _, err := fastForward(authority.storage, maxSyncIter, state, func(curs AUM, _ State) bool {
+		end, _, err := fastForward(storage, maxSyncIter, state, func(curs AUM, _ State) bool {
 			return curs.Hash() == localOffer.Head
 		})
 		if err != nil {
@@ -203,12 +199,12 @@ func computeSyncIntersection(authority *Authority, localOffer, remoteOffer SyncO
 
 // MissingAUMs returns AUMs a remote may be missing based on the
 // remotes' SyncOffer.
-func (a *Authority) MissingAUMs(remoteOffer SyncOffer) ([]AUM, error) {
-	localOffer, err := a.syncOffer()
+func (a *Authority) MissingAUMs(storage Chonk, remoteOffer SyncOffer) ([]AUM, error) {
+	localOffer, err := a.SyncOffer(storage)
 	if err != nil {
 		return nil, fmt.Errorf("local syncOffer: %v", err)
 	}
-	intersection, err := computeSyncIntersection(a, localOffer, remoteOffer)
+	intersection, err := computeSyncIntersection(storage, localOffer, remoteOffer)
 	if err != nil {
 		return nil, fmt.Errorf("intersection: %v", err)
 	}
@@ -218,12 +214,12 @@ func (a *Authority) MissingAUMs(remoteOffer SyncOffer) ([]AUM, error) {
 	out := make([]AUM, 0, 12) // 12 chosen arbitrarily.
 
 	if intersection.headIntersection != nil {
-		state, err := computeStateAt(a.storage, maxSyncIter, *intersection.headIntersection)
+		state, err := computeStateAt(storage, maxSyncIter, *intersection.headIntersection)
 		if err != nil {
 			return nil, err
 		}
 
-		_, _, err = fastForward(a.storage, maxSyncIter, state, func(curs AUM, _ State) bool {
+		_, _, err = fastForward(storage, maxSyncIter, state, func(curs AUM, _ State) bool {
 			if curs.Hash() != *intersection.headIntersection {
 				out = append(out, curs)
 			}
@@ -233,12 +229,12 @@ func (a *Authority) MissingAUMs(remoteOffer SyncOffer) ([]AUM, error) {
 	}
 
 	if intersection.tailIntersection != nil {
-		state, err := computeStateAt(a.storage, maxSyncIter, *intersection.tailIntersection)
+		state, err := computeStateAt(storage, maxSyncIter, *intersection.tailIntersection)
 		if err != nil {
 			return nil, err
 		}
 
-		_, _, err = fastForward(a.storage, maxSyncIter, state, func(curs AUM, _ State) bool {
+		_, _, err = fastForward(storage, maxSyncIter, state, func(curs AUM, _ State) bool {
 			if curs.Hash() != *intersection.tailIntersection {
 				out = append(out, curs)
 			}
