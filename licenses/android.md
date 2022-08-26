@@ -65,4 +65,4 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
  - [gvisor.dev/gvisor/pkg](https://pkg.go.dev/gvisor.dev/gvisor/pkg) ([Apache-2.0](https://github.com/google/gvisor/blob/850e42eb4444/LICENSE))
  - [inet.af/netaddr](https://pkg.go.dev/inet.af/netaddr) ([BSD-3-Clause](https://github.com/inetaf/netaddr/blob/097006376321/LICENSE))
  - [nhooyr.io/websocket](https://pkg.go.dev/nhooyr.io/websocket) ([MIT](https://github.com/nhooyr/websocket/blob/v1.8.7/LICENSE.txt))
- - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/78b90c368520/LICENSE))
+ - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/HEAD/LICENSE))
