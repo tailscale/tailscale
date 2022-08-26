@@ -16,6 +16,8 @@ type scenarioNode struct {
 	Name string
 	A    *Authority
 	AUMs map[string]AUM
+
+	storage Chonk
 }
 
 type scenarioTest struct {
@@ -30,7 +32,8 @@ type scenarioTest struct {
 }
 
 func (s *scenarioTest) mkNode(name string) *scenarioNode {
-	authority, err := Open(s.initial.Chonk())
+	storage := s.initial.Chonk()
+	authority, err := Open(storage)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -41,9 +44,10 @@ func (s *scenarioTest) mkNode(name string) *scenarioNode {
 	}
 
 	n := &scenarioNode{
-		A:    authority,
-		AUMs: aums,
-		Name: name,
+		A:       authority,
+		AUMs:    aums,
+		Name:    name,
+		storage: storage,
 	}
 
 	s.nodes[name] = n
@@ -89,7 +93,7 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 			}
 			return false
 		})
-		if err := n.A.Inform(aums); err != nil {
+		if err := n.A.Inform(n.storage, aums); err != nil {
 			panic(err)
 		}
 	}
@@ -114,27 +118,27 @@ outer:
 }
 
 func (s *scenarioTest) syncBetween(n1, n2 *scenarioNode) error {
-	o1, err := n1.A.SyncOffer()
+	o1, err := n1.A.SyncOffer(n1.storage)
 	if err != nil {
 		return err
 	}
-	o2, err := n2.A.SyncOffer()
+	o2, err := n2.A.SyncOffer(n2.storage)
 	if err != nil {
 		return err
 	}
 
-	aumsFrom1, err := n1.A.MissingAUMs(o2)
+	aumsFrom1, err := n1.A.MissingAUMs(n1.storage, o2)
 	if err != nil {
 		return err
 	}
-	aumsFrom2, err := n2.A.MissingAUMs(o1)
+	aumsFrom2, err := n2.A.MissingAUMs(n2.storage, o1)
 	if err != nil {
 		return err
 	}
-	if err := n2.A.Inform(aumsFrom1); err != nil {
+	if err := n2.A.Inform(n2.storage, aumsFrom1); err != nil {
 		return err
 	}
-	if err := n1.A.Inform(aumsFrom2); err != nil {
+	if err := n1.A.Inform(n1.storage, aumsFrom2); err != nil {
 		return err
 	}
 	return nil
@@ -303,7 +307,7 @@ func TestInvalidAUMPropergationRejected(t *testing.T) {
 	l4 := AUM{MessageKind: AUMAddKey, PrevAUMHash: l3H[:]}
 	l4.sign25519(s.defaultPriv)
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?
@@ -336,7 +340,7 @@ func TestUnsignedAUMPropergationRejected(t *testing.T) {
 	l3H := l3.Hash()
 	l4 := AUM{MessageKind: AUMNoOp, PrevAUMHash: l3H[:]}
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?
@@ -370,7 +374,7 @@ func TestBadSigAUMPropergationRejected(t *testing.T) {
 	l4.sign25519(s.defaultPriv)
 	l4.Signatures[0].Signature[3] = 42
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?

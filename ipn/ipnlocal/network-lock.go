@@ -26,6 +26,11 @@ import (
 
 var networkLockAvailable = envknob.Bool("TS_EXPERIMENTAL_NETWORK_LOCK")
 
+type tkaState struct {
+	authority *tka.Authority
+	storage   *tka.FS
+}
+
 // CanSupportNetworkLock returns true if tailscaled is able to operate
 // a local tailnet key authority (and hence enforce network lock).
 func (b *LocalBackend) CanSupportNetworkLock() bool {
@@ -54,7 +59,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	}
 
 	var head [32]byte
-	h := b.tka.Head()
+	h := b.tka.authority.Head()
 	copy(head[:], h[:])
 
 	return &ipnstate.NetworkLockStatus{

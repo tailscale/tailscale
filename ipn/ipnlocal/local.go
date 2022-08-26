@@ -148,7 +148,7 @@ type LocalBackend struct {
 	inServerMode   bool
 	machinePrivKey key.MachinePrivate
 	nlPrivKey      key.NLPrivate
-	tka            *tka.Authority
+	tka            *tkaState
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
 	// hostinfo is mutated in-place while mu is held.
@@ -2507,8 +2507,11 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 // used for locked tailnets.
 //
 // It should only be called before the LocalBackend is used.
-func (b *LocalBackend) SetTailnetKeyAuthority(a *tka.Authority) {
-	b.tka = a
+func (b *LocalBackend) SetTailnetKeyAuthority(a *tka.Authority, storage *tka.FS) {
+	b.tka = &tkaState{
+		authority: a,
+		storage:   storage,
+	}
 }
 
 // SetVarRoot sets the root directory of Tailscale's writable

@@ -376,7 +376,7 @@ func TestAuthorityInformNonLinear(t *testing.T) {
 	// and forcing Inform() to take the slow path.
 	informAUMs := []AUM{c.AUMs["L1"], c.AUMs["L2"], c.AUMs["L3"], c.AUMs["L4"], c.AUMs["L5"]}
 
-	if err := a.Inform(informAUMs); err != nil {
+	if err := a.Inform(storage, informAUMs); err != nil {
 		t.Fatalf("Inform() failed: %v", err)
 	}
 	for i, update := range informAUMs {
@@ -419,7 +419,7 @@ func TestAuthorityInformLinear(t *testing.T) {
 
 	informAUMs := []AUM{c.AUMs["L1"], c.AUMs["L2"], c.AUMs["L3"]}
 
-	if err := a.Inform(informAUMs); err != nil {
+	if err := a.Inform(storage, informAUMs); err != nil {
 		t.Fatalf("Inform() failed: %v", err)
 	}
 	for i, update := range informAUMs {

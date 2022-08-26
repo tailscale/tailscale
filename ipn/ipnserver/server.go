@@ -775,15 +775,15 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 		chonkDir := filepath.Join(root, "chonk")
 		if _, err := os.Stat(chonkDir); err == nil {
 			// The directory exists, which means network-lock has been initialized.
-			chonk, err := tka.ChonkDir(chonkDir)
+			storage, err := tka.ChonkDir(chonkDir)
 			if err != nil {
 				return nil, fmt.Errorf("opening tailchonk: %v", err)
 			}
-			authority, err := tka.Open(chonk)
+			authority, err := tka.Open(storage)
 			if err != nil {
 				return nil, fmt.Errorf("initializing tka: %v", err)
 			}
-			b.SetTailnetKeyAuthority(authority)
+			b.SetTailnetKeyAuthority(authority, storage)
 			logf("tka initialized at head %x", authority.Head())
 		}
 	} else {
