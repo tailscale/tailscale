@@ -6,6 +6,7 @@ package wgengine
 
 import (
 	"fmt"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -68,9 +69,15 @@ func TestWatchdog(t *testing.T) {
 
 		select {
 		case <-fatalCalled:
-			if !strings.Contains(logBuf.String(), "goroutine profile: total ") {
-				t.Errorf("fatal called without watchdog stacks, got: %s", logBuf.String())
+			logs := logBuf.String()
+			if !strings.Contains(logs, "goroutine profile: total ") {
+				t.Errorf("fatal called without watchdog stacks, got: %s", logs)
 			}
+			re := regexp.MustCompile(`(?m)^\s*in-flight\[\d+\]: name=RequestStatus duration=.* start=.*$`)
+			if !re.MatchString(logs) {
+				t.Errorf("fatal called without in-flight list, got: %s", logs)
+			}
+
 			// expected
 		case <-time.After(3 * time.Second):
 			t.Fatalf("watchdog failed to fire")
