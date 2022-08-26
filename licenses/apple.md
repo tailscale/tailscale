@@ -1,7 +1,7 @@
 # Tailscale for macOS/iOS dependencies
 
-The following open source dependencies are used to build the Tailscale clients
-for [macOS][] and [iOS][].  See also the dependencies in the [Tailscale CLI][].
+The following open source dependencies are used to build Tailscale on [macOS][]
+and [iOS][].  See also the dependencies in the [Tailscale CLI][].
 
 [macOS]: https://tailscale.com/kb/1016/install-mac/
 [iOS]: https://tailscale.com/kb/1020/install-ios/
@@ -47,9 +47,10 @@ for [macOS][] and [iOS][].  See also the dependencies in the [Tailscale CLI][].
  - [golang.zx2c4.com/wireguard](https://pkg.go.dev/golang.zx2c4.com/wireguard) ([MIT](https://git.zx2c4.com/wireguard-go/tree/LICENSE?id=c31a7b1ab478))
  - [gvisor.dev/gvisor/pkg](https://pkg.go.dev/gvisor.dev/gvisor/pkg) ([Apache-2.0](https://github.com/google/gvisor/blob/850e42eb4444/LICENSE))
  - [nhooyr.io/websocket](https://pkg.go.dev/nhooyr.io/websocket) ([MIT](https://github.com/nhooyr/websocket/blob/v1.8.7/LICENSE.txt))
- - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/f81723ceac3f/LICENSE))
+ - [tailscale.com](https://pkg.go.dev/tailscale.com) ([BSD-3-Clause](https://github.com/tailscale/tailscale/blob/HEAD/LICENSE))
 
 ## Additional Dependencies
 
+ - [Inter Typeface](https://rsms.me/inter/) ([OFL-1.1](https://github.com/rsms/inter/blob/v3.19/LICENSE.txt))
  - [Sparkle](https://sparkle-project.org/) ([MIT](https://github.com/sparkle-project/Sparkle/blob/2.x/LICENSE))
  - [wireguard-apple](https://git.zx2c4.com/wireguard-apple) ([MIT](https://git.zx2c4.com/wireguard-apple/tree/COPYING))
