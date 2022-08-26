@@ -6,7 +6,6 @@ package wgengine
 
 import (
 	"bufio"
-	"bytes"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/control/controlclient"
@@ -53,6 +51,7 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgint"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -990,16 +989,11 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	derpConns := e.magicConn.DERPs()
 
 	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
+	wgdev := e.wgdev
+	e.wgLock.Unlock()
 
-	e.mu.Lock()
-	closing := e.closing
-	e.mu.Unlock()
-	if closing {
-		return nil, ErrEngineClosing
-	}
-
-	if e.wgdev == nil {
+	// Assume that once created, wgdev is typically not replaced in-flight.
+	if wgdev == nil {
 		// RequestStatus was invoked before the wgengine has
 		// finished initializing. This can happen when wgegine
 		// provides a callback to magicsock for endpoint
@@ -1007,109 +1001,30 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 		return nil, nil
 	}
 
-	pr, pw := io.Pipe()
-	defer pr.Close() // to unblock writes on error path returns
-
-	errc := make(chan error, 1)
-	go func() {
-		defer pw.Close()
-		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
-		// FIXME: get notified of status changes instead of polling.
-		err := e.wgdev.IpcGetOperation(pw)
-		if err != nil {
-			err = fmt.Errorf("IpcGetOperation: %w", err)
-		}
-		errc <- err
-	}()
-
-	pp := make(map[key.NodePublic]ipnstate.PeerStatusLite)
-	var p ipnstate.PeerStatusLite
-
-	var hst1, hst2, n int64
-
-	br := e.statusBufioReader
-	if br != nil {
-		br.Reset(pr)
-	} else {
-		br = bufio.NewReaderSize(pr, 1<<10)
-		e.statusBufioReader = br
-	}
-	for {
-		line, err := br.ReadSlice('\n')
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
-		}
-		line = bytes.TrimSuffix(line, singleNewline)
-		k := line
-		var v mem.RO
-		if i := bytes.IndexByte(line, '='); i != -1 {
-			k = line[:i]
-			v = mem.B(line[i+1:])
-		}
-		switch string(k) {
-		case "public_key":
-			pk, err := key.ParseNodePublicUntyped(v)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
-			}
-			if !p.NodeKey.IsZero() {
-				pp[p.NodeKey] = p
-			}
-			p = ipnstate.PeerStatusLite{NodeKey: pk}
-		case "rx_bytes":
-			n, err = mem.ParseInt(v, 10, 64)
-			p.RxBytes = n
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
-			}
-		case "tx_bytes":
-			n, err = mem.ParseInt(v, 10, 64)
-			p.TxBytes = n
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
-			}
-		case "last_handshake_time_sec":
-			hst1, err = mem.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: hst1 invalid: %#v", line)
-			}
-		case "last_handshake_time_nsec":
-			hst2, err = mem.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: hst2 invalid: %#v", line)
-			}
-			if hst1 != 0 || hst2 != 0 {
-				p.LastHandshake = time.Unix(hst1, hst2)
-			} // else leave at time.IsZero()
-		}
-	}
-	if !p.NodeKey.IsZero() {
-		pp[p.NodeKey] = p
-	}
-	if err := <-errc; err != nil {
-		return nil, fmt.Errorf("IpcGetOperation: %v", err)
-	}
-
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	closing := e.closing
+	peerKeys := make([]key.NodePublic, len(e.peerSequence))
+	copy(peerKeys, e.peerSequence)
+	e.mu.Unlock()
 
-	// Do two passes, one to calculate size and the other to populate.
-	// This code is sensitive to allocations.
-	npeers := 0
-	for _, pk := range e.peerSequence {
-		if _, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
-			npeers++
-		}
+	if closing {
+		return nil, ErrEngineClosing
 	}
 
-	peers := make([]ipnstate.PeerStatusLite, 0, npeers)
-	for _, pk := range e.peerSequence {
-		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
-			peers = append(peers, p)
+	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
+	for _, key := range peerKeys {
+		// LookupPeer is internally locked in wgdev.
+		peer := wgdev.LookupPeer(key.Raw32())
+		if peer == nil {
+			continue
 		}
+
+		var p ipnstate.PeerStatusLite
+		p.NodeKey = key
+		p.RxBytes = int64(wgint.PeerRxBytes(peer))
+		p.TxBytes = int64(wgint.PeerTxBytes(peer))
+		p.LastHandshake = time.Unix(0, wgint.PeerLastHandshakeNano(peer))
+		peers = append(peers, p)
 	}
 
 	return &Status{
