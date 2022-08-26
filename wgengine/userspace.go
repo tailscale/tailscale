@@ -46,6 +46,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/singleflight"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -145,6 +146,10 @@ type userspaceEngine struct {
 	// echo responses. The map key is a random uint32 that is the little endian
 	// value of the ICMP identifer and sequence number concatenated.
 	icmpEchoResponseCallback map[uint32]func()
+
+	// this singleflight is used to deduplicate calls to getStatus when we
+	// don't care if the data is perfectly fresh
+	getStatusSf singleflight.Group[struct{}, *Status]
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
