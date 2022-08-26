@@ -982,24 +982,29 @@ var singleNewline = []byte{'\n'}
 
 var ErrEngineClosing = errors.New("engine closing; no status")
 
+func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
+	e.wgLock.Lock()
+	if e.wgdev == nil {
+		e.wgLock.Unlock()
+		return status, false
+	}
+	peer := e.wgdev.LookupPeer(pk.Raw32())
+	e.wgLock.Unlock()
+	if peer == nil {
+		return status, false
+	}
+	status.NodeKey = pk
+	status.RxBytes = int64(wgint.PeerRxBytes(peer))
+	status.TxBytes = int64(wgint.PeerTxBytes(peer))
+	status.LastHandshake = time.Unix(0, wgint.PeerLastHandshakeNano(peer))
+	return status, true
+}
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
 	// (See comment in userspaceEngine's declaration.)
 	derpConns := e.magicConn.DERPs()
-
-	e.wgLock.Lock()
-	wgdev := e.wgdev
-	e.wgLock.Unlock()
-
-	// Assume that once created, wgdev is typically not replaced in-flight.
-	if wgdev == nil {
-		// RequestStatus was invoked before the wgengine has
-		// finished initializing. This can happen when wgegine
-		// provides a callback to magicsock for endpoint
-		// updates that calls RequestStatus.
-		return nil, nil
-	}
 
 	e.mu.Lock()
 	closing := e.closing
@@ -1013,18 +1018,9 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
 	for _, key := range peerKeys {
-		// LookupPeer is internally locked in wgdev.
-		peer := wgdev.LookupPeer(key.Raw32())
-		if peer == nil {
-			continue
+		if status, found := e.getPeerStatusLite(key); found {
+			peers = append(peers, status)
 		}
-
-		var p ipnstate.PeerStatusLite
-		p.NodeKey = key
-		p.RxBytes = int64(wgint.PeerRxBytes(peer))
-		p.TxBytes = int64(wgint.PeerTxBytes(peer))
-		p.LastHandshake = time.Unix(0, wgint.PeerLastHandshakeNano(peer))
-		peers = append(peers, p)
 	}
 
 	return &Status{
