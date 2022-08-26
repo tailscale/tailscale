@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
@@ -19,11 +20,23 @@ var licensesCmd = &ffcli.Command{
 }
 
 func runLicenses(ctx context.Context, args []string) error {
+	var licenseURL string
+	switch runtime.GOOS {
+	case "android":
+		licenseURL = "https://tailscale.com/licenses/android"
+	case "darwin", "ios":
+		licenseURL = "https://tailscale.com/licenses/apple"
+	case "windows":
+		licenseURL = "https://tailscale.com/licenses/windows"
+	default:
+		licenseURL = "https://tailscale.com/licenses/tailscale"
+	}
+
 	outln(`
 Tailscale wouldn't be possible without the contributions of thousands of open
 source developers. To see the open source packages included in Tailscale and
 their respective license information, visit:
 
-    https://tailscale.com/licenses/tailscale`)
+    ` + licenseURL)
 	return nil
 }
