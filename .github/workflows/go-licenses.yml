@@ -46,6 +46,7 @@ jobs:
         id: generate-token
         with:
           app_id: ${{ secrets.LICENSING_APP_ID }}
+          installation_id: ${{ secrets.LICENSING_APP_INSTALLATION_ID }}
           private_key: ${{ secrets.LICENSING_APP_PRIVATE_KEY }}
 
       - name: Send pull request
@@ -53,10 +54,11 @@ jobs:
         with:
           token: ${{ steps.generate-token.outputs.token }}
           author: License Updater <noreply@tailscale.com>
+          committer: License Updater <noreply@tailscale.com>
           branch: licenses/cli
-          branch-suffix: short-commit-hash
           commit-message: "licenses: update tailscale{,d} licenses"
           title: "licenses: update tailscale{,d} licenses"
           body: Triggered by ${{ github.repository }}@${{ github.sha }}
+          signoff: true
           delete-branch: true
           team-reviewers: opensource-license-reviewers
