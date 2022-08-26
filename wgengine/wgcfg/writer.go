@@ -16,8 +16,11 @@ import (
 
 // ToUAPI writes cfg in UAPI format to w.
 // Prev is the previous device Config.
-// Prev is required so that we can remove now-defunct peers
-// without having to remove and re-add all peers.
+//
+// Prev is required so that we can remove now-defunct peers without having to
+// remove and re-add all peers, and so that we can avoid writing information
+// about peers that have not changed since the previous time we wrote our
+// Config.
 func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 	var stickyErr error
 	set := func(key, value string) {
@@ -49,13 +52,33 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 	// Add/configure all new peers.
 	for _, p := range cfg.Peers {
 		oldPeer, wasPresent := old[p.PublicKey]
+
+		// We only want to write the peer header/version if we're about
+		// to change something about that peer, or if it's a new peer.
+		// Figure out up-front whether we'll need to do anything for
+		// this peer, and skip doing anything if not.
+		//
+		// If the peer was not present in the previous config, this
+		// implies that this is a new peer; set all of these to 'true'
+		// to ensure that we're writing the full peer configuration.
+		willSetEndpoint := oldPeer.WGEndpoint != p.PublicKey || !wasPresent
+		willChangeIPs := !cidrsEqual(oldPeer.AllowedIPs, p.AllowedIPs) || !wasPresent
+		willChangeKeepalive := oldPeer.PersistentKeepalive != p.PersistentKeepalive || !wasPresent
+
+		if !willSetEndpoint && !willChangeIPs && !willChangeKeepalive {
+			// It's safe to skip doing anything here; wireguard-go
+			// will not remove a peer if it's unspecified unless we
+			// tell it to (which we do below if necessary).
+			continue
+		}
+
 		setPeer(p)
 		set("protocol_version", "1")
 
 		// Avoid setting endpoints if the correct one is already known
 		// to WireGuard, because doing so generates a bit more work in
 		// calling magicsock's ParseEndpoint for effectively a no-op.
-		if oldPeer.WGEndpoint != p.PublicKey {
+		if willSetEndpoint {
 			if wasPresent {
 				// We had an endpoint, and it was wrong.
 				// By construction, this should not happen.
@@ -72,7 +95,7 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 		// If p.AllowedIPs is a strict superset of oldPeer.AllowedIPs,
 		// then skip replace_allowed_ips and instead add only
 		// the new ipps with allowed_ip.
-		if !cidrsEqual(oldPeer.AllowedIPs, p.AllowedIPs) {
+		if willChangeIPs {
 			set("replace_allowed_ips", "true")
 			for _, ipp := range p.AllowedIPs {
 				set("allowed_ip", ipp.String())
@@ -81,7 +104,7 @@ func (cfg *Config) ToUAPI(logf logger.Logf, w io.Writer, prev *Config) error {
 
 		// Set PersistentKeepalive after the peer is otherwise configured,
 		// because it can trigger handshake packets.
-		if oldPeer.PersistentKeepalive != p.PersistentKeepalive {
+		if willChangeKeepalive {
 			setUint16("persistent_keepalive_interval", p.PersistentKeepalive)
 		}
 	}
