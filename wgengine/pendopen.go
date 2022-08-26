@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"time"
 
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -157,28 +156,8 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 
-	// We don't care if this information is perfectly up-to-date, since
-	// we're just using it to print debug information.
-	//
-	// In tailscale/coral#72, we see a goroutine profile with thousands of
-	// goroutines blocked on the mutex in getStatus here, so we wrap it in
-	// a singleflight and accept stale information to reduce contention.
-	st, err, _ := e.getStatusSf.Do(struct{}{}, e.getStatus)
-
-	var ps *ipnstate.PeerStatusLite
-	if err == nil {
-		for _, v := range st.Peers {
-			if v.NodeKey == n.Key {
-				v := v // copy
-				ps = &v
-				break
-			}
-		}
-	} else {
-		e.logf("open-conn-track: timeout opening %v to node %v; failed to get engine status: %v", flow, n.Key.ShortString(), err)
-		return
-	}
-	if ps == nil {
+	ps, found := e.getPeerStatusLite(n.Key)
+	if !found {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
 		for _, r := range n.AllowedIPs {
 			if r.Bits() != 0 && r.Contains(flow.Dst.Addr()) {
