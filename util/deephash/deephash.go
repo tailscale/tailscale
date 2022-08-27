@@ -230,69 +230,6 @@ func (ti *typeInfo) buildHashFuncOnce() {
 	ti.hashFuncLazy = genTypeHasher(ti)
 }
 
-// fieldInfo describes a struct field.
-type fieldInfo struct {
-	index      int // index of field for reflect.Value.Field(n); -1 if invalid
-	typeInfo   *typeInfo
-	canMemHash bool
-	offset     uintptr // when we can memhash the field
-	size       uintptr // when we can memhash the field
-}
-
-// mergeContiguousFieldsCopy returns a copy of f with contiguous memhashable fields
-// merged together. Such fields get a bogus index and fu value.
-func mergeContiguousFieldsCopy(in []fieldInfo) []fieldInfo {
-	ret := make([]fieldInfo, 0, len(in))
-	var last *fieldInfo
-	for _, f := range in {
-		// Combine two fields if they're both contiguous & memhash-able.
-		if f.canMemHash && last != nil && last.canMemHash && last.offset+last.size == f.offset {
-			last.size += f.size
-			last.index = -1
-			last.typeInfo = nil
-		} else {
-			ret = append(ret, f)
-			last = &ret[len(ret)-1]
-		}
-	}
-	return ret
-}
-
-// genHashStructFields generates a typeHasherFunc for t, which must be of kind Struct.
-func genHashStructFields(t reflect.Type) typeHasherFunc {
-	fields := make([]fieldInfo, 0, t.NumField())
-	for i, n := 0, t.NumField(); i < n; i++ {
-		sf := t.Field(i)
-		if sf.Type.Size() == 0 {
-			continue
-		}
-		fields = append(fields, fieldInfo{
-			index:      i,
-			typeInfo:   getTypeInfo(sf.Type),
-			canMemHash: typeIsMemHashable(sf.Type),
-			offset:     sf.Offset,
-			size:       sf.Type.Size(),
-		})
-	}
-	fields = mergeContiguousFieldsCopy(fields)
-	return structHasher{fields}.hash
-}
-
-type structHasher struct {
-	fields []fieldInfo
-}
-
-func (sh structHasher) hash(h *hasher, p pointer) {
-	for _, f := range sh.fields {
-		pf := p.structField(f.index, f.offset, f.size)
-		if f.canMemHash {
-			h.HashBytes(pf.asMemory(f.size))
-		} else {
-			f.typeInfo.hasher()(h, pf)
-		}
-	}
-}
-
 func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	t := ti.rtype
 
@@ -317,7 +254,7 @@ func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	case reflect.Slice:
 		return makeSliceHasher(t)
 	case reflect.Struct:
-		return genHashStructFields(t)
+		return makeStructHasher(t)
 	case reflect.Map:
 		return func(h *hasher, p pointer) {
 			v := p.asValue(t).Elem() // reflect.Map kind
@@ -470,6 +407,53 @@ func makeSliceHasher(t reflect.Type) typeHasherFunc {
 		for i := 0; i < n; i++ {
 			pe := pa.arrayIndex(i, nb)
 			hashElem(h, pe)
+		}
+	}
+}
+
+func makeStructHasher(t reflect.Type) typeHasherFunc {
+	type fieldHasher struct {
+		idx    int            // index of field for reflect.Type.Field(n); negative if memory is directly hashable
+		hash   typeHasherFunc // only valid if idx is not negative
+		offset uintptr
+		size   uintptr
+	}
+	var once sync.Once
+	var fields []fieldHasher
+	init := func() {
+		for i, numField := 0, t.NumField(); i < numField; i++ {
+			sf := t.Field(i)
+			f := fieldHasher{i, nil, sf.Offset, sf.Type.Size()}
+			if typeIsMemHashable(sf.Type) {
+				f.idx = -1
+			}
+
+			// Combine with previous field if both contiguous and mem-hashable.
+			if f.idx < 0 && len(fields) > 0 {
+				if last := &fields[len(fields)-1]; last.idx < 0 && last.offset+last.size == f.offset {
+					last.size += f.size
+					continue
+				}
+			}
+			fields = append(fields, f)
+		}
+
+		for i, f := range fields {
+			if f.idx >= 0 {
+				fields[i].hash = getTypeInfo(t.Field(f.idx).Type).hasher()
+			}
+		}
+	}
+
+	return func(h *hasher, p pointer) {
+		once.Do(init)
+		for _, field := range fields {
+			pf := p.structField(field.idx, field.offset, field.size)
+			if field.idx < 0 {
+				h.HashBytes(pf.asMemory(field.size))
+			} else {
+				field.hash(h, pf)
+			}
 		}
 	}
 }
