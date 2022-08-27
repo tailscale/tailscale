@@ -1075,6 +1075,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		PopBrowserURL:        b.tellClientToBrowseToURL,
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
+		C2NHandler:           http.HandlerFunc(b.handleC2N),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.

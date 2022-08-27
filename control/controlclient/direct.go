@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -16,6 +17,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -73,6 +75,7 @@ type Direct struct {
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
 	popBrowser             func(url string) // or nil
+	c2nHandler             http.Handler     // or nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -108,6 +111,7 @@ type Options struct {
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
+	C2NHandler           http.Handler     // or nil
 
 	// GetNLPublicKey specifies an optional function to use
 	// Network Lock. If nil, it's not used.
@@ -210,6 +214,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 	}
 	if opts.Hostinfo == nil {
@@ -1205,7 +1210,8 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 
 func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 	httpc := c.httpc
-	if pr.URLIsNoise {
+	useNoise := pr.URLIsNoise || pr.Types == "c2n" && c.noiseConfigured()
+	if useNoise {
 		nc, err := c.getNoiseClient()
 		if err != nil {
 			c.logf("failed to get noise client for ping request: %v", err)
@@ -1217,8 +1223,16 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		c.logf("invalid PingRequest with no URL")
 		return
 	}
-	if pr.Types == "" {
+	switch pr.Types {
+	case "":
 		answerHeadPing(c.logf, httpc, pr)
+		return
+	case "c2n":
+		if !useNoise && !envknob.Bool("TS_DEBUG_PERMIT_HTTP_C2N") {
+			c.logf("refusing to answer c2n ping without noise")
+			return
+		}
+		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
@@ -1250,6 +1264,54 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
 		logf("answerHeadPing complete to %v (after %v)", pr.URL, d)
+	}
+}
+
+func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr *tailcfg.PingRequest) {
+	if c2nHandler == nil {
+		logf("answerC2NPing: c2nHandler not defined")
+		return
+	}
+	hreq, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(pr.Payload)))
+	if err != nil {
+		logf("answerC2NPing: ReadRequest: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: got c2n request for %v ...", hreq.RequestURI)
+	}
+	handlerTimeout := time.Minute
+	if v := hreq.Header.Get("C2n-Handler-Timeout"); v != "" {
+		handlerTimeout, _ = time.ParseDuration(v)
+	}
+	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	defer cancel()
+	hreq = hreq.WithContext(handlerCtx)
+	rec := httptest.NewRecorder()
+	c2nHandler.ServeHTTP(rec, hreq)
+	cancel()
+
+	c2nResBuf := new(bytes.Buffer)
+	rec.Result().Write(c2nResBuf)
+
+	replyCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(replyCtx, "POST", pr.URL, c2nResBuf)
+	if err != nil {
+		logf("answerC2NPing: NewRequestWithContext: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
+	}
+	t0 := time.Now()
+	_, err = c.Do(req)
+	d := time.Since(t0).Round(time.Millisecond)
+	if err != nil {
+		logf("answerC2NPing error: %v to %v (after %v)", err, pr.URL, d)
+	} else if pr.Log {
+		logf("answerC2NPing complete to %v (after %v)", pr.URL, d)
 	}
 }
 
