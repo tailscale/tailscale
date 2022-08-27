@@ -58,13 +58,10 @@ import (
 //	  theoretically "parsable" by looking up the hash in a magical map that
 //	  returns the set of entries for that given hash.
 
-const scratchSize = 128
-
 // hasher is reusable state for hashing a value.
 // Get one via hasherPool.
 type hasher struct {
 	hashx.Block512
-	scratch    [scratchSize]byte
 	visitStack visitStack
 }
 
@@ -256,25 +253,7 @@ func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	case reflect.Struct:
 		return makeStructHasher(t)
 	case reflect.Map:
-		return func(h *hasher, p pointer) {
-			v := p.asValue(t).Elem() // reflect.Map kind
-			if v.IsNil() {
-				h.HashUint8(0) // indicates nil
-				return
-			}
-			if ti.isRecursive {
-				pm := v.UnsafePointer() // underlying pointer of map
-				if idx, ok := h.visitStack.seen(pm); ok {
-					h.HashUint8(2) // indicates cycle
-					h.HashUint64(uint64(idx))
-					return
-				}
-				h.visitStack.push(pm)
-				defer h.visitStack.pop(pm)
-			}
-			h.HashUint8(1) // indicates visiting a map
-			h.hashMap(v, ti)
-		}
+		return makeMapHasher(t)
 	case reflect.Pointer:
 		et := t.Elem()
 		eti := getTypeInfo(et)
@@ -458,6 +437,59 @@ func makeStructHasher(t reflect.Type) typeHasherFunc {
 	}
 }
 
+func makeMapHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashKey, hashValue typeHasherFunc
+	var isRecursive bool
+	init := func() {
+		hashKey = getTypeInfo(t.Key()).hasher()
+		hashValue = getTypeInfo(t.Elem()).hasher()
+		isRecursive = typeIsRecursive(t)
+	}
+
+	return func(h *hasher, p pointer) {
+		v := p.asValue(t).Elem() // reflect.Map kind
+		if v.IsNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		once.Do(init)
+		if isRecursive {
+			pm := v.UnsafePointer() // underlying pointer of map
+			if idx, ok := h.visitStack.seen(pm); ok {
+				h.HashUint8(2) // indicates cycle
+				h.HashUint64(uint64(idx))
+				return
+			}
+			h.visitStack.push(pm)
+			defer h.visitStack.pop(pm)
+		}
+		h.HashUint8(1) // indicates visiting map entries
+		h.HashUint64(uint64(v.Len()))
+
+		mh := mapHasherPool.Get().(*mapHasher)
+		defer mapHasherPool.Put(mh)
+
+		// Hash a map in a sort-free mannar.
+		// It relies on a map being a an unordered set of KV entries.
+		// So long as we hash each KV entry together, we can XOR all the
+		// individual hashes to produce a unique hash for the entire map.
+		k := mh.valKey.get(v.Type().Key())
+		e := mh.valElem.get(v.Type().Elem())
+		mh.sum = Sum{}
+		mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
+		for iter := v.MapRange(); iter.Next(); {
+			k.SetIterKey(iter)
+			e.SetIterValue(iter)
+			mh.h.Reset()
+			hashKey(&mh.h, pointerOf(k.Addr()))
+			hashValue(&mh.h, pointerOf(e.Addr()))
+			mh.sum.xor(mh.h.sum())
+		}
+		h.HashBytes(mh.sum.sum[:])
+	}
+}
+
 func getTypeInfo(t reflect.Type) *typeInfo {
 	if f, ok := typeInfoMap.Load(t); ok {
 		return f.(*typeInfo)
@@ -497,8 +529,10 @@ func getTypeInfoLocked(t reflect.Type, incomplete map[reflect.Type]*typeInfo) *t
 }
 
 type mapHasher struct {
-	h               hasher
-	valKey, valElem valueCache // re-usable values for map iteration
+	h       hasher
+	valKey  valueCache
+	valElem valueCache
+	sum     Sum
 }
 
 var mapHasherPool = &sync.Pool{
@@ -507,6 +541,7 @@ var mapHasherPool = &sync.Pool{
 
 type valueCache map[reflect.Type]reflect.Value
 
+// get returns an addressable reflect.Value for the given type.
 func (c *valueCache) get(t reflect.Type) reflect.Value {
 	v, ok := (*c)[t]
 	if !ok {
@@ -517,33 +552,6 @@ func (c *valueCache) get(t reflect.Type) reflect.Value {
 		(*c)[t] = v
 	}
 	return v
-}
-
-// hashMap hashes a map in a sort-free manner.
-// It relies on a map being a functionally an unordered set of KV entries.
-// So long as we hash each KV entry together, we can XOR all
-// of the individual hashes to produce a unique hash for the entire map.
-func (h *hasher) hashMap(v reflect.Value, ti *typeInfo) {
-	mh := mapHasherPool.Get().(*mapHasher)
-	defer mapHasherPool.Put(mh)
-
-	var sum Sum
-	if v.IsNil() {
-		sum.sum[0] = 1 // something non-zero
-	}
-
-	k := mh.valKey.get(v.Type().Key())
-	e := mh.valElem.get(v.Type().Elem())
-	mh.h.visitStack = h.visitStack // always use the parent's visit stack to avoid cycles
-	for iter := v.MapRange(); iter.Next(); {
-		k.SetIterKey(iter)
-		e.SetIterValue(iter)
-		mh.h.Reset()
-		ti.keyTypeInfo.hasher()(&mh.h, pointerOf(k.Addr()))
-		ti.elemTypeInfo.hasher()(&mh.h, pointerOf(e.Addr()))
-		sum.xor(mh.h.sum())
-	}
-	h.HashBytes(append(h.scratch[:0], sum.sum[:]...)) // append into scratch to avoid heap allocation
 }
 
 // hashType hashes a reflect.Type.
