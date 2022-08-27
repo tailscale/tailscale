@@ -312,25 +312,10 @@ func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	switch t.Kind() {
 	case reflect.String:
 		return (*hasher).hashString
-	case reflect.Slice:
-		et := t.Elem()
-		if typeIsMemHashable(et) {
-			return func(h *hasher, p pointer) {
-				pa := p.sliceArray()
-				vLen := p.sliceLen()
-				h.HashUint64(uint64(vLen))
-				if vLen == 0 {
-					return
-				}
-				h.HashBytes(pa.asMemory(et.Size() * uintptr(vLen)))
-			}
-		}
-		eti := getTypeInfo(et)
-		return genHashSliceElements(eti)
 	case reflect.Array:
-		et := t.Elem()
-		eti := getTypeInfo(et)
-		return genHashArray(t, eti)
+		return makeArrayHasher(t)
+	case reflect.Slice:
+		return makeSliceHasher(t)
 	case reflect.Struct:
 		return genHashStructFields(t)
 	case reflect.Map:
@@ -442,37 +427,50 @@ func makeMemHasher(n uintptr) typeHasherFunc {
 	}
 }
 
-func genHashArrayElements(n int, eti *typeInfo) typeHasherFunc {
-	nb := eti.rtype.Size() // byte size of each array element
+func makeArrayHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashElem typeHasherFunc
+	init := func() {
+		hashElem = getTypeInfo(t.Elem()).hasher()
+	}
+
+	n := t.Len()          // number of array elements
+	nb := t.Elem().Size() // byte size of each array element
 	return func(h *hasher, p pointer) {
+		once.Do(init)
 		for i := 0; i < n; i++ {
-			pe := p.arrayIndex(i, nb)
-			eti.hasher()(h, pe)
+			hashElem(h, p.arrayIndex(i, nb))
 		}
 	}
 }
 
-func genHashArray(t reflect.Type, eti *typeInfo) typeHasherFunc {
-	n := t.Len()
-	return genHashArrayElements(n, eti)
-}
+func makeSliceHasher(t reflect.Type) typeHasherFunc {
+	nb := t.Elem().Size() // byte size of each slice element
+	if typeIsMemHashable(t.Elem()) {
+		return func(h *hasher, p pointer) {
+			pa := p.sliceArray()
+			n := p.sliceLen()
+			b := pa.asMemory(uintptr(n) * nb)
+			h.HashUint64(uint64(n))
+			h.HashBytes(b)
+		}
+	}
 
-func genHashSliceElements(eti *typeInfo) typeHasherFunc {
-	return sliceElementHasher{eti}.hash
-}
+	var once sync.Once
+	var hashElem typeHasherFunc
+	init := func() {
+		hashElem = getTypeInfo(t.Elem()).hasher()
+	}
 
-type sliceElementHasher struct {
-	eti *typeInfo
-}
-
-func (seh sliceElementHasher) hash(h *hasher, p pointer) {
-	pa := p.sliceArray()
-	vLen := p.sliceLen()
-	h.HashUint64(uint64(vLen))
-	nb := seh.eti.rtype.Size()
-	for i := 0; i < vLen; i++ {
-		pe := pa.arrayIndex(i, nb)
-		seh.eti.hasher()(h, pe)
+	return func(h *hasher, p pointer) {
+		pa := p.sliceArray()
+		once.Do(init)
+		n := p.sliceLen()
+		h.HashUint64(uint64(n))
+		for i := 0; i < n; i++ {
+			pe := pa.arrayIndex(i, nb)
+			hashElem(h, pe)
+		}
 	}
 }
 
