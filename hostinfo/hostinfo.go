@@ -38,6 +38,7 @@ func New() *tailcfg.Hostinfo {
 		Desktop:     desktop(),
 		Package:     packageTypeCached(),
 		GoArch:      runtime.GOARCH,
+		GoVersion:   runtime.Version(),
 		DeviceModel: deviceModel(),
 		Cloud:       string(cloudenv.Get()),
 	}
