@@ -24,7 +24,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"math"
 	"net/netip"
 	"reflect"
 	"sync"
@@ -238,46 +237,6 @@ func (ti *typeInfo) buildHashFuncOnce() {
 	ti.hashFuncLazy = genTypeHasher(ti)
 }
 
-func (h *hasher) hashBoolv(v addressableValue) {
-	var b byte
-	if v.Bool() {
-		b = 1
-	}
-	h.HashUint8(b)
-}
-
-func (h *hasher) hashUint8v(v addressableValue) {
-	h.HashUint8(uint8(v.Uint()))
-}
-
-func (h *hasher) hashInt8v(v addressableValue) {
-	h.HashUint8(uint8(v.Int()))
-}
-
-func (h *hasher) hashUint16v(v addressableValue) {
-	h.HashUint16(uint16(v.Uint()))
-}
-
-func (h *hasher) hashInt16v(v addressableValue) {
-	h.HashUint16(uint16(v.Int()))
-}
-
-func (h *hasher) hashUint32v(v addressableValue) {
-	h.HashUint32(uint32(v.Uint()))
-}
-
-func (h *hasher) hashInt32v(v addressableValue) {
-	h.HashUint32(uint32(v.Int()))
-}
-
-func (h *hasher) hashUint64v(v addressableValue) {
-	h.HashUint64(v.Uint())
-}
-
-func (h *hasher) hashInt64v(v addressableValue) {
-	h.HashUint64(uint64(v.Int()))
-}
-
 // fieldInfo describes a struct field.
 type fieldInfo struct {
 	index      int // index of field for reflect.Value.Field(n); -1 if invalid
@@ -358,33 +317,21 @@ func genHashPtrToMemoryRange(eleType reflect.Type) typeHasherFunc {
 
 func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	t := ti.rtype
+
+	// Types with specific hashing.
+	switch t {
+	case timeTimeType:
+		return (*hasher).hashTimev
+	case netipAddrType:
+		return (*hasher).hashAddrv
+	}
+
+	// Types that can have their memory representation directly hashed.
+	if typeIsMemHashable(t) {
+		return makeMemHasher(t.Size())
+	}
+
 	switch t.Kind() {
-	case reflect.Bool:
-		return (*hasher).hashBoolv
-	case reflect.Int8:
-		return (*hasher).hashInt8v
-	case reflect.Int16:
-		return (*hasher).hashInt16v
-	case reflect.Int32:
-		return (*hasher).hashInt32v
-	case reflect.Int, reflect.Int64:
-		return (*hasher).hashInt64v
-	case reflect.Uint8:
-		return (*hasher).hashUint8v
-	case reflect.Uint16:
-		return (*hasher).hashUint16v
-	case reflect.Uint32:
-		return (*hasher).hashUint32v
-	case reflect.Uint, reflect.Uintptr, reflect.Uint64:
-		return (*hasher).hashUint64v
-	case reflect.Float32:
-		return (*hasher).hashFloat32v
-	case reflect.Float64:
-		return (*hasher).hashFloat64v
-	case reflect.Complex64:
-		return (*hasher).hashComplex64v
-	case reflect.Complex128:
-		return (*hasher).hashComplex128v
 	case reflect.String:
 		return (*hasher).hashString
 	case reflect.Slice:
@@ -399,14 +346,7 @@ func genTypeHasher(ti *typeInfo) typeHasherFunc {
 		eti := getTypeInfo(et)
 		return genHashArray(t, eti)
 	case reflect.Struct:
-		switch t {
-		case timeTimeType:
-			return (*hasher).hashTimev
-		case netipAddrType:
-			return (*hasher).hashAddrv
-		default:
-			return genHashStructFields(t)
-		}
+		return genHashStructFields(t)
 	case reflect.Map:
 		return func(h *hasher, v addressableValue) {
 			if v.IsNil() {
@@ -476,26 +416,6 @@ func (h *hasher) hashString(v addressableValue) {
 	h.HashString(s)
 }
 
-func (h *hasher) hashFloat32v(v addressableValue) {
-	h.HashUint32(math.Float32bits(float32(v.Float())))
-}
-
-func (h *hasher) hashFloat64v(v addressableValue) {
-	h.HashUint64(math.Float64bits(v.Float()))
-}
-
-func (h *hasher) hashComplex64v(v addressableValue) {
-	c := complex64(v.Complex())
-	h.HashUint32(math.Float32bits(real(c)))
-	h.HashUint32(math.Float32bits(imag(c)))
-}
-
-func (h *hasher) hashComplex128v(v addressableValue) {
-	c := v.Complex()
-	h.HashUint64(math.Float64bits(real(c)))
-	h.HashUint64(math.Float64bits(imag(c)))
-}
-
 // hashTimev hashes v, of kind time.Time.
 func (h *hasher) hashTimev(v addressableValue) {
 	// Include the zone offset (but not the name) to keep
@@ -528,6 +448,12 @@ func (h *hasher) hashAddrv(v addressableValue) {
 		h.HashUint64(binary.LittleEndian.Uint64(b[:8]))
 		h.HashUint64(binary.LittleEndian.Uint64(b[8:]))
 		h.HashString(z)
+	}
+}
+
+func makeMemHasher(n uintptr) typeHasherFunc {
+	return func(h *hasher, v addressableValue) {
+		h.HashBytes(unsafe.Slice((*byte)(v.Addr().UnsafePointer()), n))
 	}
 }
 

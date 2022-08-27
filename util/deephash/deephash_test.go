@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash"
 	"math"
+	"math/bits"
 	"math/rand"
 	"net/netip"
 	"reflect"
@@ -342,6 +343,13 @@ func u8(n uint8) string   { return string([]byte{n}) }
 func u16(n uint16) string { return string(binary.LittleEndian.AppendUint16(nil, n)) }
 func u32(n uint32) string { return string(binary.LittleEndian.AppendUint32(nil, n)) }
 func u64(n uint64) string { return string(binary.LittleEndian.AppendUint64(nil, n)) }
+func ux(n uint) string {
+	if bits.UintSize == 32 {
+		return u32(uint32(n))
+	} else {
+		return u64(uint64(n))
+	}
+}
 
 func TestGetTypeHasher(t *testing.T) {
 	switch runtime.GOARCH {
@@ -367,12 +375,12 @@ func TestGetTypeHasher(t *testing.T) {
 		{
 			name: "int",
 			val:  int(1),
-			out:  "\x01\x00\x00\x00\x00\x00\x00\x00",
+			out:  ux(1),
 		},
 		{
 			name: "int_negative",
 			val:  int(-1),
-			out:  "\xff\xff\xff\xff\xff\xff\xff\xff",
+			out:  ux(math.MaxUint),
 		},
 		{
 			name: "int8",
