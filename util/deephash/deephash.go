@@ -255,42 +255,9 @@ func genTypeHasher(ti *typeInfo) typeHasherFunc {
 	case reflect.Map:
 		return makeMapHasher(t)
 	case reflect.Pointer:
-		et := t.Elem()
-		eti := getTypeInfo(et)
-		return func(h *hasher, p pointer) {
-			pe := p.pointerElem()
-			if pe.isNil() {
-				h.HashUint8(0) // indicates nil
-				return
-			}
-			if ti.isRecursive {
-				if idx, ok := h.visitStack.seen(pe.p); ok {
-					h.HashUint8(2) // indicates cycle
-					h.HashUint64(uint64(idx))
-					return
-				}
-				h.visitStack.push(pe.p)
-				defer h.visitStack.pop(pe.p)
-			}
-			h.HashUint8(1) // indicates visiting a pointer
-			eti.hasher()(h, pe)
-		}
+		return makePointerHasher(t)
 	case reflect.Interface:
-		return func(h *hasher, p pointer) {
-			v := p.asValue(t).Elem() // reflect.Interface kind
-			if v.IsNil() {
-				h.HashUint8(0) // indicates nil
-				return
-			}
-			h.HashUint8(1) // visiting interface
-			v = v.Elem()
-			t := v.Type()
-			h.hashType(t)
-			va := reflect.New(t).Elem()
-			va.Set(v)
-			ti := getTypeInfo(t)
-			ti.hasher()(h, pointerOf(va.Addr()))
-		}
+		return makeInterfaceHasher(t)
 	default: // Func, Chan, UnsafePointer
 		return func(*hasher, pointer) {}
 	}
@@ -487,6 +454,53 @@ func makeMapHasher(t reflect.Type) typeHasherFunc {
 			mh.sum.xor(mh.h.sum())
 		}
 		h.HashBytes(mh.sum.sum[:])
+	}
+}
+
+func makePointerHasher(t reflect.Type) typeHasherFunc {
+	var once sync.Once
+	var hashElem typeHasherFunc
+	var isRecursive bool
+	init := func() {
+		hashElem = getTypeInfo(t.Elem()).hasher()
+		isRecursive = typeIsRecursive(t)
+	}
+	return func(h *hasher, p pointer) {
+		pe := p.pointerElem()
+		if pe.isNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		once.Do(init)
+		if isRecursive {
+			if idx, ok := h.visitStack.seen(pe.p); ok {
+				h.HashUint8(2) // indicates cycle
+				h.HashUint64(uint64(idx))
+				return
+			}
+			h.visitStack.push(pe.p)
+			defer h.visitStack.pop(pe.p)
+		}
+		h.HashUint8(1) // indicates visiting a pointer element
+		hashElem(h, pe)
+	}
+}
+
+func makeInterfaceHasher(t reflect.Type) typeHasherFunc {
+	return func(h *hasher, p pointer) {
+		v := p.asValue(t).Elem() // reflect.Interface kind
+		if v.IsNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
+		h.HashUint8(1) // indicates visiting an interface value
+		v = v.Elem()
+		t := v.Type()
+		h.hashType(t)
+		va := reflect.New(t).Elem()
+		va.Set(v)
+		hashElem := getTypeInfo(t).hasher()
+		hashElem(h, pointerOf(va.Addr()))
 	}
 }
 
