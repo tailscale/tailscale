@@ -374,6 +374,74 @@ func TestAddPingRequest(t *testing.T) {
 	t.Error("all ping attempts failed")
 }
 
+func TestC2NPingRequest(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n1 := newTestNode(t, env)
+	n1.StartDaemon()
+
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	gotPing := make(chan bool, 1)
+	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("unexpected ping method %q", r.Method)
+		}
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ping body read error: %v", err)
+		}
+		const want = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nabc"
+		if string(got) != want {
+			t.Errorf("body error\n got: %q\nwant: %q", got, want)
+		}
+		gotPing <- true
+	}))
+	defer waitPing.Close()
+
+	nodes := env.Control.AllNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(nodes))
+	}
+
+	nodeKey := nodes[0].Key
+
+	// Check that we get at least one ping reply after 10 tries.
+	for try := 1; try <= 10; try++ {
+		t.Logf("ping %v ...", try)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := env.Control.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+
+		pr := &tailcfg.PingRequest{
+			URL:     fmt.Sprintf("%s/ping-%d", waitPing.URL, try),
+			Log:     true,
+			Types:   "c2n",
+			Payload: []byte("POST /echo HTTP/1.0\r\nContent-Length: 3\r\n\r\nabc"),
+		}
+		if !env.Control.AddPingRequest(nodeKey, pr) {
+			t.Logf("failed to AddPingRequest")
+			continue
+		}
+
+		// Wait for PingRequest to come back
+		pingTimeout := time.NewTimer(2 * time.Second)
+		defer pingTimeout.Stop()
+		select {
+		case <-gotPing:
+			t.Logf("got ping; success")
+			return
+		case <-pingTimeout.C:
+			// Try again.
+		}
+	}
+	t.Error("all ping attempts failed")
+}
+
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnWhenDown(t *testing.T) {
@@ -737,6 +805,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Args = append(cmd.Args, "-verbose=2")
 	}
 	cmd.Env = append(os.Environ(),
+		"TS_DEBUG_PERMIT_HTTP_C2N=1",
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
