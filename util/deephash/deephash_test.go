@@ -160,7 +160,7 @@ func TestHash(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		gotEq := Hash(tt.in[0]) == Hash(tt.in[1])
+		gotEq := Hash(&tt.in[0]) == Hash(&tt.in[1])
 		if gotEq != tt.wantEq {
 			t.Errorf("(Hash(%T %v) == Hash(%T %v)) = %v, want %v", tt.in[0], tt.in[0], tt.in[1], tt.in[1], gotEq, tt.wantEq)
 		}
@@ -171,11 +171,11 @@ func TestDeepHash(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
 	v := getVal()
-
 	hash1 := Hash(v)
 	t.Logf("hash: %v", hash1)
 	for i := 0; i < 20; i++ {
-		hash2 := Hash(getVal())
+		v := getVal()
+		hash2 := Hash(v)
 		if hash1 != hash2 {
 			t.Error("second hash didn't match")
 		}
@@ -186,7 +186,7 @@ func TestDeepHash(t *testing.T) {
 func TestIssue4868(t *testing.T) {
 	m1 := map[int]string{1: "foo"}
 	m2 := map[int]string{1: "bar"}
-	if Hash(m1) == Hash(m2) {
+	if Hash(&m1) == Hash(&m2) {
 		t.Error("bogus")
 	}
 }
@@ -194,7 +194,7 @@ func TestIssue4868(t *testing.T) {
 func TestIssue4871(t *testing.T) {
 	m1 := map[string]string{"": "", "x": "foo"}
 	m2 := map[string]string{}
-	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+	if h1, h2 := Hash(&m1), Hash(&m2); h1 == h2 {
 		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
 	}
 }
@@ -202,7 +202,7 @@ func TestIssue4871(t *testing.T) {
 func TestNilVsEmptymap(t *testing.T) {
 	m1 := map[string]string(nil)
 	m2 := map[string]string{}
-	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+	if h1, h2 := Hash(&m1), Hash(&m2); h1 == h2 {
 		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
 	}
 }
@@ -210,7 +210,7 @@ func TestNilVsEmptymap(t *testing.T) {
 func TestMapFraming(t *testing.T) {
 	m1 := map[string]string{"foo": "", "fo": "o"}
 	m2 := map[string]string{}
-	if h1, h2 := Hash(m1), Hash(m2); h1 == h2 {
+	if h1, h2 := Hash(&m1), Hash(&m2); h1 == h2 {
 		t.Errorf("bogus: h1=%x, h2=%x", h1, h2)
 	}
 }
@@ -218,23 +218,25 @@ func TestMapFraming(t *testing.T) {
 func TestQuick(t *testing.T) {
 	initSeed()
 	err := quick.Check(func(v, w map[string]string) bool {
-		return (Hash(v) == Hash(w)) == reflect.DeepEqual(v, w)
+		return (Hash(&v) == Hash(&w)) == reflect.DeepEqual(v, w)
 	}, &quick.Config{MaxCount: 1000, Rand: rand.New(rand.NewSource(int64(seed)))})
 	if err != nil {
 		t.Fatalf("seed=%v, err=%v", seed, err)
 	}
 }
 
-func getVal() any {
-	return &struct {
-		WGConfig         *wgcfg.Config
-		RouterConfig     *router.Config
-		MapFQDNAddrs     map[dnsname.FQDN][]netip.Addr
-		MapFQDNAddrPorts map[dnsname.FQDN][]netip.AddrPort
-		MapDiscoPublics  map[key.DiscoPublic]bool
-		MapResponse      *tailcfg.MapResponse
-		FilterMatch      filter.Match
-	}{
+type tailscaleTypes struct {
+	WGConfig         *wgcfg.Config
+	RouterConfig     *router.Config
+	MapFQDNAddrs     map[dnsname.FQDN][]netip.Addr
+	MapFQDNAddrPorts map[dnsname.FQDN][]netip.AddrPort
+	MapDiscoPublics  map[key.DiscoPublic]bool
+	MapResponse      *tailcfg.MapResponse
+	FilterMatch      filter.Match
+}
+
+func getVal() *tailscaleTypes {
+	return &tailscaleTypes{
 		&wgcfg.Config{
 			Name:      "foo",
 			Addresses: []netip.Prefix{netip.PrefixFrom(netip.AddrFrom16([16]byte{3: 3}).Unmap(), 5)},
@@ -600,23 +602,23 @@ func TestMapCycle(t *testing.T) {
 	a["self"] = a
 	b := make(M) // cylic graph of 1 node
 	b["self"] = b
-	ha := Hash(a)
-	hb := Hash(b)
+	ha := Hash(&a)
+	hb := Hash(&b)
 	c.Assert(ha, qt.Equals, hb)
 
 	c1 := make(M) // cyclic graph of 2 nodes
 	c2 := make(M) // cyclic graph of 2 nodes
 	c1["peer"] = c2
 	c2["peer"] = c1
-	hc1 := Hash(c1)
-	hc2 := Hash(c2)
+	hc1 := Hash(&c1)
+	hc2 := Hash(&c2)
 	c.Assert(hc1, qt.Equals, hc2)
 	c.Assert(ha, qt.Not(qt.Equals), hc1)
 	c.Assert(hb, qt.Not(qt.Equals), hc2)
 
 	c3 := make(M) // graph of 1 node pointing to cyclic graph of 2 nodes
 	c3["child"] = c1
-	hc3 := Hash(c3)
+	hc3 := Hash(&c3)
 	c.Assert(hc1, qt.Not(qt.Equals), hc3)
 }
 
@@ -732,9 +734,8 @@ var filterRules = []tailcfg.FilterRule{
 func BenchmarkHashPacketFilter(b *testing.B) {
 	b.ReportAllocs()
 
-	hash := HasherForType[*[]tailcfg.FilterRule]()
 	for i := 0; i < b.N; i++ {
-		sink = hash(&filterRules)
+		sink = Hash(&filterRules)
 	}
 }
 
@@ -815,7 +816,7 @@ func BenchmarkTailcfgNode(b *testing.B) {
 func TestExhaustive(t *testing.T) {
 	seen := make(map[Sum]bool)
 	for i := 0; i < 100000; i++ {
-		s := Hash(i)
+		s := Hash(&i)
 		if seen[s] {
 			t.Fatalf("hash collision %v", i)
 		}
