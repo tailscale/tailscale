@@ -361,7 +361,6 @@ func TestGetTypeHasher(t *testing.T) {
 	tests := []struct {
 		name  string
 		val   any
-		want  bool // set true automatically if out != ""
 		out   string
 		out32 string // overwrites out if 32-bit
 	}{
@@ -571,16 +570,10 @@ func TestGetTypeHasher(t *testing.T) {
 			hb := &hashBuffer{Hash: sha256.New()}
 			h := new(hasher)
 			h.Block512.Hash = hb
-			got := fn(h, va)
+			fn(h, va)
 			const ptrSize = 32 << uintptr(^uintptr(0)>>63)
 			if tt.out32 != "" && ptrSize == 32 {
 				tt.out = tt.out32
-			}
-			if tt.out != "" {
-				tt.want = true
-			}
-			if got != tt.want {
-				t.Fatalf("func returned %v; want %v", got, tt.want)
 			}
 			h.sum()
 			if got := string(hb.B); got != tt.out {
@@ -688,7 +681,9 @@ func TestPrintArray(t *testing.T) {
 	hb := &hashBuffer{Hash: sha256.New()}
 	h := new(hasher)
 	h.Block512.Hash = hb
-	h.hashValue(addressableValue{reflect.ValueOf(&x).Elem()}, false)
+	v := addressableValue{reflect.ValueOf(&x).Elem()}
+	ti := getTypeInfo(v.Type())
+	ti.hasher()(h, v)
 	h.sum()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
 	if got := hb.B; string(got) != want {
