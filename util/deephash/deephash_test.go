@@ -747,14 +747,13 @@ func TestHashMapAcyclic(t *testing.T) {
 
 	hb := &hashBuffer{Hash: sha256.New()}
 
-	ti := getTypeInfo(reflect.TypeOf(m))
-
+	hash := getTypeInfo(reflect.TypeOf(m)).hasher()
 	for i := 0; i < 20; i++ {
-		v := reflect.ValueOf(&m).Elem()
+		va := reflect.ValueOf(&m).Elem()
 		hb.Reset()
 		h := new(hasher)
 		h.Block512.Hash = hb
-		h.hashMap(v, ti)
+		hash(h, pointerOf(va.Addr()))
 		h.sum()
 		if got[string(hb.B)] {
 			continue
@@ -793,14 +792,14 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 
 	hb := &hashBuffer{Hash: sha256.New()}
 	va := reflect.ValueOf(&m).Elem()
-	ti := getTypeInfo(va.Type())
+	hash := getTypeInfo(va.Type()).hasher()
 
 	h := new(hasher)
 	h.Block512.Hash = hb
 
 	for i := 0; i < b.N; i++ {
 		h.Reset()
-		h.hashMap(va, ti)
+		hash(h, pointerOf(va.Addr()))
 	}
 }
 
