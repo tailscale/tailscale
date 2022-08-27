@@ -157,12 +157,21 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 
+	// We don't care if this information is perfectly up-to-date, since
+	// we're just using it to print debug information.
+	//
+	// In tailscale/coral#72, we see a goroutine profile with thousands of
+	// goroutines blocked on the mutex in getStatus here, so we wrap it in
+	// a singleflight and accept stale information to reduce contention.
+	st, err, _ := e.getStatusSf.Do(struct{}{}, e.getStatus)
+
 	var ps *ipnstate.PeerStatusLite
-	if st, err := e.getStatus(); err == nil {
+	if err == nil {
 		for _, v := range st.Peers {
 			if v.NodeKey == n.Key {
 				v := v // copy
 				ps = &v
+				break
 			}
 		}
 	} else {
