@@ -20,6 +20,7 @@ import (
 	"testing/quick"
 	"time"
 
+	qt "github.com/frankban/quicktest"
 	"go4.org/mem"
 	"go4.org/netipx"
 	"tailscale.com/tailcfg"
@@ -572,13 +573,13 @@ func TestGetTypeHasher(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rv := reflect.ValueOf(tt.val)
-			va := newAddressableValue(rv.Type())
+			va := reflect.New(rv.Type()).Elem()
 			va.Set(rv)
 			fn := getTypeInfo(va.Type()).hasher()
 			hb := &hashBuffer{Hash: sha256.New()}
 			h := new(hasher)
 			h.Block512.Hash = hb
-			fn(h, va)
+			fn(h, pointerOf(va.Addr()))
 			const ptrSize = 32 << uintptr(^uintptr(0)>>63)
 			if tt.out32 != "" && ptrSize == 32 {
 				tt.out = tt.out32
@@ -589,6 +590,90 @@ func TestGetTypeHasher(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMapCycle(t *testing.T) {
+	type M map[string]M
+	c := qt.New(t)
+
+	a := make(M) // cylic graph of 1 node
+	a["self"] = a
+	b := make(M) // cylic graph of 1 node
+	b["self"] = b
+	ha := Hash(a)
+	hb := Hash(b)
+	c.Assert(ha, qt.Equals, hb)
+
+	c1 := make(M) // cyclic graph of 2 nodes
+	c2 := make(M) // cyclic graph of 2 nodes
+	c1["peer"] = c2
+	c2["peer"] = c1
+	hc1 := Hash(c1)
+	hc2 := Hash(c2)
+	c.Assert(hc1, qt.Equals, hc2)
+	c.Assert(ha, qt.Not(qt.Equals), hc1)
+	c.Assert(hb, qt.Not(qt.Equals), hc2)
+
+	c3 := make(M) // graph of 1 node pointing to cyclic graph of 2 nodes
+	c3["child"] = c1
+	hc3 := Hash(c3)
+	c.Assert(hc1, qt.Not(qt.Equals), hc3)
+}
+
+func TestPointerCycle(t *testing.T) {
+	type P *P
+	c := qt.New(t)
+
+	a := new(P) // cyclic graph of 1 node
+	*a = a
+	b := new(P) // cyclic graph of 1 node
+	*b = b
+	ha := Hash(&a)
+	hb := Hash(&b)
+	c.Assert(ha, qt.Equals, hb)
+
+	c1 := new(P) // cyclic graph of 2 nodes
+	c2 := new(P) // cyclic graph of 2 nodes
+	*c1 = c2
+	*c2 = c1
+	hc1 := Hash(&c1)
+	hc2 := Hash(&c2)
+	c.Assert(hc1, qt.Equals, hc2)
+	c.Assert(ha, qt.Not(qt.Equals), hc1)
+	c.Assert(hb, qt.Not(qt.Equals), hc2)
+
+	c3 := new(P) // graph of 1 node pointing to cyclic graph of 2 nodes
+	*c3 = c1
+	hc3 := Hash(&c3)
+	c.Assert(hc1, qt.Not(qt.Equals), hc3)
+}
+
+func TestInterfaceCycle(t *testing.T) {
+	type I struct{ v any }
+	c := qt.New(t)
+
+	a := new(I) // cyclic graph of 1 node
+	a.v = a
+	b := new(I) // cyclic graph of 1 node
+	b.v = b
+	ha := Hash(&a)
+	hb := Hash(&b)
+	c.Assert(ha, qt.Equals, hb)
+
+	c1 := new(I) // cyclic graph of 2 nodes
+	c2 := new(I) // cyclic graph of 2 nodes
+	c1.v = c2
+	c2.v = c1
+	hc1 := Hash(&c1)
+	hc2 := Hash(&c2)
+	c.Assert(hc1, qt.Equals, hc2)
+	c.Assert(ha, qt.Not(qt.Equals), hc1)
+	c.Assert(hb, qt.Not(qt.Equals), hc2)
+
+	c3 := new(I) // graph of 1 node pointing to cyclic graph of 2 nodes
+	c3.v = c1
+	hc3 := Hash(&c3)
+	c.Assert(hc1, qt.Not(qt.Equals), hc3)
 }
 
 var sink Sum
@@ -665,11 +750,11 @@ func TestHashMapAcyclic(t *testing.T) {
 	ti := getTypeInfo(reflect.TypeOf(m))
 
 	for i := 0; i < 20; i++ {
-		v := addressableValue{reflect.ValueOf(&m).Elem()}
+		v := reflect.ValueOf(&m).Elem()
 		hb.Reset()
 		h := new(hasher)
 		h.Block512.Hash = hb
-		h.hashMap(v, ti, false)
+		h.hashMap(v, ti)
 		h.sum()
 		if got[string(hb.B)] {
 			continue
@@ -689,9 +774,9 @@ func TestPrintArray(t *testing.T) {
 	hb := &hashBuffer{Hash: sha256.New()}
 	h := new(hasher)
 	h.Block512.Hash = hb
-	v := addressableValue{reflect.ValueOf(&x).Elem()}
-	ti := getTypeInfo(v.Type())
-	ti.hasher()(h, v)
+	va := reflect.ValueOf(&x).Elem()
+	ti := getTypeInfo(va.Type())
+	ti.hasher()(h, pointerOf(va.Addr()))
 	h.sum()
 	const want = "\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f"
 	if got := hb.B; string(got) != want {
@@ -707,15 +792,15 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	}
 
 	hb := &hashBuffer{Hash: sha256.New()}
-	v := addressableValue{reflect.ValueOf(&m).Elem()}
-	ti := getTypeInfo(v.Type())
+	va := reflect.ValueOf(&m).Elem()
+	ti := getTypeInfo(va.Type())
 
 	h := new(hasher)
 	h.Block512.Hash = hb
 
 	for i := 0; i < b.N; i++ {
 		h.Reset()
-		h.hashMap(v, ti, false)
+		h.hashMap(va, ti)
 	}
 }
 
