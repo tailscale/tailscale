@@ -34,7 +34,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"IPNVersion", "FrontendLogID", "BackendLogID",
 		"OS", "OSVersion", "Desktop", "Package", "DeviceModel", "Hostname",
 		"ShieldsUp", "ShareeNode",
-		"GoArch",
+		"GoArch", "GoVersion",
 		"RoutableIPs", "RequestTags",
 		"Services", "NetInfo", "SSH_HostKeys", "Cloud",
 	}
