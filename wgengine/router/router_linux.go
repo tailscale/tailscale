@@ -1112,6 +1112,30 @@ func (r *linuxRouter) addNetfilterBase() error {
 	return nil
 }
 
+// allowDiscoRule is the iptables rule to allow all UDP discovery packets in.
+// See https://github.com/tailscale/tailscale/issues/3824.
+var allowDiscoRule = []string{
+	"-p", "udp", // UDP
+	"!", "-f", // not fragmented parts of UDP packets
+	"-m", "u32", "--u32",
+	"0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac", // check first 6 bytes of UDP payload is disco packet magic
+	"-m", "comment", "--comment", "Allow Tailscale NAT traversal",
+	"-j", "ACCEPT",
+}
+
+// allowDiscoRule6 is allowDiscoRule without the fragment check that doesn't
+// apply to IPv6, and with the right offsets for the IPv6 UDP payload.
+//
+// Note: this doesn't work if IPv6 extension headers are present. Oh well.
+// It'll help most users.
+var allowDiscoRule6 = []string{
+	"-p", "udp", // UDP
+	"-m", "u32", "--u32",
+	"0x30=0x5453f09f && 0x32&0xffff=0x92ac", // check first 6 bytes of UDP payload is disco packet magic
+	"-m", "comment", "--comment", "Allow Tailscale NAT traversal",
+	"-j", "ACCEPT",
+}
+
 // addNetfilterBase4 adds some basic IPv4 processing rules to be
 // supplemented by later calls to other helpers.
 func (r *linuxRouter) addNetfilterBase4() error {
@@ -1128,6 +1152,10 @@ func (r *linuxRouter) addNetfilterBase4() error {
 	args = []string{"!", "-i", r.tunname, "-s", tsaddr.CGNATRange().String(), "-j", "DROP"}
 	if err := r.ipt4.Append("filter", "ts-input", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
+	}
+	if err := r.ipt4.Append("filter", "ts-input", allowDiscoRule...); err != nil {
+		// Not worth returning an error about. (Maybe they lack u32 kernel match support.)
+		r.logf("ignoring error adding allow-disco in v4/filter/ts-input: %v", err)
 	}
 
 	// Forward all traffic from the Tailscale interface, and drop
@@ -1166,6 +1194,11 @@ func (r *linuxRouter) addNetfilterBase4() error {
 func (r *linuxRouter) addNetfilterBase6() error {
 	// TODO: only allow traffic from Tailscale's ULA range to come
 	// from tailscale0.
+
+	if err := r.ipt6.Append("filter", "ts-input", allowDiscoRule6...); err != nil {
+		// Not worth returning an error about. (Maybe they lack u32 kernel match support.)
+		r.logf("ignoring error adding allow-disco in v6/filter/ts-input: %v", err)
+	}
 
 	args := []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
 	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {

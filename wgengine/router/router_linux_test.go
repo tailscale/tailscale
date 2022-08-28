@@ -108,6 +108,7 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v4/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
 v6/filter/FORWARD -j ts-forward
@@ -115,6 +116,7 @@ v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 v6/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
 `,
@@ -140,12 +142,14 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
@@ -173,17 +177,19 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
 		{
-			name: "addr and routes with netfilter",
+			name: "addr and routes with netfilter v2",
 			in: &Config{
 				LocalAddrs:    mustCIDRs("100.101.102.104/10"),
 				Routes:        mustCIDRs("100.100.100.100/32", "10.0.0.0/8"),
@@ -203,12 +209,14 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
@@ -232,9 +240,11 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 `,
 		},
 		{
@@ -258,12 +268,14 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
@@ -290,12 +302,14 @@ v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
+v4/filter/ts-input -p udp ! -f -m u32 --u32 0>>22&0x3C@8=0x5453f09f && 0>>22&0x3C@10&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
 v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
+v6/filter/ts-input -p udp -m u32 --u32 0x30=0x5453f09f && 0x32&0xffff=0x92ac -m comment --comment Allow Tailscale NAT traversal -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
 		},
