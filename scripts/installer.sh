@@ -227,6 +227,13 @@ main() {
 				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				PACKAGETYPE="pkg"
 				;;
+			osmc)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="bullseye"
+				APT_KEY_TYPE="keyring"
+				;;
+
 			# TODO: wsl?
 			# TODO: synology? qnap?
 		esac
