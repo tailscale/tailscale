@@ -39,9 +39,10 @@ import (
 //
 // The logic below hashes a value by printing it to a hash.Hash.
 // To be parsable, it assumes that we know the Go type of each value:
-//	* scalar types (e.g., bool or int32) are printed as fixed-width fields.
-//	* list types (e.g., strings, slices, and AppendTo buffers) are prefixed
-//	  by a fixed-width length field, followed by the contents of the list.
+//	* scalar types (e.g., bool or int32) are directly printed as their
+//	  underlying memory representation.
+//	* list types (e.g., strings and slices) are prefixed by a
+//	  fixed-width length field, followed by the contents of the list.
 //	* slices, arrays, and structs print each element/field consecutively.
 //	* interfaces print with a 1-byte prefix indicating whether it is nil.
 //	  If non-nil, it is followed by a fixed-width field of the type index,
@@ -53,10 +54,11 @@ import (
 //	* maps print with a 1-byte prefix indicating whether the map pointer is
 //	  1) nil, 2) previously seen, or 3) newly seen. Previously seen pointers
 //	  are followed by a fixed-width field of the index of the previous pointer.
-//	  Newly seen maps are printed as a fixed-width field with the XOR of the
-//	  hash of every map entry. With a sufficiently strong hash, this value is
-//	  theoretically "parsable" by looking up the hash in a magical map that
-//	  returns the set of entries for that given hash.
+//	  Newly seen maps are printed with a fixed-width length field, followed by
+//	  a fixed-width field with the XOR of the hash of every map entry.
+//	  With a sufficiently strong hash, this value is theoretically "parsable"
+//	  by looking up the hash in a magical map that returns the set of entries
+//	  for that given hash.
 
 // hasher is reusable state for hashing a value.
 // Get one via hasherPool.
@@ -134,7 +136,7 @@ func Hash[T any](v *T) Sum {
 	} else {
 		h.HashUint8(1) // indicates visiting pointer element
 		p := pointerOf(reflect.ValueOf(v))
-		hash := getTypeInfo(t).hasher()
+		hash := lookupTypeHasher(t)
 		hash(h, p)
 	}
 	return h.sum()
@@ -145,7 +147,7 @@ func HasherForType[T any]() func(*T) Sum {
 	var v *T
 	seedOnce.Do(initSeed)
 	t := reflect.TypeOf(v).Elem()
-	hash := getTypeInfo(t).hasher()
+	hash := lookupTypeHasher(t)
 	return func(v *T) (s Sum) {
 		// This logic is identical to Hash, but pull out a few statements.
 		h := hasherPool.Get().(*hasher)
@@ -175,48 +177,23 @@ func Update[T any](last *Sum, v *T) (changed bool) {
 	return changed
 }
 
-// typeInfo describes properties of a type.
-//
-// A non-nil typeInfo is populated into the typeHasher map
-// when its type is first requested, before its func is created.
-// Its func field fn is only populated once the type has been created.
-// This is used for recursive types.
-type typeInfo struct {
-	rtype       reflect.Type
-	isRecursive bool
-
-	// elemTypeInfo is the element type's typeInfo.
-	// It's set when rtype is of Kind Ptr, Slice, Array, Map.
-	elemTypeInfo *typeInfo
-
-	// keyTypeInfo is the map key type's typeInfo.
-	// It's set when rtype is of Kind Map.
-	keyTypeInfo *typeInfo
-
-	hashFuncOnce sync.Once
-	hashFuncLazy typeHasherFunc // nil until created
-}
-
 // typeHasherFunc hashes the value pointed at by p for a given type.
 // For example, if t is a bool, then p is a *bool.
 // The provided pointer must always be non-nil.
 type typeHasherFunc func(h *hasher, p pointer)
 
-var typeInfoMap sync.Map           // map[reflect.Type]*typeInfo
-var typeInfoMapPopulate sync.Mutex // just for adding to typeInfoMap
+var typeHasherCache sync.Map // map[reflect.Type]typeHasherFunc
 
-func (ti *typeInfo) hasher() typeHasherFunc {
-	ti.hashFuncOnce.Do(ti.buildHashFuncOnce)
-	return ti.hashFuncLazy
+func lookupTypeHasher(t reflect.Type) typeHasherFunc {
+	if v, ok := typeHasherCache.Load(t); ok {
+		return v.(typeHasherFunc)
+	}
+	hash := makeTypeHasher(t)
+	v, _ := typeHasherCache.LoadOrStore(t, hash)
+	return v.(typeHasherFunc)
 }
 
-func (ti *typeInfo) buildHashFuncOnce() {
-	ti.hashFuncLazy = genTypeHasher(ti)
-}
-
-func genTypeHasher(ti *typeInfo) typeHasherFunc {
-	t := ti.rtype
-
+func makeTypeHasher(t reflect.Type) typeHasherFunc {
 	// Types with specific hashing.
 	switch t {
 	case timeTimeType:
@@ -299,7 +276,7 @@ func makeArrayHasher(t reflect.Type) typeHasherFunc {
 	var once sync.Once
 	var hashElem typeHasherFunc
 	init := func() {
-		hashElem = getTypeInfo(t.Elem()).hasher()
+		hashElem = lookupTypeHasher(t.Elem())
 	}
 
 	n := t.Len()          // number of array elements
@@ -327,7 +304,7 @@ func makeSliceHasher(t reflect.Type) typeHasherFunc {
 	var once sync.Once
 	var hashElem typeHasherFunc
 	init := func() {
-		hashElem = getTypeInfo(t.Elem()).hasher()
+		hashElem = lookupTypeHasher(t.Elem())
 	}
 
 	return func(h *hasher, p pointer) {
@@ -371,7 +348,7 @@ func makeStructHasher(t reflect.Type) typeHasherFunc {
 
 		for i, f := range fields {
 			if f.idx >= 0 {
-				fields[i].hash = getTypeInfo(t.Field(f.idx).Type).hasher()
+				fields[i].hash = lookupTypeHasher(t.Field(f.idx).Type)
 			}
 		}
 	}
@@ -394,8 +371,8 @@ func makeMapHasher(t reflect.Type) typeHasherFunc {
 	var hashKey, hashValue typeHasherFunc
 	var isRecursive bool
 	init := func() {
-		hashKey = getTypeInfo(t.Key()).hasher()
-		hashValue = getTypeInfo(t.Elem()).hasher()
+		hashKey = lookupTypeHasher(t.Key())
+		hashValue = lookupTypeHasher(t.Elem())
 		isRecursive = typeIsRecursive(t)
 	}
 
@@ -447,7 +424,7 @@ func makePointerHasher(t reflect.Type) typeHasherFunc {
 	var hashElem typeHasherFunc
 	var isRecursive bool
 	init := func() {
-		hashElem = getTypeInfo(t.Elem()).hasher()
+		hashElem = lookupTypeHasher(t.Elem())
 		isRecursive = typeIsRecursive(t)
 	}
 	return func(h *hasher, p pointer) {
@@ -484,47 +461,9 @@ func makeInterfaceHasher(t reflect.Type) typeHasherFunc {
 		h.hashType(t)
 		va := reflect.New(t).Elem()
 		va.Set(v)
-		hashElem := getTypeInfo(t).hasher()
+		hashElem := lookupTypeHasher(t)
 		hashElem(h, pointerOf(va.Addr()))
 	}
-}
-
-func getTypeInfo(t reflect.Type) *typeInfo {
-	if f, ok := typeInfoMap.Load(t); ok {
-		return f.(*typeInfo)
-	}
-	typeInfoMapPopulate.Lock()
-	defer typeInfoMapPopulate.Unlock()
-	newTypes := map[reflect.Type]*typeInfo{}
-	ti := getTypeInfoLocked(t, newTypes)
-	for t, ti := range newTypes {
-		typeInfoMap.Store(t, ti)
-	}
-	return ti
-}
-
-func getTypeInfoLocked(t reflect.Type, incomplete map[reflect.Type]*typeInfo) *typeInfo {
-	if v, ok := typeInfoMap.Load(t); ok {
-		return v.(*typeInfo)
-	}
-	if ti, ok := incomplete[t]; ok {
-		return ti
-	}
-	ti := &typeInfo{
-		rtype:       t,
-		isRecursive: typeIsRecursive(t),
-	}
-	incomplete[t] = ti
-
-	switch t.Kind() {
-	case reflect.Map:
-		ti.keyTypeInfo = getTypeInfoLocked(t.Key(), incomplete)
-		fallthrough
-	case reflect.Ptr, reflect.Slice, reflect.Array:
-		ti.elemTypeInfo = getTypeInfoLocked(t.Elem(), incomplete)
-	}
-
-	return ti
 }
 
 type mapHasher struct {
