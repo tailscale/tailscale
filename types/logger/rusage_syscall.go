@@ -9,12 +9,13 @@ package logger
 
 import (
 	"runtime"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func rusageMaxRSS() float64 {
-	var ru syscall.Rusage
-	err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	var ru unix.Rusage
+	err := unix.Getrusage(unix.RUSAGE_SELF, &ru)
 	if err != nil {
 		return 0
 	}
