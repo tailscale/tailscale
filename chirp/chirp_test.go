@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeBIRD struct {
@@ -107,5 +110,84 @@ func TestChirp(t *testing.T) {
 	}
 	if err := c.DisableProtocol("rando"); err == nil {
 		t.Fatalf("disabling %q succeded", "rando")
+	}
+}
+
+type hangingListener struct {
+	net.Listener
+	t    *testing.T
+	done chan struct{}
+	wg   sync.WaitGroup
+	sock string
+}
+
+func newHangingListener(t *testing.T) *hangingListener {
+	sock := filepath.Join(t.TempDir(), "sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &hangingListener{
+		Listener: l,
+		t:        t,
+		done:     make(chan struct{}),
+		sock:     sock,
+	}
+}
+
+func (hl *hangingListener) Stop() {
+	hl.Close()
+	close(hl.done)
+	hl.wg.Wait()
+}
+
+func (hl *hangingListener) listen() error {
+	for {
+		c, err := hl.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		hl.wg.Add(1)
+		go hl.handle(c)
+	}
+}
+
+func (hl *hangingListener) handle(c net.Conn) {
+	defer hl.wg.Done()
+
+	// Write our fake first line of response so that we get into the read loop
+	fmt.Fprintln(c, "0001 BIRD 2.0.8 ready.")
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			hl.t.Logf("connection still hanging")
+		case <-hl.done:
+			return
+		}
+	}
+}
+
+func TestChirpTimeout(t *testing.T) {
+	fb := newHangingListener(t)
+	defer fb.Stop()
+	go fb.listen()
+
+	c, err := newWithTimeout(fb.sock, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = c.EnableProtocol("tailscale")
+	if err == nil {
+		t.Fatal("got err=nil, want timeout")
+	}
+	if !os.IsTimeout(err) {
+		t.Fatalf("got err=%v, want os.IsTimeout(err)=true", err)
 	}
 }
