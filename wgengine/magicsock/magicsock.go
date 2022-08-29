@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"math"
 	"math/rand"
 	"net"
@@ -58,6 +59,16 @@ import (
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
+)
+
+const (
+	// These are disco.Magic in big-endian form, 4 then 2 bytes. The
+	// BPF filters need the magic in this format to match on it. Used
+	// only in magicsock_linux.go, but defined here so that the test
+	// which verifies this is the correct magic doesn't also need a
+	// _linux variant.
+	discoMagic1 = 0x5453f09f
+	discoMagic2 = 0x92ac
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -253,6 +264,12 @@ type Conn struct {
 	// protocols.
 	pconn4 *RebindingUDPConn
 	pconn6 *RebindingUDPConn
+
+	// closeDisco4 and closeDisco6 are io.Closers to shut down the raw
+	// disco packet receivers. If nil, no raw disco receiver is
+	// running for the given family.
+	closeDisco4 io.Closer
+	closeDisco6 io.Closer
 
 	// netChecker is the prober that discovers local network
 	// conditions, including the closest DERP relay and NAT mappings.
@@ -571,6 +588,19 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c.ignoreSTUNPackets()
+
+	if d4, err := c.listenRawDisco("ip4"); err == nil {
+		c.logf("[v1] using BPF disco receiver for IPv4")
+		c.closeDisco4 = d4
+	} else {
+		c.logf("[v1] couldn't create raw v4 disco listener, using regular listener instead: %v", err)
+	}
+	if d6, err := c.listenRawDisco("ip6"); err == nil {
+		c.logf("[v1] using BPF disco receiver for IPv6")
+		c.closeDisco6 = d6
+	} else {
+		c.logf("[v1] couldn't create raw v6 disco listener, using regular listener instead: %v", err)
+	}
 
 	return c, nil
 }
@@ -1638,7 +1668,7 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6, c.closeDisco6 == nil); ok {
 			metricRecvDataIPv6.Add(1)
 			return n, ep, nil
 		}
@@ -1654,7 +1684,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4, c.closeDisco4 == nil); ok {
 			metricRecvDataIPv4.Add(1)
 			return n, ep, nil
 		}
@@ -1665,12 +1695,18 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache, checkDisco bool) (ep *endpoint, ok bool) {
 	if stun.Is(b) {
 		c.stunReceiveFunc.Load()(b, ipp)
 		return nil, false
 	}
-	if c.handleDiscoMessage(b, ipp, key.NodePublic{}) {
+	if checkDisco {
+		if c.handleDiscoMessage(b, ipp, key.NodePublic{}) {
+			return nil, false
+		}
+	} else if disco.LooksLikeDiscoWrapper(b) {
+		// Caller told us to ignore disco traffic, don't let it fall
+		// through to wireguard-go.
 		return nil, false
 	}
 	if !c.havePrivateKey.Load() {
@@ -2631,6 +2667,12 @@ func (c *connBind) Close() error {
 	}
 	if c.pconn6 != nil {
 		c.pconn6.Close()
+	}
+	if c.closeDisco4 != nil {
+		c.closeDisco4.Close()
+	}
+	if c.closeDisco6 != nil {
+		c.closeDisco6.Close()
 	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
@@ -4192,4 +4234,8 @@ var (
 	// metricDERPHomeChange is how many times our DERP home region DI has
 	// changed from non-zero to a different non-zero.
 	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")
+
+	// Disco packets received bpf read path
+	metricRecvDiscoPacketIPv4 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv4")
+	metricRecvDiscoPacketIPv6 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv6")
 )
