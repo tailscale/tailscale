@@ -147,7 +147,7 @@ func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeK
 		SigKind:        tka.SigDirect,
 		KeyID:          signer.KeyID(),
 		Pubkey:         p,
-		RotationPubkey: nodeInfo.RotationPubkey,
+		WrappingPubkey: nodeInfo.RotationPubkey,
 	}
 	sig.Signature, err = signer.SignNKS(sig.SigHash())
 	if err != nil {

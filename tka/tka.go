@@ -673,6 +673,10 @@ func (a *Authority) NodeKeyAuthorized(nodeKey key.NodePublic, nodeKeySignature t
 	if err := decoded.Unserialize(nodeKeySignature); err != nil {
 		return fmt.Errorf("unserialize: %v", err)
 	}
+	if decoded.SigKind == SigCredential {
+		return errors.New("credential signatures cannot authorize nodes on their own")
+	}
+
 	key, err := a.state.GetKey(decoded.KeyID)
 	if err != nil {
 		return fmt.Errorf("key: %v", err)
