@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,6 +109,10 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 			procID = 7
 		}
 	}
+
+	stdLogf := func(f string, a ...any) {
+		fmt.Fprintf(cfg.Stderr, strings.TrimSuffix(f, "\n")+"\n", a...)
+	}
 	l := &Logger{
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
@@ -121,7 +126,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		sentinel:       make(chan int32, 16),
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
-		bo:             backoff.NewBackoff("logtail", logf, 30*time.Second),
+		bo:             backoff.NewBackoff("logtail", stdLogf, 30*time.Second),
 		metricsDelta:   cfg.MetricsDelta,
 
 		procID:              procID,
