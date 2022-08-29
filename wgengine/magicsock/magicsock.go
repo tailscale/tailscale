@@ -2843,7 +2843,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 	}
 	ports = append(ports, 0)
 	// Remove duplicates. (All duplicates are consecutive.)
-	uniq.ModifySlice(&ports, func(i, j int) bool { return ports[i] == ports[j] })
+	uniq.ModifySlice(&ports)
 
 	var pconn nettype.PacketConn
 	for _, port := range ports {

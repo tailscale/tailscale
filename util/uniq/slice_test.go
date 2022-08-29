@@ -12,7 +12,7 @@ import (
 	"tailscale.com/util/uniq"
 )
 
-func TestModifySlice(t *testing.T) {
+func runTests(t *testing.T, cb func(*[]int)) {
 	tests := []struct {
 		in   []int
 		want []int
@@ -29,7 +29,7 @@ func TestModifySlice(t *testing.T) {
 	for _, test := range tests {
 		in := make([]int, len(test.in))
 		copy(in, test.in)
-		uniq.ModifySlice(&test.in, func(i, j int) bool { return test.in[i] == test.in[j] })
+		cb(&test.in)
 		if !reflect.DeepEqual(test.in, test.want) {
 			t.Errorf("uniq.Slice(%v) = %v, want %v", in, test.in, test.want)
 		}
@@ -41,6 +41,12 @@ func TestModifySlice(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestModifySlice(t *testing.T) {
+	runTests(t, func(slice *[]int) {
+		uniq.ModifySlice(slice)
+	})
 }
 
 func Benchmark(b *testing.B) {
@@ -83,6 +89,6 @@ func benchmark(b *testing.B, size int64, reset func(s []byte)) {
 	for i := 0; i < b.N; i++ {
 		s = s[:size]
 		reset(s)
-		uniq.ModifySlice(&s, func(i, j int) bool { return s[i] == s[j] })
+		uniq.ModifySlice(&s)
 	}
 }
