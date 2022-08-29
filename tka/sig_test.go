@@ -67,7 +67,7 @@ func TestSigNested(t *testing.T) {
 		SigKind:        SigDirect,
 		KeyID:          k.ID(),
 		Pubkey:         oldPub,
-		RotationPubkey: rPub,
+		WrappingPubkey: rPub,
 	}
 	sigHash := nestedSig.SigHash()
 	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
@@ -110,6 +110,13 @@ func TestSigNested(t *testing.T) {
 	if err := sig.verifySignature(node.Public(), k); err == nil {
 		t.Error("verifySignature(node) succeeded with bad outer signature")
 	}
+
+	// Test verification fails if the outer signature is signed with a
+	// different public key to whats specified in WrappingPubkey
+	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	if err := sig.verifySignature(node.Public(), k); err == nil {
+		t.Error("verifySignature(node) succeeded with different signature")
+	}
 }
 
 func TestSigNested_DeepNesting(t *testing.T) {
@@ -128,7 +135,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 		SigKind:        SigDirect,
 		KeyID:          k.ID(),
 		Pubkey:         oldPub,
-		RotationPubkey: rPub,
+		WrappingPubkey: rPub,
 	}
 	sigHash := nestedSig.SigHash()
 	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
@@ -172,6 +179,91 @@ func TestSigNested_DeepNesting(t *testing.T) {
 	copy(outer.Nested.Nested.Signature, []byte{1, 2, 3, 4})
 	if err := outer.verifySignature(lastNodeKey.Public(), k); err == nil {
 		t.Error("verifySignature(lastNodeKey) succeeded with bad outer signature")
+	}
+}
+
+func TestSigCredential(t *testing.T) {
+	// Network-lock key (the key used to sign the nested sig)
+	pub, priv := testingKey25519(t, 1)
+	k := Key{Kind: Key25519, Public: pub, Votes: 2}
+	// 'credential' key (the one being delegated to)
+	cPub, cPriv := testingKey25519(t, 2)
+	// The node key being certified
+	node := key.NewNode()
+	nodeKeyPub, _ := node.Public().MarshalBinary()
+
+	// The signature certifying delegated trust to another
+	// public key.
+	nestedSig := NodeKeySignature{
+		SigKind:        SigCredential,
+		KeyID:          k.ID(),
+		WrappingPubkey: cPub,
+	}
+	sigHash := nestedSig.SigHash()
+	nestedSig.Signature = ed25519.Sign(priv, sigHash[:])
+
+	// The signature authorizing the node key, signed by the
+	// delegated key & embedding the original signature.
+	sig := NodeKeySignature{
+		SigKind: SigRotation,
+		KeyID:   k.ID(),
+		Pubkey:  nodeKeyPub,
+		Nested:  &nestedSig,
+	}
+	sigHash = sig.SigHash()
+	sig.Signature = ed25519.Sign(cPriv, sigHash[:])
+	if err := sig.verifySignature(node.Public(), k); err != nil {
+		t.Fatalf("verifySignature(node) failed: %v", err)
+	}
+
+	// Test verification fails if the wrong verification key is provided
+	kBad := Key{Kind: Key25519, Public: []byte{1, 2, 3, 4}, Votes: 2}
+	if err := sig.verifySignature(node.Public(), kBad); err == nil {
+		t.Error("verifySignature() did not error for wrong verification key")
+	}
+
+	// Test someone can't misuse our public API for verifying node-keys
+	a, _ := Open(newTestchain(t, "G1\nG1.template = genesis",
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{k},
+			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+		}})).Chonk())
+	if err := a.NodeKeyAuthorized(node.Public(), nestedSig.Serialize()); err == nil {
+		t.Error("NodeKeyAuthorized(SigCredential, node) did not fail")
+	}
+	// but that they can use it properly (nested in a SigRotation)
+	if err := a.NodeKeyAuthorized(node.Public(), sig.Serialize()); err != nil {
+		t.Errorf("NodeKeyAuthorized(SigRotation{SigCredential}, node) failed: %v", err)
+	}
+
+	// Test verification fails if the inner signature is invalid
+	tmp := make([]byte, ed25519.SignatureSize)
+	copy(tmp, nestedSig.Signature)
+	copy(nestedSig.Signature, []byte{1, 2, 3, 4})
+	if err := sig.verifySignature(node.Public(), k); err == nil {
+		t.Error("verifySignature(node) succeeded with bad inner signature")
+	}
+	copy(nestedSig.Signature, tmp)
+
+	// Test verification fails if the outer signature is invalid
+	copy(tmp, sig.Signature)
+	copy(sig.Signature, []byte{1, 2, 3, 4})
+	if err := sig.verifySignature(node.Public(), k); err == nil {
+		t.Error("verifySignature(node) succeeded with bad outer signature")
+	}
+	copy(sig.Signature, tmp)
+
+	// Test verification fails if we attempt to check a different node-key
+	otherNode := key.NewNode()
+	if err := sig.verifySignature(otherNode.Public(), k); err == nil {
+		t.Error("verifySignature(otherNode) succeeded with different principal")
+	}
+
+	// Test verification fails if the outer signature is signed with a
+	// different public key to whats specified in WrappingPubkey
+	sig.Signature = ed25519.Sign(priv, sigHash[:])
+	if err := sig.verifySignature(node.Public(), k); err == nil {
+		t.Error("verifySignature(node) succeeded with different signature")
 	}
 }
 
