@@ -25,16 +25,18 @@ func TestMarshalAndParse(t *testing.T) {
 			name: "ping",
 			m: &Ping{
 				TxID: [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				Dst:  netip.MustParseAddrPort("251.252.253.254:1"),
 			},
-			want: "01 00 01 02 03 04 05 06 07 08 09 0a 0b 0c",
+			want: "01 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 00 00 00 00 00 00 00 00 00 00 ff ff fb fc fd fe 00 01",
 		},
 		{
 			name: "ping_with_nodekey_src",
 			m: &Ping{
 				TxID:    [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 				NodeKey: key.NodePublicFromRaw32(mem.B([]byte{1: 1, 2: 2, 30: 30, 31: 31})),
+				Dst:     netip.MustParseAddrPort("251.252.253.254:65533"),
 			},
-			want: "01 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f",
+			want: "01 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 00 01 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 1e 1f 00 00 00 00 00 00 00 00 00 00 ff ff fb fc fd fe ff fd",
 		},
 		{
 			name: "pong",

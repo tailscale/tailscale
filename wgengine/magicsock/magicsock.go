@@ -231,6 +231,7 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
+	interEp                netip.AddrPort
 	logf                   logger.Logf
 	epFunc                 func([]tailcfg.Endpoint)
 	derpActiveFunc         func()
@@ -1056,6 +1057,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
+	addAddr(c.interEp, tailcfg.EndpointLocal)
 	// If we didn't have a portmap earlier, maybe it's done by now.
 	if !havePortmap {
 		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
@@ -2028,6 +2030,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		di.setNodeKey(nk)
 		if !isDerp {
 			c.peerMap.setNodeKeyForIPPort(src, nk)
+			c.interEp = dm.Dst
 		}
 	}
 
@@ -3643,6 +3646,7 @@ func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, t
 	sent, _ := de.c.sendDiscoMessage(ep, de.publicKey, discoKey, &disco.Ping{
 		TxID:    [12]byte(txid),
 		NodeKey: de.c.publicKeyAtomic.Load(),
+		Dst:     ep,
 	}, logLevel)
 	if !sent {
 		de.forgetPing(txid)

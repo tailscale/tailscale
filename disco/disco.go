@@ -118,6 +118,12 @@ type Ping struct {
 	// netmap data to reduce the discokey:nodekey relation from 1:N to
 	// 1:1.
 	NodeKey key.NodePublic
+
+	// Dst is the destination IP/Port of the ping message, it's receiving
+	// node's public facing address relative to sending node. The receiving
+	// node will add this to its local endpoint list upon receiving the
+	// ping message.
+	Dst netip.AddrPort
 }
 
 func (m *Ping) AppendMarshal(b []byte) []byte {
@@ -126,11 +132,17 @@ func (m *Ping) AppendMarshal(b []byte) []byte {
 	if hasKey {
 		dataLen += key.NodePublicRawLen
 	}
+	dataLen += 18 // m.Dst length, 16 bytes Addr + 2 bytes port
 	ret, d := appendMsgHeader(b, TypePing, v0, dataLen)
 	n := copy(d, m.TxID[:])
 	if hasKey {
 		m.NodeKey.AppendTo(d[:n])
+		d = d[key.NodePublicRawLen:]
 	}
+	d = d[n:]
+	ip16 := m.Dst.Addr().As16()
+	d = d[copy(d, ip16[:]):]
+	binary.BigEndian.PutUint16(d, m.Dst.Port())
 	return ret
 }
 
@@ -140,11 +152,19 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 	}
 	m = new(Ping)
 	p = p[copy(m.TxID[:], p):]
+
 	// Deliberately lax on longer-than-expected messages, for future
 	// compatibility.
-	if len(p) >= key.NodePublicRawLen {
+	if len(p) >= key.NodePublicRawLen+18 { // 18 being the length of the 3rd field Dst
 		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:key.NodePublicRawLen]))
+		p = p[key.NodePublicRawLen:]
 	}
+
+	dstIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
+	p = p[16:]
+	port := binary.BigEndian.Uint16(p)
+	m.Dst = netip.AddrPortFrom(dstIP.Unmap(), port)
+
 	return m, nil
 }
 
