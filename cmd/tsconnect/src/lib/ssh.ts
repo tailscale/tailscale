@@ -30,7 +30,7 @@ export function runSSHSession(
   let resizeObserver: ResizeObserver | undefined
   let handleBeforeUnload: ((e: BeforeUnloadEvent) => void) | undefined
 
-  const sshSession = ipn.ssh(def.hostname + "2", def.username, {
+  const sshSession = ipn.ssh(def.hostname, def.username, {
     writeFn(input) {
       term.write(input)
     },
