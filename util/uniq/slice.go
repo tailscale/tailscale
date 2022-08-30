@@ -33,3 +33,31 @@ func ModifySlice[E comparable](slice *[]E) {
 		*slice = (*slice)[:end]
 	}
 }
+
+// ModifySliceFunc is the same as ModifySlice except that it allows using a
+// custom comparison function.
+//
+// eq should report whether the two provided elements are equal.
+func ModifySliceFunc[E any](slice *[]E, eq func(i, j E) bool) {
+	// Remove duplicates
+	dst := 0
+	for i := 1; i < len(*slice); i++ {
+		if eq((*slice)[dst], (*slice)[i]) {
+			continue
+		}
+		dst++
+		(*slice)[dst] = (*slice)[i]
+	}
+
+	// Zero out the elements we removed at the end of the slice
+	end := dst + 1
+	var zero E
+	for i := end; i < len(*slice); i++ {
+		(*slice)[i] = zero
+	}
+
+	// Truncate the slice
+	if end < len(*slice) {
+		*slice = (*slice)[:end]
+	}
+}
