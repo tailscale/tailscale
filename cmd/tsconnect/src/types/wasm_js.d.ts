@@ -19,6 +19,7 @@ declare global {
       username: string,
       termConfig: {
         writeFn: (data: string) => void
+        writeErrorFn: (err: string) => void
         setReadFn: (readFn: (data: string) => void) => void
         rows: number
         cols: number

@@ -27,26 +27,39 @@ export function runSSHSession(
 
   term.focus()
 
-  const sshSession = ipn.ssh(def.hostname, def.username, {
-    writeFn: (input) => term.write(input),
-    setReadFn: (hook) => (onDataHook = hook),
+  let resizeObserver: ResizeObserver | undefined
+  let handleBeforeUnload: ((e: BeforeUnloadEvent) => void) | undefined
+
+  const sshSession = ipn.ssh(def.hostname + "2", def.username, {
+    writeFn(input) {
+      term.write(input)
+    },
+    writeErrorFn(err) {
+      console.error(err)
+      term.write(err)
+    },
+    setReadFn(hook) {
+      onDataHook = hook
+    },
     rows: term.rows,
     cols: term.cols,
-    onDone: () => {
-      resizeObserver.disconnect()
+    onDone() {
+      resizeObserver?.disconnect()
       term.dispose()
-      window.removeEventListener("beforeunload", handleBeforeUnload)
+      if (handleBeforeUnload) {
+        window.removeEventListener("beforeunload", handleBeforeUnload)
+      }
       onDone()
     },
   })
 
   // Make terminal and SSH session track the size of the containing DOM node.
-  const resizeObserver = new ResizeObserver(() => fitAddon.fit())
+  resizeObserver = new ResizeObserver(() => fitAddon.fit())
   resizeObserver.observe(termContainerNode)
   term.onResize(({ rows, cols }) => sshSession.resize(rows, cols))
 
   // Close the session if the user closes the window without an explicit
   // exit.
-  const handleBeforeUnload = () => sshSession.close()
+  handleBeforeUnload = () => sshSession.close()
   window.addEventListener("beforeunload", handleBeforeUnload)
 }
