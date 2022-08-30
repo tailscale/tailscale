@@ -17,13 +17,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Check out code
+      uses: actions/checkout@v3
+
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.19
-
-    - name: Check out code
-      uses: actions/checkout@v3
+        go-version-file: go.mod
 
     - name: Run license checker
       run: ./scripts/check_license_headers.sh .
