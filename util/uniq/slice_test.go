@@ -12,22 +12,23 @@ import (
 	"tailscale.com/util/uniq"
 )
 
-func runTests(t *testing.T, cb func(*[]int)) {
+func runTests(t *testing.T, cb func(*[]uint32)) {
 	tests := []struct {
-		in   []int
-		want []int
+		// Use uint32 to be different from an int-typed slice index
+		in   []uint32
+		want []uint32
 	}{
-		{in: []int{0, 1, 2}, want: []int{0, 1, 2}},
-		{in: []int{0, 1, 2, 2}, want: []int{0, 1, 2}},
-		{in: []int{0, 0, 1, 2}, want: []int{0, 1, 2}},
-		{in: []int{0, 1, 0, 2}, want: []int{0, 1, 0, 2}},
-		{in: []int{0}, want: []int{0}},
-		{in: []int{0, 0}, want: []int{0}},
-		{in: []int{}, want: []int{}},
+		{in: []uint32{0, 1, 2}, want: []uint32{0, 1, 2}},
+		{in: []uint32{0, 1, 2, 2}, want: []uint32{0, 1, 2}},
+		{in: []uint32{0, 0, 1, 2}, want: []uint32{0, 1, 2}},
+		{in: []uint32{0, 1, 0, 2}, want: []uint32{0, 1, 0, 2}},
+		{in: []uint32{0}, want: []uint32{0}},
+		{in: []uint32{0, 0}, want: []uint32{0}},
+		{in: []uint32{}, want: []uint32{}},
 	}
 
 	for _, test := range tests {
-		in := make([]int, len(test.in))
+		in := make([]uint32, len(test.in))
 		copy(in, test.in)
 		cb(&test.in)
 		if !reflect.DeepEqual(test.in, test.want) {
@@ -44,8 +45,16 @@ func runTests(t *testing.T, cb func(*[]int)) {
 }
 
 func TestModifySlice(t *testing.T) {
-	runTests(t, func(slice *[]int) {
+	runTests(t, func(slice *[]uint32) {
 		uniq.ModifySlice(slice)
+	})
+}
+
+func TestModifySliceFunc(t *testing.T) {
+	runTests(t, func(slice *[]uint32) {
+		uniq.ModifySliceFunc(slice, func(i, j uint32) bool {
+			return i == j
+		})
 	})
 }
 
