@@ -271,29 +271,33 @@ func (v HostinfoView) Services() views.Slice[Service]    { return views.SliceOf(
 func (v HostinfoView) NetInfo() NetInfoView              { return v.ж.NetInfo.View() }
 func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(v.ж.SSH_HostKeys) }
 func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
+func (v HostinfoView) Userspace() opt.Bool               { return v.ж.Userspace }
+func (v HostinfoView) UserspaceRouter() opt.Bool         { return v.ж.UserspaceRouter }
 func (v HostinfoView) Equal(v2 HostinfoView) bool        { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
-	IPNVersion    string
-	FrontendLogID string
-	BackendLogID  string
-	OS            string
-	OSVersion     string
-	Desktop       opt.Bool
-	Package       string
-	DeviceModel   string
-	Hostname      string
-	ShieldsUp     bool
-	ShareeNode    bool
-	GoArch        string
-	GoVersion     string
-	RoutableIPs   []netip.Prefix
-	RequestTags   []string
-	Services      []Service
-	NetInfo       *NetInfo
-	SSH_HostKeys  []string
-	Cloud         string
+	IPNVersion      string
+	FrontendLogID   string
+	BackendLogID    string
+	OS              string
+	OSVersion       string
+	Desktop         opt.Bool
+	Package         string
+	DeviceModel     string
+	Hostname        string
+	ShieldsUp       bool
+	ShareeNode      bool
+	GoArch          string
+	GoVersion       string
+	RoutableIPs     []netip.Prefix
+	RequestTags     []string
+	Services        []Service
+	NetInfo         *NetInfo
+	SSH_HostKeys    []string
+	Cloud           string
+	Userspace       opt.Bool
+	UserspaceRouter opt.Bool
 }{})
 
 // View returns a readonly view of NetInfo.

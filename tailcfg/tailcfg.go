@@ -465,25 +465,27 @@ type Service struct {
 // Because it contains pointers (slices), this type should not be used
 // as a value type.
 type Hostinfo struct {
-	IPNVersion    string         `json:",omitempty"` // version of this code
-	FrontendLogID string         `json:",omitempty"` // logtail ID of frontend instance
-	BackendLogID  string         `json:",omitempty"` // logtail ID of backend instance
-	OS            string         `json:",omitempty"` // operating system the client runs on (a version.OS value)
-	OSVersion     string         `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
-	Desktop       opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
-	Package       string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
-	DeviceModel   string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
-	Hostname      string         `json:",omitempty"` // name of the host the client runs on
-	ShieldsUp     bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
-	ShareeNode    bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
-	GoArch        string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
-	GoVersion     string         `json:",omitempty"` // Go version binary was built with
-	RoutableIPs   []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
-	RequestTags   []string       `json:",omitempty"` // set of ACL tags this node wants to claim
-	Services      []Service      `json:",omitempty"` // services advertised by this machine
-	NetInfo       *NetInfo       `json:",omitempty"`
-	SSH_HostKeys  []string       `json:"sshHostKeys,omitempty"` // if advertised
-	Cloud         string         `json:",omitempty"`
+	IPNVersion      string         `json:",omitempty"` // version of this code
+	FrontendLogID   string         `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID    string         `json:",omitempty"` // logtail ID of backend instance
+	OS              string         `json:",omitempty"` // operating system the client runs on (a version.OS value)
+	OSVersion       string         `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
+	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
+	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
+	Hostname        string         `json:",omitempty"` // name of the host the client runs on
+	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
+	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+	GoArch          string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
+	GoVersion       string         `json:",omitempty"` // Go version binary was built with
+	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
+	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	Services        []Service      `json:",omitempty"` // services advertised by this machine
+	NetInfo         *NetInfo       `json:",omitempty"`
+	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
+	Cloud           string         `json:",omitempty"`
+	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
+	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
