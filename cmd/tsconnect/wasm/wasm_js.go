@@ -347,6 +347,7 @@ type jsSSHSession struct {
 
 func (s *jsSSHSession) Run() {
 	writeFn := s.termConfig.Get("writeFn")
+	writeErrorFn := s.termConfig.Get("writeErrorFn")
 	setReadFn := s.termConfig.Get("setReadFn")
 	rows := s.termConfig.Get("rows").Int()
 	cols := s.termConfig.Get("cols").Int()
@@ -357,7 +358,7 @@ func (s *jsSSHSession) Run() {
 		writeFn.Invoke(s)
 	}
 	writeError := func(label string, err error) {
-		write(fmt.Sprintf("%s Error: %v\r\n", label, err))
+		writeErrorFn.Invoke(fmt.Sprintf("%s Error: %v\r\n", label, err))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
