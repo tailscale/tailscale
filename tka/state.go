@@ -29,8 +29,6 @@ type State struct {
 
 	// DisablementSecrets are KDF-derived values which can be used
 	// to turn off the TKA in the event of a consensus-breaking bug.
-	// An AUM of type DisableNL should contain a secret when results
-	// in one of these values when run through the disablement KDF.
 	//
 	// TODO(tom): This is an alpha feature, remove this mechanism once
 	//            we have confidence in our implementation.
@@ -168,6 +166,9 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		}
 		if update.Meta != nil {
 			k.Meta = update.Meta
+		}
+		if err := k.StaticValidate(); err != nil {
+			return State{}, fmt.Errorf("updated key fails validation: %v", err)
 		}
 		out := s.cloneForUpdate(&update)
 		for i := range out.Keys {
