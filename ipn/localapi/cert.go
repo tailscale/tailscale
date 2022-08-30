@@ -38,6 +38,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -185,7 +186,10 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 	if err != nil {
 		return nil, fmt.Errorf("acmeKey: %w", err)
 	}
-	ac := &acme.Client{Key: key}
+	ac := &acme.Client{
+		Key:       key,
+		UserAgent: "tailscaled/" + version.Long,
+	}
 
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
 	switch {
