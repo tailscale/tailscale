@@ -77,7 +77,8 @@ type CapabilityVersion int
 //	38: 2022-08-11: added PingRequest.URLIsNoise
 //	39: 2022-08-15: clients can talk Noise over arbitrary HTTPS port
 //	40: 2022-08-22: added Node.KeySignature, PeersChangedPatch.KeySignature
-const CurrentCapabilityVersion CapabilityVersion = 40
+//	41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
+const CurrentCapabilityVersion CapabilityVersion = 41
 
 type StableID string
 
