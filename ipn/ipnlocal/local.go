@@ -955,6 +955,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo := hostinfo.New()
 	hostinfo.BackendLogID = b.backendLogID
 	hostinfo.FrontendLogID = opts.FrontendLogID
+	hostinfo.Userspace.Set(wgengine.IsNetstack(b.e))
+	hostinfo.UserspaceRouter.Set(wgengine.IsNetstackRouter(b.e))
 
 	if b.cc != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.

@@ -115,25 +115,27 @@ func (src *Hostinfo) Clone() *Hostinfo {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
-	IPNVersion    string
-	FrontendLogID string
-	BackendLogID  string
-	OS            string
-	OSVersion     string
-	Desktop       opt.Bool
-	Package       string
-	DeviceModel   string
-	Hostname      string
-	ShieldsUp     bool
-	ShareeNode    bool
-	GoArch        string
-	GoVersion     string
-	RoutableIPs   []netip.Prefix
-	RequestTags   []string
-	Services      []Service
-	NetInfo       *NetInfo
-	SSH_HostKeys  []string
-	Cloud         string
+	IPNVersion      string
+	FrontendLogID   string
+	BackendLogID    string
+	OS              string
+	OSVersion       string
+	Desktop         opt.Bool
+	Package         string
+	DeviceModel     string
+	Hostname        string
+	ShieldsUp       bool
+	ShareeNode      bool
+	GoArch          string
+	GoVersion       string
+	RoutableIPs     []netip.Prefix
+	RequestTags     []string
+	Services        []Service
+	NetInfo         *NetInfo
+	SSH_HostKeys    []string
+	Cloud           string
+	Userspace       opt.Bool
+	UserspaceRouter opt.Bool
 }{})
 
 // Clone makes a deep copy of NetInfo.
