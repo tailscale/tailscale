@@ -200,6 +200,71 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
+			// If Hosts are specified (i.e. ExtraRecords) that aren't a split
+			// DNS route and a global resolver is specified, then make
+			// everything go via 100.100.100.100.
+			name:  "hosts-with-global-dns-uses-quad100",
+			split: true,
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{
+				Nameservers: mustIPs("100.100.100.100"),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+			},
+		},
+		{
+			// This is the above hosts-with-global-dns-uses-quad100 test but
+			// verifying that if global DNS servers aren't set (the 1.1.1.1 and
+			// 9.9.9.9 above), then we don't configure 100.100.100.100 as the
+			// resolver.
+			name:  "hosts-without-global-dns-not-use-quad100",
+			split: true,
+			in: Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+		},
+		{
+			// This tests that ExtraRecords (foo.tld and bar.tld here) don't trigger forcing
+			// traffic through 100.100.100.100 if there's Split DNS support and the extra
+			// records are part of a split DNS route.
+			name:  "hosts-with-extrarecord-hosts-with-routes-no-quad100",
+			split: true,
+			in: Config{
+				Routes: upstreams(
+					"tld.", "4.4.4.4",
+				),
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{
+				Nameservers:  mustIPs("4.4.4.4"),
+				MatchDomains: fqdns("tld."),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+		},
+		{
 			name: "corp",
 			in: Config{
 				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),

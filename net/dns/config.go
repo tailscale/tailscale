@@ -91,6 +91,30 @@ func (c Config) hasDefaultIPResolversOnly() bool {
 	return true
 }
 
+// hasHostsWithoutSplitDNSRoutes reports whether c contains any Host entries
+// that aren't covered by a SplitDNS route suffix.
+func (c Config) hasHostsWithoutSplitDNSRoutes() bool {
+	// TODO(bradfitz): this could be more efficient, but we imagine
+	// the number of SplitDNS routes and/or hosts will be small.
+	for host := range c.Hosts {
+		if !c.hasSplitDNSRouteForHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSplitDNSRouteForHost reports whether c contains a SplitDNS route
+// that contains hosts.
+func (c Config) hasSplitDNSRouteForHost(host dnsname.FQDN) bool {
+	for route := range c.Routes {
+		if route.Contains(host) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c Config) hasDefaultResolvers() bool {
 	return len(c.DefaultResolvers) > 0
 }
