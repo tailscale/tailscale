@@ -11,13 +11,12 @@ import (
 	"os"
 	"path"
 
-	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/tailscale/hujson"
 	"tailscale.com/version"
 )
 
 func runBuildPkg() {
-	buildOptions, err := commonSetup(prodMode)
+	buildOptions, err := commonPkgSetup(prodMode)
 	if err != nil {
 		log.Fatalf("Cannot setup: %v", err)
 	}
@@ -31,10 +30,6 @@ func runBuildPkg() {
 		log.Fatalf("Cannot clean %s: %v", *pkgDir, err)
 	}
 
-	buildOptions.EntryPoints = []string{"src/pkg/pkg.ts", "src/pkg/pkg.css"}
-	buildOptions.Outdir = *pkgDir
-	buildOptions.Format = esbuild.FormatESModule
-	buildOptions.AssetNames = "[name]"
 	buildOptions.Write = true
 	buildOptions.MinifyWhitespace = true
 	buildOptions.MinifyIdentifiers = true

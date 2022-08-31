@@ -38,3 +38,12 @@ The client is also available as an NPM package. To build it, run:
 ```
 
 That places the output in the `pkg/` directory, which may then be uploaded to a package registry (or installed from the file path directly).
+
+To do two-sided development (on both the NPM package and code that uses it), run:
+
+```
+./tool/go run ./cmd/tsconnect dev-pkg
+
+```
+
+This serves the module at http://localhost:9090/pkg/pkg.js and the generated wasm file at http://localhost:9090/pkg/main.wasm. The two files can be used as drop-in replacements for normal imports of the NPM module.
