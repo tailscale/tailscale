@@ -2130,13 +2130,11 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 
 	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
 		c.logf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
-		if c.onEndpointRefreshed == nil {
-			c.onEndpointRefreshed = map[*endpoint]func(){}
-		}
-		c.onEndpointRefreshed[de] = func() {
+
+		mak.Set(&c.onEndpointRefreshed, de, func() {
 			c.logf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
 			c.enqueueCallMeMaybe(derpAddr, de)
-		}
+		})
 		// TODO(bradfitz): make a new 'reSTUNQuickly' method
 		// that passes down a do-a-lite-netcheck flag down to
 		// netcheck that does 1 (or 2 max) STUN queries
