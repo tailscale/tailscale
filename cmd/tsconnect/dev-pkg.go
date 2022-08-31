@@ -8,8 +8,8 @@ import (
 	"log"
 )
 
-func runDev() {
-	buildOptions, err := commonSetup(devMode)
+func runDevPkg() {
+	buildOptions, err := commonPkgSetup(devMode)
 	if err != nil {
 		log.Fatalf("Cannot setup: %v", err)
 	}
