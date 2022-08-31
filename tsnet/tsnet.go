@@ -541,6 +541,9 @@ func (ln *listener) Close() error {
 	return nil
 }
 
+// Server returns the tsnet Server associated with the listener.
+func (ln *listener) Server() *Server { return ln.s }
+
 type addr struct{ ln *listener }
 
 func (a addr) Network() string { return a.ln.key.network }
