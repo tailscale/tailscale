@@ -42,7 +42,7 @@ and [iOS][].  See also the dependencies in the [Tailscale CLI][].
  - [golang.org/x/net](https://pkg.go.dev/golang.org/x/net) ([BSD-3-Clause](https://cs.opensource.google/go/x/net/+/c690dde0:LICENSE))
  - [golang.org/x/sync/errgroup](https://pkg.go.dev/golang.org/x/sync/errgroup) ([BSD-3-Clause](https://cs.opensource.google/go/x/sync/+/0de741cf:LICENSE))
  - [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) ([BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/c0bba94a:LICENSE))
- - [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) ([BSD-3-Clause](https://cs.opensource.google/go/x/text/+/v0.3.7:LICENSE))
+ - [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) ([BSD-3-Clause](https://cs.opensource.google/go/x/text/+/18b340fc:LICENSE))
  - [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) ([BSD-3-Clause](https://cs.opensource.google/go/x/time/+/f0f3c7e8:LICENSE))
  - [golang.zx2c4.com/wireguard](https://pkg.go.dev/golang.zx2c4.com/wireguard) ([MIT](https://git.zx2c4.com/wireguard-go/tree/LICENSE?id=c31a7b1ab478))
  - [gvisor.dev/gvisor/pkg](https://pkg.go.dev/gvisor.dev/gvisor/pkg) ([Apache-2.0](https://github.com/google/gvisor/blob/850e42eb4444/LICENSE))
