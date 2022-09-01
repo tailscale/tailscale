@@ -52,6 +52,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Hostname",
 		"NotepadURLs",
 		"ForceDaemon",
+		"Egg",
 		"AdvertiseRoutes",
 		"NoSNAT",
 		"NetfilterMode",

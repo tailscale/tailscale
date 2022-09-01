@@ -163,6 +163,9 @@ type Prefs struct {
 	// for Linux/etc, which always operate in daemon mode.
 	ForceDaemon bool `json:"ForceDaemon,omitempty"`
 
+	// Egg is a optional debug flag.
+	Egg bool
+
 	// The following block of options only have an effect on Linux.
 
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
@@ -217,6 +220,7 @@ type MaskedPrefs struct {
 	HostnameSet               bool `json:",omitempty"`
 	NotepadURLsSet            bool `json:",omitempty"`
 	ForceDaemonSet            bool `json:",omitempty"`
+	EggSet                    bool `json:",omitempty"`
 	AdvertiseRoutesSet        bool `json:",omitempty"`
 	NoSNATSet                 bool `json:",omitempty"`
 	NetfilterModeSet          bool `json:",omitempty"`
