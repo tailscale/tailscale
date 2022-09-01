@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -264,13 +265,16 @@ func applyNewACL(ctx context.Context, tailnet, apiKey, policyFname, oldEtag stri
 }
 
 func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error {
-	fin, err := os.Open(policyFname)
+	data, err := os.ReadFile(policyFname)
 	if err != nil {
 		return err
 	}
-	defer fin.Close()
+	data, err = hujson.Standardize(data)
+	if err != nil {
+		return err
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.tailscale.com/api/v2/tailnet/%s/acl/validate", tailnet), fin)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.tailscale.com/api/v2/tailnet/%s/acl/validate", tailnet), bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
