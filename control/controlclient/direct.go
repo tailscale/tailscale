@@ -133,6 +133,12 @@ type Options struct {
 	// MapResponse.PingRequest queries from the control plane.
 	// If nil, PingRequest queries are not answered.
 	Pinger Pinger
+
+	// GetTailscaleRoutes is a function that should return any Tailscale
+	// routes that are currently known; if any are returned, we test the IP
+	// address of the control server against these routes and use our
+	// fallback DNS server in those cases.
+	GetTailscaleRoutes func() []netip.Prefix
 }
 
 // Pinger is the LocalBackend.Ping method.

@@ -132,6 +132,7 @@ type LocalBackend struct {
 
 	filterAtomic            atomic.Pointer[filter.Filter]
 	containsViaIPFuncAtomic syncs.AtomicValue[func(netip.Addr) bool]
+	tailscaleRoutesAtomic   syncs.AtomicValue[[]netip.Prefix]
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -884,6 +885,10 @@ func (b *LocalBackend) getNewControlClientFunc() clientGen {
 	return b.ccGen
 }
 
+func (b *LocalBackend) getTailscaleRoutes() []netip.Prefix {
+	return b.tailscaleRoutesAtomic.Load()
+}
+
 // startIsNoopLocked reports whether a Start call on this LocalBackend
 // with the provided Start Options would be a useless no-op.
 //
@@ -1078,6 +1083,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
+		GetTailscaleRoutes:   b.getTailscaleRoutes,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -2315,6 +2321,7 @@ func (b *LocalBackend) authReconfig() {
 	}
 	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll, prefs.CorpDNS, flags, err)
 
+	b.tailscaleRoutesAtomic.Store(rcfg.Routes)
 	b.initPeerAPIListener()
 }
 
