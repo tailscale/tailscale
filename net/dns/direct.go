@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -33,7 +33,7 @@ const (
 )
 
 // writeResolvConf writes DNS configuration in resolv.conf format to the given writer.
-func writeResolvConf(w io.Writer, servers []netaddr.IP, domains []dnsname.FQDN) error {
+func writeResolvConf(w io.Writer, servers []netip.Addr, domains []dnsname.FQDN) error {
 	c := &resolvconffile.Config{
 		Nameservers:   servers,
 		SearchDomains: domains,

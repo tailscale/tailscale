@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.18
-// +build go1.18
+//go:build go1.19
+// +build go1.19
 
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.
@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,7 +30,6 @@ import (
 	"syscall"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -128,6 +128,8 @@ var subCommands = map[string]*func([]string) error{
 	"be-child":                &beChildFunc,
 }
 
+var beCLI func() // non-nil if CLI is linked in
+
 func main() {
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
@@ -142,6 +144,11 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
+		beCLI()
+		return
+	}
 
 	if len(os.Args) > 1 {
 		sub := os.Args[1]
@@ -161,7 +168,7 @@ func main() {
 	flag.Parse()
 	if flag.NArg() > 0 {
 		// Windows subprocess is spawned with /subprocess, so we need to avoid this check there.
-		if runtime.GOOS != "windows" || flag.Arg(0) != "/subproc" {
+		if runtime.GOOS != "windows" || (flag.Arg(0) != "/subproc" && flag.Arg(0) != "/firewall") {
 			log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
 		}
 	}
@@ -366,11 +373,11 @@ func run() error {
 	ns.ProcessSubnets = useNetstack || wrapNetstack
 
 	if useNetstack {
-		dialer.UseNetstackForIP = func(ip netaddr.IP) bool {
+		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 			_, ok := e.PeerForIP(ip)
 			return ok
 		}
-		dialer.NetstackDialTCP = func(ctx context.Context, dst netaddr.IPPort) (net.Conn, error) {
+		dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 			return ns.DialContextTCP(ctx, dst)
 		}
 	}
@@ -404,7 +411,6 @@ func run() error {
 	// want to keep running.
 	signal.Ignore(syscall.SIGPIPE)
 	go func() {
-		defer dialer.Close()
 		select {
 		case s := <-interrupt:
 			logf("tailscaled got signal %v; shutting down", s)
@@ -437,6 +443,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+	defer dialer.Close()
 
 	err = srv.Run(ctx, ln)
 	// Cancelation is not an error: it is the only way to stop ipnserver.
@@ -474,7 +481,7 @@ func shouldWrapNetstack() bool {
 		return true
 	}
 	switch runtime.GOOS {
-	case "windows", "darwin", "freebsd":
+	case "windows", "darwin", "freebsd", "openbsd":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
 		// affect the GUI clients), and on FreeBSD.
 		return true
@@ -515,7 +522,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 	} else {
 		dev, devName, err := tstun.New(logf, name)
 		if err != nil {
-			tstun.Diagnose(logf, name)
+			tstun.Diagnose(logf, name, err)
 			return nil, false, fmt.Errorf("tstun.New(%q): %w", name, err)
 		}
 		conf.Tun = dev

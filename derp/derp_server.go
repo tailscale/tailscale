@@ -25,6 +25,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -36,12 +37,10 @@ import (
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
-	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/pad32"
@@ -162,8 +161,8 @@ type Server struct {
 	// src.
 	sentTo map[key.NodePublic]map[key.NodePublic]int64 // src => dst => dst's latest sclient.connNum
 
-	// maps from netaddr.IPPort to a client's public key
-	keyOfAddr map[netaddr.IPPort]key.NodePublic
+	// maps from netip.AddrPort to a client's public key
+	keyOfAddr map[netip.AddrPort]key.NodePublic
 }
 
 // clientSet represents 1 or more *sclients.
@@ -232,7 +231,7 @@ type dupClientSet struct {
 }
 
 func (s *dupClientSet) ActiveClient() *sclient {
-	if s.last != nil && !s.last.isDisabled.Get() {
+	if s.last != nil && !s.last.isDisabled.Load() {
 		return s.last
 	}
 	return nil
@@ -314,7 +313,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		watchers:             map[*sclient]bool{},
 		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
 		avgQueueDuration:     new(uint64),
-		keyOfAddr:            map[netaddr.IPPort]key.NodePublic{},
+		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -410,7 +409,7 @@ func (s *Server) IsClientConnectedForTest(k key.NodePublic) bool {
 // on its own.
 //
 // Accept closes nc.
-func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
+func (s *Server) Accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 	closed := make(chan struct{})
 
 	s.mu.Lock()
@@ -428,7 +427,7 @@ func (s *Server) Accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string) {
 		s.mu.Unlock()
 	}()
 
-	if err := s.accept(nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
+	if err := s.accept(ctx, nc, brw, remoteAddr, connNum); err != nil && !s.isClosed() {
 		s.logf("derp: %s: %v", remoteAddr, err)
 	}
 }
@@ -499,8 +498,8 @@ func (s *Server) registerClient(c *sclient) {
 		s.dupClientConns.Add(2) // both old and new count
 		s.dupClientConnTotal.Add(1)
 		old := set.ActiveClient()
-		old.isDup.Set(true)
-		c.isDup.Set(true)
+		old.isDup.Store(true)
+		c.isDup.Store(true)
 		s.clients[c.key] = &dupClientSet{
 			last: c,
 			set: map[*sclient]bool{
@@ -512,7 +511,7 @@ func (s *Server) registerClient(c *sclient) {
 	case *dupClientSet:
 		s.dupClientConns.Add(1)     // the gauge
 		s.dupClientConnTotal.Add(1) // the counter
-		c.isDup.Set(true)
+		c.isDup.Store(true)
 		set.set[c] = true
 		set.last = c
 		set.sendHistory = append(set.sendHistory, c)
@@ -571,8 +570,8 @@ func (s *Server) unregisterClient(c *sclient) {
 			if remain == nil {
 				panic("unexpected nil remain from single element dup set")
 			}
-			remain.isDisabled.Set(false)
-			remain.isDup.Set(false)
+			remain.isDisabled.Store(false)
+			remain.isDup.Store(false)
 			s.clients[c.key] = singleClient{remain}
 		}
 	}
@@ -641,7 +640,7 @@ func (s *Server) addWatcher(c *sclient) {
 	go c.requestMeshUpdate()
 }
 
-func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
+func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, remoteAddr string, connNum int64) error {
 	br := brw.Reader
 	nc.SetDeadline(time.Now().Add(10 * time.Second))
 	bw := &lazyBufioWriter{w: nc, lbw: brw.Writer}
@@ -660,10 +659,10 @@ func (s *Server) accept(nc Conn, brw *bufio.ReadWriter, remoteAddr string, connN
 	// At this point we trust the client so we don't time out.
 	nc.SetDeadline(time.Time{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	remoteIPPort, _ := netaddr.ParseIPPort(remoteAddr)
+	remoteIPPort, _ := netip.ParseAddrPort(remoteAddr)
 
 	c := &sclient{
 		connNum:        connNum,
@@ -1073,11 +1072,11 @@ func (s *Server) sendServerKey(lw *lazyBufioWriter) error {
 }
 
 func (s *Server) noteClientActivity(c *sclient) {
-	if !c.isDup.Get() {
+	if !c.isDup.Load() {
 		// Fast path for clients that aren't in a dup set.
 		return
 	}
-	if c.isDisabled.Get() {
+	if c.isDisabled.Load() {
 		// If they're already disabled, no point checking more.
 		return
 	}
@@ -1112,7 +1111,7 @@ func (s *Server) noteClientActivity(c *sclient) {
 		for _, prior := range ds.sendHistory {
 			if prior == c {
 				ds.ForeachClient(func(c *sclient) {
-					c.isDisabled.Set(true)
+					c.isDisabled.Store(true)
 				})
 				break
 			}
@@ -1246,15 +1245,15 @@ type sclient struct {
 	logf           logger.Logf
 	done           <-chan struct{}     // closed when connection closes
 	remoteAddr     string              // usually ip:port from net.Conn.RemoteAddr().String()
-	remoteIPPort   netaddr.IPPort      // zero if remoteAddr is not ip:port.
+	remoteIPPort   netip.AddrPort      // zero if remoteAddr is not ip:port.
 	sendQueue      chan pkt            // packets queued to this client; never closed
 	discoSendQueue chan pkt            // important packets queued to this client; never closed
 	sendPongCh     chan [8]byte        // pong replies to send to the client; never closed
 	peerGone       chan key.NodePublic // write request that a previous sender has disconnected (not used by mesh peers)
 	meshUpdate     chan struct{}       // write request to write peerStateChange
 	canMesh        bool                // clientInfo had correct mesh token for inter-region routing
-	isDup          syncs.AtomicBool    // whether more than 1 sclient for key is connected
-	isDisabled     syncs.AtomicBool    // whether sends to this peer are disabled due to active/active dups
+	isDup          atomic.Bool         // whether more than 1 sclient for key is connected
+	isDisabled     atomic.Bool         // whether sends to this peer are disabled due to active/active dups
 
 	// replaceLimiter controls how quickly two connections with
 	// the same client key can kick each other off the server by
@@ -1759,8 +1758,8 @@ type BytesSentRecv struct {
 
 // parseSSOutput parses the output from the specific call to ss in ServeDebugTraffic.
 // Separated out for ease of testing.
-func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
-	newState := map[netaddr.IPPort]BytesSentRecv{}
+func parseSSOutput(raw string) map[netip.AddrPort]BytesSentRecv {
+	newState := map[netip.AddrPort]BytesSentRecv{}
 	// parse every 2 lines and get src and dst ips, and kv pairs
 	lines := strings.Split(raw, "\n")
 	for i := 0; i < len(lines); i += 2 {
@@ -1768,7 +1767,7 @@ func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
 		if len(ipInfo) < 5 {
 			continue
 		}
-		src, err := netaddr.ParseIPPort(ipInfo[4])
+		src, err := netip.ParseAddrPort(ipInfo[4])
 		if err != nil {
 			continue
 		}
@@ -1793,7 +1792,7 @@ func parseSSOutput(raw string) map[netaddr.IPPort]BytesSentRecv {
 }
 
 func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
-	prevState := map[netaddr.IPPort]BytesSentRecv{}
+	prevState := map[netip.AddrPort]BytesSentRecv{}
 	enc := json.NewEncoder(w)
 	for r.Context().Err() == nil {
 		output, err := exec.Command("ss", "-i", "-H", "-t").Output()

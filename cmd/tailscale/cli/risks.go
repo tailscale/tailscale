@@ -55,8 +55,8 @@ func presentRiskToUser(riskType, riskMessage string) error {
 	if riskAccepted(riskType) {
 		return nil
 	}
-	fmt.Println(riskMessage)
-	fmt.Printf("To skip this warning, use --accept-risk=%s\n", riskType)
+	outln(riskMessage)
+	printf("To skip this warning, use --accept-risk=%s\n", riskType)
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT)
@@ -64,15 +64,15 @@ func presentRiskToUser(riskType, riskMessage string) error {
 	for left := riskAbortTimeSeconds; left > 0; left-- {
 		msg := fmt.Sprintf("\rContinuing in %d seconds...", left)
 		msgLen = len(msg)
-		fmt.Print(msg)
+		printf(msg)
 		select {
 		case <-interrupt:
-			fmt.Printf("\r%s\r", strings.Repeat(" ", msgLen+1))
+			printf("\r%s\r", strings.Repeat("x", msgLen+1))
 			return errAborted
 		case <-time.After(time.Second):
 			continue
 		}
 	}
-	fmt.Printf("\r%s\r", strings.Repeat(" ", msgLen))
+	printf("\r%s\r", strings.Repeat(" ", msgLen))
 	return errAborted
 }

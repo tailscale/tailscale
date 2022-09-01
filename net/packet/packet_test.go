@@ -6,10 +6,10 @@ package packet
 
 import (
 	"bytes"
+	"net/netip"
 	"reflect"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 )
@@ -26,8 +26,8 @@ const (
 	Fragment = ipproto.Fragment
 )
 
-func mustIPPort(s string) netaddr.IPPort {
-	ipp, err := netaddr.ParseIPPort(s)
+func mustIPPort(s string) netip.AddrPort {
+	ipp, err := netip.ParseAddrPort(s)
 	if err != nil {
 		panic(err)
 	}

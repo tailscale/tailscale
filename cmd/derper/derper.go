@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,7 +30,6 @@ import (
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/logpolicy"
 	"tailscale.com/metrics"
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
@@ -37,16 +37,15 @@ import (
 )
 
 var (
-	dev           = flag.Bool("dev", false, "run in localhost development mode")
-	addr          = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
-	httpPort      = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable. The listener is bound to the same IP (if any) as specified in the -a flag.")
-	stunPort      = flag.Int("stun-port", 3478, "The UDP port on which to serve STUN. The listener is bound to the same IP (if any) as specified in the -a flag.")
-	configPath    = flag.String("c", "", "config file path")
-	certMode      = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
-	certDir       = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
-	hostname      = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
-	logCollection = flag.String("logcollection", "", "If non-empty, logtail collection to log to")
-	runSTUN       = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
+	dev        = flag.Bool("dev", false, "run in localhost development mode")
+	addr       = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
+	httpPort   = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable. The listener is bound to the same IP (if any) as specified in the -a flag.")
+	stunPort   = flag.Int("stun-port", 3478, "The UDP port on which to serve STUN. The listener is bound to the same IP (if any) as specified in the -a flag.")
+	configPath = flag.String("c", "", "config file path")
+	certMode   = flag.String("certmode", "letsencrypt", "mode for getting a cert. possible options: manual, letsencrypt")
+	certDir    = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
+	hostname   = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
+	runSTUN    = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
 
 	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
@@ -135,7 +134,6 @@ func main() {
 	flag.Parse()
 
 	if *dev {
-		*logCollection = ""
 		*addr = ":3340" // above the keys DERP
 		log.Printf("Running in dev mode.")
 		tsweb.DevMode = true
@@ -144,12 +142,6 @@ func main() {
 	listenHost, _, err := net.SplitHostPort(*addr)
 	if err != nil {
 		log.Fatalf("invalid server address: %v", err)
-	}
-
-	var logPol *logpolicy.Policy
-	if *logCollection != "" {
-		logPol = logpolicy.New(*logCollection)
-		log.SetOutput(logPol.Logtail)
 	}
 
 	cfg := loadConfig()
@@ -365,7 +357,8 @@ func serverSTUNListener(ctx context.Context, pc *net.UDPConn) {
 		} else {
 			stunIPv6.Add(1)
 		}
-		res := stun.Response(txid, ua.IP, uint16(ua.Port))
+		addr, _ := netip.AddrFromSlice(ua.IP)
+		res := stun.Response(txid, netip.AddrPortFrom(addr, uint16(ua.Port)))
 		_, err = pc.WriteTo(res, ua)
 		if err != nil {
 			stunWriteError.Add(1)

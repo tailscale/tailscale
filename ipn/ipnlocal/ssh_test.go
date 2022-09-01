@@ -15,7 +15,7 @@ import (
 func TestSSHKeyGen(t *testing.T) {
 	dir := t.TempDir()
 	lb := &LocalBackend{varRoot: dir}
-	keys, err := lb.getTailscaleSSH_HostKeys()
+	keys, err := lb.getTailscaleSSH_HostKeys(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSSHKeyGen(t *testing.T) {
 		t.Fatalf("keys = %v; want %v", got, want)
 	}
 
-	keys2, err := lb.getTailscaleSSH_HostKeys()
+	keys2, err := lb.getTailscaleSSH_HostKeys(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

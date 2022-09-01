@@ -191,13 +191,13 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
-			arch)
-				OS="$ID"
+			arch|archarm|endeavouros)
+				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
-			manjaro)
-				OS="$ID"
+			manjaro|manjaro-arm)
+				OS="manjaro"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
 				;;
@@ -292,7 +292,8 @@ main() {
 			fi
 		;;
 		raspbian)
-			if [ "$VERSION" != "buster" ] && \
+			if [ "$VERSION" != "stretch" ] && \
+			   [ "$VERSION" != "buster" ] && \
 			   [ "$VERSION" != "bullseye" ]
 			then
 				OS_UNSUPPORTED=1
@@ -479,7 +480,7 @@ main() {
 		;;
 		yum)
 			set -x
-			$SUDO yum install yum-utils
+			$SUDO yum install yum-utils -y
 			$SUDO yum-config-manager -y --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO yum install tailscale -y
 			$SUDO systemctl enable --now tailscaled

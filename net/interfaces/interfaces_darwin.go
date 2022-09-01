@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"syscall"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 )
 
 func defaultRoute() (d DefaultRouteDetails, err error) {
@@ -89,7 +90,7 @@ func init() {
 	likelyHomeRouterIP = likelyHomeRouterIPDarwinFetchRIB
 }
 
-func likelyHomeRouterIPDarwinFetchRIB() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPDarwinFetchRIB() (ret netip.Addr, ok bool) {
 	rib, err := fetchRoutingTable()
 	if err != nil {
 		log.Printf("routerIP/FetchRIB: %v", err)

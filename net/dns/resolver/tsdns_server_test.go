@@ -7,11 +7,11 @@ package resolver
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
-	"inet.af/netaddr"
 )
 
 // This file exists to isolate the test infrastructure
@@ -22,7 +22,7 @@ import (
 // to queries of type A it receives with an A record containing ipv4,
 // to queries of type AAAA with an AAAA record containing ipv6,
 // to queries of type NS with an NS record containing name.
-func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
+func resolveToIP(ipv4, ipv6 netip.Addr, ns string) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(req)
@@ -41,7 +41,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeA,
 					Class:  dns.ClassINET,
 				},
-				A: ipv4.IPAddr().IP,
+				A: ipv4.AsSlice(),
 			}
 		case dns.TypeAAAA:
 			ans = &dns.AAAA{
@@ -50,7 +50,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeAAAA,
 					Class:  dns.ClassINET,
 				},
-				AAAA: ipv6.IPAddr().IP,
+				AAAA: ipv6.AsSlice(),
 			}
 		case dns.TypeNS:
 			ans = &dns.NS{
@@ -73,7 +73,7 @@ func resolveToIP(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 // to queries of type A it receives with an A record containing ipv4,
 // to queries of type AAAA with an AAAA record containing ipv6,
 // to queries of type NS with an NS record containing name.
-func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
+func resolveToIPLowercase(ipv4, ipv6 netip.Addr, ns string) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(req)
@@ -93,7 +93,7 @@ func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeA,
 					Class:  dns.ClassINET,
 				},
-				A: ipv4.IPAddr().IP,
+				A: ipv4.AsSlice(),
 			}
 		case dns.TypeAAAA:
 			ans = &dns.AAAA{
@@ -102,7 +102,7 @@ func resolveToIPLowercase(ipv4, ipv6 netaddr.IP, ns string) dns.HandlerFunc {
 					Rrtype: dns.TypeAAAA,
 					Class:  dns.ClassINET,
 				},
-				AAAA: ipv6.IPAddr().IP,
+				AAAA: ipv6.AsSlice(),
 			}
 		case dns.TypeNS:
 			ans = &dns.NS{
@@ -220,7 +220,7 @@ func weirdoGoCNAMEHandler(target string) dns.HandlerFunc {
 // dnsHandler returns a handler that replies with the answers/options
 // provided.
 //
-// Types supported: netaddr.IP.
+// Types supported: netip.Addr.
 func dnsHandler(answers ...any) dns.HandlerFunc {
 	return func(w dns.ResponseWriter, req *dns.Msg) {
 		m := new(dns.Msg)
@@ -235,7 +235,7 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 			switch a := a.(type) {
 			default:
 				panic(fmt.Sprintf("unsupported dnsHandler arg %T", a))
-			case netaddr.IP:
+			case netip.Addr:
 				ip := a
 				if ip.Is4() {
 					m.Answer = append(m.Answer, &dns.A{
@@ -244,7 +244,7 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 							Rrtype: dns.TypeA,
 							Class:  dns.ClassINET,
 						},
-						A: ip.IPAddr().IP,
+						A: ip.AsSlice(),
 					})
 				} else if ip.Is6() {
 					m.Answer = append(m.Answer, &dns.AAAA{
@@ -253,7 +253,7 @@ func dnsHandler(answers ...any) dns.HandlerFunc {
 							Rrtype: dns.TypeAAAA,
 							Class:  dns.ClassINET,
 						},
-						AAAA: ip.IPAddr().IP,
+						AAAA: ip.AsSlice(),
 					})
 				}
 			case dns.PTR:

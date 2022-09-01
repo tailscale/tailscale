@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"time"
 
-	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
@@ -104,8 +103,8 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 	// Don't start timers tracking those. They won't succeed anyway. Avoids log spam
 	// like:
 	//    open-conn-track: timeout opening (100.115.73.60:52501 => 17.125.252.5:443); no associated peer node
-	if runtime.GOOS == "ios" && flow.Dst.Port() == 443 && !tsaddr.IsTailscaleIP(flow.Dst.IP()) {
-		if _, ok := e.PeerForIP(flow.Dst.IP()); !ok {
+	if runtime.GOOS == "ios" && flow.Dst.Port() == 443 && !tsaddr.IsTailscaleIP(flow.Dst.Addr()) {
+		if _, ok := e.PeerForIP(flow.Dst.Addr()); !ok {
 			return
 		}
 	}
@@ -142,7 +141,7 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	}
 
 	// Diagnose why it might've timed out.
-	pip, ok := e.PeerForIP(flow.Dst.IP())
+	pip, ok := e.PeerForIP(flow.Dst.Addr())
 	if !ok {
 		e.logf("open-conn-track: timeout opening %v; no associated peer node", flow)
 		return
@@ -157,22 +156,11 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 
-	var ps *ipnstate.PeerStatusLite
-	if st, err := e.getStatus(); err == nil {
-		for _, v := range st.Peers {
-			if v.NodeKey == n.Key {
-				v := v // copy
-				ps = &v
-			}
-		}
-	} else {
-		e.logf("open-conn-track: timeout opening %v to node %v; failed to get engine status: %v", flow, n.Key.ShortString(), err)
-		return
-	}
-	if ps == nil {
+	ps, found := e.getPeerStatusLite(n.Key)
+	if !found {
 		onlyZeroRoute := true // whether peerForIP returned n only because its /0 route matched
 		for _, r := range n.AllowedIPs {
-			if r.Bits() != 0 && r.Contains(flow.Dst.IP()) {
+			if r.Bits() != 0 && r.Contains(flow.Dst.Addr()) {
 				onlyZeroRoute = false
 				break
 			}

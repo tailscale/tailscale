@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
@@ -260,7 +260,7 @@ func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 	return u.LoginName
 }
 
-func firstIPString(v []netaddr.IP) string {
+func firstIPString(v []netip.Addr) string {
 	if len(v) == 0 {
 		return ""
 	}

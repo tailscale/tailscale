@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/util/lineread"
+	"tailscale.com/util/strs"
 	"tailscale.com/version/distro"
 )
 
@@ -48,7 +49,17 @@ func linuxDeviceModel() string {
 	return ""
 }
 
+func getQnapQtsVersion(versionInfo string) string {
+	for _, field := range strings.Fields(versionInfo) {
+		if suffix, ok := strs.CutPrefix(field, "QTSFW_"); ok {
+			return "QTS " + suffix
+		}
+	}
+	return ""
+}
+
 func osVersionLinux() string {
+	// TODO(bradfitz,dgentry): cache this, or make caller(s) cache it.
 	dist := distro.Get()
 	propFile := "/etc/os-release"
 	switch dist {
@@ -59,6 +70,9 @@ func osVersionLinux() string {
 	case distro.WDMyCloud:
 		slurp, _ := ioutil.ReadFile("/etc/version")
 		return fmt.Sprintf("%s", string(bytes.TrimSpace(slurp)))
+	case distro.QNAP:
+		slurp, _ := ioutil.ReadFile("/etc/version_info")
+		return getQnapQtsVersion(string(slurp))
 	}
 
 	m := map[string]string{}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/netip"
 	"os"
 	"reflect"
 	"strings"
@@ -16,8 +17,8 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
@@ -62,9 +63,9 @@ func TestPrefsEqual(t *testing.T) {
 			have, prefsHandles)
 	}
 
-	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
+	nets := func(strs ...string) (ns []netip.Prefix) {
 		for _, s := range strs {
-			n, err := netaddr.ParseIPPrefix(s)
+			n, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -137,13 +138,13 @@ func TestPrefsEqual(t *testing.T) {
 		},
 
 		{
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
 			&Prefs{},
 			false,
 		},
 		{
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
-			&Prefs{ExitNodeIP: netaddr.MustParseIP("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
+			&Prefs{ExitNodeIP: netip.MustParseAddr("1.2.3.4")},
 			true,
 		},
 
@@ -226,12 +227,12 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{AdvertiseRoutes: nil},
-			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
+			&Prefs{AdvertiseRoutes: []netip.Prefix{}},
 			true,
 		},
 		{
-			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
-			&Prefs{AdvertiseRoutes: []netaddr.IPPrefix{}},
+			&Prefs{AdvertiseRoutes: []netip.Prefix{}},
+			&Prefs{AdvertiseRoutes: []netip.Prefix{}},
 			true,
 		},
 		{
@@ -415,7 +416,7 @@ func TestPrefsPretty(t *testing.T) {
 		},
 		{
 			Prefs{
-				ExitNodeIP: netaddr.MustParseIP("1.2.3.4"),
+				ExitNodeIP: netip.MustParseAddr("1.2.3.4"),
 			},
 			"linux",
 			`Prefs{ra=false mesh=false dns=false want=false exit=1.2.3.4 lan=false routes=[] nf=off Persist=nil}`,
@@ -658,8 +659,8 @@ func TestPrefsExitNode(t *testing.T) {
 	if p.AdvertisesExitNode() {
 		t.Errorf("default shouldn't advertise exit node")
 	}
-	p.AdvertiseRoutes = []netaddr.IPPrefix{
-		netaddr.MustParseIPPrefix("10.0.0.0/16"),
+	p.AdvertiseRoutes = []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/16"),
 	}
 	p.SetAdvertiseExitNode(true)
 	if got, want := len(p.AdvertiseRoutes), 3; got != want {
@@ -682,12 +683,12 @@ func TestPrefsExitNode(t *testing.T) {
 }
 
 func TestExitNodeIPOfArg(t *testing.T) {
-	mustIP := netaddr.MustParseIP
+	mustIP := netip.MustParseAddr
 	tests := []struct {
 		name    string
 		arg     string
 		st      *ipnstate.Status
-		want    netaddr.IP
+		want    netip.Addr
 		wantErr string
 	}{
 		{
@@ -713,7 +714,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				BackendState: "Running",
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
-						TailscaleIPs: []netaddr.IP{mustIP("1.2.3.4")},
+						TailscaleIPs: []netip.Addr{mustIP("1.2.3.4")},
 					},
 				},
 			},
@@ -726,7 +727,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				BackendState: "Running",
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
-						TailscaleIPs:   []netaddr.IP{mustIP("1.2.3.4")},
+						TailscaleIPs:   []netip.Addr{mustIP("1.2.3.4")},
 						ExitNodeOption: true,
 					},
 				},
@@ -747,7 +748,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:        "skippy.foo.",
-						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
 						ExitNodeOption: true,
 					},
 				},
@@ -762,7 +763,7 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:      "skippy.foo.",
-						TailscaleIPs: []netaddr.IP{mustIP("1.0.0.2")},
+						TailscaleIPs: []netip.Addr{mustIP("1.0.0.2")},
 					},
 				},
 			},
@@ -776,12 +777,12 @@ func TestExitNodeIPOfArg(t *testing.T) {
 				Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 					key.NewNode().Public(): {
 						DNSName:        "skippy.foo.",
-						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
 						ExitNodeOption: true,
 					},
 					key.NewNode().Public(): {
 						DNSName:        "SKIPPY.foo.",
-						TailscaleIPs:   []netaddr.IP{mustIP("1.0.0.2")},
+						TailscaleIPs:   []netip.Addr{mustIP("1.0.0.2")},
 						ExitNodeOption: true,
 					},
 				},

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -25,13 +26,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/kortschak/wol"
 	"golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -39,15 +40,15 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
 
-var initListenConfig func(*net.ListenConfig, netaddr.IP, *interfaces.State, string) error
+var initListenConfig func(*net.ListenConfig, netip.Addr, *interfaces.State, string) error
 
 // addH2C is non-nil on platforms where we want to add H2C
 // ("cleartext" HTTP/2) support to the peerAPI.
@@ -57,7 +58,7 @@ type peerAPIServer struct {
 	b          *LocalBackend
 	rootDir    string // empty means file receiving unavailable
 	selfNode   *tailcfg.Node
-	knownEmpty syncs.AtomicBool
+	knownEmpty atomic.Bool
 	resolver   *resolver.Resolver
 
 	// directFileMode is whether we're writing files directly to a
@@ -143,7 +144,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 	if s == nil || s.rootDir == "" || s.directFileMode {
 		return false
 	}
-	if s.knownEmpty.Get() {
+	if s.knownEmpty.Load() {
 		// Optimization: this is usually empty, so avoid opening
 		// the directory and checking. We can't cache the actual
 		// has-files-or-not values as the macOS/iOS client might
@@ -184,7 +185,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 			}
 		}
 		if err == io.EOF {
-			s.knownEmpty.Set(true)
+			s.knownEmpty.Store(true)
 		}
 		if err != nil {
 			break
@@ -386,7 +387,7 @@ func (s *peerAPIServer) OpenFile(baseName string) (rc io.ReadCloser, size int64,
 	return f, fi.Size(), nil
 }
 
-func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net.Listener, err error) {
+func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net.Listener, err error) {
 	// Android for whatever reason often has problems creating the peerapi listener.
 	// But since we started intercepting it with netstack, it's not even important that
 	// we have a real kernel-level listener. So just create a dummy listener on Android
@@ -450,7 +451,7 @@ func (s *peerAPIServer) listen(ip netaddr.IP, ifState *interfaces.State) (ln net
 
 type peerAPIListener struct {
 	ps *peerAPIServer
-	ip netaddr.IP
+	ip netip.Addr
 	lb *LocalBackend
 
 	// ln is the Listener. It can be nil in netstack mode if there are more than
@@ -492,8 +493,8 @@ func (pln *peerAPIListener) serve() {
 			logf("peerapi: unexpected RemoteAddr %#v", c.RemoteAddr())
 			continue
 		}
-		ipp, ok := netaddr.FromStdAddr(ta.IP, ta.Port, "")
-		if !ok {
+		ipp := netaddr.Unmap(ta.AddrPort())
+		if !ipp.IsValid() {
 			logf("peerapi: bogus TCPAddr %#v", ta)
 			c.Close()
 			continue
@@ -502,7 +503,7 @@ func (pln *peerAPIListener) serve() {
 	}
 }
 
-func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
+func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 	logf := pln.lb.logf
 	peerNode, peerUser, ok := pln.lb.WhoIs(src)
 	if !ok {
@@ -529,7 +530,7 @@ func (pln *peerAPIListener) ServeConn(src netaddr.IPPort, c net.Conn) {
 // peerAPIHandler serves the Peer API for a source specific client.
 type peerAPIHandler struct {
 	ps         *peerAPIServer
-	remoteAddr netaddr.IPPort
+	remoteAddr netip.AddrPort
 	isSelf     bool                // whether peerNode is owned by same user as this node
 	peerNode   *tailcfg.Node       // peerNode is who's making the request
 	peerUser   tailcfg.UserProfile // profile of peerNode
@@ -577,7 +578,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 <body>
 <h1>Hello, %s (%v)</h1>
 This is my Tailscale device. Your device is %v.
-`, html.EscapeString(who), h.remoteAddr.IP(), html.EscapeString(h.peerNode.ComputedName))
+`, html.EscapeString(who), h.remoteAddr.Addr(), html.EscapeString(h.peerNode.ComputedName))
 
 	if h.isSelf {
 		fmt.Fprintf(w, "<p>You are the owner of this node.\n")
@@ -608,7 +609,7 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<th>%v</th> ", v)
 	}
 	fmt.Fprint(w, "</tr>\n")
-	i.ForeachInterface(func(iface interfaces.Interface, ipps []netaddr.IPPrefix) {
+	i.ForeachInterface(func(iface interfaces.Interface, ipps []netip.Prefix) {
 		fmt.Fprint(w, "<tr>")
 		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
 			fmt.Fprintf(w, "<td>%v</td> ", v)
@@ -693,7 +694,7 @@ func (h *peerAPIHandler) canWakeOnLAN() bool {
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
-	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.IP()) {
+	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
 		if hasCap == wantCap {
 			return true
 		}
@@ -801,13 +802,13 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := time.Since(t0).Round(time.Second / 10)
-	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.IP, h.peerNode.ComputedName)
+	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
 
 	// TODO: set modtime
 	// TODO: some real response
 	success = true
 	io.WriteString(w, "{}\n")
-	h.ps.knownEmpty.Set(false)
+	h.ps.knownEmpty.Store(false)
 	h.ps.b.sendFileNotify()
 }
 
@@ -925,12 +926,11 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 	}
 	for ifName, ips := range st.InterfaceIPs {
 		for _, ip := range ips {
-			if ip.IP().IsLoopback() || ip.IP().Is6() {
+			if ip.Addr().IsLoopback() || ip.Addr().Is6() {
 				continue
 			}
-			ipa := ip.IP().IPAddr()
 			local := &net.UDPAddr{
-				IP:   ipa.IP,
+				IP:   ip.Addr().AsSlice(),
 				Port: 0,
 			}
 			remote := &net.UDPAddr{
@@ -973,8 +973,8 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// ourselves. As a proxy for autogroup:internet access, we see
 	// if we would've accepted a packet to 0.0.0.0:53. We treat
 	// the IP 0.0.0.0 as being "the internet".
-	f, ok := b.filterAtomic.Load().(*filter.Filter)
-	if !ok {
+	f := b.filterAtomic.Load()
+	if f == nil {
 		return false
 	}
 	// Note: we check TCP here because the Filter type already had
@@ -982,11 +982,11 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 	// arbitrary. DNS runs over TCP and UDP, so sure... we check
 	// TCP.
 	dstIP := netaddr.IPv4(0, 0, 0, 0)
-	remoteIP := h.remoteAddr.IP()
+	remoteIP := h.remoteAddr.Addr()
 	if remoteIP.Is6() {
 		// autogroup:internet for IPv6 is defined to start with 2000::/3,
 		// so use 2000::0 as the probe "the internet" address.
-		dstIP = netaddr.MustParseIP("2000::")
+		dstIP = netip.MustParseAddr("2000::")
 	}
 	verdict := f.CheckTCP(remoteIP, dstIP, 53)
 	return verdict == filter.Accept
@@ -1169,9 +1169,9 @@ func writePrettyDNSReply(w io.Writer, res []byte) (err error) {
 // it's listening on the provided IP address and on TCP port 1.
 //
 // See docs on fakePeerAPIListener.
-func newFakePeerAPIListener(ip netaddr.IP) net.Listener {
+func newFakePeerAPIListener(ip netip.Addr) net.Listener {
 	return &fakePeerAPIListener{
-		addr:   netaddr.IPPortFrom(ip, 1).TCPAddr(),
+		addr:   net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 1)),
 		closed: make(chan struct{}),
 	}
 }

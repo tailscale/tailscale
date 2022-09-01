@@ -11,14 +11,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netknob"
@@ -37,13 +36,11 @@ type Dialer struct {
 	Logf logger.Logf
 	// UseNetstackForIP if non-nil is whether NetstackDialTCP (if
 	// it's non-nil) should be used to dial the provided IP.
-	UseNetstackForIP func(netaddr.IP) bool
+	UseNetstackForIP func(netip.Addr) bool
 
 	// NetstackDialTCP dials the provided IPPort using netstack.
 	// If nil, it's not used.
-	NetstackDialTCP func(context.Context, netaddr.IPPort) (net.Conn, error)
-
-	peerDialControlFuncAtomic atomic.Value // of func() func(network, address string, c syscall.RawConn) error
+	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
 
 	peerClientOnce sync.Once
 	peerClient     *http.Client
@@ -207,7 +204,7 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
-func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netaddr.IPPort, error) {
+func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
 	exitDNSDoH := d.exitDNSDoHBase
@@ -226,7 +223,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr is malformed.
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 
 	var r net.Resolver
@@ -244,13 +241,13 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 
 	ips, err := r.LookupIP(ctx, ipNetOfNetwork(network), host)
 	if err != nil {
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
 	if len(ips) == 0 {
-		return netaddr.IPPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
+		return netip.AddrPort{}, fmt.Errorf("DNS lookup returned no results for %q", host)
 	}
-	ip, _ := netaddr.FromStdIP(ips[0])
-	return netaddr.IPPortFrom(ip, port), nil
+	ip, _ := netip.AddrFromSlice(ips[0])
+	return netip.AddrPortFrom(ip.Unmap(), port), nil
 }
 
 // ipNetOfNetwork returns "ip", "ip4", or "ip6" corresponding
@@ -309,7 +306,7 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.IP()) {
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
 		}
@@ -330,11 +327,11 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 	default:
 		return nil, fmt.Errorf("peerAPI dial requires tcp; %q not supported", network)
 	}
-	ipp, err := netaddr.ParseIPPort(addr)
+	ipp, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("peerAPI dial requires ip:port, not name resolution: %w", err)
 	}
-	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.IP()) {
+	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
 		if d.NetstackDialTCP == nil {
 			return nil, errors.New("Dialer not initialized correctly")
 		}

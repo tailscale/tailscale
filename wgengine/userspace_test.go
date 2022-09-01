@@ -6,12 +6,13 @@ package wgengine
 
 import (
 	"fmt"
+	"net/netip"
 	"reflect"
 	"testing"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -112,8 +113,8 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 			Peers: []wgcfg.Peer{
 				{
 					PublicKey: nk,
-					AllowedIPs: []netaddr.IPPrefix{
-						netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+					AllowedIPs: []netip.Prefix{
+						netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 					},
 				},
 			},
@@ -172,8 +173,8 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey: nodeKey,
-				AllowedIPs: []netaddr.IPPrefix{
-					netaddr.IPPrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+				AllowedIPs: []netip.Prefix{
+					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
 				},
 			},
 		},
@@ -223,14 +224,14 @@ func nkFromHex(hex string) key.NodePublic {
 // an experiment to see if genLocalAddrFunc was worth it. As of Go
 // 1.16, it still very much is. (30-40x faster)
 func BenchmarkGenLocalAddrFunc(b *testing.B) {
-	la1 := netaddr.MustParseIP("1.2.3.4")
-	la2 := netaddr.MustParseIP("::4")
-	lanot := netaddr.MustParseIP("5.5.5.5")
+	la1 := netip.MustParseAddr("1.2.3.4")
+	la2 := netip.MustParseAddr("::4")
+	lanot := netip.MustParseAddr("5.5.5.5")
 	var x bool
 	b.Run("map1", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		m := map[netaddr.IP]bool{
+		m := map[netip.Addr]bool{
 			la1: true,
 		}
 		for i := 0; i < b.N; i++ {
@@ -241,7 +242,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("map2", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		m := map[netaddr.IP]bool{
+		m := map[netip.Addr]bool{
 			la1: true,
 			la2: true,
 		}
@@ -253,7 +254,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("or1", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		f := func(t netaddr.IP) bool {
+		f := func(t netip.Addr) bool {
 			return t == la1
 		}
 		for i := 0; i < b.N; i++ {
@@ -264,7 +265,7 @@ func BenchmarkGenLocalAddrFunc(b *testing.B) {
 	b.Run("or2", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		f := func(t netaddr.IP) bool {
+		f := func(t netip.Addr) bool {
 			return t == la1 || t == la2
 		}
 		for i := 0; i < b.N; i++ {

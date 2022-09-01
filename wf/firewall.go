@@ -9,19 +9,20 @@ package wf
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 
 	"golang.org/x/sys/windows"
-	"inet.af/netaddr"
 	"inet.af/wf"
+	"tailscale.com/net/netaddr"
 )
 
 // Known addresses.
 var (
-	linkLocalRange           = netaddr.MustParseIPPrefix("ff80::/10")
-	linkLocalDHCPMulticast   = netaddr.MustParseIP("ff02::1:2")
-	siteLocalDHCPMulticast   = netaddr.MustParseIP("ff05::1:3")
-	linkLocalRouterMulticast = netaddr.MustParseIP("ff02::2")
+	linkLocalRange           = netip.MustParsePrefix("ff80::/10")
+	linkLocalDHCPMulticast   = netip.MustParseAddr("ff02::1:2")
+	siteLocalDHCPMulticast   = netip.MustParseAddr("ff05::1:3")
+	linkLocalRouterMulticast = netip.MustParseAddr("ff02::2")
 )
 
 type direction int
@@ -84,7 +85,7 @@ type Firewall struct {
 	sublayerID wf.SublayerID
 	session    *wf.Session
 
-	permittedRoutes map[netaddr.IPPrefix][]*wf.Rule
+	permittedRoutes map[netip.Prefix][]*wf.Rule
 }
 
 // New returns a new Firewall for the provdied interface ID.
@@ -124,7 +125,7 @@ func New(luid uint64) (*Firewall, error) {
 		session:         session,
 		providerID:      providerID,
 		sublayerID:      sublayerID,
-		permittedRoutes: make(map[netaddr.IPPrefix][]*wf.Rule),
+		permittedRoutes: make(map[netip.Prefix][]*wf.Rule),
 	}
 	if err := f.enable(); err != nil {
 		return nil, err
@@ -187,16 +188,16 @@ func (f *Firewall) enable() error {
 // UpdatedPermittedRoutes adds rules to allow incoming and outgoing connections
 // from the provided prefixes. It will also remove rules for routes that were
 // previously added but have been removed.
-func (f *Firewall) UpdatePermittedRoutes(newRoutes []netaddr.IPPrefix) error {
-	var routesToAdd []netaddr.IPPrefix
-	routeMap := make(map[netaddr.IPPrefix]bool)
+func (f *Firewall) UpdatePermittedRoutes(newRoutes []netip.Prefix) error {
+	var routesToAdd []netip.Prefix
+	routeMap := make(map[netip.Prefix]bool)
 	for _, r := range newRoutes {
 		routeMap[r] = true
 		if _, ok := f.permittedRoutes[r]; !ok {
 			routesToAdd = append(routesToAdd, r)
 		}
 	}
-	var routesToRemove []netaddr.IPPrefix
+	var routesToRemove []netip.Prefix
 	for r := range f.permittedRoutes {
 		if !routeMap[r] {
 			routesToRemove = append(routesToRemove, r)
@@ -219,7 +220,7 @@ func (f *Firewall) UpdatePermittedRoutes(newRoutes []netaddr.IPPrefix) error {
 			},
 		}
 		var p protocol
-		if r.IP().Is4() {
+		if r.Addr().Is4() {
 			p = protocolV4
 		} else {
 			p = protocolV6

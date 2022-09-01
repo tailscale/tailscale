@@ -22,21 +22,21 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/envknob"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -69,7 +69,7 @@ type Client struct {
 	// by SetAddressFamilySelector. It's an atomic because it needs
 	// to be accessed by multiple racing routines started while
 	// Client.conn holds mu.
-	addrFamSelAtomic atomic.Value // of AddressFamilySelector
+	addrFamSelAtomic syncs.AtomicValue[AddressFamilySelector]
 
 	mu           sync.Mutex
 	preferred    bool
@@ -579,11 +579,11 @@ func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn,
 // address (given in s) is valid. An empty value means to dial, but to
 // use DNS. The predicate function reports whether the non-empty
 // string s contained a valid IP address of the right family.
-func shouldDialProto(s string, pred func(netaddr.IP) bool) bool {
+func shouldDialProto(s string, pred func(netip.Addr) bool) bool {
 	if s == "" {
 		return true
 	}
-	ip, _ := netaddr.ParseIP(s)
+	ip, _ := netip.ParseAddr(s)
 	return pred(ip)
 }
 
@@ -651,10 +651,10 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 			}
 		}()
 	}
-	if shouldDialProto(n.IPv4, netaddr.IP.Is4) {
+	if shouldDialProto(n.IPv4, netip.Addr.Is4) {
 		startDial(n.IPv4, "tcp4")
 	}
-	if shouldDialProto(n.IPv6, netaddr.IP.Is6) {
+	if shouldDialProto(n.IPv6, netip.Addr.Is6) {
 		startDial(n.IPv6, "tcp6")
 	}
 	if nwait == 0 {
@@ -839,15 +839,15 @@ func (c *Client) SendPing(data [8]byte) error {
 
 // LocalAddr reports c's local TCP address, without any implicit
 // connect or reconnect.
-func (c *Client) LocalAddr() (netaddr.IPPort, error) {
+func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	c.mu.Lock()
 	closed, client := c.closed, c.client
 	c.mu.Unlock()
 	if closed {
-		return netaddr.IPPort{}, ErrClientClosed
+		return netip.AddrPort{}, ErrClientClosed
 	}
 	if client == nil {
-		return netaddr.IPPort{}, errors.New("client not connected")
+		return netip.AddrPort{}, errors.New("client not connected")
 	}
 	return client.LocalAddr()
 }

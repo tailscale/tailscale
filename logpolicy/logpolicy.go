@@ -112,6 +112,8 @@ func NewConfig(collection string) *Config {
 // and that the PrivateID and PublicID pair are sensible.
 func (c *Config) Validate(collection string) error {
 	switch {
+	case c == nil:
+		return errors.New("config is nil")
 	case c.Collection != collection:
 		return fmt.Errorf("config collection %q does not match %q", c.Collection, collection)
 	case c.PrivateID.IsZero():
@@ -509,17 +511,16 @@ func New(collection string) *Policy {
 	newc, err := ConfigFromFile(cfgPath)
 	if err != nil {
 		earlyLogf("logpolicy.ConfigFromFile %v: %v", cfgPath, err)
-		newc = NewConfig(collection)
 	}
 	if err := newc.Validate(collection); err != nil {
-		earlyLogf("logpolicy.Config.Validate for %q: %v", cfgPath, err)
-		newc := NewConfig(collection)
+		earlyLogf("logpolicy.Config.Validate for %v: %v", cfgPath, err)
+		newc = NewConfig(collection)
 		if err := newc.Save(cfgPath); err != nil {
 			earlyLogf("logpolicy.Config.Save for %v: %v", cfgPath, err)
 		}
 	}
 
-	c := logtail.Config{
+	conf := logtail.Config{
 		Collection: newc.Collection,
 		PrivateID:  newc.PrivateID,
 		Stderr:     logWriter{console},
@@ -533,16 +534,16 @@ func New(collection string) *Policy {
 		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
 	}
 	if collection == logtail.CollectionNode {
-		c.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
-		c.IncludeProcID = true
-		c.IncludeProcSequence = true
+		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
+		conf.IncludeProcID = true
+		conf.IncludeProcSequence = true
 	}
 
 	if val := getLogTarget(); val != "" {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
-		c.BaseURL = val
+		conf.BaseURL = val
 		u, _ := url.Parse(val)
-		c.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
 	}
 
 	filchOptions := filch.Options{
@@ -550,12 +551,12 @@ func New(collection string) *Policy {
 	}
 	filchPrefix := filepath.Join(dir, cmdName)
 
-	// Synology disks cannot hibernate if we're writing logs to them all the time.
+	// NAS disks cannot hibernate if we're writing logs to them all the time.
 	// https://github.com/tailscale/tailscale/issues/3551
-	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
-		synologyTmpfsLogs := "/tmp/tailscale-logs"
-		if err := os.MkdirAll(synologyTmpfsLogs, 0755); err == nil {
-			filchPrefix = filepath.Join(synologyTmpfsLogs, cmdName)
+	if runtime.GOOS == "linux" && (distro.Get() == distro.Synology || distro.Get() == distro.QNAP) {
+		tmpfsLogs := "/tmp/tailscale-logs"
+		if err := os.MkdirAll(tmpfsLogs, 0755); err == nil {
+			filchPrefix = filepath.Join(tmpfsLogs, cmdName)
 			filchOptions.MaxFileSize = 1 << 20
 		} else {
 			// not a fatal error, we can leave the log files on the spinning disk
@@ -565,16 +566,16 @@ func New(collection string) *Policy {
 
 	filchBuf, filchErr := filch.New(filchPrefix, filchOptions)
 	if filchBuf != nil {
-		c.Buffer = filchBuf
+		conf.Buffer = filchBuf
 		if filchBuf.OrigStderr != nil {
-			c.Stderr = filchBuf.OrigStderr
+			conf.Stderr = filchBuf.OrigStderr
 		}
 	}
-	lw := logtail.NewLogger(c, log.Printf)
+	lw := logtail.NewLogger(conf, log.Printf)
 
 	var logOutput io.Writer = lw
 
-	if runtime.GOOS == "windows" && c.Collection == logtail.CollectionNode {
+	if runtime.GOOS == "windows" && conf.Collection == logtail.CollectionNode {
 		logID := newc.PublicID.String()
 		exe, _ := os.Executable()
 		if strings.EqualFold(filepath.Base(exe), "tailscaled.exe") {

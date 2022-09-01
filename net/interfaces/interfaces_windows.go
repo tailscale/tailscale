@@ -6,7 +6,7 @@ package interfaces
 
 import (
 	"log"
-	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 	"syscall"
@@ -14,7 +14,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
 	"tailscale.com/tsconst"
 )
 
@@ -27,7 +26,7 @@ func init() {
 	getPAC = getPACWindows
 }
 
-func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
 	rs, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
 		log.Printf("routerIP/GetIPForwardTable2 error: %v", err)
@@ -54,18 +53,18 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 		return
 	}
 
-	unspec := net.IPv4(0, 0, 0, 0)
+	v4unspec := netip.IPv4Unspecified()
 	var best *winipcfg.MibIPforwardRow2 // best (lowest metric) found so far, or nil
 
 	for i := range rs {
 		r := &rs[i]
-		if r.Loopback || r.DestinationPrefix.PrefixLength != 0 || !r.DestinationPrefix.Prefix.IP().Equal(unspec) {
+		if r.Loopback || r.DestinationPrefix.PrefixLength != 0 || r.DestinationPrefix.Prefix().Addr().Unmap() != v4unspec {
 			// Not a default route, so skip
 			continue
 		}
 
-		ip, ok := netaddr.FromStdIP(r.NextHop.IP())
-		if !ok {
+		ip := r.NextHop.Addr().Unmap()
+		if !ip.IsValid() {
 			// Not a valid gateway, so skip (won't happen though)
 			continue
 		}
@@ -92,12 +91,12 @@ func likelyHomeRouterIPWindows() (ret netaddr.IP, ok bool) {
 		}
 	}
 
-	if !ret.IsZero() && !ret.IsPrivate() {
+	if ret.IsValid() && !ret.IsPrivate() {
 		// Default route has a non-private gateway
-		return netaddr.IP{}, false
+		return netip.Addr{}, false
 	}
 
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 // NonTailscaleMTUs returns a map of interface LUID to interface MTU,

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"math"
 	"math/rand"
 	"net"
@@ -29,7 +30,6 @@ import (
 
 	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/conn"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
@@ -39,6 +39,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
@@ -55,10 +56,19 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/netconv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
+)
+
+const (
+	// These are disco.Magic in big-endian form, 4 then 2 bytes. The
+	// BPF filters need the magic in this format to match on it. Used
+	// only in magicsock_linux.go, but defined here so that the test
+	// which verifies this is the correct magic doesn't also need a
+	// _linux variant.
+	discoMagic1 = 0x5453f09f
+	discoMagic2 = 0x92ac
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -82,13 +92,13 @@ type peerInfo struct {
 	// that when we're deleting this node, we can rapidly find out the
 	// keys that need deleting from peerMap.byIPPort without having to
 	// iterate over every IPPort known for any peer.
-	ipPorts map[netaddr.IPPort]bool
+	ipPorts map[netip.AddrPort]bool
 }
 
 func newPeerInfo(ep *endpoint) *peerInfo {
 	return &peerInfo{
 		ep:      ep,
-		ipPorts: map[netaddr.IPPort]bool{},
+		ipPorts: map[netip.AddrPort]bool{},
 	}
 }
 
@@ -98,7 +108,7 @@ func newPeerInfo(ep *endpoint) *peerInfo {
 // Doesn't do any locking, all access must be done with Conn.mu held.
 type peerMap struct {
 	byNodeKey map[key.NodePublic]*peerInfo
-	byIPPort  map[netaddr.IPPort]*peerInfo
+	byIPPort  map[netip.AddrPort]*peerInfo
 
 	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
@@ -108,7 +118,7 @@ type peerMap struct {
 func newPeerMap() peerMap {
 	return peerMap{
 		byNodeKey:    map[key.NodePublic]*peerInfo{},
-		byIPPort:     map[netaddr.IPPort]*peerInfo{},
+		byIPPort:     map[netip.AddrPort]*peerInfo{},
 		nodesOfDisco: map[key.DiscoPublic]map[key.NodePublic]bool{},
 	}
 }
@@ -138,7 +148,7 @@ func (m *peerMap) endpointForNodeKey(nk key.NodePublic) (ep *endpoint, ok bool) 
 
 // endpointForIPPort returns the endpoint for the peer we
 // believe to be at ipp, or nil if we don't know of any such peer.
-func (m *peerMap) endpointForIPPort(ipp netaddr.IPPort) (ep *endpoint, ok bool) {
+func (m *peerMap) endpointForIPPort(ipp netip.AddrPort) (ep *endpoint, ok bool) {
 	if info, ok := m.byIPPort[ipp]; ok {
 		return info.ep, true
 	}
@@ -195,7 +205,7 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 // This should only be called with a fully verified mapping of ipp to
 // nk, because calling this function defines the endpoint we hand to
 // WireGuard for packets received from ipp.
-func (m *peerMap) setNodeKeyForIPPort(ipp netaddr.IPPort, nk key.NodePublic) {
+func (m *peerMap) setNodeKeyForIPPort(ipp netip.AddrPort, nk key.NodePublic) {
 	if pi := m.byIPPort[ipp]; pi != nil {
 		delete(pi.ipPorts, ipp)
 		delete(m.byIPPort, ipp)
@@ -255,6 +265,12 @@ type Conn struct {
 	pconn4 *RebindingUDPConn
 	pconn6 *RebindingUDPConn
 
+	// closeDisco4 and closeDisco6 are io.Closers to shut down the raw
+	// disco packet receivers. If nil, no raw disco receiver is
+	// running for the given family.
+	closeDisco4 io.Closer
+	closeDisco6 io.Closer
+
 	// netChecker is the prober that discovers local network
 	// conditions, including the closest DERP relay and NAT mappings.
 	netChecker *netcheck.Client
@@ -265,7 +281,7 @@ type Conn struct {
 
 	// stunReceiveFunc holds the current STUN packet processing func.
 	// Its Loaded value is always non-nil.
-	stunReceiveFunc atomic.Value // of func(p []byte, fromAddr *net.UDPAddr)
+	stunReceiveFunc syncs.AtomicValue[func(p []byte, fromAddr netip.AddrPort)]
 
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
@@ -287,31 +303,31 @@ type Conn struct {
 	// is named negatively because in early start-up, we don't yet
 	// necessarily have a netcheck.Report and don't want to skip
 	// logging.
-	noV4, noV6 syncs.AtomicBool
+	noV4, noV6 atomic.Bool
 
 	// noV4Send is whether IPv4 UDP is known to be unable to transmit
 	// at all. This could happen if the socket is in an invalid state
 	// (as can happen on darwin after a network link status change).
-	noV4Send syncs.AtomicBool
+	noV4Send atomic.Bool
 
 	// networkUp is whether the network is up (some interface is up
 	// with IPv4 or IPv6). It's used to suppress log spam and prevent
 	// new connection that'll fail.
-	networkUp syncs.AtomicBool
+	networkUp atomic.Bool
 
 	// havePrivateKey is whether privateKey is non-zero.
-	havePrivateKey  syncs.AtomicBool
-	publicKeyAtomic atomic.Value // of key.NodePublic (or NodeKey zero value if !havePrivateKey)
+	havePrivateKey  atomic.Bool
+	publicKeyAtomic syncs.AtomicValue[key.NodePublic] // or NodeKey zero value if !havePrivateKey
 
 	// derpMapAtomic is the same as derpMap, but without requiring
 	// sync.Mutex. For use with NewRegionClient's callback, to avoid
 	// lock ordering deadlocks. See issue 3726 and mu field docs.
-	derpMapAtomic atomic.Value // of *tailcfg.DERPMap
+	derpMapAtomic atomic.Pointer[tailcfg.DERPMap]
 
-	lastNetCheckReport atomic.Value // of *netcheck.Report
+	lastNetCheckReport atomic.Pointer[netcheck.Report]
 
 	// port is the preferred port from opts.Port; 0 means auto.
-	port syncs.AtomicUint32
+	port atomic.Uint32
 
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
@@ -442,14 +458,7 @@ func (c *Conn) addDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Cl
 	mak.Set(&c.derpRoute, peer, derpRoute{derpID, dc})
 }
 
-// DerpMagicIP is a fake WireGuard endpoint IP address that means
-// to use DERP. When used, the port number of the WireGuard endpoint
-// is the DERP server number to use.
-//
-// Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
-const DerpMagicIP = "127.3.3.40"
-
-var derpMagicIPAddr = netaddr.MustParseIP(DerpMagicIP)
+var derpMagicIPAddr = netip.MustParseAddr(tailcfg.DerpMagicIP)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
@@ -539,18 +548,16 @@ func newConn() *Conn {
 	}
 	c.bind = &connBind{Conn: c, closed: true}
 	c.muCond = sync.NewCond(&c.mu)
-	c.networkUp.Set(true) // assume up until told otherwise
+	c.networkUp.Store(true) // assume up until told otherwise
 	return c
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
 // As the set of possible endpoints for a Conn changes, the
 // callback opts.EndpointsFunc is called.
-//
-// It doesn't start doing anything until Start is called.
 func NewConn(opts Options) (*Conn, error) {
 	c := newConn()
-	c.port.Set(uint32(opts.Port))
+	c.port.Store(uint32(opts.Port))
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
@@ -582,12 +589,25 @@ func NewConn(opts Options) (*Conn, error) {
 
 	c.ignoreSTUNPackets()
 
+	if d4, err := c.listenRawDisco("ip4"); err == nil {
+		c.logf("[v1] using BPF disco receiver for IPv4")
+		c.closeDisco4 = d4
+	} else {
+		c.logf("[v1] couldn't create raw v4 disco listener, using regular listener instead: %v", err)
+	}
+	if d6, err := c.listenRawDisco("ip6"); err == nil {
+		c.logf("[v1] using BPF disco receiver for IPv6")
+		c.closeDisco6 = d6
+	} else {
+		c.logf("[v1] couldn't create raw v6 disco listener, using regular listener instead: %v", err)
+	}
+
 	return c, nil
 }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
 func (c *Conn) ignoreSTUNPackets() {
-	c.stunReceiveFunc.Store(func([]byte, netaddr.IPPort) {})
+	c.stunReceiveFunc.Store(func([]byte, netip.AddrPort) {})
 }
 
 // doPeriodicSTUN is called (in a new goroutine) by
@@ -642,7 +662,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.muCond.Broadcast()
 	}()
 	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
-	if c.noV4Send.Get() && runtime.GOOS != "js" {
+	if c.noV4Send.Load() && runtime.GOOS != "js" {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
@@ -744,9 +764,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	}
 
 	c.lastNetCheckReport.Store(report)
-	c.noV4.Set(!report.IPv4)
-	c.noV6.Set(!report.IPv6)
-	c.noV4Send.Set(!report.IPv4CanSend)
+	c.noV4.Store(!report.IPv4)
+	c.noV6.Store(!report.IPv6)
+	c.noV4Send.Store(!report.IPv4CanSend)
 
 	ni := &tailcfg.NetInfo{
 		DERPLatency:           map[string]float64{},
@@ -765,6 +785,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	}
 	ni.WorkingIPv6.Set(report.IPv6)
 	ni.WorkingUDP.Set(report.UDP)
+	ni.WorkingICMPv4.Set(report.ICMPv4)
 	ni.PreferredDERP = report.PreferredDERP
 
 	if ni.PreferredDERP == 0 {
@@ -819,7 +840,7 @@ func (c *Conn) pickDERPFallback() int {
 	}
 
 	h := fnv.New64()
-	h.Write([]byte(fmt.Sprintf("%p/%d", c, processStartUnixNano))) // arbitrary
+	fmt.Fprintf(h, "%p/%d", c, processStartUnixNano) // arbitrary
 	return ids[rand.New(rand.NewSource(int64(h.Sum64()))).Intn(len(ids))]
 }
 
@@ -851,7 +872,7 @@ func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 // discoKey. It's used in tests to enable receiving of packets from
 // addr without having to spin up the entire active discovery
 // machinery.
-func (c *Conn) addValidDiscoPathForTest(nodeKey key.NodePublic, addr netaddr.IPPort) {
+func (c *Conn) addValidDiscoPathForTest(nodeKey key.NodePublic, addr netip.AddrPort) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.peerMap.setNodeKeyForIPPort(addr, nodeKey)
@@ -897,7 +918,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 		return
 	}
 	if len(peer.Addresses) > 0 {
-		res.NodeIP = peer.Addresses[0].IP().String()
+		res.NodeIP = peer.Addresses[0].Addr().String()
 	}
 	res.NodeName = peer.Name // prefer DNS name
 	if res.NodeName == "" {
@@ -916,9 +937,9 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 }
 
 // c.mu must be held
-func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netaddr.IPPort) {
+func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netip.AddrPort) {
 	res.LatencySeconds = latency.Seconds()
-	if ep.IP() != derpMagicIPAddr {
+	if ep.Addr() != derpMagicIPAddr {
 		res.Endpoint = ep.String()
 		return
 	}
@@ -1016,7 +1037,7 @@ func (c *Conn) goDerpConnect(node int) {
 	if node == 0 {
 		return
 	}
-	go c.derpWriteChanOfAddr(netaddr.IPPortFrom(derpMagicIPAddr, uint16(node)), key.NodePublic{})
+	go c.derpWriteChanOfAddr(netip.AddrPortFrom(derpMagicIPAddr, uint16(node)), key.NodePublic{})
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -1025,7 +1046,7 @@ func (c *Conn) goDerpConnect(node int) {
 // c.mu must NOT be held.
 func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, error) {
 	var havePortmap bool
-	var portmapExt netaddr.IPPort
+	var portmapExt netip.AddrPort
 	if runtime.GOOS != "js" {
 		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
 	}
@@ -1042,21 +1063,21 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// back.
 		return []tailcfg.Endpoint{
 			{
-				Addr: netaddr.MustParseIPPort("[fe80:123:456:789::1]:12345"),
+				Addr: netip.MustParseAddrPort("[fe80:123:456:789::1]:12345"),
 				Type: tailcfg.EndpointLocal,
 			},
 		}, nil
 	}
 
-	var already map[netaddr.IPPort]tailcfg.EndpointType // endpoint -> how it was found
+	var already map[netip.AddrPort]tailcfg.EndpointType // endpoint -> how it was found
 	var eps []tailcfg.Endpoint                          // unique endpoints
 
-	ipp := func(s string) (ipp netaddr.IPPort) {
-		ipp, _ = netaddr.ParseIPPort(s)
+	ipp := func(s string) (ipp netip.AddrPort) {
+		ipp, _ = netip.ParseAddrPort(s)
 		return
 	}
-	addAddr := func(ipp netaddr.IPPort, et tailcfg.EndpointType) {
-		if ipp.IsZero() || (debugOmitLocalAddresses && et == tailcfg.EndpointLocal) {
+	addAddr := func(ipp netip.AddrPort, et tailcfg.EndpointType) {
+		if !ipp.IsValid() || (debugOmitLocalAddresses && et == tailcfg.EndpointLocal) {
 			return
 		}
 		if _, ok := already[ipp]; !ok {
@@ -1082,7 +1103,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		// port mapping on their router to the same explicit
 		// port that tailscaled is running with. Worst case
 		// it's an invalid candidate mapping.
-		if port := c.port.Get(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 {
+		if port := c.port.Load(); nr.MappingVariesByDestIP.EqualBool(true) && port != 0 {
 			if ip, _, err := net.SplitHostPort(nr.GlobalV4); err == nil {
 				addAddr(ipp(net.JoinHostPort(ip, strconv.Itoa(int(port)))), tailcfg.EndpointSTUN4LocalPort)
 			}
@@ -1108,7 +1129,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 			ips = loopback
 		}
 		for _, ip := range ips {
-			addAddr(netaddr.IPPortFrom(ip, uint16(localAddr.Port)), tailcfg.EndpointLocal)
+			addAddr(netip.AddrPortFrom(ip, uint16(localAddr.Port)), tailcfg.EndpointLocal)
 		}
 	} else {
 		// Our local endpoint is bound to a particular address.
@@ -1175,7 +1196,7 @@ func (c *Conn) LocalPort() uint16 {
 
 var errNetworkDown = errors.New("magicsock: network down")
 
-func (c *Conn) networkDown() bool { return !c.networkUp.Get() }
+func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 
 func (c *Conn) Send(b []byte, ep conn.Endpoint) error {
 	metricSendData.Add(1)
@@ -1192,23 +1213,16 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
 var errNoUDP = errors.New("no UDP available on platform")
 
-var udpAddrPool = &sync.Pool{
-	New: func() any { return new(net.UDPAddr) },
-}
-
 // sendUDP sends UDP packet b to ipp.
 // See sendAddr's docs on the return value meanings.
-func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
+func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte) (sent bool, err error) {
 	if runtime.GOOS == "js" {
 		return false, errNoUDP
 	}
-	ua := udpAddrPool.Get().(*net.UDPAddr)
-	sent, err = c.sendUDPStd(ipp.UDPAddrAt(ua), b)
+	sent, err = c.sendUDPStd(ipp, b)
 	if err != nil {
 		metricSendUDPError.Add(1)
 	} else {
-		// Only return it to the pool on success; Issue 3122.
-		udpAddrPool.Put(ua)
 		if sent {
 			metricSendUDP.Add(1)
 		}
@@ -1218,20 +1232,20 @@ func (c *Conn) sendUDP(ipp netaddr.IPPort, b []byte) (sent bool, err error) {
 
 // sendUDP sends UDP packet b to addr.
 // See sendAddr's docs on the return value meanings.
-func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
+func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) {
 	switch {
-	case addr.IP.To4() != nil:
-		_, err = c.pconn4.WriteTo(b, addr)
-		if err != nil && (c.noV4.Get() || neterror.TreatAsLostUDP(err)) {
+	case addr.Addr().Is4():
+		_, err = c.pconn4.WriteToUDPAddrPort(b, addr)
+		if err != nil && (c.noV4.Load() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
-	case len(addr.IP) == net.IPv6len:
+	case addr.Addr().Is6():
 		if c.pconn6 == nil {
 			// ignore IPv6 dest if we don't have an IPv6 address.
 			return false, nil
 		}
-		_, err = c.pconn6.WriteTo(b, addr)
-		if err != nil && (c.noV6.Get() || neterror.TreatAsLostUDP(err)) {
+		_, err = c.pconn6.WriteToUDPAddrPort(b, addr)
+		if err != nil && (c.noV6.Load() || neterror.TreatAsLostUDP(err)) {
 			return false, nil
 		}
 	default:
@@ -1250,8 +1264,8 @@ func (c *Conn) sendUDPStd(addr *net.UDPAddr, b []byte) (sent bool, err error) {
 // An example of when they might be different: sending to an
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
-func (c *Conn) sendAddr(addr netaddr.IPPort, pubKey key.NodePublic, b []byte) (sent bool, err error) {
-	if addr.IP() != derpMagicIPAddr {
+func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (sent bool, err error) {
+	if addr.Addr() != derpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
 
@@ -1296,8 +1310,8 @@ const bufferedDerpWritesBeforeDrop = 32
 //
 // If peer is non-zero, it can be used to find an active reverse
 // path, without using addr.
-func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.NodePublic) chan<- derpWriteRequest {
-	if addr.IP() != derpMagicIPAddr {
+func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) chan<- derpWriteRequest {
+	if addr.Addr() != derpMagicIPAddr {
 		return nil
 	}
 	regionID := int(addr.Port())
@@ -1372,7 +1386,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netaddr.IPPort, peer key.NodePublic) cha
 			// We're closing anyway; return nil to stop dialing.
 			return nil
 		}
-		derpMap, _ := c.derpMapAtomic.Load().(*tailcfg.DERPMap)
+		derpMap := c.derpMapAtomic.Load()
 		if derpMap == nil {
 			return nil
 		}
@@ -1483,7 +1497,7 @@ type derpReadResult struct {
 
 // runDerpReader runs in a goroutine for the life of a DERP
 // connection, handling received packets.
-func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
+func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, dc *derphttp.Client, wg *syncs.WaitGroupChan, startGate <-chan struct{}) {
 	defer wg.Decr()
 	defer dc.Close()
 
@@ -1614,7 +1628,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netaddr.IPPort, d
 }
 
 type derpWriteRequest struct {
-	addr   netaddr.IPPort
+	addr   netip.AddrPort
 	pubKey key.NodePublic
 	b      []byte // copied; ownership passed to receiver
 }
@@ -1654,7 +1668,7 @@ func (c *Conn) receiveIPv6(b []byte) (int, conn.Endpoint, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6); ok {
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint6, c.closeDisco6 == nil); ok {
 			metricRecvDataIPv6.Add(1)
 			return n, ep, nil
 		}
@@ -1670,7 +1684,7 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4); ok {
+		if ep, ok := c.receiveIP(b[:n], ipp, &c.ippEndpoint4, c.closeDisco4 == nil); ok {
 			metricRecvDataIPv4.Add(1)
 			return n, ep, nil
 		}
@@ -1681,15 +1695,21 @@ func (c *Conn) receiveIPv4(b []byte) (n int, ep conn.Endpoint, err error) {
 //
 // ok is whether this read should be reported up to wireguard-go (our
 // caller).
-func (c *Conn) receiveIP(b []byte, ipp netaddr.IPPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
+func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache, checkDisco bool) (ep *endpoint, ok bool) {
 	if stun.Is(b) {
-		c.stunReceiveFunc.Load().(func([]byte, netaddr.IPPort))(b, ipp)
+		c.stunReceiveFunc.Load()(b, ipp)
 		return nil, false
 	}
-	if c.handleDiscoMessage(b, ipp, key.NodePublic{}) {
+	if checkDisco {
+		if c.handleDiscoMessage(b, ipp, key.NodePublic{}) {
+			return nil, false
+		}
+	} else if disco.LooksLikeDiscoWrapper(b) {
+		// Caller told us to ignore disco traffic, don't let it fall
+		// through to wireguard-go.
 		return nil, false
 	}
-	if !c.havePrivateKey.Get() {
+	if !c.havePrivateKey.Load() {
 		// If we have no private key, we're logged out or
 		// stopped. Don't try to pass these wireguard packets
 		// up to wireguard-go; it'll just complain (issue 1167).
@@ -1749,7 +1769,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
-	ipp := netaddr.IPPortFrom(derpMagicIPAddr, uint16(regionID))
+	ipp := netip.AddrPortFrom(derpMagicIPAddr, uint16(regionID))
 	if c.handleDiscoMessage(b[:n], ipp, dm.src) {
 		return 0, nil
 	}
@@ -1786,7 +1806,7 @@ const (
 //
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
-func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1802,7 +1822,7 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDi
 	di := c.discoInfoLocked(dstDisco)
 	c.mu.Unlock()
 
-	isDERP := dst.IP() == derpMagicIPAddr
+	isDERP := dst.Addr() == derpMagicIPAddr
 	if isDERP {
 		metricSendDiscoDERP.Add(1)
 	} else {
@@ -1848,16 +1868,16 @@ func (c *Conn) sendDiscoMessage(dst netaddr.IPPort, dstKey key.NodePublic, dstDi
 //
 // A discovery message has the form:
 //
-//  * magic             [6]byte
-//  * senderDiscoPubKey [32]byte
-//  * nonce             [24]byte
-//  * naclbox of payload (see tailscale.com/disco package for inner payload format)
+//   - magic             [6]byte
+//   - senderDiscoPubKey [32]byte
+//   - nonce             [24]byte
+//   - naclbox of payload (see tailscale.com/disco package for inner payload format)
 //
-// For messages received over DERP, the src.IP() will be derpMagicIP (with
+// For messages received over DERP, the src.Addr() will be derpMagicIP (with
 // src.Port() being the region ID) and the derpNodeSrc will be the node key
 // it was received from at the DERP layer. derpNodeSrc is zero when received
 // over UDP.
-func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc key.NodePublic) (isDiscoMsg bool) {
+func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc key.NodePublic) (isDiscoMsg bool) {
 	const headerLen = len(disco.Magic) + key.DiscoPublicRawLen
 	if len(msg) < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
 		return false
@@ -1939,7 +1959,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netaddr.IPPort, derpNodeSrc ke
 		return
 	}
 
-	isDERP := src.IP() == derpMagicIPAddr
+	isDERP := src.Addr() == derpMagicIPAddr
 	if isDERP {
 		metricRecvDiscoDERP.Add(1)
 	} else {
@@ -2027,11 +2047,11 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 
 // di is the discoInfo of the source of the ping.
 // derpNodeSrc is non-zero if the ping arrived via DERP.
-func (c *Conn) handlePingLocked(dm *disco.Ping, src netaddr.IPPort, di *discoInfo, derpNodeSrc key.NodePublic) {
+func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInfo, derpNodeSrc key.NodePublic) {
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
 	di.lastPingTime = time.Now()
-	isDerp := src.IP() == derpMagicIPAddr
+	isDerp := src.Addr() == derpMagicIPAddr
 
 	// If we can figure out with certainty which node key this disco
 	// message is for, eagerly update our IP<>node and disco<>node
@@ -2104,19 +2124,17 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netaddr.IPPort, di *discoInf
 // flipping primary DERPs in the 0-30ms it takes to confirm our STUN endpoint.
 // If they do, traffic will just go over DERP for a bit longer until the next
 // discovery round.
-func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
+func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
 		c.logf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
-		if c.onEndpointRefreshed == nil {
-			c.onEndpointRefreshed = map[*endpoint]func(){}
-		}
-		c.onEndpointRefreshed[de] = func() {
+
+		mak.Set(&c.onEndpointRefreshed, de, func() {
 			c.logf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
 			c.enqueueCallMeMaybe(derpAddr, de)
-		}
+		})
 		// TODO(bradfitz): make a new 'reSTUNQuickly' method
 		// that passes down a do-a-lite-netcheck flag down to
 		// netcheck that does 1 (or 2 max) STUN queries
@@ -2129,7 +2147,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netaddr.IPPort, de *endpoint) {
 		return
 	}
 
-	eps := make([]netaddr.IPPort, 0, len(c.lastEndpoints))
+	eps := make([]netip.AddrPort, 0, len(c.lastEndpoints))
 	for _, ep := range c.lastEndpoints {
 		eps = append(eps, ep.Addr)
 	}
@@ -2155,12 +2173,12 @@ func (c *Conn) discoInfoLocked(k key.DiscoPublic) *discoInfo {
 func (c *Conn) SetNetworkUp(up bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.networkUp.Get() == up {
+	if c.networkUp.Load() == up {
 		return
 	}
 
 	c.logf("magicsock: SetNetworkUp(%v)", up)
-	c.networkUp.Set(up)
+	c.networkUp.Store(up)
 
 	if up {
 		c.startDerpHomeConnectLocked()
@@ -2172,10 +2190,10 @@ func (c *Conn) SetNetworkUp(up bool) {
 
 // SetPreferredPort sets the connection's preferred local port.
 func (c *Conn) SetPreferredPort(port uint16) {
-	if uint16(c.port.Get()) == port {
+	if uint16(c.port.Load()) == port {
 		return
 	}
-	c.port.Set(uint32(port))
+	c.port.Store(uint32(port))
 
 	if err := c.rebind(dropCurrentPort); err != nil {
 		c.logf("%w", err)
@@ -2200,7 +2218,7 @@ func (c *Conn) SetPrivateKey(privateKey key.NodePrivate) error {
 		return nil
 	}
 	c.privateKey = newKey
-	c.havePrivateKey.Set(!newKey.IsZero())
+	c.havePrivateKey.Store(!newKey.IsZero())
 
 	if newKey.IsZero() {
 		c.publicKeyAtomic.Store(key.NodePublic{})
@@ -2362,7 +2380,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c:             c,
 			publicKey:     n.Key,
 			sentPing:      map[stun.TxID]sentPing{},
-			endpointState: map[netaddr.IPPort]*endpointState{},
+			endpointState: map[netip.AddrPort]*endpointState{},
 		}
 		if !n.DiscoKey.IsZero() {
 			ep.discoKey = n.DiscoKey
@@ -2374,7 +2392,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 				const derpPrefix = "127.3.3.40:"
 				if strings.HasPrefix(n.DERP, derpPrefix) {
-					ipp, _ := netaddr.ParseIPPort(n.DERP)
+					ipp, _ := netip.ParseAddrPort(n.DERP)
 					regionID := int(ipp.Port())
 					code := c.derpRegionCodeLocked(regionID)
 					if code != "" {
@@ -2385,7 +2403,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 				for _, a := range n.AllowedIPs {
 					if a.IsSingleIP() {
-						fmt.Fprintf(w, "aip=%v ", a.IP())
+						fmt.Fprintf(w, "aip=%v ", a.Addr())
 					} else {
 						fmt.Fprintf(w, "aip=%v ", a)
 					}
@@ -2440,7 +2458,7 @@ func (c *Conn) closeAllDerpLocked(why string) {
 // maybeCloseDERPsOnRebind, in response to a rebind, closes all
 // DERP connections that don't have a local address in okayLocalIPs
 // and pings all those that do.
-func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netaddr.IPPrefix) {
+func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for regionID, ad := range c.activeDerp {
@@ -2449,7 +2467,7 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netaddr.IPPrefix) {
 			c.closeOrReconectDERPLocked(regionID, "rebind-no-localaddr")
 			continue
 		}
-		if !tsaddr.PrefixesContainsIP(okayLocalIPs, la.IP()) {
+		if !tsaddr.PrefixesContainsIP(okayLocalIPs, la.Addr()) {
 			c.closeOrReconectDERPLocked(regionID, "rebind-default-route-change")
 			continue
 		}
@@ -2648,6 +2666,12 @@ func (c *connBind) Close() error {
 	if c.pconn6 != nil {
 		c.pconn6.Close()
 	}
+	if c.closeDisco4 != nil {
+		c.closeDisco4.Close()
+	}
+	if c.closeDisco6 != nil {
+		c.closeDisco6.Close()
+	}
 	// Send an empty read result to unblock receiveDERP,
 	// which will then check connBind.Closed.
 	// connBind.Closed takes c.mu, but c.derpRecvCh is buffered.
@@ -2813,13 +2837,13 @@ func (c *Conn) initialBind() error {
 
 // listenPacket opens a packet listener.
 // The network must be "udp4" or "udp6".
-func (c *Conn) listenPacket(network string, port uint16) (net.PacketConn, error) {
+func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
 	ctx := context.Background() // unused without DNS name to resolve
 	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {
-		return c.testOnlyPacketListener.ListenPacket(ctx, network, addr)
+		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
 	}
-	return netns.Listener(c.logf).ListenPacket(ctx, network, addr)
+	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, network, addr)
 }
 
 // bindSocket initializes rucPtr if necessary and binds a UDP socket to it.
@@ -2841,7 +2865,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 
 	if debugAlwaysDERP {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
-		ruc.pconn = newBlockForeverConn()
+		ruc.setConnLocked(newBlockForeverConn())
 		return nil
 	}
 
@@ -2850,7 +2874,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 	// Second best is the port that is currently in use.
 	// If those fail, fall back to 0.
 	var ports []uint16
-	if port := uint16(c.port.Get()); port != 0 {
+	if port := uint16(c.port.Load()); port != 0 {
 		ports = append(ports, port)
 	}
 	if ruc.pconn != nil && curPortFate == keepCurrentPort {
@@ -2859,9 +2883,9 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 	}
 	ports = append(ports, 0)
 	// Remove duplicates. (All duplicates are consecutive.)
-	uniq.ModifySlice(&ports, func(i, j int) bool { return ports[i] == ports[j] })
+	uniq.ModifySlice(&ports)
 
-	var pconn net.PacketConn
+	var pconn nettype.PacketConn
 	for _, port := range ports {
 		// Close the existing conn, in case it is sitting on the port we want.
 		err := ruc.closeLocked()
@@ -2875,7 +2899,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 			continue
 		}
 		// Success.
-		ruc.pconn = pconn
+		ruc.setConnLocked(pconn)
 		if network == "udp4" {
 			health.SetUDP4Unbound(false)
 		}
@@ -2886,7 +2910,7 @@ func (c *Conn) bindSocket(rucPtr **RebindingUDPConn, network string, curPortFate
 	// Set pconn to a dummy conn whose reads block until closed.
 	// This keeps the receive funcs alive for a future in which
 	// we get a link change and we can try binding again.
-	ruc.pconn = newBlockForeverConn()
+	ruc.setConnLocked(newBlockForeverConn())
 	if network == "udp4" {
 		health.SetUDP4Unbound(true)
 	}
@@ -2925,7 +2949,7 @@ func (c *Conn) Rebind() {
 		return
 	}
 
-	var ifIPs []netaddr.IPPrefix
+	var ifIPs []netip.Prefix
 	if c.linkMon != nil {
 		st := c.linkMon.InterfaceState()
 		defIf := st.DefaultRouteInterface
@@ -2949,8 +2973,8 @@ func (c *Conn) resetEndpointStates() {
 }
 
 // packIPPort packs an IPPort into the form wanted by WireGuard.
-func packIPPort(ua netaddr.IPPort) []byte {
-	ip := ua.IP().Unmap()
+func packIPPort(ua netip.AddrPort) []byte {
+	ip := ua.Addr().Unmap()
 	a := ip.As16()
 	ipb := a[:]
 	if ip.Is4() {
@@ -2989,12 +3013,25 @@ func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
 // RebindingUDPConn is a UDP socket that can be re-bound.
 // Unix has no notion of re-binding a socket, so we swap it out for a new one.
 type RebindingUDPConn struct {
-	mu    sync.Mutex
-	pconn net.PacketConn
+	// pconnAtomic is the same as pconn, but doesn't require acquiring mu. It's
+	// used for reads/writes and only upon failure do the reads/writes then
+	// check pconn (after acquiring mu) to see if there's been a rebind
+	// meanwhile.
+	// pconn isn't really needed, but makes some of the code simpler
+	// to keep it in a type safe form.
+	pconnAtomic syncs.AtomicValue[nettype.PacketConn]
+
+	mu    sync.Mutex // held while changing pconn (and pconnAtomic)
+	pconn nettype.PacketConn
 }
 
-// currentConn returns c's current pconn.
-func (c *RebindingUDPConn) currentConn() net.PacketConn {
+func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn) {
+	c.pconn = p
+	c.pconnAtomic.Store(p)
+}
+
+// currentConn returns c's current pconn, acquiring c.mu in the process.
+func (c *RebindingUDPConn) currentConn() nettype.PacketConn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pconn
@@ -3004,7 +3041,7 @@ func (c *RebindingUDPConn) currentConn() net.PacketConn {
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
-		pconn := c.currentConn()
+		pconn := c.pconnAtomic.Load()
 		n, addr, err := pconn.ReadFrom(b)
 		if err != nil && pconn != c.currentConn() {
 			continue
@@ -3015,33 +3052,31 @@ func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 
 // ReadFromNetaddr reads a packet from c into b.
 // It returns the number of bytes copied and the return address.
-// It is identical to c.ReadFrom, except that it returns a netaddr.IPPort instead of a net.Addr.
+// It is identical to c.ReadFrom, except that it returns a netip.AddrPort instead of a net.Addr.
 // ReadFromNetaddr is designed to work with specific underlying connection types.
 // If c's underlying connection returns a non-*net.UPDAddr return address, ReadFromNetaddr will return an error.
 // ReadFromNetaddr exists because it removes an allocation per read,
 // when c's underlying connection is a net.UDPConn.
-func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netaddr.IPPort, err error) {
+func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netip.AddrPort, err error) {
 	for {
-		pconn := c.currentConn()
+		pconn := c.pconnAtomic.Load()
 
 		// Optimization: Treat *net.UDPConn specially.
 		// This lets us avoid allocations by calling ReadFromUDPAddrPort.
 		// The non-*net.UDPConn case works, but it allocates.
 		if udpConn, ok := pconn.(*net.UDPConn); ok {
-			var ap netip.AddrPort
-			n, ap, err = udpConn.ReadFromUDPAddrPort(b)
-			ipp = netconv.AsIPPort(ap)
+			n, ipp, err = udpConn.ReadFromUDPAddrPort(b)
 		} else {
 			var addr net.Addr
 			n, addr, err = pconn.ReadFrom(b)
 			pAddr, ok := addr.(*net.UDPAddr)
 			if addr != nil && !ok {
-				return 0, netaddr.IPPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
+				return 0, netip.AddrPort{}, fmt.Errorf("RebindingUDPConn.ReadFromNetaddr: underlying connection returned address of type %T, want *netaddr.UDPAddr", addr)
 			}
 			if pAddr != nil {
-				ipp, ok = netaddr.FromStdAddr(pAddr.IP, pAddr.Port, pAddr.Zone)
-				if !ok {
-					return 0, netaddr.IPPort{}, errors.New("netaddr.FromStdAddr failed")
+				ipp = netaddr.Unmap(pAddr.AddrPort())
+				if !ipp.IsValid() {
+					return 0, netip.AddrPort{}, errors.New("netaddr.FromStdAddr failed")
 				}
 			}
 		}
@@ -3083,17 +3118,25 @@ func (c *RebindingUDPConn) closeLocked() error {
 
 func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	for {
-		c.mu.Lock()
-		pconn := c.pconn
-		c.mu.Unlock()
+		pconn := c.pconnAtomic.Load()
 
 		n, err := pconn.WriteTo(b, addr)
 		if err != nil {
-			c.mu.Lock()
-			pconn2 := c.pconn
-			c.mu.Unlock()
+			if pconn != c.currentConn() {
+				continue
+			}
+		}
+		return n, err
+	}
+}
 
-			if pconn != pconn2 {
+func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
+	for {
+		pconn := c.pconnAtomic.Load()
+
+		n, err := pconn.WriteToUDPAddrPort(b, addr)
+		if err != nil {
+			if pconn != c.currentConn() {
 				continue
 			}
 		}
@@ -3124,6 +3167,11 @@ func (c *blockForeverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 }
 
 func (c *blockForeverConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	// Silently drop writes.
+	return len(p), nil
+}
+
+func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {
 	// Silently drop writes.
 	return len(p), nil
 }
@@ -3159,12 +3207,12 @@ func simpleDur(d time.Duration) time.Duration {
 	return d.Round(time.Minute)
 }
 
-func sbPrintAddr(sb *strings.Builder, a netaddr.IPPort) {
-	is6 := a.IP().Is6()
+func sbPrintAddr(sb *strings.Builder, a netip.AddrPort) {
+	is6 := a.Addr().Is6()
 	if is6 {
 		sb.WriteByte('[')
 	}
-	fmt.Fprintf(sb, "%s", a.IP())
+	fmt.Fprintf(sb, "%s", a.Addr())
 	if is6 {
 		sb.WriteByte(']')
 	}
@@ -3197,15 +3245,15 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var tailscaleIPs []netaddr.IP
+	var tailscaleIPs []netip.Addr
 	if c.netMap != nil {
-		tailscaleIPs = make([]netaddr.IP, 0, len(c.netMap.Addresses))
+		tailscaleIPs = make([]netip.Addr, 0, len(c.netMap.Addresses))
 		for _, addr := range c.netMap.Addresses {
 			if !addr.IsSingleIP() {
 				continue
 			}
-			sb.AddTailscaleIP(addr.IP())
-			tailscaleIPs = append(tailscaleIPs, addr.IP())
+			sb.AddTailscaleIP(addr.Addr())
+			tailscaleIPs = append(tailscaleIPs, addr.Addr())
 		}
 	}
 
@@ -3242,8 +3290,8 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	})
 }
 
-func ippDebugString(ua netaddr.IPPort) string {
-	if ua.IP() == derpMagicIPAddr {
+func ippDebugString(ua netip.AddrPort) string {
+	if ua.Addr() == derpMagicIPAddr {
 		return fmt.Sprintf("derp-%d", ua.Port())
 	}
 	return ua.String()
@@ -3260,7 +3308,7 @@ type endpoint struct {
 	// These fields are initialized once and never modified.
 	c          *Conn
 	publicKey  key.NodePublic // peer public key (for WireGuard + DERP)
-	fakeWGAddr netaddr.IPPort // the UDP address we tell wireguard-go we're using
+	fakeWGAddr netip.AddrPort // the UDP address we tell wireguard-go we're using
 	wgEndpoint string         // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
 
 	// mu protects all following fields.
@@ -3272,14 +3320,14 @@ type endpoint struct {
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       mono.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
 	lastFullPing   mono.Time      // last time we pinged all endpoints
-	derpAddr       netaddr.IPPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
+	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrLatency // best non-DERP path; zero if none
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
-	endpointState      map[netaddr.IPPort]*endpointState
-	isCallMeMaybeEP    map[netaddr.IPPort]bool
+	endpointState      map[netip.AddrPort]*endpointState
+	isCallMeMaybeEP    map[netip.AddrPort]bool
 
 	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
 }
@@ -3382,9 +3430,9 @@ func (st *endpointState) shouldDeleteLocked() bool {
 	}
 }
 
-func (de *endpoint) deleteEndpointLocked(ep netaddr.IPPort) {
+func (de *endpoint) deleteEndpointLocked(ep netip.AddrPort) {
 	delete(de.endpointState, ep)
-	if de.bestAddr.IPPort == ep {
+	if de.bestAddr.AddrPort == ep {
 		de.bestAddr = addrLatency{}
 	}
 }
@@ -3395,12 +3443,12 @@ const pongHistoryCount = 64
 type pongReply struct {
 	latency time.Duration
 	pongAt  mono.Time      // when we received the pong
-	from    netaddr.IPPort // the pong's src (usually same as endpoint map key)
-	pongSrc netaddr.IPPort // what they reported they heard
+	from    netip.AddrPort // the pong's src (usually same as endpoint map key)
+	pongSrc netip.AddrPort // what they reported they heard
 }
 
 type sentPing struct {
-	to      netaddr.IPPort
+	to      netip.AddrPort
 	at      mono.Time
 	timer   *time.Timer // timeout timer
 	purpose discoPingPurpose
@@ -3414,7 +3462,7 @@ func (de *endpoint) initFakeUDPAddr() {
 	addr[0] = 0xfd
 	addr[1] = 0x00
 	binary.BigEndian.PutUint64(addr[2:], uint64(reflect.ValueOf(de).Pointer()))
-	de.fakeWGAddr = netaddr.IPPortFrom(netaddr.IPFrom16(addr), 12345)
+	de.fakeWGAddr = netip.AddrPortFrom(netip.AddrFrom16(addr).Unmap(), 12345)
 }
 
 // noteRecvActivity records receive activity on de, and invokes
@@ -3459,9 +3507,9 @@ func (de *endpoint) canP2P() bool {
 // addr may be non-zero.
 //
 // de.mu must be held.
-func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netaddr.IPPort) {
-	udpAddr = de.bestAddr.IPPort
-	if udpAddr.IsZero() || now.After(de.trustBestAddrUntil) {
+func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netip.AddrPort) {
+	udpAddr = de.bestAddr.AddrPort
+	if !udpAddr.IsValid() || now.After(de.trustBestAddrUntil) {
 		// We had a bestAddr but it expired so send both to it
 		// and DERP.
 		derpAddr = de.derpAddr
@@ -3495,7 +3543,7 @@ func (de *endpoint) heartbeat() {
 
 	now := mono.Now()
 	udpAddr, _ := de.addrForSendLocked(now)
-	if !udpAddr.IsZero() {
+	if udpAddr.IsValid() {
 		// We have a preferred path. Ping that every 2 seconds.
 		de.startPingLocked(udpAddr, now, pingHeartbeat)
 	}
@@ -3518,7 +3566,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if !de.canP2P() {
 		return false
 	}
-	if de.bestAddr.IsZero() || de.lastFullPing.IsZero() {
+	if !de.bestAddr.IsValid() || de.lastFullPing.IsZero() {
 		return true
 	}
 	if now.After(de.trustBestAddrUntil) {
@@ -3550,10 +3598,10 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 
 	now := mono.Now()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
-	if !derpAddr.IsZero() {
+	if derpAddr.IsValid() {
 		de.startPingLocked(derpAddr, now, pingCLI)
 	}
-	if !udpAddr.IsZero() && now.Before(de.trustBestAddrUntil) {
+	if udpAddr.IsValid() && now.Before(de.trustBestAddrUntil) {
 		// Already have an active session, so just ping the address we're using.
 		// Otherwise "tailscale ping" results to a node on the local network
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
@@ -3572,20 +3620,20 @@ func (de *endpoint) send(b []byte) error {
 
 	de.mu.Lock()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
-	if de.canP2P() && (udpAddr.IsZero() || now.After(de.trustBestAddrUntil)) {
+	if de.canP2P() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
 		de.sendPingsLocked(now, true)
 	}
 	de.noteActiveLocked()
 	de.mu.Unlock()
 
-	if udpAddr.IsZero() && derpAddr.IsZero() {
+	if !udpAddr.IsValid() && !derpAddr.IsValid() {
 		return errors.New("no UDP or DERP addr")
 	}
 	var err error
-	if !udpAddr.IsZero() {
+	if udpAddr.IsValid() {
 		_, err = de.c.sendAddr(udpAddr, de.publicKey, b)
 	}
-	if !derpAddr.IsZero() {
+	if derpAddr.IsValid() {
 		if ok, _ := de.c.sendAddr(derpAddr, de.publicKey, b); ok && err != nil {
 			// UDP failed but DERP worked, so good enough:
 			return nil
@@ -3601,7 +3649,7 @@ func (de *endpoint) pingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	if debugDisco || de.bestAddr.IsZero() || mono.Now().After(de.trustBestAddrUntil) {
+	if debugDisco || !de.bestAddr.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
 		de.c.logf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
 	}
 	de.removeSentPingLocked(txid, sp)
@@ -3631,11 +3679,10 @@ func (de *endpoint) removeSentPingLocked(txid stun.TxID, sp sentPing) {
 //
 // The caller should use de.discoKey as the discoKey argument.
 // It is passed in so that sendDiscoPing doesn't need to lock de.mu.
-func (de *endpoint) sendDiscoPing(ep netaddr.IPPort, discoKey key.DiscoPublic, txid stun.TxID, logLevel discoLogLevel) {
-	selfPubKey, _ := de.c.publicKeyAtomic.Load().(key.NodePublic)
+func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, txid stun.TxID, logLevel discoLogLevel) {
 	sent, _ := de.c.sendDiscoMessage(ep, de.publicKey, discoKey, &disco.Ping{
 		TxID:    [12]byte(txid),
-		NodeKey: selfPubKey,
+		NodeKey: de.c.publicKeyAtomic.Load(),
 	}, logLevel)
 	if !sent {
 		de.forgetPing(txid)
@@ -3660,7 +3707,7 @@ const (
 	pingCLI
 )
 
-func (de *endpoint) startPingLocked(ep netaddr.IPPort, now mono.Time, purpose discoPingPurpose) {
+func (de *endpoint) startPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose) {
 	if !de.canP2P() {
 		panic("tried to disco ping a peer that can't disco")
 	}
@@ -3717,7 +3764,7 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		de.startPingLocked(ep, now, pingDiscovery)
 	}
 	derpAddr := de.derpAddr
-	if sentAny && sendCallMeMaybe && !derpAddr.IsZero() {
+	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
 		// Have our magicsock.Conn figure out its STUN endpoint (if
 		// it doesn't know already) and then send a CallMeMaybe
 		// message to our peer via DERP informing them that we've
@@ -3741,9 +3788,9 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 		de.resetLocked()
 	}
 	if n.DERP == "" {
-		de.derpAddr = netaddr.IPPort{}
+		de.derpAddr = netip.AddrPort{}
 	} else {
-		de.derpAddr, _ = netaddr.ParseIPPort(n.DERP)
+		de.derpAddr, _ = netip.ParseAddrPort(n.DERP)
 	}
 
 	for _, st := range de.endpointState {
@@ -3754,7 +3801,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 			// Seems unlikely.
 			continue
 		}
-		ipp, err := netaddr.ParseIPPort(epStr)
+		ipp, err := netip.ParseAddrPort(epStr)
 		if err != nil {
 			de.c.logf("magicsock: bogus netmap endpoint %q", epStr)
 			continue
@@ -3780,7 +3827,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node) {
 //
 // This is called once we've already verified that we got a valid
 // discovery message from de via ep.
-func (de *endpoint) addCandidateEndpoint(ep netaddr.IPPort) {
+func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -3825,11 +3872,11 @@ func (de *endpoint) noteConnectivityChange() {
 // It should be called with the Conn.mu held.
 //
 // It reports whether m.TxID corresponds to a ping that this endpoint sent.
-func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netaddr.IPPort) (knownTxID bool) {
+func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip.AddrPort) (knownTxID bool) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	isDerp := src.IP() == derpMagicIPAddr
+	isDerp := src.Addr() == derpMagicIPAddr
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
@@ -3882,7 +3929,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netad
 			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
 			de.bestAddr = thisPong
 		}
-		if de.bestAddr.IPPort == thisPong.IPPort {
+		if de.bestAddr.AddrPort == thisPong.AddrPort {
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
@@ -3893,28 +3940,28 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netad
 
 // addrLatency is an IPPort with an associated latency.
 type addrLatency struct {
-	netaddr.IPPort
+	netip.AddrPort
 	latency time.Duration
 }
 
 // betterAddr reports whether a is a better addr to use than b.
 func betterAddr(a, b addrLatency) bool {
-	if a.IPPort == b.IPPort {
+	if a.AddrPort == b.AddrPort {
 		return false
 	}
-	if b.IsZero() {
+	if !b.IsValid() {
 		return true
 	}
-	if a.IsZero() {
+	if !a.IsValid() {
 		return false
 	}
-	if a.IP().Is6() && b.IP().Is4() {
+	if a.Addr().Is6() && b.Addr().Is4() {
 		// Prefer IPv6 for being a bit more robust, as long as
 		// the latencies are roughly equivalent.
 		if a.latency/10*9 < b.latency {
 			return true
 		}
-	} else if a.IP().Is4() && b.IP().Is6() {
+	} else if a.Addr().Is4() && b.Addr().Is6() {
 		if betterAddr(b, a) {
 			return false
 		}
@@ -3957,9 +4004,9 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	for ep := range de.isCallMeMaybeEP {
 		de.isCallMeMaybeEP[ep] = false // mark for deletion
 	}
-	var newEPs []netaddr.IPPort
+	var newEPs []netip.AddrPort
 	for _, ep := range m.MyNumber {
-		if ep.IP().Is6() && ep.IP().IsLinkLocalUnicast() {
+		if ep.Addr().Is6() && ep.Addr().IsLinkLocalUnicast() {
 			// We send these out, but ignore them for now.
 			// TODO: teach the ping code to ping on all interfaces
 			// for these.
@@ -4017,7 +4064,7 @@ func (de *endpoint) populatePeerStatus(ps *ipnstate.PeerStatus) {
 	ps.LastWrite = de.lastSend.WallTime()
 	ps.Active = now.Sub(de.lastSend) < sessionActiveTimeout
 
-	if udpAddr, derpAddr := de.addrForSendLocked(now); !udpAddr.IsZero() && derpAddr.IsZero() {
+	if udpAddr, derpAddr := de.addrForSendLocked(now); udpAddr.IsValid() && !derpAddr.IsValid() {
 		ps.CurAddr = udpAddr.String()
 	}
 }
@@ -4066,9 +4113,9 @@ func (de *endpoint) numStopAndReset() int64 {
 func derpStr(s string) string { return strings.ReplaceAll(s, "127.3.3.40:", "derp-") }
 
 // ippEndpointCache is a mutex-free single-element cache, mapping from
-// a single netaddr.IPPort to a single endpoint.
+// a single netip.AddrPort to a single endpoint.
 type ippEndpointCache struct {
-	ipp netaddr.IPPort
+	ipp netip.AddrPort
 	gen int64
 	de  *endpoint
 }
@@ -4099,7 +4146,7 @@ type discoInfo struct {
 	// Mutable fields follow, owned by Conn.mu:
 
 	// lastPingFrom is the src of a ping for discoKey.
-	lastPingFrom netaddr.IPPort
+	lastPingFrom netip.AddrPort
 
 	// lastPingTime is the last time of a ping for discoKey.
 	lastPingTime time.Time
@@ -4131,7 +4178,7 @@ func (di *discoInfo) setNodeKey(nk key.NodePublic) {
 type derpAddrFamSelector struct{ c *Conn }
 
 func (s derpAddrFamSelector) PreferIPv6() bool {
-	if r, ok := s.c.lastNetCheckReport.Load().(*netcheck.Report); ok {
+	if r := s.c.lastNetCheckReport.Load(); r != nil {
 		return r.IPv6
 	}
 	return false
@@ -4185,4 +4232,8 @@ var (
 	// metricDERPHomeChange is how many times our DERP home region DI has
 	// changed from non-zero to a different non-zero.
 	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")
+
+	// Disco packets received bpf read path
+	metricRecvDiscoPacketIPv4 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv4")
+	metricRecvDiscoPacketIPv6 = clientmetric.NewCounter("magicsock_disco_recv_bpf_ipv6")
 )

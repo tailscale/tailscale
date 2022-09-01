@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,11 +31,11 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/safesocket"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
@@ -46,7 +47,7 @@ var (
 	verboseTailscale  = flag.Bool("verbose-tailscale", false, "verbose tailscale CLI logging")
 )
 
-var mainError atomic.Value // of error
+var mainError syncs.AtomicValue[error]
 
 func TestMain(m *testing.M) {
 	// Have to disable UPnP which hits the network, otherwise it fails due to HTTP proxy.
@@ -57,7 +58,7 @@ func TestMain(m *testing.M) {
 	if v != 0 {
 		os.Exit(v)
 	}
-	if err, ok := mainError.Load().(error); ok {
+	if err := mainError.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
@@ -354,6 +355,74 @@ func TestAddPingRequest(t *testing.T) {
 		cancel()
 
 		pr := &tailcfg.PingRequest{URL: fmt.Sprintf("%s/ping-%d", waitPing.URL, try), Log: true}
+		if !env.Control.AddPingRequest(nodeKey, pr) {
+			t.Logf("failed to AddPingRequest")
+			continue
+		}
+
+		// Wait for PingRequest to come back
+		pingTimeout := time.NewTimer(2 * time.Second)
+		defer pingTimeout.Stop()
+		select {
+		case <-gotPing:
+			t.Logf("got ping; success")
+			return
+		case <-pingTimeout.C:
+			// Try again.
+		}
+	}
+	t.Error("all ping attempts failed")
+}
+
+func TestC2NPingRequest(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n1 := newTestNode(t, env)
+	n1.StartDaemon()
+
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	gotPing := make(chan bool, 1)
+	waitPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("unexpected ping method %q", r.Method)
+		}
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ping body read error: %v", err)
+		}
+		const want = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nabc"
+		if string(got) != want {
+			t.Errorf("body error\n got: %q\nwant: %q", got, want)
+		}
+		gotPing <- true
+	}))
+	defer waitPing.Close()
+
+	nodes := env.Control.AllNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(nodes))
+	}
+
+	nodeKey := nodes[0].Key
+
+	// Check that we get at least one ping reply after 10 tries.
+	for try := 1; try <= 10; try++ {
+		t.Logf("ping %v ...", try)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := env.Control.AwaitNodeInMapRequest(ctx, nodeKey); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+
+		pr := &tailcfg.PingRequest{
+			URL:     fmt.Sprintf("%s/ping-%d", waitPing.URL, try),
+			Log:     true,
+			Types:   "c2n",
+			Payload: []byte("POST /echo HTTP/1.0\r\nContent-Length: 3\r\n\r\nabc"),
+		}
 		if !env.Control.AddPingRequest(nodeKey, pr) {
 			t.Logf("failed to AddPingRequest")
 			continue
@@ -736,6 +805,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Args = append(cmd.Args, "-verbose=2")
 	}
 	cmd.Env = append(os.Environ(),
+		"TS_DEBUG_PERMIT_HTTP_C2N=1",
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
@@ -813,10 +883,10 @@ func (n *testNode) AwaitListening() {
 	}
 }
 
-func (n *testNode) AwaitIPs() []netaddr.IP {
+func (n *testNode) AwaitIPs() []netip.Addr {
 	t := n.env.t
 	t.Helper()
-	var addrs []netaddr.IP
+	var addrs []netip.Addr
 	if err := tstest.WaitFor(20*time.Second, func() error {
 		cmd := n.Tailscale("ip")
 		cmd.Stdout = nil // in case --verbose-tailscale was set
@@ -827,10 +897,10 @@ func (n *testNode) AwaitIPs() []netaddr.IP {
 		}
 		ips := string(out)
 		ipslice := strings.Fields(ips)
-		addrs = make([]netaddr.IP, len(ipslice))
+		addrs = make([]netip.Addr, len(ipslice))
 
 		for i, ip := range ipslice {
-			netIP, err := netaddr.ParseIP(ip)
+			netIP, err := netip.ParseAddr(ip)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -847,7 +917,7 @@ func (n *testNode) AwaitIPs() []netaddr.IP {
 }
 
 // AwaitIP returns the IP address of n.
-func (n *testNode) AwaitIP() netaddr.IP {
+func (n *testNode) AwaitIP() netip.Addr {
 	t := n.env.t
 	t.Helper()
 	ips := n.AwaitIPs()
@@ -936,14 +1006,11 @@ func (n *testNode) MustStatus() *ipnstate.Status {
 // HTTP traffic tries to leave localhost from tailscaled. We don't
 // expect any, so any request triggers a failure.
 type trafficTrap struct {
-	atomicErr atomic.Value // of error
+	atomicErr syncs.AtomicValue[error]
 }
 
 func (tt *trafficTrap) Err() error {
-	if err, ok := tt.atomicErr.Load().(error); ok {
-		return err
-	}
-	return nil
+	return tt.atomicErr.Load()
 }
 
 func (tt *trafficTrap) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -17,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -163,10 +163,10 @@ func nodeDNSNameFromArg(st *ipnstate.Status, arg string) (dnsName string, ok boo
 	if arg == "" {
 		return
 	}
-	argIP, _ := netaddr.ParseIP(arg)
+	argIP, _ := netip.ParseAddr(arg)
 	for _, ps := range st.Peer {
 		dnsName = ps.DNSName
-		if !argIP.IsZero() {
+		if argIP.IsValid() {
 			for _, ip := range ps.TailscaleIPs {
 				if ip == argIP {
 					return dnsName, true
@@ -202,7 +202,7 @@ func isSSHOverTailscale() bool {
 	if !ok {
 		return false
 	}
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return false
 	}

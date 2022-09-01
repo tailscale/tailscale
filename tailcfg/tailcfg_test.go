@@ -7,14 +7,18 @@ package tailcfg
 import (
 	"encoding"
 	"encoding/json"
+	"net/netip"
+	"os"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/util/must"
 	"tailscale.com/version"
 )
 
@@ -30,18 +34,19 @@ func TestHostinfoEqual(t *testing.T) {
 		"IPNVersion", "FrontendLogID", "BackendLogID",
 		"OS", "OSVersion", "Desktop", "Package", "DeviceModel", "Hostname",
 		"ShieldsUp", "ShareeNode",
-		"GoArch",
+		"GoArch", "GoVersion",
 		"RoutableIPs", "RequestTags",
 		"Services", "NetInfo", "SSH_HostKeys", "Cloud",
+		"Userspace", "UserspaceRouter",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, hiHandles)
 	}
 
-	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
+	nets := func(strs ...string) (ns []netip.Prefix) {
 		for _, s := range strs {
-			n, err := netaddr.ParseIPPrefix(s)
+			n, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}
@@ -224,12 +229,12 @@ func TestHostinfoHowEqual(t *testing.T) {
 			a: &Hostinfo{
 				IPNVersion:  "1",
 				ShieldsUp:   false,
-				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/24")},
+				RoutableIPs: []netip.Prefix{netip.MustParsePrefix("1.2.3.0/24")},
 			},
 			b: &Hostinfo{
 				IPNVersion:  "2",
 				ShieldsUp:   true,
-				RoutableIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.2.3.0/25")},
+				RoutableIPs: []netip.Prefix{netip.MustParsePrefix("1.2.3.0/25")},
 			},
 			want: []string{"IPNVersion", "ShieldsUp", "RoutableIPs"},
 		},
@@ -301,7 +306,7 @@ func TestHostinfoTailscaleSSHEnabled(t *testing.T) {
 func TestNodeEqual(t *testing.T) {
 	nodeHandles := []string{
 		"ID", "StableID", "Name", "User", "Sharer",
-		"Key", "KeyExpiry", "Machine", "DiscoKey",
+		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
@@ -402,23 +407,23 @@ func TestNodeEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Node{Addresses: []netaddr.IPPrefix{}},
+			&Node{Addresses: []netip.Prefix{}},
 			&Node{Addresses: nil},
 			false,
 		},
 		{
-			&Node{Addresses: []netaddr.IPPrefix{}},
-			&Node{Addresses: []netaddr.IPPrefix{}},
+			&Node{Addresses: []netip.Prefix{}},
+			&Node{Addresses: []netip.Prefix{}},
 			true,
 		},
 		{
-			&Node{AllowedIPs: []netaddr.IPPrefix{}},
+			&Node{AllowedIPs: []netip.Prefix{}},
 			&Node{AllowedIPs: nil},
 			false,
 		},
 		{
-			&Node{Addresses: []netaddr.IPPrefix{}},
-			&Node{Addresses: []netaddr.IPPrefix{}},
+			&Node{Addresses: []netip.Prefix{}},
+			&Node{Addresses: []netip.Prefix{}},
 			true,
 		},
 		{
@@ -500,7 +505,9 @@ func TestNetInfoFields(t *testing.T) {
 		"MappingVariesByDestIP",
 		"HairPinning",
 		"WorkingIPv6",
+		"OSHasIPv6",
 		"WorkingUDP",
+		"WorkingICMPv4",
 		"HavePortMap",
 		"UPnP",
 		"PMP",
@@ -564,8 +571,8 @@ func TestCloneNode(t *testing.T) {
 	}{
 		{"nil_fields", &Node{}},
 		{"zero_fields", &Node{
-			Addresses:  make([]netaddr.IPPrefix, 0),
-			AllowedIPs: make([]netaddr.IPPrefix, 0),
+			Addresses:  make([]netip.Prefix, 0),
+			AllowedIPs: make([]netip.Prefix, 0),
 			Endpoints:  make([]string, 0),
 		}},
 	}
@@ -647,5 +654,22 @@ func TestRegisterRequestNilClone(t *testing.T) {
 	got := nilReq.Clone()
 	if got != nil {
 		t.Errorf("got = %v; want nil", got)
+	}
+}
+
+// Tests that CurrentCapabilityVersion is bumped when the comment block above it gets bumped.
+// We've screwed this up several times.
+func TestCurrentCapabilityVersion(t *testing.T) {
+	f := must.Get(os.ReadFile("tailcfg.go"))
+	matches := regexp.MustCompile(`(?m)^//\s+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
+	max := 0
+	for _, m := range matches {
+		n := must.Get(strconv.Atoi(m[1]))
+		if n > max {
+			max = n
+		}
+	}
+	if CapabilityVersion(max) != CurrentCapabilityVersion {
+		t.Errorf("CurrentCapabilityVersion = %d; want %d", CurrentCapabilityVersion, max)
 	}
 }

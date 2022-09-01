@@ -7,7 +7,6 @@ package controlclient
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"math"
 	"net"
 	"net/http"
@@ -50,7 +49,9 @@ type noiseClient struct {
 	dialer       *tsdial.Dialer
 	privKey      key.MachinePrivate
 	serverPubKey key.MachinePublic
-	serverHost   string // the host:port part of serverURL
+	host         string // the host part of serverURL
+	httpPort     string // the default port to call
+	httpsPort    string // the fallback Noise-over-https port
 
 	// mu only protects the following variables.
 	mu       sync.Mutex
@@ -65,18 +66,28 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 	if err != nil {
 		return nil, err
 	}
-	var host string
+	var httpPort string
+	var httpsPort string
 	if u.Port() != "" {
-		// If there is an explicit port specified use it.
-		host = u.Host
+		// If there is an explicit port specified, trust the scheme and hope for the best
+		if u.Scheme == "http" {
+			httpPort = u.Port()
+			httpsPort = "443"
+		} else {
+			httpPort = "80"
+			httpsPort = u.Port()
+		}
 	} else {
-		// Otherwise, controlhttp.Dial expects an http endpoint.
-		host = fmt.Sprintf("%v:80", u.Hostname())
+		// Otherwise, use the standard ports
+		httpPort = "80"
+		httpsPort = "443"
 	}
 	np := &noiseClient{
 		serverPubKey: serverPubKey,
 		privKey:      priKey,
-		serverHost:   host,
+		host:         u.Hostname(),
+		httpPort:     httpPort,
+		httpsPort:    httpsPort,
 		dialer:       dialer,
 	}
 
@@ -154,7 +165,7 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		// thousand version numbers before getting to this point.
 		panic("capability version is too high to fit in the wire protocol")
 	}
-	conn, err := controlhttp.Dial(ctx, nc.serverHost, nc.privKey, nc.serverPubKey, uint16(tailcfg.CurrentCapabilityVersion), nc.dialer.SystemDial)
+	conn, err := controlhttp.Dial(ctx, nc.host, nc.httpPort, nc.httpsPort, nc.privKey, nc.serverPubKey, uint16(tailcfg.CurrentCapabilityVersion), nc.dialer.SystemDial)
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ func init() {
 	tunDiagnoseFailure = diagnoseDarwinTUNFailure
 }
 
-func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf) {
+func diagnoseDarwinTUNFailure(tunName string, logf logger.Logf, err error) {
 	if os.Getuid() != 0 {
 		logf("failed to create TUN device as non-root user; use 'sudo tailscaled', or run under launchd with 'sudo tailscaled install-system-daemon'")
 	}

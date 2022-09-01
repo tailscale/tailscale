@@ -6,11 +6,11 @@ package interfaces
 
 import (
 	"errors"
+	"net/netip"
 	"os/exec"
 	"testing"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/util/lineread"
 	"tailscale.com/version"
 )
@@ -39,9 +39,8 @@ default            link#14            UCSI         utun2
 10/16              link#4             UCS            en0      !
 10.0.0.1/32        link#4             UCS            en0      !
 ...
-
 */
-func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
+func likelyHomeRouterIPDarwinExec() (ret netip.Addr, ok bool) {
 	if version.IsMobile() {
 		// Don't try to do subprocesses on iOS. Ends up with log spam like:
 		// kernel: "Sandbox: IPNExtension(86580) deny(1) process-fork"
@@ -72,7 +71,7 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 		if !mem.Contains(flagsm, mem.S("G")) {
 			return nil
 		}
-		ip, err := netaddr.ParseIP(string(mem.Append(nil, ipm)))
+		ip, err := netip.ParseAddr(string(mem.Append(nil, ipm)))
 		if err == nil && ip.IsPrivate() {
 			ret = ip
 			// We've found what we're looking for.
@@ -80,7 +79,7 @@ func likelyHomeRouterIPDarwinExec() (ret netaddr.IP, ok bool) {
 		}
 		return nil
 	})
-	return ret, !ret.IsZero()
+	return ret, ret.IsValid()
 }
 
 func TestFetchRoutingTable(t *testing.T) {

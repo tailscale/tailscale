@@ -13,19 +13,19 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"net/netip"
 	"os"
 	"strconv"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/logger"
 )
 
 const PayloadSize = 1000
 const ICMPMinSize = 24
 
-var Addr1 = netaddr.MustParseIPPrefix("100.64.1.1/32")
-var Addr2 = netaddr.MustParseIPPrefix("100.64.1.2/32")
+var Addr1 = netip.MustParsePrefix("100.64.1.1/32")
+var Addr2 = netip.MustParsePrefix("100.64.1.2/32")
 
 func main() {
 	var logf logger.Logf = log.Printf
@@ -87,7 +87,7 @@ func main() {
 	}
 
 	logf("initialized ok.")
-	traf.Start(Addr1.IP(), Addr2.IP(), PayloadSize+ICMPMinSize, 0)
+	traf.Start(Addr1.Addr(), Addr2.Addr(), PayloadSize+ICMPMinSize, 0)
 
 	var cur, prev Snapshot
 	var pps int64

@@ -8,7 +8,9 @@ package distro
 import (
 	"os"
 	"runtime"
-	"sync/atomic"
+	"strconv"
+
+	"tailscale.com/syncs"
 )
 
 type Distro string
@@ -27,14 +29,14 @@ const (
 	WDMyCloud = Distro("wdmycloud")
 )
 
-var distroAtomic atomic.Value // of Distro
+var distroAtomic syncs.AtomicValue[Distro]
 
 // Get returns the current distro, or the empty string if unknown.
 func Get() Distro {
-	d, ok := distroAtomic.Load().(Distro)
-	if ok {
+	if d, ok := distroAtomic.LoadOk(); ok {
 		return d
 	}
+	var d Distro
 	switch runtime.GOOS {
 	case "linux":
 		d = linuxDistro()
@@ -93,4 +95,18 @@ func freebsdDistro() Distro {
 		return TrueNAS
 	}
 	return ""
+}
+
+// DSMVersion reports the Synology DSM major version.
+//
+// If not Synology, it reports 0.
+func DSMVersion() int {
+	if runtime.GOOS != "linux" {
+		return 0
+	}
+	if Get() != Synology {
+		return 0
+	}
+	v, _ := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
+	return v
 }

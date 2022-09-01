@@ -10,12 +10,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime"
 	"sort"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/hostinfo"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
 )
@@ -27,7 +28,7 @@ var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 // Tailscale returns the current machine's Tailscale interface, if any.
 // If none is found, all zero values are returned.
 // A non-nil error is only returned on a problem listing the system interfaces.
-func Tailscale() ([]netaddr.IP, *net.Interface, error) {
+func Tailscale() ([]netip.Addr, *net.Interface, error) {
 	ifs, err := netInterfaces()
 	if err != nil {
 		return nil, nil, err
@@ -40,10 +41,11 @@ func Tailscale() ([]netaddr.IP, *net.Interface, error) {
 		if err != nil {
 			continue
 		}
-		var tsIPs []netaddr.IP
+		var tsIPs []netip.Addr
 		for _, a := range addrs {
 			if ipnet, ok := a.(*net.IPNet); ok {
-				nip, ok := netaddr.FromStdIP(ipnet.IP)
+				nip, ok := netip.AddrFromSlice(ipnet.IP)
+				nip = nip.Unmap()
 				if ok && tsaddr.IsTailscaleIP(nip) {
 					tsIPs = append(tsIPs, nip)
 				}
@@ -85,13 +87,13 @@ func isProblematicInterface(nif *net.Interface) bool {
 // whether they're loopback addresses. If there are no regular addresses
 // it will return any IPv4 linklocal or IPv6 unique local addresses because we
 // know of environments where these are used with NAT to provide connectivity.
-func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
+func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 	// TODO(crawshaw): don't serve interface addresses that we are routing
 	ifaces, err := netInterfaces()
 	if err != nil {
 		return nil, nil, err
 	}
-	var regular4, regular6, linklocal4, ula6 []netaddr.IP
+	var regular4, regular6, linklocal4, ula6 []netip.Addr
 	for _, iface := range ifaces {
 		stdIf := iface.Interface
 		if !isUp(stdIf) || isProblematicInterface(stdIf) {
@@ -109,10 +111,11 @@ func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
-				ip, ok := netaddr.FromStdIP(v.IP)
+				ip, ok := netip.AddrFromSlice(v.IP)
 				if !ok {
 					continue
 				}
+				ip = ip.Unmap()
 				// TODO(apenwarr): don't special case cgNAT.
 				// In the general wireguard case, it might
 				// very well be something we can route to
@@ -164,7 +167,7 @@ func LocalAddresses() (regular, loopback []netaddr.IP, err error) {
 	return regular, loopback, nil
 }
 
-func sortIPs(s []netaddr.IP) {
+func sortIPs(s []netip.Addr) {
 	sort.Slice(s, func(i, j int) bool { return s[i].Less(s[j]) })
 }
 
@@ -186,7 +189,7 @@ func (i Interface) Addrs() ([]net.Addr, error) {
 
 // ForeachInterfaceAddress is a wrapper for GetList, then
 // List.ForeachInterfaceAddress.
-func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
+func ForeachInterfaceAddress(fn func(Interface, netip.Prefix)) error {
 	ifaces, err := GetList()
 	if err != nil {
 		return err
@@ -197,7 +200,7 @@ func ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
 // ForeachInterfaceAddress calls fn for each interface in ifaces, with
 // all its addresses. The IPPrefix's IP is the IP address assigned to
 // the interface, and Bits are the subnet mask.
-func (ifaces List) ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix)) error {
+func (ifaces List) ForeachInterfaceAddress(fn func(Interface, netip.Prefix)) error {
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -217,7 +220,7 @@ func (ifaces List) ForeachInterfaceAddress(fn func(Interface, netaddr.IPPrefix))
 
 // ForeachInterface is a wrapper for GetList, then
 // List.ForeachInterface.
-func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
+func ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 	ifaces, err := GetList()
 	if err != nil {
 		return err
@@ -228,7 +231,7 @@ func ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
 // ForeachInterface calls fn for each interface in ifaces, with
 // all its addresses. The IPPrefix's IP is the IP address assigned to
 // the interface, and Bits are the subnet mask.
-func (ifaces List) ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) error {
+func (ifaces List) ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 	ifaces, err := GetList()
 	if err != nil {
 		return err
@@ -238,7 +241,7 @@ func (ifaces List) ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) erro
 		if err != nil {
 			return err
 		}
-		var pfxs []netaddr.IPPrefix
+		var pfxs []netip.Prefix
 		for _, a := range addrs {
 			switch v := a.(type) {
 			case *net.IPNet:
@@ -248,7 +251,7 @@ func (ifaces List) ForeachInterface(fn func(Interface, []netaddr.IPPrefix)) erro
 			}
 		}
 		sort.Slice(pfxs, func(i, j int) bool {
-			return pfxs[i].IP().Less(pfxs[j].IP())
+			return pfxs[i].Addr().Less(pfxs[j].Addr())
 		})
 		fn(iface, pfxs)
 	}
@@ -263,7 +266,7 @@ type State struct {
 	// configured on that interface. Each address is represented as an
 	// IPPrefix, where the IP is the interface IP address and Bits is
 	// the subnet mask.
-	InterfaceIPs map[string][]netaddr.IPPrefix
+	InterfaceIPs map[string][]netip.Prefix
 	Interface    map[string]Interface
 
 	// HaveV6 is whether this machine has an IPv6 Global or Unique Local Address
@@ -326,7 +329,7 @@ func (s *State) String() string {
 			fmt.Fprintf(&sb, "%s:[", ifName)
 			needSpace := false
 			for _, pfx := range s.InterfaceIPs[ifName] {
-				if !isInterestingIP(pfx.IP()) {
+				if !isInterestingIP(pfx.Addr()) {
 					continue
 				}
 				if needSpace {
@@ -357,11 +360,11 @@ func (s *State) String() string {
 
 // An InterfaceFilter indicates whether EqualFiltered should use i when deciding whether two States are equal.
 // ips are all the IPPrefixes associated with i.
-type InterfaceFilter func(i Interface, ips []netaddr.IPPrefix) bool
+type InterfaceFilter func(i Interface, ips []netip.Prefix) bool
 
 // An IPFilter indicates whether EqualFiltered should use ip when deciding whether two States are equal.
 // ip is an ip address associated with some interface under consideration.
-type IPFilter func(ip netaddr.IP) bool
+type IPFilter func(ip netip.Addr) bool
 
 // EqualFiltered reports whether s and s2 are equal,
 // considering only interfaces in s for which filter returns true,
@@ -409,22 +412,22 @@ func interfacesEqual(a, b Interface) bool {
 		bytes.Equal([]byte(a.HardwareAddr), []byte(b.HardwareAddr))
 }
 
-func filteredIPPs(ipps []netaddr.IPPrefix, useIP IPFilter) []netaddr.IPPrefix {
+func filteredIPPs(ipps []netip.Prefix, useIP IPFilter) []netip.Prefix {
 	// TODO: rewrite prefixesEqualFiltered to avoid making copies
-	x := make([]netaddr.IPPrefix, 0, len(ipps))
+	x := make([]netip.Prefix, 0, len(ipps))
 	for _, ipp := range ipps {
-		if useIP(ipp.IP()) {
+		if useIP(ipp.Addr()) {
 			x = append(x, ipp)
 		}
 	}
 	return x
 }
 
-func prefixesEqualFiltered(a, b []netaddr.IPPrefix, useIP IPFilter) bool {
+func prefixesEqualFiltered(a, b []netip.Prefix, useIP IPFilter) bool {
 	return prefixesEqual(filteredIPPs(a, useIP), filteredIPPs(b, useIP))
 }
 
-func prefixesEqual(a, b []netaddr.IPPrefix) bool {
+func prefixesEqual(a, b []netip.Prefix) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -439,21 +442,21 @@ func prefixesEqual(a, b []netaddr.IPPrefix) bool {
 // UseInterestingInterfaces is an InterfaceFilter that reports whether i is an interesting interface.
 // An interesting interface if it is (a) not owned by Tailscale and (b) routes interesting IP addresses.
 // See UseInterestingIPs for the defition of an interesting IP address.
-func UseInterestingInterfaces(i Interface, ips []netaddr.IPPrefix) bool {
+func UseInterestingInterfaces(i Interface, ips []netip.Prefix) bool {
 	return !isTailscaleInterface(i.Name, ips) && anyInterestingIP(ips)
 }
 
 // UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
 // An IP address is interesting if it is neither a lopback not a link local unicast IP address.
-func UseInterestingIPs(ip netaddr.IP) bool {
+func UseInterestingIPs(ip netip.Addr) bool {
 	return isInterestingIP(ip)
 }
 
 // UseAllInterfaces is an InterfaceFilter that includes all interfaces.
-func UseAllInterfaces(i Interface, ips []netaddr.IPPrefix) bool { return true }
+func UseAllInterfaces(i Interface, ips []netip.Prefix) bool { return true }
 
 // UseAllIPs is an IPFilter that includes all all IPs.
-func UseAllIPs(ips netaddr.IP) bool { return true }
+func UseAllIPs(ips netip.Addr) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
 
@@ -465,16 +468,16 @@ func (s *State) AnyInterfaceUp() bool {
 	return s != nil && (s.HaveV4 || s.HaveV6)
 }
 
-func hasTailscaleIP(pfxs []netaddr.IPPrefix) bool {
+func hasTailscaleIP(pfxs []netip.Prefix) bool {
 	for _, pfx := range pfxs {
-		if tsaddr.IsTailscaleIP(pfx.IP()) {
+		if tsaddr.IsTailscaleIP(pfx.Addr()) {
 			return true
 		}
 	}
 	return false
 }
 
-func isTailscaleInterface(name string, ips []netaddr.IPPrefix) bool {
+func isTailscaleInterface(name string, ips []netip.Prefix) bool {
 	if runtime.GOOS == "darwin" && strings.HasPrefix(name, "utun") && hasTailscaleIP(ips) {
 		// On macOS in the sandboxed app (at least as of
 		// 2021-02-25), we often see two utun devices
@@ -496,10 +499,10 @@ var getPAC func() string
 // It does not set the returned State.IsExpensive. The caller can populate that.
 func GetState() (*State, error) {
 	s := &State{
-		InterfaceIPs: make(map[string][]netaddr.IPPrefix),
+		InterfaceIPs: make(map[string][]netip.Prefix),
 		Interface:    make(map[string]Interface),
 	}
-	if err := ForeachInterface(func(ni Interface, pfxs []netaddr.IPPrefix) {
+	if err := ForeachInterface(func(ni Interface, pfxs []netip.Prefix) {
 		ifUp := ni.IsUp()
 		s.Interface[ni.Name] = ni
 		s.InterfaceIPs[ni.Name] = append(s.InterfaceIPs[ni.Name], pfxs...)
@@ -507,11 +510,11 @@ func GetState() (*State, error) {
 			return
 		}
 		for _, pfx := range pfxs {
-			if pfx.IP().IsLoopback() {
+			if pfx.Addr().IsLoopback() {
 				continue
 			}
-			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.IP())
-			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.IP())
+			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.Addr())
+			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.Addr())
 		}
 	}); err != nil {
 		return nil, err
@@ -555,8 +558,8 @@ func HTTPOfListener(ln net.Listener) string {
 
 	var goodIP string
 	var privateIP string
-	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP()
+	ForeachInterfaceAddress(func(i Interface, pfx netip.Prefix) {
+		ip := pfx.Addr()
 		if ip.IsPrivate() {
 			if privateIP == "" {
 				privateIP = ip.String()
@@ -575,14 +578,14 @@ func HTTPOfListener(ln net.Listener) string {
 
 }
 
-var likelyHomeRouterIP func() (netaddr.IP, bool)
+var likelyHomeRouterIP func() (netip.Addr, bool)
 
 // LikelyHomeRouterIP returns the likely IP of the residential router,
 // which will always be an IPv4 private address, if found.
 // In addition, it returns the IP address of the current machine on
 // the LAN using that gateway.
 // This is used as the destination for UPnP, NAT-PMP, PCP, etc queries.
-func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
+func LikelyHomeRouterIP() (gateway, myIP netip.Addr, ok bool) {
 	if likelyHomeRouterIP != nil {
 		gateway, ok = likelyHomeRouterIP()
 		if !ok {
@@ -592,9 +595,9 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 	if !ok {
 		return
 	}
-	ForeachInterfaceAddress(func(i Interface, pfx netaddr.IPPrefix) {
-		ip := pfx.IP()
-		if !i.IsUp() || ip.IsZero() || !myIP.IsZero() {
+	ForeachInterfaceAddress(func(i Interface, pfx netip.Prefix) {
+		ip := pfx.Addr()
+		if !i.IsUp() || !ip.IsValid() || myIP.IsValid() {
 			return
 		}
 		if gateway.IsPrivate() && ip.IsPrivate() {
@@ -603,14 +606,14 @@ func LikelyHomeRouterIP() (gateway, myIP netaddr.IP, ok bool) {
 			return
 		}
 	})
-	return gateway, myIP, !myIP.IsZero()
+	return gateway, myIP, myIP.IsValid()
 }
 
 // isUsableV4 reports whether ip is a usable IPv4 address which could
 // conceivably be used to get Internet connectivity. Globally routable and
 // private IPv4 addresses are always Usable, and link local 169.254.x.x
 // addresses are in some environments.
-func isUsableV4(ip netaddr.IP) bool {
+func isUsableV4(ip netip.Addr) bool {
 	if !ip.Is4() || ip.IsLoopback() {
 		return false
 	}
@@ -624,20 +627,20 @@ func isUsableV4(ip netaddr.IP) bool {
 // conceivably be used to get Internet connectivity. Globally routable
 // IPv6 addresses are always Usable, and Unique Local Addresses
 // (fc00::/7) are in some environments used with address translation.
-func isUsableV6(ip netaddr.IP) bool {
+func isUsableV6(ip netip.Addr) bool {
 	return v6Global1.Contains(ip) ||
 		(ip.Is6() && ip.IsPrivate() && !tsaddr.TailscaleULARange().Contains(ip))
 }
 
 var (
-	v6Global1 = netaddr.MustParseIPPrefix("2000::/3")
+	v6Global1 = netip.MustParsePrefix("2000::/3")
 )
 
 // anyInterestingIP reports whether pfxs contains any IP that matches
 // isInterestingIP.
-func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
+func anyInterestingIP(pfxs []netip.Prefix) bool {
 	for _, pfx := range pfxs {
-		if isInterestingIP(pfx.IP()) {
+		if isInterestingIP(pfx.Addr()) {
 			return true
 		}
 	}
@@ -647,7 +650,7 @@ func anyInterestingIP(pfxs []netaddr.IPPrefix) bool {
 // isInterestingIP reports whether ip is an interesting IP that we
 // should log in interfaces.State logging. We don't need to show
 // localhost or link-local addresses.
-func isInterestingIP(ip netaddr.IP) bool {
+func isInterestingIP(ip netip.Addr) bool {
 	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
 }
 
@@ -726,7 +729,7 @@ func DefaultRoute() (DefaultRouteDetails, error) {
 func HasCGNATInterface() (bool, error) {
 	hasCGNATInterface := false
 	cgnatRange := tsaddr.CGNATRange()
-	err := ForeachInterface(func(i Interface, pfxs []netaddr.IPPrefix) {
+	err := ForeachInterface(func(i Interface, pfxs []netip.Prefix) {
 		if hasCGNATInterface || !i.IsUp() || isTailscaleInterface(i.Name, pfxs) {
 			return
 		}

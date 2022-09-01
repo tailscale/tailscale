@@ -30,10 +30,11 @@ import (
 	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
-	"inet.af/netaddr"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -44,7 +45,6 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cibuild"
-	"tailscale.com/util/netconv"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -83,7 +83,7 @@ func (c *Conn) WaitReady(t testing.TB) {
 	}
 }
 
-func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netaddr.IP) (derpMap *tailcfg.DERPMap, cleanup func()) {
+func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, stunIP netip.Addr) (derpMap *tailcfg.DERPMap, cleanup func()) {
 	d := derp.NewServer(key.NewNode(), logf)
 
 	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
@@ -223,7 +223,7 @@ func (s *magicStack) Status() *ipnstate.Status {
 // Something external needs to provide a NetworkMap and WireGuard
 // configs to the magicStack in order for it to acquire an IP
 // address. See meshStacks for one possible source of netmaps and IPs.
-func (s *magicStack) IP() netaddr.IP {
+func (s *magicStack) IP() netip.Addr {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		st := s.Status()
 		if len(st.TailscaleIPs) > 0 {
@@ -252,13 +252,13 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    me.privateKey.Public(),
-			Addresses:  []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
+			Addresses:  []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
 		}
 		for i, peer := range ms {
 			if i == myIdx {
 				continue
 			}
-			addrs := []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(1, 0, 0, byte(i+1)), 32)}
+			addrs := []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(i+1)), 32)}
 			peer := &tailcfg.Node{
 				ID:         tailcfg.NodeID(i + 1),
 				Name:       fmt.Sprintf("node%d", i+1),
@@ -511,7 +511,7 @@ func TestConnClosed(t *testing.T) {
 	cleanup = meshStacks(t.Logf, nil, ms1, ms2)
 	defer cleanup()
 
-	pkt := tuntest.Ping(netconv.AsAddr(ms2.IP()), netconv.AsAddr(ms1.IP()))
+	pkt := tuntest.Ping(ms2.IP(), ms1.IP())
 
 	if len(ms1.conn.activeDerp) == 0 {
 		t.Errorf("unexpected DERP empty got: %v want: >0", len(ms1.conn.activeDerp))
@@ -643,7 +643,7 @@ func TestNoDiscoKey(t *testing.T) {
 		break
 	}
 
-	pkt := tuntest.Ping(netconv.AsAddr(m2.IP()), netconv.AsAddr(m1.IP()))
+	pkt := tuntest.Ping(m2.IP(), m1.IP())
 	m1.tun.Outbound <- pkt
 	select {
 	case <-m2.tun.Inbound:
@@ -788,11 +788,11 @@ func TestActiveDiscovery(t *testing.T) {
 		inet := natlab.NewInternet()
 		lan1 := &natlab.Network{
 			Name:    "lan1",
-			Prefix4: netaddr.MustParseIPPrefix("192.168.0.0/24"),
+			Prefix4: netip.MustParsePrefix("192.168.0.0/24"),
 		}
 		lan2 := &natlab.Network{
 			Name:    "lan2",
-			Prefix4: netaddr.MustParseIPPrefix("192.168.1.0/24"),
+			Prefix4: netip.MustParsePrefix("192.168.1.0/24"),
 		}
 
 		sif := mstun.Attach("eth0", inet)
@@ -834,13 +834,13 @@ func TestActiveDiscovery(t *testing.T) {
 
 type devices struct {
 	m1   nettype.PacketListener
-	m1IP netaddr.IP
+	m1IP netip.Addr
 
 	m2   nettype.PacketListener
-	m2IP netaddr.IP
+	m2IP netip.Addr
 
 	stun   nettype.PacketListener
-	stunIP netaddr.IP
+	stunIP netip.Addr
 }
 
 // newPinger starts continuously sending test packets from srcM to
@@ -856,7 +856,7 @@ func newPinger(t *testing.T, logf logger.Logf, src, dst *magicStack) (cleanup fu
 		// failure). Figure out what kind of thing would be
 		// acceptable to test instead of "every ping must
 		// transit".
-		pkt := tuntest.Ping(netconv.AsAddr(dst.IP()), netconv.AsAddr(src.IP()))
+		pkt := tuntest.Ping(dst.IP(), src.IP())
 		select {
 		case src.tun.Outbound <- pkt:
 		case <-ctx.Done():
@@ -1011,24 +1011,24 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 	m1cfg := &wgcfg.Config{
 		Name:       "peer1",
 		PrivateKey: m1.privateKey,
-		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m2.privateKey.Public(),
 				DiscoKey:   m2.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 			},
 		},
 	}
 	m2cfg := &wgcfg.Config{
 		Name:       "peer2",
 		PrivateKey: m2.privateKey,
-		Addresses:  []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.2/32")},
+		Addresses:  []netip.Prefix{netip.MustParsePrefix("1.0.0.2/32")},
 		Peers: []wgcfg.Peer{
 			{
 				PublicKey:  m1.privateKey.Public(),
 				DiscoKey:   m1.conn.DiscoPublicKey(),
-				AllowedIPs: []netaddr.IPPrefix{netaddr.MustParseIPPrefix("1.0.0.1/32")},
+				AllowedIPs: []netip.Prefix{netip.MustParsePrefix("1.0.0.1/32")},
 			},
 		},
 	}
@@ -1158,7 +1158,7 @@ func TestDiscoMessage(t *testing.T) {
 
 	box := peer1Priv.Shared(c.discoPrivate.Public()).Seal([]byte(payload))
 	pkt = append(pkt, box...)
-	got := c.handleDiscoMessage(pkt, netaddr.IPPort{}, key.NodePublic{})
+	got := c.handleDiscoMessage(pkt, netip.AddrPort{}, key.NodePublic{})
 	if !got {
 		t.Error("failed to open it")
 	}
@@ -1248,7 +1248,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	if err != nil {
 		tb.Fatal(err)
 	}
-	conn.addValidDiscoPathForTest(nodeKey, netaddr.MustParseIPPort(sendConn.LocalAddr().String()))
+	conn.addValidDiscoPathForTest(nodeKey, netip.MustParseAddrPort(sendConn.LocalAddr().String()))
 	return nodeKey, discoKey
 }
 
@@ -1539,7 +1539,7 @@ func TestEndpointSetsEqual(t *testing.T) {
 	s := func(ports ...uint16) (ret []tailcfg.Endpoint) {
 		for _, port := range ports {
 			ret = append(ret, tailcfg.Endpoint{
-				Addr: netaddr.IPPortFrom(netaddr.IP{}, port),
+				Addr: netip.AddrPortFrom(netip.Addr{}, port),
 			})
 		}
 		return
@@ -1598,7 +1598,7 @@ func TestEndpointSetsEqual(t *testing.T) {
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
 	al := func(ipps string, d time.Duration) addrLatency {
-		return addrLatency{netaddr.MustParseIPPort(ipps), d}
+		return addrLatency{netip.MustParseAddrPort(ipps), d}
 	}
 	zero := addrLatency{}
 	tests := []struct {
@@ -1798,5 +1798,23 @@ func TestBlockForeverConnUnblocks(t *testing.T) {
 		}
 	case <-timer.C:
 		t.Fatal("timeout")
+	}
+}
+
+func TestDiscoMagicMatches(t *testing.T) {
+	// Convert our disco magic number into a uint32 and uint16 to test
+	// against. We panic on an incorrect length here rather than try to be
+	// generic with our BPF instructions below.
+	//
+	// Note that BPF uses network byte order (big-endian) when loading data
+	// from a packet, so that is what we use to generate our magic numbers.
+	if len(disco.Magic) != 6 {
+		t.Fatalf("expected disco.Magic to be of length 6")
+	}
+	if m1 := binary.BigEndian.Uint32([]byte(disco.Magic[:4])); m1 != discoMagic1 {
+		t.Errorf("first 4 bytes of disco magic don't match, got %v want %v", discoMagic1, m1)
+	}
+	if m2 := binary.BigEndian.Uint16([]byte(disco.Magic[4:6])); m2 != discoMagic2 {
+		t.Errorf("last 2 bytes of disco magic don't match, got %v want %v", discoMagic2, m2)
 	}
 }

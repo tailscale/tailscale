@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
+	"tailscale.com/util/must"
 )
 
 func TestUndeltaPeers(t *testing.T) {
@@ -32,6 +35,16 @@ func TestUndeltaPeers(t *testing.T) {
 	seenAt := func(t time.Time) func(*tailcfg.Node) {
 		return func(n *tailcfg.Node) {
 			n.LastSeen = &t
+		}
+	}
+	withDERP := func(d string) func(*tailcfg.Node) {
+		return func(n *tailcfg.Node) {
+			n.DERP = d
+		}
+	}
+	withEP := func(ep string) func(*tailcfg.Node) {
+		return func(n *tailcfg.Node) {
+			n.Endpoints = []string{ep}
 		}
 	}
 	n := func(id tailcfg.NodeID, name string, mod ...func(*tailcfg.Node)) *tailcfg.Node {
@@ -137,7 +150,150 @@ func TestUndeltaPeers(t *testing.T) {
 				n(2, "bar", seenAt(time.Unix(123, 0))),
 			),
 		},
-	}
+		{
+			name: "ep_change_derp",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:     1,
+					DERPRegion: 4,
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:4"))),
+		},
+		{
+			name: "ep_change_udp",
+			prev: peers(n(1, "foo", withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					Endpoints: []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withEP("1.2.3.4:56"))),
+		},
+		{
+			name: "ep_change_udp",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					Endpoints: []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
+		},
+		{
+			name: "ep_change_both",
+			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:     1,
+					DERPRegion: 2,
+					Endpoints:  []string{"1.2.3.4:56"},
+				}},
+			},
+			want: peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
+		},
+		{
+			name: "change_key",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID: 1,
+					Key:    ptrTo(key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:   1,
+				Name: "foo",
+				Key:  key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
+			}),
+		},
+		{
+			name: "change_key_signature",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:       1,
+					KeySignature: []byte{3, 4},
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:           1,
+				Name:         "foo",
+				KeySignature: []byte{3, 4},
+			}),
+		},
+		{
+			name: "change_disco_key",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:   1,
+					DiscoKey: ptrTo(key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:       1,
+				Name:     "foo",
+				DiscoKey: key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
+			}),
+		},
+		{
+			name: "change_online",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID: 1,
+					Online: ptrTo(true),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:     1,
+				Name:   "foo",
+				Online: ptrTo(true),
+			}),
+		},
+		{
+			name: "change_last_seen",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:   1,
+					LastSeen: ptrTo(time.Unix(123, 0).UTC()),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:       1,
+				Name:     "foo",
+				LastSeen: ptrTo(time.Unix(123, 0).UTC()),
+			}),
+		},
+		{
+			name: "change_key_expiry",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:    1,
+					KeyExpiry: ptrTo(time.Unix(123, 0).UTC()),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:        1,
+				Name:      "foo",
+				KeyExpiry: time.Unix(123, 0).UTC(),
+			}),
+		},
+		{
+			name: "change_capabilities",
+			prev: peers(n(1, "foo")),
+			mapRes: &tailcfg.MapResponse{
+				PeersChangedPatch: []*tailcfg.PeerChange{{
+					NodeID:       1,
+					Capabilities: ptrTo([]string{"foo"}),
+				}},
+			}, want: peers(&tailcfg.Node{
+				ID:           1,
+				Name:         "foo",
+				Capabilities: []string{"foo"},
+			}),
+		}}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.curTime.IsZero() {
@@ -149,6 +305,10 @@ func TestUndeltaPeers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
 }
 
 func formatNodes(nodes []*tailcfg.Node) string {
@@ -304,4 +464,153 @@ func TestNetmapForResponse(t *testing.T) {
 			t.Errorf("Node mismatch in 2nd netmap; got: %s", j)
 		}
 	})
+}
+
+// TestDeltaDebug tests that tailcfg.Debug values can be omitted in MapResposnes
+// entirely or have their opt.Bool values unspecified between MapResponses in a
+// session and that should mean no change. (as of capver 37). But two Debug
+// fields existed prior to capver 37 that weren't opt.Bool; we test that we both
+// still accept the non-opt.Bool form from control for RandomizeClientPort and
+// ForceBackgroundSTUN and also accept the new form, keeping the old form in
+// sync.
+func TestDeltaDebug(t *testing.T) {
+	type step struct {
+		got  *tailcfg.Debug
+		want *tailcfg.Debug
+	}
+	tests := []struct {
+		name  string
+		steps []step
+	}{
+		{
+			name: "nothing-to-nothing",
+			steps: []step{
+				{nil, nil},
+				{nil, nil},
+			},
+		},
+		{
+			name: "sticky-with-old-style-randomize-client-port",
+			steps: []step{
+				{
+					&tailcfg.Debug{RandomizeClientPort: true},
+					&tailcfg.Debug{
+						RandomizeClientPort:    true,
+						SetRandomizeClientPort: "true",
+					},
+				},
+				{
+					nil, // not sent by server
+					&tailcfg.Debug{
+						RandomizeClientPort:    true,
+						SetRandomizeClientPort: "true",
+					},
+				},
+			},
+		},
+		{
+			name: "sticky-with-new-style-randomize-client-port",
+			steps: []step{
+				{
+					&tailcfg.Debug{SetRandomizeClientPort: "true"},
+					&tailcfg.Debug{
+						RandomizeClientPort:    true,
+						SetRandomizeClientPort: "true",
+					},
+				},
+				{
+					nil, // not sent by server
+					&tailcfg.Debug{
+						RandomizeClientPort:    true,
+						SetRandomizeClientPort: "true",
+					},
+				},
+			},
+		},
+		{
+			name: "opt-bool-sticky-changing-over-time",
+			steps: []step{
+				{nil, nil},
+				{nil, nil},
+				{
+					&tailcfg.Debug{OneCGNATRoute: "true"},
+					&tailcfg.Debug{OneCGNATRoute: "true"},
+				},
+				{
+					nil,
+					&tailcfg.Debug{OneCGNATRoute: "true"},
+				},
+				{
+					&tailcfg.Debug{OneCGNATRoute: "false"},
+					&tailcfg.Debug{OneCGNATRoute: "false"},
+				},
+				{
+					nil,
+					&tailcfg.Debug{OneCGNATRoute: "false"},
+				},
+			},
+		},
+		{
+			name: "legacy-ForceBackgroundSTUN",
+			steps: []step{
+				{
+					&tailcfg.Debug{ForceBackgroundSTUN: true},
+					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
+				},
+			},
+		},
+		{
+			name: "opt-bool-SetForceBackgroundSTUN",
+			steps: []step{
+				{
+					&tailcfg.Debug{SetForceBackgroundSTUN: "true"},
+					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
+				},
+			},
+		},
+		{
+			name: "server-reset-to-default",
+			steps: []step{
+				{
+					&tailcfg.Debug{SetForceBackgroundSTUN: "true"},
+					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
+				},
+				{
+					&tailcfg.Debug{SetForceBackgroundSTUN: "unset"},
+					&tailcfg.Debug{ForceBackgroundSTUN: false, SetForceBackgroundSTUN: "unset"},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := newTestMapSession(t)
+			for stepi, s := range tt.steps {
+				nm := ms.netmapForResponse(&tailcfg.MapResponse{Debug: s.got})
+				if !reflect.DeepEqual(nm.Debug, s.want) {
+					t.Errorf("unexpected result at step index %v; got: %s", stepi, must.Get(json.Marshal(nm.Debug)))
+				}
+			}
+		})
+	}
+}
+
+// Verifies that copyDebugOptBools doesn't missing any opt.Bools.
+func TestCopyDebugOptBools(t *testing.T) {
+	rt := reflect.TypeOf(tailcfg.Debug{})
+	for i := 0; i < rt.NumField(); i++ {
+		sf := rt.Field(i)
+		if sf.Type != reflect.TypeOf(opt.Bool("")) {
+			continue
+		}
+		var src, dst tailcfg.Debug
+		reflect.ValueOf(&src).Elem().Field(i).Set(reflect.ValueOf(opt.Bool("true")))
+		if src == (tailcfg.Debug{}) {
+			t.Fatalf("failed to set field %v", sf.Name)
+		}
+		copyDebugOptBools(&dst, &src)
+		if src != dst {
+			t.Fatalf("copyDebugOptBools didn't copy field %v", sf.Name)
+		}
+	}
 }

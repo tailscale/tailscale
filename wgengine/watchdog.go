@@ -8,12 +8,14 @@
 package wgengine
 
 import (
+	"fmt"
 	"log"
+	"net/netip"
 	"runtime/pprof"
 	"strings"
+	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
@@ -38,11 +40,17 @@ func NewWatchdog(e Engine) Engine {
 		return e
 	}
 	return &watchdogEngine{
-		wrap:    e,
-		logf:    log.Printf,
-		fatalf:  log.Fatalf,
-		maxWait: 45 * time.Second,
+		wrap:     e,
+		logf:     log.Printf,
+		fatalf:   log.Fatalf,
+		maxWait:  45 * time.Second,
+		inFlight: make(map[inFlightKey]time.Time),
 	}
+}
+
+type inFlightKey struct {
+	op  string
+	ctr uint64
 }
 
 type watchdogEngine struct {
@@ -50,9 +58,31 @@ type watchdogEngine struct {
 	logf    func(format string, args ...any)
 	fatalf  func(format string, args ...any)
 	maxWait time.Duration
+
+	// Track the start time(s) of in-flight operations
+	inFlightMu  sync.Mutex
+	inFlight    map[inFlightKey]time.Time
+	inFlightCtr uint64
 }
 
 func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
+	// Track all in-flight operations so we can print more useful error
+	// messages on watchdog failure
+	e.inFlightMu.Lock()
+	key := inFlightKey{
+		op:  name,
+		ctr: e.inFlightCtr,
+	}
+	e.inFlightCtr++
+	e.inFlight[key] = time.Now()
+	e.inFlightMu.Unlock()
+
+	defer func() {
+		e.inFlightMu.Lock()
+		defer e.inFlightMu.Unlock()
+		delete(e.inFlight, key)
+	}()
+
 	errCh := make(chan error)
 	go func() {
 		errCh <- fn()
@@ -66,6 +96,22 @@ func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 		buf := new(strings.Builder)
 		pprof.Lookup("goroutine").WriteTo(buf, 1)
 		e.logf("wgengine watchdog stacks:\n%s", buf.String())
+
+		// Collect the list of in-flight operations for debugging.
+		var (
+			b   []byte
+			now = time.Now()
+		)
+		e.inFlightMu.Lock()
+		for k, t := range e.inFlight {
+			dur := now.Sub(t).Round(time.Millisecond)
+			b = fmt.Appendf(b, "in-flight[%d]: name=%s duration=%v start=%s\n", k.ctr, k.op, dur, t.Format(time.RFC3339Nano))
+		}
+		e.inFlightMu.Unlock()
+
+		// Print everything as a single string to avoid log
+		// rate limits.
+		e.logf("wgengine watchdog in-flight:\n%s", b)
 		e.fatalf("wgengine: watchdog timeout on %s", name)
 		return nil
 	}
@@ -120,16 +166,16 @@ func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k
 }
-func (e *watchdogEngine) Ping(ip netaddr.IP, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
+func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
 	e.watchdog("Ping", func() { e.wrap.Ping(ip, pingType, cb) })
 }
-func (e *watchdogEngine) RegisterIPPortIdentity(ipp netaddr.IPPort, tsIP netaddr.IP) {
+func (e *watchdogEngine) RegisterIPPortIdentity(ipp netip.AddrPort, tsIP netip.Addr) {
 	e.watchdog("RegisterIPPortIdentity", func() { e.wrap.RegisterIPPortIdentity(ipp, tsIP) })
 }
-func (e *watchdogEngine) UnregisterIPPortIdentity(ipp netaddr.IPPort) {
+func (e *watchdogEngine) UnregisterIPPortIdentity(ipp netip.AddrPort) {
 	e.watchdog("UnregisterIPPortIdentity", func() { e.wrap.UnregisterIPPortIdentity(ipp) })
 }
-func (e *watchdogEngine) WhoIsIPPort(ipp netaddr.IPPort) (tsIP netaddr.IP, ok bool) {
+func (e *watchdogEngine) WhoIsIPPort(ipp netip.AddrPort) (tsIP netip.Addr, ok bool) {
 	e.watchdog("UnregisterIPPortIdentity", func() { tsIP, ok = e.wrap.WhoIsIPPort(ipp) })
 	return tsIP, ok
 }
@@ -148,7 +194,7 @@ func (e *watchdogEngine) GetResolver() (r *resolver.Resolver, ok bool) {
 	}
 	return nil, false
 }
-func (e *watchdogEngine) PeerForIP(ip netaddr.IP) (ret PeerForIP, ok bool) {
+func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	e.watchdog("PeerForIP", func() { ret, ok = e.wrap.PeerForIP(ip) })
 	return ret, ok
 }

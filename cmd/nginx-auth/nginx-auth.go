@@ -63,17 +63,19 @@ func main() {
 			return
 		}
 
-		_, tailnet, ok := strings.Cut(info.Node.Name, info.Node.ComputedName+".")
-		if !ok {
-			w.WriteHeader(http.StatusUnauthorized)
-			log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
-			return
-		}
-		tailnet, _, ok = strings.Cut(tailnet, ".beta.tailscale.net")
-		if !ok {
-			w.WriteHeader(http.StatusUnauthorized)
-			log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
-			return
+		// tailnet of connected node. When accessing shared nodes, this
+		// will be empty because the tailnet of the sharee is not exposed.
+		var tailnet string
+
+		if !info.Node.Hostinfo.ShareeNode() {
+			var ok bool
+			_, tailnet, ok = strings.Cut(info.Node.Name, info.Node.ComputedName+".")
+			if !ok {
+				w.WriteHeader(http.StatusUnauthorized)
+				log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
+				return
+			}
+			tailnet = strings.TrimSuffix(tailnet, ".beta.tailscale.net")
 		}
 
 		if expectedTailnet := r.Header.Get("Expected-Tailnet"); expectedTailnet != "" && expectedTailnet != tailnet {

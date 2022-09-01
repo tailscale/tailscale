@@ -18,34 +18,34 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 )
 
-func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
-	if ip, err := netaddr.ParseIP(host); err == nil && !ip.IsZero() {
-		return []netaddr.IP{ip}, nil
+func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	if ip, err := netip.ParseAddr(host); err == nil && ip.IsValid() {
+		return []netip.Addr{ip}, nil
 	}
 
 	type nameIP struct {
 		dnsName string
-		ip      netaddr.IP
+		ip      netip.Addr
 	}
 
 	dm := getDERPMap()
 	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
-			if ip, err := netaddr.ParseIP(n.IPv4); err == nil {
+			if ip, err := netip.ParseAddr(n.IPv4); err == nil {
 				cands4 = append(cands4, nameIP{n.HostName, ip})
 			}
-			if ip, err := netaddr.ParseIP(n.IPv6); err == nil {
+			if ip, err := netip.ParseAddr(n.IPv6); err == nil {
 				cands6 = append(cands6, nameIP{n.HostName, ip})
 			}
 		}
@@ -93,7 +93,7 @@ func Lookup(ctx context.Context, host string) ([]netaddr.IP, error) {
 
 // serverName and serverIP of are, say, "derpN.tailscale.com".
 // queryName is the name being sought (e.g. "controlplane.tailscale.com"), passed as hint.
-func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netaddr.IP, queryName string) (dnsMap, error) {
+func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string) (dnsMap, error) {
 	dialer := netns.NewDialer(log.Printf)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
@@ -123,7 +123,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netaddr.IP
 
 // dnsMap is the JSON type returned by the DERP /bootstrap-dns handler:
 // https://derp10.tailscale.com/bootstrap-dns
-type dnsMap map[string][]netaddr.IP
+type dnsMap map[string][]netip.Addr
 
 // getDERPMap returns some DERP map. The DERP servers also run a fallback
 // DNS server.

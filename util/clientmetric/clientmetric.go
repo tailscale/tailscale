@@ -136,6 +136,15 @@ func Metrics() []*Metric {
 	return sorted
 }
 
+// HasPublished reports whether a metric with the given name has already been
+// published.
+func HasPublished(name string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	_, ok := metrics[name]
+	return ok
+}
+
 // NewUnpublished initializes a new Metric without calling Publish on
 // it.
 func NewUnpublished(name string, typ Type) *Metric {
@@ -207,11 +216,11 @@ const (
 // without further escaping.
 //
 // The current encoding is:
-//   * name immediately following metric:
+//   - name immediately following metric:
 //     'N' + hex(varint(len(name))) + name
-//   * set value of a metric:
+//   - set value of a metric:
 //     'S' + hex(varint(wireid)) + hex(varint(value))
-//   * increment a metric: (decrements if negative)
+//   - increment a metric: (decrements if negative)
 //     'I' + hex(varint(wireid)) + hex(varint(value))
 func EncodeLogTailMetricsDelta() string {
 	mu.Lock()

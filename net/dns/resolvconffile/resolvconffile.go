@@ -16,10 +16,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/util/dnsname"
 )
 
@@ -29,7 +29,7 @@ const Path = "/etc/resolv.conf"
 // Config represents a resolv.conf(5) file.
 type Config struct {
 	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP
+	Nameservers []netip.Addr
 
 	// SearchDomains are the domain suffixes to use when expanding
 	// single-label name queries. SearchDomains is additive to
@@ -74,7 +74,7 @@ func Parse(r io.Reader) (*Config, error) {
 			if len(nameserver) == len(s) {
 				return nil, fmt.Errorf("missing space after \"nameserver\" in %q", line)
 			}
-			ip, err := netaddr.ParseIP(nameserver)
+			ip, err := netip.ParseAddr(nameserver)
 			if err != nil {
 				return nil, err
 			}

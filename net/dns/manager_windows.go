@@ -5,9 +5,14 @@
 package dns
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"net/netip"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -16,16 +21,14 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
+	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/winutil"
 )
 
 const (
-	ipv4RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
-	ipv6RegBase = `SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters`
-
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
@@ -59,22 +62,13 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 	return ret, nil
 }
 
-// keyOpenTimeout is how long we wait for a registry key to
-// appear. For some reason, registry keys tied to ephemeral interfaces
-// can take a long while to appear after interface creation, and we
-// can end up racing with that.
-const keyOpenTimeout = 20 * time.Second
-
-func (m windowsManager) openKey(path string) (registry.Key, error) {
-	key, err := openKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE, keyOpenTimeout)
+func (m windowsManager) openInterfaceKey(pfx winutil.RegistryPathPrefix) (registry.Key, error) {
+	path := pfx.WithSuffix(m.guid)
+	key, err := winutil.OpenKeyWait(registry.LOCAL_MACHINE, path, registry.SET_VALUE)
 	if err != nil {
 		return 0, fmt.Errorf("opening %s: %w", path, err)
 	}
 	return key, nil
-}
-
-func (m windowsManager) ifPath(basePath string) string {
-	return fmt.Sprintf(`%s\Interfaces\%s`, basePath, m.guid)
 }
 
 func delValue(key registry.Key, name string) error {
@@ -89,7 +83,7 @@ func delValue(key registry.Key, name string) error {
 // system's "primary" resolver.
 //
 // If no resolvers are provided, the Tailscale NRPT rules are deleted.
-func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []dnsname.FQDN) error {
+func (m windowsManager) setSplitDNS(resolvers []netip.Addr, domains []dnsname.FQDN) error {
 	if m.nrptDB == nil {
 		if resolvers == nil {
 			// Just a no-op in this case.
@@ -111,13 +105,78 @@ func (m windowsManager) setSplitDNS(resolvers []netaddr.IP, domains []dnsname.FQ
 	return m.nrptDB.WriteSplitDNSConfig(servers, domains)
 }
 
+func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error) {
+	b := bytes.ReplaceAll(prevHostsFile, []byte("\r\n"), []byte("\n"))
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	const (
+		header = "# TailscaleHostsSectionStart"
+		footer = "# TailscaleHostsSectionEnd"
+	)
+	var comments = []string{
+		"# This section contains MagicDNS entries for Tailscale.",
+		"# Do not edit this section manually.",
+	}
+	var out bytes.Buffer
+	var inSection bool
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == header {
+			inSection = true
+			continue
+		}
+		if line == footer {
+			inSection = false
+			continue
+		}
+		if inSection {
+			continue
+		}
+		fmt.Fprintln(&out, line)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(hosts) > 0 {
+		fmt.Fprintln(&out, header)
+		for _, c := range comments {
+			fmt.Fprintln(&out, c)
+		}
+		fmt.Fprintln(&out)
+		for _, he := range hosts {
+			fmt.Fprintf(&out, "%s %s\n", he.Addr, strings.Join(he.Hosts, " "))
+		}
+		fmt.Fprintln(&out)
+		fmt.Fprintln(&out, footer)
+	}
+	return bytes.ReplaceAll(out.Bytes(), []byte("\n"), []byte("\r\n")), nil
+}
+
+// setHosts sets the hosts file to contain the given host entries.
+func (m windowsManager) setHosts(hosts []*HostEntry) error {
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return err
+	}
+	hostsFile := filepath.Join(systemDir, "drivers", "etc", "hosts")
+	b, err := os.ReadFile(hostsFile)
+	if err != nil {
+		return err
+	}
+	outB, err := setTailscaleHosts(b, hosts)
+	if err != nil {
+		return err
+	}
+	const fileMode = 0 // ignored on windows.
+	return atomicfile.WriteFile(hostsFile, outB, fileMode)
+}
+
 // setPrimaryDNS sets the given resolvers and domains as the Tailscale
 // interface's DNS configuration.
 // If resolvers is non-empty, those resolvers become the system's
 // "primary" resolvers.
 // domains can be set without resolvers, which just contributes new
 // paths to the global DNS search list.
-func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []dnsname.FQDN) error {
+func (m windowsManager) setPrimaryDNS(resolvers []netip.Addr, domains []dnsname.FQDN) error {
 	var ipsv4 []string
 	var ipsv6 []string
 
@@ -134,7 +193,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []dnsname.
 		domStrs = append(domStrs, dom.WithoutTrailingDot())
 	}
 
-	key4, err := m.openKey(m.ifPath(ipv4RegBase))
+	key4, err := m.openInterfaceKey(winutil.IPv4TCPIPInterfacePrefix)
 	if err != nil {
 		return err
 	}
@@ -156,7 +215,7 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []dnsname.
 		return err
 	}
 
-	key6, err := m.openKey(m.ifPath(ipv6RegBase))
+	key6, err := m.openInterfaceKey(winutil.IPv6TCPIPInterfacePrefix)
 	if err != nil {
 		return err
 	}
@@ -178,9 +237,9 @@ func (m windowsManager) setPrimaryDNS(resolvers []netaddr.IP, domains []dnsname.
 		return err
 	}
 
-	// Disable LLMNR on the Tailscale interface. We don't do
-	// multicast, and we certainly don't do LLMNR, so it's pointless
-	// to make Windows try it.
+	// Disable LLMNR on the Tailscale interface. We don't do multicast, and we
+	// certainly don't do LLMNR, so it's pointless to make Windows try it. It is
+	// being deprecated.
 	if err := key4.SetDWordValue("EnableMulticast", 0); err != nil {
 		return err
 	}
@@ -215,13 +274,20 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 	// configuration only, routing one set of things to the "split"
 	// resolver and the rest to the primary.
 
-	// Unconditionally disable dynamic DNS updates on our interfaces.
+	// Unconditionally disable dynamic DNS updates and NetBIOS on our
+	// interfaces.
 	if err := m.disableDynamicUpdates(); err != nil {
 		m.logf("disableDynamicUpdates error: %v\n", err)
+	}
+	if err := m.disableNetBIOS(); err != nil {
+		m.logf("disableNetBIOS error: %v\n", err)
 	}
 
 	if len(cfg.MatchDomains) == 0 {
 		if err := m.setSplitDNS(nil, nil); err != nil {
+			return err
+		}
+		if err := m.setHosts(nil); err != nil {
 			return err
 		}
 		if err := m.setPrimaryDNS(cfg.Nameservers, cfg.SearchDomains); err != nil {
@@ -233,9 +299,23 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 		if err := m.setSplitDNS(cfg.Nameservers, cfg.MatchDomains); err != nil {
 			return err
 		}
-		// Still set search domains on the interface, since NRPT only
-		// handles query routing and not search domain expansion.
+		// Unset the resolver on the interface to ensure that we do not become
+		// the primary resolver. Although this is what we want, at the moment
+		// (2022-08-13) it causes single label resolutions from the OS resolver
+		// to wait for a MDNS response from the Tailscale interface.
+		// See #1659 and #5366 for more details.
+		//
+		// Still set search domains on the interface, since NRPT only handles
+		// query routing and not search domain expansion.
 		if err := m.setPrimaryDNS(nil, cfg.SearchDomains); err != nil {
+			return err
+		}
+
+		// As we are not the primary resolver in this setup, we need to
+		// explicitly set some single name hosts to ensure that we can resolve
+		// them quickly and get around the 2.3s delay that otherwise occurs due
+		// to multicast timeouts.
+		if err := m.setHosts(cfg.Hosts); err != nil {
 			return err
 		}
 	}
@@ -297,30 +377,47 @@ func (m windowsManager) SupportsSplitDNS() bool {
 }
 
 func (m windowsManager) Close() error {
-	return m.SetDNS(OSConfig{})
+	err := m.SetDNS(OSConfig{})
+	if m.nrptDB != nil {
+		m.nrptDB.Close()
+	}
+	return err
 }
 
 // disableDynamicUpdates sets the appropriate registry values to prevent the
 // Windows DHCP client from sending dynamic DNS updates for our interface to
 // AD domain controllers.
 func (m windowsManager) disableDynamicUpdates() error {
-	setRegValue := func(regBase string) error {
-		key, err := m.openKey(m.ifPath(regBase))
-		if err != nil {
-			return err
-		}
-		defer key.Close()
-
-		return key.SetDWordValue("DisableDynamicUpdate", 1)
+	if err := m.setSingleDWORD(winutil.IPv4TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
+		return err
 	}
-
-	for _, regBase := range []string{ipv4RegBase, ipv6RegBase} {
-		if err := setRegValue(regBase); err != nil {
-			return err
-		}
+	if err := m.setSingleDWORD(winutil.IPv6TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
+		return err
 	}
-
 	return nil
+}
+
+// setSingleDWORD opens the Registry Key in HKLM for the interface associated
+// with the windowsManager and sets the "keyPrefix\value" to data.
+func (m windowsManager) setSingleDWORD(prefix winutil.RegistryPathPrefix, value string, data uint32) error {
+	k, err := m.openInterfaceKey(prefix)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetDWordValue(value, data)
+}
+
+// disableNetBIOS sets the appropriate registry values to prevent Windows from
+// sending NetBIOS name resolution requests for our interface which we do not
+// handle nor want to. By leaving it enabled and not handling it we introduce
+// short-name resolution delays in certain conditions as Windows waits for
+// NetBIOS responses from our interface (#1659).
+//
+// Further, LLMNR and NetBIOS are being deprecated anyway in favor of MDNS.
+// https://techcommunity.microsoft.com/t5/networking-blog/aligning-on-mdns-ramping-down-netbios-name-resolution-and-llmnr/ba-p/3290816
+func (m windowsManager) disableNetBIOS() error {
+	return m.setSingleDWORD(winutil.NetBTInterfacePrefix, "NetbiosOptions", 2)
 }
 
 func (m windowsManager) GetBaseConfig() (OSConfig, error) {
@@ -342,7 +439,7 @@ func (m windowsManager) GetBaseConfig() (OSConfig, error) {
 // It's used on Windows 7 to emulate split DNS by trying to figure out
 // what the "previous" primary resolver was. It might be wrong, or
 // incomplete.
-func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err error) {
+func (m windowsManager) getBasePrimaryResolver() (resolvers []netip.Addr, err error) {
 	tsGUID, err := windows.GUIDFromString(m.guid)
 	if err != nil {
 		return nil, err
@@ -388,11 +485,8 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err er
 		}
 
 	ipLoop:
-		for _, stdip := range ips {
-			ip, ok := netaddr.FromStdIP(stdip)
-			if !ok {
-				continue
-			}
+		for _, ip := range ips {
+			ip = ip.Unmap()
 			// Skip IPv6 site-local resolvers. These are an ancient
 			// and obsolete IPv6 RFC, which Windows still faithfully
 			// implements. The net result is that some low-metric
@@ -417,10 +511,10 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netaddr.IP, err er
 	return resolvers, nil
 }
 
-var siteLocalResolvers = []netaddr.IP{
-	netaddr.MustParseIP("fec0:0:0:ffff::1"),
-	netaddr.MustParseIP("fec0:0:0:ffff::2"),
-	netaddr.MustParseIP("fec0:0:0:ffff::3"),
+var siteLocalResolvers = []netip.Addr{
+	netip.MustParseAddr("fec0:0:0:ffff::1"),
+	netip.MustParseAddr("fec0:0:0:ffff::2"),
+	netip.MustParseAddr("fec0:0:0:ffff::3"),
 }
 
 func isWindows10OrBetter() bool {

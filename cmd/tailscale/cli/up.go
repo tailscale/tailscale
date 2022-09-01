@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"reflect"
 	"runtime"
@@ -24,7 +25,6 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -178,15 +178,16 @@ var upArgs upArgsT
 // JSON block will be output. The AuthURL and QR fields will not be present, the
 // BackendState and Error fields will give the result of the authentication.
 // Ex:
-// {
-//    "AuthURL": "https://login.tailscale.com/a/0123456789abcdef",
-//    "QR": "data:image/png;base64,0123...cdef"
-//    "BackendState": "NeedsLogin"
-// }
-// {
-//    "BackendState": "Running"
-// }
 //
+//	{
+//	   "AuthURL": "https://login.tailscale.com/a/0123456789abcdef",
+//	   "QR": "data:image/png;base64,0123...cdef"
+//	   "BackendState": "NeedsLogin"
+//	}
+//
+//	{
+//	   "BackendState": "Running"
+//	}
 type upOutputJSON struct {
 	AuthURL      string `json:",omitempty"` // Authentication URL of the form https://login.tailscale.com/a/0123456789
 	QR           string `json:",omitempty"` // a DataURL (base64) PNG of a QR code AuthURL
@@ -199,18 +200,18 @@ func warnf(format string, args ...any) {
 }
 
 var (
-	ipv4default = netaddr.MustParseIPPrefix("0.0.0.0/0")
-	ipv6default = netaddr.MustParseIPPrefix("::/0")
+	ipv4default = netip.MustParsePrefix("0.0.0.0/0")
+	ipv6default = netip.MustParsePrefix("::/0")
 )
 
-func validateViaPrefix(ipp netaddr.IPPrefix) error {
+func validateViaPrefix(ipp netip.Prefix) error {
 	if !tsaddr.IsViaPrefix(ipp) {
 		return fmt.Errorf("%v is not a 4-in-6 prefix", ipp)
 	}
 	if ipp.Bits() < (128 - 32) {
 		return fmt.Errorf("%v 4-in-6 prefix must be at least a /%v", ipp, 128-32)
 	}
-	a := ipp.IP().As16()
+	a := ipp.Addr().As16()
 	// The first 64 bits of a are the via prefix.
 	// The next 32 bits are the "site ID".
 	// The last 32 bits are the IPv4.
@@ -223,13 +224,13 @@ func validateViaPrefix(ipp netaddr.IPPrefix) error {
 	return nil
 }
 
-func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netaddr.IPPrefix, error) {
-	routeMap := map[netaddr.IPPrefix]bool{}
+func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]netip.Prefix, error) {
+	routeMap := map[netip.Prefix]bool{}
 	if advertiseRoutes != "" {
 		var default4, default6 bool
 		advroutes := strings.Split(advertiseRoutes, ",")
 		for _, s := range advroutes {
-			ipp, err := netaddr.ParseIPPrefix(s)
+			ipp, err := netip.ParsePrefix(s)
 			if err != nil {
 				return nil, fmt.Errorf("%q is not a valid IP address or CIDR prefix", s)
 			}
@@ -251,14 +252,14 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		if default4 && !default6 {
 			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv4default, ipv6default)
 		} else if default6 && !default4 {
-			return nil, fmt.Errorf("%s advertised without its IPv6 counterpart, please also advertise %s", ipv6default, ipv4default)
+			return nil, fmt.Errorf("%s advertised without its IPv4 counterpart, please also advertise %s", ipv6default, ipv4default)
 		}
 	}
 	if advertiseDefaultRoute {
-		routeMap[netaddr.MustParseIPPrefix("0.0.0.0/0")] = true
-		routeMap[netaddr.MustParseIPPrefix("::/0")] = true
+		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
+		routeMap[netip.MustParsePrefix("::/0")] = true
 	}
-	routes := make([]netaddr.IPPrefix, 0, len(routeMap))
+	routes := make([]netip.Prefix, 0, len(routeMap))
 	for r := range routeMap {
 		routes = append(routes, r)
 	}
@@ -266,7 +267,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		if routes[i].Bits() != routes[j].Bits() {
 			return routes[i].Bits() < routes[j].Bits()
 		}
-		return routes[i].IP().Less(routes[j].IP())
+		return routes[i].Addr().Less(routes[j].Addr())
 	})
 	return routes, nil
 }
@@ -570,9 +571,9 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 
 				data, err := json.MarshalIndent(js, "", "\t")
 				if err != nil {
-					log.Printf("upOutputJSON marshalling error: %v", err)
+					printf("upOutputJSON marshalling error: %v", err)
 				} else {
-					fmt.Println(string(data))
+					outln(string(data))
 				}
 			} else {
 				fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
@@ -710,7 +711,7 @@ func printUpDoneJSON(state ipn.State, errorString string) {
 	if err != nil {
 		log.Printf("printUpDoneJSON marshalling error: %v", err)
 	} else {
-		fmt.Println(string(data))
+		outln(string(data))
 	}
 }
 
@@ -790,7 +791,7 @@ type upCheckEnv struct {
 	flagSet       *flag.FlagSet
 	upArgs        upArgsT
 	backendState  string
-	curExitNodeIP netaddr.IP
+	curExitNodeIP netip.Addr
 	distro        distro.Distro
 }
 
@@ -913,10 +914,10 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 	ret := make(map[string]any)
 
 	exitNodeIPStr := func() string {
-		if !prefs.ExitNodeIP.IsZero() {
+		if prefs.ExitNodeIP.IsValid() {
 			return prefs.ExitNodeIP.String()
 		}
-		if prefs.ExitNodeID.IsZero() || env.curExitNodeIP.IsZero() {
+		if prefs.ExitNodeID.IsZero() || !env.curExitNodeIP.IsValid() {
 			return ""
 		}
 		return env.curExitNodeIP.String()
@@ -991,13 +992,13 @@ func fmtFlagValueArg(flagName string, val any) string {
 	return fmt.Sprintf("--%s=%v", flagName, shellquote.Join(fmt.Sprint(val)))
 }
 
-func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
+func hasExitNodeRoutes(rr []netip.Prefix) bool {
 	var v4, v6 bool
 	for _, r := range rr {
 		if r.Bits() == 0 {
-			if r.IP().Is4() {
+			if r.Addr().Is4() {
 				v4 = true
-			} else if r.IP().Is6() {
+			} else if r.Addr().Is6() {
 				v6 = true
 			}
 		}
@@ -1008,11 +1009,11 @@ func hasExitNodeRoutes(rr []netaddr.IPPrefix) bool {
 // withoutExitNodes returns rr unchanged if it has only 1 or 0 /0
 // routes. If it has both IPv4 and IPv6 /0 routes, then it returns
 // a copy with all /0 routes removed.
-func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
+func withoutExitNodes(rr []netip.Prefix) []netip.Prefix {
 	if !hasExitNodeRoutes(rr) {
 		return rr
 	}
-	var out []netaddr.IPPrefix
+	var out []netip.Prefix
 	for _, r := range rr {
 		if r.Bits() > 0 {
 			out = append(out, r)
@@ -1023,11 +1024,11 @@ func withoutExitNodes(rr []netaddr.IPPrefix) []netaddr.IPPrefix {
 
 // exitNodeIP returns the exit node IP from p, using st to map
 // it from its ID form to an IP address if needed.
-func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netaddr.IP) {
+func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 	if p == nil {
 		return
 	}
-	if !p.ExitNodeIP.IsZero() {
+	if p.ExitNodeIP.IsValid() {
 		return p.ExitNodeIP
 	}
 	id := p.ExitNodeID

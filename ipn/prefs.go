@@ -11,15 +11,16 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
@@ -98,7 +99,7 @@ type Prefs struct {
 	// blackhole route will be installed on the local system to
 	// prevent any traffic escaping to the local network.
 	ExitNodeID tailcfg.StableNodeID
-	ExitNodeIP netaddr.IP
+	ExitNodeIP netip.Addr
 
 	// ExitNodeAllowLANAccess indicates whether locally accessible subnets should be
 	// routed directly or via the exit node.
@@ -167,7 +168,7 @@ type Prefs struct {
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
 	// Tailscale network as reachable through the current
 	// node.
-	AdvertiseRoutes []netaddr.IPPrefix
+	AdvertiseRoutes []netip.Prefix
 
 	// NoSNAT specifies whether to source NAT traffic going to
 	// destinations in AdvertiseRoutes. The default is to apply source
@@ -308,7 +309,7 @@ func (p *Prefs) pretty(goos string) string {
 	if p.ShieldsUp {
 		sb.WriteString("shields=true ")
 	}
-	if !p.ExitNodeIP.IsZero() {
+	if p.ExitNodeIP.IsValid() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
 	} else if !p.ExitNodeID.IsZero() {
 		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
@@ -382,7 +383,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.Persist.Equals(p2.Persist)
 }
 
-func compareIPNets(a, b []netaddr.IPPrefix) bool {
+func compareIPNets(a, b []netip.Prefix) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -477,13 +478,13 @@ func (p *Prefs) SetAdvertiseExitNode(runExit bool) {
 		return
 	}
 	p.AdvertiseRoutes = append(p.AdvertiseRoutes,
-		netaddr.IPPrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
-		netaddr.IPPrefixFrom(netaddr.IPv6Unspecified(), 0))
+		netip.PrefixFrom(netaddr.IPv4(0, 0, 0, 0), 0),
+		netip.PrefixFrom(netip.IPv6Unspecified(), 0))
 }
 
 // peerWithTailscaleIP returns the peer in st with the provided
 // Tailscale IP.
-func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerStatus, ok bool) {
+func peerWithTailscaleIP(st *ipnstate.Status, ip netip.Addr) (ps *ipnstate.PeerStatus, ok bool) {
 	for _, ps := range st.Peer {
 		for _, ip2 := range ps.TailscaleIPs {
 			if ip == ip2 {
@@ -494,7 +495,7 @@ func peerWithTailscaleIP(st *ipnstate.Status, ip netaddr.IP) (ps *ipnstate.PeerS
 	return nil, false
 }
 
-func isRemoteIP(st *ipnstate.Status, ip netaddr.IP) bool {
+func isRemoteIP(st *ipnstate.Status, ip netip.Addr) bool {
 	for _, selfIP := range st.TailscaleIPs {
 		if ip == selfIP {
 			return false
@@ -506,7 +507,7 @@ func isRemoteIP(st *ipnstate.Status, ip netaddr.IP) bool {
 // ClearExitNode sets the ExitNodeID and ExitNodeIP to their zero values.
 func (p *Prefs) ClearExitNode() {
 	p.ExitNodeID = ""
-	p.ExitNodeIP = netaddr.IP{}
+	p.ExitNodeIP = netip.Addr{}
 }
 
 // ExitNodeLocalIPError is returned when the requested IP address for an exit
@@ -519,11 +520,11 @@ func (e ExitNodeLocalIPError) Error() string {
 	return fmt.Sprintf("cannot use %s as an exit node as it is a local IP address to this machine", e.hostOrIP)
 }
 
-func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netaddr.IP, err error) {
+func exitNodeIPOfArg(s string, st *ipnstate.Status) (ip netip.Addr, err error) {
 	if s == "" {
 		return ip, os.ErrInvalid
 	}
-	ip, err = netaddr.ParseIP(s)
+	ip, err = netip.ParseAddr(s)
 	if err == nil {
 		// If we're online already and have a netmap, double check that the IP
 		// address specified is valid.

@@ -11,11 +11,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"runtime"
 	"sync/atomic"
 	"time"
 
-	"inet.af/netaddr"
+	"golang.org/x/exp/slices"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/packet"
@@ -67,7 +68,7 @@ const reconfigTimeout = time.Second
 
 type response struct {
 	pkt []byte
-	to  netaddr.IPPort // response destination (request source)
+	to  netip.AddrPort // response destination (request source)
 }
 
 // Manager manages system DNS settings.
@@ -137,6 +138,47 @@ func (m *Manager) Set(cfg Config) error {
 	return nil
 }
 
+// compileHostEntries creates a list of single-label resolutions possible
+// from the configured hosts and search domains.
+// The entries are compiled in the order of the search domains, then the hosts.
+// The returned list is sorted by the first hostname in each entry.
+func compileHostEntries(cfg Config) (hosts []*HostEntry) {
+	didLabel := make(map[string]bool, len(cfg.Hosts))
+	for _, sd := range cfg.SearchDomains {
+		for h, ips := range cfg.Hosts {
+			if !sd.Contains(h) || h.NumLabels() != (sd.NumLabels()+1) {
+				continue
+			}
+			ipHosts := []string{string(h.WithTrailingDot())}
+			if label := dnsname.FirstLabel(string(h)); !didLabel[label] {
+				didLabel[label] = true
+				ipHosts = append(ipHosts, label)
+			}
+			for _, ip := range ips {
+				if cfg.OnlyIPv6 && ip.Is4() {
+					continue
+				}
+				hosts = append(hosts, &HostEntry{
+					Addr:  ip,
+					Hosts: ipHosts,
+				})
+				// Only add IPv4 or IPv6 per host, like we do in the resolver.
+				break
+			}
+		}
+	}
+	slices.SortFunc(hosts, func(a, b *HostEntry) bool {
+		if len(a.Hosts) == 0 {
+			return false
+		}
+		if len(b.Hosts) == 0 {
+			return true
+		}
+		return a.Hosts[0] < b.Hosts[0]
+	})
+	return hosts
+}
+
 // compileConfig converts cfg into a quad-100 resolver configuration
 // and an OS-level configuration.
 func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig, err error) {
@@ -154,6 +196,9 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	}
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
+	if runtime.GOOS == "windows" {
+		ocfg.Hosts = compileHostEntries(cfg)
+	}
 
 	// Deal with trivial configs first.
 	switch {
@@ -162,9 +207,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
 		return rcfg, ocfg, nil
-	case cfg.hasDefaultIPResolversOnly():
-		// Trivial CorpDNS configuration, just override the OS
-		// resolver.
+	case cfg.hasDefaultIPResolversOnly() && !cfg.hasHostsWithoutSplitDNSRoutes():
+		// Trivial CorpDNS configuration, just override the OS resolver.
+		//
+		// If there are hosts (ExtraRecords) that are not covered by an existing
+		// SplitDNS route, then we don't go into this path so that we fall into
+		// the next case and send the extra record hosts queries through
+		// 100.100.100.100 instead where we can answer them.
+		//
 		// TODO: for OSes that support it, pass IP:port and DoH
 		// addresses directly to OS.
 		// https://github.com/tailscale/tailscale/issues/1666
@@ -175,7 +225,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// through quad-100.
 		rcfg.Routes = routes
 		rcfg.Routes["."] = cfg.DefaultResolvers
-		ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
+		ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
 		return rcfg, ocfg, nil
 	}
 
@@ -212,14 +262,13 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 	// or routes + MagicDNS, or just MagicDNS, or on an OS that cannot
 	// split-DNS. Install a split config pointing at quad-100.
 	rcfg.Routes = routes
-	ocfg.Nameservers = []netaddr.IP{cfg.serviceIP()}
+	ocfg.Nameservers = []netip.Addr{cfg.serviceIP()}
 
-	// If the OS can't do native split-dns, read out the underlying
-	// resolver config and blend it into our config.
 	if m.os.SupportsSplitDNS() {
 		ocfg.MatchDomains = cfg.matchDomains()
-	}
-	if !m.os.SupportsSplitDNS() || isWindows {
+	} else {
+		// If the OS can't do native split-dns, read out the underlying
+		// resolver config and blend it into our config.
 		bcfg, err := m.os.GetBaseConfig()
 		if err != nil {
 			health.SetDNSOSHealth(err)
@@ -239,10 +288,10 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 // toIPsOnly returns only the IP portion of dnstype.Resolver.
 // Only safe to use if the resolvers slice has been cleared of
 // DoH or custom-port entries with something like hasDefaultIPResolversOnly.
-func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
+func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 	for _, r := range resolvers {
 		if ipp, ok := r.IPPort(); ok && ipp.Port() == 53 {
-			ret = append(ret, ipp.IP())
+			ret = append(ret, ipp.Addr())
 		}
 	}
 	return ret
@@ -252,7 +301,7 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netaddr.IP) {
 // called with a DNS request payload.
 //
 // TODO(tom): Rip out once all platforms use netstack.
-func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netaddr.IPPort) error {
+func (m *Manager) EnqueuePacket(bs []byte, proto ipproto.Proto, from, to netip.AddrPort) error {
 	if to.Port() != 53 || proto != ipproto.UDP {
 		return nil
 	}
@@ -299,11 +348,11 @@ func (m *Manager) NextPacket() ([]byte, error) {
 
 	var buf []byte
 	switch {
-	case resp.to.IP().Is4():
+	case resp.to.Addr().Is4():
 		h := packet.UDP4Header{
 			IP4Header: packet.IP4Header{
 				Src: magicDNSIP,
-				Dst: resp.to.IP(),
+				Dst: resp.to.Addr(),
 			},
 			SrcPort: 53,
 			DstPort: resp.to.Port(),
@@ -312,11 +361,11 @@ func (m *Manager) NextPacket() ([]byte, error) {
 		buf = make([]byte, offset+hlen+len(resp.pkt))
 		copy(buf[offset+hlen:], resp.pkt)
 		h.Marshal(buf[offset:])
-	case resp.to.IP().Is6():
+	case resp.to.Addr().Is6():
 		h := packet.UDP6Header{
 			IP6Header: packet.IP6Header{
 				Src: magicDNSIPv6,
-				Dst: resp.to.IP(),
+				Dst: resp.to.Addr(),
 			},
 			SrcPort: 53,
 			DstPort: resp.to.Port(),
@@ -334,7 +383,7 @@ func (m *Manager) NextPacket() ([]byte, error) {
 // Query executes a DNS query recieved from the given address. The query is
 // provided in bs as a wire-encoded DNS query without any transport header.
 // This method is called for requests arriving over UDP and TCP.
-func (m *Manager) Query(ctx context.Context, bs []byte, from netaddr.IPPort) ([]byte, error) {
+func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
 	select {
 	case <-m.ctx.Done():
 		return nil, net.ErrClosed
@@ -368,10 +417,10 @@ type dnsTCPSession struct {
 	m *Manager
 
 	conn    net.Conn
-	srcAddr netaddr.IPPort
+	srcAddr netip.AddrPort
 
-	readClosing  chan struct{}
-	responses    chan []byte // DNS replies pending writing
+	readClosing chan struct{}
+	responses   chan []byte // DNS replies pending writing
 
 	ctx      context.Context
 	closeCtx context.CancelFunc
@@ -455,13 +504,13 @@ func (s *dnsTCPSession) handleReads() {
 
 // HandleTCPConn implements magicDNS over TCP, taking a connection and
 // servicing DNS requests sent down it.
-func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netaddr.IPPort) {
+func (m *Manager) HandleTCPConn(conn net.Conn, srcAddr netip.AddrPort) {
 	s := dnsTCPSession{
-		m:            m,
-		conn:         conn,
-		srcAddr:      srcAddr,
-		responses:    make(chan []byte),
-		readClosing:  make(chan struct{}),
+		m:           m,
+		conn:        conn,
+		srcAddr:     srcAddr,
+		responses:   make(chan []byte),
+		readClosing: make(chan struct{}),
 	}
 	s.ctx, s.closeCtx = context.WithCancel(m.ctx)
 	go s.handleReads()

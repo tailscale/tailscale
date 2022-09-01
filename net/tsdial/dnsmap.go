@@ -9,10 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/dnsname"
 )
@@ -22,7 +22,7 @@ import (
 //
 // Example keys are "foo.domain.tld.beta.tailscale.net" and "foo",
 // both without trailing dots, and both always lowercase.
-type dnsMap map[string]netaddr.IP
+type dnsMap map[string]netip.Addr
 
 // canonMapKey canonicalizes its input s to be a dnsMap map key.
 func canonMapKey(s string) string {
@@ -37,13 +37,13 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	suffix := nm.MagicDNSSuffix()
 	have4 := false
 	if nm.Name != "" && len(nm.Addresses) > 0 {
-		ip := nm.Addresses[0].IP()
+		ip := nm.Addresses[0].Addr()
 		ret[canonMapKey(nm.Name)] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
 		}
 		for _, a := range nm.Addresses {
-			if a.IP().Is4() {
+			if a.Addr().Is4() {
 				have4 = true
 			}
 		}
@@ -53,7 +53,7 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 			continue
 		}
 		for _, a := range p.Addresses {
-			ip := a.IP()
+			ip := a.Addr()
 			if ip.Is4() && !have4 {
 				continue
 			}
@@ -68,7 +68,7 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 		if rec.Type != "" {
 			continue
 		}
-		ip, err := netaddr.ParseIP(rec.Value)
+		ip, err := netip.ParseAddr(rec.Value)
 		if err != nil {
 			continue
 		}
@@ -97,24 +97,24 @@ func splitHostPort(addr string) (host string, port uint16, err error) {
 //
 // The error is [exactly] errUnresolved if the addr is a name that isn't known
 // in the map.
-func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ netaddr.IPPort, err error) {
+func (m dnsMap) resolveMemory(ctx context.Context, network, addr string) (_ netip.AddrPort, err error) {
 	host, port, err := splitHostPort(addr)
 	if err != nil {
 		// addr malformed or invalid port.
-		return netaddr.IPPort{}, err
+		return netip.AddrPort{}, err
 	}
-	if ip, err := netaddr.ParseIP(host); err == nil {
+	if ip, err := netip.ParseAddr(host); err == nil {
 		// addr was literal ip:port.
-		return netaddr.IPPortFrom(ip, port), nil
+		return netip.AddrPortFrom(ip, port), nil
 	}
 
 	// Host is not an IP, so assume it's a DNS name.
 
 	// Try MagicDNS first, otherwise a real DNS lookup.
 	ip := m[canonMapKey(host)]
-	if !ip.IsZero() {
-		return netaddr.IPPortFrom(ip, port), nil
+	if ip.IsValid() {
+		return netip.AddrPortFrom(ip, port), nil
 	}
 
-	return netaddr.IPPort{}, errUnresolved
+	return netip.AddrPort{}, errUnresolved
 }

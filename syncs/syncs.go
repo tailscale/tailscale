@@ -21,6 +21,49 @@ func initClosedChan() <-chan struct{} {
 	return ch
 }
 
+// AtomicValue is the generic version of atomic.Value.
+type AtomicValue[T any] struct {
+	v atomic.Value
+}
+
+// Load returns the value set by the most recent Store.
+// It returns the zero value for T if the value is empty.
+func (v *AtomicValue[T]) Load() T {
+	x, _ := v.LoadOk()
+	return x
+}
+
+// LoadOk is like Load but returns a boolean indicating whether the value was
+// loaded.
+func (v *AtomicValue[T]) LoadOk() (_ T, ok bool) {
+	x := v.v.Load()
+	if x != nil {
+		return x.(T), true
+	}
+	var zero T
+	return zero, false
+}
+
+// Store sets the value of the Value to x.
+func (v *AtomicValue[T]) Store(x T) {
+	v.v.Store(x)
+}
+
+// Swap stores new into Value and returns the previous value.
+// It returns the zero value for T if the value is empty.
+func (v *AtomicValue[T]) Swap(x T) (old T) {
+	oldV := v.v.Swap(x)
+	if oldV != nil {
+		return oldV.(T)
+	}
+	return old
+}
+
+// CompareAndSwap executes the compare-and-swap operation for the Value.
+func (v *AtomicValue[T]) CompareAndSwap(oldV, newV T) (swapped bool) {
+	return v.v.CompareAndSwap(oldV, newV)
+}
+
 // WaitGroupChan is like a sync.WaitGroup, but has a chan that closes
 // on completion that you can wait on. (This, you can only use the
 // value once)
@@ -67,42 +110,6 @@ func (wg *WaitGroupChan) Decr() {
 
 // Wait blocks until the WaitGroupChan counter is zero.
 func (wg *WaitGroupChan) Wait() { <-wg.done }
-
-// AtomicBool is an atomic boolean.
-type AtomicBool int32
-
-func (b *AtomicBool) Set(v bool) {
-	var n int32
-	if v {
-		n = 1
-	}
-	atomic.StoreInt32((*int32)(b), n)
-}
-
-// Swap sets b to v and reports whether it changed.
-func (b *AtomicBool) Swap(v bool) (changed bool) {
-	var n int32
-	if v {
-		n = 1
-	}
-	old := atomic.SwapInt32((*int32)(b), n)
-	return old != n
-}
-
-func (b *AtomicBool) Get() bool {
-	return atomic.LoadInt32((*int32)(b)) != 0
-}
-
-// AtomicUint32 is an atomic uint32.
-type AtomicUint32 uint32
-
-func (b *AtomicUint32) Set(v uint32) {
-	atomic.StoreUint32((*uint32)(b), v)
-}
-
-func (b *AtomicUint32) Get() uint32 {
-	return atomic.LoadUint32((*uint32)(b))
-}
 
 // Semaphore is a counting semaphore.
 //

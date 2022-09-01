@@ -363,9 +363,7 @@ func (res *response) marshal() ([]byte, error) {
 	}
 
 	pkt = append(pkt, addr...)
-	port := make([]byte, 2)
-	binary.BigEndian.PutUint16(port, uint16(res.bindPort))
-	pkt = append(pkt, port...)
+	pkt = binary.BigEndian.AppendUint16(pkt, uint16(res.bindPort))
 
 	return pkt, nil
 }

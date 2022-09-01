@@ -9,9 +9,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnstate"
 )
 
@@ -100,7 +100,7 @@ func runIP(ctx context.Context, args []string) error {
 }
 
 func peerMatchingIP(st *ipnstate.Status, ipStr string) (ps *ipnstate.PeerStatus, ok bool) {
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return
 	}

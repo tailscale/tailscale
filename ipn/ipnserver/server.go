@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -29,7 +30,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -42,6 +42,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tka"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
@@ -146,15 +147,15 @@ func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 		ci.Creds, _ = peercred.Get(c)
 		return ci, nil
 	}
-	la, err := netaddr.ParseIPPort(c.LocalAddr().String())
+	la, err := netip.ParseAddrPort(c.LocalAddr().String())
 	if err != nil {
 		return ci, fmt.Errorf("parsing local address: %w", err)
 	}
-	ra, err := netaddr.ParseIPPort(c.RemoteAddr().String())
+	ra, err := netip.ParseAddrPort(c.RemoteAddr().String())
 	if err != nil {
 		return ci, fmt.Errorf("parsing local remote: %w", err)
 	}
-	if !la.IP().IsLoopback() || !ra.IP().IsLoopback() {
+	if !la.Addr().IsLoopback() || !ra.Addr().IsLoopback() {
 		return ci, errors.New("non-loopback connection")
 	}
 	tab, err := netstat.Get()
@@ -770,9 +771,28 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 		return smallzstd.NewDecoder(nil)
 	})
 
+	if root := b.TailscaleVarRoot(); root != "" {
+		chonkDir := filepath.Join(root, "chonk")
+		if _, err := os.Stat(chonkDir); err == nil {
+			// The directory exists, which means network-lock has been initialized.
+			storage, err := tka.ChonkDir(chonkDir)
+			if err != nil {
+				return nil, fmt.Errorf("opening tailchonk: %v", err)
+			}
+			authority, err := tka.Open(storage)
+			if err != nil {
+				return nil, fmt.Errorf("initializing tka: %v", err)
+			}
+			b.SetTailnetKeyAuthority(authority, storage)
+			logf("tka initialized at head %x", authority.Head())
+		}
+	} else {
+		logf("network-lock unavailable; no state directory")
+	}
+
 	dg := distro.Get()
 	switch dg {
-	case distro.Synology, distro.TrueNAS:
+	case distro.Synology, distro.TrueNAS, distro.QNAP:
 		// See if they have a "Taildrop" share.
 		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
 		path, err := findTaildropDir(dg)
@@ -1065,7 +1085,7 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	st.WriteHTML(w)
 }
 
-func peerPid(entries []netstat.Entry, la, ra netaddr.IPPort) int {
+func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
 	for _, e := range entries {
 		if e.Local == ra && e.Remote == la {
 			return e.Pid
@@ -1123,6 +1143,8 @@ func findTaildropDir(dg distro.Distro) (string, error) {
 		return findSynologyTaildropDir(name)
 	case distro.TrueNAS:
 		return findTrueNASTaildropDir(name)
+	case distro.QNAP:
+		return findQnapTaildropDir(name)
 	}
 	return "", fmt.Errorf("%s is an unsupported distro for Taildrop dir", dg)
 }
@@ -1159,6 +1181,28 @@ func findTrueNASTaildropDir(name string) (dir string, err error) {
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
 			return dir, nil
 		}
+	}
+	return "", fmt.Errorf("shared folder %q not found", name)
+}
+
+// findQnapTaildropDir checks if a Shared Folder named "Taildrop" exists.
+func findQnapTaildropDir(name string) (string, error) {
+	dir := fmt.Sprintf("/share/%s", name)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("shared folder %q not found", name)
+	}
+	if fi.IsDir() {
+		return dir, nil
+	}
+
+	// share/Taildrop is usually a symlink to CACHEDEV1_DATA/Taildrop/ or some such.
+	fullpath, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("symlink to shared folder %q not found", name)
+	}
+	if fi, err = os.Stat(fullpath); err == nil && fi.IsDir() {
+		return dir, nil // return the symlink, how QNAP set it up
 	}
 	return "", fmt.Errorf("shared folder %q not found", name)
 }

@@ -9,8 +9,8 @@ package views
 import (
 	"encoding/json"
 	"errors"
+	"net/netip"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 )
 
@@ -132,13 +132,50 @@ func (v Slice[T]) AsSlice() []T {
 	return v.AppendTo(v.ж[:0:0])
 }
 
-// IPPrefixSlice is a read-only accessor for a slice of netaddr.IPPrefix.
+// IndexFunc returns the first index of an element in v satisfying f(e),
+// or -1 if none do.
+//
+// As it runs in O(n) time, use with care.
+func (v Slice[T]) IndexFunc(f func(T) bool) int {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// ContainsFunc reports whether any element in v satisfies f(e).
+//
+// As it runs in O(n) time, use with care.
+func (v Slice[T]) ContainsFunc(f func(T) bool) bool {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// SliceContains reports whether v contains element e.
+//
+// As it runs in O(n) time, use with care.
+func SliceContains[T comparable](v Slice[T], e T) bool {
+	for i := 0; i < v.Len(); i++ {
+		if v.At(i) == e {
+			return true
+		}
+	}
+	return false
+}
+
+// IPPrefixSlice is a read-only accessor for a slice of netip.Prefix.
 type IPPrefixSlice struct {
-	ж Slice[netaddr.IPPrefix]
+	ж Slice[netip.Prefix]
 }
 
 // IPPrefixSliceOf returns a IPPrefixSlice for the provided slice.
-func IPPrefixSliceOf(x []netaddr.IPPrefix) IPPrefixSlice { return IPPrefixSlice{SliceOf(x)} }
+func IPPrefixSliceOf(x []netip.Prefix) IPPrefixSlice { return IPPrefixSlice{SliceOf(x)} }
 
 // IsNil reports whether the underlying slice is nil.
 func (v IPPrefixSlice) IsNil() bool { return v.ж.IsNil() }
@@ -147,30 +184,30 @@ func (v IPPrefixSlice) IsNil() bool { return v.ж.IsNil() }
 func (v IPPrefixSlice) Len() int { return v.ж.Len() }
 
 // At returns the IPPrefix at index `i` of the slice.
-func (v IPPrefixSlice) At(i int) netaddr.IPPrefix { return v.ж.At(i) }
+func (v IPPrefixSlice) At(i int) netip.Prefix { return v.ж.At(i) }
 
 // AppendTo appends the underlying slice values to dst.
-func (v IPPrefixSlice) AppendTo(dst []netaddr.IPPrefix) []netaddr.IPPrefix {
+func (v IPPrefixSlice) AppendTo(dst []netip.Prefix) []netip.Prefix {
 	return v.ж.AppendTo(dst)
 }
 
-// Unwrap returns the underlying Slice[netaddr.IPPrefix].
-func (v IPPrefixSlice) Unwrap() Slice[netaddr.IPPrefix] {
+// Unwrap returns the underlying Slice[netip.Prefix].
+func (v IPPrefixSlice) Unwrap() Slice[netip.Prefix] {
 	return v.ж
 }
 
 // AsSlice returns a copy of underlying slice.
-func (v IPPrefixSlice) AsSlice() []netaddr.IPPrefix {
+func (v IPPrefixSlice) AsSlice() []netip.Prefix {
 	return v.ж.AsSlice()
 }
 
 // PrefixesContainsIP reports whether any IPPrefix contains IP.
-func (v IPPrefixSlice) ContainsIP(ip netaddr.IP) bool {
+func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
 	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
 }
 
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
-func (v IPPrefixSlice) ContainsFunc(f func(netaddr.IPPrefix) bool) bool {
+func (v IPPrefixSlice) ContainsFunc(f func(netip.Prefix) bool) bool {
 	return tsaddr.PrefixesContainsFunc(v.ж.ж, f)
 }
 

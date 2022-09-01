@@ -9,12 +9,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/nettype"
@@ -84,7 +84,8 @@ func runSTUN(t testing.TB, pc net.PacketConn, stats *stunStats, done chan<- stru
 		}
 		stats.mu.Unlock()
 
-		res := stun.Response(txid, ua.IP, uint16(ua.Port))
+		nia, _ := netip.AddrFromSlice(ua.IP)
+		res := stun.Response(txid, netip.AddrPortFrom(nia, uint16(ua.Port)))
 		if _, err := pc.WriteTo(res, addr); err != nil {
 			t.Logf("STUN server write failed: %v", err)
 		}
@@ -106,7 +107,7 @@ func DERPMapOf(stun ...string) *tailcfg.DERPMap {
 			panic(fmt.Sprintf("bogus port %q in %q", portStr, hostPortStr))
 		}
 		var ipv4, ipv6 string
-		ip, err := netaddr.ParseIP(host)
+		ip, err := netip.ParseAddr(host)
 		if err != nil {
 			panic(fmt.Sprintf("bogus non-IP STUN host %q in %q", host, hostPortStr))
 		}

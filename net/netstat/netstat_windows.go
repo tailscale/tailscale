@@ -9,11 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"net/netip"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/util/endian"
 )
 
@@ -153,22 +154,22 @@ func state(v uint32) string {
 	return fmt.Sprintf("unknown-state-%d", v)
 }
 
-func ipport4(addr uint32, port uint16) netaddr.IPPort {
+func ipport4(addr uint32, port uint16) netip.AddrPort {
 	if !endian.Big {
 		addr = bits.ReverseBytes32(addr)
 	}
-	return netaddr.IPPortFrom(
+	return netip.AddrPortFrom(
 		netaddr.IPv4(byte(addr>>24), byte(addr>>16), byte(addr>>8), byte(addr)),
 		port)
 }
 
-func ipport6(addr [16]byte, scope uint32, port uint16) netaddr.IPPort {
-	ip := netaddr.IPFrom16(addr)
+func ipport6(addr [16]byte, scope uint32, port uint16) netip.AddrPort {
+	ip := netip.AddrFrom16(addr).Unmap()
 	if scope != 0 {
 		// TODO: something better here?
 		ip = ip.WithZone(fmt.Sprint(scope))
 	}
-	return netaddr.IPPortFrom(ip, port)
+	return netip.AddrPortFrom(ip, port)
 }
 
 func port(v *uint32) uint16 {

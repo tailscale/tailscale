@@ -6,10 +6,11 @@ package netmap
 
 import (
 	"encoding/hex"
+	"net/netip"
 	"testing"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -256,7 +257,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("f00f00f00f"),
-						AllowedIPs: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
+						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
 				},
 			},
@@ -269,7 +270,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						DERP:       "127.3.3.40:2",
 						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
 						DiscoKey:   testDiscoKey("ba4ba4ba4b"),
-						AllowedIPs: []netaddr.IPPrefix{netaddr.IPPrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
+						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
 				},
 			},

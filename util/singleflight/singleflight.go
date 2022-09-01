@@ -12,9 +12,9 @@
 // This is a Tailscale fork of Go's singleflight package which has had several
 // homes in the past:
 //
-//    * https://github.com/golang/go/commit/61d3b2db6292581fc07a3767ec23ec94ad6100d1
-//    * https://github.com/golang/groupcache/tree/master/singleflight
-//    * https://pkg.go.dev/golang.org/x/sync/singleflight
+//   - https://github.com/golang/go/commit/61d3b2db6292581fc07a3767ec23ec94ad6100d1
+//   - https://github.com/golang/groupcache/tree/master/singleflight
+//   - https://pkg.go.dev/golang.org/x/sync/singleflight
 //
 // This fork adds generics.
 package singleflight // import "tailscale.com/util/singleflight"

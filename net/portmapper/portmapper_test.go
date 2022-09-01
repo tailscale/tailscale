@@ -116,7 +116,7 @@ func TestPCPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get mapping: %v", err)
 	}
-	if external.IsZero() {
+	if !external.IsValid() {
 		t.Errorf("got zero IP, expected non-zero")
 	}
 	if c.mapping == nil {

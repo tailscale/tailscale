@@ -6,10 +6,10 @@ package vms
 
 import (
 	"io"
+	"net/netip"
 	"runtime"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 )
 
@@ -22,11 +22,11 @@ func deriveBindhost(t *testing.T) string {
 	}
 
 	var ret string
-	err = interfaces.ForeachInterfaceAddress(func(i interfaces.Interface, prefix netaddr.IPPrefix) {
+	err = interfaces.ForeachInterfaceAddress(func(i interfaces.Interface, prefix netip.Prefix) {
 		if ret != "" || i.Name != ifName {
 			return
 		}
-		ret = prefix.IP().String()
+		ret = prefix.Addr().String()
 	})
 	if ret != "" {
 		return ret

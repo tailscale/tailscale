@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.18
-// +build go1.18
+//go:build go1.19
+// +build go1.19
 
 package main // import "tailscale.com/cmd/tailscaled"
 
@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"time"
 
@@ -32,7 +33,6 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
@@ -245,7 +245,7 @@ func beFirewallKillswitch() bool {
 	// is passed in via stdin encoded in json.
 	dcd := json.NewDecoder(os.Stdin)
 	for {
-		var routes []netaddr.IPPrefix
+		var routes []netip.Prefix
 		if err := dcd.Decode(&routes); err != nil {
 			log.Fatalf("parent process died or requested exit, exiting (%v)", err)
 		}

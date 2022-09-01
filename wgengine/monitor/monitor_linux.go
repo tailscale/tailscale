@@ -9,12 +9,12 @@ package monitor
 
 import (
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/jsimonetti/rtnetlink"
 	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
@@ -43,7 +43,7 @@ type nlConn struct {
 	// used to suppress duplicate RTM_NEWADDR messages. It is populated
 	// by RTM_NEWADDR messages and de-populated by RTM_DELADDR. See
 	// issue #4282.
-	addrCache map[uint32]map[netaddr.IP]bool
+	addrCache map[uint32]map[netip.Addr]bool
 }
 
 func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
@@ -61,7 +61,7 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
 		return newPollingMon(logf, m)
 	}
-	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netaddr.IP]bool)}, nil
+	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netip.Addr]bool)}, nil
 }
 
 func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
@@ -120,7 +120,7 @@ func (c *nlConn) Receive() (message, error) {
 		// detect them. See nlConn.addrcache and issue #4282.
 		if msg.Header.Type == unix.RTM_NEWADDR {
 			if addrs == nil {
-				addrs = make(map[netaddr.IP]bool)
+				addrs = make(map[netip.Addr]bool)
 				c.addrCache[rmsg.Index] = addrs
 			}
 
@@ -167,7 +167,7 @@ func (c *nlConn) Receive() (message, error) {
 
 		if msg.Header.Type == unix.RTM_NEWROUTE &&
 			(rmsg.Attributes.Table == 255 || rmsg.Attributes.Table == 254) &&
-			(dst.IP().IsMulticast() || dst.IP().IsLinkLocalUnicast()) {
+			(dst.Addr().IsMulticast() || dst.Addr().IsLinkLocalUnicast()) {
 
 			if debugNetlinkMessages {
 				c.logf("%s ignored", typeStr)
@@ -180,7 +180,7 @@ func (c *nlConn) Receive() (message, error) {
 		if rmsg.Table == tsTable && dst.IsSingleIP() {
 			// Don't log. Spammy and normal to see a bunch of these on start-up,
 			// which we make ourselves.
-		} else if tsaddr.IsTailscaleIP(dst.IP()) {
+		} else if tsaddr.IsTailscaleIP(dst.Addr()) {
 			// Verbose only.
 			c.logf("%s: [v1] src=%v, dst=%v, gw=%v, outif=%v, table=%v", typeStr,
 				condNetAddrPrefix(src), condNetAddrPrefix(dst), condNetAddrIP(gw),
@@ -235,25 +235,25 @@ func (c *nlConn) Receive() (message, error) {
 	}
 }
 
-func netaddrIP(std net.IP) netaddr.IP {
-	ip, _ := netaddr.FromStdIP(std)
-	return ip
+func netaddrIP(std net.IP) netip.Addr {
+	ip, _ := netip.AddrFromSlice(std)
+	return ip.Unmap()
 }
 
-func netaddrIPPrefix(std net.IP, bits uint8) netaddr.IPPrefix {
-	ip, _ := netaddr.FromStdIP(std)
-	return netaddr.IPPrefixFrom(ip, bits)
+func netaddrIPPrefix(std net.IP, bits uint8) netip.Prefix {
+	ip, _ := netip.AddrFromSlice(std)
+	return netip.PrefixFrom(ip.Unmap(), int(bits))
 }
 
-func condNetAddrPrefix(ipp netaddr.IPPrefix) string {
-	if ipp.IP().IsZero() {
+func condNetAddrPrefix(ipp netip.Prefix) string {
+	if !ipp.Addr().IsValid() {
 		return ""
 	}
 	return ipp.String()
 }
 
-func condNetAddrIP(ip netaddr.IP) string {
-	if ip.IsZero() {
+func condNetAddrIP(ip netip.Addr) string {
+	if !ip.IsValid() {
 		return ""
 	}
 	return ip.String()
@@ -261,21 +261,21 @@ func condNetAddrIP(ip netaddr.IP) string {
 
 // newRouteMessage is a message for a new route being added.
 type newRouteMessage struct {
-	Src, Dst netaddr.IPPrefix
-	Gateway  netaddr.IP
+	Src, Dst netip.Prefix
+	Gateway  netip.Addr
 	Table    uint8
 }
 
 const tsTable = 52
 
 func (m *newRouteMessage) ignore() bool {
-	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.IP())
+	return m.Table == tsTable || tsaddr.IsTailscaleIP(m.Dst.Addr())
 }
 
 // newAddrMessage is a message for a new address being added.
 type newAddrMessage struct {
 	Delete  bool
-	Addr    netaddr.IP
+	Addr    netip.Addr
 	IfIndex uint32 // interface index
 }
 

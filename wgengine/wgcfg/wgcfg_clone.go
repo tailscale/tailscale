@@ -7,7 +7,8 @@
 package wgcfg
 
 import (
-	"inet.af/netaddr"
+	"net/netip"
+
 	"tailscale.com/types/key"
 )
 
@@ -32,9 +33,9 @@ func (src *Config) Clone() *Config {
 var _ConfigCloneNeedsRegeneration = Config(struct {
 	Name       string
 	PrivateKey key.NodePrivate
-	Addresses  []netaddr.IPPrefix
+	Addresses  []netip.Prefix
 	MTU        uint16
-	DNS        []netaddr.IP
+	DNS        []netip.Addr
 	Peers      []Peer
 }{})
 
@@ -54,7 +55,7 @@ func (src *Peer) Clone() *Peer {
 var _PeerCloneNeedsRegeneration = Peer(struct {
 	PublicKey           key.NodePublic
 	DiscoKey            key.DiscoPublic
-	AllowedIPs          []netaddr.IPPrefix
+	AllowedIPs          []netip.Prefix
 	PersistentKeepalive uint16
 	WGEndpoint          key.NodePublic
 }{})

@@ -6,8 +6,8 @@ package dns
 
 import (
 	"errors"
+	"net/netip"
 
-	"inet.af/netaddr"
 	"tailscale.com/util/dnsname"
 )
 
@@ -17,6 +17,7 @@ type OSConfigurator interface {
 	// If cfg is the zero value, all Tailscale-related DNS
 	// configuration is removed.
 	// SetDNS must not be called after Close.
+	// SetDNS takes ownership of cfg.
 	SetDNS(cfg OSConfig) error
 	// SupportsSplitDNS reports whether the configurator is capable of
 	// installing a resolver only for specific DNS suffixes. If false,
@@ -36,10 +37,20 @@ type OSConfigurator interface {
 	Close() error
 }
 
+// HostEntry represents a single line in the OS's hosts file.
+type HostEntry struct {
+	Addr  netip.Addr
+	Hosts []string
+}
+
 // OSConfig is an OS DNS configuration.
 type OSConfig struct {
+	// Hosts is a map of DNS FQDNs to their IPs, which should be added to the
+	// OS's hosts file. Currently, (2022-08-12) it is only populated for Windows
+	// in SplitDNS mode and with Smart Name Resolution turned on.
+	Hosts []*HostEntry
 	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP
+	Nameservers []netip.Addr
 	// SearchDomains are the domain suffixes to use when expanding
 	// single-label name queries. SearchDomains is additive to
 	// whatever non-Tailscale search domains the OS has.

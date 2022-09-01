@@ -34,8 +34,9 @@ func (e Error) Errors() []error {
 
 // New returns an error composed from errs.
 // Some errors in errs get special treatment:
-//   * nil errors are discarded
-//   * errors of type Error are expanded into the top level
+//   - nil errors are discarded
+//   - errors of type Error are expanded into the top level
+//
 // If the resulting slice has length 0, New returns nil.
 // If the resulting slice has length 1, New returns that error.
 // If the resulting slice has length > 1, New returns that slice as an Error.

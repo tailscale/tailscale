@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -16,17 +17,17 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -41,6 +42,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -67,11 +69,13 @@ type Direct struct {
 	linkMon                *monitor.Mon // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
+	getNLPublicKey         func() (key.NLPublic, error) // or nil
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
 	popBrowser             func(url string) // or nil
+	c2nHandler             http.Handler     // or nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -107,6 +111,11 @@ type Options struct {
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
+	C2NHandler           http.Handler     // or nil
+
+	// GetNLPublicKey specifies an optional function to use
+	// Network Lock. If nil, it's not used.
+	GetNLPublicKey func() (key.NLPublic, error)
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -129,7 +138,7 @@ type Options struct {
 // Pinger is the LocalBackend.Ping method.
 type Pinger interface {
 	// Ping is a request to do a ping with the peer handling the given IP.
-	Ping(ctx context.Context, ip netaddr.IP, pingType tailcfg.PingType) (*ipnstate.PingResult, error)
+	Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error)
 }
 
 type Decompressor interface {
@@ -190,6 +199,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	c := &Direct{
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
+		getNLPublicKey:         opts.GetNLPublicKey,
 		serverURL:              opts.ServerURL,
 		timeNow:                opts.TimeNow,
 		logf:                   opts.Logf,
@@ -204,6 +214,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 	}
 	if opts.Hostinfo == nil {
@@ -424,6 +435,14 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
+	var nlPub key.NLPublic
+	if c.getNLPublicKey != nil {
+		nlPub, err = c.getNLPublicKey()
+		if err != nil {
+			return false, "", fmt.Errorf("get nl key: %v", err)
+		}
+	}
+
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
 			return false, "", errors.New("no nodekey to log out")
@@ -439,6 +458,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		Version:    1,
 		OldNodeKey: oldNodeKey,
 		NodeKey:    tryingNewKey.Public(),
+		NLKey:      nlPub,
 		Hostinfo:   hi,
 		Followup:   opt.URL,
 		Timestamp:  &now,
@@ -695,7 +715,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
 
 	vlogf := logger.Discard
-	if Debug.NetMap {
+	if DevKnob.DumpNetMaps {
 		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
 		// want to upload it always.
 		vlogf = c.logf
@@ -870,7 +890,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 		if pr := resp.PingRequest; pr != nil && c.isUniquePingRequest(pr) {
 			metricMapResponsePings.Add(1)
-			go answerPing(c.logf, c.httpc, pr, c.pinger)
+			go c.answerPing(pr)
 		}
 		if u := resp.PopBrowserURL; u != "" && u != sess.lastPopBrowserURL {
 			sess.lastPopBrowserURL = u
@@ -924,8 +944,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			if resp.Debug.GoroutineDumpURL != "" {
 				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
-			setControlAtomic(&controlUseDERPRoute, resp.Debug.DERPRoute)
-			setControlAtomic(&controlTrimWGConfig, resp.Debug.TrimWGConfig)
 			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep); err != nil {
 					return err
@@ -939,12 +957,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			return errors.New("MapResponse lacked node")
 		}
 
-		if Debug.StripEndpoints {
+		if d := nm.Debug; d != nil {
+			controlUseDERPRoute.Store(d.DERPRoute)
+			controlTrimWGConfig.Store(d.TrimWGConfig)
+		}
+
+		if DevKnob.StripEndpoints {
 			for _, p := range resp.Peers {
 				p.Endpoints = nil
 			}
 		}
-		if Debug.StripCaps {
+		if DevKnob.StripCaps {
 			nm.SelfNode.Capabilities = nil
 		}
 
@@ -1110,25 +1133,23 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	return &out, nil
 }
 
-// Debug contains temporary internal-only debug knobs.
+// DevKnob contains temporary internal-only debug knobs.
 // They're unexported to not draw attention to them.
-var Debug = initDebug()
+var DevKnob = initDevKnob()
 
-type debug struct {
-	NetMap         bool
-	ProxyDNS       bool
-	Disco          bool
+type devKnobs struct {
+	DumpNetMaps    bool
+	ForceProxyDNS  bool
 	StripEndpoints bool // strip endpoints from control (only use disco messages)
 	StripCaps      bool // strip all local node's control-provided capabilities
 }
 
-func initDebug() debug {
-	return debug{
-		NetMap:         envknob.Bool("TS_DEBUG_NETMAP"),
-		ProxyDNS:       envknob.Bool("TS_DEBUG_PROXY_DNS"),
+func initDevKnob() devKnobs {
+	return devKnobs{
+		DumpNetMaps:    envknob.Bool("TS_DEBUG_NETMAP"),
+		ForceProxyDNS:  envknob.Bool("TS_DEBUG_PROXY_DNS"),
 		StripEndpoints: envknob.Bool("TS_DEBUG_STRIP_ENDPOINTS"),
 		StripCaps:      envknob.Bool("TS_DEBUG_STRIP_CAPS"),
-		Disco:          envknob.BoolDefaultTrue("TS_DEBUG_USE_DISCO"),
 	}
 }
 
@@ -1136,29 +1157,20 @@ var clockNow = time.Now
 
 // opt.Bool configs from control.
 var (
-	controlUseDERPRoute atomic.Value
-	controlTrimWGConfig atomic.Value
+	controlUseDERPRoute syncs.AtomicValue[opt.Bool]
+	controlTrimWGConfig syncs.AtomicValue[opt.Bool]
 )
-
-func setControlAtomic(dst *atomic.Value, v opt.Bool) {
-	old, ok := dst.Load().(opt.Bool)
-	if !ok || old != v {
-		dst.Store(v)
-	}
-}
 
 // DERPRouteFlag reports the last reported value from control for whether
 // DERP route optimization (Issue 150) should be enabled.
 func DERPRouteFlag() opt.Bool {
-	v, _ := controlUseDERPRoute.Load().(opt.Bool)
-	return v
+	return controlUseDERPRoute.Load()
 }
 
 // TrimWGConfig reports the last reported value from control for whether
 // we should do lazy wireguard configuration.
 func TrimWGConfig() opt.Bool {
-	v, _ := controlTrimWGConfig.Load().(opt.Bool)
-	return v
+	return controlTrimWGConfig.Load()
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled
@@ -1167,8 +1179,8 @@ func TrimWGConfig() opt.Bool {
 // It should not return false positives.
 //
 // TODO(bradfitz): Change controlclient.Options.SkipIPForwardingCheck into a
-// func([]netaddr.IPPrefix) error signature instead.
-func ipForwardingBroken(routes []netaddr.IPPrefix, state *interfaces.State) bool {
+// func([]netip.Prefix) error signature instead.
+func ipForwardingBroken(routes []netip.Prefix, state *interfaces.State) bool {
 	warn, err := netutil.CheckIPForwarding(routes, state)
 	if err != nil {
 		// Oh well, we tried. This is just for debugging.
@@ -1196,21 +1208,39 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 	return true
 }
 
-func answerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger) {
+func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
+	httpc := c.httpc
+	useNoise := pr.URLIsNoise || pr.Types == "c2n" && c.noiseConfigured()
+	if useNoise {
+		nc, err := c.getNoiseClient()
+		if err != nil {
+			c.logf("failed to get noise client for ping request: %v", err)
+			return
+		}
+		httpc = nc.Client
+	}
 	if pr.URL == "" {
-		logf("invalid PingRequest with no URL")
+		c.logf("invalid PingRequest with no URL")
 		return
 	}
-	if pr.Types == "" {
-		answerHeadPing(logf, c, pr)
+	switch pr.Types {
+	case "":
+		answerHeadPing(c.logf, httpc, pr)
+		return
+	case "c2n":
+		if !useNoise && !envknob.Bool("TS_DEBUG_PERMIT_HTTP_C2N") {
+			c.logf("refusing to answer c2n ping without noise")
+			return
+		}
+		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
 		switch pt := tailcfg.PingType(t); pt {
 		case tailcfg.PingTSMP, tailcfg.PingDisco, tailcfg.PingICMP, tailcfg.PingPeerAPI:
-			go doPingerPing(logf, c, pr, pinger, pt)
+			go doPingerPing(c.logf, httpc, pr, c.pinger, pt)
 		default:
-			logf("unsupported ping request type: %q", t)
+			c.logf("unsupported ping request type: %q", t)
 		}
 	}
 }
@@ -1234,6 +1264,54 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
 		logf("answerHeadPing complete to %v (after %v)", pr.URL, d)
+	}
+}
+
+func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr *tailcfg.PingRequest) {
+	if c2nHandler == nil {
+		logf("answerC2NPing: c2nHandler not defined")
+		return
+	}
+	hreq, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(pr.Payload)))
+	if err != nil {
+		logf("answerC2NPing: ReadRequest: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: got c2n request for %v ...", hreq.RequestURI)
+	}
+	handlerTimeout := time.Minute
+	if v := hreq.Header.Get("C2n-Handler-Timeout"); v != "" {
+		handlerTimeout, _ = time.ParseDuration(v)
+	}
+	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	defer cancel()
+	hreq = hreq.WithContext(handlerCtx)
+	rec := httptest.NewRecorder()
+	c2nHandler.ServeHTTP(rec, hreq)
+	cancel()
+
+	c2nResBuf := new(bytes.Buffer)
+	rec.Result().Write(c2nResBuf)
+
+	replyCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(replyCtx, "POST", pr.URL, c2nResBuf)
+	if err != nil {
+		logf("answerC2NPing: NewRequestWithContext: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
+	}
+	t0 := time.Now()
+	_, err = c.Do(req)
+	d := time.Since(t0).Round(time.Millisecond)
+	if err != nil {
+		logf("answerC2NPing error: %v to %v (after %v)", err, pr.URL, d)
+	} else if pr.Log {
+		logf("answerC2NPing complete to %v (after %v)", pr.URL, d)
 	}
 }
 
@@ -1313,7 +1391,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	if err != nil {
 		return err
 	}
-	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.serverHost, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
+	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.host, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
 	if err != nil {
 		return err
 	}
@@ -1408,7 +1486,7 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
 // pr.URL with ping response data.
 func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType tailcfg.PingType) {
-	if pr.URL == "" || pr.IP.IsZero() || pinger == nil {
+	if pr.URL == "" || !pr.IP.IsValid() || pinger == nil {
 		logf("invalid ping request: missing url, ip or pinger")
 		return
 	}

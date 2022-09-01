@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/user"
@@ -25,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/tsdial"
@@ -48,12 +48,25 @@ func TestMatchRule(t *testing.T) {
 		wantUser string
 	}{
 		{
+			name: "invalid-conn",
+			rule: &tailcfg.SSHRule{
+				Action:     someAction,
+				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
+				SSHUsers: map[string]string{
+					"*": "ubuntu",
+				},
+			},
+			wantErr: errInvalidConn,
+		},
+		{
 			name:    "nil-rule",
+			ci:      &sshConnInfo{},
 			rule:    nil,
 			wantErr: errNilRule,
 		},
 		{
 			name:    "nil-action",
+			ci:      &sshConnInfo{},
 			rule:    &tailcfg.SSHRule{},
 			wantErr: errNilAction,
 		},
@@ -140,7 +153,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{NodeIP: "1.2.3.4"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{src: netaddr.MustParseIPPort("1.2.3.4:30343")},
+			ci:       &sshConnInfo{src: netip.MustParseAddrPort("1.2.3.4:30343")},
 			wantUser: "ubuntu",
 		},
 		{
@@ -180,6 +193,7 @@ func TestMatchRule(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &conn{
 				info: tt.ci,
+				srv:  &server{logf: t.Logf},
 			}
 			got, gotUser, err := c.matchRule(tt.rule, nil)
 			if err != tt.wantErr {
@@ -232,8 +246,8 @@ func TestSSH(t *testing.T) {
 	sc.localUser = u
 	sc.info = &sshConnInfo{
 		sshUser: "test",
-		src:     netaddr.MustParseIPPort("1.2.3.4:32342"),
-		dst:     netaddr.MustParseIPPort("1.2.3.5:22"),
+		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
+		dst:     netip.MustParseAddrPort("1.2.3.5:22"),
 		node:    &tailcfg.Node{},
 		uprof:   &tailcfg.UserProfile{},
 	}

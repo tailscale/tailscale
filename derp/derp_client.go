@@ -11,13 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
-	"inet.af/netaddr"
+	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -39,8 +39,8 @@ type Client struct {
 	rate *rate.Limiter // if non-nil, rate limiter to use
 
 	// Owned by Recv:
-	peeked  int          // bytes to discard on next Recv
-	readErr atomic.Value // of error; sticky (set by Recv)
+	peeked  int                      // bytes to discard on next Recv
+	readErr syncs.AtomicValue[error] // sticky (set by Recv)
 }
 
 // ClientOpt is an option passed to NewClient.
@@ -156,6 +156,8 @@ func (c *Client) parseServerInfo(b []byte) (*serverInfo, error) {
 }
 
 type clientInfo struct {
+	// Version is the DERP protocol version that the client was built with.
+	// See the ProtocolVersion const.
 	Version int `json:"version,omitempty"`
 
 	// MeshKey optionally specifies a pre-shared key used by
@@ -443,7 +445,7 @@ func (c *Client) Recv() (m ReceivedMessage, err error) {
 }
 
 func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err error) {
-	readErr, _ := c.readErr.Load().(error)
+	readErr := c.readErr.Load()
 	if readErr != nil {
 		return nil, readErr
 	}
@@ -595,17 +597,17 @@ func (c *Client) setSendRateLimiter(sm ServerInfoMessage) {
 //
 // If the client is broken in some previously detectable way, it
 // returns an error.
-func (c *Client) LocalAddr() (netaddr.IPPort, error) {
+func (c *Client) LocalAddr() (netip.AddrPort, error) {
 	readErr, _ := c.readErr.Load().(error)
 	if readErr != nil {
-		return netaddr.IPPort{}, readErr
+		return netip.AddrPort{}, readErr
 	}
 	if c.nc == nil {
-		return netaddr.IPPort{}, errors.New("nil conn")
+		return netip.AddrPort{}, errors.New("nil conn")
 	}
 	a := c.nc.LocalAddr()
 	if a == nil {
-		return netaddr.IPPort{}, errors.New("nil addr")
+		return netip.AddrPort{}, errors.New("nil addr")
 	}
-	return netaddr.ParseIPPort(a.String())
+	return netip.ParseAddrPort(a.String())
 }

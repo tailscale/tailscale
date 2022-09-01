@@ -7,6 +7,7 @@ package tstun
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 
@@ -14,11 +15,10 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
 )
@@ -247,8 +247,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 		pkt := packLayer2UDP(
 			offer.ToBytes(),
 			ourMAC, ethSrcMAC,
-			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
+			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
+			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		if tapDebug {
@@ -274,8 +274,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 		pkt := packLayer2UDP(
 			ack.ToBytes(),
 			ourMAC, ethSrcMAC,
-			netaddr.IPPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
-			netaddr.IPPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
+			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
+			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
 		n, err := t.tdev.Write(pkt, 0)
 		if tapDebug {
@@ -289,13 +289,13 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 	return consumePacket
 }
 
-func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst netaddr.IPPort) []byte {
-	buf := buffer.NewView(header.EthernetMinimumSize + header.UDPMinimumSize + header.IPv4MinimumSize + len(payload))
+func packLayer2UDP(payload []byte, srcMAC, dstMAC net.HardwareAddr, src, dst netip.AddrPort) []byte {
+	buf := make([]byte, header.EthernetMinimumSize+header.UDPMinimumSize+header.IPv4MinimumSize+len(payload))
 	payloadStart := len(buf) - len(payload)
 	copy(buf[payloadStart:], payload)
-	srcB := src.IP().As4()
+	srcB := src.Addr().As4()
 	srcIP := tcpip.Address(srcB[:])
-	dstB := dst.IP().As4()
+	dstB := dst.Addr().As4()
 	dstIP := tcpip.Address(dstB[:])
 	// Ethernet header
 	eth := header.Ethernet(buf)
@@ -341,8 +341,7 @@ func run(prog string, args ...string) error {
 }
 
 func (t *Wrapper) destMAC() [6]byte {
-	mac, _ := t.destMACAtomic.Load().([6]byte)
-	return mac
+	return t.destMACAtomic.Load()
 }
 
 func (t *Wrapper) tapWrite(buf []byte, offset int) (int, error) {

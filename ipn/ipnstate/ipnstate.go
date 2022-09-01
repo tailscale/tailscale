@@ -12,12 +12,12 @@ import (
 	"html"
 	"io"
 	"log"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
@@ -35,7 +35,7 @@ type Status struct {
 	BackendState string
 
 	AuthURL      string       // current URL provided by control to authorize client
-	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 	Self         *PeerStatus
 
 	// ExitNodeStatus describes the current exit node.
@@ -67,6 +67,21 @@ type Status struct {
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// NetworkLockStatus represents whether network-lock is enabled,
+// along with details about the locally-known state of the tailnet
+// key authority.
+type NetworkLockStatus struct {
+	// Enabled is true if network lock is enabled.
+	Enabled bool
+
+	// Head describes the AUM hash of the leaf AUM. Head is nil
+	// if network lock is not enabled.
+	Head *[32]byte
+
+	// PublicKey describes the nodes' network-lock public key.
+	PublicKey key.NLPublic
+}
+
 // TailnetStatus is information about a Tailscale network ("tailnet").
 type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.
@@ -94,7 +109,7 @@ type ExitNodeStatus struct {
 	Online bool
 
 	// TailscaleIPs are the exit node's IP addresses assigned to the node.
-	TailscaleIPs []netaddr.IPPrefix
+	TailscaleIPs []netip.Prefix
 }
 
 func (s *Status) Peers() []key.NodePublic {
@@ -124,7 +139,7 @@ type PeerStatus struct {
 	DNSName      string
 	OS           string // HostInfo.OS
 	UserID       tailcfg.UserID
-	TailscaleIPs []netaddr.IP // Tailscale IP(s) assigned to this node
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
@@ -240,7 +255,7 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 }
 
 // AddIP adds a Tailscale IP address to the status.
-func (sb *StatusBuilder) AddTailscaleIP(ip netaddr.IP) {
+func (sb *StatusBuilder) AddTailscaleIP(ip netip.Addr) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	if sb.locked {
@@ -490,6 +505,8 @@ func osEmoji(os string) string {
 		return "👿"
 	case "openbsd":
 		return "🐡"
+	case "illumos":
+		return "☀️"
 	}
 	return "👽"
 }

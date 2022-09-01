@@ -6,9 +6,11 @@ package filter
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
-	"inet.af/netaddr"
+	"go4.org/netipx"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
@@ -32,7 +34,7 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 		// of time in runtime.growslice. As such, we attempt to
 		// pre-allocate some slices. Multipliers were chosen arbitrarily.
 		m := Match{
-			Srcs: make([]netaddr.IPPrefix, 0, len(r.SrcIPs)),
+			Srcs: make([]netip.Prefix, 0, len(r.SrcIPs)),
 			Dsts: make([]NetPortRange, 0, 2*len(r.DstPorts)),
 			Caps: make([]CapMatch, 0, 3*len(r.CapGrant)),
 		}
@@ -95,15 +97,15 @@ func MatchesFromFilterRules(pf []tailcfg.FilterRule) ([]Match, error) {
 
 var (
 	zeroIP4 = netaddr.IPv4(0, 0, 0, 0)
-	zeroIP6 = netaddr.IPFrom16([16]byte{})
+	zeroIP6 = netip.AddrFrom16([16]byte{})
 )
 
 // parseIPSet parses arg as one:
 //
-//     * an IP address (IPv4 or IPv6)
-//     * the string "*" to match everything (both IPv4 & IPv6)
-//     * a CIDR (e.g. "192.168.0.0/16")
-//     * a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
+//   - an IP address (IPv4 or IPv6)
+//   - the string "*" to match everything (both IPv4 & IPv6)
+//   - a CIDR (e.g. "192.168.0.0/16")
+//   - a range of two IPs, inclusive, separated by hyphen ("2eff::1-2eff::0800")
 //
 // bits, if non-nil, is the legacy SrcBits CIDR length to make a IP
 // address (without a slash) treated as a CIDR of *bits length.
@@ -112,50 +114,50 @@ var (
 // around, and ultimately use a new version of IPSet.ContainsFunc like
 // Contains16Func that works in [16]byte address, so we we can match
 // at runtime without allocating?
-func parseIPSet(arg string, bits *int) ([]netaddr.IPPrefix, error) {
+func parseIPSet(arg string, bits *int) ([]netip.Prefix, error) {
 	if arg == "*" {
 		// User explicitly requested wildcard.
-		return []netaddr.IPPrefix{
-			netaddr.IPPrefixFrom(zeroIP4, 0),
-			netaddr.IPPrefixFrom(zeroIP6, 0),
+		return []netip.Prefix{
+			netip.PrefixFrom(zeroIP4, 0),
+			netip.PrefixFrom(zeroIP6, 0),
 		}, nil
 	}
 	if strings.Contains(arg, "/") {
-		pfx, err := netaddr.ParseIPPrefix(arg)
+		pfx, err := netip.ParsePrefix(arg)
 		if err != nil {
 			return nil, err
 		}
 		if pfx != pfx.Masked() {
 			return nil, fmt.Errorf("%v contains non-network bits set", pfx)
 		}
-		return []netaddr.IPPrefix{pfx}, nil
+		return []netip.Prefix{pfx}, nil
 	}
 	if strings.Count(arg, "-") == 1 {
 		ip1s, ip2s, _ := strings.Cut(arg, "-")
-		ip1, err := netaddr.ParseIP(ip1s)
+		ip1, err := netip.ParseAddr(ip1s)
 		if err != nil {
 			return nil, err
 		}
-		ip2, err := netaddr.ParseIP(ip2s)
+		ip2, err := netip.ParseAddr(ip2s)
 		if err != nil {
 			return nil, err
 		}
-		r := netaddr.IPRangeFrom(ip1, ip2)
+		r := netipx.IPRangeFrom(ip1, ip2)
 		if !r.Valid() {
 			return nil, fmt.Errorf("invalid IP range %q", arg)
 		}
 		return r.Prefixes(), nil
 	}
-	ip, err := netaddr.ParseIP(arg)
+	ip, err := netip.ParseAddr(arg)
 	if err != nil {
 		return nil, fmt.Errorf("invalid IP address %q", arg)
 	}
-	bits8 := ip.BitLen()
+	bits8 := uint8(ip.BitLen())
 	if bits != nil {
 		if *bits < 0 || *bits > int(bits8) {
 			return nil, fmt.Errorf("invalid CIDR size %d for IP %q", *bits, arg)
 		}
 		bits8 = uint8(*bits)
 	}
-	return []netaddr.IPPrefix{netaddr.IPPrefixFrom(ip, bits8)}, nil
+	return []netip.Prefix{netip.PrefixFrom(ip, int(bits8))}, nil
 }

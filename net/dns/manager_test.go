@@ -5,13 +5,13 @@
 package dns
 
 import (
+	"net/netip"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
@@ -47,6 +47,112 @@ func (c *fakeOSConfigurator) GetBaseConfig() (OSConfig, error) {
 }
 
 func (c *fakeOSConfigurator) Close() error { return nil }
+
+func TestCompileHostEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want []*HostEntry
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "no-search-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"a.b.c.": {netip.MustParseAddr("1.1.1.1")},
+				},
+			},
+		},
+		{
+			name: "search-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"a.foo.ts.net.":             {netip.MustParseAddr("1.1.1.1")},
+					"b.foo.ts.net.":             {netip.MustParseAddr("1.1.1.2")},
+					"c.foo.ts.net.":             {netip.MustParseAddr("1.1.1.3")},
+					"d.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.4")},
+					"d.foo.ts.net.":             {netip.MustParseAddr("1.1.1.4")},
+					"e.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.5")},
+					"random.example.com.":       {netip.MustParseAddr("1.1.1.1")},
+					"other.example.com.":        {netip.MustParseAddr("1.1.1.2")},
+					"othertoo.example.com.":     {netip.MustParseAddr("1.1.5.2")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"a.foo.ts.net.", "a"}},
+				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"b.foo.ts.net.", "b"}},
+				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"c.foo.ts.net.", "c"}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net.", "e"}},
+			},
+		},
+		{
+			name: "only-exact-subdomain-match",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"e.foo.ts.net.":                     {netip.MustParseAddr("1.1.1.5")},
+					"e.foo.beta.tailscale.net.":         {netip.MustParseAddr("1.1.1.5")},
+					"e.ignored.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.6")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.5"), Hosts: []string{"e.foo.ts.net.", "e"}},
+			},
+		},
+		{
+			name: "unmatched-domains",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"d.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.4")},
+					"d.foo.ts.net.":             {netip.MustParseAddr("1.1.1.4")},
+					"random.example.com.":       {netip.MustParseAddr("1.1.1.1")},
+					"other.example.com.":        {netip.MustParseAddr("1.1.1.2")},
+					"othertoo.example.com.":     {netip.MustParseAddr("1.1.5.2")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.4"), Hosts: []string{"d.foo.ts.net.", "d"}},
+			},
+		},
+		{
+			name: "overlaps",
+			cfg: Config{
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"h1.foo.ts.net.":             {netip.MustParseAddr("1.1.1.3")},
+					"h1.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.2")},
+					"h2.foo.ts.net.":             {netip.MustParseAddr("1.1.1.1")},
+					"h2.foo.beta.tailscale.net.": {netip.MustParseAddr("1.1.1.1")},
+					"example.com":                {netip.MustParseAddr("1.1.1.1")},
+				},
+				SearchDomains: []dnsname.FQDN{"foo.ts.net.", "foo.beta.tailscale.net."},
+			},
+			want: []*HostEntry{
+				{Addr: netip.MustParseAddr("1.1.1.2"), Hosts: []string{"h1.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.3"), Hosts: []string{"h1.foo.ts.net.", "h1"}},
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.beta.tailscale.net."}},
+				{Addr: netip.MustParseAddr("1.1.1.1"), Hosts: []string{"h2.foo.ts.net.", "h2"}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compileHostEntries(tc.cfg)
+			if diff := cmp.Diff(tc.want, got, cmp.Comparer(func(a, b netip.Addr) bool {
+				return a == b
+			})); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 func TestManager(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -91,6 +197,71 @@ func TestManager(t *testing.T) {
 				Hosts: hosts(
 					"dave.ts.com.", "1.2.3.4",
 					"bradfitz.ts.com.", "2.3.4.5"),
+			},
+		},
+		{
+			// If Hosts are specified (i.e. ExtraRecords) that aren't a split
+			// DNS route and a global resolver is specified, then make
+			// everything go via 100.100.100.100.
+			name:  "hosts-with-global-dns-uses-quad100",
+			split: true,
+			in: Config{
+				DefaultResolvers: mustRes("1.1.1.1", "9.9.9.9"),
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{
+				Nameservers: mustIPs("100.100.100.100"),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+				Routes: upstreams(".", "1.1.1.1", "9.9.9.9"),
+			},
+		},
+		{
+			// This is the above hosts-with-global-dns-uses-quad100 test but
+			// verifying that if global DNS servers aren't set (the 1.1.1.1 and
+			// 9.9.9.9 above), then we don't configure 100.100.100.100 as the
+			// resolver.
+			name:  "hosts-without-global-dns-not-use-quad100",
+			split: true,
+			in: Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+		},
+		{
+			// This tests that ExtraRecords (foo.tld and bar.tld here) don't trigger forcing
+			// traffic through 100.100.100.100 if there's Split DNS support and the extra
+			// records are part of a split DNS route.
+			name:  "hosts-with-extrarecord-hosts-with-routes-no-quad100",
+			split: true,
+			in: Config{
+				Routes: upstreams(
+					"tld.", "4.4.4.4",
+				),
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
+			},
+			os: OSConfig{
+				Nameservers:  mustIPs("4.4.4.4"),
+				MatchDomains: fqdns("tld."),
+			},
+			rs: resolver.Config{
+				Hosts: hosts(
+					"foo.tld.", "1.2.3.4",
+					"bar.tld.", "2.3.4.5"),
 			},
 		},
 		{
@@ -393,10 +564,10 @@ func TestManager(t *testing.T) {
 		},
 	}
 
-	trIP := cmp.Transformer("ipStr", func(ip netaddr.IP) string { return ip.String() })
-	trIPPort := cmp.Transformer("ippStr", func(ipp netaddr.IPPort) string {
+	trIP := cmp.Transformer("ipStr", func(ip netip.Addr) string { return ip.String() })
+	trIPPort := cmp.Transformer("ippStr", func(ipp netip.AddrPort) string {
 		if ipp.Port() == 53 {
-			return ipp.IP().String()
+			return ipp.Addr().String()
 		}
 		return ipp.String()
 	})
@@ -423,16 +594,16 @@ func TestManager(t *testing.T) {
 	}
 }
 
-func mustIPs(strs ...string) (ret []netaddr.IP) {
+func mustIPs(strs ...string) (ret []netip.Addr) {
 	for _, s := range strs {
-		ret = append(ret, netaddr.MustParseIP(s))
+		ret = append(ret, netip.MustParseAddr(s))
 	}
 	return ret
 }
 
-func mustIPPs(strs ...string) (ret []netaddr.IPPort) {
+func mustIPPs(strs ...string) (ret []netip.AddrPort) {
 	for _, s := range strs {
-		ret = append(ret, netaddr.MustParseIPPort(s))
+		ret = append(ret, netip.MustParseAddrPort(s))
 	}
 	return ret
 }
@@ -455,11 +626,11 @@ func fqdns(strs ...string) (ret []dnsname.FQDN) {
 	return ret
 }
 
-func hosts(strs ...string) (ret map[dnsname.FQDN][]netaddr.IP) {
+func hosts(strs ...string) (ret map[dnsname.FQDN][]netip.Addr) {
 	var key dnsname.FQDN
-	ret = map[dnsname.FQDN][]netaddr.IP{}
+	ret = map[dnsname.FQDN][]netip.Addr{}
 	for _, s := range strs {
-		if ip, err := netaddr.ParseIP(s); err == nil {
+		if ip, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IP provided before name")
 			}
@@ -479,7 +650,7 @@ func hostsR(strs ...string) (ret map[dnsname.FQDN][]dnstype.Resolver) {
 	var key dnsname.FQDN
 	ret = map[dnsname.FQDN][]dnstype.Resolver{}
 	for _, s := range strs {
-		if ip, err := netaddr.ParseIP(s); err == nil {
+		if ip, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IP provided before name")
 			}
@@ -504,12 +675,12 @@ func upstreams(strs ...string) (ret map[dnsname.FQDN][]*dnstype.Resolver) {
 				panic("IPPort provided before suffix")
 			}
 			ret[key] = nil
-		} else if ipp, err := netaddr.ParseIPPort(s); err == nil {
+		} else if ipp, err := netip.ParseAddrPort(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}
 			ret[key] = append(ret[key], &dnstype.Resolver{Addr: ipp.String()})
-		} else if _, err := netaddr.ParseIP(s); err == nil {
+		} else if _, err := netip.ParseAddr(s); err == nil {
 			if key == "" {
 				panic("IPPort provided before suffix")
 			}

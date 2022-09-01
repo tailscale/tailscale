@@ -4,6 +4,8 @@
 
 #! /bin/sh
 
+set -m # enable job control
+
 export PATH=$PATH:/tailscale/bin
 
 TS_AUTH_KEY="${TS_AUTH_KEY:-}"
@@ -23,11 +25,11 @@ set -e
 TAILSCALED_ARGS="--socket=/tmp/tailscaled.sock"
 
 if [[ ! -z "${KUBERNETES_SERVICE_HOST}" ]]; then
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET}"
+  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET} --statedir=${TS_STATE_DIR:-/tmp}"
 elif [[ ! -z "${TS_STATE_DIR}" ]]; then
   TAILSCALED_ARGS="${TAILSCALED_ARGS} --statedir=${TS_STATE_DIR}"
 else
-  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=mem:"
+  TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=mem: --statedir=/tmp"
 fi
 
 if [[ "${TS_USERSPACE}" == "true" ]]; then
@@ -60,7 +62,6 @@ fi
 
 echo "Starting tailscaled"
 tailscaled ${TAILSCALED_ARGS} &
-PID=$!
 
 UP_ARGS="--accept-dns=${TS_ACCEPT_DNS}"
 if [[ ! -z "${TS_ROUTES}" ]]; then
@@ -81,4 +82,4 @@ if [[ ! -z "${TS_DEST_IP}" ]]; then
   iptables -t nat -I PREROUTING -d "$(tailscale --socket=/tmp/tailscaled.sock ip -4)" -j DNAT --to-destination "${TS_DEST_IP}"
 fi
 
-wait ${PID}
+fg

@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,7 +28,6 @@ import (
 	"time"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
@@ -70,7 +70,7 @@ func AllowDebugAccess(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return false
 	}
@@ -298,7 +298,14 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.opts.OnError != nil {
 			h.opts.OnError(lw, r, hErr)
 		} else {
-			http.Error(lw, hErr.Msg, msg.Code)
+			// Default headers set by http.Error.
+			lw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			lw.Header().Set("X-Content-Type-Options", "nosniff")
+			for k, vs := range hErr.Header {
+				lw.Header()[k] = vs
+			}
+			lw.WriteHeader(msg.Code)
+			fmt.Fprintln(lw, hErr.Msg)
 		}
 	case err != nil:
 		// Handler returned a generic error. Serve an internal server
@@ -405,9 +412,10 @@ func (l loggingResponseWriter) Flush() {
 //
 // It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
-	Code int    // HTTP response code to send to client; 0 means means 500
-	Msg  string // Response body to send to client
-	Err  error  // Detailed error to log on the server
+	Code   int         // HTTP response code to send to client; 0 means means 500
+	Msg    string      // Response body to send to client
+	Err    error       // Detailed error to log on the server
+	Header http.Header // Optional set of HTTP headers to set in the response
 }
 
 // Error implements the error interface.
@@ -463,6 +471,12 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	case *expvar.Int:
 		if typ == "" {
 			typ = "counter"
+		}
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		return
+	case *expvar.Float:
+		if typ == "" {
+			typ = "gauge"
 		}
 		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
 		return
@@ -568,17 +582,17 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 // VarzHandler is an HTTP handler to write expvar values into the
 // prometheus export format:
 //
-//   https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
+//	https://github.com/prometheus/docs/blob/master/content/docs/instrumenting/exposition_formats.md
 //
 // It makes the following assumptions:
 //
-//   * *expvar.Int are counters (unless marked as a gauge_; see below)
-//   * a *tailscale/metrics.Set is descended into, joining keys with
+//   - *expvar.Int are counters (unless marked as a gauge_; see below)
+//   - a *tailscale/metrics.Set is descended into, joining keys with
 //     underscores. So use underscores as your metric names.
-//   * an expvar named starting with "gauge_" or "counter_" is of that
+//   - an expvar named starting with "gauge_" or "counter_" is of that
 //     Prometheus type, and has that prefix stripped.
-//   * anything else is untyped and thus not exported.
-//   * expvar.Func can return an int or int64 (for now) and anything else
+//   - anything else is untyped and thus not exported.
+//   - expvar.Func can return an int or int64 (for now) and anything else
 //     is not exported.
 //
 // This will evolve over time, or perhaps be replaced.

@@ -17,26 +17,26 @@ package netns
 import (
 	"context"
 	"net"
+	"net/netip"
+	"sync/atomic"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/netknob"
-	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 )
 
-var disabled syncs.AtomicBool
+var disabled atomic.Bool
 
 // SetEnabled enables or disables netns for the process.
 // It defaults to being enabled.
 func SetEnabled(on bool) {
-	disabled.Set(!on)
+	disabled.Store(!on)
 }
 
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
 func Listener(logf logger.Logf) *net.ListenConfig {
-	if disabled.Get() {
+	if disabled.Load() {
 		return new(net.ListenConfig)
 	}
 	return &net.ListenConfig{Control: control(logf)}
@@ -57,7 +57,7 @@ func NewDialer(logf logger.Logf) Dialer {
 // handles using a SOCKS if configured in the environment with
 // ALL_PROXY.
 func FromDialer(logf logger.Logf, d *net.Dialer) Dialer {
-	if disabled.Get() {
+	if disabled.Load() {
 		return d
 	}
 	d.Control = control(logf)
@@ -100,6 +100,6 @@ func isLocalhost(addr string) bool {
 		return true
 	}
 
-	ip, _ := netaddr.ParseIP(host)
+	ip, _ := netip.ParseAddr(host)
 	return ip.IsLoopback()
 }

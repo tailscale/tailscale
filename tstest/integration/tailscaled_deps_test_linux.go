@@ -11,7 +11,6 @@ import (
 	// Otherwise cmd/go never sees that we depend on these packages'
 	// transitive deps when we run "go install tailscaled" in a child
 	// process and can cache a prior success when a dependency changes.
-	_ "inet.af/netaddr"
 	_ "tailscale.com/chirp"
 	_ "tailscale.com/cmd/tailscaled/childproc"
 	_ "tailscale.com/control/controlclient"

@@ -12,11 +12,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
+
+	"tailscale.com/syncs"
 )
 
-var dnsCache atomic.Value // of []byte
+var dnsCache syncs.AtomicValue[[]byte]
 
 var bootstrapDNSRequests = expvar.NewInt("counter_bootstrap_dns_requests")
 
@@ -58,7 +59,7 @@ func refreshBootstrapDNS() {
 func handleBootstrapDNS(w http.ResponseWriter, r *http.Request) {
 	bootstrapDNSRequests.Add(1)
 	w.Header().Set("Content-Type", "application/json")
-	j, _ := dnsCache.Load().([]byte)
+	j := dnsCache.Load()
 	// Bootstrap DNS requests occur cross-regions,
 	// and are randomized per request,
 	// so keeping a connection open is pointlessly expensive.

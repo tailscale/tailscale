@@ -15,6 +15,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,7 +25,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/time/rate"
-	"inet.af/netaddr"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -86,7 +86,7 @@ func runCp(ctx context.Context, args []string) error {
 		hadBrackets = true
 		target = strings.TrimSuffix(strings.TrimPrefix(target, "["), "]")
 	}
-	if ip, err := netaddr.ParseIP(target); err == nil && ip.Is6() && !hadBrackets {
+	if ip, err := netip.ParseAddr(target); err == nil && ip.Is6() && !hadBrackets {
 		return fmt.Errorf("an IPv6 literal must be written as [%s]", ip)
 	} else if hadBrackets && (err != nil || !ip.Is6()) {
 		return errors.New("unexpected brackets around target")
@@ -179,7 +179,7 @@ func runCp(ctx context.Context, args []string) error {
 }
 
 func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNodeID, isOffline bool, err error) {
-	ip, err := netaddr.ParseIP(ipStr)
+	ip, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return "", false, err
 	}
@@ -190,7 +190,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 	for _, ft := range fts {
 		n := ft.Node
 		for _, a := range n.Addresses {
-			if a.IP() != ip {
+			if a.Addr() != ip {
 				continue
 			}
 			isOffline = n.Online != nil && !*n.Online
@@ -202,7 +202,7 @@ func getTargetStableID(ctx context.Context, ipStr string) (id tailcfg.StableNode
 
 // fileTargetErrorDetail returns a non-nil error saying why ip is an
 // invalid file sharing target.
-func fileTargetErrorDetail(ctx context.Context, ip netaddr.IP) error {
+func fileTargetErrorDetail(ctx context.Context, ip netip.Addr) error {
 	found := false
 	if st, err := localClient.Status(ctx); err == nil && st.Self != nil {
 		for _, peer := range st.Peer {
@@ -292,7 +292,7 @@ func runCpTargets(ctx context.Context, args []string) error {
 		if detail != "" {
 			detail = "\t" + detail
 		}
-		printf("%s\t%s%s\n", n.Addresses[0].IP(), n.ComputedName, detail)
+		printf("%s\t%s%s\n", n.Addresses[0].Addr(), n.ComputedName, detail)
 	}
 	return nil
 }

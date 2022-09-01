@@ -14,12 +14,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
-	"tailscale.com/syncs"
 )
 
 // Reading the sockfiles on Linux is very fast, so we can do it often.
@@ -27,7 +27,7 @@ const pollInterval = 1 * time.Second
 
 var sockfiles = []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"}
 
-var sawProcNetPermissionErr syncs.AtomicBool
+var sawProcNetPermissionErr atomic.Bool
 
 const (
 	v6Localhost = "00000000000000000000000001000000:"
@@ -37,7 +37,7 @@ const (
 )
 
 func listPorts() (List, error) {
-	if sawProcNetPermissionErr.Get() {
+	if sawProcNetPermissionErr.Load() {
 		return nil, nil
 	}
 	var ret []Port
@@ -48,13 +48,13 @@ func listPorts() (List, error) {
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
 		// Ignore it rather than have the system log about our violation.
 		if runtime.GOOS == "android" && syscall.Access(fname, unix.R_OK) != nil {
-			sawProcNetPermissionErr.Set(true)
+			sawProcNetPermissionErr.Store(true)
 			return nil, nil
 		}
 
 		f, err := os.Open(fname)
 		if os.IsPermission(err) {
-			sawProcNetPermissionErr.Set(true)
+			sawProcNetPermissionErr.Store(true)
 			return nil, nil
 		}
 		if err != nil {

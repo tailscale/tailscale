@@ -4,21 +4,23 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal --clonefunc
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/tkatype"
 	"tailscale.com/util/dnsname"
 )
 
@@ -37,37 +39,46 @@ type CapabilityVersion int
 // CurrentCapabilityVersion is the current capability version of the codebase.
 //
 // History of versions:
-//     3: implicit compression, keep-alives
-//     4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
-//     5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
-//     6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
-//     7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
-//     8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
-//     9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
-//    10: 2021-01-17: client understands MapResponse.PeerSeenChange
-//    11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
-//    12: 2021-03-04: client understands PingRequest
-//    13: 2021-03-19: client understands FilterRule.IPProto
-//    14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
-//    15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
-//    16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
-//    17: 2021-04-18: MapResponse.Domain empty means unchanged
-//    18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
-//    19: 2021-04-21: MapResponse.Debug.SleepSeconds
-//    20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
-//    21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
-//    22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
-//    23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
-//    24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
-//    25: 2021-11-01: MapResponse.Debug.Exit
-//    26: 2022-01-12: (nothing, just bumping for 1.20.0)
-//    27: 2022-02-18: start of SSHPolicy being respected
-//    28: 2022-03-09: client can communicate over Noise.
-//    29: 2022-03-21: MapResponse.PopBrowserURL
-//    30: 2022-03-22: client can request id tokens.
-//    31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
-//    32: 2022-04-17: client knows FilterRule.CapMatch
-const CurrentCapabilityVersion CapabilityVersion = 32
+//
+//	 3: implicit compression, keep-alives
+//	 4: opt-in keep-alives via KeepAlive field, opt-in compression via Compress
+//	 5: 2020-10-19, implies IncludeIPv6, delta Peers/UserProfiles, supports MagicDNS
+//	 6: 2020-12-07: means MapResponse.PacketFilter nil means unchanged
+//	 7: 2020-12-15: FilterRule.SrcIPs accepts CIDRs+ranges, doesn't warn about 0.0.0.0/::
+//	 8: 2020-12-19: client can buggily receive IPv6 addresses and routes if beta enabled server-side
+//	 9: 2020-12-30: client doesn't auto-add implicit search domains from peers; only DNSConfig.Domains
+//	10: 2021-01-17: client understands MapResponse.PeerSeenChange
+//	11: 2021-03-03: client understands IPv6, multiple default routes, and goroutine dumping
+//	12: 2021-03-04: client understands PingRequest
+//	13: 2021-03-19: client understands FilterRule.IPProto
+//	14: 2021-04-07: client understands DNSConfig.Routes and DNSConfig.Resolvers
+//	15: 2021-04-12: client treats nil MapResponse.DNSConfig as meaning unchanged
+//	16: 2021-04-15: client understands Node.Online, MapResponse.OnlineChange
+//	17: 2021-04-18: MapResponse.Domain empty means unchanged
+//	18: 2021-04-19: MapResponse.Node nil means unchanged (all fields now omitempty)
+//	19: 2021-04-21: MapResponse.Debug.SleepSeconds
+//	20: 2021-06-11: MapResponse.LastSeen used even less (https://github.com/tailscale/tailscale/issues/2107)
+//	21: 2021-06-15: added MapResponse.DNSConfig.CertDomains
+//	22: 2021-06-16: added MapResponse.DNSConfig.ExtraRecords
+//	23: 2021-08-25: DNSConfig.Routes values may be empty (for ExtraRecords support in 1.14.1+)
+//	24: 2021-09-18: MapResponse.Health from control to node; node shows in "tailscale status"
+//	25: 2021-11-01: MapResponse.Debug.Exit
+//	26: 2022-01-12: (nothing, just bumping for 1.20.0)
+//	27: 2022-02-18: start of SSHPolicy being respected
+//	28: 2022-03-09: client can communicate over Noise.
+//	29: 2022-03-21: MapResponse.PopBrowserURL
+//	30: 2022-03-22: client can request id tokens.
+//	31: 2022-04-15: PingRequest & PingResponse TSMP & disco support
+//	32: 2022-04-17: client knows FilterRule.CapMatch
+//	33: 2022-07-20: added MapResponse.PeersChangedPatch (DERPRegion + Endpoints)
+//	34: 2022-08-02: client understands CapabilityFileSharingTarget
+//	36: 2022-08-02: added PeersChangedPatch.{Key,DiscoKey,Online,LastSeen,KeyExpiry,Capabilities}
+//	37: 2022-08-09: added Debug.{SetForceBackgroundSTUN,SetRandomizeClientPort}; Debug are sticky
+//	38: 2022-08-11: added PingRequest.URLIsNoise
+//	39: 2022-08-15: clients can talk Noise over arbitrary HTTPS port
+//	40: 2022-08-22: added Node.KeySignature, PeersChangedPatch.KeySignature
+//	41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
+const CurrentCapabilityVersion CapabilityVersion = 41
 
 type StableID string
 
@@ -165,16 +176,17 @@ type Node struct {
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
 	Sharer UserID `json:",omitempty"`
 
-	Key        key.NodePublic
-	KeyExpiry  time.Time
-	Machine    key.MachinePublic
-	DiscoKey   key.DiscoPublic
-	Addresses  []netaddr.IPPrefix // IP addresses of this Node directly
-	AllowedIPs []netaddr.IPPrefix // range of IP addresses to route to this node
-	Endpoints  []string           `json:",omitempty"` // IP+port (public via STUN, and local LANs)
-	DERP       string             `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
-	Hostinfo   HostinfoView
-	Created    time.Time
+	Key          key.NodePublic
+	KeyExpiry    time.Time
+	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
+	Machine      key.MachinePublic
+	DiscoKey     key.DiscoPublic
+	Addresses    []netip.Prefix // IP addresses of this Node directly
+	AllowedIPs   []netip.Prefix // range of IP addresses to route to this node
+	Endpoints    []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	DERP         string         `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+	Hostinfo     HostinfoView
+	Created      time.Time
 
 	// Tags are the list of ACL tags applied to this node.
 	// Tags take the form of `tag:<value>` where value starts
@@ -189,7 +201,7 @@ type Node struct {
 	// is currently the primary subnet router for, as determined
 	// by the control plane. It does not include the self address
 	// values from Addresses that are in AllowedIPs.
-	PrimaryRoutes []netaddr.IPPrefix `json:",omitempty"`
+	PrimaryRoutes []netip.Prefix `json:",omitempty"`
 
 	// LastSeen is when the node was last online. It is not
 	// updated when Online is true. It is nil if the current
@@ -453,24 +465,27 @@ type Service struct {
 // Because it contains pointers (slices), this type should not be used
 // as a value type.
 type Hostinfo struct {
-	IPNVersion    string             `json:",omitempty"` // version of this code
-	FrontendLogID string             `json:",omitempty"` // logtail ID of frontend instance
-	BackendLogID  string             `json:",omitempty"` // logtail ID of backend instance
-	OS            string             `json:",omitempty"` // operating system the client runs on (a version.OS value)
-	OSVersion     string             `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
-	Desktop       opt.Bool           `json:",omitempty"` // if a desktop was detected on Linux
-	Package       string             `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
-	DeviceModel   string             `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
-	Hostname      string             `json:",omitempty"` // name of the host the client runs on
-	ShieldsUp     bool               `json:",omitempty"` // indicates whether the host is blocking incoming connections
-	ShareeNode    bool               `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
-	GoArch        string             `json:",omitempty"` // the host's GOARCH value (of the running binary)
-	RoutableIPs   []netaddr.IPPrefix `json:",omitempty"` // set of IP ranges this client can route
-	RequestTags   []string           `json:",omitempty"` // set of ACL tags this node wants to claim
-	Services      []Service          `json:",omitempty"` // services advertised by this machine
-	NetInfo       *NetInfo           `json:",omitempty"`
-	SSH_HostKeys  []string           `json:"sshHostKeys,omitempty"` // if advertised
-	Cloud         string             `json:",omitempty"`
+	IPNVersion      string         `json:",omitempty"` // version of this code
+	FrontendLogID   string         `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID    string         `json:",omitempty"` // logtail ID of backend instance
+	OS              string         `json:",omitempty"` // operating system the client runs on (a version.OS value)
+	OSVersion       string         `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
+	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
+	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
+	Hostname        string         `json:",omitempty"` // name of the host the client runs on
+	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
+	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+	GoArch          string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
+	GoVersion       string         `json:",omitempty"` // Go version binary was built with
+	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
+	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	Services        []Service      `json:",omitempty"` // services advertised by this machine
+	NetInfo         *NetInfo       `json:",omitempty"`
+	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
+	Cloud           string         `json:",omitempty"`
+	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
+	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -496,11 +511,19 @@ type NetInfo struct {
 	// It reports true even if there's no NAT involved.
 	HairPinning opt.Bool
 
-	// WorkingIPv6 is whether IPv6 works.
+	// WorkingIPv6 is whether the host has IPv6 internet connectivity.
 	WorkingIPv6 opt.Bool
 
-	// WorkingUDP is whether UDP works.
+	// OSHasIPv6 is whether the OS supports IPv6 at all, regardless of
+	// whether IPv6 internet connectivity is available.
+	OSHasIPv6 opt.Bool
+
+	// WorkingUDP is whether the host has UDP internet connectivity.
 	WorkingUDP opt.Bool
+
+	// WorkingICMPv4 is whether ICMPv4 works.
+	// Empty means not checked.
+	WorkingICMPv4 opt.Bool
 
 	// HavePortMap is whether we have an existing portmap open
 	// (UPnP, PMP, or PCP).
@@ -546,9 +569,9 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v derp=#%v portmap=%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
-		ni.WorkingUDP, ni.PreferredDERP,
+		ni.WorkingUDP, ni.WorkingICMPv4, ni.PreferredDERP,
 		ni.portMapSummary(),
 		ni.LinkType)
 }
@@ -590,7 +613,9 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 	return ni.MappingVariesByDestIP == ni2.MappingVariesByDestIP &&
 		ni.HairPinning == ni2.HairPinning &&
 		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
+		ni.OSHasIPv6 == ni2.OSHasIPv6 &&
 		ni.WorkingUDP == ni2.WorkingUDP &&
+		ni.WorkingICMPv4 == ni2.WorkingICMPv4 &&
 		ni.HavePortMap == ni2.HavePortMap &&
 		ni.UPnP == ni2.UPnP &&
 		ni.PMP == ni2.PMP &&
@@ -740,6 +765,7 @@ func (st SignatureType) String() string {
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>
 type RegisterRequest struct {
 	_ structs.Incomparable
@@ -753,6 +779,7 @@ type RegisterRequest struct {
 
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
+	NLKey      key.NLPublic
 	Auth       struct {
 		_ structs.Incomparable
 		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
@@ -848,7 +875,7 @@ func (et EndpointType) String() string {
 // broken up into two parallel slices in MapRequest, for compatibility
 // reasons. But this type is used in the codebase.
 type Endpoint struct {
-	Addr netaddr.IPPort
+	Addr netip.AddrPort
 	Type EndpointType
 }
 
@@ -858,6 +885,7 @@ type Endpoint struct {
 //
 // The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>/map
 type MapRequest struct {
 	// Version is incremented whenever the client code changes enough that
@@ -874,6 +902,11 @@ type MapRequest struct {
 	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
 	Stream      bool // if true, multiple MapResponse objects are returned
 	Hostinfo    *Hostinfo
+
+	// TKA describes request parameters relating to a local instance of
+	// the tailnet key authority. This field is omitted if a local instance
+	// is not running.
+	TKA *TKAMapRequest `json:",omitempty"`
 
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
 	Endpoints []string
@@ -940,7 +973,7 @@ type NetPortRange struct {
 type CapGrant struct {
 	// Dsts are the destination IP ranges that this capabilty
 	// grant matches.
-	Dsts []netaddr.IPPrefix
+	Dsts []netip.Prefix
 
 	// Caps are the capabilities the source IP matched by
 	// FilterRule.SrcIPs are granted to the destination IP,
@@ -1053,7 +1086,7 @@ type DNSConfig struct {
 	// MapRequest.Version >=9 and <14.
 
 	// Nameservers are the IP addresses of the nameservers to use.
-	Nameservers []netaddr.IP `json:",omitempty"`
+	Nameservers []netip.Addr `json:",omitempty"`
 
 	// PerDomain is not set by the control server, and does nothing.
 	PerDomain bool `json:",omitempty"`
@@ -1125,13 +1158,20 @@ const (
 // PingRequest with Types and IP, will send a ping to the IP and send a POST
 // request containing a PingResponse to the URL containing results.
 type PingRequest struct {
-	// URL is the URL to send a HEAD request to.
+	// URL is the URL to reply to the PingRequest to.
 	// It will be a unique URL each time. No auth headers are necessary.
-	//
 	// If the client sees multiple PingRequests with the same URL,
 	// subsequent ones should be ignored.
-	// If Types and IP are defined, then URL is the URL to send a POST request to.
+	//
+	// The HTTP method that the node should make back to URL depends on the other
+	// fields of the PingRequest. If Types is defined, then URL is the URL to
+	// send a POST request to. Otherwise, the node should just make a HEAD
+	// request to URL.
 	URL string
+
+	// URLIsNoise, if true, means that the client should hit URL over the Noise
+	// transport instead of TLS.
+	URLIsNoise bool `json:",omitempty"`
 
 	// Log is whether to log about this ping in the success case.
 	// For failure cases, the client will log regardless.
@@ -1139,11 +1179,22 @@ type PingRequest struct {
 
 	// Types is the types of ping that are initiated. Can be any PingType, comma
 	// separated, e.g. "disco,TSMP"
-	Types string
+	//
+	// As a special case, if Types is "c2n", then this PingRequest is a
+	// client-to-node HTTP request. The HTTP request should be handled by this
+	// node's c2n handler and the HTTP response sent in a POST to URL. For c2n,
+	// the value of URLIsNoise is ignored and only the Noise transport (back to
+	// the control plane) will be used, as if URLIsNoise were true.
+	Types string `json:",omitempty"`
 
-	// IP is the ping target.
-	// It is used in TSMP pings, if IP is invalid or empty then do a HEAD request to the URL.
-	IP netaddr.IP
+	// IP is the ping target, when needed by the PingType(s) given in Types.
+	IP netip.Addr
+
+	// Payload is the ping payload.
+	//
+	// It is only used for c2n requests, in which case it's an HTTP/1.0 or
+	// HTTP/1.1-formatted HTTP request as parsable with http.ReadRequest.
+	Payload []byte `json:",omitempty"`
 }
 
 // PingResponse provides result information for a TSMP or Disco PingRequest.
@@ -1204,7 +1255,7 @@ type MapResponse struct {
 	// PopBrowserURL, if non-empty, is a URL for the client to
 	// open to complete an action. The client should dup suppress
 	// identical URLs and only open it once for the same URL.
-	PopBrowserURL string
+	PopBrowserURL string `json:",omitempty"`
 
 	// Networking
 
@@ -1232,6 +1283,15 @@ type MapResponse struct {
 	// PeersRemoved are the NodeIDs that are no longer in the peer list.
 	PeersRemoved []NodeID `json:",omitempty"`
 
+	// PeersChangedPatch, if non-nil, means that node(s) have changed.
+	// This is a lighter version of the older PeersChanged support that
+	// only supports certain types of updates
+	//
+	// These are applied after Peers* above, but in practice the
+	// control server should only send these on their own, without
+	// the Peers* fields also set.
+	PeersChangedPatch []*PeerChange `json:",omitempty"`
+
 	// PeerSeenChange contains information on how to update peers' LastSeen
 	// times. If the value is false, the peer is gone. If the value is true,
 	// the LastSeen time is now. Absent means unchanged.
@@ -1239,14 +1299,6 @@ type MapResponse struct {
 
 	// OnlineChange changes the value of a Peer Node.Online value.
 	OnlineChange map[NodeID]bool `json:",omitempty"`
-
-	// DNS is the same as DNSConfig.Nameservers.
-	// Only populated if MapRequest.Version < 9.
-	DNS []netaddr.IP `json:",omitempty"`
-
-	// SearchPaths is the old way to specify DNS search domains.
-	// Only populated if MapRequest.Version < 9.
-	SearchPaths []string `json:",omitempty"`
 
 	// DNSConfig contains the DNS settings for the client to use.
 	// A nil value means no change from an earlier non-nil value.
@@ -1295,6 +1347,10 @@ type MapResponse struct {
 	// ControlTime, if non-zero, is the current timestamp according to the control server.
 	ControlTime *time.Time `json:",omitempty"`
 
+	// TKA, if non-nil, describes updates for the local instance of the
+	// tailnet key authority.
+	TKA *TKAMapResponse `json:",omitempty"`
+
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
 	Debug *Debug `json:",omitempty"`
@@ -1316,6 +1372,15 @@ type Debug struct {
 	// always do its background STUN queries (see magicsock's
 	// periodicReSTUN), regardless of inactivity.
 	ForceBackgroundSTUN bool `json:",omitempty"`
+
+	// SetForceBackgroundSTUN controls whether magicsock should always do its
+	// background STUN queries (see magicsock's periodicReSTUN), regardless of
+	// inactivity.
+	//
+	// As of capver 37, this field is the preferred field for control to set on
+	// the wire and ForceBackgroundSTUN is only used within the code as the
+	// current map session value. But ForceBackgroundSTUN can still be used too.
+	SetForceBackgroundSTUN opt.Bool `json:",omitempty"`
 
 	// DERPRoute controls whether the DERP reverse path
 	// optimization (see Issue 150) should be enabled or
@@ -1346,6 +1411,14 @@ type Debug struct {
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
 	RandomizeClientPort bool `json:",omitempty"`
+
+	// SetRandomizeClientPort is whether magicsock should UDP bind to :0 to get
+	// a random local port, ignoring any configured fixed port.
+	//
+	// As of capver 37, this field is the preferred field for control to set on
+	// the wire and RandomizeClientPort is only used within the code as the
+	// current map session value. But RandomizeClientPort can still be used too.
+	SetRandomizeClientPort opt.Bool `json:",omitempty"`
 
 	// OneCGNATRoute controls whether the client should prefer to make one
 	// big CGNAT /10 route rather than a /32 per peer.
@@ -1397,6 +1470,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Sharer == n2.Sharer &&
 		n.Key == n2.Key &&
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
+		bytes.Equal(n.KeySignature, n2.KeySignature) &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqBoolPtr(n.Online, n2.Online) &&
@@ -1439,7 +1513,7 @@ func eqStrings(a, b []string) bool {
 	return true
 }
 
-func eqCIDRs(a, b []netaddr.IPPrefix) bool {
+func eqCIDRs(a, b []netip.Prefix) bool {
 	if len(a) != len(b) || ((a == nil) != (b == nil)) {
 		return false
 	}
@@ -1481,14 +1555,23 @@ type Oauth2Token struct {
 }
 
 const (
-	// MapResponse.Node self capabilities.
+	// These are the capabilities that the self node has as listed in
+	// MapResponse.Node.Capabilities.
 
-	CapabilityFileSharing = "https://tailscale.com/cap/file-sharing"
-	CapabilityAdmin       = "https://tailscale.com/cap/is-admin"
-	CapabilitySSH         = "https://tailscale.com/cap/ssh"         // feature enabled/available
-	CapabilitySSHRuleIn   = "https://tailscale.com/cap/ssh-rule-in" // some SSH rule reach this node
+	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
+	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
+	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
+	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
+	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 
-	// Inter-node capabilities.
+	// These are the capabilities that the peer nodes have as listed in
+	// MapResponse.Peers[].Capabilities.
+
+	// CapabilityFileSharingTarget grants the current node the ability to send
+	// files to the peer which has this capability.
+	CapabilityFileSharingTarget = "https://tailscale.com/cap/file-sharing-target"
+
+	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 
 	// CapabilityFileSharingSend grants the ability to receive files from a
 	// node that's owned by a different user.
@@ -1507,6 +1590,7 @@ const (
 //
 // The request is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
+//
 //	https://login.tailscale.com/machine/<mkey hex>/set-dns
 type SetDNSRequest struct {
 	// Version is the client's capabilities
@@ -1727,3 +1811,130 @@ type TokenResponse struct {
 	//   `uid`       | user ID, if not tagged
 	IDToken string `json:"id_token"`
 }
+
+// PeerChange is an update to a node.
+type PeerChange struct {
+	// NodeID is the node ID being mutated. If the NodeID is not
+	// known in the current netmap, this update should be
+	// ignored. (But the server will try not to send such useless
+	// updates.)
+	NodeID NodeID
+
+	// DERPRegion, if non-zero, means that NodeID's home DERP
+	// region ID is now this number.
+	DERPRegion int `json:",omitempty"`
+
+	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
+	// have changed to these.
+	Endpoints []string `json:",omitempty"`
+
+	// Key, if non-nil, means that the NodeID's wireguard public key changed.
+	Key *key.NodePublic `json:",omitempty"`
+
+	// KeySignature, if non-nil, means that the signature of the wireguard
+	// public key has changed.
+	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
+
+	// DiscoKey, if non-nil, means that the NodeID's discokey changed.
+	DiscoKey *key.DiscoPublic `json:",omitempty"`
+
+	// Online, if non-nil, means that the NodeID's online status changed.
+	Online *bool `json:",omitempty"`
+
+	// LastSeen, if non-nil, means that the NodeID's online status changed.
+	LastSeen *time.Time `json:",omitempty"`
+
+	// KeyExpiry, if non-nil, changes the NodeID's key expiry.
+	KeyExpiry *time.Time `json:",omitempty"`
+
+	// Capabilities, if non-nil, means that the NodeID's capabilities changed.
+	// It's a pointer to a slice for "omitempty", to allow differentiating
+	// a change to empty from no change.
+	Capabilities *[]string `json:",omitempty"`
+}
+
+// TKAInitBeginRequest submits a genesis AUM to seed the creation of the
+// tailnet's key authority.
+type TKAInitBeginRequest struct {
+	NodeID NodeID // NodeID of the initiating client
+
+	GenesisAUM tkatype.MarshaledAUM
+}
+
+// TKASignInfo describes information about an existing node that needs
+// to be signed into a node-key signature.
+type TKASignInfo struct {
+	NodeID     NodeID // NodeID of the node-key being signed
+	NodePublic key.NodePublic
+
+	// RotationPubkey specifies the public key which may sign
+	// a NodeKeySignature (NKS), which rotates the node key.
+	//
+	// This is necessary so the node can rotate its node-key without
+	// talking to a node which holds a trusted network-lock key.
+	// It does this by nesting the original NKS in a 'rotation' NKS,
+	// which it then signs with the key corresponding to RotationPubkey.
+	//
+	// This field expects a raw ed25519 public key.
+	RotationPubkey []byte
+}
+
+// TKAInitBeginResponse describes node information which must be signed to
+// complete initialization of the tailnets' key authority.
+type TKAInitBeginResponse struct {
+	NeedSignatures []TKASignInfo
+}
+
+// TKAInitFinishRequest finalizes initialization of the tailnet key authority
+// by submitting node-key signatures for all existing nodes.
+type TKAInitFinishRequest struct {
+	NodeID NodeID // NodeID of the initiating client
+
+	Signatures map[NodeID]tkatype.MarshaledSignature
+}
+
+// TKAInitFinishResponse describes the successful enablement of the tailnet's
+// key authority.
+type TKAInitFinishResponse struct{}
+
+// TKAMapRequest describes request parameters relating to the tailnet key
+// authority instance on this node. This information is transmitted as
+// part of the MapRequest.
+type TKAMapRequest struct {
+	// Head is the AUMHash of the latest authority update message committed
+	// by this node.
+	Head string // tka.AUMHash.String
+}
+
+// TKAMapResponse encodes information for the tailnet key authority
+// instance on the node. This information is transmitted as
+// part of the MapResponse.
+//
+// If there are no updates to be transmitted (in other words, if both
+// control and the node have the same head hash), len(Updates) == 0 and
+// WantSync is false.
+//
+// If control has updates that build off the head hash reported by the
+// node, they are simply transmitted in Updates (avoiding the more
+// expensive synchronization process).
+//
+// In all other cases, WantSync is set to true, and the node is expected
+// to reach out to control separately to synchronize.
+type TKAMapResponse struct {
+	// Updates is any AUMs that control believes the node should apply.
+	Updates []tkatype.MarshaledAUM `json:",omitempty"`
+
+	// WantSync is set by control to request the node complete AUM
+	// synchronization.
+	//
+	// TODO(tom): Implement AUM synchronization, probably as noise endpoints
+	// /machine/tka/sync/offer & /machine/tka/sync/send.
+	WantSync bool `json:",omitempty"`
+}
+
+// DerpMagicIP is a fake WireGuard endpoint IP address that means to
+// use DERP. When used (in the Node.DERP field), the port number of
+// the WireGuard endpoint is the DERP region ID number to use.
+//
+// Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
+const DerpMagicIP = "127.3.3.40"

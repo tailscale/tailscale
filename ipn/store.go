@@ -34,6 +34,10 @@ const (
 	// the server should start with the Prefs JSON loaded from
 	// StateKey "user-1234".
 	ServerModeStartKey = StateKey("server-mode-start-key")
+
+	// NLKeyStateKey is the key under which we store the nodes'
+	// network-lock node key, in its key.NLPrivate.MarshalText representation.
+	NLKeyStateKey = StateKey("_nl-node-key")
 )
 
 // StateStore persists state, and produces it back on request.

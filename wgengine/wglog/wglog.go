@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"golang.zx2c4.com/wireguard/device"
+	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/wgcfg"
@@ -21,7 +21,7 @@ import (
 // It can be modified at run time to adjust to new wireguard-go configurations.
 type Logger struct {
 	DeviceLogger *device.Logger
-	replace      atomic.Value                 // of map[string]string
+	replace      syncs.AtomicValue[map[string]string]
 	mu           sync.Mutex                   // protects strs
 	strs         map[key.NodePublic]*strCache // cached strs used to populate replace
 }
@@ -52,7 +52,7 @@ func NewLogger(logf logger.Logf) *Logger {
 			// See https://github.com/tailscale/tailscale/issues/1388.
 			return
 		}
-		replace, _ := ret.replace.Load().(map[string]string)
+		replace := ret.replace.Load()
 		if replace == nil {
 			// No replacements specified; log as originally planned.
 			logf(format, args...)

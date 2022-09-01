@@ -8,9 +8,9 @@ package nmcfg
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"strings"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -34,7 +34,7 @@ func nodeDebugName(n *tailcfg.Node) string {
 
 // cidrIsSubnet reports whether cidr is a non-default-route subnet
 // exported by node that is not one of its own self addresses.
-func cidrIsSubnet(node *tailcfg.Node, cidr netaddr.IPPrefix) bool {
+func cidrIsSubnet(node *tailcfg.Node, cidr netip.Prefix) bool {
 	if cidr.Bits() == 0 {
 		return false
 	}
@@ -92,11 +92,11 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 				}
 				fmt.Fprintf(skippedUnselected, "%q (%v)", nodeDebugName(peer), peer.Key.ShortString())
 				continue
-			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.IP()) && (flags&netmap.AllowSingleHosts) == 0 {
+			} else if allowedIP.IsSingleIP() && tsaddr.IsTailscaleIP(allowedIP.Addr()) && (flags&netmap.AllowSingleHosts) == 0 {
 				if skippedIPs.Len() > 0 {
 					skippedIPs.WriteString(", ")
 				}
-				fmt.Fprintf(skippedIPs, "%v from %q (%v)", allowedIP.IP(), nodeDebugName(peer), peer.Key.ShortString())
+				fmt.Fprintf(skippedIPs, "%v from %q (%v)", allowedIP.Addr(), nodeDebugName(peer), peer.Key.ShortString())
 				continue
 			} else if cidrIsSubnet(peer, allowedIP) {
 				if (flags & netmap.AllowSubnetRoutes) == 0 {

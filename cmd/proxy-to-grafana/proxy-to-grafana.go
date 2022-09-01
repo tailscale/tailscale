@@ -14,14 +14,14 @@
 //
 // Use this Grafana configuration to enable the auth proxy:
 //
-//     [auth.proxy]
-//     enabled = true
-//     header_name = X-WEBAUTH-USER
-//     header_property = username
-//     auto_sign_up = true
-//     whitelist = 127.0.0.1
-//     headers = Name:X-WEBAUTH-NAME
-//     enable_login_token = true
+//	[auth.proxy]
+//	enabled = true
+//	header_name = X-WEBAUTH-USER
+//	header_property = username
+//	auto_sign_up = true
+//	whitelist = 127.0.0.1
+//	headers = Name:X-WEBAUTH-NAME
+//	enable_login_token = true
 package main
 
 import (
@@ -84,7 +84,7 @@ func main() {
 	if *useHTTPS {
 		ln, err = ts.Listen("tcp", ":443")
 		ln = tls.NewListener(ln, &tls.Config{
-			GetCertificate: tailscale.GetCertificate,
+			GetCertificate: localClient.GetCertificate,
 		})
 
 		go func() {

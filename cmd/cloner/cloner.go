@@ -153,18 +153,25 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 			}
 			writef("}")
 		case *types.Map:
+			elem := ft.Elem()
 			writef("if dst.%s != nil {", fname)
-			writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(ft.Elem()))
-			if sliceType, isSlice := ft.Elem().(*types.Slice); isSlice {
+			writef("\tdst.%s = map[%s]%s{}", fname, it.QualifiedName(ft.Key()), it.QualifiedName(elem))
+			if sliceType, isSlice := elem.(*types.Slice); isSlice {
 				n := it.QualifiedName(sliceType.Elem())
 				writef("\tfor k := range src.%s {", fname)
 				// use zero-length slice instead of nil to ensure
 				// the key is always copied.
 				writef("\t\tdst.%s[k] = append([]%s{}, src.%s[k]...)", fname, n, fname)
 				writef("\t}")
-			} else if codegen.ContainsPointers(ft.Elem()) {
+			} else if codegen.ContainsPointers(elem) {
 				writef("\tfor k, v := range src.%s {", fname)
-				writef("\t\tdst.%s[k] = v.Clone()", fname)
+				switch elem.(type) {
+				case *types.Pointer:
+					writef("\t\tdst.%s[k] = v.Clone()", fname)
+				default:
+					writef("\t\tv2 := v.Clone()")
+					writef("\t\tdst.%s[k] = *v2", fname)
+				}
 				writef("\t}")
 			} else {
 				writef("\tfor k, v := range src.%s {", fname)

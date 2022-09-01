@@ -9,13 +9,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tstest"
@@ -56,7 +56,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		flags    []string // argv to be parsed by FlagSet
 		curPrefs *ipn.Prefs
 
-		curExitNodeIP netaddr.IP
+		curExitNodeIP netip.Addr
 		curUser       string // os.Getenv("USER") on the client side
 		goos          string // empty means "linux"
 		distro        distro.Distro
@@ -152,10 +152,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("10.0.42.0/24"),
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 			},
 			want: accidentalUpPrefix + " --advertise-routes=10.0.42.0/24 --advertise-exit-node",
@@ -168,10 +168,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("10.0.42.0/24"),
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 			},
 			want: "",
@@ -184,10 +184,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.42.0/24"),
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("10.0.42.0/24"),
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 			},
 			want: "",
@@ -212,8 +212,8 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
 
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("1.2.0.0/16"),
 				},
 			},
 			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
@@ -226,10 +226,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
-					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
+					netip.MustParsePrefix("1.2.0.0/16"),
 				},
 			},
 			want: accidentalUpPrefix + " --advertise-exit-node --advertise-routes=1.2.0.0/16",
@@ -255,16 +255,16 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				ControlURL:       ipn.DefaultControlURL,
 				RouteAll:         true,
 				AllowSingleHosts: false,
-				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
+				ExitNodeIP:       netip.MustParseAddr("100.64.5.6"),
 				CorpDNS:          false,
 				ShieldsUp:        true,
 				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
 				Hostname:         "myhostname",
 				ForceDaemon:      true,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.0.0/16"),
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("10.0.0.0/16"),
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 				NetfilterMode: preftype.NetfilterNoDivert,
 				OperatorUser:  "alice",
@@ -280,14 +280,14 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				ControlURL:       ipn.DefaultControlURL,
 				RouteAll:         true,
 				AllowSingleHosts: false,
-				ExitNodeIP:       netaddr.MustParseIP("100.64.5.6"),
+				ExitNodeIP:       netip.MustParseAddr("100.64.5.6"),
 				CorpDNS:          false,
 				ShieldsUp:        true,
 				AdvertiseTags:    []string{"tag:foo", "tag:bar"},
 				Hostname:         "myhostname",
 				ForceDaemon:      true,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("10.0.0.0/16"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("10.0.0.0/16"),
 				},
 				NetfilterMode: preftype.NetfilterNoDivert,
 				OperatorUser:  "alice",
@@ -344,10 +344,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
-					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
+					netip.MustParsePrefix("1.2.0.0/16"),
 				},
 			},
 			want: accidentalUpPrefix + " --operator=expbits --advertise-exit-node --advertise-routes=1.2.0.0/16",
@@ -360,10 +360,10 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				AllowSingleHosts: true,
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
-					netaddr.MustParseIPPrefix("1.2.0.0/16"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
+					netip.MustParsePrefix("1.2.0.0/16"),
 				},
 			},
 			want: accidentalUpPrefix + " --advertise-routes=1.2.0.0/16 --operator=expbits --advertise-exit-node",
@@ -391,14 +391,14 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				CorpDNS:          true,
 				NetfilterMode:    preftype.NetfilterOn,
 
-				ExitNodeIP: netaddr.MustParseIP("100.64.5.4"),
+				ExitNodeIP: netip.MustParseAddr("100.64.5.4"),
 			},
 			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.64.5.4",
 		},
 		{
 			name:          "error_exit_node_omit_with_id_pref",
 			flags:         []string{"--hostname=foo"},
-			curExitNodeIP: netaddr.MustParseIP("100.64.5.7"),
+			curExitNodeIP: netip.MustParseAddr("100.64.5.7"),
 			curPrefs: &ipn.Prefs{
 				ControlURL:       ipn.DefaultControlURL,
 				AllowSingleHosts: true,
@@ -412,7 +412,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		{
 			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Isue 3480
 			flags:         []string{"--hostname=foo"},
-			curExitNodeIP: netaddr.MustParseIP("100.2.3.4"),
+			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
 			curPrefs: &ipn.Prefs{
 				ControlURL:       ipn.DefaultControlURL,
 				AllowSingleHosts: true,
@@ -562,9 +562,9 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:      true,
 				AllowSingleHosts: true,
 				CorpDNS:          true,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("0.0.0.0/0"),
-					netaddr.MustParseIPPrefix("::/0"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("0.0.0.0/0"),
+					netip.MustParsePrefix("::/0"),
 				},
 				NetfilterMode: preftype.NetfilterOn,
 			},
@@ -631,7 +631,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				exitNodeIP: "100.105.106.107",
 			},
 			st: &ipnstate.Status{
-				TailscaleIPs: []netaddr.IP{netaddr.MustParseIP("100.105.106.107")},
+				TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.105.106.107")},
 			},
 			wantErr: `cannot use 100.105.106.107 as an exit node as it is a local IP address to this machine; did you mean --advertise-exit-node?`,
 		},
@@ -671,8 +671,8 @@ func TestPrefsFromUpArgs(t *testing.T) {
 			want: &ipn.Prefs{
 				WantRunning: true,
 				NoSNAT:      true,
-				AdvertiseRoutes: []netaddr.IPPrefix{
-					netaddr.MustParseIPPrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
+				AdvertiseRoutes: []netip.Prefix{
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
 				},
 			},
 		},
@@ -956,7 +956,7 @@ func TestUpdatePrefs(t *testing.T) {
 	}
 }
 
-var cmpIP = cmp.Comparer(func(a, b netaddr.IP) bool {
+var cmpIP = cmp.Comparer(func(a, b netip.Addr) bool {
 	return a == b
 })
 

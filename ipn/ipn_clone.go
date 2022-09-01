@@ -7,7 +7,8 @@
 package ipn
 
 import (
-	"inet.af/netaddr"
+	"net/netip"
+
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -36,7 +37,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	RouteAll               bool
 	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
-	ExitNodeIP             netaddr.IP
+	ExitNodeIP             netip.Addr
 	ExitNodeAllowLANAccess bool
 	CorpDNS                bool
 	RunSSH                 bool
@@ -47,7 +48,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Hostname               string
 	NotepadURLs            bool
 	ForceDaemon            bool
-	AdvertiseRoutes        []netaddr.IPPrefix
+	AdvertiseRoutes        []netip.Prefix
 	NoSNAT                 bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string

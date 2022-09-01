@@ -7,9 +7,9 @@ package dns
 import (
 	"bufio"
 	"fmt"
+	"net/netip"
 	"sort"
 
-	"inet.af/netaddr"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
@@ -40,13 +40,13 @@ type Config struct {
 	// Adding an entry to Hosts merely creates the record. If you want
 	// it to resolve, you also need to add appropriate routes to
 	// Routes.
-	Hosts map[dnsname.FQDN][]netaddr.IP
+	Hosts map[dnsname.FQDN][]netip.Addr
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
 }
 
-func (c *Config) serviceIP() netaddr.IP {
+func (c *Config) serviceIP() netip.Addr {
 	if c.OnlyIPv6 {
 		return tsaddr.TailscaleServiceIPv6()
 	}
@@ -89,6 +89,30 @@ func (c Config) hasDefaultIPResolversOnly() bool {
 		}
 	}
 	return true
+}
+
+// hasHostsWithoutSplitDNSRoutes reports whether c contains any Host entries
+// that aren't covered by a SplitDNS route suffix.
+func (c Config) hasHostsWithoutSplitDNSRoutes() bool {
+	// TODO(bradfitz): this could be more efficient, but we imagine
+	// the number of SplitDNS routes and/or hosts will be small.
+	for host := range c.Hosts {
+		if !c.hasSplitDNSRouteForHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSplitDNSRouteForHost reports whether c contains a SplitDNS route
+// that contains hosts.
+func (c Config) hasSplitDNSRouteForHost(host dnsname.FQDN) bool {
+	for route := range c.Routes {
+		if route.Contains(host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) hasDefaultResolvers() bool {
@@ -143,7 +167,7 @@ func sameResolverNames(a, b []*dnstype.Resolver) bool {
 	return true
 }
 
-func sameIPs(a, b []netaddr.IP) bool {
+func sameIPs(a, b []netip.Addr) bool {
 	if len(a) != len(b) {
 		return false
 	}

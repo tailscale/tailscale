@@ -5,15 +5,17 @@
 package controlclient
 
 import (
+	"fmt"
 	"log"
+	"net/netip"
 	"sort"
 
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -45,6 +47,7 @@ type mapSession struct {
 	lastDomain             string
 	lastHealth             []string
 	lastPopBrowserURL      string
+	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -113,6 +116,28 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastHealth = resp.Health
 	}
 
+	debug := resp.Debug
+	if debug != nil {
+		if debug.RandomizeClientPort {
+			debug.SetRandomizeClientPort.Set(true)
+		}
+		if debug.ForceBackgroundSTUN {
+			debug.SetForceBackgroundSTUN.Set(true)
+		}
+		copyDebugOptBools(&ms.stickyDebug, debug)
+	} else if ms.stickyDebug != (tailcfg.Debug{}) {
+		debug = new(tailcfg.Debug)
+	}
+	if debug != nil {
+		copyDebugOptBools(debug, &ms.stickyDebug)
+		if !debug.ForceBackgroundSTUN {
+			debug.ForceBackgroundSTUN, _ = ms.stickyDebug.SetForceBackgroundSTUN.Get()
+		}
+		if !debug.RandomizeClientPort {
+			debug.RandomizeClientPort, _ = ms.stickyDebug.SetRandomizeClientPort.Get()
+		}
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:         ms.privateNodeKey.Public(),
 		PrivateKey:      ms.privateNodeKey,
@@ -125,7 +150,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		SSHPolicy:       ms.lastSSHPolicy,
 		CollectServices: ms.collectServices,
 		DERPMap:         ms.lastDERPMap,
-		Debug:           resp.Debug,
+		Debug:           debug,
 		ControlHealth:   ms.lastHealth,
 	}
 	ms.netMapBuilding = nm
@@ -165,13 +190,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 		ms.addUserProfile(peer.User)
 	}
-	if len(resp.DNS) > 0 {
-		nm.DNS.Nameservers = resp.DNS
-	}
-	if len(resp.SearchPaths) > 0 {
-		nm.DNS.Domains = resp.SearchPaths
-	}
-	if Debug.ProxyDNS {
+	if DevKnob.ForceProxyDNS {
 		nm.DNS.Proxied = true
 	}
 	ms.netMapBuilding = nil
@@ -244,7 +263,7 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 		sortNodes(newFull)
 	}
 
-	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 {
+	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 || len(mapRes.PeersChangedPatch) != 0 {
 		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
 		for _, n := range newFull {
 			peerByID[n.ID] = n
@@ -265,11 +284,52 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 				n.Online = &online
 			}
 		}
+		for _, ec := range mapRes.PeersChangedPatch {
+			if n, ok := peerByID[ec.NodeID]; ok {
+				if ec.DERPRegion != 0 {
+					n.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, ec.DERPRegion)
+				}
+				if ec.Endpoints != nil {
+					n.Endpoints = ec.Endpoints
+				}
+				if ec.Key != nil {
+					n.Key = *ec.Key
+				}
+				if ec.DiscoKey != nil {
+					n.DiscoKey = *ec.DiscoKey
+				}
+				if v := ec.Online; v != nil {
+					n.Online = ptrCopy(v)
+				}
+				if v := ec.LastSeen; v != nil {
+					n.LastSeen = ptrCopy(v)
+				}
+				if v := ec.KeyExpiry; v != nil {
+					n.KeyExpiry = *v
+				}
+				if v := ec.Capabilities; v != nil {
+					n.Capabilities = *v
+				}
+				if v := ec.KeySignature; v != nil {
+					n.KeySignature = v
+				}
+			}
+		}
 	}
 
 	mapRes.Peers = newFull
 	mapRes.PeersChanged = nil
 	mapRes.PeersRemoved = nil
+}
+
+// ptrCopy returns a pointer to a newly allocated shallow copy of *v.
+func ptrCopy[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	ret := new(T)
+	*ret = *v
+	return ret
 }
 
 func nodesSorted(v []*tailcfg.Node) bool {
@@ -298,16 +358,31 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 
 var debugSelfIPv6Only = envknob.Bool("TS_DEBUG_SELF_V6_ONLY")
 
-func filterSelfAddresses(in []netaddr.IPPrefix) (ret []netaddr.IPPrefix) {
+func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 	switch {
 	default:
 		return in
 	case debugSelfIPv6Only:
 		for _, a := range in {
-			if a.IP().Is6() {
+			if a.Addr().Is6() {
 				ret = append(ret, a)
 			}
 		}
 		return ret
 	}
+}
+
+func copyDebugOptBools(dst, src *tailcfg.Debug) {
+	copy := func(v *opt.Bool, s opt.Bool) {
+		if s != "" {
+			*v = s
+		}
+	}
+	copy(&dst.DERPRoute, src.DERPRoute)
+	copy(&dst.DisableSubnetsIfPAC, src.DisableSubnetsIfPAC)
+	copy(&dst.DisableUPnP, src.DisableUPnP)
+	copy(&dst.OneCGNATRoute, src.OneCGNATRoute)
+	copy(&dst.SetForceBackgroundSTUN, src.SetForceBackgroundSTUN)
+	copy(&dst.SetRandomizeClientPort, src.SetRandomizeClientPort)
+	copy(&dst.TrimWGConfig, src.TrimWGConfig)
 }

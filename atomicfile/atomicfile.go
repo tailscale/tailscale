@@ -16,7 +16,7 @@ import (
 )
 
 // WriteFile writes data to filename+some suffix, then renames it
-// into filename.
+// into filename. The perm argument is ignored on Windows.
 func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
 	f, err := ioutil.TempFile(filepath.Dir(filename), filepath.Base(filename)+".tmp")
 	if err != nil {

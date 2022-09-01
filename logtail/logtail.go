@@ -17,13 +17,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/syncs"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )
@@ -109,6 +109,10 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 			procID = 7
 		}
 	}
+
+	stdLogf := func(f string, a ...any) {
+		fmt.Fprintf(cfg.Stderr, strings.TrimSuffix(f, "\n")+"\n", a...)
+	}
 	l := &Logger{
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
@@ -122,7 +126,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		sentinel:       make(chan int32, 16),
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
-		bo:             backoff.NewBackoff("logtail", logf, 30*time.Second),
+		bo:             backoff.NewBackoff("logtail", stdLogf, 30*time.Second),
 		metricsDelta:   cfg.MetricsDelta,
 
 		procID:              procID,
@@ -167,8 +171,9 @@ type Logger struct {
 
 	procID              uint32
 	includeProcSequence bool
-	writeLock           sync.Mutex // guards increments of procSequence
-	procSequence        uint64
+
+	writeLock    sync.Mutex // guards increments of procSequence
+	procSequence uint64
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closed when shutdown complete
@@ -269,7 +274,7 @@ func (l *Logger) drainPending(scratch []byte) (res []byte) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			b = []byte(fmt.Sprintf("reading ringbuffer: %v", err))
+			b = fmt.Appendf(nil, "reading ringbuffer: %v", err)
 			batchDone = true
 		} else if b == nil {
 			if entries > 0 {
@@ -447,15 +452,15 @@ func (l *Logger) Flush() error {
 }
 
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.
-var logtailDisabled syncs.AtomicBool
+var logtailDisabled atomic.Bool
 
 // Disable disables logtail uploads for the lifetime of the process.
 func Disable() {
-	logtailDisabled.Set(true)
+	logtailDisabled.Store(true)
 }
 
-func (l *Logger) send(jsonBlob []byte) (int, error) {
-	if logtailDisabled.Get() {
+func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
+	if logtailDisabled.Load() {
 		return len(jsonBlob), nil
 	}
 	n, err := l.buffer.Write(jsonBlob)
@@ -578,7 +583,7 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool, procID uint32, proc
 	return b
 }
 
-func (l *Logger) encode(buf []byte, level int) []byte {
+func (l *Logger) encodeLocked(buf []byte, level int) []byte {
 	if l.includeProcSequence {
 		l.procSequence++
 	}
@@ -659,10 +664,12 @@ func (l *Logger) Write(buf []byte) (int, error) {
 			l.stderr.Write(withNL)
 		}
 	}
+
 	l.writeLock.Lock()
-	b := l.encode(buf, level)
-	_, err := l.send(b)
-	l.writeLock.Unlock()
+	defer l.writeLock.Unlock()
+
+	b := l.encodeLocked(buf, level)
+	_, err := l.sendLocked(b)
 	return len(buf), err
 }
 

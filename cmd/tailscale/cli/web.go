@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,7 +28,6 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/preftype"
@@ -208,12 +208,20 @@ func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
 		return "", nil, err
 	}
 	token, err := r.Cookie("qtoken")
-	if err != nil {
-		return "", nil, err
+	if err == nil {
+		return qnapAuthnQtoken(r, user.Value, token.Value)
 	}
+	sid, err := r.Cookie("NAS_SID")
+	if err == nil {
+		return qnapAuthnSid(r, user.Value, sid.Value)
+	}
+	return "", nil, fmt.Errorf("not authenticated by any mechanism")
+}
+
+func qnapAuthnQtoken(r *http.Request, user, token string) (string, *qnapAuthResponse, error) {
 	query := url.Values{
-		"qtoken": []string{token.Value},
-		"user":   []string{user.Value},
+		"qtoken": []string{token},
+		"user":   []string{user},
 	}
 	u := url.URL{
 		Scheme:   r.URL.Scheme,
@@ -221,7 +229,26 @@ func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
 		Path:     "/cgi-bin/authLogin.cgi",
 		RawQuery: query.Encode(),
 	}
-	resp, err := http.Get(u.String())
+
+	return qnapAuthnFinish(user, u.String())
+}
+
+func qnapAuthnSid(r *http.Request, user, sid string) (string, *qnapAuthResponse, error) {
+	query := url.Values{
+		"sid": []string{sid},
+	}
+	u := url.URL{
+		Scheme:   r.URL.Scheme,
+		Host:     r.URL.Host,
+		Path:     "/cgi-bin/authLogin.cgi",
+		RawQuery: query.Encode(),
+	}
+
+	return qnapAuthnFinish(user, u.String())
+}
+
+func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
+	resp, err := http.Get(url)
 	if err != nil {
 		return "", nil, err
 	}
@@ -237,7 +264,7 @@ func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
 	if authResp.AuthPassed == 0 {
 		return "", nil, fmt.Errorf("not authenticated")
 	}
-	return user.Value, authResp, nil
+	return user, authResp, nil
 }
 
 func synoAuthn() (string, error) {
@@ -366,8 +393,8 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
 	}
-	exitNodeRouteV4 := netaddr.MustParseIPPrefix("0.0.0.0/0")
-	exitNodeRouteV6 := netaddr.MustParseIPPrefix("::/0")
+	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
+	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
 	for _, r := range prefs.AdvertiseRoutes {
 		if r == exitNodeRouteV4 || r == exitNodeRouteV6 {
 			data.AdvertiseExitNode = true

@@ -56,6 +56,6 @@ func Handler(s *derp.Server) http.Handler {
 				pubKey.UntypedHexString())
 		}
 
-		s.Accept(netConn, conn, netConn.RemoteAddr().String())
+		s.Accept(r.Context(), netConn, conn, netConn.RemoteAddr().String())
 	})
 }

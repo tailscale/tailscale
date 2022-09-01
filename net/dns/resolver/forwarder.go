@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime"
 	"sort"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/dns/publicdns"
@@ -34,6 +34,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/wgengine/monitor"
@@ -74,8 +75,6 @@ const (
 	// (e.g. how long to wait to query Google's 8.8.4.4 after 8.8.8.8).
 	wellKnownHostBackupDelay = 200 * time.Millisecond
 )
-
-var errNoUpstreams = errors.New("upstream nameservers not set")
 
 // txid identifies a DNS transaction.
 //
@@ -204,7 +203,7 @@ type forwarder struct {
 	//
 	// That is, if we're running on GCP or AWS where there's always a well-known
 	// IP of a recursive resolver, return that rather than having callers return
-	// errNoUpstreams. This fixes both normal 100.100.100.100 resolution when
+	// SERVFAIL. This fixes both normal 100.100.100.100 resolution when
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
@@ -267,7 +266,7 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 		if !ok {
 			continue
 		}
-		dohBase, ok := publicdns.KnownDoH()[ipp.IP()]
+		dohBase, ok := publicdns.KnownDoH()[ipp.Addr()]
 		if !ok || didDoH[dohBase] {
 			continue
 		}
@@ -288,12 +287,12 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 			rr = append(rr, resolverAndDelay{name: r})
 			continue
 		}
-		ip := ipp.IP()
+		ip := ipp.Addr()
 		var startDelay time.Duration
 		if host, ok := publicdns.KnownDoH()[ip]; ok {
 			// We already did the DoH query early. These
 			startDelay = dohHeadStart
-			key := hostAndFam{host, ip.BitLen()}
+			key := hostAndFam{host, uint8(ip.BitLen())}
 			if done[key] > 0 {
 				startDelay += wellKnownHostBackupDelay
 			}
@@ -364,13 +363,9 @@ func (f *forwarder) setRoutes(routesBySuffix map[dnsname.FQDN][]*dnstype.Resolve
 	f.cloudHostFallback = cloudHostFallback
 }
 
-var stdNetPacketListener packetListener = new(net.ListenConfig)
+var stdNetPacketListener nettype.PacketListenerWithNetIP = nettype.MakePacketListenerWithNetIP(new(net.ListenConfig))
 
-type packetListener interface {
-	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
-}
-
-func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
+func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNetIP, error) {
 	if f.linkSel == nil || initListenConfig == nil {
 		return stdNetPacketListener, nil
 	}
@@ -382,7 +377,7 @@ func (f *forwarder) packetListener(ip netaddr.IP) (packetListener, error) {
 	if err := initListenConfig(lc, f.linkMon, linkName); err != nil {
 		return nil, err
 	}
-	return lc, nil
+	return nettype.MakePacketListenerWithNetIP(lc), nil
 }
 
 // getKnownDoHClientForProvider returns an HTTP client for a specific DoH
@@ -411,6 +406,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	})
 	c = &http.Client{
 		Transport: &http.Transport{
+			ForceAttemptHTTP2: true,
 			IdleConnTimeout: dohTransportTimeout,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
@@ -528,11 +524,17 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	}
 	metricDNSFwdUDP.Add(1)
 
-	ln, err := f.packetListener(ipp.IP())
+	ln, err := f.packetListener(ipp.Addr())
 	if err != nil {
 		return nil, err
 	}
-	conn, err := ln.ListenPacket(ctx, "udp", ":0")
+
+	// Specify the exact UDP family to work around https://github.com/golang/go/issues/52264
+	udpFam := "udp4"
+	if ipp.Addr().Is6() {
+		udpFam = "udp6"
+	}
+	conn, err := ln.ListenPacket(ctx, udpFam, ":0")
 	if err != nil {
 		f.logf("ListenPacket failed: %v", err)
 		return nil, err
@@ -542,7 +544,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	fq.closeOnCtxDone.Add(conn)
 	defer fq.closeOnCtxDone.Remove(conn)
 
-	if _, err := conn.WriteTo(fq.packet, ipp.UDPAddr()); err != nil {
+	if _, err := conn.WriteToUDPAddrPort(fq.packet, ipp); err != nil {
 		metricDNSFwdUDPErrorWrite.Add(1)
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -675,6 +677,8 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		res, err := nxDomainResponse(query)
 		if err != nil {
 			f.logf("error parsing bonjour query: %v", err)
+			// Returning an error will cause an internal retry, there is
+			// nothing we can do if parsing failed. Just drop the packet.
 			return nil
 		}
 		select {
@@ -685,7 +689,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		}
 	}
 
-	if fl, ok := fwdLogAtomic.Load().(*fwdLog); ok {
+	if fl := fwdLogAtomic.Load(); fl != nil {
 		fl.addName(string(domain))
 	}
 
@@ -695,7 +699,20 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 		resolvers = f.resolvers(domain)
 		if len(resolvers) == 0 {
 			metricDNSFwdErrorNoUpstream.Add(1)
-			return errNoUpstreams
+			f.logf("no upstream resolvers set, returning SERVFAIL")
+			res, err := servfailResponse(query)
+			if err != nil {
+				f.logf("building servfail response: %v", err)
+				// Returning an error will cause an internal retry, there is
+				// nothing we can do if parsing failed. Just drop the packet.
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case responseChan <- res:
+				return nil
+			}
 		}
 	}
 

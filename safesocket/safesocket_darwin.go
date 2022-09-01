@@ -26,8 +26,9 @@ func init() {
 // from /Library/Tailscale.
 //
 // In that case the files are:
-//    /Library/Tailscale/ipnport => $port (symlink with localhost port number target)
-//    /Library/Tailscale/sameuserproof-$port is a file with auth
+//
+//	/Library/Tailscale/ipnport => $port (symlink with localhost port number target)
+//	/Library/Tailscale/sameuserproof-$port is a file with auth
 func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 
 	const dir = "/Library/Tailscale"

@@ -9,22 +9,23 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/tailscale/netlink"
+	"go4.org/netipx"
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"golang.zx2c4.com/wireguard/tun"
-	"inet.af/netaddr"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/multierr"
@@ -83,20 +84,20 @@ type netfilterRunner interface {
 }
 
 type linuxRouter struct {
-	closed           syncs.AtomicBool
+	closed           atomic.Bool
 	logf             func(fmt string, args ...any)
 	tunname          string
 	linkMon          *monitor.Mon
 	unregLinkMon     func()
-	addrs            map[netaddr.IPPrefix]bool
-	routes           map[netaddr.IPPrefix]bool
-	localRoutes      map[netaddr.IPPrefix]bool
+	addrs            map[netip.Prefix]bool
+	routes           map[netip.Prefix]bool
+	localRoutes      map[netip.Prefix]bool
 	snatSubnetRoutes bool
 	netfilterMode    preftype.NetfilterMode
 
 	// ruleRestorePending is whether a timer has been started to
 	// restore deleted ip rules.
-	ruleRestorePending syncs.AtomicBool
+	ruleRestorePending atomic.Bool
 	ipRuleFixLimiter   *rate.Limiter
 
 	// Various feature checks for the network stack.
@@ -182,11 +183,7 @@ func useAmbientCaps() bool {
 	if distro.Get() != distro.Synology {
 		return false
 	}
-	v, err := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
-	if err != nil {
-		return false
-	}
-	return v >= 7
+	return distro.DSMVersion() >= 7
 }
 
 var forceIPCommand = envknob.Bool("TS_DEBUG_USE_IP_COMMAND")
@@ -236,7 +233,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		return
 	}
 	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
-		if r.ruleRestorePending.Swap(false) && !r.closed.Get() {
+		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()
 		}
@@ -261,7 +258,7 @@ func (r *linuxRouter) Up() error {
 }
 
 func (r *linuxRouter) Close() error {
-	r.closed.Set(true)
+	r.closed.Store(true)
 	if r.unregLinkMon != nil {
 		r.unregLinkMon()
 	}
@@ -443,7 +440,7 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 	}
 
 	for cidr := range r.addrs {
-		if err := r.addLoopbackRule(cidr.IP()); err != nil {
+		if err := r.addLoopbackRule(cidr.Addr()); err != nil {
 			return err
 		}
 	}
@@ -454,8 +451,8 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 // addAddress adds an IP/mask to the tunnel interface. Fails if the
 // address is already assigned to the interface, or if the addition
 // fails.
-func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
-	if !r.v6Available && addr.IP().Is6() {
+func (r *linuxRouter) addAddress(addr netip.Prefix) error {
+	if !r.v6Available && addr.Addr().Is6() {
 		return nil
 	}
 	if r.useIPCommand() {
@@ -471,7 +468,7 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 			return fmt.Errorf("adding address %v from tunnel interface: %w", addr, err)
 		}
 	}
-	if err := r.addLoopbackRule(addr.IP()); err != nil {
+	if err := r.addLoopbackRule(addr.Addr()); err != nil {
 		return err
 	}
 	return nil
@@ -480,11 +477,11 @@ func (r *linuxRouter) addAddress(addr netaddr.IPPrefix) error {
 // delAddress removes an IP/mask from the tunnel interface. Fails if
 // the address is not assigned to the interface, or if the removal
 // fails.
-func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
-	if !r.v6Available && addr.IP().Is6() {
+func (r *linuxRouter) delAddress(addr netip.Prefix) error {
+	if !r.v6Available && addr.Addr().Is6() {
 		return nil
 	}
-	if err := r.delLoopbackRule(addr.IP()); err != nil {
+	if err := r.delLoopbackRule(addr.Addr()); err != nil {
 		return err
 	}
 	if r.useIPCommand() {
@@ -505,7 +502,7 @@ func (r *linuxRouter) delAddress(addr netaddr.IPPrefix) error {
 
 // addLoopbackRule adds a firewall rule to permit loopback traffic to
 // a local Tailscale IP.
-func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
+func (r *linuxRouter) addLoopbackRule(addr netip.Addr) error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}
@@ -527,7 +524,7 @@ func (r *linuxRouter) addLoopbackRule(addr netaddr.IP) error {
 
 // delLoopbackRule removes the firewall rule permitting loopback
 // traffic to a Tailscale IP.
-func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
+func (r *linuxRouter) delLoopbackRule(addr netip.Addr) error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}
@@ -550,8 +547,8 @@ func (r *linuxRouter) delLoopbackRule(addr netaddr.IP) error {
 // addRoute adds a route for cidr, pointing to the tunnel
 // interface. Fails if the route already exists, or if adding the
 // route fails.
-func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP().Is6() {
+func (r *linuxRouter) addRoute(cidr netip.Prefix) error {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	if r.useIPCommand() {
@@ -563,7 +560,7 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 	}
 	return netlink.RouteReplace(&netlink.Route{
 		LinkIndex: linkIndex,
-		Dst:       cidr.Masked().IPNet(),
+		Dst:       netipx.PrefixIPNet(cidr.Masked()),
 		Table:     r.routeTable(),
 	})
 }
@@ -572,18 +569,18 @@ func (r *linuxRouter) addRoute(cidr netaddr.IPPrefix) error {
 // This has the effect that lookup in the routing table is terminated
 // pretending that no route was found. Fails if the route already exists,
 // or if adding the route fails.
-func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
+func (r *linuxRouter) addThrowRoute(cidr netip.Prefix) error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
-	if !r.v6Available && cidr.IP().Is6() {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	if r.useIPCommand() {
 		return r.addRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
 	}
 	err := netlink.RouteReplace(&netlink.Route{
-		Dst:   cidr.Masked().IPNet(),
+		Dst:   netipx.PrefixIPNet(cidr.Masked()),
 		Table: tailscaleRouteTable.num,
 		Type:  unix.RTN_THROW,
 	})
@@ -593,8 +590,8 @@ func (r *linuxRouter) addThrowRoute(cidr netaddr.IPPrefix) error {
 	return err
 }
 
-func (r *linuxRouter) addRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP().Is6() {
+func (r *linuxRouter) addRouteDef(routeDef []string, cidr netip.Prefix) error {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	args := append([]string{"ip", "route", "add"}, routeDef...)
@@ -627,8 +624,8 @@ var (
 // delRoute removes the route for cidr pointing to the tunnel
 // interface. Fails if the route doesn't exist, or if removing the
 // route fails.
-func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP().Is6() {
+func (r *linuxRouter) delRoute(cidr netip.Prefix) error {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	if r.useIPCommand() {
@@ -640,7 +637,7 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 	}
 	err = netlink.RouteDel(&netlink.Route{
 		LinkIndex: linkIndex,
-		Dst:       cidr.Masked().IPNet(),
+		Dst:       netipx.PrefixIPNet(cidr.Masked()),
 		Table:     r.routeTable(),
 	})
 	if errors.Is(err, errESRCH) {
@@ -652,18 +649,18 @@ func (r *linuxRouter) delRoute(cidr netaddr.IPPrefix) error {
 
 // delThrowRoute removes the throw route for the cidr. Fails if the route
 // doesn't exist, or if removing the route fails.
-func (r *linuxRouter) delThrowRoute(cidr netaddr.IPPrefix) error {
+func (r *linuxRouter) delThrowRoute(cidr netip.Prefix) error {
 	if !r.ipRuleAvailable {
 		return nil
 	}
-	if !r.v6Available && cidr.IP().Is6() {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	if r.useIPCommand() {
 		return r.delRouteDef([]string{"throw", normalizeCIDR(cidr)}, cidr)
 	}
 	err := netlink.RouteDel(&netlink.Route{
-		Dst:   cidr.Masked().IPNet(),
+		Dst:   netipx.PrefixIPNet(cidr.Masked()),
 		Table: r.routeTable(),
 		Type:  unix.RTN_THROW,
 	})
@@ -674,8 +671,8 @@ func (r *linuxRouter) delThrowRoute(cidr netaddr.IPPrefix) error {
 	return err
 }
 
-func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) error {
-	if !r.v6Available && cidr.IP().Is6() {
+func (r *linuxRouter) delRouteDef(routeDef []string, cidr netip.Prefix) error {
+	if !r.v6Available && cidr.Addr().Is6() {
 		return nil
 	}
 	args := append([]string{"ip", "route", "del"}, routeDef...)
@@ -697,15 +694,15 @@ func (r *linuxRouter) delRouteDef(routeDef []string, cidr netaddr.IPPrefix) erro
 	return err
 }
 
-func dashFam(ip netaddr.IP) string {
+func dashFam(ip netip.Addr) string {
 	if ip.Is6() {
 		return "-6"
 	}
 	return "-4"
 }
 
-func (r *linuxRouter) hasRoute(routeDef []string, cidr netaddr.IPPrefix) (bool, error) {
-	args := append([]string{"ip", dashFam(cidr.IP()), "route", "show"}, routeDef...)
+func (r *linuxRouter) hasRoute(routeDef []string, cidr netip.Prefix) (bool, error) {
+	args := append([]string{"ip", dashFam(cidr.Addr()), "route", "show"}, routeDef...)
 	if r.ipRuleAvailable {
 		args = append(args, "table", tailscaleRouteTable.ipCmdArg())
 	}
@@ -1381,8 +1378,8 @@ func (r *linuxRouter) delSNATRule() error {
 // old and new match. Returns a map reflecting the actual new state
 // (which may be somewhere in between old and new if some commands
 // failed), and any error encountered while reconfiguring.
-func cidrDiff(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix, add, del func(netaddr.IPPrefix) error, logf logger.Logf) (map[netaddr.IPPrefix]bool, error) {
-	newMap := make(map[netaddr.IPPrefix]bool, len(new))
+func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, del func(netip.Prefix) error, logf logger.Logf) (map[netip.Prefix]bool, error) {
+	newMap := make(map[netip.Prefix]bool, len(new))
 	for _, cidr := range new {
 		newMap[cidr] = true
 	}
@@ -1390,7 +1387,7 @@ func cidrDiff(kind string, old map[netaddr.IPPrefix]bool, new []netaddr.IPPrefix
 	// ret starts out as a copy of old, and updates as we
 	// add/delete. That way we can always return it and have it be the
 	// true state of what we've done so far.
-	ret := make(map[netaddr.IPPrefix]bool, len(old))
+	ret := make(map[netip.Prefix]bool, len(old))
 	for cidr := range old {
 		ret[cidr] = true
 	}
@@ -1445,7 +1442,7 @@ func tsChain(chain string) string {
 
 // normalizeCIDR returns cidr as an ip/mask string, with the host bits
 // of the IP address zeroed out.
-func normalizeCIDR(cidr netaddr.IPPrefix) string {
+func normalizeCIDR(cidr netip.Prefix) string {
 	return cidr.Masked().String()
 }
 
@@ -1551,8 +1548,8 @@ func checkIPRuleSupportsV6(logf logger.Logf) error {
 	return netlink.RuleAdd(rule)
 }
 
-func nlAddrOfPrefix(p netaddr.IPPrefix) *netlink.Addr {
+func nlAddrOfPrefix(p netip.Prefix) *netlink.Addr {
 	return &netlink.Addr{
-		IPNet: p.IPNet(),
+		IPNet: netipx.PrefixIPNet(p),
 	}
 }

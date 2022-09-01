@@ -7,16 +7,17 @@
 // A discovery message is:
 //
 // Header:
-//     magic          [6]byte  // “TS💬” (0x54 53 f0 9f 92 ac)
-//     senderDiscoPub [32]byte // nacl public key
-//     nonce          [24]byte
+//
+//	magic          [6]byte  // “TS💬” (0x54 53 f0 9f 92 ac)
+//	senderDiscoPub [32]byte // nacl public key
+//	nonce          [24]byte
 //
 // The recipient then decrypts the bytes following (the nacl secretbox)
 // and then the inner payload structure is:
 //
-//     messageType    byte  (the MessageType constants below)
-//     messageVersion byte  (0 for now; but always ignore bytes at the end)
-//     message-paylod [...]byte
+//	messageType    byte  (the MessageType constants below)
+//	messageVersion byte  (0 for now; but always ignore bytes at the end)
+//	message-paylod [...]byte
 package disco
 
 import (
@@ -24,9 +25,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"go4.org/mem"
-	"inet.af/netaddr"
 	"tailscale.com/types/key"
 )
 
@@ -172,7 +173,7 @@ type CallMeMaybe struct {
 	// in this field, but might not yet be in control's endpoints.
 	// (And in the future, control will stop distributing endpoints
 	// when clients are suitably new.)
-	MyNumber []netaddr.IPPort
+	MyNumber []netip.AddrPort
 }
 
 const epLength = 16 + 2 // 16 byte IP address + 2 byte port
@@ -180,7 +181,7 @@ const epLength = 16 + 2 // 16 byte IP address + 2 byte port
 func (m *CallMeMaybe) AppendMarshal(b []byte) []byte {
 	ret, p := appendMsgHeader(b, TypeCallMeMaybe, v0, epLength*len(m.MyNumber))
 	for _, ipp := range m.MyNumber {
-		a := ipp.IP().As16()
+		a := ipp.Addr().As16()
 		copy(p[:], a[:])
 		binary.BigEndian.PutUint16(p[16:], ipp.Port())
 		p = p[epLength:]
@@ -193,12 +194,12 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 	if len(p)%epLength != 0 || ver != 0 || len(p) == 0 {
 		return m, nil
 	}
-	m.MyNumber = make([]netaddr.IPPort, 0, len(p)/epLength)
+	m.MyNumber = make([]netip.AddrPort, 0, len(p)/epLength)
 	for len(p) > 0 {
 		var a [16]byte
 		copy(a[:], p)
-		m.MyNumber = append(m.MyNumber, netaddr.IPPortFrom(
-			netaddr.IPFrom16(a),
+		m.MyNumber = append(m.MyNumber, netip.AddrPortFrom(
+			netip.AddrFrom16(a).Unmap(),
 			binary.BigEndian.Uint16(p[16:18])))
 		p = p[epLength:]
 	}
@@ -211,7 +212,7 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 // STUN response.
 type Pong struct {
 	TxID [12]byte
-	Src  netaddr.IPPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
+	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
 }
 
 const pongLen = 12 + 16 + 2
@@ -219,7 +220,7 @@ const pongLen = 12 + 16 + 2
 func (m *Pong) AppendMarshal(b []byte) []byte {
 	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
 	d = d[copy(d, m.TxID[:]):]
-	ip16 := m.Src.IP().As16()
+	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
 	binary.BigEndian.PutUint16(d, m.Src.Port())
 	return ret
@@ -233,10 +234,10 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	copy(m.TxID[:], p)
 	p = p[12:]
 
-	srcIP, _ := netaddr.FromStdIP(net.IP(p[:16]))
+	srcIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
 	p = p[16:]
 	port := binary.BigEndian.Uint16(p)
-	m.Src = netaddr.IPPortFrom(srcIP, port)
+	m.Src = netip.AddrPortFrom(srcIP.Unmap(), port)
 	return m, nil
 }
 

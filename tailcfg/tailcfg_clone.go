@@ -7,13 +7,14 @@
 package tailcfg
 
 import (
+	"net/netip"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
+	"tailscale.com/types/tkatype"
 )
 
 // Clone makes a deep copy of User.
@@ -47,6 +48,7 @@ func (src *Node) Clone() *Node {
 	}
 	dst := new(Node)
 	*dst = *src
+	dst.KeySignature = append(src.KeySignature[:0:0], src.KeySignature...)
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
@@ -74,16 +76,17 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Sharer                  UserID
 	Key                     key.NodePublic
 	KeyExpiry               time.Time
+	KeySignature            tkatype.MarshaledSignature
 	Machine                 key.MachinePublic
 	DiscoKey                key.DiscoPublic
-	Addresses               []netaddr.IPPrefix
-	AllowedIPs              []netaddr.IPPrefix
+	Addresses               []netip.Prefix
+	AllowedIPs              []netip.Prefix
 	Endpoints               []string
 	DERP                    string
 	Hostinfo                HostinfoView
 	Created                 time.Time
 	Tags                    []string
-	PrimaryRoutes           []netaddr.IPPrefix
+	PrimaryRoutes           []netip.Prefix
 	LastSeen                *time.Time
 	Online                  *bool
 	KeepAlive               bool
@@ -112,24 +115,27 @@ func (src *Hostinfo) Clone() *Hostinfo {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
-	IPNVersion    string
-	FrontendLogID string
-	BackendLogID  string
-	OS            string
-	OSVersion     string
-	Desktop       opt.Bool
-	Package       string
-	DeviceModel   string
-	Hostname      string
-	ShieldsUp     bool
-	ShareeNode    bool
-	GoArch        string
-	RoutableIPs   []netaddr.IPPrefix
-	RequestTags   []string
-	Services      []Service
-	NetInfo       *NetInfo
-	SSH_HostKeys  []string
-	Cloud         string
+	IPNVersion      string
+	FrontendLogID   string
+	BackendLogID    string
+	OS              string
+	OSVersion       string
+	Desktop         opt.Bool
+	Package         string
+	DeviceModel     string
+	Hostname        string
+	ShieldsUp       bool
+	ShareeNode      bool
+	GoArch          string
+	GoVersion       string
+	RoutableIPs     []netip.Prefix
+	RequestTags     []string
+	Services        []Service
+	NetInfo         *NetInfo
+	SSH_HostKeys    []string
+	Cloud           string
+	Userspace       opt.Bool
+	UserspaceRouter opt.Bool
 }{})
 
 // Clone makes a deep copy of NetInfo.
@@ -154,7 +160,9 @@ var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	MappingVariesByDestIP opt.Bool
 	HairPinning           opt.Bool
 	WorkingIPv6           opt.Bool
+	OSHasIPv6             opt.Bool
 	WorkingUDP            opt.Bool
+	WorkingICMPv4         opt.Bool
 	HavePortMap           bool
 	UPnP                  opt.Bool
 	PMP                   opt.Bool
@@ -223,7 +231,7 @@ var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
 	FallbackResolvers   []*dnstype.Resolver
 	Domains             []string
 	Proxied             bool
-	Nameservers         []netaddr.IP
+	Nameservers         []netip.Addr
 	PerDomain           bool
 	CertDomains         []string
 	ExtraRecords        []DNSRecord
@@ -325,9 +333,67 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	STUNTestIP       string
 }{})
 
+// Clone makes a deep copy of SSHRule.
+// The result aliases no memory with the original.
+func (src *SSHRule) Clone() *SSHRule {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHRule)
+	*dst = *src
+	if dst.RuleExpires != nil {
+		dst.RuleExpires = new(time.Time)
+		*dst.RuleExpires = *src.RuleExpires
+	}
+	dst.Principals = make([]*SSHPrincipal, len(src.Principals))
+	for i := range dst.Principals {
+		dst.Principals[i] = src.Principals[i].Clone()
+	}
+	if dst.SSHUsers != nil {
+		dst.SSHUsers = map[string]string{}
+		for k, v := range src.SSHUsers {
+			dst.SSHUsers[k] = v
+		}
+	}
+	if dst.Action != nil {
+		dst.Action = new(SSHAction)
+		*dst.Action = *src.Action
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
+	RuleExpires *time.Time
+	Principals  []*SSHPrincipal
+	SSHUsers    map[string]string
+	Action      *SSHAction
+}{})
+
+// Clone makes a deep copy of SSHPrincipal.
+// The result aliases no memory with the original.
+func (src *SSHPrincipal) Clone() *SSHPrincipal {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHPrincipal)
+	*dst = *src
+	dst.PubKeys = append(src.PubKeys[:0:0], src.PubKeys...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHPrincipalCloneNeedsRegeneration = SSHPrincipal(struct {
+	Node      StableNodeID
+	NodeIP    string
+	UserLogin string
+	Any       bool
+	PubKeys   []string
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -417,6 +483,24 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **DERPNode:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHRule:
+		switch dst := dst.(type) {
+		case *SSHRule:
+			*dst = *src.Clone()
+			return true
+		case **SSHRule:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHPrincipal:
+		switch dst := dst.(type) {
+		case *SSHPrincipal:
+			*dst = *src.Clone()
+			return true
+		case **SSHPrincipal:
 			*dst = src.Clone()
 			return true
 		}

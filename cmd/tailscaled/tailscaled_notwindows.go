@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !windows && go1.18
-// +build !windows,go1.18
+//go:build !windows && go1.19
+// +build !windows,go1.19
 
 package main // import "tailscale.com/cmd/tailscaled"
 

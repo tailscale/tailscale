@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.18
-// +build go1.18
+//go:build go1.19
+// +build go1.19
 
 package main
 
@@ -20,12 +20,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"inet.af/netaddr"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -266,11 +266,11 @@ func debugPortmap(ctx context.Context) error {
 		return err
 	}
 
-	gatewayAndSelfIP := func() (gw, self netaddr.IP, ok bool) {
+	gatewayAndSelfIP := func() (gw, self netip.Addr, ok bool) {
 		if v := os.Getenv("TS_DEBUG_GW_SELF"); strings.Contains(v, "/") {
 			i := strings.Index(v, "/")
-			gw = netaddr.MustParseIP(v[:i])
-			self = netaddr.MustParseIP(v[i+1:])
+			gw = netip.MustParseAddr(v[:i])
+			self = netip.MustParseAddr(v[i+1:])
 			return gw, self, true
 		}
 		return linkMon.GatewayAndSelfIP()

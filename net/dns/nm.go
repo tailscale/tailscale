@@ -10,11 +10,11 @@ package dns
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"inet.af/netaddr"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/endian"
@@ -293,7 +293,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 	}
 
 	type dnsPrio struct {
-		resolvers []netaddr.IP
+		resolvers []netip.Addr
 		domains   []string
 		priority  int32
 	}
@@ -312,7 +312,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 		if v, ok := cfg["nameservers"]; ok {
 			if ips, ok := v.Value().([]string); ok {
 				for _, s := range ips {
-					ip, err := netaddr.ParseIP(s)
+					ip, err := netip.ParseAddr(s)
 					if err != nil {
 						// hmm, what do? Shouldn't really happen.
 						continue
@@ -341,7 +341,7 @@ func (m *nmManager) GetBaseConfig() (OSConfig, error) {
 
 	var (
 		ret           OSConfig
-		seenResolvers = map[netaddr.IP]bool{}
+		seenResolvers = map[netip.Addr]bool{}
 		seenSearch    = map[string]bool{}
 	)
 

@@ -113,6 +113,11 @@ bee
 bearded
 beardie
 pogona
+chicken
+hen
+rooster
+quail
+grouse
 
 # Musical scales
 acoustic

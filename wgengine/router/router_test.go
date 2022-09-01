@@ -5,17 +5,17 @@
 package router
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 
-	"inet.af/netaddr"
 	"tailscale.com/types/preftype"
 )
 
-func mustCIDRs(ss ...string) []netaddr.IPPrefix {
-	var ret []netaddr.IPPrefix
+func mustCIDRs(ss ...string) []netip.Prefix {
+	var ret []netip.Prefix
 	for _, s := range ss {
-		ret = append(ret, netaddr.MustParseIPPrefix(s))
+		ret = append(ret, netip.MustParsePrefix(s))
 	}
 	return ret
 }
@@ -35,9 +35,9 @@ func TestConfigEqual(t *testing.T) {
 			configFields, testedFields)
 	}
 
-	nets := func(strs ...string) (ns []netaddr.IPPrefix) {
+	nets := func(strs ...string) (ns []netip.Prefix) {
 		for _, s := range strs {
-			n, err := netaddr.ParseIPPrefix(s)
+			n, err := netip.ParsePrefix(s)
 			if err != nil {
 				panic(err)
 			}

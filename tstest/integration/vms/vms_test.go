@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,6 @@ import (
 	expect "github.com/tailscale/goexpect"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sync/semaphore"
-	"inet.af/netaddr"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/logger"
@@ -440,7 +440,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 
 	for _, tt := range []struct {
 		ipProto string
-		addr    netaddr.IP
+		addr    netip.Addr
 	}{
 		{"ipv4", h.testerV4},
 	} {
@@ -452,7 +452,7 @@ func (h *Harness) testDistro(t *testing.T, d Distro, ipm ipMapping) {
 				t.Fatalf("can't get IP: %v", err)
 			}
 
-			netaddr.MustParseIP(string(bytes.TrimSpace(ipBytes)))
+			netip.MustParseAddr(string(bytes.TrimSpace(ipBytes)))
 		})
 
 		t.Run("ping-"+tt.ipProto, func(t *testing.T) {

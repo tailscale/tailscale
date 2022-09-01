@@ -6,12 +6,13 @@ package monitor
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
-	"inet.af/netaddr"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -170,27 +171,27 @@ func (m *darwinRouteMon) logAddrs(addrs []route.Addr) {
 	}
 }
 
-// ipOfAddr returns the route.Addr (possibly nil) as a netaddr.IP
+// ipOfAddr returns the route.Addr (possibly nil) as a netip.Addr
 // (possibly zero).
-func ipOfAddr(a route.Addr) netaddr.IP {
+func ipOfAddr(a route.Addr) netip.Addr {
 	switch a := a.(type) {
 	case *route.Inet4Addr:
 		return netaddr.IPv4(a.IP[0], a.IP[1], a.IP[2], a.IP[3])
 	case *route.Inet6Addr:
-		ip := netaddr.IPv6Raw(a.IP)
+		ip := netip.AddrFrom16(a.IP)
 		if a.ZoneID != 0 {
 			ip = ip.WithZone(fmt.Sprint(a.ZoneID)) // TODO: look up net.InterfaceByIndex? but it might be changing?
 		}
 		return ip
 	}
-	return netaddr.IP{}
+	return netip.Addr{}
 }
 
 func fmtAddr(a route.Addr) any {
 	if a == nil {
 		return nil
 	}
-	if ip := ipOfAddr(a); !ip.IsZero() {
+	if ip := ipOfAddr(a); ip.IsValid() {
 		return ip
 	}
 	switch a := a.(type) {

@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"inet.af/netaddr"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -308,18 +308,18 @@ func runStat(ctx context.Context, args []string) error {
 	for _, a := range args {
 		fi, err := os.Lstat(a)
 		if err != nil {
-			fmt.Printf("%s: %v\n", a, err)
+			printf("%s: %v\n", a, err)
 			continue
 		}
-		fmt.Printf("%s: %v, %v\n", a, fi.Mode(), fi.Size())
+		printf("%s: %v, %v\n", a, fi.Mode(), fi.Size())
 		if fi.IsDir() {
 			ents, _ := os.ReadDir(a)
 			for i, ent := range ents {
 				if i == 25 {
-					fmt.Printf("  ...\n")
+					printf("  ...\n")
 					break
 				}
-				fmt.Printf("  - %s\n", ent.Name())
+				printf("  - %s\n", ent.Name())
 			}
 		}
 	}
@@ -404,23 +404,23 @@ func runVia(ctx context.Context, args []string) error {
 	default:
 		return errors.New("expect either <site-id> <v4-cidr> or <v6-route>")
 	case 1:
-		ipp, err := netaddr.ParseIPPrefix(args[0])
+		ipp, err := netip.ParsePrefix(args[0])
 		if err != nil {
 			return err
 		}
-		if !ipp.IP().Is6() {
+		if !ipp.Addr().Is6() {
 			return errors.New("with one argument, expect an IPv6 CIDR")
 		}
-		if !tsaddr.TailscaleViaRange().Contains(ipp.IP()) {
+		if !tsaddr.TailscaleViaRange().Contains(ipp.Addr()) {
 			return errors.New("not a via route")
 		}
 		if ipp.Bits() < 96 {
 			return errors.New("short length, want /96 or more")
 		}
-		v4 := tsaddr.UnmapVia(ipp.IP())
-		a := ipp.IP().As16()
+		v4 := tsaddr.UnmapVia(ipp.Addr())
+		a := ipp.Addr().As16()
 		siteID := binary.BigEndian.Uint32(a[8:12])
-		fmt.Printf("site %v (0x%x), %v\n", siteID, siteID, netaddr.IPPrefixFrom(v4, ipp.Bits()-96))
+		printf("site %v (0x%x), %v\n", siteID, siteID, netip.PrefixFrom(v4, ipp.Bits()-96))
 	case 2:
 		siteID, err := strconv.ParseUint(args[0], 0, 32)
 		if err != nil {
@@ -429,7 +429,7 @@ func runVia(ctx context.Context, args []string) error {
 		if siteID > 0xff {
 			return fmt.Errorf("site-id values over 255 are currently reserved")
 		}
-		ipp, err := netaddr.ParseIPPrefix(args[1])
+		ipp, err := netip.ParsePrefix(args[1])
 		if err != nil {
 			return err
 		}
@@ -437,7 +437,7 @@ func runVia(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(via)
+		outln(via)
 	}
 	return nil
 }
@@ -489,7 +489,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		return c, err
 	}
 
-	conn, err := controlhttp.Dial(ctx, net.JoinHostPort(ts2021Args.host, "80"), machinePrivate, keys.PublicKey, uint16(ts2021Args.version), dialFunc)
+	conn, err := controlhttp.Dial(ctx, ts2021Args.host, "80", "443", machinePrivate, keys.PublicKey, uint16(ts2021Args.version), dialFunc)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {
 		return err
