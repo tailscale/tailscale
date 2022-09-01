@@ -762,6 +762,9 @@ func TestPrefFlagMapping(t *testing.T) {
 		case "NotepadURLs":
 			// TODO(bradfitz): https://github.com/tailscale/tailscale/issues/1830
 			continue
+		case "Egg":
+			// Not applicable.
+			continue
 		}
 		t.Errorf("unexpected new ipn.Pref field %q is not handled by up.go (see addPrefFlagMapping and checkForAccidentalSettingReverts)", prefName)
 	}

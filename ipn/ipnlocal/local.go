@@ -164,6 +164,7 @@ type LocalBackend struct {
 	authURL          string // cleared on Notify
 	authURLSticky    string // not cleared on Notify
 	interact         bool
+	egg              bool
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
@@ -423,7 +424,6 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		s.Version = version.Long
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
-
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
 			case multierr.Error:
@@ -2015,6 +2015,11 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	b.mu.Lock()
+	if mp.EggSet {
+		mp.EggSet = false
+		b.egg = true
+		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	}
 	p0 := b.prefs.Clone()
 	p1 := b.prefs.Clone()
 	p1.ApplyEdits(mp)
@@ -2211,6 +2216,9 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 		return
 	}
 	peerAPIServices := b.peerAPIServicesLocked()
+	if b.egg {
+		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg"})
+	}
 	b.mu.Unlock()
 
 	// Make a shallow copy of hostinfo so we can mutate

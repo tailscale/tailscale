@@ -406,8 +406,12 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 }
 
 func runUp(ctx context.Context, args []string) (retErr error) {
+	var egg bool
 	if len(args) > 0 {
-		fatalf("too many non-flag arguments: %q", args)
+		egg = fmt.Sprint(args) == "[up down down left right left right b a]"
+		if !egg {
+			fatalf("too many non-flag arguments: %q", args)
+		}
 	}
 
 	st, err := localClient.Status(ctx)
@@ -493,6 +497,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 		fatalf("%s", err)
 	}
 	if justEditMP != nil {
+		justEditMP.EggSet = true
 		_, err := localClient.EditPrefs(ctx, justEditMP)
 		return err
 	}
