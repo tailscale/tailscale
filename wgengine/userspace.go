@@ -1005,6 +1005,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	closing := e.closing
 	peerKeys := make([]key.NodePublic, len(e.peerSequence))
 	copy(peerKeys, e.peerSequence)
+	localAddrs := append([]tailcfg.Endpoint(nil), e.endpoints...)
 	e.mu.Unlock()
 
 	if closing {
@@ -1020,7 +1021,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 
 	return &Status{
 		AsOf:       time.Now(),
-		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
+		LocalAddrs: localAddrs,
 		Peers:      peers,
 		DERPs:      derpConns,
 	}, nil
