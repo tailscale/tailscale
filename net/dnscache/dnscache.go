@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -108,6 +109,11 @@ var debug = envknob.Bool("TS_DEBUG_DNS_CACHE")
 // If err is nil, ip will be non-nil. The v6 address may be nil even
 // with a nil error.
 func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 net.IP, allIPs []net.IPAddr, err error) {
+	if fileExists("/tmp/dnscache-synthetic-resolve-failure.txt") {
+		log.Printf("dnscache: synthetic resolve failure for %s", host)
+		return nil, nil, nil, fmt.Errorf("synthetic resolve failure for %s", host)
+	}
+
 	if ip := net.ParseIP(host); ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
 			return ip4, nil, []net.IPAddr{{IP: ip4}}, nil
@@ -266,11 +272,13 @@ func (r *Resolver) addIPCache(host string, ip, ip6 net.IP, allIPs []net.IPAddr, 
 	if r.ipCache == nil {
 		r.ipCache = make(map[string]ipCacheEntry)
 	}
-	r.ipCache[host] = ipCacheEntry{
-		ip:      ip,
-		ip6:     ip6,
-		allIPs:  allIPs,
-		expires: time.Now().Add(d),
+	if false { // DEBUG DEBUG
+		r.ipCache[host] = ipCacheEntry{
+			ip:      ip,
+			ip6:     ip6,
+			allIPs:  allIPs,
+			expires: time.Now().Add(d),
+		}
 	}
 }
 
@@ -369,11 +377,29 @@ type dialCall struct {
 // dnsWasTrustworthy reports whether we think the IP address(es) we
 // tried (and failed) to dial were probably the correct IPs. Currently
 // the heuristic is whether they ever worked previously.
-func (dc *dialCall) dnsWasTrustworthy() bool {
+func (dc *dialCall) dnsWasTrustworthy() (ret bool) {
 	dc.d.mu.Lock()
 	defer dc.d.mu.Unlock()
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+
+	defer func() {
+		log.Printf("dnscache: dnsWasTrustworthy = %v", ret)
+	}()
+
+	// DEBUG DEBUG DEBUG
+	if fileExists("/tmp/dnscache-drop-fails.txt") {
+		log.Printf("dnscache: clearing failed list")
+		dc.fails = map[netaddr.IP]error{}
+	}
+	if fileExists("/tmp/dnscache-drop-pastconnect.txt") {
+		log.Printf("dnscache: clearing past connections list")
+		dc.d.pastConnect = map[netaddr.IP]time.Time{}
+	}
+
+	if debug {
+		log.Printf("dnscache: we have %d failures and %d past connections", len(dc.fails), len(dc.d.pastConnect))
+	}
 
 	if len(dc.fails) == 0 {
 		// No information.
@@ -384,14 +410,30 @@ func (dc *dialCall) dnsWasTrustworthy() bool {
 	// this dialer, assume the DNS is fine.
 	for ip := range dc.fails {
 		if _, ok := dc.d.pastConnect[ip]; ok {
+			if debug {
+				log.Printf("dnscache: DNS trustworthy due to past connection to %v", ip)
+			}
 			return true
 		}
 	}
 	return false
 }
 
-func (dc *dialCall) dialOne(ctx context.Context, ip netaddr.IP) (net.Conn, error) {
-	c, err := dc.d.fwd(ctx, dc.network, net.JoinHostPort(ip.String(), dc.port))
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return st.Mode().IsRegular()
+}
+
+func (dc *dialCall) dialOne(ctx context.Context, ip netaddr.IP) (c net.Conn, err error) {
+	if fileExists("/tmp/dnscache-synthetic-dial-failure.txt") {
+		log.Printf("dnscache: synthetic dial failure for %s", ip)
+		err = fmt.Errorf("synthetic dial failure for %s", ip)
+	} else {
+		c, err = dc.d.fwd(ctx, dc.network, net.JoinHostPort(ip.String(), dc.port))
+	}
 	dc.noteDialResult(ip, err)
 	return c, err
 }
