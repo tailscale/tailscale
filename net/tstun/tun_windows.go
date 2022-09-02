@@ -19,6 +19,15 @@ func init() {
 	tun.WintunStaticRequestedGUID = &guid
 }
 
+func Init(windowsStaticId string) {
+	tun.WintunTunnelType = "Tailscale"
+	guid, err := windows.GUIDFromString(windowsStaticId)
+	if err != nil {
+		panic(err)
+	}
+	tun.WintunStaticRequestedGUID = &guid
+}
+
 func interfaceName(dev tun.Device) (string, error) {
 	guid, err := winipcfg.LUID(dev.(*tun.NativeTun).LUID()).GUID()
 	if err != nil {

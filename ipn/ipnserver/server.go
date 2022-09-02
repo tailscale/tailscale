@@ -430,9 +430,9 @@ func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
 		}
 	}
-	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
-		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
-	}
+	// if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
+	// 	return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
+	// }
 	return nil
 }
 

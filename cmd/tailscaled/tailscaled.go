@@ -132,6 +132,8 @@ var beCLI func() // non-nil if CLI is linked in
 
 func main() {
 	printVersion := false
+	var windowsLocalPort int
+	var windowsStaticId string
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
 	flag.StringVar(&args.debug, "debug", "", "listen address ([ip]:port) of optional debug server")
@@ -144,6 +146,8 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+	flag.IntVar(&windowsLocalPort, "windows-local-port", int(safesocket.WindowsLocalPort), "local port for windows")
+	flag.StringVar(&windowsStaticId, "windows-static-id", "{37217669-42da-4657-a55b-0d995d328250}", "static id for windows")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -191,6 +195,11 @@ func main() {
 	if args.birdSocketPath != "" && createBIRDClient == nil {
 		log.SetFlags(0)
 		log.Fatalf("--bird-socket is not supported on %s", runtime.GOOS)
+	}
+
+	safesocket.WindowsLocalPort = uint16(windowsLocalPort)
+	if runtime.GOOS == "windows" {
+		tstun.Init(windowsStaticId)
 	}
 
 	// Only apply a default statepath when neither have been provided, so that a

@@ -20,6 +20,9 @@ func init() {
 	tunDiagnoseFailure = diagnoseLinuxTUNFailure
 }
 
+// need only in tstun_windows.go but can't invoke it from cmd/tailscaled.go because of platform specific code
+func Init(in string) {}
+
 func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) {
 	if errors.Is(createErr, syscall.EBUSY) {
 		logf("TUN device %s is busy; another process probably still has it open (from old version of Tailscale that had a bug)", tunName)
