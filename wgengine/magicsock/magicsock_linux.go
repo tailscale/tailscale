@@ -195,11 +195,11 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 	}
 	pc.SetReadDeadline(time.Time{})
 
-	go c.receiveDisco(pc)
+	go c.receiveDisco(pc, family == "ip6")
 	return pc, nil
 }
 
-func (c *Conn) receiveDisco(pc net.PacketConn) {
+func (c *Conn) receiveDisco(pc net.PacketConn, isIPV6 bool) {
 	var buf [1500]byte
 	for {
 		n, src, err := pc.ReadFrom(buf[:])
@@ -213,6 +213,30 @@ func (c *Conn) receiveDisco(pc net.PacketConn) {
 			// Too small to be a valid UDP datagram, drop.
 			continue
 		}
+
+		dstPort := binary.BigEndian.Uint16(buf[2:4])
+		if dstPort == 0 {
+			c.logf("[unexpected] disco raw: received packet for port 0")
+		}
+
+		var acceptPort uint16
+		if isIPV6 {
+			acceptPort = c.pconn6.Port()
+		} else {
+			acceptPort = c.pconn4.Port()
+		}
+		if acceptPort == 0 {
+			// This should only typically happen if the receiving address family
+			// was recently disabled.
+			c.logf("[v1] disco raw: dropping packet for port %d as acceptPort=0", dstPort)
+			continue
+		}
+
+		if dstPort != acceptPort {
+			c.logf("[v1] disco raw: dropping packet for port %d", dstPort)
+			continue
+		}
+
 		srcIP, ok := netip.AddrFromSlice(src.(*net.IPAddr).IP)
 		if !ok {
 			c.logf("[unexpected] PacketConn.ReadFrom returned not-an-IP %v in from", src)
