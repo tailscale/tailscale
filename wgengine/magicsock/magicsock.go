@@ -2991,11 +2991,13 @@ type RebindingUDPConn struct {
 
 	mu    sync.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
+	port  uint16
 }
 
 func (c *RebindingUDPConn) setConnLocked(p nettype.PacketConn) {
 	c.pconn = p
 	c.pconnAtomic.Store(p)
+	c.port = uint16(c.localAddrLocked().Port)
 }
 
 // currentConn returns c's current pconn, acquiring c.mu in the process.
@@ -3057,6 +3059,12 @@ func (c *RebindingUDPConn) ReadFromNetaddr(b []byte) (n int, ipp netip.AddrPort,
 	}
 }
 
+func (c *RebindingUDPConn) Port() uint16 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.port
+}
+
 func (c *RebindingUDPConn) LocalAddr() *net.UDPAddr {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -3081,6 +3089,7 @@ func (c *RebindingUDPConn) closeLocked() error {
 	if c.pconn == nil {
 		return errNilPConn
 	}
+	c.port = 0
 	return c.pconn.Close()
 }
 
