@@ -20,8 +20,12 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"reflect"
+	"sync/atomic"
 	"time"
 
+	"tailscale.com/atomicfile"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -39,6 +43,7 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	}
 
 	dm := getDERPMap()
+
 	var cands4, cands6 []nameIP
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
@@ -128,12 +133,45 @@ type dnsMap map[string][]netip.Addr
 // getDERPMap returns some DERP map. The DERP servers also run a fallback
 // DNS server.
 func getDERPMap() *tailcfg.DERPMap {
-	// TODO(bradfitz): try to read the last known DERP map from disk,
-	// at say /var/lib/tailscale/derpmap.txt and write it when it changes,
-	// and read it here.
-	// But ultimately the fallback will be to use a copy baked into the binary,
-	// which is this part:
+	dm := getStaticDERPMap()
 
+	// Merge in any DERP servers from the cached map that aren't in the
+	// static map; this ensures that we're getting new region(s) while not
+	// overriding the built-in fallbacks if things go horribly wrong and we
+	// get a bad DERP map.
+	//
+	// TODO(andrew): should we expect OmitDefaultRegions here? We're not
+	// forwarding traffic, just resolving DNS, so maybe we can ignore that
+	// value anyway?
+	cached := cachedDERPMap.Load()
+	if cached == nil {
+		return dm
+	}
+
+	for id, region := range cached.Regions {
+		dr, ok := dm.Regions[id]
+		if !ok {
+			dm.Regions[id] = region
+			continue
+		}
+
+		// Add any nodes that we don't already have.
+		seen := make(map[string]bool)
+		for _, n := range dr.Nodes {
+			seen[n.HostName] = true
+		}
+		for _, n := range region.Nodes {
+			if !seen[n.HostName] {
+				dr.Nodes = append(dr.Nodes, n)
+			}
+		}
+	}
+
+	return dm
+}
+
+// getStaticDERPMap returns the DERP map that was compiled into this binary.
+func getStaticDERPMap() *tailcfg.DERPMap {
 	dm := new(tailcfg.DERPMap)
 	if err := json.Unmarshal(staticDERPMapJSON, dm); err != nil {
 		panic(err)
@@ -143,3 +181,67 @@ func getDERPMap() *tailcfg.DERPMap {
 
 //go:embed dns-fallback-servers.json
 var staticDERPMapJSON []byte
+
+// cachedDERPMap is the path to a cached DERP map that we loaded from our on-disk cache.
+var cachedDERPMap atomic.Pointer[tailcfg.DERPMap]
+
+// cachePath is the path to the DERP map cache file, set by SetCachePath via
+// ipnserver.New() if we have a state directory.
+var cachePath string
+
+// UpdateCache stores the DERP map cache back to disk.
+//
+// The caller must not mutate 'c' after calling this function.
+func UpdateCache(c *tailcfg.DERPMap) {
+	// Don't do anything if nothing changed.
+	curr := cachedDERPMap.Load()
+	if reflect.DeepEqual(curr, c) {
+		return
+	}
+
+	d, err := json.Marshal(c)
+	if err != nil {
+		log.Printf("[v1] dnsfallback: UpdateCache error marshaling: %v", err)
+		return
+	}
+
+	// Only store after we're confident this is at least valid JSON
+	cachedDERPMap.Store(c)
+
+	// Don't try writing if we don't have a cache path set; this can happen
+	// when we don't have a state path (e.g. /var/lib/tailscale) configured.
+	if cachePath != "" {
+		err = atomicfile.WriteFile(cachePath, d, 0600)
+		if err != nil {
+			log.Printf("[v1] dnsfallback: UpdateCache error writing: %v", err)
+			return
+		}
+	}
+	log.Printf("[v2] dnsfallback: UpdateCache succeeded")
+}
+
+// SetCachePath sets the path to the on-disk DERP map cache that we store and
+// update. Additionally, if a file at this path exists, we load it and merge it
+// with the DERP map baked into the binary.
+//
+// This function should be called before any calls to UpdateCache, as it is not
+// concurrency-safe.
+func SetCachePath(path string) {
+	cachePath = path
+
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("[v1] dnsfallback: SetCachePath error reading %q: %v", path, err)
+		return
+	}
+	defer f.Close()
+
+	dm := new(tailcfg.DERPMap)
+	if err := json.NewDecoder(f).Decode(dm); err != nil {
+		log.Printf("[v1] dnsfallback: SetCachePath error decoding %q: %v", path, err)
+		return
+	}
+
+	cachedDERPMap.Store(dm)
+	log.Printf("[v2] dnsfallback: SetCachePath loaded cached DERP map")
+}
