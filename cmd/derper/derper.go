@@ -46,6 +46,7 @@ var (
 	certDir    = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname   = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	runSTUN    = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
+	runDERP    = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 
 	meshPSKFile    = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
 	meshWith       = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
@@ -170,9 +171,15 @@ func main() {
 	expvar.Publish("derp", s.ExpVar())
 
 	mux := http.NewServeMux()
-	derpHandler := derphttp.Handler(s)
-	derpHandler = addWebSocketSupport(s, derpHandler)
-	mux.Handle("/derp", derpHandler)
+	if *runDERP {
+		derpHandler := derphttp.Handler(s)
+		derpHandler = addWebSocketSupport(s, derpHandler)
+		mux.Handle("/derp", derpHandler)
+	} else {
+		mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "derp server disabled", http.StatusNotFound)
+		}))
+	}
 	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
@@ -188,6 +195,9 @@ func main() {
   server.
 </p>
 `)
+		if !*runDERP {
+			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
+		}
 		if tsweb.AllowDebugAccess(r) {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
 		}
