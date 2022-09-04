@@ -4,8 +4,6 @@
 
 #! /bin/sh
 
-set -m # enable job control
-
 export PATH=$PATH:/tailscale/bin
 
 TS_AUTH_KEY="${TS_AUTH_KEY:-}"
@@ -60,8 +58,16 @@ if [[ ! -z "${TS_TAILSCALED_EXTRA_ARGS}" ]]; then
   TAILSCALED_ARGS="${TAILSCALED_ARGS} ${TS_TAILSCALED_EXTRA_ARGS}"
 fi
 
+handler() {
+  echo "Caught SIGINT/SIGTERM, shutting down tailscaled"
+  kill -s SIGINT $PID
+  wait ${PID}
+}
+
 echo "Starting tailscaled"
 tailscaled ${TAILSCALED_ARGS} &
+PID=$!
+trap handler SIGINT SIGTERM
 
 UP_ARGS="--accept-dns=${TS_ACCEPT_DNS}"
 if [[ ! -z "${TS_ROUTES}" ]]; then
@@ -82,4 +88,5 @@ if [[ ! -z "${TS_DEST_IP}" ]]; then
   iptables -t nat -I PREROUTING -d "$(tailscale --socket=/tmp/tailscaled.sock ip -4)" -j DNAT --to-destination "${TS_DEST_IP}"
 fi
 
-fg
+echo "Waiting for tailscaled to exit"
+wait ${PID}
