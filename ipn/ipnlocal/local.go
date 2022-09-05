@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -730,6 +731,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		b.e.SetNetworkMap(st.NetMap)
 		b.e.SetDERPMap(st.NetMap.DERPMap)
+
+		// Update our cached DERP map
+		dnsfallback.UpdateCache(st.NetMap.DERPMap)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 	}

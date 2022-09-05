@@ -37,6 +37,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
@@ -786,6 +787,8 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 			b.SetTailnetKeyAuthority(authority, storage)
 			logf("tka initialized at head %x", authority.Head())
 		}
+
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
 	} else {
 		logf("network-lock unavailable; no state directory")
 	}
