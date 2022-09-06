@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Tailscale Inc & AUTHORS All rights reserved.
+// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"tailscale.com/envknob"
@@ -29,6 +31,118 @@ var networkLockAvailable = envknob.RegisterBool("TS_EXPERIMENTAL_NETWORK_LOCK")
 type tkaState struct {
 	authority *tka.Authority
 	storage   *tka.FS
+}
+
+// tkaSyncIfNeededLocked examines TKA info reported from the control plane,
+// performing the steps necessary to synchronize local tka state.
+//
+// There are 4 scenarios handled here:
+//   - Enablement: nm.TKAEnabled but b.tka == nil
+//     ∴ reach out to /machine/tka/boostrap to get the genesis AUM, then
+//     initialize TKA.
+//   - Disablement: !nm.TKAEnabled but b.tka != nil
+//     ∴ reach out to /machine/tka/boostrap to read the disablement secret,
+//     then verify and clear tka local state.
+//   - Sync needed: b.tka.Head != nm.TKAHead
+//     ∴ complete multi-step synchronization flow.
+//   - Everything up to date: All other cases.
+//     ∴ no action necessary.
+//
+// b.mu must be held. b.mu will be stepped out of (and back in) during network
+// RPCs.
+func (b *LocalBackend) tkaSyncIfNeededLocked(nm *netmap.NetworkMap) error {
+	if !networkLockAvailable() {
+		// If the feature flag is not enabled, pretend we don't exist.
+		return nil
+	}
+	if nm.SelfNode == nil {
+		return errors.New("SelfNode missing")
+	}
+
+	isEnabled := b.tka != nil
+	wantEnabled := nm.TKAEnabled
+	if isEnabled != wantEnabled {
+		var ourHead tka.AUMHash
+		if b.tka != nil {
+			ourHead = b.tka.authority.Head()
+		}
+
+		// Regardless of whether we are moving to disabled or enabled, we
+		// need information from the tka bootstrap endpoint.
+		b.mu.Unlock()
+		bs, err := b.tkaFetchBootstrap(nm.SelfNode.ID, ourHead)
+		b.mu.Lock()
+		if err != nil {
+			return fmt.Errorf("fetching bootstrap: %v", err)
+		}
+
+		if wantEnabled && !isEnabled {
+			if err := b.tkaBootstrapFromGenesisLocked(bs.GenesisAUM); err != nil {
+				return fmt.Errorf("bootstrap: %v", err)
+			}
+			isEnabled = true
+		} else if !wantEnabled && isEnabled {
+			if b.tka.authority.ValidDisablement(bs.DisablementSecret) {
+				b.tka = nil
+				isEnabled = false
+
+				if err := os.RemoveAll(b.chonkPath()); err != nil {
+					return fmt.Errorf("os.RemoveAll: %v", err)
+				}
+			} else {
+				b.logf("Disablement secret did not verify, leaving TKA enabled.")
+			}
+		} else {
+			return fmt.Errorf("[bug] unreachable invariant of wantEnabled /w isEnabled")
+		}
+	}
+
+	if isEnabled && b.tka.authority.Head() != nm.TKAHead {
+		// TODO(tom): Implement sync
+	}
+
+	return nil
+}
+
+// chonkPath returns the absolute path to the directory in which TKA
+// state (the 'tailchonk') is stored.
+func (b *LocalBackend) chonkPath() string {
+	return filepath.Join(b.TailscaleVarRoot(), "tka")
+}
+
+// tkaBootstrapFromGenesisLocked initializes the local (on-disk) state of the
+// tailnet key authority, based on the given genesis AUM.
+//
+// b.mu must be held.
+func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) error {
+	if !b.CanSupportNetworkLock() {
+		return errors.New("network lock not supported in this configuration")
+	}
+
+	var genesis tka.AUM
+	if err := genesis.Unserialize(g); err != nil {
+		return fmt.Errorf("reading genesis: %v", err)
+	}
+
+	chonkDir := b.chonkPath()
+	if err := os.Mkdir(chonkDir, 0755); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("mkdir: %v", err)
+	}
+
+	chonk, err := tka.ChonkDir(chonkDir)
+	if err != nil {
+		return fmt.Errorf("chonk: %v", err)
+	}
+	authority, err := tka.Bootstrap(chonk, genesis)
+	if err != nil {
+		return fmt.Errorf("tka bootstrap: %v", err)
+	}
+
+	b.tka = &tkaState{
+		authority: authority,
+		storage:   chonk,
+	}
+	return nil
 }
 
 // CanSupportNetworkLock returns true if tailscaled is able to operate
@@ -236,4 +350,51 @@ func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks map[tailcfg.Node
 
 		return a, nil
 	}
+}
+
+// tkaFetchBootstrap sends a /machine/tka/bootstrap RPC to the control plane
+// over noise. This is used to get values necessary to enable or disable TKA.
+func (b *LocalBackend) tkaFetchBootstrap(nodeID tailcfg.NodeID, head tka.AUMHash) (*tailcfg.TKABootstrapResponse, error) {
+	bootstrapReq := tailcfg.TKABootstrapRequest{
+		NodeID: nodeID,
+	}
+	if !head.IsZero() {
+		head, err := head.MarshalText()
+		if err != nil {
+			return nil, fmt.Errorf("head.MarshalText failed: %v", err)
+		}
+		bootstrapReq.Head = string(head)
+	}
+
+	var req bytes.Buffer
+	if err := json.NewEncoder(&req).Encode(bootstrapReq); err != nil {
+		return nil, fmt.Errorf("encoding request: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ctx: %w", err)
+	}
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/bootstrap", &req)
+	if err != nil {
+		return nil, fmt.Errorf("req: %w", err)
+	}
+	res, err := b.DoNoiseRequest(req2)
+	if err != nil {
+		return nil, fmt.Errorf("resp: %w", err)
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKABootstrapResponse)
+	err = json.NewDecoder(res.Body).Decode(a)
+	res.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+
+	return a, nil
 }

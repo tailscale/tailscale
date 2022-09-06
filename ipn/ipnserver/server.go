@@ -772,7 +772,7 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	})
 
 	if root := b.TailscaleVarRoot(); root != "" {
-		chonkDir := filepath.Join(root, "chonk")
+		chonkDir := filepath.Join(root, "tka")
 		if _, err := os.Stat(chonkDir); err == nil {
 			// The directory exists, which means network-lock has been initialized.
 			storage, err := tka.ChonkDir(chonkDir)

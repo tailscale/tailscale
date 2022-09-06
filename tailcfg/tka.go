@@ -101,6 +101,8 @@ type TKAInfo struct {
 // TKABootstrapRequest is sent by a node to get information necessary for
 // enabling or disabling the tailnet key authority.
 type TKABootstrapRequest struct {
+	// NodeID is the node ID of the initiating client.
+	NodeID NodeID
 	// Head represents the node's head AUMHash (tka.Authority.Head), if
 	// network lock is enabled.
 	Head string
@@ -120,6 +122,8 @@ type TKABootstrapResponse struct {
 // state (TKA). Values of type tka.AUMHash are encoded as strings in their
 // MarshalText form.
 type TKASyncOfferRequest struct {
+	// NodeID is the node ID of the initiating client.
+	NodeID NodeID
 	// Head represents the node's head AUMHash (tka.Authority.Head). This
 	// corresponds to tka.SyncOffer.Head.
 	Head string
@@ -147,6 +151,8 @@ type TKASyncOfferResponse struct {
 // TKASyncSendRequest encodes AUMs that a node believes the control plane
 // is missing.
 type TKASyncSendRequest struct {
+	// NodeID is the node ID of the initiating client.
+	NodeID NodeID
 	// MissingAUMs encodes AUMs that the node believes the control plane
 	// is missing.
 	MissingAUMs []tkatype.MarshaledAUM

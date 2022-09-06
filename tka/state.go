@@ -93,7 +93,13 @@ const disablementLength = 32
 
 var disablementSalt = []byte("tailscale network-lock disablement salt")
 
-func disablementKDF(secret []byte) []byte {
+// DisablementKDF computes a public value which can be stored in a
+// key authority, but cannot be reversed to find the input secret.
+//
+// When the output of this function is stored in tka state (i.e. in
+// tka.State.DisablementSecrets) a call to Authority.ValidDisablement()
+// with the input of this function as the argument will return true.
+func DisablementKDF(secret []byte) []byte {
 	// time = 4 (3 recommended, booped to 4 to compensate for less memory)
 	// memory = 16 (32 recommended)
 	// threads = 4
@@ -103,7 +109,7 @@ func disablementKDF(secret []byte) []byte {
 
 // checkDisablement returns true for a valid disablement secret.
 func (s State) checkDisablement(secret []byte) bool {
-	derived := disablementKDF(secret)
+	derived := DisablementKDF(secret)
 	for _, candidate := range s.DisablementSecrets {
 		if bytes.Equal(derived, candidate) {
 			return true

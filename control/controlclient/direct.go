@@ -106,6 +106,7 @@ type Options struct {
 	KeepAlive            bool
 	Logf                 logger.Logf
 	HTTPTestClient       *http.Client     // optional HTTP client to use (for tests only)
+	NoiseTestClient      *http.Client     // optional HTTP client to use for noise RPCs (tests only)
 	DebugFlags           []string         // debug settings to send to control
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
@@ -225,6 +226,12 @@ func NewDirect(opts Options) (*Direct, error) {
 		if ni != nil {
 			c.SetNetInfo(ni)
 		}
+	}
+	if opts.NoiseTestClient != nil {
+		c.noiseClient = &noiseClient{
+			Client: opts.NoiseTestClient,
+		}
+		c.serverNoiseKey = key.NewMachine().Public() // prevent early error before hitting test client
 	}
 	return c, nil
 }

@@ -342,7 +342,7 @@ func TestSyncSimpleE2E(t *testing.T) {
     `,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
 			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
