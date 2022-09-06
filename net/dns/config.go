@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"sort"
 
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
@@ -78,13 +79,14 @@ func (c Config) hasRoutes() bool {
 }
 
 // hasDefaultIPResolversOnly reports whether the only resolvers in c are
-// DefaultResolvers, and that those resolvers are simple IP addresses.
+// DefaultResolvers, and that those resolvers are simple IP addresses
+// that speak regular port 53 DNS.
 func (c Config) hasDefaultIPResolversOnly() bool {
 	if !c.hasDefaultResolvers() || c.hasRoutes() {
 		return false
 	}
 	for _, r := range c.DefaultResolvers {
-		if ipp, ok := r.IPPort(); !ok || ipp.Port() != 53 {
+		if ipp, ok := r.IPPort(); !ok || ipp.Port() != 53 || publicdns.IPIsDoHOnlyServer(ipp.Addr()) {
 			return false
 		}
 	}

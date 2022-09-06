@@ -259,18 +259,26 @@ func (f *forwarder) Close() error {
 func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 	rr := make([]resolverAndDelay, 0, len(resolvers)+2)
 
+	type dohState uint8
+	const addedDoH = dohState(1)
+	const addedDoHAndDontAddUDP = dohState(2)
+
 	// Add the known DoH ones first, starting immediately.
-	didDoH := map[string]bool{}
+	didDoH := map[string]dohState{}
 	for _, r := range resolvers {
 		ipp, ok := r.IPPort()
 		if !ok {
 			continue
 		}
-		dohBase, ok := publicdns.KnownDoH()[ipp.Addr()]
-		if !ok || didDoH[dohBase] {
+		dohBase, dohOnly, ok := publicdns.DoHEndpointFromIP(ipp.Addr())
+		if !ok || didDoH[dohBase] != 0 {
 			continue
 		}
-		didDoH[dohBase] = true
+		if dohOnly {
+			didDoH[dohBase] = addedDoHAndDontAddUDP
+		} else {
+			didDoH[dohBase] = addedDoH
+		}
 		rr = append(rr, resolverAndDelay{name: &dnstype.Resolver{Addr: dohBase}})
 	}
 
@@ -289,8 +297,12 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 		}
 		ip := ipp.Addr()
 		var startDelay time.Duration
-		if host, ok := publicdns.KnownDoH()[ip]; ok {
+		if host, _, ok := publicdns.DoHEndpointFromIP(ip); ok {
+			if didDoH[host] == addedDoHAndDontAddUDP {
+				continue
+			}
 			// We already did the DoH query early. These
+			// are for normal dns53 UDP queries.
 			startDelay = dohHeadStart
 			key := hostAndFam{host, uint8(ip.BitLen())}
 			if done[key] > 0 {
@@ -391,7 +403,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if c, ok := f.dohClient[urlBase]; ok {
 		return c, true
 	}
-	allIPs := publicdns.DoHIPsOfBase()[urlBase]
+	allIPs := publicdns.DoHIPsOfBase(urlBase)
 	if len(allIPs) == 0 {
 		return nil, false
 	}
@@ -407,7 +419,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	c = &http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
-			IdleConnTimeout: dohTransportTimeout,
+			IdleConnTimeout:   dohTransportTimeout,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)

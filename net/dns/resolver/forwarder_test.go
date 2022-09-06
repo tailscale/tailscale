@@ -79,6 +79,11 @@ func TestResolversWithDelays(t *testing.T) {
 			in:   q("9.9.9.9", "2620:fe::fe"),
 			want: o("https://dns.quad9.net/dns-query", "9.9.9.9+0.5s", "2620:fe::fe+0.5s"),
 		},
+		{
+			name: "nextdns-ipv6-expand",
+			in:   q("2a07:a8c0::c3:a884"),
+			want: o("https://dns.nextdns.io/c3a884"),
+		},
 	}
 
 	for _, tt := range tests {

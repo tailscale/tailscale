@@ -194,6 +194,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			routes[suffix] = resolvers
 		}
 	}
+
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
 	if runtime.GOOS == "windows" {
