@@ -6,20 +6,30 @@ package publicdns
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 )
 
 func TestInit(t *testing.T) {
-	for baseKey, baseSet := range DoHIPsOfBase() {
+	for _, baseKey := range KnownDoHPrefixes() {
+		baseSet := DoHIPsOfBase(baseKey)
 		for _, addr := range baseSet {
-			if KnownDoH()[addr] != baseKey {
-				t.Errorf("Expected %v to map to %s, got %s", addr, baseKey, KnownDoH()[addr])
+			back, only, ok := DoHEndpointFromIP(addr)
+			if !ok {
+				t.Errorf("DoHEndpointFromIP(%v) not mapped back to %v", addr, baseKey)
+				continue
+			}
+			if only {
+				t.Errorf("unexpected DoH only bit set for %v", addr)
+			}
+			if back != baseKey {
+				t.Errorf("Expected %v to map to %s, got %s", addr, baseKey, back)
 			}
 		}
 	}
 }
 
-func TestDohV6(t *testing.T) {
+func TestDoHV6(t *testing.T) {
 	tests := []struct {
 		in      string
 		firstIP netip.Addr
@@ -36,5 +46,51 @@ func TestDohV6(t *testing.T) {
 				t.Errorf("DohV6 got (%v: IPv6 %v) for %v, want (%v: IPv6 %v)", ip, ok, test.in, test.firstIP, test.want)
 			}
 		})
+	}
+}
+
+func TestDoHIPsOfBase(t *testing.T) {
+	ips := func(s ...string) (ret []netip.Addr) {
+		for _, ip := range s {
+			ret = append(ret, netip.MustParseAddr(ip))
+		}
+		return
+	}
+	tests := []struct {
+		base string
+		want []netip.Addr
+	}{
+		{
+			base: "https://cloudflare-dns.com/dns-query",
+			want: ips("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
+		},
+		{
+			base: "https://dns.nextdns.io/",
+			want: ips(),
+		},
+		{
+			base: "https://dns.nextdns.io/ff",
+			want: ips(
+				"45.90.28.0",
+				"45.90.30.0",
+				"2a07:a8c0::ff",
+				"2a07:a8c1::ff",
+			),
+		},
+		{
+			base: "https://dns.nextdns.io/c3a884",
+			want: ips(
+				"45.90.28.0",
+				"45.90.30.0",
+				"2a07:a8c0::c3:a884",
+				"2a07:a8c1::c3:a884",
+			),
+		},
+	}
+	for _, tt := range tests {
+		got := DoHIPsOfBase(tt.base)
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("DoHIPsOfBase(%q) = %v; want %v", tt.base, got, tt.want)
+		}
 	}
 }

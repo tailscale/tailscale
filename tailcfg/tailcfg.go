@@ -78,7 +78,8 @@ type CapabilityVersion int
 //   - 39: 2022-08-15: clients can talk Noise over arbitrary HTTPS port
 //   - 40: 2022-08-22: added Node.KeySignature, PeersChangedPatch.KeySignature
 //   - 41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
-const CurrentCapabilityVersion CapabilityVersion = 41
+//   - 42: 2022-09-06: NextDNS DoH support; see https://github.com/tailscale/tailscale/pull/5556
+const CurrentCapabilityVersion CapabilityVersion = 42
 
 type StableID string
 
