@@ -22,38 +22,28 @@ var (
 
 func getPeerStatsOffset(name string) uintptr {
 	peerType := reflect.TypeOf(device.Peer{})
-	sf, ok := peerType.FieldByName("stats")
+	field, ok := peerType.FieldByName(name)
 	if !ok {
-		panic("no stats field in device.Peer")
+		panic("no " + name + " field in device.Peer")
 	}
-	if sf.Type.Kind() != reflect.Struct {
-		panic("stats field is not a struct")
+	if s := field.Type.String(); s != "atomic.Int64" && s != "atomic.Uint64" {
+		panic("unexpected type " + s + " of field " + name + " in device.Peer")
 	}
-	base := sf.Offset
-
-	st := sf.Type
-	field, ok := st.FieldByName(name)
-	if !ok {
-		panic("no " + name + " field in device.Peer.stats")
-	}
-	if field.Type.Kind() != reflect.Int64 && field.Type.Kind() != reflect.Uint64 {
-		panic("unexpected kind of " + name + " field in device.Peer.stats")
-	}
-	return base + field.Offset
+	return field.Offset
 }
 
 // PeerLastHandshakeNano returns the last handshake time in nanoseconds since the
 // unix epoch.
 func PeerLastHandshakeNano(peer *device.Peer) int64 {
-	return atomic.LoadInt64((*int64)(unsafe.Add(unsafe.Pointer(peer), offHandshake)))
+	return (*atomic.Int64)(unsafe.Add(unsafe.Pointer(peer), offHandshake)).Load()
 }
 
 // PeerRxBytes returns the number of bytes received from this peer.
 func PeerRxBytes(peer *device.Peer) uint64 {
-	return atomic.LoadUint64((*uint64)(unsafe.Add(unsafe.Pointer(peer), offRxBytes)))
+	return (*atomic.Uint64)(unsafe.Add(unsafe.Pointer(peer), offRxBytes)).Load()
 }
 
 // PeerTxBytes returns the number of bytes sent to this peer.
 func PeerTxBytes(peer *device.Peer) uint64 {
-	return atomic.LoadUint64((*uint64)(unsafe.Add(unsafe.Pointer(peer), offTxBytes)))
+	return (*atomic.Uint64)(unsafe.Add(unsafe.Pointer(peer), offTxBytes)).Load()
 }
