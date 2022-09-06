@@ -226,7 +226,7 @@ func TestSigCredential(t *testing.T) {
 	a, _ := Open(newTestchain(t, "G1\nG1.template = genesis",
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
 			Keys:               []Key{k},
-			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}})).Chonk())
 	if err := a.NodeKeyAuthorized(node.Public(), nestedSig.Serialize()); err == nil {
 		t.Error("NodeKeyAuthorized(SigCredential, node) did not fail")

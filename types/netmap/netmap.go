@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/wgengine/filter"
 )
@@ -60,6 +61,13 @@ type NetworkMap struct {
 	// point of view, but the node might know about its own health
 	// check problems.
 	ControlHealth []string
+
+	// TKAEnabled indicates whether the tailnet key authority should be
+	// enabled, from the perspective of the control plane.
+	TKAEnabled bool
+	// TKAHead indicates the control plane's understanding of 'head' (the
+	// hash of the latest update message to tick through TKA).
+	TKAHead tka.AUMHash
 
 	// ACLs
 

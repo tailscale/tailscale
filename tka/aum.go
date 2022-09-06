@@ -45,6 +45,12 @@ func (h AUMHash) MarshalText() ([]byte, error) {
 	return b, nil
 }
 
+// IsZero returns true if the hash is the empty value.
+func (h AUMHash) IsZero() bool {
+	return h == (AUMHash{})
+}
+
+
 // AUMKind describes valid AUM types.
 type AUMKind uint8
 
