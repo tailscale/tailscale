@@ -2829,6 +2829,11 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	ruc.mu.Lock()
 	defer ruc.mu.Unlock()
 
+	if runtime.GOOS == "js" {
+		ruc.setConnLocked(newBlockForeverConn())
+		return nil
+	}
+
 	if debugAlwaysDERP {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
 		ruc.setConnLocked(newBlockForeverConn())
@@ -2893,9 +2898,6 @@ const (
 // rebind closes and re-binds the UDP sockets.
 // We consider it successful if we manage to bind the IPv4 socket.
 func (c *Conn) rebind(curPortFate currentPortFate) error {
-	if runtime.GOOS == "js" {
-		return nil
-	}
 	if err := c.bindSocket(&c.pconn6, "udp6", curPortFate); err != nil {
 		c.logf("magicsock: Rebind ignoring IPv6 bind failure: %v", err)
 	}
