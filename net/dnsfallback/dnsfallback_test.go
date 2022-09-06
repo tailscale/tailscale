@@ -25,6 +25,11 @@ func TestGetDERPMap(t *testing.T) {
 }
 
 func TestCache(t *testing.T) {
+	oldlog := logfunc.Load()
+	SetLogger(t.Logf)
+	t.Cleanup(func() {
+		SetLogger(oldlog)
+	})
 	cacheFile := filepath.Join(t.TempDir(), "cache.json")
 
 	// Write initial cache value
@@ -101,6 +106,11 @@ func TestCache(t *testing.T) {
 }
 
 func TestCacheUnchanged(t *testing.T) {
+	oldlog := logfunc.Load()
+	SetLogger(t.Logf)
+	t.Cleanup(func() {
+		SetLogger(oldlog)
+	})
 	cacheFile := filepath.Join(t.TempDir(), "cache.json")
 
 	// Write initial cache value
