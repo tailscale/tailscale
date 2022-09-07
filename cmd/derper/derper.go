@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
@@ -219,9 +220,11 @@ func main() {
 		go serveSTUN(listenHost, *stunPort)
 	}
 
+	quietLogger := log.New(logFilter{}, "", 0)
 	httpsrv := &http.Server{
-		Addr:    *addr,
-		Handler: mux,
+		Addr:     *addr,
+		Handler:  mux,
+		ErrorLog: quietLogger,
 
 		// Set read/write timeout. For derper, this basically
 		// only affects TLS setup, as read/write deadlines are
@@ -290,6 +293,7 @@ func main() {
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
 					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+					ErrorLog:    quietLogger,
 					ReadTimeout: 30 * time.Second,
 					// Crank up WriteTimeout a bit more than usually
 					// necessary just so we can do long CPU profiles
@@ -459,4 +463,23 @@ func (l *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	l.numAccepts.Add(1)
 	return cn, nil
+}
+
+// logFilter is used to filter out useless error logs that are logged to
+// the net/http.Server.ErrorLog logger.
+type logFilter struct{}
+
+func (logFilter) Write(p []byte) (int, error) {
+	b := mem.B(p)
+	if mem.HasSuffix(b, mem.S(": EOF\n")) ||
+		mem.HasSuffix(b, mem.S(": i/o timeout\n")) ||
+		mem.HasSuffix(b, mem.S(": read: connection reset by peer\n")) ||
+		mem.HasSuffix(b, mem.S(": remote error: tls: bad certificate\n")) ||
+		mem.HasSuffix(b, mem.S(": tls: first record does not look like a TLS handshake\n")) {
+		// Skip this log message, but say that we processed it
+		return len(p), nil
+	}
+
+	log.Printf("%s", p)
+	return len(p), nil
 }
