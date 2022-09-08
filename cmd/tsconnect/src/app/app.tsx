@@ -92,6 +92,12 @@ class App extends Component<{}, AppState> {
   }
 
   handleBrowseToURL = (url: string) => {
+    if (this.state.ipnState === "Running") {
+      // Ignore URL requests if we're already running -- it's most likely an
+      // SSH check mode trigger and we already linkify the displayed URL
+      // in the terminal.
+      return
+    }
     this.setState({ browseToURL: url })
   }
 
