@@ -661,7 +661,7 @@ func TestRegisterRequestNilClone(t *testing.T) {
 // We've screwed this up several times.
 func TestCurrentCapabilityVersion(t *testing.T) {
 	f := must.Get(os.ReadFile("tailcfg.go"))
-	matches := regexp.MustCompile(`(?m)^//\s+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
+	matches := regexp.MustCompile(`(?m)^//[\s-]+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
 	max := 0
 	for _, m := range matches {
 		n := must.Get(strconv.Atoi(m[1]))
