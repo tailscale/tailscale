@@ -586,6 +586,18 @@ func TestManager(t *testing.T) {
 				Routes: upstreams(".", "2a07:a8c0::c3:a884"),
 			},
 		},
+		{
+			name: "nextdns-doh",
+			in: Config{
+				DefaultResolvers: mustRes("https://dns.nextdns.io/c3a884"),
+			},
+			os: OSConfig{
+				Nameservers: mustIPs("100.100.100.100"),
+			},
+			rs: resolver.Config{
+				Routes: upstreams(".", "https://dns.nextdns.io/c3a884"),
+			},
+		},
 	}
 
 	trIP := cmp.Transformer("ipStr", func(ip netip.Addr) string { return ip.String() })
