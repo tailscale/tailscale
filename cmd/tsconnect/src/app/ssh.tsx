@@ -2,16 +2,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-import { useState, useCallback } from "preact/hooks"
+import { useState, useCallback, useMemo, useEffect, useRef } from "preact/hooks"
+import { createPortal } from "preact/compat"
+import type { VNode } from "preact"
 import { runSSHSession, SSHSessionDef } from "../lib/ssh"
 
 export function SSH({ netMap, ipn }: { netMap: IPNNetMap; ipn: IPN }) {
-  const [sshSessionDef, setSSHSessionDef] = useState<SSHSessionDef | null>(null)
+  const [sshSessionDef, setSSHSessionDef] = useState<SSHFormSessionDef | null>(
+    null
+  )
   const clearSSHSessionDef = useCallback(() => setSSHSessionDef(null), [])
   if (sshSessionDef) {
-    return (
+    const sshSession = (
       <SSHSession def={sshSessionDef} ipn={ipn} onDone={clearSSHSessionDef} />
     )
+    if (sshSessionDef.newWindow) {
+      return <NewWindow close={clearSSHSessionDef}>{sshSession}</NewWindow>
+    }
+    return sshSession
   }
   const sshPeers = netMap.peers.filter(
     (p) => p.tailscaleSSHEnabled && p.online !== false
@@ -24,6 +32,8 @@ export function SSH({ netMap, ipn }: { netMap: IPNNetMap; ipn: IPN }) {
   return <SSHForm sshPeers={sshPeers} onSubmit={setSSHSessionDef} />
 }
 
+type SSHFormSessionDef = SSHSessionDef & { newWindow?: boolean }
+
 function SSHSession({
   def,
   ipn,
@@ -33,20 +43,14 @@ function SSHSession({
   ipn: IPN
   onDone: () => void
 }) {
-  return (
-    <div
-      class="flex-grow bg-black p-2 overflow-hidden"
-      ref={(node) => {
-        if (node) {
-          // Run the SSH session aysnchronously, so that the React render
-          // loop is complete (otherwise the SSH form may still be visible,
-          // which affects the size of the terminal, leading to a spurious
-          // initial resize).
-          setTimeout(() => runSSHSession(node, def, ipn, onDone), 0)
-        }
-      }}
-    />
-  )
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (ref.current) {
+      runSSHSession(ref.current, def, ipn, onDone)
+    }
+  }, [ref])
+
+  return <div class="flex-grow bg-black p-2 overflow-hidden" ref={ref} />
 }
 
 function NoSSHPeers() {
@@ -66,7 +70,7 @@ function SSHForm({
   onSubmit,
 }: {
   sshPeers: IPNNetMapPeerNode[]
-  onSubmit: (def: SSHSessionDef) => void
+  onSubmit: (def: SSHFormSessionDef) => void
 }) {
   sshPeers = sshPeers.slice().sort((a, b) => a.name.localeCompare(b.name))
   const [username, setUsername] = useState("")
@@ -99,7 +103,51 @@ function SSHForm({
         type="submit"
         class="button bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600"
         value="SSH"
+        onClick={(e) => {
+          if (e.altKey) {
+            e.preventDefault()
+            e.stopPropagation()
+            onSubmit({ username, hostname, newWindow: true })
+          }
+        }}
       />
     </form>
   )
+}
+
+const NewWindow = ({
+  children,
+  close,
+}: {
+  children: VNode
+  close: () => void
+}) => {
+  const newWindow = useMemo(() => {
+    const newWindow = window.open(undefined, undefined, "width=600,height=400")
+    if (newWindow) {
+      const containerNode = newWindow.document.createElement("div")
+      containerNode.className = "h-screen flex flex-col overflow-hidden"
+      newWindow.document.body.appendChild(containerNode)
+
+      for (const linkNode of document.querySelectorAll(
+        "head link[rel=stylesheet]"
+      )) {
+        const newLink = document.createElement("link")
+        newLink.rel = "stylesheet"
+        newLink.href = (linkNode as HTMLLinkElement).href
+        newWindow.document.head.appendChild(newLink)
+      }
+    }
+    return newWindow
+  }, [])
+  if (!newWindow) {
+    console.error("Could not open window")
+    return null
+  }
+  newWindow.onbeforeunload = () => {
+    close()
+  }
+
+  useEffect(() => () => newWindow.close(), [])
+  return createPortal(children, newWindow.document.body.lastChild as Element)
 }

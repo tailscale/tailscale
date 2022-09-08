@@ -54,7 +54,10 @@ export function runSSHSession(
   })
 
   // Make terminal and SSH session track the size of the containing DOM node.
-  resizeObserver = new ResizeObserver(() => fitAddon.fit())
+  resizeObserver =
+    new termContainerNode.ownerDocument.defaultView!.ResizeObserver(() =>
+      fitAddon.fit()
+    )
   resizeObserver.observe(termContainerNode)
   term.onResize(({ rows, cols }) => sshSession.resize(rows, cols))
 
