@@ -1,5 +1,6 @@
 import { Terminal } from "xterm"
 import { FitAddon } from "xterm-addon-fit"
+import { WebLinksAddon } from "xterm-addon-web-links"
 
 export type SSHSessionDef = {
   username: string
@@ -14,11 +15,16 @@ export function runSSHSession(
 ) {
   const term = new Terminal({
     cursorBlink: true,
+    allowProposedApi: true,
   })
+
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(termContainerNode)
   fitAddon.fit()
+
+  const webLinksAddon = new WebLinksAddon()
+  term.loadAddon(webLinksAddon)
 
   let onDataHook: ((data: string) => void) | undefined
   term.onData((e) => {

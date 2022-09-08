@@ -649,6 +649,11 @@ xterm@5.0.0-beta.58:
   resolved "https://registry.yarnpkg.com/xterm/-/xterm-5.0.0-beta.58.tgz#e3e96ab9fd24d006ec16cc9351a060cc79e67e80"
   integrity sha512-gjg39oKdgUKful27+7I1hvSK51lu/LRhdimFhfZyMvdk0iATH0FAfzv1eAvBKWY2UBgYUfxhicTkanYioANdMw==
 
+xterm-addon-web-links@0.7.0-beta.6:
+  version "0.7.0-beta.6"
+  resolved "https://registry.yarnpkg.com/xterm-addon-web-links/-/xterm-addon-web-links-0.7.0-beta.6.tgz#ec63b681b4f0f0135fa039f53664f65fe9d9f43a"
+  integrity sha512-nD/r/GchGTN4c9gAIVLWVoxExTzAUV7E9xZnwsvhuwI4CEE6yqO15ns8g2hdcUrsPyCbNEw05mIrkF6W5Yj8qA==
+
 y18n@^4.0.0:
   version "4.0.3"
   resolved "https://registry.yarnpkg.com/y18n/-/y18n-4.0.3.tgz#b5f259c82cd6e336921efd7bfd8bf560de9eeedf"
