@@ -343,6 +343,9 @@ type jsSSHSession struct {
 	username   string
 	termConfig js.Value
 	session    *ssh.Session
+
+	pendingResizeRows int
+	pendingResizeCols int
 }
 
 func (s *jsSSHSession) Run() {
@@ -413,6 +416,14 @@ func (s *jsSSHSession) Run() {
 		return nil
 	}))
 
+	// We might have gotten a resize notification since we started opening the
+	// session, pick up the latest size.
+	if s.pendingResizeRows != 0 {
+		rows = s.pendingResizeRows
+	}
+	if s.pendingResizeCols != 0 {
+		cols = s.pendingResizeCols
+	}
 	err = session.RequestPty("xterm", rows, cols, ssh.TerminalModes{})
 
 	if err != nil {
@@ -438,6 +449,11 @@ func (s *jsSSHSession) Close() error {
 }
 
 func (s *jsSSHSession) Resize(rows, cols int) error {
+	if s.session == nil {
+		s.pendingResizeRows = rows
+		s.pendingResizeCols = cols
+		return nil
+	}
 	return s.session.WindowChange(rows, cols)
 }
 
