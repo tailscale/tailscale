@@ -84,6 +84,11 @@ func TestResolversWithDelays(t *testing.T) {
 			in:   q("2a07:a8c0::c3:a884"),
 			want: o("https://dns.nextdns.io/c3a884"),
 		},
+		{
+			name: "nextdns-doh-input",
+			in:   q("https://dns.nextdns.io/c3a884"),
+			want: o("https://dns.nextdns.io/c3a884"),
+		},
 	}
 
 	for _, tt := range tests {
