@@ -86,6 +86,15 @@ func TestDoHIPsOfBase(t *testing.T) {
 				"2a07:a8c1::c3:a884",
 			),
 		},
+		{
+			base: "https://dns.nextdns.io/c3a884/with/more/stuff",
+			want: ips(
+				"45.90.28.0",
+				"45.90.30.0",
+				"2a07:a8c0::c3:a884",
+				"2a07:a8c1::c3:a884",
+			),
+		},
 	}
 	for _, tt := range tests {
 		got := DoHIPsOfBase(tt.base)

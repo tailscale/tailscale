@@ -80,6 +80,10 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		return s
 	}
 	if hexStr, ok := strs.CutPrefix(dohBase, "https://dns.nextdns.io/"); ok {
+		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
+		// but only the <profile-hex> is required. Ignore the rest:
+		hexStr, _, _ = strings.Cut(hexStr, "/") // discard any optional
+
 		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
 		// ideal. Some of their regions have better latency via a non-anycast IP
 		// which we could get by first resolving A/AAAA "dns.nextdns.io" over
