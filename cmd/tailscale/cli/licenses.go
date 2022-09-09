@@ -19,24 +19,27 @@ var licensesCmd = &ffcli.Command{
 	Exec:       runLicenses,
 }
 
-func runLicenses(ctx context.Context, args []string) error {
-	var licenseURL string
+// licensesURL returns the absolute URL containing open source license information for the current platform.
+func licensesURL() string {
 	switch runtime.GOOS {
 	case "android":
-		licenseURL = "https://tailscale.com/licenses/android"
+		return "https://tailscale.com/licenses/android"
 	case "darwin", "ios":
-		licenseURL = "https://tailscale.com/licenses/apple"
+		return "https://tailscale.com/licenses/apple"
 	case "windows":
-		licenseURL = "https://tailscale.com/licenses/windows"
+		return "https://tailscale.com/licenses/windows"
 	default:
-		licenseURL = "https://tailscale.com/licenses/tailscale"
+		return "https://tailscale.com/licenses/tailscale"
 	}
+}
 
+func runLicenses(ctx context.Context, args []string) error {
+	licenses := licensesURL()
 	outln(`
 Tailscale wouldn't be possible without the contributions of thousands of open
 source developers. To see the open source packages included in Tailscale and
 their respective license information, visit:
 
-    ` + licenseURL)
+    ` + licenses)
 	return nil
 }

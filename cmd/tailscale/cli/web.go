@@ -59,6 +59,7 @@ type tmplData struct {
 	IP                string
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
+	LicensesURL       string
 }
 
 var webCmd = &ffcli.Command{
@@ -392,6 +393,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Profile:      profile,
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
+		LicensesURL:  licensesURL(),
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
