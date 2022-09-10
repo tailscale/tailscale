@@ -18,7 +18,6 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -34,6 +33,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
 
@@ -527,7 +527,7 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, err)
 		return
 	}
-	makeNonNil(&fts)
+	mak.NonNilSliceForJSON(&fts)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fts)
 }
@@ -857,31 +857,4 @@ func defBool(a string, def bool) bool {
 		return def
 	}
 	return v
-}
-
-// makeNonNil takes a pointer to a Go data structure
-// (currently only a slice or a map) and makes sure it's non-nil for
-// JSON serialization. (In particular, JavaScript clients usually want
-// the field to be defined after they decode the JSON.)
-func makeNonNil(ptr any) {
-	if ptr == nil {
-		panic("nil interface")
-	}
-	rv := reflect.ValueOf(ptr)
-	if rv.Kind() != reflect.Ptr {
-		panic(fmt.Sprintf("kind %v, not Ptr", rv.Kind()))
-	}
-	if rv.Pointer() == 0 {
-		panic("nil pointer")
-	}
-	rv = rv.Elem()
-	if rv.Pointer() != 0 {
-		return
-	}
-	switch rv.Type().Kind() {
-	case reflect.Slice:
-		rv.Set(reflect.MakeSlice(rv.Type(), 0, 0))
-	case reflect.Map:
-		rv.Set(reflect.MakeMap(rv.Type()))
-	}
 }
