@@ -69,3 +69,21 @@ func TestNonNil(t *testing.T) {
 		t.Error("map still nil")
 	}
 }
+
+func TestNonNilMapForJSON(t *testing.T) {
+	type M map[string]int
+	var m M
+	NonNilMapForJSON(&m)
+	if m == nil {
+		t.Fatal("still nil")
+	}
+}
+
+func TestNonNilSliceForJSON(t *testing.T) {
+	type S []int
+	var s S
+	NonNilSliceForJSON(&s)
+	if s == nil {
+		t.Fatal("still nil")
+	}
+}
