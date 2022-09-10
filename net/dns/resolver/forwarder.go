@@ -37,6 +37,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -459,11 +460,8 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", dohType)
-	// Note: we don't currently set the Accept header (which is
-	// only a SHOULD in the spec) as iOS doesn't use HTTP/2 and
-	// we'd rather save a few bytes on outgoing requests when
-	// empirically no provider cares about the Accept header's
-	// absence.
+	req.Header.Set("Accept", dohType)
+	req.Header.Set("User-Agent", "tailscaled/"+version.Long)
 
 	hres, err := c.Do(req)
 	if err != nil {
