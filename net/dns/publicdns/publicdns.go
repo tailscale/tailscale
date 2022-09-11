@@ -69,6 +69,10 @@ func KnownDoHPrefixes() []string {
 	return ret
 }
 
+func isSlashOrQuestionMark(r rune) bool {
+	return r == '/' || r == '?'
+}
+
 // DoHIPsOfBase returns the IP addresses to use to dial the provided DoH base
 // URL.
 //
@@ -81,8 +85,11 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 	}
 	if hexStr, ok := strs.CutPrefix(dohBase, "https://dns.nextdns.io/"); ok {
 		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
+		// or /<profile-hex>?<query params>
 		// but only the <profile-hex> is required. Ignore the rest:
-		hexStr, _, _ = strings.Cut(hexStr, "/") // discard any optional
+		if i := strings.IndexFunc(hexStr, isSlashOrQuestionMark); i != -1 {
+			hexStr = hexStr[:i]
+		}
 
 		// TODO(bradfitz): using the NextDNS anycast addresses works but is not
 		// ideal. Some of their regions have better latency via a non-anycast IP
