@@ -11,21 +11,20 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-	"tailscale.com/syncs"
 	"tailscale.com/util/winutil"
 )
 
 func init() {
-	osVersion = osVersionWindows
-	packageType = packageTypeWindows
+	osVersion = lazyOSVersion.Get
+	packageType = lazyPackageType.Get
 }
 
-var winVerCache syncs.AtomicValue[string]
+var (
+	lazyOSVersion   = &lazyAtomicValue[string]{f: ptrTo(osVersionWindows)}
+	lazyPackageType = &lazyAtomicValue[string]{f: ptrTo(packageTypeWindows)}
+)
 
 func osVersionWindows() string {
-	if s, ok := winVerCache.LoadOk(); ok {
-		return s
-	}
 	major, minor, build := windows.RtlGetNtVersionNumbers()
 	s := fmt.Sprintf("%d.%d.%d", major, minor, build)
 	// Windows 11 still uses 10 as its major number internally
@@ -33,9 +32,6 @@ func osVersionWindows() string {
 		if ubr, err := getUBR(); err == nil {
 			s += fmt.Sprintf(".%d", ubr)
 		}
-	}
-	if s != "" {
-		winVerCache.Store(s)
 	}
 	return s // "10.0.19041.388", ideally
 }

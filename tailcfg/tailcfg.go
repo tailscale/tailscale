@@ -466,11 +466,29 @@ type Service struct {
 // Because it contains pointers (slices), this type should not be used
 // as a value type.
 type Hostinfo struct {
-	IPNVersion      string         `json:",omitempty"` // version of this code
-	FrontendLogID   string         `json:",omitempty"` // logtail ID of frontend instance
-	BackendLogID    string         `json:",omitempty"` // logtail ID of backend instance
-	OS              string         `json:",omitempty"` // operating system the client runs on (a version.OS value)
-	OSVersion       string         `json:",omitempty"` // operating system version, with optional distro prefix ("Debian 10.4", "Windows 10 Pro 10.0.19041")
+	IPNVersion    string `json:",omitempty"` // version of this code (in version.Long format)
+	FrontendLogID string `json:",omitempty"` // logtail ID of frontend instance
+	BackendLogID  string `json:",omitempty"` // logtail ID of backend instance
+	OS            string `json:",omitempty"` // operating system the client runs on (a version.OS value)
+
+	// OSVersion is the version of the OS, if available.
+	//
+	// For Android, it's like "10", "11", "12", etc. For iOS and macOS it's like
+	// "15.6.1" or "12.4.0". For Windows it's like "10.0.19044.1889". For
+	// FreeBSD it's like "12.3-STABLE".
+	//
+	// For Linux, prior to Tailscale 1.32, we jammed a bunch of fields into this
+	// string on Linux, like "Debian 10.4; kernel=xxx; container; env=kn" and so
+	// on. As of Tailscale 1.32, this is simply the kernel version on Linux, like
+	// "5.10.0-17-amd64".
+	OSVersion string `json:",omitempty"`
+
+	Container      opt.Bool `json:",omitempty"` // whether the client is running in a container
+	Env            string   `json:",omitempty"` // a hostinfo.EnvType in string form
+	Distro         string   `json:",omitempty"` // "debian", "ubuntu", "nixos", ...
+	DistroVersion  string   `json:",omitempty"` // "20.04", ...
+	DistroCodeName string   `json:",omitempty"` // "jammy", "bullseye", ...
+
 	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
 	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")

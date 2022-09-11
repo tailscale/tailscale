@@ -19,7 +19,7 @@ Date:   2022-05-30 16:08:45 +0800
 remotes/origin/QTSFW_5.0.0`
 
 	got := getQnapQtsVersion(version_info)
-	want := "QTS 5.0.0"
+	want := "5.0.0"
 	if got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,24 +32,67 @@ func New() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	hostname = dnsname.FirstLabel(hostname)
 	return &tailcfg.Hostinfo{
-		IPNVersion:  version.Long,
-		Hostname:    hostname,
-		OS:          version.OS(),
-		OSVersion:   GetOSVersion(),
-		Desktop:     desktop(),
-		Package:     packageTypeCached(),
-		GoArch:      runtime.GOARCH,
-		GoVersion:   runtime.Version(),
-		DeviceModel: deviceModel(),
-		Cloud:       string(cloudenv.Get()),
+		IPNVersion:     version.Long,
+		Hostname:       hostname,
+		OS:             version.OS(),
+		OSVersion:      GetOSVersion(),
+		Container:      lazyInContainer.Get(),
+		Distro:         condCall(distroName),
+		DistroVersion:  condCall(distroVersion),
+		DistroCodeName: condCall(distroCodeName),
+		Env:            string(GetEnvType()),
+		Desktop:        desktop(),
+		Package:        packageTypeCached(),
+		GoArch:         runtime.GOARCH,
+		GoVersion:      runtime.Version(),
+		DeviceModel:    deviceModel(),
+		Cloud:          string(cloudenv.Get()),
 	}
 }
 
 // non-nil on some platforms
 var (
-	osVersion   func() string
-	packageType func() string
+	osVersion      func() string
+	packageType    func() string
+	distroName     func() string
+	distroVersion  func() string
+	distroCodeName func() string
 )
+
+func condCall[T any](fn func() T) T {
+	var zero T
+	if fn == nil {
+		return zero
+	}
+	return fn()
+}
+
+var (
+	lazyInContainer = &lazyAtomicValue[opt.Bool]{f: ptrTo(inContainer)}
+)
+
+func ptrTo[T any](v T) *T { return &v }
+
+type lazyAtomicValue[T any] struct {
+	// f is a pointer to a fill function. If it's nil or points
+	// to nil, then Get returns the zero value for T.
+	f *func() T
+
+	once sync.Once
+	v    T
+}
+
+func (v *lazyAtomicValue[T]) Get() T {
+	v.once.Do(v.fill)
+	return v.v
+}
+
+func (v *lazyAtomicValue[T]) fill() {
+	if v.f == nil || *v.f == nil {
+		return
+	}
+	v.v = (*v.f)()
+}
 
 // GetOSVersion returns the OSVersion of current host if available.
 func GetOSVersion() string {
@@ -179,22 +223,23 @@ func getEnvType() EnvType {
 }
 
 // inContainer reports whether we're running in a container.
-func inContainer() bool {
+func inContainer() opt.Bool {
 	if runtime.GOOS != "linux" {
-		return false
+		return ""
 	}
-	var ret bool
+	var ret opt.Bool
+	ret.Set(false)
 	lineread.File("/proc/1/cgroup", func(line []byte) error {
 		if mem.Contains(mem.B(line), mem.S("/docker/")) ||
 			mem.Contains(mem.B(line), mem.S("/lxc/")) {
-			ret = true
+			ret.Set(true)
 			return io.EOF // arbitrary non-nil error to stop loop
 		}
 		return nil
 	})
 	lineread.File("/proc/mounts", func(line []byte) error {
 		if mem.Contains(mem.B(line), mem.S("fuse.lxcfs")) {
-			ret = true
+			ret.Set(true)
 			return io.EOF
 		}
 		return nil
