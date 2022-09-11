@@ -250,19 +250,24 @@ func (v *HostinfoView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v HostinfoView) IPNVersion() string    { return v.ж.IPNVersion }
-func (v HostinfoView) FrontendLogID() string { return v.ж.FrontendLogID }
-func (v HostinfoView) BackendLogID() string  { return v.ж.BackendLogID }
-func (v HostinfoView) OS() string            { return v.ж.OS }
-func (v HostinfoView) OSVersion() string     { return v.ж.OSVersion }
-func (v HostinfoView) Desktop() opt.Bool     { return v.ж.Desktop }
-func (v HostinfoView) Package() string       { return v.ж.Package }
-func (v HostinfoView) DeviceModel() string   { return v.ж.DeviceModel }
-func (v HostinfoView) Hostname() string      { return v.ж.Hostname }
-func (v HostinfoView) ShieldsUp() bool       { return v.ж.ShieldsUp }
-func (v HostinfoView) ShareeNode() bool      { return v.ж.ShareeNode }
-func (v HostinfoView) GoArch() string        { return v.ж.GoArch }
-func (v HostinfoView) GoVersion() string     { return v.ж.GoVersion }
+func (v HostinfoView) IPNVersion() string     { return v.ж.IPNVersion }
+func (v HostinfoView) FrontendLogID() string  { return v.ж.FrontendLogID }
+func (v HostinfoView) BackendLogID() string   { return v.ж.BackendLogID }
+func (v HostinfoView) OS() string             { return v.ж.OS }
+func (v HostinfoView) OSVersion() string      { return v.ж.OSVersion }
+func (v HostinfoView) Container() opt.Bool    { return v.ж.Container }
+func (v HostinfoView) Env() string            { return v.ж.Env }
+func (v HostinfoView) Distro() string         { return v.ж.Distro }
+func (v HostinfoView) DistroVersion() string  { return v.ж.DistroVersion }
+func (v HostinfoView) DistroCodeName() string { return v.ж.DistroCodeName }
+func (v HostinfoView) Desktop() opt.Bool      { return v.ж.Desktop }
+func (v HostinfoView) Package() string        { return v.ж.Package }
+func (v HostinfoView) DeviceModel() string    { return v.ж.DeviceModel }
+func (v HostinfoView) Hostname() string       { return v.ж.Hostname }
+func (v HostinfoView) ShieldsUp() bool        { return v.ж.ShieldsUp }
+func (v HostinfoView) ShareeNode() bool       { return v.ж.ShareeNode }
+func (v HostinfoView) GoArch() string         { return v.ж.GoArch }
+func (v HostinfoView) GoVersion() string      { return v.ж.GoVersion }
 func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
 	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
 }
@@ -282,6 +287,11 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	BackendLogID    string
 	OS              string
 	OSVersion       string
+	Container       opt.Bool
+	Env             string
+	Distro          string
+	DistroVersion   string
+	DistroCodeName  string
 	Desktop         opt.Bool
 	Package         string
 	DeviceModel     string
