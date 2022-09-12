@@ -18,6 +18,7 @@ import (
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netns"
 	"tailscale.com/types/key"
 )
 
@@ -126,6 +127,11 @@ var (
 func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 	if debugDisableRawDisco {
 		return nil, errors.New("raw disco listening disabled by debug flag")
+	}
+
+	// https://github.com/tailscale/tailscale/issues/5607
+	if !netns.UseSocketMark() {
+		return nil, errors.New("raw disco listening disabled, SO_MARK unavailable")
 	}
 
 	var (
