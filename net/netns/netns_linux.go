@@ -65,9 +65,9 @@ func socketMarkWorks() bool {
 
 var forceBindToDevice = envknob.Bool("TS_FORCE_LINUX_BIND_TO_DEVICE")
 
-// useSocketMark reports whether SO_MARK works.
+// UseSocketMark reports whether SO_MARK is in use.
 // If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
-func useSocketMark() bool {
+func UseSocketMark() bool {
 	if forceBindToDevice {
 		return false
 	}
@@ -103,7 +103,7 @@ func controlC(network, address string, c syscall.RawConn) error {
 
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
-		if useSocketMark() {
+		if UseSocketMark() {
 			sockErr = setBypassMark(fd)
 		} else {
 			sockErr = bindToDevice(fd)
