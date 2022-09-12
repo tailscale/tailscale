@@ -25,13 +25,13 @@ import (
 
 func TestRouterStates(t *testing.T) {
 	basic := `
-ip rule add -4 pref 5210 fwmark 0x80000 table main
-ip rule add -4 pref 5230 fwmark 0x80000 table default
-ip rule add -4 pref 5250 fwmark 0x80000 type unreachable
+ip rule add -4 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -4 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -4 pref 5250 fwmark 0x80000/0xff0000 type unreachable
 ip rule add -4 pref 5270 table 52
-ip rule add -6 pref 5210 fwmark 0x80000 table main
-ip rule add -6 pref 5230 fwmark 0x80000 table default
-ip rule add -6 pref 5250 fwmark 0x80000 type unreachable
+ip rule add -6 pref 5210 fwmark 0x80000/0xff0000 table main
+ip rule add -6 pref 5230 fwmark 0x80000/0xff0000 table default
+ip rule add -6 pref 5250 fwmark 0x80000/0xff0000 type unreachable
 ip rule add -6 pref 5270 table 52
 `
 	states := []struct {
@@ -101,22 +101,22 @@ ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
-v4/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
+v4/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
-v6/nat/ts-postrouting -m mark --mark 0x40000 -j MASQUERADE
+v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
 `,
 		},
 		{
@@ -133,8 +133,8 @@ ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
@@ -143,8 +143,8 @@ v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -166,8 +166,8 @@ ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
@@ -176,8 +176,8 @@ v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -196,8 +196,8 @@ ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
@@ -206,8 +206,8 @@ v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -225,15 +225,15 @@ up
 ip addr add 100.101.102.104/10 dev tailscale0
 ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
-				`v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+				`v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
 v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 `,
 		},
@@ -251,8 +251,8 @@ ip route add 10.0.0.0/8 dev tailscale0 table 52
 ip route add 100.100.100.100/32 dev tailscale0 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
@@ -261,8 +261,8 @@ v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -283,8 +283,8 @@ ip route add 100.100.100.100/32 dev tailscale0 table 52
 ip route add throw 10.0.0.0/8 table 52` + basic +
 				`v4/filter/FORWARD -j ts-forward
 v4/filter/INPUT -j ts-input
-v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v4/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v4/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v4/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v4/filter/ts-forward -o tailscale0 -s 100.64.0.0/10 -j DROP
 v4/filter/ts-forward -o tailscale0 -j ACCEPT
 v4/filter/ts-input -i lo -s 100.101.102.104 -j ACCEPT
@@ -293,8 +293,8 @@ v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v4/nat/POSTROUTING -j ts-postrouting
 v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
-v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000
-v6/filter/ts-forward -m mark --mark 0x40000 -j ACCEPT
+v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
+v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -810,4 +810,32 @@ func TestCheckIPRuleSupportsV6(t *testing.T) {
 	// Just log it. For interactive testing only.
 	// Some machines running our tests might not have IPv6.
 	t.Logf("Got: %v", err)
+}
+
+func TestBusyboxParseVersion(t *testing.T) {
+	input := `BusyBox v1.34.1 (2022-09-01 16:10:29 UTC) multi-call binary.
+BusyBox is copyrighted by many authors between 1998-2015.
+Licensed under GPLv2. See source distribution for detailed
+copyright notices.
+
+Usage: busybox [function [arguments]...]
+   or: busybox --list[-full]
+   or: busybox --show SCRIPT
+   or: busybox --install [-s] [DIR]
+   or: function [arguments]...
+
+	BusyBox is a multi-call binary that combines many common Unix
+	utilities into a single executable.  Most people will create a
+	link to busybox for each function they wish to use and BusyBox
+	will act like whatever it was invoked as.
+`
+
+	v1, v2, v3, err := busyboxParseVersion(input)
+	if err != nil {
+		t.Fatalf("busyboxParseVersion() failed: %v", err)
+	}
+
+	if got, want := fmt.Sprintf("%d.%d.%d", v1, v2, v3), "1.34.1"; got != want {
+		t.Errorf("version = %q, want %q", got, want)
+	}
 }
