@@ -229,6 +229,15 @@ func inContainer() opt.Bool {
 	}
 	var ret opt.Bool
 	ret.Set(false)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		ret.Set(true)
+		return ret
+	}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		// See https://github.com/cri-o/cri-o/issues/5461
+		ret.Set(true)
+		return ret
+	}
 	lineread.File("/proc/1/cgroup", func(line []byte) error {
 		if mem.Contains(mem.B(line), mem.S("/docker/")) ||
 			mem.Contains(mem.B(line), mem.S("/lxc/")) {
