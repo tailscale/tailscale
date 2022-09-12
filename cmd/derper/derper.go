@@ -206,6 +206,7 @@ func main() {
 	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
+	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -293,9 +294,12 @@ func main() {
 		})
 		if *httpPort > -1 {
 			go func() {
+				port80mux := http.NewServeMux()
+				port80mux.HandleFunc("/generate_204", serveNoContent)
+				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
-					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+					Handler:     port80mux,
 					ErrorLog:    quietLogger,
 					ReadTimeout: 30 * time.Second,
 					// Crank up WriteTimeout a bit more than usually
@@ -320,6 +324,11 @@ func main() {
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
 	}
+}
+
+// For captive portal detection
+func serveNoContent(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // probeHandler is the endpoint that js/wasm clients hit to measure
