@@ -23,7 +23,9 @@ export function runSSHSession(
   term.open(termContainerNode)
   fitAddon.fit()
 
-  const webLinksAddon = new WebLinksAddon()
+  const webLinksAddon = new WebLinksAddon((event, uri) =>
+    event.view?.open(uri, "_blank", "noopener")
+  )
   term.loadAddon(webLinksAddon)
 
   let onDataHook: ((data: string) => void) | undefined
