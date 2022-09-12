@@ -47,6 +47,7 @@ declare global {
     stateStorage?: IPNStateStorage
     authKey?: string
     controlURL?: string
+    hostname?: string
   }
 
   type IPNCallbacks = {
