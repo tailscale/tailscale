@@ -1318,6 +1318,9 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 	if !c.wantDerpLocked() || c.closed {
 		return nil
 	}
+	if c.derpMap == nil || c.derpMap.Regions[regionID] == nil {
+		return nil
+	}
 	if c.privateKey.IsZero() {
 		c.logf("magicsock: DERP lookup of %v with no private key; ignoring", addr)
 		return nil
@@ -1361,9 +1364,6 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 		firstDerp = true
 		c.activeDerp = make(map[int]activeDerp)
 		c.prevDerp = make(map[int]*syncs.WaitGroupChan)
-	}
-	if c.derpMap == nil || c.derpMap.Regions[regionID] == nil {
-		return nil
 	}
 
 	// Note that derphttp.NewRegionClient does not dial the server
