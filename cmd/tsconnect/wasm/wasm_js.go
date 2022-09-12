@@ -61,24 +61,28 @@ func main() {
 func newIPN(jsConfig js.Value) map[string]any {
 	netns.SetEnabled(false)
 
-	jsStateStorage := jsConfig.Get("stateStorage")
 	var store ipn.StateStore
-	if jsStateStorage.IsUndefined() {
-		store = new(mem.Store)
-	} else {
+	if jsStateStorage := jsConfig.Get("stateStorage"); !jsStateStorage.IsUndefined() {
 		store = &jsStateStore{jsStateStorage}
+	} else {
+		store = new(mem.Store)
 	}
 
-	jsControlURL := jsConfig.Get("controlURL")
 	controlURL := ControlURL
-	if jsControlURL.Type() == js.TypeString {
+	if jsControlURL := jsConfig.Get("controlURL"); jsControlURL.Type() == js.TypeString {
 		controlURL = jsControlURL.String()
 	}
 
-	jsAuthKey := jsConfig.Get("authKey")
 	var authKey string
-	if jsAuthKey.Type() == js.TypeString {
+	if jsAuthKey := jsConfig.Get("authKey"); jsAuthKey.Type() == js.TypeString {
 		authKey = jsAuthKey.String()
+	}
+
+	var hostname string
+	if jsHostname := jsConfig.Get("hostname"); jsHostname.Type() == js.TypeString {
+		hostname = jsHostname.String()
+	} else {
+		hostname = generateHostname()
 	}
 
 	lpc := getOrCreateLogPolicyConfig(store)
@@ -136,6 +140,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		lb:         lb,
 		controlURL: controlURL,
 		authKey:    authKey,
+		hostname:   hostname,
 	}
 
 	return map[string]any{
@@ -196,6 +201,7 @@ type jsIPN struct {
 	lb         *ipnlocal.LocalBackend
 	controlURL string
 	authKey    string
+	hostname   string
 }
 
 var jsIPNState = map[ipn.State]string{
@@ -284,7 +290,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				RouteAll:         false,
 				AllowSingleHosts: true,
 				WantRunning:      true,
-				Hostname:         generateHostname(),
+				Hostname:         i.hostname,
 			},
 			AuthKey: i.authKey,
 		})
@@ -357,9 +363,6 @@ func (s *jsSSHSession) Run() {
 	onDone := s.termConfig.Get("onDone")
 	defer onDone.Invoke()
 
-	write := func(s string) {
-		writeFn.Invoke(s)
-	}
 	writeError := func(label string, err error) {
 		writeErrorFn.Invoke(fmt.Sprintf("%s Error: %v\r\n", label, err))
 	}
@@ -384,7 +387,6 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 	defer sshConn.Close()
-	write("SSH Connected\r\n")
 
 	sshClient := ssh.NewClient(sshConn, nil, nil)
 	defer sshClient.Close()
@@ -395,7 +397,6 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 	s.session = session
-	write("Session Established\r\n")
 	defer session.Close()
 
 	stdin, err := session.StdinPipe()
