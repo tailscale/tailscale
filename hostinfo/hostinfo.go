@@ -183,6 +183,13 @@ func inContainer() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		// See https://github.com/cri-o/cri-o/issues/5461
+		return true
+	}
 	var ret bool
 	lineread.File("/proc/1/cgroup", func(line []byte) error {
 		if mem.Contains(mem.B(line), mem.S("/docker/")) ||
