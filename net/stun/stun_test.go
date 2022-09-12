@@ -6,11 +6,13 @@ package stun_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"testing"
 
 	"tailscale.com/net/stun"
+	"tailscale.com/util/must"
 )
 
 // TODO(bradfitz): fuzz this.
@@ -174,6 +176,13 @@ var responseTests = []struct {
 		},
 		wantAddr: netip.AddrFrom4([4]byte{127, 0, 0, 1}),
 		wantPort: 61300,
+	},
+	{
+		name:     "no-4in6",
+		data:     must.Get(hex.DecodeString("010100182112a4424fd5d202dcb37d31fc773306002000140002cd3d2112a4424fd5d202dcb382ce2dc3fcc7")),
+		wantTID:  []byte{79, 213, 210, 2, 220, 179, 125, 49, 252, 119, 51, 6},
+		wantAddr: netip.AddrFrom4([4]byte{209, 180, 207, 193}),
+		wantPort: 60463,
 	},
 }
 
