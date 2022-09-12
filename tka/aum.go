@@ -13,6 +13,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/blake2s"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -55,7 +56,7 @@ const (
 	//
 	// Only the Key optional field may be set.
 	AUMAddKey
-	// A RemoveKey AUM describes hte removal of a key trusted by TKA.
+	// A RemoveKey AUM describes the removal of a key trusted by TKA.
 	//
 	// Only the KeyID optional field may be set.
 	AUMRemoveKey
@@ -70,6 +71,16 @@ const (
 	//
 	// Only the State optional field may be set.
 	AUMCheckpoint
+	// A AddDenylistNodeKey AUM describes the addition of a node key to
+	// the denylist.
+	//
+	// Only the NodeKey optional field may be set.
+	AUMAddDenylistNodeKey
+	// A RemoveDenylistNodeKey AUM describes the removal of a node key from
+	// the denylist.
+	//
+	// Only the NodeKey optional field may be set.
+	AUMRemoveDenylistNodeKey
 )
 
 func (k AUMKind) String() string {
@@ -86,6 +97,10 @@ func (k AUMKind) String() string {
 		return "checkpoint"
 	case AUMUpdateKey:
 		return "update-key"
+	case AUMAddDenylistNodeKey:
+		return "add-nodekey-denylist"
+	case AUMRemoveDenylistNodeKey:
+		return "remove-nodekey-denylist"
 	default:
 		return fmt.Sprintf("AUM?<%d>", int(k))
 	}
@@ -129,6 +144,13 @@ type AUM struct {
 	Votes *uint             `cbor:"6,keyasint,omitempty"`
 	Meta  map[string]string `cbor:"7,keyasint,omitempty"`
 
+	// NodeKey describes the node-key being added or removed from the denylist.
+	// This field is used for AUMAddDenylistNodeKey & AUMRemoveDenylistNodeKey
+	// AUMs.
+	//
+	// NodeKey is the MarshalBinary representation of a key.NodePublic.
+	NodeKey []byte `cbor:"8,keyasint,omitempty"`
+
 	// Signatures lists the signatures over this AUM.
 	// CBOR key 23 is the last key which can be encoded as a single byte.
 	Signatures []tkatype.Signature `cbor:"23,keyasint,omitempty"`
@@ -161,14 +183,14 @@ func (a *AUM) StaticValidate() error {
 		if a.Key == nil {
 			return errors.New("AddKey AUMs must contain a key")
 		}
-		if a.KeyID != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.State != nil || a.Votes != nil || a.Meta != nil || a.NodeKey != nil {
 			return errors.New("AddKey AUMs may only specify a Key")
 		}
 	case AUMRemoveKey:
 		if len(a.KeyID) == 0 {
 			return errors.New("RemoveKey AUMs must specify a key ID")
 		}
-		if a.Key != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.Key != nil || a.State != nil || a.Votes != nil || a.Meta != nil || a.NodeKey != nil {
 			return errors.New("RemoveKey AUMs may only specify a KeyID")
 		}
 	case AUMUpdateKey:
@@ -178,15 +200,23 @@ func (a *AUM) StaticValidate() error {
 		if a.Meta == nil && a.Votes == nil {
 			return errors.New("UpdateKey AUMs must contain an update to votes or key metadata")
 		}
-		if a.Key != nil || a.State != nil {
+		if a.Key != nil || a.State != nil || a.NodeKey != nil {
 			return errors.New("UpdateKey AUMs may only specify KeyID, Votes, and Meta")
 		}
 	case AUMCheckpoint:
 		if a.State == nil {
 			return errors.New("Checkpoint AUMs must specify the state")
 		}
-		if a.KeyID != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.Key != nil || a.Votes != nil || a.Meta != nil || a.NodeKey != nil {
 			return errors.New("Checkpoint AUMs may only specify State")
+		}
+	case AUMAddDenylistNodeKey, AUMRemoveDenylistNodeKey:
+		if a.Key != nil || a.State != nil || a.Votes != nil || a.Meta != nil || a.KeyID != nil {
+			return errors.New("AUMs manipulating the denylist may only specify a NodeKey")
+		}
+		var nodeKey key.NodePublic
+		if err := nodeKey.UnmarshalBinary(a.NodeKey); err != nil {
+			return fmt.Errorf("NodeKey invalid: %v", err)
 		}
 
 	case AUMNoOp:

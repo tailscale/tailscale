@@ -36,6 +36,13 @@ type State struct {
 
 	// Keys are the public keys currently trusted by the TKA.
 	Keys []Key `cbor:"3,keyasint"`
+
+	// BannedNodekeys is a denylist of node-keys. Any signatures over
+	// these keys are not considered authorized.
+	//
+	// Each entry is encoded as the MarshalBinary representation of the
+	// underlying key.NodePublic.
+	BannedNodekeys [][]byte `cbor:"4,keyasint,omitempty"`
 }
 
 // GetKey returns the trusted key with the specified KeyID.
@@ -77,6 +84,13 @@ func (s State) Clone() State {
 		}
 	}
 
+	if s.BannedNodekeys != nil {
+		out.BannedNodekeys = make([][]byte, len(s.BannedNodekeys))
+		for i := range s.BannedNodekeys {
+			out.BannedNodekeys[i] = make([]byte, len(s.BannedNodekeys[i]))
+			copy(out.BannedNodekeys[i], s.BannedNodekeys[i])
+		}
+	}
 	return out
 }
 
@@ -193,6 +207,32 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		out.Keys = append(out.Keys[:idx], out.Keys[idx+1:]...)
 		return out, nil
 
+	case AUMAddDenylistNodeKey:
+		for i := range s.BannedNodekeys {
+			if bytes.Equal(update.NodeKey, s.BannedNodekeys[i]) {
+				return State{}, errors.New("entry already exists")
+			}
+		}
+		out := s.cloneForUpdate(&update)
+		// Validity of node-key already checked by StaticValidate in aumVerify().
+		out.BannedNodekeys = append(out.BannedNodekeys, update.NodeKey)
+		return out, nil
+
+	case AUMRemoveDenylistNodeKey:
+		idx := -1
+		for i := range s.BannedNodekeys {
+			if bytes.Equal(update.NodeKey, s.BannedNodekeys[i]) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return State{}, errors.New("no such entry")
+		}
+		out := s.cloneForUpdate(&update)
+		out.BannedNodekeys = append(out.BannedNodekeys[:idx], out.BannedNodekeys[idx+1:]...)
+		return out, nil
+
 	default:
 		// TODO(tom): Instead of erroring, update lastHash and
 		// continue (to preserve future compatibility).
@@ -205,6 +245,7 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 const (
 	maxDisablementSecrets = 32
 	maxKeys               = 512
+	maxDenylistEntries    = 64
 )
 
 // staticValidateCheckpoint validates that the state is well-formed for
@@ -249,6 +290,20 @@ func (s *State) staticValidateCheckpoint() error {
 			}
 			if bytes.Equal(k.ID(), k2.ID()) {
 				return fmt.Errorf("key[%d]: duplicates key[%d]", i, j)
+			}
+		}
+	}
+
+	if numDenys := len(s.BannedNodekeys); numDenys > maxDenylistEntries {
+		return fmt.Errorf("too many node-key denylist entries (%d, max %d)", numDenys, maxDenylistEntries)
+	}
+	for i, nk := range s.BannedNodekeys {
+		for j, nk2 := range s.BannedNodekeys {
+			if i == j {
+				continue
+			}
+			if bytes.Equal(nk, nk2) {
+				return fmt.Errorf("node-key entry %d duplicates entry %d", i, j)
 			}
 		}
 	}

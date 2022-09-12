@@ -677,6 +677,18 @@ func (a *Authority) NodeKeyAuthorized(nodeKey key.NodePublic, nodeKeySignature t
 		return errors.New("credential signatures cannot authorize nodes on their own")
 	}
 
+	if len(a.state.BannedNodekeys) > 0 {
+		nodeBytes, err := nodeKey.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("marshalling pubkey: %v", err)
+		}
+		for _, bannedNode := range a.state.BannedNodekeys {
+			if bytes.Equal(bannedNode, nodeBytes) {
+				return errors.New("pubkey is on the denylist")
+			}
+		}
+	}
+
 	key, err := a.state.GetKey(decoded.KeyID)
 	if err != nil {
 		return fmt.Errorf("key: %v", err)

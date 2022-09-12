@@ -53,6 +53,15 @@ func TestCloneState(t *testing.T) {
 				},
 			},
 		},
+		{
+			"BannedNodekeys",
+			State{
+				BannedNodekeys: [][]byte{
+					{1, 2, 3, 4},
+					{5, 6, 7, 8},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tcs {
@@ -153,6 +162,26 @@ func TestApplyUpdatesChain(t *testing.T) {
 				LastAUMHash: hashFromHex("57343671da5eea3cfb502954e976e8028bffd3540b50a043b2a65a8d8d8217d0"),
 			},
 		},
+		{
+			"AddDenyNodekey",
+			[]AUM{{MessageKind: AUMAddDenylistNodeKey, NodeKey: []byte{1, 2, 3, 4}}},
+			State{},
+			State{
+				BannedNodekeys: [][]byte{{1, 2, 3, 4}},
+				LastAUMHash:    hashFromHex("e6d5db2b73e6ad69ae6b852f9a1c163c17bc98d3acf257ef9616e3a36c7368f2"),
+			},
+		},
+		{
+			"RemoveDenyNodekey",
+			[]AUM{{MessageKind: AUMRemoveDenylistNodeKey, NodeKey: []byte{1, 2, 3, 4}, PrevAUMHash: fromHex("e6d5db2b73e6ad69ae6b852f9a1c163c17bc98d3acf257ef9616e3a36c7368f2")}},
+			State{
+				BannedNodekeys: [][]byte{{1, 2, 3, 4}},
+				LastAUMHash:    hashFromHex("e6d5db2b73e6ad69ae6b852f9a1c163c17bc98d3acf257ef9616e3a36c7368f2"),
+			},
+			State{
+				LastAUMHash: hashFromHex("beea03557a839a51de8822ffbe0819035ec85a1766c301ac2cd992e2b79b5068"),
+			},
+		},
 	}
 
 	for _, tc := range tcs {
@@ -166,6 +195,7 @@ func TestApplyUpdatesChain(t *testing.T) {
 					t.Fatalf("Apply message[%d] failed: %v", i, err)
 				}
 				// t.Logf("update[%d] end-state = %+v", i, state)
+				// t.Logf("state.LastAUMHash = %x", state.LastAUMHash[:])
 
 				updateHash := tc.Updates[i].Hash()
 				if got, want := *state.LastAUMHash, updateHash[:]; !bytes.Equal(got[:], want) {
@@ -222,6 +252,18 @@ func TestApplyUpdateErrors(t *testing.T) {
 				Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 			},
 			errors.New("parent AUMHash mismatch"),
+		},
+		{
+			"AddDenyNodekey exists",
+			[]AUM{{MessageKind: AUMAddDenylistNodeKey, NodeKey: []byte{1, 2, 3, 4}}},
+			State{BannedNodekeys: [][]byte{{1, 2, 3, 4}}},
+			errors.New("entry already exists"),
+		},
+		{
+			"RemoveDenyNodekey notfound",
+			[]AUM{{MessageKind: AUMRemoveDenylistNodeKey, NodeKey: []byte{1, 2, 3, 4}}},
+			State{},
+			errors.New("no such entry"),
 		},
 	}
 
