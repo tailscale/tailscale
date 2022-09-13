@@ -438,6 +438,13 @@ func tryFixLogStateLocation(dir, cmdname string) {
 // New returns a new log policy (a logger and its instance ID) for a
 // given collection name.
 func New(collection string) *Policy {
+	return NewWithConfigPath(collection, "", "")
+}
+
+// NewWithConfigPath is identical to New,
+// but uses the specified directory and command name.
+// If either is empty, it derives them automatically.
+func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -460,9 +467,12 @@ func New(collection string) *Policy {
 		earlyErrBuf.WriteByte('\n')
 	}
 
-	dir := logsDir(earlyLogf)
-
-	cmdName := version.CmdName()
+	if dir == "" {
+		dir = logsDir(earlyLogf)
+	}
+	if cmdName == "" {
+		cmdName = version.CmdName()
+	}
 	tryFixLogStateLocation(dir, cmdName)
 
 	cfgPath := filepath.Join(dir, fmt.Sprintf("%s.log.conf", cmdName))
