@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -213,6 +214,9 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logMarker := fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
+	if envknob.NoLogsNoSupport() {
+		logMarker = "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled"
+	}
 	h.logf("user bugreport: %s", logMarker)
 	if note := r.FormValue("note"); len(note) > 0 {
 		h.logf("user bugreport note: %s", note)
