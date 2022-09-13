@@ -937,6 +937,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			}
 			if resp.Debug.DisableLogTail {
 				logtail.Disable()
+				envknob.SetNoLogsNoSupport()
 			}
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)

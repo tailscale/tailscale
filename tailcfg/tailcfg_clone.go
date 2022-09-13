@@ -131,6 +131,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Hostname        string
 	ShieldsUp       bool
 	ShareeNode      bool
+	NoLogsNoSupport bool
 	GoArch          string
 	GoVersion       string
 	RoutableIPs     []netip.Prefix

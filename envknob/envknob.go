@@ -155,3 +155,14 @@ func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
 
 // SSHIgnoreTailnetPolicy is whether to ignore the Tailnet SSH policy for development.
 func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY") }
+
+// NoLogsNoSupport reports whether the client's opted out of log uploads and
+// technical support.
+func NoLogsNoSupport() bool {
+	return Bool("TS_NO_LOGS_NO_SUPPORT")
+}
+
+// SetNoLogsNoSupport enables no-logs-no-support mode.
+func SetNoLogsNoSupport() {
+	os.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+}

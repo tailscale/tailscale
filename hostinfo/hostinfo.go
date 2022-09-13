@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/cloudenv"
@@ -32,21 +33,22 @@ func New() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	hostname = dnsname.FirstLabel(hostname)
 	return &tailcfg.Hostinfo{
-		IPNVersion:     version.Long,
-		Hostname:       hostname,
-		OS:             version.OS(),
-		OSVersion:      GetOSVersion(),
-		Container:      lazyInContainer.Get(),
-		Distro:         condCall(distroName),
-		DistroVersion:  condCall(distroVersion),
-		DistroCodeName: condCall(distroCodeName),
-		Env:            string(GetEnvType()),
-		Desktop:        desktop(),
-		Package:        packageTypeCached(),
-		GoArch:         runtime.GOARCH,
-		GoVersion:      runtime.Version(),
-		DeviceModel:    deviceModel(),
-		Cloud:          string(cloudenv.Get()),
+		IPNVersion:      version.Long,
+		Hostname:        hostname,
+		OS:              version.OS(),
+		OSVersion:       GetOSVersion(),
+		Container:       lazyInContainer.Get(),
+		Distro:          condCall(distroName),
+		DistroVersion:   condCall(distroVersion),
+		DistroCodeName:  condCall(distroCodeName),
+		Env:             string(GetEnvType()),
+		Desktop:         desktop(),
+		Package:         packageTypeCached(),
+		GoArch:          runtime.GOARCH,
+		GoVersion:       runtime.Version(),
+		DeviceModel:     deviceModel(),
+		Cloud:           string(cloudenv.Get()),
+		NoLogsNoSupport: envknob.NoLogsNoSupport(),
 	}
 }
 

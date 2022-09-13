@@ -113,6 +113,7 @@ var args struct {
 	verbose        int
 	socksAddr      string // listen address for SOCKS5 server
 	httpProxyAddr  string // listen address for HTTP proxy server
+	disableLogs    bool
 }
 
 var (
@@ -144,6 +145,7 @@ func main() {
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -197,6 +199,10 @@ func main() {
 	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
 		args.statepath = paths.DefaultTailscaledStateFile()
+	}
+
+	if args.disableLogs {
+		envknob.SetNoLogsNoSupport()
 	}
 
 	if beWindowsSubprocess() {

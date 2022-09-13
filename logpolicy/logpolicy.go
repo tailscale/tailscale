@@ -539,7 +539,10 @@ func New(collection string) *Policy {
 		conf.IncludeProcSequence = true
 	}
 
-	if val := getLogTarget(); val != "" {
+	if envknob.NoLogsNoSupport() {
+		log.Println("You have disabled logging. Tailscale will not be able to provide support.")
+		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
+	} else if val := getLogTarget(); val != "" {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		conf.BaseURL = val
 		u, _ := url.Parse(val)
@@ -734,4 +737,15 @@ func goVersion() string {
 		return v + "-race"
 	}
 	return v
+}
+
+type noopPretendSuccessTransport struct{}
+
+func (noopPretendSuccessTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	io.ReadAll(req.Body)
+	req.Body.Close()
+	return &http.Response{
+		StatusCode: 200,
+		Status:     "200 OK",
+	}, nil
 }

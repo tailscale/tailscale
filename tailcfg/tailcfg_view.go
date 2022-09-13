@@ -266,6 +266,7 @@ func (v HostinfoView) DeviceModel() string    { return v.ж.DeviceModel }
 func (v HostinfoView) Hostname() string       { return v.ж.Hostname }
 func (v HostinfoView) ShieldsUp() bool        { return v.ж.ShieldsUp }
 func (v HostinfoView) ShareeNode() bool       { return v.ж.ShareeNode }
+func (v HostinfoView) NoLogsNoSupport() bool  { return v.ж.NoLogsNoSupport }
 func (v HostinfoView) GoArch() string         { return v.ж.GoArch }
 func (v HostinfoView) GoVersion() string      { return v.ж.GoVersion }
 func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
@@ -298,6 +299,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Hostname        string
 	ShieldsUp       bool
 	ShareeNode      bool
+	NoLogsNoSupport bool
 	GoArch          string
 	GoVersion       string
 	RoutableIPs     []netip.Prefix
