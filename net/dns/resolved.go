@@ -205,7 +205,7 @@ func (m *resolvedManager) run(ctx context.Context) {
 			// When ctx goes away systemd-resolved auto reverts.
 			// Keeping for potential use in future refactor.
 			if call := rManager.CallWithContext(ctx, dbusResolvedInterface+".RevertLink", 0, m.ifidx); call.Err != nil {
-				m.logf("[v1] RevertLink: %w", call.Err)
+				m.logf("[v1] RevertLink: %v", call.Err)
 				return
 			}
 			return
