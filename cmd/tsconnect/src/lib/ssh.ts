@@ -14,6 +14,7 @@ export function runSSHSession(
   onDone: () => void,
   terminalOptions?: ITerminalOptions
 ) {
+  const parentWindow = termContainerNode.ownerDocument.defaultView ?? window
   const term = new Terminal({
     cursorBlink: true,
     allowProposedApi: true,
@@ -57,22 +58,19 @@ export function runSSHSession(
       resizeObserver?.disconnect()
       term.dispose()
       if (handleBeforeUnload) {
-        window.removeEventListener("beforeunload", handleBeforeUnload)
+        parentWindow.removeEventListener("beforeunload", handleBeforeUnload)
       }
       onDone()
     },
   })
 
   // Make terminal and SSH session track the size of the containing DOM node.
-  resizeObserver =
-    new termContainerNode.ownerDocument.defaultView!.ResizeObserver(() =>
-      fitAddon.fit()
-    )
+  resizeObserver = new parentWindow.ResizeObserver(() => fitAddon.fit())
   resizeObserver.observe(termContainerNode)
   term.onResize(({ rows, cols }) => sshSession.resize(rows, cols))
 
   // Close the session if the user closes the window without an explicit
   // exit.
   handleBeforeUnload = () => sshSession.close()
-  window.addEventListener("beforeunload", handleBeforeUnload)
+  parentWindow.addEventListener("beforeunload", handleBeforeUnload)
 }
