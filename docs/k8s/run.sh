@@ -17,10 +17,11 @@ TS_KUBE_SECRET="${TS_KUBE_SECRET:-tailscale}"
 TS_SOCKS5_SERVER="${TS_SOCKS5_SERVER:-}"
 TS_OUTBOUND_HTTP_PROXY_LISTEN="${TS_OUTBOUND_HTTP_PROXY_LISTEN:-}"
 TS_TAILSCALED_EXTRA_ARGS="${TS_TAILSCALED_EXTRA_ARGS:-}"
+TS_SOCKET="${TS_SOCKET:-/tmp/tailscaled.sock}"
 
 set -e
 
-TAILSCALED_ARGS="--socket=/tmp/tailscaled.sock"
+TAILSCALED_ARGS="--socket=${TS_SOCKET}"
 
 if [[ ! -z "${KUBERNETES_SERVICE_HOST}" ]]; then
   TAILSCALED_ARGS="${TAILSCALED_ARGS} --state=kube:${TS_KUBE_SECRET} --statedir=${TS_STATE_DIR:-/tmp}"
@@ -81,11 +82,11 @@ if [[ ! -z "${TS_EXTRA_ARGS}" ]]; then
 fi
 
 echo "Running tailscale up"
-tailscale --socket=/tmp/tailscaled.sock up ${UP_ARGS}
+tailscale --socket="${TS_SOCKET}" up ${UP_ARGS}
 
 if [[ ! -z "${TS_DEST_IP}" ]]; then
   echo "Adding iptables rule for DNAT"
-  iptables -t nat -I PREROUTING -d "$(tailscale --socket=/tmp/tailscaled.sock ip -4)" -j DNAT --to-destination "${TS_DEST_IP}"
+  iptables -t nat -I PREROUTING -d "$(tailscale --socket=${TS_SOCKET} ip -4)" -j DNAT --to-destination "${TS_DEST_IP}"
 fi
 
 echo "Waiting for tailscaled to exit"
