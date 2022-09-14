@@ -74,10 +74,10 @@ func (pl List) String() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-var debugDisablePortlist = envknob.Bool("TS_DEBUG_DISABLE_PORTLIST")
+var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 
 func GetList(prev List) (List, error) {
-	if debugDisablePortlist {
+	if debugDisablePortlist() {
 		return nil, nil
 	}
 	pl, err := listPorts()

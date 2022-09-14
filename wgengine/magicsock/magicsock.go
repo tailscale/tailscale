@@ -74,7 +74,7 @@ const (
 // useDerpRoute reports whether magicsock should enable the DERP
 // return path optimization (Issue 150).
 func useDerpRoute() bool {
-	if b, ok := debugUseDerpRoute.Get(); ok {
+	if b, ok := debugUseDerpRoute().Get(); ok {
 		return b
 	}
 	ob := controlclient.DERPRouteFlag()
@@ -638,18 +638,18 @@ func (c *Conn) updateEndpoints(why string) {
 				// etc)
 				d := tstime.RandomDurationBetween(20*time.Second, 26*time.Second)
 				if t := c.periodicReSTUNTimer; t != nil {
-					if debugReSTUNStopOnIdle {
+					if debugReSTUNStopOnIdle() {
 						c.logf("resetting existing periodicSTUN to run in %v", d)
 					}
 					t.Reset(d)
 				} else {
-					if debugReSTUNStopOnIdle {
+					if debugReSTUNStopOnIdle() {
 						c.logf("scheduling periodicSTUN to run in %v", d)
 					}
 					c.periodicReSTUNTimer = time.AfterFunc(d, c.doPeriodicSTUN)
 				}
 			} else {
-				if debugReSTUNStopOnIdle {
+				if debugReSTUNStopOnIdle() {
 					c.logf("periodic STUN idle")
 				}
 				c.stopPeriodicReSTUNTimerLocked()
@@ -1074,7 +1074,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		return
 	}
 	addAddr := func(ipp netip.AddrPort, et tailcfg.EndpointType) {
-		if !ipp.IsValid() || (debugOmitLocalAddresses && et == tailcfg.EndpointLocal) {
+		if !ipp.IsValid() || (debugOmitLocalAddresses() && et == tailcfg.EndpointLocal) {
 			return
 		}
 		if _, ok := already[ipp]; !ok {
@@ -1575,7 +1575,7 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 			pkt = m
 			res.n = len(m.Data)
 			res.src = m.Source
-			if logDerpVerbose {
+			if logDerpVerbose() {
 				c.logf("magicsock: got derp-%v packet: %q", regionID, m.Data)
 			}
 			// If this is a new sender we hadn't seen before, remember it and
@@ -1826,7 +1826,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
-		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco) {
+		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
 			node := "?"
 			if !dstKey.IsZero() {
 				node = dstKey.ShortString()
@@ -1890,7 +1890,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	if c.closed {
 		return
 	}
-	if debugDisco {
+	if debugDisco() {
 		c.logf("magicsock: disco: got disco-looking frame from %v", sender.ShortString())
 	}
 	if c.privateKey.IsZero() {
@@ -1899,7 +1899,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		return
 	}
 	if c.discoPrivate.IsZero() {
-		if debugDisco {
+		if debugDisco() {
 			c.logf("magicsock: disco: ignoring disco-looking frame, no local key")
 		}
 		return
@@ -1907,7 +1907,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 
 	if !c.peerMap.anyEndpointForDiscoKey(sender) {
 		metricRecvDiscoBadPeer.Add(1)
-		if debugDisco {
+		if debugDisco() {
 			c.logf("magicsock: disco: ignoring disco-looking frame, don't know endpoint for %v", sender.ShortString())
 		}
 		return
@@ -1931,7 +1931,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		// Don't log in normal case. Pass on to wireguard, in case
 		// it's actually a wireguard packet (super unlikely,
 		// but).
-		if debugDisco {
+		if debugDisco() {
 			c.logf("magicsock: disco: failed to open naclbox from %v (wrong rcpt?)", sender)
 		}
 		metricRecvDiscoBadKey.Add(1)
@@ -1939,7 +1939,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	}
 
 	dm, err := disco.Parse(payload)
-	if debugDisco {
+	if debugDisco() {
 		c.logf("magicsock: disco: disco.Parse = %T, %v", dm, err)
 	}
 	if err != nil {
@@ -2094,7 +2094,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		return
 	}
 
-	if !likelyHeartBeat || debugDisco {
+	if !likelyHeartBeat || debugDisco() {
 		pingNodeSrcStr := dstKey.ShortString()
 		if numNodes > 1 {
 			pingNodeSrcStr = "[one-of-multi]"
@@ -2381,7 +2381,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		}
 		ep.wgEndpoint = n.Key.UntypedHexString()
 		ep.initFakeUDPAddr()
-		if debugDisco { // rather than making a new knob
+		if debugDisco() { // rather than making a new knob
 			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 				const derpPrefix = "127.3.3.40:"
 				if strings.HasPrefix(n.DERP, derpPrefix) {
@@ -2736,7 +2736,7 @@ func (c *Conn) goroutinesRunningLocked() bool {
 }
 
 func maxIdleBeforeSTUNShutdown() time.Duration {
-	if debugReSTUNStopOnIdle {
+	if debugReSTUNStopOnIdle() {
 		return 45 * time.Second
 	}
 	return sessionActiveTimeout
@@ -2753,7 +2753,7 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 	}
 	if f := c.idleFunc; f != nil {
 		idleFor := f()
-		if debugReSTUNStopOnIdle {
+		if debugReSTUNStopOnIdle() {
 			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
 		}
 		if idleFor > maxIdleBeforeSTUNShutdown() {
@@ -2834,7 +2834,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		return nil
 	}
 
-	if debugAlwaysDERP {
+	if debugAlwaysDERP() {
 		c.logf("disabled %v per TS_DEBUG_ALWAYS_USE_DERP", network)
 		ruc.setConnLocked(newBlockForeverConn())
 		return nil
@@ -3626,7 +3626,7 @@ func (de *endpoint) pingTimeout(txid stun.TxID) {
 	if !ok {
 		return
 	}
-	if debugDisco || !de.bestAddr.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
+	if debugDisco() || !de.bestAddr.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
 		de.c.logf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
 	}
 	de.removeSentPingLocked(txid, sp)

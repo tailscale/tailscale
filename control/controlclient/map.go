@@ -190,7 +190,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 		ms.addUserProfile(peer.User)
 	}
-	if DevKnob.ForceProxyDNS {
+	if DevKnob.ForceProxyDNS() {
 		nm.DNS.Proxied = true
 	}
 	ms.netMapBuilding = nil
@@ -356,13 +356,13 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 	return v2
 }
 
-var debugSelfIPv6Only = envknob.Bool("TS_DEBUG_SELF_V6_ONLY")
+var debugSelfIPv6Only = envknob.RegisterBool("TS_DEBUG_SELF_V6_ONLY")
 
 func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 	switch {
 	default:
 		return in
-	case debugSelfIPv6Only:
+	case debugSelfIPv6Only():
 		for _, a := range in {
 			if a.Addr().Is6() {
 				ret = append(ret, a)

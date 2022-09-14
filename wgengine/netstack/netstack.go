@@ -55,7 +55,7 @@ import (
 
 const debugPackets = false
 
-var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
+var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
 var (
 	magicDNSIP   = tsaddr.TailscaleServiceIP()
@@ -638,7 +638,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 		}
 		return
 	}
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
 	}
 	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
@@ -718,7 +718,7 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	reqDetails := r.ID()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] TCP ForwarderRequest: %s", stringifyTEI(reqDetails))
 	}
 	clientRemoteIP := netaddrIPFromNetstackIP(reqDetails.RemoteAddress)
@@ -849,7 +849,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 func (ns *Impl) forwardTCP(getClient func() *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
 	dialAddrStr := dialAddr.String()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
 	}
 
@@ -866,7 +866,7 @@ func (ns *Impl) forwardTCP(getClient func() *gonet.TCPConn, clientRemoteIP netip
 	go func() {
 		select {
 		case <-notifyCh:
-			if debugNetstack {
+			if debugNetstack() {
 				ns.logf("[v2] netstack: forwardTCP notifyCh fired; canceling context for %s", dialAddrStr)
 			}
 		case <-done:
@@ -919,7 +919,7 @@ func (ns *Impl) forwardTCP(getClient func() *gonet.TCPConn, clientRemoteIP netip
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	sess := r.ID()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] UDP ForwarderRequest: %v", stringifyTEI(sess))
 	}
 	var wq waiter.Queue
@@ -995,7 +995,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 // proxy to it directly.
 func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netip.AddrPort) {
 	port, srcPort := dstAddr.Port(), clientAddr.Port()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
 	}
 
@@ -1071,7 +1071,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 }
 
 func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.PacketConn, dstAddr net.Addr, src net.PacketConn, logf logger.Logf, extend func()) {
-	if debugNetstack {
+	if debugNetstack() {
 		logf("[v2] netstack: startPacketCopy to %v (%T) from %T", dstAddr, dst, src)
 	}
 	go func() {
@@ -1096,7 +1096,7 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 					}
 					return
 				}
-				if debugNetstack {
+				if debugNetstack() {
 					logf("[v2] wrote UDP packet %s -> %s", srcAddr, dstAddr)
 				}
 				extend()

@@ -28,7 +28,7 @@ const (
 )
 
 // Enable/disable using raw sockets to receive disco traffic.
-var debugDisableRawDisco = envknob.Bool("TS_DEBUG_DISABLE_RAW_DISCO")
+var debugDisableRawDisco = envknob.RegisterBool("TS_DEBUG_DISABLE_RAW_DISCO")
 
 // These are our BPF filters that we use for testing packets.
 var (
@@ -125,7 +125,7 @@ var (
 // and BPF filter.
 // https://github.com/tailscale/tailscale/issues/3824
 func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
-	if debugDisableRawDisco {
+	if debugDisableRawDisco() {
 		return nil, errors.New("raw disco listening disabled by debug flag")
 	}
 

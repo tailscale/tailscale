@@ -32,7 +32,7 @@ const (
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
-var configureWSL = envknob.Bool("TS_DEBUG_CONFIGURE_WSL")
+var configureWSL = envknob.RegisterBool("TS_DEBUG_CONFIGURE_WSL")
 
 type windowsManager struct {
 	logf       logger.Logf
@@ -359,7 +359,7 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 
 	// On initial setup of WSL, the restart caused by --shutdown is slow,
 	// so we do it out-of-line.
-	if configureWSL {
+	if configureWSL() {
 		go func() {
 			if err := m.wslManager.SetDNS(cfg); err != nil {
 				m.logf("WSL SetDNS: %v", err) // continue

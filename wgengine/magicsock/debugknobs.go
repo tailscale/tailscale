@@ -11,28 +11,30 @@ import (
 	"tailscale.com/envknob"
 )
 
+const linkDebug = true
+
 // Various debugging and experimental tweakables, set by environment
 // variable.
 var (
 	// debugDisco prints verbose logs of active discovery events as
 	// they happen.
-	debugDisco = envknob.Bool("TS_DEBUG_DISCO")
+	debugDisco = envknob.RegisterBool("TS_DEBUG_DISCO")
 	// debugOmitLocalAddresses removes all local interface addresses
 	// from magicsock's discovered local endpoints. Used in some tests.
-	debugOmitLocalAddresses = envknob.Bool("TS_DEBUG_OMIT_LOCAL_ADDRS")
+	debugOmitLocalAddresses = envknob.RegisterBool("TS_DEBUG_OMIT_LOCAL_ADDRS")
 	// debugUseDerpRoute temporarily (2020-03-22) controls whether DERP
 	// reverse routing is enabled (Issue 150).
-	debugUseDerpRoute = envknob.OptBool("TS_DEBUG_ENABLE_DERP_ROUTE")
+	debugUseDerpRoute = envknob.RegisterOptBool("TS_DEBUG_ENABLE_DERP_ROUTE")
 	// logDerpVerbose logs all received DERP packets, including their
 	// full payload.
-	logDerpVerbose = envknob.Bool("TS_DEBUG_DERP")
+	logDerpVerbose = envknob.RegisterBool("TS_DEBUG_DERP")
 	// debugReSTUNStopOnIdle unconditionally enables the "shut down
 	// STUN if magicsock is idle" behavior that normally only triggers
 	// on mobile devices, lowers the shutdown interval, and logs more
 	// verbosely about idle measurements.
-	debugReSTUNStopOnIdle = envknob.Bool("TS_DEBUG_RESTUN_STOP_ON_IDLE")
+	debugReSTUNStopOnIdle = envknob.RegisterBool("TS_DEBUG_RESTUN_STOP_ON_IDLE")
 	// debugAlwaysDERP disables the use of UDP, forcing all peer communication over DERP.
-	debugAlwaysDERP = envknob.Bool("TS_DEBUG_ALWAYS_USE_DERP")
+	debugAlwaysDERP = envknob.RegisterBool("TS_DEBUG_ALWAYS_USE_DERP")
 )
 
 // inTest reports whether the running program is a test that set the

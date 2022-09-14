@@ -19,28 +19,36 @@ package envknob
 import (
 	"log"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"tailscale.com/types/opt"
 )
 
 var (
-	mu   sync.Mutex
-	set  = map[string]string{}
-	list []string
+	mu         sync.Mutex
+	set        = map[string]string{}
+	regStr     = map[string]*string{}
+	regBool    = map[string]*bool{}
+	regOptBool = map[string]*opt.Bool{}
 )
 
 func noteEnv(k, v string) {
-	if v == "" {
-		return
-	}
 	mu.Lock()
 	defer mu.Unlock()
-	if _, ok := set[k]; !ok {
-		list = append(list, k)
+	noteEnvLocked(k, v)
+}
+
+func noteEnvLocked(k, v string) {
+	if v != "" {
+		set[k] = v
+	} else {
+		delete(set, k)
 	}
-	set[k] = v
 }
 
 // logf is logger.Logf, but logger depends on envknob, so for circular
@@ -52,8 +60,36 @@ type logf = func(format string, args ...any)
 func LogCurrent(logf logf) {
 	mu.Lock()
 	defer mu.Unlock()
+
+	list := make([]string, 0, len(set))
+	for k := range set {
+		list = append(list, k)
+	}
+	sort.Strings(list)
 	for _, k := range list {
 		logf("envknob: %s=%q", k, set[k])
+	}
+}
+
+// Setenv changes an environment variable.
+//
+// It is not safe for concurrent reading of environment variables via the
+// Register functions. All Setenv calls are meant to happen early in main before
+// any goroutines are started.
+func Setenv(envVar, val string) {
+	mu.Lock()
+	defer mu.Unlock()
+	os.Setenv(envVar, val)
+	noteEnvLocked(envVar, val)
+
+	if p := regStr[envVar]; p != nil {
+		*p = val
+	}
+	if p := regBool[envVar]; p != nil {
+		setBoolLocked(p, envVar, val)
+	}
+	if p := regOptBool[envVar]; p != nil {
+		setOptBoolLocked(p, envVar, val)
 	}
 }
 
@@ -65,6 +101,82 @@ func String(envVar string) string {
 	v := os.Getenv(envVar)
 	noteEnv(envVar, v)
 	return v
+}
+
+// RegisterString returns a func that gets the named environment variable,
+// without a map lookup per call. It assumes that mutations happen via
+// envknob.Setenv.
+func RegisterString(envVar string) func() string {
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := regStr[envVar]
+	if !ok {
+		val := os.Getenv(envVar)
+		if val != "" {
+			noteEnvLocked(envVar, val)
+		}
+		p = &val
+		regStr[envVar] = p
+	}
+	return func() string { return *p }
+}
+
+// RegisterBool returns a func that gets the named environment variable,
+// without a map lookup per call. It assumes that mutations happen via
+// envknob.Setenv.
+func RegisterBool(envVar string) func() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := regBool[envVar]
+	if !ok {
+		var b bool
+		p = &b
+		setBoolLocked(p, envVar, os.Getenv(envVar))
+		regBool[envVar] = p
+	}
+	return func() bool { return *p }
+}
+
+// RegisterOptBool returns a func that gets the named environment variable,
+// without a map lookup per call. It assumes that mutations happen via
+// envknob.Setenv.
+func RegisterOptBool(envVar string) func() opt.Bool {
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := regOptBool[envVar]
+	if !ok {
+		var b opt.Bool
+		p = &b
+		setOptBoolLocked(p, envVar, os.Getenv(envVar))
+		regOptBool[envVar] = p
+	}
+	return func() opt.Bool { return *p }
+}
+
+func setBoolLocked(p *bool, envVar, val string) {
+	noteEnvLocked(envVar, val)
+	if val == "" {
+		*p = false
+		return
+	}
+	var err error
+	*p, err = strconv.ParseBool(val)
+	if err != nil {
+		log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
+	}
+}
+
+func setOptBoolLocked(p *opt.Bool, envVar, val string) {
+	noteEnvLocked(envVar, val)
+	if val == "" {
+		*p = ""
+		return
+	}
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
+	}
+	p.Set(b)
 }
 
 // Bool returns the boolean value of the named environment variable.
@@ -81,6 +193,7 @@ func BoolDefaultTrue(envVar string) bool {
 }
 
 func boolOr(envVar string, implicitValue bool) bool {
+	assertNotInInit()
 	val := os.Getenv(envVar)
 	if val == "" {
 		return implicitValue
@@ -98,6 +211,7 @@ func boolOr(envVar string, implicitValue bool) bool {
 // The ok result is whether a value was set.
 // If the value isn't a valid int, it exits the program with a failure.
 func LookupBool(envVar string) (v bool, ok bool) {
+	assertNotInInit()
 	val := os.Getenv(envVar)
 	if val == "" {
 		return false, false
@@ -113,6 +227,7 @@ func LookupBool(envVar string) (v bool, ok bool) {
 // OptBool is like Bool, but returns an opt.Bool, so the caller can
 // distinguish between implicitly and explicitly false.
 func OptBool(envVar string) opt.Bool {
+	assertNotInInit()
 	b, ok := LookupBool(envVar)
 	if !ok {
 		return ""
@@ -126,6 +241,7 @@ func OptBool(envVar string) opt.Bool {
 // The ok result is whether a value was set.
 // If the value isn't a valid int, it exits the program with a failure.
 func LookupInt(envVar string) (v int, ok bool) {
+	assertNotInInit()
 	val := os.Getenv(envVar)
 	if val == "" {
 		return 0, false
@@ -164,5 +280,44 @@ func NoLogsNoSupport() bool {
 
 // SetNoLogsNoSupport enables no-logs-no-support mode.
 func SetNoLogsNoSupport() {
-	os.Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+	Setenv("TS_NO_LOGS_NO_SUPPORT", "true")
+}
+
+// notInInit is set true the first time we've seen a non-init stack trace.
+var notInInit atomic.Bool
+
+func assertNotInInit() {
+	if notInInit.Load() {
+		return
+	}
+	skip := 0
+	for {
+		pc, _, _, ok := runtime.Caller(skip)
+		if !ok {
+			notInInit.Store(true)
+			return
+		}
+		fu := runtime.FuncForPC(pc)
+		if fu == nil {
+			return
+		}
+		name := fu.Name()
+		name = strings.TrimRightFunc(name, func(r rune) bool { return r >= '0' && r <= '9' })
+		if strings.HasSuffix(name, ".init") || strings.HasSuffix(name, ".init.") {
+			stack := make([]byte, 1<<10)
+			stack = stack[:runtime.Stack(stack, false)]
+			envCheckedInInitStack = stack
+		}
+		skip++
+	}
+}
+
+var envCheckedInInitStack []byte
+
+// PanicIfAnyEnvCheckedInInit panics if environment variables were read during
+// init.
+func PanicIfAnyEnvCheckedInInit() {
+	if envCheckedInInitStack != nil {
+		panic("envknob check of called from init function: " + string(envCheckedInInitStack))
+	}
 }

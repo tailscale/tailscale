@@ -129,8 +129,6 @@ type limitData struct {
 	ele      *list.Element // list element used to access this string in the cache
 }
 
-var disableRateLimit = envknob.String("TS_DEBUG_LOG_RATE") == "all"
-
 // rateFree are format string substrings that are exempt from rate limiting.
 // Things should not be added to this unless they're already limited otherwise
 // or are critical for generating important stats from the logs.
@@ -156,7 +154,7 @@ func RateLimitedFn(logf Logf, f time.Duration, burst int, maxCache int) Logf {
 // timeNow is a function that returns the current time, used for calculating
 // rate limits.
 func RateLimitedFnWithClock(logf Logf, f time.Duration, burst int, maxCache int, timeNow func() time.Time) Logf {
-	if disableRateLimit {
+	if envknob.String("TS_DEBUG_LOG_RATE") == "all" {
 		return logf
 	}
 	var (

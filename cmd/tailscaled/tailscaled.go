@@ -132,6 +132,7 @@ var subCommands = map[string]*func([]string) error{
 var beCLI func() // non-nil if CLI is linked in
 
 func main() {
+	envknob.PanicIfAnyEnvCheckedInInit()
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
@@ -376,7 +377,7 @@ func run() error {
 		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = useNetstack
-	ns.ProcessSubnets = useNetstack || wrapNetstack
+	ns.ProcessSubnets = useNetstack || shouldWrapNetstack()
 
 	if useNetstack {
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
@@ -477,8 +478,6 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer)
 	return nil, false, multierr.New(errs...)
 }
 
-var wrapNetstack = shouldWrapNetstack()
-
 func shouldWrapNetstack() bool {
 	if v, ok := envknob.LookupBool("TS_DEBUG_WRAP_NETSTACK"); ok {
 		return v
@@ -549,7 +548,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 		}
 		conf.DNS = d
 		conf.Router = r
-		if wrapNetstack {
+		if shouldWrapNetstack() {
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 		}
 	}
