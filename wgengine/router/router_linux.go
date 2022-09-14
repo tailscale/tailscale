@@ -316,7 +316,7 @@ func useAmbientCaps() bool {
 	return distro.DSMVersion() >= 7
 }
 
-var forceIPCommand = envknob.Bool("TS_DEBUG_USE_IP_COMMAND")
+var forceIPCommand = envknob.RegisterBool("TS_DEBUG_USE_IP_COMMAND")
 
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
@@ -324,7 +324,7 @@ func (r *linuxRouter) useIPCommand() bool {
 	if r.cmd == nil {
 		panic("invalid init")
 	}
-	if forceIPCommand {
+	if forceIPCommand() {
 		return true
 	}
 	// In the future we might need to fall back to using the "ip"

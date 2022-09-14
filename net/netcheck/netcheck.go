@@ -43,7 +43,7 @@ import (
 
 // Debugging and experimentation tweakables.
 var (
-	debugNetcheck = envknob.Bool("TS_DEBUG_NETCHECK")
+	debugNetcheck = envknob.RegisterBool("TS_DEBUG_NETCHECK")
 )
 
 // The various default timeouts for things.
@@ -210,7 +210,7 @@ func (c *Client) logf(format string, a ...any) {
 }
 
 func (c *Client) vlogf(format string, a ...any) {
-	if c.Verbose || debugNetcheck {
+	if c.Verbose || debugNetcheck() {
 		c.logf(format, a...)
 	}
 }

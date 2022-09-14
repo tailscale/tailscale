@@ -274,7 +274,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 			dev.Close()
 			return nil, nil, fmt.Errorf("router: %w", err)
 		}
-		if wrapNetstack {
+		if shouldWrapNetstack() {
 			r = netstack.NewSubnetRouterWrapper(r)
 		}
 		d, err := dns.NewOSConfigurator(logf, devName)
@@ -301,7 +301,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 			return nil, nil, fmt.Errorf("newNetstack: %w", err)
 		}
 		ns.ProcessLocalIPs = false
-		ns.ProcessSubnets = wrapNetstack
+		ns.ProcessSubnets = shouldWrapNetstack()
 		if err := ns.Start(); err != nil {
 			return nil, nil, fmt.Errorf("failed to start netstack: %w", err)
 		}

@@ -68,7 +68,6 @@ import (
 )
 
 var controlDebugFlags = getControlDebugFlags()
-var canSSH = envknob.CanSSHD()
 
 func getControlDebugFlags() []string {
 	if e := envknob.String("TS_DEBUG_CONTROL_FLAGS"); e != "" {
@@ -1510,12 +1509,12 @@ func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 }
 
 // For testing lazy machine key generation.
-var panicOnMachineKeyGeneration = envknob.Bool("TS_DEBUG_PANIC_MACHINE_KEY")
+var panicOnMachineKeyGeneration = envknob.RegisterBool("TS_DEBUG_PANIC_MACHINE_KEY")
 
 func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePrivate, error) {
 	var cache syncs.AtomicValue[key.MachinePrivate]
 	return func() (key.MachinePrivate, error) {
-		if panicOnMachineKeyGeneration {
+		if panicOnMachineKeyGeneration() {
 			panic("machine key generated")
 		}
 		if v, ok := cache.LoadOk(); ok {
@@ -1752,7 +1751,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 // setAtomicValuesFromPrefs populates sshAtomicBool and containsViaIPFuncAtomic
 // from the prefs p, which may be nil.
 func (b *LocalBackend) setAtomicValuesFromPrefs(p *ipn.Prefs) {
-	b.sshAtomicBool.Store(p != nil && p.RunSSH && canSSH)
+	b.sshAtomicBool.Store(p != nil && p.RunSSH && envknob.CanSSHD())
 
 	if p == nil {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
@@ -1967,7 +1966,7 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 	default:
 		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
 	}
-	if !canSSH {
+	if !envknob.CanSSHD() {
 		return errors.New("The Tailscale SSH server has been administratively disabled.")
 	}
 	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
@@ -2032,7 +2031,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 		b.logf("EditPrefs check error: %v", err)
 		return nil, err
 	}
-	if p1.RunSSH && !canSSH {
+	if p1.RunSSH && !envknob.CanSSHD() {
 		b.mu.Unlock()
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
 		return nil, errors.New("Tailscale SSH server administratively disabled.")
@@ -2854,7 +2853,7 @@ func (b *LocalBackend) applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Pre
 	hi.ShieldsUp = prefs.ShieldsUp
 
 	var sshHostKeys []string
-	if prefs.RunSSH && canSSH {
+	if prefs.RunSSH && envknob.CanSSHD() {
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
@@ -3073,7 +3072,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.setAtomicValuesFromPrefs(nil)
 }
 
-func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && canSSH }
+func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
 // ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to

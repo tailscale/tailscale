@@ -73,7 +73,7 @@ func (h *Handler) certDir() (string, error) {
 	return full, nil
 }
 
-var acmeDebug = envknob.Bool("TS_DEBUG_ACME")
+var acmeDebug = envknob.RegisterBool("TS_DEBUG_ACME")
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite && !h.PermitCert {
@@ -96,7 +96,7 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	logf := logger.WithPrefix(h.logf, fmt.Sprintf("cert(%q): ", domain))
 	traceACME := func(v any) {
-		if !acmeDebug {
+		if !acmeDebug() {
 			return
 		}
 		j, _ := json.MarshalIndent(v, "", "\t")

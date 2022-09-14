@@ -10,15 +10,15 @@ package magicsock
 import "tailscale.com/types/opt"
 
 // All knobs are disabled on iOS and Wasm.
-// Further, they're const, so the toolchain can produce smaller binaries.
-const (
-	debugDisco                       = false
-	debugOmitLocalAddresses          = false
-	debugUseDerpRouteEnv             = ""
-	debugUseDerpRoute       opt.Bool = ""
-	logDerpVerbose                   = false
-	debugReSTUNStopOnIdle            = false
-	debugAlwaysDERP                  = false
-)
+//
+// They're inlinable and the linker can deadcode that's guarded by them to make
+// smaller binaries.
+func debugDisco() bool              { return false }
+func debugOmitLocalAddresses() bool { return false }
+func logDerpVerbose() bool          { return false }
+func debugReSTUNStopOnIdle() bool   { return false }
+func debugAlwaysDERP() bool         { return false }
+func debugUseDerpRouteEnv() string  { return "" }
+func debugUseDerpRoute() opt.Bool   { return "" }
 
 func inTest() bool { return false }

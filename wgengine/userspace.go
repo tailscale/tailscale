@@ -534,7 +534,7 @@ func (e *userspaceEngine) pollResolver() {
 	}
 }
 
-var debugTrimWireguard = envknob.OptBool("TS_DEBUG_TRIM_WIREGUARD")
+var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
 
 // forceFullWireguardConfig reports whether we should give wireguard our full
 // network map, even for inactive peers.
@@ -550,7 +550,7 @@ var debugTrimWireguard = envknob.OptBool("TS_DEBUG_TRIM_WIREGUARD")
 // with these knobs in place.
 func forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimmming via the environment variable knob?
-	if b, ok := debugTrimWireguard.Get(); ok {
+	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
 	if opt := controlclient.TrimWGConfig(); opt != "" {

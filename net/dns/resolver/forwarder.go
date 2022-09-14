@@ -484,13 +484,13 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	return res, err
 }
 
-var verboseDNSForward = envknob.Bool("TS_DEBUG_DNS_FORWARD_SEND")
+var verboseDNSForward = envknob.RegisterBool("TS_DEBUG_DNS_FORWARD_SEND")
 
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
-	if verboseDNSForward {
+	if verboseDNSForward() {
 		f.logf("forwarder.send(%q) ...", rr.name.Addr)
 		defer func() {
 			f.logf("forwarder.send(%q) = %v, %v", rr.name.Addr, len(ret), err)

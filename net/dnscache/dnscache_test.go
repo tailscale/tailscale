@@ -167,10 +167,8 @@ func TestInterleaveSlices(t *testing.T) {
 
 func TestShouldTryBootstrap(t *testing.T) {
 	oldDebug := debug
-	t.Cleanup(func() {
-		debug = oldDebug
-	})
-	debug = true
+	t.Cleanup(func() { debug = oldDebug })
+	debug = func() bool { return true }
 
 	type step struct {
 		ip  netip.Addr // IP we pretended to dial

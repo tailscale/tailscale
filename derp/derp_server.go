@@ -47,8 +47,6 @@ import (
 	"tailscale.com/version"
 )
 
-var debug = envknob.Bool("DERP_DEBUG_LOGS")
-
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
 var verboseDropKeys = map[key.NodePublic]bool{}
@@ -106,6 +104,7 @@ type Server struct {
 	limitedLogf logger.Logf
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 	dupPolicy   dupPolicy
+	debug       bool
 
 	// Counters:
 	packetsSent, bytesSent       expvar.Int
@@ -299,6 +298,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	runtime.ReadMemStats(&ms)
 
 	s := &Server{
+		debug:                envknob.Bool("DERP_DEBUG_LOGS"),
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
 		logf:                 logf,
@@ -980,7 +980,7 @@ func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, r
 		msg := fmt.Sprintf("drop (%s) %s -> %s", srcKey.ShortString(), reason, dstKey.ShortString())
 		s.limitedLogf(msg)
 	}
-	if debug {
+	if s.debug {
 		s.logf("dropping packet reason=%s dst=%s disco=%v", reason, dstKey, disco.LooksLikeDiscoWrapper(packetBytes))
 	}
 }

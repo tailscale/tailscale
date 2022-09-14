@@ -24,7 +24,7 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-var networkLockAvailable = envknob.Bool("TS_EXPERIMENTAL_NETWORK_LOCK")
+var networkLockAvailable = envknob.RegisterBool("TS_EXPERIMENTAL_NETWORK_LOCK")
 
 type tkaState struct {
 	authority *tka.Authority
@@ -82,7 +82,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	if b.tka != nil {
 		return errors.New("network-lock is already initialized")
 	}
-	if !networkLockAvailable {
+	if !networkLockAvailable() {
 		return errors.New("this is an experimental feature in your version of tailscale - Please upgrade to the latest to use this.")
 	}
 	if !b.CanSupportNetworkLock() {
