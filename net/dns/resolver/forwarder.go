@@ -58,9 +58,6 @@ func truncatedFlagSet(pkt []byte) bool {
 }
 
 const (
-	// responseTimeout is the maximal amount of time to wait for a DNS response.
-	responseTimeout = 5 * time.Second
-
 	// dohTransportTimeout is how long to keep idle HTTP
 	// connections open to DNS-over-HTTPs servers. This is pretty
 	// arbitrary.
