@@ -268,10 +268,6 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	return b, nil
 }
 
-func (b *LocalBackend) setDialPlan(plan *tailcfg.ControlDialPlan) {
-	b.dialPlan.Store(plan)
-}
-
 // Dialer returns the backend's dialer.
 func (b *LocalBackend) Dialer() *tsdial.Dialer {
 	return b.dialer
@@ -1095,13 +1091,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
+		DialPlan:             &b.dialPlan, // pointer because it can't be copied
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
 		SkipIPForwardingCheck: isNetstack,
-
-		DialPlan:    b.dialPlan.Load(),
-		SetDialPlan: b.setDialPlan,
 	})
 	if err != nil {
 		return err

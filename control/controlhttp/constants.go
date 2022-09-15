@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"tailscale.com/net/dnscache"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -70,9 +71,15 @@ type Dialer struct {
 	// dropped.
 	Logf logger.Logf
 
+	// DialPlan, if set, contains instructions from the control server on
+	// how to connect to it. If present, we will try the methods in this
+	// plan before falling back to DNS.
+	DialPlan *tailcfg.ControlDialPlan
+
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
 
 	// For tests only
+	drainFinished     chan struct{}
 	insecureTLS       bool
 	testFallbackDelay time.Duration
 }

@@ -73,9 +73,10 @@ type Direct struct {
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
-	popBrowser             func(url string)               // or nil
-	c2nHandler             http.Handler                   // or nil
-	setDialPlan            func(*tailcfg.ControlDialPlan) // or nil
+	popBrowser             func(url string) // or nil
+	c2nHandler             http.Handler     // or nil
+
+	dialPlan ControlDialPlanner // can be nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -91,9 +92,8 @@ type Direct struct {
 	hostinfo      *tailcfg.Hostinfo // always non-nil
 	netinfo       *tailcfg.NetInfo
 	endpoints     []tailcfg.Endpoint
-	everEndpoints bool                     // whether we've ever had non-empty endpoints
-	lastPingURL   string                   // last PingRequest.URL received, for dup suppression
-	dialPlan      *tailcfg.ControlDialPlan // or nil
+	everEndpoints bool   // whether we've ever had non-empty endpoints
+	lastPingURL   string // last PingRequest.URL received, for dup suppression
 }
 
 type Options struct {
@@ -136,13 +136,33 @@ type Options struct {
 	// If nil, PingRequest queries are not answered.
 	Pinger Pinger
 
-	// DialPlan contains a previous dial plan that we received from the
-	// control server; if nil, we fall back to using DNS.
-	DialPlan *tailcfg.ControlDialPlan
+	// DialPlan contains and stores a previous dial plan that we received
+	// from the control server; if nil, we fall back to using DNS.
+	//
+	// If we receive a new DialPlan from the server, this value will be
+	// updated.
+	DialPlan ControlDialPlanner
+}
 
-	// SetDialPlan is called (if non-nil) whenever a new DialPlan is
-	// received from the control server.
-	SetDialPlan func(*tailcfg.ControlDialPlan)
+// ControlDialPlanner is the interface optionally supplied when creating a
+// control client to control exactly how TCP connections to the control plane
+// are dialed.
+//
+// It is usually implemented by an atomic.Pointer.
+type ControlDialPlanner interface {
+	// Load returns the current plan for how to connect to control.
+	//
+	// The returned plan can be nil. If so, connections should be made by
+	// resolving the control URL using DNS.
+	Load() *tailcfg.ControlDialPlan
+
+	// Store updates the dial plan with new directions from the control
+	// server.
+	//
+	// The dial plan can span multiple connections to the control server.
+	// That is, a dial plan received when connected over Wi-Fi is still
+	// valid for a subsequent connection over LTE after a network switch.
+	Store(*tailcfg.ControlDialPlan)
 }
 
 // Pinger is the LocalBackend.Ping method.
@@ -227,7 +247,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 		dialPlan:               opts.DialPlan,
-		setDialPlan:            opts.SetDialPlan,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -928,11 +947,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			vlogf("netmap: got new map")
 		}
 		if resp.ControlDialPlan != nil {
-			if c.setDialPlan != nil {
+			if c.dialPlan != nil {
 				c.logf("netmap: got new dial plan from control")
-				c.setDialPlan(resp.ControlDialPlan)
+				c.dialPlan.Store(resp.ControlDialPlan)
 			} else {
-				c.logf("netmap: got new dial plan from control but no handler")
+				c.logf("netmap: [unexpected] new dial plan; nowhere to store it")
 			}
 		}
 
@@ -1385,12 +1404,17 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	if nc != nil {
 		return nc, nil
 	}
+	var dp func() *tailcfg.ControlDialPlan
+	if c.dialPlan != nil {
+		dp = c.dialPlan.Load
+	}
 	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*noiseClient, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
 			return nil, err
 		}
-		nc, err := newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer)
+		c.logf("creating new noise client")
+		nc, err := newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, dp)
 		if err != nil {
 			return nil, err
 		}
