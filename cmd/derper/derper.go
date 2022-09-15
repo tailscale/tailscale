@@ -57,6 +57,11 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	egressInterface = flag.String("egress-interface", "", "the interface to monitor for automatic ratelimit tuning")
+	egressDataLimit = flag.Int("egress-data-limit", 100*1024*1024/8, "the bandwidth in bytes/s the server will try to stay under, only applies if egress-interface is set")
+	clientDataMin   = flag.Int("client-data-min-limit", 1024*1024/8, "minimum bandwidth in bytes/s for a single client, only applies if egress-interface is set")
+	clientDataBurst = flag.Int("client-data-burst", 3*1024*1024, "burst limit in bytes for forwarded data from a single client, only applies if egress-interface is set")
 )
 
 var (
@@ -153,6 +158,12 @@ func main() {
 
 	s := derp.NewServer(cfg.PrivateKey, log.Printf)
 	s.SetVerifyClient(*verifyClients)
+
+	if *egressInterface != "" && *egressDataLimit > 0 {
+		if err := s.StartEgressRateLimiter(*egressInterface, *egressDataLimit, *clientDataMin, *clientDataBurst); err != nil {
+			log.Fatalf("failed to start egress rate limiter: %v", err)
+		}
+	}
 
 	if *meshPSKFile != "" {
 		b, err := ioutil.ReadFile(*meshPSKFile)

@@ -107,6 +107,9 @@ type Server struct {
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 	dupPolicy   dupPolicy
 
+	clientDataLimit *uint64 // limit for how many bytes/s of content a client can send; atomic
+	clientDataBurst int     // burst limit for how many bytes/s of content a client can send
+
 	// Counters:
 	packetsSent, bytesSent       expvar.Int
 	packetsRecv, bytesRecv       expvar.Int
@@ -314,7 +317,10 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		sentTo:               map[key.NodePublic]map[key.NodePublic]int64{},
 		avgQueueDuration:     new(uint64),
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
+		clientDataLimit:      new(uint64),
+		clientDataBurst:      10 * 1024 * 1024, // 10Mb default burst
 	}
+	atomic.StoreUint64(s.clientDataLimit, 12*1024*1024) // 12Mb/s default ratelimit
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
 	s.packetsRecvOther = s.packetsRecvByKind.Get("other")
@@ -325,10 +331,46 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		s.packetsDroppedReason.Get("queue_head"),
 		s.packetsDroppedReason.Get("queue_tail"),
 		s.packetsDroppedReason.Get("write_error"),
+		s.packetsDroppedReason.Get("rate_limited"),
 	}
 	s.packetsDroppedTypeDisco = s.packetsDroppedType.Get("disco")
 	s.packetsDroppedTypeOther = s.packetsDroppedType.Get("other")
 	return s
+}
+
+// StartEgressRateLimiter starts dynamically adjusting the rate limit
+// based on the desired limit and the utilization of the specified interface.
+//
+// It must be called before serving begins. All limits are in bytes/s.
+func (s *Server) StartEgressRateLimiter(interfaceName string, egressDataLimit, clientDataMin, clientDataBurst int) error {
+	limiter, err := newEgressLimiter(interfaceName, uint64(egressDataLimit), uint64(clientDataMin))
+	if err != nil {
+		return fmt.Errorf("starting limiter: %v", err)
+	}
+
+	atomic.StoreUint64(s.clientDataLimit, uint64(egressDataLimit))
+	s.clientDataBurst = clientDataBurst
+
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+
+		for {
+			limit, err := limiter.Limit()
+			if err != nil {
+				s.logf("derp: failed to update egress limiter: %v", err)
+				return
+			}
+			atomic.StoreUint64(s.clientDataLimit, uint64(limit))
+
+			<-t.C
+			if s.closed {
+				return
+			}
+		}
+	}()
+
+	return nil
 }
 
 // SetMesh sets the pre-shared key that regional DERP servers used to mesh
@@ -664,6 +706,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 
 	remoteIPPort, _ := netip.ParseAddrPort(remoteAddr)
 
+	rateLimiter := rate.NewLimiter(rate.Limit(atomic.LoadUint64(s.clientDataLimit)), s.clientDataBurst)
 	c := &sclient{
 		connNum:        connNum,
 		s:              s,
@@ -681,6 +724,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		sendPongCh:     make(chan [8]byte, 1),
 		peerGone:       make(chan key.NodePublic),
 		canMesh:        clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
+		rateLimiter:    rateLimiter,
 	}
 
 	if c.canMesh {
@@ -755,6 +799,18 @@ func (c *sclient) run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (c *sclient) shouldRatelimitData(dataLen int) bool {
+	if c.canMesh {
+		return false // Mesh connections arent regular clients.
+	}
+
+	now := time.Now()
+	if rateLimit := atomic.LoadUint64(c.s.clientDataLimit); rateLimit != uint64(c.rateLimiter.Limit()) {
+		c.rateLimiter.SetLimitAt(now, rate.Limit(rateLimit))
+	}
+	return !c.rateLimiter.AllowN(now, dataLen)
 }
 
 func (c *sclient) handleUnknownFrame(ft frameType, fl uint32) error {
@@ -858,6 +914,11 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 	}
 	s.packetsForwardedIn.Add(1)
 
+	if c.shouldRatelimitData(len(contents)) {
+		s.recordDrop(contents, c.key, dstKey, dropReasonRateLimited)
+		return nil
+	}
+
 	var dstLen int
 	var dst *sclient
 
@@ -906,6 +967,11 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	dstKey, contents, err := s.recvPacket(c.br, fl)
 	if err != nil {
 		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
+	}
+
+	if c.shouldRatelimitData(len(contents)) {
+		s.recordDrop(contents, c.key, dstKey, dropReasonRateLimited)
+		return nil
 	}
 
 	var fwd PacketForwarder
@@ -962,6 +1028,7 @@ const (
 	dropReasonQueueTail                          // destination queue is full, dropped packet at queue tail
 	dropReasonWriteError                         // OS write() failed
 	dropReasonDupClient                          // the public key is connected 2+ times (active/active, fighting)
+	dropReasonRateLimited                        // send/forward packet content exceeds rate limit
 )
 
 func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, reason dropReason) {
@@ -1254,6 +1321,7 @@ type sclient struct {
 	canMesh        bool                // clientInfo had correct mesh token for inter-region routing
 	isDup          atomic.Bool         // whether more than 1 sclient for key is connected
 	isDisabled     atomic.Bool         // whether sends to this peer are disabled due to active/active dups
+	rateLimiter    *rate.Limiter
 
 	// replaceLimiter controls how quickly two connections with
 	// the same client key can kick each other off the server by
@@ -1700,6 +1768,7 @@ func (s *Server) ExpVar() expvar.Var {
 	m.Set("average_queue_duration_ms", expvar.Func(func() any {
 		return math.Float64frombits(atomic.LoadUint64(s.avgQueueDuration))
 	}))
+	m.Set("client_ratelimit_bytes_per_second", expvar.Func(func() any { return atomic.LoadUint64(s.clientDataLimit) }))
 	var expvarVersion expvar.String
 	expvarVersion.Set(version.Long)
 	m.Set("version", &expvarVersion)
