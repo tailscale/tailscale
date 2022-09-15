@@ -21,7 +21,7 @@
 #
 # To run the tailscaled agent:
 #
-#     $ docker run -d --name=tailscaled -v /var/lib:/var/lib -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale/tailscale tailscaled
+#     $ docker run -d --name=tailscaled -v /dev/net/tun:/dev/net/tun --network=host --privileged tailscale/tailscale tailscaled
 #
 # To then log in:
 #
