@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,7 +51,7 @@ func NewLogtailTestHarness(t *testing.T) (*LogtailTestServer, *Logger) {
 
 	ts.srv = httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			body, err := ioutil.ReadAll(r.Body)
+			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Error("failed to read HTTP request")
 			}

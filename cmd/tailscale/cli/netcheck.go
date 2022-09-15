@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"sort"
@@ -202,7 +201,7 @@ func prodDERPMap(ctx context.Context, httpc *http.Client) (*tailcfg.DERPMap, err
 		return nil, fmt.Errorf("fetch prodDERPMap failed: %w", err)
 	}
 	defer res.Body.Close()
-	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
+	b, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("fetch prodDERPMap failed: %w", err)
 	}

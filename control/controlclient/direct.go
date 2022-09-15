@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -523,7 +522,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, fmt.Errorf("register request: %w", err)
 	}
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return regen, opt.URL, fmt.Errorf("register request: http %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
@@ -804,7 +803,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	}
 	vlogf("netmap: Do = %v after %v", res.StatusCode, time.Since(t0).Round(time.Millisecond))
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
@@ -814,7 +813,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	health.NoteMapRequestHeard(request)
 
 	if cb == nil {
-		io.Copy(ioutil.Discard, res.Body)
+		io.Copy(io.Discard, res.Body)
 		return nil
 	}
 
@@ -998,7 +997,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 // it uses the serverKey and mkey to decode the message from the NaCl-crypto-box.
 func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
 	defer res.Body.Close()
-	msg, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
+	msg, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return err
 	}
@@ -1110,7 +1109,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 		return nil, fmt.Errorf("fetch control key: %v", err)
 	}
 	defer res.Body.Close()
-	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 64<<10))
+	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	if err != nil {
 		return nil, fmt.Errorf("fetch control key response: %v", err)
 	}
@@ -1398,7 +1397,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse
@@ -1464,7 +1463,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse

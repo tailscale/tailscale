@@ -6,7 +6,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -183,7 +182,7 @@ func setupEsbuildWasm(build esbuild.PluginBuild, dev bool) {
 
 func buildWasm(dev bool) ([]byte, error) {
 	start := time.Now()
-	outputFile, err := ioutil.TempFile("", "main.*.wasm")
+	outputFile, err := os.CreateTemp("", "main.*.wasm")
 	if err != nil {
 		return nil, fmt.Errorf("Cannot create main.wasm output file: %w", err)
 	}

@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"strings"
 	"sync"
@@ -270,7 +269,7 @@ func (fn ArgWriter) Format(f fmt.State, _ rune) {
 	argBufioPool.Put(bw)
 }
 
-var argBufioPool = &sync.Pool{New: func() any { return bufio.NewWriterSize(ioutil.Discard, 1024) }}
+var argBufioPool = &sync.Pool{New: func() any { return bufio.NewWriterSize(io.Discard, 1024) }}
 
 // Filtered returns a Logf that silently swallows some log lines.
 // Each inbound format and args is evaluated and printed to a string s.

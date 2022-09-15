@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -75,7 +74,7 @@ func generateServeIndex(distFS fs.FS) ([]byte, error) {
 		return nil, fmt.Errorf("Could not open esbuild-metadata.json: %w", err)
 	}
 	defer esbuildMetadataFile.Close()
-	esbuildMetadataBytes, err := ioutil.ReadAll(esbuildMetadataFile)
+	esbuildMetadataBytes, err := io.ReadAll(esbuildMetadataFile)
 	if err != nil {
 		return nil, fmt.Errorf("Could not read esbuild-metadata.json: %w", err)
 	}

@@ -1,7 +1,7 @@
 package ssh
 
 import (
-	"io/ioutil"
+	"os"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
 )
@@ -26,7 +26,7 @@ func PublicKeyAuth(fn PublicKeyHandler) Option {
 // from a PEM file at filepath.
 func HostKeyFile(filepath string) Option {
 	return func(srv *Server) error {
-		pemBytes, err := ioutil.ReadFile(filepath)
+		pemBytes, err := os.ReadFile(filepath)
 		if err != nil {
 			return err
 		}

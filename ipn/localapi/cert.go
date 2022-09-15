@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -293,7 +292,7 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 	if err := encodeECDSAKey(&privPEM, certPrivKey); err != nil {
 		return nil, err
 	}
-	if err := ioutil.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
 		return nil, err
 	}
 
@@ -316,7 +315,7 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 			return nil, err
 		}
 	}
-	if err := ioutil.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
 		return nil, err
 	}
 
@@ -372,7 +371,7 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 
 func acmeKey(dir string) (crypto.Signer, error) {
 	pemName := filepath.Join(dir, "acme-account.key.pem")
-	if v, err := ioutil.ReadFile(pemName); err == nil {
+	if v, err := os.ReadFile(pemName); err == nil {
 		priv, _ := pem.Decode(v)
 		if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
 			return nil, errors.New("acme/autocert: invalid account key found in cache")
@@ -388,7 +387,7 @@ func acmeKey(dir string) (crypto.Signer, error) {
 	if err := encodeECDSAKey(&pemBuf, privKey); err != nil {
 		return nil, err
 	}
-	if err := ioutil.WriteFile(pemName, pemBuf.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(pemName, pemBuf.Bytes(), 0600); err != nil {
 		return nil, err
 	}
 	return privKey, nil

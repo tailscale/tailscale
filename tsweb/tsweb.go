@@ -13,7 +13,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -81,7 +80,7 @@ func AllowDebugAccess(r *http.Request) bool {
 		urlKey := r.FormValue("debugkey")
 		keyPath := envknob.String("TS_DEBUG_KEY_PATH")
 		if urlKey != "" && keyPath != "" {
-			slurp, err := ioutil.ReadFile(keyPath)
+			slurp, err := os.ReadFile(keyPath)
 			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
 				return true
 			}

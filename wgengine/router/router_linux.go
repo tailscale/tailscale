@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -1601,7 +1600,7 @@ func checkIPv6(logf logger.Logf) error {
 	if os.IsNotExist(err) {
 		return err
 	}
-	bs, err := ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	bs, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
 	if err != nil {
 		// Be conservative if we can't find the ipv6 configuration knob.
 		return err
@@ -1617,7 +1616,7 @@ func checkIPv6(logf logger.Logf) error {
 	// Older kernels don't support IPv6 policy routing. Some kernels
 	// support policy routing but don't have this knob, so absence of
 	// the knob is not fatal.
-	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
+	bs, err = os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
 	if err == nil {
 		disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
 		if err != nil {
@@ -1647,7 +1646,7 @@ func checkIPv6(logf logger.Logf) error {
 // netfilter, so some older distros ship a kernel that can't NAT IPv6
 // traffic.
 func supportsV6NAT() bool {
-	bs, err := ioutil.ReadFile("/proc/net/ip6_tables_names")
+	bs, err := os.ReadFile("/proc/net/ip6_tables_names")
 	if err != nil {
 		// Can't read the file. Assume SNAT works.
 		return true

@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -137,7 +136,7 @@ func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Respons
 			onVersionMismatch(ipn.IPCVersion(), server)
 		}
 		if res.StatusCode == 403 {
-			all, _ := ioutil.ReadAll(res.Body)
+			all, _ := io.ReadAll(res.Body)
 			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(all))}
 		}
 		return res, nil
@@ -207,7 +206,7 @@ func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus
 		return nil, err
 	}
 	defer res.Body.Close()
-	slurp, err := ioutil.ReadAll(res.Body)
+	slurp, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +364,7 @@ func (lc *LocalClient) GetWaitingFile(ctx context.Context, baseName string) (rc 
 		return nil, 0, fmt.Errorf("unexpected chunking")
 	}
 	if res.StatusCode != 200 {
-		body, _ := ioutil.ReadAll(res.Body)
+		body, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return nil, 0, fmt.Errorf("HTTP %s: %s", res.Status, body)
 	}

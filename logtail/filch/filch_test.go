@@ -6,7 +6,7 @@ package filch
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -195,7 +195,7 @@ func TestFilchStderr(t *testing.T) {
 	f.close(t)
 
 	pipeW.Close()
-	b, err := ioutil.ReadAll(pipeR)
+	b, err := io.ReadAll(pipeR)
 	if err != nil {
 		t.Fatal(err)
 	}

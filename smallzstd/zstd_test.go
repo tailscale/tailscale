@@ -5,7 +5,7 @@
 package smallzstd
 
 import (
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -113,7 +113,7 @@ func benchDecoderWithConstruction(b *testing.B, mk func() (*zstd.Decoder, error)
 
 func testdata(b *testing.B) []byte {
 	b.Helper()
-	in, err := ioutil.ReadFile("testdata")
+	in, err := os.ReadFile("testdata")
 	if err != nil {
 		b.Fatalf("reading testdata: %v", err)
 	}

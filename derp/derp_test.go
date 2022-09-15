@@ -15,9 +15,9 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -1240,7 +1240,7 @@ func benchmarkSendRecvSize(b *testing.B, packetSize int) {
 }
 
 func BenchmarkWriteUint32(b *testing.B) {
-	w := bufio.NewWriter(ioutil.Discard)
+	w := bufio.NewWriter(io.Discard)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1279,9 +1279,9 @@ func waitConnect(t testing.TB, c *Client) {
 }
 
 func TestParseSSOutput(t *testing.T) {
-	contents, err := ioutil.ReadFile("testdata/example_ss.txt")
+	contents, err := os.ReadFile("testdata/example_ss.txt")
 	if err != nil {
-		t.Errorf("ioutil.Readfile(example_ss.txt) failed: %v", err)
+		t.Errorf("os.ReadFile(example_ss.txt) failed: %v", err)
 	}
 	seen := parseSSOutput(string(contents))
 	if len(seen) == 0 {

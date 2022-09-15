@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -215,7 +214,7 @@ func (s *Server) blockWhileInUse(conn io.Reader, ci connIdentity) {
 	s.logf("blocking client while server in use; connIdentity=%v", ci)
 	connDone := make(chan struct{})
 	go func() {
-		io.Copy(ioutil.Discard, conn)
+		io.Copy(io.Discard, conn)
 		close(connDone)
 	}()
 	ch := make(chan struct{}, 1)
@@ -1175,7 +1174,7 @@ func findTrueNASTaildropDir(name string) (dir string, err error) {
 	}
 
 	// but if running on the host, it may be something like /mnt/Primary/Taildrop
-	fis, err := ioutil.ReadDir("/mnt")
+	fis, err := os.ReadDir("/mnt")
 	if err != nil {
 		return "", fmt.Errorf("error reading /mnt: %w", err)
 	}

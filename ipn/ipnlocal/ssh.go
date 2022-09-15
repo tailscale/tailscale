@@ -18,7 +18,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,7 +82,7 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 	defer keyGenMu.Unlock()
 
 	path := filepath.Join(keyDir, "ssh_host_"+typ+"_key")
-	v, err := ioutil.ReadFile(path)
+	v, err := os.ReadFile(path)
 	if err == nil {
 		return v, nil
 	}
@@ -124,7 +123,7 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 func (b *LocalBackend) getSystemSSH_HostKeys() (ret map[string]ssh.Signer) {
 	for _, typ := range keyTypes {
 		filename := "/etc/ssh/ssh_host_" + typ + "_key"
-		hostKey, err := ioutil.ReadFile(filename)
+		hostKey, err := os.ReadFile(filename)
 		if err != nil || len(bytes.TrimSpace(hostKey)) == 0 {
 			continue
 		}

@@ -9,7 +9,6 @@ package hostinfo
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -99,11 +98,11 @@ func linuxVersionMeta() (meta versionMeta) {
 	case distro.OpenWrt:
 		propFile = "/etc/openwrt_release"
 	case distro.WDMyCloud:
-		slurp, _ := ioutil.ReadFile("/etc/version")
+		slurp, _ := os.ReadFile("/etc/version")
 		meta.DistroVersion = string(bytes.TrimSpace(slurp))
 		return
 	case distro.QNAP:
-		slurp, _ := ioutil.ReadFile("/etc/version_info")
+		slurp, _ := os.ReadFile("/etc/version_info")
 		meta.DistroVersion = getQnapQtsVersion(string(slurp))
 		return
 	}
@@ -133,7 +132,7 @@ func linuxVersionMeta() (meta versionMeta) {
 	case "debian":
 		// Debian's VERSION_ID is just like "11". But /etc/debian_version has "11.5" normally.
 		// Or "bookworm/sid" on sid/testing.
-		slurp, _ := ioutil.ReadFile("/etc/debian_version")
+		slurp, _ := os.ReadFile("/etc/debian_version")
 		if v := string(bytes.TrimSpace(slurp)); v != "" {
 			if '0' <= v[0] && v[0] <= '9' {
 				meta.DistroVersion = v
@@ -143,7 +142,7 @@ func linuxVersionMeta() (meta versionMeta) {
 		}
 	case "", "centos": // CentOS 6 has no /etc/os-release, so its id is ""
 		if meta.DistroVersion == "" {
-			if cr, _ := ioutil.ReadFile("/etc/centos-release"); len(cr) > 0 { // "CentOS release 6.10 (Final)
+			if cr, _ := os.ReadFile("/etc/centos-release"); len(cr) > 0 { // "CentOS release 6.10 (Final)
 				meta.DistroVersion = string(bytes.TrimSpace(cr))
 			}
 		}

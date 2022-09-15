@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/netip"
@@ -432,7 +431,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			return nil, 0, err
 		}
 		if resp.StatusCode != http.StatusSwitchingProtocols {
-			b, _ := ioutil.ReadAll(resp.Body)
+			b, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
 		}

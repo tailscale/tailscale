@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -230,7 +229,7 @@ func addProcesses(pl []Port) ([]Port, error) {
 
 				pe := pm[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
 				if pe != nil {
-					bs, err := ioutil.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid))
+					bs, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid))
 					if err != nil {
 						// Usually shouldn't happen. One possibility is
 						// the process has gone away, so let's skip it.

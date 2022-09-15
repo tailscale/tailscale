@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -62,7 +61,7 @@ import (
 	fmt.Fprintf(&out, ")\n")
 
 	filename := fmt.Sprintf("tailscaled_deps_test_%s.go", goos)
-	err = ioutil.WriteFile(filename, out.Bytes(), 0644)
+	err = os.WriteFile(filename, out.Bytes(), 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
