@@ -25,11 +25,8 @@ import (
 	"sync"
 
 	"github.com/tailscale/golang-x-crypto/ssh"
-	"tailscale.com/envknob"
 	"tailscale.com/util/mak"
 )
-
-var useHostKeys = envknob.Bool("TS_USE_SYSTEM_SSH_HOST_KEYS")
 
 // keyTypes are the SSH key types that we either try to read from the
 // system's OpenSSH keys or try to generate for ourselves when not
