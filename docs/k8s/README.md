@@ -16,7 +16,7 @@ There are quite a few ways of running Tailscale inside a Kubernetes Cluster, som
    metadata:
      name: tailscale-auth
    stringData:
-     TS_AUTH_KEY: tskey-...
+     AUTH_KEY: tskey-...
    ```
 
 1. Tailscale (v1.16+) supports storing state inside a Kubernetes Secret.
