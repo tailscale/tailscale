@@ -26,6 +26,9 @@ func argvSubject(argv ...string) string {
 		ret = filepath.Base(argv[1])
 	}
 
+	// Handle space separated argv
+	ret, _, _ = strings.Cut(ret, " ")
+
 	// Remove common noise.
 	ret = strings.TrimSpace(ret)
 	ret = strings.TrimSuffix(ret, ".exe")
