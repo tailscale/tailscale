@@ -33,6 +33,12 @@ func addWebSocketSupport(s *derp.Server, base http.Handler) http.Handler {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			Subprotocols:   []string{"derp"},
 			OriginPatterns: []string{"*"},
+			// Disable compression because we transmit WireGuard messages that
+			// are not compressible.
+			// Additionally, Safari has a broken implementation of compression
+			// (see https://github.com/nhooyr/websocket/issues/218) that makes
+			// enabling it actively harmful.
+			CompressionMode: websocket.CompressionDisabled,
 		})
 		if err != nil {
 			log.Printf("websocket.Accept: %v", err)
