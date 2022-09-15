@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package derp implements DERP, the Detour Encrypted Routing Protocol.
+// Package derp implements the Designated Encrypted Relay for Packets (DERP)
+// protocol.
 //
 // DERP routes packets to clients using curve25519 keys as addresses.
 //
