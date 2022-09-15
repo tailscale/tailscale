@@ -361,7 +361,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 	defer func() {
 		// On failure, consider that our DNS might be wrong and ask the DNS fallback mechanism for
 		// some other IPs to try.
-		if ret == nil || ctx.Err() != nil || d.dnsCache.LookupIPFallback == nil || dc.dnsWasTrustworthy() {
+		if !d.shouldTryBootstrap(ctx, ret, dc) {
 			return
 		}
 		ips, err := d.dnsCache.LookupIPFallback(ctx, host)
@@ -396,6 +396,40 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 	// Multiple IPv4 candidates, and 0+ IPv6.
 	ipsToTry := append(i4s, v6addrs(allIPs)...)
 	return dc.raceDial(ctx, ipsToTry)
+}
+
+func (d *dialer) shouldTryBootstrap(ctx context.Context, err error, dc *dialCall) bool {
+	// No need to do anything when we succeeded.
+	if err == nil {
+		return false
+	}
+
+	// Can't try bootstrap DNS if we don't have a fallback function
+	if d.dnsCache.LookupIPFallback == nil {
+		if debug {
+			log.Printf("dnscache: not using bootstrap DNS: no fallback")
+		}
+		return false
+	}
+
+	// We can't retry if the context is canceled, since any further
+	// operations with this context will fail.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if debug {
+			log.Printf("dnscache: not using bootstrap DNS: context error: %v", ctxErr)
+		}
+		return false
+	}
+
+	wasTrustworthy := dc.dnsWasTrustworthy()
+	if wasTrustworthy {
+		if debug {
+			log.Printf("dnscache: not using bootstrap DNS: DNS was trustworthy")
+		}
+		return false
+	}
+
+	return true
 }
 
 // dialCall is the state around a single call to dial.

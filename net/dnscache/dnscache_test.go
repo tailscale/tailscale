@@ -164,3 +164,104 @@ func TestInterleaveSlices(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldTryBootstrap(t *testing.T) {
+	oldDebug := debug
+	t.Cleanup(func() {
+		debug = oldDebug
+	})
+	debug = true
+
+	type step struct {
+		ip  netip.Addr // IP we pretended to dial
+		err error      // the dial error or nil for success
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	deadlineExceeded, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+
+	ctx := context.Background()
+	errFailed := errors.New("some failure")
+
+	cacheWithFallback := &Resolver{
+		LookupIPFallback: func(_ context.Context, _ string) ([]netip.Addr, error) {
+			panic("unimplemented")
+		},
+	}
+	cacheNoFallback := &Resolver{}
+
+	testCases := []struct {
+		name       string
+		steps      []step
+		ctx        context.Context
+		err        error
+		noFallback bool
+		want       bool
+	}{
+		{
+			name: "no-error",
+			ctx:  ctx,
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "canceled",
+			ctx:  canceled,
+			err:  errFailed,
+			want: false,
+		},
+		{
+			name: "deadline-exceeded",
+			ctx:  deadlineExceeded,
+			err:  errFailed,
+			want: false,
+		},
+		{
+			name:       "no-fallback",
+			ctx:        ctx,
+			err:        errFailed,
+			noFallback: true,
+			want:       false,
+		},
+		{
+			name: "dns-was-trustworthy",
+			ctx:  ctx,
+			err:  errFailed,
+			steps: []step{
+				{netip.MustParseAddr("2003::1"), nil},
+				{netip.MustParseAddr("2003::1"), errFailed},
+			},
+			want: false,
+		},
+		{
+			name: "should-bootstrap",
+			ctx:  ctx,
+			err:  errFailed,
+			want: true,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &dialer{
+				pastConnect: map[netip.Addr]time.Time{},
+			}
+			if tt.noFallback {
+				d.dnsCache = cacheNoFallback
+			} else {
+				d.dnsCache = cacheWithFallback
+			}
+			dc := &dialCall{d: d}
+			for _, st := range tt.steps {
+				dc.noteDialResult(st.ip, st.err)
+			}
+			got := d.shouldTryBootstrap(tt.ctx, tt.err, dc)
+			if got != tt.want {
+				t.Errorf("got %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
