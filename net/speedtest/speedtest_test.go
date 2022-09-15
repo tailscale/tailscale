@@ -7,6 +7,7 @@ package speedtest
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestDownload(t *testing.T) {
@@ -23,9 +24,9 @@ func TestDownload(t *testing.T) {
 	type state struct {
 		err error
 	}
-	displayResult := func(t *testing.T, r Result) {
+	displayResult := func(t *testing.T, r Result, start time.Time) {
 		t.Helper()
-		t.Logf("{ Megabytes: %.2f, Start: %.1f, End: %.1f, Total: %t }", r.MegaBytes(), r.IntervalStart.Seconds(), r.IntervalEnd.Seconds(), r.Total)
+		t.Logf("{ Megabytes: %.2f, Start: %.1f, End: %.1f, Total: %t }", r.MegaBytes(), r.IntervalStart.Sub(start).Seconds(), r.IntervalEnd.Sub(start).Seconds(), r.Total)
 	}
 	stateChan := make(chan state, 1)
 
@@ -49,8 +50,9 @@ func TestDownload(t *testing.T) {
 			t.Fatalf("download results: expected length: %d, actual length: %d", expectedLen, len(results))
 		}
 
+		start := results[0].IntervalStart
 		for _, result := range results {
-			displayResult(t, result)
+			displayResult(t, result, start)
 		}
 	})
 
@@ -66,8 +68,9 @@ func TestDownload(t *testing.T) {
 			t.Fatalf("upload results: expected length: %d, actual length: %d", expectedLen, len(results))
 		}
 
+		start := results[0].IntervalStart
 		for _, result := range results {
-			displayResult(t, result)
+			displayResult(t, result, start)
 		}
 	})
 
