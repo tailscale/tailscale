@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"time"
 )
 
@@ -195,7 +194,7 @@ func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLe
 	}
 	remain := frameLen - uint32(n)
 	if remain > 0 {
-		if _, err := io.CopyN(ioutil.Discard, br, int64(remain)); err != nil {
+		if _, err := io.CopyN(io.Discard, br, int64(remain)); err != nil {
 			return 0, 0, err
 		}
 		err = io.ErrShortBuffer

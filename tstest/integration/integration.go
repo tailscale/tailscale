@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -88,7 +87,7 @@ var (
 // buildTestBinaries builds tailscale and tailscaled.
 // It returns the dir containing the binaries.
 func buildTestBinaries() (string, error) {
-	bindir, err := ioutil.TempDir("", "")
+	bindir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return "", err
 	}
@@ -288,7 +287,7 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer dec.Close()
 		body = dec
 	}
-	bodyBytes, _ := ioutil.ReadAll(body)
+	bodyBytes, _ := io.ReadAll(body)
 
 	type Entry struct {
 		Logtail struct {

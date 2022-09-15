@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"net"
@@ -99,7 +98,7 @@ func loadConfig() config {
 		}
 		log.Printf("no config path specified; using %s", *configPath)
 	}
-	b, err := ioutil.ReadFile(*configPath)
+	b, err := os.ReadFile(*configPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return writeNewConfig()
@@ -155,7 +154,7 @@ func main() {
 	s.SetVerifyClient(*verifyClients)
 
 	if *meshPSKFile != "" {
-		b, err := ioutil.ReadFile(*meshPSKFile)
+		b, err := os.ReadFile(*meshPSKFile)
 		if err != nil {
 			log.Fatal(err)
 		}

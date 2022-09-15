@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -252,7 +251,7 @@ func (s *Server) start() (reterr error) {
 	c := logtail.Config{
 		Collection: lpc.Collection,
 		PrivateID:  lpc.PrivateID,
-		Stderr:     ioutil.Discard, // log everything to Buffer
+		Stderr:     io.Discard, // log everything to Buffer
 		Buffer:     s.logbuffer,
 		NewZstdEncoder: func() logtail.Encoder {
 			w, err := smallzstd.NewEncoder(nil)

@@ -12,7 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -1174,7 +1174,7 @@ func TestDiscoStringLogRace(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		fmt.Fprintf(ioutil.Discard, "%v", de)
+		fmt.Fprintf(io.Discard, "%v", de)
 	}()
 	go func() {
 		defer wg.Done()

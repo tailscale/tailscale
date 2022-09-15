@@ -5,7 +5,6 @@ package ssh
 
 import (
 	"bytes"
-	"io/ioutil"
 	"net"
 	"strconv"
 	"strings"
@@ -61,7 +60,7 @@ func TestLocalPortForwardingWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error connecting to %v: %v", l.Addr().String(), err)
 	}
-	result, err := ioutil.ReadAll(conn)
+	result, err := io.ReadAll(conn)
 	if err != nil {
 		t.Fatal(err)
 	}

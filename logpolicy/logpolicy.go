@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -248,7 +247,7 @@ func logsDir(logf logger.Logf) string {
 	// No idea where to put stuff. Try to create a temp dir. It'll
 	// mean we might lose some logs and rotate through log IDs, but
 	// it's something.
-	tmp, err := ioutil.TempDir("", "tailscaled-log-*")
+	tmp, err := os.MkdirTemp("", "tailscaled-log-*")
 	if err != nil {
 		panic("no safe place found to store log state")
 	}
@@ -259,7 +258,7 @@ func logsDir(logf logger.Logf) string {
 // runningUnderSystemd reports whether we're running under systemd.
 func runningUnderSystemd() bool {
 	if runtime.GOOS == "linux" && os.Getppid() == 1 {
-		slurp, _ := ioutil.ReadFile("/proc/1/stat")
+		slurp, _ := os.ReadFile("/proc/1/stat")
 		return bytes.HasPrefix(slurp, []byte("1 (systemd) "))
 	}
 	return false

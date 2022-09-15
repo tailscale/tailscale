@@ -6,7 +6,7 @@ package pprof
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime/pprof"
@@ -52,7 +52,7 @@ func TestHandlers(t *testing.T) {
 				t.Errorf("status code: got %d; want %d", got, want)
 			}
 
-			body, err := ioutil.ReadAll(resp.Body)
+			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Errorf("when reading response body, expected non-nil err; got %v", err)
 			}

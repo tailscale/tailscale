@@ -2,8 +2,8 @@ package ssh
 
 import (
 	"io"
-	"io/ioutil"
 	"net"
+	"os"
 	"path"
 	"sync"
 
@@ -36,7 +36,7 @@ func AgentRequested(sess Session) bool {
 // NewAgentListener sets up a temporary Unix socket that can be communicated
 // to the session environment and used for forwarding connections.
 func NewAgentListener() (net.Listener, error) {
-	dir, err := ioutil.TempDir("", agentTempDir)
+	dir, err := os.MkdirTemp("", agentTempDir)
 	if err != nil {
 		return nil, err
 	}

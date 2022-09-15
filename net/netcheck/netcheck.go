@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -1096,7 +1095,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 		return 0, ip, fmt.Errorf("unexpected status code: %d (%s)", resp.StatusCode, resp.Status)
 	}
 
-	_, err = io.Copy(ioutil.Discard, io.LimitReader(resp.Body, 8<<10))
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 	if err != nil {
 		return 0, ip, err
 	}

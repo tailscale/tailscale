@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 )
 
@@ -131,7 +130,7 @@ func (c *Client) sendRequest(req *http.Request) ([]byte, *http.Response, error) 
 
 	// Read response. Limit the response to 10MB.
 	body := io.LimitReader(resp.Body, maxReadSize+1)
-	b, err := ioutil.ReadAll(body)
+	b, err := io.ReadAll(body)
 	if len(b) > maxReadSize {
 		err = errors.New("API response too large")
 	}

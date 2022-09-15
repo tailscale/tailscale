@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -254,7 +253,7 @@ func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
 		return "", nil, err
 	}
 	defer resp.Body.Close()
-	out, err := ioutil.ReadAll(resp.Body)
+	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", nil, err
 	}

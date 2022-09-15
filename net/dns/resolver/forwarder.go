@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
@@ -474,7 +473,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		metricDNSFwdDoHErrorCT.Add(1)
 		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
 	}
-	res, err := ioutil.ReadAll(hres.Body)
+	res, err := io.ReadAll(hres.Body)
 	if err != nil {
 		metricDNSFwdDoHErrorBody.Add(1)
 	}

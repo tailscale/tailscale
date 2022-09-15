@@ -7,7 +7,6 @@ package tka
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -345,7 +344,7 @@ func (c *FS) LastActiveAncestor() (*AUMHash, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	hash, err := ioutil.ReadFile(filepath.Join(c.base, "last_active_ancestor"))
+	hash, err := os.ReadFile(filepath.Join(c.base, "last_active_ancestor"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // Not exist == none set.

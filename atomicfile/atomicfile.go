@@ -9,7 +9,6 @@
 package atomicfile // import "tailscale.com/atomicfile"
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,7 +17,7 @@ import (
 // WriteFile writes data to filename+some suffix, then renames it
 // into filename. The perm argument is ignored on Windows.
 func WriteFile(filename string, data []byte, perm os.FileMode) (err error) {
-	f, err := ioutil.TempFile(filepath.Dir(filename), filepath.Base(filename)+".tmp")
+	f, err := os.CreateTemp(filepath.Dir(filename), filepath.Base(filename)+".tmp")
 	if err != nil {
 		return err
 	}
