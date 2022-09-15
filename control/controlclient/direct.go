@@ -73,8 +73,9 @@ type Direct struct {
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
-	popBrowser             func(url string) // or nil
-	c2nHandler             http.Handler     // or nil
+	popBrowser             func(url string)               // or nil
+	c2nHandler             http.Handler                   // or nil
+	setDialPlan            func(*tailcfg.ControlDialPlan) // or nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -90,8 +91,9 @@ type Direct struct {
 	hostinfo      *tailcfg.Hostinfo // always non-nil
 	netinfo       *tailcfg.NetInfo
 	endpoints     []tailcfg.Endpoint
-	everEndpoints bool   // whether we've ever had non-empty endpoints
-	lastPingURL   string // last PingRequest.URL received, for dup suppression
+	everEndpoints bool                     // whether we've ever had non-empty endpoints
+	lastPingURL   string                   // last PingRequest.URL received, for dup suppression
+	dialPlan      *tailcfg.ControlDialPlan // or nil
 }
 
 type Options struct {
@@ -133,6 +135,14 @@ type Options struct {
 	// MapResponse.PingRequest queries from the control plane.
 	// If nil, PingRequest queries are not answered.
 	Pinger Pinger
+
+	// DialPlan contains a previous dial plan that we received from the
+	// control server; if nil, we fall back to using DNS.
+	DialPlan *tailcfg.ControlDialPlan
+
+	// SetDialPlan is called (if non-nil) whenever a new DialPlan is
+	// received from the control server.
+	SetDialPlan func(*tailcfg.ControlDialPlan)
 }
 
 // Pinger is the LocalBackend.Ping method.
@@ -216,6 +226,8 @@ func NewDirect(opts Options) (*Direct, error) {
 		popBrowser:             opts.PopBrowserURL,
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
+		dialPlan:               opts.DialPlan,
+		setDialPlan:            opts.SetDialPlan,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -914,6 +926,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			vlogf("netmap: got keep-alive")
 		} else {
 			vlogf("netmap: got new map")
+		}
+		if resp.ControlDialPlan != nil {
+			if c.setDialPlan != nil {
+				c.logf("netmap: got new dial plan from control")
+				c.setDialPlan(resp.ControlDialPlan)
+			} else {
+				c.logf("netmap: got new dial plan from control but no handler")
+			}
 		}
 
 		select {
