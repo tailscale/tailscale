@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail/backoff"
@@ -27,6 +28,11 @@ import (
 )
 
 var networkLockAvailable = envknob.RegisterBool("TS_EXPERIMENTAL_NETWORK_LOCK")
+
+var (
+	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
+	errNetworkLockNotActive = errors.New("network-lock is not active")
+)
 
 type tkaState struct {
 	authority *tka.Authority
@@ -202,8 +208,8 @@ func (b *LocalBackend) chonkPath() string {
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) error {
-	if !b.CanSupportNetworkLock() {
-		return errors.New("network lock not supported in this configuration")
+	if err := b.CanSupportNetworkLock(); err != nil {
+		return err
 	}
 
 	var genesis tka.AUM
@@ -232,21 +238,26 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) err
 	return nil
 }
 
-// CanSupportNetworkLock returns true if tailscaled is able to operate
+// CanSupportNetworkLock returns nil if tailscaled is able to operate
 // a local tailnet key authority (and hence enforce network lock).
-func (b *LocalBackend) CanSupportNetworkLock() bool {
-	if b.tka != nil {
-		// The TKA is being used, so yeah its supported.
-		return true
+func (b *LocalBackend) CanSupportNetworkLock() error {
+	if !networkLockAvailable() {
+		return errors.New("this feature is not yet complete, a later release may support this functionality")
 	}
 
-	if b.TailscaleVarRoot() != "" {
-		// Theres a var root (aka --statedir), so if network lock gets
-		// initialized we have somewhere to store our AUMs. Thats all
-		// we need.
-		return true
+	if b.tka != nil {
+		// If the TKA is being used, it is supported.
+		return nil
 	}
-	return false
+
+	if b.TailscaleVarRoot() == "" {
+		return errors.New("network-lock is not supported in this configuration, try setting --statedir")
+	}
+
+	// There's a var root (aka --statedir), so if network lock gets
+	// initialized we have somewhere to store our AUMs. That's all
+	// we need.
+	return nil
 }
 
 // NetworkLockStatus returns a structure describing the state of the
@@ -280,14 +291,8 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
 func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
-	if b.tka != nil {
-		return errors.New("network-lock is already initialized")
-	}
-	if !networkLockAvailable() {
-		return errors.New("this is an experimental feature in your version of tailscale - Please upgrade to the latest to use this.")
-	}
-	if !b.CanSupportNetworkLock() {
-		return errors.New("network-lock is not supported in this configuration. Did you supply a --statedir?")
+	if err := b.CanSupportNetworkLock(); err != nil {
+		return err
 	}
 
 	var ourNodeKey key.NodePublic
@@ -342,6 +347,117 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	// Finalize enablement by transmitting signature for all nodes to Control.
 	_, err = b.tkaInitFinish(ourNodeKey, sigs)
 	return err
+}
+
+// NetworkLockModify adds and/or removes keys in the tailnet's key authority.
+func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("modify network-lock keys: %w", err)
+		}
+	}()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if err := b.CanSupportNetworkLock(); err != nil {
+		return err
+	}
+	if b.tka == nil {
+		return errNetworkLockNotActive
+	}
+	nm := b.NetMap()
+	if nm == nil {
+		return errMissingNetmap
+	}
+
+	updater := b.tka.authority.NewUpdater(b.nlPrivKey)
+
+	for _, addKey := range addKeys {
+		if err := updater.AddKey(addKey); err != nil {
+			return err
+		}
+	}
+	for _, removeKey := range removeKeys {
+		if err := updater.RemoveKey(removeKey.ID()); err != nil {
+			return err
+		}
+	}
+
+	aums, err := updater.Finalize(b.tka.storage)
+	if err != nil {
+		return err
+	}
+
+	if len(aums) == 0 {
+		return nil
+	}
+
+	head, err := b.sendAUMsLocked(aums, true)
+	if err != nil {
+		return err
+	}
+
+	lastHead := aums[len(aums)-1].Hash()
+	if !slices.Equal(head[:], lastHead[:]) {
+		return errors.New("central tka head differs from submitted AUM, try again")
+	}
+
+	return nil
+}
+
+func (b *LocalBackend) sendAUMsLocked(aums []tka.AUM, interactive bool) (head tka.AUMHash, err error) {
+	// Submitting AUMs may block, so release the lock
+	b.mu.Unlock()
+	defer b.mu.Lock()
+
+	mAUMs := make([]tkatype.MarshaledAUM, len(aums))
+	for i := range aums {
+		mAUMs[i] = aums[i].Serialize()
+	}
+
+	var req bytes.Buffer
+	if err := json.NewEncoder(&req).Encode(tailcfg.TKASyncSendRequest{
+		MissingAUMs: mAUMs,
+		Interactive: interactive,
+	}); err != nil {
+		return head, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	bo := backoff.NewBackoff("tka-submit", b.logf, 5*time.Second)
+	var res *http.Response
+	for {
+		if err := ctx.Err(); err != nil {
+			return head, err
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/sync/send", &req)
+		if err != nil {
+			return head, err
+		}
+		res, err = b.DoNoiseRequest(req)
+		bo.BackOff(ctx, err)
+		if err == nil {
+			break
+		}
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		return head, fmt.Errorf("submit status %d: %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKASyncSendResponse)
+	if err := json.NewDecoder(res.Body).Decode(a); err != nil {
+		return head, err
+	}
+
+	if err := head.UnmarshalText([]byte(a.Head)); err != nil {
+		return head, err
+	}
+
+	return head, nil
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {

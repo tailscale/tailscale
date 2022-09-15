@@ -156,6 +156,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveTkaStatus(w, r)
 	case "/localapi/v0/tka/init":
 		h.serveTkaInit(w, r)
+	case "/localapi/v0/tka/modify":
+		h.serveTkaModify(w, r)
 	case "/":
 		io.WriteString(w, "tailscaled\n")
 	default:
@@ -843,6 +845,40 @@ func (h *Handler) serveTkaInit(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.b.NetworkLockInit(req.Keys); err != nil {
 		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
+}
+
+func (h *Handler) serveTkaModify(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type modifyRequest struct {
+		AddKeys    []tka.Key
+		RemoveKeys []tka.Key
+	}
+	var req modifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockModify(req.AddKeys, req.RemoveKeys); err != nil {
+		http.Error(w, "network-lock modify failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

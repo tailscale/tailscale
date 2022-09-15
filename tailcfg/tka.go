@@ -173,6 +173,11 @@ type TKASyncSendRequest struct {
 	// MissingAUMs encodes AUMs that the node believes the control plane
 	// is missing.
 	MissingAUMs []tkatype.MarshaledAUM
+	// Interactive is true if additional error checking should be performed as
+	// the request is on behalf of an interactive operation (e.g., an
+	// administrator publishing new changes) as opposed to an automatic
+	// synchronization that may be reporting lost data.
+	Interactive bool
 }
 
 // TKASyncSendResponse encodes the control plane's response to a node
