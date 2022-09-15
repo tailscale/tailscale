@@ -44,7 +44,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
-	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -537,12 +536,18 @@ func (e *userspaceEngine) pollResolver() {
 
 var debugTrimWireguard = envknob.OptBool("TS_DEBUG_TRIM_WIREGUARD")
 
-// forceFullWireguardConfig reports whether we should give wireguard
-// our full network map, even for inactive peers
+// forceFullWireguardConfig reports whether we should give wireguard our full
+// network map, even for inactive peers.
 //
-// TODO(bradfitz): remove this after our 1.0 launch; we don't want to
-// enable wireguard config trimming quite yet because it just landed
-// and we haven't got enough time testing it.
+// TODO(bradfitz): remove this at some point. We had a TODO to do it before 1.0
+// but it's still there as of 1.30. Really we should not do this wireguard lazy
+// peer config at all and just fix wireguard-go to not have so much extra memory
+// usage per peer. That would simplify a lot of Tailscale code. OTOH, we have 50
+// MB of memory on iOS now instead of 15 MB, so the other option is to just give
+// up on lazy wireguard config and blow the memory and hope for the best on iOS.
+// That's sad too. Or we get rid of these knobs (lazy wireguard config has been
+// stable!) but I'm worried that a future regression would be easier to debug
+// with these knobs in place.
 func forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimmming via the environment variable knob?
 	if b, ok := debugTrimWireguard.Get(); ok {
@@ -550,13 +555,6 @@ func forceFullWireguardConfig(numPeers int) bool {
 	}
 	if opt := controlclient.TrimWGConfig(); opt != "" {
 		return !opt.EqualBool(true)
-	}
-
-	// On iOS with large networks, it's critical, so turn on trimming.
-	// Otherwise we run out of memory from wireguard-go goroutine stacks+buffers.
-	// This will be the default later for all platforms and network sizes.
-	if numPeers > 50 && version.OS() == "iOS" {
-		return false
 	}
 	return false
 }
