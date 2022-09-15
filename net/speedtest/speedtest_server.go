@@ -81,9 +81,6 @@ func doTest(conn net.Conn, conf config) ([]Result, error) {
 	var currentTime time.Time
 	var results []Result
 
-	startTime := time.Now()
-	lastCalculated := startTime
-
 	if conf.Direction == Download {
 		conn.SetReadDeadline(time.Now().Add(conf.TestDuration).Add(5 * time.Second))
 	} else {
@@ -93,6 +90,9 @@ func doTest(conn net.Conn, conf config) ([]Result, error) {
 		}
 
 	}
+
+	startTime := time.Now()
+	lastCalculated := startTime
 
 SpeedTestLoop:
 	for {
@@ -110,48 +110,37 @@ SpeedTestLoop:
 				return nil, fmt.Errorf("unexpected error has occurred: %w", err)
 			}
 		} else {
-			// Need to change the data a little bit, to avoid any compression.
-			for i := range bufferData {
-				bufferData[i]++
-			}
 			n, err = conn.Write(bufferData)
 			if err != nil {
 				// If the write failed, there is most likely something wrong with the connection.
 				return nil, fmt.Errorf("upload failed: %w", err)
 			}
 		}
-		currentTime = time.Now()
 		intervalBytes += n
 
+		currentTime = time.Now()
 		// checks if the current time is more or equal to the lastCalculated time plus the increment
-		if currentTime.After(lastCalculated.Add(increment)) {
-			intervalStart := lastCalculated.Sub(startTime)
-			intervalEnd := currentTime.Sub(startTime)
-			if (intervalEnd - intervalStart) > minInterval {
-				results = append(results, Result{Bytes: intervalBytes, IntervalStart: intervalStart, IntervalEnd: intervalEnd, Total: false})
-			}
+		if currentTime.Sub(lastCalculated) >= increment {
+			results = append(results, Result{Bytes: intervalBytes, IntervalStart: lastCalculated, IntervalEnd: currentTime, Total: false})
 			lastCalculated = currentTime
 			totalBytes += intervalBytes
 			intervalBytes = 0
 		}
 
-		if conf.Direction == Upload && time.Since(startTime) > conf.TestDuration {
+		if conf.Direction == Upload && currentTime.Sub(startTime) > conf.TestDuration {
 			break SpeedTestLoop
 		}
 	}
 
 	// get last segment
-	intervalStart := lastCalculated.Sub(startTime)
-	intervalEnd := currentTime.Sub(startTime)
-	if (intervalEnd - intervalStart) > minInterval {
-		results = append(results, Result{Bytes: intervalBytes, IntervalStart: intervalStart, IntervalEnd: intervalEnd, Total: false})
+	if currentTime.Sub(lastCalculated) > minInterval {
+		results = append(results, Result{Bytes: intervalBytes, IntervalStart: lastCalculated, IntervalEnd: currentTime, Total: false})
 	}
 
 	// get total
 	totalBytes += intervalBytes
-	intervalEnd = currentTime.Sub(startTime)
-	if intervalEnd > minInterval {
-		results = append(results, Result{Bytes: totalBytes, IntervalStart: 0, IntervalEnd: intervalEnd, Total: true})
+	if currentTime.Sub(startTime) > minInterval {
+		results = append(results, Result{Bytes: totalBytes, IntervalStart: startTime, IntervalEnd: currentTime, Total: true})
 	}
 
 	return results, nil
