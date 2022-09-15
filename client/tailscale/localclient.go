@@ -748,6 +748,30 @@ func (lc *LocalClient) NetworkLockInit(ctx context.Context, keys []tka.Key) (*ip
 	return pr, nil
 }
 
+// NetworkLockModify adds and/or removes key(s) to the tailnet key authority.
+func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKeys []tka.Key) (*ipnstate.NetworkLockStatus, error) {
+	var b bytes.Buffer
+	type modifyRequest struct {
+		AddKeys    []tka.Key
+		RemoveKeys []tka.Key
+	}
+
+	if err := json.NewEncoder(&b).Encode(modifyRequest{AddKeys: addKeys, RemoveKeys: removeKeys}); err != nil {
+		return nil, err
+	}
+
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/modify", 200, &b)
+	if err != nil {
+		return nil, fmt.Errorf("error: %w", err)
+	}
+
+	pr := new(ipnstate.NetworkLockStatus)
+	if err := json.Unmarshal(body, pr); err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
+
 // tailscaledConnectHint gives a little thing about why tailscaled (or
 // platform equivalent) is not answering localapi connections.
 //
