@@ -1456,6 +1456,10 @@ type Debug struct {
 	// re-enabled for the lifetime of the process.
 	DisableLogTail bool `json:",omitempty"`
 
+	// EnableSilentDisco disables the use of heartBeatTimer in magicsock and attempts to
+	// handle disco silently. See issue #540 for details.
+	EnableSilentDisco bool `json:",omitempty"`
+
 	// Exit optionally specifies that the client should os.Exit
 	// with this code.
 	Exit *int `json:",omitempty"`
