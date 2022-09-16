@@ -37,6 +37,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/strs"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -86,12 +87,15 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	domain := strings.TrimPrefix(r.URL.Path, "/localapi/v0/cert/")
-	if domain == r.URL.Path {
+	domain, ok := strs.CutPrefix(r.URL.Path, "/localapi/v0/cert/")
+	if !ok {
 		http.Error(w, "internal handler config wired wrong", 500)
 		return
 	}
-
+	if !validLookingCertDomain(domain) {
+		http.Error(w, "invalid domain", 400)
+		return
+	}
 	now := time.Now()
 	logf := logger.WithPrefix(h.logf, fmt.Sprintf("cert(%q): ", domain))
 	traceACME := func(v any) {
@@ -164,6 +168,11 @@ func certFile(dir, domain string) string { return filepath.Join(dir, domain+".cr
 // keypair for domain exists on disk in dir that is valid at the
 // provided now time.
 func (h *Handler) getCertPEMCached(dir, domain string, now time.Time) (p *keyPair, ok bool) {
+	if !validLookingCertDomain(domain) {
+		// Before we read files from disk using it, validate it's halfway
+		// reasonable looking.
+		return nil, false
+	}
 	if keyPEM, err := os.ReadFile(keyFile(dir, domain)); err == nil {
 		certPEM, _ := os.ReadFile(certFile(dir, domain))
 		if validCertPEM(domain, keyPEM, certPEM, now) {
@@ -423,6 +432,21 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, now time.Time) bool {
 		Intermediates: intermediates,
 	})
 	return err == nil
+}
+
+// validLookingCertDomain reports whether name looks like a valid domain name that
+// we might be able to get a cert for.
+//
+// It's a light check primarily for double checking before it's used
+// as part of a filesystem path. The actual validation happens in checkCertDomain.
+func validLookingCertDomain(name string) bool {
+	if name == "" ||
+		strings.Contains(name, "..") ||
+		strings.ContainsAny(name, ":/\\\x00") ||
+		!strings.Contains(name, ".") {
+		return false
+	}
+	return true
 }
 
 func checkCertDomain(st *ipnstate.Status, domain string) error {
