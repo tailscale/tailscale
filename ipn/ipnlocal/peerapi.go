@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/strs"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -720,8 +721,8 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawPath := r.URL.EscapedPath()
-	suffix := strings.TrimPrefix(rawPath, "/v0/put/")
-	if suffix == rawPath {
+	suffix, ok := strs.CutPrefix(rawPath, "/v0/put/")
+	if !ok {
 		http.Error(w, "misconfigured internals", 500)
 		return
 	}
