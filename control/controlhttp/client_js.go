@@ -7,27 +7,31 @@ package controlhttp
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/url"
 
 	"nhooyr.io/websocket"
 	"tailscale.com/control/controlbase"
-	"tailscale.com/net/dnscache"
-	"tailscale.com/types/key"
 )
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
 // bi-directional communication over an HTTP connection when in JS.
-func Dial(ctx context.Context, host string, httpPort string, httpsPort string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
-	init, cont, err := controlbase.ClientDeferred(machineKey, controlKey, protocolVersion)
+func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
+	if d.Hostname == "" {
+		return nil, errors.New("required Dialer.Hostname empty")
+	}
+
+	init, cont, err := controlbase.ClientDeferred(d.MachineKey, d.ControlKey, d.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	wsScheme := "wss"
+	host := d.Hostname
 	if host == "localhost" {
 		wsScheme = "ws"
-		host = net.JoinHostPort(host, httpPort)
+		host = net.JoinHostPort(host, strDef(d.HTTPPort, "80"))
 	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,
@@ -52,5 +56,4 @@ func Dial(ctx context.Context, host string, httpPort string, httpsPort string, m
 		return nil, err
 	}
 	return cbConn, nil
-
 }
