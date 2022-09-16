@@ -932,14 +932,6 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		startTime := time.Now()
 		log.Printf("exec: %#v %v", executable, args)
 		cmd := exec.Command(executable, args...)
-		if runtime.GOOS == "windows" {
-			extraEnv, err := loadExtraEnv()
-			if err != nil {
-				logf("errors loading extra env file; ignoring: %v", err)
-			} else {
-				cmd.Env = append(os.Environ(), extraEnv...)
-			}
-		}
 
 		// Create a pipe object to use as the subproc's stdin.
 		// When the writer goes away, the reader gets EOF.
@@ -1207,39 +1199,4 @@ func findQnapTaildropDir(name string) (string, error) {
 		return dir, nil // return the symlink, how QNAP set it up
 	}
 	return "", fmt.Errorf("shared folder %q not found", name)
-}
-
-func loadExtraEnv() (env []string, err error) {
-	if runtime.GOOS != "windows" {
-		return nil, nil
-	}
-	name := filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt")
-	contents, err := os.ReadFile(name)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, line := range strings.Split(string(contents), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || k == "" {
-			continue
-		}
-		if strings.HasPrefix(v, `"`) {
-			var err error
-			v, err = strconv.Unquote(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid value in line %q: %v", line, err)
-			}
-			env = append(env, k+"="+v)
-		} else {
-			env = append(env, line)
-		}
-	}
-	return env, nil
 }

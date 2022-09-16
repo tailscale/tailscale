@@ -131,8 +131,12 @@ var subCommands = map[string]*func([]string) error{
 
 var beCLI func() // non-nil if CLI is linked in
 
+var diskConfigErr error
+
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
+	diskConfigErr = envknob.ApplyDiskConfig()
+
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
@@ -308,6 +312,10 @@ func run() error {
 		defer cancel()
 		pol.Shutdown(ctx)
 	}()
+
+	if diskConfigErr != nil {
+		log.Printf("Error reading environment config: %v", diskConfigErr)
+	}
 
 	if isWindowsService() {
 		// Run the IPN server from the Windows service manager.

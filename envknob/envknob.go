@@ -17,6 +17,9 @@
 package envknob
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime"
@@ -320,4 +323,51 @@ func PanicIfAnyEnvCheckedInInit() {
 	if envCheckedInInitStack != nil {
 		panic("envknob check of called from init function: " + string(envCheckedInInitStack))
 	}
+}
+
+var platformApplyDiskConfig func() error
+
+// ApplyDiskConfig returns a platform-specific config file of environment keys/values and
+// applies them. On Linux and Unix operating systems, it's a no-op and always returns nil.
+// If no platform-specific config file is found, it also returns nil.
+//
+// It exists primarily for Windows to make it easy to apply environment variables to
+// a running service in a way similar to modifying /etc/default/tailscaled on Linux.
+// On Windows, you use %ProgramData%\Tailscale\tailscaled-env.txt instead.
+func ApplyDiskConfig() error {
+	if f := platformApplyDiskConfig; f != nil {
+		return f()
+	}
+	return nil
+}
+
+// applyKeyValueEnv reads key=value lines r and calls Setenv for each.
+//
+// Empty lines and lines beginning with '#' are skipped.
+//
+// Values can be double quoted, in which case they're unquoted using
+// strconv.Unquote.
+func applyKeyValueEnv(r io.Reader) error {
+	bs := bufio.NewScanner(r)
+	for bs.Scan() {
+		line := strings.TrimSpace(bs.Text())
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if strings.HasPrefix(v, `"`) {
+			var err error
+			v, err = strconv.Unquote(v)
+			if err != nil {
+				return fmt.Errorf("invalid value in line %q: %v", line, err)
+			}
+		}
+		Setenv(k, v)
+	}
+	return bs.Err()
 }
