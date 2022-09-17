@@ -116,7 +116,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
 	upf.DurationVar(&upArgs.timeout, "timeout", 0, "maximum amount of time to wait for tailscaled to enter a Running state; default (0s) blocks forever")
-	registerAcceptRiskFlag(upf)
+	registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
 	return upf
 }
 
@@ -150,6 +150,7 @@ type upArgsT struct {
 	opUser                 string
 	json                   bool
 	timeout                time.Duration
+	acceptedRisks          string
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -376,6 +377,21 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		return false, nil, fmt.Errorf("can't change --login-server without --force-reauth")
 	}
 
+	// Do this after validations to avoid the 5s delay if we're going to error
+	// out anyway.
+	wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
+	fmt.Println("wantSSH", wantSSH, "haveSSH", haveSSH)
+	if wantSSH != haveSSH && isSSHOverTailscale() {
+		if wantSSH {
+			err = presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`, env.upArgs.acceptedRisks)
+		} else {
+			err = presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, env.upArgs.acceptedRisks)
+		}
+		if err != nil {
+			return false, nil, err
+		}
+	}
+
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
 
 	simpleUp = env.flagSet.NFlag() == 0 &&
@@ -473,17 +489,6 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 		upArgs:        upArgs,
 		backendState:  st.BackendState,
 		curExitNodeIP: exitNodeIP(curPrefs, st),
-	}
-
-	if upArgs.runSSH != curPrefs.RunSSH && isSSHOverTailscale() {
-		if upArgs.runSSH {
-			err = presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`)
-		} else {
-			err = presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`)
-		}
-		if err != nil {
-			return err
-		}
 	}
 
 	defer func() {

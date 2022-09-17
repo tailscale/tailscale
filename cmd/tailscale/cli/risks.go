@@ -16,9 +16,8 @@ import (
 )
 
 var (
-	riskTypes     []string
-	acceptedRisks string
-	riskLoseSSH   = registerRiskType("lose-ssh")
+	riskTypes   []string
+	riskLoseSSH = registerRiskType("lose-ssh")
 )
 
 func registerRiskType(riskType string) string {
@@ -28,12 +27,13 @@ func registerRiskType(riskType string) string {
 
 // registerAcceptRiskFlag registers the --accept-risk flag. Accepted risks are accounted for
 // in presentRiskToUser.
-func registerAcceptRiskFlag(f *flag.FlagSet) {
-	f.StringVar(&acceptedRisks, "accept-risk", "", "accept risk and skip confirmation for risk types: "+strings.Join(riskTypes, ","))
+func registerAcceptRiskFlag(f *flag.FlagSet, acceptedRisks *string) {
+	f.StringVar(acceptedRisks, "accept-risk", "", "accept risk and skip confirmation for risk types: "+strings.Join(riskTypes, ","))
 }
 
-// riskAccepted reports whether riskType is in acceptedRisks.
-func riskAccepted(riskType string) bool {
+// isRiskAccepted reports whether riskType is in the comma-separated list of
+// risks in acceptedRisks.
+func isRiskAccepted(riskType, acceptedRisks string) bool {
 	for _, r := range strings.Split(acceptedRisks, ",") {
 		if r == riskType {
 			return true
@@ -49,11 +49,15 @@ var errAborted = errors.New("aborted, no changes made")
 // It is used by the presentRiskToUser function below.
 const riskAbortTimeSeconds = 5
 
-// presentRiskToUser displays the risk message and waits for the user to
-// cancel. It returns errorAborted if the user aborts.
-func presentRiskToUser(riskType, riskMessage string) error {
-	if riskAccepted(riskType) {
+// presentRiskToUser displays the risk message and waits for the user to cancel.
+// It returns errorAborted if the user aborts. In tests it returns errAborted
+// immediately unless the risk has been explicitly accepted.
+func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
+	if isRiskAccepted(riskType, acceptedRisks) {
 		return nil
+	}
+	if inTest() {
+		return errAborted
 	}
 	outln(riskMessage)
 	printf("To skip this warning, use --accept-risk=%s\n", riskType)
