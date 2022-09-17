@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   ubuntu2004-LTS-cloud-base:
-    runs-on: [ self-hosted, linux, vm ]
+    runs-on: buildjet-4vcpu-ubuntu-2204
 
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
@@ -27,12 +27,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Get QEMU
+        run: |
+          sudo apt-get -y update
+          sudo apt-get -y install qemu-system-x86 qemu-user genisoimage qemu-utils
+
       - name: Run VM tests
         run: go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
         env:
           HOME: "/tmp"
           TMPDIR: "/tmp"
-          XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
+          XDG_CACHE_HOME: "/home/runner/cache"
 
       - uses: k0kubun/action-slack@v2.0.0
         with:
