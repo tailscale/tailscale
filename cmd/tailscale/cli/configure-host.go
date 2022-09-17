@@ -48,11 +48,11 @@ func runConfigureHost(ctx context.Context, args []string) error {
 	if uid := os.Getuid(); uid != 0 {
 		return fmt.Errorf("must be run as root, not %q (%v)", os.Getenv("USER"), uid)
 	}
-	osVer := hostinfo.GetOSVersion()
-	isDSM6 := strings.HasPrefix(osVer, "Synology 6")
-	isDSM7 := strings.HasPrefix(osVer, "Synology 7")
+	hi:= hostinfo.New()
+	isDSM6 := strings.HasPrefix(hi.DistroVersion, "6.")
+	isDSM7 := strings.HasPrefix(hi.DistroVersion, "7.")
 	if !isDSM6 && !isDSM7 {
-		return fmt.Errorf("unsupported DSM version %q", osVer)
+		return fmt.Errorf("unsupported DSM version %q", hi.DistroVersion)
 	}
 	if _, err := os.Stat("/dev/net/tun"); os.IsNotExist(err) {
 		if err := os.MkdirAll("/dev/net", 0755); err != nil {
