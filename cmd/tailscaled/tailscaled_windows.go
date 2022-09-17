@@ -197,8 +197,8 @@ func beWindowsSubprocess() bool {
 
 	log.Printf("Program starting: v%v: %#v", version.Long, os.Args)
 	log.Printf("subproc mode: logid=%v", logid)
-	if diskConfigErr != nil {
-		log.Printf("Error reading environment config: %v", diskConfigErr)
+	if err := envknob.ApplyDiskConfigError(); err != nil {
+		log.Printf("Error reading environment config: %v", err)
 	}
 
 	go func() {
