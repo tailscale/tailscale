@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -30,6 +31,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/types/opt"
+	"tailscale.com/version/distro"
 )
 
 var (
@@ -325,7 +327,10 @@ func PanicIfAnyEnvCheckedInInit() {
 	}
 }
 
-var platformApplyDiskConfig func() error
+var applyDiskConfigErr error
+
+// ApplyDiskConfigError returns the most recent result of ApplyDiskConfig.
+func ApplyDiskConfigError() error { return applyDiskConfigErr }
 
 // ApplyDiskConfig returns a platform-specific config file of environment keys/values and
 // applies them. On Linux and Unix operating systems, it's a no-op and always returns nil.
@@ -334,11 +339,59 @@ var platformApplyDiskConfig func() error
 // It exists primarily for Windows to make it easy to apply environment variables to
 // a running service in a way similar to modifying /etc/default/tailscaled on Linux.
 // On Windows, you use %ProgramData%\Tailscale\tailscaled-env.txt instead.
-func ApplyDiskConfig() error {
-	if f := platformApplyDiskConfig; f != nil {
-		return f()
+func ApplyDiskConfig() (err error) {
+	var f *os.File
+	defer func() {
+		if err != nil {
+			// Stash away our return error for the healthcheck package to use.
+			applyDiskConfigErr = fmt.Errorf("error parsing %s: %w", f.Name(), err)
+		}
+	}()
+
+	// First try the explicitly-provided value for development testing. Not
+	// useful for users to use on their own. (if they can set this, they can set
+	// any environment variable anyway)
+	if name := os.Getenv("TS_DEBUG_ENV_FILE"); name != "" {
+		f, err = os.Open(name)
+		if err != nil {
+			return fmt.Errorf("error opening explicitly configured TS_DEBUG_ENV_FILE: %w", err)
+		}
+		defer f.Close()
+		return applyKeyValueEnv(f)
 	}
-	return nil
+
+	name := getPlatformEnvFile()
+	if name == "" {
+		return nil
+	}
+	f, err = os.Open(name)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return applyKeyValueEnv(f)
+}
+
+// getPlatformEnvFile returns the current platform's path to an optional
+// tailscaled-env.txt file. It returns an empty string if none is defined
+// for the platform.
+func getPlatformEnvFile() string {
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt")
+	case "linux":
+		if distro.Get() == distro.Synology {
+			return "/etc/tailscale/tailscaled-env.txt"
+		}
+	case "darwin":
+		// TODO(bradfitz): figure this out. There are three ways to run
+		// Tailscale on macOS (tailscaled, GUI App Store, GUI System Extension)
+		// and we should deal with all three.
+	}
+	return ""
 }
 
 // applyKeyValueEnv reads key=value lines r and calls Setenv for each.

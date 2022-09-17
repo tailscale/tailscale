@@ -131,11 +131,9 @@ var subCommands = map[string]*func([]string) error{
 
 var beCLI func() // non-nil if CLI is linked in
 
-var diskConfigErr error
-
 func main() {
 	envknob.PanicIfAnyEnvCheckedInInit()
-	diskConfigErr = envknob.ApplyDiskConfig()
+	envknob.ApplyDiskConfig()
 
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
@@ -313,8 +311,8 @@ func run() error {
 		pol.Shutdown(ctx)
 	}()
 
-	if diskConfigErr != nil {
-		log.Printf("Error reading environment config: %v", diskConfigErr)
+	if err := envknob.ApplyDiskConfigError(); err != nil {
+		log.Printf("Error reading environment config: %v", err)
 	}
 
 	if isWindowsService() {

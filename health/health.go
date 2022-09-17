@@ -383,6 +383,9 @@ func overallErrorLocked() error {
 	for _, s := range controlHealth {
 		errs = append(errs, errors.New(s))
 	}
+	if err := envknob.ApplyDiskConfigError(); err != nil {
+		errs = append(errs, err)
+	}
 	if e := fakeErrForTesting(); len(errs) == 0 && e != "" {
 		return errors.New(e)
 	}
