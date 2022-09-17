@@ -789,6 +789,10 @@ func TestUpdatePrefs(t *testing.T) {
 		curPrefs *ipn.Prefs
 		env      upCheckEnv // empty goos means "linux"
 
+		// sshOverTailscale specifies if the cmd being run over SSH over Tailscale.
+		// It is used to test the --accept-risks flag.
+		sshOverTailscale bool
+
 		// checkUpdatePrefsMutations, if non-nil, is run with the new prefs after
 		// updatePrefs might've mutated them (from applyImplicitPrefs).
 		checkUpdatePrefsMutations func(t *testing.T, newPrefs *ipn.Prefs)
@@ -916,15 +920,159 @@ func TestUpdatePrefs(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "enable_ssh",
+			flags: []string{"--ssh"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to true")
+				}
+			},
+			env: upCheckEnv{backendState: "Running"},
+		},
+		{
+			name:  "disable_ssh",
+			flags: []string{"--ssh=false"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				RunSSH:           true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to false")
+				}
+			},
+			env: upCheckEnv{backendState: "Running", upArgs: upArgsT{
+				runSSH: true,
+			}},
+		},
+		{
+			name:             "disable_ssh_over_ssh_no_risk",
+			flags:            []string{"--ssh=false"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				RunSSH:           true,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to true")
+				}
+			},
+			env:          upCheckEnv{backendState: "Running"},
+			wantErrSubtr: "aborted, no changes made",
+		},
+		{
+			name:             "enable_ssh_over_ssh_no_risk",
+			flags:            []string{"--ssh=true"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to true")
+				}
+			},
+			env:          upCheckEnv{backendState: "Running"},
+			wantErrSubtr: "aborted, no changes made",
+		},
+		{
+			name:             "enable_ssh_over_ssh",
+			flags:            []string{"--ssh=true", "--accept-risk=lose-ssh"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if !newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to true")
+				}
+			},
+			env: upCheckEnv{backendState: "Running"},
+		},
+		{
+			name:             "disable_ssh_over_ssh",
+			flags:            []string{"--ssh=false", "--accept-risk=lose-ssh"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				Persist:          &persist.Persist{LoginName: "crawshaw.github"},
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				RunSSH:           true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: &ipn.MaskedPrefs{
+				RunSSHSet:      true,
+				WantRunningSet: true,
+			},
+			checkUpdatePrefsMutations: func(t *testing.T, newPrefs *ipn.Prefs) {
+				if newPrefs.RunSSH {
+					t.Errorf("RunSSH not set to false")
+				}
+			},
+			env: upCheckEnv{backendState: "Running"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.sshOverTailscale {
+				old := getSSHClientEnvVar
+				getSSHClientEnvVar = func() string { return "100.100.100.100 1 1" }
+				t.Cleanup(func() { getSSHClientEnvVar = old })
+			}
 			if tt.env.goos == "" {
 				tt.env.goos = "linux"
 			}
 			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
 			flags := CleanUpArgs(tt.flags)
-			tt.env.flagSet.Parse(flags)
+			if err := tt.env.flagSet.Parse(flags); err != nil {
+				t.Fatal(err)
+			}
 
 			newPrefs, err := prefsFromUpArgs(tt.env.upArgs, t.Logf, new(ipnstate.Status), tt.env.goos)
 			if err != nil {
@@ -939,6 +1087,8 @@ func TestUpdatePrefs(t *testing.T) {
 					return
 				}
 				t.Fatal(err)
+			} else if tt.wantErrSubtr != "" {
+				t.Fatalf("want error %q, got nil", tt.wantErrSubtr)
 			}
 			if tt.checkUpdatePrefsMutations != nil {
 				tt.checkUpdatePrefsMutations(t, newPrefs)
@@ -952,11 +1102,16 @@ func TestUpdatePrefs(t *testing.T) {
 				justEditMP.Prefs = ipn.Prefs{} // uninteresting
 			}
 			if !reflect.DeepEqual(justEditMP, tt.wantJustEditMP) {
-				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was %+v", oldEditPrefs)
+				t.Logf("justEditMP != wantJustEditMP; following diff omits the Prefs field, which was \n%v", asJSON(oldEditPrefs))
 				t.Fatalf("justEditMP: %v\n\n: ", cmp.Diff(justEditMP, tt.wantJustEditMP, cmpIP))
 			}
 		})
 	}
+}
+
+func asJSON(v any) string {
+	b, _ := json.MarshalIndent(v, "", "\t")
+	return string(b)
 }
 
 var cmpIP = cmp.Comparer(func(a, b netip.Addr) bool {
