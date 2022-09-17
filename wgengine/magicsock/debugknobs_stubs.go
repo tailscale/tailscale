@@ -18,6 +18,7 @@ func debugOmitLocalAddresses() bool { return false }
 func logDerpVerbose() bool          { return false }
 func debugReSTUNStopOnIdle() bool   { return false }
 func debugAlwaysDERP() bool         { return false }
+func debugEnableSilentDisco() bool  { return false }
 func debugUseDerpRouteEnv() string  { return "" }
 func debugUseDerpRoute() opt.Bool   { return "" }
 

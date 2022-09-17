@@ -2356,6 +2356,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 	c.netMap = nm
 
+	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
+
 	// Try a pass of just upserting nodes and creating missing
 	// endpoints. If the set of nodes is the same, this is an
 	// efficient alloc-free update. If the set of nodes is different,
@@ -2364,16 +2366,18 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			oldDiscoKey := ep.discoKey
+			ep.heartbeatDisabled = heartbeatDisabled
 			ep.updateFromNode(n)
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
 
 		ep := &endpoint{
-			c:             c,
-			publicKey:     n.Key,
-			sentPing:      map[stun.TxID]sentPing{},
-			endpointState: map[netip.AddrPort]*endpointState{},
+			c:                 c,
+			publicKey:         n.Key,
+			sentPing:          map[stun.TxID]sentPing{},
+			endpointState:     map[netip.AddrPort]*endpointState{},
+			heartbeatDisabled: heartbeatDisabled,
 		}
 		if !n.DiscoKey.IsZero() {
 			ep.discoKey = n.DiscoKey
@@ -3307,6 +3311,8 @@ type endpoint struct {
 	isCallMeMaybeEP    map[netip.AddrPort]bool
 
 	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
+
+	heartbeatDisabled bool // heartBeatTimer disabled for silent disco. See issue #540.
 }
 
 type pendingCLIPing struct {
@@ -3502,6 +3508,11 @@ func (de *endpoint) heartbeat() {
 
 	de.heartBeatTimer = nil
 
+	if de.heartbeatDisabled {
+		// If control override to disable heartBeatTimer set, return early.
+		return
+	}
+
 	if !de.canP2P() {
 		// Cannot form p2p connections, no heartbeating necessary.
 		return
@@ -3560,7 +3571,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 
 func (de *endpoint) noteActiveLocked() {
 	de.lastSend = mono.Now()
-	if de.heartBeatTimer == nil && de.canP2P() {
+	if de.heartBeatTimer == nil && de.canP2P() && !de.heartbeatDisabled {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
 }

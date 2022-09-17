@@ -35,6 +35,9 @@ var (
 	debugReSTUNStopOnIdle = envknob.RegisterBool("TS_DEBUG_RESTUN_STOP_ON_IDLE")
 	// debugAlwaysDERP disables the use of UDP, forcing all peer communication over DERP.
 	debugAlwaysDERP = envknob.RegisterBool("TS_DEBUG_ALWAYS_USE_DERP")
+	// debugEnableSilentDisco disables the use of heartbeatTimer on the endpoint struct
+	// and attempts to handle disco silently. See issue #540 for details.
+	debugEnableSilentDisco = envknob.RegisterBool("TS_DEBUG_ENABLE_SILENT_DISCO")
 )
 
 // inTest reports whether the running program is a test that set the
