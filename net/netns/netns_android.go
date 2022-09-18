@@ -20,6 +20,11 @@ var (
 	androidProtectFunc   func(fd int) error
 )
 
+// UseSocketMark reports whether SO_MARK is in use. Android does not use SO_MARK.
+func UseSocketMark() bool {
+	return false
+}
+
 // SetAndroidProtectFunc register a func that Android provides that JNI calls into
 // https://developer.android.com/reference/android/net/VpnService#protect(int)
 // which is documented as:
