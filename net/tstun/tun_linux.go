@@ -59,8 +59,9 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 	}
 	logf("is CONFIG_TUN enabled in your kernel? `modprobe tun` failed with: %s", modprobeOut)
 
-	switch distro.Get() {
-	case distro.Debian:
+	dist := distro.Get()
+	switch {
+	case dist.LikeDebian():
 		dpkgOut, err := exec.Command("dpkg", "-S", "kernel/drivers/net/tun.ko").CombinedOutput()
 		if len(bytes.TrimSpace(dpkgOut)) == 0 || err != nil {
 			logf("tun module not loaded nor found on disk")
@@ -69,7 +70,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 		if !bytes.Contains(dpkgOut, []byte(kernel)) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", dpkgOut)
 		}
-	case distro.Arch:
+	case dist == distro.Arch:
 		findOut, err := exec.Command("find", "/lib/modules/", "-path", "*/net/tun.ko*").CombinedOutput()
 		if len(bytes.TrimSpace(findOut)) == 0 || err != nil {
 			logf("tun module not loaded nor found on disk")
@@ -78,7 +79,7 @@ func diagnoseLinuxTUNFailure(tunName string, logf logger.Logf, createErr error) 
 		if !bytes.Contains(findOut, []byte(kernel)) {
 			logf("kernel/drivers/net/tun.ko found on disk, but not for current kernel; are you in middle of a system update and haven't rebooted? found: %s", findOut)
 		}
-	case distro.OpenWrt:
+	case dist == distro.OpenWrt:
 		out, err := exec.Command("opkg", "list-installed").CombinedOutput()
 		if err != nil {
 			logf("error querying OpenWrt installed packages: %s", out)

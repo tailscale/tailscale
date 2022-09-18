@@ -10,13 +10,16 @@ import (
 	"runtime"
 	"strconv"
 
+	"go4.org/mem"
 	"tailscale.com/syncs"
+	"tailscale.com/util/lineread"
 )
 
 type Distro string
 
 const (
 	Debian    = Distro("debian")
+	Ubuntu    = Distro("ubuntu")
 	Arch      = Distro("arch")
 	Synology  = Distro("synology")
 	OpenWrt   = Distro("openwrt")
@@ -62,9 +65,20 @@ func linuxDistro() Distro {
 	case haveDir("/usr/syno"):
 		return Synology
 	case have("/usr/local/bin/freenas-debug"):
-		// TrueNAS Scale runs on debian
+		// TrueNAS Scale runs on debian so test for it before Debian.
 		return TrueNAS
 	case have("/etc/debian_version"):
+		// Ubuntu also has an /etc/debian_version file, so see if it's actually Ubuntu.
+		isUbuntu := false
+		lineread.File("/etc/os-release", func(line []byte) error {
+			if mem.HasPrefix(mem.B(line), mem.S("ID=ubuntu")) {
+				isUbuntu = true
+			}
+			return nil
+		})
+		if isUbuntu {
+			return Ubuntu
+		}
 		return Debian
 	case have("/etc/arch-release"):
 		return Arch
@@ -109,4 +123,9 @@ func DSMVersion() int {
 	}
 	v, _ := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
 	return v
+}
+
+// LikeDebian reports whether d is Debian-derived.
+func (d Distro) LikeDebian() bool {
+	return d == Debian || d == Ubuntu
 }

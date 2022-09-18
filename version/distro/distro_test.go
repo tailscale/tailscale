@@ -14,3 +14,8 @@ func BenchmarkGet(b *testing.B) {
 	}
 	_ = d
 }
+
+func TestGet(t *testing.T) {
+	d := Get()
+	t.Logf("Get = %q", d)
+}
