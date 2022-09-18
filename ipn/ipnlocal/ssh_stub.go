@@ -6,6 +6,16 @@
 
 package ipnlocal
 
+import (
+	"errors"
+
+	"tailscale.com/tailcfg"
+)
+
 func (b *LocalBackend) getSSHHostKeyPublicStrings() []string {
 	return nil
+}
+
+func (b *LocalBackend) getSSHUsernames(*tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
+	return nil, errors.New("not implemented")
 }
