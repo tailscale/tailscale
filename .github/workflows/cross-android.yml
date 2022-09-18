@@ -1,0 +1,54 @@
+name: Android-Cross
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version-file: go.mod
+      id: go
+
+    - name: Android smoke build
+      # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
+      # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
+      # some Android breakages early.
+      # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
+      env:
+        GOOS: android
+        GOARCH: arm64
+      run: go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/interfaces ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version
+
+    - uses: k0kubun/action-slack@v2.0.0
+      with:
+        payload: |
+          {
+            "attachments": [{
+              "text": "${{ job.status }}: ${{ github.workflow }} <https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks|${{ env.COMMIT_DATE }} #${{ env.COMMIT_NUMBER_OF_DAY }}> " +
+                      "(<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|" + "${{ github.sha }}".substring(0, 10) + ">) " +
+                      "of ${{ github.repository }}@" + "${{ github.ref }}".split('/').reverse()[0] + " by ${{ github.event.head_commit.committer.name }}",
+              "color": "danger"
+            }]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      if: failure() && github.event_name == 'push'
