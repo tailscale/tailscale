@@ -2366,8 +2366,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
 			oldDiscoKey := ep.discoKey
-			ep.heartbeatDisabled = heartbeatDisabled
-			ep.updateFromNode(n)
+			ep.updateFromNode(n, heartbeatDisabled)
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
@@ -2410,7 +2409,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 				}
 			}))
 		}
-		ep.updateFromNode(n)
+		ep.updateFromNode(n, heartbeatDisabled)
 		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
 	}
 
@@ -3762,12 +3761,14 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 	}
 }
 
-func (de *endpoint) updateFromNode(n *tailcfg.Node) {
+func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 	if n == nil {
 		panic("nil node when updating disco ep")
 	}
 	de.mu.Lock()
 	defer de.mu.Unlock()
+
+	de.heartbeatDisabled = heartbeatDisabled
 
 	if de.discoKey != n.DiscoKey {
 		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
