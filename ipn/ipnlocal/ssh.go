@@ -19,11 +19,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/tailscale/golang-x-crypto/ssh"
+	"go4.org/mem"
+	"golang.org/x/exp/slices"
+	"tailscale.com/tailcfg"
+	"tailscale.com/util/lineread"
 	"tailscale.com/util/mak"
 )
 
@@ -31,6 +37,77 @@ import (
 // system's OpenSSH keys or try to generate for ourselves when not
 // running as root.
 var keyTypes = []string{"rsa", "ecdsa", "ed25519"}
+
+func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
+	res := new(tailcfg.C2NSSHUsernamesResponse)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.sshServer == nil {
+		return res, nil
+	}
+	max := 10
+	if req != nil && req.Max != 0 {
+		max = req.Max
+	}
+
+	add := func(u string) {
+		if req != nil && req.Exclude[u] {
+			return
+		}
+		switch u {
+		case "nobody", "daemon", "sync":
+			return
+		}
+		if slices.Contains(res.Usernames, u) {
+			return
+		}
+		if len(res.Usernames) > max {
+			// Enough for a hint.
+			return
+		}
+		res.Usernames = append(res.Usernames, u)
+	}
+
+	if b.prefs != nil && b.prefs.OperatorUser != "" {
+		add(b.prefs.OperatorUser)
+	}
+
+	// Check popular usernames and see if they exist with a real shell.
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("dscl", ".", "list", "/Users").Output()
+		if err != nil {
+			return nil, err
+		}
+		lineread.Reader(bytes.NewReader(out), func(line []byte) error {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 || line[0] == '_' {
+				return nil
+			}
+			add(string(line))
+			return nil
+		})
+	default:
+		lineread.File("/etc/passwd", func(line []byte) error {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 || line[0] == '#' || line[0] == '_' {
+				return nil
+			}
+			if mem.HasSuffix(mem.B(line), mem.S("/nologin")) ||
+				mem.HasSuffix(mem.B(line), mem.S("/false")) {
+				return nil
+			}
+			colon := bytes.IndexByte(line, ':')
+			if colon != -1 {
+				add(string(line[:colon]))
+			}
+			return nil
+		})
+	}
+	return res, nil
+}
 
 func (b *LocalBackend) GetSSH_HostKeys() (keys []ssh.Signer, err error) {
 	var existing map[string]ssh.Signer
