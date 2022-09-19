@@ -23,6 +23,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/netip"
@@ -270,6 +271,12 @@ func startIPNServer(ctx context.Context, logid string) error {
 	getEngineRaw := func() (wgengine.Engine, *netstack.Impl, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")
 		if err != nil {
+			if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) {
+				// Wintun is not installing correctly. Dump the state of NetSetupSvc
+				// (which is a user-mode service that must be active for network devices
+				// to install) and its dependencies to the log.
+				winutil.LogSvcState(logf, "NetSetupSvc")
+			}
 			return nil, nil, fmt.Errorf("TUN: %w", err)
 		}
 		r, err := router.New(logf, dev, nil)
