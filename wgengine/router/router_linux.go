@@ -112,6 +112,7 @@ type linuxRouter struct {
 	v6Available     bool
 	v6NATAvailable  bool
 	fwmaskWorks     bool // whether we can use 'ip rule...fwmark <mark>/<mask>'
+	hasV4Prefix     bool // false when 'DisableIPv4' is set on the tailnet
 
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
@@ -417,6 +418,26 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	if cfg == nil {
 		cfg = &shutdownConfig
 	}
+
+	// Because the tailnet may have IPv4 disabled, check if we have any v4
+	// prefixes from addresses, routes, or local routes.
+	r.hasV4Prefix = false
+	findV4 := func(arr []netip.Prefix) {
+		// Skip useless loop if we've already found a v4 prefix
+		if r.hasV4Prefix {
+			return
+		}
+		for _, pref := range arr {
+			if pref.Addr().Is4() {
+				r.hasV4Prefix = true
+				return
+			}
+		}
+	}
+	findV4(cfg.LocalAddrs)
+	findV4(cfg.Routes)
+	findV4(cfg.LocalRoutes)
+	findV4(cfg.SubnetRoutes)
 
 	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
 		errs = append(errs, err)
