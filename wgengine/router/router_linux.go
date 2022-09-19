@@ -377,7 +377,7 @@ func (r *linuxRouter) Up() error {
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
 	}
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff, true); err != nil {
 		return fmt.Errorf("setting netfilter mode: %w", err)
 	}
 	if err := r.upInterface(); err != nil {
@@ -398,7 +398,7 @@ func (r *linuxRouter) Close() error {
 	if err := r.delIPRules(); err != nil {
 		return err
 	}
-	if err := r.setNetfilterMode(netfilterOff); err != nil {
+	if err := r.setNetfilterMode(netfilterOff, true); err != nil {
 		return err
 	}
 	if err := r.delRoutes(); err != nil {
@@ -421,15 +421,15 @@ func (r *linuxRouter) Set(cfg *Config) error {
 
 	// Because the tailnet may have IPv4 disabled, check if we have any v4
 	// prefixes from addresses, routes, or local routes.
-	r.hasV4Prefix = false
+	var foundV4 bool
 	findV4 := func(arr []netip.Prefix) {
 		// Skip useless loop if we've already found a v4 prefix
-		if r.hasV4Prefix {
+		if foundV4 {
 			return
 		}
 		for _, pref := range arr {
 			if pref.Addr().Is4() {
-				r.hasV4Prefix = true
+				foundV4 = true
 				return
 			}
 		}
@@ -439,7 +439,18 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	findV4(cfg.LocalRoutes)
 	findV4(cfg.SubnetRoutes)
 
-	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
+	if !foundV4 && !r.v6Available {
+		return fmt.Errorf("No IPv4 routes and IPv6 isn't available")
+	}
+
+	// Update our "have IPv4" setting after we're done with this function;
+	// we can't do this earlier because both 'setNetfilterMode' and the
+	// SNAT rules need to know what the previous value was.
+	defer func() {
+		r.hasV4Prefix = foundV4
+	}()
+
+	if err := r.setNetfilterMode(cfg.NetfilterMode, foundV4); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -465,7 +476,7 @@ func (r *linuxRouter) Set(cfg *Config) error {
 	case cfg.SNATSubnetRoutes == r.snatSubnetRoutes:
 		// state already correct, nothing to do.
 	case cfg.SNATSubnetRoutes:
-		if err := r.addSNATRule(); err != nil {
+		if err := r.addSNATRule(foundV4); err != nil {
 			errs = append(errs, err)
 		}
 	default:
@@ -482,12 +493,25 @@ func (r *linuxRouter) Set(cfg *Config) error {
 // mode. Netfilter state is created or deleted appropriately to
 // reflect the new mode, and r.snatSubnetRoutes is updated to reflect
 // the current state of subnet SNATing.
-func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
+func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode, foundV4 bool) error {
 	if distro.Get() == distro.Synology {
 		mode = netfilterOff
 	}
-	if r.netfilterMode == mode {
+	if r.netfilterMode == mode && r.hasV4Prefix == foundV4 {
 		return nil
+	}
+
+	// In the (unlikely) case where we change whether or not we install
+	// IPv4 rules, recreate everything rather than complicating our diff
+	// logic. This should only happen if the user changes the tailnet-wide
+	// "DisableIPv4" setting.
+	if r.hasV4Prefix != foundV4 {
+		// Turn off netfilter (recursively) to force the code below to
+		// recreate things in the "correct" mode.
+		// TODO(andrew): this is a bit janky; think about this before merging
+		if err := r.setNetfilterMode(netfilterOff, r.hasV4Prefix); err != nil {
+			return err
+		}
 	}
 
 	// Depending on the netfilter mode we switch from and to, we may
@@ -1499,14 +1523,16 @@ func (r *linuxRouter) delNetfilterHooks() error {
 
 // addSNATRule adds a netfilter rule to SNAT traffic destined for
 // local subnets.
-func (r *linuxRouter) addSNATRule() error {
+func (r *linuxRouter) addSNATRule(foundV4 bool) error {
 	if r.netfilterMode == netfilterOff {
 		return nil
 	}
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "MASQUERADE"}
-	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
+	if foundV4 {
+		if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
+			return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
+		}
 	}
 	if r.v6NATAvailable {
 		if err := r.ipt6.Append("nat", "ts-postrouting", args...); err != nil {
@@ -1524,8 +1550,10 @@ func (r *linuxRouter) delSNATRule() error {
 	}
 
 	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "MASQUERADE"}
-	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
-		return fmt.Errorf("deleting %v in v4/nat/ts-postrouting: %w", args, err)
+	if r.hasV4Prefix {
+		if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
+			return fmt.Errorf("deleting %v in v4/nat/ts-postrouting: %w", args, err)
+		}
 	}
 	if r.v6NATAvailable {
 		if err := r.ipt6.Delete("nat", "ts-postrouting", args...); err != nil {
