@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -574,6 +573,10 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.Use
 func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.peerCapsLocked(src)
+}
+
+func (b *LocalBackend) peerCapsLocked(src netip.Addr) []string {
 	if b.netMap == nil {
 		return nil
 	}
@@ -585,9 +588,9 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 		if !a.IsSingleIP() {
 			continue
 		}
-		dstIP := a.Addr()
-		if dstIP.BitLen() == src.BitLen() {
-			return filt.AppendCaps(nil, src, a.Addr())
+		dst := a.Addr()
+		if dst.BitLen() == src.BitLen() { // match on family
+			return filt.AppendCaps(nil, src, dst)
 		}
 	}
 	return nil
@@ -3304,13 +3307,15 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
-		if p.User != nm.User && !slices.Contains(p.Capabilities, tailcfg.CapabilityFileSharingTarget) {
+		if len(p.Addresses) == 0 {
+			continue
+		}
+		if p.User != nm.User && b.peerHasCapLocked(p.Addresses[0].Addr(), tailcfg.CapabilityFileSharing) {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)
 		if peerAPI == "" {
 			continue
-
 		}
 		ret = append(ret, &apitype.FileTarget{
 			Node:       p,
@@ -3319,6 +3324,15 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	}
 	// TODO: sort a different way than the netmap already is?
 	return ret, nil
+}
+
+func (b *LocalBackend) peerHasCapLocked(addr netip.Addr, wantCap string) bool {
+	for _, hasCap := range b.peerCapsLocked(addr) {
+		if hasCap == wantCap {
+			return true
+		}
+	}
+	return false
 }
 
 // SetDNS adds a DNS record for the given domain name & TXT record

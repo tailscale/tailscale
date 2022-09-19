@@ -1589,15 +1589,11 @@ const (
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 
-	// These are the capabilities that the peer nodes have as listed in
-	// MapResponse.Peers[].Capabilities.
+	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 
 	// CapabilityFileSharingTarget grants the current node the ability to send
 	// files to the peer which has this capability.
 	CapabilityFileSharingTarget = "https://tailscale.com/cap/file-sharing-target"
-
-	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
-
 	// CapabilityFileSharingSend grants the ability to receive files from a
 	// node that's owned by a different user.
 	CapabilityFileSharingSend = "https://tailscale.com/cap/file-send"
