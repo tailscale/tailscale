@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -112,6 +113,10 @@ type Report struct {
 	GlobalV4 string // ip:port of global IPv4
 	GlobalV6 string // [ip]:port of global IPv6
 
+	// CaptivePortal is set when we think there's a captive portal that is
+	// intercepting HTTP traffic.
+	CaptivePortal opt.Bool
+
 	// TODO: update Clone when adding new fields
 }
 
@@ -175,6 +180,10 @@ type Client struct {
 	// If nil, portmap discovery is not done.
 	PortMapper *portmapper.Client // lazily initialized on first use
 
+	// For tests
+	testEnoughRegions      int
+	testCaptivePortalDelay time.Duration
+
 	mu       sync.Mutex            // guards following
 	nextFull bool                  // do a full region scan, even if last != nil
 	prev     map[time.Time]*Report // some previous reports
@@ -192,12 +201,23 @@ type STUNConn interface {
 }
 
 func (c *Client) enoughRegions() int {
+	if c.testEnoughRegions > 0 {
+		return c.testEnoughRegions
+	}
 	if c.Verbose {
 		// Abuse verbose a bit here so netcheck can show all region latencies
 		// in verbose mode.
 		return 100
 	}
 	return 3
+}
+
+func (c *Client) captivePortalDelay() time.Duration {
+	if c.testCaptivePortalDelay > 0 {
+		return c.testCaptivePortalDelay
+	}
+	// Chosen semi-arbitrarily
+	return 200 * time.Millisecond
 }
 
 func (c *Client) logf(format string, a ...any) {
@@ -783,13 +803,35 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	}
 	c.curState = rs
 	last := c.last
+
+	// Even if we're doing a non-incremental update, we may want to try our
+	// preferred DERP region for captive portal detection. Save that, if we
+	// have it.
+	var preferredDERP int
+	if last != nil {
+		preferredDERP = last.PreferredDERP
+	}
+
 	now := c.timeNow()
+
+	doFull := false
 	if c.nextFull || now.Sub(c.lastFull) > 5*time.Minute {
+		doFull = true
+	}
+	// If the last report had a captive portal and reported no UDP access,
+	// it's possible that we didn't get a useful netcheck due to the
+	// captive portal blocking us. If so, make this report a full
+	// (non-incremental) one.
+	if !doFull && last != nil {
+		doFull = !last.UDP && last.CaptivePortal.EqualBool(true)
+	}
+	if doFull {
 		last = nil // causes makeProbePlan below to do a full (initial) plan
 		c.nextFull = false
 		c.lastFull = now
 		metricNumGetReportFull.Add(1)
 	}
+
 	rs.incremental = last != nil
 	c.mu.Unlock()
 
@@ -874,6 +916,48 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 
 	plan := makeProbePlan(dm, ifState, last)
 
+	// If we're doing a full probe, also check for a captive portal. We
+	// delay by a bit to wait for UDP STUN to finish, to avoid the probe if
+	// it's unnecessary.
+	captivePortalDone := syncs.ClosedChan()
+	captivePortalStop := func() {}
+	if !rs.incremental {
+		// NOTE(andrew): we can't simply add this goroutine to the
+		// `NewWaitGroupChan` below, since we don't wait for that
+		// waitgroup to finish when exiting this function and thus get
+		// a data race.
+		ch := make(chan struct{})
+		captivePortalDone = ch
+
+		tmr := time.AfterFunc(c.captivePortalDelay(), func() {
+			defer close(ch)
+			found, err := c.checkCaptivePortal(ctx, dm, preferredDERP)
+			if err != nil {
+				c.logf("[v1] checkCaptivePortal: %v", err)
+				return
+			}
+			rs.report.CaptivePortal.Set(found)
+		})
+
+		captivePortalStop = func() {
+			// Don't cancel our captive portal check if we're
+			// explicitly doing a verbose netcheck.
+			if c.Verbose {
+				return
+			}
+
+			if tmr.Stop() {
+				// Stopped successfully; need to close the
+				// signal channel ourselves.
+				close(ch)
+				return
+			}
+
+			// Did not stop; do nothing and it'll finish by itself
+			// and close the signal channel.
+		}
+	}
+
 	wg := syncs.NewWaitGroupChan()
 	wg.Add(len(plan))
 	for _, probeSet := range plan {
@@ -894,9 +978,17 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	case <-stunTimer.C:
 	case <-ctx.Done():
 	case <-wg.DoneChan():
+		// All of our probes finished, so if we have >0 responses, we
+		// stop our captive portal check.
+		if rs.anyUDP() {
+			captivePortalStop()
+		}
 	case <-rs.stopProbeCh:
 		// Saw enough regions.
 		c.vlogf("saw enough regions; not waiting for rest")
+		// We can stop the captive portal check since we know that we
+		// got a bunch of STUN responses.
+		captivePortalStop()
 	}
 
 	rs.waitHairCheck(ctx)
@@ -965,6 +1057,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		wg.Wait()
 	}
 
+	// Wait for captive portal check before finishing the report.
+	<-captivePortalDone
+
 	return c.finishAndStoreReport(rs, dm), nil
 }
 
@@ -977,6 +1072,54 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	c.logConciseReport(report, dm)
 
 	return report
+}
+
+var noRedirectClient = &http.Client{
+	// No redirects allowed
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+
+	// Remaining fields are the same as the default client.
+	Transport: http.DefaultClient.Transport,
+	Jar:       http.DefaultClient.Jar,
+	Timeout:   http.DefaultClient.Timeout,
+}
+
+// checkCaptivePortal reports whether or not we think the system is behind a
+// captive portal, detected by making a request to a URL that we know should
+// return a "204 No Content" response and checking if that's what we get.
+//
+// The boolean return is whether we think we have a captive portal.
+func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, preferredDERP int) (bool, error) {
+	defer noRedirectClient.CloseIdleConnections()
+
+	// If we have a preferred DERP region with more than one node, try
+	// that; otherwise, pick a random one not marked as "Avoid".
+	if preferredDERP == 0 || dm.Regions[preferredDERP] == nil ||
+		(preferredDERP != 0 && len(dm.Regions[preferredDERP].Nodes) == 0) {
+		rids := make([]int, 0, len(dm.Regions))
+		for id, reg := range dm.Regions {
+			if reg == nil || reg.Avoid || len(reg.Nodes) == 0 {
+				continue
+			}
+			rids = append(rids, id)
+		}
+		preferredDERP = rids[rand.Intn(len(rids))]
+	}
+
+	node := dm.Regions[preferredDERP].Nodes[0]
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+node.HostName+"/generate_204", nil)
+	if err != nil {
+		return false, err
+	}
+	r, err := noRedirectClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	c.logf("[v2] checkCaptivePortal url=%q status_code=%d", req.URL.String(), r.StatusCode)
+
+	return r.StatusCode != 204, nil
 }
 
 // runHTTPOnlyChecks is the netcheck done by environments that can
@@ -1199,6 +1342,9 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		}
 		if r.GlobalV6 != "" {
 			fmt.Fprintf(w, " v6a=%v", r.GlobalV6)
+		}
+		if r.CaptivePortal != "" {
+			fmt.Fprintf(w, " captiveportal=%v", r.CaptivePortal)
 		}
 		fmt.Fprintf(w, " derp=%v", r.PreferredDERP)
 		if r.PreferredDERP != 0 {

@@ -200,6 +200,9 @@ func (s *Server) logf(format string, a ...any) {
 func (s *Server) initMux() {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", s.serveUnhandled)
+	s.mux.HandleFunc("/generate_204", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
 }

@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,6 +117,9 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	// OS IPv6 test is irrelevant here, accept whatever the current
 	// machine has.
 	want.OSHasIPv6 = r.OSHasIPv6
+	// Captive portal test is irrelevant; accept what the current report
+	// has.
+	want.CaptivePortal = r.CaptivePortal
 
 	if !reflect.DeepEqual(r, want) {
 		t.Errorf("mismatch\n got: %+v\nwant: %+v\n", r, want)
@@ -660,4 +665,58 @@ func TestSortRegions(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
+}
+
+func TestNoCaptivePortalWhenUDP(t *testing.T) {
+	// Override noRedirectClient to handle the /generate_204 endpoint
+	var generate204Called atomic.Bool
+	tr := RoundTripFunc(func(req *http.Request) *http.Response {
+		if !strings.HasSuffix(req.URL.String(), "/generate_204") {
+			panic("bad URL: " + req.URL.String())
+		}
+		generate204Called.Store(true)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+		}
+	})
+
+	oldTransport := noRedirectClient.Transport
+	t.Cleanup(func() { noRedirectClient.Transport = oldTransport })
+	noRedirectClient.Transport = tr
+
+	stunAddr, cleanup := stuntest.Serve(t)
+	defer cleanup()
+
+	c := &Client{
+		Logf:              t.Logf,
+		UDPBindAddr:       "127.0.0.1:0",
+		testEnoughRegions: 1,
+
+		// Set the delay long enough that we have time to cancel it
+		// when our STUN probe succeeds.
+		testCaptivePortalDelay: 10 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should not have called our captive portal function.
+	if generate204Called.Load() {
+		t.Errorf("captive portal check called; expected no call")
+	}
+	if r.CaptivePortal != "" {
+		t.Errorf("got CaptivePortal=%q, want empty", r.CaptivePortal)
+	}
+}
+
+type RoundTripFunc func(req *http.Request) *http.Response
+
+func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req), nil
 }

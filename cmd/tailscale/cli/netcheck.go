@@ -133,6 +133,9 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	printf("\t* MappingVariesByDestIP: %v\n", report.MappingVariesByDestIP)
 	printf("\t* HairPinning: %v\n", report.HairPinning)
 	printf("\t* PortMapping: %v\n", portMapping(report))
+	if report.CaptivePortal != "" {
+		printf("\t* CaptivePortal: %v\n", report.CaptivePortal)
+	}
 
 	// When DERP latency checking failed,
 	// magicsock will try to pick the DERP server that
