@@ -226,7 +226,7 @@ type Node struct {
 	//    "https://tailscale.com/cap/file-sharing"
 	Capabilities []string `json:",omitempty"`
 
-	// The following three computed fields hold the various names that can
+	// The following computed fields hold the various names that can
 	// be used for this node in UIs. They are populated from controlclient
 	// (not from control) by calling node.InitDisplayNames. These can be
 	// used directly or accessed via node.DisplayName or node.DisplayNames.
@@ -234,6 +234,7 @@ type Node struct {
 	ComputedName            string `json:",omitempty"` // MagicDNS base name (for normal non-shared-in nodes), FQDN (without trailing dot, for shared-in nodes), or Hostname (if no MagicDNS)
 	computedHostIfDifferent string // hostname, if different than ComputedName, otherwise empty
 	ComputedNameWithHost    string `json:",omitempty"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
+	TailnetName             string `json:",omitempty"` // SSO Tailnet name
 }
 
 // DisplayName returns the user-facing name for a node which should
