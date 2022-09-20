@@ -380,7 +380,6 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	// Do this after validations to avoid the 5s delay if we're going to error
 	// out anyway.
 	wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
-	fmt.Println("wantSSH", wantSSH, "haveSSH", haveSSH)
 	if wantSSH != haveSSH && isSSHOverTailscale() {
 		if wantSSH {
 			err = presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`, env.upArgs.acceptedRisks)
