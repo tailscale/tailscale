@@ -360,6 +360,10 @@ func (s *jsSSHSession) Run() {
 	setReadFn := s.termConfig.Get("setReadFn")
 	rows := s.termConfig.Get("rows").Int()
 	cols := s.termConfig.Get("cols").Int()
+	timeoutSeconds := 5.0
+	if jsTimeoutSeconds := s.termConfig.Get("timeoutSeconds"); jsTimeoutSeconds.Type() == js.TypeNumber {
+		timeoutSeconds = jsTimeoutSeconds.Float()
+	}
 	onDone := s.termConfig.Get("onDone")
 	defer onDone.Invoke()
 
@@ -367,7 +371,7 @@ func (s *jsSSHSession) Run() {
 		writeErrorFn.Invoke(fmt.Sprintf("%s Error: %v\r\n", label, err))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds*float64(time.Second)))
 	defer cancel()
 	c, err := s.jsIPN.dialer.UserDial(ctx, "tcp", net.JoinHostPort(s.host, "22"))
 	if err != nil {

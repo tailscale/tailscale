@@ -23,6 +23,8 @@ declare global {
         setReadFn: (readFn: (data: string) => void) => void
         rows: number
         cols: number
+        /** Defaults to 5 seconds */
+        timeoutSeconds?: number
         onDone: () => void
       }
     ): IPNSSHSession

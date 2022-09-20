@@ -5,6 +5,8 @@ import { WebLinksAddon } from "xterm-addon-web-links"
 export type SSHSessionDef = {
   username: string
   hostname: string
+  /** Defaults to 5 seconds */
+  timeoutSeconds?: number
 }
 
 export function runSSHSession(
@@ -62,6 +64,7 @@ export function runSSHSession(
       }
       onDone()
     },
+    timeoutSeconds: def.timeoutSeconds,
   })
 
   // Make terminal and SSH session track the size of the containing DOM node.
