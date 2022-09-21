@@ -5,6 +5,7 @@
 package netstack
 
 import (
+	"fmt"
 	"net/netip"
 	"runtime"
 	"testing"
@@ -216,36 +217,38 @@ func TestShouldHandlePing(t *testing.T) {
 		}
 	})
 
-	t.Run("ICMP6-4via6", func(t *testing.T) {
-		// The 4via6 route 10.1.1.0/24 siteid 7, and then the IP
-		// 10.1.1.9 within that route.
-		dst := netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:7:a01:109")
-		expectedPingDst := netip.MustParseAddr("10.1.1.9")
-		icmph := packet.ICMP6Header{
-			IP6Header: packet.IP6Header{
-				IPProto: ipproto.ICMPv6,
-				Src:     srcIP,
-				Dst:     dst,
-			},
-			Type: packet.ICMP6EchoRequest,
-			Code: packet.ICMP6NoCode,
-		}
-		_, payload := packet.ICMPEchoPayload(nil)
-		icmpPing := packet.Generate(icmph, payload)
-		pkt := &packet.Parsed{}
-		pkt.Decode(icmpPing)
+	// Handle pings for 4via6 addresses regardless of ProcessSubnets
+	for _, subnets := range []bool{true, false} {
+		t.Run("ICMP6-4via6-ProcessSubnets-"+fmt.Sprint(subnets), func(t *testing.T) {
+			// The 4via6 route 10.1.1.0/24 siteid 7, and then the IP
+			// 10.1.1.9 within that route.
+			dst := netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:7:a01:109")
+			expectedPingDst := netip.MustParseAddr("10.1.1.9")
+			icmph := packet.ICMP6Header{
+				IP6Header: packet.IP6Header{
+					IPProto: ipproto.ICMPv6,
+					Src:     srcIP,
+					Dst:     dst,
+				},
+				Type: packet.ICMP6EchoRequest,
+				Code: packet.ICMP6NoCode,
+			}
+			_, payload := packet.ICMPEchoPayload(nil)
+			icmpPing := packet.Generate(icmph, payload)
+			pkt := &packet.Parsed{}
+			pkt.Decode(icmpPing)
 
-		impl := makeNetstack(t, func(impl *Impl) {
-			impl.ProcessSubnets = true
+			impl := makeNetstack(t, func(impl *Impl) {
+				impl.ProcessSubnets = subnets
+			})
+			pingDst, ok := impl.shouldHandlePing(pkt)
+
+			// Handled due to being 4via6
+			if !ok {
+				t.Errorf("expected shouldHandlePing==true")
+			} else if pingDst != expectedPingDst {
+				t.Errorf("got dst %s; want %s", pingDst, expectedPingDst)
+			}
 		})
-		pingDst, ok := impl.shouldHandlePing(pkt)
-
-		// Handled due to being 4via6
-		if !ok {
-			t.Errorf("expected shouldHandlePing==true")
-		}
-		if pingDst != expectedPingDst {
-			t.Errorf("got dst %s; want %s", pingDst, expectedPingDst)
-		}
-	})
+	}
 }
