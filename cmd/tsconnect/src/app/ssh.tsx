@@ -46,7 +46,7 @@ function SSHSession({
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current) {
-      runSSHSession(ref.current, def, ipn, onDone)
+      runSSHSession(ref.current, def, ipn, onDone, (err) => console.error(err))
     }
   }, [ref])
 

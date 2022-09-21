@@ -12,6 +12,7 @@ export function runSSHSession(
   def: SSHSessionDef,
   ipn: IPN,
   onDone: () => void,
+  onError?: (err: string) => void,
   terminalOptions?: ITerminalOptions
 ) {
   const parentWindow = termContainerNode.ownerDocument.defaultView ?? window
@@ -46,7 +47,7 @@ export function runSSHSession(
       term.write(input)
     },
     writeErrorFn(err) {
-      console.error(err)
+      onError?.(err)
       term.write(err)
     },
     setReadFn(hook) {
