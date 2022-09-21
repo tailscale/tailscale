@@ -285,10 +285,6 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		return nil, err
 	}
 
-	if upArgs.exitNodeIP == "" && upArgs.exitNodeAllowLANAccess {
-		return nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
-	}
-
 	var tags []string
 	if upArgs.advertiseTags != "" {
 		tags = strings.Split(upArgs.advertiseTags, ",")
@@ -375,6 +371,12 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		!(ipn.IsLoginServerSynonym(curPrefs.ControlURL) && ipn.IsLoginServerSynonym(prefs.ControlURL))
 	if controlURLChanged && env.backendState == ipn.Running.String() && !env.upArgs.forceReauth {
 		return false, nil, fmt.Errorf("can't change --login-server without --force-reauth")
+	}
+
+	if curPrefs.ExitNodeAllowLANAccess != env.upArgs.exitNodeAllowLANAccess {
+		if env.upArgs.exitNodeIP == "" && env.upArgs.exitNodeAllowLANAccess {
+			return false, nil, fmt.Errorf("--exit-node-allow-lan-access can only be used with --exit-node")
+		}
 	}
 
 	// Do this after validations to avoid the 5s delay if we're going to error
@@ -824,9 +826,14 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		return nil
 	}
 
+	usingExitNode := false
 	flagIsSet := map[string]bool{}
 	env.flagSet.Visit(func(f *flag.Flag) {
 		flagIsSet[f.Name] = true
+
+		if f.Name == "exit-node" && f.Value.String() != "" {
+			usingExitNode = true
+		}
 	})
 
 	if len(flagIsSet) == 0 {
@@ -859,6 +866,9 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
 	}
 	if len(missing) == 0 {
+		return nil
+	}
+	if len(missing) == 1 && missing[0] == "--exit-node-allow-lan-access" && !usingExitNode {
 		return nil
 	}
 	sort.Strings(missing)

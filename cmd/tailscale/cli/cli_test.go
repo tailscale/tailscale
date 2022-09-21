@@ -425,6 +425,57 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: accidentalUpPrefix + " --hostname=foo --exit-node-allow-lan-access --exit-node=100.2.3.4",
 		},
 		{
+			name:          "exit_node_revert",
+			flags:         []string{"--hostname=foo"},
+			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:       ipn.DefaultControlURL,
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+				ExitNodeIP:       netip.MustParseAddr("100.2.3.4"),
+			},
+			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.2.3.4",
+		},
+		{
+			name:  "no_revert_lan_access",
+			flags: []string{"--hostname=foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:             ipn.DefaultControlURL,
+				AllowSingleHosts:       true,
+				CorpDNS:                true,
+				NetfilterMode:          preftype.NetfilterOn,
+				ExitNodeAllowLANAccess: true,
+			},
+		},
+		{
+			name:          "exit_node_revert_lan_access",
+			flags:         []string{"--hostname=foo", "--exit-node=100.2.3.4"},
+			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:             ipn.DefaultControlURL,
+				AllowSingleHosts:       true,
+				CorpDNS:                true,
+				NetfilterMode:          preftype.NetfilterOn,
+				ExitNodeIP:             netip.MustParseAddr("100.2.3.4"),
+				ExitNodeAllowLANAccess: true,
+			},
+			want: accidentalUpPrefix + " --exit-node=100.2.3.4 --hostname=foo --exit-node-allow-lan-access",
+		},
+		{
+			name:          "exit_node_no_revert_lan_access",
+			flags:         []string{"--exit-node="},
+			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
+			curPrefs: &ipn.Prefs{
+				ControlURL:             ipn.DefaultControlURL,
+				AllowSingleHosts:       true,
+				CorpDNS:                true,
+				NetfilterMode:          preftype.NetfilterOn,
+				ExitNodeIP:             netip.MustParseAddr("100.2.3.4"),
+				ExitNodeAllowLANAccess: true,
+			},
+		},
+		{
 			name:  "ignore_login_server_synonym",
 			flags: []string{"--login-server=https://controlplane.tailscale.com"},
 			curPrefs: &ipn.Prefs{
