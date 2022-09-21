@@ -38,15 +38,16 @@ import (
 // running as root.
 var keyTypes = []string{"rsa", "ecdsa", "ed25519"}
 
+// getSSHUsernames discovers and returns the list of usernames that are
+// potential Tailscale SSH user targets.
+//
+// Invariant: must not be called with b.mu held.
 func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
 	res := new(tailcfg.C2NSSHUsernamesResponse)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.sshServer == nil {
+	if !b.tailscaleSSHEnabled() {
 		return res, nil
 	}
+
 	max := 10
 	if req != nil && req.Max != 0 {
 		max = req.Max
@@ -70,8 +71,8 @@ func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*ta
 		res.Usernames = append(res.Usernames, u)
 	}
 
-	if b.prefs != nil && b.prefs.OperatorUser != "" {
-		add(b.prefs.OperatorUser)
+	if opUser := b.operatorUserName(); opUser != "" {
+		add(opUser)
 	}
 
 	// Check popular usernames and see if they exist with a real shell.

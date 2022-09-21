@@ -3228,6 +3228,17 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 }
 
+// operatorUserName returns the current pref's OperatorUser's name, or the
+// empty string if none.
+func (b *LocalBackend) operatorUserName() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.prefs == nil {
+		return ""
+	}
+	return b.prefs.OperatorUser
+}
+
 // OperatorUserID returns the current pref's OperatorUser's ID (in
 // os/user.User.Uid string form), or the empty string if none.
 func (b *LocalBackend) OperatorUserID() string {
@@ -3594,6 +3605,17 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
+}
+
+// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
+// on prefs. It returns false if there are no prefs set.
+func (b *LocalBackend) tailscaleSSHEnabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.prefs == nil {
+		return false
+	}
+	return b.prefs.RunSSH
 }
 
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {

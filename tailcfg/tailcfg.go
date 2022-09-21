@@ -79,7 +79,8 @@ type CapabilityVersion int
 //   - 40: 2022-08-22: added Node.KeySignature, PeersChangedPatch.KeySignature
 //   - 41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
 //   - 42: 2022-09-06: NextDNS DoH support; see https://github.com/tailscale/tailscale/pull/5556
-const CurrentCapabilityVersion CapabilityVersion = 42
+//   - 43: 2022-09-21: clients can return usernames for SSH
+const CurrentCapabilityVersion CapabilityVersion = 43
 
 type StableID string
 
