@@ -12,9 +12,11 @@ import (
 // TKAInitBeginRequest submits a genesis AUM to seed the creation of the
 // tailnet's key authority.
 type TKAInitBeginRequest struct {
-	// NodeID is the node of the initiating client.
-	// It must match the machine key being used to communicate over noise.
-	NodeID NodeID
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
 
 	// GenesisAUM is the initial (genesis) AUM that the node generated
 	// to bootstrap tailnet key authority state.
@@ -58,8 +60,11 @@ type TKAInitBeginResponse struct {
 // This RPC finalizes initialization of the tailnet key authority
 // by submitting node-key signatures for all existing nodes.
 type TKAInitFinishRequest struct {
-	// NodeID is the node ID of the initiating client.
-	NodeID NodeID
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
 
 	// Signatures are serialized tka.NodeKeySignatures for all nodes
 	// in the tailnet.
@@ -101,8 +106,12 @@ type TKAInfo struct {
 // TKABootstrapRequest is sent by a node to get information necessary for
 // enabling or disabling the tailnet key authority.
 type TKABootstrapRequest struct {
-	// NodeID is the node ID of the initiating client.
-	NodeID NodeID
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
+
 	// Head represents the node's head AUMHash (tka.Authority.Head), if
 	// network lock is enabled.
 	Head string
@@ -122,8 +131,12 @@ type TKABootstrapResponse struct {
 // state (TKA). Values of type tka.AUMHash are encoded as strings in their
 // MarshalText form.
 type TKASyncOfferRequest struct {
-	// NodeID is the node ID of the initiating client.
-	NodeID NodeID
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
+
 	// Head represents the node's head AUMHash (tka.Authority.Head). This
 	// corresponds to tka.SyncOffer.Head.
 	Head string
@@ -151,8 +164,12 @@ type TKASyncOfferResponse struct {
 // TKASyncSendRequest encodes AUMs that a node believes the control plane
 // is missing.
 type TKASyncSendRequest struct {
-	// NodeID is the node ID of the initiating client.
-	NodeID NodeID
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
+
 	// MissingAUMs encodes AUMs that the node believes the control plane
 	// is missing.
 	MissingAUMs []tkatype.MarshaledAUM

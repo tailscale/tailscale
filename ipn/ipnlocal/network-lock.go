@@ -55,9 +55,6 @@ func (b *LocalBackend) tkaSyncIfNeededLocked(nm *netmap.NetworkMap) error {
 		// If the feature flag is not enabled, pretend we don't exist.
 		return nil
 	}
-	if nm.SelfNode == nil {
-		return errors.New("SelfNode missing")
-	}
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
@@ -69,8 +66,9 @@ func (b *LocalBackend) tkaSyncIfNeededLocked(nm *netmap.NetworkMap) error {
 
 		// Regardless of whether we are moving to disabled or enabled, we
 		// need information from the tka bootstrap endpoint.
+		ourNodeKey := b.prefs.Persist.PrivateNodeKey.Public()
 		b.mu.Unlock()
-		bs, err := b.tkaFetchBootstrap(nm.SelfNode.ID, ourHead)
+		bs, err := b.tkaFetchBootstrap(ourNodeKey, ourHead)
 		b.mu.Lock()
 		if err != nil {
 			return fmt.Errorf("fetching bootstrap: %v", err)
@@ -202,9 +200,15 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	if !b.CanSupportNetworkLock() {
 		return errors.New("network-lock is not supported in this configuration. Did you supply a --statedir?")
 	}
-	nm := b.NetMap()
-	if nm == nil {
-		return errors.New("no netmap: are you logged into tailscale?")
+
+	var ourNodeKey key.NodePublic
+	b.mu.Lock()
+	if b.prefs != nil {
+		ourNodeKey = b.prefs.Persist.PrivateNodeKey.Public()
+	}
+	b.mu.Unlock()
+	if ourNodeKey.IsZero() {
+		return errors.New("no node-key: is tailscale logged in?")
 	}
 
 	// Generates a genesis AUM representing trust in the provided keys.
@@ -226,7 +230,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	}
 
 	// Phase 1/2 of initialization: Transmit the genesis AUM to Control.
-	initResp, err := b.tkaInitBegin(nm, genesisAUM)
+	initResp, err := b.tkaInitBegin(ourNodeKey, genesisAUM)
 	if err != nil {
 		return fmt.Errorf("tka init-begin RPC: %w", err)
 	}
@@ -247,7 +251,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	}
 
 	// Finalize enablement by transmitting signature for all nodes to Control.
-	_, err = b.tkaInitFinish(nm, sigs)
+	_, err = b.tkaInitFinish(ourNodeKey, sigs)
 	return err
 }
 
@@ -270,10 +274,11 @@ func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeK
 	return &sig, nil
 }
 
-func (b *LocalBackend) tkaInitBegin(nm *netmap.NetworkMap, aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
+func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*tailcfg.TKAInitBeginResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitBeginRequest{
-		NodeID:     nm.SelfNode.ID,
+		Version:    tailcfg.CurrentCapabilityVersion,
+		NodeKey:    ourNodeKey,
 		GenesisAUM: aum.Serialize(),
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
@@ -311,10 +316,11 @@ func (b *LocalBackend) tkaInitBegin(nm *netmap.NetworkMap, aum tka.AUM) (*tailcf
 	}
 }
 
-func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks map[tailcfg.NodeID]tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
+func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.NodeID]tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
-		NodeID:     nm.SelfNode.ID,
+		Version:    tailcfg.CurrentCapabilityVersion,
+		NodeKey:    ourNodeKey,
 		Signatures: nks,
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
@@ -354,9 +360,10 @@ func (b *LocalBackend) tkaInitFinish(nm *netmap.NetworkMap, nks map[tailcfg.Node
 
 // tkaFetchBootstrap sends a /machine/tka/bootstrap RPC to the control plane
 // over noise. This is used to get values necessary to enable or disable TKA.
-func (b *LocalBackend) tkaFetchBootstrap(nodeID tailcfg.NodeID, head tka.AUMHash) (*tailcfg.TKABootstrapResponse, error) {
+func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUMHash) (*tailcfg.TKABootstrapResponse, error) {
 	bootstrapReq := tailcfg.TKABootstrapRequest{
-		NodeID: nodeID,
+		Version: tailcfg.CurrentCapabilityVersion,
+		NodeKey: ourNodeKey,
 	}
 	if !head.IsZero() {
 		head, err := head.MarshalText()

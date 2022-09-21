@@ -17,10 +17,12 @@ import (
 
 	"tailscale.com/control/controlclient"
 	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
 )
 
 func fakeControlClient(t *testing.T, c *http.Client) *controlclient.Auto {
@@ -62,6 +64,7 @@ func fakeNoiseServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, 
 
 func TestTKAEnablementFlow(t *testing.T) {
 	networkLockAvailable = func() bool { return true } // Enable the feature flag
+	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, getting a usable genesis AUM which
 	// our mock server can communicate.
@@ -83,8 +86,11 @@ func TestTKAEnablementFlow(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
-			if body.NodeID != 420 {
-				t.Errorf("bootstrap nodeID=%v, want 420", body.NodeID)
+			if body.Version != tailcfg.CurrentCapabilityVersion {
+				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
+			}
+			if body.NodeKey != nodePriv.Public() {
+				t.Errorf("bootstrap nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
 			}
 			if body.Head != "" {
 				t.Errorf("bootstrap head=%s, want empty hash", body.Head)
@@ -112,11 +118,13 @@ func TestTKAEnablementFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
+		prefs: &ipn.Prefs{
+			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
+		},
 	}
 
 	b.mu.Lock()
 	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
-		SelfNode:   &tailcfg.Node{ID: 420},
 		TKAEnabled: true,
 		TKAHead:    tka.AUMHash{},
 	})
@@ -136,6 +144,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	networkLockAvailable = func() bool { return true } // Enable the feature flag
 	temp := t.TempDir()
 	os.Mkdir(filepath.Join(temp, "tka"), 0755)
+	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, to seed local state.
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
@@ -153,6 +162,7 @@ func TestTKADisablementFlow(t *testing.T) {
 		t.Fatalf("tka.Create() failed: %v", err)
 	}
 
+	returnWrongSecret := false
 	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		switch r.URL.Path {
@@ -161,14 +171,11 @@ func TestTKADisablementFlow(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
 				t.Fatal(err)
 			}
-			var disablement []byte
-			switch body.NodeID {
-			case 42:
-				disablement = bytes.Repeat([]byte{0x42}, 32) // wrong secret
-			case 420:
-				disablement = disablementSecret
-			default:
-				t.Errorf("bootstrap nodeID=%v, wanted 42 or 420", body.NodeID)
+			if body.Version != tailcfg.CurrentCapabilityVersion {
+				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
+			}
+			if body.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
 			}
 			var head tka.AUMHash
 			if err := head.UnmarshalText([]byte(body.Head)); err != nil {
@@ -176,6 +183,13 @@ func TestTKADisablementFlow(t *testing.T) {
 			}
 			if head != authority.Head() {
 				t.Errorf("reported head = %x, want %x", head, authority.Head())
+			}
+
+			var disablement []byte
+			if returnWrongSecret {
+				disablement = bytes.Repeat([]byte{0x42}, 32) // wrong secret
+			} else {
+				disablement = disablementSecret
 			}
 
 			w.WriteHeader(200)
@@ -203,13 +217,15 @@ func TestTKADisablementFlow(t *testing.T) {
 			authority: authority,
 			storage:   chonk,
 		},
+		prefs: &ipn.Prefs{
+			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
+		},
 	}
 
 	// Test that the wrong disablement secret does not shut down the authority.
-	// NodeID == 42 indicates this scenario to our mock server.
+	returnWrongSecret = true
 	b.mu.Lock()
 	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
-		SelfNode:   &tailcfg.Node{ID: 42},
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
 	})
@@ -222,10 +238,9 @@ func TestTKADisablementFlow(t *testing.T) {
 	}
 
 	// Test the correct disablement secret shuts down the authority.
-	// NodeID == 420 indicates this scenario to our mock server.
+	returnWrongSecret = false
 	b.mu.Lock()
 	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
-		SelfNode:   &tailcfg.Node{ID: 420},
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
 	})
