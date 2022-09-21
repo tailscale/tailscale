@@ -987,16 +987,19 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 	dstAddr, ok := ipPortOfNetstackAddr(sess.LocalAddress, sess.LocalPort)
 	if !ok {
+		ep.Close()
 		return
 	}
 	srcAddr, ok := ipPortOfNetstackAddr(sess.RemoteAddress, sess.RemotePort)
 	if !ok {
+		ep.Close()
 		return
 	}
 
 	// Handle magicDNS traffic (via UDP) here.
 	if dst := dstAddr.Addr(); dst == magicDNSIP || dst == magicDNSIPv6 {
 		if dstAddr.Port() != 53 {
+			ep.Close()
 			return // Only MagicDNS traffic runs on the service IPs for now.
 		}
 
