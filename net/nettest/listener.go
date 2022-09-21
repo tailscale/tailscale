@@ -61,7 +61,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 // The provided Context must be non-nil. If the context expires before the
 // connection is complete, an error is returned. Once successfully connected
 // any expiration of the context will not affect the connection.
-func (l *Listener) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+func (l *Listener) Dial(ctx context.Context, network, addr string) (_ net.Conn, err error) {
 	if !strings.HasSuffix(network, "tcp") {
 		return nil, net.UnknownNetworkError(network)
 	}
@@ -72,6 +72,13 @@ func (l *Listener) Dial(ctx context.Context, network, addr string) (net.Conn, er
 		}
 	}
 	c, s := NewConn(addr, bufferSize)
+	defer func() {
+		if err != nil {
+			c.Close()
+			s.Close()
+		}
+	}()
+
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

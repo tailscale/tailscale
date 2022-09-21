@@ -24,11 +24,17 @@ func New(socket string) (*BIRDClient, error) {
 	return newWithTimeout(socket, responseTimeout)
 }
 
-func newWithTimeout(socket string, timeout time.Duration) (*BIRDClient, error) {
+func newWithTimeout(socket string, timeout time.Duration) (_ *BIRDClient, err error) {
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to BIRD: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			conn.Close()
+		}
+	}()
+
 	b := &BIRDClient{
 		socket:  socket,
 		conn:    conn,

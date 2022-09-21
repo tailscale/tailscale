@@ -48,7 +48,7 @@ func runConfigureHost(ctx context.Context, args []string) error {
 	if uid := os.Getuid(); uid != 0 {
 		return fmt.Errorf("must be run as root, not %q (%v)", os.Getenv("USER"), uid)
 	}
-	hi:= hostinfo.New()
+	hi := hostinfo.New()
 	isDSM6 := strings.HasPrefix(hi.DistroVersion, "6.")
 	isDSM7 := strings.HasPrefix(hi.DistroVersion, "7.")
 	if !isDSM6 && !isDSM7 {
