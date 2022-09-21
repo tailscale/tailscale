@@ -664,7 +664,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	}
 
 	destIP := p.Dst.Addr()
-	if p.IsEchoRequest() && ns.ProcessSubnets && !tsaddr.IsTailscaleIP(destIP) {
+
+	// If this is an echo request and we're a subnet router, handle pings
+	// ourselves instead of forwarding the packet on.
+	pingIP, handlePing := ns.shouldHandlePing(p)
+	if handlePing {
 		var pong []byte // the reply to the ping, if our relayed ping works
 		if destIP.Is4() {
 			h := p.ICMP4Header()
@@ -675,7 +679,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 			h.ToResponse()
 			pong = packet.Generate(&h, p.Payload())
 		}
-		go ns.userPing(destIP, pong)
+		go ns.userPing(pingIP, pong)
 		return filter.DropSilently
 	}
 
@@ -702,6 +706,43 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	// instead return filter.DropSilently which just quietly stops
 	// processing it in the tstun TUN wrapper.
 	return filter.DropSilently
+}
+
+// shouldHandlePing returns whether or not netstack should handle an incoming
+// ICMP echo request packet, and the IP address that should be pinged from this
+// process. The IP address can be different from the destination in the packet
+// if the destination is a 4via6 address.
+func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
+	if !p.IsEchoRequest() {
+		return netip.Addr{}, false
+	}
+	if !ns.ProcessSubnets {
+		return netip.Addr{}, false
+	}
+
+	destIP := p.Dst.Addr()
+
+	// For non-4via6 addresses, we don't handle pings if they're destined
+	// for a Tailscale IP.
+	if !viaRange.Contains(destIP) {
+		if tsaddr.IsTailscaleIP(destIP) {
+			return netip.Addr{}, false
+		}
+
+		return destIP, true
+	}
+
+	// The input echo request was to a 4via6 address, which we cannot
+	// simply ping as-is from this process. Translate the destination to an
+	// IPv4 address, so that our relayed ping (in userPing) is pinging the
+	// underlying destination IP.
+	//
+	// ICMPv4 and ICMPv6 are different protocols with different on-the-wire
+	// representations, so normally you can't send an ICMPv6 message over
+	// IPv4 and expect to get a useful result. However, in this specific
+	// case things are safe because the 'userPing' function doesn't make
+	// use of the input packet.
+	return tsaddr.UnmapVia(destIP), true
 }
 
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
