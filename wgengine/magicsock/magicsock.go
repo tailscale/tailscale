@@ -231,7 +231,6 @@ type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
 
-	interEp                netip.AddrPort
 	logf                   logger.Logf
 	epFunc                 func([]tailcfg.Endpoint)
 	derpActiveFunc         func()
@@ -321,6 +320,14 @@ type Conn struct {
 	muCond *sync.Cond
 
 	closed bool // Close was called
+
+	// interEps (intermediate Endpoints) holds the endpoints that are
+	// discovered in Ping messages received from peers. When a peer is
+	// located in private network, it could potentially see more/different
+	// endpoint addresses of ourselves from STUN. And this extra information
+	// could help other peers in the same private network. See issu #5396
+	// for details.
+	interEps map[netip.AddrPort]bool
 
 	// derpCleanupTimer is the timer that fires to occasionally clean
 	// up idle DERP connections. It's only used when there is a non-home
@@ -570,6 +577,8 @@ func NewConn(opts Options) (*Conn, error) {
 	if c.pconn6 != nil {
 		c.netChecker.GetSTUNConn6 = func() netcheck.STUNConn { return c.pconn6 }
 	}
+
+	c.interEps = make(map[netip.AddrPort]bool)
 
 	c.ignoreSTUNPackets()
 
@@ -1057,7 +1066,9 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
-	addAddr(c.interEp, tailcfg.EndpointLocal)
+	for k := range c.interEps {
+		addAddr(k, tailcfg.EndpointLocal)
+	}
 	// If we didn't have a portmap earlier, maybe it's done by now.
 	if !havePortmap {
 		portmapExt, havePortmap = c.portMapper.GetCachedMappingOrStartCreatingOne()
@@ -2030,7 +2041,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		di.setNodeKey(nk)
 		if !isDerp {
 			c.peerMap.setNodeKeyForIPPort(src, nk)
-			c.interEp = dm.Dst
+			c.interEps[dm.Dst] = true
 		}
 	}
 
