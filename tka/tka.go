@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 
 	"github.com/fxamacker/cbor/v2"
@@ -181,6 +182,18 @@ func advanceByPrimary(state State, candidates []AUM) (next *AUM, out State, err 
 	}
 
 	aum := pickNextAUM(state, candidates)
+
+	// TODO(tom): Remove this before GA, this is just a correctness check during implementation.
+	// Post-GA, we want clients to not error if they dont recognize additional fields in State.
+	if aum.MessageKind == AUMCheckpoint {
+		dupe := state
+		dupe.LastAUMHash = nil
+		// aum.State is non-nil (see aum.StaticValidate).
+		if !reflect.DeepEqual(dupe, *aum.State) {
+			return nil, State{}, errors.New("checkpoint includes changes not represented in earlier AUMs")
+		}
+	}
+
 	if state, err = state.applyVerifiedAUM(aum); err != nil {
 		return nil, State{}, fmt.Errorf("advancing state: %v", err)
 	}
@@ -244,10 +257,6 @@ func fastForward(storage Chonk, maxIter int, startState State, done func(curAUM 
 
 // computeStateAt returns the State at wantHash.
 func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error) {
-	// TODO(tom): This is going to get expensive for really long
-	//            chains. We should make nodes emit a checkpoint every
-	//            X updates or something.
-
 	topAUM, err := storage.AUM(wantHash)
 	if err != nil {
 		return State{}, err

@@ -6,6 +6,7 @@ package tka
 
 import (
 	"fmt"
+	"os"
 
 	"tailscale.com/types/tkatype"
 )
@@ -92,8 +93,62 @@ func (b *UpdateBuilder) SetKeyMeta(keyID tkatype.KeyID, meta map[string]string) 
 	return b.mkUpdate(AUM{MessageKind: AUMUpdateKey, Meta: meta, KeyID: keyID})
 }
 
+func (b *UpdateBuilder) generateCheckpoint() error {
+	// Compute the checkpoint state.
+	state := b.a.state
+	for i, update := range b.out {
+		var err error
+		if state, err = state.applyVerifiedAUM(update); err != nil {
+			return fmt.Errorf("applying update %d: %v", i, err)
+		}
+	}
+
+	// Checkpoints cant specify a parent AUM.
+	state.LastAUMHash = nil
+	return b.mkUpdate(AUM{MessageKind: AUMCheckpoint, State: &state})
+}
+
+// checkpointEvery sets how often a checkpoint AUM should be generated.
+const checkpointEvery = 50
+
 // Finalize returns the set of update message to actuate the update.
-func (b *UpdateBuilder) Finalize() ([]AUM, error) {
+func (b *UpdateBuilder) Finalize(storage Chonk) ([]AUM, error) {
+	var (
+		needCheckpoint bool    = true
+		cursor         AUMHash = b.a.Head()
+	)
+	for i := len(b.out); i < checkpointEvery; i++ {
+		aum, err := storage.AUM(cursor)
+		if err != nil {
+			if err == os.ErrNotExist {
+				// The available chain is shorter than the interval to checkpoint at.
+				needCheckpoint = false
+				break
+			}
+			return nil, fmt.Errorf("reading AUM: %v", err)
+		}
+
+		if aum.MessageKind == AUMCheckpoint {
+			needCheckpoint = false
+			break
+		}
+
+		parent, hasParent := aum.Parent()
+		if !hasParent {
+			// We've hit the genesis update, so the chain is shorter than the interval to checkpoint at.
+			needCheckpoint = false
+			break
+		}
+		cursor = parent
+	}
+
+	if needCheckpoint {
+		if err := b.generateCheckpoint(); err != nil {
+			return nil, fmt.Errorf("generating checkpoint: %v", err)
+		}
+	}
+
+	// Check no AUMs were applied in the meantime
 	if len(b.out) > 0 {
 		if parent, _ := b.out[0].Parent(); parent != b.a.Head() {
 			return nil, fmt.Errorf("updates no longer apply to head: based on %x but head is %x", parent, b.a.Head())

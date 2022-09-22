@@ -50,7 +50,6 @@ func (h AUMHash) IsZero() bool {
 	return h == (AUMHash{})
 }
 
-
 // AUMKind describes valid AUM types.
 type AUMKind uint8
 
