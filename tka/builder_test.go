@@ -44,7 +44,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}
-	updates, err := b.Finalize()
+	updates, err := b.Finalize(storage)
 	if err != nil {
 		t.Fatalf("Finalize() failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	if err := b.RemoveKey(key2.ID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key2, err)
 	}
-	updates, err := b.Finalize()
+	updates, err := b.Finalize(storage)
 	if err != nil {
 		t.Fatalf("Finalize() failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	if err := b.SetKeyVote(key.ID(), 5); err != nil {
 		t.Fatalf("SetKeyVote(%v) failed: %v", key.ID(), err)
 	}
-	updates, err := b.Finalize()
+	updates, err := b.Finalize(storage)
 	if err != nil {
 		t.Fatalf("Finalize() failed: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	if err := b.SetKeyMeta(key.ID(), map[string]string{"b": "c"}); err != nil {
 		t.Fatalf("SetKeyMeta(%v) failed: %v", key, err)
 	}
-	updates, err := b.Finalize()
+	updates, err := b.Finalize(storage)
 	if err != nil {
 		t.Fatalf("Finalize() failed: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	if err := b.RemoveKey(key.ID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key, err)
 	}
-	updates, err := b.Finalize()
+	updates, err := b.Finalize(storage)
 	if err != nil {
 		t.Fatalf("Finalize() failed: %v", err)
 	}
@@ -210,5 +210,62 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	}
 	if _, err := a.state.GetKey(key.ID()); err != ErrNoSuchKey {
 		t.Errorf("GetKey(key).err = %v, want %v", err, ErrNoSuchKey)
+	}
+}
+
+func TestAuthorityBuilderCheckpointsAfterXUpdates(t *testing.T) {
+	pub, priv := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	storage := &Mem{}
+	a, _, err := Create(storage, State{
+		Keys:               []Key{key},
+		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}, signer25519(priv))
+	if err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	for i := 0; i <= checkpointEvery; i++ {
+		pub2, _ := testingKey25519(t, int64(i+2))
+		key2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
+
+		b := a.NewUpdater(signer25519(priv))
+		if err := b.AddKey(key2); err != nil {
+			t.Fatalf("AddKey(%v) failed: %v", key2, err)
+		}
+		updates, err := b.Finalize(storage)
+		if err != nil {
+			t.Fatalf("Finalize() failed: %v", err)
+		}
+		// See if the update is valid by applying it to the authority
+		// + checking if the new key is there.
+		if err := a.Inform(storage, updates); err != nil {
+			t.Fatalf("could not apply generated updates: %v", err)
+		}
+		if _, err := a.state.GetKey(key2.ID()); err != nil {
+			t.Fatal(err)
+		}
+
+		wantKind := AUMAddKey
+		if i == checkpointEvery-1 { // Genesis + 49 updates == 50 (the value of checkpointEvery)
+			wantKind = AUMCheckpoint
+		}
+		lastAUM, err := storage.AUM(a.Head())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lastAUM.MessageKind != wantKind {
+			t.Errorf("[%d] HeadAUM.MessageKind = %v, want %v", i, lastAUM.MessageKind, wantKind)
+		}
+	}
+
+	// Try starting an authority just based on storage.
+	a2, err := Open(storage)
+	if err != nil {
+		t.Fatalf("Failed to open from stored AUMs: %v", err)
+	}
+	if a.Head() != a2.Head() {
+		t.Errorf("stored and computed HEAD differ: got %v, want %v", a2.Head(), a.Head())
 	}
 }
