@@ -18,7 +18,7 @@ import (
 const unknown = ipproto.Unknown
 
 // RFC1858: prevent overlapping fragment attacks.
-const minFrag = 60 + 20 // max IPv4 header + basic TCP header
+const minFragBlks = (60 + 20) / 8 // max IPv4 header + basic TCP header in fragment blocks (8 bytes each)
 
 type TCPFlag uint8
 
@@ -152,11 +152,12 @@ func (q *Parsed) decode4(b []byte) {
 	// it as Unknown. We can also treat any subsequent fragment that starts
 	// at such a low offset as Unknown.
 	fragFlags := binary.BigEndian.Uint16(b[6:8])
-	moreFrags := (fragFlags & 0x20) != 0
+	moreFrags := (fragFlags & 0x2000) != 0
 	fragOfs := fragFlags & 0x1FFF
+
 	if fragOfs == 0 {
 		// This is the first fragment
-		if moreFrags && len(sub) < minFrag {
+		if moreFrags && len(sub) < minFragBlks {
 			// Suspiciously short first fragment, dump it.
 			q.IPProto = unknown
 			return
@@ -216,7 +217,7 @@ func (q *Parsed) decode4(b []byte) {
 		}
 	} else {
 		// This is a fragment other than the first one.
-		if fragOfs < minFrag {
+		if fragOfs < minFragBlks {
 			// First frag was suspiciously short, so we can't
 			// trust the followup either.
 			q.IPProto = unknown
