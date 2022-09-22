@@ -9,6 +9,7 @@ package netns
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"syscall"
 
@@ -32,12 +33,20 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 		// Don't bind to an interface for localhost connections.
 		return nil
 	}
-	idx, err := interfaces.DefaultRouteInterfaceIndex()
+	addr, err := netip.ParseAddr(address)
 	if err != nil {
-		logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
-		return nil
+		return fmt.Errorf("netip.ParseAddr(%s): %w", address, err)
 	}
-	v6 := strings.Contains(address, "]:") || strings.HasSuffix(network, "6") // hacky test for v6
+	idx, err := interfaces.InterfaceIndexFor(addr)
+	if err != nil {
+		logf("[unexpected] netns: InterfaceIndexFor failed; falling back to default: %v", err)
+		idx, err = interfaces.DefaultRouteInterfaceIndex()
+		if err != nil {
+			logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+			return nil
+		}
+	}
+	v6 := addr.Is6()
 	proto := unix.IPPROTO_IP
 	opt := unix.IP_BOUND_IF
 	if v6 {

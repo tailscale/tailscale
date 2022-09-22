@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"syscall"
 
 	"golang.org/x/net/route"
@@ -84,6 +85,76 @@ func DefaultRouteInterfaceIndex() (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("ambiguous gateway interfaces found: %v", indexSeen)
+}
+
+// InterfaceIndexFor returns the interface index that we should bind to in
+// order to send traffic to the provided address.
+func InterfaceIndexFor(addr netip.Addr) (int, error) {
+	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err != nil {
+		return 0, fmt.Errorf("creating AF_ROUTE socket: %w", err)
+	}
+	defer unix.Close(fd)
+
+	var routeAddr route.Addr
+	if addr.Is4() {
+		routeAddr = &route.Inet4Addr{IP: addr.As4()}
+	} else {
+		routeAddr = &route.Inet6Addr{IP: addr.As16()}
+	}
+
+	rm := route.RouteMessage{
+		Version: unix.RTM_VERSION,
+		Type:    unix.RTM_GET,
+		Flags:   unix.RTF_UP,
+		ID:      uintptr(os.Getpid()),
+		Seq:     1,
+		Addrs: []route.Addr{
+			unix.RTAX_DST: routeAddr,
+		},
+	}
+	b, err := rm.Marshal()
+	if err != nil {
+		return 0, fmt.Errorf("marshaling RouteMessage: %w", err)
+	}
+	_, err = unix.Write(fd, b)
+	if err != nil {
+		return 0, fmt.Errorf("writing message: %w")
+	}
+	var buf [2048]byte
+	n, err := unix.Read(fd, buf[:])
+	if err != nil {
+		return 0, fmt.Errorf("reading message: %w", err)
+	}
+	msgs, err := route.ParseRIB(route.RIBTypeRoute, buf[:n])
+	if err != nil {
+		return 0, fmt.Errorf("route.ParseRIB: %w", err)
+	}
+	if len(msgs) == 0 {
+		return 0, fmt.Errorf("no messages")
+	}
+
+	for _, msg := range msgs {
+		rm, ok := msg.(*route.RouteMessage)
+		if !ok {
+			continue
+		}
+		if rm.Version < 3 || rm.Version > 5 || rm.Type != unix.RTM_GET {
+			continue
+		}
+		if len(rm.Addrs) < unix.RTAX_GATEWAY {
+			continue
+		}
+
+		laddr, ok := rm.Addrs[unix.RTAX_GATEWAY].(*route.LinkAddr)
+		if !ok {
+			continue
+		}
+
+		return laddr.Index, nil
+	}
+
+	return 0, fmt.Errorf("no valid address found")
 }
 
 func init() {
