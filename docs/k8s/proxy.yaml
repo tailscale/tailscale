@@ -37,7 +37,7 @@ spec:
       valueFrom:
         secretKeyRef:
           name: tailscale-auth
-          key: AUTH_KEY
+          key: TS_AUTH_KEY
           optional: true
     - name: TS_DEST_IP
       value: "{{TS_DEST_IP}}"

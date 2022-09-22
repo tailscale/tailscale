@@ -23,7 +23,7 @@ spec:
       valueFrom:
         secretKeyRef:
           name: tailscale-auth
-          key: AUTH_KEY
+          key: TS_AUTH_KEY
           optional: true
     - name: TS_ROUTES
       value: "{{TS_ROUTES}}"
