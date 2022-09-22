@@ -6,14 +6,13 @@ package dns
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 
 	"tailscale.com/types/logger"
 )
 
 func NewOSConfigurator(logf logger.Logf, _ string) (OSConfigurator, error) {
-	bs, err := ioutil.ReadFile("/etc/resolv.conf")
+	bs, err := os.ReadFile("/etc/resolv.conf")
 	if os.IsNotExist(err) {
 		return newDirectManager(logf), nil
 	}

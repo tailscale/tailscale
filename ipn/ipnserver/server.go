@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
@@ -214,7 +214,7 @@ func (s *Server) blockWhileInUse(conn io.Reader, ci connIdentity) {
 	s.logf("blocking client while server in use; connIdentity=%v", ci)
 	connDone := make(chan struct{})
 	go func() {
-		io.Copy(ioutil.Discard, conn)
+		io.Copy(io.Discard, conn)
 		close(connDone)
 	}()
 	ch := make(chan struct{}, 1)
@@ -772,7 +772,7 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 	})
 
 	if root := b.TailscaleVarRoot(); root != "" {
-		chonkDir := filepath.Join(root, "chonk")
+		chonkDir := filepath.Join(root, "tka")
 		if _, err := os.Stat(chonkDir); err == nil {
 			// The directory exists, which means network-lock has been initialized.
 			storage, err := tka.ChonkDir(chonkDir)
@@ -786,6 +786,8 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 			b.SetTailnetKeyAuthority(authority, storage)
 			logf("tka initialized at head %x", authority.Head())
 		}
+
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
 	} else {
 		logf("network-lock unavailable; no state directory")
 	}
@@ -930,14 +932,6 @@ func BabysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		startTime := time.Now()
 		log.Printf("exec: %#v %v", executable, args)
 		cmd := exec.Command(executable, args...)
-		if runtime.GOOS == "windows" {
-			extraEnv, err := loadExtraEnv()
-			if err != nil {
-				logf("errors loading extra env file; ignoring: %v", err)
-			} else {
-				cmd.Env = append(os.Environ(), extraEnv...)
-			}
-		}
 
 		// Create a pipe object to use as the subproc's stdin.
 		// When the writer goes away, the reader gets EOF.
@@ -1172,7 +1166,7 @@ func findTrueNASTaildropDir(name string) (dir string, err error) {
 	}
 
 	// but if running on the host, it may be something like /mnt/Primary/Taildrop
-	fis, err := ioutil.ReadDir("/mnt")
+	fis, err := os.ReadDir("/mnt")
 	if err != nil {
 		return "", fmt.Errorf("error reading /mnt: %w", err)
 	}
@@ -1205,39 +1199,4 @@ func findQnapTaildropDir(name string) (string, error) {
 		return dir, nil // return the symlink, how QNAP set it up
 	}
 	return "", fmt.Errorf("shared folder %q not found", name)
-}
-
-func loadExtraEnv() (env []string, err error) {
-	if runtime.GOOS != "windows" {
-		return nil, nil
-	}
-	name := filepath.Join(os.Getenv("ProgramData"), "Tailscale", "tailscaled-env.txt")
-	contents, err := os.ReadFile(name)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, line := range strings.Split(string(contents), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || k == "" {
-			continue
-		}
-		if strings.HasPrefix(v, `"`) {
-			var err error
-			v, err = strconv.Unquote(v)
-			if err != nil {
-				return nil, fmt.Errorf("invalid value in line %q: %v", line, err)
-			}
-			env = append(env, k+"="+v)
-		} else {
-			env = append(env, line)
-		}
-	}
-	return env, nil
 }

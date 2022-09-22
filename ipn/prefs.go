@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/netip"
 	"os"
@@ -163,6 +162,9 @@ type Prefs struct {
 	// for Linux/etc, which always operate in daemon mode.
 	ForceDaemon bool `json:"ForceDaemon,omitempty"`
 
+	// Egg is a optional debug flag.
+	Egg bool
+
 	// The following block of options only have an effect on Linux.
 
 	// AdvertiseRoutes specifies CIDR prefixes to advertise into the
@@ -217,6 +219,7 @@ type MaskedPrefs struct {
 	HostnameSet               bool `json:",omitempty"`
 	NotepadURLsSet            bool `json:",omitempty"`
 	ForceDaemonSet            bool `json:",omitempty"`
+	EggSet                    bool `json:",omitempty"`
 	AdvertiseRoutesSet        bool `json:",omitempty"`
 	NoSNATSet                 bool `json:",omitempty"`
 	NetfilterModeSet          bool `json:",omitempty"`
@@ -614,7 +617,7 @@ func PrefsFromBytes(b []byte) (*Prefs, error) {
 // LoadPrefs loads a legacy relaynode config file into Prefs
 // with sensible migration defaults set.
 func LoadPrefs(filename string) (*Prefs, error) {
-	data, err := ioutil.ReadFile(filename)
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("LoadPrefs open: %w", err) // err includes path
 	}

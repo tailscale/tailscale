@@ -55,7 +55,7 @@ import (
 
 const debugPackets = false
 
-var debugNetstack = envknob.Bool("TS_DEBUG_NETSTACK")
+var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
 var (
 	magicDNSIP   = tsaddr.TailscaleServiceIP()
@@ -638,7 +638,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 		}
 		return
 	}
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
 	}
 	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
@@ -664,7 +664,11 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	}
 
 	destIP := p.Dst.Addr()
-	if p.IsEchoRequest() && ns.ProcessSubnets && !tsaddr.IsTailscaleIP(destIP) {
+
+	// If this is an echo request and we're a subnet router, handle pings
+	// ourselves instead of forwarding the packet on.
+	pingIP, handlePing := ns.shouldHandlePing(p)
+	if handlePing {
 		var pong []byte // the reply to the ping, if our relayed ping works
 		if destIP.Is4() {
 			h := p.ICMP4Header()
@@ -675,7 +679,7 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 			h.ToResponse()
 			pong = packet.Generate(&h, p.Payload())
 		}
-		go ns.userPing(destIP, pong)
+		go ns.userPing(pingIP, pong)
 		return filter.DropSilently
 	}
 
@@ -704,6 +708,59 @@ func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Respons
 	return filter.DropSilently
 }
 
+// shouldHandlePing returns whether or not netstack should handle an incoming
+// ICMP echo request packet, and the IP address that should be pinged from this
+// process. The IP address can be different from the destination in the packet
+// if the destination is a 4via6 address.
+func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
+	if !p.IsEchoRequest() {
+		return netip.Addr{}, false
+	}
+
+	destIP := p.Dst.Addr()
+
+	// We need to handle pings for all 4via6 addresses, even if this
+	// netstack instance normally isn't responsible for processing subnets.
+	//
+	// For example, on Linux, subnet router traffic could be handled via
+	// tun+iptables rules for most packets, but we still need to handle
+	// ICMP echo requests over 4via6 since the host networking stack
+	// doesn't know what to do with a 4via6 address.
+	//
+	// shouldProcessInbound returns 'true' to say that we should process
+	// all IPv6 packets with a destination address in the 'via' range, so
+	// check before we check the "ProcessSubnets" boolean below.
+	if viaRange.Contains(destIP) {
+		// The input echo request was to a 4via6 address, which we cannot
+		// simply ping as-is from this process. Translate the destination to an
+		// IPv4 address, so that our relayed ping (in userPing) is pinging the
+		// underlying destination IP.
+		//
+		// ICMPv4 and ICMPv6 are different protocols with different on-the-wire
+		// representations, so normally you can't send an ICMPv6 message over
+		// IPv4 and expect to get a useful result. However, in this specific
+		// case things are safe because the 'userPing' function doesn't make
+		// use of the input packet.
+		return tsaddr.UnmapVia(destIP), true
+	}
+
+	// If we get here, we don't do anything unless this netstack instance
+	// is responsible for processing subnet traffic.
+	if !ns.ProcessSubnets {
+		return netip.Addr{}, false
+	}
+
+	// For non-4via6 addresses, we don't handle pings if they're destined
+	// for a Tailscale IP.
+	if tsaddr.IsTailscaleIP(destIP) {
+		return netip.Addr{}, false
+	}
+
+	// This netstack instance is processing subnet traffic, so handle the
+	// ping ourselves.
+	return destIP, true
+}
+
 func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 	switch len(s) {
 	case 4:
@@ -718,7 +775,7 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 
 func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	reqDetails := r.ID()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] TCP ForwarderRequest: %s", stringifyTEI(reqDetails))
 	}
 	clientRemoteIP := netaddrIPFromNetstackIP(reqDetails.RemoteAddress)
@@ -743,47 +800,64 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.removeSubnetAddress(dialIP)
 		}
 	}()
+
 	var wq waiter.Queue
-	ep, err := r.CreateEndpoint(&wq)
-	if err != nil {
-		ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
-		r.Complete(true) // sends a RST
-		return
+
+	// We can't actually create the endpoint or complete the inbound
+	// request until we're sure that the connection can be handled by this
+	// endpoint. This function sets up the TCP connection and should be
+	// called immediately before a connection is handled.
+	createConn := func() *gonet.TCPConn {
+		ep, err := r.CreateEndpoint(&wq)
+		if err != nil {
+			ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
+			r.Complete(true) // sends a RST
+			return nil
+		}
+		r.Complete(false)
+
+		// SetKeepAlive so that idle connections to peers that have forgotten about
+		// the connection or gone completely offline eventually time out.
+		// Applications might be setting this on a forwarded connection, but from
+		// userspace we can not see those, so the best we can do is to always
+		// perform them with conservative timing.
+		// TODO(tailscale/tailscale#4522): Netstack defaults match the Linux
+		// defaults, and results in a little over two hours before the socket would
+		// be closed due to keepalive. A shorter default might be better, or seeking
+		// a default from the host IP stack. This also might be a useful
+		// user-tunable, as in userspace mode this can have broad implications such
+		// as lingering connections to fork style daemons. On the other side of the
+		// fence, the long duration timers are low impact values for battery powered
+		// peers.
+		ep.SocketOptions().SetKeepAlive(true)
+
+		// The ForwarderRequest.CreateEndpoint above asynchronously
+		// starts the TCP handshake. Note that the gonet.TCPConn
+		// methods c.RemoteAddr() and c.LocalAddr() will return nil
+		// until the handshake actually completes. But we have the
+		// remote address in reqDetails instead, so we don't use
+		// gonet.TCPConn.RemoteAddr. The byte copies in both
+		// directions to/from the gonet.TCPConn in forwardTCP will
+		// block until the TCP handshake is complete.
+		return gonet.NewTCPConn(&wq, ep)
 	}
-	r.Complete(false)
 
-	// SetKeepAlive so that idle connections to peers that have forgotten about
-	// the connection or gone completely offline eventually time out.
-	// Applications might be setting this on a forwarded connection, but from
-	// userspace we can not see those, so the best we can do is to always
-	// perform them with conservative timing.
-	// TODO(tailscale/tailscale#4522): Netstack defaults match the Linux
-	// defaults, and results in a little over two hours before the socket would
-	// be closed due to keepalive. A shorter default might be better, or seeking
-	// a default from the host IP stack. This also might be a useful
-	// user-tunable, as in userspace mode this can have broad implications such
-	// as lingering connections to fork style daemons. On the other side of the
-	// fence, the long duration timers are low impact values for battery powered
-	// peers.
-	ep.SocketOptions().SetKeepAlive(true)
-
-	// The ForwarderRequest.CreateEndpoint above asynchronously
-	// starts the TCP handshake. Note that the gonet.TCPConn
-	// methods c.RemoteAddr() and c.LocalAddr() will return nil
-	// until the handshake actually completes. But we have the
-	// remote address in reqDetails instead, so we don't use
-	// gonet.TCPConn.RemoteAddr. The byte copies in both
-	// directions to/from the gonet.TCPConn in forwardTCP will
-	// block until the TCP handshake is complete.
-	c := gonet.NewTCPConn(&wq, ep)
-
+	// DNS
 	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+		c := createConn()
+		if c == nil {
+			return
+		}
 		go ns.dns.HandleTCPConn(c, netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort))
 		return
 	}
 
 	if ns.lb != nil {
 		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {
+			c := createConn()
+			if c == nil {
+				return
+			}
 			if err := ns.lb.HandleSSHConn(c); err != nil {
 				ns.logf("ssh error: %v", err)
 			}
@@ -791,6 +865,11 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
 			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
+				c := createConn()
+				if c == nil {
+					return
+				}
+
 				src := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
 				dst := netip.AddrPortFrom(dialIP, port)
 				ns.lb.ServePeerAPIConnection(src, dst, c)
@@ -798,12 +877,20 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			}
 		}
 		if reqDetails.LocalPort == 80 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
+			c := createConn()
+			if c == nil {
+				return
+			}
 			ns.lb.HandleQuad100Port80Conn(c)
 			return
 		}
 	}
 
 	if ns.ForwardTCPIn != nil {
+		c := createConn()
+		if c == nil {
+			return
+		}
 		ns.ForwardTCPIn(c, reqDetails.LocalPort)
 		return
 	}
@@ -811,18 +898,21 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		dialIP = netaddr.IPv4(127, 0, 0, 1)
 	}
 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
-	ns.forwardTCP(c, clientRemoteIP, &wq, dialAddr)
+
+	if !ns.forwardTCP(createConn, clientRemoteIP, &wq, dialAddr) {
+		r.Complete(true) // sends a RST
+	}
 }
 
-func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) {
-	defer client.Close()
+func (ns *Impl) forwardTCP(getClient func() *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
 	dialAddrStr := dialAddr.String()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	waitEntry, notifyCh := waiter.NewChannelEntry(waiter.EventHUp) // TODO(bradfitz): right EventMask?
 	wq.EventRegister(&waitEntry)
 	defer wq.EventUnregister(&waitEntry)
@@ -833,20 +923,36 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netip.Addr, wq 
 	go func() {
 		select {
 		case <-notifyCh:
-			if debugNetstack {
+			if debugNetstack() {
 				ns.logf("[v2] netstack: forwardTCP notifyCh fired; canceling context for %s", dialAddrStr)
 			}
 		case <-done:
 		}
 		cancel()
 	}()
+
+	// Attempt to dial the outbound connection before we accept the inbound one.
 	var stdDialer net.Dialer
 	server, err := stdDialer.DialContext(ctx, "tcp", dialAddrStr)
 	if err != nil {
-		ns.logf("netstack: could not connect to local server at %s: %v", dialAddrStr, err)
+		ns.logf("netstack: could not connect to local server at %s: %v", dialAddr.String(), err)
 		return
 	}
 	defer server.Close()
+
+	// If we get here, either the getClient call below will succeed and
+	// return something we can Close, or it will fail and will properly
+	// respond to the client with a RST. Either way, the caller no longer
+	// needs to clean up the client connection.
+	handled = true
+
+	// We dialed the connection; we can complete the client's TCP handshake.
+	client := getClient()
+	if client == nil {
+		return
+	}
+	defer client.Close()
+
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
 	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
@@ -865,11 +971,12 @@ func (ns *Impl) forwardTCP(client *gonet.TCPConn, clientRemoteIP netip.Addr, wq 
 		ns.logf("proxy connection closed with error: %v", err)
 	}
 	ns.logf("[v2] netstack: forwarder connection to %s closed", dialAddrStr)
+	return
 }
 
 func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	sess := r.ID()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] UDP ForwarderRequest: %v", stringifyTEI(sess))
 	}
 	var wq waiter.Queue
@@ -945,7 +1052,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 // proxy to it directly.
 func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netip.AddrPort) {
 	port, srcPort := dstAddr.Port(), clientAddr.Port()
-	if debugNetstack {
+	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)
 	}
 
@@ -1021,7 +1128,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, 
 }
 
 func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.PacketConn, dstAddr net.Addr, src net.PacketConn, logf logger.Logf, extend func()) {
-	if debugNetstack {
+	if debugNetstack() {
 		logf("[v2] netstack: startPacketCopy to %v (%T) from %T", dstAddr, dst, src)
 	}
 	go func() {
@@ -1046,7 +1153,7 @@ func startPacketCopy(ctx context.Context, cancel context.CancelFunc, dst net.Pac
 					}
 					return
 				}
-				if debugNetstack {
+				if debugNetstack() {
 					logf("[v2] wrote UDP packet %s -> %s", srcAddr, dstAddr)
 				}
 				extend()

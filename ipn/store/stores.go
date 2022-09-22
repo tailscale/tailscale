@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,7 +127,7 @@ func NewFileStore(logf logger.Logf, path string) (ipn.StateStore, error) {
 		return nil, fmt.Errorf("creating state directory: %w", err)
 	}
 
-	bs, err := ioutil.ReadFile(path)
+	bs, err := os.ReadFile(path)
 
 	// Treat an empty file as a missing file.
 	// (https://github.com/tailscale/tailscale/issues/895#issuecomment-723255589)

@@ -1,0 +1,30 @@
+name: "@tailscale/connect npm publish"
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up node
+        uses: actions/setup-node@v3
+        with:
+          node-version: "16.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build package
+        # Build with build_dist.sh to ensure that version information is embedded.
+        # GOROOT is specified so that the Go/Wasm that is trigged by build-pk
+        # also picks up our custom Go toolchain.
+        run: |
+          ./build_dist.sh tailscale.com/cmd/tsconnect
+          GOROOT="${HOME}/.cache/tailscale-go" ./tsconnect build-pkg
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.TSCONNECT_NPM_PUBLISH_AUTH_TOKEN }}
+        run: ./tool/yarn --cwd ./cmd/tsconnect/pkg publish --access public

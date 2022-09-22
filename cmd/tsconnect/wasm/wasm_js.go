@@ -61,24 +61,28 @@ func main() {
 func newIPN(jsConfig js.Value) map[string]any {
 	netns.SetEnabled(false)
 
-	jsStateStorage := jsConfig.Get("stateStorage")
 	var store ipn.StateStore
-	if jsStateStorage.IsUndefined() {
-		store = new(mem.Store)
-	} else {
+	if jsStateStorage := jsConfig.Get("stateStorage"); !jsStateStorage.IsUndefined() {
 		store = &jsStateStore{jsStateStorage}
+	} else {
+		store = new(mem.Store)
 	}
 
-	jsControlURL := jsConfig.Get("controlURL")
 	controlURL := ControlURL
-	if jsControlURL.Type() == js.TypeString {
+	if jsControlURL := jsConfig.Get("controlURL"); jsControlURL.Type() == js.TypeString {
 		controlURL = jsControlURL.String()
 	}
 
-	jsAuthKey := jsConfig.Get("authKey")
 	var authKey string
-	if jsAuthKey.Type() == js.TypeString {
+	if jsAuthKey := jsConfig.Get("authKey"); jsAuthKey.Type() == js.TypeString {
 		authKey = jsAuthKey.String()
+	}
+
+	var hostname string
+	if jsHostname := jsConfig.Get("hostname"); jsHostname.Type() == js.TypeString {
+		hostname = jsHostname.String()
+	} else {
+		hostname = generateHostname()
 	}
 
 	lpc := getOrCreateLogPolicyConfig(store)
@@ -136,6 +140,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		lb:         lb,
 		controlURL: controlURL,
 		authKey:    authKey,
+		hostname:   hostname,
 	}
 
 	return map[string]any{
@@ -196,6 +201,7 @@ type jsIPN struct {
 	lb         *ipnlocal.LocalBackend
 	controlURL string
 	authKey    string
+	hostname   string
 }
 
 var jsIPNState = map[ipn.State]string{
@@ -284,7 +290,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				RouteAll:         false,
 				AllowSingleHosts: true,
 				WantRunning:      true,
-				Hostname:         generateHostname(),
+				Hostname:         i.hostname,
 			},
 			AuthKey: i.authKey,
 		})
@@ -343,24 +349,29 @@ type jsSSHSession struct {
 	username   string
 	termConfig js.Value
 	session    *ssh.Session
+
+	pendingResizeRows int
+	pendingResizeCols int
 }
 
 func (s *jsSSHSession) Run() {
 	writeFn := s.termConfig.Get("writeFn")
+	writeErrorFn := s.termConfig.Get("writeErrorFn")
 	setReadFn := s.termConfig.Get("setReadFn")
 	rows := s.termConfig.Get("rows").Int()
 	cols := s.termConfig.Get("cols").Int()
+	timeoutSeconds := 5.0
+	if jsTimeoutSeconds := s.termConfig.Get("timeoutSeconds"); jsTimeoutSeconds.Type() == js.TypeNumber {
+		timeoutSeconds = jsTimeoutSeconds.Float()
+	}
 	onDone := s.termConfig.Get("onDone")
 	defer onDone.Invoke()
 
-	write := func(s string) {
-		writeFn.Invoke(s)
-	}
 	writeError := func(label string, err error) {
-		write(fmt.Sprintf("%s Error: %v\r\n", label, err))
+		writeErrorFn.Invoke(fmt.Sprintf("%s Error: %v\r\n", label, err))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds*float64(time.Second)))
 	defer cancel()
 	c, err := s.jsIPN.dialer.UserDial(ctx, "tcp", net.JoinHostPort(s.host, "22"))
 	if err != nil {
@@ -380,7 +391,6 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 	defer sshConn.Close()
-	write("SSH Connected\r\n")
 
 	sshClient := ssh.NewClient(sshConn, nil, nil)
 	defer sshClient.Close()
@@ -391,7 +401,6 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 	s.session = session
-	write("Session Established\r\n")
 	defer session.Close()
 
 	stdin, err := session.StdinPipe()
@@ -412,6 +421,14 @@ func (s *jsSSHSession) Run() {
 		return nil
 	}))
 
+	// We might have gotten a resize notification since we started opening the
+	// session, pick up the latest size.
+	if s.pendingResizeRows != 0 {
+		rows = s.pendingResizeRows
+	}
+	if s.pendingResizeCols != 0 {
+		cols = s.pendingResizeCols
+	}
 	err = session.RequestPty("xterm", rows, cols, ssh.TerminalModes{})
 
 	if err != nil {
@@ -437,6 +454,11 @@ func (s *jsSSHSession) Close() error {
 }
 
 func (s *jsSSHSession) Resize(rows, cols int) error {
+	if s.session == nil {
+		s.pendingResizeRows = rows
+		s.pendingResizeCols = cols
+		return nil
+	}
 	return s.session.WindowChange(rows, cols)
 }
 

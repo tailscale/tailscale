@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -34,6 +33,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
@@ -67,7 +67,6 @@ import (
 )
 
 var controlDebugFlags = getControlDebugFlags()
-var canSSH = envknob.CanSSHD()
 
 func getControlDebugFlags() []string {
 	if e := envknob.String("TS_DEBUG_CONTROL_FLAGS"); e != "" {
@@ -164,6 +163,7 @@ type LocalBackend struct {
 	authURL          string // cleared on Notify
 	authURLSticky    string // not cleared on Notify
 	interact         bool
+	egg              bool
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
@@ -423,7 +423,6 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		s.Version = version.Long
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
-
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
 			case multierr.Error:
@@ -574,6 +573,10 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.Use
 func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.peerCapsLocked(src)
+}
+
+func (b *LocalBackend) peerCapsLocked(src netip.Addr) []string {
 	if b.netMap == nil {
 		return nil
 	}
@@ -585,9 +588,9 @@ func (b *LocalBackend) PeerCaps(src netip.Addr) []string {
 		if !a.IsSingleIP() {
 			continue
 		}
-		dstIP := a.Addr()
-		if dstIP.BitLen() == src.BitLen() {
-			return filt.AppendCaps(nil, src, a.Addr())
+		dst := a.Addr()
+		if dst.BitLen() == src.BitLen() { // match on family
+			return filt.AppendCaps(nil, src, dst)
 		}
 	}
 	return nil
@@ -681,6 +684,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 	}
 	if st.NetMap != nil {
+		if err := b.tkaSyncIfNeededLocked(st.NetMap); err != nil {
+			b.logf("[v1] TKA sync error: %v", err)
+		}
 		if b.findExitNodeIDLocked(st.NetMap) {
 			prefsChanged = true
 		}
@@ -730,6 +736,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 		b.e.SetNetworkMap(st.NetMap)
 		b.e.SetDERPMap(st.NetMap.DERPMap)
+
+		// Update our cached DERP map
+		dnsfallback.UpdateCache(st.NetMap.DERPMap)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 	}
@@ -955,6 +964,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo := hostinfo.New()
 	hostinfo.BackendLogID = b.backendLogID
 	hostinfo.FrontendLogID = opts.FrontendLogID
+	hostinfo.Userspace.Set(wgengine.IsNetstack(b.e))
+	hostinfo.UserspaceRouter.Set(wgengine.IsNetstackRouter(b.e))
 
 	if b.cc != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -1075,6 +1086,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		PopBrowserURL:        b.tellClientToBrowseToURL,
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
+		C2NHandler:           http.HandlerFunc(b.handleC2N),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -1503,12 +1515,12 @@ func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 }
 
 // For testing lazy machine key generation.
-var panicOnMachineKeyGeneration = envknob.Bool("TS_DEBUG_PANIC_MACHINE_KEY")
+var panicOnMachineKeyGeneration = envknob.RegisterBool("TS_DEBUG_PANIC_MACHINE_KEY")
 
 func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePrivate, error) {
 	var cache syncs.AtomicValue[key.MachinePrivate]
 	return func() (key.MachinePrivate, error) {
-		if panicOnMachineKeyGeneration {
+		if panicOnMachineKeyGeneration() {
 			panic("machine key generated")
 		}
 		if v, ok := cache.LoadOk(); ok {
@@ -1745,7 +1757,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 // setAtomicValuesFromPrefs populates sshAtomicBool and containsViaIPFuncAtomic
 // from the prefs p, which may be nil.
 func (b *LocalBackend) setAtomicValuesFromPrefs(p *ipn.Prefs) {
-	b.sshAtomicBool.Store(p != nil && p.RunSSH && canSSH)
+	b.sshAtomicBool.Store(p != nil && p.RunSSH && envknob.CanSSHD())
 
 	if p == nil {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
@@ -1960,7 +1972,7 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 	default:
 		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
 	}
-	if !canSSH {
+	if !envknob.CanSSHD() {
 		return errors.New("The Tailscale SSH server has been administratively disabled.")
 	}
 	if envknob.SSHIgnoreTailnetPolicy() || envknob.SSHPolicyFile() != "" {
@@ -2012,6 +2024,11 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 	b.mu.Lock()
+	if mp.EggSet {
+		mp.EggSet = false
+		b.egg = true
+		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	}
 	p0 := b.prefs.Clone()
 	p1 := b.prefs.Clone()
 	p1.ApplyEdits(mp)
@@ -2020,7 +2037,7 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
 		b.logf("EditPrefs check error: %v", err)
 		return nil, err
 	}
-	if p1.RunSSH && !canSSH {
+	if p1.RunSSH && !envknob.CanSSHD() {
 		b.mu.Unlock()
 		b.logf("EditPrefs requests SSH, but disabled by envknob; returning error")
 		return nil, errors.New("Tailscale SSH server administratively disabled.")
@@ -2208,6 +2225,9 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 		return
 	}
 	peerAPIServices := b.peerAPIServicesLocked()
+	if b.egg {
+		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg"})
+	}
 	b.mu.Unlock()
 
 	// Make a shallow copy of hostinfo so we can mutate
@@ -2839,7 +2859,7 @@ func (b *LocalBackend) applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs *ipn.Pre
 	hi.ShieldsUp = prefs.ShieldsUp
 
 	var sshHostKeys []string
-	if prefs.RunSSH && canSSH {
+	if prefs.RunSSH && envknob.CanSSHD() {
 		// TODO(bradfitz): this is called with b.mu held. Not ideal.
 		// If the filesystem gets wedged or something we could block for
 		// a long time. But probably fine.
@@ -3058,7 +3078,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.setAtomicValuesFromPrefs(nil)
 }
 
-func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && canSSH }
+func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
 // ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
@@ -3208,6 +3228,17 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 }
 
+// operatorUserName returns the current pref's OperatorUser's name, or the
+// empty string if none.
+func (b *LocalBackend) operatorUserName() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.prefs == nil {
+		return ""
+	}
+	return b.prefs.OperatorUser
+}
+
 // OperatorUserID returns the current pref's OperatorUser's ID (in
 // os/user.User.Uid string form), or the empty string if none.
 func (b *LocalBackend) OperatorUserID() string {
@@ -3290,13 +3321,15 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
-		if p.User != nm.User && !slices.Contains(p.Capabilities, tailcfg.CapabilityFileSharingTarget) {
+		if len(p.Addresses) == 0 {
+			continue
+		}
+		if p.User != nm.User && b.peerHasCapLocked(p.Addresses[0].Addr(), tailcfg.CapabilityFileSharing) {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)
 		if peerAPI == "" {
 			continue
-
 		}
 		ret = append(ret, &apitype.FileTarget{
 			Node:       p,
@@ -3305,6 +3338,15 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	}
 	// TODO: sort a different way than the netmap already is?
 	return ret, nil
+}
+
+func (b *LocalBackend) peerHasCapLocked(addr netip.Addr, wantCap string) bool {
+	for _, hasCap := range b.peerCapsLocked(addr) {
+		if hasCap == wantCap {
+			return true
+		}
+	}
+	return false
 }
 
 // SetDNS adds a DNS record for the given domain name & TXT record
@@ -3563,6 +3605,17 @@ func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error)
 		return nil, errors.New("no client")
 	}
 	return cc.DoNoiseRequest(req)
+}
+
+// tailscaleSSHEnabled reports whether Tailscale SSH is currently enabled based
+// on prefs. It returns false if there are no prefs set.
+func (b *LocalBackend) tailscaleSSHEnabled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.prefs == nil {
+		return false
+	}
+	return b.prefs.RunSSH
 }
 
 func (b *LocalBackend) sshServerOrInit() (_ SSHServer, err error) {

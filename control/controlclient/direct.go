@@ -5,6 +5,7 @@
 package controlclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -13,9 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -73,6 +74,7 @@ type Direct struct {
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
 	popBrowser             func(url string) // or nil
+	c2nHandler             http.Handler     // or nil
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -104,10 +106,12 @@ type Options struct {
 	KeepAlive            bool
 	Logf                 logger.Logf
 	HTTPTestClient       *http.Client     // optional HTTP client to use (for tests only)
+	NoiseTestClient      *http.Client     // optional HTTP client to use for noise RPCs (tests only)
 	DebugFlags           []string         // debug settings to send to control
 	LinkMonitor          *monitor.Mon     // optional link monitor
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
+	C2NHandler           http.Handler     // or nil
 
 	// GetNLPublicKey specifies an optional function to use
 	// Network Lock. If nil, it's not used.
@@ -210,6 +214,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 	}
 	if opts.Hostinfo == nil {
@@ -221,6 +226,12 @@ func NewDirect(opts Options) (*Direct, error) {
 		if ni != nil {
 			c.SetNetInfo(ni)
 		}
+	}
+	if opts.NoiseTestClient != nil {
+		c.noiseClient = &noiseClient{
+			Client: opts.NoiseTestClient,
+		}
+		c.serverNoiseKey = key.NewMachine().Public() // prevent early error before hitting test client
 	}
 	return c, nil
 }
@@ -485,7 +496,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 			c.logf("RegisterReq sign error: %v", err)
 		}
 	}
-	if debugRegister {
+	if debugRegister() {
 		j, _ := json.MarshalIndent(request, "", "\t")
 		c.logf("RegisterRequest: %s", j)
 	}
@@ -518,7 +529,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		return regen, opt.URL, fmt.Errorf("register request: %w", err)
 	}
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return regen, opt.URL, fmt.Errorf("register request: http %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
@@ -528,7 +539,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
 		return regen, opt.URL, fmt.Errorf("register request: %v", err)
 	}
-	if debugRegister {
+	if debugRegister() {
 		j, _ := json.MarshalIndent(resp, "", "\t")
 		c.logf("RegisterResponse: %s", j)
 	}
@@ -710,7 +721,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
 
 	vlogf := logger.Discard
-	if DevKnob.DumpNetMaps {
+	if DevKnob.DumpNetMaps() {
 		// TODO(bradfitz): update this to use "[v2]" prefix perhaps? but we don't
 		// want to upload it always.
 		vlogf = c.logf
@@ -799,7 +810,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	}
 	vlogf("netmap: Do = %v after %v", res.StatusCode, time.Since(t0).Round(time.Millisecond))
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
 		return fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
@@ -809,7 +820,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	health.NoteMapRequestHeard(request)
 
 	if cb == nil {
-		io.Copy(ioutil.Discard, res.Body)
+		io.Copy(io.Discard, res.Body)
 		return nil
 	}
 
@@ -932,6 +943,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			}
 			if resp.Debug.DisableLogTail {
 				logtail.Disable()
+				envknob.SetNoLogsNoSupport()
 			}
 			if resp.Debug.LogHeapPprof {
 				go logheap.LogHeap(resp.Debug.LogHeapURL)
@@ -957,12 +969,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			controlTrimWGConfig.Store(d.TrimWGConfig)
 		}
 
-		if DevKnob.StripEndpoints {
+		if DevKnob.StripEndpoints() {
 			for _, p := range resp.Peers {
 				p.Endpoints = nil
 			}
 		}
-		if DevKnob.StripCaps {
+		if DevKnob.StripCaps() {
 			nm.SelfNode.Capabilities = nil
 		}
 
@@ -992,7 +1004,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 // it uses the serverKey and mkey to decode the message from the NaCl-crypto-box.
 func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.MachinePrivate) error {
 	defer res.Body.Close()
-	msg, err := ioutil.ReadAll(io.LimitReader(res.Body, 1<<20))
+	msg, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return err
 	}
@@ -1006,8 +1018,8 @@ func decode(res *http.Response, v any, serverKey, serverNoiseKey key.MachinePubl
 }
 
 var (
-	debugMap      = envknob.Bool("TS_DEBUG_MAP")
-	debugRegister = envknob.Bool("TS_DEBUG_REGISTER")
+	debugMap      = envknob.RegisterBool("TS_DEBUG_MAP")
+	debugRegister = envknob.RegisterBool("TS_DEBUG_REGISTER")
 )
 
 var jsonEscapedZero = []byte(`\u0000`)
@@ -1045,7 +1057,7 @@ func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 			return err
 		}
 	}
-	if debugMap {
+	if debugMap() {
 		var buf bytes.Buffer
 		json.Indent(&buf, b, "", "    ")
 		log.Printf("MapResponse: %s", buf.Bytes())
@@ -1082,7 +1094,7 @@ func encode(v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.Machine
 	if err != nil {
 		return nil, err
 	}
-	if debugMap {
+	if debugMap() {
 		if _, ok := v.(*tailcfg.MapRequest); ok {
 			log.Printf("MapRequest: %s", b)
 		}
@@ -1104,7 +1116,7 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 		return nil, fmt.Errorf("fetch control key: %v", err)
 	}
 	defer res.Body.Close()
-	b, err := ioutil.ReadAll(io.LimitReader(res.Body, 64<<10))
+	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	if err != nil {
 		return nil, fmt.Errorf("fetch control key response: %v", err)
 	}
@@ -1133,18 +1145,18 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 var DevKnob = initDevKnob()
 
 type devKnobs struct {
-	DumpNetMaps    bool
-	ForceProxyDNS  bool
-	StripEndpoints bool // strip endpoints from control (only use disco messages)
-	StripCaps      bool // strip all local node's control-provided capabilities
+	DumpNetMaps    func() bool
+	ForceProxyDNS  func() bool
+	StripEndpoints func() bool // strip endpoints from control (only use disco messages)
+	StripCaps      func() bool // strip all local node's control-provided capabilities
 }
 
 func initDevKnob() devKnobs {
 	return devKnobs{
-		DumpNetMaps:    envknob.Bool("TS_DEBUG_NETMAP"),
-		ForceProxyDNS:  envknob.Bool("TS_DEBUG_PROXY_DNS"),
-		StripEndpoints: envknob.Bool("TS_DEBUG_STRIP_ENDPOINTS"),
-		StripCaps:      envknob.Bool("TS_DEBUG_STRIP_CAPS"),
+		DumpNetMaps:    envknob.RegisterBool("TS_DEBUG_NETMAP"),
+		ForceProxyDNS:  envknob.RegisterBool("TS_DEBUG_PROXY_DNS"),
+		StripEndpoints: envknob.RegisterBool("TS_DEBUG_STRIP_ENDPOINTS"),
+		StripCaps:      envknob.RegisterBool("TS_DEBUG_STRIP_CAPS"),
 	}
 }
 
@@ -1205,7 +1217,8 @@ func (c *Direct) isUniquePingRequest(pr *tailcfg.PingRequest) bool {
 
 func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 	httpc := c.httpc
-	if pr.URLIsNoise {
+	useNoise := pr.URLIsNoise || pr.Types == "c2n" && c.noiseConfigured()
+	if useNoise {
 		nc, err := c.getNoiseClient()
 		if err != nil {
 			c.logf("failed to get noise client for ping request: %v", err)
@@ -1217,8 +1230,16 @@ func (c *Direct) answerPing(pr *tailcfg.PingRequest) {
 		c.logf("invalid PingRequest with no URL")
 		return
 	}
-	if pr.Types == "" {
+	switch pr.Types {
+	case "":
 		answerHeadPing(c.logf, httpc, pr)
+		return
+	case "c2n":
+		if !useNoise && !envknob.Bool("TS_DEBUG_PERMIT_HTTP_C2N") {
+			c.logf("refusing to answer c2n ping without noise")
+			return
+		}
+		answerC2NPing(c.logf, c.c2nHandler, httpc, pr)
 		return
 	}
 	for _, t := range strings.Split(pr.Types, ",") {
@@ -1250,6 +1271,54 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
 		logf("answerHeadPing complete to %v (after %v)", pr.URL, d)
+	}
+}
+
+func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr *tailcfg.PingRequest) {
+	if c2nHandler == nil {
+		logf("answerC2NPing: c2nHandler not defined")
+		return
+	}
+	hreq, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(pr.Payload)))
+	if err != nil {
+		logf("answerC2NPing: ReadRequest: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: got c2n request for %v ...", hreq.RequestURI)
+	}
+	handlerTimeout := time.Minute
+	if v := hreq.Header.Get("C2n-Handler-Timeout"); v != "" {
+		handlerTimeout, _ = time.ParseDuration(v)
+	}
+	handlerCtx, cancel := context.WithTimeout(context.Background(), handlerTimeout)
+	defer cancel()
+	hreq = hreq.WithContext(handlerCtx)
+	rec := httptest.NewRecorder()
+	c2nHandler.ServeHTTP(rec, hreq)
+	cancel()
+
+	c2nResBuf := new(bytes.Buffer)
+	rec.Result().Write(c2nResBuf)
+
+	replyCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(replyCtx, "POST", pr.URL, c2nResBuf)
+	if err != nil {
+		logf("answerC2NPing: NewRequestWithContext: %v", err)
+		return
+	}
+	if pr.Log {
+		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
+	}
+	t0 := time.Now()
+	_, err = c.Do(req)
+	d := time.Since(t0).Round(time.Millisecond)
+	if err != nil {
+		logf("answerC2NPing error: %v to %v (after %v)", err, pr.URL, d)
+	} else if pr.Log {
+		logf("answerC2NPing complete to %v (after %v)", pr.URL, d)
 	}
 }
 
@@ -1335,7 +1404,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse
@@ -1401,7 +1470,7 @@ func (c *Direct) SetDNS(ctx context.Context, req *tailcfg.SetDNSRequest) (err er
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
+		msg, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("set-dns response: %v, %.200s", res.Status, strings.TrimSpace(string(msg)))
 	}
 	var setDNSRes tailcfg.SetDNSResponse

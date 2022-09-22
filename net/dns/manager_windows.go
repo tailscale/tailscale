@@ -32,7 +32,7 @@ const (
 	versionKey = `SOFTWARE\Microsoft\Windows NT\CurrentVersion`
 )
 
-var configureWSL = envknob.Bool("TS_DEBUG_CONFIGURE_WSL")
+var configureWSL = envknob.RegisterBool("TS_DEBUG_CONFIGURE_WSL")
 
 type windowsManager struct {
 	logf       logger.Logf
@@ -359,7 +359,7 @@ func (m windowsManager) SetDNS(cfg OSConfig) error {
 
 	// On initial setup of WSL, the restart caused by --shutdown is slow,
 	// so we do it out-of-line.
-	if configureWSL {
+	if configureWSL() {
 		go func() {
 			if err := m.wslManager.SetDNS(cfg); err != nil {
 				m.logf("WSL SetDNS: %v", err) // continue
@@ -388,10 +388,10 @@ func (m windowsManager) Close() error {
 // Windows DHCP client from sending dynamic DNS updates for our interface to
 // AD domain controllers.
 func (m windowsManager) disableDynamicUpdates() error {
-	if err := m.setSingleDWORD(winutil.IPv4TCPIPInterfacePrefix, "EnableDNSUpdate", 0); err != nil {
+	if err := m.setSingleDWORD(winutil.IPv4TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
 		return err
 	}
-	if err := m.setSingleDWORD(winutil.IPv6TCPIPInterfacePrefix, "EnableDNSUpdate", 0); err != nil {
+	if err := m.setSingleDWORD(winutil.IPv6TCPIPInterfacePrefix, "DisableDynamicUpdate", 1); err != nil {
 		return err
 	}
 	return nil
@@ -485,11 +485,7 @@ func (m windowsManager) getBasePrimaryResolver() (resolvers []netip.Addr, err er
 		}
 
 	ipLoop:
-		for _, stdip := range ips {
-			ip, ok := netip.AddrFromSlice(stdip)
-			if !ok {
-				continue
-			}
+		for _, ip := range ips {
 			ip = ip.Unmap()
 			// Skip IPv6 site-local resolvers. These are an ancient
 			// and obsolete IPv6 RFC, which Windows still faithfully

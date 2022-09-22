@@ -22,9 +22,13 @@ var downCmd = &ffcli.Command{
 	FlagSet: newDownFlagSet(),
 }
 
+var downArgs struct {
+	acceptedRisks string
+}
+
 func newDownFlagSet() *flag.FlagSet {
 	downf := newFlagSet("down")
-	registerAcceptRiskFlag(downf)
+	registerAcceptRiskFlag(downf, &downArgs.acceptedRisks)
 	return downf
 }
 
@@ -34,7 +38,7 @@ func runDown(ctx context.Context, args []string) error {
 	}
 
 	if isSSHOverTailscale() {
-		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will disable Tailscale and result in your session disconnecting.`); err != nil {
+		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will disable Tailscale and result in your session disconnecting.`, downArgs.acceptedRisks); err != nil {
 			return err
 		}
 	}

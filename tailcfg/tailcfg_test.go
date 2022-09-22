@@ -31,12 +31,33 @@ func fieldsOf(t reflect.Type) (fields []string) {
 
 func TestHostinfoEqual(t *testing.T) {
 	hiHandles := []string{
-		"IPNVersion", "FrontendLogID", "BackendLogID",
-		"OS", "OSVersion", "Desktop", "Package", "DeviceModel", "Hostname",
-		"ShieldsUp", "ShareeNode",
-		"GoArch", "GoVersion",
-		"RoutableIPs", "RequestTags",
-		"Services", "NetInfo", "SSH_HostKeys", "Cloud",
+		"IPNVersion",
+		"FrontendLogID",
+		"BackendLogID",
+		"OS",
+		"OSVersion",
+		"Container",
+		"Env",
+		"Distro",
+		"DistroVersion",
+		"DistroCodeName",
+		"Desktop",
+		"Package",
+		"DeviceModel",
+		"Hostname",
+		"ShieldsUp",
+		"ShareeNode",
+		"NoLogsNoSupport",
+		"GoArch",
+		"GoVersion",
+		"RoutableIPs",
+		"RequestTags",
+		"Services",
+		"NetInfo",
+		"SSH_HostKeys",
+		"Cloud",
+		"Userspace",
+		"UserspaceRouter",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -660,7 +681,7 @@ func TestRegisterRequestNilClone(t *testing.T) {
 // We've screwed this up several times.
 func TestCurrentCapabilityVersion(t *testing.T) {
 	f := must.Get(os.ReadFile("tailcfg.go"))
-	matches := regexp.MustCompile(`(?m)^//\s+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
+	matches := regexp.MustCompile(`(?m)^//[\s-]+(\d+): \d\d\d\d-\d\d-\d\d: `).FindAllStringSubmatch(string(f), -1)
 	max := 0
 	for _, m := range matches {
 		n := must.Get(strconv.Atoi(m[1]))

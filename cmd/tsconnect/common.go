@@ -6,8 +6,8 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -68,6 +68,18 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	}, nil
 }
 
+func commonPkgSetup(dev bool) (*esbuild.BuildOptions, error) {
+	buildOptions, err := commonSetup(dev)
+	if err != nil {
+		return nil, err
+	}
+	buildOptions.EntryPoints = []string{"src/pkg/pkg.ts", "src/pkg/pkg.css"}
+	buildOptions.Outdir = *pkgDir
+	buildOptions.Format = esbuild.FormatESModule
+	buildOptions.AssetNames = "[name]"
+	return buildOptions, nil
+}
+
 // cleanDir removes files from dirPath, except the ones specified by
 // preserveFiles.
 func cleanDir(dirPath string, preserveFiles ...string) error {
@@ -88,6 +100,27 @@ func cleanDir(dirPath string, preserveFiles ...string) error {
 		}
 	}
 	return nil
+}
+
+func runEsbuildServe(buildOptions esbuild.BuildOptions) {
+	host, portStr, err := net.SplitHostPort(*addr)
+	if err != nil {
+		log.Fatalf("Cannot parse addr: %v", err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		log.Fatalf("Cannot parse port: %v", err)
+	}
+	result, err := esbuild.Serve(esbuild.ServeOptions{
+		Port:     uint16(port),
+		Host:     host,
+		Servedir: "./",
+	}, buildOptions)
+	if err != nil {
+		log.Fatalf("Cannot start esbuild server: %v", err)
+	}
+	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
+	result.Wait()
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
@@ -149,7 +182,7 @@ func setupEsbuildWasm(build esbuild.PluginBuild, dev bool) {
 
 func buildWasm(dev bool) ([]byte, error) {
 	start := time.Now()
-	outputFile, err := ioutil.TempFile("", "main.*.wasm")
+	outputFile, err := os.CreateTemp("", "main.*.wasm")
 	if err != nil {
 		return nil, fmt.Errorf("Cannot create main.wasm output file: %w", err)
 	}

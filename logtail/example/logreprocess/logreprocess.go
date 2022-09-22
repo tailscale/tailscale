@@ -9,7 +9,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -50,7 +50,7 @@ func main() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		b, err := ioutil.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Fatalf("logreprocess: read error %d: %v", resp.StatusCode, err)
 		}

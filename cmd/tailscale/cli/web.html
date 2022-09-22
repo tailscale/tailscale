@@ -11,7 +11,7 @@
 </head>
 
 <body class="py-14">
-<main class="container max-w-lg mx-auto py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
+<main class="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
 	<header class="flex justify-between items-center min-width-0 py-2 mb-8">
 		<svg width="26" height="26" viewBox="0 0 23 23" title="Tailscale" fill="none" xmlns="http://www.w3.org/2000/svg"
 			class="flex-shrink-0 mr-4">
@@ -100,6 +100,9 @@
 	</div>
 	{{ end }}
 </main>
+<footer class="container max-w-lg mx-auto text-center">
+	<a class="text-xs text-gray-500 hover:text-gray-600" href="{{ .LicensesURL }}">Open Source Licenses</a>
+</footer>
 <script>(function () {
 const advertiseExitNode = {{.AdvertiseExitNode}};
 let fetchingUrl = false;

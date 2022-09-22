@@ -181,6 +181,7 @@ func TestApplyUpdatesChain(t *testing.T) {
 }
 
 func TestApplyUpdateErrors(t *testing.T) {
+	tooLargeVotes := uint(99999)
 	tcs := []struct {
 		Name    string
 		Updates []AUM
@@ -204,6 +205,12 @@ func TestApplyUpdateErrors(t *testing.T) {
 			[]AUM{{MessageKind: AUMUpdateKey, KeyID: []byte{1}}},
 			State{},
 			ErrNoSuchKey,
+		},
+		{
+			"UpdateKey now fails validation",
+			[]AUM{{MessageKind: AUMUpdateKey, KeyID: []byte{1}, Votes: &tooLargeVotes}},
+			State{Keys: []Key{{Kind: Key25519, Public: []byte{1}}}},
+			errors.New("updated key fails validation: excessive key weight: 99999 > 4096"),
 		},
 		{
 			"Bad lastAUMHash",

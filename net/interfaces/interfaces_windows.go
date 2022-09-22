@@ -6,7 +6,6 @@ package interfaces
 
 import (
 	"log"
-	"net"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -54,22 +53,21 @@ func likelyHomeRouterIPWindows() (ret netip.Addr, ok bool) {
 		return
 	}
 
-	unspec := net.IPv4(0, 0, 0, 0)
+	v4unspec := netip.IPv4Unspecified()
 	var best *winipcfg.MibIPforwardRow2 // best (lowest metric) found so far, or nil
 
 	for i := range rs {
 		r := &rs[i]
-		if r.Loopback || r.DestinationPrefix.PrefixLength != 0 || !r.DestinationPrefix.Prefix.IP().Equal(unspec) {
+		if r.Loopback || r.DestinationPrefix.PrefixLength != 0 || r.DestinationPrefix.Prefix().Addr().Unmap() != v4unspec {
 			// Not a default route, so skip
 			continue
 		}
 
-		ip, ok := netip.AddrFromSlice(r.NextHop.IP())
-		if !ok {
+		ip := r.NextHop.Addr().Unmap()
+		if !ip.IsValid() {
 			// Not a valid gateway, so skip (won't happen though)
 			continue
 		}
-		ip = ip.Unmap()
 
 		if best == nil {
 			best = r

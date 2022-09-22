@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
@@ -37,6 +36,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -57,9 +57,6 @@ func truncatedFlagSet(pkt []byte) bool {
 }
 
 const (
-	// responseTimeout is the maximal amount of time to wait for a DNS response.
-	responseTimeout = 5 * time.Second
-
 	// dohTransportTimeout is how long to keep idle HTTP
 	// connections open to DNS-over-HTTPs servers. This is pretty
 	// arbitrary.
@@ -259,18 +256,26 @@ func (f *forwarder) Close() error {
 func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 	rr := make([]resolverAndDelay, 0, len(resolvers)+2)
 
+	type dohState uint8
+	const addedDoH = dohState(1)
+	const addedDoHAndDontAddUDP = dohState(2)
+
 	// Add the known DoH ones first, starting immediately.
-	didDoH := map[string]bool{}
+	didDoH := map[string]dohState{}
 	for _, r := range resolvers {
 		ipp, ok := r.IPPort()
 		if !ok {
 			continue
 		}
-		dohBase, ok := publicdns.KnownDoH()[ipp.Addr()]
-		if !ok || didDoH[dohBase] {
+		dohBase, dohOnly, ok := publicdns.DoHEndpointFromIP(ipp.Addr())
+		if !ok || didDoH[dohBase] != 0 {
 			continue
 		}
-		didDoH[dohBase] = true
+		if dohOnly {
+			didDoH[dohBase] = addedDoHAndDontAddUDP
+		} else {
+			didDoH[dohBase] = addedDoH
+		}
 		rr = append(rr, resolverAndDelay{name: &dnstype.Resolver{Addr: dohBase}})
 	}
 
@@ -289,8 +294,12 @@ func resolversWithDelays(resolvers []*dnstype.Resolver) []resolverAndDelay {
 		}
 		ip := ipp.Addr()
 		var startDelay time.Duration
-		if host, ok := publicdns.KnownDoH()[ip]; ok {
+		if host, _, ok := publicdns.DoHEndpointFromIP(ip); ok {
+			if didDoH[host] == addedDoHAndDontAddUDP {
+				continue
+			}
 			// We already did the DoH query early. These
+			// are for normal dns53 UDP queries.
 			startDelay = dohHeadStart
 			key := hostAndFam{host, uint8(ip.BitLen())}
 			if done[key] > 0 {
@@ -391,7 +400,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if c, ok := f.dohClient[urlBase]; ok {
 		return c, true
 	}
-	allIPs := publicdns.DoHIPsOfBase()[urlBase]
+	allIPs := publicdns.DoHIPsOfBase(urlBase)
 	if len(allIPs) == 0 {
 		return nil, false
 	}
@@ -407,7 +416,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	c = &http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
-			IdleConnTimeout: dohTransportTimeout,
+			IdleConnTimeout:   dohTransportTimeout,
 			DialContext: func(ctx context.Context, netw, addr string) (net.Conn, error) {
 				if !strings.HasPrefix(netw, "tcp") {
 					return nil, fmt.Errorf("unexpected network %q", netw)
@@ -447,11 +456,8 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		return nil, err
 	}
 	req.Header.Set("Content-Type", dohType)
-	// Note: we don't currently set the Accept header (which is
-	// only a SHOULD in the spec) as iOS doesn't use HTTP/2 and
-	// we'd rather save a few bytes on outgoing requests when
-	// empirically no provider cares about the Accept header's
-	// absence.
+	req.Header.Set("Accept", dohType)
+	req.Header.Set("User-Agent", "tailscaled/"+version.Long)
 
 	hres, err := c.Do(req)
 	if err != nil {
@@ -467,7 +473,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 		metricDNSFwdDoHErrorCT.Add(1)
 		return nil, fmt.Errorf("unexpected response Content-Type %q", ct)
 	}
-	res, err := ioutil.ReadAll(hres.Body)
+	res, err := io.ReadAll(hres.Body)
 	if err != nil {
 		metricDNSFwdDoHErrorBody.Add(1)
 	}
@@ -477,13 +483,13 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	return res, err
 }
 
-var verboseDNSForward = envknob.Bool("TS_DEBUG_DNS_FORWARD_SEND")
+var verboseDNSForward = envknob.RegisterBool("TS_DEBUG_DNS_FORWARD_SEND")
 
 // send sends packet to dst. It is best effort.
 //
 // send expects the reply to have the same txid as txidOut.
 func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDelay) (ret []byte, err error) {
-	if verboseDNSForward {
+	if verboseDNSForward() {
 		f.logf("forwarder.send(%q) ...", rr.name.Addr)
 		defer func() {
 			f.logf("forwarder.send(%q) = %v, %v", rr.name.Addr, len(ret), err)

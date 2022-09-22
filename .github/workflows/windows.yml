@@ -19,14 +19,13 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
 
     - name: Install Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.19.x
-
-    - name: Checkout code
-      uses: actions/checkout@v3
+        go-version-file: go.mod
 
     - name: Restore Cache
       uses: actions/cache@v3

@@ -13,10 +13,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,6 +108,10 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 			procID = 7
 		}
 	}
+
+	stdLogf := func(f string, a ...any) {
+		fmt.Fprintf(cfg.Stderr, strings.TrimSuffix(f, "\n")+"\n", a...)
+	}
 	l := &Logger{
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
@@ -121,7 +125,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		sentinel:       make(chan int32, 16),
 		drainLogs:      cfg.DrainLogs,
 		timeNow:        cfg.TimeNow,
-		bo:             backoff.NewBackoff("logtail", logf, 30*time.Second),
+		bo:             backoff.NewBackoff("logtail", stdLogf, 30*time.Second),
 		metricsDelta:   cfg.MetricsDelta,
 
 		procID:              procID,
@@ -425,7 +429,7 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded
 
 	if resp.StatusCode != 200 {
 		uploaded = resp.StatusCode == 400 // the server saved the logs anyway
-		b, _ := ioutil.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return uploaded, fmt.Errorf("log upload of %d bytes %s failed %d: %q", len(body), compressedNote, resp.StatusCode, b)
 	}
 
@@ -649,7 +653,7 @@ func (l *Logger) Write(buf []byte) (int, error) {
 		return 0, nil
 	}
 	level, buf := parseAndRemoveLogLevel(buf)
-	if l.stderr != nil && l.stderr != ioutil.Discard && int64(level) <= atomic.LoadInt64(&l.stderrLevel) {
+	if l.stderr != nil && l.stderr != io.Discard && int64(level) <= atomic.LoadInt64(&l.stderrLevel) {
 		if buf[len(buf)-1] == '\n' {
 			l.stderr.Write(buf)
 		} else {

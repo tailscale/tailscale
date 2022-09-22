@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -50,13 +49,21 @@ const (
 // Empirically, most of the documentation on packet marks on the
 // internet gives the impression that the marks are 16 bits
 // wide. Based on this, we theorize that the upper two bytes are
-// relatively unused in the wild, and so we consume bits starting at
-// the 17th.
+// relatively unused in the wild, and so we consume bits 16:23 (the
+// third byte).
 //
 // The constants are in the iptables/iproute2 string format for
 // matching and setting the bits, so they can be directly embedded in
 // commands.
 const (
+	// The mask for reading/writing the 'firewall mask' bits on a packet.
+	// See the comment on the const block on why we only use the third byte.
+	//
+	// We claim bits 16:23 entirely. For now we only use the lower four
+	// bits, leaving the higher 4 bits for future use.
+	tailscaleFwmarkMask    = "0xff0000"
+	tailscaleFwmarkMaskNum = 0xff0000
+
 	// Packet is from Tailscale and to a subnet route destination, so
 	// is allowed to be routed through this machine.
 	tailscaleSubnetRouteMark = "0x40000"
@@ -104,6 +111,10 @@ type linuxRouter struct {
 	ipRuleAvailable bool // whether kernel was built with IP_MULTIPLE_TABLES
 	v6Available     bool
 	v6NATAvailable  bool
+	fwmaskWorks     bool // whether we can use 'ip rule...fwmark <mark>/<mask>'
+
+	// ipPolicyPrefBase is the base priority at which ip rules are installed.
+	ipPolicyPrefBase int
 
 	ipt4 netfilterRunner
 	ipt6 netfilterRunner
@@ -163,6 +174,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 		cmd:  cmd,
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
+		ipPolicyPrefBase: 5200,
 	}
 	if r.useIPCommand() {
 		r.ipRuleAvailable = (cmd.run("ip", "rule") == nil)
@@ -176,7 +188,124 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 		}
 	}
 
+	// To be a good denizen of the 4-byte 'fwmark' bitspace on every packet, we try to
+	// only use the third byte. However, support for masking to part of the fwmark bitspace
+	// was only added to busybox in 1.33.0. As such, we want to detect older versions and
+	// not issue such a stanza.
+	var err error
+	if r.fwmaskWorks, err = ipCmdSupportsFwmask(); err != nil {
+		r.logf("failed to determine ip command fwmask support: %v", err)
+	}
+	if r.fwmaskWorks {
+		r.logf("[v1] ip command supports fwmark masks")
+	} else {
+		r.logf("[v1] ip command does NOT support fwmark masks")
+	}
+
+	// A common installation of OpenWRT involves use of the 'mwan3' package.
+	// This package installs ip-tables rules like:
+	//  -A mwan3_fallback_policy -m mark --mark 0x0/0x3f00 -j MARK --set-xmark 0x100/0x3f00
+	//
+	// which coupled with an ip rule:
+	//  2001: from all fwmark 0x100/0x3f00 lookup 1
+	//
+	// has the effect of gobbling tailscale packets, because tailscale by default installs
+	// its policy routing rules at priority 52xx.
+	//
+	// As such, if we are running on openWRT, detect a mwan3 config, AND detect a rule
+	// with a preference 2001 (corresponding to the first interface wman3 manages), we
+	// shift the priority of our policies to 13xx. This effectively puts us betwen mwan3's
+	// permit-by-src-ip rules and mwan3 lookup of its own routing table which would drop
+	// the packet.
+	isMWAN3, err := checkOpenWRTUsingMWAN3()
+	if err != nil {
+		r.logf("error checking mwan3 installation: %v", err)
+	} else if isMWAN3 {
+		r.ipPolicyPrefBase = 1300
+		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
+	}
+
 	return r, nil
+}
+
+// ipCmdSupportsFwmask returns true if the system 'ip' binary supports using a
+// fwmark stanza with a mask specified. To our knowledge, everything except busybox
+// pre-1.33 supports this.
+func ipCmdSupportsFwmask() (bool, error) {
+	ipPath, err := exec.LookPath("ip")
+	if err != nil {
+		return false, fmt.Errorf("lookpath: %v", err)
+	}
+	stat, err := os.Lstat(ipPath)
+	if err != nil {
+		return false, fmt.Errorf("lstat: %v", err)
+	}
+	if stat.Mode()&os.ModeSymlink == 0 {
+		// Not a symlink, so can't be busybox. Must be regular ip utility.
+		return true, nil
+	}
+
+	linkDest, err := os.Readlink(ipPath)
+	if err != nil {
+		return false, err
+	}
+	if !strings.Contains(strings.ToLower(linkDest), "busybox") {
+		// Not busybox, presumably supports fwmark masks.
+		return true, nil
+	}
+
+	// If we got this far, the ip utility is a busybox version with an
+	// unknown version.
+	// We run `ip --version` and look for the busybox banner (which
+	// is a stable 'BusyBox vX.Y.Z (<builddate>)' string) to determine
+	// the version.
+	out, err := exec.Command("ip", "--version").CombinedOutput()
+	if err != nil {
+		return false, err
+	}
+	major, minor, _, err := busyboxParseVersion(string(out))
+	if err != nil {
+		return false, nil
+	}
+
+	// Support for masks added in 1.33.0.
+	switch {
+	case major > 1:
+		return true, nil
+	case major == 1 && minor >= 33:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func busyboxParseVersion(output string) (major, minor, patch int, err error) {
+	bannerStart := strings.Index(output, "BusyBox v")
+	if bannerStart < 0 {
+		return 0, 0, 0, errors.New("missing BusyBox banner")
+	}
+	bannerEnd := bannerStart + len("BusyBox v")
+
+	end := strings.Index(output[bannerEnd:], " ")
+	if end < 0 {
+		return 0, 0, 0, errors.New("missing end delimiter")
+	}
+
+	elements := strings.Split(output[bannerEnd:bannerEnd+end], ".")
+	if len(elements) < 3 {
+		return 0, 0, 0, fmt.Errorf("expected 3 version elements, got %d", len(elements))
+	}
+
+	if major, err = strconv.Atoi(elements[0]); err != nil {
+		return 0, 0, 0, fmt.Errorf("parsing major: %v", err)
+	}
+	if minor, err = strconv.Atoi(elements[1]); err != nil {
+		return 0, 0, 0, fmt.Errorf("parsing minor: %v", err)
+	}
+	if patch, err = strconv.Atoi(elements[2]); err != nil {
+		return 0, 0, 0, fmt.Errorf("parsing patch: %v", err)
+	}
+	return major, minor, patch, nil
 }
 
 func useAmbientCaps() bool {
@@ -186,7 +315,7 @@ func useAmbientCaps() bool {
 	return distro.DSMVersion() >= 7
 }
 
-var forceIPCommand = envknob.Bool("TS_DEBUG_USE_IP_COMMAND")
+var forceIPCommand = envknob.RegisterBool("TS_DEBUG_USE_IP_COMMAND")
 
 // useIPCommand reports whether r should use the "ip" command (or its
 // fake commandRunner for tests) instead of netlink.
@@ -194,7 +323,7 @@ func (r *linuxRouter) useIPCommand() bool {
 	if r.cmd == nil {
 		panic("invalid init")
 	}
-	if forceIPCommand {
+	if forceIPCommand() {
 		return true
 	}
 	// In the future we might need to fall back to using the "ip"
@@ -219,7 +348,7 @@ func (r *linuxRouter) useIPCommand() bool {
 // about the priority number. We could just do this in response to any netlink
 // change. Filtering by known priority ranges cuts back on some logspam.
 func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
-	if priority < 5200 || priority >= 5300 {
+	if int(priority) < r.ipPolicyPrefBase || int(priority) >= (r.ipPolicyPrefBase+100) {
 		// Not our rule.
 		return
 	}
@@ -870,6 +999,8 @@ var (
 )
 
 // ipRules are the policy routing rules that Tailscale uses.
+// The priority is the value represented here added to r.ipPolicyPrefBase,
+// which is usually 5200.
 //
 // NOTE(apenwarr): We leave spaces between each pref number.
 // This is so the sysadmin can override by inserting rules in
@@ -886,14 +1017,14 @@ var ipRules = []netlink.Rule{
 	// Packets from us, tagged with our fwmark, first try the kernel's
 	// main routing table.
 	{
-		Priority: 5210,
+		Priority: 10,
 		Mark:     tailscaleBypassMarkNum,
 		Table:    mainRouteTable.num,
 	},
 	// ...and then we try the 'default' table, for correctness,
 	// even though it's been empty on every Linux system I've ever seen.
 	{
-		Priority: 5230,
+		Priority: 30,
 		Mark:     tailscaleBypassMarkNum,
 		Table:    defaultRouteTable.num,
 	},
@@ -901,7 +1032,7 @@ var ipRules = []netlink.Rule{
 	// then packets from us should be aborted rather than falling through
 	// to the tailscale routes, because that would create routing loops.
 	{
-		Priority: 5250,
+		Priority: 50,
 		Mark:     tailscaleBypassMarkNum,
 		Type:     unix.RTN_UNREACHABLE,
 	},
@@ -911,7 +1042,7 @@ var ipRules = []netlink.Rule{
 	// it takes precedence over all the others, ie. VPN routes always
 	// beat non-VPN routes.
 	{
-		Priority: 5270,
+		Priority: 70,
 		Table:    tailscaleRouteTable.num,
 	},
 	// If that didn't match, then non-fwmark packets fall through to the
@@ -928,14 +1059,18 @@ func (r *linuxRouter) justAddIPRules() error {
 	}
 	var errAcc error
 	for _, family := range r.addrFamilies() {
+
 		for _, ru := range ipRules {
 			// Note: r is a value type here; safe to mutate it.
 			ru.Family = family.netlinkInt()
-			ru.Mask = -1
+			if ru.Mark != 0 {
+				ru.Mask = tailscaleFwmarkMaskNum
+			}
 			ru.Goto = -1
 			ru.SuppressIfgroup = -1
 			ru.SuppressPrefixlen = -1
 			ru.Flow = -1
+			ru.Priority += r.ipPolicyPrefBase
 
 			err := netlink.RuleAdd(&ru)
 			if errors.Is(err, errEEXIST) {
@@ -954,19 +1089,23 @@ func (r *linuxRouter) addIPRulesWithIPCommand() error {
 	rg := newRunGroup(nil, r.cmd)
 
 	for _, family := range r.addrFamilies() {
-		for _, r := range ipRules {
+		for _, rule := range ipRules {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "add",
-				"pref", strconv.Itoa(r.Priority),
+				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
 			}
-			if r.Mark != 0 {
-				args = append(args, "fwmark", fmt.Sprintf("0x%x", r.Mark))
+			if rule.Mark != 0 {
+				if r.fwmaskWorks {
+					args = append(args, "fwmark", fmt.Sprintf("0x%x/%s", rule.Mark, tailscaleFwmarkMask))
+				} else {
+					args = append(args, "fwmark", fmt.Sprintf("0x%x", rule.Mark))
+				}
 			}
-			if r.Table != 0 {
-				args = append(args, "table", mustRouteTable(r.Table).ipCmdArg())
+			if rule.Table != 0 {
+				args = append(args, "table", mustRouteTable(rule.Table).ipCmdArg())
 			}
-			if r.Type == unix.RTN_UNREACHABLE {
+			if rule.Type == unix.RTN_UNREACHABLE {
 				args = append(args, "type", "unreachable")
 			}
 			rg.Run(args...)
@@ -1011,6 +1150,7 @@ func (r *linuxRouter) delIPRules() error {
 			ru.Goto = -1
 			ru.SuppressIfgroup = -1
 			ru.SuppressPrefixlen = -1
+			ru.Priority += r.ipPolicyPrefBase
 
 			err := netlink.RuleDel(&ru)
 			if errors.Is(err, errENOENT) {
@@ -1040,14 +1180,14 @@ func (r *linuxRouter) delIPRulesWithIPCommand() error {
 		// That leaves us some flexibility to change these values in later
 		// versions without having ongoing hacks for every possible
 		// combination.
-		for _, r := range ipRules {
+		for _, rule := range ipRules {
 			args := []string{
 				"ip", family.dashArg(),
 				"rule", "del",
-				"pref", strconv.Itoa(r.Priority),
+				"pref", strconv.Itoa(rule.Priority + r.ipPolicyPrefBase),
 			}
-			if r.Table != 0 {
-				args = append(args, "table", mustRouteTable(r.Table).ipCmdArg())
+			if rule.Table != 0 {
+				args = append(args, "table", mustRouteTable(rule.Table).ipCmdArg())
 			} else {
 				args = append(args, "type", "unreachable")
 			}
@@ -1141,11 +1281,11 @@ func (r *linuxRouter) addNetfilterBase4() error {
 	// POSTROUTING. So instead, we match on the inbound interface in
 	// filter/FORWARD, and set a packet mark that nat/POSTROUTING can
 	// use to effectively run that same test again.
-	args = []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
+	args = []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "ACCEPT"}
 	if err := r.ipt4.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
 	}
@@ -1167,11 +1307,11 @@ func (r *linuxRouter) addNetfilterBase6() error {
 	// TODO: only allow traffic from Tailscale's ULA range to come
 	// from tailscale0.
 
-	args := []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark}
+	args := []string{"-i", r.tunname, "-j", "MARK", "--set-mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask}
 	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
-	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "ACCEPT"}
+	args = []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "ACCEPT"}
 	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
@@ -1343,7 +1483,7 @@ func (r *linuxRouter) addSNATRule() error {
 		return nil
 	}
 
-	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "MASQUERADE"}
 	if err := r.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
 		return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
 	}
@@ -1362,7 +1502,7 @@ func (r *linuxRouter) delSNATRule() error {
 		return nil
 	}
 
-	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark, "-j", "MASQUERADE"}
+	args := []string{"-m", "mark", "--mark", tailscaleSubnetRouteMark + "/" + tailscaleFwmarkMask, "-j", "MASQUERADE"}
 	if err := r.ipt4.Delete("nat", "ts-postrouting", args...); err != nil {
 		return fmt.Errorf("deleting %v in v4/nat/ts-postrouting: %w", args, err)
 	}
@@ -1460,7 +1600,7 @@ func checkIPv6(logf logger.Logf) error {
 	if os.IsNotExist(err) {
 		return err
 	}
-	bs, err := ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	bs, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
 	if err != nil {
 		// Be conservative if we can't find the ipv6 configuration knob.
 		return err
@@ -1476,7 +1616,7 @@ func checkIPv6(logf logger.Logf) error {
 	// Older kernels don't support IPv6 policy routing. Some kernels
 	// support policy routing but don't have this knob, so absence of
 	// the knob is not fatal.
-	bs, err = ioutil.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
+	bs, err = os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_policy")
 	if err == nil {
 		disabled, err = strconv.ParseBool(strings.TrimSpace(string(bs)))
 		if err != nil {
@@ -1506,7 +1646,7 @@ func checkIPv6(logf logger.Logf) error {
 // netfilter, so some older distros ship a kernel that can't NAT IPv6
 // traffic.
 func supportsV6NAT() bool {
-	bs, err := ioutil.ReadFile("/proc/net/ip6_tables_names")
+	bs, err := os.ReadFile("/proc/net/ip6_tables_names")
 	if err != nil {
 		// Can't read the file. Assume SNAT works.
 		return true
@@ -1546,6 +1686,39 @@ func checkIPRuleSupportsV6(logf logger.Logf) error {
 	// And clean up on exit.
 	defer netlink.RuleDel(rule)
 	return netlink.RuleAdd(rule)
+}
+
+// Checks if the running openWRT system is using mwan3, based on the heuristic
+// of the config file being present as well as a policy rule with a specific
+// priority (2000 + 1 - first interface mwan3 manages) and non-zero mark.
+func checkOpenWRTUsingMWAN3() (bool, error) {
+	if distro.Get() != distro.OpenWrt {
+		return false, nil
+	}
+
+	if _, err := os.Stat("/etc/config/mwan3"); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range rules {
+		// We want to match on a rule like this:
+		//    2001:	from all fwmark 0x100/0x3f00 lookup 1
+		//
+		// We dont match on the mask because it can vary, or the
+		// table because I'm not sure if it can vary.
+		if r.Priority == 2001 && r.Mark != 0 {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func nlAddrOfPrefix(p netip.Prefix) *netlink.Addr {

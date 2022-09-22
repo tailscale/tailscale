@@ -16,12 +16,12 @@ jobs:
   gofmt:
     runs-on: ubuntu-latest
     steps:
+    - name: Check out code
+      uses: actions/checkout@v3
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.19
-    - name: Check out code
-      uses: actions/checkout@v3
+        go-version-file: go.mod
     - name: Run gofmt (goimports)
       run: go run golang.org/x/tools/cmd/goimports -d --format-only .
     - uses: k0kubun/action-slack@v2.0.0

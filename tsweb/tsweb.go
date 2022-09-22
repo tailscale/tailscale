@@ -13,7 +13,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -38,6 +37,7 @@ import (
 func init() {
 	expvar.Publish("process_start_unix_time", expvar.Func(func() any { return timeStart.Unix() }))
 	expvar.Publish("version", expvar.Func(func() any { return version.Long }))
+	expvar.Publish("go_version", expvar.Func(func() any { return runtime.Version() }))
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
@@ -81,7 +81,7 @@ func AllowDebugAccess(r *http.Request) bool {
 		urlKey := r.FormValue("debugkey")
 		keyPath := envknob.String("TS_DEBUG_KEY_PATH")
 		if urlKey != "" && keyPath != "" {
-			slurp, err := ioutil.ReadFile(keyPath)
+			slurp, err := os.ReadFile(keyPath)
 			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
 				return true
 			}

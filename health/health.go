@@ -325,7 +325,7 @@ func OverallError() error {
 	return overallErrorLocked()
 }
 
-var fakeErrForTesting = envknob.String("TS_DEBUG_FAKE_HEALTH_ERROR")
+var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 
 func overallErrorLocked() error {
 	if !anyInterfaceUp {
@@ -383,7 +383,10 @@ func overallErrorLocked() error {
 	for _, s := range controlHealth {
 		errs = append(errs, errors.New(s))
 	}
-	if e := fakeErrForTesting; len(errs) == 0 && e != "" {
+	if err := envknob.ApplyDiskConfigError(); err != nil {
+		errs = append(errs, err)
+	}
+	if e := fakeErrForTesting(); len(errs) == 0 && e != "" {
 		return errors.New(e)
 	}
 	sort.Slice(errs, func(i, j int) bool {

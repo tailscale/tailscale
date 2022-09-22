@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,7 +22,7 @@ func TestGoogleCloudRunDefaultRouteInterface(t *testing.T) {
 	buf := []byte("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
 		"eth0\t8008FEA9\t00000000\t0001\t0\t0\t0\t01FFFFFF\t0\t0\t0\n" +
 		"eth1\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0\n")
-	err := ioutil.WriteFile(procNetRoutePath, buf, 0644)
+	err := os.WriteFile(procNetRoutePath, buf, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +86,7 @@ func TestAwsAppRunnerDefaultRouteInterface(t *testing.T) {
 		"ecs-eth0\t02AAFEA9\t01ACFEA9\t0007\t0\t0\t0\tFFFFFFFF\t0\t0\t0\n" +
 		"ecs-eth0\t00ACFEA9\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n" +
 		"eth0\t00AFFEA9\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n")
-	err := ioutil.WriteFile(procNetRoutePath, buf, 0644)
+	err := os.WriteFile(procNetRoutePath, buf, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}

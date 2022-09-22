@@ -9,7 +9,6 @@ package filelogger
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -186,12 +185,18 @@ func (w *logFileWriter) startNewFileLocked() {
 //
 // w.mu must be held.
 func (w *logFileWriter) cleanLocked() {
-	fis, _ := ioutil.ReadDir(w.dir)
+	entries, _ := os.ReadDir(w.dir)
 	prefix := w.fileBasePrefix + "-"
 	fileSize := map[string]int64{}
 	var files []string
 	var sumSize int64
-	for _, fi := range fis {
+	for _, entry := range entries {
+		fi, err := entry.Info()
+		if err != nil {
+			w.wrappedLogf("error getting log file info: %v", err)
+			continue
+		}
+
 		baseName := filepath.Base(fi.Name())
 		if !strings.HasPrefix(baseName, prefix) {
 			continue

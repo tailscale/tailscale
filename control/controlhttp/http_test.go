@@ -170,15 +170,16 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		defer cancel()
 	}
 
-	a := dialParams{
-		host:              "localhost",
-		httpPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
-		httpsPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
-		machineKey:        client,
-		controlKey:        server.Public(),
-		version:           testProtocolVersion,
+	a := &Dialer{
+		Hostname:          "localhost",
+		HTTPPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
+		HTTPSPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
+		MachineKey:        client,
+		ControlKey:        server.Public(),
+		ProtocolVersion:   testProtocolVersion,
+		Dialer:            new(tsdial.Dialer).SystemDial,
+		Logf:              t.Logf,
 		insecureTLS:       true,
-		dialer:            new(tsdial.Dialer).SystemDial,
 		testFallbackDelay: 50 * time.Millisecond,
 	}
 

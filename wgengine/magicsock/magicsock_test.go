@@ -12,7 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -32,6 +32,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
+	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun/stuntest"
@@ -1173,7 +1174,7 @@ func TestDiscoStringLogRace(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		fmt.Fprintf(ioutil.Discard, "%v", de)
+		fmt.Fprintf(io.Discard, "%v", de)
 	}()
 	go func() {
 		defer wg.Done()
@@ -1797,5 +1798,23 @@ func TestBlockForeverConnUnblocks(t *testing.T) {
 		}
 	case <-timer.C:
 		t.Fatal("timeout")
+	}
+}
+
+func TestDiscoMagicMatches(t *testing.T) {
+	// Convert our disco magic number into a uint32 and uint16 to test
+	// against. We panic on an incorrect length here rather than try to be
+	// generic with our BPF instructions below.
+	//
+	// Note that BPF uses network byte order (big-endian) when loading data
+	// from a packet, so that is what we use to generate our magic numbers.
+	if len(disco.Magic) != 6 {
+		t.Fatalf("expected disco.Magic to be of length 6")
+	}
+	if m1 := binary.BigEndian.Uint32([]byte(disco.Magic[:4])); m1 != discoMagic1 {
+		t.Errorf("first 4 bytes of disco magic don't match, got %v want %v", discoMagic1, m1)
+	}
+	if m2 := binary.BigEndian.Uint16([]byte(disco.Magic[4:6])); m2 != discoMagic2 {
+		t.Errorf("last 2 bytes of disco magic don't match, got %v want %v", discoMagic2, m2)
 	}
 }

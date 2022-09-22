@@ -294,6 +294,11 @@ func makeSliceHasher(t reflect.Type) typeHasherFunc {
 	if typeIsMemHashable(t.Elem()) {
 		return func(h *hasher, p pointer) {
 			pa := p.sliceArray()
+			if pa.isNil() {
+				h.HashUint8(0) // indicates nil
+				return
+			}
+			h.HashUint8(1) // indicates visiting slice
 			n := p.sliceLen()
 			b := pa.asMemory(uintptr(n) * nb)
 			h.HashUint64(uint64(n))
@@ -305,11 +310,30 @@ func makeSliceHasher(t reflect.Type) typeHasherFunc {
 	var hashElem typeHasherFunc
 	init := func() {
 		hashElem = lookupTypeHasher(t.Elem())
+		if typeIsRecursive(t) {
+			hashElemDefault := hashElem
+			hashElem = func(h *hasher, p pointer) {
+				if idx, ok := h.visitStack.seen(p.p); ok {
+					h.HashUint8(2) // indicates cycle
+					h.HashUint64(uint64(idx))
+					return
+				}
+				h.HashUint8(1) // indicates visiting slice element
+				h.visitStack.push(p.p)
+				defer h.visitStack.pop(p.p)
+				hashElemDefault(h, p)
+			}
+		}
 	}
 
 	return func(h *hasher, p pointer) {
 		pa := p.sliceArray()
+		if pa.isNil() {
+			h.HashUint8(0) // indicates nil
+			return
+		}
 		once.Do(init)
+		h.HashUint8(1) // indicates visiting slice
 		n := p.sliceLen()
 		h.HashUint64(uint64(n))
 		for i := 0; i < n; i++ {

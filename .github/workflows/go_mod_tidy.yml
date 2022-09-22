@@ -1,0 +1,35 @@
+name: go mod tidy
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "*"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version-file: go.mod
+
+      - name: check 'go mod tidy' is clean
+        run: |
+          go mod tidy
+          echo
+          echo
+          git diff --name-only --exit-code || (echo "Please run 'go mod tidy'."; exit 1)

@@ -29,7 +29,7 @@ var certCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("cert")
 		fs.StringVar(&certArgs.certFile, "cert-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.crt if --cert-file and --key-file are both unset")
-		fs.StringVar(&certArgs.keyFile, "key-file", "", "output cert file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
+		fs.StringVar(&certArgs.keyFile, "key-file", "", "output key file or \"-\" for stdout; defaults to DOMAIN.key if --cert-file and --key-file are both unset")
 		fs.BoolVar(&certArgs.serve, "serve-demo", false, "if true, serve on port :443 using the cert as a demo, instead of writing out the files to disk")
 		return fs
 	})(),

@@ -194,6 +194,7 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 			routes[suffix] = resolvers
 		}
 	}
+
 	// Similarly, the OS always gets search paths.
 	ocfg.SearchDomains = cfg.SearchDomains
 	if runtime.GOOS == "windows" {
@@ -207,9 +208,14 @@ func (m *Manager) compileConfig(cfg Config) (rcfg resolver.Config, ocfg OSConfig
 		// case where cfg is entirely zero, in which case these
 		// configs clear all Tailscale DNS settings.
 		return rcfg, ocfg, nil
-	case cfg.hasDefaultIPResolversOnly():
-		// Trivial CorpDNS configuration, just override the OS
-		// resolver.
+	case cfg.hasDefaultIPResolversOnly() && !cfg.hasHostsWithoutSplitDNSRoutes():
+		// Trivial CorpDNS configuration, just override the OS resolver.
+		//
+		// If there are hosts (ExtraRecords) that are not covered by an existing
+		// SplitDNS route, then we don't go into this path so that we fall into
+		// the next case and send the extra record hosts queries through
+		// 100.100.100.100 instead where we can answer them.
+		//
 		// TODO: for OSes that support it, pass IP:port and DoH
 		// addresses directly to OS.
 		// https://github.com/tailscale/tailscale/issues/1666

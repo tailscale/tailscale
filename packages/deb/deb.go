@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,7 +73,7 @@ func Read(r io.Reader) (*Info, error) {
 	}
 
 	// Exhaust the remainder of r, so that the summers see the entire file.
-	if _, err := io.Copy(ioutil.Discard, r); err != nil {
+	if _, err := io.Copy(io.Discard, r); err != nil {
 		return nil, fmt.Errorf("hashing file: %w", err)
 	}
 
@@ -117,7 +116,7 @@ func findControlTar(r io.Reader) (tarReader io.Reader, err error) {
 		if size%2 == 1 {
 			size++
 		}
-		if _, err := io.CopyN(ioutil.Discard, r, size); err != nil {
+		if _, err := io.CopyN(io.Discard, r, size); err != nil {
 			return nil, fmt.Errorf("seeking past file %q: %w", filename, err)
 		}
 	}
@@ -150,7 +149,7 @@ func findControlFile(r io.Reader) (control []byte, err error) {
 		break
 	}
 
-	bs, err := ioutil.ReadAll(tr)
+	bs, err := io.ReadAll(tr)
 	if err != nil {
 		return nil, fmt.Errorf("reading control file: %w", err)
 	}

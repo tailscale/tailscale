@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -452,7 +451,7 @@ func (fs directFS) Rename(oldName, newName string) error {
 func (fs directFS) Remove(name string) error { return os.Remove(fs.path(name)) }
 
 func (fs directFS) ReadFile(name string) ([]byte, error) {
-	return ioutil.ReadFile(fs.path(name))
+	return os.ReadFile(fs.path(name))
 }
 
 func (fs directFS) Truncate(name string) error {
@@ -460,7 +459,7 @@ func (fs directFS) Truncate(name string) error {
 }
 
 func (fs directFS) WriteFile(name string, contents []byte, perm os.FileMode) error {
-	return ioutil.WriteFile(fs.path(name), contents, perm)
+	return os.WriteFile(fs.path(name), contents, perm)
 }
 
 // runningAsGUIDesktopUser reports whether it seems that this code is

@@ -13,20 +13,18 @@ import (
 )
 
 // disableUPnP indicates whether to attempt UPnP mapping.
-var disableUPnP atomic.Bool
+var disableUPnPControl atomic.Bool
 
-func init() {
-	SetDisableUPnP(envknob.Bool("TS_DISABLE_UPNP"))
-}
+var disableUPnpEnv = envknob.RegisterBool("TS_DISABLE_UPNP")
 
 // DisableUPnP reports the last reported value from control
 // whether UPnP portmapping should be disabled.
 func DisableUPnP() bool {
-	return disableUPnP.Load()
+	return disableUPnPControl.Load() || disableUPnpEnv()
 }
 
 // SetDisableUPnP sets whether control says that UPnP should be
 // disabled.
 func SetDisableUPnP(v bool) {
-	disableUPnP.Store(v)
+	disableUPnPControl.Store(v)
 }

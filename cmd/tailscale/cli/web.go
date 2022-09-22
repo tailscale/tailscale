@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -59,6 +58,7 @@ type tmplData struct {
 	IP                string
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
+	LicensesURL       string
 }
 
 var webCmd = &ffcli.Command{
@@ -253,7 +253,7 @@ func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
 		return "", nil, err
 	}
 	defer resp.Body.Close()
-	out, err := ioutil.ReadAll(resp.Body)
+	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", nil, err
 	}
@@ -392,6 +392,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Profile:      profile,
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
+		LicensesURL:  licensesURL(),
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")

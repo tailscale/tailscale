@@ -33,6 +33,19 @@ const (
 	// SigRotation signature and sign it again with their rotation key. That
 	// way, SigRotation nesting should only be 2 deep in the common case.
 	SigRotation
+	// SigCredential describes a signature over a specifi public key, signed
+	// by a key in the tailnet key authority referenced by the specified keyID.
+	// In effect, SigCredential delegates the ability to make a signature to
+	// a different public/private key pair.
+	//
+	// It is intended that a different public/private key pair be generated
+	// for each different SigCredential that is created. Implementors must
+	// take care that the private side is only known to the entity that needs
+	// to generate the wrapping SigRotation signature, and it is immediately
+	// discarded after use.
+	//
+	// SigCredential is expected to be nested in a SigRotation signature.
+	SigCredential
 )
 
 func (s SigKind) String() string {
@@ -43,6 +56,8 @@ func (s SigKind) String() string {
 		return "direct"
 	case SigRotation:
 		return "rotation"
+	case SigCredential:
+		return "credential"
 	default:
 		return fmt.Sprintf("Sig?<%d>", int(s))
 	}
@@ -53,8 +68,9 @@ func (s SigKind) String() string {
 type NodeKeySignature struct {
 	// SigKind identifies the variety of signature.
 	SigKind SigKind `cbor:"1,keyasint"`
-	// Pubkey identifies the public key which is being authorized.
-	Pubkey []byte `cbor:"2,keyasint"`
+	// Pubkey identifies the key.NodePublic which is being authorized.
+	// SigCredential signatures do not use this field.
+	Pubkey []byte `cbor:"2,keyasint,omitempty"`
 
 	// KeyID identifies which key in the tailnet key authority should
 	// be used to verify this signature. Only set for SigDirect and
@@ -69,19 +85,23 @@ type NodeKeySignature struct {
 	// used as Pubkey. Only used for SigRotation signatures.
 	Nested *NodeKeySignature `cbor:"5,keyasint,omitempty"`
 
-	// RotationPubkey specifies the ed25519 public key which may sign a
-	// SigRotation signature, which embeds this one.
+	// WrappingPubkey specifies the ed25519 public key which must be used
+	// to sign a Signature which embeds this one.
 	//
-	// Intermediate SigRotation signatures may omit this value to use the
-	// parent one.
-	RotationPubkey []byte `cbor:"6,keyasint,omitempty"`
+	// For SigRotation signatures multiple levels deep, intermediate
+	// signatures may omit this value, in which case the parent WrappingPubkey
+	// is used.
+	//
+	// SigCredential signatures use this field to specify the public key
+	// they are certifying, following the usual semanticsfor WrappingPubkey.
+	WrappingPubkey []byte `cbor:"6,keyasint,omitempty"`
 }
 
-// rotationPublic returns the public key which must sign a SigRotation
-// signature that embeds this signature, if any.
-func (s NodeKeySignature) rotationPublic() (pub ed25519.PublicKey, ok bool) {
-	if len(s.RotationPubkey) > 0 {
-		return ed25519.PublicKey(s.RotationPubkey), true
+// wrappingPublic returns the public key which must sign a signature which
+// embeds this one, if any.
+func (s NodeKeySignature) wrappingPublic() (pub ed25519.PublicKey, ok bool) {
+	if len(s.WrappingPubkey) > 0 {
+		return ed25519.PublicKey(s.WrappingPubkey), true
 	}
 
 	switch s.SigKind {
@@ -89,7 +109,7 @@ func (s NodeKeySignature) rotationPublic() (pub ed25519.PublicKey, ok bool) {
 		if s.Nested == nil {
 			return nil, false
 		}
-		return s.Nested.rotationPublic()
+		return s.Nested.wrappingPublic()
 
 	default:
 		return nil, false
@@ -138,15 +158,18 @@ func (s *NodeKeySignature) Unserialize(data []byte) error {
 	return dec.Unmarshal(data, s)
 }
 
-// verifySignature checks that the NodeKeySignature is authentic, certified
-// by the given verificationKey, and authorizes the given nodeKey.
+// verifySignature checks that the NodeKeySignature is authentic & certified
+// by the given verificationKey. Additionally, SigDirect and SigRotation
+// signatures are checked to ensure they authorize the given nodeKey.
 func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationKey Key) error {
-	nodeBytes, err := nodeKey.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("marshalling pubkey: %v", err)
-	}
-	if !bytes.Equal(nodeBytes, s.Pubkey) {
-		return errors.New("signature does not authorize nodeKey")
+	if s.SigKind != SigCredential {
+		nodeBytes, err := nodeKey.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("marshalling pubkey: %v", err)
+		}
+		if !bytes.Equal(nodeBytes, s.Pubkey) {
+			return errors.New("signature does not authorize nodeKey")
+		}
 	}
 
 	sigHash := s.SigHash()
@@ -157,7 +180,7 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 		}
 
 		// Verify the signature using the nested rotation key.
-		verifyPub, ok := s.Nested.rotationPublic()
+		verifyPub, ok := s.Nested.wrappingPublic()
 		if !ok {
 			return errors.New("missing rotation key")
 		}
@@ -167,15 +190,22 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 
 		// Recurse to verify the signature on the nested structure.
 		var nestedPub key.NodePublic
-		if err := nestedPub.UnmarshalBinary(s.Nested.Pubkey); err != nil {
-			return fmt.Errorf("nested pubkey: %v", err)
+		// SigCredential signatures certify an indirection key rather than a node
+		// key, so theres no need to check the node key.
+		if s.Nested.SigKind != SigCredential {
+			if err := nestedPub.UnmarshalBinary(s.Nested.Pubkey); err != nil {
+				return fmt.Errorf("nested pubkey: %v", err)
+			}
 		}
 		if err := s.Nested.verifySignature(nestedPub, verificationKey); err != nil {
 			return fmt.Errorf("nested: %v", err)
 		}
 		return nil
 
-	case SigDirect:
+	case SigDirect, SigCredential:
+		if s.Nested != nil {
+			return fmt.Errorf("invalid signature: signatures of type %v cannot nest another signature", s.SigKind)
+		}
 		switch verificationKey.Kind {
 		case Key25519:
 			if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {

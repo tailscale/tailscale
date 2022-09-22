@@ -18,23 +18,97 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/tailscale/golang-x-crypto/ssh"
-	"tailscale.com/envknob"
+	"go4.org/mem"
+	"golang.org/x/exp/slices"
+	"tailscale.com/tailcfg"
+	"tailscale.com/util/lineread"
 	"tailscale.com/util/mak"
 )
-
-var useHostKeys = envknob.Bool("TS_USE_SYSTEM_SSH_HOST_KEYS")
 
 // keyTypes are the SSH key types that we either try to read from the
 // system's OpenSSH keys or try to generate for ourselves when not
 // running as root.
 var keyTypes = []string{"rsa", "ecdsa", "ed25519"}
+
+// getSSHUsernames discovers and returns the list of usernames that are
+// potential Tailscale SSH user targets.
+//
+// Invariant: must not be called with b.mu held.
+func (b *LocalBackend) getSSHUsernames(req *tailcfg.C2NSSHUsernamesRequest) (*tailcfg.C2NSSHUsernamesResponse, error) {
+	res := new(tailcfg.C2NSSHUsernamesResponse)
+	if !b.tailscaleSSHEnabled() {
+		return res, nil
+	}
+
+	max := 10
+	if req != nil && req.Max != 0 {
+		max = req.Max
+	}
+
+	add := func(u string) {
+		if req != nil && req.Exclude[u] {
+			return
+		}
+		switch u {
+		case "nobody", "daemon", "sync":
+			return
+		}
+		if slices.Contains(res.Usernames, u) {
+			return
+		}
+		if len(res.Usernames) > max {
+			// Enough for a hint.
+			return
+		}
+		res.Usernames = append(res.Usernames, u)
+	}
+
+	if opUser := b.operatorUserName(); opUser != "" {
+		add(opUser)
+	}
+
+	// Check popular usernames and see if they exist with a real shell.
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("dscl", ".", "list", "/Users").Output()
+		if err != nil {
+			return nil, err
+		}
+		lineread.Reader(bytes.NewReader(out), func(line []byte) error {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 || line[0] == '_' {
+				return nil
+			}
+			add(string(line))
+			return nil
+		})
+	default:
+		lineread.File("/etc/passwd", func(line []byte) error {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 || line[0] == '#' || line[0] == '_' {
+				return nil
+			}
+			if mem.HasSuffix(mem.B(line), mem.S("/nologin")) ||
+				mem.HasSuffix(mem.B(line), mem.S("/false")) {
+				return nil
+			}
+			colon := bytes.IndexByte(line, ':')
+			if colon != -1 {
+				add(string(line[:colon]))
+			}
+			return nil
+		})
+	}
+	return res, nil
+}
 
 func (b *LocalBackend) GetSSH_HostKeys() (keys []ssh.Signer, err error) {
 	var existing map[string]ssh.Signer
@@ -83,7 +157,7 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 	defer keyGenMu.Unlock()
 
 	path := filepath.Join(keyDir, "ssh_host_"+typ+"_key")
-	v, err := ioutil.ReadFile(path)
+	v, err := os.ReadFile(path)
 	if err == nil {
 		return v, nil
 	}
@@ -124,7 +198,7 @@ func (b *LocalBackend) hostKeyFileOrCreate(keyDir, typ string) ([]byte, error) {
 func (b *LocalBackend) getSystemSSH_HostKeys() (ret map[string]ssh.Signer) {
 	for _, typ := range keyTypes {
 		filename := "/etc/ssh/ssh_host_" + typ + "_key"
-		hostKey, err := ioutil.ReadFile(filename)
+		hostKey, err := os.ReadFile(filename)
 		if err != nil || len(bytes.TrimSpace(hostKey)) == 0 {
 			continue
 		}

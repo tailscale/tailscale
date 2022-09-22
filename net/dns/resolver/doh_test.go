@@ -41,7 +41,8 @@ func TestDoH(t *testing.T) {
 	if !*testDoH {
 		t.Skip("skipping manual test without --test-doh flag")
 	}
-	if len(publicdns.KnownDoH()) == 0 {
+	prefixes := publicdns.KnownDoHPrefixes()
+	if len(prefixes) == 0 {
 		t.Fatal("no known DoH")
 	}
 
@@ -49,7 +50,7 @@ func TestDoH(t *testing.T) {
 		dohSem: make(chan struct{}, 10),
 	}
 
-	for urlBase := range publicdns.DoHIPsOfBase() {
+	for _, urlBase := range prefixes {
 		t.Run(urlBase, func(t *testing.T) {
 			c, ok := f.getKnownDoHClientForProvider(urlBase)
 			if !ok {
@@ -86,13 +87,15 @@ func TestDoH(t *testing.T) {
 }
 
 func TestDoHV6Fallback(t *testing.T) {
-	for ip, base := range publicdns.KnownDoH() {
-		if ip.Is4() {
-			ip6, ok := publicdns.DoHV6(base)
-			if !ok {
-				t.Errorf("no v6 DoH known for %v", ip)
-			} else if !ip6.Is6() {
-				t.Errorf("dohV6(%q) returned non-v6 address %v", base, ip6)
+	for _, base := range publicdns.KnownDoHPrefixes() {
+		for _, ip := range publicdns.DoHIPsOfBase(base) {
+			if ip.Is4() {
+				ip6, ok := publicdns.DoHV6(base)
+				if !ok {
+					t.Errorf("no v6 DoH known for %v", ip)
+				} else if !ip6.Is6() {
+					t.Errorf("dohV6(%q) returned non-v6 address %v", base, ip6)
+				}
 			}
 		}
 	}

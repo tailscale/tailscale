@@ -18,7 +18,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"math/big"
@@ -46,8 +45,6 @@ import (
 	"tailscale.com/types/pad32"
 	"tailscale.com/version"
 )
-
-var debug = envknob.Bool("DERP_DEBUG_LOGS")
 
 // verboseDropKeys is the set of destination public keys that should
 // verbosely log whenever DERP drops a packet.
@@ -106,6 +103,7 @@ type Server struct {
 	limitedLogf logger.Logf
 	metaCert    []byte // the encoded x509 cert to send after LetsEncrypt cert+intermediate
 	dupPolicy   dupPolicy
+	debug       bool
 
 	// Counters:
 	packetsSent, bytesSent       expvar.Int
@@ -299,6 +297,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 	runtime.ReadMemStats(&ms)
 
 	s := &Server{
+		debug:                envknob.Bool("DERP_DEBUG_LOGS"),
 		privateKey:           privateKey,
 		publicKey:            privateKey.Public(),
 		logf:                 logf,
@@ -758,7 +757,7 @@ func (c *sclient) run(ctx context.Context) error {
 }
 
 func (c *sclient) handleUnknownFrame(ft frameType, fl uint32) error {
-	_, err := io.CopyN(ioutil.Discard, c.br, int64(fl))
+	_, err := io.CopyN(io.Discard, c.br, int64(fl))
 	return err
 }
 
@@ -801,7 +800,7 @@ func (c *sclient) handleFramePing(ft frameType, fl uint32) error {
 		return err
 	}
 	if extra := int64(fl) - int64(len(m)); extra > 0 {
-		_, err = io.CopyN(ioutil.Discard, c.br, extra)
+		_, err = io.CopyN(io.Discard, c.br, extra)
 	}
 	select {
 	case c.sendPongCh <- [8]byte(m):
@@ -980,7 +979,7 @@ func (s *Server) recordDrop(packetBytes []byte, srcKey, dstKey key.NodePublic, r
 		msg := fmt.Sprintf("drop (%s) %s -> %s", srcKey.ShortString(), reason, dstKey.ShortString())
 		s.limitedLogf(msg)
 	}
-	if debug {
+	if s.debug {
 		s.logf("dropping packet reason=%s dst=%s disco=%v", reason, dstKey, disco.LooksLikeDiscoWrapper(packetBytes))
 	}
 }
@@ -1828,7 +1827,7 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 
 var bufioWriterPool = &sync.Pool{
 	New: func() any {
-		return bufio.NewWriterSize(ioutil.Discard, 2<<10)
+		return bufio.NewWriterSize(io.Discard, 2<<10)
 	},
 }
 
@@ -1861,7 +1860,7 @@ func (w *lazyBufioWriter) Flush() error {
 	}
 	err := w.lbw.Flush()
 
-	w.lbw.Reset(ioutil.Discard)
+	w.lbw.Reset(io.Discard)
 	bufioWriterPool.Put(w.lbw)
 	w.lbw = nil
 

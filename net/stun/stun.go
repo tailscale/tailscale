@@ -208,7 +208,7 @@ func ParseResponse(b []byte) (tID TxID, addr netip.AddrPort, err error) {
 		b = b[:attrsLen] // trim trailing packet bytes
 	}
 
-	var addr6, fallbackAddr, fallbackAddr6 netip.AddrPort
+	var fallbackAddr netip.AddrPort
 
 	// Read through the attributes.
 	// The the addr+port reported by XOR-MAPPED-ADDRESS
@@ -218,24 +218,20 @@ func ParseResponse(b []byte) (tID TxID, addr netip.AddrPort, err error) {
 	if err := foreachAttr(b, func(attrType uint16, attr []byte) error {
 		switch attrType {
 		case attrXorMappedAddress, attrXorMappedAddressAlt:
-			a, p, err := xorMappedAddress(tID, attr)
+			ipSlice, port, err := xorMappedAddress(tID, attr)
 			if err != nil {
 				return err
 			}
-			if len(a) == 16 {
-				addr6 = netip.AddrPortFrom(netip.AddrFrom16(*(*[16]byte)([]byte(a))), p)
-			} else {
-				addr = netip.AddrPortFrom(netip.AddrFrom4(*(*[4]byte)([]byte(a))), p)
+			if ip, ok := netip.AddrFromSlice(ipSlice); ok {
+				addr = netip.AddrPortFrom(ip.Unmap(), port)
 			}
 		case attrMappedAddress:
-			a, p, err := mappedAddress(attr)
+			ipSlice, port, err := mappedAddress(attr)
 			if err != nil {
 				return ErrMalformedAttrs
 			}
-			if len(a) == 16 {
-				fallbackAddr6 = netip.AddrPortFrom(netip.AddrFrom16(*(*[16]byte)([]byte(a))), p)
-			} else {
-				fallbackAddr = netip.AddrPortFrom(netip.AddrFrom4(*(*[4]byte)([]byte(a))), p)
+			if ip, ok := netip.AddrFromSlice(ipSlice); ok {
+				fallbackAddr = netip.AddrPortFrom(ip.Unmap(), port)
 			}
 		}
 		return nil
@@ -249,12 +245,6 @@ func ParseResponse(b []byte) (tID TxID, addr netip.AddrPort, err error) {
 	}
 	if fallbackAddr.IsValid() {
 		return tID, fallbackAddr, nil
-	}
-	if addr6.IsValid() {
-		return tID, addr6, nil
-	}
-	if fallbackAddr6.IsValid() {
-		return tID, fallbackAddr6, nil
 	}
 	return tID, netip.AddrPort{}, ErrMalformedAttrs
 }

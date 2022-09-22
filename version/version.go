@@ -23,7 +23,8 @@ var Long = ""
 
 // Short is a short version number for this build, of the form
 // "x.y.z" for builds stamped in the usual way (see
-// build_dist.sh in the root) or, for binaries built by hand with the                                                                            // go tool, it's like Long's dev form, but ending at the date part,
+// build_dist.sh in the root) or, for binaries built by hand with the
+// go tool, it's like Long's dev form, but ending at the date part,
 // of the form "1.23.0-dev20220316".
 var Short = ""
 

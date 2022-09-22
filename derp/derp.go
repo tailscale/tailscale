@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package derp implements DERP, the Detour Encrypted Routing Protocol.
+// Package derp implements the Designated Encrypted Relay for Packets (DERP)
+// protocol.
 //
 // DERP routes packets to clients using curve25519 keys as addresses.
 //
@@ -18,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"time"
 )
 
@@ -194,7 +194,7 @@ func readFrame(br *bufio.Reader, maxSize uint32, b []byte) (t frameType, frameLe
 	}
 	remain := frameLen - uint32(n)
 	if remain > 0 {
-		if _, err := io.CopyN(ioutil.Discard, br, int64(remain)); err != nil {
+		if _, err := io.CopyN(io.Discard, br, int64(remain)); err != nil {
 			return 0, 0, err
 		}
 		err = io.ErrShortBuffer

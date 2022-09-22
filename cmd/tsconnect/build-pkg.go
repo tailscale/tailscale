@@ -5,13 +5,18 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
+	"os"
+	"path"
 
-	esbuild "github.com/evanw/esbuild/pkg/api"
+	"github.com/tailscale/hujson"
+	"tailscale.com/version"
 )
 
 func runBuildPkg() {
-	buildOptions, err := commonSetup(prodMode)
+	buildOptions, err := commonPkgSetup(prodMode)
 	if err != nil {
 		log.Fatalf("Cannot setup: %v", err)
 	}
@@ -25,10 +30,6 @@ func runBuildPkg() {
 		log.Fatalf("Cannot clean %s: %v", *pkgDir, err)
 	}
 
-	buildOptions.EntryPoints = []string{"src/pkg/pkg.ts", "src/pkg/pkg.css"}
-	buildOptions.Outdir = *pkgDir
-	buildOptions.Format = esbuild.FormatESModule
-	buildOptions.AssetNames = "[name]"
 	buildOptions.Write = true
 	buildOptions.MinifyWhitespace = true
 	buildOptions.MinifyIdentifiers = true
@@ -41,4 +42,33 @@ func runBuildPkg() {
 		log.Fatalf("Type generation failed: %v", err)
 	}
 
+	if err := updateVersion(); err != nil {
+		log.Fatalf("Cannot update version: %v", err)
+	}
+
+	log.Printf("Built package version %s", version.Long)
+}
+
+func updateVersion() error {
+	packageJSONBytes, err := os.ReadFile("package.json.tmpl")
+	if err != nil {
+		return fmt.Errorf("Could not read package.json: %w", err)
+	}
+
+	var packageJSON map[string]any
+	packageJSONBytes, err = hujson.Standardize(packageJSONBytes)
+	if err != nil {
+		return fmt.Errorf("Could not standardize template package.json: %w", err)
+	}
+	if err := json.Unmarshal(packageJSONBytes, &packageJSON); err != nil {
+		return fmt.Errorf("Could not unmarshal package.json: %w", err)
+	}
+	packageJSON["version"] = version.Long
+
+	packageJSONBytes, err = json.MarshalIndent(packageJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("Could not marshal package.json: %w", err)
+	}
+
+	return os.WriteFile(path.Join(*pkgDir, "package.json"), packageJSONBytes, 0644)
 }

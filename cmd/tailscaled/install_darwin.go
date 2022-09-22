@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,7 +141,7 @@ func installSystemDaemonDarwin(args []string) (err error) {
 		return err
 	}
 
-	if err := ioutil.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0700); err != nil {
+	if err := os.WriteFile(sysPlist, []byte(darwinLaunchdPlist), 0700); err != nil {
 		return err
 	}
 

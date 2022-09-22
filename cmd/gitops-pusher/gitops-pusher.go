@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -30,17 +31,14 @@ var (
 	cacheFname   = rootFlagSet.String("cache-file", "./version-cache.json", "filename for the previous known version hash")
 	timeout      = rootFlagSet.Duration("timeout", 5*time.Minute, "timeout for the entire CI run")
 	githubSyntax = rootFlagSet.Bool("github-syntax", true, "use GitHub Action error syntax (https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#setting-an-error-message)")
-
-	modifiedExternallyFailure = make(chan struct{}, 1)
 )
 
 func modifiedExternallyError() {
 	if *githubSyntax {
-		fmt.Printf("::error file=%s,line=1,col=1,title=Policy File Modified Externally::The policy file was modified externally in the admin console.\n", *policyFname)
+		fmt.Printf("::warning file=%s,line=1,col=1,title=Policy File Modified Externally::The policy file was modified externally in the admin console.\n", *policyFname)
 	} else {
 		fmt.Printf("The policy file was modified externally in the admin console.\n")
 	}
-	modifiedExternallyFailure <- struct{}{}
 }
 
 func apply(cache *Cache, tailnet, apiKey string) func(context.Context, []string) error {
@@ -207,10 +205,6 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
-	if len(modifiedExternallyFailure) != 0 {
-		os.Exit(1)
-	}
 }
 
 func sumFile(fname string) (string, error) {
@@ -271,13 +265,16 @@ func applyNewACL(ctx context.Context, tailnet, apiKey, policyFname, oldEtag stri
 }
 
 func testNewACLs(ctx context.Context, tailnet, apiKey, policyFname string) error {
-	fin, err := os.Open(policyFname)
+	data, err := os.ReadFile(policyFname)
 	if err != nil {
 		return err
 	}
-	defer fin.Close()
+	data, err = hujson.Standardize(data)
+	if err != nil {
+		return err
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.tailscale.com/api/v2/tailnet/%s/acl/validate", tailnet), fin)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.tailscale.com/api/v2/tailnet/%s/acl/validate", tailnet), bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}

@@ -12,7 +12,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,7 +157,7 @@ func (m *resolvconfManager) GetBaseConfig() (OSConfig, error) {
 		if sc.Text() == resolvconfConfigName {
 			continue
 		}
-		bs, err := ioutil.ReadFile(filepath.Join(m.interfacesDir, sc.Text()))
+		bs, err := os.ReadFile(filepath.Join(m.interfacesDir, sc.Text()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Probably raced with a deletion, that's okay.

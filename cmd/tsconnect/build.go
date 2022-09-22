@@ -7,7 +7,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path"
@@ -47,7 +46,7 @@ func runBuild() {
 	if err != nil {
 		log.Fatalf("Cannot fix esbuild metadata paths: %v", err)
 	}
-	if err := ioutil.WriteFile(path.Join(*distDir, "/esbuild-metadata.json"), metadataBytes, 0666); err != nil {
+	if err := os.WriteFile(path.Join(*distDir, "/esbuild-metadata.json"), metadataBytes, 0666); err != nil {
 		log.Fatalf("Cannot write metadata: %v", err)
 	}
 

@@ -29,8 +29,6 @@ type State struct {
 
 	// DisablementSecrets are KDF-derived values which can be used
 	// to turn off the TKA in the event of a consensus-breaking bug.
-	// An AUM of type DisableNL should contain a secret when results
-	// in one of these values when run through the disablement KDF.
 	//
 	// TODO(tom): This is an alpha feature, remove this mechanism once
 	//            we have confidence in our implementation.
@@ -95,7 +93,13 @@ const disablementLength = 32
 
 var disablementSalt = []byte("tailscale network-lock disablement salt")
 
-func disablementKDF(secret []byte) []byte {
+// DisablementKDF computes a public value which can be stored in a
+// key authority, but cannot be reversed to find the input secret.
+//
+// When the output of this function is stored in tka state (i.e. in
+// tka.State.DisablementSecrets) a call to Authority.ValidDisablement()
+// with the input of this function as the argument will return true.
+func DisablementKDF(secret []byte) []byte {
 	// time = 4 (3 recommended, booped to 4 to compensate for less memory)
 	// memory = 16 (32 recommended)
 	// threads = 4
@@ -105,7 +109,7 @@ func disablementKDF(secret []byte) []byte {
 
 // checkDisablement returns true for a valid disablement secret.
 func (s State) checkDisablement(secret []byte) bool {
-	derived := disablementKDF(secret)
+	derived := DisablementKDF(secret)
 	for _, candidate := range s.DisablementSecrets {
 		if bytes.Equal(derived, candidate) {
 			return true
@@ -168,6 +172,9 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		}
 		if update.Meta != nil {
 			k.Meta = update.Meta
+		}
+		if err := k.StaticValidate(); err != nil {
+			return State{}, fmt.Errorf("updated key fails validation: %v", err)
 		}
 		out := s.cloneForUpdate(&update)
 		for i := range out.Keys {

@@ -19,9 +19,12 @@ declare global {
       username: string,
       termConfig: {
         writeFn: (data: string) => void
+        writeErrorFn: (err: string) => void
         setReadFn: (readFn: (data: string) => void) => void
         rows: number
         cols: number
+        /** Defaults to 5 seconds */
+        timeoutSeconds?: number
         onDone: () => void
       }
     ): IPNSSHSession
@@ -46,6 +49,7 @@ declare global {
     stateStorage?: IPNStateStorage
     authKey?: string
     controlURL?: string
+    hostname?: string
   }
 
   type IPNCallbacks = {

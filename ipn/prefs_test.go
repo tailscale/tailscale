@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/netip"
 	"os"
 	"reflect"
@@ -52,6 +51,7 @@ func TestPrefsEqual(t *testing.T) {
 		"Hostname",
 		"NotepadURLs",
 		"ForceDaemon",
+		"Egg",
 		"AdvertiseRoutes",
 		"NoSNAT",
 		"NetfilterMode",
@@ -473,7 +473,7 @@ func TestLoadPrefsNotExist(t *testing.T) {
 // TestLoadPrefsFileWithZeroInIt verifies that LoadPrefs hanldes corrupted input files.
 // See issue #954 for details.
 func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
-	f, err := ioutil.TempFile("", "TestLoadPrefsFileWithZeroInIt")
+	f, err := os.CreateTemp("", "TestLoadPrefsFileWithZeroInIt")
 	if err != nil {
 		t.Fatal(err)
 	}

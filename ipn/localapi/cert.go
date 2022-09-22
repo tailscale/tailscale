@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -38,6 +37,8 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/strs"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -72,7 +73,7 @@ func (h *Handler) certDir() (string, error) {
 	return full, nil
 }
 
-var acmeDebug = envknob.Bool("TS_DEBUG_ACME")
+var acmeDebug = envknob.RegisterBool("TS_DEBUG_ACME")
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite && !h.PermitCert {
@@ -86,16 +87,19 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	domain := strings.TrimPrefix(r.URL.Path, "/localapi/v0/cert/")
-	if domain == r.URL.Path {
+	domain, ok := strs.CutPrefix(r.URL.Path, "/localapi/v0/cert/")
+	if !ok {
 		http.Error(w, "internal handler config wired wrong", 500)
 		return
 	}
-
+	if !validLookingCertDomain(domain) {
+		http.Error(w, "invalid domain", 400)
+		return
+	}
 	now := time.Now()
 	logf := logger.WithPrefix(h.logf, fmt.Sprintf("cert(%q): ", domain))
 	traceACME := func(v any) {
-		if !acmeDebug {
+		if !acmeDebug() {
 			return
 		}
 		j, _ := json.MarshalIndent(v, "", "\t")
@@ -164,6 +168,11 @@ func certFile(dir, domain string) string { return filepath.Join(dir, domain+".cr
 // keypair for domain exists on disk in dir that is valid at the
 // provided now time.
 func (h *Handler) getCertPEMCached(dir, domain string, now time.Time) (p *keyPair, ok bool) {
+	if !validLookingCertDomain(domain) {
+		// Before we read files from disk using it, validate it's halfway
+		// reasonable looking.
+		return nil, false
+	}
 	if keyPEM, err := os.ReadFile(keyFile(dir, domain)); err == nil {
 		certPEM, _ := os.ReadFile(certFile(dir, domain))
 		if validCertPEM(domain, keyPEM, certPEM, now) {
@@ -185,7 +194,10 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 	if err != nil {
 		return nil, fmt.Errorf("acmeKey: %w", err)
 	}
-	ac := &acme.Client{Key: key}
+	ac := &acme.Client{
+		Key:       key,
+		UserAgent: "tailscaled/" + version.Long,
+	}
 
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
 	switch {
@@ -289,7 +301,7 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 	if err := encodeECDSAKey(&privPEM, certPrivKey); err != nil {
 		return nil, err
 	}
-	if err := ioutil.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
 		return nil, err
 	}
 
@@ -312,7 +324,7 @@ func (h *Handler) getCertPEM(ctx context.Context, logf logger.Logf, traceACME fu
 			return nil, err
 		}
 	}
-	if err := ioutil.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
 		return nil, err
 	}
 
@@ -368,7 +380,7 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 
 func acmeKey(dir string) (crypto.Signer, error) {
 	pemName := filepath.Join(dir, "acme-account.key.pem")
-	if v, err := ioutil.ReadFile(pemName); err == nil {
+	if v, err := os.ReadFile(pemName); err == nil {
 		priv, _ := pem.Decode(v)
 		if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
 			return nil, errors.New("acme/autocert: invalid account key found in cache")
@@ -384,7 +396,7 @@ func acmeKey(dir string) (crypto.Signer, error) {
 	if err := encodeECDSAKey(&pemBuf, privKey); err != nil {
 		return nil, err
 	}
-	if err := ioutil.WriteFile(pemName, pemBuf.Bytes(), 0600); err != nil {
+	if err := os.WriteFile(pemName, pemBuf.Bytes(), 0600); err != nil {
 		return nil, err
 	}
 	return privKey, nil
@@ -420,6 +432,21 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, now time.Time) bool {
 		Intermediates: intermediates,
 	})
 	return err == nil
+}
+
+// validLookingCertDomain reports whether name looks like a valid domain name that
+// we might be able to get a cert for.
+//
+// It's a light check primarily for double checking before it's used
+// as part of a filesystem path. The actual validation happens in checkCertDomain.
+func validLookingCertDomain(name string) bool {
+	if name == "" ||
+		strings.Contains(name, "..") ||
+		strings.ContainsAny(name, ":/\\\x00") ||
+		!strings.Contains(name, ".") {
+		return false
+	}
+	return true
 }
 
 func checkCertDomain(st *ipnstate.Status, domain string) error {

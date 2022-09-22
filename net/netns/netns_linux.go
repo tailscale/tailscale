@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/envknob"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
 )
@@ -62,9 +63,14 @@ func socketMarkWorks() bool {
 	return true
 }
 
-// useSocketMark reports whether SO_MARK works.
+var forceBindToDevice = envknob.RegisterBool("TS_FORCE_LINUX_BIND_TO_DEVICE")
+
+// UseSocketMark reports whether SO_MARK is in use.
 // If it doesn't, we have to use SO_BINDTODEVICE on our sockets instead.
-func useSocketMark() bool {
+func UseSocketMark() bool {
+	if forceBindToDevice() {
+		return false
+	}
 	socketMarkWorksOnce.Do(func() {
 		socketMarkWorksOnce.v = socketMarkWorks()
 	})
@@ -97,7 +103,7 @@ func controlC(network, address string, c syscall.RawConn) error {
 
 	var sockErr error
 	err := c.Control(func(fd uintptr) {
-		if useSocketMark() {
+		if UseSocketMark() {
 			sockErr = setBypassMark(fd)
 		} else {
 			sockErr = bindToDevice(fd)

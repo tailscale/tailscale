@@ -19,15 +19,14 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
     steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v3
 
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: 1.19
+        go-version-file: go.mod
       id: go
-
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v3
 
     - name: Basic build
       run: GOARCH=386 go build ./cmd/...

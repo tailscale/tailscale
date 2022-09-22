@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"sort"
 
+	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/dnstype"
@@ -78,17 +79,42 @@ func (c Config) hasRoutes() bool {
 }
 
 // hasDefaultIPResolversOnly reports whether the only resolvers in c are
-// DefaultResolvers, and that those resolvers are simple IP addresses.
+// DefaultResolvers, and that those resolvers are simple IP addresses
+// that speak regular port 53 DNS.
 func (c Config) hasDefaultIPResolversOnly() bool {
 	if !c.hasDefaultResolvers() || c.hasRoutes() {
 		return false
 	}
 	for _, r := range c.DefaultResolvers {
-		if ipp, ok := r.IPPort(); !ok || ipp.Port() != 53 {
+		if ipp, ok := r.IPPort(); !ok || ipp.Port() != 53 || publicdns.IPIsDoHOnlyServer(ipp.Addr()) {
 			return false
 		}
 	}
 	return true
+}
+
+// hasHostsWithoutSplitDNSRoutes reports whether c contains any Host entries
+// that aren't covered by a SplitDNS route suffix.
+func (c Config) hasHostsWithoutSplitDNSRoutes() bool {
+	// TODO(bradfitz): this could be more efficient, but we imagine
+	// the number of SplitDNS routes and/or hosts will be small.
+	for host := range c.Hosts {
+		if !c.hasSplitDNSRouteForHost(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSplitDNSRouteForHost reports whether c contains a SplitDNS route
+// that contains hosts.
+func (c Config) hasSplitDNSRouteForHost(host dnsname.FQDN) bool {
+	for route := range c.Routes {
+		if route.Contains(host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) hasDefaultResolvers() bool {

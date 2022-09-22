@@ -478,8 +478,8 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 
 // Issue 1573: don't generate a machine key if we don't want to be running.
 func TestLazyMachineKeyGeneration(t *testing.T) {
-	defer func(old bool) { panicOnMachineKeyGeneration = old }(panicOnMachineKeyGeneration)
-	panicOnMachineKeyGeneration = true
+	defer func(old func() bool) { panicOnMachineKeyGeneration = old }(panicOnMachineKeyGeneration)
+	panicOnMachineKeyGeneration = func() bool { return true }
 
 	var logf logger.Logf = logger.Discard
 	store := new(mem.Store)

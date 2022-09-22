@@ -48,6 +48,7 @@ type mapSession struct {
 	lastHealth             []string
 	lastPopBrowserURL      string
 	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
+	lastTKAInfo            *tailcfg.TKAInfo
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -115,6 +116,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
 	}
+	if resp.TKAInfo != nil {
+		ms.lastTKAInfo = resp.TKAInfo
+	}
 
 	debug := resp.Debug
 	if debug != nil {
@@ -152,8 +156,16 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		DERPMap:         ms.lastDERPMap,
 		Debug:           debug,
 		ControlHealth:   ms.lastHealth,
+		TKAEnabled:      ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 	ms.netMapBuilding = nm
+
+	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
+		if err := nm.TKAHead.UnmarshalText([]byte(ms.lastTKAInfo.Head)); err != nil {
+			ms.logf("error unmarshalling TKAHead: %v", err)
+			nm.TKAEnabled = false
+		}
+	}
 
 	if resp.Node != nil {
 		ms.lastNode = resp.Node
@@ -190,7 +202,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 		ms.addUserProfile(peer.User)
 	}
-	if DevKnob.ForceProxyDNS {
+	if DevKnob.ForceProxyDNS() {
 		nm.DNS.Proxied = true
 	}
 	ms.netMapBuilding = nil
@@ -356,13 +368,13 @@ func cloneNodes(v1 []*tailcfg.Node) []*tailcfg.Node {
 	return v2
 }
 
-var debugSelfIPv6Only = envknob.Bool("TS_DEBUG_SELF_V6_ONLY")
+var debugSelfIPv6Only = envknob.RegisterBool("TS_DEBUG_SELF_V6_ONLY")
 
 func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 	switch {
 	default:
 		return in
-	case debugSelfIPv6Only:
+	case debugSelfIPv6Only():
 		for _, a := range in {
 			if a.Addr().Is6() {
 				ret = append(ret, a)

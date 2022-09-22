@@ -48,6 +48,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	Hostname               string
 	NotepadURLs            bool
 	ForceDaemon            bool
+	Egg                    bool
 	AdvertiseRoutes        []netip.Prefix
 	NoSNAT                 bool
 	NetfilterMode          preftype.NetfilterMode

@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/netip"
@@ -46,9 +45,7 @@ import (
 )
 
 var (
-	debugPolicyFile             = envknob.SSHPolicyFile()
-	debugIgnoreTailnetSSHPolicy = envknob.SSHIgnoreTailnetPolicy()
-	sshVerboseLogging           = envknob.Bool("TS_DEBUG_SSH_VLOG")
+	sshVerboseLogging = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
 )
 
 type server struct {
@@ -384,9 +381,10 @@ func (c *conn) sshPolicy() (_ *tailcfg.SSHPolicy, ok bool) {
 	if nm == nil {
 		return nil, false
 	}
-	if pol := nm.SSHPolicy; pol != nil && !debugIgnoreTailnetSSHPolicy {
+	if pol := nm.SSHPolicy; pol != nil && !envknob.SSHIgnoreTailnetPolicy() {
 		return pol, true
 	}
+	debugPolicyFile := envknob.SSHPolicyFile()
 	if debugPolicyFile != "" {
 		c.logf("reading debug SSH policy file: %v", debugPolicyFile)
 		f, err := os.ReadFile(debugPolicyFile)
@@ -769,7 +767,7 @@ type sshSession struct {
 }
 
 func (ss *sshSession) vlogf(format string, args ...interface{}) {
-	if sshVerboseLogging {
+	if sshVerboseLogging() {
 		ss.logf(format, args...)
 	}
 }
@@ -952,7 +950,7 @@ func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) err
 // functionality and support off-node streaming.
 //
 // TODO(bradfitz,maisem): move this to SSHPolicy.
-var recordSSH = envknob.Bool("TS_DEBUG_LOG_SSH")
+var recordSSH = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
 
 // run is the entrypoint for a newly accepted SSH session.
 //
@@ -1092,7 +1090,7 @@ func (ss *sshSession) shouldRecord() bool {
 	// TODO(bradfitz,maisem): make configurable on SSHPolicy and
 	// support recording non-pty stuff too.
 	_, _, isPtyReq := ss.Pty()
-	return recordSSH && isPtyReq
+	return recordSSH() && isPtyReq
 }
 
 type sshConnInfo struct {
@@ -1307,7 +1305,7 @@ func (ss *sshSession) startNewRecording() (*recording, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	f, err := ioutil.TempFile(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
+	f, err := os.CreateTemp(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
 	if err != nil {
 		return nil, err
 	}

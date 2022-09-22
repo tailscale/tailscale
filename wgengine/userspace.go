@@ -6,7 +6,6 @@ package wgengine
 
 import (
 	"bufio"
-	"bytes"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"go4.org/mem"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/control/controlclient"
@@ -46,13 +44,12 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/singleflight"
-	"tailscale.com/version"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
+	"tailscale.com/wgengine/wgint"
 	"tailscale.com/wgengine/wglog"
 )
 
@@ -146,10 +143,6 @@ type userspaceEngine struct {
 	// echo responses. The map key is a random uint32 that is the little endian
 	// value of the ICMP identifer and sequence number concatenated.
 	icmpEchoResponseCallback map[uint32]func()
-
-	// this singleflight is used to deduplicate calls to getStatus when we
-	// don't care if the data is perfectly fresh
-	getStatusSf singleflight.Group[struct{}, *Status]
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
@@ -541,28 +534,27 @@ func (e *userspaceEngine) pollResolver() {
 	}
 }
 
-var debugTrimWireguard = envknob.OptBool("TS_DEBUG_TRIM_WIREGUARD")
+var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
 
-// forceFullWireguardConfig reports whether we should give wireguard
-// our full network map, even for inactive peers
+// forceFullWireguardConfig reports whether we should give wireguard our full
+// network map, even for inactive peers.
 //
-// TODO(bradfitz): remove this after our 1.0 launch; we don't want to
-// enable wireguard config trimming quite yet because it just landed
-// and we haven't got enough time testing it.
+// TODO(bradfitz): remove this at some point. We had a TODO to do it before 1.0
+// but it's still there as of 1.30. Really we should not do this wireguard lazy
+// peer config at all and just fix wireguard-go to not have so much extra memory
+// usage per peer. That would simplify a lot of Tailscale code. OTOH, we have 50
+// MB of memory on iOS now instead of 15 MB, so the other option is to just give
+// up on lazy wireguard config and blow the memory and hope for the best on iOS.
+// That's sad too. Or we get rid of these knobs (lazy wireguard config has been
+// stable!) but I'm worried that a future regression would be easier to debug
+// with these knobs in place.
 func forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimmming via the environment variable knob?
-	if b, ok := debugTrimWireguard.Get(); ok {
+	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
 	if opt := controlclient.TrimWGConfig(); opt != "" {
 		return !opt.EqualBool(true)
-	}
-
-	// On iOS with large networks, it's critical, so turn on trimming.
-	// Otherwise we run out of memory from wireguard-go goroutine stacks+buffers.
-	// This will be the default later for all platforms and network sizes.
-	if numPeers > 50 && version.OS() == "iOS" {
-		return false
 	}
 	return false
 }
@@ -983,138 +975,51 @@ var singleNewline = []byte{'\n'}
 
 var ErrEngineClosing = errors.New("engine closing; no status")
 
+func (e *userspaceEngine) getPeerStatusLite(pk key.NodePublic) (status ipnstate.PeerStatusLite, ok bool) {
+	e.wgLock.Lock()
+	if e.wgdev == nil {
+		e.wgLock.Unlock()
+		return status, false
+	}
+	peer := e.wgdev.LookupPeer(pk.Raw32())
+	e.wgLock.Unlock()
+	if peer == nil {
+		return status, false
+	}
+	status.NodeKey = pk
+	status.RxBytes = int64(wgint.PeerRxBytes(peer))
+	status.TxBytes = int64(wgint.PeerTxBytes(peer))
+	status.LastHandshake = time.Unix(0, wgint.PeerLastHandshakeNano(peer))
+	return status, true
+}
+
 func (e *userspaceEngine) getStatus() (*Status, error) {
 	// Grab derpConns before acquiring wgLock to not violate lock ordering;
 	// the DERPs method acquires magicsock.Conn.mu.
 	// (See comment in userspaceEngine's declaration.)
 	derpConns := e.magicConn.DERPs()
 
-	e.wgLock.Lock()
-	defer e.wgLock.Unlock()
-
 	e.mu.Lock()
 	closing := e.closing
+	peerKeys := make([]key.NodePublic, len(e.peerSequence))
+	copy(peerKeys, e.peerSequence)
+	localAddrs := append([]tailcfg.Endpoint(nil), e.endpoints...)
 	e.mu.Unlock()
+
 	if closing {
 		return nil, ErrEngineClosing
 	}
 
-	if e.wgdev == nil {
-		// RequestStatus was invoked before the wgengine has
-		// finished initializing. This can happen when wgegine
-		// provides a callback to magicsock for endpoint
-		// updates that calls RequestStatus.
-		return nil, nil
-	}
-
-	pr, pw := io.Pipe()
-	defer pr.Close() // to unblock writes on error path returns
-
-	errc := make(chan error, 1)
-	go func() {
-		defer pw.Close()
-		// TODO(apenwarr): get rid of silly uapi stuff for in-process comms
-		// FIXME: get notified of status changes instead of polling.
-		err := e.wgdev.IpcGetOperation(pw)
-		if err != nil {
-			err = fmt.Errorf("IpcGetOperation: %w", err)
-		}
-		errc <- err
-	}()
-
-	pp := make(map[key.NodePublic]ipnstate.PeerStatusLite)
-	var p ipnstate.PeerStatusLite
-
-	var hst1, hst2, n int64
-
-	br := e.statusBufioReader
-	if br != nil {
-		br.Reset(pr)
-	} else {
-		br = bufio.NewReaderSize(pr, 1<<10)
-		e.statusBufioReader = br
-	}
-	for {
-		line, err := br.ReadSlice('\n')
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("reading from UAPI pipe: %w", err)
-		}
-		line = bytes.TrimSuffix(line, singleNewline)
-		k := line
-		var v mem.RO
-		if i := bytes.IndexByte(line, '='); i != -1 {
-			k = line[:i]
-			v = mem.B(line[i+1:])
-		}
-		switch string(k) {
-		case "public_key":
-			pk, err := key.ParseNodePublicUntyped(v)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: invalid key in line %q", line)
-			}
-			if !p.NodeKey.IsZero() {
-				pp[p.NodeKey] = p
-			}
-			p = ipnstate.PeerStatusLite{NodeKey: pk}
-		case "rx_bytes":
-			n, err = mem.ParseInt(v, 10, 64)
-			p.RxBytes = n
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: rx_bytes invalid: %#v", line)
-			}
-		case "tx_bytes":
-			n, err = mem.ParseInt(v, 10, 64)
-			p.TxBytes = n
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: tx_bytes invalid: %#v", line)
-			}
-		case "last_handshake_time_sec":
-			hst1, err = mem.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: hst1 invalid: %#v", line)
-			}
-		case "last_handshake_time_nsec":
-			hst2, err = mem.ParseInt(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("IpcGetOperation: hst2 invalid: %#v", line)
-			}
-			if hst1 != 0 || hst2 != 0 {
-				p.LastHandshake = time.Unix(hst1, hst2)
-			} // else leave at time.IsZero()
-		}
-	}
-	if !p.NodeKey.IsZero() {
-		pp[p.NodeKey] = p
-	}
-	if err := <-errc; err != nil {
-		return nil, fmt.Errorf("IpcGetOperation: %v", err)
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Do two passes, one to calculate size and the other to populate.
-	// This code is sensitive to allocations.
-	npeers := 0
-	for _, pk := range e.peerSequence {
-		if _, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
-			npeers++
-		}
-	}
-
-	peers := make([]ipnstate.PeerStatusLite, 0, npeers)
-	for _, pk := range e.peerSequence {
-		if p, ok := pp[pk]; ok { // ignore idle ones not in wireguard-go's config
-			peers = append(peers, p)
+	peers := make([]ipnstate.PeerStatusLite, 0, len(peerKeys))
+	for _, key := range peerKeys {
+		if status, found := e.getPeerStatusLite(key); found {
+			peers = append(peers, status)
 		}
 	}
 
 	return &Status{
 		AsOf:       time.Now(),
-		LocalAddrs: append([]tailcfg.Endpoint(nil), e.endpoints...),
+		LocalAddrs: localAddrs,
 		Peers:      peers,
 		DERPs:      derpConns,
 	}, nil

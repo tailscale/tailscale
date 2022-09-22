@@ -36,6 +36,8 @@ func main() {
 	switch flag.Arg(0) {
 	case "dev":
 		runDev()
+	case "dev-pkg":
+		runDevPkg()
 	case "build":
 		runBuild()
 	case "build-pkg":

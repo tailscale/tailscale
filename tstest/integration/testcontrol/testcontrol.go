@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -201,6 +200,9 @@ func (s *Server) logf(format string, a ...any) {
 func (s *Server) initMux() {
 	s.mux = http.NewServeMux()
 	s.mux.HandleFunc("/", s.serveUnhandled)
+	s.mux.HandleFunc("/generate_204", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	s.mux.HandleFunc("/key", s.serveKey)
 	s.mux.HandleFunc("/machine/", s.serveMachine)
 }
@@ -426,7 +428,7 @@ func (s *Server) CompleteAuth(authPathOrURL string) bool {
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.MachinePublic) {
-	msg, err := ioutil.ReadAll(io.LimitReader(r.Body, msgLimit))
+	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	r.Body.Close()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("bad map request read: %v", err), 400)
@@ -597,7 +599,7 @@ func (s *Server) serveMap(w http.ResponseWriter, r *http.Request, mkey key.Machi
 	defer s.incrInServeMap(-1)
 	ctx := r.Context()
 
-	msg, err := ioutil.ReadAll(io.LimitReader(r.Body, msgLimit))
+	msg, err := io.ReadAll(io.LimitReader(r.Body, msgLimit))
 	if err != nil {
 		r.Body.Close()
 		http.Error(w, fmt.Sprintf("bad map request read: %v", err), 400)

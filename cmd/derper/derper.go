@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"net"
@@ -26,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/atomicfile"
 	"tailscale.com/derp"
@@ -46,11 +46,13 @@ var (
 	certDir    = flag.String("certdir", tsweb.DefaultCertDir("derper-certs"), "directory to store LetsEncrypt certs, if addr's port is :443")
 	hostname   = flag.String("hostname", "derp.tailscale.com", "LetsEncrypt host name, if addr's port is :443")
 	runSTUN    = flag.Bool("stun", true, "whether to run a STUN server. It will bind to the same IP (if any) as the --addr flag value.")
+	runDERP    = flag.Bool("derp", true, "whether to run a DERP server. The only reason to set this false is if you're decommissioning a server but want to keep its bootstrap DNS functionality still running.")
 
-	meshPSKFile   = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
-	meshWith      = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
-	bootstrapDNS  = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
-	verifyClients = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
+	meshPSKFile    = flag.String("mesh-psk-file", defaultMeshPSKFile(), "if non-empty, path to file containing the mesh pre-shared key file. It should contain some hex string; whitespace is trimmed.")
+	meshWith       = flag.String("mesh-with", "", "optional comma-separated list of hostnames to mesh with; the server's own hostname can be in the list")
+	bootstrapDNS   = flag.String("bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns")
+	unpublishedDNS = flag.String("unpublished-bootstrap-dns-names", "", "optional comma-separated list of hostnames to make available at /bootstrap-dns and not publish in the list")
+	verifyClients  = flag.Bool("verify-clients", false, "verify clients to this DERP server through a local tailscaled instance.")
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
@@ -96,7 +98,7 @@ func loadConfig() config {
 		}
 		log.Printf("no config path specified; using %s", *configPath)
 	}
-	b, err := ioutil.ReadFile(*configPath)
+	b, err := os.ReadFile(*configPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return writeNewConfig()
@@ -152,7 +154,7 @@ func main() {
 	s.SetVerifyClient(*verifyClients)
 
 	if *meshPSKFile != "" {
-		b, err := ioutil.ReadFile(*meshPSKFile)
+		b, err := os.ReadFile(*meshPSKFile)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -169,9 +171,15 @@ func main() {
 	expvar.Publish("derp", s.ExpVar())
 
 	mux := http.NewServeMux()
-	derpHandler := derphttp.Handler(s)
-	derpHandler = addWebSocketSupport(s, derpHandler)
-	mux.Handle("/derp", derpHandler)
+	if *runDERP {
+		derpHandler := derphttp.Handler(s)
+		derpHandler = addWebSocketSupport(s, derpHandler)
+		mux.Handle("/derp", derpHandler)
+	} else {
+		mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "derp server disabled", http.StatusNotFound)
+		}))
+	}
 	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
@@ -187,10 +195,17 @@ func main() {
   server.
 </p>
 `)
+		if !*runDERP {
+			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
+		}
 		if tsweb.AllowDebugAccess(r) {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
 		}
 	}))
+	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "User-agent: *\nDisallow: /\n")
+	}))
+	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -208,9 +223,11 @@ func main() {
 		go serveSTUN(listenHost, *stunPort)
 	}
 
+	quietLogger := log.New(logFilter{}, "", 0)
 	httpsrv := &http.Server{
-		Addr:    *addr,
-		Handler: mux,
+		Addr:     *addr,
+		Handler:  mux,
+		ErrorLog: quietLogger,
 
 		// Set read/write timeout. For derper, this basically
 		// only affects TLS setup, as read/write deadlines are
@@ -276,9 +293,13 @@ func main() {
 		})
 		if *httpPort > -1 {
 			go func() {
+				port80mux := http.NewServeMux()
+				port80mux.HandleFunc("/generate_204", serveNoContent)
+				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
-					Handler:     certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}),
+					Handler:     port80mux,
+					ErrorLog:    quietLogger,
 					ReadTimeout: 30 * time.Second,
 					// Crank up WriteTimeout a bit more than usually
 					// necessary just so we can do long CPU profiles
@@ -302,6 +323,11 @@ func main() {
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
 	}
+}
+
+// For captive portal detection
+func serveNoContent(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // probeHandler is the endpoint that js/wasm clients hit to measure
@@ -448,4 +474,23 @@ func (l *rateLimitedListener) Accept() (net.Conn, error) {
 	}
 	l.numAccepts.Add(1)
 	return cn, nil
+}
+
+// logFilter is used to filter out useless error logs that are logged to
+// the net/http.Server.ErrorLog logger.
+type logFilter struct{}
+
+func (logFilter) Write(p []byte) (int, error) {
+	b := mem.B(p)
+	if mem.HasSuffix(b, mem.S(": EOF\n")) ||
+		mem.HasSuffix(b, mem.S(": i/o timeout\n")) ||
+		mem.HasSuffix(b, mem.S(": read: connection reset by peer\n")) ||
+		mem.HasSuffix(b, mem.S(": remote error: tls: bad certificate\n")) ||
+		mem.HasSuffix(b, mem.S(": tls: first record does not look like a TLS handshake\n")) {
+		// Skip this log message, but say that we processed it
+		return len(p), nil
+	}
+
+	log.Printf("%s", p)
+	return len(p), nil
 }

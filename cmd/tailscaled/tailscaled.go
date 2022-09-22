@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -97,6 +98,20 @@ func defaultTunName() string {
 	return "tailscale0"
 }
 
+// defaultPort returns the default UDP port to listen on for disco+wireguard.
+// By default it returns 0, to pick one randomly from the kernel.
+// If the environment variable PORT is set, that's used instead.
+// The PORT environment variable is chosen to match what the Linux systemd
+// unit uses, to make documentation more consistent.
+func defaultPort() uint16 {
+	if s := envknob.String("PORT"); s != "" {
+		if p, err := strconv.ParseUint(s, 10, 16); err == nil {
+			return uint16(p)
+		}
+	}
+	return 0
+}
+
 var args struct {
 	// tunname is a /dev/net/tun tunnel name ("tailscale0"), the
 	// string "userspace-networking", "tap:TAPNAME[:BRIDGENAME]"
@@ -113,6 +128,7 @@ var args struct {
 	verbose        int
 	socksAddr      string // listen address for SOCKS5 server
 	httpProxyAddr  string // listen address for HTTP proxy server
+	disableLogs    bool
 }
 
 var (
@@ -131,6 +147,9 @@ var subCommands = map[string]*func([]string) error{
 var beCLI func() // non-nil if CLI is linked in
 
 func main() {
+	envknob.PanicIfAnyEnvCheckedInInit()
+	envknob.ApplyDiskConfig()
+
 	printVersion := false
 	flag.IntVar(&args.verbose, "verbose", 0, "log verbosity level; 0 is default, 1 or higher are increasingly verbose")
 	flag.BoolVar(&args.cleanup, "cleanup", false, "clean up system state and exit")
@@ -138,12 +157,13 @@ func main() {
 	flag.StringVar(&args.socksAddr, "socks5-server", "", `optional [ip]:port to run a SOCK5 server (e.g. "localhost:1080")`)
 	flag.StringVar(&args.httpProxyAddr, "outbound-http-proxy-listen", "", `optional [ip]:port to run an outbound HTTP proxy (e.g. "localhost:8080")`)
 	flag.StringVar(&args.tunname, "tun", defaultTunName(), `tunnel interface name; use "userspace-networking" (beta) to not use TUN`)
-	flag.Var(flagtype.PortValue(&args.port, 0), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
+	flag.Var(flagtype.PortValue(&args.port, defaultPort()), "port", "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	flag.StringVar(&args.statepath, "state", "", "absolute path of state file; use 'kube:<secret-name>' to use Kubernetes secrets or 'arn:aws:ssm:...' to store in AWS SSM; use 'mem:' to not store state and register as an emphemeral node. If empty and --statedir is provided, the default is <statedir>/tailscaled.state. Default: "+paths.DefaultTailscaledStateFile())
 	flag.StringVar(&args.statedir, "statedir", "", "path to directory for storage of config state, TLS certs, temporary incoming Taildrop files, etc. If empty, it's derived from --state when possible.")
 	flag.StringVar(&args.socketpath, "socket", paths.DefaultTailscaledSocket(), "path of the service unix socket")
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -197,6 +217,10 @@ func main() {
 	// user may specify only --statedir if they wish.
 	if args.statepath == "" && args.statedir == "" {
 		args.statepath = paths.DefaultTailscaledStateFile()
+	}
+
+	if args.disableLogs {
+		envknob.SetNoLogsNoSupport()
 	}
 
 	if beWindowsSubprocess() {
@@ -302,6 +326,10 @@ func run() error {
 		pol.Shutdown(ctx)
 	}()
 
+	if err := envknob.ApplyDiskConfigError(); err != nil {
+		log.Printf("Error reading environment config: %v", err)
+	}
+
 	if isWindowsService() {
 		// Run the IPN server from the Windows service manager.
 		log.Printf("Running service...")
@@ -370,7 +398,7 @@ func run() error {
 		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = useNetstack
-	ns.ProcessSubnets = useNetstack || wrapNetstack
+	ns.ProcessSubnets = useNetstack || shouldWrapNetstack()
 
 	if useNetstack {
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
@@ -471,8 +499,6 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer)
 	return nil, false, multierr.New(errs...)
 }
 
-var wrapNetstack = shouldWrapNetstack()
-
 func shouldWrapNetstack() bool {
 	if v, ok := envknob.LookupBool("TS_DEBUG_WRAP_NETSTACK"); ok {
 		return v
@@ -543,7 +569,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 		}
 		conf.DNS = d
 		conf.Router = r
-		if wrapNetstack {
+		if shouldWrapNetstack() {
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 		}
 	}

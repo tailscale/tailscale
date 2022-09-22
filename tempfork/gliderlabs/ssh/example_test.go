@@ -3,7 +3,7 @@ package ssh_test
 import (
 	"errors"
 	"io"
-	"io/ioutil"
+	"os"
 
 	"tailscale.com/tempfork/gliderlabs/ssh"
 )
@@ -29,7 +29,7 @@ func ExampleNoPty() {
 func ExamplePublicKeyAuth() {
 	ssh.ListenAndServe(":2222", nil,
 		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) error {
-			data, err := ioutil.ReadFile("/path/to/allowed/key.pub")
+			data, err := os.ReadFile("/path/to/allowed/key.pub")
 			if err != nil {
 				return err
 			}
