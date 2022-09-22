@@ -235,6 +235,9 @@ type Node struct {
 	ComputedName            string `json:",omitempty"` // MagicDNS base name (for normal non-shared-in nodes), FQDN (without trailing dot, for shared-in nodes), or Hostname (if no MagicDNS)
 	computedHostIfDifferent string // hostname, if different than ComputedName, otherwise empty
 	ComputedNameWithHost    string `json:",omitempty"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
+
+	// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
+	DataPlaneAuditLogID string `json:",omitempty"`
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1372,6 +1375,10 @@ type MapResponse struct {
 	// A nil TKAInfo in a mapresponse stream (i.e. a 'delta' mapresponse)
 	// indicates no change from the value sent earlier.
 	TKAInfo *TKAInfo `json:",omitempty"`
+
+	// DomainDataPlaneAuditLogID, if non-empty, is the per-tailnet log ID to be
+	// used when writing data plane audit logs.
+	DomainDataPlaneAuditLogID string `json:",omitempty"`
 
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.

@@ -173,6 +173,7 @@ func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthor
 func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
 func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
+func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
 func (v NodeView) Equal(v2 NodeView) bool            { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -203,6 +204,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	ComputedName            string
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
+	DataPlaneAuditLogID     string
 }{})
 
 // View returns a readonly view of Hostinfo.

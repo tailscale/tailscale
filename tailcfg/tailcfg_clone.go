@@ -95,6 +95,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	ComputedName            string
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
+	DataPlaneAuditLogID     string
 }{})
 
 // Clone makes a deep copy of Hostinfo.
