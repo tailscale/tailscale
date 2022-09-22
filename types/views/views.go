@@ -216,6 +216,17 @@ func (v IPPrefixSlice) ContainsExitRoutes() bool {
 	return tsaddr.ContainsExitRoutes(v.ж.ж)
 }
 
+// ContainsNonExitSubnetRoutes reports whether v contains Subnet
+// Routes other than ExitNode Routes.
+func (v IPPrefixSlice) ContainsNonExitSubnetRoutes() bool {
+	for i := 0; i < v.Len(); i++ {
+		if v.At(i).Bits() != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // MarshalJSON implements json.Marshaler.
 func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
 	return v.ж.MarshalJSON()
