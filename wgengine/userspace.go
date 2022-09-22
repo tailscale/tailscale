@@ -1187,15 +1187,18 @@ func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	// suspend/resume or whenever NetworkManager is started, it
 	// nukes all systemd-resolved configs. So reapply our DNS
 	// config on major link change.
-	if (runtime.GOOS == "linux" || runtime.GOOS == "android") && changed {
-		e.wgLock.Lock()
-		dnsCfg := e.lastDNSConfig
-		e.wgLock.Unlock()
-		if dnsCfg != nil {
-			if err := e.dns.Set(*dnsCfg); err != nil {
-				e.logf("wgengine: error setting DNS config after major link change: %v", err)
-			} else {
-				e.logf("wgengine: set DNS config again after major link change")
+	if changed {
+		switch runtime.GOOS {
+		case "linux", "android", "ios", "darwin":
+			e.wgLock.Lock()
+			dnsCfg := e.lastDNSConfig
+			e.wgLock.Unlock()
+			if dnsCfg != nil {
+				if err := e.dns.Set(*dnsCfg); err != nil {
+					e.logf("wgengine: error setting DNS config after major link change: %v", err)
+				} else {
+					e.logf("wgengine: set DNS config again after major link change")
+				}
 			}
 		}
 	}
