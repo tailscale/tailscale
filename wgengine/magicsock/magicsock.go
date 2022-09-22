@@ -344,7 +344,7 @@ type Conn struct {
 	// endpoint addresses of ourselves from STUN. And this extra information
 	// could help other peers in the same private network. See issu #5396
 	// for details.
-	interEps map[netip.AddrPort]bool
+	interEps map[key.NodePublic]netip.AddrPort
 
 	// derpCleanupTimer is the timer that fires to occasionally clean
 	// up idle DERP connections. It's only used when there is a non-home
@@ -592,6 +592,7 @@ func NewConn(opts Options) (*Conn, error) {
 		PortMapper:          c.portMapper,
 	}
 
+	c.interEps = make(map[key.NodePublic]netip.AddrPort)
 	c.ignoreSTUNPackets()
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
@@ -2068,7 +2069,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		di.setNodeKey(nk)
 		if !isDerp {
 			c.peerMap.setNodeKeyForIPPort(src, nk)
-			c.interEps[dm.Dst] = true
+			c.interEps[dm.NodeKey] = dm.Dst
 		}
 	}
 
