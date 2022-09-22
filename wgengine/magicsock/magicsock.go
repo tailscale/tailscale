@@ -1092,8 +1092,8 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 		}
 	}
 
-	for k := range c.interEps {
-		addAddr(k, tailcfg.EndpointLocal)
+	for _, v := range c.interEps {
+		addAddr(v, tailcfg.EndpointLocal)
 	}
 	// If we didn't have a portmap earlier, maybe it's done by now.
 	if !havePortmap {
