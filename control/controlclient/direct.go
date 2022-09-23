@@ -1434,15 +1434,11 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) error {
 	newReq := *req
 	newReq.Version = tailcfg.CurrentCapabilityVersion
-	np, err := c.getNoiseClient()
+	nc, err := c.getNoiseClient()
 	if err != nil {
 		return err
 	}
-	bodyData, err := json.Marshal(newReq)
-	if err != nil {
-		return err
-	}
-	res, err := np.Post(fmt.Sprintf("https://%v/%v", np.host, "machine/set-dns"), "application/json", bytes.NewReader(bodyData))
+	res, err := nc.post(ctx, "/machine/set-dns", req)
 	if err != nil {
 		return err
 	}
