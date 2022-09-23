@@ -5,8 +5,10 @@
 package controlclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"math"
 	"net"
 	"net/http"
@@ -227,4 +229,17 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	ncc := &noiseConn{Conn: conn, id: connID, pool: nc}
 	mak.Set(&nc.connPool, ncc.id, ncc)
 	return ncc, nil
+}
+
+func (nc *noiseClient) post(ctx context.Context, path string, body any) (*http.Response, error) {
+	jbody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://"+nc.host+path, bytes.NewReader(jbody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return nc.Do(req)
 }
