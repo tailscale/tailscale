@@ -80,7 +80,8 @@ type CapabilityVersion int
 //   - 41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
 //   - 42: 2022-09-06: NextDNS DoH support; see https://github.com/tailscale/tailscale/pull/5556
 //   - 43: 2022-09-21: clients can return usernames for SSH
-const CurrentCapabilityVersion CapabilityVersion = 43
+//   - 44: 2022-09-22: MapResponse.ControlDialPlan
+const CurrentCapabilityVersion CapabilityVersion = 44
 
 type StableID string
 
@@ -1383,6 +1384,40 @@ type MapResponse struct {
 	// Debug is normally nil, except for when the control server
 	// is setting debug settings on a node.
 	Debug *Debug `json:",omitempty"`
+
+	// ControlDialPlan tells the client how to connect to the control
+	// server. An initial nil is equivalent to new(ControlDialPlan).
+	// A subsequent streamed nil means no change.
+	ControlDialPlan *ControlDialPlan `json:",omitempty"`
+}
+
+// ControlDialPlan is instructions from the control server to the client on how
+// to connect to the control server; this is useful for maintaining connection
+// if the client's network state changes after the initial connection, or due
+// to the configuration that the control server pushes.
+type ControlDialPlan struct {
+	// An empty list means the default: use DNS (unspecified which DNS).
+	Candidates []ControlIPCandidate
+}
+
+// ControlIPCandidate represents a single candidate address to use when
+// connecting to the control server.
+type ControlIPCandidate struct {
+	// IP is the address to attempt connecting to.
+	IP netip.Addr
+
+	// DialStartSec is the number of seconds after the beginning of the
+	// connection process to wait before trying this candidate.
+	DialStartDelaySec float64 `json:",omitempty"`
+
+	// DialTimeoutSec is the timeout for a connection to this candidate,
+	// starting after DialStartDelaySec.
+	DialTimeoutSec float64 `json:",omitempty"`
+
+	// Priority is the relative priority of this candidate; candidates with
+	// a higher priority are preferred over candidates with a lower
+	// priority.
+	Priority int `json:",omitempty"`
 }
 
 // Debug are instructions from the control server to the client

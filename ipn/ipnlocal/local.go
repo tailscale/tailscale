@@ -189,6 +189,10 @@ type LocalBackend struct {
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
 	statusChanged *sync.Cond
+
+	// dialPlan is any dial plan that we've received from the control
+	// server during a previous connection; it is cleared on logout.
+	dialPlan atomic.Pointer[tailcfg.ControlDialPlan]
 }
 
 // clientGen is a func that creates a control plane client.
@@ -1087,6 +1091,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
+		DialPlan:             &b.dialPlan, // pointer because it can't be copied
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
@@ -3111,6 +3116,9 @@ func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 		LoggedOutSet:   true,
 		Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
 	})
+
+	// Clear any previous dial plan(s), if set.
+	b.dialPlan.Store(nil)
 
 	if cc == nil {
 		// Double Logout can happen via repeated IPN
