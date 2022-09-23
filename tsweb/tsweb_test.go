@@ -303,7 +303,7 @@ func BenchmarkLogNot200(b *testing.B) {
 		// Implicit 200 OK.
 		return nil
 	})
-	h := StdHandler(rh, HandlerOptions{Quiet200s: true})
+	h := StdHandler(rh, HandlerOptions{QuietLoggingIfSuccessful: true})
 	req := httptest.NewRequest("GET", "/", nil)
 	rw := new(httptest.ResponseRecorder)
 	for i := 0; i < b.N; i++ {
