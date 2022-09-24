@@ -996,6 +996,10 @@ func (h *peerAPIHandler) replyToDNSQueries() bool {
 // handleDNSQuery implements a DoH server (RFC 8484) over the peerapi.
 // It's not over HTTPS as the spec dictates, but rather HTTP-over-WireGuard.
 func (h *peerAPIHandler) handleDNSQuery(w http.ResponseWriter, r *http.Request) {
+	if !h.ps.b.peerAPIEnableDNS {
+		http.Error(w, "denied, DNS service disabled", http.StatusForbidden)
+		return
+	}
 	if h.ps.resolver == nil {
 		http.Error(w, "DNS not wired up", http.StatusNotImplemented)
 		return

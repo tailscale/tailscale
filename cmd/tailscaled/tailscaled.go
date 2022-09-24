@@ -129,6 +129,7 @@ var args struct {
 	socksAddr      string // listen address for SOCKS5 server
 	httpProxyAddr  string // listen address for HTTP proxy server
 	disableLogs    bool
+	disablePeerAPIDNS    bool
 }
 
 var (
@@ -164,6 +165,7 @@ func main() {
 	flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
 	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
+	flag.BoolVar(&args.disablePeerAPIDNS, "no-peerapi-dns", false, "disable peer API DNS");
 
 	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "tailscale" && beCLI != nil {
 		beCLI()
@@ -458,7 +460,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("ipnserver.New: %w", err)
 	}
-	ns.SetLocalBackend(srv.LocalBackend())
+	backend := srv.LocalBackend()
+	backend.SetPeerAPIEnableDNS(!args.disablePeerAPIDNS)
+	ns.SetLocalBackend(backend)
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}

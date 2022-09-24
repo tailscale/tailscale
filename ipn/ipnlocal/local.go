@@ -167,6 +167,7 @@ type LocalBackend struct {
 	prevIfState      *interfaces.State
 	peerAPIServer    *peerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
+	peerAPIEnableDNS bool
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
 	lastStatusTime   time.Time // status.AsOf value of the last processed status update
@@ -2200,14 +2201,19 @@ func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
 			Port:  uint16(pln.port),
 		})
 	}
-	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd", "illumos", "darwin", "windows":
-		// These are the platforms currently supported by
-		// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
-		ret = append(ret, tailcfg.Service{
-			Proto: tailcfg.PeerAPIDNS,
-			Port:  1, // version
-		})
+	if b.peerAPIEnableDNS {
+		b.logf("[v1] enabling peerapi-dns service");
+		switch runtime.GOOS {
+		case "linux", "freebsd", "openbsd", "illumos", "darwin", "windows":
+			// These are the platforms currently supported by
+			// net/dns/resolver/tsdns.go:Resolver.HandleExitNodeDNSQuery.
+			ret = append(ret, tailcfg.Service{
+				Proto: tailcfg.PeerAPIDNS,
+				Port:  1, // version
+			})
+		}
+	} else {
+		b.logf("[v1] NOT enabling peerapi-dns service");
 	}
 	return ret
 }
@@ -2545,6 +2551,10 @@ func (b *LocalBackend) SetTailnetKeyAuthority(a *tka.Authority, storage *tka.FS)
 // It should only be called before the LocalBackend is used.
 func (b *LocalBackend) SetVarRoot(dir string) {
 	b.varRoot = dir
+}
+
+func (b *LocalBackend) SetPeerAPIEnableDNS(enable bool) {
+	b.peerAPIEnableDNS = enable
 }
 
 // TailscaleVarRoot returns the root directory of Tailscale's writable
