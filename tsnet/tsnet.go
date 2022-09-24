@@ -42,6 +42,9 @@ import (
 	"tailscale.com/wgengine/netstack"
 )
 
+var encoderOnce sync.Once
+var zstdEncoder logtail.Encoder
+
 // Server is an embedded Tailscale server.
 //
 // Its exported fields may be changed until the first call to Listen.
@@ -123,6 +126,14 @@ func (s *Server) LocalClient() (*tailscale.LocalClient, error) {
 // Optional: any calls to Dial/Listen will also call Start.
 func (s *Server) Start() error {
 	hostinfo.SetPackage("tsnet")
+	encoderOnce.Do(func() {
+		// on advice from https://github.com/klauspost/compress/issues/370
+		w, err := smallzstd.NewEncoder(nil)
+		if err != nil {
+			panic(err)
+		}
+		zstdEncoder = w
+	})
 	s.initOnce.Do(s.doInit)
 	return s.initErr
 }
@@ -254,11 +265,7 @@ func (s *Server) start() (reterr error) {
 		Stderr:     io.Discard, // log everything to Buffer
 		Buffer:     s.logbuffer,
 		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
+			return zstdEncoder
 		},
 		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
 	}
