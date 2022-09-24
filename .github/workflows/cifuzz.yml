@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   Fuzzing:
-    runs-on: buildjet-4vcpu-ubuntu-2204
+    runs-on: github-4vcpu-ubuntu-2204
     steps:
     - name: Build Fuzzers
       id: build

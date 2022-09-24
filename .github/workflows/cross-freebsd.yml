@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: buildjet-4vcpu-ubuntu-2204
+    runs-on: github-4vcpu-ubuntu-2204
 
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
