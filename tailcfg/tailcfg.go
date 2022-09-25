@@ -991,7 +991,7 @@ type NetPortRange struct {
 
 // CapGrant grants capabilities in a FilterRule.
 type CapGrant struct {
-	// Dsts are the destination IP ranges that this capabilty
+	// Dsts are the destination IP ranges that this capability
 	// grant matches.
 	Dsts []netip.Prefix
 
