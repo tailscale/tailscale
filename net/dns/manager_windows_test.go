@@ -274,7 +274,7 @@ func runTest(t *testing.T, isLocal bool) {
 	runCase := func(n int) {
 		t.Logf("Test case: %d domains\n", n)
 		if !isLocal {
-			// When !isLocal, we want to check that a GP notification occured for
+			// When !isLocal, we want to check that a GP notification occurred for
 			// every single test case.
 			trk, err = newGPNotificationTracker()
 			if err != nil {
