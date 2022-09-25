@@ -2460,11 +2460,11 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 	for regionID, ad := range c.activeDerp {
 		la, err := ad.c.LocalAddr()
 		if err != nil {
-			c.closeOrReconectDERPLocked(regionID, "rebind-no-localaddr")
+			c.closeOrReconnectDERPLocked(regionID, "rebind-no-localaddr")
 			continue
 		}
 		if !tsaddr.PrefixesContainsIP(okayLocalIPs, la.Addr()) {
-			c.closeOrReconectDERPLocked(regionID, "rebind-default-route-change")
+			c.closeOrReconnectDERPLocked(regionID, "rebind-default-route-change")
 			continue
 		}
 		regionID := regionID
@@ -2475,7 +2475,7 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 			if err := dc.Ping(ctx); err != nil {
 				c.mu.Lock()
 				defer c.mu.Unlock()
-				c.closeOrReconectDERPLocked(regionID, "rebind-ping-fail")
+				c.closeOrReconnectDERPLocked(regionID, "rebind-ping-fail")
 				return
 			}
 			c.logf("post-rebind ping of DERP region %d okay", regionID)
@@ -2484,14 +2484,14 @@ func (c *Conn) maybeCloseDERPsOnRebind(okayLocalIPs []netip.Prefix) {
 	c.logActiveDerpLocked()
 }
 
-// closeOrReconectDERPLocked closes the DERP connection to the
+// closeOrReconnectDERPLocked closes the DERP connection to the
 // provided regionID and starts reconnecting it if it's our current
 // home DERP.
 //
 // why is a reason for logging.
 //
 // c.mu must be held.
-func (c *Conn) closeOrReconectDERPLocked(regionID int, why string) {
+func (c *Conn) closeOrReconnectDERPLocked(regionID int, why string) {
 	c.closeDerpLocked(regionID, why)
 	if !c.privateKey.IsZero() && c.myDerp == regionID {
 		c.startDerpHomeConnectLocked()
