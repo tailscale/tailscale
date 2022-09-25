@@ -180,7 +180,7 @@ type resolverAndDelay struct {
 type forwarder struct {
 	logf    logger.Logf
 	linkMon *monitor.Mon
-	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absords it
+	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absorbs it
 	dialer  *tsdial.Dialer
 	dohSem  chan struct{}
 
