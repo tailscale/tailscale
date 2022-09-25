@@ -562,7 +562,7 @@ func forceFullWireguardConfig(numPeers int) bool {
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
 // network map.
 //
-// For implementation simplificy, we can only trim peers that have
+// For implementation simplicity, we can only trim peers that have
 // only non-subnet AllowedIPs (an IPv4 /32 or IPv6 /128), which is the
 // common case for most peers. Subnet router nodes will just always be
 // created in the wireguard-go config.
