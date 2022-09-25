@@ -1827,7 +1827,7 @@ type SSHAction struct {
 //
 // The "OverTLS" prefix is to loudly declare that this exchange
 // doesn't happen over Noise and can be intercepted/MITM'ed by
-// enterprise/corp proxies where the orgnanization can put TLS roots
+// enterprise/corp proxies where the organization can put TLS roots
 // on devices.
 type OverTLSPublicKeyResponse struct {
 	// LegacyPublic specifies the control plane server's original
