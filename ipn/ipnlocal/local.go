@@ -3025,7 +3025,7 @@ func (b *LocalBackend) RequestEngineStatus() {
 // that have happened. It is invoked from the various callbacks that
 // feed events into LocalBackend.
 //
-// TODO(apenwarr): use a channel or something to prevent re-entrancy?
+// TODO(apenwarr): use a channel or something to prevent reentrancy?
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	b.enterState(b.nextState())
