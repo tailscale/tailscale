@@ -596,7 +596,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 		}
 	}
 
-	log.SetFlags(0) // other logflags are set on console, not here
+	log.SetFlags(0) // other log flags are set on console, not here
 	log.SetOutput(logOutput)
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
