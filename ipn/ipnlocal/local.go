@@ -2171,7 +2171,7 @@ func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
 // ServePeerAPIConnection serves an already-accepted connection c.
 //
 // The remote parameter is the remote address.
-// The local paramater is the local address (either a Tailscale IPv4
+// The local parameter is the local address (either a Tailscale IPv4
 // or IPv6 IP and the peerapi port for that address).
 //
 // The connection will be closed by ServePeerAPIConnection.
