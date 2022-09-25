@@ -1438,7 +1438,7 @@ func (c *Direct) setDNSNoise(ctx context.Context, req *tailcfg.SetDNSRequest) er
 	if err != nil {
 		return err
 	}
-	res, err := nc.post(ctx, "/machine/set-dns", req)
+	res, err := nc.post(ctx, "/machine/set-dns", &newReq)
 	if err != nil {
 		return err
 	}
