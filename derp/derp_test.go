@@ -232,7 +232,7 @@ func TestSendFreeze(t *testing.T) {
 	//	alice --> bob
 	//	alice --> cathy
 	//
-	// Then cathy stops processing messsages.
+	// Then cathy stops processing messages.
 	// That should not interfere with alice talking to bob.
 
 	newClient := func(ctx context.Context, name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
