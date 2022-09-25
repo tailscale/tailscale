@@ -88,7 +88,7 @@ func defaultTunName() string {
 			// see https://github.com/tailscale/tailscale/issues/391
 			//
 			// But Gokrazy does have the tun module built-in, so users
-			// can stil run --tun=tailscale0 if they wish, if they
+			// can still run --tun=tailscale0 if they wish, if they
 			// arrange for iptables to be present or run in "tailscale
 			// up --netfilter-mode=off" mode, perhaps. Untested.
 			return "userspace-networking"
