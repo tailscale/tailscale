@@ -116,7 +116,7 @@ func (u StableNodeID) IsZero() bool {
 // A user can have multiple logins associated with it (e.g. gmail and github oauth).
 // (Note: none of our UIs support this yet.)
 //
-// Some properties are inhereted from the logins and can be overridden, such as
+// Some properties are inherited from the logins and can be overridden, such as
 // display name and profile picture.
 //
 // Other properties must be the same for all logins associated with a user.
