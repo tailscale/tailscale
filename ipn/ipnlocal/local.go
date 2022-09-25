@@ -3085,7 +3085,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
-// ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
+// ShouldHandleViaIP reports whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
 func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
