@@ -410,7 +410,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.64.5.7",
 		},
 		{
-			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Isue 3480
+			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Issue 3480
 			flags:         []string{"--hostname=foo"},
 			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
 			curPrefs: &ipn.Prefs{
