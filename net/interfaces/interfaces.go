@@ -447,7 +447,7 @@ func UseInterestingInterfaces(i Interface, ips []netip.Prefix) bool {
 }
 
 // UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
-// An IP address is interesting if it is neither a lopback not a link local unicast IP address.
+// An IP address is interesting if it is neither a loopback not a link local unicast IP address.
 func UseInterestingIPs(ip netip.Addr) bool {
 	return isInterestingIP(ip)
 }
