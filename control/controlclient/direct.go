@@ -776,7 +776,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		// with useful results. The first POST just gets us the DERP map which we
 		// need to do the STUN queries to discover our endpoints.
 		// TODO(bradfitz): we skip this optimization in tests, though,
-		// because the e2e tests are currently hyperspecific about the
+		// because the e2e tests are currently hyper-specific about the
 		// ordering of things. The e2e tests need love.
 		ReadOnly: readOnly || (len(epStrs) == 0 && !everEndpoints && !inTest()),
 	}
