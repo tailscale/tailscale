@@ -67,7 +67,7 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 	for parentName, chain := range chains {
 		parent, exists := n.AUMs[parentName]
 		if !exists {
-			panic("cannot use non-existent parent: " + parentName)
+			panic("cannot use nonexistent parent: " + parentName)
 		}
 		parentHash := parent.Hash()
 		chain.Nodes[chain.FirstIdent].ParentHash = &parentHash

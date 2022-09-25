@@ -204,7 +204,7 @@ http_port=80
 
 	})
 
-	t.Run("non-existent config", func(t *testing.T) {
+	t.Run("nonexistent config", func(t *testing.T) {
 		openReader = nil
 		openErr = os.ErrNotExist
 
