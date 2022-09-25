@@ -61,7 +61,7 @@ const (
 	//
 	// Only the Key optional field may be set.
 	AUMAddKey
-	// A RemoveKey AUM describes hte removal of a key trusted by TKA.
+	// A RemoveKey AUM describes the removal of a key trusted by TKA.
 	//
 	// Only the KeyID optional field may be set.
 	AUMRemoveKey

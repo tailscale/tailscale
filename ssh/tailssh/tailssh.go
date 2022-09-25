@@ -181,7 +181,7 @@ func (c *conn) logf(format string, args ...any) {
 	c.srv.logf(format, args...)
 }
 
-// PublicKeyHandler implements ssh.PublicKeyHandler is called by the the
+// PublicKeyHandler implements ssh.PublicKeyHandler is called by the
 // ssh.Server when the client presents a public key.
 func (c *conn) PublicKeyHandler(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	c.mu.Lock()
@@ -205,7 +205,7 @@ func (c *conn) PublicKeyHandler(ctx ssh.Context, pubKey ssh.PublicKey) error {
 var errPubKeyRequired = errors.New("ssh publickey required")
 
 // NoClientAuthCallback implements gossh.NoClientAuthCallback and is called by
-// the the ssh.Server when the client first connects with the "none"
+// the ssh.Server when the client first connects with the "none"
 // authentication method.
 func (c *conn) NoClientAuthCallback(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
 	if c.insecureSkipTailscaleAuth {

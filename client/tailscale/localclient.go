@@ -642,14 +642,14 @@ func (lc *LocalClient) GetCertificate(hi *tls.ClientHelloInfo) (*tls.Certificate
 	return &cert, nil
 }
 
-// ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
+// ExpandSNIName expands bare label name into the most likely actual TLS cert name.
 //
 // Deprecated: use LocalClient.ExpandSNIName.
 func ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 	return defaultLocalClient.ExpandSNIName(ctx, name)
 }
 
-// ExpandSNIName expands bare label name into the the most likely actual TLS cert name.
+// ExpandSNIName expands bare label name into the most likely actual TLS cert name.
 func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn string, ok bool) {
 	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil {

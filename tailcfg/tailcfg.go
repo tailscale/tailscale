@@ -1123,7 +1123,7 @@ type DNSConfig struct {
 	// MagicDNS config.
 	ExtraRecords []DNSRecord `json:",omitempty"`
 
-	// ExitNodeFilteredSuffixes are the the DNS suffixes that the
+	// ExitNodeFilteredSuffixes are the DNS suffixes that the
 	// node, when being an exit node DNS proxy, should not answer.
 	//
 	// The entries do not contain trailing periods and are always

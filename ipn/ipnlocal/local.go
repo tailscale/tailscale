@@ -3603,7 +3603,7 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	return mc, nil
 }
 
-// DoNoiseRequest sends a request to URL over the the control plane
+// DoNoiseRequest sends a request to URL over the control plane
 // Noise connection.
 func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	b.mu.Lock()
