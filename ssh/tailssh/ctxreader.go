@@ -40,7 +40,7 @@ type contextReader struct {
 	ch chan readResult
 }
 
-// HasOutstandingRead reports whether there's an oustanding Read call that's
+// HasOutstandingRead reports whether there's an outstanding Read call that's
 // either currently blocked in a Read or whose result hasn't been consumed.
 func (w *contextReader) HasOutstandingRead() bool {
 	w.mu.Lock()
