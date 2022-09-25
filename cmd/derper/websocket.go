@@ -23,7 +23,7 @@ func addWebSocketSupport(s *derp.Server, base http.Handler) http.Handler {
 		up := strings.ToLower(r.Header.Get("Upgrade"))
 
 		// Very early versions of Tailscale set "Upgrade: WebSocket" but didn't actually
-		// speak WebSockets (they still assumed DERP's binary framining). So to distinguish
+		// speak WebSockets (they still assumed DERP's binary framing). So to distinguish
 		// clients that actually want WebSockets, look for an explicit "derp" subprotocol.
 		if up != "websocket" || !strings.Contains(r.Header.Get("Sec-Websocket-Protocol"), "derp") {
 			base.ServeHTTP(w, r)
