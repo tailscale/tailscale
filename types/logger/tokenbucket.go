@@ -21,7 +21,7 @@ import (
 // be enough to disqualify it on its own.
 //
 // Unlike rate.Limiter, this token bucket does not attempt to
-// do any locking of its own. Don't try to access it re-entrantly.
+// do any locking of its own. Don't try to access it reentrantly.
 // That's fine inside this types/logger package because we already have
 // locking at a higher level.
 type tokenBucket struct {
