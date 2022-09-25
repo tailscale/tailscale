@@ -29,7 +29,7 @@ type contextReader struct {
 	// consumed.
 	buffered []byte
 	// readErr is a previous read error that was seen while filling buffered. It
-	// should be returned to the caller after bufffered is consumed.
+	// should be returned to the caller after buffered is consumed.
 	readErr error
 
 	mu sync.Mutex // guards ch only
