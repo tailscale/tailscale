@@ -57,7 +57,7 @@ func runBuild() {
 
 // fixEsbuildMetadataPaths re-keys the esbuild metadata file to use paths
 // relative to the dist directory (it normally uses paths relative to the cwd,
-// which are akward if we're running with a different cwd at serving time).
+// which are awkward if we're running with a different cwd at serving time).
 func fixEsbuildMetadataPaths(metadataStr string) ([]byte, error) {
 	var metadata EsbuildMetadata
 	if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
