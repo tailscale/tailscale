@@ -463,7 +463,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		case <-doneCh:
 		}
 		// TODO(bradfitz): support a side test API to mark an
-		// auth as failued so we can send an error response in
+		// auth as failed so we can send an error response in
 		// some follow-ups? For now all are successes.
 	}
 
