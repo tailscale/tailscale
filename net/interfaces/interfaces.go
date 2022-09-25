@@ -455,7 +455,7 @@ func UseInterestingIPs(ip netip.Addr) bool {
 // UseAllInterfaces is an InterfaceFilter that includes all interfaces.
 func UseAllInterfaces(i Interface, ips []netip.Prefix) bool { return true }
 
-// UseAllIPs is an IPFilter that includes all all IPs.
+// UseAllIPs is an IPFilter that includes all IPs.
 func UseAllIPs(ips netip.Addr) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
