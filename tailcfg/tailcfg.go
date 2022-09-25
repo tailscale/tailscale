@@ -1005,7 +1005,7 @@ type CapGrant struct {
 //
 // A rule is logically a set of source CIDRs to match (described by
 // SrcIPs and SrcBits), and a set of destination targets that are then
-// allowed if a source IP is mathces of those CIDRs.
+// allowed if a source IP is matches of those CIDRs.
 type FilterRule struct {
 	// SrcIPs are the source IPs/networks to match.
 	//
