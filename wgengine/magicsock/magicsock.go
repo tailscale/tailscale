@@ -2788,7 +2788,7 @@ func (c *Conn) ReSTUN(why string) {
 	// reconfigures the engine with a zero private key.)
 	//
 	// This used to just check c.privateKey.IsZero, but that broke
-	// some end-to-end tests tests that didn't ever set a private
+	// some end-to-end tests that didn't ever set a private
 	// key somehow. So for now, only stop doing work if we ever
 	// had a key, which helps real users, but appeases tests for
 	// now. TODO: rewrite those tests to be less brittle or more
