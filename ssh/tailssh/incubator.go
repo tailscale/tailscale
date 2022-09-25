@@ -6,7 +6,7 @@
 // launches the incubator as the same user as it was launched as.  The
 // incubator then registers a new session with the OS, sets its UID
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
-// then lauches the requested `--cmd`.
+// then launches the requested `--cmd`.
 
 //go:build linux || (darwin && !ios)
 // +build linux darwin,!ios
