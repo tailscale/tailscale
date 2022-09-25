@@ -120,7 +120,7 @@ func cleanup(logf logger.Logf, interfaceName string) {
 // but it can be REALLY SLOW to change the Windows firewall for reasons not understood.
 // Like 4 minutes slow. But usually it's tens of milliseconds.
 // See https://github.com/tailscale/tailscale/issues/785.
-// So this tracks the desired state and runs the actual adjusting code asynchrounsly.
+// So this tracks the desired state and runs the actual adjusting code asynchronously.
 type firewallTweaker struct {
 	logf    logger.Logf
 	tunGUID windows.GUID
