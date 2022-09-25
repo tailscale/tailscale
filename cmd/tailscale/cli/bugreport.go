@@ -25,7 +25,7 @@ func runBugReport(ctx context.Context, args []string) error {
 	case 1:
 		note = args[0]
 	default:
-		return errors.New("unknown argumets")
+		return errors.New("unknown arguments")
 	}
 	logMarker, err := localClient.BugReport(ctx, note)
 	if err != nil {
