@@ -549,7 +549,7 @@ var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
 // stable!) but I'm worried that a future regression would be easier to debug
 // with these knobs in place.
 func forceFullWireguardConfig(numPeers int) bool {
-	// Did the user explicitly enable trimmming via the environment variable knob?
+	// Did the user explicitly enable trimming via the environment variable knob?
 	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
