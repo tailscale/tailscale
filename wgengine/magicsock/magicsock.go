@@ -4119,17 +4119,17 @@ type ippEndpointCache struct {
 type discoInfo struct {
 	// discoKey is the same as the Conn.discoInfo map key,
 	// just so you can pass around a *discoInfo alone.
-	// Not modifed once initialized.
+	// Not modified once initialized.
 	discoKey key.DiscoPublic
 
 	// discoShort is discoKey.ShortString().
-	// Not modifed once initialized;
+	// Not modified once initialized;
 	discoShort string
 
 	// sharedKey is the precomputed key for communication with the
 	// peer that has the DiscoKey used to look up this *discoInfo in
 	// Conn.discoInfo.
-	// Not modifed once initialized.
+	// Not modified once initialized.
 	sharedKey key.DiscoShared
 
 	// Mutable fields follow, owned by Conn.mu:
