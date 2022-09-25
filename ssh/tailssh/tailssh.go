@@ -595,7 +595,7 @@ func (c *conn) handleSessionPostSSHAuth(s ssh.Session) {
 	if cr.HasOutstandingRead() {
 		// There was some buffered input while we were waiting for the policy
 		// decision.
-		s = contextReaderSesssion{s, cr}
+		s = contextReaderSession{s, cr}
 	}
 
 	// Do this check after auth, but before starting the session.

@@ -97,14 +97,14 @@ func (w *contextReader) ReadContext(ctx context.Context, p []byte) (n int, err e
 	}
 }
 
-// contextReaderSesssion implements ssh.Session, wrapping another
+// contextReaderSession implements ssh.Session, wrapping another
 // ssh.Session but changing its Read method to use contextReader.
-type contextReaderSesssion struct {
+type contextReaderSession struct {
 	ssh.Session
 	cr *contextReader
 }
 
-func (a contextReaderSesssion) Read(p []byte) (n int, err error) {
+func (a contextReaderSession) Read(p []byte) (n int, err error) {
 	if a.cr.HasOutstandingRead() {
 		return a.cr.ReadContext(context.Background(), p)
 	}
