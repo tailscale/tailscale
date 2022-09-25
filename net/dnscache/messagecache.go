@@ -99,7 +99,7 @@ type msgResource struct {
 }
 
 // ErrCacheMiss is a sentinel error returned by MessageCache.ReplyFromCache
-// when the request can not be satisified from cache.
+// when the request can not be satisfied from cache.
 var ErrCacheMiss = errors.New("cache miss")
 
 var parserPool = &sync.Pool{
