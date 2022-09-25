@@ -264,7 +264,7 @@ func asciiLowerName(n dnsmessage.Name) dnsmessage.Name {
 }
 
 // packDNSResponse builds a DNS response for the given question and
-// transaction ID. The response resource records will have have the
+// transaction ID. The response resource records will have the
 // same provided TTL.
 func packDNSResponse(q msgQ, txID uint16, ttl uint32, answers []msgResource) ([]byte, error) {
 	var baseMem []byte // TODO: guess a max size based on looping over answers?
