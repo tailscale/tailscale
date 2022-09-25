@@ -200,7 +200,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	if startingPort == defaultPort {
 		// Only try this if we managed to bind defaultPort the first time.
 		// Otherwise, assume someone else on the computer is using defaultPort
-		// and so Reconfig would have caused magicSockt to bind some other port.
+		// and so Reconfig would have caused magicSocket to bind some other port.
 		if got := ue.magicConn.LocalPort(); got != defaultPort {
 			t.Errorf("debug setting did not change local port from %d to %d", startingPort, defaultPort)
 		}
