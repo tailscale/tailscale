@@ -1326,7 +1326,7 @@ func (ss *sshSession) startNewRecording() (*recording, error) {
 		Timestamp: now.Unix(),
 		Env: map[string]string{
 			"TERM": term,
-			// TODO(bradiftz): anything else important?
+			// TODO(bradfitz): anything else important?
 			// including all seems noisey, but maybe we should
 			// for auditing. But first need to break
 			// launchProcess's startWithStdPipes and
