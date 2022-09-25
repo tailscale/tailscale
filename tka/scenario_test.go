@@ -278,7 +278,7 @@ func TestForkingPropergation(t *testing.T) {
 	s.testSyncsBetween(control, n2)
 	s.checkHaveConsensus(control, n2)
 
-	// No wozzles propergating from n2->CTRL, what about CTRL->n1?
+	// No wozzles propagating from n2->CTRL, what about CTRL->n1?
 	s.testSyncsBetween(control, n1)
 	s.checkHaveConsensus(n1, n2)
 
