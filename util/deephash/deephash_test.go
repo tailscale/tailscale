@@ -897,7 +897,7 @@ func TestArrayAllocs(t *testing.T) {
 
 	// In theory, there should be no allocations. However, escape analysis on
 	// certain architectures fails to detect that certain cases do not escape.
-	// This discrepency currently affects sha256.digest.Sum.
+	// This discrepancy currently affects sha256.digest.Sum.
 	// Measure the number of allocations in sha256 to ensure that Hash does
 	// not allocate on top of its usage of sha256.
 	// See https://golang.org/issue/48055.
