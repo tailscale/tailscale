@@ -195,7 +195,7 @@ const (
 // given interface.
 // The iface param determines which interface to check against, "" means to check
 // global config.
-// It tries to lookup the value directly from `/proc/sys`, and fallsback to
+// It tries to lookup the value directly from `/proc/sys`, and falls back to
 // using `sysctl` on failure.
 func ipForwardingEnabledLinux(p protocol, iface string) (bool, error) {
 	k := ipForwardSysctlKey(slashFormat, p, iface)

@@ -549,7 +549,7 @@ var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
 // stable!) but I'm worried that a future regression would be easier to debug
 // with these knobs in place.
 func forceFullWireguardConfig(numPeers int) bool {
-	// Did the user explicitly enable trimmming via the environment variable knob?
+	// Did the user explicitly enable trimming via the environment variable knob?
 	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
@@ -562,7 +562,7 @@ func forceFullWireguardConfig(numPeers int) bool {
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
 // network map.
 //
-// For implementation simplificy, we can only trim peers that have
+// For implementation simplicity, we can only trim peers that have
 // only non-subnet AllowedIPs (an IPv4 /32 or IPv6 /128), which is the
 // common case for most peers. Subnet router nodes will just always be
 // created in the wireguard-go config.
@@ -664,8 +664,8 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	activeCutoff := e.timeNow().Add(-lazyPeerIdleThreshold)
 
 	// Not all peers can be trimmed from the network map (see
-	// isTrimmablePeer).  For those are are trimmable, keep track of
-	// their NodeKey and Tailscale IPs.  These are the ones we'll need
+	// isTrimmablePeer). For those that are trimmable, keep track of
+	// their NodeKey and Tailscale IPs. These are the ones we'll need
 	// to install tracking hooks for to watch their send/receive
 	// activity.
 	trackNodes := make([]key.NodePublic, 0, len(full.Peers))

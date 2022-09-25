@@ -232,7 +232,7 @@ func TestSendFreeze(t *testing.T) {
 	//	alice --> bob
 	//	alice --> cathy
 	//
-	// Then cathy stops processing messsages.
+	// Then cathy stops processing messages.
 	// That should not interfere with alice talking to bob.
 
 	newClient := func(ctx context.Context, name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
@@ -772,7 +772,7 @@ func TestForwarderRegistration(t *testing.T) {
 	})
 
 	// Now pretend u1 was already connected locally (so clientsMesh[u1] is nil), and then we heard
-	// that they're also connected to a peer of ours. That sholdn't transition the forwarder
+	// that they're also connected to a peer of ours. That shouldn't transition the forwarder
 	// from nil to the new one, not a multiForwarder.
 	s.clients[u1] = singleClient{u1c}
 	s.clientsMesh[u1] = nil

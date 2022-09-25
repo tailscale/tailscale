@@ -67,7 +67,7 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 	for parentName, chain := range chains {
 		parent, exists := n.AUMs[parentName]
 		if !exists {
-			panic("cannot use non-existent parent: " + parentName)
+			panic("cannot use nonexistent parent: " + parentName)
 		}
 		parentHash := parent.Hash()
 		chain.Nodes[chain.FirstIdent].ParentHash = &parentHash
@@ -216,7 +216,7 @@ func TestScenarioHelpers(t *testing.T) {
 	s.checkHaveConsensus(control, n)
 }
 
-func TestNormalPropergation(t *testing.T) {
+func TestNormalPropagation(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -242,7 +242,7 @@ func TestNormalPropergation(t *testing.T) {
 	s.checkHaveConsensus(n1, n2)
 }
 
-func TestForkingPropergation(t *testing.T) {
+func TestForkingPropagation(t *testing.T) {
 	pub, priv := testingKey25519(t, 2)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
@@ -278,7 +278,7 @@ func TestForkingPropergation(t *testing.T) {
 	s.testSyncsBetween(control, n2)
 	s.checkHaveConsensus(control, n2)
 
-	// No wozzles propergating from n2->CTRL, what about CTRL->n1?
+	// No wozzles propagating from n2->CTRL, what about CTRL->n1?
 	s.testSyncsBetween(control, n1)
 	s.checkHaveConsensus(n1, n2)
 
@@ -290,7 +290,7 @@ func TestForkingPropergation(t *testing.T) {
 	}
 }
 
-func TestInvalidAUMPropergationRejected(t *testing.T) {
+func TestInvalidAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -324,7 +324,7 @@ func TestInvalidAUMPropergationRejected(t *testing.T) {
 	}
 }
 
-func TestUnsignedAUMPropergationRejected(t *testing.T) {
+func TestUnsignedAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -357,7 +357,7 @@ func TestUnsignedAUMPropergationRejected(t *testing.T) {
 	}
 }
 
-func TestBadSigAUMPropergationRejected(t *testing.T) {
+func TestBadSigAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis

@@ -466,7 +466,7 @@ func TestNetmapForResponse(t *testing.T) {
 	})
 }
 
-// TestDeltaDebug tests that tailcfg.Debug values can be omitted in MapResposnes
+// TestDeltaDebug tests that tailcfg.Debug values can be omitted in MapResponses
 // entirely or have their opt.Bool values unspecified between MapResponses in a
 // session and that should mean no change. (as of capver 37). But two Debug
 // fields existed prior to capver 37 that weren't opt.Bool; we test that we both

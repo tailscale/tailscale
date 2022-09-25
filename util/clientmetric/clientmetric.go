@@ -197,7 +197,7 @@ func WritePrometheusExpositionFormat(w io.Writer) {
 const (
 	// metricLogNameFrequency is how often a metric's name=>id
 	// mapping is redundantly put in the logs. In other words,
-	// this is how how far in the logs you need to fetch from a
+	// this is how far in the logs you need to fetch from a
 	// given point in time to recompute the metrics at that point
 	// in time.
 	metricLogNameFrequency = 4 * time.Hour

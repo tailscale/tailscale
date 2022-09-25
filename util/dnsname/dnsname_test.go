@@ -104,7 +104,7 @@ func TestSanitizeLabel(t *testing.T) {
 		{"mixed", "Avery's iPhone 4(SE)", "averys-iphone-4se"},
 		{"dotted", "mon.ipn.dev", "mon-ipn-dev"},
 		{"email", "admin@example.com", "admin-example-com"},
-		{"boudary", ".bound.ary.", "bound-ary"},
+		{"boundary", ".bound.ary.", "bound-ary"},
 		{"bad_trailing", "a-", "a"},
 		{"bad_leading", "-a", "a"},
 		{"bad_both", "-a-", "a"},

@@ -15,12 +15,12 @@ import wasmURL from "./main.wasm"
  * needed for the package to function.
  */
 type IPNPackageConfig = IPNConfig & {
-  // Auth key used to intitialize the Tailscale client (required)
+  // Auth key used to initialize the Tailscale client (required)
   authKey: string
   // URL of the main.wasm file that is included in the page, if it is not
   // accessible via a relative URL.
   wasmURL?: string
-  // Funtion invoked if the Go process panics or unexpectedly exits.
+  // Function invoked if the Go process panics or unexpectedly exits.
   panicHandler: (err: string) => void
 }
 

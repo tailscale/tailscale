@@ -57,7 +57,7 @@ import (
 
 // Options is the configuration of the Tailscale node agent.
 type Options struct {
-	// VarRoot is the the Tailscale daemon's private writable
+	// VarRoot is the Tailscale daemon's private writable
 	// directory (usually "/var/lib/tailscale" on Linux) that
 	// contains the "tailscaled.state" file, the "certs" directory
 	// for TLS certs, and the "files" directory for incoming

@@ -552,7 +552,7 @@ func TestGetTypeHasher(t *testing.T) {
 			out:  "\x01\x00\x00\x00\x02\x00\x00\x00\x03\x04\x00\x00\x00",
 		},
 		{
-			name: "IntIntByteInt-canddr",
+			name: "IntIntByteInt-canaddr",
 			val:  &IntIntByteInt{1, 2, 3, 4},
 			out:  "\x01\x01\x00\x00\x00\x02\x00\x00\x00\x03\x04\x00\x00\x00",
 		},
@@ -604,9 +604,9 @@ func TestSliceCycle(t *testing.T) {
 	type S []S
 	c := qt.New(t)
 
-	a := make(S, 1) // cylic graph of 1 node
+	a := make(S, 1) // cyclic graph of 1 node
 	a[0] = a
-	b := make(S, 1) // cylic graph of 1 node
+	b := make(S, 1) // cyclic graph of 1 node
 	b[0] = b
 	ha := Hash(&a)
 	hb := Hash(&b)
@@ -642,9 +642,9 @@ func TestMapCycle(t *testing.T) {
 	type M map[string]M
 	c := qt.New(t)
 
-	a := make(M) // cylic graph of 1 node
+	a := make(M) // cyclic graph of 1 node
 	a["self"] = a
-	b := make(M) // cylic graph of 1 node
+	b := make(M) // cyclic graph of 1 node
 	b["self"] = b
 	ha := Hash(&a)
 	hb := Hash(&b)
@@ -897,7 +897,7 @@ func TestArrayAllocs(t *testing.T) {
 
 	// In theory, there should be no allocations. However, escape analysis on
 	// certain architectures fails to detect that certain cases do not escape.
-	// This discrepency currently affects sha256.digest.Sum.
+	// This discrepancy currently affects sha256.digest.Sum.
 	// Measure the number of allocations in sha256 to ensure that Hash does
 	// not allocate on top of its usage of sha256.
 	// See https://golang.org/issue/48055.

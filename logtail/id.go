@@ -34,7 +34,7 @@ func NewPrivateID() (id PrivateID, err error) {
 func (id PrivateID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {
-		return nil, fmt.Errorf("logtail.PrivateID.MarhsalText: i=%d", i)
+		return nil, fmt.Errorf("logtail.PrivateID.MarshalText: i=%d", i)
 	}
 	return b, nil
 }
@@ -122,7 +122,7 @@ func MustParsePublicID(s string) PublicID {
 func (id PublicID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {
-		return nil, fmt.Errorf("logtail.PublicID.MarhsalText: i=%d", i)
+		return nil, fmt.Errorf("logtail.PublicID.MarshalText: i=%d", i)
 	}
 	return b, nil
 }

@@ -58,7 +58,7 @@ type Dialer struct {
 	linkMon           *monitor.Mon
 	linkMonUnregister func()
 	exitDNSDoHBase    string                 // non-empty if DoH-proxying exit node in use; base URL+path (without '?')
-	dnsCache          *dnscache.MessageCache // nil until first first non-empty SetExitDNSDoH
+	dnsCache          *dnscache.MessageCache // nil until first non-empty SetExitDNSDoH
 	nextSysConnID     int
 	activeSysConns    map[int]net.Conn // active connections not yet closed
 }
@@ -210,7 +210,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
-	// MagicDNS or otherwise baked in to the NetworkMap? Try that first.
+	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
 	ipp, err := dns.resolveMemory(ctx, network, addr)
 	if err != errUnresolved {
 		return ipp, err

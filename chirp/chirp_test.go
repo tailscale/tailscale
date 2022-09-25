@@ -106,10 +106,10 @@ func TestChirp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.EnableProtocol("rando"); err == nil {
-		t.Fatalf("enabling %q succeded", "rando")
+		t.Fatalf("enabling %q succeeded", "rando")
 	}
 	if err := c.DisableProtocol("rando"); err == nil {
-		t.Fatalf("disabling %q succeded", "rando")
+		t.Fatalf("disabling %q succeeded", "rando")
 	}
 }
 

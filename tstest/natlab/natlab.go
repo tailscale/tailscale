@@ -92,7 +92,7 @@ func mustPrefix(s string) netip.Prefix {
 func NewInternet() *Network {
 	return &Network{
 		Name: "internet",
-		// easily recognizable internett-y addresses
+		// easily recognizable internetty addresses
 		Prefix4: mustPrefix("1.0.0.0/24"),
 		Prefix6: mustPrefix("1111::/64"),
 	}
@@ -243,7 +243,7 @@ func (f *Interface) String() string {
 	if f.name != "" {
 		return f.name
 	}
-	return fmt.Sprintf("unamed-interface-on-network-%p", f.net)
+	return fmt.Sprintf("unnamed-interface-on-network-%p", f.net)
 }
 
 // Contains reports whether f contains ip as an IP.

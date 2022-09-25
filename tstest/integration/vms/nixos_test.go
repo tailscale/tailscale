@@ -73,7 +73,7 @@ let
 
     # The path on disk to the "source code" of the package, in this case it is
     # the path to the binaries that are built. This needs to be the raw
-    # unquoted slash-separated path, not a string contaning the path because Nix
+    # unquoted slash-separated path, not a string containing the path because Nix
     # has a special path type.
     src = {{.BinPath}};
 

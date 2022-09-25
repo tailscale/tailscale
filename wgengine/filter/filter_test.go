@@ -166,7 +166,7 @@ func TestUDPState(t *testing.T) {
 	a4 := parsed(ipproto.UDP, "119.119.119.119", "102.102.102.102", 4242, 4343)
 	b4 := parsed(ipproto.UDP, "102.102.102.102", "119.119.119.119", 4343, 4242)
 
-	// Unsollicited UDP traffic gets dropped
+	// Unsolicited UDP traffic gets dropped
 	if got := acl.RunIn(&a4, flags); got != Drop {
 		t.Fatalf("incoming initial packet not dropped, got=%v: %v", got, a4)
 	}
@@ -182,7 +182,7 @@ func TestUDPState(t *testing.T) {
 	a6 := parsed(ipproto.UDP, "2001::2", "2001::1", 4242, 4343)
 	b6 := parsed(ipproto.UDP, "2001::1", "2001::2", 4343, 4242)
 
-	// Unsollicited UDP traffic gets dropped
+	// Unsolicited UDP traffic gets dropped
 	if got := acl.RunIn(&a6, flags); got != Drop {
 		t.Fatalf("incoming initial packet not dropped: %v", a4)
 	}

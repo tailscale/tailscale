@@ -11,7 +11,7 @@ import (
 )
 
 // Bool represents an optional boolean to be JSON-encoded.  The string
-// is either "true", "false", or the enmpty string to mean unset.
+// is either "true", "false", or the empty string to mean unset.
 //
 // As a special case, the underlying string may also be the string
 // "unset" as as a synonym for the empty string. This lets the

@@ -29,7 +29,7 @@ type contextReader struct {
 	// consumed.
 	buffered []byte
 	// readErr is a previous read error that was seen while filling buffered. It
-	// should be returned to the caller after bufffered is consumed.
+	// should be returned to the caller after buffered is consumed.
 	readErr error
 
 	mu sync.Mutex // guards ch only
@@ -40,7 +40,7 @@ type contextReader struct {
 	ch chan readResult
 }
 
-// HasOutstandingRead reports whether there's an oustanding Read call that's
+// HasOutstandingRead reports whether there's an outstanding Read call that's
 // either currently blocked in a Read or whose result hasn't been consumed.
 func (w *contextReader) HasOutstandingRead() bool {
 	w.mu.Lock()
@@ -97,14 +97,14 @@ func (w *contextReader) ReadContext(ctx context.Context, p []byte) (n int, err e
 	}
 }
 
-// contextReaderSesssion implements ssh.Session, wrapping another
+// contextReaderSession implements ssh.Session, wrapping another
 // ssh.Session but changing its Read method to use contextReader.
-type contextReaderSesssion struct {
+type contextReaderSession struct {
 	ssh.Session
 	cr *contextReader
 }
 
-func (a contextReaderSesssion) Read(p []byte) (n int, err error) {
+func (a contextReaderSession) Read(p []byte) (n int, err error) {
 	if a.cr.HasOutstandingRead() {
 		return a.cr.ReadContext(context.Background(), p)
 	}

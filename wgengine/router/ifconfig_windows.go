@@ -570,7 +570,7 @@ func unicastIPNets(ifc *winipcfg.IPAdapterAddresses) []netip.Prefix {
 //
 // Any IPv6 link-local addresses are not deleted out of caution as some
 // configurations may repeatedly re-add them. Link-local addresses are adjusted
-// to set SkipAsSource. SkipAsSource prevents the addresses from being addded to
+// to set SkipAsSource. SkipAsSource prevents the addresses from being added to
 // DNS locally or remotely and from being picked as a source address for
 // outgoing packets with unspecified sources. See #4647 and
 // https://web.archive.org/web/20200912120956/https://devblogs.microsoft.com/scripting/use-powershell-to-change-ip-behavior-with-skipassource/

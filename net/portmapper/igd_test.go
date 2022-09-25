@@ -19,7 +19,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-// TestIGD is an IGD (Intenet Gateway Device) for testing. It supports fake
+// TestIGD is an IGD (Internet Gateway Device) for testing. It supports fake
 // implementations of NAT-PMP, PCP, and/or UPnP to test clients against.
 type TestIGD struct {
 	upnpConn net.PacketConn // for UPnP discovery

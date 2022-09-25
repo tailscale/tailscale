@@ -49,7 +49,7 @@ type Config struct {
 	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
 	SkipClientTime bool             // if true, client_time is not written to logs
 	LowMemory      bool             // if true, logtail minimizes memory use
-	TimeNow        func() time.Time // if set, subsitutes uses of time.Now
+	TimeNow        func() time.Time // if set, substitutes uses of time.Now
 	Stderr         io.Writer        // if set, logs are sent here instead of os.Stderr
 	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
 	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
@@ -73,7 +73,7 @@ type Config struct {
 
 	// IncludeProcSequence, if true, results in an ephemeral sequence number
 	// being included in the logs. The sequence number is incremented for each
-	// log message sent, but is not peristed across process restarts.
+	// log message sent, but is not persisted across process restarts.
 	IncludeProcSequence bool
 }
 

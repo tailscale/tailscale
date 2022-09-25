@@ -2173,7 +2173,7 @@ func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
 // ServePeerAPIConnection serves an already-accepted connection c.
 //
 // The remote parameter is the remote address.
-// The local paramater is the local address (either a Tailscale IPv4
+// The local parameter is the local address (either a Tailscale IPv4
 // or IPv6 IP and the peerapi port for that address).
 //
 // The connection will be closed by ServePeerAPIConnection.
@@ -3027,7 +3027,7 @@ func (b *LocalBackend) RequestEngineStatus() {
 // that have happened. It is invoked from the various callbacks that
 // feed events into LocalBackend.
 //
-// TODO(apenwarr): use a channel or something to prevent re-entrancy?
+// TODO(apenwarr): use a channel or something to prevent reentrancy?
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
 	b.enterState(b.nextState())
@@ -3087,7 +3087,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
 
-// ShouldHandleViaIP reports whether whether ip is an IPv6 address in the
+// ShouldHandleViaIP reports whether ip is an IPv6 address in the
 // Tailscale ULA's v6 "via" range embedding an IPv4 address to be forwarded to
 // by Tailscale.
 func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
@@ -3605,7 +3605,7 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	return mc, nil
 }
 
-// DoNoiseRequest sends a request to URL over the the control plane
+// DoNoiseRequest sends a request to URL over the control plane
 // Noise connection.
 func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	b.mu.Lock()

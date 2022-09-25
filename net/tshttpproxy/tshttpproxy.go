@@ -89,7 +89,7 @@ func GetAuthHeader(u *url.URL) (string, error) {
 
 var condSetTransportGetProxyConnectHeader func(*http.Transport)
 
-// SetTarnsportGetProxyConnectHeader sets the provided Transport's
+// SetTransportGetProxyConnectHeader sets the provided Transport's
 // GetProxyConnectHeader field, if the current build of Go supports
 // it.
 //

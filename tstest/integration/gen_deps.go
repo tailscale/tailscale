@@ -53,7 +53,7 @@ import (
 `)
 	for _, dep := range x.Imports {
 		if !strings.Contains(dep, ".") {
-			// Omit stanard library deps.
+			// Omit standard library deps.
 			continue
 		}
 		fmt.Fprintf(&out, "\t_ %q\n", dep)

@@ -305,7 +305,7 @@ func (f *Filter) CheckTCP(srcIP, dstIP netip.Addr, dstPort uint16) Response {
 	pkt.Decode(dummyPacket) // initialize private fields
 	switch {
 	case (srcIP.Is4() && dstIP.Is6()) || (srcIP.Is6() && srcIP.Is4()):
-		// Mistmatched address families, no filters will
+		// Mismatched address families, no filters will
 		// match.
 		return Drop
 	case srcIP.Is4():
@@ -523,7 +523,7 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 	return Accept, "ok out"
 }
 
-// direction is whether a packet was flowing in to this machine, or
+// direction is whether a packet was flowing into this machine, or
 // flowing out.
 type direction int
 
