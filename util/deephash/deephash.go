@@ -423,7 +423,7 @@ func makeMapHasher(t reflect.Type) typeHasherFunc {
 		mh := mapHasherPool.Get().(*mapHasher)
 		defer mapHasherPool.Put(mh)
 
-		// Hash a map in a sort-free mannar.
+		// Hash a map in a sort-free manner.
 		// It relies on a map being a an unordered set of KV entries.
 		// So long as we hash each KV entry together, we can XOR all the
 		// individual hashes to produce a unique hash for the entire map.
