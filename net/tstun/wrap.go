@@ -173,7 +173,7 @@ type Wrapper struct {
 // See the comment in the middle of Wrap.Read.
 type tunReadResult struct {
 	// Only one of err, packet or data should be set, and are read in that order
-	// of precendence.
+	// of precedence.
 	err    error
 	packet *stack.PacketBuffer
 	data   []byte
