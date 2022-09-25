@@ -17,7 +17,7 @@
 //
 //	messageType    byte  (the MessageType constants below)
 //	messageVersion byte  (0 for now; but always ignore bytes at the end)
-//	message-paylod [...]byte
+//	message-payload [...]byte
 package disco
 
 import (
