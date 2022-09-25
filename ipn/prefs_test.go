@@ -470,7 +470,7 @@ func TestLoadPrefsNotExist(t *testing.T) {
 	t.Fatalf("unexpected prefs=%#v, err=%v", p, err)
 }
 
-// TestLoadPrefsFileWithZeroInIt verifies that LoadPrefs hanldes corrupted input files.
+// TestLoadPrefsFileWithZeroInIt verifies that LoadPrefs handles corrupted input files.
 // See issue #954 for details.
 func TestLoadPrefsFileWithZeroInIt(t *testing.T) {
 	f, err := os.CreateTemp("", "TestLoadPrefsFileWithZeroInIt")

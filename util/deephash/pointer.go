@@ -27,7 +27,7 @@ import (
 // rely on pointer.asValue to convert the pointer back to a reflect.Value.
 // Conversion of an unsafe.Pointer to reflect.Value guarantees that the
 // read-only flag in the reflect.Value is unpopulated, avoiding panics that may
-// othewise have occurred since the value was obtained from an unexported field.
+// otherwise have occurred since the value was obtained from an unexported field.
 type unsafePointer struct{ p unsafe.Pointer }
 
 func unsafePointerOf(v reflect.Value) unsafePointer {

@@ -381,7 +381,7 @@ func (m *Manager) NextPacket() ([]byte, error) {
 	return buf, nil
 }
 
-// Query executes a DNS query recieved from the given address. The query is
+// Query executes a DNS query received from the given address. The query is
 // provided in bs as a wire-encoded DNS query without any transport header.
 // This method is called for requests arriving over UDP and TCP.
 func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {

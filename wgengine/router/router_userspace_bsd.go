@@ -148,7 +148,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		}
 		newRoutes[route] = struct{}{}
 	}
-	// Delete any pre-existing routes.
+	// Delete any preexisting routes.
 	for route := range r.routes {
 		if _, keep := newRoutes[route]; !keep {
 			net := netipx.PrefixIPNet(route)

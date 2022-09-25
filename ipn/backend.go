@@ -69,7 +69,7 @@ type Notify struct {
 	State         *State             // if non-nil, the new or current IPN state
 	Prefs         *Prefs             // if non-nil, the new or current preferences
 	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
-	Engine        *EngineStatus      // if non-nil, the new or urrent wireguard stats
+	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
 	BrowseToURL   *string            // if non-nil, UI should open a browser right now
 	BackendLogID  *string            // if non-nil, the public logtail ID used by backend
 

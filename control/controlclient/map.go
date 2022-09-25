@@ -35,7 +35,7 @@ type mapSession struct {
 	machinePubKey          key.MachinePublic
 	keepSharerAndUserSplit bool // see Options.KeepSharerAndUserSplit
 
-	// Fields storing state over the the coards of multiple MapResponses.
+	// Fields storing state over the course of multiple MapResponses.
 	lastNode               *tailcfg.Node
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap

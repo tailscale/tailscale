@@ -25,7 +25,7 @@ type Clock struct {
 	sync.Mutex
 }
 
-// Now returns the virtual clock's current time, and avances it
+// Now returns the virtual clock's current time, and advances it
 // according to its step configuration.
 func (c *Clock) Now() time.Time {
 	c.Lock()

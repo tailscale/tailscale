@@ -236,7 +236,7 @@ func (v varExporter) String() string {
 	return string(bs)
 }
 
-// WritePrometheus writes the the state of all probes to w.
+// WritePrometheus writes the state of all probes to w.
 //
 // For each probe, WritePrometheus exports 5 variables:
 //   - <prefix>_interval_secs, how frequently the probe runs.

@@ -40,7 +40,7 @@ type Header interface {
 }
 
 // HeaderChecksummer is implemented by Header implementations that
-// need to do a checksum over their paylods.
+// need to do a checksum over their payloads.
 type HeaderChecksummer interface {
 	Header
 

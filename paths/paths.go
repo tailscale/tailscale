@@ -63,7 +63,7 @@ func DefaultTailscaledStateFile() string {
 	return ""
 }
 
-// MkStateDir ensures that dirPath, the daemon's configurtaion directory
+// MkStateDir ensures that dirPath, the daemon's configuration directory
 // containing machine keys etc, both exists and has the correct permissions.
 // We want it to only be accessible to the user the daemon is running under.
 func MkStateDir(dirPath string) error {

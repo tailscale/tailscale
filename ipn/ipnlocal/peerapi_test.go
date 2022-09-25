@@ -109,7 +109,7 @@ func TestHandlePeerAPI(t *testing.T) {
 	tests := []struct {
 		name       string
 		isSelf     bool // the peer sending the request is owned by us
-		capSharing bool // self node has file sharing capabilty
+		capSharing bool // self node has file sharing capability
 		omitRoot   bool // don't configure
 		req        *http.Request
 		checks     []check

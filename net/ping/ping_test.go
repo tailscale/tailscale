@@ -202,7 +202,7 @@ func TestPingerMismatch(t *testing.T) {
 
 func mockPinger(t *testing.T, clock *tstest.Clock) (*Pinger, func()) {
 	// In tests, we use UDP so that we can test without being root; this
-	// doesn't matter becuase we mock out the ICMP reply below to be a real
+	// doesn't matter because we mock out the ICMP reply below to be a real
 	// ICMP echo reply packet.
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {

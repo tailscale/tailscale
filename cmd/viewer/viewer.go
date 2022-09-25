@@ -388,7 +388,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if runCloner {
-		// When a new pacakge is added or when existing generated files have
+		// When a new package is added or when existing generated files have
 		// been deleted, we might run into a case where tailscale.com/cmd/cloner
 		// has not run yet. We detect this by verifying that all the structs we
 		// interacted with have had Clone method already generated. If they

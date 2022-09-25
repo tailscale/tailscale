@@ -199,7 +199,7 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 	return fmt.Sprintf("https://%s/derp", node.HostName)
 }
 
-// AddressFamilySelector decides whethers IPv6 is preferred for
+// AddressFamilySelector decides whether IPv6 is preferred for
 // outbound dials.
 type AddressFamilySelector interface {
 	// PreferIPv6 reports whether IPv4 dials should be slightly

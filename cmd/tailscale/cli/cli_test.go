@@ -410,7 +410,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			want: accidentalUpPrefix + " --hostname=foo --exit-node=100.64.5.7",
 		},
 		{
-			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Isue 3480
+			name:          "error_exit_node_and_allow_lan_omit_with_id_pref", // Issue 3480
 			flags:         []string{"--hostname=foo"},
 			curExitNodeIP: netip.MustParseAddr("100.2.3.4"),
 			curPrefs: &ipn.Prefs{
@@ -448,7 +448,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		},
 		{
 			// Issue 3176: on Synology, don't require --accept-routes=false because user
-			// migth've had old an install, and we don't support --accept-routes anyway.
+			// might've had an old install, and we don't support --accept-routes anyway.
 			name:  "synology_permit_omit_accept_routes",
 			flags: []string{"--hostname=foo"},
 			curPrefs: &ipn.Prefs{

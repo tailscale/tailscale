@@ -412,7 +412,7 @@ func (l loggingResponseWriter) Flush() {
 //
 // It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
-	Code   int         // HTTP response code to send to client; 0 means means 500
+	Code   int         // HTTP response code to send to client; 0 means 500
 	Msg    string      // Response body to send to client
 	Err    error       // Detailed error to log on the server
 	Header http.Header // Optional set of HTTP headers to set in the response

@@ -609,7 +609,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 		metricDNSResolveLocalOKAll.Add(1)
 		return addrs[0], dns.RCodeSuccess
 
-	// Leave some some record types explicitly unimplemented.
+	// Leave some record types explicitly unimplemented.
 	// These types relate to recursive resolution or special
 	// DNS semantics and might be implemented in the future.
 	case dns.TypeNS, dns.TypeSOA, dns.TypeAXFR, dns.TypeHINFO:

@@ -15,7 +15,7 @@ const (
 	bufferSize = 256 * 1024
 )
 
-// Listener is a net.Listener using using NewConn to create pairs of network
+// Listener is a net.Listener using NewConn to create pairs of network
 // connections connected in memory using a buffered pipe. It also provides a
 // Dial method to establish new connections.
 type Listener struct {

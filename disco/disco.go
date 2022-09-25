@@ -15,9 +15,9 @@
 // The recipient then decrypts the bytes following (the nacl secretbox)
 // and then the inner payload structure is:
 //
-//	messageType    byte  (the MessageType constants below)
-//	messageVersion byte  (0 for now; but always ignore bytes at the end)
-//	message-paylod [...]byte
+//	messageType     byte  (the MessageType constants below)
+//	messageVersion  byte  (0 for now; but always ignore bytes at the end)
+//	message-payload [...]byte
 package disco
 
 import (

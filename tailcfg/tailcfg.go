@@ -117,7 +117,7 @@ func (u StableNodeID) IsZero() bool {
 // A user can have multiple logins associated with it (e.g. gmail and github oauth).
 // (Note: none of our UIs support this yet.)
 //
-// Some properties are inhereted from the logins and can be overridden, such as
+// Some properties are inherited from the logins and can be overridden, such as
 // display name and profile picture.
 //
 // Other properties must be the same for all logins associated with a user.
@@ -249,7 +249,7 @@ type Node struct {
 // the owner of the node. When forOwner is false, the hostname is
 // never included in the return value.
 //
-// Return value is either either "Name" or "Name (Hostname)", where
+// Return value is either "Name" or "Name (Hostname)", where
 // Name is the node's MagicDNS base name (for normal non-shared-in
 // nodes), FQDN (without trailing dot, for shared-in nodes), or
 // Hostname (if no MagicDNS). Hostname is only included in the
@@ -864,7 +864,7 @@ type RegisterResponse struct {
 	MachineAuthorized bool   // TODO(crawshaw): move to using MachineStatus
 	AuthURL           string // if set, authorization pending
 
-	// Error indiciates that authorization failed. If this is non-empty,
+	// Error indicates that authorization failed. If this is non-empty,
 	// other status fields should be ignored.
 	Error string
 }
@@ -992,7 +992,7 @@ type NetPortRange struct {
 
 // CapGrant grants capabilities in a FilterRule.
 type CapGrant struct {
-	// Dsts are the destination IP ranges that this capabilty
+	// Dsts are the destination IP ranges that this capability
 	// grant matches.
 	Dsts []netip.Prefix
 
@@ -1006,7 +1006,7 @@ type CapGrant struct {
 //
 // A rule is logically a set of source CIDRs to match (described by
 // SrcIPs and SrcBits), and a set of destination targets that are then
-// allowed if a source IP is mathces of those CIDRs.
+// allowed if a source IP is matches of those CIDRs.
 type FilterRule struct {
 	// SrcIPs are the source IPs/networks to match.
 	//
@@ -1124,7 +1124,7 @@ type DNSConfig struct {
 	// MagicDNS config.
 	ExtraRecords []DNSRecord `json:",omitempty"`
 
-	// ExitNodeFilteredSuffixes are the the DNS suffixes that the
+	// ExitNodeFilteredSuffixes are the DNS suffixes that the
 	// node, when being an exit node DNS proxy, should not answer.
 	//
 	// The entries do not contain trailing periods and are always
@@ -1828,7 +1828,7 @@ type SSHAction struct {
 //
 // The "OverTLS" prefix is to loudly declare that this exchange
 // doesn't happen over Noise and can be intercepted/MITM'ed by
-// enterprise/corp proxies where the orgnanization can put TLS roots
+// enterprise/corp proxies where the organization can put TLS roots
 // on devices.
 type OverTLSPublicKeyResponse struct {
 	// LegacyPublic specifies the control plane server's original

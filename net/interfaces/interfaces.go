@@ -441,13 +441,13 @@ func prefixesEqual(a, b []netip.Prefix) bool {
 
 // UseInterestingInterfaces is an InterfaceFilter that reports whether i is an interesting interface.
 // An interesting interface if it is (a) not owned by Tailscale and (b) routes interesting IP addresses.
-// See UseInterestingIPs for the defition of an interesting IP address.
+// See UseInterestingIPs for the definition of an interesting IP address.
 func UseInterestingInterfaces(i Interface, ips []netip.Prefix) bool {
 	return !isTailscaleInterface(i.Name, ips) && anyInterestingIP(ips)
 }
 
 // UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
-// An IP address is interesting if it is neither a lopback not a link local unicast IP address.
+// An IP address is interesting if it is neither a loopback nor a link local unicast IP address.
 func UseInterestingIPs(ip netip.Addr) bool {
 	return isInterestingIP(ip)
 }
@@ -455,7 +455,7 @@ func UseInterestingIPs(ip netip.Addr) bool {
 // UseAllInterfaces is an InterfaceFilter that includes all interfaces.
 func UseAllInterfaces(i Interface, ips []netip.Prefix) bool { return true }
 
-// UseAllIPs is an IPFilter that includes all all IPs.
+// UseAllIPs is an IPFilter that includes all IPs.
 func UseAllIPs(ips netip.Addr) bool { return true }
 
 func (s *State) HasPAC() bool { return s != nil && s.PAC != "" }
