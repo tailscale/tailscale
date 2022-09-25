@@ -58,7 +58,7 @@ var (
 
 const _RP_FORCE = 1 // Flag for RefreshPolicyEx
 
-// nrptRuleDatabase ensapsulates access to the Windows Name Resolution Policy
+// nrptRuleDatabase encapsulates access to the Windows Name Resolution Policy
 // Table (NRPT).
 type nrptRuleDatabase struct {
 	logf               logger.Logf
