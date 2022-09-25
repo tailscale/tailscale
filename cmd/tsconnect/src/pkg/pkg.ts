@@ -20,7 +20,7 @@ type IPNPackageConfig = IPNConfig & {
   // URL of the main.wasm file that is included in the page, if it is not
   // accessible via a relative URL.
   wasmURL?: string
-  // Funtion invoked if the Go process panics or unexpectedly exits.
+  // Function invoked if the Go process panics or unexpectedly exits.
   panicHandler: (err: string) => void
 }
 
