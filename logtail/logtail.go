@@ -73,7 +73,7 @@ type Config struct {
 
 	// IncludeProcSequence, if true, results in an ephemeral sequence number
 	// being included in the logs. The sequence number is incremented for each
-	// log message sent, but is not peristed across process restarts.
+	// log message sent, but is not persisted across process restarts.
 	IncludeProcSequence bool
 }
 
