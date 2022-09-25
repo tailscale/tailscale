@@ -248,7 +248,7 @@ type Node struct {
 // the owner of the node. When forOwner is false, the hostname is
 // never included in the return value.
 //
-// Return value is either either "Name" or "Name (Hostname)", where
+// Return value is either "Name" or "Name (Hostname)", where
 // Name is the node's MagicDNS base name (for normal non-shared-in
 // nodes), FQDN (without trailing dot, for shared-in nodes), or
 // Hostname (if no MagicDNS). Hostname is only included in the
