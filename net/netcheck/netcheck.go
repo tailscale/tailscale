@@ -161,7 +161,7 @@ type Client struct {
 
 	// GetSTUNConn4 optionally provides a func to return the
 	// connection to use for sending & receiving IPv4 packets. If
-	// nil, an emphemeral one is created as needed.
+	// nil, an ephemeral one is created as needed.
 	GetSTUNConn4 func() STUNConn
 
 	// GetSTUNConn6 is like GetSTUNConn4, but for IPv6.
