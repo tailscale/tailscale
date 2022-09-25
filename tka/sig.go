@@ -33,7 +33,7 @@ const (
 	// SigRotation signature and sign it again with their rotation key. That
 	// way, SigRotation nesting should only be 2 deep in the common case.
 	SigRotation
-	// SigCredential describes a signature over a specifi public key, signed
+	// SigCredential describes a signature over a specific public key, signed
 	// by a key in the tailnet key authority referenced by the specified keyID.
 	// In effect, SigCredential delegates the ability to make a signature to
 	// a different public/private key pair.
