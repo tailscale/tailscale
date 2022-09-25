@@ -863,7 +863,7 @@ type RegisterResponse struct {
 	MachineAuthorized bool   // TODO(crawshaw): move to using MachineStatus
 	AuthURL           string // if set, authorization pending
 
-	// Error indiciates that authorization failed. If this is non-empty,
+	// Error indicates that authorization failed. If this is non-empty,
 	// other status fields should be ignored.
 	Error string
 }
