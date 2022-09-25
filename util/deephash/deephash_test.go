@@ -552,7 +552,7 @@ func TestGetTypeHasher(t *testing.T) {
 			out:  "\x01\x00\x00\x00\x02\x00\x00\x00\x03\x04\x00\x00\x00",
 		},
 		{
-			name: "IntIntByteInt-canddr",
+			name: "IntIntByteInt-canaddr",
 			val:  &IntIntByteInt{1, 2, 3, 4},
 			out:  "\x01\x01\x00\x00\x00\x02\x00\x00\x00\x03\x04\x00\x00\x00",
 		},
