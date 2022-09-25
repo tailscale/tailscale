@@ -448,7 +448,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 		},
 		{
 			// Issue 3176: on Synology, don't require --accept-routes=false because user
-			// migth've had old an install, and we don't support --accept-routes anyway.
+			// might've had old an install, and we don't support --accept-routes anyway.
 			name:  "synology_permit_omit_accept_routes",
 			flags: []string{"--hostname=foo"},
 			curPrefs: &ipn.Prefs{
