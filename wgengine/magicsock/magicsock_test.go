@@ -427,7 +427,7 @@ func TestPickDERPFallback(t *testing.T) {
 		}
 	}
 
-	// Test that that the pointer value of c is blended in and
+	// Test that the pointer value of c is blended in and
 	// distribution over nodes works.
 	got := map[int]int{}
 	for i := 0; i < 50; i++ {

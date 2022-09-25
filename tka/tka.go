@@ -339,7 +339,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 // only possible ancestor, ezpz. However if there are multiple distinct
 // ancestors, that means there are distinct chains, and we need some
 // hint to choose what to use. For that, we rely on the chainsThroughActive
-// bit, which signals to us that that ancestor was part of the
+// bit, which signals to us that ancestor was part of the
 // chain in a previous run.
 func computeActiveAncestor(storage Chonk, chains []chain) (AUMHash, error) {
 	// Dedupe possible ancestors, tracking if they were part of
