@@ -52,7 +52,7 @@ func NonNil(ptr interface{}) {
 
 // NonNilSliceForJSON makes sure that *slicePtr is non-nil so it will
 // won't be omitted from JSON serialization and possibly confuse JavaScript
-// clients expecting it to be preesnt.
+// clients expecting it to be present.
 func NonNilSliceForJSON[T any, S ~[]T](slicePtr *S) {
 	if *slicePtr != nil {
 		return
@@ -62,7 +62,7 @@ func NonNilSliceForJSON[T any, S ~[]T](slicePtr *S) {
 
 // NonNilMapForJSON makes sure that *slicePtr is non-nil so it will
 // won't be omitted from JSON serialization and possibly confuse JavaScript
-// clients expecting it to be preesnt.
+// clients expecting it to be present.
 func NonNilMapForJSON[K comparable, V any, M ~map[K]V](mapPtr *M) {
 	if *mapPtr != nil {
 		return
