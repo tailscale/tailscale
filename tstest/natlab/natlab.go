@@ -243,7 +243,7 @@ func (f *Interface) String() string {
 	if f.name != "" {
 		return f.name
 	}
-	return fmt.Sprintf("unamed-interface-on-network-%p", f.net)
+	return fmt.Sprintf("unnamed-interface-on-network-%p", f.net)
 }
 
 // Contains reports whether f contains ip as an IP.
