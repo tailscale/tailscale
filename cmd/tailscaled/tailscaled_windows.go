@@ -192,7 +192,7 @@ func beWindowsSubprocess() bool {
 	}
 	logid := os.Args[2]
 
-	// Remove the date/time prefix; the logtail + file logggers add it.
+	// Remove the date/time prefix; the logtail + file loggers add it.
 	log.SetFlags(0)
 
 	log.Printf("Program starting: v%v: %#v", version.Long, os.Args)
