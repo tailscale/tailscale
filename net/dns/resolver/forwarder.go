@@ -502,7 +502,7 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		// Only known DoH providers are supported currently. Specifically, we
 		// only support DoH providers where we can TCP connect to them on port
 		// 443 at the same IP address they serve normal UDP DNS from (1.1.1.1,
-		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custon DoH providers
+		// 8.8.8.8, 9.9.9.9, etc.) That's why OpenDNS and custom DoH providers
 		// aren't currently supported. There's no backup DNS resolution path for
 		// them.
 		urlBase := rr.name.Addr
