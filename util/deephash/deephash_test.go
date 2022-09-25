@@ -604,9 +604,9 @@ func TestSliceCycle(t *testing.T) {
 	type S []S
 	c := qt.New(t)
 
-	a := make(S, 1) // cylic graph of 1 node
+	a := make(S, 1) // cyclic graph of 1 node
 	a[0] = a
-	b := make(S, 1) // cylic graph of 1 node
+	b := make(S, 1) // cyclic graph of 1 node
 	b[0] = b
 	ha := Hash(&a)
 	hb := Hash(&b)
@@ -642,9 +642,9 @@ func TestMapCycle(t *testing.T) {
 	type M map[string]M
 	c := qt.New(t)
 
-	a := make(M) // cylic graph of 1 node
+	a := make(M) // cyclic graph of 1 node
 	a["self"] = a
-	b := make(M) // cylic graph of 1 node
+	b := make(M) // cyclic graph of 1 node
 	b["self"] = b
 	ha := Hash(&a)
 	hb := Hash(&b)
