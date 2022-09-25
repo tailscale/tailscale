@@ -93,7 +93,7 @@ type TKAInfo struct {
 	// This field exists to disambiguate a nil TKAInfo in a delta mapresponse
 	// from a nil TKAInfo indicating TKA should be disabled.
 	//
-	// TODO(tom): Implement /machine/tka/boostrap as a noise endpoint, to
+	// TODO(tom): Implement /machine/tka/bootstrap as a noise endpoint, to
 	// communicate the genesis AUM & any disablement secrets.
 	Disabled bool `json:",omitempty"`
 }

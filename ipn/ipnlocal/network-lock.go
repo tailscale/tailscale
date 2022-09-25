@@ -38,10 +38,10 @@ type tkaState struct {
 //
 // There are 4 scenarios handled here:
 //   - Enablement: nm.TKAEnabled but b.tka == nil
-//     ∴ reach out to /machine/tka/boostrap to get the genesis AUM, then
+//     ∴ reach out to /machine/tka/bootstrap to get the genesis AUM, then
 //     initialize TKA.
 //   - Disablement: !nm.TKAEnabled but b.tka != nil
-//     ∴ reach out to /machine/tka/boostrap to read the disablement secret,
+//     ∴ reach out to /machine/tka/bootstrap to read the disablement secret,
 //     then verify and clear tka local state.
 //   - Sync needed: b.tka.Head != nm.TKAHead
 //     ∴ complete multi-step synchronization flow.
