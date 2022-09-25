@@ -79,7 +79,7 @@ type peerAPIServer struct {
 }
 
 const (
-	// partialSuffix is the suffix appened to files while they're
+	// partialSuffix is the suffix appended to files while they're
 	// still in the process of being transferred.
 	partialSuffix = ".partial"
 
