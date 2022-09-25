@@ -4022,7 +4022,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 			}))
 	}
 
-	// Delete any prior CalllMeMaybe endpoints that weren't included
+	// Delete any prior CallMeMaybe endpoints that weren't included
 	// in this message.
 	for ep, want := range de.isCallMeMaybeEP {
 		if !want {
