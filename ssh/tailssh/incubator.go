@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This file contains the code for the incubator process.  Taiscaled
+// This file contains the code for the incubator process.  Tailscaled
 // launches the incubator as the same user as it was launched as.  The
 // incubator then registers a new session with the OS, sets its UID
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
