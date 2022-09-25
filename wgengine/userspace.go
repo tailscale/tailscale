@@ -664,7 +664,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	activeCutoff := e.timeNow().Add(-lazyPeerIdleThreshold)
 
 	// Not all peers can be trimmed from the network map (see
-	// isTrimmablePeer).  For those are are trimmable, keep track of
+	// isTrimmablePeer).  For those are trimmable, keep track of
 	// their NodeKey and Tailscale IPs.  These are the ones we'll need
 	// to install tracking hooks for to watch their send/receive
 	// activity.
