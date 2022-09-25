@@ -214,7 +214,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 	//
 	// As such, if we are running on openWRT, detect a mwan3 config, AND detect a rule
 	// with a preference 2001 (corresponding to the first interface wman3 manages), we
-	// shift the priority of our policies to 13xx. This effectively puts us betwen mwan3's
+	// shift the priority of our policies to 13xx. This effectively puts us between mwan3's
 	// permit-by-src-ip rules and mwan3 lookup of its own routing table which would drop
 	// the packet.
 	isMWAN3, err := checkOpenWRTUsingMWAN3()

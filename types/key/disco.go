@@ -63,7 +63,7 @@ func (k DiscoPrivate) Public() DiscoPublic {
 	return ret
 }
 
-// Shared returns the DiscoShared for communication betweek k and p.
+// Shared returns the DiscoShared for communication between k and p.
 func (k DiscoPrivate) Shared(p DiscoPublic) DiscoShared {
 	if k.IsZero() || p.IsZero() {
 		panic("can't compute shared secret with zero keys")
