@@ -26,6 +26,8 @@ import (
 	"go4.org/netipx"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/doctor"
+	"tailscale.com/doctor/routetable"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
@@ -3683,4 +3685,20 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<li>%v</li>\n", ipp.Addr())
 	}
 	io.WriteString(w, "</ul>\n")
+}
+
+func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
+	var checks []doctor.Check
+
+	checks = append(checks, routetable.Check{})
+
+	// TODO(andrew): more
+
+	numChecks := len(checks)
+	checks = append(checks, doctor.CheckFunc("numchecks", func(_ context.Context, log logger.Logf) error {
+		log("%d checks", numChecks)
+		return nil
+	}))
+
+	doctor.RunChecks(ctx, logf, checks...)
 }

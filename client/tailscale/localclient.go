@@ -267,13 +267,45 @@ func (lc *LocalClient) Profile(ctx context.Context, pprofType string, sec int) (
 	return lc.get200(ctx, fmt.Sprintf("/localapi/v0/profile?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
 }
 
-// BugReport logs and returns a log marker that can be shared by the user with support.
-func (lc *LocalClient) BugReport(ctx context.Context, note string) (string, error) {
-	body, err := lc.send(ctx, "POST", "/localapi/v0/bugreport?note="+url.QueryEscape(note), 200, nil)
+// BugReportOpts contains options to pass to the Tailscale daemon when
+// generating a bug report.
+type BugReportOpts struct {
+	// Note contains an optional user-provided note to add to the logs.
+	Note string
+
+	// Diagnose specifies whether to print additional diagnostic information to
+	// the logs when generating this bugreport.
+	Diagnose bool
+}
+
+// BugReportWithOpts logs and returns a log marker that can be shared by the
+// user with support.
+//
+// The opts type specifies options to pass to the Tailscale daemon when
+// generating this bug report.
+func (lc *LocalClient) BugReportWithOpts(ctx context.Context, opts BugReportOpts) (string, error) {
+	var qparams url.Values
+	if opts.Note != "" {
+		qparams.Set("note", opts.Note)
+	}
+	if opts.Diagnose {
+		qparams.Set("diagnose", "true")
+	}
+
+	uri := fmt.Sprintf("/localapi/v0/bugreport?%s", qparams.Encode())
+	body, err := lc.send(ctx, "POST", uri, 200, nil)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(body)), nil
+}
+
+// BugReport logs and returns a log marker that can be shared by the user with support.
+//
+// This is the same as calling BugReportWithOpts and only specifying the Note
+// field.
+func (lc *LocalClient) BugReport(ctx context.Context, note string) (string, error) {
+	return lc.BugReportWithOpts(ctx, BugReportOpts{Note: note})
 }
 
 // DebugAction invokes a debug action, such as "rebind" or "restun".

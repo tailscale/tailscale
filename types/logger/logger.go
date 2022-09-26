@@ -138,6 +138,8 @@ var rateFree = []string{
 	"SetPrefs: %v",
 	"peer keys: %s",
 	"v%v peers: %v",
+	// debug messages printed by 'tailscale bugreport'
+	"diag: ",
 }
 
 // RateLimitedFn is a wrapper for RateLimitedFnWithClock that includes the
