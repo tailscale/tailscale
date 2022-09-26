@@ -81,7 +81,8 @@ type CapabilityVersion int
 //   - 42: 2022-09-06: NextDNS DoH support; see https://github.com/tailscale/tailscale/pull/5556
 //   - 43: 2022-09-21: clients can return usernames for SSH
 //   - 44: 2022-09-22: MapResponse.ControlDialPlan
-const CurrentCapabilityVersion CapabilityVersion = 44
+//   - 45: 2022-09-26: c2n /debug/{goroutines,prefs,metrics}
+const CurrentCapabilityVersion CapabilityVersion = 45
 
 type StableID string
 

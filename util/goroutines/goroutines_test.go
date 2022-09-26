@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package controlclient
+package goroutines
 
 import "testing"
 
 func TestScrubbedGoroutineDump(t *testing.T) {
-	t.Logf("Got:\n%s\n", scrubbedGoroutineDump())
+	t.Logf("Got:\n%s\n", ScrubbedGoroutineDump())
 }
 
 func TestScrubHex(t *testing.T) {
