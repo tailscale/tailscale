@@ -69,6 +69,11 @@ const (
 	// _linux variant.
 	discoMagic1 = 0x5453f09f
 	discoMagic2 = 0x92ac
+
+	// UDP socket read/write buffer size (7MB). The value of 7MB is chosen as it
+	// is the max supported by a default configuration of macOS. Some platforms
+	// will silently clamp the value.
+	socketBufferSize = 7 << 20
 )
 
 // useDerpRoute reports whether magicsock should enable the DERP
@@ -2893,6 +2898,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			c.logf("magicsock: unable to bind %v port %d: %v", network, port, err)
 			continue
 		}
+		trySetSocketBuffer(pconn, c.logf)
 		// Success.
 		ruc.setConnLocked(pconn)
 		if network == "udp4" {
@@ -3946,6 +3952,20 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		}
 	}
 	return
+}
+
+// portableTrySetSocketBuffer sets SO_SNDBUF and SO_RECVBUF on pconn to socketBufferSize,
+// logging an error if it occurs.
+func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
+	if c, ok := pconn.(*net.UDPConn); ok {
+		// Attempt to increase the buffer size, and allow failures.
+		if err := c.SetReadBuffer(socketBufferSize); err != nil {
+			logf("magicsock: failed to set UDP read buffer size to %d: %v", socketBufferSize, err)
+		}
+		if err := c.SetWriteBuffer(socketBufferSize); err != nil {
+			logf("magicsock: failed to set UDP write buffer size to %d: %v", socketBufferSize, err)
+		}
+	}
 }
 
 // addrLatency is an IPPort with an associated latency.
