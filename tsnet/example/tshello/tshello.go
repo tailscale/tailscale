@@ -25,10 +25,13 @@ var (
 func main() {
 	flag.Parse()
 	s := new(tsnet.Server)
+	defer s.Close()
 	ln, err := s.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer ln.Close()
+
 	if *addr == ":443" {
 		ln = tls.NewListener(ln, &tls.Config{
 			GetCertificate: tailscale.GetCertificate,

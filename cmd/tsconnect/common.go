@@ -187,7 +187,12 @@ func buildWasm(dev bool) ([]byte, error) {
 		return nil, fmt.Errorf("Cannot create main.wasm output file: %w", err)
 	}
 	outputPath := outputFile.Name()
+
 	defer os.Remove(outputPath)
+	// Running defer (*os.File).Close() in defer order before os.Remove
+	// because on some systems like Windows, it is possible for os.Remove
+	// to fail for unclosed files.
+	defer outputFile.Close()
 
 	args := []string{"build", "-tags", "tailscale_go,osusergo,netgo,nethttpomithttp2,omitidna,omitpemdecrypt"}
 	if !dev {

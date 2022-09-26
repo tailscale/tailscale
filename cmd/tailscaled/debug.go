@@ -88,6 +88,8 @@ func runMonitor(ctx context.Context, loop bool) error {
 	if err != nil {
 		return err
 	}
+	defer mon.Close()
+
 	mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		if !changed {
 			log.Printf("Link monitor fired; no change")
@@ -162,7 +164,7 @@ func getURL(ctx context.Context, urlStr string) error {
 	return res.Write(os.Stdout)
 }
 
-func checkDerp(ctx context.Context, derpRegion string) error {
+func checkDerp(ctx context.Context, derpRegion string) (err error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", ipn.DefaultControlURL+"/derpmap/default", nil)
 	if err != nil {
 		return fmt.Errorf("create derp map request: %w", err)
@@ -201,6 +203,12 @@ func checkDerp(ctx context.Context, derpRegion string) error {
 
 	c1 := derphttp.NewRegionClient(priv1, log.Printf, getRegion)
 	c2 := derphttp.NewRegionClient(priv2, log.Printf, getRegion)
+	defer func() {
+		if err != nil {
+			c1.Close()
+			c2.Close()
+		}
+	}()
 
 	c2.NotePreferred(true) // just to open it
 

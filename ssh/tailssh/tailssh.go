@@ -1258,7 +1258,7 @@ func randBytes(n int) []byte {
 //
 // It writes an asciinema file to
 // $TAILSCALE_VAR_ROOT/ssh-sessions/ssh-session-<unixtime>-*.cast.
-func (ss *sshSession) startNewRecording() (*recording, error) {
+func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	var w ssh.Window
 	if ptyReq, _, isPtyReq := ss.Pty(); isPtyReq {
 		w = ptyReq.Window
@@ -1282,6 +1282,12 @@ func (ss *sshSession) startNewRecording() (*recording, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			rec.Close()
+		}
+	}()
+
 	f, err := os.CreateTemp(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
 	if err != nil {
 		return nil, err
