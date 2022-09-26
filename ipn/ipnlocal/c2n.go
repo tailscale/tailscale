@@ -10,14 +10,28 @@ import (
 	"net/http"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/goroutines"
 )
 
 func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
+	writeJSON := func(v any) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v)
+	}
 	switch r.URL.Path {
 	case "/echo":
 		// Test handler.
 		body, _ := io.ReadAll(r.Body)
 		w.Write(body)
+	case "/debug/goroutines":
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(goroutines.ScrubbedGoroutineDump())
+	case "/debug/prefs":
+		writeJSON(b.Prefs())
+	case "/debug/metrics":
+		w.Header().Set("Content-Type", "text/plain")
+		clientmetric.WritePrometheusExpositionFormat(w)
 	case "/ssh/usernames":
 		var req tailcfg.C2NSSHUsernamesRequest
 		if r.Method == "POST" {
@@ -31,8 +45,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(res)
+		writeJSON(res)
 	default:
 		http.Error(w, "unknown c2n path", http.StatusBadRequest)
 	}
