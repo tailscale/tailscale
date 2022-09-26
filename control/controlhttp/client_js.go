@@ -29,9 +29,11 @@ func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
 
 	wsScheme := "wss"
 	host := d.Hostname
-	if host == "localhost" {
+	// If using a custom control server (on a non-standard port), prefer that.
+	// This mirrors the port selection in newNoiseClient from noise.go.
+	if d.HTTPPort != "" && d.HTTPPort != "80" && d.HTTPSPort == "443" {
 		wsScheme = "ws"
-		host = net.JoinHostPort(host, strDef(d.HTTPPort, "80"))
+		host = net.JoinHostPort(host, d.HTTPPort)
 	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,
