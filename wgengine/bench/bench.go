@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"tailscale.com/types/logger"
@@ -323,6 +324,13 @@ func setupBatchTCPTest(logf logger.Logf, traf *TrafficGen) {
 		log.Fatalf("listen: %v", err)
 	}
 
+	var slCloseOnce sync.Once
+	slClose := func() {
+		slCloseOnce.Do(func() {
+			sl.Close()
+		})
+	}
+
 	s1, err := net.Dial("tcp", sl.Addr().String())
 	if err != nil {
 		log.Fatalf("dial: %v", err)
@@ -340,6 +348,8 @@ func setupBatchTCPTest(logf logger.Logf, traf *TrafficGen) {
 
 	go func() {
 		// transmitter
+		defer slClose()
+		defer s1.Close()
 
 		bs1 := bufio.NewWriterSize(s1, 1024*1024)
 
@@ -375,6 +385,8 @@ func setupBatchTCPTest(logf logger.Logf, traf *TrafficGen) {
 
 	go func() {
 		// receiver
+		defer slClose()
+		defer s2.Close()
 
 		bs2 := bufio.NewReaderSize(s2, 1024*1024)
 

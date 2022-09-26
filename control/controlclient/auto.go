@@ -88,11 +88,17 @@ func New(opts Options) (*Auto, error) {
 }
 
 // NewNoStart creates a new Auto, but without calling Start on it.
-func NewNoStart(opts Options) (*Auto, error) {
+func NewNoStart(opts Options) (_ *Auto, err error) {
 	direct, err := NewDirect(opts)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			direct.Close()
+		}
+	}()
+
 	if opts.Status == nil {
 		return nil, errors.New("missing required Options.Status")
 	}

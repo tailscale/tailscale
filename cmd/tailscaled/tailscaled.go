@@ -564,6 +564,8 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 		}
 		d, err := dns.NewOSConfigurator(logf, devName)
 		if err != nil {
+			dev.Close()
+			r.Close()
 			return nil, false, fmt.Errorf("dns.NewOSConfigurator: %w", err)
 		}
 		conf.DNS = d
