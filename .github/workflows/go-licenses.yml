@@ -50,7 +50,7 @@ jobs:
           private_key: ${{ secrets.LICENSING_APP_PRIVATE_KEY }}
 
       - name: Send pull request
-        uses: peter-evans/create-pull-request@18f90432bedd2afd6a825469ffd38aa24712a91d #v4.1.1
+        uses: peter-evans/create-pull-request@171dd555b9ab6b18fa02519fdfacbb8bf671e1b4 #v4.1.1
         with:
           token: ${{ steps.generate-token.outputs.token }}
           author: License Updater <noreply@tailscale.com>
