@@ -219,6 +219,10 @@ type Node struct {
 
 	MachineAuthorized bool `json:",omitempty"` // TODO(crawshaw): replace with MachineStatus
 
+	// Tailscale cert domain used to represent the alias applied whether by default, shared or custom.
+	// Combination of a TCD prefix that is default, tails-scales or custom with the ts.net public suffix.
+	TailnetName string `json:",omitempty"` // ??.ts.net
+
 	// Capabilities are capabilities that the node has.
 	// They're free-form strings, but should be in the form of URLs/URIs
 	// such as:
@@ -234,7 +238,6 @@ type Node struct {
 	ComputedName            string `json:",omitempty"` // MagicDNS base name (for normal non-shared-in nodes), FQDN (without trailing dot, for shared-in nodes), or Hostname (if no MagicDNS)
 	computedHostIfDifferent string // hostname, if different than ComputedName, otherwise empty
 	ComputedNameWithHost    string `json:",omitempty"` // either "ComputedName" or "ComputedName (computedHostIfDifferent)", if computedHostIfDifferent is set
-	TailnetName             string `json:",omitempty"` // SSO Tailnet name
 }
 
 // DisplayName returns the user-facing name for a node which should

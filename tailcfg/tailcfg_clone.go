@@ -91,11 +91,11 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Online                  *bool
 	KeepAlive               bool
 	MachineAuthorized       bool
+	TailnetName             string
 	Capabilities            []string
 	ComputedName            string
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
-	TailnetName             string
 }{})
 
 // Clone makes a deep copy of Hostinfo.
