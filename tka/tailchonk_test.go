@@ -58,6 +58,18 @@ func TestTailchonk_ChildAUMs(t *testing.T) {
 	}
 }
 
+func TestTailchonk_AUMMissing(t *testing.T) {
+	for _, chonk := range []Chonk{&Mem{}, &FS{base: t.TempDir()}} {
+		t.Run(fmt.Sprintf("%T", chonk), func(t *testing.T) {
+			var notExists AUMHash
+			notExists[:][0] = 42
+			if _, err := chonk.AUM(notExists); err != os.ErrNotExist {
+				t.Errorf("chonk.AUM(notExists).err = %v, want %v", err, os.ErrNotExist)
+			}
+		})
+	}
+}
+
 func TestTailchonkMem_Orphans(t *testing.T) {
 	chonk := Mem{}
 
