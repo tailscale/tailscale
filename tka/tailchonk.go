@@ -214,6 +214,9 @@ func (c *FS) AUM(hash AUMHash) (AUM, error) {
 
 	info, err := c.get(hash)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return AUM{}, os.ErrNotExist
+		}
 		return AUM{}, err
 	}
 	if info.AUM == nil {
