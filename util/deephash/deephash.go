@@ -106,7 +106,18 @@ func (s1 *Sum) xor(s2 Sum) {
 }
 
 func (s Sum) String() string {
+	// Note: if we change this, keep in sync with AppendTo
 	return hex.EncodeToString(s.sum[:])
+}
+
+// AppendTo appends the string encoding of this sum (as returned by the String
+// method) to the provided byte slice and returns the extended buffer.
+func (s Sum) AppendTo(b []byte) []byte {
+	// TODO: switch to upstream implementation if accepted:
+	// https://github.com/golang/go/issues/53693
+	var lb [len(s.sum) * 2]byte
+	hex.Encode(lb[:], s.sum[:])
+	return append(b, lb[:]...)
 }
 
 var (

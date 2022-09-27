@@ -1050,3 +1050,25 @@ func FuzzAddr(f *testing.F) {
 		}
 	})
 }
+
+func TestAppendTo(t *testing.T) {
+	v := getVal()
+	h := Hash(v)
+	sum := h.AppendTo(nil)
+
+	if s := h.String(); s != string(sum) {
+		t.Errorf("hash sum mismatch; h.String()=%q h.AppendTo()=%q", s, string(sum))
+	}
+}
+
+func BenchmarkAppendTo(b *testing.B) {
+	b.ReportAllocs()
+	v := getVal()
+	h := Hash(v)
+
+	hashBuf := make([]byte, 0, 100)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hashBuf = h.AppendTo(hashBuf[:0])
+	}
+}
