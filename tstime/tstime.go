@@ -8,6 +8,8 @@ package tstime
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,4 +142,26 @@ func Parse3339(s string) (time.Time, error) {
 // Parse3339B is Parse3339 but for byte slices.
 func Parse3339B(b []byte) (time.Time, error) {
 	return parse3339m(mem.B(b))
+}
+
+// ParseDuration is more expressive than time.ParseDuration, also accepting d
+// (days) and w (weeks) literals.
+func ParseDuration(s string) (time.Duration, error) {
+	for {
+		end := strings.IndexAny(s, "dw")
+		if end < 0 {
+			break
+		}
+		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "012345789")))
+		n, err := strconv.Atoi(s[start:end])
+		if err != nil {
+			return 0, err
+		}
+		hours := 24
+		if s[end] == 'w' {
+			hours *= 7
+		}
+		s = s[:start] + s[end+1:] + strconv.Itoa(n*hours) + "h"
+	}
+	return time.ParseDuration(s)
 }
