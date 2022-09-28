@@ -92,7 +92,7 @@ func mustPrefix(s string) netip.Prefix {
 func NewInternet() *Network {
 	return &Network{
 		Name: "internet",
-		// easily recognizable internett-y addresses
+		// easily recognizable internetty addresses
 		Prefix4: mustPrefix("1.0.0.0/24"),
 		Prefix6: mustPrefix("1111::/64"),
 	}
