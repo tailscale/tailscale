@@ -102,6 +102,29 @@ func TestParseInt(t *testing.T) {
 	}
 }
 
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"1h", time.Hour},
+		{"1d", 24 * time.Hour},
+		{"1d1d", 48 * time.Hour},
+		{"1h1d", 25 * time.Hour},
+		{"1d1h", 25 * time.Hour},
+		{"1w", 7 * 24 * time.Hour},
+		{"1w1d1h", 8*24*time.Hour + time.Hour},
+		{"1w1d1h", 8*24*time.Hour + time.Hour},
+		{"1y", 0},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		if got, _ := ParseDuration(tt.in); got != tt.want {
+			t.Errorf("ParseDuration(%q) = %d; want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
 func BenchmarkGoParse3339(b *testing.B) {
 	run := func(in string) func(*testing.B) {
 		return func(b *testing.B) {
