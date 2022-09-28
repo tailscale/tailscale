@@ -541,7 +541,7 @@ main() {
 			;;
 	esac
 
-	echo "Installation complete! Log in to start using Tailscale by running:"
+	echo "Installation complete! Login to start using Tailscale by running:"
 	echo
 	if [ -z "$SUDO" ]; then
 		echo "tailscale up"
