@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 
+	"go4.org/netipx"
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netaddr"
@@ -656,4 +657,29 @@ func SavePrefs(filename string, p *Prefs) {
 	if err := atomicfile.WriteFile(filename, data, 0600); err != nil {
 		log.Printf("SavePrefs: %v\n", err)
 	}
+}
+
+func ParseAcceptRoutesFilter(acceptFilter string) (*netipx.IPSet, error) {
+	var acceptFilterBuilder netipx.IPSetBuilder
+	for _, af := range strings.Split(acceptFilter, ",") {
+		af = strings.TrimSpace(af)
+		if af == "" {
+			continue
+		}
+		includeRange := true
+		if strings.HasPrefix(af, "-") {
+			includeRange = false
+			af = af[1:]
+		}
+		pfx, err := netip.ParsePrefix(af)
+		if err != nil {
+			return nil, err
+		}
+		if includeRange {
+			acceptFilterBuilder.AddPrefix(pfx)
+		} else {
+			acceptFilterBuilder.RemovePrefix(pfx)
+		}
+	}
+	return acceptFilterBuilder.IPSet()
 }

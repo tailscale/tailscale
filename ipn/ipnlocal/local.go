@@ -2775,32 +2775,6 @@ func ipPrefixLess(ri, rj netip.Prefix) bool {
 	return ri.Addr().Less(rj.Addr())
 }
 
-func (b *LocalBackend) parseAcceptRoutesFilter(acceptFilter string) (*netipx.IPSet, error) {
-	var acceptFilterBuilder netipx.IPSetBuilder
-	for _, af := range strings.Split(acceptFilter, ",") {
-		af = strings.TrimSpace(af)
-		if af == "" {
-			continue
-		}
-		includeRange := true
-		if strings.HasPrefix(af, "-") {
-			includeRange = false
-			af = af[1:]
-		}
-		pfx, err := netip.ParsePrefix(af)
-		if err != nil {
-			b.logf("accept routes filter: invalid prefix %q will be ignored: %v (check accept-routes flag)", af, err)
-			continue
-		}
-		if includeRange {
-			acceptFilterBuilder.AddPrefix(pfx)
-		} else {
-			acceptFilterBuilder.RemovePrefix(pfx)
-		}
-	}
-	return acceptFilterBuilder.IPSet()
-}
-
 func (b *LocalBackend) filterRoutes(routes []netip.Prefix, acceptFilter *netipx.IPSet) []netip.Prefix {
 	if acceptFilter == nil {
 		return routes
@@ -2815,6 +2789,7 @@ func (b *LocalBackend) filterRoutes(routes []netip.Prefix, acceptFilter *netipx.
 		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
 		return routes
 	}
+	b.logf("accept routes filter: accepting routes: %v", set.Ranges())
 	return set.Prefixes()
 }
 
@@ -2825,9 +2800,9 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNA
 		singleRouteThreshold = 1
 	}
 
-	acceptRoutesFilterSet, err := b.parseAcceptRoutesFilter(prefs.AcceptRoutesFilter)
+	acceptRoutesFilterSet, err := ipn.ParseAcceptRoutesFilter(prefs.AcceptRoutesFilter)
 	if err != nil {
-		b.logf("accept routes filter: failed to build filter set: %v", err)
+		b.logf("accept routes filter: failed to build filter set from %q: %v", prefs.AcceptRoutesFilter, err)
 	}
 
 	rs := &router.Config{
