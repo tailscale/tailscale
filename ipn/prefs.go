@@ -70,6 +70,13 @@ type Prefs struct {
 	// controlled by ExitNodeID/IP below.
 	RouteAll bool
 
+	// AcceptRoutesFilter specifies an ordered list of IP ranges that are to be
+	// included or excluded from peer routes. The value is comma-seprated IP CIDRs
+	// with an optional leading `-` prefix indicating an exclusion, e.g.
+	// "0.0.0.0/0,-192.168.20.0/24" meaning "all routes except those intersecting
+	// 192.168.20.0/24".
+	AcceptRoutesFilter string
+
 	// AllowSingleHosts specifies whether to install routes for each
 	// node IP on the tailscale network, in addition to a route for
 	// the whole network.
@@ -206,6 +213,7 @@ type MaskedPrefs struct {
 
 	ControlURLSet             bool `json:",omitempty"`
 	RouteAllSet               bool `json:",omitempty"`
+	AcceptRoutesFilterSet     bool `json:",omitempty"`
 	AllowSingleHostsSet       bool `json:",omitempty"`
 	ExitNodeIDSet             bool `json:",omitempty"`
 	ExitNodeIPSet             bool `json:",omitempty"`
@@ -293,6 +301,9 @@ func (p *Prefs) pretty(goos string) string {
 	var sb strings.Builder
 	sb.WriteString("Prefs{")
 	fmt.Fprintf(&sb, "ra=%v ", p.RouteAll)
+	if p.RouteAll || p.AcceptRoutesFilter != "" {
+		fmt.Fprintf(&sb, "acceptfilter=%q ", p.AcceptRoutesFilter)
+	}
 	if !p.AllowSingleHosts {
 		sb.WriteString("mesh=false ")
 	}
@@ -366,6 +377,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 	return p != nil && p2 != nil &&
 		p.ControlURL == p2.ControlURL &&
 		p.RouteAll == p2.RouteAll &&
+		p.AcceptRoutesFilter == p2.AcceptRoutesFilter &&
 		p.AllowSingleHosts == p2.AllowSingleHosts &&
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
@@ -423,11 +435,12 @@ func NewPrefs() *Prefs {
 		// later anyway.
 		ControlURL: "",
 
-		RouteAll:         true,
-		AllowSingleHosts: true,
-		CorpDNS:          true,
-		WantRunning:      false,
-		NetfilterMode:    preftype.NetfilterOn,
+		RouteAll:           true,
+		AcceptRoutesFilter: "0.0.0.0/0,::/0",
+		AllowSingleHosts:   true,
+		CorpDNS:            true,
+		WantRunning:        false,
+		NetfilterMode:      preftype.NetfilterOn,
 	}
 }
 

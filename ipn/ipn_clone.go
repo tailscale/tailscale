@@ -35,6 +35,7 @@ func (src *Prefs) Clone() *Prefs {
 var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	ControlURL             string
 	RouteAll               bool
+	AcceptRoutesFilter 		 string
 	AllowSingleHosts       bool
 	ExitNodeID             tailcfg.StableNodeID
 	ExitNodeIP             netip.Addr
