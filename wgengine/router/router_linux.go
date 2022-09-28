@@ -1713,7 +1713,7 @@ func checkOpenWRTUsingMWAN3() (bool, error) {
 		//
 		// We dont match on the mask because it can vary, or the
 		// table because I'm not sure if it can vary.
-		if r.Priority == 2001 && r.Mark != 0 {
+		if r.Priority >= 2001 && r.Priority <= 2004 && r.Mark != 0 {
 			return true, nil
 		}
 	}
