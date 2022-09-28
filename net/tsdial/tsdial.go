@@ -210,7 +210,7 @@ func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (net
 	exitDNSDoH := d.exitDNSDoHBase
 	d.mu.Unlock()
 
-	// MagicDNS or otherwise baked in to the NetworkMap? Try that first.
+	// MagicDNS or otherwise baked into the NetworkMap? Try that first.
 	ipp, err := dns.resolveMemory(ctx, network, addr)
 	if err != errUnresolved {
 		return ipp, err
