@@ -523,7 +523,7 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 	return Accept, "ok out"
 }
 
-// direction is whether a packet was flowing in to this machine, or
+// direction is whether a packet was flowing into this machine, or
 // flowing out.
 type direction int
 
