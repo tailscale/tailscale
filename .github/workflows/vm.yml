@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   ubuntu2004-LTS-cloud-base:
-    runs-on: [ self-hosted, linux, vm ]
+    runs-on: ubuntu-22.04
 
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
@@ -32,7 +32,7 @@ jobs:
         env:
           HOME: "/tmp"
           TMPDIR: "/tmp"
-          XDG_CACHE_HOME: "/var/lib/ghrunner/cache"
+          XDG_CACHE_HOME: "$HOME/.cache"
 
       - uses: k0kubun/action-slack@v2.0.0
         with:
