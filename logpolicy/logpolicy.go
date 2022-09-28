@@ -74,7 +74,9 @@ func getLogTarget() string {
 // logtail server, or the default.
 func LogHost() string {
 	if v := getLogTarget(); v != "" {
-		return v
+		if u, err := url.Parse(v); err == nil {
+			return u.Hostname()
+		}
 	}
 	return logtail.DefaultHost
 }
