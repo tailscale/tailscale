@@ -70,8 +70,19 @@ func getLogTarget() string {
 	return getLogTargetOnce.v
 }
 
+// LogURL is the base URL for the configured logtail server, or the default.
+// It is guaranteed to not terminate with any forward slashes.
+func LogURL() string {
+	if v := getLogTarget(); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "https://" + logtail.DefaultHost
+}
+
 // LogHost returns the hostname only (without port) of the configured
 // logtail server, or the default.
+//
+// Deprecated: Use LogURL instead.
 func LogHost() string {
 	if v := getLogTarget(); v != "" {
 		if u, err := url.Parse(v); err == nil {
