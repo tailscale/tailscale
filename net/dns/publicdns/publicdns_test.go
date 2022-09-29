@@ -87,6 +87,19 @@ func TestDoHIPsOfBase(t *testing.T) {
 			),
 		},
 		{
+			base: "https://dns.nextdns.io/112233445566778899aabbcc",
+			want: ips(
+				"45.90.28.0",
+				"45.90.30.0",
+				"2a07:a8c0:1122:3344:5566:7788:99aa:bbcc",
+				"2a07:a8c1:1122:3344:5566:7788:99aa:bbcc",
+			),
+		},
+		{
+			base: "https://dns.nextdns.io/112233445566778899aabbccdd",
+			want: ips(), // nothing; profile length is over 12 bytes
+		},
+		{
 			base: "https://dns.nextdns.io/c3a884/with/more/stuff",
 			want: ips(
 				"45.90.28.0",

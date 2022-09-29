@@ -37,15 +37,15 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 	}
 
 	// NextDNS DoH URLs are of the form "https://dns.nextdns.io/c3a884"
-	// where the path component is the lower 8 bytes of the IPv6 address
+	// where the path component is the lower 12 bytes of the IPv6 address
 	// in lowercase hex without any zero padding.
 	if nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) {
 		a := ip.As16()
 		var sb strings.Builder
 		const base = "https://dns.nextdns.io/"
-		sb.Grow(len(base) + 8)
+		sb.Grow(len(base) + 12)
 		sb.WriteString(base)
-		for _, b := range bytes.TrimLeft(a[8:], "\x00") {
+		for _, b := range bytes.TrimLeft(a[4:], "\x00") {
 			fmt.Fprintf(&sb, "%02x", b)
 		}
 		return sb.String(), true, true
@@ -100,7 +100,7 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 		// conventional for them and not required (it'll already be in the DoH path).
 		// (Really we shouldn't use either IPv4 or IPv6 anycast for DoH once we
 		// resolve "dns.nextdns.io".)
-		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 8 && len(b) > 0 {
+		if b, err := hex.DecodeString(hexStr); err == nil && len(b) <= 12 && len(b) > 0 {
 			return []netip.Addr{
 				nextDNSv4One,
 				nextDNSv4Two,
@@ -215,7 +215,7 @@ var (
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
 // provided ip and using id as the lowest 0-8 bytes.
 func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
-	if len(id) > 8 {
+	if len(id) > 12 {
 		return netip.Addr{}
 	}
 	a := ip.As16()
