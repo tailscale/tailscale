@@ -39,6 +39,7 @@ import (
 var (
 	dev        = flag.Bool("dev", false, "run in localhost development mode")
 	addr       = flag.String("a", ":443", "server HTTPS listen address, in form \":port\", \"ip:port\", or for IPv6 \"[ip]:port\". If the IP is omitted, it defaults to all interfaces.")
+	basePath   = flag.String("basepath", "", "serve under a sub-path")
 	httpPort   = flag.Int("http-port", 80, "The port on which to serve HTTP. Set to -1 to disable. The listener is bound to the same IP (if any) as specified in the -a flag.")
 	stunPort   = flag.Int("stun-port", 3478, "The UDP port on which to serve STUN. The listener is bound to the same IP (if any) as specified in the -a flag.")
 	configPath = flag.String("c", "", "config file path")
@@ -174,16 +175,16 @@ func main() {
 	if *runDERP {
 		derpHandler := derphttp.Handler(s)
 		derpHandler = addWebSocketSupport(s, derpHandler)
-		mux.Handle("/derp", derpHandler)
+		mux.Handle(*basePath+"/derp", derpHandler)
 	} else {
-		mux.Handle("/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle(*basePath+"/derp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "derp server disabled", http.StatusNotFound)
 		}))
 	}
-	mux.HandleFunc("/derp/probe", probeHandler)
+	mux.HandleFunc(*basePath+"/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
-	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(*basePath+"/bootstrap-dns", handleBootstrapDNS)
+	mux.Handle(*basePath+"/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
 		io.WriteString(w, `<html><body>
@@ -202,10 +203,10 @@ func main() {
 			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
 		}
 	}))
-	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle(*basePath+"/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
-	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
+	mux.Handle(*basePath+"/generate_204", http.HandlerFunc(serveNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -294,8 +295,8 @@ func main() {
 		if *httpPort > -1 {
 			go func() {
 				port80mux := http.NewServeMux()
-				port80mux.HandleFunc("/generate_204", serveNoContent)
-				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
+				port80mux.HandleFunc(*basePath+"/generate_204", serveNoContent)
+				port80mux.Handle(*basePath+"/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
 					Handler:     port80mux,

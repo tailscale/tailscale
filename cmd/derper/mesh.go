@@ -36,7 +36,7 @@ func startMesh(s *derp.Server) error {
 
 func startMeshWithHost(s *derp.Server, host string) error {
 	logf := logger.WithPrefix(log.Printf, fmt.Sprintf("mesh(%q): ", host))
-	c, err := derphttp.NewClient(s.PrivateKey(), "https://"+host+"/derp", logf)
+	c, err := derphttp.NewClient(s.PrivateKey(), "https://"+host+*basePath+"/derp", logf)
 	if err != nil {
 		return err
 	}

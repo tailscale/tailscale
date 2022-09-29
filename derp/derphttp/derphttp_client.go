@@ -196,7 +196,7 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.String()
 	}
-	return fmt.Sprintf("https://%s/derp", node.HostName)
+	return fmt.Sprintf("https://%s%s/derp", node.HostName, node.DERPBasePath)
 }
 
 // AddressFamilySelector decides whethers IPv6 is preferred for

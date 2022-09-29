@@ -1109,7 +1109,7 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 	}
 
 	node := dm.Regions[preferredDERP].Nodes[0]
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+node.HostName+"/generate_204", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+node.HostName+node.DERPBasePath+"/generate_204", nil)
 	if err != nil {
 		return false, err
 	}
@@ -1150,7 +1150,7 @@ func (c *Client) runHTTPOnlyChecks(ctx context.Context, last *Report, rs *report
 		go func() {
 			defer wg.Done()
 			node := rg.Nodes[0]
-			req, _ := http.NewRequestWithContext(ctx, "HEAD", "https://"+node.HostName+"/derp/probe", nil)
+			req, _ := http.NewRequestWithContext(ctx, "HEAD", "https://"+node.HostName+node.DERPBasePath+"/derp/probe", nil)
 			// One warm-up one to get HTTP connection set
 			// up and get a connection from the browser's
 			// pool.
@@ -1222,7 +1222,7 @@ func (c *Client) measureHTTPSLatency(ctx context.Context, reg *tailcfg.DERPRegio
 	}
 	hc := &http.Client{Transport: tr}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+node.HostName+"/derp/latency-check", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+node.HostName+node.DERPBasePath+"/derp/latency-check", nil)
 	if err != nil {
 		return 0, ip, err
 	}

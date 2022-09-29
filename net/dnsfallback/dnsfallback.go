@@ -40,8 +40,9 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	}
 
 	type nameIP struct {
-		dnsName string
-		ip      netip.Addr
+		dnsName  string
+		ip       netip.Addr
+		basePath string
 	}
 
 	dm := getDERPMap()
@@ -50,10 +51,10 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	for _, dr := range dm.Regions {
 		for _, n := range dr.Nodes {
 			if ip, err := netip.ParseAddr(n.IPv4); err == nil {
-				cands4 = append(cands4, nameIP{n.HostName, ip})
+				cands4 = append(cands4, nameIP{n.HostName, ip, n.DERPBasePath})
 			}
 			if ip, err := netip.ParseAddr(n.IPv6); err == nil {
-				cands6 = append(cands6, nameIP{n.HostName, ip})
+				cands6 = append(cands6, nameIP{n.HostName, ip, n.DERPBasePath})
 			}
 		}
 	}
@@ -82,7 +83,7 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 		logf("trying bootstrapDNS(%q, %q) for %q ...", cand.dnsName, cand.ip, host)
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		dm, err := bootstrapDNSMap(ctx, cand.dnsName, cand.ip, host)
+		dm, err := bootstrapDNSMap(ctx, cand.dnsName, cand.ip, cand.basePath, host)
 		if err != nil {
 			logf("bootstrapDNS(%q, %q) for %q error: %v", cand.dnsName, cand.ip, host, err)
 			continue
@@ -100,7 +101,7 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 
 // serverName and serverIP of are, say, "derpN.tailscale.com".
 // queryName is the name being sought (e.g. "controlplane.tailscale.com"), passed as hint.
-func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string) (dnsMap, error) {
+func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, basePath, queryName string) (dnsMap, error) {
 	dialer := netns.NewDialer(logf)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
@@ -109,7 +110,7 @@ func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr
 	}
 	tr.TLSClientConfig = tlsdial.Config(serverName, tr.TLSClientConfig)
 	c := &http.Client{Transport: tr}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+serverName+"/bootstrap-dns?q="+url.QueryEscape(queryName), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+serverName+basePath+"/bootstrap-dns?q="+url.QueryEscape(queryName), nil)
 	if err != nil {
 		return nil, err
 	}

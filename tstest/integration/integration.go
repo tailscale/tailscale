@@ -184,6 +184,7 @@ func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpMap *
 						IPv6:             "none",
 						STUNPort:         stunAddr.Port,
 						DERPPort:         httpsrv.Listener.Addr().(*net.TCPAddr).Port,
+						DERPBasePath:     "/test",
 						InsecureForTests: true,
 						STUNTestIP:       ipAddress,
 					},

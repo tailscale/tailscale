@@ -136,6 +136,17 @@ type DERPNode struct {
 	// If zero, 443 is used.
 	DERPPort int `json:",omitempty"`
 
+	// DERPBasePath optionally provides a base path for the DERP HTTPS
+	// server.
+	//
+	// Clients may send requests to the following paths:
+	//   - DERPBasePath + "/derp"
+	//   - DERPBasePath + "/derp/probe"
+	//   - DERPBasePath + "/derp/latency-check"
+	//   - DERPBasePath + "/bootstrap-dns"
+	//   - DERPBasePath + "/generate_204"
+	DERPBasePath string `json:",omitempty"`
+
 	// InsecureForTests is used by unit tests to disable TLS verification.
 	// It should not be set by users.
 	InsecureForTests bool `json:",omitempty"`

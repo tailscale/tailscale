@@ -772,6 +772,7 @@ func (v DERPNodeView) IPv6() string           { return v.ж.IPv6 }
 func (v DERPNodeView) STUNPort() int          { return v.ж.STUNPort }
 func (v DERPNodeView) STUNOnly() bool         { return v.ж.STUNOnly }
 func (v DERPNodeView) DERPPort() int          { return v.ж.DERPPort }
+func (v DERPNodeView) DERPBasePath() string   { return v.ж.DERPBasePath }
 func (v DERPNodeView) InsecureForTests() bool { return v.ж.InsecureForTests }
 func (v DERPNodeView) STUNTestIP() string     { return v.ж.STUNTestIP }
 
@@ -786,6 +787,7 @@ var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
 	STUNPort         int
 	STUNOnly         bool
 	DERPPort         int
+	DERPBasePath     string
 	InsecureForTests bool
 	STUNTestIP       string
 }{})
