@@ -214,7 +214,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	logf.JSON(1, "Hostinfo", hi)
 	envknob.LogCurrent(logf)
 	if dialer == nil {
-		dialer = new(tsdial.Dialer)
+		dialer = &tsdial.Dialer{Logf: logf}
 	}
 
 	osshare.SetFileSharingEnabled(false, logf)

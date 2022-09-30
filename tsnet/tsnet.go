@@ -271,7 +271,7 @@ func (s *Server) start() (reterr error) {
 	}
 	closePool.add(s.linkMon)
 
-	s.dialer = new(tsdial.Dialer) // mutated below (before used)
+	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		ListenPort:  0,
 		LinkMonitor: s.linkMon,

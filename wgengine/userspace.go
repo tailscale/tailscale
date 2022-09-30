@@ -282,7 +282,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		conf.DNS = d
 	}
 	if conf.Dialer == nil {
-		conf.Dialer = new(tsdial.Dialer)
+		conf.Dialer = &tsdial.Dialer{Logf: logf}
 	}
 
 	var tsTUNDev *tstun.Wrapper
