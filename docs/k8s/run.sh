@@ -18,6 +18,7 @@ TS_SOCKS5_SERVER="${TS_SOCKS5_SERVER:-}"
 TS_OUTBOUND_HTTP_PROXY_LISTEN="${TS_OUTBOUND_HTTP_PROXY_LISTEN:-}"
 TS_TAILSCALED_EXTRA_ARGS="${TS_TAILSCALED_EXTRA_ARGS:-}"
 TS_SOCKET="${TS_SOCKET:-/tmp/tailscaled.sock}"
+TS_WEBUI="${TS_WEBUI:-}"
 
 set -e
 
@@ -81,8 +82,13 @@ if [[ ! -z "${TS_EXTRA_ARGS}" ]]; then
   UP_ARGS="${UP_ARGS} ${TS_EXTRA_ARGS:-}"
 fi
 
-echo "Running tailscale up"
-tailscale --socket="${TS_SOCKET}" up ${UP_ARGS}
+if [[ ! -z "${TS_WEBUI}" ]]; then
+  echo "Running tailscale web"
+  tailscale --socket="${TS_SOCKET}" web --listen ${HOSTNAME}:8088
+else
+  echo "Running tailscale up"
+  tailscale --socket="${TS_SOCKET}" up ${UP_ARGS}
+fi
 
 if [[ ! -z "${TS_DEST_IP}" ]]; then
   echo "Adding iptables rule for DNAT"
