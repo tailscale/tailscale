@@ -540,7 +540,7 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, new(tsdial.Dialer), nil)
+	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}

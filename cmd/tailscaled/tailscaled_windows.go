@@ -266,7 +266,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	if err != nil {
 		return fmt.Errorf("monitor: %w", err)
 	}
-	dialer := new(tsdial.Dialer)
+	dialer := &tsdial.Dialer{Logf: logf}
 
 	getEngineRaw := func() (wgengine.Engine, *netstack.Impl, error) {
 		dev, devName, err := tstun.New(logf, "Tailscale")

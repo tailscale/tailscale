@@ -375,8 +375,7 @@ func run() error {
 
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
-	dialer := new(tsdial.Dialer) // mutated below (before used)
-	dialer.Logf = logf
+	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	e, useNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
 		return fmt.Errorf("createEngine: %w", err)
