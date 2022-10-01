@@ -9,7 +9,7 @@ spec:
   serviceAccountName: "{{SA_NAME}}"
   initContainers:
     # In order to run as a proxy we need to enable IP Forwarding inside
-    # the container. The `net.ipv4.ip_forward` sysctl is not whitelisted
+    # the container. The `net.ipv4.ip_forward` sysctl is not allowlisted
     # in Kubelet by default.
   - name: sysctler
     image: busybox
@@ -18,7 +18,7 @@ spec:
     command: ["/bin/sh"]
     args:
       - -c
-      - sysctl -w net.ipv4.ip_forward=1 -w net.ipv6.conf.all.forwarding=1
+      - sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
     resources:
       requests:
         cpu: 1m
