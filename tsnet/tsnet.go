@@ -84,6 +84,7 @@ type Server struct {
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
+	netstack         *netstack.Impl
 	linkMon          *monitor.Mon
 	localAPIListener net.Listener
 	rootPath         string // the state directory
@@ -151,6 +152,10 @@ func (s *Server) Close() error {
 		}()
 	}
 
+	if s.netstack != nil {
+		s.netstack.Close()
+		s.netstack = nil
+	}
 	s.shutdownCancel()
 	s.lb.Shutdown()
 	s.linkMon.Close()
@@ -296,6 +301,7 @@ func (s *Server) start() (reterr error) {
 	if err := ns.Start(); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
+	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
 		return ok
