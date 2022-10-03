@@ -249,6 +249,10 @@ func (s *State) staticValidateCheckpoint() error {
 		if err := k.StaticValidate(); err != nil {
 			return fmt.Errorf("key[%d]: %v", i, err)
 		}
+	}
+	// NOTE: The max number of keys is constrained (512), so
+	// O(n^2) is fine.
+	for i, k := range s.Keys {
 		for j, k2 := range s.Keys {
 			if i == j {
 				continue

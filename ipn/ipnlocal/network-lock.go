@@ -16,10 +16,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -27,7 +25,7 @@ import (
 	"tailscale.com/types/tkatype"
 )
 
-var networkLockAvailable = envknob.RegisterBool("TS_EXPERIMENTAL_NETWORK_LOCK")
+// TODO(tom): RPC retry/backoff was broken and has been removed. Fix?
 
 var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
@@ -90,7 +88,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 // b.mu must be held. b.mu will be stepped out of (and back in) during network
 // RPCs.
 func (b *LocalBackend) tkaSyncIfNeededLocked(nm *netmap.NetworkMap) error {
-	if !networkLockAvailable() {
+	if !envknob.UseWIPCode() {
 		// If the feature flag is not enabled, pretend we don't exist.
 		return nil
 	}
@@ -213,7 +211,7 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	// copy of all forks that clients had.
 
 	b.mu.Unlock()
-	sendResp, err := b.tkaDoSyncSend(ourNodeKey, toSendAUMs)
+	sendResp, err := b.tkaDoSyncSend(ourNodeKey, toSendAUMs, false)
 	b.mu.Lock()
 	if err != nil {
 		return fmt.Errorf("send RPC: %v", err)
@@ -274,7 +272,7 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) err
 // CanSupportNetworkLock returns nil if tailscaled is able to operate
 // a local tailnet key authority (and hence enforce network lock).
 func (b *LocalBackend) CanSupportNetworkLock() error {
-	if !networkLockAvailable() {
+	if !envknob.UseWIPCode() {
 		return errors.New("this feature is not yet complete, a later release may support this functionality")
 	}
 
@@ -382,6 +380,26 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	return err
 }
 
+// Only use is in tests.
+func (b *LocalBackend) NetworkLockVerifySignatureForTest(nks tkatype.MarshaledSignature, nodeKey key.NodePublic) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return errNetworkLockNotActive
+	}
+	return b.tka.authority.NodeKeyAuthorized(nodeKey, nks)
+}
+
+// Only use is in tests.
+func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		panic("network lock not initialized")
+	}
+	return b.tka.authority.KeyTrusted(keyID)
+}
+
 // NetworkLockModify adds and/or removes keys in the tailnet's key authority.
 func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
 	defer func() {
@@ -398,10 +416,6 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	}
 	if b.tka == nil {
 		return errNetworkLockNotActive
-	}
-	nm := b.NetMap()
-	if nm == nil {
-		return errMissingNetmap
 	}
 
 	updater := b.tka.authority.NewUpdater(b.nlPrivKey)
@@ -426,71 +440,25 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return nil
 	}
 
-	head, err := b.sendAUMsLocked(aums, true)
+	ourNodeKey := b.prefs.Persist.PrivateNodeKey.Public()
+	b.mu.Unlock()
+	resp, err := b.tkaDoSyncSend(ourNodeKey, aums, true)
+	b.mu.Lock()
 	if err != nil {
 		return err
 	}
 
+	var controlHead tka.AUMHash
+	if err := controlHead.UnmarshalText([]byte(resp.Head)); err != nil {
+		return err
+	}
+
 	lastHead := aums[len(aums)-1].Hash()
-	if !slices.Equal(head[:], lastHead[:]) {
+	if controlHead != lastHead {
 		return errors.New("central tka head differs from submitted AUM, try again")
 	}
 
 	return nil
-}
-
-func (b *LocalBackend) sendAUMsLocked(aums []tka.AUM, interactive bool) (head tka.AUMHash, err error) {
-	// Submitting AUMs may block, so release the lock
-	b.mu.Unlock()
-	defer b.mu.Lock()
-
-	mAUMs := make([]tkatype.MarshaledAUM, len(aums))
-	for i := range aums {
-		mAUMs[i] = aums[i].Serialize()
-	}
-
-	var req bytes.Buffer
-	if err := json.NewEncoder(&req).Encode(tailcfg.TKASyncSendRequest{
-		MissingAUMs: mAUMs,
-		Interactive: interactive,
-	}); err != nil {
-		return head, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	bo := backoff.NewBackoff("tka-submit", b.logf, 5*time.Second)
-	var res *http.Response
-	for {
-		if err := ctx.Err(); err != nil {
-			return head, err
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/sync/send", &req)
-		if err != nil {
-			return head, err
-		}
-		res, err = b.DoNoiseRequest(req)
-		bo.BackOff(ctx, err)
-		if err == nil {
-			break
-		}
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		body, _ := io.ReadAll(res.Body)
-		return head, fmt.Errorf("submit status %d: %s", res.StatusCode, string(body))
-	}
-	a := new(tailcfg.TKASyncSendResponse)
-	if err := json.NewDecoder(res.Body).Decode(a); err != nil {
-		return head, err
-	}
-
-	if err := head.UnmarshalText([]byte(a.Head)); err != nil {
-		return head, err
-	}
-
-	return head, nil
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
@@ -524,34 +492,27 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	bo := backoff.NewBackoff("tka-init-begin", b.logf, 5*time.Second)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("ctx: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/init/begin", &req)
-		if err != nil {
-			return nil, fmt.Errorf("req: %w", err)
-		}
-		res, err := b.DoNoiseRequest(req)
-		if err != nil {
-			bo.BackOff(ctx, err)
-			continue
-		}
-		if res.StatusCode != 200 {
-			body, _ := io.ReadAll(res.Body)
-			res.Body.Close()
-			return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
-		}
-		a := new(tailcfg.TKAInitBeginResponse)
-		err = json.NewDecoder(res.Body).Decode(a)
-		res.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decoding JSON: %w", err)
-		}
-
-		return a, nil
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/init/begin", &req)
+	if err != nil {
+		return nil, fmt.Errorf("req: %w", err)
 	}
+	res, err := b.DoNoiseRequest(req2)
+	if err != nil {
+		return nil, fmt.Errorf("resp: %w", err)
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKAInitBeginResponse)
+	err = json.NewDecoder(res.Body).Decode(a)
+	res.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+
+	return a, nil
 }
 
 func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.NodeID]tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
@@ -566,34 +527,28 @@ func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	bo := backoff.NewBackoff("tka-init-finish", b.logf, 5*time.Second)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("ctx: %w", err)
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/init/finish", &req)
-		if err != nil {
-			return nil, fmt.Errorf("req: %w", err)
-		}
-		res, err := b.DoNoiseRequest(req)
-		if err != nil {
-			bo.BackOff(ctx, err)
-			continue
-		}
-		if res.StatusCode != 200 {
-			body, _ := io.ReadAll(res.Body)
-			res.Body.Close()
-			return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
-		}
-		a := new(tailcfg.TKAInitFinishResponse)
-		err = json.NewDecoder(res.Body).Decode(a)
-		res.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decoding JSON: %w", err)
-		}
 
-		return a, nil
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/init/finish", &req)
+	if err != nil {
+		return nil, fmt.Errorf("req: %w", err)
 	}
+	res, err := b.DoNoiseRequest(req2)
+	if err != nil {
+		return nil, fmt.Errorf("resp: %w", err)
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKAInitFinishResponse)
+	err = json.NewDecoder(res.Body).Decode(a)
+	res.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+
+	return a, nil
 }
 
 // tkaFetchBootstrap sends a /machine/tka/bootstrap RPC to the control plane
@@ -707,11 +662,12 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 
 // tkaDoSyncSend sends a /machine/tka/sync/send RPC to the control plane
 // over noise. This is the second of two RPCs implementing tka synchronization.
-func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, aums []tka.AUM) (*tailcfg.TKASyncSendResponse, error) {
+func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, aums []tka.AUM, interactive bool) (*tailcfg.TKASyncSendResponse, error) {
 	sendReq := tailcfg.TKASyncSendRequest{
 		Version:     tailcfg.CurrentCapabilityVersion,
 		NodeKey:     ourNodeKey,
 		MissingAUMs: make([]tkatype.MarshaledAUM, len(aums)),
+		Interactive: interactive,
 	}
 	for i, a := range aums {
 		sendReq.MissingAUMs[i] = a.Serialize()
