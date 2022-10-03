@@ -26,6 +26,8 @@ import (
 
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -222,6 +224,13 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	h.logf("user bugreport: %s", logMarker)
 	if note := r.FormValue("note"); len(note) > 0 {
 		h.logf("user bugreport note: %s", note)
+	}
+	hi, _ := json.Marshal(hostinfo.New())
+	h.logf("user bugreport hostinfo: %s", hi)
+	if err := health.OverallError(); err != nil {
+		h.logf("user bugreport health: %s", err.Error())
+	} else {
+		h.logf("user bugreport health: ok")
 	}
 	if defBool(r.FormValue("diagnose"), false) {
 		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
