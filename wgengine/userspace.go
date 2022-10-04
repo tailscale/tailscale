@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/maps"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/control/controlclient"
@@ -671,7 +672,13 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	trackNodes := make([]key.NodePublic, 0, len(full.Peers))
 	trackIPs := make([]netip.Addr, 0, len(full.Peers))
 
-	trimmedNodes := map[key.NodePublic]bool{} // TODO: don't re-alloc this map each time
+	// Don't re-alloc the map; the Go compiler optimizes map clears as of
+	// Go 1.11, so we can re-use the existing + allocated map.
+	if e.trimmedNodes != nil {
+		maps.Clear(e.trimmedNodes)
+	} else {
+		e.trimmedNodes = make(map[key.NodePublic]bool)
+	}
 
 	needRemoveStep := false
 	for i := range full.Peers {
@@ -696,7 +703,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 				needRemoveStep = true
 			}
 		} else {
-			trimmedNodes[nk] = true
+			e.trimmedNodes[nk] = true
 		}
 	}
 	e.lastNMinPeers = len(min.Peers)
@@ -706,11 +713,9 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 		TrimmedNodes map[key.NodePublic]bool
 		TrackNodes   []key.NodePublic
 		TrackIPs     []netip.Addr
-	}{&min, trimmedNodes, trackNodes, trackIPs}); !changed {
+	}{&min, e.trimmedNodes, trackNodes, trackIPs}); !changed {
 		return nil
 	}
-
-	e.trimmedNodes = trimmedNodes
 
 	e.updateActivityMapsLocked(trackNodes, trackIPs)
 
