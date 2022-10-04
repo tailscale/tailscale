@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"go4.org/netipx"
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/doctor"
@@ -55,6 +56,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/systemd"
@@ -186,6 +188,7 @@ type LocalBackend struct {
 	// *.partial file to its final name on completion.
 	directFileRoot          string
 	directFileDoFinalRename bool // false on macOS, true on several NAS platforms
+	componentLogUntil       map[string]componentLogState
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -267,7 +270,89 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		b.logf("[unexpected] failed to wire up peer API port for engine %T", e)
 	}
 
+	for _, component := range debuggableComponents {
+		key := componentStateKey(component)
+		if ut, err := ipn.ReadStoreInt(store, key); err == nil {
+			if until := time.Unix(ut, 0); until.After(time.Now()) {
+				// conditional to avoid log spam at start when off
+				b.SetComponentDebugLogging(component, until)
+			}
+		}
+	}
+
 	return b, nil
+}
+
+type componentLogState struct {
+	until time.Time
+	timer *time.Timer // if non-nil, the AfterFunc to disable it
+}
+
+var debuggableComponents = []string{
+	"magicsock",
+}
+
+func componentStateKey(component string) ipn.StateKey {
+	return ipn.StateKey("_debug_" + component + "_until")
+}
+
+// SetComponentDebugLogging sets component's debug logging enabled until the until time.
+// If until is in the past, the component's debug logging is disabled.
+//
+// The following components are recognized:
+//
+//   - magicsock
+func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var setEnabled func(bool)
+	switch component {
+	case "magicsock":
+		mc, err := b.magicConn()
+		if err != nil {
+			return err
+		}
+		setEnabled = mc.SetDebugLoggingEnabled
+	}
+	if setEnabled == nil || !slices.Contains(debuggableComponents, component) {
+		return fmt.Errorf("unknown component %q", component)
+	}
+	timeUnixOrZero := func(t time.Time) int64 {
+		if t.IsZero() {
+			return 0
+		}
+		return t.Unix()
+	}
+	ipn.PutStoreInt(b.store, componentStateKey(component), timeUnixOrZero(until))
+	now := time.Now()
+	on := now.Before(until)
+	setEnabled(on)
+	var onFor time.Duration
+	if on {
+		onFor = until.Sub(now)
+		b.logf("debugging logging for component %q enabled for %v (until %v)", component, onFor.Round(time.Second), until.UTC().Format(time.RFC3339))
+	} else {
+		b.logf("debugging logging for component %q disabled", component)
+	}
+	if oldSt, ok := b.componentLogUntil[component]; ok && oldSt.timer != nil {
+		oldSt.timer.Stop()
+	}
+	newSt := componentLogState{until: until}
+	if on {
+		newSt.timer = time.AfterFunc(onFor, func() {
+			// Turn off logging after the timer fires, as long as the state is
+			// unchanged when the timer actually fires.
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if ls := b.componentLogUntil[component]; ls.until == until {
+				setEnabled(false)
+				b.logf("debugging logging for component %q disabled (by timer)", component)
+			}
+		})
+	}
+	mak.Set(&b.componentLogUntil, component, newSt)
+	return nil
 }
 
 // Dialer returns the backend's dialer.

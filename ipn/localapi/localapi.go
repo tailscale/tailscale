@@ -146,6 +146,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveMetrics(w, r)
 	case "/localapi/v0/debug":
 		h.serveDebug(w, r)
+	case "/localapi/v0/component-debug-logging":
+		h.serveComponentDebugLogging(w, r)
 	case "/localapi/v0/set-expiry-sooner":
 		h.serveSetExpirySooner(w, r)
 	case "/localapi/v0/dial":
@@ -327,6 +329,24 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	component := r.FormValue("component")
+	secs, _ := strconv.Atoi(r.FormValue("secs"))
+	err := h.b.SetComponentDebugLogging(component, time.Now().Add(time.Duration(secs)*time.Second))
+	var res struct {
+		Error string
+	}
+	if err != nil {
+		res.Error = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 // serveProfileFunc is the implementation of Handler.serveProfile, after auth,

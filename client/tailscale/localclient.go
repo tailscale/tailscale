@@ -318,6 +318,28 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// SetComponentDebugLogging sets component's debug logging enabled for
+// the provided duration. If the duration is in the past, the debug logging
+// is disabled.
+func (lc *LocalClient) SetComponentDebugLogging(ctx context.Context, component string, d time.Duration) error {
+	body, err := lc.send(ctx, "POST",
+		fmt.Sprintf("/localapi/v0/component-debug-logging?component=%s&secs=%d",
+			url.QueryEscape(component), int64(d.Seconds())), 200, nil)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	var res struct {
+		Error string
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return err
+	}
+	if res.Error != "" {
+		return errors.New(res.Error)
+	}
+	return nil
+}
+
 // Status returns the Tailscale daemon's status.
 func Status(ctx context.Context) (*ipnstate.Status, error) {
 	return defaultLocalClient.Status(ctx)

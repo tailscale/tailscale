@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
@@ -32,6 +34,21 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 	case "/debug/metrics":
 		w.Header().Set("Content-Type", "text/plain")
 		clientmetric.WritePrometheusExpositionFormat(w)
+	case "/debug/component-logging":
+		component := r.FormValue("component")
+		secs, _ := strconv.Atoi(r.FormValue("secs"))
+		if secs == 0 {
+			secs -= 1
+		}
+		until := time.Now().Add(time.Duration(secs) * time.Second)
+		err := b.SetComponentDebugLogging(component, until)
+		var res struct {
+			Error string `json:",omitempty"`
+		}
+		if err != nil {
+			res.Error = err.Error()
+		}
+		writeJSON(res)
 	case "/ssh/usernames":
 		var req tailcfg.C2NSSHUsernamesRequest
 		if r.Method == "POST" {
