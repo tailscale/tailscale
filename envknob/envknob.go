@@ -277,6 +277,11 @@ func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
 // SSHIgnoreTailnetPolicy is whether to ignore the Tailnet SSH policy for development.
 func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY") }
 
+
+// TKASkipSignatureCheck is whether to skip node-key signature checking for development.
+func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION") }
+
+
 // NoLogsNoSupport reports whether the client's opted out of log uploads and
 // technical support.
 func NoLogsNoSupport() bool {

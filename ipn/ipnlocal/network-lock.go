@@ -39,6 +39,39 @@ type tkaState struct {
 	storage   *tka.FS
 }
 
+// tkaFilterNetmapLocked checks the signatures on each node key, dropping
+// nodes from the netmap who's signature does not verify.
+func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
+	if !envknob.UseWIPCode() {
+		return // Feature-flag till network-lock is in Alpha.
+	}
+	if b.tka == nil {
+		return // TKA not enabled.
+	}
+
+	toDelete := make(map[int]struct{}, len(nm.Peers))
+	for i, p := range nm.Peers {
+		if len(p.KeySignature) == 0 {
+			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID, p.StableID)
+			toDelete[i] = struct{}{}
+		} else {
+			if err := b.tka.authority.NodeKeyAuthorized(p.Key, p.KeySignature); err != nil {
+				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID, p.StableID, err)
+				toDelete[i] = struct{}{}
+			}
+		}
+	}
+
+	// nm.Peers is ordered, so deletion must be order-preserving.
+	peers := make([]*tailcfg.Node, 0, len(nm.Peers))
+	for i, p := range nm.Peers {
+		if _, delete := toDelete[i]; !delete {
+			peers = append(peers, p)
+		}
+	}
+	nm.Peers = peers
+}
+
 // tkaSyncIfNeededLocked examines TKA info reported from the control plane,
 // performing the steps necessary to synchronize local tka state.
 //

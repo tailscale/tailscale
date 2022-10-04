@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
@@ -482,5 +484,63 @@ func TestTKASync(t *testing.T) {
 				t.Errorf("node head = %v, want %v", nodeHead, controlHead)
 			}
 		})
+	}
+}
+
+func TestTKAFilterNetmap(t *testing.T) {
+	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+
+	nlPriv := key.NewNLPrivate()
+	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	storage := &tka.Mem{}
+	authority, _, err := tka.Create(storage, tka.State{
+		Keys:               []tka.Key{nlKey},
+		DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+	}, nlPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	n1, n2, n3, n4, n5 := key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode(), key.NewNode()
+	n1GoodSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n1.Public()}, nlPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n4Sig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n4.Public()}, nlPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n4Sig.Signature[3] = 42 // mess up the signature
+	n4Sig.Signature[4] = 42 // mess up the signature
+	n5GoodSig, err := signNodeKey(tailcfg.TKASignInfo{NodePublic: n5.Public()}, nlPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nm := netmap.NetworkMap{
+		Peers: []*tailcfg.Node{
+			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+			{ID: 2, Key: n2.Public(), KeySignature: nil},                   // missing sig
+			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()}, // someone elses sig
+			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},     // messed-up signature
+			{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
+		},
+	}
+
+	b := &LocalBackend{
+		logf: t.Logf,
+		tka:  &tkaState{authority: authority},
+	}
+	b.tkaFilterNetmapLocked(&nm)
+
+	want := []*tailcfg.Node{
+		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
+		{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
+	}
+	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
+		return x.Raw32() == y.Raw32()
+	})
+	if diff := cmp.Diff(nm.Peers, want, nodePubComparer); diff != "" {
+		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
 	}
 }
