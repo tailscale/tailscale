@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
@@ -21,12 +22,14 @@ var bugReportCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("bugreport")
 		fs.BoolVar(&bugReportArgs.diagnose, "diagnose", false, "run additional in-depth checks")
+		fs.BoolVar(&bugReportArgs.record, "record", false, "if true, pause and then write another bugreport")
 		return fs
 	})(),
 }
 
 var bugReportArgs struct {
 	diagnose bool
+	record   bool
 }
 
 func runBugReport(ctx context.Context, args []string) error {
@@ -45,6 +48,22 @@ func runBugReport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	if bugReportArgs.record {
+		outln("The initial bugreport is below; please reproduce your issue and then press Enter...")
+	}
+
 	outln(logMarker)
+
+	if bugReportArgs.record {
+		fmt.Scanln()
+
+		logMarker, err := localClient.BugReportWithOpts(ctx, tailscale.BugReportOpts{})
+		if err != nil {
+			return err
+		}
+		outln(logMarker)
+		outln("Please provide both bugreport markers above to the support team or GitHub issue.")
+	}
 	return nil
 }
