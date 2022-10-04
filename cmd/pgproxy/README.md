@@ -1,6 +1,8 @@
 # pgproxy
 
-The pgproxy server is a proxy for the Postgres wire protocol.
+The pgproxy server is a proxy for the Postgres wire protocol. [Read
+more in our blog
+post](https://tailscale.com/blog/introducing-pgproxy/) about it!
 
 The proxy runs an in-process Tailscale instance, accepts postgres
 client connections over Tailscale only, and proxies them to the
