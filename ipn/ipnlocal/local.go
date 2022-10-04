@@ -778,6 +778,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if err := b.tkaSyncIfNeededLocked(st.NetMap); err != nil {
 			b.logf("[v1] TKA sync error: %v", err)
 		}
+		if !envknob.TKASkipSignatureCheck() {
+			b.tkaFilterNetmapLocked(st.NetMap)
+		}
 		if b.findExitNodeIDLocked(st.NetMap) {
 			prefsChanged = true
 		}
