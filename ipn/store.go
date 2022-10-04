@@ -6,6 +6,8 @@ package ipn
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 )
 
 // ErrStateNotExist is returned by StateStore.ReadState when the
@@ -35,7 +37,7 @@ const (
 	// StateKey "user-1234".
 	ServerModeStartKey = StateKey("server-mode-start-key")
 
-	// NLKeyStateKey is the key under which we store the nodes'
+	// NLKeyStateKey is the key under which we store the node's
 	// network-lock node key, in its key.NLPrivate.MarshalText representation.
 	NLKeyStateKey = StateKey("_nl-node-key")
 )
@@ -47,4 +49,18 @@ type StateStore interface {
 	ReadState(id StateKey) ([]byte, error)
 	// WriteState saves bs as the state associated with ID.
 	WriteState(id StateKey, bs []byte) error
+}
+
+// ReadStoreInt reads an integer from a StateStore.
+func ReadStoreInt(store StateStore, id StateKey) (int64, error) {
+	v, err := store.ReadState(id)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(string(v), 10, 64)
+}
+
+// PutStoreInt puts an integer into a StateStore.
+func PutStoreInt(store StateStore, id StateKey, val int64) error {
+	return store.WriteState(id, fmt.Appendf(nil, "%d", val))
 }

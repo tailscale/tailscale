@@ -234,12 +234,12 @@ func (c *Conn) receiveDisco(pc net.PacketConn, isIPV6 bool) {
 		if acceptPort == 0 {
 			// This should only typically happen if the receiving address family
 			// was recently disabled.
-			c.logf("[v1] disco raw: dropping packet for port %d as acceptPort=0", dstPort)
+			c.dlogf("[v1] disco raw: dropping packet for port %d as acceptPort=0", dstPort)
 			continue
 		}
 
 		if dstPort != acceptPort {
-			c.logf("[v1] disco raw: dropping packet for port %d", dstPort)
+			c.dlogf("[v1] disco raw: dropping packet for port %d", dstPort)
 			continue
 		}
 

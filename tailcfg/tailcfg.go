@@ -82,7 +82,8 @@ type CapabilityVersion int
 //   - 43: 2022-09-21: clients can return usernames for SSH
 //   - 44: 2022-09-22: MapResponse.ControlDialPlan
 //   - 45: 2022-09-26: c2n /debug/{goroutines,prefs,metrics}
-const CurrentCapabilityVersion CapabilityVersion = 45
+//   - 46: 2022-10-04: c2n /debug/component-logging
+const CurrentCapabilityVersion CapabilityVersion = 46
 
 type StableID string
 

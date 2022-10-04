@@ -168,6 +168,11 @@ type PartialFile struct {
 //     LocalBackend.userID, a string like "user-$USER_ID" (used in
 //     server mode).
 //   - on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
+//
+// Additionally, the StateKey can be debug setting name:
+//
+//   - "_debug_magicsock_until" with value being a unix timestamp stringified
+//   - "_debug_<component>_until" with value being a unix timestamp stringified
 type StateKey string
 
 type Options struct {

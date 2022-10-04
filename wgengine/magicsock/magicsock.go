@@ -315,6 +315,9 @@ type Conn struct {
 	// new connection that'll fail.
 	networkUp atomic.Bool
 
+	// Whether debugging logging is enabled.
+	debugLogging atomic.Bool
+
 	// havePrivateKey is whether privateKey is non-zero.
 	havePrivateKey  atomic.Bool
 	publicKeyAtomic syncs.AtomicValue[key.NodePublic] // or NodeKey zero value if !havePrivateKey
@@ -428,6 +431,24 @@ type Conn struct {
 	// peerLastDerp tracks which DERP node we last used to speak with a
 	// peer. It's only used to quiet logging, so we only log on change.
 	peerLastDerp map[key.NodePublic]int
+}
+
+// SetDebugLoggingEnabled controls whether spammy debug logging is enabled.
+//
+// Note that this is currently independent from the log levels, even though
+// they're pretty correlated: debugging logs should be [v1] (or higher), but
+// some non-debug logs may also still have a [vN] annotation. The [vN] level
+// controls which gets shown in stderr. The dlogf method, on the other hand,
+// controls which gets even printed or uploaded at any level.
+func (c *Conn) SetDebugLoggingEnabled(v bool) {
+	c.debugLogging.Store(v)
+}
+
+// dlogf logs a debug message if debug logging is enabled via SetDebugLoggingEnabled.
+func (c *Conn) dlogf(format string, a ...any) {
+	if c.debugLogging.Load() {
+		c.logf(format, a...)
+	}
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -658,7 +679,7 @@ func (c *Conn) updateEndpoints(why string) {
 		c.endpointsUpdateActive = false
 		c.muCond.Broadcast()
 	}()
-	c.logf("[v1] magicsock: starting endpoint update (%s)", why)
+	c.dlogf("[v1] magicsock: starting endpoint update (%s)", why)
 	if c.noV4Send.Load() && runtime.GOOS != "js" {
 		c.mu.Lock()
 		closed := c.closed
@@ -706,7 +727,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 		// skipped during the e2e tests because they depend
 		// too much on the exact sequence of updates.  Fix the
 		// tests. But a protocol rewrite might happen first.
-		c.logf("[v1] magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
+		c.dlogf("[v1] magicsock: ignoring pre-DERP map, STUN-less endpoint update: %v", endpoints)
 		return false
 	}
 
@@ -860,7 +881,7 @@ func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 func (c *Conn) callNetInfoCallbackLocked(ni *tailcfg.NetInfo) {
 	c.netInfoLast = ni
 	if c.netInfoFunc != nil {
-		c.logf("[v1] magicsock: netInfo update: %+v", ni)
+		c.dlogf("[v1] magicsock: netInfo update: %+v", ni)
 		go c.netInfoFunc(ni)
 	}
 }
@@ -1831,7 +1852,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 			if !dstKey.IsZero() {
 				node = dstKey.ShortString()
 			}
-			c.logf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), node, derpStr(dst.String()), disco.MessageSummary(m))
+			c.dlogf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), node, derpStr(dst.String()), disco.MessageSummary(m))
 		}
 		if isDERP {
 			metricSentDiscoDERP.Add(1)
@@ -1997,7 +2018,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			return
 		}
 		di.setNodeKey(nodeKey)
-		c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
+		c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 			c.discoShort, ep.discoShort,
 			ep.publicKey.ShortString(), derpStr(src.String()),
 			len(dm.MyNumber))
@@ -2099,7 +2120,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 		if numNodes > 1 {
 			pingNodeSrcStr = "[one-of-multi]"
 		}
-		c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, di.discoShort, pingNodeSrcStr, src, dm.TxID[:6])
+		c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x", c.discoShort, di.discoShort, pingNodeSrcStr, src, dm.TxID[:6])
 	}
 
 	ipDst := src
@@ -2122,10 +2143,10 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 	defer c.mu.Unlock()
 
 	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
-		c.logf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
+		c.dlogf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
 
 		mak.Set(&c.onEndpointRefreshed, de, func() {
-			c.logf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
+			c.dlogf("[v1] magicsock: STUN done; sending call-me-maybe to %v %v", de.discoShort, de.publicKey.ShortString())
 			c.enqueueCallMeMaybe(derpAddr, de)
 		})
 		// TODO(bradfitz): make a new 'reSTUNQuickly' method
@@ -2352,7 +2373,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
 	if numNoDisco != 0 {
-		c.logf("[v1] magicsock: %d DERP-only peers (no discokey)", numNoDisco)
+		c.logf("magicsock: %d DERP-only peers (no discokey)", numNoDisco)
 	}
 	c.netMap = nm
 
@@ -2800,7 +2821,7 @@ func (c *Conn) ReSTUN(why string) {
 
 	if c.endpointsUpdateActive {
 		if c.wantEndpointsUpdate != why {
-			c.logf("[v1] magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
+			c.dlogf("[v1] magicsock: ReSTUN: endpoint update active, need another later (%q)", why)
 			c.wantEndpointsUpdate = why
 		}
 	} else {
@@ -3524,7 +3545,7 @@ func (de *endpoint) heartbeat() {
 
 	if mono.Since(de.lastSend) > sessionActiveTimeout {
 		// Session's idle. Stop heartbeating.
-		de.c.logf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort)
+		de.c.dlogf("[v1] magicsock: disco: ending heartbeats for idle session to %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		return
 	}
 
@@ -3637,7 +3658,7 @@ func (de *endpoint) pingTimeout(txid stun.TxID) {
 		return
 	}
 	if debugDisco() || !de.bestAddr.IsValid() || mono.Now().After(de.trustBestAddrUntil) {
-		de.c.logf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
+		de.c.dlogf("[v1] magicsock: disco: timeout waiting for pong %x from %v (%v, %v)", txid[:6], sp.to, de.publicKey.ShortString(), de.discoShort)
 	}
 	de.removeSentPingLocked(txid, sp)
 }
@@ -3745,7 +3766,7 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		sentAny = true
 
 		if firstPing && sendCallMeMaybe {
-			de.c.logf("[v1] magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
+			de.c.dlogf("[v1] magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort)
 		}
 
 		de.startPingLocked(ep, now, pingDiscovery)
@@ -3830,7 +3851,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort) {
 	}
 
 	// Newly discovered endpoint. Exciting!
-	de.c.logf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
+	de.c.dlogf("[v1] magicsock: disco: adding %v as candidate endpoint for %v (%s)", ep, de.discoShort, de.publicKey.ShortString())
 	de.endpointState[ep] = &endpointState{
 		lastGotPing: time.Now(),
 	}
@@ -3843,7 +3864,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort) {
 			}
 		}
 		size2 := len(de.endpointState)
-		de.c.logf("[v1] magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
+		de.c.dlogf("[v1] magicsock: disco: addCandidateEndpoint pruned %v candidate set from %v to %v entries", size, size2)
 	}
 }
 
@@ -3897,7 +3918,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.logf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort, de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -4010,7 +4031,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		}
 	}
 	if len(newEPs) > 0 {
-		de.c.logf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
+		de.c.dlogf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
 			de.publicKey.ShortString(), de.discoShort,
 			logger.ArgWriter(func(w *bufio.Writer) {
 				for i, ep := range newEPs {

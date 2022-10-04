@@ -54,6 +54,16 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "print DERP map",
 		},
 		{
+			Name:      "component-logs",
+			Exec:      runDebugComponentLogs,
+			ShortHelp: "enable/disable debug logs for a component",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("component-logs")
+				fs.DurationVar(&debugComponentLogsArgs.forDur, "for", time.Hour, "how long to enable debug logs for; zero or negative means to disable")
+				return fs
+			})(),
+		},
+		{
 			Name:      "daemon-goroutines",
 			Exec:      runDaemonGoroutines,
 			ShortHelp: "print tailscaled's goroutines",
@@ -511,5 +521,28 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
+	return nil
+}
+
+var debugComponentLogsArgs struct {
+	forDur time.Duration
+}
+
+func runDebugComponentLogs(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: debug component-logs <component>")
+	}
+	component := args[0]
+	dur := debugComponentLogsArgs.forDur
+
+	err := localClient.SetComponentDebugLogging(ctx, component, dur)
+	if err != nil {
+		return err
+	}
+	if debugComponentLogsArgs.forDur <= 0 {
+		fmt.Printf("Disabled debug logs for component %q\n", component)
+	} else {
+		fmt.Printf("Enabled debug logs for component %q for %v\n", component, dur)
+	}
 	return nil
 }
