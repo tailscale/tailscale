@@ -269,7 +269,7 @@ func (c *conn) checkAuth(pubKey ssh.PublicKey) error {
 func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 	return &gossh.ServerConfig{
 		// OpenSSH presents this on failure as `Permission denied (tailscale).`
-		ImplictAuthMethod:    "tailscale",
+		ImplicitAuthMethod:   "tailscale",
 		NoClientAuth:         true, // required for the NoClientAuthCallback to run
 		NoClientAuthCallback: c.NoClientAuthCallback,
 	}
