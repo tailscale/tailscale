@@ -22,8 +22,10 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tunstats"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
@@ -166,6 +168,12 @@ type Wrapper struct {
 
 	// disableTSMPRejected disables TSMP rejected responses. For tests.
 	disableTSMPRejected bool
+
+	// stats maintains per-connection counters.
+	stats struct {
+		enabled atomic.Bool
+		tunstats.Statistics
+	}
 }
 
 // tunReadResult is the result of a TUN read, or an injected result pretending to be a TUN read.
@@ -560,6 +568,9 @@ func (t *Wrapper) Read(buf []byte, offset int) (int, error) {
 		}
 	}
 
+	if t.stats.enabled.Load() {
+		t.stats.UpdateTx(buf[offset:][:n])
+	}
 	t.noteActivity()
 	return n, nil
 }
@@ -690,6 +701,9 @@ func (t *Wrapper) Write(buf []byte, offset int) (int, error) {
 }
 
 func (t *Wrapper) tdevWrite(buf []byte, offset int) (int, error) {
+	if t.stats.enabled.Load() {
+		t.stats.UpdateRx(buf[offset:])
+	}
 	if t.isTAP {
 		return t.tapWrite(buf, offset)
 	}
@@ -827,6 +841,18 @@ func (t *Wrapper) InjectOutboundPacketBuffer(packet *stack.PacketBuffer) error {
 // Unwrap returns the underlying tun.Device.
 func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
+}
+
+// StatisticsEnable enables per-connections packet counters.
+// StatisticsExtract must be called periodically to avoid unbounded memory use.
+func (t *Wrapper) StatisticsEnable(enable bool) {
+	t.stats.enabled.Store(enable)
+}
+
+// StatisticsExtract extracts and resets the counters for all active connections.
+// It must be called periodically otherwise the memory used is unbounded.
+func (t *Wrapper) StatisticsExtract() map[flowtrack.Tuple]tunstats.Counts {
+	return t.stats.Extract()
 }
 
 var (
