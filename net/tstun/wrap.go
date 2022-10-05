@@ -843,15 +843,15 @@ func (t *Wrapper) Unwrap() tun.Device {
 	return t.tdev
 }
 
-// StatisticsEnable enables per-connections packet counters.
-// StatisticsExtract must be called periodically to avoid unbounded memory use.
-func (t *Wrapper) StatisticsEnable(enable bool) {
+// SetStatisticsEnabled enables per-connections packet counters.
+// ExtractStatistics must be called periodically to avoid unbounded memory use.
+func (t *Wrapper) SetStatisticsEnabled(enable bool) {
 	t.stats.enabled.Store(enable)
 }
 
-// StatisticsExtract extracts and resets the counters for all active connections.
+// ExtractStatistics extracts and resets the counters for all active connections.
 // It must be called periodically otherwise the memory used is unbounded.
-func (t *Wrapper) StatisticsExtract() map[flowtrack.Tuple]tunstats.Counts {
+func (t *Wrapper) ExtractStatistics() map[flowtrack.Tuple]tunstats.Counts {
 	return t.stats.Extract()
 }
 

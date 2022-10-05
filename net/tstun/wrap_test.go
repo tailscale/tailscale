@@ -286,8 +286,8 @@ func TestWriteAndInject(t *testing.T) {
 	}
 
 	// Statistics gathering is disabled by default.
-	if stats := tun.StatisticsExtract(); len(stats) > 0 {
-		t.Errorf("tun.StatisticsExtract = %v, want {}", stats)
+	if stats := tun.ExtractStatistics(); len(stats) > 0 {
+		t.Errorf("tun.ExtractStatistics = %v, want {}", stats)
 	}
 }
 
@@ -337,15 +337,15 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
-	tun.StatisticsEnable(true)
+	tun.SetStatisticsEnabled(true)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var n int
 			var err error
 			var filtered bool
 
-			if stats := tun.StatisticsExtract(); len(stats) > 0 {
-				t.Errorf("tun.StatisticsExtract = %v, want {}", stats)
+			if stats := tun.ExtractStatistics(); len(stats) > 0 {
+				t.Errorf("tun.ExtractStatistics = %v, want {}", stats)
 			}
 
 			if tt.dir == in {
@@ -378,7 +378,7 @@ func TestFilter(t *testing.T) {
 				}
 			}
 
-			got := tun.StatisticsExtract()
+			got := tun.ExtractStatistics()
 			want := map[flowtrack.Tuple]tunstats.Counts{}
 			if !tt.drop {
 				var p packet.Parsed
@@ -393,7 +393,7 @@ func TestFilter(t *testing.T) {
 				}
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Errorf("tun.StatisticsExtract = %v, want %v", got, want)
+				t.Errorf("tun.ExtractStatistics = %v, want %v", got, want)
 			}
 		})
 	}
