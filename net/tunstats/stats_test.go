@@ -111,13 +111,8 @@ func TestConcurrent(t *testing.T) {
 
 func mergeMaps(dst map[flowtrack.Tuple]Counts, srcs ...map[flowtrack.Tuple]Counts) {
 	for _, src := range srcs {
-		for tuple, cntsSrc := range src {
-			cntsDst := dst[tuple]
-			cntsDst.TxPackets += cntsSrc.TxPackets
-			cntsDst.TxBytes += cntsSrc.TxBytes
-			cntsDst.RxPackets += cntsSrc.RxPackets
-			cntsDst.RxBytes += cntsSrc.RxBytes
-			dst[tuple] = cntsDst
+		for tuple, cnts := range src {
+			dst[tuple] = dst[tuple].Add(cnts)
 		}
 	}
 }
