@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,8 +19,10 @@ import (
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/disco"
+	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tunstats"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
@@ -281,6 +284,11 @@ func TestWriteAndInject(t *testing.T) {
 			t.Errorf("%s not received", packet)
 		}
 	}
+
+	// Statistics gathering is disabled by default.
+	if stats := tun.StatisticsExtract(); len(stats) > 0 {
+		t.Errorf("tun.StatisticsExtract = %v, want {}", stats)
+	}
 }
 
 func TestFilter(t *testing.T) {
@@ -329,11 +337,16 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
+	tun.StatisticsEnable(true)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var n int
 			var err error
 			var filtered bool
+
+			if stats := tun.StatisticsExtract(); len(stats) > 0 {
+				t.Errorf("tun.StatisticsExtract = %v, want {}", stats)
+			}
 
 			if tt.dir == in {
 				// Use the side effect of updating the last
@@ -363,6 +376,24 @@ func TestFilter(t *testing.T) {
 				if tt.drop {
 					t.Errorf("got accept; want drop")
 				}
+			}
+
+			got := tun.StatisticsExtract()
+			want := map[flowtrack.Tuple]tunstats.Counts{}
+			if !tt.drop {
+				var p packet.Parsed
+				p.Decode(tt.data)
+				switch tt.dir {
+				case in:
+					tuple := flowtrack.Tuple{Proto: ipproto.UDP, Src: p.Dst, Dst: p.Src}
+					want[tuple] = tunstats.Counts{RxPackets: 1, RxBytes: uint64(len(tt.data))}
+				case out:
+					tuple := flowtrack.Tuple{Proto: ipproto.UDP, Src: p.Src, Dst: p.Dst}
+					want[tuple] = tunstats.Counts{TxPackets: 1, TxBytes: uint64(len(tt.data))}
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("tun.StatisticsExtract = %v, want %v", got, want)
 			}
 		})
 	}
