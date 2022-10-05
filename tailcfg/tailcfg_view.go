@@ -21,7 +21,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal,ControlDialPlan
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -922,4 +922,58 @@ var _SSHPrincipalViewNeedsRegeneration = SSHPrincipal(struct {
 	UserLogin string
 	Any       bool
 	PubKeys   []string
+}{})
+
+// View returns a readonly view of ControlDialPlan.
+func (p *ControlDialPlan) View() ControlDialPlanView {
+	return ControlDialPlanView{ж: p}
+}
+
+// ControlDialPlanView provides a read-only view over ControlDialPlan.
+//
+// Its methods should only be called if `Valid()` returns true.
+type ControlDialPlanView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *ControlDialPlan
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v ControlDialPlanView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v ControlDialPlanView) AsStruct() *ControlDialPlan {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v ControlDialPlanView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *ControlDialPlanView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x ControlDialPlan
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v ControlDialPlanView) Candidates() views.Slice[ControlIPCandidate] {
+	return views.SliceOf(v.ж.Candidates)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ControlDialPlanViewNeedsRegeneration = ControlDialPlan(struct {
+	Candidates []ControlIPCandidate
 }{})
