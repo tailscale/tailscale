@@ -44,7 +44,8 @@ type Encoder interface {
 
 type Config struct {
 	Collection     string           // collection name, a domain name
-	PrivateID      PrivateID        // machine-specific private identifier
+	PrivateID      PrivateID        // private ID for the primary log stream
+	CopyPrivateID  PrivateID        // private ID for a log stream that is a superset of this log stream
 	BaseURL        string           // if empty defaults to "https://log.tailscale.io"
 	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
 	SkipClientTime bool             // if true, client_time is not written to logs
@@ -112,12 +113,16 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	stdLogf := func(f string, a ...any) {
 		fmt.Fprintf(cfg.Stderr, strings.TrimSuffix(f, "\n")+"\n", a...)
 	}
+	var urlSuffix string
+	if !cfg.CopyPrivateID.IsZero() {
+		urlSuffix = "?copyId=" + cfg.CopyPrivateID.String()
+	}
 	l := &Logger{
 		privateID:      cfg.PrivateID,
 		stderr:         cfg.Stderr,
 		stderrLevel:    int64(cfg.StderrLevel),
 		httpc:          cfg.HTTPC,
-		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String(),
+		url:            cfg.BaseURL + "/c/" + cfg.Collection + "/" + cfg.PrivateID.String() + urlSuffix,
 		lowMem:         cfg.LowMemory,
 		buffer:         cfg.Buffer,
 		skipClientTime: cfg.SkipClientTime,
