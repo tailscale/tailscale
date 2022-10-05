@@ -29,6 +29,15 @@ type Counts struct {
 	RxBytes   uint64 `json:"rxBytes,omitempty"`
 }
 
+// Add adds the counts from both c1 and c2.
+func (c1 Counts) Add(c2 Counts) Counts {
+	c1.TxPackets += c2.TxPackets
+	c1.TxBytes += c2.TxBytes
+	c1.RxPackets += c2.RxPackets
+	c1.RxBytes += c2.RxBytes
+	return c1
+}
+
 // UpdateTx updates the counters for a transmitted IP packet
 // The source and destination of the packet directly correspond with
 // the source and destination in flowtrack.Tuple.
