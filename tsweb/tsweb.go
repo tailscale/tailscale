@@ -421,6 +421,8 @@ type HTTPError struct {
 // Error implements the error interface.
 func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
 
+func (e HTTPError) Unwrap() error { return e.Err }
+
 // Error returns an HTTPError containing the given information.
 func Error(code int, msg string, err error) HTTPError {
 	return HTTPError{Code: code, Msg: msg, Err: err}

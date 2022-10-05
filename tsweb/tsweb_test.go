@@ -327,6 +327,14 @@ func BenchmarkLog(b *testing.B) {
 	}
 }
 
+func TestHTTPError_Unwrap(t *testing.T) {
+	wrappedErr := fmt.Errorf("wrapped")
+	err := Error(404, "not found", wrappedErr)
+	if got := errors.Unwrap(err); got != wrappedErr {
+		t.Errorf("HTTPError.Unwrap() = %v, want %v", got, wrappedErr)
+	}
+}
+
 func TestVarzHandler(t *testing.T) {
 	t.Run("globals_log", func(t *testing.T) {
 		rec := httptest.NewRecorder()
