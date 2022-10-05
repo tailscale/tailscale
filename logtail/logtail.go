@@ -524,7 +524,7 @@ func (l *Logger) encodeText(buf []byte, skipClientTime bool, procID uint32, proc
 		b = append(b, `"logtail": {`...)
 		if !skipClientTime {
 			b = append(b, `"client_time": "`...)
-			b = now.AppendFormat(b, time.RFC3339Nano)
+			b = now.UTC().AppendFormat(b, time.RFC3339Nano)
 			b = append(b, `",`...)
 		}
 		if procID != 0 {
@@ -617,7 +617,7 @@ func (l *Logger) encodeLocked(buf []byte, level int) []byte {
 	if !l.skipClientTime || l.procID != 0 || l.procSequence != 0 {
 		logtail := map[string]any{}
 		if !l.skipClientTime {
-			logtail["client_time"] = now.Format(time.RFC3339Nano)
+			logtail["client_time"] = now.UTC().Format(time.RFC3339Nano)
 		}
 		if l.procID != 0 {
 			logtail["proc_id"] = l.procID
