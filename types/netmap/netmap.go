@@ -76,6 +76,11 @@ type NetworkMap struct {
 	// Domain is the current Tailnet name.
 	Domain string
 
+	// DomainAuditLogID is an audit log ID provided by control and
+	// only populated if the domain opts into data-plane audit logging.
+	// If this is empty, then data-plane audit logging is disabled.
+	DomainAuditLogID string
+
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
 }
 

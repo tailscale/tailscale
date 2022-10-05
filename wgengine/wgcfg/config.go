@@ -8,6 +8,7 @@ package wgcfg
 import (
 	"net/netip"
 
+	"tailscale.com/logtail"
 	"tailscale.com/types/key"
 )
 
@@ -22,6 +23,13 @@ type Config struct {
 	MTU        uint16
 	DNS        []netip.Addr
 	Peers      []Peer
+
+	// NetworkLogging enables network logging.
+	// It is disabled if either ID is the zero value.
+	NetworkLogging struct {
+		NodeID   logtail.PrivateID
+		DomainID logtail.PrivateID
+	}
 }
 
 type Peer struct {

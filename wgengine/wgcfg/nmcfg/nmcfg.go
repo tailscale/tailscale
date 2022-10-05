@@ -11,6 +11,8 @@ import (
 	"net/netip"
 	"strings"
 
+	"golang.org/x/exp/slices"
+	"tailscale.com/logtail"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -56,6 +58,25 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		PrivateKey: nm.PrivateKey,
 		Addresses:  nm.Addresses,
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
+	}
+
+	// Setup log IDs for data plane audit logging.
+	if nm.SelfNode != nil {
+		canNetworkLog := slices.Contains(nm.SelfNode.Capabilities, tailcfg.CapabilityDataPlaneAuditLogs)
+		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID != "" && nm.DomainAuditLogID != "" {
+			nodeID, errNode := logtail.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID)
+			if errNode != nil {
+				logf("[v1] wgcfg: unable to parse node audit log ID: %v", errNode)
+			}
+			domainID, errDomain := logtail.ParsePrivateID(nm.DomainAuditLogID)
+			if errDomain != nil {
+				logf("[v1] wgcfg: unable to parse domain audit log ID: %v", errDomain)
+			}
+			if errNode == nil && errDomain == nil {
+				cfg.NetworkLogging.NodeID = nodeID
+				cfg.NetworkLogging.DomainID = domainID
+			}
+		}
 	}
 
 	// Logging buffers
