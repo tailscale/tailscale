@@ -20,9 +20,9 @@ import (
 
 // Tuple is a 5-tuple of proto, source and destination IP and port.
 type Tuple struct {
-	Proto ipproto.Proto
-	Src   netip.AddrPort
-	Dst   netip.AddrPort
+	Proto ipproto.Proto  `json:"proto"`
+	Src   netip.AddrPort `json:"src"`
+	Dst   netip.AddrPort `json:"dst"`
 }
 
 func (t Tuple) String() string {
