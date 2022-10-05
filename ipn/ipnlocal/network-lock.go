@@ -294,6 +294,9 @@ func (b *LocalBackend) CanSupportNetworkLock() error {
 // NetworkLockStatus returns a structure describing the state of the
 // tailnet key authority, if any.
 func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if b.tka == nil {
 		return &ipnstate.NetworkLockStatus{
 			Enabled:   false,
