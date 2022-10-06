@@ -2,6 +2,8 @@ module tailscale.com
 
 go 1.19
 
+replace golang.zx2c4.com/wireguard => github.com/tailscale/wireguard-go v0.0.0-20221207223341-6be4ed075788
+
 require (
 	filippo.io/mkcert v1.4.3
 	github.com/Microsoft/go-winio v0.6.0
@@ -64,12 +66,12 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf
-	golang.org/x/crypto v0.1.0
+	golang.org/x/crypto v0.3.0
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db
-	golang.org/x/net v0.1.0
+	golang.org/x/net v0.2.0
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
-	golang.org/x/sys v0.1.0
-	golang.org/x/term v0.1.0
+	golang.org/x/sys v0.2.0
+	golang.org/x/term v0.2.0
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.2.0
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224

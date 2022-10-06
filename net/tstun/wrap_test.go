@@ -208,16 +208,24 @@ func TestReadAndInject(t *testing.T) {
 
 	var buf [MaxPacketSize]byte
 	var seen = make(map[string]bool)
+	sizes := make([]int, 1)
 	// We expect the same packets back, in no particular order.
 	for i := 0; i < len(written)+len(injected); i++ {
-		n, err := tun.Read(buf[:], 0)
+		packet := buf[:]
+		buffs := [][]byte{packet}
+		numPackets, err := tun.Read(buffs, sizes, 0)
 		if err != nil {
 			t.Errorf("read %d: error: %v", i, err)
 		}
-		if n != size {
-			t.Errorf("read %d: got size %d; want %d", i, n, size)
+		if numPackets != 1 {
+			t.Fatalf("read %d packets, expected %d", numPackets, 1)
 		}
-		got := string(buf[:n])
+		packet = packet[:sizes[0]]
+		packetLen := len(packet)
+		if packetLen != size {
+			t.Errorf("read %d: got size %d; want %d", i, packetLen, size)
+		}
+		got := string(packet)
 		t.Logf("read %d: got %s", i, got)
 		seen[got] = true
 	}
@@ -245,12 +253,9 @@ func TestWriteAndInject(t *testing.T) {
 	go func() {
 		for _, packet := range written {
 			payload := []byte(packet)
-			n, err := tun.Write(payload, 0)
+			_, err := tun.Write([][]byte{payload}, 0)
 			if err != nil {
 				t.Errorf("%s: error: %v", packet, err)
-			}
-			if n != size {
-				t.Errorf("%s: got size %d; want %d", packet, n, size)
 			}
 		}
 	}()
@@ -339,6 +344,7 @@ func TestFilter(t *testing.T) {
 			var n int
 			var err error
 			var filtered bool
+			sizes := make([]int, 1)
 
 			tunStats, _ := stats.Extract()
 			if len(tunStats) > 0 {
@@ -352,11 +358,11 @@ func TestFilter(t *testing.T) {
 				// If it stays zero, nothing made it through
 				// to the wrapped TUN.
 				tun.lastActivityAtomic.StoreAtomic(0)
-				_, err = tun.Write(tt.data, 0)
+				_, err = tun.Write([][]byte{tt.data}, 0)
 				filtered = tun.lastActivityAtomic.LoadAtomic() == 0
 			} else {
 				chtun.Outbound <- tt.data
-				n, err = tun.Read(buf[:], 0)
+				n, err = tun.Read([][]byte{buf[:]}, sizes, 0)
 				// In the read direction, errors are fatal, so we return n = 0 instead.
 				filtered = (n == 0)
 			}
@@ -400,7 +406,7 @@ func TestAllocs(t *testing.T) {
 	ftun, tun := newFakeTUN(t.Logf, false)
 	defer tun.Close()
 
-	buf := []byte{0x00}
+	buf := [][]byte{[]byte{0x00}}
 	err := tstest.MinAllocsPerRun(t, 0, func() {
 		_, err := ftun.Write(buf, 0)
 		if err != nil {
@@ -417,7 +423,7 @@ func TestAllocs(t *testing.T) {
 func TestClose(t *testing.T) {
 	ftun, tun := newFakeTUN(t.Logf, false)
 
-	data := udp4("1.2.3.4", "5.6.7.8", 98, 98)
+	data := [][]byte{udp4("1.2.3.4", "5.6.7.8", 98, 98)}
 	_, err := ftun.Write(data, 0)
 	if err != nil {
 		t.Error(err)
@@ -435,7 +441,7 @@ func BenchmarkWrite(b *testing.B) {
 	ftun, tun := newFakeTUN(b.Logf, true)
 	defer tun.Close()
 
-	packet := udp4("5.6.7.8", "1.2.3.4", 89, 89)
+	packet := [][]byte{udp4("5.6.7.8", "1.2.3.4", 89, 89)}
 	for i := 0; i < b.N; i++ {
 		_, err := ftun.Write(packet, 0)
 		if err != nil {

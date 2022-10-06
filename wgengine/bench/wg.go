@@ -168,25 +168,31 @@ type sourceTun struct {
 	traf *TrafficGen
 }
 
-func (t *sourceTun) Close() error           { return nil }
-func (t *sourceTun) Events() chan tun.Event { return nil }
-func (t *sourceTun) File() *os.File         { return nil }
-func (t *sourceTun) Flush() error           { return nil }
-func (t *sourceTun) MTU() (int, error)      { return 1500, nil }
-func (t *sourceTun) Name() (string, error)  { return "source", nil }
+func (t *sourceTun) Close() error             { return nil }
+func (t *sourceTun) Events() <-chan tun.Event { return nil }
+func (t *sourceTun) File() *os.File           { return nil }
+func (t *sourceTun) Flush() error             { return nil }
+func (t *sourceTun) MTU() (int, error)        { return 1500, nil }
+func (t *sourceTun) Name() (string, error)    { return "source", nil }
 
-func (t *sourceTun) Write(b []byte, ofs int) (int, error) {
+// TODO(raggi): could be optimized for linux style batch sizes
+func (t *sourceTun) BatchSize() int { return 1 }
+
+func (t *sourceTun) Write(b [][]byte, ofs int) (int, error) {
 	// Discard all writes
-	return len(b) - ofs, nil
+	return len(b), nil
 }
 
-func (t *sourceTun) Read(b []byte, ofs int) (int, error) {
-	// Continually generate "input" packets
-	n := t.traf.Generate(b, ofs)
-	if n == 0 {
-		return 0, io.EOF
+func (t *sourceTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
+	for i, b := range b {
+		// Continually generate "input" packets
+		n := t.traf.Generate(b, ofs)
+		sizes[i] = n
+		if n == 0 {
+			return 0, io.EOF
+		}
 	}
-	return n, nil
+	return len(b), nil
 }
 
 type sinkTun struct {
@@ -194,20 +200,25 @@ type sinkTun struct {
 	traf *TrafficGen
 }
 
-func (t *sinkTun) Close() error           { return nil }
-func (t *sinkTun) Events() chan tun.Event { return nil }
-func (t *sinkTun) File() *os.File         { return nil }
-func (t *sinkTun) Flush() error           { return nil }
-func (t *sinkTun) MTU() (int, error)      { return 1500, nil }
-func (t *sinkTun) Name() (string, error)  { return "sink", nil }
+func (t *sinkTun) Close() error             { return nil }
+func (t *sinkTun) Events() <-chan tun.Event { return nil }
+func (t *sinkTun) File() *os.File           { return nil }
+func (t *sinkTun) Flush() error             { return nil }
+func (t *sinkTun) MTU() (int, error)        { return 1500, nil }
+func (t *sinkTun) Name() (string, error)    { return "sink", nil }
 
-func (t *sinkTun) Read(b []byte, ofs int) (int, error) {
+func (t *sinkTun) Read(b [][]byte, sizes []int, ofs int) (int, error) {
 	// Never returns
 	select {}
 }
 
-func (t *sinkTun) Write(b []byte, ofs int) (int, error) {
+func (t *sinkTun) Write(b [][]byte, ofs int) (int, error) {
 	// Count packets, but discard them
-	t.traf.GotPacket(b, ofs)
-	return len(b) - ofs, nil
+	for _, b := range b {
+		t.traf.GotPacket(b, ofs)
+	}
+	return len(b), nil
 }
+
+// TODO(raggi): could be optimized for linux style batch sizes
+func (t *sinkTun) BatchSize() int { return 1 }
