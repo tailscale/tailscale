@@ -42,7 +42,7 @@ export function runSSHSession(
   term.focus()
 
   let resizeObserver: ResizeObserver | undefined
-  let handleBeforeUnload: ((e: BeforeUnloadEvent) => void) | undefined
+  let handleUnload: ((e: Event) => void) | undefined
 
   const sshSession = ipn.ssh(def.hostname, def.username, {
     writeFn(input) {
@@ -60,8 +60,8 @@ export function runSSHSession(
     onDone() {
       resizeObserver?.disconnect()
       term.dispose()
-      if (handleBeforeUnload) {
-        parentWindow.removeEventListener("beforeunload", handleBeforeUnload)
+      if (handleUnload) {
+        parentWindow.removeEventListener("unload", handleUnload)
       }
       onDone()
     },
@@ -75,6 +75,6 @@ export function runSSHSession(
 
   // Close the session if the user closes the window without an explicit
   // exit.
-  handleBeforeUnload = () => sshSession.close()
-  parentWindow.addEventListener("beforeunload", handleBeforeUnload)
+  handleUnload = () => sshSession.close()
+  parentWindow.addEventListener("unload", handleUnload)
 }
