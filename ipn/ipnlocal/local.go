@@ -198,6 +198,14 @@ type LocalBackend struct {
 	// dialPlan is any dial plan that we've received from the control
 	// server during a previous connection; it is cleared on logout.
 	dialPlan atomic.Pointer[tailcfg.ControlDialPlan]
+
+	// tkaSyncLock is used to make tkaSyncIfNeeded an exclusive
+	// section. This is needed to stop two map-responses in quick succession
+	// from racing each other through TKA sync logic / RPCs.
+	//
+	// tkaSyncLock MUST be taken before mu (or inversely, mu must not be held
+	// at the moment that tkaSyncLock is taken).
+	tkaSyncLock sync.Mutex
 }
 
 // clientGen is a func that creates a control plane client.
@@ -775,9 +783,12 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		}
 	}
 	if st.NetMap != nil {
-		if err := b.tkaSyncIfNeededLocked(st.NetMap); err != nil {
+		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
+		if err := b.tkaSyncIfNeeded(st.NetMap); err != nil {
 			b.logf("[v1] TKA sync error: %v", err)
 		}
+		b.mu.Lock()
+
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
 		}

@@ -39,6 +39,8 @@ type tkaState struct {
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap who's signature does not verify.
+//
+// b.mu must be held.
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	if !envknob.UseWIPCode() {
 		return // Feature-flag till network-lock is in Alpha.
@@ -70,7 +72,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	nm.Peers = peers
 }
 
-// tkaSyncIfNeededLocked examines TKA info reported from the control plane,
+// tkaSyncIfNeeded examines TKA info reported from the control plane,
 // performing the steps necessary to synchronize local tka state.
 //
 // There are 4 scenarios handled here:
@@ -85,13 +87,19 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 //   - Everything up to date: All other cases.
 //     ∴ no action necessary.
 //
-// b.mu must be held. b.mu will be stepped out of (and back in) during network
-// RPCs.
-func (b *LocalBackend) tkaSyncIfNeededLocked(nm *netmap.NetworkMap) error {
+// tkaSyncIfNeeded immediately takes b.takeSyncLock which is held throughout,
+// and may take b.mu as required.
+func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 	if !envknob.UseWIPCode() {
 		// If the feature flag is not enabled, pretend we don't exist.
 		return nil
 	}
+
+	b.tkaSyncLock.Lock() // take tkaSyncLock to make this function an exclusive section.
+	defer b.tkaSyncLock.Unlock()
+	b.mu.Lock() // take mu to protect access to synchronized fields.
+	defer b.mu.Unlock()
+
 	ourNodeKey := b.prefs.Persist.PrivateNodeKey.Public()
 
 	isEnabled := b.tka != nil
@@ -158,6 +166,8 @@ func toSyncOffer(head string, ancestors []string) (tka.SyncOffer, error) {
 // tkaSyncLocked synchronizes TKA state with control. b.mu must be held
 // and tka must be initialized. b.mu will be stepped out of (and back into)
 // during network RPCs.
+//
+// b.mu must be held.
 func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	offer, err := b.tka.authority.SyncOffer(b.tka.storage)
 	if err != nil {

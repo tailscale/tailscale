@@ -127,12 +127,10 @@ func TestTKAEnablementFlow(t *testing.T) {
 		},
 	}
 
-	b.mu.Lock()
-	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
+	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: true,
 		TKAHead:    a1.Head(),
 	})
-	b.mu.Unlock()
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -228,12 +226,10 @@ func TestTKADisablementFlow(t *testing.T) {
 
 	// Test that the wrong disablement secret does not shut down the authority.
 	returnWrongSecret = true
-	b.mu.Lock()
-	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
+	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
 	})
-	b.mu.Unlock()
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -243,12 +239,10 @@ func TestTKADisablementFlow(t *testing.T) {
 
 	// Test the correct disablement secret shuts down the authority.
 	returnWrongSecret = false
-	b.mu.Lock()
-	err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
+	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
 	})
-	b.mu.Unlock()
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -468,12 +462,10 @@ func TestTKASync(t *testing.T) {
 			}
 
 			// Finally, lets trigger a sync.
-			b.mu.Lock()
-			err = b.tkaSyncIfNeededLocked(&netmap.NetworkMap{
+			err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 				TKAEnabled: true,
 				TKAHead:    controlAuthority.Head(),
 			})
-			b.mu.Unlock()
 			if err != nil {
 				t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 			}
