@@ -89,6 +89,8 @@ type Context interface {
 
 	// SetValue allows you to easily write new values into the underlying context.
 	SetValue(key, value interface{})
+
+	PublicKey() PublicKey
 }
 
 type sshContext struct {
@@ -137,6 +139,14 @@ func (ctx *sshContext) ClientVersion() string {
 
 func (ctx *sshContext) ServerVersion() string {
 	return ctx.Value(ContextKeyServerVersion).(string)
+}
+
+func (ctx *sshContext) PublicKey() PublicKey {
+	sessionkey := ctx.Value(ContextKeyPublicKey)
+	if sessionkey == nil {
+		return nil
+	}
+	return sessionkey.(PublicKey)
 }
 
 func (ctx *sshContext) RemoteAddr() net.Addr {
