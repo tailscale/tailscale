@@ -45,6 +45,7 @@ type mapSession struct {
 	collectServices        bool
 	previousPeers          []*tailcfg.Node // for delta-purposes
 	lastDomain             string
+	lastDomainAuditLogID   string
 	lastHealth             []string
 	lastPopBrowserURL      string
 	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
@@ -113,6 +114,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if resp.Domain != "" {
 		ms.lastDomain = resp.Domain
 	}
+	if resp.DomainDataPlaneAuditLogID != "" {
+		ms.lastDomainAuditLogID = resp.DomainDataPlaneAuditLogID
+	}
 	if resp.Health != nil {
 		ms.lastHealth = resp.Health
 	}
@@ -143,20 +147,21 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	nm := &netmap.NetworkMap{
-		NodeKey:         ms.privateNodeKey.Public(),
-		PrivateKey:      ms.privateNodeKey,
-		MachineKey:      ms.machinePubKey,
-		Peers:           resp.Peers,
-		UserProfiles:    make(map[tailcfg.UserID]tailcfg.UserProfile),
-		Domain:          ms.lastDomain,
-		DNS:             *ms.lastDNSConfig,
-		PacketFilter:    ms.lastParsedPacketFilter,
-		SSHPolicy:       ms.lastSSHPolicy,
-		CollectServices: ms.collectServices,
-		DERPMap:         ms.lastDERPMap,
-		Debug:           debug,
-		ControlHealth:   ms.lastHealth,
-		TKAEnabled:      ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
+		NodeKey:          ms.privateNodeKey.Public(),
+		PrivateKey:       ms.privateNodeKey,
+		MachineKey:       ms.machinePubKey,
+		Peers:            resp.Peers,
+		UserProfiles:     make(map[tailcfg.UserID]tailcfg.UserProfile),
+		Domain:           ms.lastDomain,
+		DomainAuditLogID: ms.lastDomainAuditLogID,
+		DNS:              *ms.lastDNSConfig,
+		PacketFilter:     ms.lastParsedPacketFilter,
+		SSHPolicy:        ms.lastSSHPolicy,
+		CollectServices:  ms.collectServices,
+		DERPMap:          ms.lastDERPMap,
+		Debug:            debug,
+		ControlHealth:    ms.lastHealth,
+		TKAEnabled:       ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 	ms.netMapBuilding = nm
 
