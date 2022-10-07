@@ -1037,9 +1037,6 @@ func (ss *sshSession) run() {
 		if _, err := io.Copy(rec.writer("i", ss.stdin), ss); err != nil {
 			logf("stdin copy: %v", err)
 			ss.ctx.CloseWithError(err)
-		} else if ss.ptyReq != nil {
-			const EOT = 4 // https://en.wikipedia.org/wiki/End-of-Transmission_character
-			ss.stdin.Write([]byte{EOT})
 		}
 	}()
 	go func() {
