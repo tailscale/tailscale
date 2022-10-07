@@ -496,24 +496,24 @@ func TestVarzHandler(t *testing.T) {
 			"foo",
 			someExpVarWithJSONAndPromTypes(),
 			strings.TrimSpace(`
-# TYPE foo_nestvalue_foo gauge
-foo_nestvalue_foo 1
-# TYPE foo_nestvalue_bar counter
-foo_nestvalue_bar 2
-# TYPE foo_nestptr_foo gauge
-foo_nestptr_foo 10
-# TYPE foo_nestptr_bar counter
-foo_nestptr_bar 20
-# TYPE foo_curX gauge
-foo_curX 3
-# TYPE foo_totalY counter
-foo_totalY 4
-# TYPE foo_curTemp gauge
-foo_curTemp 20.6
-# TYPE foo_AnInt8 counter
-foo_AnInt8 127
 # TYPE foo_AUint16 counter
 foo_AUint16 65535
+# TYPE foo_AnInt8 counter
+foo_AnInt8 127
+# TYPE foo_curTemp gauge
+foo_curTemp 20.6
+# TYPE foo_curX gauge
+foo_curX 3
+# TYPE foo_nestptr_bar counter
+foo_nestptr_bar 20
+# TYPE foo_nestptr_foo gauge
+foo_nestptr_foo 10
+# TYPE foo_nestvalue_bar counter
+foo_nestvalue_bar 2
+# TYPE foo_nestvalue_foo gauge
+foo_nestvalue_foo 1
+# TYPE foo_totalY counter
+foo_totalY 4
 `) + "\n",
 		},
 		{
@@ -533,6 +533,21 @@ foo_AUint16 65535
 			"custom_var",
 			promWriter{},
 			"custom_var_value 42\n",
+		},
+		{
+			"field_ordering",
+			"foo",
+			someExpVarWithFieldNamesSorting(),
+			strings.TrimSpace(`
+# TYPE foo_bar_a gauge
+foo_bar_a 1
+# TYPE foo_bar_b counter
+foo_bar_b 1
+# TYPE foo_foo_a gauge
+foo_foo_a 1
+# TYPE foo_foo_b counter
+foo_foo_b 1
+`) + "\n",
 		},
 	}
 	for _, tt := range tests {
@@ -597,6 +612,38 @@ type expvarAdapter struct {
 func (expvarAdapter) String() string { return "{}" } // expvar JSON; unused in test
 
 func (a expvarAdapter) PrometheusMetricsReflectRoot() any {
+	return a.st
+}
+
+// SomeTestOfFieldNamesSorting demonstrates field
+// names that are not in sorted in declaration order, to verify
+// that we sort based on field name
+type SomeTestOfFieldNamesSorting struct {
+	FooAG int64 `json:"foo_a" metrictype:"gauge"`
+	BarAG int64 `json:"bar_a" metrictype:"gauge"`
+	FooBC int64 `json:"foo_b" metrictype:"counter"`
+	BarBC int64 `json:"bar_b" metrictype:"counter"`
+}
+
+// someExpVarWithFieldNamesSorting returns an expvar.Var that
+// implements PrometheusMetricsReflectRooter for TestVarzHandler.
+func someExpVarWithFieldNamesSorting() expvar.Var {
+	st := &SomeTestOfFieldNamesSorting{
+		FooAG: 1,
+		BarAG: 1,
+		FooBC: 1,
+		BarBC: 1,
+	}
+	return expvarAdapter2{st}
+}
+
+type expvarAdapter2 struct {
+	st *SomeTestOfFieldNamesSorting
+}
+
+func (expvarAdapter2) String() string { return "{}" } // expvar JSON; unused in test
+
+func (a expvarAdapter2) PrometheusMetricsReflectRoot() any {
 	return a.st
 }
 
