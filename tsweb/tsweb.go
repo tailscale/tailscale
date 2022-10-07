@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,13 @@ func init() {
 	expvar.Publish("counter_uptime_sec", expvar.Func(func() any { return int64(Uptime().Seconds()) }))
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
+
+const gaugePrefix = "gauge_"
+const counterPrefix = "counter_"
+const labelMapPrefix = "labelmap_"
+
+// prefixesToTrim contains key prefixes to remove when exporting and sorting metrics.
+var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix}
 
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.
 var DevMode bool
@@ -450,16 +458,16 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	var typ string
 	var label string
 	switch {
-	case strings.HasPrefix(kv.Key, "gauge_"):
+	case strings.HasPrefix(kv.Key, gaugePrefix):
 		typ = "gauge"
-		key = strings.TrimPrefix(kv.Key, "gauge_")
+		key = strings.TrimPrefix(kv.Key, gaugePrefix)
 
-	case strings.HasPrefix(kv.Key, "counter_"):
+	case strings.HasPrefix(kv.Key, counterPrefix):
 		typ = "counter"
-		key = strings.TrimPrefix(kv.Key, "counter_")
+		key = strings.TrimPrefix(kv.Key, counterPrefix)
 	}
-	if strings.HasPrefix(key, "labelmap_") {
-		key = strings.TrimPrefix(key, "labelmap_")
+	if strings.HasPrefix(key, labelMapPrefix) {
+		key = strings.TrimPrefix(key, labelMapPrefix)
 		if a, b, ok := strings.Cut(key, "_"); ok {
 			label, key = a, b
 		}
@@ -634,8 +642,13 @@ func writeMemstats(w io.Writer, ms *runtime.MemStats) {
 	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
 }
 
+// foreachExportedStructField iterates over the fields in sorted order of
+// their name, after removing metric prefixes. This is not necessarily the
+// order they were declared in the struct
 func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metricType string, rv reflect.Value)) {
 	t := rv.Type()
+	nameToIndex := map[string]int{}
+	sortedFields := make([]string, 0, t.NumField())
 	for i, n := 0, t.NumField(); i < n; i++ {
 		sf := t.Field(i)
 		name := sf.Name
@@ -649,6 +662,21 @@ func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metric
 				name = v
 			}
 		}
+		nameToIndex[name] = i
+		sortedFields = append(sortedFields, name)
+	}
+	sort.Slice(sortedFields, func(i, j int) bool {
+		left := sortedFields[i]
+		right := sortedFields[j]
+		for _, prefix := range prefixesToTrim {
+			left = strings.TrimPrefix(left, prefix)
+			right = strings.TrimPrefix(right, prefix)
+		}
+		return left < right
+	})
+	for _, name := range sortedFields {
+		i := nameToIndex[name]
+		sf := t.Field(i)
 		metricType := sf.Tag.Get("metrictype")
 		if metricType != "" || sf.Type.Kind() == reflect.Struct {
 			f(name, metricType, rv.Field(i))
