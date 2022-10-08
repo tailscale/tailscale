@@ -2405,8 +2405,12 @@ func (b *LocalBackend) authReconfig() {
 	// Keep the dialer updated about whether we're supposed to use
 	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
 	// can use it for name resolution)
-	if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
-		b.dialer.SetExitDNSDoH(dohURL)
+	if prefs.ExitNodeUseDNS {
+		if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); prefs.ExitNodeUseDNS && ok {
+			b.dialer.SetExitDNSDoH(dohURL)
+		} else {
+			b.dialer.SetExitDNSDoH("")
+		}
 	} else {
 		b.dialer.SetExitDNSDoH("")
 	}
@@ -2564,9 +2568,11 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs *ipn.Prefs, logf logger.Log
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
 	// to run a DoH DNS proxy, then send all our DNS traffic through it.
-	if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
-		addDefault([]*dnstype.Resolver{{Addr: dohURL}})
-		return dcfg
+	if prefs.ExitNodeUseDNS {
+		if dohURL, ok := exitNodeCanProxyDNS(nm, prefs.ExitNodeID); ok {
+			addDefault([]*dnstype.Resolver{{Addr: dohURL}})
+			return dcfg
+		}
 	}
 
 	addDefault(nm.DNS.Resolvers)

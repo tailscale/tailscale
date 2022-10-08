@@ -104,6 +104,10 @@ type Prefs struct {
 	// routed directly or via the exit node.
 	ExitNodeAllowLANAccess bool
 
+	// ExitNodeUseDNS indicates whether DNS requests should be made directly or
+	// routed via the exit node.
+	ExitNodeUseDNS bool
+
 	// CorpDNS specifies whether to install the Tailscale network's
 	// DNS configuration, if it exists.
 	CorpDNS bool
@@ -210,6 +214,7 @@ type MaskedPrefs struct {
 	ExitNodeIDSet             bool `json:",omitempty"`
 	ExitNodeIPSet             bool `json:",omitempty"`
 	ExitNodeAllowLANAccessSet bool `json:",omitempty"`
+	ExitNodeUseDNSSet         bool `json:",omitempty"`
 	CorpDNSSet                bool `json:",omitempty"`
 	RunSSHSet                 bool `json:",omitempty"`
 	WantRunningSet            bool `json:",omitempty"`
@@ -313,9 +318,9 @@ func (p *Prefs) pretty(goos string) string {
 		sb.WriteString("shields=true ")
 	}
 	if p.ExitNodeIP.IsValid() {
-		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess)
+		fmt.Fprintf(&sb, "exit=%v lan=%t useDNS=%t ", p.ExitNodeIP, p.ExitNodeAllowLANAccess, p.ExitNodeUseDNS)
 	} else if !p.ExitNodeID.IsZero() {
-		fmt.Fprintf(&sb, "exit=%v lan=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess)
+		fmt.Fprintf(&sb, "exit=%v lan=%t useDNS=%t ", p.ExitNodeID, p.ExitNodeAllowLANAccess, p.ExitNodeUseDNS)
 	}
 	if len(p.AdvertiseRoutes) > 0 || goos == "linux" {
 		fmt.Fprintf(&sb, "routes=%v ", p.AdvertiseRoutes)
@@ -370,6 +375,7 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ExitNodeID == p2.ExitNodeID &&
 		p.ExitNodeIP == p2.ExitNodeIP &&
 		p.ExitNodeAllowLANAccess == p2.ExitNodeAllowLANAccess &&
+		p.ExitNodeUseDNS == p2.ExitNodeUseDNS &&
 		p.CorpDNS == p2.CorpDNS &&
 		p.RunSSH == p2.RunSSH &&
 		p.WantRunning == p2.WantRunning &&
