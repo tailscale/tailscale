@@ -34,6 +34,7 @@ import (
 
 var Stderr io.Writer = os.Stderr
 var Stdout io.Writer = os.Stdout
+var Stdin io.Reader = os.Stdin
 
 func printf(format string, a ...any) {
 	fmt.Fprintf(Stdout, format, a...)

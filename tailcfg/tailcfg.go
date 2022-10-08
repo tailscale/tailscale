@@ -1647,6 +1647,8 @@ const (
 	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
 	// CapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
 	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
+
+	CapabilityTailpipeTarget = "https://tailscale.com/cap/tailpipe-target"
 )
 
 // SetDNSRequest is a request to add a DNS record.

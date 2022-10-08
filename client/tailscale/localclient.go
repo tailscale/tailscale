@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/netip"
+	"net/textproto"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -558,6 +559,15 @@ func (lc *LocalClient) SetDNS(ctx context.Context, name, value string) error {
 //
 // The ctx is only used for the duration of the call, not the lifetime of the net.Conn.
 func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (net.Conn, error) {
+	return lc.dialViaLocalAPI(ctx, host, fmt.Sprint(port))
+}
+
+// DialTCPNamedPort is like DialTCP but takes a named port rather than an integer.
+func (lc *LocalClient) DialTCPNamedPort(ctx context.Context, host, portName string) (net.Conn, error) {
+	return lc.dialViaLocalAPI(ctx, host, portName)
+}
+
+func (lc *LocalClient) dialViaLocalAPI(ctx context.Context, host, port string) (net.Conn, error) {
 	connCh := make(chan net.Conn, 1)
 	trace := httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -573,7 +583,7 @@ func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (n
 		"Upgrade":    []string{"ts-dial"},
 		"Connection": []string{"upgrade"},
 		"Dial-Host":  []string{host},
-		"Dial-Port":  []string{fmt.Sprint(port)},
+		"Dial-Port":  []string{port},
 	}
 	res, err := lc.DoLocalRequest(req)
 	if err != nil {
@@ -603,6 +613,59 @@ func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (n
 		return nil, errors.New("http Transport did not provide a writable body")
 	}
 	return netutil.NewAltReadWriteCloserConn(rwc, switchedConn), nil
+}
+
+// ListenNewRandomPortName...
+func (lc *LocalClient) ListenNewRandomPortName(ctx context.Context) (portName string, accept func(context.Context) (net.Conn, error), err error) {
+	connCh := make(chan net.Conn, 1)
+	portNameCh := make(chan string, 1)
+	trace := httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			connCh <- info.Conn
+		},
+		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+			portNameCh <- fmt.Sprintf("Got %v, %v", code, header)
+			return nil
+		},
+	}
+	ctx = httptrace.WithClientTrace(ctx, &trace)
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://local-tailscaled.sock/localapi/v0/open-bidi-pipe", nil)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header = http.Header{
+		"Upgrade":    []string{"ts-open-bidi-pipe"},
+		"Connection": []string{"upgrade"},
+	}
+
+	doErrc := make(chan error, 1)
+
+	go func() {
+		res, err := lc.DoLocalRequest(req)
+		if err != nil {
+			doErrc <- err
+			return
+		}
+		_ = res
+	}()
+
+	accept = func(ctx context.Context) (net.Conn, error) {
+		panic("TODO")
+	}
+
+	select {
+	case name := <-portNameCh:
+		return name, accept, nil
+	case err := <-doErrc:
+		return "", nil, err
+	}
+
+	// if res.StatusCode != http.StatusSwitchingProtocols {
+	// 	body, _ := io.ReadAll(res.Body)
+	// 	res.Body.Close()
+	// 	return nil, fmt.Errorf("unexpected HTTP response: %s, %s", res.Status, body)
+	// }
+	panic("TODO")
 }
 
 // CurrentDERPMap returns the current DERPMap that is being used by the local tailscaled.

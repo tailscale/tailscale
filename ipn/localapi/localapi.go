@@ -67,6 +67,7 @@ var handler = map[string]localAPIHandler{
 	"login-interactive":       (*Handler).serveLoginInteractive,
 	"logout":                  (*Handler).serveLogout,
 	"metrics":                 (*Handler).serveMetrics,
+	"open-bidi-pipe":          (*Handler).serveOpenBidiPipe,
 	"ping":                    (*Handler).servePing,
 	"prefs":                   (*Handler).servePrefs,
 	"profile":                 (*Handler).serveProfile,
@@ -764,8 +765,16 @@ func (h *Handler) serveDial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr := net.JoinHostPort(hostStr, portStr)
-	outConn, err := h.b.Dialer().UserDial(r.Context(), "tcp", addr)
+	dial := func() (net.Conn, error) {
+		if strings.HasPrefix(portStr, "tailpipe-") {
+			// hostStr is expected to be a Tailscale IP at this point.
+			return h.b.DialTailpipe(r.Context(), hostStr, portStr)
+		}
+		addr := net.JoinHostPort(hostStr, portStr)
+		return h.b.Dialer().UserDial(r.Context(), "tcp", addr)
+	}
+
+	outConn, err := dial()
 	if err != nil {
 		http.Error(w, "dial failure: "+err.Error(), http.StatusBadGateway)
 		return
@@ -931,6 +940,29 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+func (h *Handler) serveOpenBidiPipe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.FormValue("name")
+	if name != "" && !h.PermitWrite {
+		http.Error(w, "naming a bidi pipe requires write access", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Foo", "bar")
+	w.WriteHeader(http.StatusProcessing) // informational code 102
+
+	time.Sleep(time.Second)
+
+	w.Header().Set("Foo", "baz")
+	w.WriteHeader(http.StatusProcessing) // informational code 102
+
+	w.Header()["Foo"] = nil
+	io.WriteString(w, "the body")
 }
 
 func defBool(a string, def bool) bool {
