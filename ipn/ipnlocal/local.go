@@ -3419,10 +3419,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 		return nil, errors.New("file sharing not enabled by Tailscale admin")
 	}
 	for _, p := range nm.Peers {
-		if len(p.Addresses) == 0 {
-			continue
-		}
-		if p.User != nm.User && b.peerHasCapLocked(p.Addresses[0].Addr(), tailcfg.CapabilityFileSharing) {
+		if !b.peerIsTaildropTargetLocked(p) {
 			continue
 		}
 		peerAPI := peerAPIBase(b.netMap, p)
@@ -3436,6 +3433,26 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 	}
 	// TODO: sort a different way than the netmap already is?
 	return ret, nil
+}
+
+// peerIsTaildropTargetLocked reports whether p is a valid Taildrop file
+// recipient from this node according to its ownership and the capabilities in
+// the netmap.
+//
+// b.mu must be locked.
+func (b *LocalBackend) peerIsTaildropTargetLocked(p *tailcfg.Node) bool {
+	if b.netMap == nil || p == nil {
+		return false
+	}
+	if b.netMap.User == p.User {
+		return true
+	}
+	if len(p.Addresses) > 0 &&
+		b.peerHasCapLocked(p.Addresses[0].Addr(), tailcfg.CapabilityFileSharingTarget) {
+		// Explicitly noted in the netmap ACL caps as a target.
+		return true
+	}
+	return false
 }
 
 func (b *LocalBackend) peerHasCapLocked(addr netip.Addr, wantCap string) bool {
