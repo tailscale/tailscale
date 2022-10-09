@@ -37,8 +37,48 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
+
+type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
+
+// handler is the set of LocalAPI handlers, keyed by the part of the
+// Request.URL.Path after "/localapi/v0/". If the key ends with a trailing slash
+// then it's a prefix match.
+var handler = map[string]localAPIHandler{
+	// The prefix match handlers end with a slash:
+	"cert/":     (*Handler).serveCert,
+	"file-put/": (*Handler).serveFilePut,
+	"files/":    (*Handler).serveFiles,
+
+	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
+	// without a trailing slash:
+	"bugreport":               (*Handler).serveBugReport,
+	"check-ip-forwarding":     (*Handler).serveCheckIPForwarding,
+	"check-prefs":             (*Handler).serveCheckPrefs,
+	"component-debug-logging": (*Handler).serveComponentDebugLogging,
+	"debug":                   (*Handler).serveDebug,
+	"derpmap":                 (*Handler).serveDERPMap,
+	"dial":                    (*Handler).serveDial,
+	"file-targets":            (*Handler).serveFileTargets,
+	"goroutines":              (*Handler).serveGoroutines,
+	"id-token":                (*Handler).serveIDToken,
+	"login-interactive":       (*Handler).serveLoginInteractive,
+	"logout":                  (*Handler).serveLogout,
+	"metrics":                 (*Handler).serveMetrics,
+	"ping":                    (*Handler).servePing,
+	"prefs":                   (*Handler).servePrefs,
+	"profile":                 (*Handler).serveProfile,
+	"set-dns":                 (*Handler).serveSetDNS,
+	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
+	"status":                  (*Handler).serveStatus,
+	"tka/init":                (*Handler).serveTKAInit,
+	"tka/modify":              (*Handler).serveTKAModify,
+	"tka/status":              (*Handler).serveTKAStatus,
+	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
+	"whois":                   (*Handler).serveWhoIs,
+}
 
 func randHex(n int) string {
 	b := make([]byte, n)
@@ -101,72 +141,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/localapi/v0/files/") {
-		h.serveFiles(w, r)
-		return
+	if fn, ok := handlerForPath(r.URL.Path); ok {
+		fn(h, w, r)
+	} else {
+		http.NotFound(w, r)
 	}
-	if strings.HasPrefix(r.URL.Path, "/localapi/v0/file-put/") {
-		h.serveFilePut(w, r)
-		return
+}
+
+// handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
+// (the path doesn't include any query parameters)
+func handlerForPath(urlPath string) (h localAPIHandler, ok bool) {
+	if urlPath == "/" {
+		return (*Handler).serveLocalAPIRoot, true
 	}
-	if strings.HasPrefix(r.URL.Path, "/localapi/v0/cert/") {
-		h.serveCert(w, r)
-		return
+	suff, ok := strs.CutPrefix(urlPath, "/localapi/v0/")
+	if !ok {
+		// Currently all LocalAPI methods start with "/localapi/v0/" to signal
+		// to people that they're not necessarily stable APIs. In practice we'll
+		// probably need to keep them pretty stable anyway, but for now treat
+		// them as an internal implementation detail.
+		return nil, false
 	}
-	switch r.URL.Path {
-	case "/localapi/v0/whois":
-		h.serveWhoIs(w, r)
-	case "/localapi/v0/goroutines":
-		h.serveGoroutines(w, r)
-	case "/localapi/v0/profile":
-		h.serveProfile(w, r)
-	case "/localapi/v0/status":
-		h.serveStatus(w, r)
-	case "/localapi/v0/logout":
-		h.serveLogout(w, r)
-	case "/localapi/v0/login-interactive":
-		h.serveLoginInteractive(w, r)
-	case "/localapi/v0/prefs":
-		h.servePrefs(w, r)
-	case "/localapi/v0/ping":
-		h.servePing(w, r)
-	case "/localapi/v0/check-prefs":
-		h.serveCheckPrefs(w, r)
-	case "/localapi/v0/check-ip-forwarding":
-		h.serveCheckIPForwarding(w, r)
-	case "/localapi/v0/bugreport":
-		h.serveBugReport(w, r)
-	case "/localapi/v0/file-targets":
-		h.serveFileTargets(w, r)
-	case "/localapi/v0/set-dns":
-		h.serveSetDNS(w, r)
-	case "/localapi/v0/derpmap":
-		h.serveDERPMap(w, r)
-	case "/localapi/v0/metrics":
-		h.serveMetrics(w, r)
-	case "/localapi/v0/debug":
-		h.serveDebug(w, r)
-	case "/localapi/v0/component-debug-logging":
-		h.serveComponentDebugLogging(w, r)
-	case "/localapi/v0/set-expiry-sooner":
-		h.serveSetExpirySooner(w, r)
-	case "/localapi/v0/dial":
-		h.serveDial(w, r)
-	case "/localapi/v0/id-token":
-		h.serveIDToken(w, r)
-	case "/localapi/v0/upload-client-metrics":
-		h.serveUploadClientMetrics(w, r)
-	case "/localapi/v0/tka/status":
-		h.serveTkaStatus(w, r)
-	case "/localapi/v0/tka/init":
-		h.serveTkaInit(w, r)
-	case "/localapi/v0/tka/modify":
-		h.serveTkaModify(w, r)
-	case "/":
-		io.WriteString(w, "tailscaled\n")
-	default:
-		http.Error(w, "404 not found", 404)
+	if fn, ok := handler[suff]; ok {
+		// Here we match exact handler suffixes like "status" or ones with a
+		// slash already in their name, like "tka/status".
+		return fn, true
 	}
+	// Otherwise, it might be a prefix match like "files/*" which we look up
+	// by the prefix including first trailing slash.
+	if i := strings.IndexByte(suff, '/'); i != -1 {
+		suff = suff[:i+1]
+		if fn, ok := handler[suff]; ok {
+			return fn, true
+		}
+	}
+	return nil, false
+}
+
+func (*Handler) serveLocalAPIRoot(w http.ResponseWriter, r *http.Request) {
+	io.WriteString(w, "tailscaled\n")
 }
 
 // serveIDToken handles requests to get an OIDC ID token.
@@ -834,13 +847,13 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(struct{}{})
 }
 
-func (h *Handler) serveTkaStatus(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) serveTKAStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "lock status access denied", http.StatusForbidden)
 		return
 	}
 	if r.Method != http.MethodGet {
-		http.Error(w, "use Get", http.StatusMethodNotAllowed)
+		http.Error(w, "use GET", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -853,7 +866,7 @@ func (h *Handler) serveTkaStatus(w http.ResponseWriter, r *http.Request) {
 	w.Write(j)
 }
 
-func (h *Handler) serveTkaInit(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "lock init access denied", http.StatusForbidden)
 		return
@@ -886,7 +899,7 @@ func (h *Handler) serveTkaInit(w http.ResponseWriter, r *http.Request) {
 	w.Write(j)
 }
 
-func (h *Handler) serveTkaModify(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
 		return
