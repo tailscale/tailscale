@@ -72,7 +72,7 @@ func uninstallSystemDaemonDarwin(args []string) (ret error) {
 			fmt.Printf("launchctl stop com.tailscale.tailscaled: %v, %s\n", err, out)
 			ret = err
 		}
-		out, err = exec.Command("launchctl", "unload", sysPlist).CombinedOutput()
+		out, err = exec.Command("launchctl", "unload", "-w", sysPlist).CombinedOutput()
 		if err != nil {
 			fmt.Printf("launchctl unload %s: %v, %s\n", sysPlist, err, out)
 			if ret == nil {
@@ -151,7 +151,7 @@ func installSystemDaemonDarwin(args []string) (err error) {
 		return err
 	}
 
-	if out, err := exec.Command("launchctl", "load", sysPlist).CombinedOutput(); err != nil {
+	if out, err := exec.Command("launchctl", "load", "-w", sysPlist).CombinedOutput(); err != nil {
 		return fmt.Errorf("error running launchctl load %s: %v, %s", sysPlist, err, out)
 	}
 
