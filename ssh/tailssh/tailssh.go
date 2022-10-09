@@ -770,7 +770,7 @@ func (c *conn) newSSHSession(s ssh.Session) *sshSession {
 	return &sshSession{
 		Session:  s,
 		sharedID: sharedID,
-		ctx:      newSSHContext(),
+		ctx:      newSSHContext(s.Context()),
 		conn:     c,
 		logf:     logger.WithPrefix(c.srv.logf, "ssh-session("+sharedID+"): "),
 	}
