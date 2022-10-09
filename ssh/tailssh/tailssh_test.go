@@ -335,10 +335,10 @@ func TestSSHAuthFlow(t *testing.T) {
 	})
 
 	tests := []struct {
-		name       string
-		state      *localState
-		wantBanner string
-		authErr    bool
+		name        string
+		state       *localState
+		wantBanners []string
+		authErr     bool
 	}{
 		{
 			name: "no-policy",
@@ -353,7 +353,7 @@ func TestSSHAuthFlow(t *testing.T) {
 				sshEnabled:   true,
 				matchingRule: acceptRule,
 			},
-			wantBanner: "Welcome to Tailscale SSH!",
+			wantBanners: []string{"Welcome to Tailscale SSH!"},
 		},
 		{
 			name: "reject",
@@ -361,8 +361,8 @@ func TestSSHAuthFlow(t *testing.T) {
 				sshEnabled:   true,
 				matchingRule: rejectRule,
 			},
-			wantBanner: "Go Away!",
-			authErr:    true,
+			wantBanners: []string{"Go Away!"},
+			authErr:     true,
 		},
 		{
 			name: "simple-check",
@@ -375,13 +375,14 @@ func TestSSHAuthFlow(t *testing.T) {
 					"accept": acceptRule.Action,
 				},
 			},
-			wantBanner: "Welcome to Tailscale SSH!",
+			wantBanners: []string{"Welcome to Tailscale SSH!"},
 		},
 		{
 			name: "multi-check",
 			state: &localState{
 				sshEnabled: true,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
+					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/check1",
 				}),
 				serverActions: map[string]*tailcfg.SSHAction{
@@ -392,21 +393,22 @@ func TestSSHAuthFlow(t *testing.T) {
 					"check2": acceptRule.Action,
 				},
 			},
-			wantBanner: "url-here",
+			wantBanners: []string{"First", "url-here", "Welcome to Tailscale SSH!"},
 		},
 		{
 			name: "check-reject",
 			state: &localState{
 				sshEnabled: true,
 				matchingRule: newSSHRule(&tailcfg.SSHAction{
+					Message:         "First",
 					HoldAndDelegate: "https://unused/ssh-action/reject",
 				}),
 				serverActions: map[string]*tailcfg.SSHAction{
 					"reject": rejectRule.Action,
 				},
 			},
-			wantBanner: "Go Away!",
-			authErr:    true,
+			wantBanners: []string{"First", "Go Away!"},
+			authErr:     true,
 		},
 	}
 	s := &server{
@@ -422,8 +424,13 @@ func TestSSHAuthFlow(t *testing.T) {
 				User:            "alice",
 				HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 				BannerCallback: func(message string) error {
-					if message != tc.wantBanner {
-						t.Errorf("BannerCallback = %q; want %q", message, tc.wantBanner)
+					if len(tc.wantBanners) == 0 {
+						t.Errorf("unexpected banner: %q", message)
+					} else if message != tc.wantBanners[0] {
+						t.Errorf("banner = %q; want %q", message, tc.wantBanners[0])
+					} else {
+						t.Logf("banner = %q", message)
+						tc.wantBanners = tc.wantBanners[1:]
 					}
 					return nil
 				},
@@ -451,16 +458,18 @@ func TestSSHAuthFlow(t *testing.T) {
 					return
 				}
 				defer session.Close()
-				o, err := session.CombinedOutput("echo Ran echo!")
+				_, err = session.CombinedOutput("echo Ran echo!")
 				if err != nil {
 					t.Errorf("client: %v", err)
 				}
-				t.Logf("output: %s", o)
 			}()
 			if err := s.HandleSSHConn(dc); err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 			wg.Wait()
+			if len(tc.wantBanners) > 0 {
+				t.Errorf("missing banners: %v", tc.wantBanners)
+			}
 		})
 	}
 }
