@@ -6,6 +6,7 @@ package nettest
 
 import (
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -32,20 +33,38 @@ func NewConn(name string, maxBuf int) (Conn, Conn) {
 	return &connHalf{r: r, w: w}, &connHalf{r: w, w: r}
 }
 
+// NewTCPConn creates a pair of Conns that are wired together by pipes.
+func NewTCPConn(src, dst netip.AddrPort, maxBuf int) (local Conn, remote Conn) {
+	r := NewPipe(src.String(), maxBuf)
+	w := NewPipe(dst.String(), maxBuf)
+
+	lAddr := net.TCPAddrFromAddrPort(src)
+	rAddr := net.TCPAddrFromAddrPort(dst)
+
+	return &connHalf{r: r, w: w, remote: rAddr, local: lAddr}, &connHalf{r: w, w: r, remote: lAddr, local: rAddr}
+}
+
 type connAddr string
 
 func (a connAddr) Network() string { return "mem" }
 func (a connAddr) String() string  { return string(a) }
 
 type connHalf struct {
-	r, w *Pipe
+	local, remote net.Addr
+	r, w          *Pipe
 }
 
 func (c *connHalf) LocalAddr() net.Addr {
+	if c.local != nil {
+		return c.local
+	}
 	return connAddr(c.r.name)
 }
 
 func (c *connHalf) RemoteAddr() net.Addr {
+	if c.remote != nil {
+		return c.remote
+	}
 	return connAddr(c.w.name)
 }
 

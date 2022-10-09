@@ -39,6 +39,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 )
@@ -47,8 +48,19 @@ var (
 	sshVerboseLogging = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
 )
 
+// ipnLocalBackend is the subset of ipnlocal.LocalBackend that we use.
+// It is used for testing.
+type ipnLocalBackend interface {
+	GetSSH_HostKeys() ([]gossh.Signer, error)
+	ShouldRunSSH() bool
+	NetMap() *netmap.NetworkMap
+	WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool)
+	DoNoiseRequest(req *http.Request) (*http.Response, error)
+	TailscaleVarRoot() string
+}
+
 type server struct {
-	lb             *ipnlocal.LocalBackend
+	lb             ipnLocalBackend
 	logf           logger.Logf
 	tailscaledPath string
 
@@ -212,7 +224,10 @@ func (c *conn) logf(format string, args ...any) {
 	c.srv.logf(format, args...)
 }
 
-// isAuthorized returns nil if the connection is authorized to proceed.
+// isAuthorized walks through the action chain and returns nil if the connection
+// is authorized. If the connection is not authorized, it returns
+// gossh.ErrDenied. If the action chain resolution fails, it returns the
+// resolution error.
 func (c *conn) isAuthorized(ctx ssh.Context) error {
 	action := c.currentAction
 	for {
@@ -525,7 +540,7 @@ func (c *conn) setInfo(ctx ssh.Context) error {
 		return fmt.Errorf("unknown Tailscale identity from src %v", ci.src)
 	}
 	ci.node = node
-	ci.uprof = &uprof
+	ci.uprof = uprof
 
 	c.idH = ctx.SessionID()
 	c.info = ci
@@ -743,12 +758,8 @@ func (c *conn) expandPublicKeyURL(pubKeyURL string) string {
 	if !strings.Contains(pubKeyURL, "$") {
 		return pubKeyURL
 	}
-	var localPart string
-	var loginName string
-	if c.info.uprof != nil {
-		loginName = c.info.uprof.LoginName
-		localPart, _, _ = strings.Cut(loginName, "@")
-	}
+	loginName := c.info.uprof.LoginName
+	localPart, _, _ := strings.Cut(loginName, "@")
 	return strings.NewReplacer(
 		"$LOGINNAME_EMAIL", loginName,
 		"$LOGINNAME_LOCALPART", localPart,
@@ -1108,7 +1119,7 @@ type sshConnInfo struct {
 	node *tailcfg.Node
 
 	// uprof is node's UserProfile.
-	uprof *tailcfg.UserProfile
+	uprof tailcfg.UserProfile
 }
 
 func (ci *sshConnInfo) String() string {
@@ -1223,7 +1234,7 @@ func (c *conn) principalMatchesTailscaleIdentity(p *tailcfg.SSHPrincipal) bool {
 			return true
 		}
 	}
-	if p.UserLogin != "" && ci.uprof != nil && ci.uprof.LoginName == p.UserLogin {
+	if p.UserLogin != "" && ci.uprof.LoginName == p.UserLogin {
 		return true
 	}
 	return false
