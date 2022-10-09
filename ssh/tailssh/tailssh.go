@@ -176,7 +176,6 @@ func (srv *server) OnPolicyChange() {
 //   - ServerConfigCallback
 //
 // Do the user auth
-//   - BannerHandler
 //   - NoClientAuthHandler
 //   - PublicKeyHandler (only if NoClientAuthHandler returns errPubKeyRequired)
 //
@@ -245,45 +244,17 @@ func (c *conn) isAuthorized(ctx ssh.Context) error {
 		if err != nil {
 			return err
 		}
+		if action.Message != "" {
+			if err := ctx.SendAuthBanner(action.Message); err != nil {
+				return err
+			}
+		}
 	}
 }
 
 // errPubKeyRequired is returned by NoClientAuthCallback to make the client
 // resort to public-key auth; not user visible.
 var errPubKeyRequired = errors.New("ssh publickey required")
-
-// BannerCallback implements ssh.BannerCallback.
-// It is responsible for starting the policy evaluation, and returns
-// the first message found in the action chain. It stops the evaluation
-// on the first "accept" or "reject" action, and returns the message
-// associated with that action (if any).
-func (c *conn) BannerCallback(ctx ssh.Context) string {
-	if err := c.setInfo(ctx); err != nil {
-		c.logf("failed to get conninfo: %v", err)
-		return gossh.ErrDenied.Error()
-	}
-	if err := c.doPolicyAuth(ctx, nil /* no pub key */); err != nil {
-		// Stash the error for NoClientAuthCallback to return it.
-		c.noPubKeyPolicyAuthError = err
-		return ""
-	}
-	action := c.currentAction
-	for {
-		if action.Reject || action.Accept || action.Message != "" {
-			return action.Message
-		}
-		if action.HoldAndDelegate == "" {
-			// Do not send user-visible messages to the user.
-			// Let the SSH level authentication fail instead.
-			return ""
-		}
-		var err error
-		action, err = c.resolveNextAction(ctx)
-		if err != nil {
-			return ""
-		}
-	}
-}
 
 // NoClientAuthCallback implements gossh.NoClientAuthCallback and is called by
 // the ssh.Server when the client first connects with the "none"
@@ -299,11 +270,8 @@ func (c *conn) NoClientAuthCallback(ctx ssh.Context) error {
 	if c.insecureSkipTailscaleAuth {
 		return nil
 	}
-	if c.noPubKeyPolicyAuthError != nil {
-		return c.noPubKeyPolicyAuthError
-	} else if c.currentAction == nil {
-		// This should never happen, but if it does, we want to know.
-		panic("no current action")
+	if err := c.doPolicyAuth(ctx, nil /* no pub key */); err != nil {
+		return err
 	}
 	return c.isAuthorized(ctx)
 }
@@ -327,8 +295,12 @@ func (c *conn) PublicKeyHandler(ctx ssh.Context, pubKey ssh.PublicKey) error {
 // pubKey. It returns nil if the matching policy action is Accept or
 // HoldAndDelegate. If pubKey is nil, there was no policy match but there is a
 // policy that might match a public key it returns errPubKeyRequired. Otherwise,
-// it returns gossh.ErrDenied possibly wrapped in gossh.WithBannerError.
+// it returns gossh.ErrDenied.
 func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
+	if err := c.setInfo(ctx); err != nil {
+		c.logf("failed to get conninfo: %v", err)
+		return gossh.ErrDenied
+	}
 	a, localUser, err := c.evaluatePolicy(pubKey)
 	if err != nil {
 		if pubKey == nil && c.havePubKeyPolicy() {
@@ -339,6 +311,11 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	c.action0 = a
 	c.currentAction = a
 	c.pubKey = pubKey
+	if a.Message != "" {
+		if err := ctx.SendAuthBanner(a.Message); err != nil {
+			return fmt.Errorf("SendBanner: %w", err)
+		}
+	}
 	if a.Accept || a.HoldAndDelegate != "" {
 		if a.Accept {
 			c.finalAction = a
@@ -346,10 +323,8 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		lu, err := user.Lookup(localUser)
 		if err != nil {
 			c.logf("failed to lookup %v: %v", localUser, err)
-			return gossh.WithBannerError{
-				Err:     gossh.ErrDenied,
-				Message: fmt.Sprintf("failed to lookup %v\r\n", localUser),
-			}
+			ctx.SendAuthBanner(fmt.Sprintf("failed to lookup %v\r\n", localUser))
+			return err
 		}
 		gids, err := lu.GroupIds()
 		if err != nil {
@@ -361,14 +336,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 	}
 	if a.Reject {
 		c.finalAction = a
-		err := gossh.ErrDenied
-		if a.Message != "" {
-			err = gossh.WithBannerError{
-				Err:     err,
-				Message: a.Message,
-			}
-		}
-		return err
+		return gossh.ErrDenied
 	}
 	// Shouldn't get here, but:
 	return gossh.ErrDenied
@@ -400,7 +368,6 @@ func (srv *server) newConn() (*conn, error) {
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
 
-		BannerHandler:       c.BannerCallback,
 		NoClientAuthHandler: c.NoClientAuthCallback,
 		PublicKeyHandler:    c.PublicKeyHandler,
 
@@ -524,6 +491,9 @@ func toIPPort(a net.Addr) (ipp netip.AddrPort) {
 // connInfo returns a populated sshConnInfo from the provided arguments,
 // validating only that they represent a known Tailscale identity.
 func (c *conn) setInfo(ctx ssh.Context) error {
+	if c.info != nil {
+		return nil
+	}
 	ci := &sshConnInfo{
 		sshUser: ctx.User(),
 		src:     toIPPort(ctx.RemoteAddr()),
