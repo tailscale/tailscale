@@ -43,6 +43,12 @@ const darwinLaunchdPlist = `
   <key>RunAtLoad</key>
   <true/>
 
+  <key>StandardOutPath</key>
+  <string>/var/log/tailscaled.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/var/log/tailscaled.log</string>
+
 </dict>
 </plist>
 `
