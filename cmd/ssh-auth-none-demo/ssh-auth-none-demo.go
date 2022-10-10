@@ -3,9 +3,10 @@
 // license that can be found in the LICENSE file.
 
 // ssh-auth-none-demo is a demo SSH server that's meant to run on the
-// public internet and highlight the unique parts of the Tailscale SSH
-// server so SSH client authors can hit it easily and fix their SSH
-// clients without needing to set up Tailscale and Tailscale SSH.
+// public internet (at 188.166.70.128 port 2222) and
+// highlight the unique parts of the Tailscale SSH server so SSH
+// client authors can hit it easily and fix their SSH clients without
+// needing to set up Tailscale and Tailscale SSH.
 package main
 
 import (
