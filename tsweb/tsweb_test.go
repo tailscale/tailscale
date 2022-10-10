@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -724,5 +725,21 @@ func TestPort80Handler(t *testing.T) {
 				t.Errorf("Location = %q; want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestSortedStructAllocs(t *testing.T) {
+	f := reflect.ValueOf(struct {
+		Foo int
+		Bar int
+		Baz int
+	}{})
+	n := testing.AllocsPerRun(1000, func() {
+		foreachExportedStructField(f, func(fieldOrJSONName, metricType string, rv reflect.Value) {
+			// Nothing.
+		})
+	})
+	if n != 0 {
+		t.Errorf("allocs = %v; want 0", n)
 	}
 }

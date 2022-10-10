@@ -43,9 +43,11 @@ func init() {
 	expvar.Publish("gauge_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
 }
 
-const gaugePrefix = "gauge_"
-const counterPrefix = "counter_"
-const labelMapPrefix = "labelmap_"
+const (
+	gaugePrefix    = "gauge_"
+	counterPrefix  = "counter_"
+	labelMapPrefix = "labelmap_"
+)
 
 // prefixesToTrim contains key prefixes to remove when exporting and sorting metrics.
 var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix}
@@ -642,13 +644,25 @@ func writeMemstats(w io.Writer, ms *runtime.MemStats) {
 	c("num_gc", uint64(ms.NumGC), "number of completed GC cycles")
 }
 
-// foreachExportedStructField iterates over the fields in sorted order of
-// their name, after removing metric prefixes. This is not necessarily the
-// order they were declared in the struct
-func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metricType string, rv reflect.Value)) {
-	t := rv.Type()
-	nameToIndex := map[string]int{}
-	sortedFields := make([]string, 0, t.NumField())
+// sortedStructField is metadata about a struct field used both for sorting once
+// (by structTypeSortedFields) and at serving time (by
+// foreachExportedStructField).
+type sortedStructField struct {
+	Index           int    // index of struct field in struct
+	Name            string // struct field name, or "json" name
+	SortName        string // Name with "foo_" type prefixes removed
+	MetricType      string // the "metrictype" struct tag
+	StructFieldType *reflect.StructField
+}
+
+var structSortedFieldsCache sync.Map // reflect.Type => []sortedStructField
+
+// structTypeSortedFields returns the sorted fields of t, caching as needed.
+func structTypeSortedFields(t reflect.Type) []sortedStructField {
+	if v, ok := structSortedFieldsCache.Load(t); ok {
+		return v.([]sortedStructField)
+	}
+	fields := make([]sortedStructField, 0, t.NumField())
 	for i, n := 0, t.NumField(); i < n; i++ {
 		sf := t.Field(i)
 		name := sf.Name
@@ -662,28 +676,45 @@ func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metric
 				name = v
 			}
 		}
-		nameToIndex[name] = i
-		sortedFields = append(sortedFields, name)
+		fields = append(fields, sortedStructField{
+			Index:           i,
+			Name:            name,
+			SortName:        removeTypePrefixes(name),
+			MetricType:      sf.Tag.Get("metrictype"),
+			StructFieldType: &sf,
+		})
 	}
-	sort.Slice(sortedFields, func(i, j int) bool {
-		left := sortedFields[i]
-		right := sortedFields[j]
-		for _, prefix := range prefixesToTrim {
-			left = strings.TrimPrefix(left, prefix)
-			right = strings.TrimPrefix(right, prefix)
-		}
-		return left < right
+	sort.Slice(fields, func(i, j int) bool {
+		return fields[i].SortName < fields[j].SortName
 	})
-	for _, name := range sortedFields {
-		i := nameToIndex[name]
-		sf := t.Field(i)
-		metricType := sf.Tag.Get("metrictype")
-		if metricType != "" || sf.Type.Kind() == reflect.Struct {
-			f(name, metricType, rv.Field(i))
+	structSortedFieldsCache.Store(t, fields)
+	return fields
+}
+
+// removeTypePrefixes returns s with the first "foo_" prefix in prefixesToTrim
+// removed.
+func removeTypePrefixes(s string) string {
+	for _, prefix := range prefixesToTrim {
+		if trimmed := strings.TrimPrefix(s, prefix); trimmed != s {
+			return trimmed
+		}
+	}
+	return s
+}
+
+// foreachExportedStructField iterates over the fields in sorted order of
+// their name, after removing metric prefixes. This is not necessarily the
+// order they were declared in the struct
+func foreachExportedStructField(rv reflect.Value, f func(fieldOrJSONName, metricType string, rv reflect.Value)) {
+	t := rv.Type()
+	for _, ssf := range structTypeSortedFields(t) {
+		sf := ssf.StructFieldType
+		if ssf.MetricType != "" || sf.Type.Kind() == reflect.Struct {
+			f(ssf.Name, ssf.MetricType, rv.Field(ssf.Index))
 		} else if sf.Type.Kind() == reflect.Ptr && sf.Type.Elem().Kind() == reflect.Struct {
-			fv := rv.Field(i)
+			fv := rv.Field(ssf.Index)
 			if !fv.IsNil() {
-				f(name, metricType, fv.Elem())
+				f(ssf.Name, ssf.MetricType, fv.Elem())
 			}
 		}
 	}
