@@ -62,10 +62,25 @@ func main() {
 		Version: "Tailscale",
 		Handler: handleSessionPostSSHAuth,
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+			start := time.Now()
 			return &gossh.ServerConfig{
 				ImplicitAuthMethod: "tailscale",
 				NoClientAuth:       true, // required for the NoClientAuthCallback to run
-				NoClientAuthCallback: func(gossh.ConnMetadata) (*gossh.Permissions, error) {
+				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
+					cm.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
+
+					totalBanners := 2
+					if cm.User() == "banners" {
+						totalBanners = 5
+					}
+					for banner := 2; banner <= totalBanners; banner++ {
+						time.Sleep(time.Second)
+						if banner == totalBanners {
+							cm.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
+						} else {
+							cm.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
+						}
+					}
 					return nil, nil
 				},
 				BannerCallback: func(cm gossh.ConnMetadata) string {
