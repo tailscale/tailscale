@@ -197,8 +197,6 @@ type conn struct {
 	idH    string
 	connID string // ID that's shared with control
 
-	noPubKeyPolicyAuthError error // set by BannerCallback
-
 	action0        *tailcfg.SSHAction // set by doPolicyAuth; first matching action
 	currentAction  *tailcfg.SSHAction // set by doPolicyAuth, updated by resolveNextAction
 	finalAction    *tailcfg.SSHAction // set by doPolicyAuth or resolveNextAction
