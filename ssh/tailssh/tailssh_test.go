@@ -335,10 +335,12 @@ func TestSSHAuthFlow(t *testing.T) {
 	})
 
 	tests := []struct {
-		name        string
-		state       *localState
-		wantBanners []string
-		authErr     bool
+		name         string
+		sshUser      string // defaults to alice
+		state        *localState
+		wantBanners  []string
+		usesPassword bool
+		authErr      bool
 	}{
 		{
 			name: "no-policy",
@@ -410,6 +412,16 @@ func TestSSHAuthFlow(t *testing.T) {
 			wantBanners: []string{"First", "Go Away!"},
 			authErr:     true,
 		},
+		{
+			name:    "force-password-auth",
+			sshUser: "alice+password",
+			state: &localState{
+				sshEnabled:   true,
+				matchingRule: acceptRule,
+			},
+			usesPassword: true,
+			wantBanners:  []string{"Welcome to Tailscale SSH!"},
+		},
 	}
 	s := &server{
 		logf: logger.Discard,
@@ -420,9 +432,24 @@ func TestSSHAuthFlow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sc, dc := nettest.NewTCPConn(src, dst, 1024)
 			s.lb = tc.state
+			sshUser := "alice"
+			if tc.sshUser != "" {
+				sshUser = tc.sshUser
+			}
+			var passwordUsed atomic.Bool
 			cfg := &gossh.ClientConfig{
-				User:            "alice",
+				User:            sshUser,
 				HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+				Auth: []gossh.AuthMethod{
+					gossh.PasswordCallback(func() (secret string, err error) {
+						if !tc.usesPassword {
+							t.Error("unexpected use of PasswordCallback")
+							return "", errors.New("unexpected use of PasswordCallback")
+						}
+						passwordUsed.Store(true)
+						return "any-pass", nil
+					}),
+				},
 				BannerCallback: func(message string) error {
 					if len(tc.wantBanners) == 0 {
 						t.Errorf("unexpected banner: %q", message)
