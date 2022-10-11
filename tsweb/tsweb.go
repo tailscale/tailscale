@@ -591,6 +591,18 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 	}
 }
 
+var sortedKVsPool = &sync.Pool{New: func() any { return new(sortedKVs) }}
+
+// sortedKV is a KeyValue with a sort key.
+type sortedKV struct {
+	expvar.KeyValue
+	sortKey string // KeyValue.Key with type prefix removed
+}
+
+type sortedKVs struct {
+	kvs []sortedKV
+}
+
 // VarzHandler is an HTTP handler to write expvar values into the
 // prometheus export format:
 //
@@ -610,9 +622,19 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 // This will evolve over time, or perhaps be replaced.
 func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+
+	s := sortedKVsPool.Get().(*sortedKVs)
+	defer sortedKVsPool.Put(s)
+	s.kvs = s.kvs[:0]
 	expvarDo(func(kv expvar.KeyValue) {
-		writePromExpVar(w, "", kv)
+		s.kvs = append(s.kvs, sortedKV{kv, removeTypePrefixes(kv.Key)})
 	})
+	sort.Slice(s.kvs, func(i, j int) bool {
+		return s.kvs[i].sortKey < s.kvs[j].sortKey
+	})
+	for _, e := range s.kvs {
+		writePromExpVar(w, "", e.KeyValue)
+	}
 }
 
 // PrometheusMetricsReflectRooter is an optional interface that expvar.Var implementations

@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
+	"tailscale.com/version"
 )
 
 type noopHijacker struct {
@@ -741,5 +742,32 @@ func TestSortedStructAllocs(t *testing.T) {
 	})
 	if n != 0 {
 		t.Errorf("allocs = %v; want 0", n)
+	}
+}
+
+func TestVarzHandlerSorting(t *testing.T) {
+	defer func() { expvarDo = expvar.Do }()
+	expvarDo = func(f func(expvar.KeyValue)) {
+		f(expvar.KeyValue{Key: "counter_zz", Value: new(expvar.Int)})
+		f(expvar.KeyValue{Key: "gauge_aa", Value: new(expvar.Int)})
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	VarzHandler(rec, req)
+	got := rec.Body.Bytes()
+	const want = "# TYPE aa gauge\naa 0\n# TYPE zz counter\nzz 0\n"
+	if string(got) != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	rec = new(httptest.ResponseRecorder) // without a body
+
+	// Lock in the current number of allocs, to prevent it from growing.
+	if !version.IsRace() {
+		allocs := int(testing.AllocsPerRun(1000, func() {
+			VarzHandler(rec, req)
+		}))
+		if max := 13; allocs > max {
+			t.Errorf("allocs = %v; want max %v", allocs, max)
+		}
 	}
 }
