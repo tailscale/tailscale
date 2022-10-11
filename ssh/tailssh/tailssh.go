@@ -48,6 +48,13 @@ var (
 	sshVerboseLogging = envknob.RegisterBool("TS_DEBUG_SSH_VLOG")
 )
 
+const (
+	// forcePasswordSuffix is the suffix at the end of a username that forces
+	// Tailscale SSH into password authentication mode to work around buggy SSH
+	// clients that get confused by successful replies to auth type "none".
+	forcePasswordSuffix = "+password"
+)
+
 // ipnLocalBackend is the subset of ipnlocal.LocalBackend that we use.
 // It is used for testing.
 type ipnLocalBackend interface {
@@ -197,7 +204,10 @@ type conn struct {
 	idH    string
 	connID string // ID that's shared with control
 
-	noPubKeyPolicyAuthError error // set by BannerCallback
+	// anyPasswordIsOkay is whether the client is authorized but has requested
+	// password-based auth to work around their buggy SSH client. When set, we
+	// accept any password in the PasswordHandler.
+	anyPasswordIsOkay bool // set by NoClientAuthCallback
 
 	action0        *tailcfg.SSHAction // set by doPolicyAuth; first matching action
 	currentAction  *tailcfg.SSHAction // set by doPolicyAuth, updated by resolveNextAction
@@ -273,7 +283,43 @@ func (c *conn) NoClientAuthCallback(ctx ssh.Context) error {
 	if err := c.doPolicyAuth(ctx, nil /* no pub key */); err != nil {
 		return err
 	}
-	return c.isAuthorized(ctx)
+	if err := c.isAuthorized(ctx); err != nil {
+		return err
+	}
+
+	// Let users specify a username ending in +password to force password auth.
+	// This exists for buggy SSH clients that get confused by success from
+	// "none" auth.
+	if strings.HasSuffix(ctx.User(), forcePasswordSuffix) {
+		c.anyPasswordIsOkay = true
+		return errors.New("any password please") // not shown to users
+	}
+	return nil
+}
+
+func (c *conn) nextAuthMethodCallback(cm gossh.ConnMetadata, prevErrors []error) (nextMethod []string) {
+	switch {
+	case c.anyPasswordIsOkay:
+		nextMethod = append(nextMethod, "password")
+	case len(prevErrors) > 0 && prevErrors[len(prevErrors)-1] == errPubKeyRequired:
+		nextMethod = append(nextMethod, "publickey")
+	}
+
+	// The fake "tailscale" method is always appended to next so OpenSSH renders
+	// that in parens as the final failure. (It also shows up in "ssh -v", etc)
+	nextMethod = append(nextMethod, "tailscale")
+	return
+}
+
+// fakePasswordHandler is our implementation of the PasswordHandler hook that
+// checks whether the user's password is correct. But we don't actually use
+// passwords. This exists only for when the user's username ends in "+password"
+// to signal that their SSH client is buggy and gets confused by auth type
+// "none" succeeding and they want our SSH server to require a dummy password
+// prompt instead. We then accept any password since we've already authenticated
+// & authorized them.
+func (c *conn) fakePasswordHandler(ctx ssh.Context, password string) bool {
+	return c.anyPasswordIsOkay
 }
 
 // PublicKeyHandler implements ssh.PublicKeyHandler is called by the
@@ -345,9 +391,8 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 // ServerConfig implements ssh.ServerConfigCallback.
 func (c *conn) ServerConfig(ctx ssh.Context) *gossh.ServerConfig {
 	return &gossh.ServerConfig{
-		// OpenSSH presents this on failure as `Permission denied (tailscale).`
-		ImplicitAuthMethod: "tailscale",
-		NoClientAuth:       true, // required for the NoClientAuthCallback to run
+		NoClientAuth:           true, // required for the NoClientAuthCallback to run
+		NextAuthMethodCallback: c.nextAuthMethodCallback,
 	}
 }
 
@@ -370,6 +415,7 @@ func (srv *server) newConn() (*conn, error) {
 
 		NoClientAuthHandler: c.NoClientAuthCallback,
 		PublicKeyHandler:    c.PublicKeyHandler,
+		PasswordHandler:     c.fakePasswordHandler,
 
 		Handler:                     c.handleSessionPostSSHAuth,
 		LocalPortForwardingCallback: c.mayForwardLocalPortTo,
@@ -495,7 +541,7 @@ func (c *conn) setInfo(ctx ssh.Context) error {
 		return nil
 	}
 	ci := &sshConnInfo{
-		sshUser: ctx.User(),
+		sshUser: strings.TrimSuffix(ctx.User(), forcePasswordSuffix),
 		src:     toIPPort(ctx.RemoteAddr()),
 		dst:     toIPPort(ctx.LocalAddr()),
 	}

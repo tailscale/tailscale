@@ -65,8 +65,10 @@ func main() {
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
 			start := time.Now()
 			return &gossh.ServerConfig{
-				ImplicitAuthMethod: "tailscale",
-				NoClientAuth:       true, // required for the NoClientAuthCallback to run
+				NextAuthMethodCallback: func(conn gossh.ConnMetadata, prevErrors []error) []string {
+					return []string{"tailscale"}
+				},
+				NoClientAuth: true, // required for the NoClientAuthCallback to run
 				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
 					cm.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
 
