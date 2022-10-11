@@ -62,30 +62,28 @@ func main() {
 		Addr:    *addr,
 		Version: "Tailscale",
 		Handler: handleSessionPostSSHAuth,
-		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
-			start := time.Now()
-			return &gossh.ServerConfig{
-				NextAuthMethodCallback: func(conn gossh.ConnMetadata, prevErrors []error) []string {
-					return []string{"tailscale"}
-				},
-				NoClientAuth: true, // required for the NoClientAuthCallback to run
-				NoClientAuthCallback: func(cm gossh.ConnMetadata) (*gossh.Permissions, error) {
-					cm.SendAuthBanner(fmt.Sprintf("# Banner: doing none auth at %v\r\n", time.Since(start)))
+		KeyboardInteractiveHandler: func(ctx ssh.Context, challenge gossh.KeyboardInteractiveChallenge) bool {
+			log.Printf("XXXX here")
+			challenge("Tailscale SSH", "\nTailscale SSH needs blah blah\nGo to:\n\n    https://example.com\n\n", nil, nil)
 
-					totalBanners := 2
-					if cm.User() == "banners" {
-						totalBanners = 5
-					}
-					for banner := 2; banner <= totalBanners; banner++ {
-						time.Sleep(time.Second)
-						if banner == totalBanners {
-							cm.SendAuthBanner(fmt.Sprintf("# Banner%d: access granted at %v\r\n", banner, time.Since(start)))
-						} else {
-							cm.SendAuthBanner(fmt.Sprintf("# Banner%d at %v\r\n", banner, time.Since(start)))
-						}
-					}
-					return nil, nil
-				},
+			// ans, err := challenge("tailscale-check",
+			// 	"instruction",
+			// 	[]string{"question1\n", "question2-noecho\n"},
+			// 	[]bool{true, false})
+			// if err != nil {
+			// 	log.Printf("Error: %v", err)
+			// 	return false
+			// }
+			// ok := ctx.User() == "testuser" && ans[0] == "a1" && ans[1] == "a2"
+			// if ok {
+			// 	return true
+			// }
+			// log.Printf("failed")
+			time.Sleep(5 * time.Second)
+			return true
+		},
+		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+			return &gossh.ServerConfig{
 				BannerCallback: func(cm gossh.ConnMetadata) string {
 					log.Printf("Got connection from user %q, %q from %v", cm.User(), cm.ClientVersion(), cm.RemoteAddr())
 					return fmt.Sprintf("# Banner for user %q, %q\n", cm.User(), cm.ClientVersion())
@@ -106,7 +104,7 @@ func main() {
 }
 
 func handleSessionPostSSHAuth(s ssh.Session) {
-	log.Printf("Started session from user %q", s.User())
+	log.Printf("Started session from userxXXX %q", s.User())
 	fmt.Fprintf(s, "Hello user %q, it worked.\n", s.User())
 
 	// Abort the session on Control-C or Control-D.
