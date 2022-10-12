@@ -844,7 +844,9 @@ func (t *Wrapper) Unwrap() tun.Device {
 }
 
 // SetStatisticsEnabled enables per-connections packet counters.
-// ExtractStatistics must be called periodically to avoid unbounded memory use.
+// Disabling statistics gathering does not reset the counters.
+// ExtractStatistics must be called to reset the counters and
+// be periodically called while enabled to avoid unbounded memory use.
 func (t *Wrapper) SetStatisticsEnabled(enable bool) {
 	t.stats.enabled.Store(enable)
 }
