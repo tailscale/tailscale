@@ -1731,9 +1731,6 @@ func (m *peerMap) validate() error {
 		if got := pi.ep.publicKey; got != pub {
 			return fmt.Errorf("byNodeKey[%v].publicKey = %v", pub, got)
 		}
-		if got, want := pi.ep.wgEndpoint, pub.UntypedHexString(); got != want {
-			return fmt.Errorf("byNodeKey[%v].wgEndpoint = %q, want %q", pub, got, want)
-		}
 		if _, ok := seenEps[pi.ep]; ok {
 			return fmt.Errorf("duplicate endpoint present: %v", pi.ep.publicKey)
 		}

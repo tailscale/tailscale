@@ -2403,7 +2403,6 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			ep.discoKey = n.DiscoKey
 			ep.discoShort = n.DiscoKey.ShortString()
 		}
-		ep.wgEndpoint = n.Key.UntypedHexString()
 		ep.initFakeUDPAddr()
 		if debugDisco() { // rather than making a new knob
 			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
@@ -3310,7 +3309,6 @@ type endpoint struct {
 	c          *Conn
 	publicKey  key.NodePublic // peer public key (for WireGuard + DERP)
 	fakeWGAddr netip.AddrPort // the UDP address we tell wireguard-go we're using
-	wgEndpoint string         // string from ParseEndpoint, holds a JSON-serialized wgcfg.Endpoints
 
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -3492,7 +3490,7 @@ func (de *endpoint) String() string {
 func (de *endpoint) ClearSrc()           {}
 func (de *endpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
 func (de *endpoint) SrcIP() netip.Addr   { panic("unused") } // unused by wireguard-go
-func (de *endpoint) DstToString() string { return de.wgEndpoint }
+func (de *endpoint) DstToString() string { return de.publicKey.UntypedHexString() }
 func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
