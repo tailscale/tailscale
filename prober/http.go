@@ -18,8 +18,7 @@ const maxHTTPBody = 4 << 20 // MiB
 //
 // The ProbeFunc sends a GET request for url, expects an HTTP 200
 // response, and verifies that want is present in the response
-// body. If the URL is HTTPS, the probe further checks that the TLS
-// certificate is good for at least the next 7 days.
+// body.
 func HTTP(url, wantText string) ProbeFunc {
 	return func(ctx context.Context) error {
 		return probeHTTP(ctx, url, []byte(wantText))
