@@ -44,9 +44,7 @@ type Device interface {
 type Logger struct {
 	mu sync.Mutex
 
-	nodeID   logtail.PrivateID
-	domainID logtail.PrivateID
-	logger   *logtail.Logger
+	logger *logtail.Logger
 
 	addrs    map[netip.Addr]bool
 	prefixes map[netip.Prefix]bool
@@ -67,11 +65,11 @@ var testClient *http.Client
 // Startup starts an asynchronous network logger that monitors
 // statistics for the provided tun device.
 // The provided cfg is used to classify the types of connections.
-func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun Device, cfg *router.Config) error {
+func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun Device) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 	if nl.logger != nil {
-		return fmt.Errorf("network logger already running for %v", nl.nodeID.Public())
+		return fmt.Errorf("network logger already running for %v", nl.logger.PrivateID().Public())
 	}
 
 	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)}
@@ -98,8 +96,6 @@ func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun Device, cfg *r
 		IncludeProcSequence: true,
 	}, log.Printf)
 	nl.logger = logger
-
-	nl.addrs, nl.prefixes = makeRouteMaps(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	nl.cancel = cancel
@@ -228,6 +224,7 @@ func (nl *Logger) ReconfigRoutes(cfg *router.Config) {
 
 // Shutdown shuts down the network logger.
 // This attempts to flush out all pending log messages.
+// Even if an error is returned, the logger is still shut down.
 func (nl *Logger) Shutdown(ctx context.Context) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
@@ -240,8 +237,6 @@ func (nl *Logger) Shutdown(ctx context.Context) error {
 	nl.mu.Lock()
 	err := nl.logger.Shutdown(ctx)
 
-	nl.nodeID = logtail.PrivateID{}
-	nl.domainID = logtail.PrivateID{}
 	nl.logger = nil
 	nl.addrs = nil
 	nl.prefixes = nil
