@@ -79,7 +79,7 @@ type Engine interface {
 	Reconfig(*wgcfg.Config, *router.Config, *dns.Config, *tailcfg.Debug) error
 
 	// PeerForIP returns the node to which the provided IP routes,
-	// if any. If none is found, (nil, nil) is returned.
+	// if any. If none is found, (nil, false) is returned.
 	PeerForIP(netip.Addr) (_ PeerForIP, ok bool)
 
 	// GetFilter returns the current packet filter, if any.
