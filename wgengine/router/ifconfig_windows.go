@@ -24,6 +24,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine/winnet"
 )
@@ -247,7 +248,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 }
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
-	const mtu = 0
+	const mtu = tstun.DefaultMTU
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
 		// Issue 474: on early boot, when the network is still
