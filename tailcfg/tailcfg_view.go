@@ -581,12 +581,13 @@ func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseView) User() UserView          { return v.ж.User.View() }
-func (v RegisterResponseView) Login() Login            { return v.ж.Login }
-func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
-func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
-func (v RegisterResponseView) AuthURL() string         { return v.ж.AuthURL }
-func (v RegisterResponseView) Error() string           { return v.ж.Error }
+func (v RegisterResponseView) User() UserView           { return v.ж.User.View() }
+func (v RegisterResponseView) Login() Login             { return v.ж.Login }
+func (v RegisterResponseView) NodeKeyExpired() bool     { return v.ж.NodeKeyExpired }
+func (v RegisterResponseView) MachineAuthorized() bool  { return v.ж.MachineAuthorized }
+func (v RegisterResponseView) AuthURL() string          { return v.ж.AuthURL }
+func (v RegisterResponseView) NodeKeySignature() mem.RO { return mem.B(v.ж.NodeKeySignature) }
+func (v RegisterResponseView) Error() string            { return v.ж.Error }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
@@ -595,6 +596,7 @@ var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
 	NodeKeyExpired    bool
 	MachineAuthorized bool
 	AuthURL           string
+	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
 }{})
 

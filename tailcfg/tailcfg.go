@@ -83,7 +83,8 @@ type CapabilityVersion int
 //   - 44: 2022-09-22: MapResponse.ControlDialPlan
 //   - 45: 2022-09-26: c2n /debug/{goroutines,prefs,metrics}
 //   - 46: 2022-10-04: c2n /debug/component-logging
-const CurrentCapabilityVersion CapabilityVersion = 46
+//   - 47: 2022-10-11: Register{Request,Response}.NodeKeySignature
+const CurrentCapabilityVersion CapabilityVersion = 47
 
 type StableID string
 
@@ -827,6 +828,13 @@ type RegisterRequest struct {
 	// when it stops being active.
 	Ephemeral bool `json:",omitempty"`
 
+	// NodeKeySignature is the node's own node-key signature, re-signed
+	// for its new node key using its network-lock key.
+	//
+	// This field is set when the client retries registration after learning
+	// its NodeKeySignature (which is in need of rotation).
+	NodeKeySignature tkatype.MarshaledSignature
+
 	// The following fields are not used for SignatureNone and are required for
 	// SignatureV1:
 	SignatureType SignatureType `json:",omitempty"`
@@ -854,6 +862,7 @@ func (req *RegisterRequest) Clone() *RegisterRequest {
 	}
 	res.DeviceCert = append(res.DeviceCert[:0:0], res.DeviceCert...)
 	res.Signature = append(res.Signature[:0:0], res.Signature...)
+	res.NodeKeySignature = append(res.NodeKeySignature[:0:0], res.NodeKeySignature...)
 	return res
 }
 
@@ -864,6 +873,10 @@ type RegisterResponse struct {
 	NodeKeyExpired    bool   // if true, the NodeKey needs to be replaced
 	MachineAuthorized bool   // TODO(crawshaw): move to using MachineStatus
 	AuthURL           string // if set, authorization pending
+
+	// If set, this is the current node-key signature that needs to be
+	// re-signed for the node's new node-key.
+	NodeKeySignature tkatype.MarshaledSignature
 
 	// Error indicates that authorization failed. If this is non-empty,
 	// other status fields should be ignored.

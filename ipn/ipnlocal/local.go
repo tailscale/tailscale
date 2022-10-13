@@ -1164,7 +1164,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
-		GetNLPublicKey:       b.createGetNLPublicKeyFunc(),
+		GetNLPrivateKey:      b.createGetNLPrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
 		ServerURL:            b.serverURL,
@@ -1634,18 +1634,18 @@ func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePriva
 	}
 }
 
-func (b *LocalBackend) createGetNLPublicKeyFunc() func() (key.NLPublic, error) {
-	var cache syncs.AtomicValue[key.NLPublic]
-	return func() (key.NLPublic, error) {
+func (b *LocalBackend) createGetNLPrivateKeyFunc() func() (key.NLPrivate, error) {
+	var cache syncs.AtomicValue[key.NLPrivate]
+	return func() (key.NLPrivate, error) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if v, ok := cache.LoadOk(); ok {
 			return v, nil
 		}
 
-		pub := b.nlPrivKey.Public()
-		cache.Store(pub)
-		return pub, nil
+		priv := b.nlPrivKey
+		cache.Store(priv)
+		return priv, nil
 	}
 }
 

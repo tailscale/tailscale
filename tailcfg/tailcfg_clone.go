@@ -254,6 +254,7 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 	dst := new(RegisterResponse)
 	*dst = *src
 	dst.User = *src.User.Clone()
+	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	return dst
 }
 
@@ -264,6 +265,7 @@ var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	NodeKeyExpired    bool
 	MachineAuthorized bool
 	AuthURL           string
+	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
 }{})
 
