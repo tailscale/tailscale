@@ -43,11 +43,13 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
+	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
@@ -68,7 +70,7 @@ type Direct struct {
 	linkMon                *monitor.Mon // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
-	getNLPublicKey         func() (key.NLPublic, error) // or nil
+	getNLPrivateKey        func() (key.NLPrivate, error) // or nil
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
@@ -115,9 +117,9 @@ type Options struct {
 	Dialer               *tsdial.Dialer   // non-nil
 	C2NHandler           http.Handler     // or nil
 
-	// GetNLPublicKey specifies an optional function to use
+	// GetNLPrivateKey specifies an optional function to use
 	// Network Lock. If nil, it's not used.
-	GetNLPublicKey func() (key.NLPublic, error)
+	GetNLPrivateKey func() (key.NLPrivate, error)
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -229,7 +231,7 @@ func NewDirect(opts Options) (*Direct, error) {
 	c := &Direct{
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
-		getNLPublicKey:         opts.GetNLPublicKey,
+		getNLPrivateKey:        opts.GetNLPrivateKey,
 		serverURL:              opts.ServerURL,
 		timeNow:                opts.TimeNow,
 		logf:                   opts.Logf,
@@ -324,7 +326,7 @@ func (c *Direct) GetPersist() persist.Persist {
 func (c *Direct) TryLogout(ctx context.Context) error {
 	c.logf("[v1] direct.TryLogout()")
 
-	mustRegen, newURL, err := c.doLogin(ctx, loginOpt{Logout: true})
+	mustRegen, newURL, _, err := c.doLogin(ctx, loginOpt{Logout: true})
 	c.logf("[v1] TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
 
 	c.mu.Lock()
@@ -348,13 +350,14 @@ func (c *Direct) WaitLoginURL(ctx context.Context, url string) (newURL string, e
 }
 
 func (c *Direct) doLoginOrRegen(ctx context.Context, opt loginOpt) (newURL string, err error) {
-	mustRegen, url, err := c.doLogin(ctx, opt)
+	mustRegen, url, oldNodeKeySignature, err := c.doLogin(ctx, opt)
 	if err != nil {
 		return url, err
 	}
 	if mustRegen {
 		opt.Regen = true
-		_, url, err = c.doLogin(ctx, opt)
+		opt.OldNodeKeySignature = oldNodeKeySignature
+		_, url, _, err = c.doLogin(ctx, opt)
 	}
 	return url, err
 }
@@ -380,6 +383,10 @@ type loginOpt struct {
 	// It is ignored if Logout is set since Logout works by setting a
 	// expiry time in the far past.
 	Expiry *time.Time
+
+	// OldNodeKeySignature indicates the former NodeKeySignature
+	// that must be resigned for the new node-key.
+	OldNodeKeySignature tkatype.MarshaledSignature
 }
 
 // httpClient provides a common interface for the noiseClient and
@@ -396,7 +403,7 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 	return hi
 }
 
-func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, err error) {
+func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	c.mu.Lock()
 	persist := c.persist
 	tryingNewKey := c.tryingNewKey
@@ -410,10 +417,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	machinePrivKey, err := c.getMachinePrivKey()
 	if err != nil {
-		return false, "", fmt.Errorf("getMachinePrivKey: %w", err)
+		return false, "", nil, fmt.Errorf("getMachinePrivKey: %w", err)
 	}
 	if machinePrivKey.IsZero() {
-		return false, "", errors.New("getMachinePrivKey returned zero key")
+		return false, "", nil, errors.New("getMachinePrivKey returned zero key")
 	}
 
 	regen := opt.Regen
@@ -435,7 +442,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if serverKey.IsZero() {
 		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
 		if err != nil {
-			return regen, opt.URL, err
+			return regen, opt.URL, nil, err
 		}
 		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
@@ -472,43 +479,53 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
 
-	var nlPub key.NLPublic
-	if c.getNLPublicKey != nil {
-		nlPub, err = c.getNLPublicKey()
-		if err != nil {
-			return false, "", fmt.Errorf("get nl key: %v", err)
-		}
-	}
-
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
-			return false, "", errors.New("no nodekey to log out")
+			return false, "", nil, errors.New("no nodekey to log out")
 		}
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
+
+	var nlPub key.NLPublic
+	var nodeKeySignature tkatype.MarshaledSignature
+	if c.getNLPrivateKey != nil {
+		priv, err := c.getNLPrivateKey()
+		if err != nil {
+			return false, "", nil, fmt.Errorf("get nl key: %v", err)
+		}
+		nlPub = priv.Public()
+
+		if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
+			if nodeKeySignature, err = resignNKS(priv, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
+				c.logf("Failed re-signing node-key signature: %v", err)
+			}
+		}
+	}
+
 	if backendLogID == "" {
 		err = errors.New("hostinfo: BackendLogID missing")
-		return regen, opt.URL, err
+		return regen, opt.URL, nil, err
 	}
 	now := time.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
-		Version:    1,
-		OldNodeKey: oldNodeKey,
-		NodeKey:    tryingNewKey.Public(),
-		NLKey:      nlPub,
-		Hostinfo:   hi,
-		Followup:   opt.URL,
-		Timestamp:  &now,
-		Ephemeral:  (opt.Flags & LoginEphemeral) != 0,
+		Version:          1,
+		OldNodeKey:       oldNodeKey,
+		NodeKey:          tryingNewKey.Public(),
+		NLKey:            nlPub,
+		Hostinfo:         hi,
+		Followup:         opt.URL,
+		Timestamp:        &now,
+		Ephemeral:        (opt.Flags & LoginEphemeral) != 0,
+		NodeKeySignature: nodeKeySignature,
 	}
 	if opt.Logout {
 		request.Expiry = time.Unix(123, 0) // far in the past
 	} else if opt.Expiry != nil {
 		request.Expiry = *opt.Expiry
 	}
-	c.logf("RegisterReq: onode=%v node=%v fup=%v",
+	c.logf("RegisterReq: onode=%v node=%v fup=%v nks=%v",
 		request.OldNodeKey.ShortString(),
-		request.NodeKey.ShortString(), opt.URL != "")
+		request.NodeKey.ShortString(), opt.URL != "", len(nodeKeySignature) > 0)
 	request.Auth.Oauth2Token = opt.Token
 	request.Auth.Provider = persist.Provider
 	request.Auth.LoginName = persist.LoginName
@@ -542,33 +559,33 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		request.Version = tailcfg.CurrentCapabilityVersion
 		httpc, err = c.getNoiseClient()
 		if err != nil {
-			return regen, opt.URL, fmt.Errorf("getNoiseClient: %w", err)
+			return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: %w", err)
 		}
 		url = fmt.Sprintf("%s/machine/register", c.serverURL)
 		url = strings.Replace(url, "http:", "https:", 1)
 	}
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
-		return regen, opt.URL, err
+		return regen, opt.URL, nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
-		return regen, opt.URL, err
+		return regen, opt.URL, nil, err
 	}
 	res, err := httpc.Do(req)
 	if err != nil {
-		return regen, opt.URL, fmt.Errorf("register request: %w", err)
+		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
 	}
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return regen, opt.URL, fmt.Errorf("register request: http %d: %.200s",
+		return regen, opt.URL, nil, fmt.Errorf("register request: http %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, serverKey, serverNoiseKey, machinePrivKey); err != nil {
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
-		return regen, opt.URL, fmt.Errorf("register request: %v", err)
+		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
 	}
 	if debugRegister() {
 		j, _ := json.MarshalIndent(resp, "", "\t")
@@ -580,15 +597,19 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.Error != "" {
-		return false, "", UserVisibleError(resp.Error)
+		return false, "", nil, UserVisibleError(resp.Error)
 	}
+	if len(resp.NodeKeySignature) > 0 {
+		return true, "", resp.NodeKeySignature, nil
+	}
+
 	if resp.NodeKeyExpired {
 		if regen {
-			return true, "", fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
+			return true, "", nil, fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
 		}
 		c.logf("server reports new node key %v has expired",
 			request.NodeKey.ShortString())
-		return true, "", nil
+		return true, "", nil, nil
 	}
 	if resp.Login.Provider != "" {
 		persist.Provider = resp.Login.Provider
@@ -621,12 +642,51 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Unlock()
 
 	if err != nil {
-		return regen, "", err
+		return regen, "", nil, err
 	}
 	if ctx.Err() != nil {
-		return regen, "", ctx.Err()
+		return regen, "", nil, ctx.Err()
 	}
-	return false, resp.AuthURL, nil
+	return false, resp.AuthURL, nil, nil
+}
+
+// resignNKS re-signs a node-key signature for a new node-key.
+//
+// This only matters on network-locked tailnets, because node-key signatures are
+// how other nodes know that a node-key is authentic. When the node-key is
+// rotated then the existing signature becomes invalid, so this function is
+// responsible for generating a new wrapping signature to certify the new node-key.
+//
+// The signature itself is a SigRotation signature, which embeds the old signature
+// and certifies the new node-key as a replacement for the old by signing the new
+// signature with RotationPubkey (which is the node's own network-lock key).
+func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.MarshaledSignature) (tkatype.MarshaledSignature, error) {
+	var oldSig tka.NodeKeySignature
+	if err := oldSig.Unserialize(oldNKS); err != nil {
+		return nil, fmt.Errorf("decoding NKS: %w", err)
+	}
+
+	nk, err := nodeKey.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshalling node-key: %w", err)
+	}
+
+	if bytes.Equal(nk, oldSig.Pubkey) {
+		// The old signature is valid for the node-key we are using, so just
+		// use it verbatim.
+		return oldNKS, nil
+	}
+
+	newSig := tka.NodeKeySignature{
+		SigKind: tka.SigRotation,
+		Pubkey:  nk,
+		Nested:  &oldSig,
+	}
+	if newSig.Signature, err = priv.SignNKS(newSig.SigHash()); err != nil {
+		return nil, fmt.Errorf("signing NKS: %w", err)
+	}
+
+	return newSig.Serialize(), nil
 }
 
 func sameEndpoints(a, b []tailcfg.Endpoint) bool {
