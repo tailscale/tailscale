@@ -241,6 +241,15 @@ type Node struct {
 
 	// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
 	DataPlaneAuditLogID string `json:",omitempty"`
+
+	// Accumulators are scoped accumulator values allocated to this node.
+	Accumulators []Accumulator `json:",omitempty"`
+}
+
+// Accumulator is a scoped monotonically-increasing accumulator value.
+type Accumulator struct {
+	Scope       string // default scope is "*"
+	Accumulator uint64 // allocated values are greater than zero
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -513,6 +522,7 @@ type Hostinfo struct {
 	Cloud           string         `json:",omitempty"`
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
+	Accumulator     opt.Bool       `json:",omitempty"` // node participates in tailnet accumulator store
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
@@ -1391,6 +1401,10 @@ type MapResponse struct {
 	// server. An initial nil is equivalent to new(ControlDialPlan).
 	// A subsequent streamed nil means no change.
 	ControlDialPlan *ControlDialPlan `json:",omitempty"`
+
+	// MaxAccumulator is the maximum accumulator allocated in this
+	// tailnet for each scope.
+	MaxAccumulators []Accumulator `json:",omitempty"`
 }
 
 // ControlDialPlan is instructions from the control server to the client on how
@@ -1557,7 +1571,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags)
+		eqStrings(n.Tags, n2.Tags) &&
+		eqAccumulators(n.Accumulators, n2.Accumulators)
 }
 
 func eqBoolPtr(a, b *bool) bool {
@@ -1569,6 +1584,18 @@ func eqBoolPtr(a, b *bool) bool {
 	}
 	return *a == *b
 
+}
+
+func eqAccumulators(a, b []Accumulator) bool {
+	if len(a) != len(b) || ((a == nil) != (b == nil)) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func eqStrings(a, b []string) bool {
@@ -1844,6 +1871,25 @@ type OverTLSPublicKeyResponse struct {
 	// Noise-based control plane protocol. (see packages
 	// control/controlbase and control/controlhttp)
 	PublicKey key.MachinePublic `json:"publicKey"`
+}
+
+// AccumulatorRequest requests the accumulator for a scope be incremented.
+//
+// It is JSON-encoded and sent over Noise to "/machine/accumulator".
+type AccumulatorRequest struct {
+	CapVersion CapabilityVersion // the clients' current CapabilityVersion
+	NodeKey    key.NodePublic    // the client's current node key
+	Scope      string            // always "*" for now
+	CurValue   uint64
+	// ToValue, if set, means the node does not want to bump the
+	// MaxAccumulator, but has upgraded its own local state to ToValue.
+	ToValue uint64 `json:",omitempty"`
+}
+
+// An AccumulatorResponse is the response to an AccumulatorRequest,
+// it is sent when the value is successfully incremented.
+type AccumulatorResponse struct {
+	NewValue uint64
 }
 
 // TokenRequest is a request to get an OIDC ID token for an audience.
