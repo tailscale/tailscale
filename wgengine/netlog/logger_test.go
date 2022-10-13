@@ -59,7 +59,7 @@ func TestResourceCheck(t *testing.T) {
 	var l Logger
 	var d fakeDevice
 	for i := 0; i < 10; i++ {
-		must.Do(l.Startup(logtail.PrivateID{}, logtail.PrivateID{}, &d))
+		must.Do(l.Startup(logtail.PrivateID{}, logtail.PrivateID{}, &d, nil))
 		l.ReconfigRoutes(&router.Config{})
 		must.Do(l.Shutdown(context.Background()))
 		c.Assert(d.toggled, qt.Equals, 2*(i+1))
