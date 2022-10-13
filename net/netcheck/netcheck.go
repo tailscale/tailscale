@@ -1105,6 +1105,9 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 			}
 			rids = append(rids, id)
 		}
+		if len(rids) == 0 {
+			return false, nil
+		}
 		preferredDERP = rids[rand.Intn(len(rids))]
 	}
 
