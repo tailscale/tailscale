@@ -17,17 +17,31 @@ import (
 
 func TestLikelyHomeRouterIPSyscallExec(t *testing.T) {
 	syscallIP, syscallOK := likelyHomeRouterIPBSDFetchRIB()
-	netstatIP, netstatOK := likelyHomeRouterIPDarwinExec()
+	netstatIP, netstatIf, netstatOK := likelyHomeRouterIPDarwinExec()
+
 	if syscallOK != netstatOK || syscallIP != netstatIP {
 		t.Errorf("syscall() = %v, %v, netstat = %v, %v",
 			syscallIP, syscallOK,
 			netstatIP, netstatOK,
 		)
 	}
+
+	if !syscallOK {
+		return
+	}
+
+	def, err := defaultRoute()
+	if err != nil {
+		t.Errorf("defaultRoute() error: %v", err)
+	}
+
+	if def.InterfaceName != netstatIf {
+		t.Errorf("syscall default route interface %s differs from netstat %s", def.InterfaceName, netstatIf)
+	}
 }
 
 /*
-Parse out 10.0.0.1 from:
+Parse out 10.0.0.1 and en0 from:
 
 $ netstat -r -n -f inet
 Routing tables
@@ -40,12 +54,12 @@ default            link#14            UCSI         utun2
 10.0.0.1/32        link#4             UCS            en0      !
 ...
 */
-func likelyHomeRouterIPDarwinExec() (ret netip.Addr, ok bool) {
+func likelyHomeRouterIPDarwinExec() (ret netip.Addr, netif string, ok bool) {
 	if version.IsMobile() {
 		// Don't try to do subprocesses on iOS. Ends up with log spam like:
 		// kernel: "Sandbox: IPNExtension(86580) deny(1) process-fork"
 		// This is why we have likelyHomeRouterIPDarwinSyscall.
-		return ret, false
+		return ret, "", false
 	}
 	cmd := exec.Command("/usr/sbin/netstat", "-r", "-n", "-f", "inet")
 	stdout, err := cmd.StdoutPipe()
@@ -64,22 +78,26 @@ func likelyHomeRouterIPDarwinExec() (ret netip.Addr, ok bool) {
 			return nil
 		}
 		f = mem.AppendFields(f[:0], line)
-		if len(f) < 3 || !f[0].EqualString("default") {
+		if len(f) < 4 || !f[0].EqualString("default") {
 			return nil
 		}
-		ipm, flagsm := f[1], f[2]
+		ipm, flagsm, netifm := f[1], f[2], f[3]
 		if !mem.Contains(flagsm, mem.S("G")) {
+			return nil
+		}
+		if mem.Contains(flagsm, mem.S("I")) {
 			return nil
 		}
 		ip, err := netip.ParseAddr(string(mem.Append(nil, ipm)))
 		if err == nil && ip.IsPrivate() {
 			ret = ip
+			netif = netifm.StringCopy()
 			// We've found what we're looking for.
 			return errStopReadingNetstatTable
 		}
 		return nil
 	})
-	return ret, ret.IsValid()
+	return ret, netif, ret.IsValid()
 }
 
 func TestFetchRoutingTable(t *testing.T) {
