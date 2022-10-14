@@ -459,12 +459,25 @@ func TestDialPlan(t *testing.T) {
 
 	const (
 		testProtocolVersion = 1
-
-		// We need consistent ports for each address; these are chosen
-		// randomly and we hope that they won't conflict during this test.
-		httpPort  = "40080"
-		httpsPort = "40443"
 	)
+
+	getRandomPort := func() string {
+		ln, err := net.Listen("tcp", ":0")
+		if err != nil {
+			t.Fatalf("net.Listen: %v", err)
+		}
+		defer ln.Close()
+		_, port, err := net.SplitHostPort(ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return port
+	}
+
+	// We need consistent ports for each address; these are chosen
+	// randomly and we hope that they won't conflict during this test.
+	httpPort := getRandomPort()
+	httpsPort := getRandomPort()
 
 	makeHandler := func(t *testing.T, name string, host netip.Addr, wrap func(http.Handler) http.Handler) {
 		done := make(chan struct{})
