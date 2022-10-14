@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This might work on other BSDs, but only tested on FreeBSD.
-// Originally a fork of interfaces_darwin.go with slightly different flags.
+// Common code for FreeBSD and Darwin.
 
-//go:build freebsd
-// +build freebsd
+//go:build darwin || freebsd
+// +build darwin freebsd
 
 package interfaces
 
@@ -16,7 +15,6 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"syscall"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -35,11 +33,6 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	d.InterfaceName = iface.Name
 	d.InterfaceIndex = idx
 	return d, nil
-}
-
-// fetchRoutingTable calls route.FetchRIB, fetching NET_RT_DUMP.
-func fetchRoutingTable() (rib []byte, err error) {
-	return route.FetchRIB(syscall.AF_UNSPEC, unix.NET_RT_DUMP, 0)
 }
 
 func DefaultRouteInterfaceIndex() (int, error) {
@@ -61,7 +54,7 @@ func DefaultRouteInterfaceIndex() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("route.FetchRIB: %w", err)
 	}
-	msgs, err := route.ParseRIB(unix.NET_RT_IFLIST, rib)
+	msgs, err := parseRoutingTable(rib)
 	if err != nil {
 		return 0, fmt.Errorf("route.ParseRIB: %w", err)
 	}
@@ -71,12 +64,10 @@ func DefaultRouteInterfaceIndex() (int, error) {
 		if !ok {
 			continue
 		}
-		const RTF_GATEWAY = 0x2
-		const RTF_IFSCOPE = 0x1000000
-		if rm.Flags&RTF_GATEWAY == 0 {
+		if rm.Flags&unix.RTF_GATEWAY == 0 {
 			continue
 		}
-		if rm.Flags&RTF_IFSCOPE != 0 {
+		if rm.Flags&unix.RTF_IFSCOPE != 0 {
 			continue
 		}
 		indexSeen[rm.Index]++
@@ -102,7 +93,7 @@ func likelyHomeRouterIPBSDFetchRIB() (ret netip.Addr, ok bool) {
 		log.Printf("routerIP/FetchRIB: %v", err)
 		return ret, false
 	}
-	msgs, err := route.ParseRIB(unix.NET_RT_IFLIST, rib)
+	msgs, err := parseRoutingTable(rib)
 	if err != nil {
 		log.Printf("routerIP/ParseRIB: %v", err)
 		return ret, false
@@ -112,11 +103,10 @@ func likelyHomeRouterIPBSDFetchRIB() (ret netip.Addr, ok bool) {
 		if !ok {
 			continue
 		}
-		const RTF_IFSCOPE = 0x1000000
 		if rm.Flags&unix.RTF_GATEWAY == 0 {
 			continue
 		}
-		if rm.Flags&RTF_IFSCOPE != 0 {
+		if rm.Flags&unix.RTF_IFSCOPE != 0 {
 			continue
 		}
 		if len(rm.Addrs) > unix.RTAX_GATEWAY {
