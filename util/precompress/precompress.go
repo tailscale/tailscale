@@ -42,7 +42,7 @@ func PrecompressDir(dirPath string, options Options) error {
 		}
 
 		eg.Go(func() error {
-			return precompress(p, options)
+			return Precompress(p, options)
 		})
 		return nil
 	})
@@ -81,12 +81,11 @@ func OpenPrecompressedFile(w http.ResponseWriter, r *http.Request, path string, 
 }
 
 var compressibleExtensions = map[string]bool{
-	".js":   true,
-	".css":  true,
-	".wasm": true,
+	".js":  true,
+	".css": true,
 }
 
-func precompress(path string, options Options) error {
+func Precompress(path string, options Options) error {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return err
