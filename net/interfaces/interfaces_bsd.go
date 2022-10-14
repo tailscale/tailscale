@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Common code for FreeBSD and Darwin.
+// Common code for FreeBSD and Darwin. This might also work on other
+// BSD systems (e.g. OpenBSD) but has not been tested.
 
 //go:build darwin || freebsd
 // +build darwin freebsd
@@ -15,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"syscall"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -58,29 +60,16 @@ func DefaultRouteInterfaceIndex() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("route.ParseRIB: %w", err)
 	}
-	indexSeen := map[int]int{} // index => count
 	for _, m := range msgs {
 		rm, ok := m.(*route.RouteMessage)
 		if !ok {
 			continue
 		}
-		if rm.Flags&unix.RTF_GATEWAY == 0 {
-			continue
-		}
-		if rm.Flags&unix.RTF_IFSCOPE != 0 {
-			continue
-		}
-		indexSeen[rm.Index]++
-	}
-	if len(indexSeen) == 0 {
-		return 0, errors.New("no gateway index found")
-	}
-	if len(indexSeen) == 1 {
-		for idx := range indexSeen {
-			return idx, nil
+		if isDefaultGateway(rm) {
+			return rm.Index, nil
 		}
 	}
-	return 0, fmt.Errorf("ambiguous gateway interfaces found: %v", indexSeen)
+	return 0, errors.New("no gateway index found")
 }
 
 func init() {
@@ -103,25 +92,54 @@ func likelyHomeRouterIPBSDFetchRIB() (ret netip.Addr, ok bool) {
 		if !ok {
 			continue
 		}
-		if rm.Flags&unix.RTF_GATEWAY == 0 {
+		if !isDefaultGateway(rm) {
 			continue
 		}
-		if rm.Flags&unix.RTF_IFSCOPE != 0 {
+
+		gw, ok := rm.Addrs[unix.RTAX_GATEWAY].(*route.Inet4Addr)
+		if !ok {
 			continue
 		}
-		if len(rm.Addrs) > unix.RTAX_GATEWAY {
-			dst4, ok := rm.Addrs[unix.RTAX_DST].(*route.Inet4Addr)
-			if !ok || dst4.IP != ([4]byte{0, 0, 0, 0}) {
-				// Expect 0.0.0.0 as DST field.
-				continue
-			}
-			gw, ok := rm.Addrs[unix.RTAX_GATEWAY].(*route.Inet4Addr)
-			if !ok {
-				continue
-			}
-			return netaddr.IPv4(gw.IP[0], gw.IP[1], gw.IP[2], gw.IP[3]), true
-		}
+		return netaddr.IPv4(gw.IP[0], gw.IP[1], gw.IP[2], gw.IP[3]), true
 	}
 
 	return ret, false
+}
+
+var v4default = [4]byte{0, 0, 0, 0}
+var v6default = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
+func isDefaultGateway(rm *route.RouteMessage) bool {
+	if rm.Flags&unix.RTF_GATEWAY == 0 {
+		return false
+	}
+	// Defined locally because FreeBSD does not have unix.RTF_IFSCOPE.
+	const RTF_IFSCOPE = 0x1000000
+	if rm.Flags&RTF_IFSCOPE != 0 {
+		return false
+	}
+
+	// Addrs is [RTAX_DST, RTAX_GATEWAY, RTAX_NETMASK, ...]
+	if len(rm.Addrs) <= unix.RTAX_NETMASK {
+		return false
+	}
+
+	dst := rm.Addrs[unix.RTAX_DST]
+	netmask := rm.Addrs[unix.RTAX_NETMASK]
+
+	if dst.Family() == syscall.AF_INET &&
+		netmask.Family() == syscall.AF_INET &&
+		dst.(*route.Inet4Addr).IP == v4default &&
+		netmask.(*route.Inet4Addr).IP == v4default {
+		return true
+	}
+
+	if dst.Family() == syscall.AF_INET6 &&
+		netmask.Family() == syscall.AF_INET6 &&
+		dst.(*route.Inet6Addr).IP == v6default &&
+		netmask.(*route.Inet6Addr).IP == v6default {
+		return true
+	}
+
+	return false
 }
