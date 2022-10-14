@@ -1116,13 +1116,20 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 	if err != nil {
 		return false, err
 	}
+
+	chal := "tailscale " + node.HostName
+	req.Header.Set("X-Tailscale-Challenge", chal)
 	r, err := noRedirectClient.Do(req)
 	if err != nil {
 		return false, err
 	}
-	c.logf("[v2] checkCaptivePortal url=%q status_code=%d", req.URL.String(), r.StatusCode)
+	defer r.Body.Close()
 
-	return r.StatusCode != 204, nil
+	expectedResponse := "response " + chal
+	validResponse := r.Header.Get("X-Tailscale-Response") == expectedResponse
+
+	c.logf("[v2] checkCaptivePortal url=%q status_code=%d valid_response=%v", req.URL.String(), r.StatusCode, validResponse)
+	return r.StatusCode != 204 || !validResponse, nil
 }
 
 // runHTTPOnlyChecks is the netcheck done by environments that can
