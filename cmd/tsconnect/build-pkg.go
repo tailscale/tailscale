@@ -12,6 +12,7 @@ import (
 	"path"
 
 	"github.com/tailscale/hujson"
+	"tailscale.com/util/precompress"
 	"tailscale.com/version"
 )
 
@@ -37,6 +38,10 @@ func runBuildPkg() {
 
 	runEsbuild(*buildOptions)
 
+	if err := precompressWasm(); err != nil {
+		log.Fatalf("Could not pre-recompress wasm: %v", err)
+	}
+
 	log.Printf("Generating types...\n")
 	if err := runYarn("pkg-types"); err != nil {
 		log.Fatalf("Type generation failed: %v", err)
@@ -47,6 +52,13 @@ func runBuildPkg() {
 	}
 
 	log.Printf("Built package version %s", version.Long)
+}
+
+func precompressWasm() error {
+	log.Printf("Pre-compressing main.wasm...\n")
+	return precompress.Precompress(path.Join(*pkgDir, "main.wasm"), precompress.Options{
+		FastCompression: *fastCompression,
+	})
 }
 
 func updateVersion() error {
