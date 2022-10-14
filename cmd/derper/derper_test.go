@@ -7,6 +7,9 @@ package main
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"tailscale.com/net/stun"
@@ -66,4 +69,58 @@ func BenchmarkServerSTUN(b *testing.B) {
 		}
 	}
 
+}
+
+func TestNoContent(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "no challenge",
+		},
+		{
+			name:  "valid challenge",
+			input: "input",
+			want:  "response input",
+		},
+		{
+			name:  "invalid challenge",
+			input: "foo\x00bar",
+			want:  "",
+		},
+		{
+			name:  "whitespace invalid challenge",
+			input: "foo bar",
+			want:  "",
+		},
+		{
+			name:  "long challenge",
+			input: strings.Repeat("x", 65),
+			want:  "",
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "https://localhost/generate_204", nil)
+			if tt.input != "" {
+				req.Header.Set(noContentChallengeHeader, tt.input)
+			}
+			w := httptest.NewRecorder()
+			serveNoContent(w, req)
+			resp := w.Result()
+
+			if tt.want == "" {
+				if h, found := resp.Header[noContentResponseHeader]; found {
+					t.Errorf("got %+v; expected no response header", h)
+				}
+				return
+			}
+
+			if got := resp.Header.Get(noContentResponseHeader); got != tt.want {
+				t.Errorf("got %q; want %q", got, tt.want)
+			}
+		})
+	}
 }
