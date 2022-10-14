@@ -79,7 +79,6 @@ func TestSigNested(t *testing.T) {
 	// rotation key & embedding the original signature.
 	sig := NodeKeySignature{
 		SigKind: SigRotation,
-		KeyID:   k.ID(),
 		Pubkey:  nodeKeyPub,
 		Nested:  &nestedSig,
 	}
@@ -145,14 +144,13 @@ func TestSigNested_DeepNesting(t *testing.T) {
 
 	outer := nestedSig
 	var lastNodeKey key.NodePrivate
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 15; i++ { // 15 = max nesting level for CBOR
 		lastNodeKey = key.NewNode()
 		nodeKeyPub, _ := lastNodeKey.Public().MarshalBinary()
 
 		tmp := outer
 		sig := NodeKeySignature{
 			SigKind: SigRotation,
-			KeyID:   k.ID(),
 			Pubkey:  nodeKeyPub,
 			Nested:  &tmp,
 		}
@@ -164,6 +162,16 @@ func TestSigNested_DeepNesting(t *testing.T) {
 
 	if err := outer.verifySignature(lastNodeKey.Public(), k); err != nil {
 		t.Fatalf("verifySignature(lastNodeKey) failed: %v", err)
+	}
+
+	// Test this works with our public API
+	a, _ := Open(newTestchain(t, "G1\nG1.template = genesis",
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{k},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		}})).Chonk())
+	if err := a.NodeKeyAuthorized(lastNodeKey.Public(), outer.Serialize()); err != nil {
+		t.Errorf("NodeKeyAuthorized(lastNodeKey) failed: %v", err)
 	}
 
 	// Test verification fails if the inner signature is invalid
@@ -206,7 +214,6 @@ func TestSigCredential(t *testing.T) {
 	// delegated key & embedding the original signature.
 	sig := NodeKeySignature{
 		SigKind: SigRotation,
-		KeyID:   k.ID(),
 		Pubkey:  nodeKeyPub,
 		Nested:  &nestedSig,
 	}
