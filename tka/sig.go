@@ -116,6 +116,27 @@ func (s NodeKeySignature) wrappingPublic() (pub ed25519.PublicKey, ok bool) {
 	}
 }
 
+// authorizingKeyID returns the KeyID of the key trusted by network-lock which authorizes
+// this signature.
+func (s NodeKeySignature) authorizingKeyID() (tkatype.KeyID, error) {
+	switch s.SigKind {
+	case SigDirect, SigCredential:
+		if len(s.KeyID) == 0 {
+			return tkatype.KeyID{}, errors.New("invalid signature: no keyID present")
+		}
+		return tkatype.KeyID(s.KeyID), nil
+
+	case SigRotation:
+		if s.Nested == nil {
+			return tkatype.KeyID{}, errors.New("invalid signature: rotation signature missing nested signature")
+		}
+		return s.Nested.authorizingKeyID()
+
+	default:
+		return tkatype.KeyID{}, fmt.Errorf("unhandled signature type: %v", s.SigKind)
+	}
+}
+
 // SigHash returns the cryptographic digest which a signature
 // is over.
 //

@@ -686,7 +686,12 @@ func (a *Authority) NodeKeyAuthorized(nodeKey key.NodePublic, nodeKeySignature t
 		return errors.New("credential signatures cannot authorize nodes on their own")
 	}
 
-	key, err := a.state.GetKey(decoded.KeyID)
+	kID, err := decoded.authorizingKeyID()
+	if err != nil {
+		return err
+	}
+
+	key, err := a.state.GetKey(kID)
 	if err != nil {
 		return fmt.Errorf("key: %v", err)
 	}
