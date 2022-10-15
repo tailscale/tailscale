@@ -118,8 +118,9 @@ hen
 rooster
 quail
 grouse
-
-# Musical scales
+universe
+galaxy
+atlas
 acoustic
 alpha
 altered
@@ -163,4 +164,3 @@ tet
 tone
 tritone
 yo
-
