@@ -33,6 +33,8 @@ import (
 // Config.BaseURL isn't provided.
 const DefaultHost = "log.tailscale.io"
 
+const defaultFlushDelay = 2 * time.Second
+
 const (
 	// CollectionNode is the name of a logtail Config.Collection
 	// for tailscaled (or equivalent: IPNExtension, Android app).
@@ -64,8 +66,12 @@ type Config struct {
 	// that's safe to embed in a JSON string literal without further escaping.
 	MetricsDelta func() string
 
-	// FlushDelay, if non-zero, is how long to wait to accumulate logs before
+	// FlushDelay is how long to wait to accumulate logs before
 	// uploading them.
+	//
+	// If zero, a default value is used. (currently 2 seconds)
+	//
+	// Negative means to upload immediately.
 	FlushDelay time.Duration
 
 	// IncludeProcID, if true, results in an ephemeral process identifier being
@@ -117,6 +123,8 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		if err != nil {
 			log.Fatalf("invalid TS_DEBUG_LOGTAIL_FLUSHDELAY: %v", err)
 		}
+	} else if cfg.FlushDelay == 0 && !envknob.Bool("IN_TS_TEST") {
+		cfg.FlushDelay = defaultFlushDelay
 	}
 
 	stdLogf := func(f string, a ...any) {
@@ -172,7 +180,7 @@ type Logger struct {
 	linkMonitor    *monitor.Mon
 	buffer         Buffer
 	drainWake      chan struct{} // signal to speed up drain
-	flushDelay     time.Duration // 0 to upload agressively, or >0 to batch at this delay
+	flushDelay     time.Duration // negative or zero to upload agressively, or >0 to batch at this delay
 	flushPending   atomic.Bool
 	sentinel       chan int32
 	timeNow        func() time.Time
@@ -189,7 +197,7 @@ type Logger struct {
 
 	writeLock    sync.Mutex // guards procSequence, flushTimer, buffer.Write calls
 	procSequence uint64
-	flushTimer   *time.Timer // used when flushDelay non-zero
+	flushTimer   *time.Timer // used when flushDelay is >0
 
 	shutdownStart chan struct{} // closed when shutdown begins
 	shutdownDone  chan struct{} // closed when shutdown complete
