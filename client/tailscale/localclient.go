@@ -276,6 +276,12 @@ type BugReportOpts struct {
 	// Diagnose specifies whether to print additional diagnostic information to
 	// the logs when generating this bugreport.
 	Diagnose bool
+
+	// Record specifies, if non-nil, whether to perform a bugreport
+	// "recording"–generating an initial log marker, then waiting for
+	// this channel to be closed before finishing the request, which
+	// generates another log marker.
+	Record <-chan struct{}
 }
 
 // BugReportWithOpts logs and returns a log marker that can be shared by the
@@ -284,16 +290,40 @@ type BugReportOpts struct {
 // The opts type specifies options to pass to the Tailscale daemon when
 // generating this bug report.
 func (lc *LocalClient) BugReportWithOpts(ctx context.Context, opts BugReportOpts) (string, error) {
-	var qparams url.Values
+	qparams := make(url.Values)
 	if opts.Note != "" {
 		qparams.Set("note", opts.Note)
 	}
 	if opts.Diagnose {
 		qparams.Set("diagnose", "true")
 	}
+	if opts.Record != nil {
+		qparams.Set("record", "true")
+	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var requestBody io.Reader
+	if opts.Record != nil {
+		pr, pw := io.Pipe()
+		requestBody = pr
+
+		// This goroutine waits for the 'Record' channel to be closed,
+		// and then closes the write end of our pipe to unblock the
+		// reader.
+		go func() {
+			defer pw.Close()
+			select {
+			case <-opts.Record:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	// lc.send might block if opts.Record != nil; see above.
 	uri := fmt.Sprintf("/localapi/v0/bugreport?%s", qparams.Encode())
-	body, err := lc.send(ctx, "POST", uri, 200, nil)
+	body, err := lc.send(ctx, "POST", uri, 200, requestBody)
 	if err != nil {
 		return "", err
 	}

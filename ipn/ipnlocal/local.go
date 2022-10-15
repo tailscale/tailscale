@@ -363,6 +363,21 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	return nil
 }
 
+// GetComponentDebugLogging gets the time that component's debug logging is
+// enabled until, or the zero time if component's time is not currently
+// enabled.
+func (b *LocalBackend) GetComponentDebugLogging(component string) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := time.Now()
+	ls := b.componentLogUntil[component]
+	if ls.until.IsZero() || ls.until.Before(now) {
+		return time.Time{}
+	}
+	return ls.until
+}
+
 // Dialer returns the backend's dialer.
 func (b *LocalBackend) Dialer() *tsdial.Dialer {
 	return b.dialer
