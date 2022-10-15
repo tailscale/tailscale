@@ -232,12 +232,16 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logMarker := fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
-	if envknob.NoLogsNoSupport() {
-		logMarker = "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled"
+	logMarker := func() string {
+		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
 	}
-	h.logf("user bugreport: %s", logMarker)
-	if note := r.FormValue("note"); len(note) > 0 {
+	if envknob.NoLogsNoSupport() {
+		logMarker = func() string { return "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled" }
+	}
+
+	startMarker := logMarker()
+	h.logf("user bugreport: %s", startMarker)
+	if note := r.URL.Query().Get("note"); len(note) > 0 {
 		h.logf("user bugreport note: %s", note)
 	}
 	hi, _ := json.Marshal(hostinfo.New())
@@ -247,11 +251,62 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.logf("user bugreport health: ok")
 	}
-	if defBool(r.FormValue("diagnose"), false) {
+	if defBool(r.URL.Query().Get("diagnose"), false) {
 		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
 	}
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintln(w, logMarker)
+	fmt.Fprintln(w, startMarker)
+
+	// Nothing else to do if we're not in record mode; we wrote the marker
+	// above, so we can just finish our response now.
+	if !defBool(r.URL.Query().Get("record"), false) {
+		return
+	}
+
+	until := time.Now().Add(12 * time.Hour)
+
+	var changed map[string]bool
+	for _, component := range []string{"magicsock"} {
+		if h.b.GetComponentDebugLogging(component).IsZero() {
+			if err := h.b.SetComponentDebugLogging(component, until); err != nil {
+				h.logf("bugreport: error setting component %q logging: %v", component, err)
+				continue
+			}
+
+			mak.Set(&changed, component, true)
+		}
+	}
+	defer func() {
+		for component := range changed {
+			h.b.SetComponentDebugLogging(component, time.Time{})
+		}
+	}()
+
+	// NOTE(andrew): if we have anything else we want to do while recording
+	// a bugreport, we can add it here.
+
+	// Read from the client; this will also return when the client closes
+	// the connection.
+	var buf [1]byte
+	_, err := r.Body.Read(buf[:])
+
+	switch {
+	case err == nil:
+		// good
+	case errors.Is(err, io.EOF):
+		// good
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		// this happens when Ctrl-C'ing the tailscale client; don't
+		// bother logging an error
+	default:
+		// Log but continue anyway.
+		h.logf("user bugreport: error reading body: %v", err)
+	}
+
+	// Generate another log marker and return it to the client.
+	endMarker := logMarker()
+	h.logf("user bugreport end: %s", endMarker)
+	fmt.Fprintln(w, endMarker)
 }
 
 func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {

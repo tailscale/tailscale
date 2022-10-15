@@ -41,29 +41,44 @@ func runBugReport(ctx context.Context, args []string) error {
 	default:
 		return errors.New("unknown arguments")
 	}
-	logMarker, err := localClient.BugReportWithOpts(ctx, tailscale.BugReportOpts{
+	opts := tailscale.BugReportOpts{
 		Note:     note,
 		Diagnose: bugReportArgs.diagnose,
-	})
-	if err != nil {
-		return err
 	}
-
-	if bugReportArgs.record {
-		outln("The initial bugreport is below; please reproduce your issue and then press Enter...")
-	}
-
-	outln(logMarker)
-
-	if bugReportArgs.record {
-		fmt.Scanln()
-
-		logMarker, err := localClient.BugReportWithOpts(ctx, tailscale.BugReportOpts{})
+	if !bugReportArgs.record {
+		// Simple, non-record case
+		logMarker, err := localClient.BugReportWithOpts(ctx, opts)
 		if err != nil {
 			return err
 		}
 		outln(logMarker)
-		outln("Please provide both bugreport markers above to the support team or GitHub issue.")
+		return nil
 	}
+
+	// Recording; run the request in the background
+	done := make(chan struct{})
+	opts.Record = done
+
+	type bugReportResp struct {
+		marker string
+		err    error
+	}
+	resCh := make(chan bugReportResp, 1)
+	go func() {
+		m, err := localClient.BugReportWithOpts(ctx, opts)
+		resCh <- bugReportResp{m, err}
+	}()
+
+	outln("Recording started; please reproduce your issue and then press Enter...")
+	fmt.Scanln()
+	close(done)
+	res := <-resCh
+
+	if res.err != nil {
+		return res.err
+	}
+
+	outln(res.marker)
+	outln("Please provide both bugreport markers above to the support team or GitHub issue.")
 	return nil
 }
