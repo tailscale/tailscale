@@ -100,7 +100,9 @@ func (c *Client) secretURL(name string) string {
 }
 
 func getError(resp *http.Response) error {
-	if resp.StatusCode == 200 {
+	if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		// These are the only success codes returned by the Kubernetes API.
+		// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#http-status-codes
 		return nil
 	}
 	st := &Status{}
