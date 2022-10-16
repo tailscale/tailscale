@@ -42,7 +42,7 @@ var debugCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("debug")
 		fs.StringVar(&debugArgs.file, "file", "", "get, delete:NAME, or NAME")
-		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-sec seconds and write it to this file; - for stdout")
+		fs.StringVar(&debugArgs.cpuFile, "cpu-profile", "", "if non-empty, grab a CPU profile for --profile-seconds seconds and write it to this file; - for stdout")
 		fs.StringVar(&debugArgs.memFile, "mem-profile", "", "if non-empty, grab a memory profile and write it to this file; - for stdout")
 		fs.IntVar(&debugArgs.cpuSec, "profile-seconds", 15, "number of seconds to run a CPU profile for, when --cpu-profile is non-empty")
 		return fs
