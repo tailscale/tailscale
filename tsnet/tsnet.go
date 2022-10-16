@@ -9,6 +9,7 @@ package tsnet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -479,6 +480,25 @@ func getTSNetDir(logf logger.Logf, confDir, prog string) (string, error) {
 	}
 	logf("renamed old tsnet state storage directory %q to %q", oldPath, newPath)
 	return newPath, nil
+}
+
+// APIClient returns a tailscale.Client that can be used to make authenticated
+// requests to the Tailscale control server.
+// It requires the user to set tailscale.I_Acknowledge_This_API_Is_Unstable.
+func (s *Server) APIClient() (*tailscale.Client, error) {
+	if !tailscale.I_Acknowledge_This_API_Is_Unstable {
+		return nil, errors.New("use of Client without setting I_Acknowledge_This_API_Is_Unstable")
+	}
+	if err := s.Start(); err != nil {
+		return nil, err
+	}
+
+	nm := s.lb.NetMap()
+	if nm == nil {
+		return nil, errors.New("no netmap, not logged in?")
+	}
+	c := tailscale.NewNoiseClient(nm.Domain, s.lb.NoiseRoundTripper(), nm.NodeKey)
+	return c, nil
 }
 
 // Listen announces only on the Tailscale network.

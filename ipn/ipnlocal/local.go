@@ -3736,6 +3736,20 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	return mc, nil
 }
 
+type noiseRoundTripper struct {
+	*LocalBackend
+}
+
+func (n noiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return n.LocalBackend.DoNoiseRequest(req)
+}
+
+// NoiseRoundTripper returns an http.RoundTripper that uses the LocalBackend's
+// DoNoiseRequest method.
+func (b *LocalBackend) NoiseRoundTripper() http.RoundTripper {
+	return noiseRoundTripper{b}
+}
+
 // DoNoiseRequest sends a request to URL over the control plane
 // Noise connection.
 func (b *LocalBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
