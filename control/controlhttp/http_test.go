@@ -127,7 +127,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 	const testProtocolVersion = 1
 	sch := make(chan serverResult, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := AcceptHTTP(context.Background(), w, r, server)
+		conn, err := AcceptHTTP(context.Background(), w, r, server, nil)
 		if err != nil {
 			log.Print(err)
 		}
@@ -485,7 +485,7 @@ func TestDialPlan(t *testing.T) {
 			close(done)
 		})
 		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			conn, err := AcceptHTTP(context.Background(), w, r, server)
+			conn, err := AcceptHTTP(context.Background(), w, r, server, nil)
 			if err != nil {
 				log.Print(err)
 			} else {

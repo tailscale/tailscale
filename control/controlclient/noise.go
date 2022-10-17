@@ -210,7 +210,7 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, err := (&controlhttp.Dialer{
+	clientConn, err := (&controlhttp.Dialer{
 		Hostname:        nc.host,
 		HTTPPort:        nc.httpPort,
 		HTTPSPort:       nc.httpsPort,
@@ -226,7 +226,7 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	ncc := &noiseConn{Conn: conn, id: connID, pool: nc}
+	ncc := &noiseConn{Conn: clientConn.Conn, id: connID, pool: nc}
 	mak.Set(&nc.connPool, ncc.id, ncc)
 	return ncc, nil
 }
