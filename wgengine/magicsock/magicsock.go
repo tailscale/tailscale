@@ -2395,6 +2395,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		ep := &endpoint{
 			c:                 c,
 			publicKey:         n.Key,
+			publicKeyHex:      n.Key.UntypedHexString(),
 			sentPing:          map[stun.TxID]sentPing{},
 			endpointState:     map[netip.AddrPort]*endpointState{},
 			heartbeatDisabled: heartbeatDisabled,
@@ -3306,9 +3307,10 @@ type endpoint struct {
 	numStopAndResetAtomic int64
 
 	// These fields are initialized once and never modified.
-	c          *Conn
-	publicKey  key.NodePublic // peer public key (for WireGuard + DERP)
-	fakeWGAddr netip.AddrPort // the UDP address we tell wireguard-go we're using
+	c            *Conn
+	publicKey    key.NodePublic // peer public key (for WireGuard + DERP)
+	publicKeyHex string         // cached output of publicKey.UntypedHexString
+	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using
 
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -3490,7 +3492,7 @@ func (de *endpoint) String() string {
 func (de *endpoint) ClearSrc()           {}
 func (de *endpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
 func (de *endpoint) SrcIP() netip.Addr   { panic("unused") } // unused by wireguard-go
-func (de *endpoint) DstToString() string { return de.publicKey.UntypedHexString() }
+func (de *endpoint) DstToString() string { return de.publicKeyHex }
 func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
