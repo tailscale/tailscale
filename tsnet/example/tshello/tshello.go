@@ -32,13 +32,18 @@ func main() {
 	}
 	defer ln.Close()
 
+	lc, err := s.LocalClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if *addr == ":443" {
 		ln = tls.NewListener(ln, &tls.Config{
 			GetCertificate: tailscale.GetCertificate,
 		})
 	}
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		who, err := tailscale.WhoIs(r.Context(), r.RemoteAddr)
+		who, err := lc.WhoIs(r.Context(), r.RemoteAddr)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
