@@ -17,7 +17,7 @@ import (
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
 // bi-directional communication over an HTTP connection when in JS.
-func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
+func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 	if d.Hostname == "" {
 		return nil, errors.New("required Dialer.Hostname empty")
 	}
@@ -45,7 +45,7 @@ func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
 			handshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
 		}.Encode(),
 	}
-	wsConn, _, err := websocket.Dial(ctx, wsURL.String(), &websocket.DialOptions{
+	wsConn, httpRes, err := websocket.Dial(ctx, wsURL.String(), &websocket.DialOptions{
 		Subprotocols: []string{upgradeHeaderValue},
 	})
 	if err != nil {
@@ -57,5 +57,8 @@ func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
 		netConn.Close()
 		return nil, err
 	}
-	return cbConn, nil
+	return &ClientConn{
+		Conn:                    cbConn,
+		UntrustedUpgradeHeaders: httpRes.Header,
+	}, nil
 }

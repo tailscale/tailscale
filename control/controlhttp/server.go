@@ -22,7 +22,11 @@ import (
 //
 // AcceptHTTP always writes an HTTP response to w. The caller must not
 // attempt their own response after calling AcceptHTTP.
-func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
+//
+// extraHeader optionally specifies extra header(s) to send in the
+// 101 Switching Protocols Upgrade response. It must not include the "Upgrade"
+// or "Connection" headers; they will be replaced.
+func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate, extraHeader http.Header) (*controlbase.Conn, error) {
 	next := r.Header.Get("Upgrade")
 	if next == "" {
 		http.Error(w, "missing next protocol", http.StatusBadRequest)
@@ -53,6 +57,9 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 		return nil, errors.New("can't hijack client connection")
 	}
 
+	for k, vv := range extraHeader {
+		w.Header()[k] = vv
+	}
 	w.Header().Set("Upgrade", upgradeHeaderValue)
 	w.Header().Set("Connection", "upgrade")
 	w.WriteHeader(http.StatusSwitchingProtocols)
