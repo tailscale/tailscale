@@ -14,17 +14,17 @@ import (
 //
 // The ProbeFunc reports whether it can successfully connect to addr.
 func TCP(addr string) ProbeFunc {
-	return func(ctx context.Context) error {
+	return func(ctx context.Context) (*ProbeResponse, error) {
 		return probeTCP(ctx, addr)
 	}
 }
 
-func probeTCP(ctx context.Context, addr string) error {
+func probeTCP(ctx context.Context, addr string) (*ProbeResponse, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("dialing %q: %v", addr, err)
+		return nil, fmt.Errorf("dialing %q: %v", addr, err)
 	}
 	conn.Close()
-	return nil
+	return nil, nil
 }

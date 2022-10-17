@@ -55,9 +55,9 @@ func TestProberTiming(t *testing.T) {
 		}
 	}
 
-	p.Run("test-probe", probeInterval, nil, func(context.Context) error {
+	p.Run("test-probe", probeInterval, nil, func(context.Context) (*ProbeResponse, error) {
 		invoked <- struct{}{}
-		return nil
+		return nil, nil
 	})
 
 	waitActiveProbes(t, p, 1)
@@ -87,11 +87,11 @@ func TestProberRun(t *testing.T) {
 	var probes []*Probe
 
 	for i := 0; i < startingProbes; i++ {
-		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, func(context.Context) error {
+		probes = append(probes, p.Run(fmt.Sprintf("probe%d", i), probeInterval, nil, func(context.Context) (*ProbeResponse, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			cnt++
-			return nil
+			return nil, nil
 		}))
 	}
 
@@ -132,12 +132,12 @@ func TestExpvar(t *testing.T) {
 	p := newForTest(clk.Now, clk.NewTicker)
 
 	var succeed atomic.Bool
-	p.Run("probe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
+	p.Run("probe", probeInterval, map[string]string{"label": "value"}, func(context.Context) (*ProbeResponse, error) {
 		clk.Advance(aFewMillis)
 		if succeed.Load() {
-			return nil
+			return nil, nil
 		}
-		return errors.New("failing, as instructed by test")
+		return nil, errors.New("failing, as instructed by test")
 	})
 
 	waitActiveProbes(t, p, 1)
@@ -170,6 +170,7 @@ func TestExpvar(t *testing.T) {
 		End:     epoch.Add(aFewMillis),
 		Latency: aFewMillis.String(),
 		Result:  false,
+		Err:     "failing, as instructed by test",
 	})
 
 	succeed.Store(true)
@@ -190,12 +191,12 @@ func TestPrometheus(t *testing.T) {
 	p := newForTest(clk.Now, clk.NewTicker)
 
 	var succeed atomic.Bool
-	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) error {
+	p.Run("testprobe", probeInterval, map[string]string{"label": "value"}, func(context.Context) (*ProbeResponse, error) {
 		clk.Advance(aFewMillis)
 		if succeed.Load() {
-			return nil
+			return nil, nil
 		}
-		return errors.New("failing, as instructed by test")
+		return nil, errors.New("failing, as instructed by test")
 	})
 
 	waitActiveProbes(t, p, 1)

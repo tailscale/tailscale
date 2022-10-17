@@ -24,7 +24,7 @@ import (
 // ProbeFunc is a function that probes something and reports whether
 // the probe succeeded. The provided context's deadline must be obeyed
 // for correct probe scheduling.
-type ProbeFunc func(context.Context) error
+type ProbeFunc func(context.Context) (*ProbeResponse, error)
 
 // a Prober manages a set of probes and keeps track of their results.
 type Prober struct {
@@ -97,6 +97,14 @@ func (p *Prober) activeProbes() int {
 	return len(p.probes)
 }
 
+type ProbeResponse struct {
+	Gauges map[string]float64
+}
+
+func NewResponse() *ProbeResponse {
+	return &ProbeResponse{Gauges: make(map[string]float64)}
+}
+
 // Probe is a probe that healthchecks something and updates Prometheus
 // metrics with the results.
 type Probe struct {
@@ -111,10 +119,12 @@ type Probe struct {
 	tick     ticker
 	labels   map[string]string
 
-	mu     sync.Mutex
-	start  time.Time // last time doProbe started
-	end    time.Time // last time doProbe returned
-	result bool      // whether the last doProbe call succeeded
+	mu           sync.Mutex
+	start        time.Time // last time doProbe started
+	end          time.Time // last time doProbe returned
+	result       bool      // whether the last doProbe call succeeded
+	lastErr      error
+	lastResponse *ProbeResponse
 }
 
 // Close shuts down the Probe and unregisters it from its Prober.
@@ -158,15 +168,15 @@ func (p *Probe) run() {
 		// alert for debugging.
 		if r := recover(); r != nil {
 			log.Printf("probe %s panicked: %v", p.name, r)
-			p.recordEnd(start, errors.New("panic"))
+			p.recordEnd(start, errors.New("panic"), nil)
 		}
 	}()
 	timeout := time.Duration(float64(p.interval) * 0.8)
 	ctx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
 
-	err := p.doProbe(ctx)
-	p.recordEnd(start, err)
+	resp, err := p.doProbe(ctx)
+	p.recordEnd(start, err, resp)
 	if err != nil {
 		log.Printf("probe %s: %v", p.name, err)
 	}
@@ -180,12 +190,14 @@ func (p *Probe) recordStart() time.Time {
 	return st
 }
 
-func (p *Probe) recordEnd(start time.Time, err error) {
+func (p *Probe) recordEnd(start time.Time, err error, resp *ProbeResponse) {
 	end := p.prober.now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.end = end
 	p.result = err == nil
+	p.lastErr = err
+	p.lastResponse = resp
 }
 
 type varExporter struct {
@@ -195,11 +207,13 @@ type varExporter struct {
 // probeInfo is the state of a Probe. Used in expvar-format debug
 // data.
 type probeInfo struct {
-	Labels  map[string]string
-	Start   time.Time
-	End     time.Time
-	Latency string // as a string because time.Duration doesn't encode readably to JSON
-	Result  bool
+	Labels   map[string]string
+	Start    time.Time
+	End      time.Time
+	Latency  string // as a string because time.Duration doesn't encode readably to JSON
+	Result   bool
+	Err      string
+	Response *ProbeResponse
 }
 
 // String implements expvar.Var, returning the prober's state as an
@@ -217,13 +231,17 @@ func (v varExporter) String() string {
 	for _, probe := range probes {
 		probe.mu.Lock()
 		inf := probeInfo{
-			Labels: probe.labels,
-			Start:  probe.start,
-			End:    probe.end,
-			Result: probe.result,
+			Labels:   probe.labels,
+			Start:    probe.start,
+			End:      probe.end,
+			Result:   probe.result,
+			Response: probe.lastResponse,
 		}
 		if probe.end.After(probe.start) {
 			inf.Latency = probe.end.Sub(probe.start).String()
+		}
+		if probe.lastErr != nil {
+			inf.Err = probe.lastErr.Error()
 		}
 		out[probe.name] = inf
 		probe.mu.Unlock()
@@ -287,6 +305,11 @@ func (v varExporter) WritePrometheus(w io.Writer, prefix string) {
 				fmt.Fprintf(w, "%s_result{%s} 1\n", prefix, labels)
 			} else {
 				fmt.Fprintf(w, "%s_result{%s} 0\n", prefix, labels)
+			}
+		}
+		if probe.lastResponse != nil {
+			for n, v := range probe.lastResponse.Gauges {
+				fmt.Fprintf(w, "%s_result_%s{%s} %f\n", prefix, n, labels, v)
 			}
 		}
 		probe.mu.Unlock()

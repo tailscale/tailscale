@@ -21,6 +21,7 @@ import (
 )
 
 const expiresSoon = 7 * 24 * time.Hour // 7 days from now
+const earliestExpiration = "earliest_cert_expiration_secs"
 
 // TLS returns a Probe that healthchecks a TLS endpoint.
 //
@@ -28,21 +29,21 @@ const expiresSoon = 7 * 24 * time.Hour // 7 days from now
 // handshake, verifies that the hostname matches the presented certificate,
 // checks certificate validity time and OCSP revocation status.
 func TLS(hostname string) ProbeFunc {
-	return func(ctx context.Context) error {
+	return func(ctx context.Context) (*ProbeResponse, error) {
 		return probeTLS(ctx, hostname)
 	}
 }
 
-func probeTLS(ctx context.Context, hostname string) error {
+func probeTLS(ctx context.Context, hostname string) (*ProbeResponse, error) {
 	host, _, err := net.SplitHostPort(hostname)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	dialer := &tls.Dialer{Config: &tls.Config{ServerName: host}}
 	conn, err := dialer.DialContext(ctx, "tcp", hostname)
 	if err != nil {
-		return fmt.Errorf("connecting to %q: %w", hostname, err)
+		return nil, fmt.Errorf("connecting to %q: %w", hostname, err)
 	}
 	defer conn.Close()
 
@@ -53,12 +54,14 @@ func probeTLS(ctx context.Context, hostname string) error {
 // validateConnState verifies certificate validity time in all certificates
 // returned by the TLS server and checks OCSP revocation status for the
 // leaf cert.
-func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr error) {
+func validateConnState(ctx context.Context, cs *tls.ConnectionState) (resp *ProbeResponse, returnerr error) {
 	var errs []error
 	defer func() {
 		returnerr = multierr.New(errs...)
 	}()
 	latestAllowedExpiration := time.Now().Add(expiresSoon)
+
+	resp = NewResponse()
 
 	var leafCert *x509.Certificate
 	var issuerCert *x509.Certificate
@@ -68,6 +71,7 @@ func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr 
 		if i == 0 {
 			leafCert = cert
 			leafAuthorityKeyID = string(cert.AuthorityKeyId)
+			resp.Gauges[earliestExpiration] = float64(cert.NotAfter.Unix())
 		}
 		if i > 0 {
 			if leafAuthorityKeyID == string(cert.SubjectKeyId) {
@@ -89,6 +93,10 @@ func validateConnState(ctx context.Context, cs *tls.ConnectionState) (returnerr 
 		if latestAllowedExpiration.After(cert.NotAfter) {
 			left := cert.NotAfter.Sub(time.Now())
 			errs = append(errs, fmt.Errorf("one of the certs expires in %v: %v", left, cert.Subject))
+		}
+
+		if float64(cert.NotAfter.Unix()) < resp.Gauges[earliestExpiration] {
+			resp.Gauges[earliestExpiration] = float64(cert.NotAfter.Unix())
 		}
 	}
 

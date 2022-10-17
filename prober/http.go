@@ -20,15 +20,15 @@ const maxHTTPBody = 4 << 20 // MiB
 // response, and verifies that want is present in the response
 // body.
 func HTTP(url, wantText string) ProbeFunc {
-	return func(ctx context.Context) error {
+	return func(ctx context.Context) (*ProbeResponse, error) {
 		return probeHTTP(ctx, url, []byte(wantText))
 	}
 }
 
-func probeHTTP(ctx context.Context, url string, want []byte) error {
+func probeHTTP(ctx context.Context, url string, want []byte) (*ProbeResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("constructing request: %w", err)
+		return nil, fmt.Errorf("constructing request: %w", err)
 	}
 
 	// Get a completely new transport each time, so we don't reuse a
@@ -41,21 +41,21 @@ func probeHTTP(ctx context.Context, url string, want []byte) error {
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("fetching %q: %w", url, err)
+		return nil, fmt.Errorf("fetching %q: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("fetching %q: status code %d, want 200", url, resp.StatusCode)
+		return nil, fmt.Errorf("fetching %q: status code %d, want 200", url, resp.StatusCode)
 	}
 
 	bs, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody))
 	if err != nil {
-		return fmt.Errorf("reading body of %q: %w", url, err)
+		return nil, fmt.Errorf("reading body of %q: %w", url, err)
 	}
 
 	if !bytes.Contains(bs, want) {
-		return fmt.Errorf("body of %q does not contain %q", url, want)
+		return nil, fmt.Errorf("body of %q does not contain %q", url, want)
 	}
 
-	return nil
+	return nil, nil
 }

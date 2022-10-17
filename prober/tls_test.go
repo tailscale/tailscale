@@ -48,7 +48,7 @@ var issuerCertTpl = x509.Certificate{
 	Version:            3,
 	IPAddresses:        []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	NotBefore:          time.Now().Add(-5 * time.Minute),
-	NotAfter:           time.Now().Add(60 * 24 * time.Hour),
+	NotAfter:           time.Now().Add(55 * 24 * time.Hour),
 	SubjectKeyId:       []byte{1, 2, 3, 4, 5},
 	ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	KeyUsage:           x509.KeyUsageDigitalSignature,
@@ -86,7 +86,7 @@ func TestTLSConnection(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 
-	err = probeTLS(context.Background(), srv.Listener.Addr().String())
+	_, err = probeTLS(context.Background(), srv.Listener.Addr().String())
 	// The specific error message here is platform-specific ("certificate is not trusted"
 	// on macOS and "certificate signed by unknown authority" on Linux), so only check
 	// that it contains the word 'certificate'.
@@ -126,10 +126,20 @@ func TestCertExpiration(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{tt.cert()}}
-			err := validateConnState(context.Background(), cs)
+			leaf := tt.cert()
+			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf, &issuerCertTpl}}
+			resp, err := validateConnState(context.Background(), cs)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("unexpected error %q; want %q", err, tt.wantErr)
+			}
+
+			wantExpiration := issuerCertTpl.NotAfter.Unix()
+			if leaf.NotAfter.Unix() < wantExpiration {
+				wantExpiration = leaf.NotAfter.Unix()
+			}
+
+			if int64(resp.Gauges[earliestExpiration]) != wantExpiration {
+				t.Errorf("unexpected cert expiration metric: %f; want %d", resp.Gauges[earliestExpiration], wantExpiration)
 			}
 		})
 	}
@@ -222,7 +232,7 @@ func TestOCSP(t *testing.T) {
 				handler.template.SerialNumber = big.NewInt(1337)
 			}
 			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{parsed, issuerCert}}
-			err := validateConnState(context.Background(), cs)
+			_, err := validateConnState(context.Background(), cs)
 
 			if err == nil && tt.wantErr == "" {
 				return
