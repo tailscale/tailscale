@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -44,6 +45,7 @@ var certArgs struct {
 func runCert(ctx context.Context, args []string) error {
 	if certArgs.serve {
 		s := &http.Server{
+			Addr: ":443",
 			TLSConfig: &tls.Config{
 				GetCertificate: localClient.GetCertificate,
 			},
@@ -57,7 +59,16 @@ func runCert(ctx context.Context, args []string) error {
 				fmt.Fprintf(w, "<h1>Hello from Tailscale</h1>It works.")
 			}),
 		}
-		log.Printf("running TLS server on :443 ...")
+		switch len(args) {
+		case 0:
+			// Nothing.
+		case 1:
+			s.Addr = args[0]
+		default:
+			return errors.New("too many arguments; max 1 allowed with --serve-demo (the listen address)")
+		}
+
+		log.Printf("running TLS server on %s ...", s.Addr)
 		return s.ListenAndServeTLS("", "")
 	}
 
