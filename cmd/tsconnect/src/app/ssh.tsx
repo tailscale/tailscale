@@ -46,7 +46,12 @@ function SSHSession({
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (ref.current) {
-      runSSHSession(ref.current, def, ipn, onDone, (err) => console.error(err))
+      runSSHSession(ref.current, def, ipn, {
+        onConnectionProgress: (p) => console.log("Connection progress", p),
+        onConnected() {},
+        onError: (err) => console.error(err),
+        onDone,
+      })
     }
   }, [ref])
 

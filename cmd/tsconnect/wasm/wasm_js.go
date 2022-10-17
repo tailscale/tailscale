@@ -364,15 +364,21 @@ func (s *jsSSHSession) Run() {
 	if jsTimeoutSeconds := s.termConfig.Get("timeoutSeconds"); jsTimeoutSeconds.Type() == js.TypeNumber {
 		timeoutSeconds = jsTimeoutSeconds.Float()
 	}
+	onConnectionProgress := s.termConfig.Get("onConnectionProgress")
+	onConnected := s.termConfig.Get("onConnected")
 	onDone := s.termConfig.Get("onDone")
 	defer onDone.Invoke()
 
 	writeError := func(label string, err error) {
 		writeErrorFn.Invoke(fmt.Sprintf("%s Error: %v\r\n", label, err))
 	}
+	reportProgress := func(message string) {
+		onConnectionProgress.Invoke(message)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds*float64(time.Second)))
 	defer cancel()
+	reportProgress(fmt.Sprintf("Connecting to %s…", strings.Split(s.host, ".")[0]))
 	c, err := s.jsIPN.dialer.UserDial(ctx, "tcp", net.JoinHostPort(s.host, "22"))
 	if err != nil {
 		writeError("Dial", err)
@@ -381,10 +387,16 @@ func (s *jsSSHSession) Run() {
 	defer c.Close()
 
 	config := &ssh.ClientConfig{
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		User:            s.username,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			// Host keys are not used with Tailscale SSH, but we can use this
+			// callback to know that the connection has been established.
+			reportProgress("SSH connection established…")
+			return nil
+		},
+		User: s.username,
 	}
 
+	reportProgress("Starting SSH client…")
 	sshConn, _, _, err := ssh.NewClientConn(c, s.host, config)
 	if err != nil {
 		writeError("SSH Connection", err)
@@ -442,6 +454,7 @@ func (s *jsSSHSession) Run() {
 		return
 	}
 
+	onConnected.Invoke()
 	err = session.Wait()
 	if err != nil {
 		writeError("Wait", err)

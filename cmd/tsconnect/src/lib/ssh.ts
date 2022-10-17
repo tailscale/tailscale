@@ -9,12 +9,18 @@ export type SSHSessionDef = {
   timeoutSeconds?: number
 }
 
+export type SSHSessionCallbacks = {
+  onConnectionProgress: (messsage: string) => void
+  onConnected: () => void
+  onDone: () => void
+  onError?: (err: string) => void
+}
+
 export function runSSHSession(
   termContainerNode: HTMLDivElement,
   def: SSHSessionDef,
   ipn: IPN,
-  onDone: () => void,
-  onError?: (err: string) => void,
+  callbacks: SSHSessionCallbacks,
   terminalOptions?: ITerminalOptions
 ) {
   const parentWindow = termContainerNode.ownerDocument.defaultView ?? window
@@ -49,7 +55,7 @@ export function runSSHSession(
       term.write(input)
     },
     writeErrorFn(err) {
-      onError?.(err)
+      callbacks.onError?.(err)
       term.write(err)
     },
     setReadFn(hook) {
@@ -57,13 +63,15 @@ export function runSSHSession(
     },
     rows: term.rows,
     cols: term.cols,
+    onConnectionProgress: callbacks.onConnectionProgress,
+    onConnected: callbacks.onConnected,
     onDone() {
       resizeObserver?.disconnect()
       term.dispose()
       if (handleUnload) {
         parentWindow.removeEventListener("unload", handleUnload)
       }
-      onDone()
+      callbacks.onDone()
     },
     timeoutSeconds: def.timeoutSeconds,
   })

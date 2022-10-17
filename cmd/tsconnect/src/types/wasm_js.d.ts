@@ -25,6 +25,8 @@ declare global {
         cols: number
         /** Defaults to 5 seconds */
         timeoutSeconds?: number
+        onConnectionProgress: (message: string) => void
+        onConnected: () => void
         onDone: () => void
       }
     ): IPNSSHSession
