@@ -1,12 +1,12 @@
 name: Bug report
-description: File a bug report
+description: File a bug report. If you need help, contact support instead
 labels: [needs-triage, bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Please check if your bug is [already filed](https://github.com/tailscale/tailscale/issues).
-        Have an urgent issue? Let us know by emailing us at <support@tailscale.com>.
+        Need help with your tailnet? [Contact support](https://tailscale.com/contact/support) instead.
+        Otherwise, please check if your bug is [already filed](https://github.com/tailscale/tailscale/issues) before filing a new one.
   - type: textarea
     id: what-happened
     attributes:
