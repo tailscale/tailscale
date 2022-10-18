@@ -13,6 +13,7 @@ import (
 
 	"nhooyr.io/websocket"
 	"tailscale.com/control/controlbase"
+	"tailscale.com/net/wsconn"
 )
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
@@ -51,7 +52,7 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	netConn := websocket.NetConn(context.Background(), wsConn, websocket.MessageBinary)
+	netConn := wsconn.NetConn(context.Background(), wsConn, websocket.MessageBinary)
 	cbConn, err := cont(ctx, netConn)
 	if err != nil {
 		netConn.Close()
