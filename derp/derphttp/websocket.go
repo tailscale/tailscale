@@ -13,6 +13,7 @@ import (
 	"net"
 
 	"nhooyr.io/websocket"
+	"tailscale.com/net/wsconn"
 )
 
 func init() {
@@ -28,6 +29,6 @@ func dialWebsocket(ctx context.Context, urlStr string) (net.Conn, error) {
 		return nil, err
 	}
 	log.Printf("websocket: connected to %v", urlStr)
-	netConn := websocket.NetConn(context.Background(), c, websocket.MessageBinary)
+	netConn := wsconn.NetConn(context.Background(), c, websocket.MessageBinary)
 	return netConn, nil
 }
