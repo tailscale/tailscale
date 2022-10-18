@@ -48,6 +48,7 @@ var (
 	udp4Unbound             bool
 	controlHealth           []string
 	lastLoginErr            error
+	localLogConfigErr       error
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -192,6 +193,13 @@ func SetDNSManagerHealth(err error) { setErr(SysDNSManager, err) }
 
 // DNSOSHealth returns the net/dns.OSConfigurator error state.
 func DNSOSHealth() error { return get(SysDNSOS) }
+
+// SetLocalLogConfigHealth sets the error state of this client's local log configuration.
+func SetLocalLogConfigHealth(err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	localLogConfigErr = err
+}
 
 func RegisterDebugHandler(typ string, h http.Handler) {
 	mu.Lock()
@@ -396,6 +404,9 @@ var fakeErrForTesting = envknob.RegisterString("TS_DEBUG_FAKE_HEALTH_ERROR")
 func overallErrorLocked() error {
 	if !anyInterfaceUp {
 		return errors.New("network down")
+	}
+	if localLogConfigErr != nil {
+		return localLogConfigErr
 	}
 	if !ipnWantRunning {
 		return fmt.Errorf("state=%v, wantRunning=%v", ipnState, ipnWantRunning)
