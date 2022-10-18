@@ -348,6 +348,22 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// TODO: docs
+func (lc *LocalClient) DebugSubnetRoute(ctx context.Context, addr string) (*apitype.SubnetRouteDebugResponse, error) {
+	urlvals := make(url.Values)
+	urlvals.Set("addr", addr)
+
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-subnet-route?"+urlvals.Encode(), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	var res apitype.SubnetRouteDebugResponse
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // SetComponentDebugLogging sets component's debug logging enabled for
 // the provided duration. If the duration is in the past, the debug logging
 // is disabled.

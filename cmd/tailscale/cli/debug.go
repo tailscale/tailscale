@@ -109,6 +109,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a magicsock rebind",
 		},
 		{
+			Name:      "subnet-router",
+			Exec:      runDebugSubnetRouter,
+			ShortHelp: "debug connectivity to a host through a subnet router",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
@@ -544,5 +549,19 @@ func runDebugComponentLogs(ctx context.Context, args []string) error {
 	} else {
 		fmt.Printf("Enabled debug logs for component %q for %v\n", component, dur)
 	}
+	return nil
+}
+
+func runDebugSubnetRouter(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: debug subnet-router <hostname-or-ipv6>")
+	}
+
+	s, err := localClient.DebugSubnetRoute(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	j, _ := json.MarshalIndent(s, "", "\t")
+	outln(string(j))
 	return nil
 }

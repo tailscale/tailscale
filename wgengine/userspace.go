@@ -1289,7 +1289,11 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func
 		return
 	}
 	peer := pip.Node
+	e.PingPeer(ip, peer, pingType, cb)
+}
 
+func (e *userspaceEngine) PingPeer(ip netip.Addr, peer *tailcfg.Node, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
+	res := &ipnstate.PingResult{IP: ip.String()}
 	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
 	switch pingType {
 	case "disco":
@@ -1297,7 +1301,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
 	case "ICMP":
-		e.sendICMPEchoRequest(ip, peer, res, cb)
+		e.SendICMPEchoRequest(ip, peer, res, cb)
 	}
 }
 
@@ -1318,7 +1322,7 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	return netip.Addr{}, errors.New("no self address in netmap matching address family")
 }
 
-func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (e *userspaceEngine) SendICMPEchoRequest(destIP netip.Addr, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	srcIP, err := e.mySelfIPMatchingFamily(destIP)
 	if err != nil {
 		res.Err = err.Error()

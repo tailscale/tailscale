@@ -169,6 +169,9 @@ func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
 func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
 	e.watchdog("Ping", func() { e.wrap.Ping(ip, pingType, cb) })
 }
+func (e *watchdogEngine) PingPeer(ip netip.Addr, peer *tailcfg.Node, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
+	e.watchdog("PingPeer", func() { e.wrap.PingPeer(ip, peer, pingType, cb) })
+}
 func (e *watchdogEngine) RegisterIPPortIdentity(ipp netip.AddrPort, tsIP netip.Addr) {
 	e.watchdog("RegisterIPPortIdentity", func() { e.wrap.RegisterIPPortIdentity(ipp, tsIP) })
 }

@@ -158,6 +158,8 @@ type Engine interface {
 	// then call cb with its ping latency & method.
 	Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
 
+	PingPeer(ip netip.Addr, peer *tailcfg.Node, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
+
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
 	// The IP:port is generally a localhost IP and an ephemeral port, used

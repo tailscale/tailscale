@@ -59,6 +59,7 @@ var handler = map[string]localAPIHandler{
 	"check-prefs":             (*Handler).serveCheckPrefs,
 	"component-debug-logging": (*Handler).serveComponentDebugLogging,
 	"debug":                   (*Handler).serveDebug,
+	"debug-subnet-route":      (*Handler).serveDebugSubnetRoute,
 	"derpmap":                 (*Handler).serveDERPMap,
 	"dial":                    (*Handler).serveDial,
 	"file-targets":            (*Handler).serveFileTargets,
@@ -414,6 +415,26 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 		res.Error = err.Error()
 	}
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
+}
+
+func (h *Handler) serveDebugSubnetRoute(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	addr := r.FormValue("addr")
+	res, err := h.b.DebugSubnetRoute(r.Context(), addr)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		json.NewEncoder(w).Encode(struct {
+			Errors []string
+		}{
+			Errors: []string{err.Error()},
+		})
+		return
+	}
+
 	json.NewEncoder(w).Encode(res)
 }
 

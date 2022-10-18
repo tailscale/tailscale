@@ -25,6 +25,7 @@ import (
 
 	"go4.org/netipx"
 	"golang.org/x/exp/slices"
+	"golang.org/x/sync/errgroup"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/doctor"
@@ -3722,6 +3723,193 @@ func (b *LocalBackend) DebugReSTUN() error {
 	}
 	mc.ReSTUN("explicit-debug")
 	return nil
+}
+
+func (b *LocalBackend) DebugSubnetRoute(ctx context.Context, addr string) (*apitype.SubnetRouteDebugResponse, error) {
+	b.mu.Lock()
+	nm := b.netMap
+	b.mu.Unlock()
+
+	if nm == nil {
+		return nil, errors.New("no netmap")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	out := &apitype.SubnetRouteDebugResponse{
+		InputAddr: addr,
+	}
+
+	returnWithError := func(format string, args ...any) (*apitype.SubnetRouteDebugResponse, error) {
+		if len(format) > 0 && format[len(format)-1] != '\n' {
+			format += "\n"
+		}
+		out.Errors = append(out.Errors, fmt.Sprintf(format, args...))
+		return out, nil
+	}
+
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
+		// Try resolving the address using both the Go and platform-specific resolver
+		var addrs []apitype.SubnetRouteDebugAddress
+		for _, preferGo := range []bool{true, false} {
+			resolver := net.Resolver{PreferGo: preferGo}
+			ips, err := resolver.LookupNetIP(ctx, "ip", addr)
+			if err != nil {
+				return returnWithError("error resolving address %q: %v", addr, err)
+			}
+			for _, ip := range ips {
+				addrs = append(addrs, apitype.SubnetRouteDebugAddress{
+					Addr:   ip.Unmap(),
+					Source: fmt.Sprintf("net.Resolver{PreferGo: %v}", preferGo),
+				})
+			}
+		}
+
+		// Pick the first IP, since we always expect it.
+		// TODO: try all IPs?
+		out.Addresses = addrs
+		ip = addrs[0].Addr
+	} else {
+		out.Addresses = []apitype.SubnetRouteDebugAddress{{
+			Addr:   ip,
+			Source: "user",
+		}}
+	}
+	ip = ip.Unmap()
+
+	// Try to determine which subnet router is routing this address.
+	type nodeWithMatching struct {
+		*tailcfg.Node
+		MatchingAllowedIPs []netip.Prefix
+	}
+	var ns []nodeWithMatching
+	for _, peer := range nm.Peers {
+		curr := nodeWithMatching{Node: peer}
+		for _, allowedip := range peer.AllowedIPs {
+			if !allowedip.Contains(ip) {
+				continue
+			}
+			curr.MatchingAllowedIPs = append(curr.MatchingAllowedIPs, allowedip)
+		}
+
+		if len(curr.MatchingAllowedIPs) > 0 {
+			ns = append(ns, curr)
+		}
+	}
+	if len(ns) == 0 {
+		return returnWithError("this node has no peers advertising a route for %s", ip)
+	}
+
+	// For each possible subnet router, check the status.
+	type nodeRes struct {
+		dn  apitype.SubnetRouteDebugNode
+		err error
+	}
+	nodeResults := make(chan nodeRes, len(ns))
+	grp, grpCtx := errgroup.WithContext(ctx)
+	grp.SetLimit(5)
+	for _, node := range ns {
+		node := node // capture loop variable
+		grp.Go(func() error {
+			var retErr error
+			dn := apitype.SubnetRouteDebugNode{
+				StableID:   node.StableID,
+				Name:       node.Name,
+				AllowedIPs: node.MatchingAllowedIPs,
+			}
+			defer func() {
+				nodeResults <- nodeRes{dn, retErr}
+			}()
+
+			// Check PrimaryRoutes
+			for _, pref := range node.PrimaryRoutes {
+				if pref.Contains(ip) {
+					dn.Primary = append(dn.Primary, pref)
+				}
+			}
+
+			// Check for exit node
+			if tsaddr.ContainsExitRoutes(node.AllowedIPs) {
+				dn.IsExitNode = true
+			}
+
+			// Do online checks after gathering all data that doesn't
+			// require an interaction, so we can 'continue' if the node
+			// isn't online.
+			if node.Online == nil {
+				dn.Online = "unknown"
+				return nil
+			} else if !*node.Online {
+				dn.Online = "false"
+				return nil
+			} else {
+				dn.Online = "true"
+			}
+
+			// Try pinging the node itself
+			// TODO: try all IPs?
+			// TODO: check if we have the right v4/v6 address support
+			candidates := []struct {
+				ty  tailcfg.PingType
+				res **apitype.SubnetRouteDebugPingResponse
+			}{
+				{tailcfg.PingDisco, &dn.DiscoPing},
+				{tailcfg.PingICMP, &dn.ICMPPing},
+			}
+			for _, cand := range candidates {
+				ip := node.Addresses[0].Addr()
+
+				res := &apitype.SubnetRouteDebugPingResponse{
+					IP: ip,
+				}
+				*cand.res = res
+
+				pingRes := make(chan *ipnstate.PingResult, 1)
+				b.e.Ping(ip, cand.ty, func(pr *ipnstate.PingResult) {
+					select {
+					case pingRes <- pr:
+					default:
+					}
+				})
+				select {
+				case pr := <-pingRes:
+					if pr.Err != "" {
+						res.Err = pr.Err
+					} else {
+						res.LatencySeconds = pr.LatencySeconds
+					}
+
+				case <-grpCtx.Done():
+					res.Err = grpCtx.Err().Error()
+					retErr = fmt.Errorf("context canceled while waiting for %s response from %v: %v", cand.ty, ip, grpCtx.Err())
+					return nil
+				}
+			}
+			return nil
+		})
+	}
+	grp.Wait()
+
+resultsLoop:
+	for i := 0; i < len(ns); i++ {
+		select {
+		case res := <-nodeResults:
+			if res.err != nil {
+				out.Errors = append(out.Errors, res.err.Error())
+			}
+			out.Nodes = append(out.Nodes, res.dn)
+
+		// We could have finished before starting all goroutines, so we
+		// need to handle the case where our channel doesn't have all
+		// the responses.
+		default:
+			break resultsLoop
+		}
+	}
+
+	return out, nil
 }
 
 func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
