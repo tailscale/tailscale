@@ -2347,7 +2347,7 @@ func (b *LocalBackend) doSetHostinfoFilterServices(hi *tailcfg.Hostinfo) {
 	}
 	peerAPIServices := b.peerAPIServicesLocked()
 	if b.egg {
-		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg"})
+		peerAPIServices = append(peerAPIServices, tailcfg.Service{Proto: "egg", Port: 1})
 	}
 	b.mu.Unlock()
 
