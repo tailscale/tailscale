@@ -501,7 +501,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 		fatalf("%s", err)
 	}
 	if justEditMP != nil {
-		justEditMP.EggSet = true
+		justEditMP.EggSet = egg
 		_, err := localClient.EditPrefs(ctx, justEditMP)
 		return err
 	}
