@@ -908,6 +908,21 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 
 	if st.NetMap != nil {
+		if envknob.NoLogsNoSupport() && hasCapability(st.NetMap, tailcfg.CapabilityDataPlaneAuditLogs) {
+			msg := "tailnet requires logging to be enabled. Remove -no-logs-no-support from tailscaled command line."
+			health.SetLocalLogConfigHealth(errors.New(msg))
+			// Connecting to this tailnet without logging is forbidden; boot us outta here.
+			b.mu.Lock()
+			prefs.WantRunning = false
+			p := prefs.View()
+			if err := b.pm.SetPrefs(p); err != nil {
+				b.logf("Failed to save new controlclient state: %v", err)
+			}
+			b.mu.Unlock()
+			np := stripKeysFromPrefs(p)
+			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &np})
+			return
+		}
 		if netMap != nil {
 			diff := st.NetMap.ConciseDiffFrom(netMap)
 			if strings.TrimSpace(diff) == "" {
@@ -4418,6 +4433,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
 	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
+	health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
 
