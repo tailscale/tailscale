@@ -820,6 +820,10 @@ Supply the tailnet in the path.
 
 ###### POST Body
 `capabilities` - A mapping of resources to permissible actions.
+
+`expirySeconds` - (Optional) How long the key is valid for in seconds.
+                  Defaults to 90d.
+
 ```
 {
   "capabilities": {
@@ -833,7 +837,8 @@ Supply the tailnet in the path.
         ]
       }
     }
-  }
+  },
+  "expirySeconds": 1440
 }
 ```
 
