@@ -3352,7 +3352,11 @@ type endpoint struct {
 
 	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
 
-	heartbeatDisabled bool // heartBeatTimer disabled for silent disco. See issue #540.
+	// The following fields are related to the new "silent disco"
+	// implementation that's a WIP as of 2022-10-20.
+	// See #540 for background.
+	heartbeatDisabled bool
+	pathFinderRunning bool
 }
 
 type pendingCLIPing struct {
@@ -3648,9 +3652,16 @@ func (de *endpoint) send(b []byte) error {
 		return fn(b)
 	}
 
-	now := mono.Now()
-
 	de.mu.Lock()
+
+	// if heartbeat disabled, kick off pathfinder
+	if de.heartbeatDisabled {
+		if !de.pathFinderRunning {
+			de.startPathFinder()
+		}
+	}
+
+	now := mono.Now()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
 	if de.canP2P() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
 		de.sendPingsLocked(now, true)
