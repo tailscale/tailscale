@@ -60,11 +60,54 @@ func TestProberTiming(t *testing.T) {
 		return nil
 	})
 
-	waitActiveProbes(t, p, 1)
+	waitActiveProbes(t, p, clk, 1)
 
 	called()
 	notCalled()
 	clk.Advance(probeInterval + halfProbeInterval)
+	called()
+	notCalled()
+	clk.Advance(quarterProbeInterval)
+	notCalled()
+	clk.Advance(probeInterval)
+	called()
+	notCalled()
+}
+
+func TestProberTimingSpread(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker).WithSpread(true)
+
+	invoked := make(chan struct{}, 1)
+
+	notCalled := func() {
+		t.Helper()
+		select {
+		case <-invoked:
+			t.Fatal("probe was invoked earlier than expected")
+		default:
+		}
+	}
+	called := func() {
+		t.Helper()
+		select {
+		case <-invoked:
+		case <-time.After(2 * time.Second):
+			t.Fatal("probe wasn't invoked as expected")
+		}
+	}
+
+	p.Run("test-spread-probe", probeInterval, nil, func(context.Context) error {
+		invoked <- struct{}{}
+		return nil
+	})
+
+	waitActiveProbes(t, p, clk, 1)
+
+	notCalled()
+	// Name of the probe (test-spread-probe) has been chosen to ensure that
+	// the initial delay is smaller than half of the probe interval.
+	clk.Advance(halfProbeInterval)
 	called()
 	notCalled()
 	clk.Advance(quarterProbeInterval)
@@ -111,7 +154,7 @@ func TestProberRun(t *testing.T) {
 		}
 	}
 
-	waitActiveProbes(t, p, startingProbes)
+	waitActiveProbes(t, p, clk, startingProbes)
 	checkCnt(startingProbes)
 	clk.Advance(probeInterval + halfProbeInterval)
 	checkCnt(startingProbes)
@@ -121,7 +164,7 @@ func TestProberRun(t *testing.T) {
 	for i := keep; i < startingProbes; i++ {
 		probes[i].Close()
 	}
-	waitActiveProbes(t, p, keep)
+	waitActiveProbes(t, p, clk, keep)
 
 	clk.Advance(probeInterval)
 	checkCnt(keep)
@@ -140,7 +183,7 @@ func TestExpvar(t *testing.T) {
 		return errors.New("failing, as instructed by test")
 	})
 
-	waitActiveProbes(t, p, 1)
+	waitActiveProbes(t, p, clk, 1)
 
 	check := func(name string, want probeInfo) {
 		t.Helper()
@@ -198,7 +241,7 @@ func TestPrometheus(t *testing.T) {
 		return errors.New("failing, as instructed by test")
 	})
 
-	waitActiveProbes(t, p, 1)
+	waitActiveProbes(t, p, clk, 1)
 
 	err := tstest.WaitFor(convergenceTimeout, func() error {
 		var b bytes.Buffer
@@ -326,6 +369,17 @@ func (t *fakeTime) Advance(d time.Duration) {
 	}
 }
 
+func (t *fakeTime) activeTickers() (count int) {
+	t.Lock()
+	defer t.Unlock()
+	for _, tick := range t.tickers {
+		if !tick.stopped {
+			count += 1
+		}
+	}
+	return
+}
+
 func probeExpvar(t *testing.T, p *Prober) map[string]*probeInfo {
 	t.Helper()
 	s := p.Expvar().String()
@@ -336,11 +390,14 @@ func probeExpvar(t *testing.T, p *Prober) map[string]*probeInfo {
 	return ret
 }
 
-func waitActiveProbes(t *testing.T, p *Prober, want int) {
+func waitActiveProbes(t *testing.T, p *Prober, clk *fakeTime, want int) {
 	t.Helper()
 	err := tstest.WaitFor(convergenceTimeout, func() error {
 		if got := p.activeProbes(); got != want {
-			return fmt.Errorf("active probe count is %d, want %d", got, want)
+			return fmt.Errorf("installed probe count is %d, want %d", got, want)
+		}
+		if got := clk.activeTickers(); got != want {
+			return fmt.Errorf("active ticker count is %d, want %d", got, want)
 		}
 		return nil
 	})
