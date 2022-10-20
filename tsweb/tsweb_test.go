@@ -437,6 +437,56 @@ func TestVarzHandler(t *testing.T) {
 			"api_status_code_2xx 100\napi_status_code_5xx 2\n",
 		},
 		{
+			"metrics_distribution",
+			"distribution_rtt",
+			func() *metrics.Distribution {
+				d := &metrics.Distribution{
+					Bins: []float64{1, 2, 5, 10},
+				}
+				d.AddFloat(0.5)
+				d.AddFloat(4)
+				d.AddFloat(15)
+				return d
+			}(),
+			strings.TrimSpace(`
+# TYPE distribution_rtt counter
+distribution_rtt{le="1"} 1
+distribution_rtt{le="5"} 1
+distribution_rtt{le="Inf"} 1
+# TYPE distribution_rtt_min gauge
+distribution_rtt_min 0.5
+# TYPE distribution_rtt_max gauge
+distribution_rtt_max 15
+# TYPE distribution_rtt_count gauge
+distribution_rtt_count 3
+`) + "\n",
+		},
+		{
+			"metrics_distribution_empty",
+			"distribution_empty",
+			func() *metrics.Distribution {
+				d := &metrics.Distribution{
+					Bins: []float64{1, 2, 5, 10},
+				}
+				d.Init()
+				return d
+			}(),
+			strings.TrimSpace(`
+# TYPE distribution_empty counter
+distribution_empty{le="1"} 0
+distribution_empty{le="2"} 0
+distribution_empty{le="5"} 0
+distribution_empty{le="10"} 0
+distribution_empty{le="Inf"} 0
+# TYPE distribution_empty_min gauge
+distribution_empty_min 0
+# TYPE distribution_empty_max gauge
+distribution_empty_max 0
+# TYPE distribution_empty_count gauge
+distribution_empty_count 0
+`) + "\n",
+		},
+		{
 			"func_float64",
 			"counter_x",
 			expvar.Func(func() any { return float64(1.2) }),

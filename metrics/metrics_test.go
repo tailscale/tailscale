@@ -5,6 +5,7 @@
 package metrics
 
 import (
+	"expvar"
 	"os"
 	"runtime"
 	"testing"
@@ -50,4 +51,32 @@ func BenchmarkCurrentFileDescriptors(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = CurrentFDs()
 	}
+}
+
+func TestDistribution(t *testing.T) {
+	d := &Distribution{
+		Map: expvar.Map{},
+		Bins: []float64{
+			2, 3, 5, 8, 13,
+		},
+	}
+
+	t.Run("Single", func(t *testing.T) {
+		d.AddFloat(1.0)
+		const expected = `{"2": 1, "count": 1, "max": 1, "min": 1}`
+		if ss := d.String(); ss != expected {
+			t.Errorf("got %q; want %q", ss, expected)
+		}
+	})
+
+	t.Run("Additional", func(t *testing.T) {
+		d.AddFloat(1.5)
+		d.AddFloat(2.5)
+		d.AddFloat(7)
+		d.AddFloat(15)
+		const expected = `{"2": 2, "3": 1, "8": 1, "count": 5, "inf": 1, "max": 15, "min": 1}`
+		if ss := d.String(); ss != expected {
+			t.Errorf("got %q; want %q", ss, expected)
+		}
+	})
 }

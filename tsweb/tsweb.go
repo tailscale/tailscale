@@ -497,6 +497,48 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			writePromExpVar(w, name+"_", kv)
 		})
 		return
+	case *metrics.Distribution:
+		type bucket struct {
+			le    float64
+			leStr string
+			value expvar.Var
+		}
+
+		var (
+			min, max, count expvar.Var
+			buckets         []bucket
+		)
+		v.Do(func(kv expvar.KeyValue) {
+			switch kv.Key {
+			case "min":
+				min = kv.Value
+			case "max":
+				max = kv.Value
+			case "count":
+				count = kv.Value
+			default:
+				ff, err := strconv.ParseFloat(kv.Key, 64)
+				if err == nil {
+					buckets = append(buckets, bucket{ff, kv.Key, kv.Value})
+				}
+			}
+		})
+
+		// Sort buckets by their numeric value, not string value.
+		sort.Slice(buckets, func(i, j int) bool {
+			return buckets[i].le < buckets[j].le
+		})
+
+		fmt.Fprintf(w, "# TYPE %s counter\n", name)
+		for _, bucket := range buckets {
+			fmt.Fprintf(w, "%s{le=%q} %v\n", name, bucket.leStr, bucket.value)
+		}
+
+		fmt.Fprintf(w, "# TYPE %s_min gauge\n%s_min %v\n", name, name, min)
+		fmt.Fprintf(w, "# TYPE %s_max gauge\n%s_max %v\n", name, name, max)
+		fmt.Fprintf(w, "# TYPE %s_count gauge\n%s_count %v\n", name, name, count)
+		return
+
 	case PrometheusMetricsReflectRooter:
 		root := v.PrometheusMetricsReflectRoot()
 		rv := reflect.ValueOf(root)
@@ -588,6 +630,9 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				fmt.Fprintf(w, "%s_%s %v\n", name, kv.Key, kv.Value)
 			})
 		}
+
+	case *metrics.Distribution:
+		// TODO
 	}
 }
 
