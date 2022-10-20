@@ -121,6 +121,17 @@ grouse
 universe
 galaxy
 atlas
+wyvern
+hydra
+gorgon
+chimera
+ladon
+scylla
+mermaid
+nessie
+hippocampus
+typhon
+qilin
 acoustic
 alpha
 altered
