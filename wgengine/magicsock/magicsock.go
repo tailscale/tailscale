@@ -3304,6 +3304,19 @@ func ippDebugString(ua netip.AddrPort) string {
 	return ua.String()
 }
 
+// endpointSendFunc is a func that writes an encrypted Wireguard payload from
+// WireGuard to a peer. It might write via UDP, DERP, both, or neither.
+//
+// What these funcs should NOT do is too much work. Minimize use of mutexes, map
+// lookups, etc. The idea is that selecting the path to use is done infrequently
+// and mostly async from sending packets. When conditions change (including the
+// passing of time and loss of confidence in certain routes), then a new send
+// func gets set on an sendpoint.
+//
+// A nil value means the current fast path has expired and needs to be
+// recalculated.
+type endpointSendFunc func([]byte) error
+
 // discoEndpoint is a wireguard/conn.Endpoint that picks the best
 // available path to communicate with a peer, based on network
 // conditions and what the peer supports.
@@ -3311,6 +3324,7 @@ type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
 	lastRecv              mono.Time
 	numStopAndResetAtomic int64
+	sendFunc              syncs.AtomicValue[endpointSendFunc] // nil or unset means unused
 
 	// These fields are initialized once and never modified.
 	c            *Conn
@@ -3630,6 +3644,10 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 }
 
 func (de *endpoint) send(b []byte) error {
+	if fn := de.sendFunc.Load(); fn != nil {
+		return fn(b)
+	}
+
 	now := mono.Now()
 
 	de.mu.Lock()
@@ -3836,6 +3854,9 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 			de.deleteEndpointLocked(ep)
 		}
 	}
+
+	// Node changed. Invalidate its sending fast path, if any.
+	de.sendFunc.Store(nil)
 }
 
 // addCandidateEndpoint adds ep as an endpoint to which we should send
