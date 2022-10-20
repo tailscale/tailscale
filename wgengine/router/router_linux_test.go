@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/netip"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/exp/slices"
 	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
@@ -837,5 +839,86 @@ Usage: busybox [function [arguments]...]
 
 	if got, want := fmt.Sprintf("%d.%d.%d", v1, v2, v3), "1.34.1"; got != want {
 		t.Errorf("version = %q, want %q", got, want)
+	}
+}
+
+func TestCIDRDiff(t *testing.T) {
+	pfx := func(p ...string) []netip.Prefix {
+		var ret []netip.Prefix
+		for _, s := range p {
+			ret = append(ret, netip.MustParsePrefix(s))
+		}
+		return ret
+	}
+	tests := []struct {
+		old     []netip.Prefix
+		new     []netip.Prefix
+		wantAdd []netip.Prefix
+		wantDel []netip.Prefix
+		final   []netip.Prefix
+	}{
+		{
+			old:     nil,
+			new:     pfx("1.1.1.1/32"),
+			wantAdd: pfx("1.1.1.1/32"),
+			final:   pfx("1.1.1.1/32"),
+		},
+		{
+			old:   pfx("1.1.1.1/32"),
+			new:   pfx("1.1.1.1/32"),
+			final: pfx("1.1.1.1/32"),
+		},
+		{
+			old:     pfx("1.1.1.1/32", "2.3.4.5/32"),
+			new:     pfx("1.1.1.1/32"),
+			wantDel: pfx("2.3.4.5/32"),
+			final:   pfx("1.1.1.1/32"),
+		},
+		{
+			old:     pfx("1.1.1.1/32", "2.3.4.5/32"),
+			new:     pfx("1.0.0.0/32", "3.4.5.6/32"),
+			wantDel: pfx("1.1.1.1/32", "2.3.4.5/32"),
+			wantAdd: pfx("1.0.0.0/32", "3.4.5.6/32"),
+			final:   pfx("1.0.0.0/32", "3.4.5.6/32"),
+		},
+	}
+	for _, tc := range tests {
+		om := make(map[netip.Prefix]bool)
+		for _, p := range tc.old {
+			om[p] = true
+		}
+		var added []netip.Prefix
+		var deleted []netip.Prefix
+		fm, err := cidrDiff("test", om, tc.new, func(p netip.Prefix) error {
+			if len(deleted) > 0 {
+				t.Error("delete called before add")
+			}
+			added = append(added, p)
+			return nil
+		}, func(p netip.Prefix) error {
+			deleted = append(deleted, p)
+			return nil
+		}, t.Logf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.SortFunc(added, func(a, b netip.Prefix) bool { return a.Addr().Less(b.Addr()) })
+		slices.SortFunc(deleted, func(a, b netip.Prefix) bool { return a.Addr().Less(b.Addr()) })
+		if !reflect.DeepEqual(added, tc.wantAdd) {
+			t.Errorf("added = %v, want %v", added, tc.wantAdd)
+		}
+		if !reflect.DeepEqual(deleted, tc.wantDel) {
+			t.Errorf("deleted = %v, want %v", deleted, tc.wantDel)
+		}
+
+		// Check that the final state is correct.
+		if len(fm) != len(tc.final) {
+			t.Fatalf("final state = %v, want %v", fm, tc.final)
+		}
+		for _, p := range tc.final {
+			if !fm[p] {
+				t.Errorf("final state = %v, want %v", fm, tc.final)
+			}
+		}
 	}
 }

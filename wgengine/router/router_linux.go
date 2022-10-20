@@ -1532,25 +1532,10 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 		ret[cidr] = true
 	}
 
-	var delFail []error
-	for cidr := range old {
-		if newMap[cidr] {
-			continue
-		}
-		if err := del(cidr); err != nil {
-			logf("%s del failed: %v", kind, err)
-			delFail = append(delFail, err)
-		} else {
-			delete(ret, cidr)
-		}
-	}
-	if len(delFail) == 1 {
-		return ret, delFail[0]
-	}
-	if len(delFail) > 0 {
-		return ret, fmt.Errorf("%d delete %s failures; first was: %w", len(delFail), kind, delFail[0])
-	}
-
+	// We want to add before we delete, so that if there is no overlap, we don't
+	// end up in a state where we have no addresses on an interface as that
+	// results in other kernel entities (like routes) pointing to that interface
+	// to also be deleted.
 	var addFail []error
 	for cidr := range newMap {
 		if old[cidr] {
@@ -1569,6 +1554,25 @@ func cidrDiff(kind string, old map[netip.Prefix]bool, new []netip.Prefix, add, d
 	}
 	if len(addFail) > 0 {
 		return ret, fmt.Errorf("%d add %s failures; first was: %w", len(addFail), kind, addFail[0])
+	}
+
+	var delFail []error
+	for cidr := range old {
+		if newMap[cidr] {
+			continue
+		}
+		if err := del(cidr); err != nil {
+			logf("%s del failed: %v", kind, err)
+			delFail = append(delFail, err)
+		} else {
+			delete(ret, cidr)
+		}
+	}
+	if len(delFail) == 1 {
+		return ret, delFail[0]
+	}
+	if len(delFail) > 0 {
+		return ret, fmt.Errorf("%d delete %s failures; first was: %w", len(delFail), kind, delFail[0])
 	}
 
 	return ret, nil
