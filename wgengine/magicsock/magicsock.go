@@ -2405,7 +2405,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 	c.netMap = nm
 
-	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
+	heartbeatDisabled := silentDiscoEnabled() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
 
 	// Try a pass of just upserting nodes and creating missing
 	// endpoints. If the set of nodes is the same, this is an
@@ -3417,6 +3417,7 @@ type endpoint struct {
 	// See #540 for background.
 	heartbeatDisabled bool
 	pathFinderRunning bool
+	lastSendAtomic    syncs.AtomicValue[mono.Time] // last time endpoint.send was called
 }
 
 type pendingCLIPing struct {
@@ -3708,6 +3709,9 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 }
 
 func (de *endpoint) send(b []byte) error {
+	now := mono.Now()
+	de.lastSendAtomic.Store(now)
+
 	if fn := de.sendFunc.Load(); fn != nil {
 		return fn(b)
 	}
@@ -3721,7 +3725,6 @@ func (de *endpoint) send(b []byte) error {
 		}
 	}
 
-	now := mono.Now()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
 	if de.canP2PLocked() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
 		de.sendPingsLocked(now, true)

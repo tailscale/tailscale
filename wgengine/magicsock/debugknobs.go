@@ -34,15 +34,16 @@ var (
 	debugReSTUNStopOnIdle = envknob.RegisterBool("TS_DEBUG_RESTUN_STOP_ON_IDLE")
 	// debugAlwaysDERP disables the use of UDP, forcing all peer communication over DERP.
 	debugAlwaysDERP = envknob.RegisterBool("TS_DEBUG_ALWAYS_USE_DERP")
-	// debugEnableSilentDisco disables the use of heartbeatTimer on the endpoint struct
-	// and attempts to handle disco silently. See issue #540 for details.
-	debugEnableSilentDisco = envknob.RegisterBool("TS_DEBUG_ENABLE_SILENT_DISCO")
 )
+
+// Unlike the other debug tweakables above, the following knobs needs to be
+// checked every time at runtime, because tests set this after program
+// startup.
 
 // inTest reports whether the running program is a test that set the
 // IN_TS_TEST environment variable.
-//
-// Unlike the other debug tweakables above, this one needs to be
-// checked every time at runtime, because tests set this after program
-// startup.
 func inTest() bool { return envknob.Bool("IN_TS_TEST") }
+
+// silentDiscoEnabled reports whether the running program enabled
+// silent disco to get rid of heartbeat pings. See issue #540 for details.
+func silentDiscoEnabled() bool { return envknob.Bool("TS_DEBUG_ENABLE_SILENT_DISCO") }
