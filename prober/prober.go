@@ -13,8 +13,10 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +30,10 @@ type ProbeFunc func(context.Context) error
 
 // a Prober manages a set of probes and keeps track of their results.
 type Prober struct {
+	// Whether to spread probe execution over time by introducing a
+	// random delay before the first probe run.
+	spread bool
+
 	// Time-related functions that get faked out during tests.
 	now       func() time.Time
 	newTicker func(time.Duration) ticker
@@ -65,18 +71,17 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ticker := p.newTicker(interval)
 	probe := &Probe{
 		prober:  p,
 		ctx:     ctx,
 		cancel:  cancel,
 		stopped: make(chan struct{}),
 
-		name:     name,
-		doProbe:  fun,
-		interval: interval,
-		tick:     ticker,
-		labels:   labels,
+		name:         name,
+		doProbe:      fun,
+		interval:     interval,
+		initialDelay: initialDelay(name, interval),
+		labels:       labels,
 	}
 	p.probes[name] = probe
 	go probe.loop()
@@ -88,6 +93,13 @@ func (p *Prober) unregister(probe *Probe) {
 	defer p.mu.Unlock()
 	name := probe.name
 	delete(p.probes, name)
+}
+
+// WithSpread is used to enable random delay before the first run of
+// each added probe.
+func (p *Prober) WithSpread(s bool) *Prober {
+	p.spread = s
+	return p
 }
 
 // Reports the number of registered probes. For tests only.
@@ -105,11 +117,12 @@ type Probe struct {
 	cancel  context.CancelFunc // run to initiate shutdown
 	stopped chan struct{}      // closed when shutdown is complete
 
-	name     string
-	doProbe  ProbeFunc
-	interval time.Duration
-	tick     ticker
-	labels   map[string]string
+	name         string
+	doProbe      ProbeFunc
+	interval     time.Duration
+	initialDelay time.Duration
+	tick         ticker
+	labels       map[string]string
 
 	mu     sync.Mutex
 	start  time.Time // last time doProbe started
@@ -127,12 +140,26 @@ func (p *Probe) Close() error {
 }
 
 // probeLoop invokes runProbe on fun every interval. The first probe
-// is run after interval.
+// is run after a random delay (if spreading is enabled) or immediately.
 func (p *Probe) loop() {
 	defer close(p.stopped)
 
-	// Do a first probe right away, so that the prober immediately exports results for everything.
-	p.run()
+	if p.prober.spread && p.initialDelay > 0 {
+		t := p.prober.newTicker(p.initialDelay)
+		select {
+		case <-t.Chan():
+			p.run()
+		case <-p.ctx.Done():
+			t.Stop()
+			return
+		}
+		t.Stop()
+	} else {
+		p.run()
+	}
+
+	p.tick = p.prober.newTicker(p.interval)
+	defer p.tick.Stop()
 	for {
 		select {
 		case <-p.tick.Chan():
@@ -309,4 +336,13 @@ func (t *realTicker) Chan() <-chan time.Time {
 
 func newRealTicker(d time.Duration) ticker {
 	return &realTicker{time.NewTicker(d)}
+}
+
+// initialDelay returns a pseudorandom duration in [0, interval) that
+// is based on the provided seed string.
+func initialDelay(seed string, interval time.Duration) time.Duration {
+	h := fnv.New64()
+	fmt.Fprint(h, seed)
+	r := rand.New(rand.NewSource(int64(h.Sum64()))).Float64()
+	return time.Duration(float64(interval) * r)
 }
