@@ -69,7 +69,7 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -v ./cmd/tailscale ./cmd/tailscaled
 
 FROM alpine:3.16
-RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
+RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables jq curl
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
 COPY --from=build-env /go/src/tailscale/docs/k8s/run.sh /usr/local/bin/

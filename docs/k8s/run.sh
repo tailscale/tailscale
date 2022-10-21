@@ -89,5 +89,22 @@ if [[ ! -z "${TS_DEST_IP}" ]]; then
   iptables -t nat -I PREROUTING -d "$(tailscale --socket=${TS_SOCKET} ip -4)" -j DNAT --to-destination "${TS_DEST_IP}"
 fi
 
+if [[ ! -z "${TS_KUBE_SECRET}" ]]; then
+	DEVICE_ID=$(tailscale --socket="${TS_SOCKET}" status --json | jq -r .Self.ID)
+	echo "Device ID is $DEVICE_ID"
+	NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+	TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+	if ! curl -s -X PATCH \
+		 --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+		 -H "Authorization: Bearer $TOKEN" \
+		 -H "Accept: application/json" \
+		 -H "Content-Type: application/strategic-merge-patch+json" \
+		 --data-raw "{\"data\":{\"device_id\": \"$DEVICE_ID\"}}" \
+		 "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS}/api/v1/namespaces/${NS}/secrets/${TS_KUBE_SECRET}?fieldManager=kubectl-patch" >/dev/null; then
+		echo "Failed to record Tailscale device ID"
+		exit 1
+	fi
+fi
+
 echo "Waiting for tailscaled to exit"
 wait ${PID}
