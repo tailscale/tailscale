@@ -27,7 +27,7 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Prefs
+//go:generate go run tailscale.com/cmd/viewer -type=Prefs
 
 // DefaultControlURL is the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
@@ -288,6 +288,8 @@ func (m *MaskedPrefs) Pretty() string {
 // IsEmpty reports whether p is nil or pointing to a Prefs zero value.
 func (p *Prefs) IsEmpty() bool { return p == nil || p.Equals(&Prefs{}) }
 
+func (p PrefsView) Pretty() string { return p.ж.Pretty() }
+
 func (p *Prefs) Pretty() string { return p.pretty(runtime.GOOS) }
 func (p *Prefs) pretty(goos string) string {
 	var sb strings.Builder
@@ -347,12 +349,20 @@ func (p *Prefs) pretty(goos string) string {
 	return sb.String()
 }
 
+func (p PrefsView) ToBytes() []byte {
+	return p.ж.ToBytes()
+}
+
 func (p *Prefs) ToBytes() []byte {
 	data, err := json.MarshalIndent(p, "", "\t")
 	if err != nil {
 		log.Fatalf("Prefs marshal: %v\n", err)
 	}
 	return data
+}
+
+func (p PrefsView) Equals(p2 PrefsView) bool {
+	return p.ж.Equals(p2.ж)
 }
 
 func (p *Prefs) Equals(p2 *Prefs) bool {
@@ -429,6 +439,14 @@ func NewPrefs() *Prefs {
 		WantRunning:      false,
 		NetfilterMode:    preftype.NetfilterOn,
 	}
+}
+
+// ControlURLOrDefault returns the coordination server's URL base.
+//
+// If not configured, or if the configured value is a legacy name equivalent to
+// the default, then DefaultControlURL is returned instead.
+func (p PrefsView) ControlURLOrDefault() string {
+	return p.ж.ControlURLOrDefault()
 }
 
 // ControlURLOrDefault returns the coordination server's URL base.
@@ -586,6 +604,12 @@ func (p *Prefs) SetExitNodeIP(s string, st *ipnstate.Status) error {
 		p.ExitNodeIP = ip
 	}
 	return err
+}
+
+// ShouldSSHBeRunning reports whether the SSH server should be running based on
+// the prefs.
+func (p PrefsView) ShouldSSHBeRunning() bool {
+	return p.Valid() && p.ж.ShouldSSHBeRunning()
 }
 
 // ShouldSSHBeRunning reports whether the SSH server should be running based on
