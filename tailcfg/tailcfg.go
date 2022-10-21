@@ -597,11 +597,10 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
-		ni.WorkingUDP, ni.WorkingICMPv4, ni.PreferredDERP,
-		ni.portMapSummary(),
-		ni.LinkType)
+		ni.OSHasIPv6, ni.WorkingUDP, ni.WorkingICMPv4,
+		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType)
 }
 
 func (ni *NetInfo) portMapSummary() string {

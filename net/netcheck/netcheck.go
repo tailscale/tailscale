@@ -1342,6 +1342,9 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 		}
 
 		fmt.Fprintf(w, " v6=%v", r.IPv6)
+		if !r.IPv6 {
+			fmt.Fprintf(w, " v6os=%v", r.OSHasIPv6)
+		}
 		fmt.Fprintf(w, " mapvarydest=%v", r.MappingVariesByDestIP)
 		fmt.Fprintf(w, " hair=%v", r.HairPinning)
 		if r.AnyPortMappingChecked() {
