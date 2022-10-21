@@ -54,3 +54,9 @@ pushspk: spk
 	echo "Pushing SPK to root@${SYNO_HOST} (env var SYNO_HOST) ..."
 	scp tailscale.spk root@${SYNO_HOST}:
 	ssh root@${SYNO_HOST} /usr/syno/bin/synopkg install tailscale.spk
+
+publishdevimage:
+	@test -n "${REPO}" || (echo "REPO=... required; e.g. REPO=ghcr.io/${USER}/tailscale" && exit 1)
+	@test "${REPO}" != "tailscale/tailscale" || (echo "REPO=... must not be tailscale/tailscale" && exit 1)
+	@test "${REPO}" != "ghcr.io/tailscale/tailscale" || (echo "REPO=... must not be ghcr.io/tailscale/tailscale" && exit 1)
+	TAGS=latest REPOS=${REPO} PUSH=true ./build_docker.sh
