@@ -12,7 +12,7 @@ import (
 	"tailscale.com/types/structs"
 )
 
-//go:generate go run tailscale.com/cmd/cloner -type=Persist
+//go:generate go run tailscale.com/cmd/viewer -type=Persist
 
 // Persist is the JSON type stored on disk on nodes to remember their
 // settings between runs.

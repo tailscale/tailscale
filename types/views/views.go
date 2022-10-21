@@ -201,6 +201,11 @@ func (v IPPrefixSlice) AsSlice() []netip.Prefix {
 	return v.ж.AsSlice()
 }
 
+// Filter returns a new slice, containing elements of v that match f.
+func (v IPPrefixSlice) Filter(f func(netip.Prefix) bool) []netip.Prefix {
+	return tsaddr.FilterPrefixesCopy(v.ж.ж, f)
+}
+
 // PrefixesContainsIP reports whether any IPPrefix contains IP.
 func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
 	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
