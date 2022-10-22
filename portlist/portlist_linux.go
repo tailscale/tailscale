@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
@@ -215,6 +216,8 @@ func addProcesses(pl []Port) ([]Port, error) {
 		pm[pl[i].inode] = &pl[i]
 	}
 
+	var pathBuf []byte
+
 	err := foreachPID(func(pid string) error {
 		fdPath := fmt.Sprintf("/proc/%s/fd", pid)
 
@@ -251,8 +254,9 @@ func addProcesses(pl []Port) ([]Port, error) {
 				return fmt.Errorf("addProcesses.readDir: %w", err)
 			}
 			for _, fd := range fds {
-				n, err := unix.Readlink(fmt.Sprintf("/proc/%s/fd/%s", pid, fd), targetBuf)
-				if err != nil {
+				pathBuf = fmt.Appendf(pathBuf[:0], "/proc/%s/fd/%s\x00", pid, fd)
+				n, ok := readlink(pathBuf, targetBuf)
+				if !ok {
 					// Not a symlink or no permission.
 					// Skip it.
 					continue
@@ -336,4 +340,23 @@ func fieldIndex(line []byte, n int) int {
 		}
 	}
 	return skip
+}
+
+// path must be null terminated.
+func readlink(path, buf []byte) (n int, ok bool) {
+	if len(buf) == 0 || len(path) < 2 || path[len(path)-1] != 0 {
+		return 0, false
+	}
+	var dirfd int = unix.AT_FDCWD
+	r0, _, e1 := unix.Syscall6(unix.SYS_READLINKAT,
+		uintptr(dirfd),
+		uintptr(unsafe.Pointer(&path[0])),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)),
+		0, 0)
+	n = int(r0)
+	if e1 != 0 {
+		return 0, false
+	}
+	return n, true
 }
