@@ -1530,7 +1530,7 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 func (b *LocalBackend) readPoller() {
 	n := 0
 	for {
-		ports, ok := <-b.portpoll.C
+		ports, ok := <-b.portpoll.Updates()
 		if !ok {
 			return
 		}
