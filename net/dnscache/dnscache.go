@@ -276,6 +276,11 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 netip.Addr, allIPs []netip.Add
 		return netip.Addr{}, netip.Addr{}, nil, fmt.Errorf("no IPs for %q found", host)
 	}
 
+        // Unmap everything; LookupNetIP can return mapped addresses (see #5698)
+	for i := range ips {
+		ips[i] = ips[i].Unmap()
+	}
+
 	have4 := false
 	for _, ipa := range ips {
 		if ipa.Is4() {
