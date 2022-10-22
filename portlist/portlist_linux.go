@@ -6,6 +6,7 @@ package portlist
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -13,12 +14,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
+	"tailscale.com/util/mak"
 )
 
 // Reading the sockfiles on Linux is very fast, so we can do it often.
@@ -35,13 +38,42 @@ const (
 	v4Any       = "00000000:0000"
 )
 
+var eofReader = bytes.NewReader(nil)
+
+var bufioReaderPool = &sync.Pool{
+	New: func() any { return bufio.NewReader(eofReader) },
+}
+
+type internedStrings struct {
+	m map[string]string
+}
+
+func (v *internedStrings) get(b []byte) string {
+	if s, ok := v.m[string(b)]; ok {
+		return s
+	}
+	s := string(b)
+	mak.Set(&v.m, s, s)
+	return s
+}
+
+var internedStringsPool = &sync.Pool{
+	New: func() any { return new(internedStrings) },
+}
+
 func appendListeningPorts(base []Port) ([]Port, error) {
 	ret := base
 	if sawProcNetPermissionErr.Load() {
 		return ret, nil
 	}
 
-	var br *bufio.Reader
+	br := bufioReaderPool.Get().(*bufio.Reader)
+	defer bufioReaderPool.Put(br)
+	defer br.Reset(eofReader)
+
+	stringCache := internedStringsPool.Get().(*internedStrings)
+	defer internedStringsPool.Put(stringCache)
+
 	for _, fname := range sockfiles {
 		// Android 10+ doesn't allow access to this anymore.
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
@@ -59,25 +91,24 @@ func appendListeningPorts(base []Port) ([]Port, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s", fname, err)
 		}
-		if br == nil {
-			br = bufio.NewReader(f)
-		} else {
-			br.Reset(f)
-		}
-		ports, err := parsePorts(br, filepath.Base(fname))
+		br.Reset(f)
+		ret, err = appendParsePorts(ret, stringCache, br, filepath.Base(fname))
 		f.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parsing %q: %w", fname, err)
 		}
-		ret = append(ret, ports...)
+	}
+	if len(stringCache.m) >= len(ret)*2 {
+		// Prevent unbounded growth of the internedStrings map.
+		stringCache.m = nil
 	}
 	return ret, nil
 }
 
 // fileBase is one of "tcp", "tcp6", "udp", "udp6".
-func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
+func appendParsePorts(base []Port, stringCache *internedStrings, r *bufio.Reader, fileBase string) ([]Port, error) {
 	proto := strings.TrimSuffix(fileBase, "6")
-	var ret []Port
+	ret := base
 
 	// skip header row
 	_, err := r.ReadSlice('\n')
@@ -171,7 +202,7 @@ func parsePorts(r *bufio.Reader, fileBase string) ([]Port, error) {
 		ret = append(ret, Port{
 			Proto: proto,
 			Port:  uint16(portv),
-			inode: string(inoBuf),
+			inode: stringCache.get(inoBuf),
 		})
 	}
 
