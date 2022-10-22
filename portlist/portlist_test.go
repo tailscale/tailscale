@@ -14,7 +14,7 @@ import (
 func TestGetList(t *testing.T) {
 	tstest.ResourceCheck(t)
 
-	pl, err := GetList(nil)
+	pl, err := getList(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 	defer ln.Close()
 	ta := ln.Addr().(*net.TCPAddr)
 	port := ta.Port
-	pl, err := GetList(nil)
+	pl, err := getList(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestSameInodes(t *testing.T) {
 func BenchmarkGetList(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, err := GetList(nil)
+		_, err := getList(nil)
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -45,7 +45,7 @@ func NewPoller() (*Poller, error) {
 	// Do one initial poll synchronously so we can return an error
 	// early.
 	var err error
-	p.prev, err = GetList(nil)
+	p.prev, err = getList(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (p *Poller) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-tick.C:
-			pl, err := GetList(p.prev)
+			pl, err := getList(p.prev)
 			if err != nil {
 				p.Err = err
 				return err
