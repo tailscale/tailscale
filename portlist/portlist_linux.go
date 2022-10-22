@@ -35,11 +35,11 @@ const (
 	v4Any       = "00000000:0000"
 )
 
-func listPorts() (List, error) {
+func appendListeningPorts(base []Port) ([]Port, error) {
+	ret := base
 	if sawProcNetPermissionErr.Load() {
-		return nil, nil
+		return ret, nil
 	}
-	var ret []Port
 
 	var br *bufio.Reader
 	for _, fname := range sockfiles {

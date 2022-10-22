@@ -8,8 +8,8 @@ import "time"
 
 const pollInterval = 365 * 24 * time.Hour
 
-func listPorts() (List, error) {
-	return nil, nil
+func appendListeningPorts(base []Port) ([]Port, error) {
+	return base, nil
 }
 
 func addProcesses(pl []Port) ([]Port, error) {

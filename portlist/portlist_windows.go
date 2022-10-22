@@ -15,11 +15,11 @@ import (
 // Forking on Windows is insanely expensive, so don't do it too often.
 const pollInterval = 5 * time.Second
 
-func listPorts() (List, error) {
+func appendListeningPorts(base []Port) ([]Port, error) {
 	// TODO(bradfitz): stop shelling out to netstat and use the
 	// net/netstat package instead. When doing so, be sure to filter
 	// out all of 127.0.0.0/8 and not just 127.0.0.1.
-	return listPortsNetstat("-na")
+	return appendListeningPortsNetstat(base, "-na")
 }
 
 func addProcesses(pl []Port) ([]Port, error) {
@@ -31,9 +31,9 @@ func addProcesses(pl []Port) ([]Port, error) {
 	}
 	defer tok.Close()
 	if !tok.IsElevated() {
-		return listPortsNetstat("-na")
+		return appendListeningPortsNetstat(nil, "-na")
 	}
-	return listPortsNetstat("-nab")
+	return appendListeningPortsNetstat(nil, "-nab")
 }
 
 func init() {

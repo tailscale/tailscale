@@ -55,7 +55,7 @@ type nothing struct{}
 // formats that we can parse without special detection logic.
 // Unfortunately, options to filter by proto or state are non-portable,
 // so we'll filter for ourselves.
-func parsePortsNetstat(output string) List {
+func appendParsePortsNetstat(base []Port, output string) []Port {
 	m := map[Port]nothing{}
 	lines := strings.Split(string(output), "\n")
 
@@ -131,13 +131,18 @@ func parsePortsNetstat(output string) List {
 		lastline = ""
 	}
 
-	l := []Port{}
+	ret := base
 	for p := range m {
-		l = append(l, p)
+		ret = append(ret, p)
 	}
-	sort.Slice(l, func(i, j int) bool {
-		return (&l[i]).lessThan(&l[j])
+
+	// Only sort the part we appended. It's up to the caller to sort the whole
+	// thing if they'd like. In practice the caller's base will have len 0,
+	// though, so the whole thing will be sorted.
+	toSort := ret[len(base):]
+	sort.Slice(toSort, func(i, j int) bool {
+		return (&toSort[i]).lessThan(&toSort[j])
 	})
 
-	return l
+	return ret
 }

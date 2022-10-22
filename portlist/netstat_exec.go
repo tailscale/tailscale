@@ -25,7 +25,7 @@ func hideWindow(c *exec.Cmd) *exec.Cmd {
 	return c
 }
 
-func listPortsNetstat(arg string) (List, error) {
+func appendListeningPortsNetstat(base []Port, arg string) ([]Port, error) {
 	exe, err := exec.LookPath("netstat")
 	if err != nil {
 		return nil, fmt.Errorf("netstat: lookup: %v", err)
@@ -40,5 +40,5 @@ func listPortsNetstat(arg string) (List, error) {
 		return nil, fmt.Errorf("netstat: %v (%q)", err, stderr)
 	}
 
-	return parsePortsNetstat(string(output)), nil
+	return appendParsePortsNetstat(base, string(output)), nil
 }
