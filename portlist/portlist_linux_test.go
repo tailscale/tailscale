@@ -132,8 +132,10 @@ func BenchmarkParsePorts(b *testing.B) {
 
 func BenchmarkListPorts(b *testing.B) {
 	b.ReportAllocs()
+	var base []Port
 	for i := 0; i < b.N; i++ {
-		_, err := listPorts()
+		var err error
+		base, err = appendListeningPorts(base[:0])
 		if err != nil {
 			b.Fatal(err)
 		}

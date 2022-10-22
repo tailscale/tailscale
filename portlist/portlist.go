@@ -76,18 +76,19 @@ func (pl List) String() string {
 
 var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 
-func getList(prev List) (List, error) {
+func (p *Poller) getList() (List, error) {
 	if debugDisablePortlist() {
 		return nil, nil
 	}
-	pl, err := listPorts()
+	var err error
+	p.scratch, err = appendListeningPorts(p.scratch[:0])
 	if err != nil {
 		return nil, fmt.Errorf("listPorts: %s", err)
 	}
-	pl = sortAndDedup(pl)
-	if pl.sameInodes(prev) {
+	pl := sortAndDedup(p.scratch)
+	if pl.sameInodes(p.prev) {
 		// Nothing changed, skip inode lookup
-		return prev, nil
+		return p.prev, nil
 	}
 	pl, err = addProcesses(pl)
 	if err != nil {

@@ -19,12 +19,15 @@ type Poller struct {
 	// Run completes, after which Err can be checked.
 	C <-chan List
 
-	c chan List
-
 	// Err is the error from the final GetList call. It is only
 	// valid to read once C has been closed. Err is nil if Close
 	// is called or the context is canceled.
 	Err error
+
+	// scatch is memory for Poller.getList to reuse between calls.
+	scratch []Port
+
+	c chan List // the unconstrained version of the exported C above
 
 	quitCh chan struct{} // close this to force exit
 	prev   List          // most recent data
@@ -45,7 +48,7 @@ func NewPoller() (*Poller, error) {
 	// Do one initial poll synchronously so we can return an error
 	// early.
 	var err error
-	p.prev, err = getList(nil)
+	p.prev, err = p.getList()
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +79,7 @@ func (p *Poller) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-tick.C:
-			pl, err := getList(p.prev)
+			pl, err := p.getList()
 			if err != nil {
 				p.Err = err
 				return err

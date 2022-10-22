@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !ios && !js
+// +build !ios,!js
+
 package portlist
 
 import (
@@ -83,7 +86,7 @@ func TestParsePortsNetstat(t *testing.T) {
 		Port{"udp", 9353, "iTunes", ""},
 	}
 
-	pl := parsePortsNetstat(netstatOutput)
+	pl := appendParsePortsNetstat(nil, netstatOutput)
 	jgot, _ := json.MarshalIndent(pl, "", "\t")
 	jwant, _ := json.MarshalIndent(want, "", "\t")
 	if len(pl) != len(want) {

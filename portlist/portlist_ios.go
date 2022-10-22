@@ -14,7 +14,7 @@ import (
 
 const pollInterval = 9999 * time.Hour
 
-func listPorts() (List, error) {
+func appendListeningPorts(base []Port) ([]Port, error) {
 	return nil, errors.New("not implemented")
 }
 
