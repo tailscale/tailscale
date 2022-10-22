@@ -52,7 +52,7 @@ func (a *Port) lessThan(b *Port) bool {
 }
 
 func (a List) sameInodes(b List) bool {
-	if a == nil || b == nil || len(a) != len(b) {
+	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {

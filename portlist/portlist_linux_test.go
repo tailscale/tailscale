@@ -76,6 +76,7 @@ func TestParsePorts(t *testing.T) {
 		},
 	}
 
+	stringCache := new(internedStrings)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := bytes.NewBufferString(tt.in)
@@ -84,7 +85,7 @@ func TestParsePorts(t *testing.T) {
 			if tt.file != "" {
 				file = tt.file
 			}
-			got, err := parsePorts(r, file)
+			got, err := appendParsePorts(nil, stringCache, r, file)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -116,11 +117,12 @@ func BenchmarkParsePorts(b *testing.B) {
 
 	r := bytes.NewReader(contents.Bytes())
 	br := bufio.NewReader(&contents)
+	stringCache := new(internedStrings)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		r.Seek(0, io.SeekStart)
 		br.Reset(r)
-		got, err := parsePorts(br, "tcp6")
+		got, err := appendParsePorts(nil, stringCache, br, "tcp6")
 		if err != nil {
 			b.Fatal(err)
 		}
