@@ -76,7 +76,7 @@ func (pl List) String() string {
 
 var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 
-func GetList(prev List) (List, error) {
+func getList(prev List) (List, error) {
 	if debugDisablePortlist() {
 		return nil, nil
 	}
