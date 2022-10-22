@@ -283,7 +283,8 @@ main() {
 			   [ "$VERSION" != "groovy" ] && \
 			   [ "$VERSION" != "hirsute" ] && \
 			   [ "$VERSION" != "impish" ] && \
-			   [ "$VERSION" != "jammy" ]
+			   [ "$VERSION" != "jammy" ] && \
+			   [ "$VERSION" != "kinetic" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
