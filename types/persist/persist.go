@@ -36,6 +36,11 @@ type Persist struct {
 	LoginName         string
 }
 
+// PublicNodeKey returns the public key for the node key.
+func (p *Persist) PublicNodeKey() key.NodePublic {
+	return p.PrivateNodeKey.Public()
+}
+
 func (p *Persist) Equals(p2 *Persist) bool {
 	if p == nil && p2 == nil {
 		return true
@@ -63,7 +68,7 @@ func (p *Persist) Pretty() string {
 		ok = p.OldPrivateNodeKey.Public()
 	}
 	if !p.PrivateNodeKey.IsZero() {
-		nk = p.PrivateNodeKey.Public()
+		nk = p.PublicNodeKey()
 	}
 	return fmt.Sprintf("Persist{lm=%v, o=%v, n=%v u=%#v}",
 		mk.ShortString(), ok.ShortString(), nk.ShortString(), p.LoginName)
