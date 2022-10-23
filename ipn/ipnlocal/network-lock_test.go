@@ -122,9 +122,9 @@ func TestTKAEnablementFlow(t *testing.T) {
 		cc:      cc,
 		ccAuto:  cc,
 		logf:    t.Logf,
-		prefs: &ipn.Prefs{
+		prefs: (&ipn.Prefs{
 			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
-		},
+		}).View(),
 	}
 
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
@@ -219,9 +219,9 @@ func TestTKADisablementFlow(t *testing.T) {
 			authority: authority,
 			storage:   chonk,
 		},
-		prefs: &ipn.Prefs{
+		prefs: (&ipn.Prefs{
 			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
-		},
+		}).View(),
 	}
 
 	// Test that the wrong disablement secret does not shut down the authority.
@@ -456,9 +456,9 @@ func TestTKASync(t *testing.T) {
 					authority: nodeAuthority,
 					storage:   nodeStorage,
 				},
-				prefs: &ipn.Prefs{
+				prefs: (&ipn.Prefs{
 					Persist: &persist.Persist{PrivateNodeKey: nodePriv},
-				},
+				}).View(),
 			}
 
 			// Finally, lets trigger a sync.
