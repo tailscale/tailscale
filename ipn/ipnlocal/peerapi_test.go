@@ -593,12 +593,12 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	if h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly offering exit node")
 	}
-	h.ps.b.prefs = &ipn.Prefs{
+	h.ps.b.prefs = (&ipn.Prefs{
 		AdvertiseRoutes: []netip.Prefix{
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},
-	}
+	}).View()
 	if !h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly not offering exit node")
 	}
