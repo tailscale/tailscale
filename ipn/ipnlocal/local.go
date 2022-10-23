@@ -3396,7 +3396,7 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	}
 
 	mk := machinePrivKey.Public()
-	nk := prefs.Persist().PrivateNodeKey.Public()
+	nk := prefs.Persist().PublicNodeKey()
 	return mk, nk
 }
 
@@ -3506,7 +3506,7 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 	b.mu.Lock()
 	cc := b.ccAuto
 	if b.prefs.Valid() {
-		req.NodeKey = b.prefs.Persist().PrivateNodeKey.Public()
+		req.NodeKey = b.prefs.Persist().PublicNodeKey()
 	}
 	b.mu.Unlock()
 	if cc == nil {
