@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// This file is just the types. The bulk of the code is in poller.go.
+
+// The portlist package contains code that checks what ports are open and
+// listening on the current machine.
 package portlist
 
 import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"tailscale.com/envknob"
 )
 
 // Port is a listening port on the machine.
@@ -72,29 +74,6 @@ func (pl List) String() string {
 			v.Proto, v.Port, v.inode, v.Process)
 	}
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
-
-func (p *Poller) getList() (List, error) {
-	if debugDisablePortlist() {
-		return nil, nil
-	}
-	var err error
-	p.scratch, err = appendListeningPorts(p.scratch[:0])
-	if err != nil {
-		return nil, fmt.Errorf("listPorts: %s", err)
-	}
-	pl := sortAndDedup(p.scratch)
-	if pl.sameInodes(p.prev) {
-		// Nothing changed, skip inode lookup
-		return p.prev, nil
-	}
-	pl, err = addProcesses(pl)
-	if err != nil {
-		return nil, fmt.Errorf("addProcesses: %s", err)
-	}
-	return pl, nil
 }
 
 // sortAndDedup sorts ps in place (by Port.lessThan) and then returns
