@@ -821,7 +821,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentCapabilityVersion,
 		KeepAlive:     c.keepAlive,
-		NodeKey:       persist.PrivateNodeKey.Public(),
+		NodeKey:       persist.PublicNodeKey(),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,

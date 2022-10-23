@@ -100,7 +100,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
 
-	ourNodeKey := b.prefs.Persist().PrivateNodeKey.Public()
+	ourNodeKey := b.prefs.Persist().PublicNodeKey()
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
@@ -342,7 +342,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	var ourNodeKey key.NodePublic
 	b.mu.Lock()
 	if b.prefs.Valid() {
-		ourNodeKey = b.prefs.Persist().PrivateNodeKey.Public()
+		ourNodeKey = b.prefs.Persist().PublicNodeKey()
 	}
 	b.mu.Unlock()
 	if ourNodeKey.IsZero() {
@@ -453,7 +453,7 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return nil
 	}
 
-	ourNodeKey := b.prefs.Persist().PrivateNodeKey.Public()
+	ourNodeKey := b.prefs.Persist().PublicNodeKey()
 	b.mu.Unlock()
 	resp, err := b.tkaDoSyncSend(ourNodeKey, aums, true)
 	b.mu.Lock()
