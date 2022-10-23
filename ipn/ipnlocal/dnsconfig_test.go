@@ -314,7 +314,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				verOS = "linux"
 			}
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, tt.prefs, log.Logf, verOS)
+			got := dnsConfigForNetmap(tt.nm, tt.prefs.View(), log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")

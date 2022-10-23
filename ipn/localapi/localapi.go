@@ -505,7 +505,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prefs access denied", http.StatusForbidden)
 		return
 	}
-	var prefs *ipn.Prefs
+	var prefs ipn.PrefsView
 	switch r.Method {
 	case "PATCH":
 		if !h.PermitWrite {
@@ -526,7 +526,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "GET", "HEAD":
-		prefs = h.b.Prefs()
+		prefs = h.b.Prefs().View()
 	default:
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 		return
