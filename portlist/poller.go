@@ -2,15 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// This file contains the code related to the Poller type and its methods.
+// The hot loop to keep efficient is Poller.Run.
+
 package portlist
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"tailscale.com/envknob"
 	"tailscale.com/version"
 )
+
+var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 
 // Poller scans the systems for listening ports periodically and sends
 // the results to C.
@@ -34,6 +41,9 @@ type Poller struct {
 func NewPoller() (*Poller, error) {
 	if version.OS() == "iOS" {
 		return nil, errors.New("not available on iOS")
+	}
+	if debugDisablePortlist() {
+		return nil, errors.New("portlist disabled by envknob")
 	}
 	p := &Poller{
 		c:       make(chan List),
@@ -112,4 +122,25 @@ func (p *Poller) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (p *Poller) getList() (List, error) {
+	if debugDisablePortlist() {
+		return nil, nil
+	}
+	var err error
+	p.scratch, err = appendListeningPorts(p.scratch[:0])
+	if err != nil {
+		return nil, fmt.Errorf("listPorts: %s", err)
+	}
+	pl := sortAndDedup(p.scratch)
+	if pl.sameInodes(p.prev) {
+		// Nothing changed, skip inode lookup
+		return p.prev, nil
+	}
+	pl, err = addProcesses(pl)
+	if err != nil {
+		return nil, fmt.Errorf("addProcesses: %s", err)
+	}
+	return pl, nil
 }
