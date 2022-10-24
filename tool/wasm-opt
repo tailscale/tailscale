@@ -1,0 +1,74 @@
+#!/bin/sh
+#
+# This script acts like the "wasm-opt" command from the Binaryen toolchain, but
+# uses Tailscale's currently-desired version, downloading it first if necessary.
+
+set -eu
+
+BINARYEN_DIR="$HOME/.cache/tailscale-binaryen"
+read -r BINARYEN_REV < "$(dirname "$0")/binaryen.rev"
+# This works for Linux and Darwin, which is sufficient
+# (we do not build for other targets).
+OS=$(uname -s | tr A-Z a-z)
+if [ "$OS" = "darwin" ]; then
+    # Binaryen uses the name "macos".
+    OS="macos"
+fi
+ARCH="$(uname -m)"
+if [ "$ARCH" = "aarch64" ]; then
+    # Binaryen uses the name "arm64".
+    ARCH="arm64"
+fi
+
+install_binaryen() {
+    BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_REV}/binaryen-version_${BINARYEN_REV}-${ARCH}-${OS}.tar.gz"
+    install_tool "wasm-opt" $BINARYEN_REV $BINARYEN_DIR $BINARYEN_URL
+}
+
+install_tool() {
+    TOOL=$1
+    REV=$2
+    TOOLCHAIN=$3
+    URL=$4
+
+    archive="$TOOLCHAIN-$REV.tar.gz"
+    mark="$TOOLCHAIN.extracted"
+    extracted=
+    [ ! -e "$mark" ] || read -r extracted junk <$mark
+
+    if [ "$extracted" = "$REV" ] && [ -e "$TOOLCHAIN/bin/$TOOL" ]; then
+        # Already extracted, continue silently
+        return 0
+    fi
+    echo ""
+
+    rm -f "$archive.new" "$TOOLCHAIN.extracted"
+    if [ ! -e "$archive" ]; then
+            log "Need to download $TOOL '$REV' from $URL."
+            curl -f -L -o "$archive.new" $URL
+            rm -f "$archive"
+            mv "$archive.new" "$archive"
+    fi
+
+    log "Extracting $TOOL '$REV' into '$TOOLCHAIN'." >&2
+    rm -rf "$TOOLCHAIN"
+    mkdir -p "$TOOLCHAIN"
+    (cd "$TOOLCHAIN" && tar --strip-components=1 -xf "$archive")
+    echo "$REV" >$mark
+}
+
+log() {
+    echo "$@" >&2
+}
+
+if [ "${BINARYEN_DIR}" = "SKIP" ] ||
+   [ "${OS}" != "macos" -a "${OS}" != "linux" ] ||
+   [ "${ARCH}" != "x86_64" -a "${ARCH}" != "arm64" ]; then
+    log "Unsupported OS (${OS}) and architecture (${ARCH}) combination."
+    log "Using existing wasm-opt (`which wasm-opt`)."
+    exec wasm-opt "$@"
+fi
+
+install_binaryen
+
+"$BINARYEN_DIR/bin/wasm-opt" "$@"
