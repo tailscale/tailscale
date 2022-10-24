@@ -46,6 +46,7 @@ func (nt *notifyThrottler) expect(count int) {
 
 // put adds one notification into the throttler's queue.
 func (nt *notifyThrottler) put(n ipn.Notify) {
+	nt.t.Helper()
 	nt.mu.Lock()
 	ch := nt.ch
 	nt.mu.Unlock()
@@ -592,8 +593,8 @@ func TestStateMachine(t *testing.T) {
 		cc.assertCalls("unpause", "unpause")
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
-		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -607,8 +608,8 @@ func TestStateMachine(t *testing.T) {
 		// still logged out. So it shouldn't call it again.
 		cc.assertCalls("StartLogout", "unpause")
 		cc.assertCalls()
-		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -620,8 +621,8 @@ func TestStateMachine(t *testing.T) {
 	{
 		notifies.drain(0)
 		cc.assertCalls("unpause", "unpause")
-		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -634,8 +635,8 @@ func TestStateMachine(t *testing.T) {
 	{
 		notifies.drain(0)
 		cc.assertCalls("Logout", "unpause")
-		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -647,8 +648,8 @@ func TestStateMachine(t *testing.T) {
 	{
 		notifies.drain(0)
 		cc.assertCalls("unpause", "unpause")
-		c.Assert(b.Prefs().LoggedOut, qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning, qt.IsFalse)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
@@ -915,6 +916,60 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(ipn.Running, qt.Equals, *nn[0].State)
 		c.Assert(ipn.Running, qt.Equals, b.State())
+	}
+}
+
+func TestEditPrefsHasNoKeys(t *testing.T) {
+	logf := t.Logf
+	store := new(testStateStorage)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	t.Cleanup(e.Close)
+
+	b, err := NewLocalBackend(logf, "logid", store, nil, e, 0)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	b.hostinfo = &tailcfg.Hostinfo{OS: "testos"}
+	b.prefs = (&ipn.Prefs{
+		Persist: &persist.Persist{
+			PrivateNodeKey:    key.NewNode(),
+			OldPrivateNodeKey: key.NewNode(),
+
+			LegacyFrontendPrivateMachineKey: key.NewMachine(),
+		},
+	}).View()
+	if b.prefs.Persist().PrivateNodeKey.IsZero() {
+		t.Fatalf("PrivateNodeKey not set")
+	}
+	p, err := b.EditPrefs(&ipn.MaskedPrefs{
+		Prefs: ipn.Prefs{
+			Hostname: "foo",
+		},
+		HostnameSet: true,
+	})
+	if err != nil {
+		t.Fatalf("EditPrefs: %v", err)
+	}
+	if p.Hostname() != "foo" {
+		t.Errorf("Hostname = %q; want foo", p.Hostname())
+	}
+
+	// Test that we can't see the PrivateNodeKey.
+	if !p.Persist().PrivateNodeKey.IsZero() {
+		t.Errorf("PrivateNodeKey = %v; want zero", p.Persist().PrivateNodeKey)
+	}
+
+	// Test that we can't see the PrivateNodeKey.
+	if !p.Persist().OldPrivateNodeKey.IsZero() {
+		t.Errorf("OldPrivateNodeKey = %v; want zero", p.Persist().OldPrivateNodeKey)
+	}
+
+	// Test that we can't see the PrivateNodeKey.
+	if !p.Persist().LegacyFrontendPrivateMachineKey.IsZero() {
+		t.Errorf("LegacyFrontendPrivateMachineKey = %v; want zero", p.Persist().LegacyFrontendPrivateMachineKey)
 	}
 }
 
