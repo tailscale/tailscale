@@ -47,7 +47,7 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 	}
 }
 
-func TestLessThan(t *testing.T) {
+func TestEqualLessThan(t *testing.T) {
 	tests := []struct {
 		name string
 		a, b Port
@@ -55,80 +55,62 @@ func TestLessThan(t *testing.T) {
 	}{
 		{
 			"Port a < b",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
+			Port{Proto: "tcp", Port: 101, Process: "proc1"},
 			true,
 		},
 		{
 			"Port a > b",
-			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 101, Process: "proc1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
 			false,
 		},
 		{
 			"Proto a < b",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
+			Port{Proto: "udp", Port: 100, Process: "proc1"},
 			true,
 		},
 		{
 			"Proto a < b",
-			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			false,
-		},
-		{
-			"inode a < b",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode2"},
-			true,
-		},
-		{
-			"inode a > b",
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode2"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "udp", Port: 100, Process: "proc1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
 			false,
 		},
 		{
 			"Process a < b",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2"},
 			true,
 		},
 		{
 			"Process a > b",
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
 			false,
 		},
 		{
 			"Port evaluated first",
-			Port{Proto: "udp", Port: 100, Process: "proc2", inode: "inode2"},
-			Port{Proto: "tcp", Port: 101, Process: "proc1", inode: "inode1"},
+			Port{Proto: "udp", Port: 100, Process: "proc2"},
+			Port{Proto: "tcp", Port: 101, Process: "proc1"},
 			true,
 		},
 		{
 			"Proto evaluated second",
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode2"},
-			Port{Proto: "udp", Port: 100, Process: "proc1", inode: "inode1"},
-			true,
-		},
-		{
-			"inode evaluated third",
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode2"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2"},
+			Port{Proto: "udp", Port: 100, Process: "proc1"},
 			true,
 		},
 		{
 			"Process evaluated fourth",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc2", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc2"},
 			true,
 		},
 		{
 			"equal",
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
-			Port{Proto: "tcp", Port: 100, Process: "proc1", inode: "inode1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
+			Port{Proto: "tcp", Port: 100, Process: "proc1"},
 			false,
 		},
 	}
@@ -138,58 +120,14 @@ func TestLessThan(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
 		}
-	}
-}
-
-func TestSameInodes(t *testing.T) {
-	port1 := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode1"}
-	port2 := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode1"}
-	portProto := Port{Proto: "udp", Port: 100, Process: "proc", inode: "inode1"}
-	portPort := Port{Proto: "tcp", Port: 101, Process: "proc", inode: "inode1"}
-	portInode := Port{Proto: "tcp", Port: 100, Process: "proc", inode: "inode2"}
-	portProcess := Port{Proto: "tcp", Port: 100, Process: "other", inode: "inode1"}
-
-	tests := []struct {
-		name string
-		a, b List
-		want bool
-	}{
-		{
-			"identical",
-			List{port1, port1},
-			List{port2, port2},
-			true,
-		},
-		{
-			"proto differs",
-			List{port1, port1},
-			List{port2, portProto},
-			false,
-		},
-		{
-			"port differs",
-			List{port1, port1},
-			List{port2, portPort},
-			false,
-		},
-		{
-			"inode differs",
-			List{port1, port1},
-			List{port2, portInode},
-			false,
-		},
-		{
-			// SameInodes does not check the Process field
-			"Process differs",
-			List{port1, port1},
-			List{port2, portProcess},
-			true,
-		},
-	}
-	for _, tt := range tests {
-		got := tt.a.sameInodes(tt.b)
-		if got != tt.want {
-			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
+		lessBack := tt.b.lessThan(&tt.a)
+		if got && lessBack {
+			t.Errorf("%s: both a and b report being less than each other", tt.name)
+		}
+		wantEqual := !got && !lessBack
+		gotEqual := tt.a.equal(&tt.b)
+		if gotEqual != wantEqual {
+			t.Errorf("%s: equal = %v; want %v", tt.name, gotEqual, wantEqual)
 		}
 	}
 }
