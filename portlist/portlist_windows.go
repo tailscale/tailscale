@@ -5,39 +5,122 @@
 package portlist
 
 import (
-	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
+	"tailscale.com/net/netstat"
 )
 
 // Forking on Windows is insanely expensive, so don't do it too often.
 const pollInterval = 5 * time.Second
 
-func appendListeningPorts(base []Port) ([]Port, error) {
-	// TODO(bradfitz): stop shelling out to netstat and use the
-	// net/netstat package instead. When doing so, be sure to filter
-	// out all of 127.0.0.0/8 and not just 127.0.0.1.
-	return appendListeningPortsNetstat(base, "-na")
+func init() {
+	newOSImpl = newWindowsImpl
 }
 
-func addProcesses(pl []Port) ([]Port, error) {
-	// OpenCurrentProcessToken instead of GetCurrentProcessToken,
-	// as GetCurrentProcessToken only works on Windows 8+.
-	tok, err := windows.OpenCurrentProcessToken()
+type famPort struct {
+	proto string
+	port  uint16
+	pid   uintptr
+}
+
+type windowsImpl struct {
+	known map[famPort]*portMeta // inode string => metadata
+}
+
+type portMeta struct {
+	port Port
+	keep bool
+}
+
+func newWindowsImpl() osImpl {
+	return &windowsImpl{
+		known: map[famPort]*portMeta{},
+	}
+}
+
+func (*windowsImpl) Close() error { return nil }
+
+func (im *windowsImpl) AppendListeningPorts(base []Port) ([]Port, error) {
+	// TODO(bradfitz): netstat.Get makes a bunch of garbage. Add an Append-style
+	// API to that package instead/additionally.
+	tab, err := netstat.Get()
 	if err != nil {
 		return nil, err
 	}
-	defer tok.Close()
-	if !tok.IsElevated() {
-		return appendListeningPortsNetstat(nil, "-na")
+
+	for _, pm := range im.known {
+		pm.keep = false
 	}
-	return appendListeningPortsNetstat(nil, "-nab")
+
+	ret := base
+	for _, e := range tab.Entries {
+		if e.State != "LISTEN" {
+			continue
+		}
+		if !e.Local.Addr().IsUnspecified() {
+			continue
+		}
+		fp := famPort{
+			proto: "tcp", // TODO(bradfitz): UDP too; add to netstat
+			port:  e.Local.Port(),
+			pid:   uintptr(e.Pid),
+		}
+		pm, ok := im.known[fp]
+		if ok {
+			pm.keep = true
+			continue
+		}
+		pm = &portMeta{
+			keep: true,
+			port: Port{
+				Proto:   "tcp",
+				Port:    e.Local.Port(),
+				Process: procNameOfPid(e.Pid),
+			},
+		}
+		im.known[fp] = pm
+	}
+
+	for k, m := range im.known {
+		if !m.keep {
+			delete(im.known, k)
+			continue
+		}
+		ret = append(ret, m.port)
+	}
+	return sortAndDedup(ret), nil
 }
 
-func init() {
-	osHideWindow = func(c *exec.Cmd) {
-		c.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+func procNameOfPid(pid int) string {
+	const da = windows.PROCESS_QUERY_LIMITED_INFORMATION
+	h, err := syscall.OpenProcess(da, false, uint32(pid))
+	if err != nil {
+		return ""
 	}
+	defer syscall.CloseHandle(h)
+
+	var buf [512]uint16
+	var size = uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(windows.Handle(h), 0, &buf[0], &size); err != nil {
+		return ""
+	}
+	name := filepath.Base(windows.UTF16ToString(buf[:]))
+	if name == "." {
+		return ""
+	}
+	name = strings.TrimSuffix(name, ".exe")
+	name = strings.TrimSuffix(name, ".EXE")
+	return name
+}
+
+func appendListeningPorts([]Port) ([]Port, error) {
+	panic("unused on windows; needed to compile for now")
+}
+
+func addProcesses([]Port) ([]Port, error) {
+	panic("unused on windows; needed to compile for now")
 }
