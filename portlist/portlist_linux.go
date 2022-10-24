@@ -7,15 +7,15 @@ package portlist
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -25,12 +25,61 @@ import (
 	"tailscale.com/util/mak"
 )
 
+func init() {
+	newOSImpl = newLinuxImpl
+}
+
+type linuxImpl struct {
+	procNetFiles []*os.File // seeked to start & reused between calls
+
+	known map[string]*portMeta // inode string => metadata
+	br    *bufio.Reader
+}
+
+type portMeta struct {
+	port          Port
+	keep          bool
+	needsProcName bool
+}
+
+func newLinuxImplBase() *linuxImpl {
+	return &linuxImpl{
+		br:    bufio.NewReader(eofReader),
+		known: map[string]*portMeta{},
+	}
+}
+
+func newLinuxImpl() osImpl {
+	li := newLinuxImplBase()
+	for _, name := range []string{
+		"/proc/net/tcp",
+		"/proc/net/tcp6",
+		"/proc/net/udp",
+		"/proc/net/udp6",
+	} {
+		f, err := os.Open(name)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			log.Printf("portlist warning; ignoring: %v", err)
+			continue
+		}
+		li.procNetFiles = append(li.procNetFiles, f)
+	}
+	return li
+}
+
+func (li *linuxImpl) Close() error {
+	for _, f := range li.procNetFiles {
+		f.Close()
+	}
+	li.procNetFiles = nil
+	return nil
+}
+
 // Reading the sockfiles on Linux is very fast, so we can do it often.
 const pollInterval = 1 * time.Second
-
-var sockfiles = []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"}
-
-var sawProcNetPermissionErr atomic.Bool
 
 const (
 	v6Localhost = "00000000000000000000000001000000:"
@@ -41,80 +90,68 @@ const (
 
 var eofReader = bytes.NewReader(nil)
 
-var bufioReaderPool = &sync.Pool{
-	New: func() any { return bufio.NewReader(eofReader) },
-}
-
-type internedStrings struct {
-	m map[string]string
-}
-
-func (v *internedStrings) get(b []byte) string {
-	if s, ok := v.m[string(b)]; ok {
-		return s
-	}
-	s := string(b)
-	mak.Set(&v.m, s, s)
-	return s
-}
-
-var internedStringsPool = &sync.Pool{
-	New: func() any { return new(internedStrings) },
-}
-
-func appendListeningPorts(base []Port) ([]Port, error) {
-	ret := base
-	if sawProcNetPermissionErr.Load() {
-		return ret, nil
-	}
-
-	br := bufioReaderPool.Get().(*bufio.Reader)
-	defer bufioReaderPool.Put(br)
-	defer br.Reset(eofReader)
-
-	stringCache := internedStringsPool.Get().(*internedStrings)
-	defer internedStringsPool.Put(stringCache)
-
-	for _, fname := range sockfiles {
+func (li *linuxImpl) AppendListeningPorts(base []Port) ([]Port, error) {
+	if runtime.GOOS == "android" {
 		// Android 10+ doesn't allow access to this anymore.
 		// https://developer.android.com/about/versions/10/privacy/changes#proc-net-filesystem
 		// Ignore it rather than have the system log about our violation.
-		if runtime.GOOS == "android" && syscall.Access(fname, unix.R_OK) != nil {
-			sawProcNetPermissionErr.Store(true)
-			return nil, nil
-		}
+		return nil, nil
+	}
 
-		f, err := os.Open(fname)
-		if os.IsPermission(err) {
-			sawProcNetPermissionErr.Store(true)
-			return nil, nil
-		}
+	br := li.br
+	defer br.Reset(eofReader)
+
+	// Start by marking all previous known ports as gone. If this mark
+	// bit is still false later, we'll remove them.
+	for _, pm := range li.known {
+		pm.keep = false
+	}
+
+	for _, f := range li.procNetFiles {
+		name := f.Name()
+		_, err := f.Seek(0, io.SeekStart)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %s", fname, err)
+			return nil, err
 		}
 		br.Reset(f)
-		ret, err = appendParsePorts(ret, stringCache, br, filepath.Base(fname))
-		f.Close()
+		err = li.parseProcNetFile(br, filepath.Base(name))
 		if err != nil {
-			return nil, fmt.Errorf("parsing %q: %w", fname, err)
+			return nil, fmt.Errorf("parsing %q: %w", name, err)
 		}
 	}
-	if len(stringCache.m) >= len(ret)*2 {
-		// Prevent unbounded growth of the internedStrings map.
-		stringCache.m = nil
+
+	// Delete ports that aren't open any longer.
+	// And see if there are any process names we need to look for.
+	var needProc map[string]*portMeta
+	for inode, pm := range li.known {
+		if !pm.keep {
+			delete(li.known, inode)
+			continue
+		}
+		if pm.needsProcName {
+			mak.Set(&needProc, inode, pm)
+		}
 	}
-	return ret, nil
+	err := li.findProcessNames(needProc)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := base
+	for _, pm := range li.known {
+		ret = append(ret, pm.port)
+	}
+	return sortAndDedup(ret), nil
 }
 
 // fileBase is one of "tcp", "tcp6", "udp", "udp6".
-func appendParsePorts(base []Port, stringCache *internedStrings, r *bufio.Reader, fileBase string) ([]Port, error) {
+func (li *linuxImpl) parseProcNetFile(r *bufio.Reader, fileBase string) error {
 	proto := strings.TrimSuffix(fileBase, "6")
-	ret := base
 
 	// skip header row
 	_, err := r.ReadSlice('\n')
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	fields := make([]mem.RO, 0, 20) // 17 current fields + some future slop
@@ -144,7 +181,7 @@ func appendParsePorts(base []Port, stringCache *internedStrings, r *bufio.Reader
 			break
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		rows++
 		if rows >= maxRows {
@@ -191,30 +228,48 @@ func appendParsePorts(base []Port, stringCache *internedStrings, r *bufio.Reader
 		// allocations significant enough to show up in profiles.
 		i := mem.IndexByte(local, ':')
 		if i == -1 {
-			return nil, fmt.Errorf("%q unexpectedly didn't have a colon", local.StringCopy())
+			return fmt.Errorf("%q unexpectedly didn't have a colon", local.StringCopy())
 		}
 		portv, err := mem.ParseUint(local.SliceFrom(i+1), 16, 16)
 		if err != nil {
-			return nil, fmt.Errorf("%#v: %s", local.SliceFrom(9).StringCopy(), err)
+			return fmt.Errorf("%#v: %s", local.SliceFrom(9).StringCopy(), err)
 		}
 		inoBuf = append(inoBuf[:0], "socket:["...)
 		inoBuf = mem.Append(inoBuf, inode)
 		inoBuf = append(inoBuf, ']')
-		ret = append(ret, Port{
-			Proto: proto,
-			Port:  uint16(portv),
-			inode: stringCache.get(inoBuf),
-		})
+
+		if pm, ok := li.known[string(inoBuf)]; ok {
+			pm.keep = true
+			// Rest should be unchanged.
+		} else {
+			li.known[string(inoBuf)] = &portMeta{
+				needsProcName: true,
+				keep:          true,
+				port: Port{
+					Proto: proto,
+					Port:  uint16(portv),
+				},
+			}
+		}
 	}
 
-	return ret, nil
+	return nil
 }
 
-func addProcesses(pl []Port) ([]Port, error) {
-	pm := map[string]*Port{} // by Port.inode
-	for i := range pl {
-		pm[pl[i].inode] = &pl[i]
+// errDone is an internal sentinel error that we found everything we were looking for.
+var errDone = errors.New("done")
+
+// need is keyed by inode string.
+func (li *linuxImpl) findProcessNames(need map[string]*portMeta) error {
+	if len(need) == 0 {
+		return nil
 	}
+	defer func() {
+		// Anything we didn't find, give up on and don't try to look for it later.
+		for _, pm := range need {
+			pm.needsProcName = false
+		}
+	}()
 
 	var pathBuf []byte
 
@@ -262,7 +317,7 @@ func addProcesses(pl []Port) ([]Port, error) {
 					continue
 				}
 
-				pe := pm[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
+				pe := need[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
 				if pe != nil {
 					bs, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid))
 					if err != nil {
@@ -272,15 +327,20 @@ func addProcesses(pl []Port) ([]Port, error) {
 					}
 
 					argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
-					pe.Process = argvSubject(argv...)
+					pe.port.Process = argvSubject(argv...)
+					pe.needsProcName = false
+					delete(need, string(targetBuf[:n]))
+					if len(need) == 0 {
+						return errDone
+					}
 				}
 			}
 		}
 	})
-	if err != nil {
-		return nil, err
+	if err == errDone {
+		return nil
 	}
-	return pl, nil
+	return err
 }
 
 func foreachPID(fn func(pidStr string) error) error {
@@ -359,4 +419,12 @@ func readlink(path, buf []byte) (n int, ok bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func appendListeningPorts([]Port) ([]Port, error) {
+	panic("unused on linux; needed to compile for now")
+}
+
+func addProcesses([]Port) ([]Port, error) {
+	panic("unused on linux; needed to compile for now")
 }

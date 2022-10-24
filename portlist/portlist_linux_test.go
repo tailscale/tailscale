@@ -41,12 +41,12 @@ func TestParsePorts(t *testing.T) {
 		name string
 		in   string
 		file string
-		want []Port
+		want map[string]*portMeta
 	}{
 		{
 			name: "empty",
 			in:   "header line (ignored)\n",
-			want: nil,
+			want: map[string]*portMeta{},
 		},
 		{
 			name: "ipv4",
@@ -56,8 +56,10 @@ func TestParsePorts(t *testing.T) {
   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 34062 1 0000000000000000 100 0 0 10 0
   2: 5501A8C0:ADD4 B25E9536:01BB 01 00000000:00000000 02:00000B2B 00000000  1000        0 155276677 2 0000000000000000 22 4 30 10 -1
 `,
-			want: []Port{
-				{Proto: "tcp", Port: 22, inode: "socket:[34062]"},
+			want: map[string]*portMeta{
+				"socket:[34062]": &portMeta{
+					port: Port{Proto: "tcp", Port: 22},
+				},
 			},
 		},
 		{
@@ -69,14 +71,17 @@ func TestParsePorts(t *testing.T) {
    2: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 34064 1 0000000000000000 100 0 0 10 0
    3: 69050120005716BC64906EBE009ECD4D:D506 0047062600000000000000006E171268:01BB 01 00000000:00000000 02:0000009E 00000000  1000        0 151042856 2 0000000000000000 21 4 28 10 -1
 `,
-			want: []Port{
-				{Proto: "tcp", Port: 8081, inode: "socket:[142240557]"},
-				{Proto: "tcp", Port: 22, inode: "socket:[34064]"},
+			want: map[string]*portMeta{
+				"socket:[142240557]": &portMeta{
+					port: Port{Proto: "tcp", Port: 8081},
+				},
+				"socket:[34064]": &portMeta{
+					port: Port{Proto: "tcp", Port: 22},
+				},
 			},
 		},
 	}
 
-	stringCache := new(internedStrings)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := bytes.NewBufferString(tt.in)
@@ -85,12 +90,16 @@ func TestParsePorts(t *testing.T) {
 			if tt.file != "" {
 				file = tt.file
 			}
-			got, err := appendParsePorts(nil, stringCache, r, file)
+			li := newLinuxImplBase()
+			err := li.parseProcNetFile(r, file)
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			if diff := cmp.Diff(got, tt.want, cmp.AllowUnexported(Port{})); diff != "" {
+			for _, pm := range tt.want {
+				pm.keep = true
+				pm.needsProcName = true
+			}
+			if diff := cmp.Diff(li.known, tt.want, cmp.AllowUnexported(Port{}), cmp.AllowUnexported(portMeta{})); diff != "" {
 				t.Errorf("unexpected parsed ports (-got+want):\n%s", diff)
 			}
 		})
@@ -110,36 +119,20 @@ func BenchmarkParsePorts(b *testing.B) {
 		contents.WriteString("   3: 69050120005716BC64906EBE009ECD4D:D506 0047062600000000000000006E171268:01BB 01 00000000:00000000 02:0000009E 00000000  1000        0 151042856 2 0000000000000000 21 4 28 10 -1\n")
 	}
 
-	want := []Port{
-		{Proto: "tcp", Port: 8081, inode: "socket:[142240557]"},
-		{Proto: "tcp", Port: 22, inode: "socket:[34064]"},
-	}
+	li := newLinuxImplBase()
 
 	r := bytes.NewReader(contents.Bytes())
 	br := bufio.NewReader(&contents)
-	stringCache := new(internedStrings)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		r.Seek(0, io.SeekStart)
 		br.Reset(r)
-		got, err := appendParsePorts(nil, stringCache, br, "tcp6")
+		err := li.parseProcNetFile(br, "tcp6")
 		if err != nil {
 			b.Fatal(err)
 		}
-		if len(got) != 2 || got[0].Port != 8081 || got[1].Port != 22 {
-			b.Fatalf("wrong result:\n got %+v\nwant %+v", got, want)
-		}
-	}
-}
-
-func BenchmarkListPorts(b *testing.B) {
-	b.ReportAllocs()
-	var base []Port
-	for i := 0; i < b.N; i++ {
-		var err error
-		base, err = appendListeningPorts(base[:0])
-		if err != nil {
-			b.Fatal(err)
+		if len(li.known) != 2 {
+			b.Fatalf("wrong results; want 2 parsed got %d", len(li.known))
 		}
 	}
 }
