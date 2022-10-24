@@ -27,7 +27,7 @@ func runBuildPkg() {
 		log.Fatalf("Linting failed: %v", err)
 	}
 
-	if err := cleanDir(*pkgDir, "package.json"); err != nil {
+	if err := cleanDir(*pkgDir); err != nil {
 		log.Fatalf("Cannot clean %s: %v", *pkgDir, err)
 	}
 
@@ -49,6 +49,10 @@ func runBuildPkg() {
 
 	if err := updateVersion(); err != nil {
 		log.Fatalf("Cannot update version: %v", err)
+	}
+
+	if err := copyReadme(); err != nil {
+		log.Fatalf("Cannot copy readme: %v", err)
 	}
 
 	log.Printf("Built package version %s", version.Long)
@@ -83,4 +87,12 @@ func updateVersion() error {
 	}
 
 	return os.WriteFile(path.Join(*pkgDir, "package.json"), packageJSONBytes, 0644)
+}
+
+func copyReadme() error {
+	readmeBytes, err := os.ReadFile("README.pkg.md")
+	if err != nil {
+		return fmt.Errorf("Could not read README.pkg.md: %w", err)
+	}
+	return os.WriteFile(path.Join(*pkgDir, "README.md"), readmeBytes, 0644)
 }
