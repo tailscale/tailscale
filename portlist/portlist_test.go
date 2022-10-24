@@ -5,7 +5,9 @@
 package portlist
 
 import (
+	"flag"
 	"net"
+	"runtime"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -44,6 +46,54 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 		if p.Proto == "tcp" && int(p.Port) == port {
 			t.Fatal("didn't expect to find test's localhost ephemeral port")
 		}
+	}
+}
+
+var flagRunUnspecTests = flag.Bool("run-unspec-tests",
+	runtime.GOOS == "linux", // other OSes have annoying firewall GUI confirmation dialogs
+	"run tests that require listening on the the unspecified address")
+
+func TestChangesOverTime(t *testing.T) {
+	if !*flagRunUnspecTests {
+		t.Skip("skipping test without --run-unspec-tests")
+	}
+
+	var p Poller
+	get := func(t *testing.T) []Port {
+		t.Helper()
+		s, err := p.getList()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append([]Port(nil), s...)
+	}
+
+	p1 := get(t)
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Skipf("failed to bind: %v", err)
+	}
+	defer ln.Close()
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	containsPort := func(pl List) bool {
+		for _, p := range pl {
+			if p.Proto == "tcp" && p.Port == port {
+				return true
+			}
+		}
+		return false
+	}
+	if containsPort(p1) {
+		t.Error("unexpectedly found ephemeral port in p1, before it was opened", port)
+	}
+	p2 := get(t)
+	if !containsPort(p2) {
+		t.Error("didn't find ephemeral port in p2", port)
+	}
+	ln.Close()
+	p3 := get(t)
+	if containsPort(p3) {
+		t.Error("unexpectedly found ephemeral port in p3, after it was closed", port)
 	}
 }
 
