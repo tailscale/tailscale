@@ -31,7 +31,7 @@ By default the build output is placed in the `dist/` directory and embedded in t
 
 # Library / NPM Package
 
-The client is also available as an NPM package. To build it, run:
+The client is also available as [an NPM package](https://www.npmjs.com/package/@tailscale/connect). To build it, run:
 
 ```
 ./tool/go run ./cmd/tsconnect build-pkg
