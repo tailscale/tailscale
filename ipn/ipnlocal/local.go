@@ -492,17 +492,23 @@ func (b *LocalBackend) Shutdown() {
 	b.e.Wait()
 }
 
+func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
+	if !p.Valid() || p.Persist() == nil {
+		return p
+	}
+
+	p2 := p.AsStruct()
+	p2.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
+	p2.Persist.PrivateNodeKey = key.NodePrivate{}
+	p2.Persist.OldPrivateNodeKey = key.NodePrivate{}
+	return p2.View()
+}
+
 // Prefs returns a copy of b's current prefs, with any private keys removed.
-func (b *LocalBackend) Prefs() *ipn.Prefs {
+func (b *LocalBackend) Prefs() ipn.PrefsView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	p := b.prefs.AsStruct()
-	if p != nil && p.Persist != nil {
-		p.Persist.LegacyFrontendPrivateMachineKey = key.MachinePrivate{}
-		p.Persist.PrivateNodeKey = key.NodePrivate{}
-		p.Persist.OldPrivateNodeKey = key.NodePrivate{}
-	}
-	return p
+	return stripKeysFromPrefs(b.prefs)
 }
 
 // Status returns the latest status of the backend and its
@@ -2170,15 +2176,17 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 	}
 	if p1.View().Equals(p0) {
 		b.mu.Unlock()
-		return p1.View(), nil
+		return stripKeysFromPrefs(p0), nil
 	}
 	b.logf("EditPrefs: %v", mp.Pretty())
-	b.setPrefsLockedOnEntry("EditPrefs", p1) // does a b.mu.Unlock
+	newPrefs := b.setPrefsLockedOnEntry("EditPrefs", p1) // does a b.mu.Unlock
 
 	// Note: don't perform any actions for the new prefs here. Not
 	// every prefs change goes through EditPrefs. Put your actions
 	// in setPrefsLocksOnEntry instead.
-	return p1.View(), nil
+
+	// This should return the public prefs, not the private ones.
+	return stripKeysFromPrefs(newPrefs), nil
 }
 
 // SetPrefs saves new user preferences and propagates them throughout
@@ -2193,7 +2201,8 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
-func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
+// It returns a readonly copy of the new prefs.
+func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn.PrefsView {
 	netMap := b.netMap
 	stateKey := b.stateKey
 	oldp := b.prefs
@@ -2274,6 +2283,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) {
 	}
 
 	b.send(ipn.Notify{Prefs: prefs})
+	return prefs
 }
 
 // GetPeerAPIPort returns the port number for the peerapi server

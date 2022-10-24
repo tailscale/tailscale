@@ -526,7 +526,7 @@ func (h *Handler) servePrefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "GET", "HEAD":
-		prefs = h.b.Prefs().View()
+		prefs = h.b.Prefs()
 	default:
 		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
 		return
