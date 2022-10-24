@@ -69,14 +69,17 @@ func effectiveGOOS() string {
 
 // acceptRouteDefault returns the CLI's default value of --accept-routes as
 // a function of the platform it's running on.
-func acceptRouteDefault(goos string) bool {
+func acceptRouteDefault(goos string) string {
 	switch goos {
 	case "windows":
-		return true
+		return "true"
 	case "darwin":
-		return version.IsSandboxedMacOS()
+		if version.IsSandboxedMacOS() {
+			return "true"
+		}
+		return "false"
 	default:
-		return false
+		return "false"
 	}
 }
 
@@ -93,7 +96,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
-	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
+	upf.StringVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
 	upf.BoolVar(&upArgs.acceptDNS, "accept-dns", true, "accept DNS configuration from the admin panel")
 	upf.BoolVar(&upArgs.singleRoutes, "host-routes", true, "install host routes to other Tailscale nodes")
 	upf.StringVar(&upArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
@@ -131,7 +134,7 @@ type upArgsT struct {
 	qr                     bool
 	reset                  bool
 	server                 string
-	acceptRoutes           bool
+	acceptRoutes           string
 	acceptDNS              bool
 	singleRoutes           bool
 	exitNodeIP             string
@@ -307,7 +310,25 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs := ipn.NewPrefs()
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
-	prefs.RouteAll = upArgs.acceptRoutes
+
+	switch upArgs.acceptRoutes {
+	case "0", "f", "false":
+		prefs.RouteAll = false
+	case "1", "t", "true":
+		prefs.RouteAll = true
+	default:
+		prefs.RouteAll = true
+		prefs.AcceptRoutesFilter = upArgs.acceptRoutes
+
+		// accept-routes accepts an include/exclude ip range of the form:
+		// 0.0.0.0/0,-192.168.20.0/24
+		// Ensure that the provided values parse correctly, as the backend can only
+		// bury errors in the logs.
+		_, err := ipn.ParseAcceptRoutesFilter(prefs.AcceptRoutesFilter)
+		if err != nil {
+			return nil, fmt.Errorf("accept-routes filter %q did not parse: %w", prefs.AcceptRoutesFilter, err)
+		}
+	}
 
 	if upArgs.exitNodeIP != "" {
 		if err := prefs.SetExitNodeIP(upArgs.exitNodeIP, st); err != nil {
@@ -453,7 +474,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 
 	if distro.Get() == distro.Synology {
 		notSupported := "not supported on Synology; see https://github.com/tailscale/tailscale/issues/1995"
-		if upArgs.acceptRoutes {
+		if upArgs.acceptRoutes != "" && upArgs.acceptRoutes != "f" && upArgs.acceptRoutes != "false" {
 			return errors.New("--accept-routes is " + notSupported)
 		}
 		if upArgs.exitNodeIP != "" {
@@ -735,10 +756,10 @@ func init() {
 
 	// And this flag has two ipn.Prefs:
 	addPrefFlagMapping("exit-node", "ExitNodeIP", "ExitNodeID")
+	addPrefFlagMapping("accept-routes", "RouteAll", "AcceptRoutesFilter")
 
 	// The rest are 1:1:
 	addPrefFlagMapping("accept-dns", "CorpDNS")
-	addPrefFlagMapping("accept-routes", "RouteAll")
 	addPrefFlagMapping("advertise-tags", "AdvertiseTags")
 	addPrefFlagMapping("host-routes", "AllowSingleHosts")
 	addPrefFlagMapping("hostname", "Hostname")

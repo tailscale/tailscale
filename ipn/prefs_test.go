@@ -38,6 +38,7 @@ func TestPrefsEqual(t *testing.T) {
 	prefsHandles := []string{
 		"ControlURL",
 		"RouteAll",
+		"AcceptRoutesFilter",
 		"AllowSingleHosts",
 		"ExitNodeID",
 		"ExitNodeIP",

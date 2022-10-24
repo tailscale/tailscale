@@ -2889,18 +2889,42 @@ func ipPrefixLess(ri, rj netip.Prefix) bool {
 	return ri.Addr().Less(rj.Addr())
 }
 
+func (b *LocalBackend) filterRoutes(routes []netip.Prefix, acceptFilter *netipx.IPSet) []netip.Prefix {
+	if acceptFilter == nil {
+		return routes
+	}
+	var builder netipx.IPSetBuilder
+	for _, r := range routes {
+		builder.AddPrefix(r)
+	}
+	builder.Intersect(acceptFilter)
+	set, err := builder.IPSet()
+	if err != nil {
+		b.logf("accept routes filter: failed to build filtered set, all routes will be accepted: %v (check accept-routes flag)", err)
+		return routes
+	}
+	b.logf("accept routes filter: accepting routes: %v", set.Ranges())
+	return set.Prefixes()
+}
+
 // routerConfig produces a router.Config from a wireguard config and IPN prefs.
 func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs *ipn.Prefs, oneCGNATRoute bool) *router.Config {
 	singleRouteThreshold := 10_000
 	if oneCGNATRoute {
 		singleRouteThreshold = 1
 	}
+
+	acceptRoutesFilterSet, err := ipn.ParseAcceptRoutesFilter(prefs.AcceptRoutesFilter)
+	if err != nil {
+		b.logf("accept routes filter: failed to build filter set from %q: %v", prefs.AcceptRoutesFilter, err)
+	}
+
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes),
 		SNATSubnetRoutes: !prefs.NoSNAT,
 		NetfilterMode:    prefs.NetfilterMode,
-		Routes:           peerRoutes(cfg.Peers, singleRouteThreshold),
+		Routes:           b.filterRoutes(peerRoutes(cfg.Peers, singleRouteThreshold), acceptRoutesFilterSet),
 	}
 
 	if distro.Get() == distro.Synology {
