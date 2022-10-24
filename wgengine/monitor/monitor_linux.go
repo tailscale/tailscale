@@ -54,14 +54,18 @@ func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
 		// but all reachability would.
 		Groups: unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR |
 			unix.RTMGRP_IPV4_ROUTE | unix.RTMGRP_IPV6_ROUTE |
-			unix.RTMGRP_IPV4_RULE, // no IPV6_RULE in x/sys/unix
+			unix.RTMGRP_IPV4_RULE | unix.RTMGRP_LINK, // no IPV6_RULE in x/sys/unix
 	})
 	if err != nil {
 		// Google Cloud Run does not implement NETLINK_ROUTE RTMGRP support
 		logf("monitor_linux: AF_NETLINK RTMGRP failed, falling back to polling")
 		return newPollingMon(logf, m)
 	}
-	return &nlConn{logf: logf, conn: conn, addrCache: make(map[uint32]map[netip.Addr]bool)}, nil
+	return &nlConn{
+		logf:      logf,
+		conn:      conn,
+		addrCache: make(map[uint32]map[netip.Addr]bool),
+	}, nil
 }
 
 func (c *nlConn) IsInterestingInterface(iface string) bool { return true }
@@ -229,6 +233,53 @@ func (c *nlConn) Receive() (message, error) {
 			c.logf("%+v", rdm)
 		}
 		return rdm, nil
+	case unix.RTM_NEWLINK, unix.RTM_DELLINK:
+		typeStr := "RTM_NEWLINK"
+		if msg.Header.Type == unix.RTM_DELLINK {
+			typeStr = "RTM_DELLINK"
+		}
+
+		var lmsg rtnetlink.LinkMessage
+		if err := lmsg.UnmarshalBinary(msg.Data); err != nil {
+			c.logf("%s: failed to parse: %v", typeStr, err)
+			return unspecifiedMessage{}, nil
+		}
+
+		// Make a *net.Interface
+		netif := &net.Interface{
+			Index: int(lmsg.Index),
+		}
+		if attrs := lmsg.Attributes; attrs != nil {
+			netif.HardwareAddr = attrs.Address
+			netif.MTU = int(attrs.MTU)
+			netif.Name = attrs.Name
+		}
+
+		// Handle flags
+		if lmsg.Flags&unix.IFF_UP != 0 {
+			netif.Flags |= net.FlagUp
+		}
+		if lmsg.Flags&unix.IFF_BROADCAST != 0 {
+			netif.Flags |= net.FlagBroadcast
+		}
+		if lmsg.Flags&unix.IFF_LOOPBACK != 0 {
+			netif.Flags |= net.FlagLoopback
+		}
+		if lmsg.Flags&unix.IFF_POINTOPOINT != 0 {
+			netif.Flags |= net.FlagPointToPoint
+		}
+		if lmsg.Flags&unix.IFF_MULTICAST != 0 {
+			netif.Flags |= net.FlagMulticast
+		}
+
+		nlm := &newLinkMessage{
+			Link:   netif,
+			Delete: msg.Header.Type == unix.RTM_DELLINK,
+		}
+		if debugNetlinkMessages() {
+			c.logf("newLinkMessage{Link: %+v, Delete: %v}", nlm.Link, nlm.Delete)
+		}
+		return nlm, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
@@ -286,3 +337,11 @@ func (m *newAddrMessage) ignore() bool {
 type ignoreMessage struct{}
 
 func (ignoreMessage) ignore() bool { return true }
+
+// newLinkMessage is a message for a link being added.
+type newLinkMessage struct {
+	Link   *net.Interface
+	Delete bool
+}
+
+func (newLinkMessage) ignore() bool { return true }
