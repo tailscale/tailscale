@@ -232,10 +232,6 @@ func ForeachInterface(fn func(Interface, []netip.Prefix)) error {
 // all its addresses. The IPPrefix's IP is the IP address assigned to
 // the interface, and Bits are the subnet mask.
 func (ifaces List) ForeachInterface(fn func(Interface, []netip.Prefix)) error {
-	ifaces, err := GetList()
-	if err != nil {
-		return err
-	}
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
