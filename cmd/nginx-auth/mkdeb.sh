@@ -4,7 +4,7 @@ set -e
 
 CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -o tailscale.nginx-auth .
 
-VERSION=0.1.1
+VERSION=0.1.2
 
 mkpkg \
     --out=tailscale-nginx-auth-${VERSION}-amd64.deb \
