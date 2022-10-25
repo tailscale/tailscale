@@ -45,9 +45,11 @@ in
 	  #  - gotools for goimports, a robust formatting tool for Go source code
 	  #  - gopls, the language server for Go to increase editor integration
 	  #  - git, the version control program (used in some scripts)
+	  #  - graphviz, for 'go tool pprof'
 	  buildInputs = [
 	    pkgs.git
 	    pkgs.gotools pkgs.gopls
 	    tailscale-go
+	    pkgs.graphviz
 	  ];
 	}
