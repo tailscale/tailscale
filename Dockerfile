@@ -66,10 +66,12 @@ RUN GOARCH=$TARGETARCH go install -ldflags="\
       -X tailscale.com/version.Long=$VERSION_LONG \
       -X tailscale.com/version.Short=$VERSION_SHORT \
       -X tailscale.com/version.GitCommit=$VERSION_GIT_HASH" \
-      -v ./cmd/tailscale ./cmd/tailscaled
+      -v ./cmd/tailscale ./cmd/tailscaled ./cmd/containerboot
 
 FROM alpine:3.16
 RUN apk add --no-cache ca-certificates iptables iproute2 ip6tables
 
 COPY --from=build-env /go/bin/* /usr/local/bin/
-COPY --from=build-env /go/src/tailscale/docs/k8s/run.sh /usr/local/bin/
+# For compat with the previous run.sh, although ideally you should be
+# using build_docker.sh which sets an entrypoint for the image.
+RUN ln -s /usr/local/bin/containerboot /tailscale/run.sh

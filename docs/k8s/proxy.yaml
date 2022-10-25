@@ -41,6 +41,8 @@ spec:
           optional: true
     - name: TS_DEST_IP
       value: "{{TS_DEST_IP}}"
+    - name: TS_AUTH_ONCE
+      value: "true"
     securityContext:
       capabilities:
         add:
