@@ -35,14 +35,14 @@ BASE="${BASE:-${DEFAULT_BASE}}"
 go run github.com/tailscale/mkctr \
   --gopaths="\
     tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
-    tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
+    tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled, \
+    tailscale.com/cmd/containerboot:/usr/local/bin/containerboot" \
   --ldflags="\
     -X tailscale.com/version.Long=${VERSION_LONG} \
     -X tailscale.com/version.Short=${VERSION_SHORT} \
     -X tailscale.com/version.GitCommit=${VERSION_GIT_HASH}" \
-  --files="docs/k8s/run.sh:/tailscale/run.sh" \
   --base="${BASE}" \
   --tags="${TAGS}" \
   --repos="${REPOS}" \
   --push="${PUSH}" \
-  /bin/sh /tailscale/run.sh
+  /usr/local/bin/containerboot
