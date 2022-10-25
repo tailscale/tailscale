@@ -126,19 +126,24 @@ func isDefaultGateway(rm *route.RouteMessage) bool {
 
 	dst := rm.Addrs[unix.RTAX_DST]
 	netmask := rm.Addrs[unix.RTAX_NETMASK]
-
-	if dst.Family() == syscall.AF_INET &&
-		netmask.Family() == syscall.AF_INET &&
-		dst.(*route.Inet4Addr).IP == v4default &&
-		netmask.(*route.Inet4Addr).IP == v4default {
-		return true
+	if dst == nil || netmask == nil {
+		return false
 	}
 
-	if dst.Family() == syscall.AF_INET6 &&
-		netmask.Family() == syscall.AF_INET6 &&
-		dst.(*route.Inet6Addr).IP == v6default &&
-		netmask.(*route.Inet6Addr).IP == v6default {
-		return true
+	if dst.Family() == syscall.AF_INET && netmask.Family() == syscall.AF_INET {
+		dstAddr, dstOk := dst.(*route.Inet4Addr)
+		nmAddr, nmOk := netmask.(*route.Inet4Addr)
+		if dstOk && nmOk && dstAddr.IP == v4default && nmAddr.IP == v4default {
+			return true
+		}
+	}
+
+	if dst.Family() == syscall.AF_INET6 && netmask.Family() == syscall.AF_INET6 {
+		dstAddr, dstOk := dst.(*route.Inet6Addr)
+		nmAddr, nmOk := netmask.(*route.Inet6Addr)
+		if dstOk && nmOk && dstAddr.IP == v6default && nmAddr.IP == v6default {
+			return true
+		}
 	}
 
 	return false
