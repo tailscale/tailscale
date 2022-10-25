@@ -803,21 +803,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			prefs.Persist = st.Persist.Clone()
 		}
 	}
-	if st.NetMap != nil {
-		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
-		if err := b.tkaSyncIfNeeded(st.NetMap); err != nil {
-			b.logf("[v1] TKA sync error: %v", err)
-		}
-		b.mu.Lock()
-
-		if !envknob.TKASkipSignatureCheck() {
-			b.tkaFilterNetmapLocked(st.NetMap)
-		}
-		if findExitNodeIDLocked(prefs, st.NetMap) {
-			prefsChanged = true
-		}
-		b.setNetMapLocked(st.NetMap)
-	}
 	if st.URL != "" {
 		b.authURL = st.URL
 		b.authURLSticky = st.URL
@@ -832,11 +817,24 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
+	if findExitNodeIDLocked(prefs, st.NetMap) {
+		prefsChanged = true
+	}
 	// Prefs will be written out; this is not safe unless locked or cloned.
 	if prefsChanged {
 		b.prefs = prefs.View()
 	}
 	if st.NetMap != nil {
+		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
+		if err := b.tkaSyncIfNeeded(st.NetMap); err != nil {
+			b.logf("[v1] TKA sync error: %v", err)
+		}
+		b.mu.Lock()
+
+		if !envknob.TKASkipSignatureCheck() {
+			b.tkaFilterNetmapLocked(st.NetMap)
+		}
+		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(st.NetMap, b.prefs)
 	}
 	b.mu.Unlock()
