@@ -157,6 +157,7 @@ change in the future.
 		Subcommands: []*ffcli.Command{
 			upCmd,
 			downCmd,
+			setCmd,
 			logoutCmd,
 			netcheckCmd,
 			ipCmd,
@@ -177,7 +178,9 @@ change in the future.
 		UsageFunc: usageFunc,
 	}
 	for _, c := range rootCmd.Subcommands {
-		c.UsageFunc = usageFunc
+		if c.UsageFunc == nil {
+			c.UsageFunc = usageFunc
+		}
 	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, idTokenCmd)
@@ -290,6 +293,56 @@ func strSliceContains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// usageFuncNoDefaultValues is like usageFunc but doesn't print default values.
+func usageFuncNoDefaultValues(c *ffcli.Command) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "USAGE\n")
+	if c.ShortUsage != "" {
+		fmt.Fprintf(&b, "  %s\n", c.ShortUsage)
+	} else {
+		fmt.Fprintf(&b, "  %s\n", c.Name)
+	}
+	fmt.Fprintf(&b, "\n")
+
+	if c.LongHelp != "" {
+		fmt.Fprintf(&b, "%s\n\n", c.LongHelp)
+	}
+
+	if len(c.Subcommands) > 0 {
+		fmt.Fprintf(&b, "SUBCOMMANDS\n")
+		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
+		for _, subcommand := range c.Subcommands {
+			fmt.Fprintf(tw, "  %s\t%s\n", subcommand.Name, subcommand.ShortHelp)
+		}
+		tw.Flush()
+		fmt.Fprintf(&b, "\n")
+	}
+
+	if countFlags(c.FlagSet) > 0 {
+		fmt.Fprintf(&b, "FLAGS\n")
+		tw := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
+		c.FlagSet.VisitAll(func(f *flag.Flag) {
+			var s string
+			name, usage := flag.UnquoteUsage(f)
+			s = fmt.Sprintf("  --%s", f.Name) // Two spaces before --; see next two comments.
+			if len(name) > 0 {
+				s += " " + name
+			}
+			// Four spaces before the tab triggers good alignment
+			// for both 4- and 8-space tab stops.
+			s += "\n    \t"
+			s += strings.ReplaceAll(usage, "\n", "\n    \t")
+
+			fmt.Fprintln(&b, s)
+		})
+		tw.Flush()
+		fmt.Fprintf(&b, "\n")
+	}
+
+	return strings.TrimSpace(b.String())
 }
 
 func usageFunc(c *ffcli.Command) string {

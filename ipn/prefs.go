@@ -244,6 +244,21 @@ func (p *Prefs) ApplyEdits(m *MaskedPrefs) {
 	}
 }
 
+// IsEmpty reports whether there are no masks set or if m is nil.
+func (m *MaskedPrefs) IsEmpty() bool {
+	if m == nil {
+		return true
+	}
+	mv := reflect.ValueOf(m).Elem()
+	fields := mv.NumField()
+	for i := 1; i < fields; i++ {
+		if mv.Field(i).Bool() {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *MaskedPrefs) Pretty() string {
 	if m == nil {
 		return "MaskedPrefs{<nil>}"

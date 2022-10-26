@@ -380,15 +380,8 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 	// Do this after validations to avoid the 5s delay if we're going to error
 	// out anyway.
 	wantSSH, haveSSH := env.upArgs.runSSH, curPrefs.RunSSH
-	if wantSSH != haveSSH && isSSHOverTailscale() {
-		if wantSSH {
-			err = presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`, env.upArgs.acceptedRisks)
-		} else {
-			err = presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, env.upArgs.acceptedRisks)
-		}
-		if err != nil {
-			return false, nil, err
-		}
+	if err := presentSSHToggleRisk(wantSSH, haveSSH, env.upArgs.acceptedRisks); err != nil {
+		return false, nil, err
 	}
 
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
@@ -413,11 +406,21 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 			visitFlags = env.flagSet.VisitAll
 		}
 		visitFlags(func(f *flag.Flag) {
-			updateMaskedPrefsFromUpFlag(justEditMP, f.Name)
+			updateMaskedPrefsFromUpOrSetFlag(justEditMP, f.Name)
 		})
 	}
 
 	return simpleUp, justEditMP, nil
+}
+
+func presentSSHToggleRisk(wantSSH, haveSSH bool, acceptedRisks string) error {
+	if !isSSHOverTailscale() || wantSSH == haveSSH {
+		return nil
+	}
+	if wantSSH {
+		return presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will reroute SSH traffic to Tailscale SSH and will result in your session disconnecting.`, acceptedRisks)
+	}
+	return presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, acceptedRisks)
 }
 
 func runUp(ctx context.Context, args []string) (retErr error) {
@@ -773,7 +776,7 @@ func preflessFlag(flagName string) bool {
 	return false
 }
 
-func updateMaskedPrefsFromUpFlag(mp *ipn.MaskedPrefs, flagName string) {
+func updateMaskedPrefsFromUpOrSetFlag(mp *ipn.MaskedPrefs, flagName string) {
 	if preflessFlag(flagName) {
 		return
 	}
