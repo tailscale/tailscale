@@ -826,3 +826,48 @@ func TestControlURLOrDefault(t *testing.T) {
 		t.Errorf("got %q; want %q", got, want)
 	}
 }
+
+func TestMaskedPrefsIsEmpty(t *testing.T) {
+	tests := []struct {
+		name      string
+		mp        *MaskedPrefs
+		wantEmpty bool
+	}{
+		{
+			name:      "nil",
+			wantEmpty: true,
+		},
+		{
+			name:      "empty",
+			wantEmpty: true,
+			mp:        &MaskedPrefs{},
+		},
+		{
+			name:      "no-masks",
+			wantEmpty: true,
+			mp: &MaskedPrefs{
+				Prefs: Prefs{
+					WantRunning: true,
+				},
+			},
+		},
+		{
+			name:      "with-mask",
+			wantEmpty: false,
+			mp: &MaskedPrefs{
+				Prefs: Prefs{
+					WantRunning: true,
+				},
+				WantRunningSet: true,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.mp.IsEmpty()
+			if got != tc.wantEmpty {
+				t.Fatalf("mp.IsEmpty = %t; want %t", got, tc.wantEmpty)
+			}
+		})
+	}
+}

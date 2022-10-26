@@ -39,7 +39,7 @@ func TestUpdateMaskedPrefsFromUpFlag(t *testing.T) {
 		fs := newUpFlagSet(goos, &upArgs)
 		fs.VisitAll(func(f *flag.Flag) {
 			mp := new(ipn.MaskedPrefs)
-			updateMaskedPrefsFromUpFlag(mp, f.Name)
+			updateMaskedPrefsFromUpOrSetFlag(mp, f.Name)
 			got := mp.Pretty()
 			wantEmpty := preflessFlag(f.Name)
 			isEmpty := got == "MaskedPrefs{}"
