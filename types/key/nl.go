@@ -125,3 +125,8 @@ func (k NLPublic) IsZero() bool {
 func (k NLPublic) Equal(other NLPublic) bool {
 	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
 }
+
+// KeyID returns a tkatype.KeyID that can be used with a tka.Authority.
+func (k NLPublic) KeyID() tkatype.KeyID {
+	return k.k[:]
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
 )
 
@@ -435,5 +436,42 @@ func TestAuthorityInformLinear(t *testing.T) {
 
 	if a.Head() != c.AUMHashes["L3"] {
 		t.Fatal("authority did not converge to correct AUM")
+	}
+}
+
+func TestInteropWithNLKey(t *testing.T) {
+	priv1 := key.NewNLPrivate()
+	pub1 := priv1.Public()
+	pub2 := key.NewNLPrivate().Public()
+	pub3 := key.NewNLPrivate().Public()
+
+	a, _, err := Create(&Mem{}, State{
+		Keys: []Key{
+			{
+				Kind:   Key25519,
+				Votes:  1,
+				Public: pub1.KeyID(),
+			},
+			{
+				Kind:   Key25519,
+				Votes:  1,
+				Public: pub2.KeyID(),
+			},
+		},
+		DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+	}, priv1)
+	if err != nil {
+		t.Errorf("tka.Create: %v", err)
+		return
+	}
+
+	if !a.KeyTrusted(pub1.KeyID()) {
+		t.Error("pub1 want trusted, got untrusted")
+	}
+	if !a.KeyTrusted(pub2.KeyID()) {
+		t.Error("pub2 want trusted, got untrusted")
+	}
+	if a.KeyTrusted(pub3.KeyID()) {
+		t.Error("pub3 want untrusted, got trusted")
 	}
 }
