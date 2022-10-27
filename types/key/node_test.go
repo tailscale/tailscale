@@ -142,3 +142,19 @@ func TestNodeWriteRawWithoutAllocating(t *testing.T) {
 		t.Fatalf("WriteRawWithoutAllocating got %f allocs, want %f", got, want)
 	}
 }
+
+func TestChallenge(t *testing.T) {
+	priv := NewChallenge()
+	pub := priv.Public()
+	txt, err := pub.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ChallengePublic
+	if err := back.UnmarshalText(txt); err != nil {
+		t.Fatal(err)
+	}
+	if back != pub {
+		t.Errorf("didn't round trip: %v != %v", back, pub)
+	}
+}
