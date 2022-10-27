@@ -19,15 +19,14 @@ import (
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/disco"
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
-	"tailscale.com/net/tunstats"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netlogtype"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -379,17 +378,17 @@ func TestFilter(t *testing.T) {
 			}
 
 			got := tun.ExtractStatistics()
-			want := map[flowtrack.Tuple]tunstats.Counts{}
+			want := map[netlogtype.Connection]netlogtype.Counts{}
 			if !tt.drop {
 				var p packet.Parsed
 				p.Decode(tt.data)
 				switch tt.dir {
 				case in:
-					tuple := flowtrack.Tuple{Proto: ipproto.UDP, Src: p.Dst, Dst: p.Src}
-					want[tuple] = tunstats.Counts{RxPackets: 1, RxBytes: uint64(len(tt.data))}
+					conn := netlogtype.Connection{Proto: ipproto.UDP, Src: p.Dst, Dst: p.Src}
+					want[conn] = netlogtype.Counts{RxPackets: 1, RxBytes: uint64(len(tt.data))}
 				case out:
-					tuple := flowtrack.Tuple{Proto: ipproto.UDP, Src: p.Src, Dst: p.Dst}
-					want[tuple] = tunstats.Counts{TxPackets: 1, TxBytes: uint64(len(tt.data))}
+					conn := netlogtype.Connection{Proto: ipproto.UDP, Src: p.Src, Dst: p.Dst}
+					want[conn] = netlogtype.Counts{TxPackets: 1, TxBytes: uint64(len(tt.data))}
 				}
 			}
 			if !reflect.DeepEqual(got, want) {

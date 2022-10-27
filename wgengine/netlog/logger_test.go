@@ -11,9 +11,8 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"tailscale.com/logtail"
-	"tailscale.com/net/flowtrack"
-	"tailscale.com/net/tunstats"
 	"tailscale.com/tstest"
+	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/router"
 )
@@ -42,7 +41,7 @@ func (d *fakeDevice) SetStatisticsEnabled(enable bool) {
 	}
 
 }
-func (fakeDevice) ExtractStatistics() map[flowtrack.Tuple]tunstats.Counts {
+func (fakeDevice) ExtractStatistics() map[netlogtype.Connection]netlogtype.Counts {
 	// TODO(dsnet): Add a test that verifies that statistics are correctly
 	// extracted from the device and uploaded. Unfortunately,
 	// we can't reliably run this test until we fix http://go/oss/5856.
