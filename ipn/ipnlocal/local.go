@@ -831,6 +831,16 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			b.logf("[v1] TKA sync error: %v", err)
 		}
 		b.mu.Lock()
+		if b.tka != nil {
+			head, err := b.tka.authority.Head().MarshalText()
+			if err != nil {
+				b.logf("[v1] error marshalling tka head: %v", err)
+			} else {
+				b.cc.SetTKAHead(string(head))
+			}
+		} else {
+			b.cc.SetTKAHead("")
+		}
 
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
@@ -1226,11 +1236,21 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	endpoints := b.endpoints
+	var tkaHead string
+	if b.tka != nil {
+		head, err := b.tka.authority.Head().MarshalText()
+		if err != nil {
+			b.mu.Unlock()
+			return fmt.Errorf("marshalling tka head: %w", err)
+		}
+		tkaHead = string(head)
+	}
 	b.mu.Unlock()
 
 	if endpoints != nil {
 		cc.UpdateEndpoints(endpoints)
 	}
+	cc.SetTKAHead(tkaHead)
 
 	b.e.SetNetInfoCallback(b.setNetInfo)
 

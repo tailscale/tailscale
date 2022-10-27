@@ -94,6 +94,7 @@ type Direct struct {
 	hostinfo      *tailcfg.Hostinfo // always non-nil
 	netinfo       *tailcfg.NetInfo
 	endpoints     []tailcfg.Endpoint
+	tkaHead       string
 	everEndpoints bool   // whether we've ever had non-empty endpoints
 	lastPingURL   string // last PingRequest.URL received, for dup suppression
 }
@@ -314,6 +315,21 @@ func (c *Direct) SetNetInfo(ni *tailcfg.NetInfo) bool {
 	}
 	c.netinfo = ni.Clone()
 	c.logf("NetInfo: %v", ni)
+	return true
+}
+
+// SetNetInfo stores a new TKA head value for next update.
+// It reports whether the TKA head changed.
+func (c *Direct) SetTKAHead(tkaHead string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if tkaHead == c.tkaHead {
+		return false
+	}
+
+	c.tkaHead = tkaHead
+	c.logf("tkaHead: %v", tkaHead)
 	return true
 }
 
@@ -829,6 +845,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		Hostinfo:      hi,
 		DebugFlags:    c.debugFlags,
 		OmitPeers:     cb == nil,
+		TKAHead:       c.tkaHead,
 
 		// On initial startup before we know our endpoints, set the ReadOnly flag
 		// to tell the control server not to distribute out our (empty) endpoints to peers.

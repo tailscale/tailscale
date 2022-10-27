@@ -86,9 +86,6 @@ type TKAInfo struct {
 	//
 	// If the Head state differs to that known locally, the node should perform
 	// synchronization via a separate RPC.
-	//
-	// TODO(tom): Implement AUM synchronization as noise endpoints
-	// /machine/tka/sync/offer & /machine/tka/sync/send.
 	Head string `json:",omitempty"`
 
 	// Disabled indicates the control plane believes TKA should be disabled,
@@ -97,9 +94,6 @@ type TKAInfo struct {
 	// disable TKA locally.
 	// This field exists to disambiguate a nil TKAInfo in a delta mapresponse
 	// from a nil TKAInfo indicating TKA should be disabled.
-	//
-	// TODO(tom): Implement /machine/tka/bootstrap as a noise endpoint, to
-	// communicate the genesis AUM & any disablement secrets.
 	Disabled bool `json:",omitempty"`
 }
 
@@ -162,7 +156,8 @@ type TKASyncOfferResponse struct {
 }
 
 // TKASyncSendRequest encodes AUMs that a node believes the control plane
-// is missing.
+// is missing, and notifies control of its local TKA state (specifically
+// the head hash).
 type TKASyncSendRequest struct {
 	// Version is the client's capabilities.
 	Version CapabilityVersion
@@ -170,9 +165,15 @@ type TKASyncSendRequest struct {
 	// NodeKey is the client's current node key.
 	NodeKey key.NodePublic
 
+	// Head represents the node's head AUMHash (tka.Authority.Head) after
+	// applying any AUMs from the sync-offer response.
+	// It is encoded as tka.AUMHash.MarshalText.
+	Head string
+
 	// MissingAUMs encodes AUMs that the node believes the control plane
 	// is missing.
 	MissingAUMs []tkatype.MarshaledAUM
+
 	// Interactive is true if additional error checking should be performed as
 	// the request is on behalf of an interactive operation (e.g., an
 	// administrator publishing new changes) as opposed to an automatic
@@ -186,4 +187,30 @@ type TKASyncSendResponse struct {
 	// Head represents the control plane's head AUMHash (tka.Authority.Head),
 	// after applying the missing AUMs.
 	Head string
+}
+
+// TKADisableRequest disables network-lock across the tailnet using the
+// provided disablement secret.
+//
+// This is the request schema for a /tka/disable noise RPC.
+type TKADisableRequest struct {
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic
+
+	// Head represents the node's head AUMHash (tka.Authority.Head).
+	// It is encoded as tka.AUMHash.MarshalText.
+	Head string
+
+	// DisablementSecret encodes the secret necessary to disable TKA.
+	DisablementSecret []byte
+}
+
+// TKADisableResponse is the JSON response from a /tka/disable RPC.
+// This schema describes the successful disablement of the tailnet's
+// key authority.
+type TKADisableResponse struct {
+	// Nothing. (yet?)
 }

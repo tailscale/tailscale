@@ -561,6 +561,11 @@ func (c *Auto) SetNetInfo(ni *tailcfg.NetInfo) {
 	c.sendNewMapRequest()
 }
 
+// SetTKAHead updates the TKA head hash that map-request infrastructure sends.
+func (c *Auto) SetTKAHead(headHash string) {
+	c.direct.SetTKAHead(headHash)
+}
+
 func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkMap) {
 	c.mu.Lock()
 	if c.closed {

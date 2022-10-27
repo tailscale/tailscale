@@ -95,6 +95,8 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 		return nil
 	}
 
+	b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+
 	b.tkaSyncLock.Lock() // take tkaSyncLock to make this function an exclusive section.
 	defer b.tkaSyncLock.Unlock()
 	b.mu.Lock() // take mu to protect access to synchronized fields.
@@ -125,15 +127,13 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 			}
 			isEnabled = true
 		} else if !wantEnabled && isEnabled {
-			if b.tka.authority.ValidDisablement(bs.DisablementSecret) {
-				b.tka = nil
-				isEnabled = false
-
-				if err := os.RemoveAll(b.chonkPath()); err != nil {
-					return fmt.Errorf("os.RemoveAll: %v", err)
-				}
+			if err := b.tkaApplyDisablementLocked(bs.DisablementSecret); err != nil {
+				// We log here instead of returning an error (which itself would be
+				// logged), so that sync will continue even if control gives us an
+				// incorrect disablement secret.
+				b.logf("Disablement failed, leaving TKA enabled. Error: %v", err)
 			} else {
-				b.logf("Disablement secret did not verify, leaving TKA enabled.")
+				isEnabled = false
 			}
 		} else {
 			return fmt.Errorf("[bug] unreachable invariant of wantEnabled /w isEnabled")
@@ -216,12 +216,11 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 		}
 	}
 
-	// NOTE(tom): We could short-circuit here if our HEAD equals the
-	// control-plane's head, but we don't just so control always has a
-	// copy of all forks that clients had.
-
+	// NOTE(tom): We always send this RPC so control knows what TKA
+	// head we landed at.
+	head := b.tka.authority.Head()
 	b.mu.Unlock()
-	sendResp, err := b.tkaDoSyncSend(ourNodeKey, toSendAUMs, false)
+	sendResp, err := b.tkaDoSyncSend(ourNodeKey, head, toSendAUMs, false)
 	b.mu.Lock()
 	if err != nil {
 		return fmt.Errorf("send RPC: %v", err)
@@ -236,6 +235,21 @@ func (b *LocalBackend) tkaSyncLocked(ourNodeKey key.NodePublic) error {
 	}
 
 	return nil
+}
+
+// tkaApplyDisablementLocked checks a disablement secret and locally disables
+// TKA (if correct). An error is returned if disablement failed.
+//
+// b.mu must be held & TKA must be initialized.
+func (b *LocalBackend) tkaApplyDisablementLocked(secret []byte) error {
+	if b.tka.authority.ValidDisablement(secret) {
+		if err := os.RemoveAll(b.chonkPath()); err != nil {
+			return err
+		}
+		b.tka = nil
+		return nil
+	}
+	return errors.New("incorrect disablement secret")
 }
 
 // chonkPath returns the absolute path to the directory in which TKA
@@ -334,7 +348,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
-func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
+func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte) error {
 	if err := b.CanSupportNetworkLock(); err != nil {
 		return err
 	}
@@ -355,8 +369,11 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	// just in case something goes wrong.
 	_, genesisAUM, err := tka.Create(&tka.Mem{}, tka.State{
 		Keys: keys,
-		// TODO(tom): Actually plumb a real disablement value.
-		DisablementSecrets: [][]byte{bytes.Repeat([]byte{1}, 32)},
+		// TODO(tom): s/tka.State.DisablementSecrets/tka.State.DisablementValues
+		//   This will center on consistent nomenclature:
+		//    - DisablementSecret: value needed to disable.
+		//    - DisablementValue: the KDF of the disablement secret, a public value.
+		DisablementSecrets: disablementValues,
 	}, b.nlPrivKey)
 	if err != nil {
 		return fmt.Errorf("tka.Create: %v", err)
@@ -454,8 +471,9 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	}
 
 	ourNodeKey := b.prefs.Persist().PublicNodeKey()
+	head := b.tka.authority.Head()
 	b.mu.Unlock()
-	resp, err := b.tkaDoSyncSend(ourNodeKey, aums, true)
+	resp, err := b.tkaDoSyncSend(ourNodeKey, head, aums, true)
 	b.mu.Lock()
 	if err != nil {
 		return err
@@ -472,6 +490,42 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	}
 
 	return nil
+}
+
+// NetworkLockDisable disables network-lock using the provided disablement secret.
+func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
+	if err := b.CanSupportNetworkLock(); err != nil {
+		return err
+	}
+
+	var (
+		ourNodeKey key.NodePublic
+		head       tka.AUMHash
+		err        error
+	)
+
+	b.mu.Lock()
+	if b.prefs.Valid() {
+		ourNodeKey = b.prefs.Persist().PublicNodeKey()
+	}
+	if b.tka == nil {
+		err = errNetworkLockNotActive
+	} else {
+		head = b.tka.authority.Head()
+		if !b.tka.authority.ValidDisablement(secret) {
+			err = errors.New("incorrect disablement secret")
+		}
+	}
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if ourNodeKey.IsZero() {
+		return errors.New("no node-key: is tailscale logged in?")
+	}
+	_, err = b.tkaDoDisablement(ourNodeKey, head, secret)
+	return err
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
@@ -519,7 +573,7 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitBeginResponse)
-	err = json.NewDecoder(res.Body).Decode(a)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -555,7 +609,7 @@ func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKAInitFinishResponse)
-	err = json.NewDecoder(res.Body).Decode(a)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -603,7 +657,7 @@ func (b *LocalBackend) tkaFetchBootstrap(ourNodeKey key.NodePublic, head tka.AUM
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKABootstrapResponse)
-	err = json.NewDecoder(res.Body).Decode(a)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -664,7 +718,7 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncOfferResponse)
-	err = json.NewDecoder(res.Body).Decode(a)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)
@@ -675,10 +729,16 @@ func (b *LocalBackend) tkaDoSyncOffer(ourNodeKey key.NodePublic, offer tka.SyncO
 
 // tkaDoSyncSend sends a /machine/tka/sync/send RPC to the control plane
 // over noise. This is the second of two RPCs implementing tka synchronization.
-func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, aums []tka.AUM, interactive bool) (*tailcfg.TKASyncSendResponse, error) {
+func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, head tka.AUMHash, aums []tka.AUM, interactive bool) (*tailcfg.TKASyncSendResponse, error) {
+	headBytes, err := head.MarshalText()
+	if err != nil {
+		return nil, fmt.Errorf("head.MarshalText: %w", err)
+	}
+
 	sendReq := tailcfg.TKASyncSendRequest{
 		Version:     tailcfg.CurrentCapabilityVersion,
 		NodeKey:     ourNodeKey,
+		Head:        string(headBytes),
 		MissingAUMs: make([]tkatype.MarshaledAUM, len(aums)),
 		Interactive: interactive,
 	}
@@ -707,7 +767,49 @@ func (b *LocalBackend) tkaDoSyncSend(ourNodeKey key.NodePublic, aums []tka.AUM, 
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKASyncSendResponse)
-	err = json.NewDecoder(res.Body).Decode(a)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 10 * 1024 * 1024}).Decode(a)
+	res.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+
+	return a, nil
+}
+
+func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMHash, secret []byte) (*tailcfg.TKADisableResponse, error) {
+	headBytes, err := head.MarshalText()
+	if err != nil {
+		return nil, fmt.Errorf("head.MarshalText: %w", err)
+	}
+
+	var req bytes.Buffer
+	if err := json.NewEncoder(&req).Encode(tailcfg.TKADisableRequest{
+		Version:           tailcfg.CurrentCapabilityVersion,
+		NodeKey:           ourNodeKey,
+		Head:              string(headBytes),
+		DisablementSecret: secret,
+	}); err != nil {
+		return nil, fmt.Errorf("encoding request: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/disable", &req)
+	if err != nil {
+		return nil, fmt.Errorf("req: %w", err)
+	}
+	res, err := b.DoNoiseRequest(req2)
+	if err != nil {
+		return nil, fmt.Errorf("resp: %w", err)
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKADisableResponse)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("decoding JSON: %w", err)

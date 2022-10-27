@@ -947,6 +947,11 @@ type MapRequest struct {
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
 	EndpointTypes []EndpointType `json:",omitempty"`
 
+	// TKAHead describes the hash of the latest AUM applied to the local
+	// tailnet key authority, if one is operating.
+	// It is encoded as tka.AUMHash.MarshalText.
+	TKAHead string `json:",omitempty"`
+
 	// ReadOnly is whether the client just wants to fetch the
 	// MapResponse, without updating their Endpoints. The
 	// Endpoints field will be ignored and LastSeen will not be
