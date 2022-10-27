@@ -15,8 +15,8 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/netlogtype"
 )
 
 func testPacketV4(proto ipproto.Proto, srcAddr, dstAddr [4]byte, srcPort, dstPort, size uint16) (out []byte) {
@@ -48,17 +48,17 @@ func TestConcurrent(t *testing.T) {
 	c := qt.New(t)
 
 	var stats Statistics
-	var wants []map[flowtrack.Tuple]Counts
-	gots := make([]map[flowtrack.Tuple]Counts, runtime.NumCPU())
+	var wants []map[netlogtype.Connection]netlogtype.Counts
+	gots := make([]map[netlogtype.Connection]netlogtype.Counts, runtime.NumCPU())
 	var group sync.WaitGroup
 	for i := range gots {
 		group.Add(1)
 		go func(i int) {
 			defer group.Done()
-			gots[i] = make(map[flowtrack.Tuple]Counts)
+			gots[i] = make(map[netlogtype.Connection]netlogtype.Counts)
 			rn := rand.New(rand.NewSource(time.Now().UnixNano()))
 			var p []byte
-			var t flowtrack.Tuple
+			var t netlogtype.Connection
 			for j := 0; j < 1000; j++ {
 				delay := rn.Intn(10000)
 				if p == nil || rn.Intn(64) == 0 {
@@ -72,7 +72,7 @@ func TestConcurrent(t *testing.T) {
 					dstPort := uint16(rand.Intn(16))
 					size := uint16(64 + rand.Intn(1024))
 					p = testPacketV4(proto, srcAddr.As4(), dstAddr.As4(), srcPort, dstPort, size)
-					t = flowtrack.Tuple{Proto: proto, Src: netip.AddrPortFrom(srcAddr, srcPort), Dst: netip.AddrPortFrom(dstAddr, dstPort)}
+					t = netlogtype.Connection{Proto: proto, Src: netip.AddrPortFrom(srcAddr, srcPort), Dst: netip.AddrPortFrom(dstAddr, dstPort)}
 				}
 				t2 := t
 				receive := rn.Intn(2) == 0
@@ -102,17 +102,17 @@ func TestConcurrent(t *testing.T) {
 	group.Wait()
 	wants = append(wants, stats.Extract())
 
-	got := make(map[flowtrack.Tuple]Counts)
-	want := make(map[flowtrack.Tuple]Counts)
+	got := make(map[netlogtype.Connection]netlogtype.Counts)
+	want := make(map[netlogtype.Connection]netlogtype.Counts)
 	mergeMaps(got, gots...)
 	mergeMaps(want, wants...)
 	c.Assert(got, qt.DeepEquals, want)
 }
 
-func mergeMaps(dst map[flowtrack.Tuple]Counts, srcs ...map[flowtrack.Tuple]Counts) {
+func mergeMaps(dst map[netlogtype.Connection]netlogtype.Counts, srcs ...map[netlogtype.Connection]netlogtype.Counts) {
 	for _, src := range srcs {
-		for tuple, cnts := range src {
-			dst[tuple] = dst[tuple].Add(cnts)
+		for conn, cnts := range src {
+			dst[conn] = dst[conn].Add(cnts)
 		}
 	}
 }

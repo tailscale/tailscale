@@ -20,10 +20,9 @@ import (
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
-	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/tsaddr"
-	"tailscale.com/net/tunstats"
 	"tailscale.com/smallzstd"
+	"tailscale.com/types/netlogtype"
 	"tailscale.com/wgengine/router"
 )
 
@@ -36,29 +35,13 @@ const pollPeriod = 5 * time.Second
 // TODO(joetsai): Make *magicsock.Conn implement this interface.
 type Device interface {
 	SetStatisticsEnabled(bool)
-	ExtractStatistics() map[flowtrack.Tuple]tunstats.Counts
+	ExtractStatistics() map[netlogtype.Connection]netlogtype.Counts
 }
 
 type noopDevice struct{}
 
-func (noopDevice) SetStatisticsEnabled(bool)                              {}
-func (noopDevice) ExtractStatistics() map[flowtrack.Tuple]tunstats.Counts { return nil }
-
-// Message is the log message that captures network traffic.
-type Message struct {
-	Start           time.Time     `json:"start"` // inclusive
-	End             time.Time     `json:"end"`   // inclusive
-	VirtualTraffic  []TupleCounts `json:"virtualTraffic,omitempty"`
-	SubnetTraffic   []TupleCounts `json:"subnetTraffic,omitempty"`
-	ExitTraffic     []TupleCounts `json:"exitTraffic,omitempty"`
-	PhysicalTraffic []TupleCounts `json:"physicalTraffic,omitempty"`
-}
-
-// TupleCounts is a flattened struct of both a connection and counts.
-type TupleCounts struct {
-	flowtrack.Tuple
-	tunstats.Counts
-}
+func (noopDevice) SetStatisticsEnabled(bool)                                      {}
+func (noopDevice) ExtractStatistics() map[netlogtype.Connection]netlogtype.Counts { return nil }
 
 // Logger logs statistics about every connection.
 // At present, it only logs connections within a tailscale network.
@@ -192,8 +175,8 @@ func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun, sock Device) 
 	return nil
 }
 
-func recordStatistics(logger *logtail.Logger, start, end time.Time, tunStats, sockStats map[flowtrack.Tuple]tunstats.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool) {
-	m := Message{Start: start.UTC(), End: end.UTC()}
+func recordStatistics(logger *logtail.Logger, start, end time.Time, tunStats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool) {
+	m := netlogtype.Message{Start: start.UTC(), End: end.UTC()}
 
 	classifyAddr := func(a netip.Addr) (isTailscale, withinRoute bool) {
 		// NOTE: There could be mis-classifications where an address is treated
@@ -214,23 +197,23 @@ func recordStatistics(logger *logtail.Logger, start, end time.Time, tunStats, so
 		dstIsTailscaleIP, dstWithinSubnet := classifyAddr(conn.Dst.Addr())
 		switch {
 		case srcIsTailscaleIP && dstIsTailscaleIP:
-			m.VirtualTraffic = append(m.VirtualTraffic, TupleCounts{conn, cnts})
+			m.VirtualTraffic = append(m.VirtualTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 		case srcWithinSubnet || dstWithinSubnet:
-			m.SubnetTraffic = append(m.SubnetTraffic, TupleCounts{conn, cnts})
+			m.SubnetTraffic = append(m.SubnetTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 		default:
 			const anonymize = true
 			if anonymize {
 				if len(m.ExitTraffic) == 0 {
-					m.ExitTraffic = []TupleCounts{{}}
+					m.ExitTraffic = []netlogtype.ConnectionCounts{{}}
 				}
 				m.ExitTraffic[0].Counts = m.ExitTraffic[0].Counts.Add(cnts)
 			} else {
-				m.ExitTraffic = append(m.ExitTraffic, TupleCounts{conn, cnts})
+				m.ExitTraffic = append(m.ExitTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 			}
 		}
 	}
 	for conn, cnts := range sockStats {
-		m.PhysicalTraffic = append(m.PhysicalTraffic, TupleCounts{conn, cnts})
+		m.PhysicalTraffic = append(m.PhysicalTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 	}
 
 	if len(m.VirtualTraffic)+len(m.SubnetTraffic)+len(m.ExitTraffic)+len(m.PhysicalTraffic) > 0 {
