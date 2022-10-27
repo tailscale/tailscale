@@ -248,6 +248,10 @@ func (cc *mockControl) SetNetInfo(ni *tailcfg.NetInfo) {
 	cc.called("SetNetInfo")
 }
 
+func (cc *mockControl) SetTKAHead(head string) {
+	cc.logf("SetTKAHead: %s", head)
+}
+
 func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 	// validate endpoint information here?
 	cc.logf("UpdateEndpoints:  ep=%v", endpoints)

@@ -261,6 +261,8 @@ func TestTKASync(t *testing.T) {
 	someKeyPriv := key.NewNLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
 
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+
 	type tkaSyncScenario struct {
 		name string
 		// controlAUMs is called (if non-nil) to get any AUMs which the tka state
@@ -342,7 +344,7 @@ func TestTKASync(t *testing.T) {
 			controlStorage := &tka.Mem{}
 			controlAuthority, bootstrap, err := tka.Create(controlStorage, tka.State{
 				Keys:               []tka.Key{key, someKey},
-				DisablementSecrets: [][]byte{bytes.Repeat([]byte{0xa5}, 32)},
+				DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
 			}, nlPriv)
 			if err != nil {
 				t.Fatalf("tka.Create() failed: %v", err)
@@ -416,6 +418,11 @@ func TestTKASync(t *testing.T) {
 						t.Fatal(err)
 					}
 					t.Logf("got sync send:\n%+v", body)
+
+					var remoteHead tka.AUMHash
+					if err := remoteHead.UnmarshalText([]byte(body.Head)); err != nil {
+						t.Fatalf("head unmarshal: %v", err)
+					}
 					toApply := make([]tka.AUM, len(body.MissingAUMs))
 					for i, a := range body.MissingAUMs {
 						if err := toApply[i].Unserialize(a); err != nil {
@@ -434,7 +441,9 @@ func TestTKASync(t *testing.T) {
 					}
 
 					w.WriteHeader(200)
-					if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{Head: string(head)}); err != nil {
+					if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
+						Head: string(head),
+					}); err != nil {
 						t.Fatal(err)
 					}
 
@@ -534,5 +543,89 @@ func TestTKAFilterNetmap(t *testing.T) {
 	})
 	if diff := cmp.Diff(nm.Peers, want, nodePubComparer); diff != "" {
 		t.Errorf("filtered netmap differs (-want, +got):\n%s", diff)
+	}
+}
+
+func TestTKADisable(t *testing.T) {
+	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	temp := t.TempDir()
+	os.Mkdir(filepath.Join(temp, "tka"), 0755)
+	nodePriv := key.NewNode()
+
+	// Make a fake TKA authority, to seed local state.
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+	nlPriv := key.NewNLPrivate()
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	chonk, err := tka.ChonkDir(filepath.Join(temp, "tka"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, _, err := tka.Create(chonk, tka.State{
+		Keys:               []tka.Key{key},
+		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+	}, nlPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		switch r.URL.Path {
+		case "/machine/tka/disable":
+			body := new(tailcfg.TKADisableRequest)
+			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Version != tailcfg.CurrentCapabilityVersion {
+				t.Errorf("disable CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
+			}
+			if body.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey = %v, want %v", body.NodeKey, nodePriv.Public())
+			}
+			if !bytes.Equal(body.DisablementSecret, disablementSecret) {
+				t.Errorf("disablement secret = %x, want %x", body.DisablementSecret, disablementSecret)
+			}
+
+			var head tka.AUMHash
+			if err := head.UnmarshalText([]byte(body.Head)); err != nil {
+				t.Fatalf("failed unmarshal of body.Head: %v", err)
+			}
+			if head != authority.Head() {
+				t.Errorf("reported head = %x, want %x", head, authority.Head())
+			}
+
+			w.WriteHeader(200)
+			if err := json.NewEncoder(w).Encode(tailcfg.TKADisableResponse{}); err != nil {
+				t.Fatal(err)
+			}
+
+		default:
+			t.Errorf("unhandled endpoint path: %v", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+
+	cc := fakeControlClient(t, client)
+	b := LocalBackend{
+		varRoot: temp,
+		cc:      cc,
+		ccAuto:  cc,
+		logf:    t.Logf,
+		tka: &tkaState{
+			authority: authority,
+			storage:   chonk,
+		},
+		prefs: (&ipn.Prefs{
+			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
+		}).View(),
+	}
+
+	// Test that we get an error for an incorrect disablement secret.
+	if err := b.NetworkLockDisable([]byte{1, 2, 3, 4}); err == nil || err.Error() != "incorrect disablement secret" {
+		t.Errorf("NetworkLockDisable(<bad secret>).err = %v, want 'incorrect disablement secret'", err)
+	}
+	if err := b.NetworkLockDisable(disablementSecret); err != nil {
+		t.Errorf("NetworkLockDisable() failed: %v", err)
 	}
 }

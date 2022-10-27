@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -51,7 +52,10 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return err
 	}
 
-	status, err := localClient.NetworkLockInit(ctx, keys)
+	// TODO(tom): Implement specification of disablement values from the command line.
+	disablementValues := [][]byte{bytes.Repeat([]byte{0xa5}, 32)}
+
+	status, err := localClient.NetworkLockInit(ctx, keys, disablementValues)
 	if err != nil {
 		return err
 	}
