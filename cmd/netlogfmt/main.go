@@ -39,10 +39,8 @@ import (
 
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
-	"tailscale.com/net/flowtrack"
-	"tailscale.com/net/tunstats"
+	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/must"
-	"tailscale.com/wgengine/netlog"
 )
 
 var (
@@ -62,7 +60,7 @@ func main() {
 			Logtail struct {
 				ID string `json:"id"`
 			} `json:"logtail"`
-			netlog.Message
+			netlogtype.Message
 		}
 		if err := dec.Decode(&msg); err != nil {
 			if err == io.EOF {
@@ -77,16 +75,16 @@ func main() {
 		// Construct a table of network traffic per connection.
 		rows := [][7]string{{3: "Tx[P/s]", 4: "Tx[B/s]", 5: "Rx[P/s]", 6: "Rx[B/s]"}}
 		duration := msg.End.Sub(msg.Start)
-		addRows := func(heading string, traffic []netlog.TupleCounts) {
+		addRows := func(heading string, traffic []netlogtype.ConnectionCounts) {
 			if len(traffic) == 0 {
 				return
 			}
-			slices.SortFunc(traffic, func(x, y netlog.TupleCounts) bool {
+			slices.SortFunc(traffic, func(x, y netlogtype.ConnectionCounts) bool {
 				nx := x.TxPackets + x.TxBytes + x.RxPackets + x.RxBytes
 				ny := y.TxPackets + y.TxBytes + y.RxPackets + y.RxBytes
 				return nx > ny
 			})
-			var sum tunstats.Counts
+			var sum netlogtype.Counts
 			for _, cc := range traffic {
 				sum = sum.Add(cc.Counts)
 			}
@@ -97,7 +95,7 @@ func main() {
 				5: formatSI(float64(sum.RxPackets) / duration.Seconds()),
 				6: formatIEC(float64(sum.RxBytes) / duration.Seconds()),
 			})
-			if len(traffic) == 1 && traffic[0].Tuple == (flowtrack.Tuple{}) {
+			if len(traffic) == 1 && traffic[0].Connection.IsZero() {
 				return // this is already a summary counts
 			}
 			formatAddrPort := func(a netip.AddrPort) string {
