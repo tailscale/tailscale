@@ -31,8 +31,7 @@ const pollPeriod = 5 * time.Second
 
 // Device is an abstraction over a tunnel device or a magic socket.
 // *tstun.Wrapper implements this interface.
-//
-// TODO(joetsai): Make *magicsock.Conn implement this interface.
+// *magicsock.Conn implements this interface.
 type Device interface {
 	SetStatisticsEnabled(bool)
 	ExtractStatistics() map[netlogtype.Connection]netlogtype.Counts
