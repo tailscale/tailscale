@@ -37,6 +37,8 @@ type httpTestParam struct {
 	// makeHTTPHangAfterUpgrade makes the HTTP response hang after sending a
 	// 101 switching protocols.
 	makeHTTPHangAfterUpgrade bool
+
+	doEarlyWrite bool
 }
 
 func TestControlHTTP(t *testing.T) {
@@ -111,6 +113,11 @@ func TestControlHTTP(t *testing.T) {
 				allowHTTP:    true,
 			},
 		},
+		// Early write
+		{
+			name:         "early_write",
+			doEarlyWrite: true,
+		},
 	}
 
 	for _, test := range tests {
@@ -125,9 +132,21 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 	client, server := key.NewMachine(), key.NewMachine()
 
 	const testProtocolVersion = 1
+	const earlyWriteMsg = "Hello, world!"
 	sch := make(chan serverResult, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := AcceptHTTP(context.Background(), w, r, server, nil)
+		var earlyWriteFn func(protocolVersion int, w io.Writer) error
+		if param.doEarlyWrite {
+			earlyWriteFn = func(protocolVersion int, w io.Writer) error {
+				if protocolVersion != testProtocolVersion {
+					t.Errorf("unexpected protocol version %d; want %d", protocolVersion, testProtocolVersion)
+					return fmt.Errorf("unexpected protocol version %d; want %d", protocolVersion, testProtocolVersion)
+				}
+				_, err := io.WriteString(w, earlyWriteMsg)
+				return err
+			}
+		}
+		conn, err := AcceptHTTP(context.Background(), w, r, server, earlyWriteFn)
 		if err != nil {
 			log.Print(err)
 		}
@@ -227,6 +246,15 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 	}
 	if proxy != nil && !proxy.ConnIsFromProxy(si.clientAddr) {
 		t.Fatalf("client connected from %s, which isn't the proxy", si.clientAddr)
+	}
+	if param.doEarlyWrite {
+		buf := make([]byte, len(earlyWriteMsg))
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			t.Fatalf("reading early write: %v", err)
+		}
+		if string(buf) != earlyWriteMsg {
+			t.Errorf("early write = %q; want %q", buf, earlyWriteMsg)
+		}
 	}
 }
 
