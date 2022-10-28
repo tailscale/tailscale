@@ -336,7 +336,7 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (*Cli
 	if err != nil {
 		return nil, err
 	}
-	netConn, untrustedUpgradeHeaders, err := a.tryURLUpgrade(ctx, u, addr, init)
+	netConn, err := a.tryURLUpgrade(ctx, u, addr, init)
 	if err != nil {
 		return nil, err
 	}
@@ -346,8 +346,7 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (*Cli
 		return nil, err
 	}
 	return &ClientConn{
-		Conn:                    cbConn,
-		UntrustedUpgradeHeaders: untrustedUpgradeHeaders,
+		Conn: cbConn,
 	}, nil
 }
 
@@ -356,7 +355,7 @@ func (a *Dialer) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (*Cli
 // provided address.
 //
 // Only the provided ctx is used, not a.ctx.
-func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr, init []byte) (_ net.Conn, untrustedUpgradeHeaders http.Header, _ error) {
+func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr, init []byte) (net.Conn, error) {
 	var dns *dnscache.Resolver
 
 	// If we were provided an address to dial, then create a resolver that just
@@ -438,11 +437,11 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr,
 
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return nil, nil, fmt.Errorf("unexpected HTTP response: %s", resp.Status)
+		return nil, fmt.Errorf("unexpected HTTP response: %s", resp.Status)
 	}
 
 	// From here on, the underlying net.Conn is ours to use, but there
@@ -456,19 +455,19 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr,
 	}
 	if switchedConn == nil {
 		resp.Body.Close()
-		return nil, nil, fmt.Errorf("httptrace didn't provide a connection")
+		return nil, fmt.Errorf("httptrace didn't provide a connection")
 	}
 
 	if next := resp.Header.Get("Upgrade"); next != upgradeHeaderValue {
 		resp.Body.Close()
-		return nil, nil, fmt.Errorf("server switched to unexpected protocol %q", next)
+		return nil, fmt.Errorf("server switched to unexpected protocol %q", next)
 	}
 
 	rwc, ok := resp.Body.(io.ReadWriteCloser)
 	if !ok {
 		resp.Body.Close()
-		return nil, nil, errors.New("http Transport did not provide a writable body")
+		return nil, errors.New("http Transport did not provide a writable body")
 	}
 
-	return netutil.NewAltReadWriteCloserConn(rwc, switchedConn), resp.Header, nil
+	return netutil.NewAltReadWriteCloserConn(rwc, switchedConn), nil
 }

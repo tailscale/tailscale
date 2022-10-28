@@ -5,8 +5,6 @@
 package controlhttp
 
 import (
-	"net/http"
-
 	"tailscale.com/control/controlbase"
 )
 
@@ -17,10 +15,4 @@ import (
 type ClientConn struct {
 	// Conn is the noise connection.
 	*controlbase.Conn
-
-	// UntrustedUpgradeHeaders are the HTTP headers seen in the
-	// 101 Switching Protocols upgrade response. They may be nil
-	// or even might've been tampered with by a middlebox.
-	// They should not be trusted.
-	UntrustedUpgradeHeaders http.Header
 }
