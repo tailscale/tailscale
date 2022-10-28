@@ -62,6 +62,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 
 	// Setup log IDs for data plane audit logging.
 	if nm.SelfNode != nil {
+		cfg.NodeID = nm.SelfNode.StableID
 		canNetworkLog := slices.Contains(nm.SelfNode.Capabilities, tailcfg.CapabilityDataPlaneAuditLogs)
 		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID != "" && nm.DomainAuditLogID != "" {
 			nodeID, errNode := logtail.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID)

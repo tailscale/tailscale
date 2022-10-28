@@ -9,6 +9,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/logtail"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -18,6 +19,7 @@ import (
 // It only supports the set of things Tailscale uses.
 type Config struct {
 	Name       string
+	NodeID     tailcfg.StableNodeID
 	PrivateKey key.NodePrivate
 	Addresses  []netip.Prefix
 	MTU        uint16
