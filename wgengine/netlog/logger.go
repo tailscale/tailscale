@@ -217,8 +217,21 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 	}
 
 	if len(m.VirtualTraffic)+len(m.SubnetTraffic)+len(m.ExitTraffic)+len(m.PhysicalTraffic) > 0 {
+		// TODO(joetsai): Place a hard limit on the size of a network log message.
+		// The log server rejects any payloads above a certain size, so logging
+		// a message that large would cause logtail to be stuck forever trying
+		// and failing to upload the same excessively large payload.
+		//
+		// We should figure out the behavior for handling this. We could split
+		// the message apart so that there are multiple chunks with the same window,
+		// We could also consider reducing the granularity of the data
+		// by dropping port numbers.
+		const maxSize = 256 << 10
 		if b, err := json.Marshal(m); err != nil {
 			logger.Logf("json.Marshal error: %v", err)
+		} else if len(b) > maxSize {
+			logger.Logf("JSON body too large: %dB (virtual:%d subnet:%d exit:%d physical:%d)",
+				len(b), len(m.VirtualTraffic), len(m.SubnetTraffic), len(m.ExitTraffic), len(m.PhysicalTraffic))
 		} else {
 			logger.Logf("%s", b)
 		}
