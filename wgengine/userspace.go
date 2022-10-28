@@ -956,6 +956,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		if err := e.networkLogger.Startup(cfg.NodeID, nid, tid, e.tundev, e.magicConn); err != nil {
 			e.logf("wgengine: Reconfig: error starting up network logger: %v", err)
 		}
+		e.networkLogger.ReconfigRoutes(routerCfg)
 	}
 
 	if routerChanged {
