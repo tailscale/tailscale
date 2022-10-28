@@ -7,10 +7,8 @@ package controlclient
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -24,6 +22,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
+	"tailscale.com/util/singleflight"
 )
 
 // noiseConn is a wrapper around controlbase.Conn.
@@ -34,6 +33,7 @@ type noiseConn struct {
 	*controlbase.Conn
 	id   int
 	pool *noiseClient
+	h2cc *http2.ClientConn
 }
 
 func (c *noiseConn) Close() error {
@@ -47,7 +47,24 @@ func (c *noiseConn) Close() error {
 // noiseClient provides a http.Client to connect to tailcontrol over
 // the ts2021 protocol.
 type noiseClient struct {
-	*http.Client // HTTP client used to talk to tailcontrol
+	// Client is an HTTP client to talk to the coordination server.
+	// It automatically makes a new Noise connection as needed.
+	// It does not support node key proofs. To do that, call
+	// noiseClient.getConn instead to make a connection.
+	*http.Client
+
+	// h2t is the HTTP/2 transport we use a bit to create new
+	// *http2.ClientConns. We don't use its connection pool and we don't use its
+	// dialing. We use it for exactly one reason: its idle timeout that can only
+	// be configured via the HTTP/1 config. And then we call NewClientConn (with
+	// an existing Noise connection) on the http2.Transport which sets up an
+	// http2.ClientConn using that idle timeout from an http1.Transport.
+	h2t *http2.Transport
+
+	// sfDial ensures that two concurrent requests for a noise connection only
+	// produce one shared one between the two callers.
+	sfDial singleflight.Group[struct{}, *noiseConn]
+
 	dialer       *tsdial.Dialer
 	privKey      key.MachinePrivate
 	serverPubKey key.MachinePublic
@@ -62,6 +79,7 @@ type noiseClient struct {
 
 	// mu only protects the following variables.
 	mu       sync.Mutex
+	last     *noiseConn // or nil
 	nextID   int
 	connPool map[int]*noiseConn // active connections not yet closed; see noiseConn.Close
 }
@@ -112,22 +130,34 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 	if err != nil {
 		return nil, err
 	}
+	np.h2t = h2Transport
 
-	// Let the HTTP/2 Transport think it's dialing out using TLS,
-	// but it's actually our Noise dialer:
-	h2Transport.DialTLS = np.dial
-
-	// ConfigureTransports assumes it's being used to wire up an HTTP/1
-	// and HTTP/2 Transport together, so its returned http2.Transport
-	// has a ConnPool already initialized that's configured to not dial
-	// (assuming it's only called from the HTTP/1 Transport). But we
-	// want it to dial, so nil it out before use. On first use it has
-	// a sync.Once that lazily initializes the ConnPool to its default
-	// one that dials.
-	h2Transport.ConnPool = nil
-
-	np.Client = &http.Client{Transport: h2Transport}
+	np.Client = &http.Client{Transport: np}
 	return np, nil
+}
+
+func (nc *noiseClient) getConn(ctx context.Context) (*noiseConn, error) {
+	nc.mu.Lock()
+	if last := nc.last; last != nil && last.canTakeNewRequest() {
+		nc.mu.Unlock()
+		return last, nil
+	}
+	nc.mu.Unlock()
+
+	conn, err, _ := nc.sfDial.Do(struct{}{}, nc.dial)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (nc *noiseClient) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	conn, err := nc.getConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.h2cc.RoundTrip(req)
 }
 
 // connClosed removes the connection with the provided ID from the pool
@@ -135,7 +165,13 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 func (nc *noiseClient) connClosed(id int) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	delete(nc.connPool, id)
+	conn := nc.connPool[id]
+	if conn != nil {
+		delete(nc.connPool, id)
+		if nc.last == conn {
+			nc.last = nil
+		}
+	}
 }
 
 // Close closes all the underlying noise connections.
@@ -156,10 +192,8 @@ func (nc *noiseClient) Close() error {
 }
 
 // dial opens a new connection to tailcontrol, fetching the server noise key
-// if not cached. It implements the signature needed by http2.Transport.DialTLS
-// but ignores all params as it only dials out to the server the noiseClient was
-// created for.
-func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
+// if not cached.
+func (nc *noiseClient) dial() (*noiseConn, error) {
 	nc.mu.Lock()
 	connID := nc.nextID
 	nc.nextID++
@@ -224,10 +258,25 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		return nil, err
 	}
 
+	ncc := &noiseConn{
+		Conn: clientConn.Conn,
+		id:   connID,
+		pool: nc,
+	}
+
+	// TODO(bradfitz): wrap clientConn in a type that sniffs the leading bytes
+	// from the server to see if it has early post-Noise, pre-H2 data for us.
+
+	h2cc, err := nc.h2t.NewClientConn(ncc)
+	if err != nil {
+		return nil, err
+	}
+	ncc.h2cc = h2cc
+
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	ncc := &noiseConn{Conn: clientConn.Conn, id: connID, pool: nc}
 	mak.Set(&nc.connPool, ncc.id, ncc)
+	nc.last = ncc
 	return ncc, nil
 }
 
@@ -241,5 +290,14 @@ func (nc *noiseClient) post(ctx context.Context, path string, body any) (*http.R
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	return nc.Do(req)
+
+	conn, err := nc.getConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn.h2cc.RoundTrip(req)
+}
+
+func (c *noiseConn) canTakeNewRequest() bool {
+	return c.h2cc.CanTakeNewRequest()
 }
