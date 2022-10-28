@@ -9,11 +9,17 @@ import (
 	"net/netip"
 	"time"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
 
+// TODO(joetsai): Remove "omitempty" if "omitzero" is ever supported in both
+// the v1 and v2 "json" packages.
+
 // Message is the log message that captures network traffic.
 type Message struct {
+	NodeID tailcfg.StableNodeID `json:"nodeId"` // e.g., "n123456CNTRL"
+
 	Start time.Time `json:"start"` // inclusive
 	End   time.Time `json:"end"`   // inclusive
 

@@ -22,6 +22,7 @@ import (
 	"tailscale.com/logtail"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/wgengine/router"
 )
@@ -91,7 +92,7 @@ var testClient *http.Client
 // is a non-tailscale IP address to contact for that particular tailscale node.
 // The IP protocol and source port are always zero.
 // The sock is used to populated the PhysicalTraffic field in Message.
-func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun, sock Device) error {
+func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID logtail.PrivateID, tun, sock Device) error {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 	if nl.logger != nil {
@@ -110,8 +111,8 @@ func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun, sock Device) 
 	}
 	logger := logtail.NewLogger(logtail.Config{
 		Collection:    "tailtraffic.log.tailscale.io",
-		PrivateID:     nodeID,
-		CopyPrivateID: domainID,
+		PrivateID:     nodeLogID,
+		CopyPrivateID: domainLogID,
 		Stderr:        io.Discard,
 		// TODO(joetsai): Set Buffer? Use an in-memory buffer for now.
 		NewZstdEncoder: func() logtail.Encoder {
@@ -161,7 +162,7 @@ func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun, sock Device) 
 				addrs := nl.addrs
 				prefixes := nl.prefixes
 				nl.mu.Unlock()
-				recordStatistics(logger, start, end, tunStats, sockStats, addrs, prefixes)
+				recordStatistics(logger, nodeID, start, end, tunStats, sockStats, addrs, prefixes)
 			}
 
 			if ctx.Err() != nil {
@@ -174,8 +175,8 @@ func (nl *Logger) Startup(nodeID, domainID logtail.PrivateID, tun, sock Device) 
 	return nil
 }
 
-func recordStatistics(logger *logtail.Logger, start, end time.Time, tunStats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool) {
-	m := netlogtype.Message{Start: start.UTC(), End: end.UTC()}
+func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start, end time.Time, tunStats, sockStats map[netlogtype.Connection]netlogtype.Counts, addrs map[netip.Addr]bool, prefixes map[netip.Prefix]bool) {
+	m := netlogtype.Message{NodeID: nodeID, Start: start.UTC(), End: end.UTC()}
 
 	classifyAddr := func(a netip.Addr) (isTailscale, withinRoute bool) {
 		// NOTE: There could be mis-classifications where an address is treated
