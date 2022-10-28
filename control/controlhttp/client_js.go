@@ -46,7 +46,7 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 			handshakeHeaderName: []string{base64.StdEncoding.EncodeToString(init)},
 		}.Encode(),
 	}
-	wsConn, httpRes, err := websocket.Dial(ctx, wsURL.String(), &websocket.DialOptions{
+	wsConn, _, err := websocket.Dial(ctx, wsURL.String(), &websocket.DialOptions{
 		Subprotocols: []string{upgradeHeaderValue},
 	})
 	if err != nil {
@@ -58,8 +58,5 @@ func (d *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
 		netConn.Close()
 		return nil, err
 	}
-	return &ClientConn{
-		Conn:                    cbConn,
-		UntrustedUpgradeHeaders: httpRes.Header,
-	}, nil
+	return &ClientConn{Conn: cbConn}, nil
 }
