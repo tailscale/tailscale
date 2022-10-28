@@ -584,11 +584,12 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
 		ss.Online = health.GetInPollNetMap()
 		if b.netMap != nil {
+			ss.InNetworkMap = true
 			ss.HostName = b.netMap.Hostinfo.Hostname
 			ss.DNSName = b.netMap.Name
 			ss.UserID = b.netMap.User
 			if sn := b.netMap.SelfNode; sn != nil {
-				ss.ID = sn.StableID
+				peerStatusFromNode(ss, sn)
 				if c := sn.Capabilities; len(c) > 0 {
 					ss.Capabilities = append([]string(nil), c...)
 				}
@@ -626,38 +627,38 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
-		exitNodeOption := tsaddr.PrefixesContainsFunc(p.AllowedIPs, func(r netip.Prefix) bool {
-			return r.Bits() == 0
-		})
-		var tags *views.Slice[string]
-		var primaryRoutes *views.IPPrefixSlice
-		if p.Tags != nil {
-			v := views.SliceOf(p.Tags)
-			tags = &v
+		ps := &ipnstate.PeerStatus{
+			InNetworkMap: true,
+			UserID:       p.User,
+			TailscaleIPs: tailscaleIPs,
+			HostName:     p.Hostinfo.Hostname(),
+			DNSName:      p.Name,
+			OS:           p.Hostinfo.OS(),
+			KeepAlive:    p.KeepAlive,
+			LastSeen:     lastSeen,
+			Online:       p.Online != nil && *p.Online,
+			ShareeNode:   p.Hostinfo.ShareeNode(),
+			ExitNode:     p.StableID != "" && p.StableID == b.prefs.ExitNodeID(),
+			SSH_HostKeys: p.Hostinfo.SSH_HostKeys().AsSlice(),
 		}
-		if p.PrimaryRoutes != nil {
-			v := views.IPPrefixSliceOf(p.PrimaryRoutes)
-			primaryRoutes = &v
-		}
-		sb.AddPeer(p.Key, &ipnstate.PeerStatus{
-			InNetworkMap:   true,
-			ID:             p.StableID,
-			UserID:         p.User,
-			TailscaleIPs:   tailscaleIPs,
-			Tags:           tags,
-			PrimaryRoutes:  primaryRoutes,
-			HostName:       p.Hostinfo.Hostname(),
-			DNSName:        p.Name,
-			OS:             p.Hostinfo.OS(),
-			KeepAlive:      p.KeepAlive,
-			Created:        p.Created,
-			LastSeen:       lastSeen,
-			Online:         p.Online != nil && *p.Online,
-			ShareeNode:     p.Hostinfo.ShareeNode(),
-			ExitNode:       p.StableID != "" && p.StableID == b.prefs.ExitNodeID(),
-			ExitNodeOption: exitNodeOption,
-			SSH_HostKeys:   p.Hostinfo.SSH_HostKeys().AsSlice(),
-		})
+		peerStatusFromNode(ps, p)
+		sb.AddPeer(p.Key, ps)
+	}
+}
+
+// peerStatusFromNode copies fields that exist in the Node struct for
+// current node and peers into the provided PeerStatus.
+func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
+	ps.ID = n.StableID
+	ps.Created = n.Created
+	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(n.AllowedIPs)
+	if n.Tags != nil {
+		v := views.SliceOf(n.Tags)
+		ps.Tags = &v
+	}
+	if n.PrimaryRoutes != nil {
+		v := views.IPPrefixSliceOf(n.PrimaryRoutes)
+		ps.PrimaryRoutes = &v
 	}
 }
 
