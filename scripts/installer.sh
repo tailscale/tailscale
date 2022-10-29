@@ -163,6 +163,9 @@ main() {
 				OS="$ID"
 				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				PACKAGETYPE="dnf"
+				if [ "$VERSION" = "7" ]; then
+					PACKAGETYPE="yum"
+				fi
 				;;
 			fedora)
 				OS="$ID"
@@ -326,8 +329,9 @@ main() {
 			fi
 		;;
 		rhel)
-			if [ "$VERSION" != "8" ] && \
-                           [ "$VERSION" != "9" ]
+			if [ "$VERSION" != "7" ] && \
+			   [ "$VERSION" != "8" ] && \
+			   [ "$VERSION" != "9" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
