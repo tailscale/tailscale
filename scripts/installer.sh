@@ -66,7 +66,10 @@ main() {
 				PACKAGETYPE="apt"
 				# Third-party keyrings became the preferred method of
 				# installation in Debian 11 (Bullseye).
-				if [ "$VERSION_ID" -lt 11 ]; then
+				if [ -z "${VERSION_ID:-}" ]; then
+					# rolling release. If you haven't kept current, that's on you.
+					APT_KEY_TYPE="keyring"
+				elif [ "$VERSION_ID" -lt 11 ]; then
 					APT_KEY_TYPE="legacy"
 				else
 					APT_KEY_TYPE="keyring"
