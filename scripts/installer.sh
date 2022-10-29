@@ -339,6 +339,7 @@ main() {
 			if [ "$VERSION" != "leap/15.1" ] && \
 			   [ "$VERSION" != "leap/15.2" ] && \
 			   [ "$VERSION" != "leap/15.3" ] && \
+			   [ "$VERSION" != "leap/15.4" ] && \
 			   [ "$VERSION" != "tumbleweed" ]
 			then
 				OS_UNSUPPORTED=1
