@@ -1946,3 +1946,15 @@ type PeerChange struct {
 //
 // Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
 const DerpMagicIP = "127.3.3.40"
+
+// EarlyNoise is the early payload that's sent over Noise but before the HTTP/2
+// handshake when connecting to the coordination server.
+//
+// This exists to let the server push some early info to client for that
+// stateful HTTP/2+Noise connection without incurring an extra round trip. (This
+// would've used HTTP/2 server push, had Go's client-side APIs been available)
+type EarlyNoise struct {
+	// NodeKeyChallenge is a random per-connection public key to be used by
+	// the client to prove possession of a wireguard private key.
+	NodeKeyChallenge key.ChallengePublic `json:"nodeKeyChallenge"`
+}

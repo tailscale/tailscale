@@ -7,7 +7,10 @@ package controlclient
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -34,6 +37,77 @@ type noiseConn struct {
 	id   int
 	pool *noiseClient
 	h2cc *http2.ClientConn
+
+	readHeaderOnce    sync.Once     // guards init of reader field
+	reader            io.Reader     // (effectively Conn.Reader after header)
+	earlyPayloadReady chan struct{} // closed after earlyPayload is set (including set to nil)
+	earlyPayload      *tailcfg.EarlyNoise
+}
+
+func (c *noiseConn) RoundTrip(r *http.Request) (*http.Response, error) {
+	return c.h2cc.RoundTrip(r)
+}
+
+// The first 9 bytes from the server to client over Noise are either an HTTP/2
+// settings frame (a normal HTTP/2 setup) or, as we added later, an "early payload"
+// header that's also 9 bytes long: 5 bytes (earlyPayloadMagic) followed by 4 bytes
+// of length. Then that many bytes of JSON-encoded tailcfg.EarlyNoise.
+// The early payload is optional. Some servers may not send it.
+const (
+	hdrLen            = 9 // http2 frame header size; also size of our early payload size header
+	earlyPayloadMagic = "\xff\xff\xffTS"
+)
+
+// returnErrReader is an io.Reader that always returns an error.
+type returnErrReader struct {
+	err error // the error to return
+}
+
+func (r returnErrReader) Read([]byte) (int, error) { return 0, r.err }
+
+// Read is basically the same as controlbase.Conn.Read, but it first reads the
+// "early payload" header from the server which may or may not be present,
+// depending on the server.
+func (c *noiseConn) Read(p []byte) (n int, err error) {
+	c.readHeaderOnce.Do(c.readHeader)
+	return c.reader.Read(p)
+}
+
+// readHeader reads the optional "early payload" from the server that arrives
+// after the Noise handshake but before the HTTP/2 session begins.
+//
+// readHeader is responsible for reading the header (if present), initializing
+// c.earlyPayload, closing c.earlyPayloadReady, and initializing c.reader for
+// future reads.
+func (c *noiseConn) readHeader() {
+	var hdr [hdrLen]byte
+	if _, err := io.ReadFull(c.Conn, hdr[:]); err != nil {
+		c.reader = returnErrReader{err}
+		return
+	}
+	if string(hdr[:len(earlyPayloadMagic)]) != earlyPayloadMagic {
+		// No early payload. We have to return the 9 bytes read we already
+		// consumed.
+		close(c.earlyPayloadReady)
+		c.reader = io.MultiReader(bytes.NewReader(hdr[:]), c.Conn)
+		return
+	}
+	epLen := binary.BigEndian.Uint32(hdr[len(earlyPayloadMagic):])
+	if epLen > 10<<20 {
+		c.reader = returnErrReader{errors.New("invalid early payload length")}
+		return
+	}
+	payBuf := make([]byte, epLen)
+	if _, err := io.ReadFull(c.Conn, payBuf); err != nil {
+		c.reader = returnErrReader{err}
+		return
+	}
+	if err := json.Unmarshal(payBuf, &c.earlyPayload); err != nil {
+		c.reader = returnErrReader{err}
+		return
+	}
+	close(c.earlyPayloadReady)
+	c.reader = c.Conn
 }
 
 func (c *noiseConn) Close() error {
@@ -88,7 +162,7 @@ type noiseClient struct {
 // serverURL is of the form https://<host>:<port> (no trailing slash).
 //
 // dialPlan may be nil
-func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, dialPlan func() *tailcfg.ControlDialPlan) (*noiseClient, error) {
+func newNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, dialPlan func() *tailcfg.ControlDialPlan) (*noiseClient, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, err
@@ -111,7 +185,7 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 	}
 	np := &noiseClient{
 		serverPubKey: serverPubKey,
-		privKey:      priKey,
+		privKey:      privKey,
 		host:         u.Hostname(),
 		httpPort:     httpPort,
 		httpsPort:    httpsPort,
@@ -157,7 +231,7 @@ func (nc *noiseClient) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return conn.h2cc.RoundTrip(req)
+	return conn.RoundTrip(req)
 }
 
 // connClosed removes the connection with the provided ID from the pool
@@ -259,13 +333,11 @@ func (nc *noiseClient) dial() (*noiseConn, error) {
 	}
 
 	ncc := &noiseConn{
-		Conn: clientConn.Conn,
-		id:   connID,
-		pool: nc,
+		Conn:              clientConn.Conn,
+		id:                connID,
+		pool:              nc,
+		earlyPayloadReady: make(chan struct{}),
 	}
-
-	// TODO(bradfitz): wrap clientConn in a type that sniffs the leading bytes
-	// from the server to see if it has early post-Noise, pre-H2 data for us.
 
 	h2cc, err := nc.h2t.NewClientConn(ncc)
 	if err != nil {

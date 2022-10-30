@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlhttp"
@@ -38,15 +39,32 @@ func TestNoiseVersion(t *testing.T) {
 	}
 }
 
+type noiseClientTest struct {
+	sendEarlyPayload bool
+}
+
 func TestNoiseClientHTTP2Upgrade(t *testing.T) {
+	noiseClientTest{}.run(t)
+}
+
+func TestNoiseClientHTTP2Upgrade_earlyPayload(t *testing.T) {
+	noiseClientTest{
+		sendEarlyPayload: true,
+	}.run(t)
+}
+
+func (tt noiseClientTest) run(t *testing.T) {
 	serverPrivate := key.NewMachine()
 	clientPrivate := key.NewMachine()
+	chalPrivate := key.NewChallenge()
 
 	const msg = "Hello, client"
 	h2 := &http2.Server{}
 	hs := httptest.NewServer(&Upgrader{
-		h2srv:        h2,
-		noiseKeyPriv: serverPrivate,
+		h2srv:            h2,
+		noiseKeyPriv:     serverPrivate,
+		sendEarlyPayload: tt.sendEarlyPayload,
+		challenge:        chalPrivate,
 		httpBaseConfig: &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
@@ -61,19 +79,56 @@ func TestNoiseClientHTTP2Upgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := nc.post(context.Background(), "/", nil)
+
+	// Get a conn and verify it read its early payload before the http/2
+	// handshake.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := nc.getConn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
-	all, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(all) != msg {
-		t.Errorf("got response %q; want %q", all, msg)
+	select {
+	case <-c.earlyPayloadReady:
+		gotNonNil := c.earlyPayload != nil
+		if gotNonNil != tt.sendEarlyPayload {
+			t.Errorf("sendEarlyPayload = %v but got earlyPayload = %T", tt.sendEarlyPayload, c.earlyPayload)
+		}
+		if c.earlyPayload != nil {
+			if c.earlyPayload.NodeKeyChallenge != chalPrivate.Public() {
+				t.Errorf("earlyPayload.NodeKeyChallenge = %v; want %v", c.earlyPayload.NodeKeyChallenge, chalPrivate.Public())
+			}
+		}
+
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for didReadHeaderCh")
 	}
 
+	checkRes := func(t *testing.T, res *http.Response) {
+		t.Helper()
+		defer res.Body.Close()
+		all, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(all) != msg {
+			t.Errorf("got response %q; want %q", all, msg)
+		}
+	}
+
+	// And verify we can do HTTP/2 against that conn.
+	res, err := (&http.Client{Transport: c}).Get("https://unused.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkRes(t, res)
+
+	// And try using the high-level nc.post API as well.
+	res, err = nc.post(context.Background(), "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkRes(t, res)
 }
 
 // Upgrader is an http.Handler that hijacks and upgrades POST-with-Upgrade
@@ -91,6 +146,7 @@ type Upgrader struct {
 	logf logger.Logf
 
 	noiseKeyPriv key.MachinePrivate
+	challenge    key.ChallengePrivate
 
 	sendEarlyPayload bool
 }
@@ -109,21 +165,21 @@ func (up *Upgrader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chalPub := key.NewChallenge()
 	earlyWriteFn := func(protocolVersion int, w io.Writer) error {
 		if !up.sendEarlyPayload {
 			return nil
 		}
-		earlyJSON, err := json.Marshal(struct {
-			NodeKeyOwnershipChallenge string
-		}{chalPub.Public().String()})
+		earlyJSON, err := json.Marshal(&tailcfg.EarlyNoise{
+			NodeKeyChallenge: up.challenge.Public(),
+		})
 		if err != nil {
 			return err
 		}
 		// 5 bytes that won't be mistaken for an HTTP/2 frame:
 		// https://httpwg.org/specs/rfc7540.html#rfc.section.4.1 (Especially not
 		// an HTTP/2 settings frame, which isn't of type 'T')
-		var notH2Frame = [5]byte{0xff, 0xff, 0xff, 'T', 'S'}
+		var notH2Frame [5]byte
+		copy(notH2Frame[:], earlyPayloadMagic)
 		var lenBuf [4]byte
 		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(earlyJSON)))
 		// These writes are all buffered by caller, so fine to do them
