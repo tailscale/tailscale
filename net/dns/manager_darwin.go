@@ -6,7 +6,6 @@ package dns
 
 import (
 	"bytes"
-	"errors"
 	"os"
 
 	"go4.org/mem"
@@ -85,7 +84,7 @@ func (c *darwinConfigurator) SetDNS(cfg OSConfig) error {
 }
 
 func (c *darwinConfigurator) GetBaseConfig() (OSConfig, error) {
-	return OSConfig{}, errors.New("[unexpected] unreachable")
+	return OSConfig{}, ErrGetBaseConfigNotSupported
 }
 
 const macResolverFileHeader = "# Added by tailscaled\n"
