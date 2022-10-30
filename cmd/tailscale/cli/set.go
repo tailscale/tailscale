@@ -110,8 +110,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 	})
 
 	if maskedPrefs.IsEmpty() {
-		println("no flags specified")
-		return nil
+		return flag.ErrHelp
 	}
 
 	if maskedPrefs.RunSSHSet {
