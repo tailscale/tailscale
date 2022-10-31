@@ -57,4 +57,4 @@ and [iOS][].  See also the dependencies in the [Tailscale CLI][].
  - [Inter Typeface](https://rsms.me/inter/) ([OFL-1.1](https://github.com/rsms/inter/blob/v3.19/LICENSE.txt))
  - [Sparkle](https://sparkle-project.org/) ([MIT](https://github.com/sparkle-project/Sparkle/blob/2.x/LICENSE))
  - [wireguard-apple](https://git.zx2c4.com/wireguard-apple) ([MIT](https://git.zx2c4.com/wireguard-apple/tree/COPYING))
- - Code from [keybase/client](https://github.com/keybase/client) ([BSD-3-Clause](https://github.com/keybase/client/blob/master/LICENSE))
+ - [apple-oss-distributions/configd](https://github.com/apple-oss-distributions/configd) ([APSL](https://github.com/apple-oss-distributions/configd/blob/main/APPLE_LICENSE))
