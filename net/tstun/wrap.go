@@ -82,7 +82,7 @@ type Wrapper struct {
 
 	// lastActivityAtomic is read/written atomically.
 	// On 32 bit systems, if the fields above change,
-	// you might need to add a pad32.Four field here.
+	// you might need to add an align64 field here.
 	lastActivityAtomic mono.Time // time of last send or receive
 
 	destIPActivity syncs.AtomicValue[map[netip.Addr]func()]

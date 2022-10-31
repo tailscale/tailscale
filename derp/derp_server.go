@@ -42,7 +42,6 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/pad32"
 	"tailscale.com/version"
 )
 
@@ -89,6 +88,8 @@ const (
 	disableFighters
 )
 
+type align64 [0]atomic.Int64 // for side effect of its 64-bit alignment
+
 // Server is a DERP server.
 type Server struct {
 	// WriteTimeout, if non-zero, specifies how long to wait
@@ -111,14 +112,14 @@ type Server struct {
 	packetsRecvByKind            metrics.LabelMap
 	packetsRecvDisco             *expvar.Int
 	packetsRecvOther             *expvar.Int
-	_                            pad32.Four
+	_                            align64
 	packetsDropped               expvar.Int
 	packetsDroppedReason         metrics.LabelMap
 	packetsDroppedReasonCounters []*expvar.Int // indexed by dropReason
 	packetsDroppedType           metrics.LabelMap
 	packetsDroppedTypeDisco      *expvar.Int
 	packetsDroppedTypeOther      *expvar.Int
-	_                            pad32.Four
+	_                            align64
 	packetsForwardedOut          expvar.Int
 	packetsForwardedIn           expvar.Int
 	peerGoneFrames               expvar.Int // number of peer gone frames sent
