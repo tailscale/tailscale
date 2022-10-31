@@ -36,6 +36,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/types/key"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -825,6 +826,25 @@ func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKey
 		return nil, err
 	}
 	return pr, nil
+}
+
+// NetworkLockSign signs the specified node-key and transmits that signature to the control plane.
+// rotationPublic, if specified, must be an ed25519 public key.
+func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePublic, rotationPublic []byte) error {
+	var b bytes.Buffer
+	type signRequest struct {
+		NodeKey        key.NodePublic
+		RotationPublic []byte
+	}
+
+	if err := json.NewEncoder(&b).Encode(signRequest{NodeKey: nodeKey, RotationPublic: rotationPublic}); err != nil {
+		return err
+	}
+
+	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/sign", 200, &b); err != nil {
+		return fmt.Errorf("error: %w", err)
+	}
+	return nil
 }
 
 // tailscaledConnectHint gives a little thing about why tailscaled (or

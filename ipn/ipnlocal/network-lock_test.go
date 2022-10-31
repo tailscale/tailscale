@@ -629,3 +629,83 @@ func TestTKADisable(t *testing.T) {
 		t.Errorf("NetworkLockDisable() failed: %v", err)
 	}
 }
+
+func TestTKASign(t *testing.T) {
+	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	temp := t.TempDir()
+	os.Mkdir(filepath.Join(temp, "tka"), 0755)
+	nodePriv := key.NewNode()
+	toSign := key.NewNode()
+
+	// Make a fake TKA authority, to seed local state.
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+	nlPriv := key.NewNLPrivate()
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+	chonk, err := tka.ChonkDir(filepath.Join(temp, "tka"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, _, err := tka.Create(chonk, tka.State{
+		Keys:               []tka.Key{key},
+		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+	}, nlPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		switch r.URL.Path {
+		case "/machine/tka/sign":
+			body := new(tailcfg.TKASubmitSignatureRequest)
+			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Version != tailcfg.CurrentCapabilityVersion {
+				t.Errorf("sign CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
+			}
+			if body.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey = %v, want %v", body.NodeKey, nodePriv.Public())
+			}
+
+			var sig tka.NodeKeySignature
+			if err := sig.Unserialize(body.Signature); err != nil {
+				t.Fatalf("malformed signature: %v", err)
+			}
+
+			if err := authority.NodeKeyAuthorized(toSign.Public(), body.Signature); err != nil {
+				t.Errorf("signature does not verify: %v", err)
+			}
+
+			w.WriteHeader(200)
+			if err := json.NewEncoder(w).Encode(tailcfg.TKASubmitSignatureResponse{}); err != nil {
+				t.Fatal(err)
+			}
+
+		default:
+			t.Errorf("unhandled endpoint path: %v", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+
+	cc := fakeControlClient(t, client)
+	b := LocalBackend{
+		varRoot: temp,
+		cc:      cc,
+		ccAuto:  cc,
+		logf:    t.Logf,
+		tka: &tkaState{
+			authority: authority,
+			storage:   chonk,
+		},
+		prefs: (&ipn.Prefs{
+			Persist: &persist.Persist{PrivateNodeKey: nodePriv},
+		}).View(),
+		nlPrivKey: nlPriv,
+	}
+
+	if err := b.NetworkLockSign(toSign.Public(), nil); err != nil {
+		t.Errorf("NetworkLockSign() failed: %v", err)
+	}
+}
