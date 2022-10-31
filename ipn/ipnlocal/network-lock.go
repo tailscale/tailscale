@@ -430,6 +430,47 @@ func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
 	return b.tka.authority.KeyTrusted(keyID)
 }
 
+// NetworkLockSign signs the given node-key and submits it to the control plane.
+// rotationPublic, if specified, must be an ed25519 public key.
+func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []byte) error {
+	ourNodeKey, sig, err := func(nodeKey key.NodePublic, rotationPublic []byte) (key.NodePublic, tka.NodeKeySignature, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if b.tka == nil {
+			return key.NodePublic{}, tka.NodeKeySignature{}, errNetworkLockNotActive
+		}
+		if !b.tka.authority.KeyTrusted(b.nlPrivKey.KeyID()) {
+			return key.NodePublic{}, tka.NodeKeySignature{}, errors.New("this node is not trusted by network lock")
+		}
+
+		p, err := nodeKey.MarshalBinary()
+		if err != nil {
+			return key.NodePublic{}, tka.NodeKeySignature{}, err
+		}
+		sig := tka.NodeKeySignature{
+			SigKind:        tka.SigDirect,
+			KeyID:          b.nlPrivKey.KeyID(),
+			Pubkey:         p,
+			WrappingPubkey: rotationPublic,
+		}
+		sig.Signature, err = b.nlPrivKey.SignNKS(sig.SigHash())
+		if err != nil {
+			return key.NodePublic{}, tka.NodeKeySignature{}, fmt.Errorf("signature failed: %w", err)
+		}
+		return b.prefs.Persist().PublicNodeKey(), sig, nil
+	}(nodeKey, rotationPublic)
+	if err != nil {
+		return err
+	}
+
+	b.logf("Generated network-lock signature for %v, submitting to control plane", nodeKey)
+	if _, err := b.tkaSubmitSignature(ourNodeKey, sig.Serialize()); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NetworkLockModify adds and/or removes keys in the tailnet's key authority.
 func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
 	defer func() {
@@ -809,6 +850,42 @@ func (b *LocalBackend) tkaDoDisablement(ourNodeKey key.NodePublic, head tka.AUMH
 		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
 	}
 	a := new(tailcfg.TKADisableResponse)
+	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
+	res.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding JSON: %w", err)
+	}
+
+	return a, nil
+}
+
+func (b *LocalBackend) tkaSubmitSignature(ourNodeKey key.NodePublic, sig tkatype.MarshaledSignature) (*tailcfg.TKASubmitSignatureResponse, error) {
+	var req bytes.Buffer
+	if err := json.NewEncoder(&req).Encode(tailcfg.TKASubmitSignatureRequest{
+		Version:   tailcfg.CurrentCapabilityVersion,
+		NodeKey:   ourNodeKey,
+		Signature: sig,
+	}); err != nil {
+		return nil, fmt.Errorf("encoding request: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	req2, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/sign", &req)
+	if err != nil {
+		return nil, fmt.Errorf("req: %w", err)
+	}
+	res, err := b.DoNoiseRequest(req2)
+	if err != nil {
+		return nil, fmt.Errorf("resp: %w", err)
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("request returned (%d): %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKASubmitSignatureResponse)
 	err = json.NewDecoder(&io.LimitedReader{R: res.Body, N: 1024 * 1024}).Decode(a)
 	res.Body.Close()
 	if err != nil {

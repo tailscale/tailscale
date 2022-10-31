@@ -214,3 +214,23 @@ type TKADisableRequest struct {
 type TKADisableResponse struct {
 	// Nothing. (yet?)
 }
+
+// TKASubmitSignatureRequest transmits a node-key signature to the control plane.
+//
+// This is the request schema for a /tka/sign noise RPC.
+type TKASubmitSignatureRequest struct {
+	// Version is the client's capabilities.
+	Version CapabilityVersion
+
+	// NodeKey is the client's current node key. The node-key which
+	// is being signed is embedded in Signature.
+	NodeKey key.NodePublic
+
+	// Signature encodes the node-key signature being submitted.
+	Signature tkatype.MarshaledSignature
+}
+
+// TKASubmitSignatureResponse is the JSON response from a /tka/sign RPC.
+type TKASubmitSignatureResponse struct {
+	// Nothing. (yet?)
+}
