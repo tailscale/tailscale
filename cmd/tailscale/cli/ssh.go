@@ -28,7 +28,23 @@ var sshCmd = &ffcli.Command{
 	Name:       "ssh",
 	ShortUsage: "ssh [user@]<host> [args...]",
 	ShortHelp:  "SSH to a Tailscale machine",
-	Exec:       runSSH,
+	LongHelp: strings.TrimSpace(`
+
+The 'tailscale ssh' command is an optional wrapper around the system 'ssh'
+command that's useful in some cases. Tailscale SSH does not require its use;
+most users running the Tailscale SSH server will prefer to just use the normal
+'ssh' command or their normal SSH client.
+
+The 'tailscale ssh' wrapper adds a few things:
+
+* It resolves the destination server name in its arugments using MagicDNS,
+  even if --accept-dns=false.
+* It works in userspace-networking mode, by supplying a ProxyCommand to the
+  system 'ssh' command that connects via a pipe through tailscaled.
+* It automatically checks the destination server's SSH host key against the
+  node's SSH host key as advertised via the Tailscale coordination server.
+`),
+	Exec: runSSH,
 }
 
 func runSSH(ctx context.Context, args []string) error {
