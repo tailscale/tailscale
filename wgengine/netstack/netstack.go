@@ -812,7 +812,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// request until we're sure that the connection can be handled by this
 	// endpoint. This function sets up the TCP connection and should be
 	// called immediately before a connection is handled.
-	createConn := func() *gonet.TCPConn {
+	createConn := func(opts ...tcpip.SettableSocketOption) *gonet.TCPConn {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
 			ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
@@ -820,7 +820,9 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			return nil
 		}
 		r.Complete(false)
-
+		for _, opt := range opts {
+			ep.SetSockOpt(opt)
+		}
 		// SetKeepAlive so that idle connections to peers that have forgotten about
 		// the connection or gone completely offline eventually time out.
 		// Applications might be setting this on a forwarded connection, but from
@@ -859,7 +861,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	if ns.lb != nil {
 		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {
-			c := createConn()
+			// Use a higher keepalive idle time for SSH connections, as they are
+			// typically long lived and idle connections are more likely to be
+			// intentional. Ideally we would turn this off entirely, but we can't
+			// tell the difference between a long lived connection that is idle
+			// vs a connection that is dead because the peer has gone away.
+			// We pick 72h as that is typically sufficient for a long weekend.
+			idle := tcpip.KeepaliveIdleOption(72 * time.Hour)
+			c := createConn(&idle)
 			if c == nil {
 				return
 			}
@@ -909,7 +918,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 }
 
-func (ns *Impl) forwardTCP(getClient func() *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
+func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.TCPConn, clientRemoteIP netip.Addr, wq *waiter.Queue, dialAddr netip.AddrPort) (handled bool) {
 	dialAddrStr := dialAddr.String()
 	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming connection to %s", dialAddrStr)
