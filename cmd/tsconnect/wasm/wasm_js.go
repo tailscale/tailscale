@@ -463,6 +463,10 @@ func (s *jsSSHSession) Run() {
 }
 
 func (s *jsSSHSession) Close() error {
+	if s.session == nil {
+		// We never had a chance to open the session, ignore the close request.
+		return nil
+	}
 	return s.session.Close()
 }
 
