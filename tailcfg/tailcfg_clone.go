@@ -64,6 +64,7 @@ func (src *Node) Clone() *Node {
 		*dst.Online = *src.Online
 	}
 	dst.Capabilities = append(src.Capabilities[:0:0], src.Capabilities...)
+	dst.Accumulators = append(src.Accumulators[:0:0], src.Accumulators...)
 	return dst
 }
 
@@ -96,6 +97,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
 	DataPlaneAuditLogID     string
+	Accumulators            []Accumulator
 }{})
 
 // Clone makes a deep copy of Hostinfo.
@@ -143,6 +145,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Cloud           string
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
+	Accumulator     opt.Bool
 }{})
 
 // Clone makes a deep copy of NetInfo.

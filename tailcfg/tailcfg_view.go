@@ -168,13 +168,14 @@ func (v NodeView) Online() *bool {
 	return &x
 }
 
-func (v NodeView) KeepAlive() bool                   { return v.ж.KeepAlive }
-func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthorized }
-func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
-func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
-func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
-func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
-func (v NodeView) Equal(v2 NodeView) bool            { return v.ж.Equal(v2.ж) }
+func (v NodeView) KeepAlive() bool                        { return v.ж.KeepAlive }
+func (v NodeView) MachineAuthorized() bool                { return v.ж.MachineAuthorized }
+func (v NodeView) Capabilities() views.Slice[string]      { return views.SliceOf(v.ж.Capabilities) }
+func (v NodeView) ComputedName() string                   { return v.ж.ComputedName }
+func (v NodeView) ComputedNameWithHost() string           { return v.ж.ComputedNameWithHost }
+func (v NodeView) DataPlaneAuditLogID() string            { return v.ж.DataPlaneAuditLogID }
+func (v NodeView) Accumulators() views.Slice[Accumulator] { return views.SliceOf(v.ж.Accumulators) }
+func (v NodeView) Equal(v2 NodeView) bool                 { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeViewNeedsRegeneration = Node(struct {
@@ -205,6 +206,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
 	DataPlaneAuditLogID     string
+	Accumulators            []Accumulator
 }{})
 
 // View returns a readonly view of Hostinfo.
@@ -281,6 +283,7 @@ func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(
 func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
 func (v HostinfoView) Userspace() opt.Bool               { return v.ж.Userspace }
 func (v HostinfoView) UserspaceRouter() opt.Bool         { return v.ж.UserspaceRouter }
+func (v HostinfoView) Accumulator() opt.Bool             { return v.ж.Accumulator }
 func (v HostinfoView) Equal(v2 HostinfoView) bool        { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -312,6 +315,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Cloud           string
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
+	Accumulator     opt.Bool
 }{})
 
 // View returns a readonly view of NetInfo.
