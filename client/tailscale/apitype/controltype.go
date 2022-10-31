@@ -11,7 +11,6 @@ type DNSConfig struct {
 	Domains           []string                 `json:"domains"`
 	Nameservers       []string                 `json:"nameservers"`
 	Proxied           bool                     `json:"proxied"`
-	PerDomain         bool                     `json:",omitempty"`
 }
 
 type DNSResolver struct {

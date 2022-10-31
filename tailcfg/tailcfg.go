@@ -1122,9 +1122,6 @@ type DNSConfig struct {
 	// Nameservers are the IP addresses of the nameservers to use.
 	Nameservers []netip.Addr `json:",omitempty"`
 
-	// PerDomain is not set by the control server, and does nothing.
-	PerDomain bool `json:",omitempty"`
-
 	// CertDomains are the set of DNS names for which the control
 	// plane server will assist with provisioning TLS
 	// certificates. See SetDNSRequest, which can be used to
