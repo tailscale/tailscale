@@ -97,7 +97,7 @@ func TestProberTimingSpread(t *testing.T) {
 		}
 	}
 
-	p.Run("test-spread-probe", probeInterval, nil, func(context.Context) error {
+	probe := p.Run("test-spread-probe", probeInterval, nil, func(context.Context) error {
 		invoked <- struct{}{}
 		return nil
 	})
@@ -110,6 +110,36 @@ func TestProberTimingSpread(t *testing.T) {
 	clk.Advance(halfProbeInterval)
 	called()
 	notCalled()
+
+	// We need to wait until the main (non-initial) ticker in Probe.loop is
+	// waiting, or we could race and advance the test clock between when
+	// the initial delay ticker completes and before the ticker for the
+	// main loop is created. In this race, we'd first advance the test
+	// clock, then the ticker would be registered, and the test would fail
+	// because that ticker would never be fired.
+	err := tstest.WaitFor(convergenceTimeout, func() error {
+		clk.Lock()
+		defer clk.Unlock()
+		for _, tick := range clk.tickers {
+			tick.Lock()
+			stopped, interval := tick.stopped, tick.interval
+			tick.Unlock()
+
+			if stopped {
+				continue
+			}
+			// Test for the main loop, not the initialDelay
+			if interval == probe.interval {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("no ticker with interval %d found", probe.interval)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	clk.Advance(quarterProbeInterval)
 	notCalled()
 	clk.Advance(probeInterval)
