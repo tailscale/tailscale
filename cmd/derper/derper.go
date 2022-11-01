@@ -183,28 +183,6 @@ func main() {
 	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(200)
-		io.WriteString(w, `<html><body>
-<h1>DERP</h1>
-<p>
-  This is a
-  <a href="https://tailscale.com/">Tailscale</a>
-  <a href="https://pkg.go.dev/tailscale.com/derp">DERP</a>
-  server.
-</p>
-`)
-		if !*runDERP {
-			io.WriteString(w, `<p>Status: <b>disabled</b></p>`)
-		}
-		if tsweb.AllowDebugAccess(r) {
-			io.WriteString(w, "<p>Debug info at <a href='/debug/'>/debug/</a>.</p>\n")
-		}
-	}))
-	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "User-agent: *\nDisallow: /\n")
-	}))
 	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
