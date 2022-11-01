@@ -283,7 +283,16 @@ func (ss *sshSession) launchProcess() error {
 	ss.cmd = ss.newIncubatorCommand()
 
 	cmd := ss.cmd
-	cmd.Dir = ss.conn.localUser.HomeDir
+	homeDir := ss.conn.localUser.HomeDir
+	if _, err := os.Stat(homeDir); err == nil {
+		cmd.Dir = homeDir
+	} else if os.IsNotExist(err) {
+		// If the home directory doesn't exist, we can't chdir to it.
+		// Instead, we'll chdir to the root directory.
+		cmd.Dir = "/"
+	} else {
+		return err
+	}
 	cmd.Env = append(cmd.Env, envForUser(ss.conn.localUser)...)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
