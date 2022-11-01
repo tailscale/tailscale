@@ -18,16 +18,44 @@ import (
 
 // Message is the log message that captures network traffic.
 type Message struct {
-	NodeID tailcfg.StableNodeID `json:"nodeId"` // e.g., "n123456CNTRL"
+	NodeID tailcfg.StableNodeID `json:"nodeId" cbor:"0,keyasint"` // e.g., "n123456CNTRL"
 
-	Start time.Time `json:"start"` // inclusive
-	End   time.Time `json:"end"`   // inclusive
+	Start time.Time `json:"start" cbor:"12,keyasint"` // inclusive
+	End   time.Time `json:"end"   cbor:"13,keyasint"` // inclusive
 
-	VirtualTraffic  []ConnectionCounts `json:"virtualTraffic,omitempty"`
-	SubnetTraffic   []ConnectionCounts `json:"subnetTraffic,omitempty"`
-	ExitTraffic     []ConnectionCounts `json:"exitTraffic,omitempty"`
-	PhysicalTraffic []ConnectionCounts `json:"physicalTraffic,omitempty"`
+	VirtualTraffic  []ConnectionCounts `json:"virtualTraffic,omitempty"  cbor:"14,keyasint,omitempty"`
+	SubnetTraffic   []ConnectionCounts `json:"subnetTraffic,omitempty"   cbor:"15,keyasint,omitempty"`
+	ExitTraffic     []ConnectionCounts `json:"exitTraffic,omitempty"     cbor:"16,keyasint,omitempty"`
+	PhysicalTraffic []ConnectionCounts `json:"physicalTraffic,omitempty" cbor:"17,keyasint,omitempty"`
 }
+
+const (
+	maxJSONConnCounts = `{` + maxJSONConn + `,` + maxJSONCounts + `}`
+	maxJSONConn       = `"proto":` + maxJSONProto + `,"src":` + maxJSONAddrPort + `,"dst":` + maxJSONAddrPort
+	maxJSONProto      = `255`
+	maxJSONAddrPort   = `"[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"`
+	maxJSONCounts     = `"txPkts":` + maxJSONCount + `,"txBytes":` + maxJSONCount + `,"rxPkts":` + maxJSONCount + `,"rxBytes":` + maxJSONCount
+	maxJSONCount      = `18446744073709551615`
+
+	// MaxConnectionCountsJSONSize is the maximum size of a ConnectionCounts
+	// when it is serialized as JSON, assuming no superfluous whitespace.
+	// It does not include the trailing comma that often appears when
+	// this object is nested within an array.
+	// It assumes that netip.Addr never has IPv6 zones.
+	MaxConnectionCountsJSONSize = len(maxJSONConnCounts)
+
+	maxCBORConnCounts = "\xbf" + maxCBORConn + maxCBORCounts + "\xff"
+	maxCBORConn       = "\x00" + maxCBORProto + "\x01" + maxCBORAddrPort + "\x02" + maxCBORAddrPort
+	maxCBORProto      = "\x18\xff"
+	maxCBORAddrPort   = "\x52\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+	maxCBORCounts     = "\x0c" + maxCBORCount + "\x0d" + maxCBORCount + "\x0e" + maxCBORCount + "\x0f" + maxCBORCount
+	maxCBORCount      = "\x1b\xff\xff\xff\xff\xff\xff\xff\xff"
+
+	// MaxConnectionCountsCBORSize is the maximum size of a ConnectionCounts
+	// when it is serialized as CBOR.
+	// It assumes that netip.Addr never has IPv6 zones.
+	MaxConnectionCountsCBORSize = len(maxCBORConnCounts)
+)
 
 // ConnectionCounts is a flattened struct of both a connection and counts.
 type ConnectionCounts struct {
@@ -37,19 +65,19 @@ type ConnectionCounts struct {
 
 // Connection is a 5-tuple of proto, source and destination IP and port.
 type Connection struct {
-	Proto ipproto.Proto  `json:"proto,omitzero,omitempty"`
-	Src   netip.AddrPort `json:"src,omitzero"`
-	Dst   netip.AddrPort `json:"dst,omitzero"`
+	Proto ipproto.Proto  `json:"proto,omitzero,omitempty" cbor:"0,keyasint,omitempty"`
+	Src   netip.AddrPort `json:"src,omitzero,omitempty"   cbor:"1,keyasint,omitempty"`
+	Dst   netip.AddrPort `json:"dst,omitzero,omitempty"   cbor:"2,keyasint,omitempty"`
 }
 
 func (c Connection) IsZero() bool { return c == Connection{} }
 
 // Counts are statistics about a particular connection.
 type Counts struct {
-	TxPackets uint64 `json:"txPkts,omitzero,omitempty"`
-	TxBytes   uint64 `json:"txBytes,omitzero,omitempty"`
-	RxPackets uint64 `json:"rxPkts,omitzero,omitempty"`
-	RxBytes   uint64 `json:"rxBytes,omitzero,omitempty"`
+	TxPackets uint64 `json:"txPkts,omitzero,omitempty"  cbor:"12,keyasint,omitempty"`
+	TxBytes   uint64 `json:"txBytes,omitzero,omitempty" cbor:"13,keyasint,omitempty"`
+	RxPackets uint64 `json:"rxPkts,omitzero,omitempty"  cbor:"14,keyasint,omitempty"`
+	RxBytes   uint64 `json:"rxBytes,omitzero,omitempty" cbor:"15,keyasint,omitempty"`
 }
 
 func (c Counts) IsZero() bool { return c == Counts{} }
