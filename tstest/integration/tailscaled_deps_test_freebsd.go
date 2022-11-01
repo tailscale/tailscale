@@ -32,6 +32,7 @@ import (
 	_ "tailscale.com/net/tstun"
 	_ "tailscale.com/paths"
 	_ "tailscale.com/safesocket"
+	_ "tailscale.com/ssh/tailssh"
 	_ "tailscale.com/tailcfg"
 	_ "tailscale.com/tsweb"
 	_ "tailscale.com/types/flagtype"
