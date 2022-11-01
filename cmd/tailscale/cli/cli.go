@@ -335,6 +335,9 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 		c.FlagSet.VisitAll(func(f *flag.Flag) {
 			var s string
 			name, usage := flag.UnquoteUsage(f)
+			if strings.HasPrefix(usage, "HIDDEN: ") {
+				return
+			}
 			if isBoolFlag(f) {
 				s = fmt.Sprintf("  --%s, --%s=false", f.Name, f.Name)
 			} else {
