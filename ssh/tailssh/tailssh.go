@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux || (darwin && !ios)
+//go:build linux || (darwin && !ios) || freebsd
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh
