@@ -187,11 +187,13 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 		for p := range prefixes {
 			if p.Contains(a) && p.Bits() > 0 {
 				withinRoute = true
+				break
 			}
 		}
 		return withinRoute && tsaddr.IsTailscaleIP(a), withinRoute && !tsaddr.IsTailscaleIP(a)
 	}
 
+	exitTraffic := make(map[netlogtype.Connection]netlogtype.Counts)
 	for conn, cnts := range tunStats {
 		srcIsTailscaleIP, srcWithinSubnet := classifyAddr(conn.Src.Addr())
 		dstIsTailscaleIP, dstWithinSubnet := classifyAddr(conn.Dst.Addr())
@@ -203,14 +205,21 @@ func recordStatistics(logger *logtail.Logger, nodeID tailcfg.StableNodeID, start
 		default:
 			const anonymize = true
 			if anonymize {
-				if len(m.ExitTraffic) == 0 {
-					m.ExitTraffic = []netlogtype.ConnectionCounts{{}}
+				// Only preserve the address if it is a Tailscale IP address.
+				srcOrig, dstOrig := conn.Src, conn.Dst
+				conn = netlogtype.Connection{} // scrub everything by default
+				if srcIsTailscaleIP {
+					conn.Src = netip.AddrPortFrom(srcOrig.Addr(), 0)
 				}
-				m.ExitTraffic[0].Counts = m.ExitTraffic[0].Counts.Add(cnts)
-			} else {
-				m.ExitTraffic = append(m.ExitTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
+				if dstIsTailscaleIP {
+					conn.Dst = netip.AddrPortFrom(dstOrig.Addr(), 0)
+				}
 			}
+			exitTraffic[conn] = exitTraffic[conn].Add(cnts)
 		}
+	}
+	for conn, cnts := range exitTraffic {
+		m.ExitTraffic = append(m.ExitTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
 	}
 	for conn, cnts := range sockStats {
 		m.PhysicalTraffic = append(m.PhysicalTraffic, netlogtype.ConnectionCounts{Connection: conn, Counts: cnts})
