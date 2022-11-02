@@ -887,6 +887,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	netLogIDsWasValid := !oldLogIDs.NodeID.IsZero() && !oldLogIDs.DomainID.IsZero()
 	netLogIDsChanged := netLogIDsNowValid && netLogIDsWasValid && newLogIDs != oldLogIDs
 	netLogRunning := netLogIDsNowValid && !routerCfg.Equal(&router.Config{})
+	if envknob.NoLogsNoSupport() {
+		netLogRunning = false
+	}
 
 	// TODO(bradfitz,danderson): maybe delete this isDNSIPOverTailscale
 	// field and delete the resolver.ForwardLinkSelector hook and
