@@ -23,6 +23,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/mak"
 )
 
 // TODO(tom): RPC retry/backoff was broken and has been removed. Fix?
@@ -38,7 +39,7 @@ type tkaState struct {
 }
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
-// nodes from the netmap who's signature does not verify.
+// nodes from the netmap whose signature does not verify.
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
@@ -49,27 +50,33 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 		return // TKA not enabled.
 	}
 
-	toDelete := make(map[int]struct{}, len(nm.Peers))
+	var toDelete map[int]bool // peer index => true
 	for i, p := range nm.Peers {
+		if p.UnsignedPeerAPIOnly {
+			// Not subject to TKA.
+			continue
+		}
 		if len(p.KeySignature) == 0 {
 			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID, p.StableID)
-			toDelete[i] = struct{}{}
+			mak.Set(&toDelete, i, true)
 		} else {
 			if err := b.tka.authority.NodeKeyAuthorized(p.Key, p.KeySignature); err != nil {
 				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID, p.StableID, err)
-				toDelete[i] = struct{}{}
+				mak.Set(&toDelete, i, true)
 			}
 		}
 	}
 
 	// nm.Peers is ordered, so deletion must be order-preserving.
-	peers := make([]*tailcfg.Node, 0, len(nm.Peers))
-	for i, p := range nm.Peers {
-		if _, delete := toDelete[i]; !delete {
-			peers = append(peers, p)
+	if len(toDelete) > 0 {
+		peers := make([]*tailcfg.Node, 0, len(nm.Peers))
+		for i, p := range nm.Peers {
+			if !toDelete[i] {
+				peers = append(peers, p)
+			}
 		}
+		nm.Peers = peers
 	}
-	nm.Peers = peers
 }
 
 // tkaSyncIfNeeded examines TKA info reported from the control plane,

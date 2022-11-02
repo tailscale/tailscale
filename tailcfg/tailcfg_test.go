@@ -331,6 +331,7 @@ func TestNodeEqual(t *testing.T) {
 		"Created", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
 		"Capabilities",
+		"UnsignedPeerAPIOnly",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID",
 	}

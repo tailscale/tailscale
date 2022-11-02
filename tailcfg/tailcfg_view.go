@@ -171,6 +171,7 @@ func (v NodeView) Online() *bool {
 func (v NodeView) KeepAlive() bool                   { return v.ж.KeepAlive }
 func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
+func (v NodeView) UnsignedPeerAPIOnly() bool         { return v.ж.UnsignedPeerAPIOnly }
 func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
@@ -201,6 +202,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	KeepAlive               bool
 	MachineAuthorized       bool
 	Capabilities            []string
+	UnsignedPeerAPIOnly     bool
 	ComputedName            string
 	computedHostIfDifferent string
 	ComputedNameWithHost    string

@@ -22,6 +22,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -637,4 +638,110 @@ func TestInternalAndExternalInterfaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		peers  []*tailcfg.Node
+		filter []filter.Match
+		want   bool
+	}{
+		{
+			name: "empty",
+			want: false,
+		},
+		{
+			name: "no-unsigned",
+			peers: []*tailcfg.Node{
+				{ID: 1},
+			},
+			want: false,
+		},
+		{
+			name: "unsigned-good",
+			peers: []*tailcfg.Node{
+				{ID: 1, UnsignedPeerAPIOnly: true},
+			},
+			want: false,
+		},
+		{
+			name: "unsigned-bad",
+			peers: []*tailcfg.Node{
+				{
+					ID:                  1,
+					UnsignedPeerAPIOnly: true,
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("100.64.0.0/32"),
+					},
+				},
+			},
+			filter: []filter.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/32")},
+					Dsts: []filter.NetPortRange{
+						{
+							Net: netip.MustParsePrefix("100.99.0.0/32"),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "unsigned-bad-src-is-superset",
+			peers: []*tailcfg.Node{
+				{
+					ID:                  1,
+					UnsignedPeerAPIOnly: true,
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("100.64.0.0/32"),
+					},
+				},
+			},
+			filter: []filter.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/24")},
+					Dsts: []filter.NetPortRange{
+						{
+							Net: netip.MustParsePrefix("100.99.0.0/32"),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "unsigned-okay-because-no-dsts",
+			peers: []*tailcfg.Node{
+				{
+					ID:                  1,
+					UnsignedPeerAPIOnly: true,
+					AllowedIPs: []netip.Prefix{
+						netip.MustParsePrefix("100.64.0.0/32"),
+					},
+				},
+			},
+			filter: []filter.Match{
+				{
+					Srcs: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/32")},
+					Caps: []filter.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("100.99.0.0/32"),
+							Cap: "foo",
+						},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := packetFilterPermitsUnlockedNodes(tt.peers, tt.filter); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+
 }

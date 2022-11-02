@@ -1303,6 +1303,14 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 			localNetsB.AddPrefix(p)
 		}
 		packetFilter = netMap.PacketFilter
+
+		if packetFilterPermitsUnlockedNodes(netMap.Peers, packetFilter) {
+			err := errors.New("server sent invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety")
+			health.SetValidUnsignedNodes(err)
+			packetFilter = nil
+		} else {
+			health.SetValidUnsignedNodes(nil)
+		}
 	}
 	if prefs.Valid() {
 		ar := prefs.AdvertiseRoutes()
@@ -1373,6 +1381,45 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	if b.sshServer != nil {
 		go b.sshServer.OnPolicyChange()
 	}
+}
+
+// packetFilterPermitsUnlockedNodes reports any peer in peers with the
+// UnsignedPeerAPIOnly bool set true has any of its allowed IPs in the packet
+// filter.
+//
+// If this reports true, the packet filter is invalid (the server is either broken
+// or malicious) and should be ignored for safety.
+func packetFilterPermitsUnlockedNodes(peers []*tailcfg.Node, packetFilter []filter.Match) bool {
+	var b netipx.IPSetBuilder
+	var numUnlocked int
+	for _, p := range peers {
+		if !p.UnsignedPeerAPIOnly {
+			continue
+		}
+		numUnlocked++
+		for _, a := range p.AllowedIPs { // not only addresses!
+			b.AddPrefix(a)
+		}
+	}
+	if numUnlocked == 0 {
+		return false
+	}
+	s, err := b.IPSet()
+	if err != nil {
+		// Shouldn't happen, but if it does, fail closed.
+		return true
+	}
+	for _, m := range packetFilter {
+		for _, r := range m.Srcs {
+			if !s.OverlapsPrefix(r) {
+				continue
+			}
+			if len(m.Dsts) != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (b *LocalBackend) setFilter(f *filter.Filter) {
