@@ -42,10 +42,22 @@ type noiseConn struct {
 	reader            io.Reader     // (effectively Conn.Reader after header)
 	earlyPayloadReady chan struct{} // closed after earlyPayload is set (including set to nil)
 	earlyPayload      *tailcfg.EarlyNoise
+	earlyPayloadErr   error
 }
 
 func (c *noiseConn) RoundTrip(r *http.Request) (*http.Response, error) {
 	return c.h2cc.RoundTrip(r)
+}
+
+// getEarlyPayload waits for the early noise payload to arrive.
+// It may return (nil, nil) if the server begins HTTP/2 without one.
+func (c *noiseConn) getEarlyPayload(ctx context.Context) (*tailcfg.EarlyNoise, error) {
+	select {
+	case <-c.earlyPayloadReady:
+		return c.earlyPayload, c.earlyPayloadErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // The first 9 bytes from the server to client over Noise are either an HTTP/2
@@ -80,33 +92,38 @@ func (c *noiseConn) Read(p []byte) (n int, err error) {
 // c.earlyPayload, closing c.earlyPayloadReady, and initializing c.reader for
 // future reads.
 func (c *noiseConn) readHeader() {
+	defer close(c.earlyPayloadReady)
+
+	setErr := func(err error) {
+		c.reader = returnErrReader{err}
+		c.earlyPayloadErr = err
+	}
+
 	var hdr [hdrLen]byte
 	if _, err := io.ReadFull(c.Conn, hdr[:]); err != nil {
-		c.reader = returnErrReader{err}
+		setErr(err)
 		return
 	}
 	if string(hdr[:len(earlyPayloadMagic)]) != earlyPayloadMagic {
 		// No early payload. We have to return the 9 bytes read we already
 		// consumed.
-		close(c.earlyPayloadReady)
 		c.reader = io.MultiReader(bytes.NewReader(hdr[:]), c.Conn)
 		return
 	}
 	epLen := binary.BigEndian.Uint32(hdr[len(earlyPayloadMagic):])
 	if epLen > 10<<20 {
-		c.reader = returnErrReader{errors.New("invalid early payload length")}
+		setErr(errors.New("invalid early payload length"))
 		return
 	}
 	payBuf := make([]byte, epLen)
 	if _, err := io.ReadFull(c.Conn, payBuf); err != nil {
-		c.reader = returnErrReader{err}
+		setErr(err)
 		return
 	}
 	if err := json.Unmarshal(payBuf, &c.earlyPayload); err != nil {
-		c.reader = returnErrReader{err}
+		setErr(err)
 		return
 	}
-	close(c.earlyPayloadReady)
 	c.reader = c.Conn
 }
 

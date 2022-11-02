@@ -82,3 +82,6 @@ func (k ChallengePublic) MarshalText() ([]byte, error) {
 func (k *ChallengePublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(chalPublicHexPrefix))
 }
+
+// IsZero reports whether k is the zero value.
+func (k ChallengePublic) IsZero() bool { return k == ChallengePublic{} }
