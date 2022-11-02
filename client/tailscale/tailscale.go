@@ -18,9 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-
-	"tailscale.com/types/key"
 )
 
 // I_Acknowledge_This_API_Is_Unstable must be set true to use this package
@@ -90,29 +87,6 @@ func (ak APIKey) modifyRequest(req *http.Request) {
 func (c *Client) setAuth(r *http.Request) {
 	if c.auth != nil {
 		c.auth.modifyRequest(r)
-	}
-}
-
-// nodeKeyAuth is an AuthMethod for NewClient that authenticates requests
-// using a node key over the Noise protocol.
-type nodeKeyAuth key.NodePublic
-
-func (k nodeKeyAuth) modifyRequest(req *http.Request) {
-	// QueryEscape the node key since it has a colon in it.
-	nk := url.QueryEscape(key.NodePublic(k).String())
-	req.SetBasicAuth(nk, "")
-}
-
-// NewNoiseClient is a convenience method for instantiating a new Client
-// that uses the Noise protocol for authentication.
-//
-// tailnet is the globally unique identifier for a Tailscale network, such
-// as "example.com" or "user@gmail.com".
-func NewNoiseClient(tailnet string, noiseRoundTripper http.RoundTripper, nk key.NodePublic) *Client {
-	return &Client{
-		tailnet:    tailnet,
-		auth:       nodeKeyAuth(nk),
-		HTTPClient: &http.Client{Transport: noiseRoundTripper},
 	}
 }
 

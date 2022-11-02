@@ -1607,6 +1607,33 @@ func (c *Direct) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	return nc.Do(req)
 }
 
+// GetSingleUseNoiseRoundTripper returns a RoundTripper that can be only be used
+// once (and must be used once) to make a single HTTP request over the noise
+// channel to the coordination server.
+//
+// In addition to the RoundTripper, it returns the HTTP/2 channel's early noise
+// payload, if any.
+func (c *Direct) GetSingleUseNoiseRoundTripper(ctx context.Context) (http.RoundTripper, *tailcfg.EarlyNoise, error) {
+	nc, err := c.getNoiseClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	for tries := 0; tries < 3; tries++ {
+		conn, err := nc.getConn(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		earlyPayloadMaybeNil, err := conn.getEarlyPayload(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if conn.h2cc.ReserveNewRequest() {
+			return conn, earlyPayloadMaybeNil, nil
+		}
+	}
+	return nil, nil, errors.New("[unexpected] failed to reserve a request on a connection")
+}
+
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
 // pr.URL with ping response data.
 func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pinger Pinger, pingType tailcfg.PingType) {

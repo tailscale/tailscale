@@ -6,12 +6,14 @@ package ipnlocal
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -3765,18 +3767,60 @@ func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
 	return mc, nil
 }
 
-type noiseRoundTripper struct {
-	*LocalBackend
+type keyProvingNoiseRoundTripper struct {
+	b *LocalBackend
 }
 
-func (n noiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return n.LocalBackend.DoNoiseRequest(req)
+func (n keyProvingNoiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	b := n.b
+
+	var priv key.NodePrivate
+
+	b.mu.Lock()
+	cc := b.ccAuto
+	if nm := b.netMap; nm != nil {
+		priv = nm.PrivateKey
+	}
+	b.mu.Unlock()
+	if cc == nil {
+		return nil, errors.New("no client")
+	}
+	if priv.IsZero() {
+		return nil, errors.New("no netmap or private key")
+	}
+	rt, ep, err := cc.GetSingleUseNoiseRoundTripper(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	if ep == nil || ep.NodeKeyChallenge.IsZero() {
+		go rt.RoundTrip(new(http.Request)) // return our reservation with a bogus request
+		return nil, errors.New("this coordination server does not support API calls over the Noise channel")
+	}
+
+	// QueryEscape the node key since it has a colon in it.
+	nk := url.QueryEscape(priv.Public().String())
+	req.SetBasicAuth(nk, "")
+
+	// genNodeProofHeaderValue returns the Tailscale-Node-Proof header's value to prove
+	// to chalPub that we control claimedPrivate.
+	genNodeProofHeaderValue := func(claimedPrivate key.NodePrivate, chalPub key.ChallengePublic) string {
+		// TODO(bradfitz): cache this somewhere?
+		box := claimedPrivate.SealToChallenge(chalPub, []byte(chalPub.String()))
+		return claimedPrivate.Public().String() + " " + base64.StdEncoding.EncodeToString(box)
+	}
+
+	// And prove we have the private key corresponding to the public key sent
+	// tin the basic auth username.
+	req.Header.Set("Tailscale-Node-Proof", genNodeProofHeaderValue(priv, ep.NodeKeyChallenge))
+
+	return rt.RoundTrip(req)
 }
 
-// NoiseRoundTripper returns an http.RoundTripper that uses the LocalBackend's
-// DoNoiseRequest method.
-func (b *LocalBackend) NoiseRoundTripper() http.RoundTripper {
-	return noiseRoundTripper{b}
+// KeyProvingNoiseRoundTripper returns an http.RoundTripper that uses the LocalBackend's
+// DoNoiseRequest method and mutates the request to add an authorization header
+// to prove the client's nodekey.
+func (b *LocalBackend) KeyProvingNoiseRoundTripper() http.RoundTripper {
+	return keyProvingNoiseRoundTripper{b}
 }
 
 // DoNoiseRequest sends a request to URL over the control plane
