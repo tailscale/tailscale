@@ -72,6 +72,10 @@ const (
 	// the Windows network adapter's "category" (public, private, domain).
 	// If it's unhealthy, the Windows firewall rules won't match.
 	SysNetworkCategory = Subsystem("network-category")
+
+	// SysValidUnsignedNodes is a health check area for recording problems
+	// with the unsigned nodes that the coordination server sent.
+	SysValidUnsignedNodes = Subsystem("valid-unsigned-nodes")
 )
 
 type watchHandle byte
@@ -98,6 +102,9 @@ func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 		}
 	}
 }
+
+// SetValidUnsignedNodes sets the state of the map response validation.
+func SetValidUnsignedNodes(err error) { set(SysValidUnsignedNodes, err) }
 
 // SetRouterHealth sets the state of the wgengine/router.Router.
 func SetRouterHealth(err error) { set(SysRouter, err) }

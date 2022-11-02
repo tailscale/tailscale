@@ -84,7 +84,8 @@ type CapabilityVersion int
 //   - 45: 2022-09-26: c2n /debug/{goroutines,prefs,metrics}
 //   - 46: 2022-10-04: c2n /debug/component-logging
 //   - 47: 2022-10-11: Register{Request,Response}.NodeKeySignature
-const CurrentCapabilityVersion CapabilityVersion = 47
+//   - 48: 2022-11-02: Node.UnsignedPeerAPIOnly
+const CurrentCapabilityVersion CapabilityVersion = 48
 
 type StableID string
 
@@ -230,6 +231,14 @@ type Node struct {
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
 	Capabilities []string `json:",omitempty"`
+
+	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
+	// restrictions. However, in exchange for that privilege, it does not get
+	// network access. It can only access this node's peerapi, which may not let
+	// it do anything. It is the tailscaled client's job to double-check the
+	// MapResponse's PacketFilter to verify that its AllowedIPs will not be
+	// accepted by the packet filter.
+	UnsignedPeerAPIOnly bool `json:",omitempty"`
 
 	// The following three computed fields hold the various names that can
 	// be used for this node in UIs. They are populated from controlclient
@@ -1552,6 +1561,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Name == n2.Name &&
 		n.User == n2.User &&
 		n.Sharer == n2.Sharer &&
+		n.UnsignedPeerAPIOnly == n2.UnsignedPeerAPIOnly &&
 		n.Key == n2.Key &&
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
 		bytes.Equal(n.KeySignature, n2.KeySignature) &&
