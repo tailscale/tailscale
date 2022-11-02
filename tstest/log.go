@@ -145,3 +145,50 @@ func (ml *MemLogger) String() string {
 	defer ml.Unlock()
 	return ml.Buffer.String()
 }
+
+// WhileTestRunningLogger returns a logger.Logf that logs to t.Logf until the
+// test finishes, at which point it no longer logs anything.
+func WhileTestRunningLogger(t testing.TB) logger.Logf {
+	var (
+		mu   sync.RWMutex
+		done bool
+	)
+
+	logger := func(format string, args ...any) {
+		t.Helper()
+
+		mu.RLock()
+		defer mu.RUnlock()
+
+		if done {
+			return
+		}
+		t.Logf(format, args...)
+	}
+
+	// t.Cleanup is run before the test is marked as done, so by acquiring
+	// the mutex and then disabling logs, we know that all existing log
+	// functions have completed, and that no future calls to the logger
+	// will log something.
+	//
+	// We can't do this with an atomic bool, since it's possible to
+	// observe the following race:
+	//
+	//    test goroutine                goroutine 1
+	//    --------------                -----------
+	//                                  check atomic, testFinished = no
+	//    test finishes
+	//    run t.Cleanups
+	//    set testFinished = true
+	//                                  call t.Logf
+	//                                  panic
+	//
+	// Using a mutex ensures that all actions in goroutine 1 in the
+	// sequence above occur atomically, and thus should not panic.
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		done = true
+	})
+	return logger
+}

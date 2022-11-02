@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -92,7 +93,6 @@ type mockControl struct {
 	opts       controlclient.Options
 	logfActual logger.Logf
 	statusFunc func(controlclient.Status)
-	preventLog atomic.Bool
 
 	mu          sync.Mutex
 	calls       []string
@@ -109,7 +109,7 @@ func newMockControl(tb testing.TB) *mockControl {
 }
 
 func (cc *mockControl) logf(format string, args ...any) {
-	if cc.preventLog.Load() || cc.logfActual == nil {
+	if cc.logfActual == nil {
 		return
 	}
 	cc.logfActual(format, args...)
@@ -282,7 +282,7 @@ func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 func TestStateMachine(t *testing.T) {
 	c := qt.New(t)
 
-	logf := t.Logf
+	logf := tstest.WhileTestRunningLogger(t)
 	store := new(testStateStorage)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
@@ -297,7 +297,6 @@ func TestStateMachine(t *testing.T) {
 
 	cc := newMockControl(t)
 	cc.statusFunc = b.setClientStatus
-	t.Cleanup(func() { cc.preventLog.Store(true) }) // hacky way to pacify issue 3020
 
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc.mu.Lock()
@@ -316,9 +315,6 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(0)
 
 	b.SetNotifyCallback(func(n ipn.Notify) {
-		if cc.preventLog.Load() {
-			return
-		}
 		if n.State != nil ||
 			n.Prefs.Valid() ||
 			n.BrowseToURL != nil ||
@@ -329,7 +325,6 @@ func TestStateMachine(t *testing.T) {
 			logf("\n(ignored) %v\n\n", n)
 		}
 	})
-	t.Cleanup(func() { b.SetNotifyCallback(nil) }) // hacky way to pacify issue 3020
 
 	// Check that it hasn't called us right away.
 	// The state machine should be idle until we call Start().
@@ -924,7 +919,7 @@ func TestStateMachine(t *testing.T) {
 }
 
 func TestEditPrefsHasNoKeys(t *testing.T) {
-	logf := t.Logf
+	logf := tstest.WhileTestRunningLogger(t)
 	store := new(testStateStorage)
 	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	if err != nil {
@@ -1006,7 +1001,7 @@ func (s *testStateStorage) sawWrite() bool {
 func TestWGEngineStatusRace(t *testing.T) {
 	t.Skip("test fails")
 	c := qt.New(t)
-	logf := t.Logf
+	logf := tstest.WhileTestRunningLogger(t)
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
