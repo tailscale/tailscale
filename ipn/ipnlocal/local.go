@@ -859,7 +859,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
 		}
-		b.send(ipn.Notify{Prefs: prefs.View()})
+		p := prefs.View()
+		b.send(ipn.Notify{Prefs: &p})
 	}
 	if st.NetMap != nil {
 		if netMap != nil {
@@ -1089,10 +1090,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		nm := b.netMap
 		state := b.state
 		b.mu.Unlock()
+		p := b.prefs
 		b.send(ipn.Notify{
 			State:         &state,
 			NetMap:        nm,
-			Prefs:         b.prefs,
+			Prefs:         &p,
 			LoginFinished: new(empty.Message),
 		})
 		return nil
@@ -1263,7 +1265,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.send(ipn.Notify{BackendLogID: &blid})
-	b.send(ipn.Notify{Prefs: prefs})
+	b.send(ipn.Notify{Prefs: &prefs})
 
 	if !loggedOut && b.hasNodeKey() {
 		// Even if !WantRunning, we should verify our key, if there
@@ -2350,7 +2352,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.authReconfig()
 	}
 
-	b.send(ipn.Notify{Prefs: prefs})
+	b.send(ipn.Notify{Prefs: &prefs})
 	return prefs
 }
 

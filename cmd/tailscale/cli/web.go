@@ -474,7 +474,7 @@ func tailscaleUp(ctx context.Context, prefs *ipn.Prefs, forceReauth bool) (authU
 			authURL = *url
 			cancel()
 		}
-		if !forceReauth && n.Prefs.Valid() {
+		if !forceReauth && n.Prefs != nil && n.Prefs.Valid() {
 			p1, p2 := n.Prefs.AsStruct(), *prefs
 			p1.Persist = nil
 			p2.Persist = nil
