@@ -75,7 +75,7 @@ func (tt noiseClientTest) run(t *testing.T) {
 	defer hs.Close()
 
 	dialer := new(tsdial.Dialer)
-	nc, err := newNoiseClient(clientPrivate, serverPrivate.Public(), hs.URL, dialer, nil)
+	nc, err := NewNoiseClient(clientPrivate, serverPrivate.Public(), hs.URL, dialer, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

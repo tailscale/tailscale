@@ -84,8 +84,8 @@ type Direct struct {
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
 	serverNoiseKey key.MachinePublic
 
-	sfGroup     singleflight.Group[struct{}, *noiseClient] // protects noiseClient creation.
-	noiseClient *noiseClient
+	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
+	noiseClient *NoiseClient
 
 	persist       persist.Persist
 	authKey       string
@@ -262,7 +262,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		}
 	}
 	if opts.NoiseTestClient != nil {
-		c.noiseClient = &noiseClient{
+		c.noiseClient = &NoiseClient{
 			Client: opts.NoiseTestClient,
 		}
 		c.serverNoiseKey = key.NewMachine().Public() // prevent early error before hitting test client
@@ -1470,7 +1470,7 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 }
 
 // getNoiseClient returns the noise client, creating one if one doesn't exist.
-func (c *Direct) getNoiseClient() (*noiseClient, error) {
+func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 	c.mu.Lock()
 	serverNoiseKey := c.serverNoiseKey
 	nc := c.noiseClient
@@ -1485,13 +1485,13 @@ func (c *Direct) getNoiseClient() (*noiseClient, error) {
 	if c.dialPlan != nil {
 		dp = c.dialPlan.Load
 	}
-	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*noiseClient, error) {
+	nc, err, _ := c.sfGroup.Do(struct{}{}, func() (*NoiseClient, error) {
 		k, err := c.getMachinePrivKey()
 		if err != nil {
 			return nil, err
 		}
 		c.logf("creating new noise client")
-		nc, err := newNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, dp)
+		nc, err := NewNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, dp)
 		if err != nil {
 			return nil, err
 		}
@@ -1618,20 +1618,7 @@ func (c *Direct) GetSingleUseNoiseRoundTripper(ctx context.Context) (http.RoundT
 	if err != nil {
 		return nil, nil, err
 	}
-	for tries := 0; tries < 3; tries++ {
-		conn, err := nc.getConn(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		earlyPayloadMaybeNil, err := conn.getEarlyPayload(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		if conn.h2cc.ReserveNewRequest() {
-			return conn, earlyPayloadMaybeNil, nil
-		}
-	}
-	return nil, nil, errors.New("[unexpected] failed to reserve a request on a connection")
+	return nc.GetSingleUseRoundTripper(ctx)
 }
 
 // doPingerPing sends a Ping to pr.IP using pinger, and sends an http request back to
