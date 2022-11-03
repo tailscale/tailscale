@@ -127,10 +127,6 @@ type Impl struct {
 	connsOpenBySubnetIP map[netip.Addr]int
 }
 
-// handleSSH is initialized in ssh.go (on Linux only) to register an SSH server
-// handler. See https://github.com/tailscale/tailscale/issues/3802.
-var handleSSH func(logger.Logf, *ipnlocal.LocalBackend, net.Conn) error
-
 const nicID = 1
 const mtu = tstun.DefaultMTU
 
