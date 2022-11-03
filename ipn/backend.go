@@ -106,7 +106,7 @@ func (n Notify) String() string {
 	if n.State != nil {
 		fmt.Fprintf(&sb, "state=%v ", *n.State)
 	}
-	if n.Prefs.Valid() {
+	if n.Prefs != nil && n.Prefs.Valid() {
 		fmt.Fprintf(&sb, "%v ", n.Prefs.Pretty())
 	}
 	if n.NetMap != nil {
