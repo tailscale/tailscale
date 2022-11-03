@@ -51,5 +51,7 @@ in
 	    pkgs.gotools pkgs.gopls
 	    tailscale-go
 	    pkgs.graphviz
+	    pkgs.protobuf
+	    pkgs.protoc-gen-go
 	  ];
 	}
