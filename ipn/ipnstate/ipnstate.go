@@ -67,6 +67,13 @@ type Status struct {
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// TKAKey describes a key trusted by network lock.
+type TKAKey struct {
+	Key      key.NLPublic
+	Metadata map[string]string
+	Votes    uint
+}
+
 // NetworkLockStatus represents whether network-lock is enabled,
 // along with details about the locally-known state of the tailnet
 // key authority.
@@ -78,8 +85,19 @@ type NetworkLockStatus struct {
 	// if network lock is not enabled.
 	Head *[32]byte
 
-	// PublicKey describes the nodes' network-lock public key.
+	// PublicKey describes the node's network-lock public key.
 	PublicKey key.NLPublic
+
+	// NodeKey describes the node's current node-key. This field is not
+	// populated if the node is not operating (i.e. waiting for a login).
+	NodeKey *key.NodePublic
+
+	// NodeKeySigned is true if our node is authorized by network-lock.
+	NodeKeySigned bool
+
+	// TrustedKeys describes the keys currently trusted to make changes
+	// to network-lock.
+	TrustedKeys []TKAKey
 }
 
 // TailnetStatus is information about a Tailscale network ("tailnet").

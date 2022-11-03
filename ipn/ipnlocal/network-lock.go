@@ -329,10 +329,17 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	var nodeKey *key.NodePublic
+	if p := b.pm.CurrentPrefs(); p.Valid() {
+		nkp := p.Persist().PublicNodeKey()
+		nodeKey = &nkp
+	}
+
 	if b.tka == nil {
 		return &ipnstate.NetworkLockStatus{
 			Enabled:   false,
 			PublicKey: b.nlPrivKey.Public(),
+			NodeKey:   nodeKey,
 		}
 	}
 
@@ -340,10 +347,28 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	h := b.tka.authority.Head()
 	copy(head[:], h[:])
 
+	var selfAuthorized bool
+	if b.netMap != nil {
+		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key, b.netMap.SelfNode.KeySignature) == nil
+	}
+
+	keys := b.tka.authority.Keys()
+	outKeys := make([]ipnstate.TKAKey, len(keys))
+	for i, k := range keys {
+		outKeys[i] = ipnstate.TKAKey{
+			Key:      key.NLPublicFromEd25519Unsafe(k.Public),
+			Metadata: k.Meta,
+			Votes:    k.Votes,
+		}
+	}
+
 	return &ipnstate.NetworkLockStatus{
-		Enabled:   true,
-		Head:      &head,
-		PublicKey: b.nlPrivKey.Public(),
+		Enabled:       true,
+		Head:          &head,
+		PublicKey:     b.nlPrivKey.Public(),
+		NodeKey:       nodeKey,
+		NodeKeySigned: selfAuthorized,
+		TrustedKeys:   outKeys,
 	}
 }
 

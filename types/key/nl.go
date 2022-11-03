@@ -100,6 +100,17 @@ type NLPublic struct {
 	k [ed25519.PublicKeySize]byte
 }
 
+// NLPublicFromEd25519Unsafe converts an ed25519 public key into
+// a type of NLPublic.
+//
+// New uses of this function should be avoided, as its possible to
+// accidentally construct an NLPublic from a non network-lock key.
+func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
+	var out NLPublic
+	copy(out.k[:], public)
+	return out
+}
+
 // MarshalText implements encoding.TextUnmarshaler.
 func (k *NLPublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))

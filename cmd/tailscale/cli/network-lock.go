@@ -82,11 +82,46 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	} else {
 		fmt.Println("Network-lock is NOT enabled.")
 	}
+	fmt.Println()
+
+	if st.Enabled && st.NodeKey != nil {
+		if st.NodeKeySigned {
+			fmt.Println("This node is trusted by network-lock.")
+		} else {
+			fmt.Println("This node IS NOT trusted by network-lock, and action is required to establish connectivity.")
+			fmt.Printf("Run the following command on a node with a network-lock key:\n\ttailscale lock sign %v\n", st.NodeKey)
+		}
+		fmt.Println()
+	}
+
 	p, err := st.PublicKey.MarshalText()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("our public-key: %s\n", p)
+	fmt.Printf("This node's public-key: %s\n", p)
+	fmt.Println()
+
+	if st.Enabled && len(st.TrustedKeys) > 0 {
+		fmt.Println("Keys trusted to make changes to network-lock:")
+		for _, k := range st.TrustedKeys {
+			key, err := k.Key.MarshalText()
+			if err != nil {
+				return err
+			}
+
+			var line strings.Builder
+			line.WriteString("\t")
+			line.WriteString(string(key))
+			line.WriteString("\t")
+			line.WriteString(fmt.Sprint(k.Votes))
+			line.WriteString("\t")
+			if k.Key == st.PublicKey {
+				line.WriteString("(us)")
+			}
+			fmt.Println(line.String())
+		}
+	}
+
 	return nil
 }
 
@@ -143,8 +178,8 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
-	if st.Enabled {
-		return errors.New("network-lock is already enabled")
+	if !st.Enabled {
+		return errors.New("network-lock is not enabled")
 	}
 
 	addKeys, err := parseNLKeyArgs(addArgs)
