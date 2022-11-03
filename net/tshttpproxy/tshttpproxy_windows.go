@@ -23,6 +23,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpver"
 )
 
@@ -42,6 +43,15 @@ var cachedProxy struct {
 // HTTP request which ultimately will call back into us to log again,
 // forever. So for errors, we only log a bit.
 var proxyErrorf = logger.RateLimitedFn(log.Printf, 10*time.Minute, 2 /* burst*/, 10 /* maxCache */)
+
+var (
+	metricSuccess              = clientmetric.NewCounter("winhttp_proxy_success")
+	metricErrDetectionFailed   = clientmetric.NewCounter("winhttp_proxy_err_detection_failed")
+	metricErrInvalidParameters = clientmetric.NewCounter("winhttp_proxy_err_invalid_param")
+	metricErrDownloadScript    = clientmetric.NewCounter("winhttp_proxy_err_download_script")
+	metricErrTimeout           = clientmetric.NewCounter("winhttp_proxy_err_timeout")
+	metricErrOther             = clientmetric.NewCounter("winhttp_proxy_err_other")
+)
 
 func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 	if req.URL == nil {
@@ -66,6 +76,7 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 	case res := <-resc:
 		err := res.err
 		if err == nil {
+			metricSuccess.Add(1)
 			cachedProxy.Lock()
 			defer cachedProxy.Unlock()
 			if was, now := fmt.Sprint(cachedProxy.val), fmt.Sprint(res.proxy); was != now {
@@ -81,10 +92,12 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 			ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT = 12167
 		)
 		if err == syscall.Errno(ERROR_WINHTTP_AUTODETECTION_FAILED) {
+			metricErrDetectionFailed.Add(1)
 			setNoProxyUntil(10 * time.Second)
 			return nil, nil
 		}
 		if err == windows.ERROR_INVALID_PARAMETER {
+			metricErrInvalidParameters.Add(1)
 			// Seen on Windows 8.1. (https://github.com/tailscale/tailscale/issues/879)
 			// TODO(bradfitz): figure this out.
 			setNoProxyUntil(time.Hour)
@@ -93,11 +106,14 @@ func proxyFromWinHTTPOrCache(req *http.Request) (*url.URL, error) {
 		}
 		proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): %v/%#v", urlStr, err, err)
 		if err == syscall.Errno(ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT) {
+			metricErrDownloadScript.Add(1)
 			setNoProxyUntil(10 * time.Second)
 			return nil, nil
 		}
+		metricErrOther.Add(1)
 		return nil, err
 	case <-ctx.Done():
+		metricErrTimeout.Add(1)
 		cachedProxy.Lock()
 		defer cachedProxy.Unlock()
 		proxyErrorf("tshttpproxy: winhttp: GetProxyForURL(%q): timeout; using cached proxy %v", urlStr, cachedProxy.val)
