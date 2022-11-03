@@ -22,7 +22,8 @@ func (b *FakeBackend) Start(opts Options) error {
 	}
 	nl := NeedsLogin
 	if b.notify != nil {
-		b.notify(Notify{Prefs: opts.Prefs.View()})
+		p := opts.Prefs.View()
+		b.notify(Notify{Prefs: &p})
 		b.notify(Notify{State: &nl})
 	}
 	return nil
@@ -83,7 +84,8 @@ func (b *FakeBackend) SetPrefs(new *Prefs) {
 	}
 
 	if b.notify != nil {
-		b.notify(Notify{Prefs: new.View()})
+		p := new.View()
+		b.notify(Notify{Prefs: &p})
 	}
 	if new.WantRunning && !b.live {
 		b.newState(Starting)
