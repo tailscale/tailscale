@@ -82,7 +82,9 @@ func getRegInteger(name string, defval uint64) uint64 {
 func getRegStringInternal(subKey, name string) (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		if err != registry.ErrNotExist {
+			log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		}
 		return "", err
 	}
 	defer key.Close()
@@ -110,7 +112,9 @@ func GetRegStrings(name string, defval []string) []string {
 func getRegStringsInternal(subKey, name string) ([]string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		if err != registry.ErrNotExist {
+			log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		}
 		return nil, err
 	}
 	defer key.Close()
@@ -148,6 +152,9 @@ func DeleteRegValue(name string) error {
 
 func deleteRegValueInternal(subKey, name string) error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
+	if err == registry.ErrNotExist {
+		return nil
+	}
 	if err != nil {
 		log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		return err
@@ -164,7 +171,9 @@ func deleteRegValueInternal(subKey, name string) error {
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		if err == registry.ErrNotExist {
+			log.Printf("registry.OpenKey(%v): %v", subKey, err)
+		}
 		return 0, err
 	}
 	defer key.Close()
