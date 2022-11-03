@@ -316,7 +316,7 @@ func TestStateMachine(t *testing.T) {
 
 	b.SetNotifyCallback(func(n ipn.Notify) {
 		if n.State != nil ||
-			n.Prefs.Valid() ||
+			(n.Prefs != nil && n.Prefs.Valid()) ||
 			n.BrowseToURL != nil ||
 			n.LoginFinished != nil {
 			logf("\n%v\n\n", n)

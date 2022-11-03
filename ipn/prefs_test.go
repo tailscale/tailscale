@@ -871,3 +871,22 @@ func TestMaskedPrefsIsEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestNotifyPrefsJSONRoundtrip(t *testing.T) {
+	var n Notify
+	if n.Prefs != nil && n.Prefs.Valid() {
+		t.Fatal("Prefs should not be valid at start")
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var n2 Notify
+	if err := json.Unmarshal(b, &n2); err != nil {
+		t.Fatal(err)
+	}
+	if n2.Prefs != nil && n2.Prefs.Valid() {
+		t.Fatal("Prefs should not be valid after deserialization")
+	}
+}
