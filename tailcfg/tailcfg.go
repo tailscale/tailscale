@@ -85,7 +85,8 @@ type CapabilityVersion int
 //   - 46: 2022-10-04: c2n /debug/component-logging
 //   - 47: 2022-10-11: Register{Request,Response}.NodeKeySignature
 //   - 48: 2022-11-02: Node.UnsignedPeerAPIOnly
-const CurrentCapabilityVersion CapabilityVersion = 48
+//   - 49: 2022-11-03: Client understands EarlyNoise
+const CurrentCapabilityVersion CapabilityVersion = 49
 
 type StableID string
 
