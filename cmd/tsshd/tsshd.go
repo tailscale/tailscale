@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build ignore
-// +build ignore
 
 // The tsshd binary was an experimental SSH server that accepts connections
 // from anybody on the same Tailscale network.

@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build !linux && !windows && !darwin && !js
-// +build !linux,!windows,!darwin,!js
 
 package portlist
 

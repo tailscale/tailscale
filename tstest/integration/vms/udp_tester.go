@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build ignore
-// +build ignore
 
 // Command udp_tester exists because all of these distros being tested don't
 // have a consistent tool for doing UDP traffic. This is a very hacked up tool

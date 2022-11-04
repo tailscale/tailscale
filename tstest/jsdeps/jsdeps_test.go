@@ -6,7 +6,6 @@
 // worry about "go.exe" etc.
 
 //go:build !windows
-// +build !windows
 
 package jsdeps
 

@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build !ios && !android && !js
-// +build !ios,!android,!js
 
 package ipnlocal
 

@@ -7,8 +7,6 @@
 // and System Extension). It's not used on tailscaled-on-macOS.
 
 //go:build ts_macext && (darwin || ios)
-// +build ts_macext
-// +build darwin ios
 
 package tsdial
 

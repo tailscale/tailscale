@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build !js
-// +build !js
 
 // Package tun creates a tuntap device, working around OS-specific
 // quirks if necessary.

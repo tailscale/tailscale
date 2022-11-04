@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build ts_include_cli
-// +build ts_include_cli
 
 package main
 

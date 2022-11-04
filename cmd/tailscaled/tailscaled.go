@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build go1.19
-// +build go1.19
 
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.

@@ -6,7 +6,6 @@
 // BSD systems (e.g. OpenBSD) but has not been tested.
 
 //go:build darwin || freebsd
-// +build darwin freebsd
 
 package interfaces
 

@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build linux
-// +build linux
 
 // The containerboot binary is a wrapper for starting tailscaled in a
 // container. It handles reading the desired mode of operation out of

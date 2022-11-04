@@ -1,5 +1,4 @@
 //go:build glidertests
-// +build glidertests
 
 package ssh
 
