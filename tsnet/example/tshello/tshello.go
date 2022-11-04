@@ -57,8 +57,6 @@ func main() {
 }
 
 func firstLabel(s string) string {
-	if i := strings.Index(s, "."); i != -1 {
-		return s[:i]
-	}
+	s, _, _ = strings.Cut(s, ".")
 	return s
 }
