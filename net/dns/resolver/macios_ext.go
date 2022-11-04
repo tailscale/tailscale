@@ -3,8 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build ts_macext && (darwin || ios)
-// +build ts_macext
-// +build darwin ios
 
 package resolver
 

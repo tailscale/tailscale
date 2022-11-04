@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build windows && cgo
-// +build windows,cgo
 
 // darwin,cgo is also supported by certstore but machineCertificateSubject will
 // need to be loaded by a different mechanism, so this is not currently enabled

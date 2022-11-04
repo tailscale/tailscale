@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build linux || (darwin && !ts_macext)
-// +build linux darwin,!ts_macext
 
 package interfaces
 

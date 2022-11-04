@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build linux || (darwin && !ios)
-// +build linux darwin,!ios
 
 // Package tailssh is an SSH server integrated into Tailscale.
 package tailssh

@@ -6,7 +6,6 @@
 // tool modules from our go.mod.
 
 //go:build tools
-// +build tools
 
 package tools
 

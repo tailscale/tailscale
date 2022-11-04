@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build ignore
-// +build ignore
 
 // Command dns_tester exists in order to perform tests of our DNS
 // configuration stack. This was written because the state of DNS

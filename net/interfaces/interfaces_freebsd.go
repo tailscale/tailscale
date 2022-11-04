@@ -5,7 +5,6 @@
 // This might work on other BSDs, but only tested on FreeBSD.
 
 //go:build freebsd
-// +build freebsd
 
 package interfaces
 

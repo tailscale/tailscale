@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build for_go_mod_tidy_only
-// +build for_go_mod_tidy_only
 
 package tlsdial
 

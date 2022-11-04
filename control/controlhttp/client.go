@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build !js
-// +build !js
 
 // Package controlhttp implements the Tailscale 2021 control protocol
 // base transport over HTTP.

@@ -5,7 +5,6 @@
 // Only built on 64-bit platforms to avoid complexity
 
 //go:build amd64 || arm64 || mips64le || ppc64le || riscv64
-// +build amd64 arm64 mips64le ppc64le riscv64
 
 package cstruct
 

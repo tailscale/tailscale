@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build linux && !ts_omit_aws
-// +build linux,!ts_omit_aws
 
 // Package awsstore contains an ipn.StateStore implementation using AWS SSM.
 package awsstore

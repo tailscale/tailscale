@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build linux || windows || darwin
-// +build linux windows darwin
 
 package cli
 

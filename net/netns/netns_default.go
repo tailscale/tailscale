@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 //go:build (!linux && !windows && !darwin) || (darwin && ts_macext)
-// +build !linux,!windows,!darwin darwin,ts_macext
 
 package netns
 
