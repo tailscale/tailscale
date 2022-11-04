@@ -2,21 +2,30 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !ios && !js
+//go:build darwin && !ios
 
 package portlist
 
 import (
-	"sort"
-	"strconv"
-	"strings"
+	"bufio"
+	"bytes"
+	"io"
+
+	"go4.org/mem"
 )
 
-func parsePort(s string) int {
+// parsePort returns the port number at the end of s following the last "." or
+// ":", whichever comes last. It returns -1 on a parse error or invalid number
+// and 0 if the port number was "*".
+//
+// This is basically net.SplitHostPort except that it handles a "." (as macOS
+// and others return in netstat output), uses mem.RO, and validates that the
+// port must be numeric and in the uint16 range.
+func parsePort(s mem.RO) int {
 	// a.b.c.d:1234 or [a:b:c:d]:1234
-	i1 := strings.LastIndexByte(s, ':')
+	i1 := mem.LastIndexByte(s, ':')
 	// a.b.c.d.1234 or [a:b:c:d].1234
-	i2 := strings.LastIndexByte(s, '.')
+	i2 := mem.LastIndexByte(s, '.')
 
 	i := i1
 	if i2 > i {
@@ -27,12 +36,12 @@ func parsePort(s string) int {
 		return -1
 	}
 
-	portstr := s[i+1:]
-	if portstr == "*" {
+	portstr := s.SliceFrom(i + 1)
+	if portstr.EqualString("*") {
 		return 0
 	}
 
-	port, err := strconv.ParseUint(portstr, 10, 16)
+	port, err := mem.ParseUint(portstr, 10, 16)
 	if err != nil {
 		// invalid port; weird
 		return -1
@@ -41,34 +50,45 @@ func parsePort(s string) int {
 	return int(port)
 }
 
-func isLoopbackAddr(s string) bool {
-	return strings.HasPrefix(s, "127.") ||
-		strings.HasPrefix(s, "[::1]:") ||
-		strings.HasPrefix(s, "::1.")
+func isLoopbackAddr(s mem.RO) bool {
+	return mem.HasPrefix(s, mem.S("127.")) ||
+		mem.HasPrefix(s, mem.S("[::1]:")) ||
+		mem.HasPrefix(s, mem.S("::1."))
 }
 
 type nothing struct{}
 
-// Lowest common denominator parser for "netstat -na" format.
+// appendParsePortsNetstat appends to base listening ports
+// from "netstat" output, read from br. See TestParsePortsNetstat
+// for example input lines.
+//
+// This used to be a lowest common denominator parser for "netstat -na" format.
 // All of Linux, Windows, and macOS support -na and give similar-ish output
 // formats that we can parse without special detection logic.
 // Unfortunately, options to filter by proto or state are non-portable,
 // so we'll filter for ourselves.
-func appendParsePortsNetstat(base []Port, output string) []Port {
-	m := map[Port]nothing{}
-	lines := strings.Split(string(output), "\n")
-
-	var lastline string
-	var lastport Port
-	for _, line := range lines {
-		trimline := strings.TrimSpace(line)
-		cols := strings.Fields(trimline)
+// Nowadays, though, we only use it for macOS as of 2022-11-04.
+func appendParsePortsNetstat(base []Port, br *bufio.Reader) ([]Port, error) {
+	ret := base
+	var fieldBuf [10]mem.RO
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		trimline := bytes.TrimSpace(line)
+		cols := mem.AppendFields(fieldBuf[:0], mem.B(trimline))
 		if len(cols) < 1 {
 			continue
 		}
-		protos := strings.ToLower(cols[0])
-		var proto, laddr, raddr string
-		if strings.HasPrefix(protos, "tcp") {
+		protos := cols[0]
+
+		var proto string
+		var laddr, raddr mem.RO
+		if mem.HasPrefixFold(protos, mem.S("tcp")) {
 			if len(cols) < 4 {
 				continue
 			}
@@ -76,7 +96,7 @@ func appendParsePortsNetstat(base []Port, output string) []Port {
 			laddr = cols[len(cols)-3]
 			raddr = cols[len(cols)-2]
 			state := cols[len(cols)-1]
-			if !strings.HasPrefix(state, "LISTEN") {
+			if !mem.HasPrefix(state, mem.S("LISTEN")) {
 				// not interested in non-listener sockets
 				continue
 			}
@@ -84,7 +104,7 @@ func appendParsePortsNetstat(base []Port, output string) []Port {
 				// not interested in loopback-bound listeners
 				continue
 			}
-		} else if strings.HasPrefix(protos, "udp") {
+		} else if mem.HasPrefixFold(protos, mem.S("udp")) {
 			if len(cols) < 3 {
 				continue
 			}
@@ -95,53 +115,21 @@ func appendParsePortsNetstat(base []Port, output string) []Port {
 				// not interested in loopback-bound listeners
 				continue
 			}
-		} else if protos[0] == '[' && len(trimline) > 2 {
-			// Windows: with netstat -nab, appends a line like:
-			//  [description]
-			// after the port line.
-			p := lastport
-			delete(m, lastport)
-			proc := trimline[1 : len(trimline)-1]
-			if proc == "svchost.exe" && lastline != "" {
-				p.Process = argvSubject(lastline)
-			} else {
-				p.Process = argvSubject(proc)
-			}
-			m[p] = nothing{}
 		} else {
 			// not interested in other protocols
-			lastline = trimline
 			continue
 		}
 
 		lport := parsePort(laddr)
 		rport := parsePort(raddr)
-		if rport != 0 || lport <= 0 {
+		if rport > 0 || lport <= 0 {
 			// not interested in "connected" sockets
 			continue
 		}
-
-		p := Port{
+		ret = append(ret, Port{
 			Proto: proto,
 			Port:  uint16(lport),
-		}
-		m[p] = nothing{}
-		lastport = p
-		lastline = ""
+		})
 	}
-
-	ret := base
-	for p := range m {
-		ret = append(ret, p)
-	}
-
-	// Only sort the part we appended. It's up to the caller to sort the whole
-	// thing if they'd like. In practice the caller's base will have len 0,
-	// though, so the whole thing will be sorted.
-	toSort := ret[len(base):]
-	sort.Slice(toSort, func(i, j int) bool {
-		return (&toSort[i]).lessThan(&toSort[j])
-	})
-
-	return ret
+	return ret, nil
 }

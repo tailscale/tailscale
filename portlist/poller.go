@@ -10,13 +10,14 @@ package portlist
 import (
 	"context"
 	"errors"
-	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
 	"tailscale.com/envknob"
-	"tailscale.com/version"
 )
+
+var pollInterval = 5 * time.Second // default; changed by some OS-specific init funcs
 
 var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 
@@ -29,11 +30,8 @@ type Poller struct {
 	// code. When non-nil, it's responsible for getting the complete list of
 	// cached ports complete with the process name. That is, when set,
 	// addProcesses is not used.
-	//
-	// This is part of a multi-step migration (starting 2022-10-22) to move to
-	// using osImpl for all of Linux, macOS (unsandboxed), and Windows. But
-	// during the transition period, we support this being nil.
-	// TODO(bradfitz): finish that migration.
+	// A nil values means we don't have code for getting the list on the current
+	// operating system.
 	os     osImpl
 	osOnce sync.Once // guards init of os
 
@@ -66,12 +64,11 @@ type osImpl interface {
 // newOSImpl, if non-nil, constructs a new osImpl.
 var newOSImpl func() osImpl
 
+var errUnimplemented = errors.New("portlist poller not implemented on " + runtime.GOOS)
+
 // NewPoller returns a new portlist Poller. It returns an error
 // if the portlist couldn't be obtained.
 func NewPoller() (*Poller, error) {
-	if version.OS() == "iOS" {
-		return nil, errors.New("not available on iOS")
-	}
 	if debugDisablePortlist() {
 		return nil, errors.New("portlist disabled by envknob")
 	}
@@ -81,6 +78,9 @@ func NewPoller() (*Poller, error) {
 	}
 	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
 	p.osOnce.Do(p.initOSField)
+	if p.os == nil {
+		return nil, errUnimplemented
+	}
 
 	// Do one initial poll synchronously so we can return an error
 	// early.
@@ -172,25 +172,6 @@ func (p *Poller) getList() (List, error) {
 	}
 	p.osOnce.Do(p.initOSField)
 	var err error
-	if p.os != nil {
-		p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
-		return p.scratch, err
-	}
-
-	// Old path for OSes that don't have osImpl yet.
-	// TODO(bradfitz): delete these when macOS and Windows are converted.
-	p.scratch, err = appendListeningPorts(p.scratch[:0])
-	if err != nil {
-		return nil, fmt.Errorf("listPorts: %s", err)
-	}
-	pl := sortAndDedup(p.scratch)
-	if pl.equal(p.prev) {
-		// Nothing changed, skip inode lookup
-		return p.prev, nil
-	}
-	pl, err = addProcesses(pl)
-	if err != nil {
-		return nil, fmt.Errorf("addProcesses: %s", err)
-	}
-	return pl, nil
+	p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
+	return p.scratch, err
 }
