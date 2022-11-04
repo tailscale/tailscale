@@ -19,6 +19,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tka"
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -1154,5 +1155,71 @@ func TestUpWorthWarning(t *testing.T) {
 	}
 	if upWorthyWarning("not in map poll") {
 		t.Errorf("want false for other misc errors")
+	}
+}
+
+func TestParseNLArgs(t *testing.T) {
+	tcs := []struct {
+		name              string
+		input             []string
+		parseKeys         bool
+		parseDisablements bool
+
+		wantErr          error
+		wantKeys         []tka.Key
+		wantDisablements [][]byte
+	}{
+		{
+			name:              "empty",
+			input:             nil,
+			parseKeys:         true,
+			parseDisablements: true,
+		},
+		{
+			name:      "key no votes",
+			input:     []string{"nlpub:" + strings.Repeat("00", 32)},
+			parseKeys: true,
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 1, Public: bytes.Repeat([]byte{0}, 32)}},
+		},
+		{
+			name:      "key with votes",
+			input:     []string{"nlpub:" + strings.Repeat("01", 32) + "?5"},
+			parseKeys: true,
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 5, Public: bytes.Repeat([]byte{1}, 32)}},
+		},
+		{
+			name:              "disablements",
+			input:             []string{"disablement:" + strings.Repeat("02", 32), "disablement-secret:" + strings.Repeat("03", 32)},
+			parseDisablements: true,
+			wantDisablements:  [][]byte{bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{3}, 32)},
+		},
+		{
+			name:      "disablements not allowed",
+			input:     []string{"disablement:" + strings.Repeat("02", 32)},
+			parseKeys: true,
+			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix nlpub:"),
+		},
+		{
+			name:              "keys not allowed",
+			input:             []string{"nlpub:" + strings.Repeat("02", 32)},
+			parseDisablements: true,
+			wantErr:           fmt.Errorf("parsing argument 1: expected value with \"disablement:\" or \"disablement-secret:\" prefix, got %q", "nlpub:0202020202020202020202020202020202020202020202020202020202020202"),
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
+			if !reflect.DeepEqual(err, tc.wantErr) {
+				t.Fatalf("parseNLArgs(%v).err = %v, want %v", tc.input, err, tc.wantErr)
+			}
+
+			if !reflect.DeepEqual(keys, tc.wantKeys) {
+				t.Errorf("keys = %v, want %v", keys, tc.wantKeys)
+			}
+			if !reflect.DeepEqual(disablements, tc.wantDisablements) {
+				t.Errorf("disablements = %v, want %v", disablements, tc.wantDisablements)
+			}
+		})
 	}
 }

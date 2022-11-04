@@ -827,6 +827,14 @@ func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConf
 	return nil
 }
 
+// NetworkLockDisable shuts down network-lock across the tailnet.
+func (lc *LocalClient) NetworkLockDisable(ctx context.Context, secret []byte) error {
+	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/disable", 200, bytes.NewReader(secret)); err != nil {
+		return fmt.Errorf("error: %w", err)
+	}
+	return nil
+}
+
 // GetServeConfig return the current serve config.
 //
 // If the serve config is empty, it returns (nil, nil).

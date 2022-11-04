@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -80,6 +81,7 @@ var handler = map[string]localAPIHandler{
 	"tka/modify":              (*Handler).serveTKAModify,
 	"tka/sign":                (*Handler).serveTKASign,
 	"tka/status":              (*Handler).serveTKAStatus,
+	"tka/disable":             (*Handler).serveTKADisable,
 	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
 	"whois":                   (*Handler).serveWhoIs,
 }
@@ -1071,6 +1073,30 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body := io.LimitReader(r.Body, 1024*1024)
+	secret, err := ioutil.ReadAll(body)
+	if err != nil {
+		http.Error(w, "reading secret", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockDisable(secret); err != nil {
+		http.Error(w, "network-lock disable failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(200)
 }
 
 func defBool(a string, def bool) bool {
