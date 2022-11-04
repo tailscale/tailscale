@@ -5,8 +5,8 @@
 package cli
 
 import (
-	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -27,6 +27,8 @@ var netlockCmd = &ffcli.Command{
 		nlAddCmd,
 		nlRemoveCmd,
 		nlSignCmd,
+		nlDisableCmd,
+		nlDisablementKDFCmd,
 	},
 	Exec: runNetworkLockStatus,
 }
@@ -47,14 +49,11 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return errors.New("network-lock is already enabled")
 	}
 
-	// Parse the set of initially-trusted keys.
-	keys, err := parseNLKeyArgs(args)
+	// Parse initially-trusted keys & disablement values.
+	keys, disablementValues, err := parseNLArgs(args, true, true)
 	if err != nil {
 		return err
 	}
-
-	// TODO(tom): Implement specification of disablement values from the command line.
-	disablementValues := [][]byte{bytes.Repeat([]byte{0xa5}, 32)}
 
 	status, err := localClient.NetworkLockInit(ctx, keys, disablementValues)
 	if err != nil {
@@ -143,17 +142,34 @@ var nlRemoveCmd = &ffcli.Command{
 	},
 }
 
-// parseNLKeyArgs converts a slice of strings into a slice of tka.Key. The keys
-// should be specified using their key.NLPublic.MarshalText representation with
-// an optional '?<votes>' suffix. If any of the keys encounters an error, a nil
-// slice is returned along with an appropriate error.
-func parseNLKeyArgs(args []string) ([]tka.Key, error) {
-	var keys []tka.Key
+// parseNLArgs parses a slice of strings into slices of tka.Key & disablement
+// values/secrets.
+// The keys encoded in args should be specified using their key.NLPublic.MarshalText
+// representation with an optional '?<votes>' suffix.
+// Disablement values or secrets must be encoded in hex with a prefix of 'disablement:' or
+// 'disablement-secret:'.
+//
+// If any element could not be parsed,
+// a nil slice is returned along with an appropriate error.
+func parseNLArgs(args []string, parseKeys, parseDisablements bool) (keys []tka.Key, disablements [][]byte, err error) {
 	for i, a := range args {
+		if parseDisablements && (strings.HasPrefix(a, "disablement:") || strings.HasPrefix(a, "disablement-secret:")) {
+			b, err := hex.DecodeString(a[strings.Index(a, ":")+1:])
+			if err != nil {
+				return nil, nil, fmt.Errorf("parsing disablement %d: %v", i+1, err)
+			}
+			disablements = append(disablements, b)
+			continue
+		}
+
+		if !parseKeys {
+			return nil, nil, fmt.Errorf("parsing argument %d: expected value with \"disablement:\" or \"disablement-secret:\" prefix, got %q", i+1, a)
+		}
+
 		var nlpk key.NLPublic
 		spl := strings.SplitN(a, "?", 2)
 		if err := nlpk.UnmarshalText([]byte(spl[0])); err != nil {
-			return nil, fmt.Errorf("parsing key %d: %v", i+1, err)
+			return nil, nil, fmt.Errorf("parsing key %d: %v", i+1, err)
 		}
 
 		k := tka.Key{
@@ -164,13 +180,13 @@ func parseNLKeyArgs(args []string) ([]tka.Key, error) {
 		if len(spl) > 1 {
 			votes, err := strconv.Atoi(spl[1])
 			if err != nil {
-				return nil, fmt.Errorf("parsing key %d votes: %v", i+1, err)
+				return nil, nil, fmt.Errorf("parsing key %d votes: %v", i+1, err)
 			}
 			k.Votes = uint(votes)
 		}
 		keys = append(keys, k)
 	}
-	return keys, nil
+	return keys, disablements, nil
 }
 
 func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) error {
@@ -182,11 +198,11 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 		return errors.New("network-lock is not enabled")
 	}
 
-	addKeys, err := parseNLKeyArgs(addArgs)
+	addKeys, _, err := parseNLArgs(addArgs, true, false)
 	if err != nil {
 		return err
 	}
-	removeKeys, err := parseNLKeyArgs(removeArgs)
+	removeKeys, _, err := parseNLArgs(removeArgs, true, false)
 	if err != nil {
 		return err
 	}
@@ -202,24 +218,65 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
-	ShortUsage: "sign <node-key>",
+	ShortUsage: "sign <node-key> [<rotation-key>]",
 	ShortHelp:  "Signs a node-key and transmits that signature to the control plane",
 	Exec:       runNetworkLockSign,
 }
 
-// TODO(tom): Implement specifying the rotation key for the signature.
 func runNetworkLockSign(ctx context.Context, args []string) error {
-	switch len(args) {
-	case 0:
-		return errors.New("expected node-key as second argument")
-	case 1:
-		var nodeKey key.NodePublic
-		if err := nodeKey.UnmarshalText([]byte(args[0])); err != nil {
-			return fmt.Errorf("decoding node-key: %w", err)
-		}
+	var (
+		nodeKey     key.NodePublic
+		rotationKey key.NLPublic
+	)
 
-		return localClient.NetworkLockSign(ctx, nodeKey, nil)
-	default:
-		return errors.New("expected a single node-key as only argument")
+	if len(args) == 0 || len(args) > 2 {
+		return errors.New("usage: lock sign <node-key> [<rotation-key>]")
 	}
+	if err := nodeKey.UnmarshalText([]byte(args[0])); err != nil {
+		return fmt.Errorf("decoding node-key: %w", err)
+	}
+	if len(args) > 1 {
+		if err := rotationKey.UnmarshalText([]byte(args[1])); err != nil {
+			return fmt.Errorf("decoding rotation-key: %w", err)
+		}
+	}
+
+	return localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey.Verifier()))
+}
+
+var nlDisableCmd = &ffcli.Command{
+	Name:       "disable",
+	ShortUsage: "disable <disablement-secret>",
+	ShortHelp:  "Consumes a disablement secret to shut down network-lock across the tailnet",
+	Exec:       runNetworkLockDisable,
+}
+
+func runNetworkLockDisable(ctx context.Context, args []string) error {
+	_, secrets, err := parseNLArgs(args, false, true)
+	if err != nil {
+		return err
+	}
+	if len(secrets) != 1 {
+		return errors.New("usage: lock disable <disablement-secret>")
+	}
+	return localClient.NetworkLockDisable(ctx, secrets[0])
+}
+
+var nlDisablementKDFCmd = &ffcli.Command{
+	Name:       "disablement-kdf",
+	ShortUsage: "disablement-kdf <hex-encoded-disablement-secret>",
+	ShortHelp:  "Computes a disablement value from a disablement secret",
+	Exec:       runNetworkLockDisablementKDF,
+}
+
+func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: lock disablement-kdf <hex-encoded-disablement-secret>")
+	}
+	secret, err := hex.DecodeString(args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("disablement:%x\n", tka.DisablementKDF(secret))
+	return nil
 }
