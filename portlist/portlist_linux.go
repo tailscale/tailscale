@@ -27,6 +27,8 @@ import (
 
 func init() {
 	newOSImpl = newLinuxImpl
+	// Reading the sockfiles on Linux is very fast, so we can do it often.
+	pollInterval = 1 * time.Second
 }
 
 type linuxImpl struct {
@@ -77,9 +79,6 @@ func (li *linuxImpl) Close() error {
 	li.procNetFiles = nil
 	return nil
 }
-
-// Reading the sockfiles on Linux is very fast, so we can do it often.
-const pollInterval = 1 * time.Second
 
 const (
 	v6Localhost = "00000000000000000000000001000000:"
@@ -419,12 +418,4 @@ func readlink(path, buf []byte) (n int, ok bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-func appendListeningPorts([]Port) ([]Port, error) {
-	panic("unused on linux; needed to compile for now")
-}
-
-func addProcesses([]Port) ([]Port, error) {
-	panic("unused on linux; needed to compile for now")
 }

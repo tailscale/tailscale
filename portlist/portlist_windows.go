@@ -14,11 +14,13 @@ import (
 	"tailscale.com/net/netstat"
 )
 
-// Forking on Windows is insanely expensive, so don't do it too often.
-const pollInterval = 5 * time.Second
-
 func init() {
 	newOSImpl = newWindowsImpl
+	// The portlist poller used to fork on Windows, which is insanely expensive,
+	// so historically we only did this every 5 seconds on Windows. Maybe we
+	// could reduce it down to 1 seconds like Linux, but nobody's benchmarked as
+	// of 2022-11-04.
+	pollInterval = 5 * time.Second
 }
 
 type famPort struct {
@@ -115,12 +117,4 @@ func procNameOfPid(pid int) string {
 	name = strings.TrimSuffix(name, ".exe")
 	name = strings.TrimSuffix(name, ".EXE")
 	return name
-}
-
-func appendListeningPorts([]Port) ([]Port, error) {
-	panic("unused on windows; needed to compile for now")
-}
-
-func addProcesses([]Port) ([]Port, error) {
-	panic("unused on windows; needed to compile for now")
 }
