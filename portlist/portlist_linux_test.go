@@ -136,3 +136,16 @@ func BenchmarkParsePorts(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkFindProcessNames(b *testing.B) {
+	b.ReportAllocs()
+	li := &linuxImpl{}
+	need := map[string]*portMeta{
+		"something-we'll-never-find": new(portMeta),
+	}
+	for i := 0; i < b.N; i++ {
+		if err := li.findProcessNames(need); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

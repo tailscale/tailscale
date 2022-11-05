@@ -10,11 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +22,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sys/unix"
+	"tailscale.com/util/dirwalk"
 	"tailscale.com/util/mak"
 )
 
@@ -32,7 +33,8 @@ func init() {
 }
 
 type linuxImpl struct {
-	procNetFiles []*os.File // seeked to start & reused between calls
+	procNetFiles    []*os.File // seeked to start & reused between calls
+	readlinkPathBuf []byte
 
 	known map[string]*portMeta // inode string => metadata
 	br    *bufio.Reader
@@ -270,71 +272,59 @@ func (li *linuxImpl) findProcessNames(need map[string]*portMeta) error {
 		}
 	}()
 
-	var pathBuf []byte
-
-	err := foreachPID(func(pid string) error {
-		fdPath := fmt.Sprintf("/proc/%s/fd", pid)
+	err := foreachPID(func(pid mem.RO) error {
+		var procBuf [128]byte
+		fdPath := mem.Append(procBuf[:0], mem.S("/proc/"))
+		fdPath = mem.Append(fdPath, pid)
+		fdPath = mem.Append(fdPath, mem.S("/fd"))
 
 		// Android logs a bunch of audit violations in logcat
 		// if we try to open things we don't have access
 		// to. So on Android only, ask if we have permission
 		// rather than just trying it to determine whether we
 		// have permission.
-		if runtime.GOOS == "android" && syscall.Access(fdPath, unix.R_OK) != nil {
+		if runtime.GOOS == "android" && syscall.Access(string(fdPath), unix.R_OK) != nil {
 			return nil
 		}
 
-		fdDir, err := os.Open(fdPath)
-		if err != nil {
-			// Can't open fd list for this pid. Maybe
-			// don't have access. Ignore it.
-			return nil
-		}
-		defer fdDir.Close()
+		dirwalk.WalkShallow(mem.B(fdPath), func(fd mem.RO, de fs.DirEntry) error {
+			targetBuf := make([]byte, 64) // plenty big for "socket:[165614651]"
 
-		targetBuf := make([]byte, 64) // plenty big for "socket:[165614651]"
-		for {
-			fds, err := fdDir.Readdirnames(100)
-			if err == io.EOF {
+			linkPath := li.readlinkPathBuf[:0]
+			linkPath = fmt.Appendf(linkPath, "/proc/")
+			linkPath = mem.Append(linkPath, pid)
+			linkPath = append(linkPath, "/fd/"...)
+			linkPath = mem.Append(linkPath, fd)
+			linkPath = append(linkPath, 0) // terminating NUL
+			li.readlinkPathBuf = linkPath  // to reuse its buffer next time
+			n, ok := readlink(linkPath, targetBuf)
+			if !ok {
+				// Not a symlink or no permission.
+				// Skip it.
 				return nil
 			}
-			if os.IsNotExist(err) {
-				// This can happen if the directory we're
-				// reading disappears during the run. No big
-				// deal.
+
+			pe := need[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
+			if pe == nil {
 				return nil
 			}
+			bs, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid.StringCopy()))
 			if err != nil {
-				return fmt.Errorf("addProcesses.readDir: %w", err)
+				// Usually shouldn't happen. One possibility is
+				// the process has gone away, so let's skip it.
+				return nil
 			}
-			for _, fd := range fds {
-				pathBuf = fmt.Appendf(pathBuf[:0], "/proc/%s/fd/%s\x00", pid, fd)
-				n, ok := readlink(pathBuf, targetBuf)
-				if !ok {
-					// Not a symlink or no permission.
-					// Skip it.
-					continue
-				}
 
-				pe := need[string(targetBuf[:n])] // m[string([]byte)] avoids alloc
-				if pe != nil {
-					bs, err := os.ReadFile(fmt.Sprintf("/proc/%s/cmdline", pid))
-					if err != nil {
-						// Usually shouldn't happen. One possibility is
-						// the process has gone away, so let's skip it.
-						continue
-					}
-
-					argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
-					pe.port.Process = argvSubject(argv...)
-					pe.needsProcName = false
-					delete(need, string(targetBuf[:n]))
-					if len(need) == 0 {
-						return errDone
-					}
-				}
+			argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
+			pe.port.Process = argvSubject(argv...)
+			pe.needsProcName = false
+			delete(need, string(targetBuf[:n]))
+			if len(need) == 0 {
+				return errDone
 			}
-		}
+			return nil
+		})
+		return nil
 	})
 	if err == errDone {
 		return nil
@@ -342,40 +332,30 @@ func (li *linuxImpl) findProcessNames(need map[string]*portMeta) error {
 	return err
 }
 
-func foreachPID(fn func(pidStr string) error) error {
-	pdir, err := os.Open("/proc")
-	if err != nil {
-		return err
-	}
-	defer pdir.Close()
-
-	for {
-		pids, err := pdir.Readdirnames(100)
-		if err == io.EOF {
+func foreachPID(fn func(pidStr mem.RO) error) error {
+	err := dirwalk.WalkShallow(mem.S("/proc"), func(name mem.RO, de fs.DirEntry) error {
+		if !isNumeric(name) {
 			return nil
 		}
-		if os.IsNotExist(err) {
-			// This can happen if the directory we're
-			// reading disappears during the run. No big
-			// deal.
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("foreachPID.readdir: %w", err)
-		}
+		return fn(name)
+	})
+	if os.IsNotExist(err) {
+		// This can happen if the directory we're
+		// reading disappears during the run. No big
+		// deal.
+		return nil
+	}
+	return err
+}
 
-		for _, pid := range pids {
-			_, err := strconv.ParseInt(pid, 10, 64)
-			if err != nil {
-				// not a pid, ignore it.
-				// /proc has lots of non-pid stuff in it.
-				continue
-			}
-			if err := fn(pid); err != nil {
-				return err
-			}
+func isNumeric(s mem.RO) bool {
+	for i, n := 0, s.Len(); i < n; i++ {
+		b := s.At(i)
+		if b < '0' || b > '9' {
+			return false
 		}
 	}
+	return s.Len() > 0
 }
 
 // fieldIndex returns the offset in line where the Nth field (0-based) begins, or -1
