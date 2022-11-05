@@ -40,6 +40,7 @@ type linuxImpl struct {
 
 type portMeta struct {
 	port          Port
+	pid           int
 	keep          bool
 	needsProcName bool
 }
@@ -326,6 +327,9 @@ func (li *linuxImpl) findProcessNames(need map[string]*portMeta) error {
 					}
 
 					argv := strings.Split(strings.TrimSuffix(string(bs), "\x00"), "\x00")
+					if p, err := strconv.Atoi(pid); err == nil {
+						pe.pid = p
+					}
 					pe.port.Process = argvSubject(argv...)
 					pe.needsProcName = false
 					delete(need, string(targetBuf[:n]))

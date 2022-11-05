@@ -54,12 +54,12 @@ udp46      0      0  *.146                 *.*
 
 func TestParsePortsNetstat(t *testing.T) {
 	want := List{
-		Port{"tcp", 23, ""},
-		Port{"tcp", 24, ""},
-		Port{"udp", 104, ""},
-		Port{"udp", 106, ""},
-		Port{"udp", 146, ""},
-		Port{"tcp", 8185, ""}, // but not 8186, 8187, 8188 on localhost
+		Port{"tcp", 23, "", 0},
+		Port{"tcp", 24, "", 0},
+		Port{"udp", 104, "", 0},
+		Port{"udp", 106, "", 0},
+		Port{"udp", 146, "", 0},
+		Port{"tcp", 8185, "", 0}, // but not 8186, 8187, 8188 on localhost
 	}
 
 	pl, err := appendParsePortsNetstat(nil, bufio.NewReader(strings.NewReader(netstatOutput)))
