@@ -82,6 +82,7 @@ func (im *windowsImpl) AppendListeningPorts(base []Port) ([]Port, error) {
 				Proto:   "tcp",
 				Port:    e.Local.Port(),
 				Process: procNameOfPid(e.Pid),
+				Pid:     e.Pid,
 			},
 		}
 		im.known[fp] = pm

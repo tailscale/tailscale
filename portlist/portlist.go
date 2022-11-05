@@ -19,6 +19,7 @@ type Port struct {
 	Proto   string // "tcp" or "udp"
 	Port    uint16 // port number
 	Process string // optional process name, if found
+	Pid     int    // process id, if known
 }
 
 // List is a list of Ports.
