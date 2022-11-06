@@ -122,7 +122,7 @@ func DERPMapOf(stun ...string) *tailcfg.DERPMap {
 		node := &tailcfg.DERPNode{
 			Name:     fmt.Sprint(regionID) + "a",
 			RegionID: regionID,
-			HostName: fmt.Sprintf("d%d.invalid", regionID),
+			HostName: fmt.Sprintf("d%d%s", regionID, tailcfg.DotInvalid),
 			IPv4:     ipv4,
 			IPv6:     ipv6,
 			STUNPort: port,
