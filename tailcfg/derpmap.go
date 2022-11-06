@@ -144,3 +144,6 @@ type DERPNode struct {
 	// If empty, it's assumed to be the same as the DERP server.
 	STUNTestIP string `json:",omitempty"`
 }
+
+// DotInvalid is a fake DNS TLD used in tests for an invalid hostname.
+const DotInvalid = ".invalid"
