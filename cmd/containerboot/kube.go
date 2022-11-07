@@ -69,6 +69,23 @@ func findKeyInKubeSecret(ctx context.Context, secretName string) (string, error)
 // the kube secret secretName.
 func storeDeviceID(ctx context.Context, secretName, deviceID string) error {
 	kubeOnce.Do(initKube)
+
+	// First check if the secret exists at all. Even if running on
+	// kubernetes, we do not necessarily store state in a k8s secret.
+	req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", kubeNamespace, secretName), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := doKubeRequest(ctx, req)
+	if err != nil {
+		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode <= 499 {
+			// Assume the secret doesn't exist, or we don't have
+			// permission to access it.
+			return nil
+		}
+		return err
+	}
+
 	m := map[string]map[string]string{
 		"stringData": map[string]string{
 			"device_id": deviceID,
@@ -78,7 +95,7 @@ func storeDeviceID(ctx context.Context, secretName, deviceID string) error {
 	if err := json.NewEncoder(&b).Encode(m); err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s?fieldManager=tailscale-container", kubeNamespace, secretName), &b)
+	req, err = http.NewRequest("PATCH", fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s?fieldManager=tailscale-container", kubeNamespace, secretName), &b)
 	if err != nil {
 		return err
 	}
