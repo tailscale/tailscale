@@ -16,11 +16,13 @@ import (
 	"net/netip"
 	"net/url"
 	pathpkg "path"
+	"strconv"
 	"strings"
 	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
+	"tailscale.com/tailcfg"
 )
 
 // serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
@@ -29,6 +31,40 @@ type serveHTTPContextKey struct{}
 type serveHTTPContext struct {
 	SrcAddr  netip.AddrPort
 	DestPort uint16
+}
+
+func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ipn.HostPort, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
+
+	if !sc.Valid() {
+		b.logf("localbackend: got ingress conn w/o serveConfig; rejecting")
+		sendRST()
+		return
+	}
+
+	if !sc.AllowIngress().Get(target) {
+		b.logf("localbackend: got ingress conn for unconfigured %q; rejecting", target)
+		sendRST()
+		return
+	}
+
+	_, port, err := net.SplitHostPort(string(target))
+	if err != nil {
+		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		sendRST()
+		return
+	}
+	port16, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		b.logf("localbackend: got ingress conn for bad target %q; rejecting", target)
+		sendRST()
+		return
+	}
+	// TODO(bradfitz): pass ingressPeer etc in context to HandleInterceptedTCPConn,
+	// extend serveHTTPContext or similar.
+	b.HandleInterceptedTCPConn(uint16(port16), srcAddr, getConn, sendRST)
 }
 
 func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
