@@ -133,7 +133,7 @@ func main() {
 			log.Fatalf("installing proxy rules: %v", err)
 		}
 	}
-	if cfg.KubeSecret != "" {
+	if cfg.InKubernetes && cfg.KubeSecret != "" {
 		if err := storeDeviceID(ctx, cfg.KubeSecret, string(st.Self.ID)); err != nil {
 			log.Fatalf("storing device ID in kube secret: %v", err)
 		}
