@@ -81,6 +81,10 @@ type ServeConfig struct {
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+
+	// AllowIngress is the set of SNI:port values for which ingress
+	// traffic is allowed, from trusted ingress peers.
+	AllowIngress map[HostPort]bool
 }
 
 // HostPort is an SNI name and port number, joined by a colon.

@@ -76,13 +76,20 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			dst.Web[k] = v.Clone()
 		}
 	}
+	if dst.AllowIngress != nil {
+		dst.AllowIngress = map[HostPort]bool{}
+		for k, v := range src.AllowIngress {
+			dst.AllowIngress[k] = v
+		}
+	}
 	return dst
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
-	TCP map[int]*TCPPortHandler
-	Web map[HostPort]*WebServerConfig
+	TCP          map[int]*TCPPortHandler
+	Web          map[HostPort]*WebServerConfig
+	AllowIngress map[HostPort]bool
 }{})
 
 // Clone makes a deep copy of TCPPortHandler.
