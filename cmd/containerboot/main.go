@@ -91,15 +91,15 @@ func main() {
 		if err := ensureTunFile(); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-	}
-	if cfg.ProxyTo != "" || cfg.Routes != "" {
-		if err := ensureIPForwarding(); err != nil {
-			log.Printf("Failed to enable IP forwarding: %v", err)
-			log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
-			if cfg.InKubernetes {
-				log.Fatalf("You can either set the sysctls as a privileged initContainer, or run the tailscale container with privileged=true.")
-			} else {
-				log.Fatalf("You can fix this by running the container with privileged=true, or the equivalent in your container runtime that permits access to sysctls.")
+		if cfg.ProxyTo != "" || cfg.Routes != "" {
+			if err := ensureIPForwarding(cfg.ProxyTo, strings.Split(cfg.Routes, ",")); err != nil {
+				log.Printf("Failed to enable IP forwarding: %v", err)
+				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
+				if cfg.InKubernetes {
+					log.Fatalf("You can either set the sysctls as a privileged initContainer, or run the tailscale container with privileged=true.")
+				} else {
+					log.Fatalf("You can fix this by running the container with privileged=true, or the equivalent in your container runtime that permits access to sysctls.")
+				}
 			}
 		}
 	}
@@ -334,14 +334,46 @@ func ensureTunFile() error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding() error {
+func ensureIPForwarding(proxyTo string, routes []string) error {
+	var (
+		v4Forwarding, v6Forwarding bool
+	)
+	proxyIP, err := netip.ParseAddr(proxyTo)
+	if err != nil {
+		return fmt.Errorf("invalid proxy destination IP: %v", err)
+	}
+	if proxyIP.Is4() {
+		v4Forwarding = true
+	} else {
+		v6Forwarding = true
+	}
+	for _, route := range routes {
+		cidr, err := netip.ParsePrefix(route)
+		if err != nil {
+			return fmt.Errorf("invalid subnet route: %v", err)
+		}
+		if cidr.Addr().Is4() {
+			v4Forwarding = true
+		} else {
+			v6Forwarding = true
+		}
+	}
+
+	var paths []string
+	if v4Forwarding {
+		paths = append(paths, "/proc/sys/net/ipv4/ip_forward")
+	}
+	if v6Forwarding {
+		paths = append(paths, "/proc/sys/net/ipv6/conf/all/forwarding")
+	}
+
 	// In some common configurations (e.g. default docker,
 	// kubernetes), the container environment denies write access to
 	// most sysctls, including IP forwarding controls. Check the
 	// sysctl values before trying to change them, so that we
 	// gracefully do nothing if the container's already been set up
 	// properly by e.g. a k8s initContainer.
-	for _, path := range []string{"/proc/sys/net/ipv4/ip_forward", "/proc/sys/net/ipv6/conf/all/forwarding"} {
+	for _, path := range paths {
 		bs, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading %q: %w", path, err)
