@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.19 && (linux || darwin || freebsd || openbsd)
+//go:build go1.19 && (linux || darwin || freebsd || openbsd) && !ts_omit_bird
 
 package main
 

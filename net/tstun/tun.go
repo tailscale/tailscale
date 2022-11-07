@@ -31,6 +31,9 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		if runtime.GOOS != "linux" {
 			return nil, "", errors.New("tap only works on Linux")
 		}
+		if createTAP == nil { // if the ts_omit_tap tag is used
+			return nil, "", errors.New("tap is not supported in this build")
+		}
 		f := strings.Split(tunName, ":")
 		var tapName, bridgeName string
 		switch len(f) {
