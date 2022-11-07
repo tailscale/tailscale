@@ -554,9 +554,8 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		if dport == peerAPIPort {
 			return true
 		}
-
-		// Also handle SSH connections, if enabled.
-		if dport == 22 && ns.lb.ShouldRunSSH() {
+		// Also handle SSH connections, webserver, etc, if enabled:
+		if ns.lb.ShouldInterceptTCPPort(dport) {
 			return true
 		}
 	}
@@ -892,6 +891,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 				return
 			}
 			ns.lb.HandleQuad100Port80Conn(c)
+			return
+		}
+		if ns.lb.ShouldInterceptTCPPort(reqDetails.LocalPort) && ns.isLocalIP(dialIP) {
+			c := createConn()
+			if c == nil {
+				return
+			}
+			ns.lb.HandleInterceptedTCPConn(c)
 			return
 		}
 	}

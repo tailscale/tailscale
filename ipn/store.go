@@ -64,3 +64,54 @@ func ReadStoreInt(store StateStore, id StateKey) (int64, error) {
 func PutStoreInt(store StateStore, id StateKey, val int64) error {
 	return store.WriteState(id, fmt.Appendf(nil, "%d", val))
 }
+
+// ServeConfigKey returns a StateKey that stores the
+// JSON-encoded ServeConfig for a config profile.
+func ServeConfigKey(profileID string) StateKey {
+	return StateKey("_serve/" + profileID)
+}
+
+// ServeConfig is the JSON type stored in the StateStore for
+// StateKey "_serve/$PROFILE_ID" as returned by ServeConfigKey.
+type ServeConfig struct {
+	// TCP are the list of TCP port numbers that tailscaled should handle for
+	// the Tailscale IP addresses. (not subnet routers, etc)
+	TCP map[int]*TCPPortHandler `json:",omitempty"`
+
+	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
+	// keyed by mount point ("/", "/foo", etc)
+	Web map[string]map[string]*HTTPHandler `json:",omitempty"`
+}
+
+// TCPPortHandler describes what to do when handling a TCP
+// connection.
+type TCPPortHandler struct {
+	// HTTPS, if true, means that tailscaled should handle this connection as an
+	// HTTPS request as configured by ServeConfig.Web.
+	//
+	// It is mutually exclusive with TCPForward.
+	HTTPS bool `json:",omitempty"`
+
+	// TCPForward is the IP:port to forward TCP connections to.
+	// Whether or not TLS is terminated by tailscaled depends on
+	// TerminateTLS.
+	//
+	// It is mutually exclusive with HTTPS.
+	TCPForward string `json:",omitempty"`
+
+	// TerminateTLS is whether tailscaled should terminate TLS
+	// connections before forwarding them to TCPForward. It is only
+	// used if TCPForward is non-empty. (the HTTPS mode )
+	TerminateTLS bool `json:",omitempty"`
+}
+
+// HTTPHandler is either a path or a proxy to serve.
+type HTTPHandler struct {
+	// Exactly one of the following may be set.
+
+	Path  string `json:",omitempty"` // absolute path to directory or file to serve
+	Proxy string `json:",omitempty"` // http://localhost:3000/, localhost:3030, 3030
+
+	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
+	// temporary ones? Error codes? Redirects?
+}

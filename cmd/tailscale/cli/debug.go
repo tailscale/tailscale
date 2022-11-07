@@ -568,5 +568,13 @@ func runDevStoreSet(ctx context.Context, args []string) error {
 	if !devStoreSetArgs.danger {
 		return errors.New("this command is dangerous; use --danger to proceed")
 	}
-	return localClient.SetDevStoreKeyValue(ctx, args[0], args[1])
+	key, val := args[0], args[1]
+	if val == "-" {
+		valb, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		val = string(valb)
+	}
+	return localClient.SetDevStoreKeyValue(ctx, key, val)
 }
