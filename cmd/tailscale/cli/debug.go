@@ -144,6 +144,16 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:      "dev-store-set",
+			Exec:      runDevStoreSet,
+			ShortHelp: "set a key/value pair during development",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("store-set")
+				fs.BoolVar(&devStoreSetArgs.danger, "danger", false, "accept danger")
+				return fs
+			})(),
+		},
 	},
 }
 
@@ -545,4 +555,18 @@ func runDebugComponentLogs(ctx context.Context, args []string) error {
 		fmt.Printf("Enabled debug logs for component %q for %v\n", component, dur)
 	}
 	return nil
+}
+
+var devStoreSetArgs struct {
+	danger bool
+}
+
+func runDevStoreSet(ctx context.Context, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: dev-store-set --danger <key> <value>")
+	}
+	if !devStoreSetArgs.danger {
+		return errors.New("this command is dangerous; use --danger to proceed")
+	}
+	return localClient.SetDevStoreKeyValue(ctx, args[0], args[1])
 }

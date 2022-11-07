@@ -348,6 +348,19 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// SetDevStoreKeyValue set a statestore key/value. It's only meant for development.
+// The schema (including when keys are re-read) is not a stable interface.
+func (lc *LocalClient) SetDevStoreKeyValue(ctx context.Context, key, value string) error {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/dev-set-state-store?"+(url.Values{
+		"key":   {key},
+		"value": {value},
+	}).Encode(), 200, nil)
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	return nil
+}
+
 // SetComponentDebugLogging sets component's debug logging enabled for
 // the provided duration. If the duration is in the past, the debug logging
 // is disabled.
