@@ -3966,3 +3966,15 @@ func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
 
 	doctor.RunChecks(ctx, logf, checks...)
 }
+
+// SetDevStateStore updates the LocalBackend's state storage to the provided values.
+//
+// It's meant only for development.
+func (b *LocalBackend) SetDevStateStore(key, value string) error {
+	if b.store == nil {
+		return errors.New("no state store")
+	}
+	err := b.store.WriteState(ipn.StateKey(key), []byte(value))
+	b.logf("SetDevStateStore(%q, %q) = %v", key, value, err)
+	return err
+}

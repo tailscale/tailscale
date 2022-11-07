@@ -61,6 +61,7 @@ var handler = map[string]localAPIHandler{
 	"component-debug-logging": (*Handler).serveComponentDebugLogging,
 	"debug":                   (*Handler).serveDebug,
 	"derpmap":                 (*Handler).serveDERPMap,
+	"dev-set-state-store":     (*Handler).serveDevSetStateStore,
 	"dial":                    (*Handler).serveDial,
 	"file-targets":            (*Handler).serveFileTargets,
 	"goroutines":              (*Handler).serveGoroutines,
@@ -395,6 +396,23 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		http.Error(w, err.Error(), 400)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := h.b.SetDevStateStore(r.FormValue("key"), r.FormValue("value")); err != nil {
+		http.Error(w, err.Error(), 500)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
