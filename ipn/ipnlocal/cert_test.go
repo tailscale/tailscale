@@ -4,7 +4,7 @@
 
 //go:build !ios && !android && !js
 
-package localapi
+package ipnlocal
 
 import "testing"
 
