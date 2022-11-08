@@ -535,23 +535,30 @@ var viaRange = tsaddr.TailscaleViaRange()
 // WireGuard peer) should be handled by netstack.
 func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	// Handle incoming peerapi connections in netstack.
-	if ns.lb != nil && p.IPProto == ipproto.TCP {
+	dstIP := p.Dst.Addr()
+	isLocal := ns.isLocalIP(dstIP)
+
+	// Handle TCP connection to the Tailscale IP(s) in some cases:
+	if ns.lb != nil && p.IPProto == ipproto.TCP && isLocal {
 		var peerAPIPort uint16
-		dstIP := p.Dst.Addr()
-		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn && ns.isLocalIP(dstIP) {
-			if port, ok := ns.lb.GetPeerAPIPort(p.Dst.Addr()); ok {
+
+		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn {
+			if port, ok := ns.lb.GetPeerAPIPort(dstIP); ok {
 				peerAPIPort = port
 				atomic.StoreUint32(ns.peerAPIPortAtomic(dstIP), uint32(port))
 			}
 		} else {
 			peerAPIPort = uint16(atomic.LoadUint32(ns.peerAPIPortAtomic(dstIP)))
 		}
-		if p.IPProto == ipproto.TCP && p.Dst.Port() == peerAPIPort {
+		dport := p.Dst.Port()
+		if dport == peerAPIPort {
 			return true
 		}
-	}
-	if ns.isInboundTSSH(p) && ns.processSSH() {
-		return true
+
+		// Also handle SSH connections, if enabled.
+		if dport == 22 && ns.lb.ShouldRunSSH() {
+			return true
+		}
 	}
 	if p.IPVersion == 6 && viaRange.Contains(p.Dst.Addr()) {
 		return ns.lb != nil && ns.lb.ShouldHandleViaIP(p.Dst.Addr())
@@ -561,7 +568,6 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		// netstack isn't used at all; don't even do an isLocalIP lookup.
 		return false
 	}
-	isLocal := ns.isLocalIP(p.Dst.Addr())
 	if ns.ProcessLocalIPs && isLocal {
 		return true
 	}
@@ -645,12 +651,6 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
 		ns.logf("InjectOutbound ping response: %v", err)
 	}
-}
-
-func (ns *Impl) isInboundTSSH(p *packet.Parsed) bool {
-	return p.IPProto == ipproto.TCP &&
-		p.Dst.Port() == 22 &&
-		ns.isLocalIP(p.Dst.Addr())
 }
 
 // injectInbound is installed as a packet hook on the 'inbound' (from a
