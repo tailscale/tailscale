@@ -86,6 +86,11 @@ func TestNoContent(t *testing.T) {
 			want:  "response input",
 		},
 		{
+			name:  "valid challenge hostname",
+			input: "ts_derp99b.tailscale.com",
+			want:  "response ts_derp99b.tailscale.com",
+		},
+		{
 			name:  "invalid challenge",
 			input: "foo\x00bar",
 			want:  "",
