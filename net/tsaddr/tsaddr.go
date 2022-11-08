@@ -309,3 +309,17 @@ func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	copy(a[12:], ip4a[:])
 	return netip.PrefixFrom(netip.AddrFrom16(a), v4.Bits()+64+32), nil
 }
+
+// MapViaAddr returns an IPv6 "via" address for an IPv4 address in a given siteID.
+func MapViaAddr(siteID uint32, v4 netip.Addr) (netip.Addr, error) {
+	if !v4.Is4() {
+		return netip.Addr{}, errors.New("want IPv4 address with a site ID")
+	}
+	viaRange16 := TailscaleViaRange().Addr().As16()
+	var a [16]byte
+	copy(a[:], viaRange16[:8])
+	binary.BigEndian.PutUint32(a[8:], siteID)
+	ip4a := v4.As4()
+	copy(a[12:], ip4a[:])
+	return netip.AddrFrom16(a), nil
+}

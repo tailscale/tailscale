@@ -105,3 +105,36 @@ func TestUnmapVia(t *testing.T) {
 		}
 	}
 }
+
+func TestMapViaAddr(t *testing.T) {
+	tests := []struct {
+		ip   string
+		site uint32
+		want string
+	}{
+		{"1.2.3.4", 0, "fd7a:115c:a1e0:b1a::102:304"},
+		{"1.2.3.4", 7, "fd7a:115c:a1e0:b1a:0:7:102:304"},
+	}
+	for _, tt := range tests {
+		got, err := MapViaAddr(tt.site, netip.MustParseAddr(tt.ip))
+		if err != nil {
+			t.Errorf("for %q @ %d: error: %v", tt.ip, tt.site, err)
+			continue
+		}
+
+		if got.String() != tt.want {
+			t.Errorf("for %q @ %d: got %q, want %q", tt.ip, tt.site, got.String(), tt.want)
+		}
+	}
+
+	t.Run("Error", func(t *testing.T) {
+		addr, err := MapViaAddr(9, netip.MustParseAddr("::1"))
+		want := "want IPv4 address with a site ID"
+		if err == nil || err.Error() != want {
+			t.Errorf("got err=%v; want %q", err, want)
+		}
+		if addr.IsValid() {
+			t.Errorf("expected invalid Addr")
+		}
+	})
+}
