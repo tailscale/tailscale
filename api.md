@@ -335,11 +335,12 @@ The response is 2xx on success. The response body is currently an empty JSON
 object.
 
 ## Tailnet
-A tailnet is the name of your Tailscale network.
-You can find it in the top left corner of the [Admin Panel](https://login.tailscale.com/admin) beside the Tailscale logo.
 
+A tailnet is your private network, composed of all the devices on it and their configuration. For more information on tailnets, see [our user-facing documentation](https://tailscale.com/kb/1136/tailnet/).
 
-`alice@example.com` belongs to the `example.com` tailnet and would use the following format for API calls:
+When making API requests, your tailnet is identified by the organization name. You can find it on the [Settings page](https://login.tailscale.com/admin/settings) of the admin console.
+
+For example, if `alice@example.com` belongs to the `example.com` tailnet, they would use the following format for API calls:
 
 ```
 GET /api/v2/tailnet/example.com/...
@@ -363,8 +364,6 @@ curl https://api.tailscale.com/api/v2/tailnet/-/...
 ```
 
 Tailnets are a top-level resource. ACL is an example of a resource that is tied to a top-level tailnet.
-
-For more information on Tailscale networks/tailnets, click [here](https://tailscale.com/kb/1064/invite-team-members).
 
 ### ACL
 
