@@ -8,12 +8,18 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
+	"sync/atomic"
 	"testing"
 
 	"gvisor.dev/gvisor/pkg/refs"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -248,6 +254,221 @@ func TestShouldHandlePing(t *testing.T) {
 				t.Errorf("expected shouldHandlePing==true")
 			} else if pingDst != expectedPingDst {
 				t.Errorf("got dst %s; want %s", pingDst, expectedPingDst)
+			}
+		})
+	}
+}
+
+func TestShouldProcessInbound(t *testing.T) {
+	testCases := []struct {
+		name  string
+		pkt   *packet.Parsed
+		setup func(*Impl)
+		want  bool
+	}{
+		{
+			name: "ipv6-via",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+
+				// $ tailscale debug via 7 10.1.1.9/24
+				// fd7a:115c:a1e0:b1a:0:7:a01:109/120
+				Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
+				TCPFlags: packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					// $ tailscale debug via 7 10.1.1.0/24
+					// fd7a:115c:a1e0:b1a:0:7:a01:100/120
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
+				}
+				i.lb.Start(ipn.Options{
+					StateKey:    ipn.GlobalDaemonStateKey,
+					UpdatePrefs: prefs,
+				})
+
+				// This should be handled even if we're
+				// otherwise not processing local IPs or
+				// subnets.
+				i.ProcessLocalIPs = false
+				i.ProcessSubnets = false
+			},
+			want: true,
+		},
+		{
+			name: "ipv6-via-not-advertised",
+			pkt: &packet.Parsed{
+				IPVersion: 6,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+
+				// $ tailscale debug via 7 10.1.1.9/24
+				// fd7a:115c:a1e0:b1a:0:7:a01:109/120
+				Dst:      netip.MustParseAddrPort("[fd7a:115c:a1e0:b1a:0:7:a01:109]:5678"),
+				TCPFlags: packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					// tailscale debug via 7 10.1.2.0/24
+					// fd7a:115c:a1e0:b1a:0:7:a01:200/120
+					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:200/120"),
+				}
+				i.lb.Start(ipn.Options{
+					StateKey:    ipn.GlobalDaemonStateKey,
+					UpdatePrefs: prefs,
+				})
+			},
+			want: false,
+		},
+		{
+			name: "tailscale-ssh-enabled",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.101.102.104:22"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.RunSSH = true
+				i.lb.Start(ipn.Options{
+					StateKey:    ipn.GlobalDaemonStateKey,
+					UpdatePrefs: prefs,
+				})
+				i.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+					return addr.String() == "100.101.102.104" // Dst, above
+				})
+			},
+			want: true,
+		},
+		{
+			name: "tailscale-ssh-disabled",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.101.102.104:22"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.RunSSH = false // default, but to be explicit
+				i.lb.Start(ipn.Options{
+					StateKey:    ipn.GlobalDaemonStateKey,
+					UpdatePrefs: prefs,
+				})
+				i.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+					return addr.String() == "100.101.102.104" // Dst, above
+				})
+			},
+			want: false,
+		},
+		{
+			name: "process-local-ips",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("100.101.102.104:4567"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				i.ProcessLocalIPs = true
+				i.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
+					return addr.String() == "100.101.102.104" // Dst, above
+				})
+			},
+			want: true,
+		},
+		{
+			name: "process-subnets",
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("10.1.2.3:4567"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				i.ProcessSubnets = true
+
+				// For testing purposes, assume all Tailscale
+				// IPs are local; the Dst above is something
+				// not in that range.
+				i.atomicIsLocalIPFunc.Store(tsaddr.IsTailscaleIP)
+			},
+			want: true,
+		},
+		{
+			name: "peerapi-port-subnet-router", // see #6235
+			pkt: &packet.Parsed{
+				IPVersion: 4,
+				IPProto:   ipproto.TCP,
+				Src:       netip.MustParseAddrPort("100.101.102.103:1234"),
+				Dst:       netip.MustParseAddrPort("10.0.0.23:5555"),
+				TCPFlags:  packet.TCPSyn,
+			},
+			setup: func(i *Impl) {
+				prefs := ipn.NewPrefs()
+				prefs.AdvertiseRoutes = []netip.Prefix{
+					netip.MustParsePrefix("10.0.0.1/24"),
+				}
+				i.lb.Start(ipn.Options{
+					StateKey:    ipn.GlobalDaemonStateKey,
+					UpdatePrefs: prefs,
+				})
+
+				// As if we were running on Linux where netstack isn't used.
+				i.ProcessSubnets = false
+				i.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return false })
+
+				// Set the PeerAPI port to the Dst port above.
+				atomic.StoreUint32(&i.peerapiPort4Atomic, 5555)
+				atomic.StoreUint32(&i.peerapiPort6Atomic, 5555)
+			},
+			want: false,
+		},
+
+		// TODO(andrew): test PeerAPI
+		// TODO(andrew): test TCP packets without the SYN flag set
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			impl := makeNetstack(t, func(i *Impl) {
+				defer t.Logf("netstack setup finished")
+
+				logf := tstest.WhileTestRunningLogger(t)
+				e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+				if err != nil {
+					t.Fatalf("NewFakeUserspaceEngine: %v", err)
+				}
+				t.Cleanup(e.Close)
+
+				lb, err := ipnlocal.NewLocalBackend(logf, "logid", new(mem.Store), new(tsdial.Dialer), e, 0)
+				if err != nil {
+					t.Fatalf("NewLocalBackend: %v", err)
+				}
+				t.Cleanup(lb.Shutdown)
+				dir := t.TempDir()
+				lb.SetVarRoot(dir)
+
+				i.SetLocalBackend(lb)
+
+				if tc.setup != nil {
+					tc.setup(i)
+				}
+			})
+			got := impl.shouldProcessInbound(tc.pkt, nil)
+			if got != tc.want {
+				t.Errorf("got shouldProcessInbound()=%v; want %v", got, tc.want)
+			} else {
+				t.Logf("OK: shouldProcessInbound() = %v", got)
 			}
 		})
 	}
