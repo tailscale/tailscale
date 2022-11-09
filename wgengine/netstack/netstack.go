@@ -559,8 +559,8 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 			return true
 		}
 	}
-	if p.IPVersion == 6 && viaRange.Contains(p.Dst.Addr()) {
-		return ns.lb != nil && ns.lb.ShouldHandleViaIP(p.Dst.Addr())
+	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
+		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
 	}
 	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
 		// Fast path for common case (e.g. Linux server in TUN mode) where

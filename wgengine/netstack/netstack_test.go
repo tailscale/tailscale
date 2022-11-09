@@ -259,6 +259,13 @@ func TestShouldHandlePing(t *testing.T) {
 	}
 }
 
+// looksLikeATailscaleSelfAddress reports whether addr looks like
+// a Tailscale self address, for tests.
+func looksLikeATailscaleSelfAddress(addr netip.Addr) bool {
+	return addr.Is4() && tsaddr.IsTailscaleIP(addr) ||
+		addr.Is6() && tsaddr.Tailscale4To6Range().Contains(addr)
+}
+
 func TestShouldProcessInbound(t *testing.T) {
 	testCases := []struct {
 		name  string
@@ -289,6 +296,7 @@ func TestShouldProcessInbound(t *testing.T) {
 					StateKey:    ipn.GlobalDaemonStateKey,
 					UpdatePrefs: prefs,
 				})
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 
 				// This should be handled even if we're
 				// otherwise not processing local IPs or
@@ -400,7 +408,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				// For testing purposes, assume all Tailscale
 				// IPs are local; the Dst above is something
 				// not in that range.
-				i.atomicIsLocalIPFunc.Store(tsaddr.IsTailscaleIP)
+				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 			},
 			want: true,
 		},
