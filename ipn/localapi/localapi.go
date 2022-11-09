@@ -71,16 +71,19 @@ var handler = map[string]localAPIHandler{
 	"metrics":                 (*Handler).serveMetrics,
 	"ping":                    (*Handler).servePing,
 	"prefs":                   (*Handler).servePrefs,
-	"profile":                 (*Handler).serveProfile,
-	"set-dns":                 (*Handler).serveSetDNS,
-	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
-	"status":                  (*Handler).serveStatus,
-	"tka/init":                (*Handler).serveTKAInit,
-	"tka/modify":              (*Handler).serveTKAModify,
-	"tka/sign":                (*Handler).serveTKASign,
-	"tka/status":              (*Handler).serveTKAStatus,
-	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
-	"whois":                   (*Handler).serveWhoIs,
+	// TODO: rename to debug-profile or pprof-profile to separatate it from the
+	// (user) profile functionality.
+	"profile":               (*Handler).serveProfile,
+	"set-dns":               (*Handler).serveSetDNS,
+	"set-expiry-sooner":     (*Handler).serveSetExpirySooner,
+	"status":                (*Handler).serveStatus,
+	"tka/init":              (*Handler).serveTKAInit,
+	"tka/modify":            (*Handler).serveTKAModify,
+	"tka/sign":              (*Handler).serveTKASign,
+	"tka/status":            (*Handler).serveTKAStatus,
+	"upload-client-metrics": (*Handler).serveUploadClientMetrics,
+	"whois":                 (*Handler).serveWhoIs,
+	"profiles":              (*Handler).serveProfiles,
 }
 
 func randHex(n int) string {
@@ -1035,6 +1038,64 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "profiles access denied", http.StatusForbidden)
+		return
+	}
+	switch r.Method {
+	case "GET": // List profiles
+		profiles := make([]tailcfg.UserProfile, 0)
+		for i, name := range h.b.ListProfiles() {
+			profiles = append(profiles, tailcfg.UserProfile{
+				ID:            tailcfg.UserID(i),
+				LoginName:     name,
+				DisplayName:   name,
+				ProfilePicURL: "",
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		e := json.NewEncoder(w)
+		e.SetIndent("", "\t")
+		e.Encode(profiles)
+	case "POST": // Switch profile
+		// TODO: it would be more REST-y to get the profile name from the path
+		profile := r.FormValue("profile")
+		if profile == "" {
+			http.Error(w, "missing profile", http.StatusBadRequest)
+			return
+		}
+		err := h.b.SwitchProfile(profile)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "done\n")
+	case "PUT": // Add profile
+		h.b.NewProfile()
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "done\n")
+	case "DELETE": // Delete profile
+		// TODO: it would be more REST-y to get the profile name from the path
+		profile := r.FormValue("profile")
+		if profile == "" {
+			http.Error(w, "missing profile", http.StatusBadRequest)
+			return
+		}
+		err := h.b.DeleteProfile(profile)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "done\n")
+	default:
+		http.Error(w, "unsupported method", http.StatusMethodNotAllowed)
+		return
+	}
 }
 
 func defBool(a string, def bool) bool {
