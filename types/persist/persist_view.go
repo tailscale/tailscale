@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 )
@@ -68,6 +69,7 @@ func (v PersistView) PrivateNodeKey() key.NodePrivate    { return v.ж.PrivateNo
 func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivateNodeKey }
 func (v PersistView) Provider() string                   { return v.ж.Provider }
 func (v PersistView) LoginName() string                  { return v.ж.LoginName }
+func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PersistViewNeedsRegeneration = Persist(struct {
@@ -77,4 +79,5 @@ var _PersistViewNeedsRegeneration = Persist(struct {
 	OldPrivateNodeKey               key.NodePrivate
 	Provider                        string
 	LoginName                       string
+	UserProfile                     tailcfg.UserProfile
 }{})

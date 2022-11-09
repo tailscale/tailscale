@@ -55,14 +55,12 @@ func TestLocalLogLines(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	lb, err := NewLocalBackend(logf, idA.String(), store, nil, e, 0)
+	lb, err := NewLocalBackend(logf, idA.String(), store, "", nil, e, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lb.Shutdown()
 
-	// custom adjustments for required non-nil fields
-	lb.prefs = ipn.NewPrefs().View()
 	lb.hostinfo = &tailcfg.Hostinfo{}
 	// hacky manual override of the usual log-on-change behaviour of keylogf
 	lb.keyLogf = logListen.Logf

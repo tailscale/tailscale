@@ -333,10 +333,10 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 	return true
 }
 
-func (c *Direct) GetPersist() persist.Persist {
+func (c *Direct) GetPersist() persist.PersistView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.persist
+	return c.persist.View()
 }
 
 func (c *Direct) TryLogout(ctx context.Context) error {
@@ -632,6 +632,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	}
 	if resp.Login.LoginName != "" {
 		persist.LoginName = resp.Login.LoginName
+	}
+	persist.UserProfile = tailcfg.UserProfile{
+		ID:            resp.User.ID,
+		DisplayName:   resp.Login.DisplayName,
+		ProfilePicURL: resp.Login.ProfilePicURL,
+		LoginName:     resp.Login.LoginName,
 	}
 
 	// TODO(crawshaw): RegisterResponse should be able to mechanically

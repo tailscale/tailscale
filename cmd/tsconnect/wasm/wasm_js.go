@@ -124,9 +124,10 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
-	srv, err := ipnserver.New(logf, lpc.PublicID.String(), store, eng, dialer, nil, ipnserver.Options{
+	srv, err := ipnserver.New(logf, lpc.PublicID.String(), store, eng, dialer, ipnserver.Options{
 		SurviveDisconnects: true,
 		LoginFlags:         controlclient.LoginEphemeral,
+		AutostartStateKey:  "wasm",
 	})
 	if err != nil {
 		log.Fatalf("ipnserver.New: %v", err)
@@ -284,7 +285,6 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 
 	go func() {
 		err := i.lb.Start(ipn.Options{
-			StateKey: "wasm",
 			UpdatePrefs: &ipn.Prefs{
 				ControlURL:       i.controlURL,
 				RouteAll:         false,

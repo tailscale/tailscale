@@ -21,9 +21,11 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -585,20 +587,23 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
-			e: eng,
+			e:     eng,
+			pm:    pm,
+			store: pm.Store(),
 		},
 	}
 	if h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly offering exit node")
 	}
-	h.ps.b.prefs = (&ipn.Prefs{
+	h.ps.b.pm.SetPrefs((&ipn.Prefs{
 		AdvertiseRoutes: []netip.Prefix{
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},
-	}).View()
+	}).View())
 	if !h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly not offering exit node")
 	}

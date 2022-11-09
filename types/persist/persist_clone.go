@@ -7,6 +7,7 @@
 package persist
 
 import (
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 )
@@ -30,4 +31,5 @@ var _PersistCloneNeedsRegeneration = Persist(struct {
 	OldPrivateNodeKey               key.NodePrivate
 	Provider                        string
 	LoginName                       string
+	UserProfile                     tailcfg.UserProfile
 }{})

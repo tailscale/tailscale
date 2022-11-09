@@ -634,27 +634,10 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 		if err != nil {
 			return err
 		}
-		opts := ipn.Options{
-			StateKey:    ipn.GlobalDaemonStateKey,
+		bc.Start(ipn.Options{
 			AuthKey:     authKey,
 			UpdatePrefs: prefs,
-		}
-		// On Windows, we still run in mostly the "legacy" way that
-		// predated the server's StateStore. That is, we send an empty
-		// StateKey and send the prefs directly. Although the Windows
-		// supports server mode, though, the transition to StateStore
-		// is only half complete. Only server mode uses it, and the
-		// Windows service (~tailscaled) is the one that computes the
-		// StateKey based on the connection identity. So for now, just
-		// do as the Windows GUI's always done:
-		if effectiveGOOS() == "windows" {
-			// The Windows service will set this as needed based
-			// on our connection's identity.
-			opts.StateKey = ""
-			opts.Prefs = prefs
-		}
-
-		bc.Start(opts)
+		})
 		if upArgs.forceReauth {
 			startLoginInteractive()
 		}
