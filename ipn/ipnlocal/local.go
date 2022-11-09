@@ -861,6 +861,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(st.NetMap, b.prefs)
 	}
+	userID := b.userID
 	b.mu.Unlock()
 
 	// Now complete the lock-free parts of what we started while locked.
@@ -870,6 +871,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
 		}
+		b.writeServerModeStartState(userID, prefs.View())
+
 		p := prefs.View()
 		b.send(ipn.Notify{Prefs: &p})
 	}
