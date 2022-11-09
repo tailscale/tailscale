@@ -38,9 +38,11 @@ func (b *LocalBackend) HandleInterceptedTCPConn(c net.Conn) {
 	hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
 }
 
-func (b *LocalBackend) getServeHandler(r *http.Request) (_ *ipn.HTTPHandler, ok bool) {
+func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, ok bool) {
+	var z ipn.HTTPHandlerView // zero value
+
 	if r.TLS == nil {
-		return nil, false
+		return z, false
 	}
 
 	sni := r.TLS.ServerName
@@ -50,17 +52,21 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ *ipn.HTTPHandler, ok 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	wsc, ok := b.serveConfig.Web[key]
+	if !b.serveConfig.Valid() {
+		return z, false
+	}
+
+	wsc, ok := b.serveConfig.Web().GetOk(key)
 	if !ok {
-		return nil, false
+		return z, false
 	}
 	path := r.URL.Path
 	for {
-		if h, ok := wsc.Handlers[path]; ok {
+		if h, ok := wsc.Handlers().GetOk(path); ok {
 			return h, true
 		}
 		if path == "/" {
-			return nil, false
+			return z, false
 		}
 		path = pathpkg.Dir(path)
 	}
@@ -72,16 +78,16 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if s := h.Text; s != "" {
+	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		io.WriteString(w, s)
 		return
 	}
-	if v := h.Path; v != "" {
+	if v := h.Path(); v != "" {
 		io.WriteString(w, "TODO(bradfitz): serve file")
 		return
 	}
-	if v := h.Proxy; v != "" {
+	if v := h.Proxy(); v != "" {
 		io.WriteString(w, "TODO(bradfitz): proxy")
 		return
 	}
