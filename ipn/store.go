@@ -121,6 +121,8 @@ type HTTPHandler struct {
 	Path  string `json:",omitempty"` // absolute path to directory or file to serve
 	Proxy string `json:",omitempty"` // http://localhost:3000/, localhost:3030, 3030
 
+	Text string `json:",omitempty"` // plaintext to serve (primarily for testing)
+
 	// TODO(bradfitz): bool to not enumerate directories? TTL on mapping for
 	// temporary ones? Error codes? Redirects?
 }

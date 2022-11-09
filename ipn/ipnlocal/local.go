@@ -6,7 +6,6 @@ package ipnlocal
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -4085,42 +4084,4 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 // Tailscaled and handled in-process.
 func (b *LocalBackend) ShouldInterceptTCPPort(port uint16) bool {
 	return b.shouldInterceptTCPPortAtomic.Load()(port)
-}
-
-var runDevWebServer = envknob.RegisterBool("TS_DEV_WEBSERVER")
-
-func (b *LocalBackend) HandleInterceptedTCPConn(c net.Conn) {
-	if !runDevWebServer() {
-		b.logf("localbackend: closing TCP conn from %v to %v", c.RemoteAddr(), c.LocalAddr())
-		c.Close()
-		return
-	}
-
-	// TODO(bradfitz): look up how; sniff SNI if ambiguous
-	hs := &http.Server{
-		TLSConfig: &tls.Config{
-			GetCertificate: b.getTLSServeCert,
-		},
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			io.WriteString(w, "<h1>hello world</h1>this is tailscaled")
-		}),
-	}
-	hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
-}
-
-func (b *LocalBackend) getTLSServeCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if hi == nil || hi.ServerName == "" {
-		return nil, errors.New("no SNI ServerName")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	pair, err := b.GetCertPEM(ctx, hi.ServerName)
-	if err != nil {
-		return nil, err
-	}
-	cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
-	if err != nil {
-		return nil, err
-	}
-	return &cert, nil
 }
