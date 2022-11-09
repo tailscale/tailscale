@@ -82,6 +82,13 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// ControlURL is explicitly not set to signal that
+	// it's not yet configured, which relaxes the CLI "up"
+	// safety net features. It will get set to DefaultControlURL
+	// on first up. Or, if not, DefaultControlURL will be used
+	// later anyway. Can be overridden with TS_CONTROL_URL environment variable.
+	ControlURL string
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -338,6 +345,12 @@ func (s *Server) start() (reterr error) {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
+	if os.Getenv("TS_CONTROL_URL") != "" {
+		prefs.ControlURL = os.Getenv("TS_CONTROL_URL")
+	}
+	if s.ControlURL != "" {
+		prefs.ControlURL = s.ControlURL
+	}
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		StateKey:    ipn.GlobalDaemonStateKey,
