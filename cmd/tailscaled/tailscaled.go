@@ -33,7 +33,7 @@ import (
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
@@ -306,7 +306,6 @@ func ipnServerOpts() (o ipnserver.Options) {
 		fallthrough
 	default:
 		o.SurviveDisconnects = true
-		o.AutostartStateKey = ipn.GlobalDaemonStateKey
 	case "windows":
 		// Not those.
 	}
@@ -452,7 +451,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("store.New: %w", err)
 	}
-	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
+	pm, err := ipnlocal.NewProfileManager(store, logf, "")
+	if err != nil {
+		return fmt.Errorf("ipnlocal.NewProfileManager: %w", err)
+	}
+	srv, err := ipnserver.New(logf, pol.PublicID.String(), pm, e, dialer, opts)
 	if err != nil {
 		return fmt.Errorf("ipnserver.New: %w", err)
 	}

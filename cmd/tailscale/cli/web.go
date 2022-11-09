@@ -496,9 +496,7 @@ func tailscaleUp(ctx context.Context, prefs *ipn.Prefs, forceReauth bool) (authU
 
 	bc.SetPrefs(prefs)
 
-	bc.Start(ipn.Options{
-		StateKey: ipn.GlobalDaemonStateKey,
-	})
+	bc.Start(ipn.Options{})
 	if forceReauth {
 		bc.StartLoginInteractive()
 	}

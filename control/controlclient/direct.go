@@ -333,10 +333,10 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 	return true
 }
 
-func (c *Direct) GetPersist() persist.Persist {
+func (c *Direct) GetPersist() persist.PersistView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.persist
+	return c.persist.View()
 }
 
 func (c *Direct) TryLogout(ctx context.Context) error {

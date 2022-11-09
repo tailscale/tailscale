@@ -26,6 +26,13 @@ const (
 	// particular), but right now Unix daemons run with a single
 	// node-global state. To keep open the option of having per-user state
 	// later, the global state key doesn't look like a username.
+	//
+	// As of 2022-10-21, it has been superseded by profiles and is no longer
+	// written to disk. It is only read at startup when there are no profiles,
+	// to migrate the state to the "default" profile.
+	// The existing state is left on disk in case the user downgrades to an
+	// older version of Tailscale that doesn't support profiles. We can
+	// remove this in a future release.
 	GlobalDaemonStateKey = StateKey("_daemon")
 
 	// ServerModeStartKey's value, if non-empty, is the value of a
@@ -40,7 +47,22 @@ const (
 	// NLKeyStateKey is the key under which we store the node's
 	// network-lock node key, in its key.NLPrivate.MarshalText representation.
 	NLKeyStateKey = StateKey("_nl-node-key")
+
+	// KnownProfilesStateKey is the key under which we store the list of
+	// known profiles.
+	KnownProfilesStateKey = StateKey("_profiles")
+
+	// CurrentProfileStateKey is the key under which we store the current
+	// profile.
+	CurrentProfileStateKey = StateKey("_current-profile")
 )
+
+func CurrentProfileKey(userID string) StateKey {
+	if userID == "" {
+		return CurrentProfileStateKey
+	}
+	return StateKey("_current/" + userID)
+}
 
 // StateStore persists state, and produces it back on request.
 type StateStore interface {

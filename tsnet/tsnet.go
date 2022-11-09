@@ -324,7 +324,11 @@ func (s *Server) start() (reterr error) {
 	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, s.Store, s.dialer, eng, loginFlags)
+	pm, err := ipnlocal.NewProfileManager(s.Store, logf, "")
+	if err != nil {
+		return err
+	}
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, pm, s.dialer, eng, loginFlags)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
@@ -340,7 +344,6 @@ func (s *Server) start() (reterr error) {
 	prefs.WantRunning = true
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
-		StateKey:    ipn.GlobalDaemonStateKey,
 		UpdatePrefs: prefs,
 		AuthKey:     authKey,
 	})

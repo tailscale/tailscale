@@ -31,6 +31,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store"
 	"tailscale.com/safesocket"
@@ -39,6 +40,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 )
 
 var (
@@ -659,15 +661,8 @@ func (n *testNode) diskPrefs() *ipn.Prefs {
 	if err != nil {
 		t.Fatalf("reading prefs, NewFileStore: %v", err)
 	}
-	prefBytes, err := fs.ReadState(ipn.GlobalDaemonStateKey)
-	if err != nil {
-		t.Fatalf("reading prefs, ReadState: %v", err)
-	}
-	p := new(ipn.Prefs)
-	if err := json.Unmarshal(prefBytes, p); err != nil {
-		t.Fatalf("reading prefs, JSON unmarshal: %v", err)
-	}
-	return p
+	pm := must.Get(ipnlocal.NewProfileManager(fs, t.Logf, ""))
+	return pm.CurrentPrefs().AsStruct()
 }
 
 // AwaitResponding waits for n's tailscaled to be up enough to be

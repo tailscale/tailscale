@@ -590,7 +590,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	}
 	if nm != nil && loggedIn && synced {
 		pp := c.direct.GetPersist()
-		p = &pp
+		p = pp.AsStruct()
 	} else {
 		// don't send netmap status, as it's misleading when we're
 		// not logged in.
@@ -708,7 +708,7 @@ func (c *Auto) Shutdown() {
 // used exclusively in tests.
 func (c *Auto) TestOnlyNodePublicKey() key.NodePublic {
 	priv := c.direct.GetPersist()
-	return priv.PrivateNodeKey.Public()
+	return priv.PrivateNodeKey().Public()
 }
 
 func (c *Auto) TestOnlySetAuthKey(authkey string) {
