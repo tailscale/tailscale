@@ -784,6 +784,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		r.Complete(true) // sends a RST
 		return
 	}
+	clientRemotePort := reqDetails.RemotePort
+	clientRemoteAddrPort := netip.AddrPortFrom(clientRemoteIP, clientRemotePort)
 
 	dialIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	isTailscaleIP := tsaddr.IsTailscaleIP(dialIP)
@@ -894,11 +896,14 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 		if ns.lb.ShouldInterceptTCPPort(reqDetails.LocalPort) && ns.isLocalIP(dialIP) {
-			c := createConn()
-			if c == nil {
-				return
+			getTCPConn := func() (_ net.Conn, ok bool) {
+				c := createConn()
+				return c, c != nil
 			}
-			ns.lb.HandleInterceptedTCPConn(c)
+			sendRST := func() {
+				r.Complete(true)
+			}
+			ns.lb.HandleInterceptedTCPConn(reqDetails.LocalPort, clientRemoteAddrPort, getTCPConn, sendRST)
 			return
 		}
 	}

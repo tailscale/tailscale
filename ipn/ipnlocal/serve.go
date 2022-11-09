@@ -11,20 +11,73 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	pathpkg "path"
 	"time"
 
-	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 )
 
-var runDevWebServer = envknob.RegisterBool("TS_DEV_WEBSERVER")
+func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
+	b.mu.Lock()
+	sc := b.serveConfig
+	b.mu.Unlock()
 
-func (b *LocalBackend) HandleInterceptedTCPConn(c net.Conn) {
-	if !runDevWebServer() {
-		b.logf("localbackend: closing TCP conn from %v to %v", c.RemoteAddr(), c.LocalAddr())
-		c.Close()
+	if !sc.Valid() {
+		b.logf("[unexpected] localbackend: got TCP conn w/o serveConfig; from %v to port %v", srcAddr, dport)
+		sendRST()
+		return
+	}
+
+	tcph, ok := sc.TCP().GetOk(int(dport))
+	if !ok {
+		b.logf("[unexpected] localbackend: got TCP conn without TCP config for port %v; from %v", dport, srcAddr)
+		sendRST()
+		return
+	}
+
+	if backDst := tcph.TCPForward(); backDst != "" {
+		if tcph.TerminateTLS() {
+			b.logf("TODO(bradfitz): finish")
+			sendRST()
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+		cancel()
+		if err != nil {
+			b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+			sendRST()
+			return
+		}
+		conn, ok := getConn()
+		if !ok {
+			b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+			backConn.Close()
+			return
+		}
+		defer conn.Close()
+		defer backConn.Close()
+
+		// TODO(bradfitz): do the RegisterIPPortIdentity and
+		// UnregisterIPPortIdentity stuff that netstack does
+
+		errc := make(chan error, 1)
+		go func() {
+			_, err := io.Copy(backConn, conn)
+			errc <- err
+		}()
+		go func() {
+			_, err := io.Copy(conn, backConn)
+			errc <- err
+		}()
+		<-errc
+		return
+	}
+
+	conn, ok := getConn()
+	if !ok {
 		return
 	}
 
@@ -35,7 +88,7 @@ func (b *LocalBackend) HandleInterceptedTCPConn(c net.Conn) {
 		},
 		Handler: http.HandlerFunc(b.serveWebHandler),
 	}
-	hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+	hs.ServeTLS(netutil.NewOneConnListener(conn, nil), "", "")
 }
 
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, ok bool) {
