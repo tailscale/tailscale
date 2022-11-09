@@ -16,13 +16,13 @@ type FakeBackend struct {
 }
 
 func (b *FakeBackend) Start(opts Options) error {
-	b.serverURL = opts.Prefs.ControlURLOrDefault()
+	b.serverURL = opts.LegacyMigrationPrefs.ControlURLOrDefault()
 	if b.notify == nil {
 		panic("FakeBackend.Start: SetNotifyCallback not called")
 	}
 	nl := NeedsLogin
 	if b.notify != nil {
-		p := opts.Prefs.View()
+		p := opts.LegacyMigrationPrefs.View()
 		b.notify(Notify{Prefs: &p})
 		b.notify(Notify{State: &nl})
 	}

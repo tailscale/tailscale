@@ -293,8 +293,7 @@ func TestShouldProcessInbound(t *testing.T) {
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:100/120"),
 				}
 				i.lb.Start(ipn.Options{
-					StateKey:    ipn.GlobalDaemonStateKey,
-					UpdatePrefs: prefs,
+					LegacyMigrationPrefs: prefs,
 				})
 				i.atomicIsLocalIPFunc.Store(looksLikeATailscaleSelfAddress)
 
@@ -326,8 +325,7 @@ func TestShouldProcessInbound(t *testing.T) {
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a:0:7:a01:200/120"),
 				}
 				i.lb.Start(ipn.Options{
-					StateKey:    ipn.GlobalDaemonStateKey,
-					UpdatePrefs: prefs,
+					LegacyMigrationPrefs: prefs,
 				})
 			},
 			want: false,
@@ -345,8 +343,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				prefs := ipn.NewPrefs()
 				prefs.RunSSH = true
 				i.lb.Start(ipn.Options{
-					StateKey:    ipn.GlobalDaemonStateKey,
-					UpdatePrefs: prefs,
+					LegacyMigrationPrefs: prefs,
 				})
 				i.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
 					return addr.String() == "100.101.102.104" // Dst, above
@@ -367,8 +364,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				prefs := ipn.NewPrefs()
 				prefs.RunSSH = false // default, but to be explicit
 				i.lb.Start(ipn.Options{
-					StateKey:    ipn.GlobalDaemonStateKey,
-					UpdatePrefs: prefs,
+					LegacyMigrationPrefs: prefs,
 				})
 				i.atomicIsLocalIPFunc.Store(func(addr netip.Addr) bool {
 					return addr.String() == "100.101.102.104" // Dst, above
@@ -427,8 +423,7 @@ func TestShouldProcessInbound(t *testing.T) {
 					netip.MustParsePrefix("10.0.0.1/24"),
 				}
 				i.lb.Start(ipn.Options{
-					StateKey:    ipn.GlobalDaemonStateKey,
-					UpdatePrefs: prefs,
+					LegacyMigrationPrefs: prefs,
 				})
 
 				// As if we were running on Linux where netstack isn't used.
@@ -458,7 +453,7 @@ func TestShouldProcessInbound(t *testing.T) {
 				}
 				t.Cleanup(e.Close)
 
-				lb, err := ipnlocal.NewLocalBackend(logf, "logid", new(mem.Store), new(tsdial.Dialer), e, 0)
+				lb, err := ipnlocal.NewLocalBackend(logf, "logid", new(mem.Store), "", new(tsdial.Dialer), e, 0)
 				if err != nil {
 					t.Fatalf("NewLocalBackend: %v", err)
 				}

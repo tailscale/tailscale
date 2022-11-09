@@ -20,13 +20,13 @@ import (
 type State int
 
 const (
-	NoState = State(iota)
-	InUseOtherUser
-	NeedsLogin
-	NeedsMachineAuth
-	Stopped
-	Starting
-	Running
+	NoState          State = 0
+	InUseOtherUser   State = 1
+	NeedsLogin       State = 2
+	NeedsMachineAuth State = 3
+	Stopped          State = 4
+	Starting         State = 5
+	Running          State = 6
 )
 
 // GoogleIDToken Type is the tailcfg.Oauth2Token.TokenType for the Google
@@ -153,21 +153,8 @@ type PartialFile struct {
 }
 
 // StateKey is an opaque identifier for a set of LocalBackend state
-// (preferences, private keys, etc.).
-//
-// The reason we need this is that the Tailscale agent may be running
-// on a multi-user machine, in a context where a single daemon is
-// shared by several consecutive users. Ideally we would just use the
-// username of the connected frontend as the StateKey.
-//
-// Various platforms currently set StateKey in different ways:
-//
-//   - the macOS/iOS GUI apps set it to "ipn-go-bridge"
-//   - the Android app sets it to "ipn-android"
-//   - on Windows, it's the empty string (in client mode) or, via
-//     LocalBackend.userID, a string like "user-$USER_ID" (used in
-//     server mode).
-//   - on Linux/etc, it's always "_daemon" (ipn.GlobalDaemonStateKey)
+// (preferences, private keys, etc.). It is also used as a key for
+// the various LoginProfiles that the instance may be signed into.
 //
 // Additionally, the StateKey can be debug setting name:
 //
@@ -178,21 +165,10 @@ type StateKey string
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
-	// StateKey and Prefs together define the state the backend should
-	// use:
-	//  - StateKey=="" && Prefs!=nil: use Prefs for internal state,
-	//    don't persist changes in the backend, except for the machine key
-	//    for migration purposes.
-	//  - StateKey!="" && Prefs==nil: load the given backend-side
-	//    state and use/update that.
-	//  - StateKey!="" && Prefs!=nil: like the previous case, but do
-	//    an initial overwrite of backend state with Prefs.
-	//
-	// NOTE(apenwarr): The above means that this Prefs field does not do
-	// what you probably think it does. It will overwrite your encryption
-	// keys. Do not use unless you know what you're doing.
-	StateKey StateKey
-	Prefs    *Prefs
+	// LegacyMigrationPrefs are used to migrate preferences from the
+	// frontend to the backend.
+	// If non-nil, they are imported as a new profile.
+	LegacyMigrationPrefs *Prefs `json:"Prefs"`
 	// UpdatePrefs, if provided, overrides Options.Prefs *and* the Prefs
 	// already stored in the backend state, *except* for the Persist
 	// Persist member. If you just want to provide prefs, this is

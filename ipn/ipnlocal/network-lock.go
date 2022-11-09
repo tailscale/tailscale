@@ -109,7 +109,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
 
-	ourNodeKey := b.prefs.Persist().PublicNodeKey()
+	ourNodeKey := b.pm.CurrentPrefs().Persist().PublicNodeKey()
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
@@ -362,8 +362,8 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	var ourNodeKey key.NodePublic
 	b.mu.Lock()
-	if b.prefs.Valid() {
-		ourNodeKey = b.prefs.Persist().PublicNodeKey()
+	if p := b.pm.CurrentPrefs(); p.Valid() {
+		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	b.mu.Unlock()
 	if ourNodeKey.IsZero() {
@@ -465,7 +465,8 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 		if err != nil {
 			return key.NodePublic{}, tka.NodeKeySignature{}, fmt.Errorf("signature failed: %w", err)
 		}
-		return b.prefs.Persist().PublicNodeKey(), sig, nil
+
+		return b.pm.CurrentPrefs().Persist().PublicNodeKey(), sig, nil
 	}(nodeKey, rotationPublic)
 	if err != nil {
 		return err
@@ -518,7 +519,7 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return nil
 	}
 
-	ourNodeKey := b.prefs.Persist().PublicNodeKey()
+	ourNodeKey := b.pm.CurrentPrefs().Persist().PublicNodeKey()
 	head := b.tka.authority.Head()
 	b.mu.Unlock()
 	resp, err := b.tkaDoSyncSend(ourNodeKey, head, aums, true)
@@ -553,8 +554,8 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	)
 
 	b.mu.Lock()
-	if b.prefs.Valid() {
-		ourNodeKey = b.prefs.Persist().PublicNodeKey()
+	if p := b.pm.CurrentPrefs(); p.Valid() {
+		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if b.tka == nil {
 		err = errNetworkLockNotActive

@@ -8,6 +8,7 @@ package persist
 import (
 	"fmt"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 )
@@ -34,6 +35,7 @@ type Persist struct {
 	OldPrivateNodeKey key.NodePrivate // needed to request key rotation
 	Provider          string
 	LoginName         string
+	UserProfile       tailcfg.UserProfile
 }
 
 // PublicNodeKey returns the public key for the node key.
@@ -53,7 +55,8 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.PrivateNodeKey.Equal(p2.PrivateNodeKey) &&
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.Provider == p2.Provider &&
-		p.LoginName == p2.LoginName
+		p.LoginName == p2.LoginName &&
+		p.UserProfile == p2.UserProfile
 }
 
 func (p *Persist) Pretty() string {

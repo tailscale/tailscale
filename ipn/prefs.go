@@ -681,3 +681,21 @@ func SavePrefs(filename string, p *Prefs) {
 		log.Printf("SavePrefs: %v\n", err)
 	}
 }
+
+// ProfileID is an auto-generated system-wide unique identifier for a login
+// profile. It is a 4 character hex string like "1ab3".
+type ProfileID string
+
+// LoginProfile represents a single login profile as managed
+// by the ProfileManager.
+type LoginProfile struct {
+	ID   ProfileID
+	Name string
+	Key  StateKey
+
+	UserProfile tailcfg.UserProfile
+
+	// LocalUserID is the user ID of the user who created this profile.
+	// It is only relevant on Windows where we have a multi-user system.
+	LocalUserID string
+}
