@@ -55,3 +55,89 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	OperatorUser           string
 	Persist                *persist.Persist
 }{})
+
+// Clone makes a deep copy of ServeConfig.
+// The result aliases no memory with the original.
+func (src *ServeConfig) Clone() *ServeConfig {
+	if src == nil {
+		return nil
+	}
+	dst := new(ServeConfig)
+	*dst = *src
+	if dst.TCP != nil {
+		dst.TCP = map[int]*TCPPortHandler{}
+		for k, v := range src.TCP {
+			dst.TCP[k] = v.Clone()
+		}
+	}
+	if dst.Web != nil {
+		dst.Web = map[HostPort]*WebServerConfig{}
+		for k, v := range src.Web {
+			dst.Web[k] = v.Clone()
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
+	TCP map[int]*TCPPortHandler
+	Web map[HostPort]*WebServerConfig
+}{})
+
+// Clone makes a deep copy of TCPPortHandler.
+// The result aliases no memory with the original.
+func (src *TCPPortHandler) Clone() *TCPPortHandler {
+	if src == nil {
+		return nil
+	}
+	dst := new(TCPPortHandler)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
+	HTTPS        bool
+	TCPForward   string
+	TerminateTLS bool
+}{})
+
+// Clone makes a deep copy of HTTPHandler.
+// The result aliases no memory with the original.
+func (src *HTTPHandler) Clone() *HTTPHandler {
+	if src == nil {
+		return nil
+	}
+	dst := new(HTTPHandler)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
+	Path  string
+	Proxy string
+}{})
+
+// Clone makes a deep copy of WebServerConfig.
+// The result aliases no memory with the original.
+func (src *WebServerConfig) Clone() *WebServerConfig {
+	if src == nil {
+		return nil
+	}
+	dst := new(WebServerConfig)
+	*dst = *src
+	if dst.Handlers != nil {
+		dst.Handlers = map[string]*HTTPHandler{}
+		for k, v := range src.Handlers {
+			dst.Handlers[k] = v.Clone()
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _WebServerConfigCloneNeedsRegeneration = WebServerConfig(struct {
+	Handlers map[string]*HTTPHandler
+}{})

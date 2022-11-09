@@ -80,7 +80,16 @@ type ServeConfig struct {
 
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
-	Web map[string]map[string]*HTTPHandler `json:",omitempty"`
+	Web map[HostPort]*WebServerConfig `json:",omitempty"`
+}
+
+// HostPort is an SNI name and port number, joined by a colon.
+// There is no implicit port 443. It must contain a colon.
+type HostPort string
+
+// WebServerConfig describes a web server's configuration.
+type WebServerConfig struct {
+	Handlers map[string]*HTTPHandler
 }
 
 // TCPPortHandler describes what to do when handling a TCP

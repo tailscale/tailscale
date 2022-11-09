@@ -27,8 +27,6 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-//go:generate go run tailscale.com/cmd/viewer -type=Prefs
-
 // DefaultControlURL is the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
 // The default control plane is the hosted version run by Tailscale.com.

@@ -199,8 +199,8 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfig
+	lastServeConfJSON mem.RO          // last JSON that was parsed into serveConfig
+	serveConfig       ipn.ServeConfig // only replaced wholesale; don't mutate in-place
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().

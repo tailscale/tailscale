@@ -17,7 +17,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=Prefs,ServeConfig,TCPPortHandler,HTTPHandler,WebServerConfig
 
 // View returns a readonly view of Prefs.
 func (p *Prefs) View() PrefsView {
@@ -117,4 +117,233 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
 	Persist                *persist.Persist
+}{})
+
+// View returns a readonly view of ServeConfig.
+func (p *ServeConfig) View() ServeConfigView {
+	return ServeConfigView{ж: p}
+}
+
+// ServeConfigView provides a read-only view over ServeConfig.
+//
+// Its methods should only be called if `Valid()` returns true.
+type ServeConfigView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *ServeConfig
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v ServeConfigView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v ServeConfigView) AsStruct() *ServeConfig {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v ServeConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *ServeConfigView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x ServeConfig
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v ServeConfigView) TCP() views.MapFn[int, *TCPPortHandler, TCPPortHandlerView] {
+	return views.MapFnOf(v.ж.TCP, func(t *TCPPortHandler) TCPPortHandlerView {
+		return t.View()
+	})
+}
+
+func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServerConfigView] {
+	return views.MapFnOf(v.ж.Web, func(t *WebServerConfig) WebServerConfigView {
+		return t.View()
+	})
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
+	TCP map[int]*TCPPortHandler
+	Web map[HostPort]*WebServerConfig
+}{})
+
+// View returns a readonly view of TCPPortHandler.
+func (p *TCPPortHandler) View() TCPPortHandlerView {
+	return TCPPortHandlerView{ж: p}
+}
+
+// TCPPortHandlerView provides a read-only view over TCPPortHandler.
+//
+// Its methods should only be called if `Valid()` returns true.
+type TCPPortHandlerView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *TCPPortHandler
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v TCPPortHandlerView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v TCPPortHandlerView) AsStruct() *TCPPortHandler {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v TCPPortHandlerView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *TCPPortHandlerView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x TCPPortHandler
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v TCPPortHandlerView) HTTPS() bool        { return v.ж.HTTPS }
+func (v TCPPortHandlerView) TCPForward() string { return v.ж.TCPForward }
+func (v TCPPortHandlerView) TerminateTLS() bool { return v.ж.TerminateTLS }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _TCPPortHandlerViewNeedsRegeneration = TCPPortHandler(struct {
+	HTTPS        bool
+	TCPForward   string
+	TerminateTLS bool
+}{})
+
+// View returns a readonly view of HTTPHandler.
+func (p *HTTPHandler) View() HTTPHandlerView {
+	return HTTPHandlerView{ж: p}
+}
+
+// HTTPHandlerView provides a read-only view over HTTPHandler.
+//
+// Its methods should only be called if `Valid()` returns true.
+type HTTPHandlerView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *HTTPHandler
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v HTTPHandlerView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v HTTPHandlerView) AsStruct() *HTTPHandler {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v HTTPHandlerView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *HTTPHandlerView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x HTTPHandler
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v HTTPHandlerView) Path() string  { return v.ж.Path }
+func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
+	Path  string
+	Proxy string
+}{})
+
+// View returns a readonly view of WebServerConfig.
+func (p *WebServerConfig) View() WebServerConfigView {
+	return WebServerConfigView{ж: p}
+}
+
+// WebServerConfigView provides a read-only view over WebServerConfig.
+//
+// Its methods should only be called if `Valid()` returns true.
+type WebServerConfigView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *WebServerConfig
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v WebServerConfigView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v WebServerConfigView) AsStruct() *WebServerConfig {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v WebServerConfigView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *WebServerConfigView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x WebServerConfig
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v WebServerConfigView) Handlers() views.MapFn[string, *HTTPHandler, HTTPHandlerView] {
+	return views.MapFnOf(v.ж.Handlers, func(t *HTTPHandler) HTTPHandlerView {
+		return t.View()
+	})
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _WebServerConfigViewNeedsRegeneration = WebServerConfig(struct {
+	Handlers map[string]*HTTPHandler
 }{})
