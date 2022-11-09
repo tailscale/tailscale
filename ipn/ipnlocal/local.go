@@ -198,8 +198,8 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO          // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfig // only replaced wholesale; don't mutate in-place
+	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
+	serveConfig       ipn.ServeConfigView // or !Valid if none
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -3514,13 +3514,18 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked() {
 				var conf ipn.ServeConfig
 				if err := json.Unmarshal(confj, &conf); err != nil {
 					b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
+					b.serveConfig = ipn.ServeConfigView{}
+				} else {
+					b.serveConfig = conf.View()
 				}
-				b.serveConfig = conf
 			}
-			for p := range b.serveConfig.TCP {
-				if p > 0 && p <= math.MaxUint16 {
-					handlePorts = append(handlePorts, uint16(p))
-				}
+			if b.serveConfig.Valid() {
+				b.serveConfig.TCP().Range(func(port int, _ ipn.TCPPortHandlerView) bool {
+					if port > 0 && port <= math.MaxUint16 {
+						handlePorts = append(handlePorts, uint16(port))
+					}
+					return true
+				})
 			}
 		}
 	}
