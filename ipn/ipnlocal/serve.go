@@ -15,9 +15,12 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os"
+	"path"
 	pathpkg "path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/ipn"
@@ -151,37 +154,44 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 	sendRST()
 }
 
-func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, ok bool) {
+func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
 	var z ipn.HTTPHandlerView // zero value
 
 	if r.TLS == nil {
-		return z, false
+		return z, "", false
 	}
 
 	sctx, ok := r.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext)
 	if !ok {
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
-		return z, false
+		return z, "", false
 	}
 	wsc, ok := b.webServerConfig(r.TLS.ServerName, sctx.DestPort)
 	if !ok {
-		return z, false
+		return z, "", false
 	}
 
-	path := r.URL.Path
+	if h, ok := wsc.Handlers().GetOk(r.URL.Path); ok {
+		return h, r.URL.Path, true
+	}
+	path := path.Clean(r.URL.Path)
 	for {
+		withSlash := path + "/"
+		if h, ok := wsc.Handlers().GetOk(withSlash); ok {
+			return h, withSlash, true
+		}
 		if h, ok := wsc.Handlers().GetOk(path); ok {
-			return h, true
+			return h, path, true
 		}
 		if path == "/" {
-			return z, false
+			return z, "", false
 		}
 		path = pathpkg.Dir(path)
 	}
 }
 
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
-	h, ok := b.getServeHandler(r)
+	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -192,7 +202,7 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v := h.Path(); v != "" {
-		io.WriteString(w, "TODO(bradfitz): serve file")
+		b.serveFileOrDirectory(w, r, v, mountPoint)
 		return
 	}
 	if v := h.Proxy(); v != "" {
@@ -217,6 +227,74 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "empty handler", 500)
+}
+
+func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Request, fileOrDir, mountPoint string) {
+	fi, err := os.Stat(fileOrDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if fi.Mode().IsRegular() {
+		if mountPoint != r.URL.Path {
+			http.NotFound(w, r)
+			return
+		}
+		f, err := os.Open(fileOrDir)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer f.Close()
+		http.ServeContent(w, r, path.Base(mountPoint), fi.ModTime(), f)
+		return
+	}
+	if !fi.IsDir() {
+		http.Error(w, "not a file or directory", 500)
+		return
+	}
+	if len(r.URL.Path) < len(mountPoint) && r.URL.Path+"/" == mountPoint {
+		http.Redirect(w, r, mountPoint, http.StatusFound)
+		return
+	}
+
+	var fs http.Handler = http.FileServer(http.Dir(fileOrDir))
+	if mountPoint != "/" {
+		fs = http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), fs)
+	}
+	fs.ServeHTTP(&fixLocationHeaderResponseWriter{
+		ResponseWriter: w,
+		mountPoint:     mountPoint,
+	}, r)
+}
+
+// fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon
+// flushing HTTP headers, prefixes any Location header with the mount point.
+type fixLocationHeaderResponseWriter struct {
+	http.ResponseWriter
+	mountPoint string
+	fixOnce    sync.Once // guards call to fix
+}
+
+func (w *fixLocationHeaderResponseWriter) fix() {
+	h := w.ResponseWriter.Header()
+	if v := h.Get("Location"); v != "" {
+		h.Set("Location", w.mountPoint+v)
+	}
+}
+
+func (w *fixLocationHeaderResponseWriter) WriteHeader(code int) {
+	w.fixOnce.Do(w.fix)
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *fixLocationHeaderResponseWriter) Write(p []byte) (int, error) {
+	w.fixOnce.Do(w.fix)
+	return w.ResponseWriter.Write(p)
 }
 
 // expandProxyArg returns a URL from s, where s can be of form:
