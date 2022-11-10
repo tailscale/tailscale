@@ -52,6 +52,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -81,6 +82,7 @@ func main() {
 		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
+		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -88,11 +90,11 @@ func main() {
 	}
 
 	if !cfg.UserspaceMode {
-		if err := ensureTunFile(); err != nil {
+		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
 		if cfg.ProxyTo != "" || cfg.Routes != "" {
-			if err := ensureIPForwarding(cfg.ProxyTo, strings.Split(cfg.Routes, ",")); err != nil {
+			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -102,6 +104,10 @@ func main() {
 				}
 			}
 		}
+	}
+
+	if cfg.InKubernetes {
+		initKube(cfg.Root)
 	}
 
 	// Context is used for all setup stuff until we're in steady
@@ -209,10 +215,12 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 		break
 	}
 
+	didLogin := false
 	if !cfg.AuthOnce {
 		if err := tailscaleUp(ctx, cfg); err != nil {
 			return nil, 0, fmt.Errorf("couldn't log in: %v", err)
 		}
+		didLogin = true
 	}
 
 	tsClient := tailscale.LocalClient{
@@ -243,17 +251,20 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 			}
 			log.Printf("No Tailscale IPs assigned yet")
 		case "NeedsLogin":
-			// Alas, we cannot currently trigger an authkey login from
-			// LocalAPI, so we still have to shell out to the
-			// tailscale CLI for this bit.
-			if err := tailscaleUp(ctx, cfg); err != nil {
-				return nil, 0, fmt.Errorf("couldn't log in: %v", err)
+			if !didLogin {
+				// Alas, we cannot currently trigger an authkey login from
+				// LocalAPI, so we still have to shell out to the
+				// tailscale CLI for this bit.
+				if err := tailscaleUp(ctx, cfg); err != nil {
+					return nil, 0, fmt.Errorf("couldn't log in: %v", err)
+				}
+				didLogin = true
 			}
 		default:
 			log.Printf("tailscaled in state %q, waiting", st.BackendState)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -271,7 +282,7 @@ func tailscaledArgs(cfg *settings) []string {
 
 	if cfg.UserspaceMode {
 		args = append(args, "--tun=userspace-networking")
-	} else if err := ensureTunFile(); err != nil {
+	} else if err := ensureTunFile(cfg.Root); err != nil {
 		log.Fatalf("ensuring that /dev/net/tun exists: %v", err)
 	}
 
@@ -316,17 +327,17 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 
 // ensureTunFile checks that /dev/net/tun exists, creating it if
 // missing.
-func ensureTunFile() error {
+func ensureTunFile(root string) error {
 	// Verify that /dev/net/tun exists, in some container envs it
 	// needs to be mknod-ed.
-	if _, err := os.Stat("/dev/net"); errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll("/dev/net", 0755); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "dev/net")); errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Join(root, "dev/net"), 0755); err != nil {
 			return err
 		}
 	}
-	if _, err := os.Stat("/dev/net/tun"); errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, "dev/net/tun")); errors.Is(err, fs.ErrNotExist) {
 		dev := unix.Mkdev(10, 200) // tuntap major and minor
-		if err := unix.Mknod("/dev/net/tun", 0600|unix.S_IFCHR, int(dev)); err != nil {
+		if err := unix.Mknod(filepath.Join(root, "dev/net/tun"), 0600|unix.S_IFCHR, int(dev)); err != nil {
 			return err
 		}
 	}
@@ -334,37 +345,41 @@ func ensureTunFile() error {
 }
 
 // ensureIPForwarding enables IPv4/IPv6 forwarding for the container.
-func ensureIPForwarding(proxyTo string, routes []string) error {
+func ensureIPForwarding(root, proxyTo, routes string) error {
 	var (
 		v4Forwarding, v6Forwarding bool
 	)
-	proxyIP, err := netip.ParseAddr(proxyTo)
-	if err != nil {
-		return fmt.Errorf("invalid proxy destination IP: %v", err)
-	}
-	if proxyIP.Is4() {
-		v4Forwarding = true
-	} else {
-		v6Forwarding = true
-	}
-	for _, route := range routes {
-		cidr, err := netip.ParsePrefix(route)
+	if proxyTo != "" {
+		proxyIP, err := netip.ParseAddr(proxyTo)
 		if err != nil {
-			return fmt.Errorf("invalid subnet route: %v", err)
+			return fmt.Errorf("invalid proxy destination IP: %v", err)
 		}
-		if cidr.Addr().Is4() {
+		if proxyIP.Is4() {
 			v4Forwarding = true
 		} else {
 			v6Forwarding = true
 		}
 	}
+	if routes != "" {
+		for _, route := range strings.Split(routes, ",") {
+			cidr, err := netip.ParsePrefix(route)
+			if err != nil {
+				return fmt.Errorf("invalid subnet route: %v", err)
+			}
+			if cidr.Addr().Is4() {
+				v4Forwarding = true
+			} else {
+				v6Forwarding = true
+			}
+		}
+	}
 
 	var paths []string
 	if v4Forwarding {
-		paths = append(paths, "/proc/sys/net/ipv4/ip_forward")
+		paths = append(paths, filepath.Join(root, "proc/sys/net/ipv4/ip_forward"))
 	}
 	if v6Forwarding {
-		paths = append(paths, "/proc/sys/net/ipv6/conf/all/forwarding")
+		paths = append(paths, filepath.Join(root, "proc/sys/net/ipv6/conf/all/forwarding"))
 	}
 
 	// In some common configurations (e.g. default docker,
@@ -432,6 +447,7 @@ type settings struct {
 	HTTPProxyAddr   string
 	Socket          string
 	AuthOnce        bool
+	Root            string
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
