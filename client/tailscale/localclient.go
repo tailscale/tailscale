@@ -255,8 +255,8 @@ func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/metrics")
 }
 
-// Profile returns a pprof profile of the Tailscale daemon.
-func (lc *LocalClient) Profile(ctx context.Context, pprofType string, sec int) ([]byte, error) {
+// Pprof returns a pprof profile of the Tailscale daemon.
+func (lc *LocalClient) Pprof(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	var secArg string
 	if sec < 0 || sec > 300 {
 		return nil, errors.New("duration out of range")
@@ -264,7 +264,7 @@ func (lc *LocalClient) Profile(ctx context.Context, pprofType string, sec int) (
 	if sec != 0 || pprofType == "profile" {
 		secArg = fmt.Sprint(sec)
 	}
-	return lc.get200(ctx, fmt.Sprintf("/localapi/v0/profile?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
+	return lc.get200(ctx, fmt.Sprintf("/localapi/v0/pprof?name=%s&seconds=%v", url.QueryEscape(pprofType), secArg))
 }
 
 // BugReportOpts contains options to pass to the Tailscale daemon when

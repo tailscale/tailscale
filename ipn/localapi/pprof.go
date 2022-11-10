@@ -15,10 +15,10 @@ import (
 )
 
 func init() {
-	serveProfileFunc = serveProfile
+	servePprofFunc = servePprof
 }
 
-func serveProfile(w http.ResponseWriter, r *http.Request) {
+func servePprof(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
 	switch name {
 	case "profile":

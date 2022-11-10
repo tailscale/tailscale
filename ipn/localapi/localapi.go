@@ -71,7 +71,7 @@ var handler = map[string]localAPIHandler{
 	"metrics":                 (*Handler).serveMetrics,
 	"ping":                    (*Handler).servePing,
 	"prefs":                   (*Handler).servePrefs,
-	"profile":                 (*Handler).serveProfile,
+	"pprof":                   (*Handler).servePprof,
 	"set-dns":                 (*Handler).serveSetDNS,
 	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
 	"status":                  (*Handler).serveStatus,
@@ -437,22 +437,22 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(res)
 }
 
-// serveProfileFunc is the implementation of Handler.serveProfile, after auth,
+// servePprofFunc is the implementation of Handler.servePprof, after auth,
 // for platforms where we want to link it in.
-var serveProfileFunc func(http.ResponseWriter, *http.Request)
+var servePprofFunc func(http.ResponseWriter, *http.Request)
 
-func (h *Handler) serveProfile(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 	// Require write access out of paranoia that the profile dump
 	// might contain something sensitive.
 	if !h.PermitWrite {
 		http.Error(w, "profile access denied", http.StatusForbidden)
 		return
 	}
-	if serveProfileFunc == nil {
+	if servePprofFunc == nil {
 		http.Error(w, "not implemented on this platform", http.StatusServiceUnavailable)
 		return
 	}
-	serveProfileFunc(w, r)
+	servePprofFunc(w, r)
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
