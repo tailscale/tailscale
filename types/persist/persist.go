@@ -43,6 +43,15 @@ func (p *Persist) PublicNodeKey() key.NodePublic {
 	return p.PrivateNodeKey.Public()
 }
 
+// PublicNodeKey returns the public key for the node key.
+func (p PersistView) PublicNodeKey() key.NodePublic {
+	return p.ж.PublicNodeKey()
+}
+
+func (p PersistView) Equals(p2 PersistView) bool {
+	return p.ж.Equals(p2.ж)
+}
+
 func (p *Persist) Equals(p2 *Persist) bool {
 	if p == nil && p2 == nil {
 		return true

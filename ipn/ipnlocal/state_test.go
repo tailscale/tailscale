@@ -139,10 +139,11 @@ func (cc *mockControl) populateKeys() (newKeys bool) {
 // (In our tests here, upstream is the ipnlocal.Local instance.)
 func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netmap.NetworkMap) {
 	if cc.statusFunc != nil {
+		pv := cc.persist.View()
 		s := controlclient.Status{
 			URL:     url,
 			NetMap:  nm,
-			Persist: cc.persist,
+			Persist: &pv,
 			Err:     err,
 		}
 		if loginFinished {
