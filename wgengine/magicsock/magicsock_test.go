@@ -35,6 +35,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
@@ -133,6 +134,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 type magicStack struct {
 	privateKey key.NodePrivate
 	epCh       chan []tailcfg.Endpoint // endpoint updates produced by this peer
+	stats      connstats.Statistics    // per-connection statistics
 	conn       *Conn                   // the magicsock itself
 	tun        *tuntest.ChannelTUN     // TUN device to send/receive packets
 	tsTun      *tstun.Wrapper          // wrapped tun that implements filtering and wgengine hooks
@@ -1047,11 +1049,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		}
 	}
 
-	m1.conn.SetStatisticsEnabled(true)
-	m2.conn.SetStatisticsEnabled(true)
+	m1.conn.SetStatistics(&m1.stats)
+	m2.conn.SetStatistics(&m2.stats)
 
 	checkStats := func(t *testing.T, m *magicStack, wantConns []netlogtype.Connection) {
-		stats := m.conn.ExtractStatistics()
+		_, stats := m.stats.Extract()
 		for _, conn := range wantConns {
 			if _, ok := stats[conn]; ok {
 				return
