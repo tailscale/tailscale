@@ -188,9 +188,9 @@ func runDebug(ctx context.Context, args []string) error {
 	}
 	var usedFlag bool
 	if out := debugArgs.cpuFile; out != "" {
-		usedFlag = true // TODO(bradfitz): add "profile" subcommand
+		usedFlag = true // TODO(bradfitz): add "pprof" subcommand
 		log.Printf("Capturing CPU profile for %v seconds ...", debugArgs.cpuSec)
-		if v, err := localClient.Profile(ctx, "profile", debugArgs.cpuSec); err != nil {
+		if v, err := localClient.Pprof(ctx, "profile", debugArgs.cpuSec); err != nil {
 			return err
 		} else {
 			if err := writeProfile(out, v); err != nil {
@@ -200,9 +200,9 @@ func runDebug(ctx context.Context, args []string) error {
 		}
 	}
 	if out := debugArgs.memFile; out != "" {
-		usedFlag = true // TODO(bradfitz): add "profile" subcommand
+		usedFlag = true // TODO(bradfitz): add "pprof" subcommand
 		log.Printf("Capturing memory profile ...")
-		if v, err := localClient.Profile(ctx, "heap", 0); err != nil {
+		if v, err := localClient.Pprof(ctx, "heap", 0); err != nil {
 			return err
 		} else {
 			if err := writeProfile(out, v); err != nil {
