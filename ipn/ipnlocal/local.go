@@ -1980,7 +1980,6 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 	slices.Sort(ports)
 	uniq.ModifySlice(&ports)
-	b.logf("localbackend: handling TCP ports = %v", ports)
 	var f func(uint16) bool
 	switch len(ports) {
 	case 0:
