@@ -37,6 +37,24 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 		return
 	}
 
+	if tcph.HTTPS() {
+		conn, ok := getConn()
+		if !ok {
+			b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+			return
+		}
+
+		// TODO(bradfitz): look up how; sniff SNI if ambiguous
+		hs := &http.Server{
+			TLSConfig: &tls.Config{
+				GetCertificate: b.getTLSServeCert,
+			},
+			Handler: http.HandlerFunc(b.serveWebHandler),
+		}
+		hs.ServeTLS(netutil.NewOneConnListener(conn, nil), "", "")
+		return
+	}
+
 	if backDst := tcph.TCPForward(); backDst != "" {
 		if tcph.TerminateTLS() {
 			b.logf("TODO(bradfitz): finish")
@@ -76,19 +94,8 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 		return
 	}
 
-	conn, ok := getConn()
-	if !ok {
-		return
-	}
-
-	// TODO(bradfitz): look up how; sniff SNI if ambiguous
-	hs := &http.Server{
-		TLSConfig: &tls.Config{
-			GetCertificate: b.getTLSServeCert,
-		},
-		Handler: http.HandlerFunc(b.serveWebHandler),
-	}
-	hs.ServeTLS(netutil.NewOneConnListener(conn, nil), "", "")
+	b.logf("closing TCP conn to port %v (from %v) with actionless TCPPortHandler", dport, srcAddr)
+	sendRST()
 }
 
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, ok bool) {
