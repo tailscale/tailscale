@@ -198,8 +198,9 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView // or !Valid if none
+	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
+	serveConfig         ipn.ServeConfigView // or !Valid if none
+	interceptedTCPPorts []uint16            // last set of TCP ports that were set to be intercepted
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -266,7 +267,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	// Default filter blocks everything and logs nothing, until Start() is called.
 	b.setFilter(filter.NewAllowNone(logf, &netipx.IPSet{}))
 
-	b.setTCPPortsIntercepted(nil)
+	b.setTCPInterceptAtomic(nil)
 
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
@@ -836,7 +837,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 	// Prefs will be written out; this is not safe unless locked or cloned.
 	if prefsChanged {
-		b.prefs = prefs.View()
+		b.setPrefsLocked(prefs.View())
 	}
 	if st.NetMap != nil {
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
@@ -1145,15 +1146,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if opts.UpdatePrefs != nil {
 		newPrefs := opts.UpdatePrefs
 		newPrefs.Persist = b.prefs.Persist()
-		b.prefs = newPrefs.View()
+		b.setPrefsLocked(newPrefs.View())
 
 		if opts.StateKey != "" {
 			if err := b.store.WriteState(opts.StateKey, b.prefs.ToBytes()); err != nil {
 				b.logf("failed to save UpdatePrefs state: %v", err)
 			}
 		}
-		b.setAtomicValuesFromPrefs(b.prefs)
-		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
 	}
 
 	wantRunning := b.prefs.WantRunning()
@@ -1917,9 +1916,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 		// optional/legacy machine key then it's used as the
 		// value instead of making up a new one.
 		b.logf("using frontend prefs: %s", prefs.Pretty())
-		b.prefs = prefs.Clone().View()
-		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
-		b.writeServerModeStartState(b.userID, b.prefs)
+		b.setPrefsLocked(prefs.Clone().View())
 		return nil
 	}
 
@@ -1938,8 +1935,7 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 		prefs := ipn.NewPrefs()
 		prefs.WantRunning = false
 		b.logf("using backend prefs; created empty state for %q: %s", key, prefs.Pretty())
-		b.prefs = prefs.View()
-		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
+		b.setPrefsLocked(prefs.View())
 		return nil
 	case err != nil:
 		return fmt.Errorf("backend prefs: store.ReadState(%q): %v", key, err)
@@ -1963,18 +1959,27 @@ func (b *LocalBackend) loadStateLocked(key ipn.StateKey, prefs *ipn.Prefs) (err 
 	}
 
 	b.logf("using backend prefs for %q: %s", key, prefs.Pretty())
-	b.prefs = prefs.View()
-
-	b.setAtomicValuesFromPrefs(b.prefs)
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
+	b.setPrefsLocked(prefs.View())
 
 	return nil
 }
 
-// setTCPPortsIntercepted populates b.shouldInterceptTCPPortAtomic with an
+// setTCPPortsInterceptedLocked conditionally calls setTCPInterceptAtomic
+// if the provided set of ports has changed since the last call.
+//
+// b.mu must be held.
+func (b *LocalBackend) setTCPPortsInterceptedLocked(ports []uint16) {
+	if slices.Equal(b.interceptedTCPPorts, ports) {
+		return
+	}
+	b.interceptedTCPPorts = ports
+	b.setTCPInterceptAtomic(ports)
+}
+
+// setTCPInterceptAtomic populates b.shouldInterceptTCPPortAtomic with an
 // efficient func for ShouldInterceptTCPPort to use, which is called on every
 // incoming packet.
-func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
+func (b *LocalBackend) setTCPInterceptAtomic(ports []uint16) {
 	slices.Sort(ports)
 	uniq.ModifySlice(&ports)
 	b.logf("localbackend: handling TCP ports = %v", ports)
@@ -2016,7 +2021,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefs(p ipn.PrefsView) {
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
-		b.setTCPPortsIntercepted(nil)
+		b.setTCPInterceptAtomic(nil)
 	} else {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(p.AdvertiseRoutes().Filter(tsaddr.IsViaPrefix)))
 	}
@@ -2323,6 +2328,17 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.setPrefsLockedOnEntry("SetPrefs", newp)
 }
 
+// setPrefsLocked updates b.prefs to p.
+//
+// b.mu must be held.
+func (b *LocalBackend) setPrefsLocked(p ipn.PrefsView) {
+	b.prefs = p
+	b.setAtomicValuesFromPrefs(b.prefs)
+	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
+	b.inServerMode = b.prefs.ForceDaemon()
+	b.writeServerModeStartState(b.userID, b.prefs)
+}
+
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
@@ -2336,10 +2352,8 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
 	findExitNodeIDLocked(newp, netMap)
-	b.prefs = newp.View()
-	b.setAtomicValuesFromPrefs(b.prefs)
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
-	b.inServerMode = b.prefs.ForceDaemon()
+
+	b.setPrefsLocked(newp.View())
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
@@ -3329,13 +3343,11 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.stateKey = ""
 	b.userID = ""
 	b.setNetMapLocked(nil)
-	b.prefs = new(ipn.Prefs).View()
+	b.setPrefsLocked(new(ipn.Prefs).View())
 	b.keyExpired = false
 	b.authURL = ""
 	b.authURLSticky = ""
 	b.activeLogin = ""
-	b.setAtomicValuesFromPrefs(b.prefs)
-	b.setTCPPortsIntercepted(nil)
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
@@ -3529,7 +3541,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked() {
 			}
 		}
 	}
-	b.setTCPPortsIntercepted(handlePorts)
+	b.setTCPPortsInterceptedLocked(handlePorts)
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the
