@@ -12,8 +12,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	pathpkg "path"
+	"strings"
 	"time"
 
 	"tailscale.com/ipn"
@@ -156,11 +159,50 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v := h.Proxy(); v != "" {
-		io.WriteString(w, "TODO(bradfitz): proxy")
+		// TODO(bradfitz): this is a lot of setup per HTTP request. We should
+		// build the whole http.Handler with all the muxing and child handlers
+		// only on start/config change. But this works for now (2022-11-09).
+		u, err := url.Parse(expandProxyArg(v))
+		if err != nil {
+			http.Error(w, "bad proxy config", http.StatusInternalServerError)
+			return
+		}
+		rp := httputil.NewSingleHostReverseProxy(u)
+		rp.Transport = &http.Transport{
+			DialContext: b.dialer.SystemDial,
+		}
+		rp.ServeHTTP(w, r)
 		return
 	}
 
 	http.Error(w, "empty handler", 500)
+}
+
+// expandProxyArg returns a URL from s, where s can be of form:
+//
+// * port number ("8080")
+// * host:port ("localhost:8080")
+// * full URL ("http://localhost:8080", in which case it's returned unchanged)
+func expandProxyArg(s string) string {
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+		return s
+	}
+	if allNumeric(s) {
+		return "http://127.0.0.1:" + s
+	}
+	return "http://" + s
+}
+
+func allNumeric(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func (b *LocalBackend) webServerConfig(sniName string, port uint16) (c ipn.WebServerConfigView, ok bool) {
