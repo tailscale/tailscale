@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +19,14 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 )
+
+// serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
+type serveHTTPContextKey struct{}
+
+type serveHTTPContext struct {
+	SrcAddr  netip.AddrPort
+	DestPort uint16
+}
 
 func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
 	b.mu.Lock()
@@ -43,13 +52,17 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 			b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
 			return
 		}
-
-		// TODO(bradfitz): look up how; sniff SNI if ambiguous
 		hs := &http.Server{
 			TLSConfig: &tls.Config{
 				GetCertificate: b.getTLSServeCert,
 			},
 			Handler: http.HandlerFunc(b.serveWebHandler),
+			BaseContext: func(_ net.Listener) context.Context {
+				return context.WithValue(context.Background(), serveHTTPContextKey{}, &serveHTTPContext{
+					SrcAddr:  srcAddr,
+					DestPort: dport,
+				})
+			},
 		}
 		hs.ServeTLS(netutil.NewOneConnListener(conn, nil), "", "")
 		return
@@ -105,9 +118,13 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		return z, false
 	}
 
+	sctx, ok := r.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext)
+	if !ok {
+		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
+		return z, false
+	}
 	sni := r.TLS.ServerName
-	port := "443" // TODO(bradfitz): fix
-	key := ipn.HostPort(net.JoinHostPort(sni, port))
+	key := ipn.HostPort(fmt.Sprintf("%s:%v", sni, sctx.DestPort))
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
