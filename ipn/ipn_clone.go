@@ -65,7 +65,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 	dst := new(ServeConfig)
 	*dst = *src
 	if dst.TCP != nil {
-		dst.TCP = map[int]*TCPPortHandler{}
+		dst.TCP = map[uint16]*TCPPortHandler{}
 		for k, v := range src.TCP {
 			dst.TCP[k] = v.Clone()
 		}
@@ -87,7 +87,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
-	TCP          map[int]*TCPPortHandler
+	TCP          map[uint16]*TCPPortHandler
 	Web          map[HostPort]*WebServerConfig
 	AllowIngress map[HostPort]bool
 }{})
