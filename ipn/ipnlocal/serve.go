@@ -54,7 +54,7 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 		}
 		hs := &http.Server{
 			TLSConfig: &tls.Config{
-				GetCertificate: b.getTLSServeCert,
+				GetCertificate: b.getTLSServeCertForPort(dport),
 			},
 			Handler: http.HandlerFunc(b.serveWebHandler),
 			BaseContext: func(_ net.Listener) context.Context {
@@ -123,20 +123,11 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
 		return z, false
 	}
-	sni := r.TLS.ServerName
-	key := ipn.HostPort(fmt.Sprintf("%s:%v", sni, sctx.DestPort))
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if !b.serveConfig.Valid() {
-		return z, false
-	}
-
-	wsc, ok := b.serveConfig.Web().GetOk(key)
+	wsc, ok := b.webServerConfig(r.TLS.ServerName, sctx.DestPort)
 	if !ok {
 		return z, false
 	}
+
 	path := r.URL.Path
 	for {
 		if h, ok := wsc.Handlers().GetOk(path); ok {
@@ -172,19 +163,38 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "empty handler", 500)
 }
 
-func (b *LocalBackend) getTLSServeCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if hi == nil || hi.ServerName == "" {
-		return nil, errors.New("no SNI ServerName")
+func (b *LocalBackend) webServerConfig(sniName string, port uint16) (c ipn.WebServerConfigView, ok bool) {
+	key := ipn.HostPort(fmt.Sprintf("%s:%v", sniName, port))
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.serveConfig.Valid() {
+		return c, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	pair, err := b.GetCertPEM(ctx, hi.ServerName)
-	if err != nil {
-		return nil, err
+	return b.serveConfig.Web().GetOk(key)
+}
+
+func (b *LocalBackend) getTLSServeCertForPort(port uint16) func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if hi == nil || hi.ServerName == "" {
+			return nil, errors.New("no SNI ServerName")
+		}
+		_, ok := b.webServerConfig(hi.ServerName, port)
+		if !ok {
+			return nil, errors.New("no webserver configured for name/port")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		pair, err := b.GetCertPEM(ctx, hi.ServerName)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+		if err != nil {
+			return nil, err
+		}
+		return &cert, nil
 	}
-	cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
-	if err != nil {
-		return nil, err
-	}
-	return &cert, nil
 }
