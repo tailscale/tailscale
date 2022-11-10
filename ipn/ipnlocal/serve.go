@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/strs"
 )
 
 // serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
@@ -198,7 +199,8 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		// TODO(bradfitz): this is a lot of setup per HTTP request. We should
 		// build the whole http.Handler with all the muxing and child handlers
 		// only on start/config change. But this works for now (2022-11-09).
-		u, err := url.Parse(expandProxyArg(v))
+		targetURL, insecure := expandProxyArg(v)
+		u, err := url.Parse(targetURL)
 		if err != nil {
 			http.Error(w, "bad proxy config", http.StatusInternalServerError)
 			return
@@ -206,6 +208,9 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		rp := httputil.NewSingleHostReverseProxy(u)
 		rp.Transport = &http.Transport{
 			DialContext: b.dialer.SystemDial,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: insecure,
+			},
 		}
 		rp.ServeHTTP(w, r)
 		return
@@ -219,17 +224,21 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 // * port number ("8080")
 // * host:port ("localhost:8080")
 // * full URL ("http://localhost:8080", in which case it's returned unchanged)
-func expandProxyArg(s string) string {
+// * insecure TLS ("https+insecure://127.0.0.1:4430")
+func expandProxyArg(s string) (targetURL string, insecureSkipVerify bool) {
 	if s == "" {
-		return ""
+		return "", false
 	}
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-		return s
+		return s, false
+	}
+	if rest, ok := strs.CutPrefix(s, "https+insecure://"); ok {
+		return "https://" + rest, true
 	}
 	if allNumeric(s) {
-		return "http://127.0.0.1:" + s
+		return "http://127.0.0.1:" + s, false
 	}
-	return "http://" + s
+	return "http://" + s, false
 }
 
 func allNumeric(s string) bool {
