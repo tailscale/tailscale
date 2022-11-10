@@ -87,7 +87,7 @@ type Direct struct {
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
 
-	persist       persist.Persist
+	persist       persist.PersistView
 	authKey       string
 	tryingNewKey  key.NodePrivate
 	expiry        *time.Time
@@ -238,7 +238,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		logf:                   opts.Logf,
 		newDecompressor:        opts.NewDecompressor,
 		keepAlive:              opts.KeepAlive,
-		persist:                opts.Persist,
+		persist:                opts.Persist.View(),
 		authKey:                opts.AuthKey,
 		discoPubKey:            opts.DiscoPublicKey,
 		debugFlags:             opts.DebugFlags,
@@ -336,7 +336,7 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 func (c *Direct) GetPersist() persist.PersistView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.persist.View()
+	return c.persist
 }
 
 func (c *Direct) TryLogout(ctx context.Context) error {
@@ -346,7 +346,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	c.logf("[v1] TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
 
 	c.mu.Lock()
-	c.persist = persist.Persist{}
+	c.persist = new(persist.Persist).View()
 	c.mu.Unlock()
 
 	return err
@@ -421,7 +421,7 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	c.mu.Lock()
-	persist := c.persist
+	persist := c.persist.AsStruct()
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
@@ -660,7 +660,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		// save it for the retry-with-URL
 		c.tryingNewKey = tryingNewKey
 	}
-	c.persist = persist
+	c.persist = persist.View()
 	c.mu.Unlock()
 
 	if err != nil {
@@ -823,7 +823,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		return errors.New("getMachinePrivKey returned zero key")
 	}
 
-	if persist.PrivateNodeKey.IsZero() {
+	if persist.PrivateNodeKey().IsZero() {
 		return errors.New("privateNodeKey is zero")
 	}
 	if backendLogID == "" {
@@ -967,7 +967,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		}
 	}()
 
-	sess := newMapSession(persist.PrivateNodeKey)
+	sess := newMapSession(persist.PrivateNodeKey())
 	sess.logf = c.logf
 	sess.vlogf = vlogf
 	sess.machinePubKey = machinePubKey

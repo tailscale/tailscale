@@ -818,10 +818,10 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		prefs.ControlURL = prefs.ControlURLOrDefault()
 		prefsChanged = true
 	}
-	if st.Persist != nil {
-		if !prefs.Persist.Equals(st.Persist) {
+	if st.Persist != nil && st.Persist.Valid() {
+		if !prefs.Persist.View().Equals(*st.Persist) {
 			prefsChanged = true
-			prefs.Persist = st.Persist.Clone()
+			prefs.Persist = st.Persist.AsStruct()
 		}
 	}
 	if st.URL != "" {

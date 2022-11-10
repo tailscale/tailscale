@@ -580,7 +580,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
-	var p *persist.Persist
+	var p *persist.PersistView
 	var loginFin, logoutFin *empty.Message
 	if state == StateAuthenticated {
 		loginFin = new(empty.Message)
@@ -590,7 +590,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	}
 	if nm != nil && loggedIn && synced {
 		pp := c.direct.GetPersist()
-		p = pp.AsStruct()
+		p = &pp
 	} else {
 		// don't send netmap status, as it's misleading when we're
 		// not logged in.
