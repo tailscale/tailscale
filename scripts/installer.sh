@@ -172,7 +172,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux)
+			rocky|almalinux|nobara)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
