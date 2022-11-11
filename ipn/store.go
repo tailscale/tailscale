@@ -76,7 +76,7 @@ func ServeConfigKey(profileID string) StateKey {
 type ServeConfig struct {
 	// TCP are the list of TCP port numbers that tailscaled should handle for
 	// the Tailscale IP addresses. (not subnet routers, etc)
-	TCP map[int]*TCPPortHandler `json:",omitempty"`
+	TCP map[uint16]*TCPPortHandler `json:",omitempty"`
 
 	// Web maps from "$SNI_NAME:$PORT" to a set of HTTP handlers
 	// keyed by mount point ("/", "/foo", etc)
@@ -84,7 +84,7 @@ type ServeConfig struct {
 
 	// AllowIngress is the set of SNI:port values for which ingress
 	// traffic is allowed, from trusted ingress peers.
-	AllowIngress map[HostPort]bool
+	AllowIngress map[HostPort]bool `json:",omitempty"`
 }
 
 // HostPort is an SNI name and port number, joined by a colon.

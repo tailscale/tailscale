@@ -859,6 +859,33 @@ func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePubl
 	return nil
 }
 
+// SetServeConfig sets or replaces the serving settings.
+// If config is nil, settings are cleared and serving is disabled.
+func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
+	b, err := json.Marshal(&config)
+	if err != nil {
+		return fmt.Errorf("encoding config: %w", err)
+	}
+	_, err = lc.send(ctx, "POST", "/localapi/v0/serve-config", 200, bytes.NewReader(b))
+	if err != nil {
+		return fmt.Errorf("sending serve config: %w", err)
+	}
+	return nil
+}
+
+// GetServeConfig return the current serve config.
+func (lc *LocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/serve-config", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting serve config: %w", err)
+	}
+	sc := new(ipn.ServeConfig)
+	if err := json.Unmarshal(body, sc); err != nil {
+		return nil, err
+	}
+	return sc, nil
+}
+
 // tailscaledConnectHint gives a little thing about why tailscaled (or
 // platform equivalent) is not answering localapi connections.
 //

@@ -164,7 +164,7 @@ func (v *ServeConfigView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v ServeConfigView) TCP() views.MapFn[int, *TCPPortHandler, TCPPortHandlerView] {
+func (v ServeConfigView) TCP() views.MapFn[uint16, *TCPPortHandler, TCPPortHandlerView] {
 	return views.MapFnOf(v.ж.TCP, func(t *TCPPortHandler) TCPPortHandlerView {
 		return t.View()
 	})
@@ -182,7 +182,7 @@ func (v ServeConfigView) AllowIngress() views.Map[HostPort, bool] {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
-	TCP          map[int]*TCPPortHandler
+	TCP          map[uint16]*TCPPortHandler
 	Web          map[HostPort]*WebServerConfig
 	AllowIngress map[HostPort]bool
 }{})

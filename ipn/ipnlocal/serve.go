@@ -82,7 +82,7 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 		return
 	}
 
-	tcph, ok := sc.TCP().GetOk(int(dport))
+	tcph, ok := sc.TCP().GetOk(dport)
 	if !ok {
 		b.logf("[unexpected] localbackend: got TCP conn without TCP config for port %v; from %v", dport, srcAddr)
 		sendRST()

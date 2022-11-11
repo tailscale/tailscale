@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -3522,8 +3521,8 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked() {
 				}
 			}
 			if b.serveConfig.Valid() {
-				b.serveConfig.TCP().Range(func(port int, _ ipn.TCPPortHandlerView) bool {
-					if port > 0 && port <= math.MaxUint16 {
+				b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+					if port > 0 {
 						handlePorts = append(handlePorts, uint16(port))
 					}
 					return true
@@ -3532,6 +3531,46 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked() {
 		}
 	}
 	b.setTCPPortsIntercepted(handlePorts)
+}
+
+// SetServeConfig establishes or replaces the current serve config.
+func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	nm := b.netMap
+	if nm == nil {
+		return errors.New("netMap is nil")
+	}
+	if nm.SelfNode == nil {
+		return errors.New("netMap SelfNode is nil")
+	}
+	profileID := fmt.Sprintf("node-%s", nm.SelfNode.StableID) // TODO(maisem,bradfitz): something else?
+	confKey := ipn.ServeConfigKey(profileID)
+
+	var bs []byte
+	if config != nil {
+		j, err := json.Marshal(config)
+		if err != nil {
+			return fmt.Errorf("encoding serve config: %w", err)
+		}
+		bs = j
+	}
+	if err := b.store.WriteState(confKey, bs); err != nil {
+		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
+	}
+
+	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked()
+
+	return nil
+}
+
+// ServeConfig provides a view of the current serve mappings.
+// If serving is not configured, the returned view is not Valid.
+func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.serveConfig
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the

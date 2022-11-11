@@ -72,6 +72,7 @@ var handler = map[string]localAPIHandler{
 	"ping":                    (*Handler).servePing,
 	"prefs":                   (*Handler).servePrefs,
 	"pprof":                   (*Handler).servePprof,
+	"serve-config":            (*Handler).serveServeConfig,
 	"set-dns":                 (*Handler).serveSetDNS,
 	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
 	"status":                  (*Handler).serveStatus,
@@ -453,6 +454,41 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	servePprofFunc(w, r)
+}
+
+func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "serve config denied", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case "GET":
+		config := h.b.ServeConfig()
+		json.NewEncoder(w).Encode(config)
+	case "POST":
+		configIn := new(ipn.ServeConfig)
+		if err := json.NewDecoder(r.Body).Decode(configIn); err != nil {
+			json.NewEncoder(w).Encode(struct {
+				Error error
+			}{
+				Error: fmt.Errorf("decoding config: %w", err),
+			})
+			return
+		}
+		err := h.b.SetServeConfig(configIn)
+		if err != nil {
+			json.NewEncoder(w).Encode(struct {
+				Error error
+			}{
+				Error: fmt.Errorf("updating config: %w", err),
+			})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
