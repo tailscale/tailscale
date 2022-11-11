@@ -231,20 +231,21 @@ func WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, erro
 	return defaultLocalClient.WhoIs(ctx, remoteAddr)
 }
 
+func decodeJSON[T any](b []byte) (ret T, err error) {
+	if err := json.Unmarshal(b, &ret); err != nil {
+		var zero T
+		return zero, fmt.Errorf("failed to unmarshal JSON into %T: %w", ret, err)
+	}
+	return ret, nil
+}
+
 // WhoIs returns the owner of the remoteAddr, which must be an IP or IP:port.
 func (lc *LocalClient) WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error) {
 	body, err := lc.get200(ctx, "/localapi/v0/whois?addr="+url.QueryEscape(remoteAddr))
 	if err != nil {
 		return nil, err
 	}
-	r := new(apitype.WhoIsResponse)
-	if err := json.Unmarshal(body, r); err != nil {
-		if max := 200; len(body) > max {
-			body = append(body[:max], "..."...)
-		}
-		return nil, fmt.Errorf("failed to parse JSON WhoIsResponse from %q", body)
-	}
-	return r, nil
+	return decodeJSON[*apitype.WhoIsResponse](body)
 }
 
 // Goroutines returns a dump of the Tailscale daemon's current goroutines.
@@ -411,11 +412,7 @@ func (lc *LocalClient) status(ctx context.Context, queryString string) (*ipnstat
 	if err != nil {
 		return nil, err
 	}
-	st := new(ipnstate.Status)
-	if err := json.Unmarshal(body, st); err != nil {
-		return nil, err
-	}
-	return st, nil
+	return decodeJSON[*ipnstate.Status](body)
 }
 
 // IDToken is a request to get an OIDC ID token for an audience.
@@ -426,11 +423,7 @@ func (lc *LocalClient) IDToken(ctx context.Context, aud string) (*tailcfg.TokenR
 	if err != nil {
 		return nil, err
 	}
-	tr := new(tailcfg.TokenResponse)
-	if err := json.Unmarshal(body, tr); err != nil {
-		return nil, err
-	}
-	return tr, nil
+	return decodeJSON[*tailcfg.TokenResponse](body)
 }
 
 func (lc *LocalClient) WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
@@ -438,11 +431,7 @@ func (lc *LocalClient) WaitingFiles(ctx context.Context) ([]apitype.WaitingFile,
 	if err != nil {
 		return nil, err
 	}
-	var wfs []apitype.WaitingFile
-	if err := json.Unmarshal(body, &wfs); err != nil {
-		return nil, err
-	}
-	return wfs, nil
+	return decodeJSON[[]apitype.WaitingFile](body)
 }
 
 func (lc *LocalClient) DeleteWaitingFile(ctx context.Context, baseName string) error {
@@ -476,11 +465,7 @@ func (lc *LocalClient) FileTargets(ctx context.Context) ([]apitype.FileTarget, e
 	if err != nil {
 		return nil, err
 	}
-	var fts []apitype.FileTarget
-	if err := json.Unmarshal(body, &fts); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
-	}
-	return fts, nil
+	return decodeJSON[[]apitype.FileTarget](body)
 }
 
 // PushFile sends Taildrop file r to target.
@@ -555,11 +540,7 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	if err != nil {
 		return nil, err
 	}
-	var p ipn.Prefs
-	if err := json.Unmarshal(body, &p); err != nil {
-		return nil, fmt.Errorf("invalid prefs JSON: %w", err)
-	}
-	return &p, nil
+	return decodeJSON[*ipn.Prefs](body)
 }
 
 func (lc *LocalClient) Logout(ctx context.Context) error {
@@ -765,11 +746,7 @@ func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
-	pr := new(ipnstate.PingResult)
-	if err := json.Unmarshal(body, pr); err != nil {
-		return nil, err
-	}
-	return pr, nil
+	return decodeJSON[*ipnstate.PingResult](body)
 }
 
 // NetworkLockStatus fetches information about the tailnet key authority, if one is configured.
@@ -778,11 +755,7 @@ func (lc *LocalClient) NetworkLockStatus(ctx context.Context) (*ipnstate.Network
 	if err != nil {
 		return nil, fmt.Errorf("error: %w", err)
 	}
-	pr := new(ipnstate.NetworkLockStatus)
-	if err := json.Unmarshal(body, pr); err != nil {
-		return nil, err
-	}
-	return pr, nil
+	return decodeJSON[*ipnstate.NetworkLockStatus](body)
 }
 
 // NetworkLockInit initializes the tailnet key authority.
@@ -803,12 +776,7 @@ func (lc *LocalClient) NetworkLockInit(ctx context.Context, keys []tka.Key, disa
 	if err != nil {
 		return nil, fmt.Errorf("error: %w", err)
 	}
-
-	pr := new(ipnstate.NetworkLockStatus)
-	if err := json.Unmarshal(body, pr); err != nil {
-		return nil, err
-	}
-	return pr, nil
+	return decodeJSON[*ipnstate.NetworkLockStatus](body)
 }
 
 // NetworkLockModify adds and/or removes key(s) to the tailnet key authority.
@@ -827,12 +795,7 @@ func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKey
 	if err != nil {
 		return nil, fmt.Errorf("error: %w", err)
 	}
-
-	pr := new(ipnstate.NetworkLockStatus)
-	if err := json.Unmarshal(body, pr); err != nil {
-		return nil, err
-	}
-	return pr, nil
+	return decodeJSON[*ipnstate.NetworkLockStatus](body)
 }
 
 // NetworkLockSign signs the specified node-key and transmits that signature to the control plane.
