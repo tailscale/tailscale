@@ -862,7 +862,7 @@ func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePubl
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
-	b, err := json.Marshal(&config)
+	b, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("encoding config: %w", err)
 	}
@@ -874,13 +874,18 @@ func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConf
 }
 
 // GetServeConfig return the current serve config.
+//
+// If the serve config is empty, it returns (nil, nil).
 func (lc *LocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
 	body, err := lc.send(ctx, "GET", "/localapi/v0/serve-config", 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting serve config: %w", err)
 	}
-	sc := new(ipn.ServeConfig)
-	if err := json.Unmarshal(body, sc); err != nil {
+	return getServeConfigFromJSON(body)
+}
+
+func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
+	if err := json.Unmarshal(body, &sc); err != nil {
 		return nil, err
 	}
 	return sc, nil
