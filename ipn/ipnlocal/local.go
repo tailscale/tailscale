@@ -844,7 +844,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	// Prefs will be written out; this is not safe unless locked or cloned.
 	if st.NetMap != nil {
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
-		if err := b.tkaSyncIfNeeded(st.NetMap); err != nil {
+		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
 			b.logf("[v1] TKA sync error: %v", err)
 		}
 		b.mu.Lock()

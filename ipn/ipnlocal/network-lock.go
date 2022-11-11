@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
@@ -96,7 +97,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 //
 // tkaSyncIfNeeded immediately takes b.takeSyncLock which is held throughout,
 // and may take b.mu as required.
-func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
+func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsView) error {
 	if !envknob.UseWIPCode() {
 		// If the feature flag is not enabled, pretend we don't exist.
 		return nil
@@ -109,7 +110,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap) error {
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
 
-	ourNodeKey := b.pm.CurrentPrefs().Persist().PublicNodeKey()
+	ourNodeKey := prefs.Persist().PublicNodeKey()
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
