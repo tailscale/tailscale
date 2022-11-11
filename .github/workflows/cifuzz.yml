@@ -1,5 +1,7 @@
 name: CIFuzz
-on: [pull_request]
+on:
+  push:
+    branches: [ main, release-branch/* ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -7,7 +9,7 @@ concurrency:
 
 jobs:
   Fuzzing:
-    runs-on: ubuntu-latest
+    runs-on: buildjet-4vcpu-ubuntu-2204
     steps:
     - name: Build Fuzzers
       id: build
@@ -20,7 +22,7 @@ jobs:
       uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@master
       with:
         oss-fuzz-project-name: 'tailscale'
-        fuzz-seconds: 300
+        fuzz-seconds: 900
         dry-run: false
         language: go
     - name: Upload Crash
