@@ -22,3 +22,6 @@ cmd/tailscaled/tailscaled
 # direnv config, this may be different for other people so it's probably safer
 # to make this nonspecific.
 .envrc
+
+# vscode project specific settings
+.vscode/
