@@ -128,18 +128,21 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// print health check information prior to checking LocalBackend state as
-	// it may provide an explanation to the user if we choose to exit early
-	if len(st.Health) > 0 {
+	printHealth := func() {
 		printf("# Health check:\n")
 		for _, m := range st.Health {
 			printf("#     - %s\n", m)
 		}
-		outln()
 	}
 
 	description, ok := isRunningOrStarting(st)
 	if !ok {
+		// print health check information if we're in a weird state, as it might
+		// provide context about why we're in that weird state.
+		if len(st.Health) > 0 && (st.BackendState == ipn.Starting.String() || st.BackendState == ipn.NoState.String()) {
+			printHealth()
+			outln()
+		}
 		outln(description)
 		os.Exit(1)
 	}
@@ -214,6 +217,10 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 	}
 	Stdout.Write(buf.Bytes())
+	if len(st.Health) > 0 {
+		outln()
+		printHealth()
+	}
 	return nil
 }
 

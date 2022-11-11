@@ -25,6 +25,7 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -495,7 +496,7 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 
 	defer func() {
 		if retErr == nil {
-			checkSSHUpWarnings(ctx)
+			checkUpWarnings(ctx)
 		}
 	}()
 
@@ -678,25 +679,39 @@ func runUp(ctx context.Context, args []string) (retErr error) {
 	}
 }
 
-func checkSSHUpWarnings(ctx context.Context) {
-	if !upArgs.runSSH {
-		return
-	}
-	st, err := localClient.Status(ctx)
+// upWorthWarning reports whether the health check message s is worth warning
+// about during "tailscale up". Many of the health checks are noisy or confusing
+// or very ephemeral and happen especially briefly at startup.
+//
+// TODO(bradfitz): change the server to send typed warnings with metadata about
+// the health check, rather than just a string.
+func upWorthyWarning(s string) bool {
+	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
+		strings.Contains(s, healthmsg.WarnAcceptRoutesOff)
+}
+
+func checkUpWarnings(ctx context.Context) {
+	st, err := localClient.StatusWithoutPeers(ctx)
 	if err != nil {
 		// Ignore. Don't spam more.
 		return
 	}
-	if len(st.Health) == 0 {
+	var warn []string
+	for _, w := range st.Health {
+		if upWorthyWarning(w) {
+			warn = append(warn, w)
+		}
+	}
+	if len(warn) == 0 {
 		return
 	}
-	if len(st.Health) == 1 && strings.Contains(st.Health[0], "SSH") {
-		printf("%s\n", st.Health[0])
+	if len(warn) == 1 {
+		printf("%s\n", warn[0])
 		return
 	}
-	printf("# Health check:\n")
-	for _, m := range st.Health {
-		printf("    - %s\n", m)
+	printf("# Health check warnings:\n")
+	for _, m := range warn {
+		printf("#     - %s\n", m)
 	}
 }
 
@@ -1039,4 +1054,16 @@ func exitNodeIP(p *ipn.Prefs, st *ipnstate.Status) (ip netip.Addr) {
 		}
 	}
 	return
+}
+
+func anyPeerAdvertisingRoutes(st *ipnstate.Status) bool {
+	for _, ps := range st.Peer {
+		if ps.PrimaryRoutes == nil {
+			continue
+		}
+		if ps.PrimaryRoutes.Len() > 0 {
+			return true
+		}
+	}
+	return false
 }
