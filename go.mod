@@ -73,6 +73,7 @@ require (
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/wf v0.0.0-20220728202103-50d96caab2f6
 	nhooyr.io/websocket v1.8.7
+	software.sslmate.com/src/go-pkcs12 v0.2.0
 )
 
 require (
@@ -281,5 +282,4 @@ require (
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect
 	mvdan.cc/lint v0.0.0-20170908181259-adc824a0674b // indirect
 	mvdan.cc/unparam v0.0.0-20211002134041-24922b6997ca // indirect
-	software.sslmate.com/src/go-pkcs12 v0.0.0-20210415151418-c5206de65a78 // indirect
 )
