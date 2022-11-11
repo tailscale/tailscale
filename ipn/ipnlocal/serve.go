@@ -112,11 +112,6 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 	}
 
 	if backDst := tcph.TCPForward(); backDst != "" {
-		if tcph.TerminateTLS() {
-			b.logf("TODO(bradfitz): finish")
-			sendRST()
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
 		cancel()
@@ -133,6 +128,24 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 		}
 		defer conn.Close()
 		defer backConn.Close()
+
+		if sni := tcph.TerminateTLS(); sni != "" {
+			conn = tls.Server(conn, &tls.Config{
+				GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+					defer cancel()
+					pair, err := b.GetCertPEM(ctx, sni)
+					if err != nil {
+						return nil, err
+					}
+					cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+					if err != nil {
+						return nil, err
+					}
+					return &cert, nil
+				},
+			})
+		}
 
 		// TODO(bradfitz): do the RegisterIPPortIdentity and
 		// UnregisterIPPortIdentity stuff that netstack does
