@@ -112,10 +112,11 @@ type TCPPortHandler struct {
 	// It is mutually exclusive with HTTPS.
 	TCPForward string `json:",omitempty"`
 
-	// TerminateTLS is whether tailscaled should terminate TLS
-	// connections before forwarding them to TCPForward. It is only
-	// used if TCPForward is non-empty. (the HTTPS mode )
-	TerminateTLS bool `json:",omitempty"`
+	// TerminateTLS, if non-empty, means that tailscaled should terminate the
+	// TLS connections before forwarding them to TCPForward, permitting only the
+	// SNI name with this value. It is only used if TCPForward is non-empty.
+	// (the HTTPS mode uses ServeConfig.Web)
+	TerminateTLS string `json:",omitempty"`
 }
 
 // HTTPHandler is either a path or a proxy to serve.

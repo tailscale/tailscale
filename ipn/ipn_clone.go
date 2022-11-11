@@ -107,7 +107,7 @@ func (src *TCPPortHandler) Clone() *TCPPortHandler {
 var _TCPPortHandlerCloneNeedsRegeneration = TCPPortHandler(struct {
 	HTTPS        bool
 	TCPForward   string
-	TerminateTLS bool
+	TerminateTLS string
 }{})
 
 // Clone makes a deep copy of HTTPHandler.
