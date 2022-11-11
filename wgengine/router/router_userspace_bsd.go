@@ -26,7 +26,7 @@ type userspaceBSDRouter struct {
 	linkMon *monitor.Mon
 	tunname string
 	local   []netip.Prefix
-	routes  map[netip.Prefix]struct{}
+	routes  map[netip.Prefix]bool
 }
 
 func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
@@ -102,15 +102,19 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		cfg = &shutdownConfig
 	}
 
-	var errq error
 	setErr := func(err error) {
-		if errq == nil {
-			errq = err
+		if reterr == nil {
+			reterr = err
 		}
 	}
+	addrsToRemove := r.addrsToRemove(cfg.LocalAddrs)
+
+	// If we're removing all addresses, we need to remove and re-add all
+	// routes.
+	resetRoutes := len(r.local) > 0 && len(addrsToRemove) == len(r.local)
 
 	// Update the addresses.
-	for _, addr := range r.addrsToRemove(cfg.LocalAddrs) {
+	for _, addr := range addrsToRemove {
 		arg := []string{"ifconfig", r.tunname, inet(addr), addr.String(), "-alias"}
 		out, err := cmd(arg...).CombinedOutput()
 		if err != nil {
@@ -137,7 +141,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 		}
 	}
 
-	newRoutes := make(map[netip.Prefix]struct{})
+	newRoutes := make(map[netip.Prefix]bool)
 	for _, route := range cfg.Routes {
 		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
 			// Because we added the interface address as a /48 above,
@@ -145,11 +149,11 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 			// implicitly. We mustn't try to add/delete it ourselves.
 			continue
 		}
-		newRoutes[route] = struct{}{}
+		newRoutes[route] = true
 	}
 	// Delete any preexisting routes.
 	for route := range r.routes {
-		if _, keep := newRoutes[route]; !keep {
+		if resetRoutes || !newRoutes[route] {
 			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
@@ -169,7 +173,7 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	}
 	// Add the routes.
 	for route := range newRoutes {
-		if _, exists := r.routes[route]; !exists {
+		if resetRoutes || !r.routes[route] {
 			net := netipx.PrefixIPNet(route)
 			nip := net.IP.Mask(net.Mask)
 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
@@ -185,12 +189,12 @@ func (r *userspaceBSDRouter) Set(cfg *Config) (reterr error) {
 	}
 
 	// Store the interface and routes so we know what to change on an update.
-	if errq == nil {
+	if reterr == nil {
 		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
 	}
 	r.routes = newRoutes
 
-	return errq
+	return reterr
 }
 
 func (r *userspaceBSDRouter) Close() error {
