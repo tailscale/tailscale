@@ -477,6 +477,9 @@ func (p *Prefs) ControlURLOrDefault() string {
 }
 
 // AdminPageURL returns the admin web site URL for the current ControlURL.
+func (p PrefsView) AdminPageURL() string { return p.ж.AdminPageURL() }
+
+// AdminPageURL returns the admin web site URL for the current ControlURL.
 func (p *Prefs) AdminPageURL() string {
 	url := p.ControlURLOrDefault()
 	if IsLoginServerSynonym(url) {
@@ -485,6 +488,10 @@ func (p *Prefs) AdminPageURL() string {
 	}
 	return url + "/admin/machines"
 }
+
+// AdvertisesExitNode reports whether p is advertising both the v4 and
+// v6 /0 exit node routes.
+func (p PrefsView) AdvertisesExitNode() bool { return p.ж.AdvertisesExitNode() }
 
 // AdvertisesExitNode reports whether p is advertising both the v4 and
 // v6 /0 exit node routes.
