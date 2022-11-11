@@ -429,7 +429,9 @@ table tbody tr:nth-child(even) td { background-color: #f5f5f5; }
 		ips = append(ips, ip.String())
 	}
 	f("<p>Tailscale IP: %s", strings.Join(ips, ", "))
-	f("<p>Tailnet Name: %s", st.CurrentTailnet.MagicDNSSuffix)
+	if st.CurrentTailnet != nil {
+		f("<p>Tailnet Name: %s", st.CurrentTailnet.MagicDNSSuffix)
+	}
 
 	f("<table>\n<thead>\n")
 	f("<tr><th>Peer</th><th>OS</th><th>Node</th><th>Owner</th><th>Rx</th><th>Tx</th><th>Activity</th><th>Connection</th></tr>\n")

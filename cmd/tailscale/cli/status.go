@@ -147,7 +147,9 @@ func runStatus(ctx context.Context, args []string) error {
 	var buf bytes.Buffer
 	f := func(format string, a ...any) { fmt.Fprintf(&buf, format, a...) }
 
-	f("%-15s %-20s\n", "tailnet name", st.CurrentTailnet.MagicDNSSuffix)
+	if st.CurrentTailnet != nil {
+		f("# Tailnet name: %s\n\n", st.CurrentTailnet.MagicDNSSuffix)
+	}
 
 	printPS := func(ps *ipnstate.PeerStatus) {
 		f("%-15s %-20s %-12s %-7s ",
