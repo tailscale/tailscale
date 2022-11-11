@@ -135,7 +135,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: true,
 		TKAHead:    a1.Head(),
-	})
+	}, pm.CurrentPrefs())
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
-	})
+	}, pm.CurrentPrefs())
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 		TKAEnabled: false,
 		TKAHead:    authority.Head(),
-	})
+	}, pm.CurrentPrefs())
 	if err != nil {
 		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestTKASync(t *testing.T) {
 			err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
 				TKAEnabled: true,
 				TKAHead:    controlAuthority.Head(),
-			})
+			}, pm.CurrentPrefs())
 			if err != nil {
 				t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
 			}
