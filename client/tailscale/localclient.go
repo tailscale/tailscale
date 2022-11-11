@@ -197,6 +197,9 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 }
 
 func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
+	if jr, ok := body.(jsonReader); ok && jr.err != nil {
+		return nil, jr.err // fail early if there was a JSON marshaling error
+	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
 	if err != nil {
 		return nil, err
@@ -531,11 +534,7 @@ func (lc *LocalClient) CheckIPForwarding(ctx context.Context) error {
 // Note that EditPrefs does the same validation as this, so call CheckPrefs before
 // EditPrefs is not necessary.
 func (lc *LocalClient) CheckPrefs(ctx context.Context, p *ipn.Prefs) error {
-	pj, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	_, err = lc.send(ctx, "POST", "/localapi/v0/check-prefs", http.StatusOK, bytes.NewReader(pj))
+	_, err := lc.send(ctx, "POST", "/localapi/v0/check-prefs", http.StatusOK, jsonBody(p))
 	return err
 }
 
@@ -552,11 +551,7 @@ func (lc *LocalClient) GetPrefs(ctx context.Context) (*ipn.Prefs, error) {
 }
 
 func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn.Prefs, error) {
-	mpj, err := json.Marshal(mp)
-	if err != nil {
-		return nil, err
-	}
-	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, bytes.NewReader(mpj))
+	body, err := lc.send(ctx, "PATCH", "/localapi/v0/prefs", http.StatusOK, jsonBody(mp))
 	if err != nil {
 		return nil, err
 	}
@@ -862,11 +857,7 @@ func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePubl
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
-	b, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("encoding config: %w", err)
-	}
-	_, err = lc.send(ctx, "POST", "/localapi/v0/serve-config", 200, bytes.NewReader(b))
+	_, err := lc.send(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config))
 	if err != nil {
 		return fmt.Errorf("sending serve config: %w", err)
 	}
@@ -919,4 +910,25 @@ func tailscaledConnectHint() string {
 		return "systemd tailscaled.service not running."
 	}
 	return "not running?"
+}
+
+type jsonReader struct {
+	b   *bytes.Reader
+	err error // sticky JSON marshal error, if any
+}
+
+// jsonBody returns an io.Reader that marshals v as JSON and then reads it.
+func jsonBody(v any) jsonReader {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return jsonReader{err: err}
+	}
+	return jsonReader{b: bytes.NewReader(b)}
+}
+
+func (r jsonReader) Read(p []byte) (n int, err error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	return r.b.Read(p)
 }
