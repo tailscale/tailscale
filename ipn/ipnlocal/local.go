@@ -203,6 +203,8 @@ type LocalBackend struct {
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView // or !Valid if none
 
+	serveListeners map[netip.AddrPort]*serveListener // addrPort => serveListener
+
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
 	statusLock    sync.Mutex
@@ -3449,56 +3451,22 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 				}
 			}
 			if b.serveConfig.Valid() {
+				servePorts := make([]uint16, 0, 3)
 				b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
 					if port > 0 {
-						handlePorts = append(handlePorts, uint16(port))
+						servePorts = append(servePorts, uint16(port))
 					}
 					return true
 				})
+				handlePorts = append(handlePorts, servePorts...)
+				// don't listen on netmap addresses if we're in userspace mode
+				if !wgengine.IsNetstack(b.e) {
+					b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
+				}
 			}
 		}
 	}
 	b.setTCPPortsIntercepted(handlePorts)
-}
-
-// SetServeConfig establishes or replaces the current serve config.
-func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	nm := b.netMap
-	if nm == nil {
-		return errors.New("netMap is nil")
-	}
-	if nm.SelfNode == nil {
-		return errors.New("netMap SelfNode is nil")
-	}
-	profileID := b.pm.CurrentProfile().ID
-	confKey := ipn.ServeConfigKey(profileID)
-
-	var bs []byte
-	if config != nil {
-		j, err := json.Marshal(config)
-		if err != nil {
-			return fmt.Errorf("encoding serve config: %w", err)
-		}
-		bs = j
-	}
-	if err := b.store.WriteState(confKey, bs); err != nil {
-		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
-	}
-
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
-
-	return nil
-}
-
-// ServeConfig provides a view of the current serve mappings.
-// If serving is not configured, the returned view is not Valid.
-func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.serveConfig
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the
