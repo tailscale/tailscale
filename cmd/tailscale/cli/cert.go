@@ -7,7 +7,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"software.sslmate.com/src/go-pkcs12"
 	"tailscale.com/atomicfile"
 	"tailscale.com/ipn"
 	"tailscale.com/version"
@@ -130,17 +133,25 @@ func runCert(ctx context.Context, args []string) error {
 			}
 		}
 	}
-	if certArgs.keyFile != "" {
-		keyChanged, err := writeIfChanged(certArgs.keyFile, keyPEM, 0600)
+	if dst := certArgs.keyFile; dst != "" {
+		contents := keyPEM
+		if isPKCS12(dst) {
+			var err error
+			contents, err = convertToPKCS12(certPEM, keyPEM)
+			if err != nil {
+				return err
+			}
+		}
+		keyChanged, err := writeIfChanged(dst, contents, 0600)
 		if err != nil {
 			return err
 		}
 		if certArgs.keyFile != "-" {
 			macWarn()
 			if keyChanged {
-				printf("Wrote private key to %v\n", certArgs.keyFile)
+				printf("Wrote private key to %v\n", dst)
 			} else {
-				printf("Private key unchanged at %v\n", certArgs.keyFile)
+				printf("Private key unchanged at %v\n", dst)
 			}
 		}
 	}
@@ -159,4 +170,30 @@ func writeIfChanged(filename string, contents []byte, mode os.FileMode) (changed
 		return false, err
 	}
 	return true, nil
+}
+
+func isPKCS12(dst string) bool {
+	return strings.HasSuffix(dst, ".p12") || strings.HasSuffix(dst, ".pfx")
+}
+
+func convertToPKCS12(certPEM, keyPEM []byte) ([]byte, error) {
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	var certs []*x509.Certificate
+	for _, c := range cert.Certificate {
+		cert, err := x509.ParseCertificate(c)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, errors.New("no certs")
+	}
+	// TODO(bradfitz): I'm not sure this is right yet. The goal was to make this
+	// work for https://github.com/tailscale/tailscale/issues/2928 but I'm still
+	// fighting Windows.
+	return pkcs12.Encode(rand.Reader, cert.PrivateKey, certs[0], certs[1:], "" /* no password */)
 }
