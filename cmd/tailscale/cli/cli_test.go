@@ -16,6 +16,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tstest"
@@ -1141,5 +1142,17 @@ func TestCleanUpArgs(t *testing.T) {
 	for _, tt := range tests {
 		got := CleanUpArgs(tt.in)
 		c.Assert(got, qt.DeepEquals, tt.want)
+	}
+}
+
+func TestUpWorthWarning(t *testing.T) {
+	if !upWorthyWarning(healthmsg.WarnAcceptRoutesOff) {
+		t.Errorf("WarnAcceptRoutesOff of %q should be worth warning", healthmsg.WarnAcceptRoutesOff)
+	}
+	if !upWorthyWarning(healthmsg.TailscaleSSHOnBut + "some problem") {
+		t.Errorf("want true for SSH problems")
+	}
+	if upWorthyWarning("not in map poll") {
+		t.Errorf("want false for other misc errors")
 	}
 }

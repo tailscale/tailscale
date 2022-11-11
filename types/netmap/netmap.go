@@ -84,6 +84,16 @@ type NetworkMap struct {
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
+func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
+	for _, p := range nm.Peers {
+		if len(p.PrimaryRoutes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // PeerByTailscaleIP returns a peer's Node based on its Tailscale IP.
 //
 // If nm is nil or no peer is found, ok is false.

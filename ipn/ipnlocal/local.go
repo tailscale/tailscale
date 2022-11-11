@@ -35,6 +35,7 @@ import (
 	"tailscale.com/doctor/routetable"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -585,19 +586,23 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
 			s.CurrentTailnet.Name = b.netMap.Domain
-			if prefs := b.pm.CurrentPrefs(); prefs.Valid() && !prefs.ExitNodeID().IsZero() {
-				if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
-					var online = false
-					if exitPeer.Online != nil {
-						online = *exitPeer.Online
-					}
-					s.ExitNodeStatus = &ipnstate.ExitNodeStatus{
-						ID:           prefs.ExitNodeID(),
-						Online:       online,
-						TailscaleIPs: exitPeer.Addresses,
+			if prefs := b.pm.CurrentPrefs(); prefs.Valid() {
+				if !prefs.RouteAll() && b.netMap.AnyPeersAdvertiseRoutes() {
+					s.Health = append(s.Health, healthmsg.WarnAcceptRoutesOff)
+				}
+				if !prefs.ExitNodeID().IsZero() {
+					if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
+						var online = false
+						if exitPeer.Online != nil {
+							online = *exitPeer.Online
+						}
+						s.ExitNodeStatus = &ipnstate.ExitNodeStatus{
+							ID:           prefs.ExitNodeID(),
+							Online:       online,
+							TailscaleIPs: exitPeer.Addresses,
+						}
 					}
 				}
-
 			}
 		}
 	})
@@ -2172,12 +2177,12 @@ func (b *LocalBackend) sshOnButUnusableHealthCheckMessageLocked() (healthMessage
 	isAdmin := hasCapability(nm, tailcfg.CapabilityAdmin)
 
 	if !isAdmin {
-		return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Ask your admin to update your tailnet's ACLs to allow access."
+		return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Ask your admin to update your tailnet's ACLs to allow access."
 	}
 	if !isDefault {
-		return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Update your tailnet's ACLs to allow access."
+		return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Update your tailnet's ACLs to allow access."
 	}
-	return "Tailscale SSH enabled, but access controls don't allow anyone to access this device. Update your tailnet's ACLs at https://tailscale.com/s/ssh-policy"
+	return healthmsg.TailscaleSSHOnBut + "access controls don't allow anyone to access this device. Update your tailnet's ACLs at https://tailscale.com/s/ssh-policy"
 }
 
 func (b *LocalBackend) isDefaultServerLocked() bool {
