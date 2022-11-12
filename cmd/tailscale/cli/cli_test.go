@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1155,4 +1156,51 @@ func TestUpWorthWarning(t *testing.T) {
 	if upWorthyWarning("not in map poll") {
 		t.Errorf("want false for other misc errors")
 	}
+}
+
+func TestServeConfigMutations(t *testing.T) {
+	// Stateful mutations, starting from an empty config.
+	type step struct {
+		command []string // serve args
+		reset   bool     // if true, reset all ServeConfig state
+		want    *ipn.ServeConfig
+		wantErr string
+		line    int // line number of addStep call, for error messages
+	}
+	var steps []step
+	add := func(s step) {
+		_, _, s.line, _ = runtime.Caller(1)
+		steps = append(steps, s)
+	}
+	add(step{reset: true})
+	add(step{
+		want: nil,
+	})
+	var current *ipn.ServeConfig
+	for i, st := range steps {
+		t.Logf("Executing step #%d (line %v) ... ", i, st.line)
+		if st.reset {
+			t.Logf("(resetting state)")
+			current = nil
+		}
+		newState, err := applyServeMutation(current, st.command)
+		var gotErr string
+		if err != nil {
+			gotErr = err.Error()
+		}
+		if gotErr != st.wantErr {
+			t.Fatalf("[%d] %v: got error %q, want %q", i, st.command, gotErr, st.wantErr)
+		}
+		if !reflect.DeepEqual(newState, st.want) {
+			t.Fatalf("[%d] %v: bad state. got:\n%s\n\nwant:\n%s\n",
+				i, st.command, asJSON(newState), asJSON(st.want))
+		}
+	}
+}
+
+func applyServeMutation(current *ipn.ServeConfig, command []string) (*ipn.ServeConfig, error) {
+	if len(command) == 0 {
+		return current, nil
+	}
+	panic("TODO") // in cli/serve.go, not here in tests
 }
