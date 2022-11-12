@@ -67,6 +67,7 @@ func fakeNoiseServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, 
 
 func TestTKAEnablementFlow(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	nodePriv := key.NewNode()
 
 	// Make a fake TKA authority, getting a usable genesis AUM which
@@ -149,6 +150,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 
 func TestTKADisablementFlow(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	temp := t.TempDir()
 	os.Mkdir(filepath.Join(temp, "tka"), 0755)
 	nodePriv := key.NewNode()
@@ -265,6 +267,7 @@ func TestTKADisablementFlow(t *testing.T) {
 
 func TestTKASync(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 
 	someKeyPriv := key.NewNLPrivate()
 	someKey := tka.Key{Kind: tka.Key25519, Public: someKeyPriv.Public().Verifier(), Votes: 1}
@@ -501,6 +504,7 @@ func TestTKASync(t *testing.T) {
 
 func TestTKAFilterNetmap(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 
 	nlPriv := key.NewNLPrivate()
 	nlKey := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
@@ -559,6 +563,7 @@ func TestTKAFilterNetmap(t *testing.T) {
 
 func TestTKADisable(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	temp := t.TempDir()
 	os.Mkdir(filepath.Join(temp, "tka"), 0755)
 	nodePriv := key.NewNode()
@@ -647,6 +652,7 @@ func TestTKADisable(t *testing.T) {
 
 func TestTKASign(t *testing.T) {
 	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	temp := t.TempDir()
 	os.Mkdir(filepath.Join(temp, "tka"), 0755)
 	nodePriv := key.NewNode()
