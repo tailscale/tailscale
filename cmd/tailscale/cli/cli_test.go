@@ -38,7 +38,7 @@ var geese = []string{"linux", "darwin", "windows", "freebsd"}
 func TestUpdateMaskedPrefsFromUpFlag(t *testing.T) {
 	for _, goos := range geese {
 		var upArgs upArgsT
-		fs := newUpFlagSet(goos, &upArgs)
+		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			mp := new(ipn.MaskedPrefs)
 			updateMaskedPrefsFromUpOrSetFlag(mp, f.Name)
@@ -488,7 +488,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				goos = tt.goos
 			}
 			var upArgs upArgsT
-			flagSet := newUpFlagSet(goos, &upArgs)
+			flagSet := newUpFlagSet(goos, &upArgs, "up")
 			flags := CleanUpArgs(tt.flags)
 			flagSet.Parse(flags)
 			newPrefs, err := prefsFromUpArgs(upArgs, t.Logf, new(ipnstate.Status), goos)
@@ -515,7 +515,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 }
 
 func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
-	fs := newUpFlagSet(goos, &args)
+	fs := newUpFlagSet(goos, &args, "up")
 	fs.Parse(flagArgs) // populates args
 	return
 }
@@ -775,7 +775,7 @@ func TestPrefFlagMapping(t *testing.T) {
 func TestFlagAppliesToOS(t *testing.T) {
 	for _, goos := range geese {
 		var upArgs upArgsT
-		fs := newUpFlagSet(goos, &upArgs)
+		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			if !flagAppliesToOS(f.Name, goos) {
 				t.Errorf("flagAppliesToOS(%q, %q) = false but found in %s set", f.Name, goos, goos)
@@ -1070,7 +1070,7 @@ func TestUpdatePrefs(t *testing.T) {
 			if tt.env.goos == "" {
 				tt.env.goos = "linux"
 			}
-			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
+			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs, "up")
 			flags := CleanUpArgs(tt.flags)
 			if err := tt.env.flagSet.Parse(flags); err != nil {
 				t.Fatal(err)
