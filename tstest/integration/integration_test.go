@@ -514,6 +514,7 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 		nodes[i].AwaitIP()
 		nodes[i].AwaitRunning()
 	}
+	expectedPeers := len(nodes) - 1
 
 	// Make every node ping every other node.
 	// This makes sure magicsock is fully populated.
@@ -543,12 +544,15 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 		}
 	}
 
-	wantNode0PeerCount(len(nodes) - 1) // all other nodes are peers
+	wantNode0PeerCount(expectedPeers) // all other nodes are peers
 	nodes[0].MustLogOut()
 	wantNode0PeerCount(0) // node[0] is logged out, so it should not have any peers
-	nodes[0].MustUp()
+
+	nodes[0].MustUp() // This will create a new node
+	expectedPeers++
+
 	nodes[0].AwaitIP()
-	wantNode0PeerCount(len(nodes) - 1) // all other nodes are peers again
+	wantNode0PeerCount(expectedPeers) // all existing peers and the new node
 }
 
 // testEnv contains the test environment (set of servers) used by one

@@ -268,6 +268,11 @@ var errProfileNotFound = errors.New("profile not found")
 // useful for deleting the last profile. In other cases, it is
 // recommended to call SwitchProfile() first.
 func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
+	if id == "" && pm.isNewProfile {
+		// Deleting the in-memory only new profile, just create a new one.
+		pm.NewProfile()
+		return nil
+	}
 	kp, ok := pm.knownProfiles[id]
 	if !ok {
 		return errProfileNotFound

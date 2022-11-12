@@ -799,19 +799,22 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
 	}
 
-	prefsChanged := false
-
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
 
 	if st.LogoutFinished != nil {
-		// Since we're logged out now, our netmap cache is invalid.
-		// Since st.NetMap==nil means "netmap is unchanged", there is
-		// no other way to represent this change.
-		b.setNetMapLocked(nil)
-		b.e.SetNetworkMap(new(netmap.NetworkMap))
+		if p := b.pm.CurrentPrefs(); p.Persist() == nil || p.Persist().LoginName == "" {
+			b.mu.Unlock()
+			return
+		}
+		if err := b.pm.DeleteProfile(b.pm.CurrentProfile().ID); err != nil {
+			b.logf("error deleting profile: %v", err)
+		}
+		b.resetForProfileChangeLockedOnEntry()
+		return
 	}
 
+	prefsChanged := false
 	prefs := b.pm.CurrentPrefs().AsStruct()
 	netMap := b.netMap
 	interact := b.interact

@@ -14,6 +14,7 @@ import (
 	qt "github.com/frankban/quicktest"
 
 	"tailscale.com/control/controlclient"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
@@ -81,6 +82,7 @@ func (nt *notifyThrottler) drain(count int) []ipn.Notify {
 	// no more notifications expected
 	close(ch)
 
+	nt.t.Log(nn)
 	return nn
 }
 
@@ -125,6 +127,9 @@ func (cc *mockControl) populateKeys() (newKeys bool) {
 		newKeys = true
 	}
 
+	if cc.persist == nil {
+		cc.persist = &persist.Persist{}
+	}
 	if cc.persist != nil && cc.persist.PrivateNodeKey.IsZero() {
 		cc.logf("Generating a new nodekey.")
 		cc.persist.OldPrivateNodeKey = cc.persist.PrivateNodeKey
@@ -281,6 +286,8 @@ func (cc *mockControl) UpdateEndpoints(endpoints []tailcfg.Endpoint) {
 // predictable, but maybe a bit less thorough. This is more of an overall
 // state machine test than a test of the wgengine+magicsock integration.
 func TestStateMachine(t *testing.T) {
+	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
 	c := qt.New(t)
 
 	logf := tstest.WhileTestRunningLogger(t)
@@ -304,10 +311,10 @@ func TestStateMachine(t *testing.T) {
 		cc.opts = opts
 		cc.logfActual = opts.Logf
 		cc.authBlocked = true
-		cc.persist = &cc.opts.Persist
+		cc.persist = cc.opts.Persist.Clone()
 		cc.mu.Unlock()
 
-		cc.logf("ccGen: new mockControl.")
+		t.Logf("ccGen: new mockControl.")
 		cc.called("New")
 		return cc, nil
 	})
@@ -585,25 +592,29 @@ func TestStateMachine(t *testing.T) {
 
 	// Let's make the logout succeed.
 	t.Logf("\n\nLogout (async) - succeed")
-	notifies.expect(1)
+	notifies.expect(3)
 	cc.setAuthBlocked(true)
 	cc.send(nil, "", false, nil)
 	{
-		nn := notifies.drain(1)
-		cc.assertCalls("unpause", "unpause")
+		nn := notifies.drain(3)
+		cc.assertCalls("unpause", "unpause", "Shutdown", "unpause", "New", "unpause")
 		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[0].State)
-		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
+		c.Assert(*nn[0].State, qt.Equals, ipn.NoState)
+		c.Assert(nn[1].Prefs, qt.IsNotNil) // emptyPrefs
+		c.Assert(nn[2].State, qt.IsNotNil)
+		c.Assert(*nn[2].State, qt.Equals, ipn.NeedsLogin)
+		c.Assert(b.Prefs().LoggedOut(), qt.IsFalse)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
+		c.Assert(b.State(), qt.Equals, ipn.NeedsLogin)
 	}
 
-	// A second logout should do nothing, since the prefs haven't changed.
+	// A second logout should reset all prefs.
 	t.Logf("\n\nLogout2 (async)")
-	notifies.expect(0)
+	notifies.expect(1)
 	b.Logout()
 	{
-		notifies.drain(0)
+		nn := notifies.drain(1)
+		c.Assert(nn[0].Prefs, qt.IsNotNil) // emptyPrefs
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
 		cc.assertCalls("StartLogout", "unpause")
@@ -620,7 +631,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		notifies.drain(0)
-		cc.assertCalls("unpause", "unpause")
+		cc.assertCalls()
 		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -647,7 +658,7 @@ func TestStateMachine(t *testing.T) {
 	cc.send(nil, "", false, nil)
 	{
 		notifies.drain(0)
-		cc.assertCalls("unpause", "unpause")
+		cc.assertCalls()
 		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -679,10 +690,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
-	// Let's break the rules a little. Our control server accepts
-	// your invalid login attempt, with no need for an interactive login.
-	// (This simulates an admin reviving a key that you previously
-	// disabled.)
+	b.Login(nil)
 	t.Logf("\n\nLoginFinished3")
 	notifies.expect(3)
 	cc.setAuthBlocked(false)
@@ -692,9 +700,10 @@ func TestStateMachine(t *testing.T) {
 	})
 	{
 		nn := notifies.drain(3)
-		cc.assertCalls("unpause", "unpause", "unpause")
+		cc.assertCalls("Login", "unpause", "unpause", "unpause")
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
+		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
 		c.Assert(nn[1].Prefs.Persist().LoginName, qt.Equals, "user2")
@@ -737,7 +746,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[1].State, qt.IsNotNil)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
-		c.Assert(ipn.Stopped, qt.Equals, *nn[1].State)
+		c.Assert(*nn[1].State, qt.Equals, ipn.Stopped)
 	}
 
 	// When logged in but !WantRunning, ipn leaves us unpaused to retrieve
