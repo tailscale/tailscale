@@ -2100,8 +2100,15 @@ func (b *LocalBackend) shouldUploadServices() bool {
 
 func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Lock()
-	b.pm.SetCurrentUser(uid)
-	b.mu.Unlock()
+	if b.pm.CurrentUser() == uid {
+		b.mu.Unlock()
+		return
+	}
+	if err := b.pm.SetCurrentUser(uid); err != nil {
+		b.mu.Unlock()
+		return
+	}
+	b.resetForProfileChangeLockedOnEntry()
 }
 
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
