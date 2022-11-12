@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -38,6 +39,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
@@ -423,7 +425,7 @@ func (s *Server) printAuthURLLoop() {
 
 func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	s.mu.Lock()
-	ln, ok := s.listeners[listenKey{"tcp", "", fmt.Sprint(port)}]
+	ln, ok := s.listeners[listenKey{"tcp", "", port}]
 	s.mu.Unlock()
 	if !ok {
 		c.Close()
@@ -500,16 +502,24 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
-	host, port, err := net.SplitHostPort(addr)
+	switch network {
+	case "", "tcp", "tcp4", "tcp6":
+	default:
+		return nil, errors.New("unsupported network type")
+	}
+	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("tsnet: %w", err)
 	}
-
+	port, err := net.LookupPort(network, portStr)
+	if err != nil || port < 0 || port > math.MaxUint16 {
+		return nil, fmt.Errorf("invalid port: %w", err)
+	}
 	if err := s.Start(); err != nil {
 		return nil, err
 	}
 
-	key := listenKey{network, host, port}
+	key := listenKey{network, host, uint16(port)}
 	ln := &listener{
 		s:    s,
 		key:  key,
@@ -518,14 +528,11 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 		conn: make(chan net.Conn),
 	}
 	s.mu.Lock()
-	if s.listeners == nil {
-		s.listeners = map[listenKey]*listener{}
-	}
 	if _, ok := s.listeners[key]; ok {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("tsnet: listener already open for %s, %s", network, addr)
 	}
-	s.listeners[key] = ln
+	mak.Set(&s.listeners, key, ln)
 	s.mu.Unlock()
 	return ln, nil
 }
@@ -533,7 +540,7 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 type listenKey struct {
 	network string
 	host    string
-	port    string
+	port    uint16
 }
 
 type listener struct {
