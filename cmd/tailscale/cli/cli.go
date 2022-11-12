@@ -184,6 +184,7 @@ change in the future.
 	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, idTokenCmd)
+		rootCmd.Subcommands = append(rootCmd.Subcommands, serveCmd)
 	}
 
 	// Don't advertise the debug command, but it exists.
