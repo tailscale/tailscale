@@ -24,6 +24,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -34,6 +35,10 @@ import (
 
 var Stderr io.Writer = os.Stderr
 var Stdout io.Writer = os.Stdout
+
+func errf(format string, a ...any) {
+	fmt.Fprintf(Stderr, format, a...)
+}
 
 func printf(format string, a ...any) {
 	fmt.Fprintf(Stdout, format, a...)
@@ -183,13 +188,20 @@ change in the future.
 		}
 	}
 	if envknob.UseWIPCode() {
-		rootCmd.Subcommands = append(rootCmd.Subcommands, idTokenCmd)
-		rootCmd.Subcommands = append(rootCmd.Subcommands, serveCmd)
+		rootCmd.Subcommands = append(rootCmd.Subcommands,
+			idTokenCmd,
+			serveCmd,
+		)
 	}
 
 	// Don't advertise the debug command, but it exists.
-	if strSliceContains(args, "debug") {
+	switch {
+	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
+	case slices.Contains(args, "login"):
+		rootCmd.Subcommands = append(rootCmd.Subcommands, loginCmd)
+	case slices.Contains(args, "switch"):
+		rootCmd.Subcommands = append(rootCmd.Subcommands, switchCmd)
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
@@ -285,15 +297,6 @@ func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) error {
 		bc.GotNotifyMsg(msg)
 	}
 	return ctx.Err()
-}
-
-func strSliceContains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // usageFuncNoDefaultValues is like usageFunc but doesn't print default values.

@@ -58,7 +58,9 @@ considered settings that need to be re-specified when modifying
 settings.)
 `),
 	FlagSet: upFlagSet,
-	Exec:    runUp,
+	Exec: func(ctx context.Context, args []string) error {
+		return runUp(ctx, args, upArgsGlobal)
+	},
 }
 
 func effectiveGOOS() string {
@@ -81,17 +83,19 @@ func acceptRouteDefault(goos string) bool {
 	}
 }
 
-var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgs)
+var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
 func inTest() bool { return flag.Lookup("test.v") != nil }
 
-func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
-	upf := newFlagSet("up")
+// newUpFlagSet returns a new flag set for the "up" and "login" commands.
+func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
+	if cmd != "up" && cmd != "login" {
+		panic("cmd must be up or login")
+	}
+	upf := newFlagSet(cmd)
 
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
-	upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
-	upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
-	upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
+	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
@@ -102,7 +106,6 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 	upf.BoolVar(&upArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
 	upf.BoolVar(&upArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
 	upf.StringVar(&upArgs.advertiseTags, "advertise-tags", "", "comma-separated ACL tags to request; each must start with \"tag:\" (e.g. \"tag:eng,tag:montreal,tag:ssh\")")
-	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
@@ -117,7 +120,14 @@ func newUpFlagSet(goos string, upArgs *upArgsT) *flag.FlagSet {
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
 	upf.DurationVar(&upArgs.timeout, "timeout", 0, "maximum amount of time to wait for tailscaled to enter a Running state; default (0s) blocks forever")
-	registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
+
+	if cmd == "up" {
+		// Some flags are only for "up", not "login".
+		upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		upf.BoolVar(&upArgs.reset, "reset", false, "reset unspecified settings to their default values")
+		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
+		registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
+	}
 	return upf
 }
 
@@ -167,7 +177,7 @@ func (a upArgsT) getAuthKey() (string, error) {
 	return v, nil
 }
 
-var upArgs upArgsT
+var upArgsGlobal upArgsT
 
 // Fields output when `tailscale up --json` is used. Two JSON blocks will be output.
 //
@@ -427,7 +437,7 @@ func presentSSHToggleRisk(wantSSH, haveSSH bool, acceptedRisks string) error {
 	return presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, acceptedRisks)
 }
 
-func runUp(ctx context.Context, args []string) (retErr error) {
+func runUp(ctx context.Context, args []string, upArgs upArgsT) (retErr error) {
 	var egg bool
 	if len(args) > 0 {
 		egg = fmt.Sprint(args) == "[up down down left right left right b a]"
@@ -936,7 +946,7 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 		return env.curExitNodeIP.String()
 	}
 
-	fs := newUpFlagSet(env.goos, new(upArgsT) /* dummy */)
+	fs := newUpFlagSet(env.goos, new(upArgsT) /* dummy */, "up")
 	fs.VisitAll(func(f *flag.Flag) {
 		if preflessFlag(f.Name) {
 			return
