@@ -9,9 +9,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 )
 
@@ -77,11 +79,6 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		return err
 	}
 
-	routes, err := calcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
-	if err != nil {
-		return err
-	}
-
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
 			RouteAll:               setArgs.acceptRoutes,
@@ -90,7 +87,6 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			ShieldsUp:              setArgs.shieldsUp,
 			RunSSH:                 setArgs.runSSH,
 			Hostname:               setArgs.hostname,
-			AdvertiseRoutes:        routes,
 			OperatorUser:           setArgs.opUser,
 		},
 	}
@@ -105,20 +101,32 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		}
 	}
 
+	var advertiseExitNodeSet, advertiseRoutesSet bool
 	setFlagSet.Visit(func(f *flag.Flag) {
 		updateMaskedPrefsFromUpOrSetFlag(maskedPrefs, f.Name)
+		switch f.Name {
+		case "advertise-exit-node":
+			advertiseExitNodeSet = true
+		case "advertise-routes":
+			advertiseRoutesSet = true
+		}
 	})
-
 	if maskedPrefs.IsEmpty() {
 		return flag.ErrHelp
 	}
 
-	if maskedPrefs.RunSSHSet {
-		curPrefs, err := localClient.GetPrefs(ctx)
+	curPrefs, err := localClient.GetPrefs(ctx)
+	if err != nil {
+		return err
+	}
+	if maskedPrefs.AdvertiseRoutesSet {
+		maskedPrefs.AdvertiseRoutes, err = calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet, curPrefs, setArgs)
 		if err != nil {
 			return err
 		}
+	}
 
+	if maskedPrefs.RunSSHSet {
 		wantSSH, haveSSH := maskedPrefs.RunSSH, curPrefs.RunSSH
 		if err := presentSSHToggleRisk(wantSSH, haveSSH, setArgs.acceptedRisks); err != nil {
 			return err
@@ -127,4 +135,34 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	_, err = localClient.EditPrefs(ctx, maskedPrefs)
 	return err
+}
+
+// calcAdvertiseRoutesForSet returns the new value for Prefs.AdvertiseRoutes based on the
+// current value, the flags passed to "tailscale set".
+// advertiseExitNodeSet is whether the --advertise-exit-node flag was set.
+// advertiseRoutesSet is whether the --advertise-routes flag was set.
+// curPrefs is the current Prefs.
+// setArgs is the parsed command-line arguments.
+func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, curPrefs *ipn.Prefs, setArgs setArgsT) (routes []netip.Prefix, err error) {
+	if advertiseExitNodeSet && advertiseRoutesSet {
+		return calcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
+
+	}
+	if advertiseRoutesSet {
+		return calcAdvertiseRoutes(setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
+	}
+	if advertiseExitNodeSet {
+		alreadyAdvertisesExitNode := curPrefs.AdvertisesExitNode()
+		if alreadyAdvertisesExitNode == setArgs.advertiseDefaultRoute {
+			return curPrefs.AdvertiseRoutes, nil
+		}
+		routes = tsaddr.FilterPrefixesCopy(curPrefs.AdvertiseRoutes, func(p netip.Prefix) bool {
+			return p.Bits() != 0
+		})
+		if setArgs.advertiseDefaultRoute {
+			routes = append(routes, tsaddr.AllIPv4(), tsaddr.AllIPv6())
+		}
+		return routes, nil
+	}
+	return nil, nil
 }

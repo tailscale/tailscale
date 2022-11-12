@@ -261,6 +261,9 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 		routeMap[netip.MustParsePrefix("0.0.0.0/0")] = true
 		routeMap[netip.MustParsePrefix("::/0")] = true
 	}
+	if len(routeMap) == 0 {
+		return nil, nil
+	}
 	routes := make([]netip.Prefix, 0, len(routeMap))
 	for r := range routeMap {
 		routes = append(routes, r)
