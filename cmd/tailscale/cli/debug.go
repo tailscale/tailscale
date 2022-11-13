@@ -562,17 +562,6 @@ var devStoreSetArgs struct {
 }
 
 func runDevStoreSet(ctx context.Context, args []string) error {
-	// TODO(bradfitz): remove this temporary (2022-11-09) hack once
-	// profile stuff and serving CLI commands are more fleshed out.
-	isServe := len(args) >= 1 && strings.HasPrefix(args[0], "_serve/")
-	if isServe {
-		st, err := localClient.StatusWithoutPeers(ctx)
-		if err != nil {
-			return err
-		}
-		args[0] = "_serve/node-" + string(st.Self.ID)
-		log.Printf("Using key %q instead.", args[0])
-	}
 	if len(args) != 2 {
 		return errors.New("usage: dev-store-set --danger <key> <value>")
 	}
@@ -584,11 +573,6 @@ func runDevStoreSet(ctx context.Context, args []string) error {
 		valb, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
-		}
-		if isServe {
-			if err := json.Unmarshal(valb, new(ipn.ServeConfig)); err != nil {
-				return fmt.Errorf("invalid JSON: %w", err)
-			}
 		}
 		val = string(valb)
 	}
