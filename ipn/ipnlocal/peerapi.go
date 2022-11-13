@@ -622,11 +622,11 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 	}
 	target := r.Header.Get("Tailscale-Ingress-Target")
 	if target == "" {
-		bad("Tailscale-Target-Target header not set")
+		bad("Tailscale-Ingress-Target header not set")
 		return
 	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
-		bad("Tailscale-Target-Target header invalid; want host:port")
+		bad("Tailscale-Ingress-Target header invalid; want host:port")
 		return
 	}
 
