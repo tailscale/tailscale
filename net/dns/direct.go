@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -293,10 +294,10 @@ func (m *directManager) setWant(want []byte) {
 	m.wantResolvConf = want
 }
 
+var warnTrample = health.NewWarnable()
+
 // checkForFileTrample checks whether /etc/resolv.conf has been trampled
 // by another program on the system. (e.g. a DHCP client)
-//
-// For now (2022-11-12) this only logs on changes in state.
 func (m *directManager) checkForFileTrample() {
 	m.mu.Lock()
 	want := m.wantResolvConf
@@ -313,13 +314,13 @@ func (m *directManager) checkForFileTrample() {
 		return
 	}
 	if bytes.Equal(cur, want) {
+		warnTrample.Set(nil)
 		if lastWarn != nil {
 			m.mu.Lock()
 			m.lastWarnContents = nil
 			m.mu.Unlock()
 			m.logf("trample: resolv.conf again matches expected content")
 		}
-		// TODO(bradfitz): register with health package that all is well
 		return
 	}
 	if bytes.Equal(cur, lastWarn) {
@@ -336,7 +337,7 @@ func (m *directManager) checkForFileTrample() {
 		show = show[:1024]
 	}
 	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
-	// TODO(bradfitz): register with health package that something is wrong
+	warnTrample.Set(errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
 }
 
 func (m *directManager) SetDNS(config OSConfig) (err error) {
