@@ -93,7 +93,9 @@ func (s *serveListener) Run() {
 	for {
 		ln, err := net.Listen("tcp", s.ap.String())
 		if err != nil {
-			s.logf("serve failed to listen on %v, backing off: %v", s.ap, err)
+			if s.shouldWarnAboutListenError(err) {
+				s.logf("serve failed to listen on %v, backing off: %v", s.ap, err)
+			}
 			s.bo.BackOff(s.ctx, err)
 			continue
 		}
@@ -109,6 +111,17 @@ func (s *serveListener) Run() {
 			s.logf("serve listener accept error, retrying: %v", err)
 		}
 	}
+}
+
+func (s *serveListener) shouldWarnAboutListenError(err error) bool {
+	if !s.b.e.GetLinkMonitor().InterfaceState().HasIP(s.ap.Addr()) {
+		// Machine likely doesn't have IPv6 enabled (or the IP is still being
+		// assigned). No need to warn. Notably, WSL2 (Issue 6303).
+		return false
+	}
+	// TODO(bradfitz): check errors.Is(err, syscall.EADDRNOTAVAIL) etc? Let's
+	// see what happens in practice.
+	return true
 }
 
 // handleServeListenersAccept accepts connections for the Listener.
