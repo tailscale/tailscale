@@ -400,6 +400,22 @@ func (s *State) EqualFiltered(s2 *State, useInterface InterfaceFilter, useIP IPF
 	return true
 }
 
+// HasIP reports whether any interface has the provided IP address.
+func (s *State) HasIP(ip netip.Addr) bool {
+	if s == nil {
+		return false
+	}
+	want := netip.PrefixFrom(ip, ip.BitLen())
+	for _, pv := range s.InterfaceIPs {
+		for _, p := range pv {
+			if p == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func interfacesEqual(a, b Interface) bool {
 	return a.Index == b.Index &&
 		a.MTU == b.MTU &&
