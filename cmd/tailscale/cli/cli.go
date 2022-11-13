@@ -190,11 +190,10 @@ change in the future.
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands,
 			idTokenCmd,
-			serveCmd,
 		)
 	}
 
-	// Don't advertise the debug command, but it exists.
+	// Don't advertise these commands, but they're still explicitly available.
 	switch {
 	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
@@ -202,6 +201,8 @@ change in the future.
 		rootCmd.Subcommands = append(rootCmd.Subcommands, loginCmd)
 	case slices.Contains(args, "switch"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, switchCmd)
+	case slices.Contains(args, "serve"):
+		rootCmd.Subcommands = append(rootCmd.Subcommands, serveCmd)
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)

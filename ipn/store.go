@@ -108,9 +108,9 @@ type ServeConfig struct {
 	// keyed by mount point ("/", "/foo", etc)
 	Web map[HostPort]*WebServerConfig `json:",omitempty"`
 
-	// AllowIngress is the set of SNI:port values for which ingress
+	// AllowFunnel is the set of SNI:port values for which funnel
 	// traffic is allowed, from trusted ingress peers.
-	AllowIngress map[HostPort]bool `json:",omitempty"`
+	AllowFunnel map[HostPort]bool `json:",omitempty"`
 }
 
 // HostPort is an SNI name and port number, joined by a colon.
@@ -119,7 +119,7 @@ type HostPort string
 
 // WebServerConfig describes a web server's configuration.
 type WebServerConfig struct {
-	Handlers map[string]*HTTPHandler
+	Handlers map[string]*HTTPHandler // mountPoint => handler
 }
 
 // TCPPortHandler describes what to do when handling a TCP

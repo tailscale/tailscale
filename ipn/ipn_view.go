@@ -176,15 +176,15 @@ func (v ServeConfigView) Web() views.MapFn[HostPort, *WebServerConfig, WebServer
 	})
 }
 
-func (v ServeConfigView) AllowIngress() views.Map[HostPort, bool] {
-	return views.MapOf(v.ж.AllowIngress)
+func (v ServeConfigView) AllowFunnel() views.Map[HostPort, bool] {
+	return views.MapOf(v.ж.AllowFunnel)
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
-	TCP          map[uint16]*TCPPortHandler
-	Web          map[HostPort]*WebServerConfig
-	AllowIngress map[HostPort]bool
+	TCP         map[uint16]*TCPPortHandler
+	Web         map[HostPort]*WebServerConfig
+	AllowFunnel map[HostPort]bool
 }{})
 
 // View returns a readonly view of TCPPortHandler.

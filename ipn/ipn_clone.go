@@ -76,10 +76,10 @@ func (src *ServeConfig) Clone() *ServeConfig {
 			dst.Web[k] = v.Clone()
 		}
 	}
-	if dst.AllowIngress != nil {
-		dst.AllowIngress = map[HostPort]bool{}
-		for k, v := range src.AllowIngress {
-			dst.AllowIngress[k] = v
+	if dst.AllowFunnel != nil {
+		dst.AllowFunnel = map[HostPort]bool{}
+		for k, v := range src.AllowFunnel {
+			dst.AllowFunnel[k] = v
 		}
 	}
 	return dst
@@ -87,9 +87,9 @@ func (src *ServeConfig) Clone() *ServeConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
-	TCP          map[uint16]*TCPPortHandler
-	Web          map[HostPort]*WebServerConfig
-	AllowIngress map[HostPort]bool
+	TCP         map[uint16]*TCPPortHandler
+	Web         map[HostPort]*WebServerConfig
+	AllowFunnel map[HostPort]bool
 }{})
 
 // Clone makes a deep copy of TCPPortHandler.
