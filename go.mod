@@ -30,6 +30,7 @@ require (
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3
 	github.com/iancoleman/strcase v0.2.0
+	github.com/illarion/gonotify v1.0.1
 	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
