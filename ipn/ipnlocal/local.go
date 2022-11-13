@@ -1298,6 +1298,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	return nil
 }
 
+var warnInvalidUnsignedNodes = health.NewWarnable()
+
 // updateFilterLocked updates the packet filter in wgengine based on the
 // given netMap and user preferences.
 //
@@ -1329,10 +1331,10 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 		if packetFilterPermitsUnlockedNodes(netMap.Peers, packetFilter) {
 			err := errors.New("server sent invalid packet filter permitting traffic to unlocked nodes; rejecting all packets for safety")
-			health.SetValidUnsignedNodes(err)
+			warnInvalidUnsignedNodes.Set(err)
 			packetFilter = nil
 		} else {
-			health.SetValidUnsignedNodes(nil)
+			warnInvalidUnsignedNodes.Set(nil)
 		}
 	}
 	if prefs.Valid() {
