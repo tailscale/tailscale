@@ -871,9 +871,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	if health.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
-	if health.NetworkCategoryHealth() != nil {
-		extraDebugFlags = append(extraDebugFlags, "warn-network-category-unhealthy")
-	}
+	extraDebugFlags = health.AppendWarnableDebugFlags(extraDebugFlags)
 	if hostinfo.DisabledEtcAptSource() {
 		extraDebugFlags = append(extraDebugFlags, "warn-etc-apt-source-disabled")
 	}

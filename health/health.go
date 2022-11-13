@@ -25,9 +25,10 @@ var (
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	sysErr   = map[Subsystem]error{}                     // error key => err (or nil for no error)
-	watchers = map[*watchHandle]func(Subsystem, error){} // opt func to run if error state changes
-	timer    *time.Timer
+	sysErr    = map[Subsystem]error{}                     // error key => err (or nil for no error)
+	watchers  = map[*watchHandle]func(Subsystem, error){} // opt func to run if error state changes
+	warnables = map[*Warnable]struct{}{}                  // set of warnables
+	timer     *time.Timer
 
 	debugHandler = map[string]http.Handler{}
 
@@ -67,16 +68,85 @@ const (
 
 	// SysDNSManager is the name of the net/dns manager subsystem.
 	SysDNSManager = Subsystem("dns-manager")
-
-	// SysNetworkCategory is the name of the subsystem that sets
-	// the Windows network adapter's "category" (public, private, domain).
-	// If it's unhealthy, the Windows firewall rules won't match.
-	SysNetworkCategory = Subsystem("network-category")
-
-	// SysValidUnsignedNodes is a health check area for recording problems
-	// with the unsigned nodes that the coordination server sent.
-	SysValidUnsignedNodes = Subsystem("valid-unsigned-nodes")
 )
+
+// NewWarnable returns a new warnable item that the caller can mark
+// as health or in warning state.
+func NewWarnable(opts ...WarnableOpt) *Warnable {
+	w := new(Warnable)
+	for _, o := range opts {
+		o.mod(w)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	warnables[w] = struct{}{}
+	return w
+}
+
+// WarnableOpt is an option passed to NewWarnable.
+type WarnableOpt interface {
+	mod(*Warnable)
+}
+
+// WithMapDebugFlag returns a WarnableOpt for NewWarnable that makes the returned
+// Warnable report itself to the coordination server as broken with this
+// string in MapRequest.DebugFlag when Set to a non-nil value.
+func WithMapDebugFlag(name string) WarnableOpt {
+	return warnOptFunc(func(w *Warnable) {
+		w.debugFlag = name
+	})
+}
+
+type warnOptFunc func(*Warnable)
+
+func (f warnOptFunc) mod(w *Warnable) { f(w) }
+
+// Warnable is a health check item that may or may not be in a bad warning state.
+// The caller of NewWarnable is responsible for calling Set to update the state.
+type Warnable struct {
+	debugFlag string // optional MapRequest.DebugFlag to send when unhealthy
+
+	isSet atomic.Bool
+	mu    sync.Mutex
+	err   error
+}
+
+// Set updates the Warnable's state.
+// If non-nil, it's considered unhealthy.
+func (w *Warnable) Set(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.err = err
+	w.isSet.Store(err != nil)
+}
+
+func (w *Warnable) get() error {
+	if !w.isSet.Load() {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err
+}
+
+// AppendWarnableDebugFlags appends to base any health items that are currently in failed
+// state and were created with MapDebugFlag.
+func AppendWarnableDebugFlags(base []string) []string {
+	ret := base
+
+	mu.Lock()
+	defer mu.Unlock()
+	for w := range warnables {
+		if w.debugFlag == "" {
+			continue
+		}
+		if err := w.get(); err != nil {
+			ret = append(ret, w.debugFlag)
+		}
+	}
+	sort.Strings(ret[len(base):]) // sort the new ones
+	return ret
+}
 
 type watchHandle byte
 
@@ -103,9 +173,6 @@ func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 	}
 }
 
-// SetValidUnsignedNodes sets the state of the map response validation.
-func SetValidUnsignedNodes(err error) { set(SysValidUnsignedNodes, err) }
-
 // SetRouterHealth sets the state of the wgengine/router.Router.
 func SetRouterHealth(err error) { set(SysRouter, err) }
 
@@ -127,12 +194,6 @@ func SetDNSManagerHealth(err error) { set(SysDNSManager, err) }
 
 // DNSOSHealth returns the net/dns.OSConfigurator error state.
 func DNSOSHealth() error { return get(SysDNSOS) }
-
-// SetNetworkCategoryHealth sets the state of setting the network adaptor's category.
-// This only applies on Windows.
-func SetNetworkCategoryHealth(err error) { set(SysNetworkCategory, err) }
-
-func NetworkCategoryHealth() error { return get(SysNetworkCategory) }
 
 func RegisterDebugHandler(typ string, h http.Handler) {
 	mu.Lock()
@@ -383,6 +444,11 @@ func overallErrorLocked() error {
 			continue
 		}
 		errs = append(errs, fmt.Errorf("%v: %w", sys, err))
+	}
+	for w := range warnables {
+		if err := w.get(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	for regionID, problem := range derpRegionHealthProblem {
 		errs = append(errs, fmt.Errorf("derp%d: %v", regionID, problem))
