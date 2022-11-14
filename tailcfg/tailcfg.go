@@ -86,7 +86,8 @@ type CapabilityVersion int
 //   - 47: 2022-10-11: Register{Request,Response}.NodeKeySignature
 //   - 48: 2022-11-02: Node.UnsignedPeerAPIOnly
 //   - 49: 2022-11-03: Client understands EarlyNoise
-const CurrentCapabilityVersion CapabilityVersion = 49
+//   - 50: 2022-11-14: Client understands CapabilityIngress
+const CurrentCapabilityVersion CapabilityVersion = 50
 
 type StableID string
 
