@@ -7,12 +7,18 @@ package cli
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/mattn/go-colorable"
+	"github.com/mattn/go-isatty"
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 )
@@ -29,6 +35,7 @@ var netlockCmd = &ffcli.Command{
 		nlSignCmd,
 		nlDisableCmd,
 		nlDisablementKDFCmd,
+		nlLogCmd,
 	},
 	Exec: runNetworkLockStatus,
 }
@@ -280,5 +287,102 @@ func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("disablement:%x\n", tka.DisablementKDF(secret))
+	return nil
+}
+
+var nlLogArgs struct {
+	limit int
+}
+
+var nlLogCmd = &ffcli.Command{
+	Name:       "log",
+	ShortUsage: "log [--limit N]",
+	ShortHelp:  "List changes applied to network-lock",
+	Exec:       runNetworkLockLog,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("lock log")
+		fs.IntVar(&nlLogArgs.limit, "limit", 50, "max number of updates to list")
+		return fs
+	})(),
+}
+
+func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, error) {
+	terminalYellow := ""
+	terminalClear := ""
+	if color {
+		terminalYellow = "\x1b[33m"
+		terminalClear = "\x1b[0m"
+	}
+
+	var stanza strings.Builder
+	printKey := func(key *tka.Key, prefix string) {
+		fmt.Fprintf(&stanza, "%sType: %s\n", prefix, key.Kind.String())
+		fmt.Fprintf(&stanza, "%sKeyID: %x\n", prefix, key.ID())
+		fmt.Fprintf(&stanza, "%sVotes: %d\n", prefix, key.Votes)
+		if key.Meta != nil {
+			fmt.Fprintf(&stanza, "%sMetadata: %+v\n", prefix, key.Meta)
+		}
+	}
+
+	var aum tka.AUM
+	if err := aum.Unserialize(update.Raw); err != nil {
+		return "", fmt.Errorf("decoding: %w", err)
+	}
+
+	fmt.Fprintf(&stanza, "%supdate %x (%s)%s\n", terminalYellow, update.Hash, update.Change, terminalClear)
+
+	switch update.Change {
+	case tka.AUMAddKey.String():
+		printKey(aum.Key, "")
+	case tka.AUMRemoveKey.String():
+		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+
+	case tka.AUMUpdateKey.String():
+		fmt.Fprintf(&stanza, "KeyID: %x\n", aum.KeyID)
+		if aum.Votes != nil {
+			fmt.Fprintf(&stanza, "Votes: %d\n", aum.Votes)
+		}
+		if aum.Meta != nil {
+			fmt.Fprintf(&stanza, "Metadata: %+v\n", aum.Meta)
+		}
+
+	case tka.AUMCheckpoint.String():
+		fmt.Fprintln(&stanza, "Disablement values:")
+		for _, v := range aum.State.DisablementSecrets {
+			fmt.Fprintf(&stanza, " - %x\n", v)
+		}
+		fmt.Fprintln(&stanza, "Keys:")
+		for _, k := range aum.State.Keys {
+			printKey(&k, "  ")
+		}
+
+	default:
+		// Print a JSON encoding of the AUM as a fallback.
+		e := json.NewEncoder(&stanza)
+		e.SetIndent("", "\t")
+		if err := e.Encode(aum); err != nil {
+			return "", err
+		}
+		stanza.WriteRune('\n')
+	}
+
+	return stanza.String(), nil
+}
+
+func runNetworkLockLog(ctx context.Context, args []string) error {
+	updates, err := localClient.NetworkLockLog(ctx, nlLogArgs.limit)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	useColor := isatty.IsTerminal(os.Stdout.Fd())
+
+	stdOut := colorable.NewColorableStdout()
+	for _, update := range updates {
+		stanza, err := nlDescribeUpdate(update, useColor)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdOut, stanza)
+	}
 	return nil
 }

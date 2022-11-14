@@ -647,6 +647,43 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	return err
 }
 
+// NetworkLockLog returns the changelog of TKA state up to maxEntries in size.
+func (b *LocalBackend) NetworkLockLog(maxEntries int) ([]ipnstate.NetworkLockUpdate, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.tka == nil {
+		return nil, errNetworkLockNotActive
+	}
+
+	var out []ipnstate.NetworkLockUpdate
+	cursor := b.tka.authority.Head()
+	for i := 0; i < maxEntries; i++ {
+		aum, err := b.tka.storage.AUM(cursor)
+		if err != nil {
+			if err == os.ErrNotExist {
+				break
+			}
+			return out, fmt.Errorf("reading AUM: %w", err)
+		}
+
+		update := ipnstate.NetworkLockUpdate{
+			Hash:   cursor,
+			Change: aum.MessageKind.String(),
+			Raw:    aum.Serialize(),
+		}
+		out = append(out, update)
+
+		parent, hasParent := aum.Parent()
+		if !hasParent {
+			break
+		}
+		cursor = parent
+	}
+
+	return out, nil
+}
+
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
 	p, err := nodeInfo.NodePublic.MarshalBinary()
 	if err != nil {

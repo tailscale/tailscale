@@ -82,6 +82,7 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
 	"status":                  (*Handler).serveStatus,
 	"tka/init":                (*Handler).serveTKAInit,
+	"tka/log":                 (*Handler).serveTKALog,
 	"tka/modify":              (*Handler).serveTKAModify,
 	"tka/sign":                (*Handler).serveTKASign,
 	"tka/status":              (*Handler).serveTKAStatus,
@@ -1162,6 +1163,37 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(200)
+}
+
+func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "use GET", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := 50
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		l, err := strconv.Atoi(limitStr)
+		if err != nil {
+			http.Error(w, "parsing 'limit' parameter: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		limit = int(l)
+	}
+
+	updates, err := h.b.NetworkLockLog(limit)
+	if err != nil {
+		http.Error(w, "reading log failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	j, err := json.MarshalIndent(updates, "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
 
 // serveProfiles serves profile switching-related endpoints. Supported methods

@@ -101,6 +101,16 @@ type NetworkLockStatus struct {
 	TrustedKeys []TKAKey
 }
 
+// NetworkLockUpdate describes a change to network-lock state.
+type NetworkLockUpdate struct {
+	Hash   [32]byte
+	Change string // values of tka.AUMKind.String()
+
+	// Raw contains the serialized AUM. The AUM is sent in serialized
+	// form to avoid transitive dependences bloating this package.
+	Raw []byte
+}
+
 // TailnetStatus is information about a Tailscale network ("tailnet").
 type TailnetStatus struct {
 	// Name is the name of the network that's currently in use.
