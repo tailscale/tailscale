@@ -159,7 +159,6 @@ type LocalBackend struct {
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
 	inServerMode   bool
 	machinePrivKey key.MachinePrivate
-	nlPrivKey      key.NLPrivate
 	tka            *tkaState
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
@@ -832,6 +831,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if !prefs.Persist.View().Equals(*st.Persist) {
 			prefsChanged = true
 			prefs.Persist = st.Persist.AsStruct()
+			if err := b.initTKALocked(); err != nil {
+				b.logf("initTKALocked: %v", err)
+			}
 		}
 	}
 	if st.URL != "" {
@@ -1174,9 +1176,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 	}
-	if err := b.initNLKeyLocked(); err != nil {
-		return fmt.Errorf("initNLKeyLocked: %w", err)
-	}
 
 	loggedOut := prefs.LoggedOut()
 
@@ -1232,7 +1231,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// but it won't take effect until the next Start().
 	cc, err := b.getNewControlClientFunc()(controlclient.Options{
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
-		GetNLPrivateKey:      b.createGetNLPrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
 		ServerURL:            b.serverURL,
@@ -1759,21 +1757,6 @@ func (b *LocalBackend) createGetMachinePrivateKeyFunc() func() (key.MachinePriva
 	}
 }
 
-func (b *LocalBackend) createGetNLPrivateKeyFunc() func() (key.NLPrivate, error) {
-	var cache syncs.AtomicValue[key.NLPrivate]
-	return func() (key.NLPrivate, error) {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if v, ok := cache.LoadOk(); ok {
-			return v, nil
-		}
-
-		priv := b.nlPrivKey
-		cache.Store(priv)
-		return priv, nil
-	}
-}
-
 // initMachineKeyLocked is called to initialize b.machinePrivKey.
 //
 // b.prefs must already be initialized.
@@ -1824,46 +1807,6 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	b.logf("machine key written to store")
-	return nil
-}
-
-// initNLKeyLocked is called to initialize b.nlPrivKey.
-//
-// b.prefs must already be initialized.
-//
-// b.stateKey should be set too, but just for nicer log messages.
-// b.mu must be held.
-func (b *LocalBackend) initNLKeyLocked() (err error) {
-	if !b.nlPrivKey.IsZero() {
-		// Already set.
-		return nil
-	}
-
-	keyText, err := b.store.ReadState(ipn.NLKeyStateKey)
-	if err == nil {
-		if err := b.nlPrivKey.UnmarshalText(keyText); err != nil {
-			return fmt.Errorf("invalid key in %s key of %v: %w", ipn.NLKeyStateKey, b.store, err)
-		}
-		if b.nlPrivKey.IsZero() {
-			return fmt.Errorf("invalid zero key stored in %v key of %v", ipn.NLKeyStateKey, b.store)
-		}
-		return nil
-	}
-	if err != ipn.ErrStateNotExist {
-		return fmt.Errorf("error reading %v key of %v: %w", ipn.NLKeyStateKey, b.store, err)
-	}
-
-	// If we didn't find one already on disk, generate a new one.
-	b.logf("generating new network-lock key")
-	b.nlPrivKey = key.NewNLPrivate()
-
-	keyText, _ = b.nlPrivKey.MarshalText()
-	if err := b.store.WriteState(ipn.NLKeyStateKey, keyText); err != nil {
-		b.logf("error writing network-lock key to store: %v", err)
-		return err
-	}
-
-	b.logf("network-lock key written to store")
 	return nil
 }
 
@@ -2703,17 +2646,6 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 	}
 
 	return dcfg
-}
-
-// SetTailnetKeyAuthority sets the key authority which should be
-// used for locked tailnets.
-//
-// It should only be called before the LocalBackend is used.
-func (b *LocalBackend) SetTailnetKeyAuthority(a *tka.Authority, storage *tka.FS) {
-	b.tka = &tkaState{
-		authority: a,
-		storage:   storage,
-	}
 }
 
 // SetVarRoot sets the root directory of Tailscale's writable
@@ -4053,11 +3985,58 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 	return b.resetForProfileChangeLockedOnEntry()
 }
 
+func (b *LocalBackend) initTKALocked() error {
+	cp := b.pm.CurrentProfile()
+	if cp.ID == "" {
+		b.tka = nil
+		return nil
+	}
+	if b.tka != nil {
+		if b.tka.profile == cp.ID {
+			// Already initialized.
+			return nil
+		}
+		// As we're switching profiles, we need to reset the TKA to nil.
+		b.tka = nil
+	}
+	root := b.TailscaleVarRoot()
+	if root == "" {
+		b.tka = nil
+		b.logf("network-lock unavailable; no state directory")
+		return nil
+	}
+
+	chonkDir := b.chonkPathLocked()
+	if _, err := os.Stat(chonkDir); err == nil {
+		// The directory exists, which means network-lock has been initialized.
+		storage, err := tka.ChonkDir(chonkDir)
+		if err != nil {
+			return fmt.Errorf("opening tailchonk: %v", err)
+		}
+		authority, err := tka.Open(storage)
+		if err != nil {
+			return fmt.Errorf("initializing tka: %v", err)
+		}
+
+		b.tka = &tkaState{
+			profile:   cp.ID,
+			authority: authority,
+			storage:   storage,
+		}
+		b.logf("tka initialized at head %x", authority.Head())
+	}
+
+	return nil
+}
+
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
 func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
+	if err := b.initTKALocked(); err != nil {
+		return err
+	}
 	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
 	return b.Start(ipn.Options{})
 }

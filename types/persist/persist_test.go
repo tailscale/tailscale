@@ -22,7 +22,7 @@ func fieldsOf(t reflect.Type) (fields []string) {
 }
 
 func TestPersistEqual(t *testing.T) {
-	persistHandles := []string{"LegacyFrontendPrivateMachineKey", "PrivateNodeKey", "OldPrivateNodeKey", "Provider", "LoginName", "UserProfile"}
+	persistHandles := []string{"LegacyFrontendPrivateMachineKey", "PrivateNodeKey", "OldPrivateNodeKey", "Provider", "LoginName", "UserProfile", "NetworkLockKey"}
 	if have := fieldsOf(reflect.TypeOf(Persist{})); !reflect.DeepEqual(have, persistHandles) {
 		t.Errorf("Persist.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, persistHandles)
@@ -30,6 +30,7 @@ func TestPersistEqual(t *testing.T) {
 
 	m1 := key.NewMachine()
 	k1 := key.NewNode()
+	nl1 := key.NewNLPrivate()
 	tests := []struct {
 		a, b *Persist
 		want bool
@@ -110,6 +111,16 @@ func TestPersistEqual(t *testing.T) {
 				ID:          tailcfg.UserID(3),
 				DisplayName: "foo",
 			}},
+			false,
+		},
+		{
+			&Persist{NetworkLockKey: nl1},
+			&Persist{NetworkLockKey: nl1},
+			true,
+		},
+		{
+			&Persist{NetworkLockKey: nl1},
+			&Persist{NetworkLockKey: key.NewNLPrivate()},
 			false,
 		},
 	}
