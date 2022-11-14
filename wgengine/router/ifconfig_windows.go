@@ -11,7 +11,6 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"runtime"
 	"sort"
 	"time"
 
@@ -178,17 +177,9 @@ func setPrivateNetwork(ifcLUID winipcfg.LUID) (bool, error) {
 		return false, fmt.Errorf("ifcLUID.GUID: %v", err)
 	}
 
-	// Lock OS thread when using OLE, which seems to be a requirement
-	// from the Microsoft docs. go-ole doesn't seem to handle it automatically.
-	// https://github.com/tailscale/tailscale/issues/921#issuecomment-727526807
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
+	// aaron: DO NOT call Initialize() or Uninitialize() on c!
+	// We've already handled that process-wide.
 	var c ole.Connection
-	if err := c.Initialize(); err != nil {
-		return false, fmt.Errorf("c.Initialize: %v", err)
-	}
-	defer c.Uninitialize()
 
 	m, err := winnet.NewNetworkListManager(&c)
 	if err != nil {
