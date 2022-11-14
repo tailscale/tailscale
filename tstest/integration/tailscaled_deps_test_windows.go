@@ -11,6 +11,7 @@ import (
 	// Otherwise cmd/go never sees that we depend on these packages'
 	// transitive deps when we run "go install tailscaled" in a child
 	// process and can cache a prior success when a dependency changes.
+	_ "github.com/dblohm7/wingoes/com"
 	_ "golang.org/x/sys/windows"
 	_ "golang.org/x/sys/windows/svc"
 	_ "golang.org/x/sys/windows/svc/eventlog"

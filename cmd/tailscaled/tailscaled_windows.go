@@ -29,6 +29,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/dblohm7/wingoes/com"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -50,6 +51,17 @@ import (
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
+
+func init() {
+	// Initialize COM process-wide.
+	comProcessType := com.Service
+	if !isWindowsService() {
+		comProcessType = com.ConsoleApp
+	}
+	if err := com.StartRuntime(comProcessType); err != nil {
+		log.Printf("wingoes.com.StartRuntime(%d) failed: %v", comProcessType, err)
+	}
+}
 
 const serviceName = "Tailscale"
 
