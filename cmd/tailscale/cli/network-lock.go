@@ -93,12 +93,14 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		fmt.Println()
 	}
 
-	p, err := st.PublicKey.MarshalText()
-	if err != nil {
-		return err
+	if !st.PublicKey.IsZero() {
+		p, err := st.PublicKey.MarshalText()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("This node's public-key: %s\n", p)
+		fmt.Println()
 	}
-	fmt.Printf("This node's public-key: %s\n", p)
-	fmt.Println()
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
 		fmt.Println("Keys trusted to make changes to network-lock:")

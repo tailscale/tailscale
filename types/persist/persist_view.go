@@ -70,6 +70,7 @@ func (v PersistView) OldPrivateNodeKey() key.NodePrivate { return v.ж.OldPrivat
 func (v PersistView) Provider() string                   { return v.ж.Provider }
 func (v PersistView) LoginName() string                  { return v.ж.LoginName }
 func (v PersistView) UserProfile() tailcfg.UserProfile   { return v.ж.UserProfile }
+func (v PersistView) NetworkLockKey() key.NLPrivate      { return v.ж.NetworkLockKey }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _PersistViewNeedsRegeneration = Persist(struct {
@@ -80,4 +81,5 @@ var _PersistViewNeedsRegeneration = Persist(struct {
 	Provider                        string
 	LoginName                       string
 	UserProfile                     tailcfg.UserProfile
+	NetworkLockKey                  key.NLPrivate
 }{})

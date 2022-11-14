@@ -86,6 +86,7 @@ type NetworkLockStatus struct {
 	Head *[32]byte
 
 	// PublicKey describes the node's network-lock public key.
+	// It may be zero if the node has not logged in.
 	PublicKey key.NLPublic
 
 	// NodeKey describes the node's current node-key. This field is not

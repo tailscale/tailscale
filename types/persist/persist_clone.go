@@ -32,4 +32,5 @@ var _PersistCloneNeedsRegeneration = Persist(struct {
 	Provider                        string
 	LoginName                       string
 	UserProfile                     tailcfg.UserProfile
+	NetworkLockKey                  key.NLPrivate
 }{})

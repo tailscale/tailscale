@@ -60,6 +60,11 @@ func (k NLPrivate) MarshalText() ([]byte, error) {
 	return toHex(k.k[:], nlPrivateHexPrefix), nil
 }
 
+// Equal reports whether k and other are the same key.
+func (k NLPrivate) Equal(other NLPrivate) bool {
+	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
+}
+
 // Public returns the public component of this key.
 func (k NLPrivate) Public() NLPublic {
 	var out NLPublic

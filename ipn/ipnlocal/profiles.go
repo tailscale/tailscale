@@ -252,8 +252,8 @@ func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error
 	return savedPrefs.View(), nil
 }
 
-// CurrentProfile returns the name and ID of the current profile, or "" if the profile
-// is not named.
+// CurrentProfile returns the current LoginProfile.
+// The value may be zero if the profile is not persisted.
 func (pm *profileManager) CurrentProfile() ipn.LoginProfile {
 	return *pm.currentProfile
 }

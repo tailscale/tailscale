@@ -70,7 +70,6 @@ type Direct struct {
 	linkMon                *monitor.Mon // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
-	getNLPrivateKey        func() (key.NLPrivate, error) // or nil
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
@@ -117,10 +116,6 @@ type Options struct {
 	PopBrowserURL        func(url string) // optional func to open browser
 	Dialer               *tsdial.Dialer   // non-nil
 	C2NHandler           http.Handler     // or nil
-
-	// GetNLPrivateKey specifies an optional function to use
-	// Network Lock. If nil, it's not used.
-	GetNLPrivateKey func() (key.NLPrivate, error)
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -232,7 +227,6 @@ func NewDirect(opts Options) (*Direct, error) {
 	c := &Direct{
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
-		getNLPrivateKey:        opts.GetNLPrivateKey,
 		serverURL:              opts.ServerURL,
 		timeNow:                opts.TimeNow,
 		logf:                   opts.Logf,
@@ -494,6 +488,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if !persist.OldPrivateNodeKey.IsZero() {
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
+	if persist.NetworkLockKey.IsZero() {
+		persist.NetworkLockKey = key.NewNLPrivate()
+	}
+	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
@@ -502,19 +500,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 
-	var nlPub key.NLPublic
 	var nodeKeySignature tkatype.MarshaledSignature
-	if c.getNLPrivateKey != nil {
-		priv, err := c.getNLPrivateKey()
-		if err != nil {
-			return false, "", nil, fmt.Errorf("get nl key: %v", err)
-		}
-		nlPub = priv.Public()
-
-		if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
-			if nodeKeySignature, err = resignNKS(priv, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
-				c.logf("Failed re-signing node-key signature: %v", err)
-			}
+	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
+		if nodeKeySignature, err = resignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
+			c.logf("Failed re-signing node-key signature: %v", err)
 		}
 	}
 

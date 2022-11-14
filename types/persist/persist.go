@@ -16,7 +16,8 @@ import (
 //go:generate go run tailscale.com/cmd/viewer -type=Persist
 
 // Persist is the JSON type stored on disk on nodes to remember their
-// settings between runs.
+// settings between runs. This is stored as part of ipn.Prefs and is
+// persisted per ipn.LoginProfile.
 type Persist struct {
 	_ structs.Incomparable
 
@@ -36,6 +37,7 @@ type Persist struct {
 	Provider          string
 	LoginName         string
 	UserProfile       tailcfg.UserProfile
+	NetworkLockKey    key.NLPrivate
 }
 
 // PublicNodeKey returns the public key for the node key.
@@ -65,7 +67,8 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.Provider == p2.Provider &&
 		p.LoginName == p2.LoginName &&
-		p.UserProfile == p2.UserProfile
+		p.UserProfile == p2.UserProfile &&
+		p.NetworkLockKey.Equal(p2.NetworkLockKey)
 }
 
 func (p *Persist) Pretty() string {
