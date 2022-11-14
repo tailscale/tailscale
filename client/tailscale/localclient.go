@@ -829,6 +829,17 @@ func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePubl
 	return nil
 }
 
+// NetworkLockLog returns up to maxEntries number of changes to network-lock state.
+func (lc *LocalClient) NetworkLockLog(ctx context.Context, maxEntries int) ([]ipnstate.NetworkLockUpdate, error) {
+	v := url.Values{}
+	v.Set("limit", fmt.Sprint(maxEntries))
+	body, err := lc.send(ctx, "GET", "/localapi/v0/tka/log?"+v.Encode(), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[[]ipnstate.NetworkLockUpdate](body)
+}
+
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
