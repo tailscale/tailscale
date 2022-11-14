@@ -330,7 +330,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 	defer b.mu.Unlock()
 
 	var nodeKey *key.NodePublic
-	if p := b.pm.CurrentPrefs(); p.Valid() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
 		nkp := p.Persist().PublicNodeKey()
 		nodeKey = &nkp
 	}
@@ -388,7 +388,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	var ourNodeKey key.NodePublic
 	b.mu.Lock()
-	if p := b.pm.CurrentPrefs(); p.Valid() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	b.mu.Unlock()
@@ -516,6 +516,14 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	var ourNodeKey key.NodePublic
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
+		ourNodeKey = p.Persist().PublicNodeKey()
+	}
+	if ourNodeKey.IsZero() {
+		return errors.New("no node-key: is tailscale logged in?")
+	}
+
 	if err := b.CanSupportNetworkLock(); err != nil {
 		return err
 	}
@@ -545,7 +553,6 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return nil
 	}
 
-	ourNodeKey := b.pm.CurrentPrefs().Persist().PublicNodeKey()
 	head := b.tka.authority.Head()
 	b.mu.Unlock()
 	resp, err := b.tkaDoSyncSend(ourNodeKey, head, aums, true)
@@ -580,7 +587,7 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	)
 
 	b.mu.Lock()
-	if p := b.pm.CurrentPrefs(); p.Valid() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if b.tka == nil {
