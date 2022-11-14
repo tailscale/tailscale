@@ -84,6 +84,10 @@ type Server struct {
 	// used.
 	AuthKey string
 
+	// ControlURL optionally specifies the coordination server URL.
+	// If empty, the Tailscale default is used.
+	ControlURL string
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -340,6 +344,7 @@ func (s *Server) start() (reterr error) {
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
+	prefs.ControlURL = s.ControlURL
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
