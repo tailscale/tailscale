@@ -15,6 +15,7 @@ import (
 	"golang.org/x/exp/slices"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
@@ -201,6 +202,8 @@ func (pm *profileManager) Profiles() []ipn.LoginProfile {
 // SwitchProfile switches to the profile with the given id.
 // If the profile is not known, it returns an errProfileNotFound.
 func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
+	metricSwitchProfile.Add(1)
+
 	kp, ok := pm.knownProfiles[id]
 	if !ok {
 		return errProfileNotFound
@@ -268,6 +271,8 @@ var errProfileNotFound = errors.New("profile not found")
 // useful for deleting the last profile. In other cases, it is
 // recommended to call SwitchProfile() first.
 func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
+	metricDeleteProfile.Add(1)
+
 	if id == "" && pm.isNewProfile {
 		// Deleting the in-memory only new profile, just create a new one.
 		pm.NewProfile()
@@ -298,6 +303,8 @@ func (pm *profileManager) writeKnownProfiles() error {
 // NewProfile creates and switches to a new unnamed profile. The new profile is
 // not persisted until SetPrefs is called with a logged-in user.
 func (pm *profileManager) NewProfile() {
+	metricNewProfile.Add(1)
+
 	pm.prefs = emptyPrefs
 	pm.isNewProfile = true
 	pm.currentProfile = &ipn.LoginProfile{}
@@ -420,6 +427,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, stateKey 
 }
 
 func (pm *profileManager) migrateFromLegacyPrefs() error {
+	metricMigration.Add(1)
 	pm.NewProfile()
 	k := ipn.LegacyGlobalDaemonStateKey
 	switch {
@@ -432,13 +440,26 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 	}
 	prefs, err := pm.loadSavedPrefs(k)
 	if err != nil {
+		metricMigrationError.Add(1)
 		return fmt.Errorf("calling ReadState on state store: %w", err)
 	}
 	pm.logf("migrating %q profile to new format", k)
 	if err := pm.SetPrefs(prefs); err != nil {
+		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}
 	// Do not delete the old state key, as we may be downgraded to an
 	// older version that still relies on it.
+	metricMigrationSuccess.Add(1)
 	return nil
 }
+
+var (
+	metricNewProfile    = clientmetric.NewCounter("profiles_new")
+	metricSwitchProfile = clientmetric.NewCounter("profiles_switch")
+	metricDeleteProfile = clientmetric.NewCounter("profiles_delete")
+
+	metricMigration        = clientmetric.NewCounter("profiles_migration")
+	metricMigrationError   = clientmetric.NewCounter("profiles_migration_error")
+	metricMigrationSuccess = clientmetric.NewCounter("profiles_migration_success")
+)
