@@ -1141,9 +1141,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		// into sync with the minimal changes. But that's not how it
 		// is right now, which is a sign that the code is still too
 		// complicated.
-		b.mu.Unlock()
-		b.cc.Shutdown()
-		b.mu.Lock()
+		b.resetControlClientLockedAsync()
 	}
 	httpTestClient := b.httpTestClient
 
@@ -1956,7 +1954,7 @@ func (b *LocalBackend) InServerMode() bool {
 }
 
 // Login implements Backend.
-// As of 2022-02-17, this is only exists for tests.
+// As of 2022-11-15, this is only exists for Android.
 func (b *LocalBackend) Login(token *tailcfg.Oauth2Token) {
 	b.mu.Lock()
 	b.assertClientLocked()
@@ -3128,7 +3126,6 @@ func (b *LocalBackend) hasNodeKey() bool {
 // its internal state.
 func (b *LocalBackend) nextState() ipn.State {
 	b.mu.Lock()
-	b.assertClientLocked()
 	var (
 		cc         = b.cc
 		netMap     = b.netMap
@@ -3150,7 +3147,7 @@ func (b *LocalBackend) nextState() ipn.State {
 	case !wantRunning && !loggedOut && !blocked && b.hasNodeKey():
 		return ipn.Stopped
 	case netMap == nil:
-		if cc.AuthCantContinue() || loggedOut {
+		if (cc != nil && cc.AuthCantContinue()) || loggedOut {
 			// Auth was interrupted or waiting for URL visit,
 			// so it won't proceed without human help.
 			return ipn.NeedsLogin
@@ -3238,6 +3235,18 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
+// resetControlClientLockedAsync sets b.cc to nil, and starts a
+// goroutine to Shutdown the old client. It does not wait for the
+// shutdown to complete.
+func (b *LocalBackend) resetControlClientLockedAsync() {
+	if b.cc == nil {
+		return
+	}
+	go b.cc.Shutdown()
+	b.cc = nil
+	b.ccAuto = nil
+}
+
 // ResetForClientDisconnect resets the backend for GUI clients running
 // in interactive (non-headless) mode. This is currently used only by
 // Windows. This causes all state to be cleared, lest an unrelated user
@@ -3249,11 +3258,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.logf("LocalBackend.ResetForClientDisconnect")
-
-	if b.cc != nil {
-		go b.cc.Shutdown()
-		b.cc = nil
-	}
+	b.resetControlClientLockedAsync()
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
 	b.keyExpired = false
