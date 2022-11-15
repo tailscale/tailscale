@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
@@ -1069,13 +1070,20 @@ func (ss *sshSession) run() {
 			ss.ctx.CloseWithError(err)
 		}
 	}()
+	var openOutputStreams atomic.Int32
+	if ss.stderr != nil {
+		openOutputStreams.Store(2)
+	} else {
+		openOutputStreams.Store(1)
+	}
 	go func() {
 		defer ss.stdout.Close()
 		_, err := io.Copy(rec.writer("o", ss), ss.stdout)
 		if err != nil && !errors.Is(err, io.EOF) {
 			logf("stdout copy: %v", err)
 			ss.ctx.CloseWithError(err)
-		} else {
+		}
+		if openOutputStreams.Add(-1) == 0 {
 			ss.CloseWrite()
 		}
 	}()
@@ -1085,6 +1093,9 @@ func (ss *sshSession) run() {
 			_, err := io.Copy(ss.Stderr(), ss.stderr)
 			if err != nil {
 				logf("stderr copy: %v", err)
+			}
+			if openOutputStreams.Add(-1) == 0 {
+				ss.CloseWrite()
 			}
 		}()
 	}
