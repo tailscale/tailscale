@@ -810,7 +810,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if err := b.pm.DeleteProfile(b.pm.CurrentProfile().ID); err != nil {
 			b.logf("error deleting profile: %v", err)
 		}
-		b.resetForProfileChangeLockedOnEntry()
+		// Restart backend asychonously, so that we avoid reentrancy in the
+		// controclient (we're currently in a callback from it).
+		b.resetForProfileChangeLockedOnEntry(profileChangeStartAsync)
 		return
 	}
 
@@ -2110,7 +2112,7 @@ func (b *LocalBackend) SetCurrentUserID(uid string) {
 		b.mu.Unlock()
 		return
 	}
-	b.resetForProfileChangeLockedOnEntry()
+	b.resetForProfileChangeLockedOnEntry(profileChangeStartSync)
 }
 
 func (b *LocalBackend) CheckPrefs(p *ipn.Prefs) error {
@@ -4045,16 +4047,32 @@ func (b *LocalBackend) SwitchProfile(profile ipn.ProfileID) error {
 		b.mu.Unlock()
 		return err
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(profileChangeStartSync)
 }
 
+type profileChangeStartMode int
+
+const (
+	profileChangeStartSync profileChangeStartMode = iota
+	profileChangeStartAsync
+)
+
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
-func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
+// It requires b.mu be held to call it, but it unlocks b.mu when done.
+func (b *LocalBackend) resetForProfileChangeLockedOnEntry(startMode profileChangeStartMode) error {
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
 	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
-	return b.Start(ipn.Options{})
+	switch startMode {
+	case profileChangeStartSync:
+		return b.Start(ipn.Options{})
+	case profileChangeStartAsync:
+		go b.Start(ipn.Options{})
+		return nil
+	default:
+		panic("unreachable")
+	}
 }
 
 // DeleteProfile deletes a profile with the given ID.
@@ -4072,7 +4090,7 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	if !needToRestart {
 		return nil
 	}
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(profileChangeStartSync)
 }
 
 // CurrentProfile returns the current LoginProfile.
@@ -4087,7 +4105,7 @@ func (b *LocalBackend) CurrentProfile() ipn.LoginProfile {
 func (b *LocalBackend) NewProfile() error {
 	b.mu.Lock()
 	b.pm.NewProfile()
-	return b.resetForProfileChangeLockedOnEntry()
+	return b.resetForProfileChangeLockedOnEntry(profileChangeStartSync)
 }
 
 // ListProfiles returns a list of all LoginProfiles.

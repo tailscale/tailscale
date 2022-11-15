@@ -552,7 +552,12 @@ func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want POST", 400)
 		return
 	}
-	err := h.b.LogoutSync(r.Context())
+	var err error
+	if defBool(r.FormValue("async"), false) {
+		h.b.Logout()
+	} else {
+		err = h.b.LogoutSync(r.Context())
+	}
 	if err == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return

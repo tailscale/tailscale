@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"strings"
 
@@ -23,11 +24,23 @@ the current node key, forcing a future use of it to cause
 a reauthentication.
 `),
 	Exec: runLogout,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("logout")
+		fs.BoolVar(&logoutArgs.async, "async", false, "Does not wait for logout to be complete (status can be queried to determine success)")
+		return fs
+	})(),
+}
+
+var logoutArgs struct {
+	async bool
 }
 
 func runLogout(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
+	}
+	if logoutArgs.async {
+		return localClient.LogoutAsync(ctx)
 	}
 	return localClient.Logout(ctx)
 }

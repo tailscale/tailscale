@@ -548,6 +548,11 @@ func (lc *LocalClient) Logout(ctx context.Context) error {
 	return err
 }
 
+func (lc *LocalClient) LogoutAsync(ctx context.Context) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/logout?async=true", http.StatusNoContent, nil)
+	return err
+}
+
 // SetDNS adds a DNS TXT record for the given domain name, containing
 // the provided TXT value. The intended use case is answering
 // LetsEncrypt/ACME dns-01 challenges.

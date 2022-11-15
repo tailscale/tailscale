@@ -555,6 +555,23 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	wantNode0PeerCount(expectedPeers) // all existing peers and the new node
 }
 
+func TestLogoutAsyncState(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	node := newTestNode(t, env)
+	node.StartDaemon()
+	node.AwaitResponding()
+	node.MustUp()
+	node.AwaitIP()
+	node.AwaitRunning()
+
+	log.Printf("running logout CLI")
+	if err := node.Tailscale("logout", "--async").Run(); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	node.AwaitNeedsLogin()
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
