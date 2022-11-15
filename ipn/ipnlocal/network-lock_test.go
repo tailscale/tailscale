@@ -108,8 +108,30 @@ func TestTKAEnablementFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 
-		case "/machine/tka/sync/offer", "/machine/tka/sync/send":
-			t.Error("node attempted to sync, but should have been up to date")
+		// Sync offer/send endpoints are hit even though the node is up-to-date,
+		// so we implement enough of a fake that the client doesn't explode.
+		case "/machine/tka/sync/offer":
+			head, err := a1.Head().MarshalText()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(200)
+			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncOfferResponse{
+				Head: string(head),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		case "/machine/tka/sync/send":
+			head, err := a1.Head().MarshalText()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.WriteHeader(200)
+			if err := json.NewEncoder(w).Encode(tailcfg.TKASyncSendResponse{
+				Head: string(head),
+			}); err != nil {
+				t.Fatal(err)
+			}
 
 		default:
 			t.Errorf("unhandled endpoint path: %v", r.URL.Path)

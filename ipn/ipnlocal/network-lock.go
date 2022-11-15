@@ -115,6 +115,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 
 	isEnabled := b.tka != nil
 	wantEnabled := nm.TKAEnabled
+	didJustEnable := false
 	if isEnabled != wantEnabled {
 		var ourHead tka.AUMHash
 		if b.tka != nil {
@@ -135,6 +136,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 				return fmt.Errorf("bootstrap: %w", err)
 			}
 			isEnabled = true
+			didJustEnable = true
 		} else if !wantEnabled && isEnabled {
 			if err := b.tkaApplyDisablementLocked(bs.DisablementSecret); err != nil {
 				// We log here instead of returning an error (which itself would be
@@ -149,7 +151,10 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		}
 	}
 
-	if isEnabled && b.tka.authority.Head() != nm.TKAHead {
+	// We always transmit the sync RPCs if TKA was just enabled.
+	// This informs the control plane that our TKA state is now
+	// initialized to the transmitted TKA head hash.
+	if isEnabled && (b.tka.authority.Head() != nm.TKAHead || didJustEnable) {
 		if err := b.tkaSyncLocked(ourNodeKey); err != nil {
 			return fmt.Errorf("tka sync: %w", err)
 		}
