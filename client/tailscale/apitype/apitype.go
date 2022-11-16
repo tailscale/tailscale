@@ -7,6 +7,9 @@ package apitype
 
 import "tailscale.com/tailcfg"
 
+// LocalAPIHost is the Host header value used by the LocalAPI.
+const LocalAPIHost = "local-tailscaled.sock"
+
 // WhoIsResponse is the JSON type returned by tailscaled debug server's /whois?ip=$IP handler.
 type WhoIsResponse struct {
 	Node        *tailcfg.Node

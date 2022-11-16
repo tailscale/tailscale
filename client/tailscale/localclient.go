@@ -197,7 +197,7 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 }
 
 func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "http://local-tailscaled.sock"+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+apitype.LocalAPIHost+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +435,7 @@ func (lc *LocalClient) DeleteWaitingFile(ctx context.Context, baseName string) e
 }
 
 func (lc *LocalClient) GetWaitingFile(ctx context.Context, baseName string) (rc io.ReadCloser, size int64, err error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://local-tailscaled.sock/localapi/v0/files/"+url.PathEscape(baseName), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+apitype.LocalAPIHost+"/localapi/v0/files/"+url.PathEscape(baseName), nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -472,7 +472,7 @@ func (lc *LocalClient) FileTargets(ctx context.Context) ([]apitype.FileTarget, e
 // A size of -1 means unknown.
 // The name parameter is the original filename, not escaped.
 func (lc *LocalClient) PushFile(ctx context.Context, target tailcfg.StableNodeID, size int64, name string, r io.Reader) error {
-	req, err := http.NewRequestWithContext(ctx, "PUT", "http://local-tailscaled.sock/localapi/v0/file-put/"+string(target)+"/"+url.PathEscape(name), r)
+	req, err := http.NewRequestWithContext(ctx, "PUT", "http://"+apitype.LocalAPIHost+"/localapi/v0/file-put/"+string(target)+"/"+url.PathEscape(name), r)
 	if err != nil {
 		return err
 	}
@@ -595,7 +595,7 @@ func (lc *LocalClient) DialTCP(ctx context.Context, host string, port uint16) (n
 		},
 	}
 	ctx = httptrace.WithClientTrace(ctx, &trace)
-	req, err := http.NewRequestWithContext(ctx, "POST", "http://local-tailscaled.sock/localapi/v0/dial", nil)
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/dial", nil)
 	if err != nil {
 		return nil, err
 	}
