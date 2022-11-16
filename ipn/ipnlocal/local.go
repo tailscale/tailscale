@@ -3827,6 +3827,17 @@ func (b *LocalBackend) HandleQuad100Port80Conn(c net.Conn) {
 	s.Serve(netutil.NewOneConnListener(c, nil))
 }
 
+func validQuad100Host(h string) bool {
+	switch h {
+	case "",
+		tsaddr.TailscaleServiceIPString,
+		tsaddr.TailscaleServiceIPv6String,
+		"[" + tsaddr.TailscaleServiceIPv6String + "]":
+		return true
+	}
+	return false
+}
+
 func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy", "default-src 'self';")
@@ -3834,9 +3845,7 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	switch r.Host {
-	case "", tsaddr.TailscaleServiceIP().String(), tsaddr.TailscaleServiceIPv6().String():
-	default:
+	if !validQuad100Host(r.Host) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
