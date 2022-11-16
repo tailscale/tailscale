@@ -57,9 +57,14 @@ func TailscaleServiceIP() netip.Addr {
 //
 // For IPv4, use TailscaleServiceIP.
 func TailscaleServiceIPv6() netip.Addr {
-	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, "fd7a:115c:a1e0::53/128") })
+	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, TailscaleServiceIPv6String+"/128") })
 	return serviceIPv6.v.Addr()
 }
+
+const (
+	TailscaleServiceIPString   = "100.100.100.100"
+	TailscaleServiceIPv6String = "fd7a:115c:a1e0::53"
+)
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
