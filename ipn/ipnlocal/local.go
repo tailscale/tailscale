@@ -1184,7 +1184,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if b.inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", b.inServerMode)
 	}
-	b.applyPrefsToHostinfo(hostinfo, prefs)
+	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
 	b.setNetMapLocked(nil)
 	persistv := prefs.Persist()
@@ -2213,7 +2213,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
-	b.applyPrefsToHostinfo(newHi, newp.View())
+	b.applyPrefsToHostinfoLocked(newHi, newp.View())
 	b.hostinfo = newHi
 	hostInfoChanged := !oldHi.Equal(newHi)
 	cc := b.cc
@@ -2954,8 +2954,8 @@ func unmapIPPrefixes(ippsList ...[]netip.Prefix) (ret []netip.Prefix) {
 	return ret
 }
 
-// Warning: b.mu might be held. Currently (2022-02-17) both callers hold it.
-func (b *LocalBackend) applyPrefsToHostinfo(hi *tailcfg.Hostinfo, prefs ipn.PrefsView) {
+// b.mu must be held.
+func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ipn.PrefsView) {
 	if h := prefs.Hostname(); h != "" {
 		hi.Hostname = h
 	}
