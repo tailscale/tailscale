@@ -2193,6 +2193,20 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.setPrefsLockedOnEntry("SetPrefs", newp)
 }
 
+// wantIngressLocked reports whether this node has ingress configured. This bool
+// is sent to the coordination server (in Hostinfo.WireIngress) as an
+// optimization hint to know primarily which nodes are NOT using ingress, to
+// avoid doing work for regular nodes.
+//
+// Even if the user's ServeConfig.AllowIngress map was manually edited in raw
+// mode and contains map entries with false values, sending true (from Len > 0)
+// is still fine. This is only an optimization hint for the control plane and
+// doesn't affect security or correctness. And we also don't expect people to
+// modify their ServeConfig in raw mode.
+func (b *LocalBackend) wantIngressLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.AllowIngress().Len() > 0
+}
+
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
@@ -2971,6 +2985,14 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		sshHostKeys = b.getSSHHostKeyPublicStrings()
 	}
 	hi.SSH_HostKeys = sshHostKeys
+
+	// The Hostinfo.WantIngress field tells control whether this node wants to
+	// be wired up for ingress connections. If harmless if it's accidentally
+	// true; the actual policy is controlled in tailscaled by ServeConfig. But
+	// if this is accidentally false, then control may not configure DNS
+	// properly. This exists as an optimization to control to program fewer DNS
+	// records that have ingress enabled but are not actually being used.
+	hi.WireIngress = b.wantIngressLocked()
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -3406,6 +3428,14 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 			}
 		}
 	}
+
+	// Kick off a Hostinfo update to control if WireIngress changed.
+	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
+		b.logf("Hostinfo.WireIngress changed to %v", wire)
+		b.hostinfo.WireIngress = wire
+		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	}
+
 	b.setTCPPortsIntercepted(handlePorts)
 }
 
