@@ -297,7 +297,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, state
 		}
 	}
 	if !wiredPeerAPIPort {
-		b.logf("[unexpected] failed to wire up peer API port for engine %T", e)
+		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
 	}
 
 	for _, component := range debuggableComponents {
@@ -2003,7 +2003,7 @@ func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer *ta
 	}
 	base := peerAPIBase(nm, peer)
 	if base == "" {
-		return nil, "", fmt.Errorf("no peer API base found for peer %v (%v)", peer.ID, ip)
+		return nil, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID, ip)
 	}
 	outReq, err := http.NewRequestWithContext(ctx, "HEAD", base, nil)
 	if err != nil {
@@ -2718,8 +2718,8 @@ func (b *LocalBackend) fileRootLocked(uid tailcfg.UserID) string {
 	return dir
 }
 
-// closePeerAPIListenersLocked closes any existing peer API listeners
-// and clears out the peer API server state.
+// closePeerAPIListenersLocked closes any existing PeerAPI listeners
+// and clears out the PeerAPI server state.
 //
 // It does not kick off any Hostinfo update with new services.
 //
