@@ -168,15 +168,26 @@ func validHost(h string) bool {
 	case "", apitype.LocalAPIHost:
 		return true
 	}
-	// Otherwise, any Host header we see should at most be an ip:port.
-	ap, err := netip.ParseAddrPort(h)
+	// Allow either localhost or loopback IP hosts.
+	host, portStr, err := net.SplitHostPort(h)
 	if err != nil {
 		return false
 	}
-	if runtime.GOOS == "windows" && ap.Port() != safesocket.WindowsLocalPort {
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
 		return false
 	}
-	return ap.Addr().IsLoopback()
+	if runtime.GOOS == "windows" && port != safesocket.WindowsLocalPort {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	addr, err := netip.ParseAddr(h)
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback()
 }
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
