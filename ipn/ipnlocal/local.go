@@ -1166,7 +1166,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		if err := b.pm.SetPrefs(pv); err != nil {
 			b.logf("failed to save UpdatePrefs state: %v", err)
 		}
-		b.setAtomicValuesFromPrefs(pv)
+		b.setAtomicValuesFromPrefsLocked(pv)
 	}
 
 	prefs := b.pm.CurrentPrefs()
@@ -1852,7 +1852,7 @@ func (b *LocalBackend) migrateStateLocked(prefs *ipn.Prefs) (err error) {
 		}
 	}
 
-	b.setAtomicValuesFromPrefs(b.pm.CurrentPrefs())
+	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())
 
 	return nil
 }
@@ -1894,14 +1894,16 @@ func (b *LocalBackend) setTCPPortsIntercepted(ports []uint16) {
 	b.shouldInterceptTCPPortAtomic.Store(f)
 }
 
-// setAtomicValuesFromPrefs populates sshAtomicBool, containsViaIPFuncAtomic
+// setAtomicValuesFromPrefsLocked populates sshAtomicBool, containsViaIPFuncAtomic
 // and shouldInterceptTCPPortAtomic from the prefs p, which may be !Valid().
-func (b *LocalBackend) setAtomicValuesFromPrefs(p ipn.PrefsView) {
+func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
 
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
 		b.setTCPPortsIntercepted(nil)
+		b.lastServeConfJSON = mem.B(nil)
+		b.serveConfig = ipn.ServeConfigView{}
 	} else {
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(p.AdvertiseRoutes().Filter(tsaddr.IsViaPrefix)))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
@@ -2219,12 +2221,26 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 	b.setPrefsLockedOnEntry("SetPrefs", newp)
 }
 
+// wantIngressLocked reports whether this node has ingress configured. This bool
+// is sent to the coordination server (in Hostinfo.WireIngress) as an
+// optimization hint to know primarily which nodes are NOT using ingress, to
+// avoid doing work for regular nodes.
+//
+// Even if the user's ServeConfig.AllowIngress map was manually edited in raw
+// mode and contains map entries with false values, sending true (from Len > 0)
+// is still fine. This is only an optimization hint for the control plane and
+// doesn't affect security or correctness. And we also don't expect people to
+// modify their ServeConfig in raw mode.
+func (b *LocalBackend) wantIngressLocked() bool {
+	return b.serveConfig.Valid() && b.serveConfig.AllowIngress().Len() > 0
+}
+
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
 // unlocks b.mu when done. newp ownership passes to this function.
 // It returns a readonly copy of the new prefs.
 func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn.PrefsView {
 	netMap := b.netMap
-	b.setAtomicValuesFromPrefs(newp.View())
+	b.setAtomicValuesFromPrefsLocked(newp.View())
 
 	oldp := b.pm.CurrentPrefs()
 	if oldp.Valid() {
@@ -2996,6 +3012,14 @@ func (b *LocalBackend) applyPrefsToHostinfoLocked(hi *tailcfg.Hostinfo, prefs ip
 		sshHostKeys = b.getSSHHostKeyPublicStrings()
 	}
 	hi.SSH_HostKeys = sshHostKeys
+
+	// The Hostinfo.WantIngress field tells control whether this node wants to
+	// be wired up for ingress connections. If harmless if it's accidentally
+	// true; the actual policy is controlled in tailscaled by ServeConfig. But
+	// if this is accidentally false, then control may not configure DNS
+	// properly. This exists as an optimization to control to program fewer DNS
+	// records that have ingress enabled but are not actually being used.
+	hi.WireIngress = b.wantIngressLocked()
 }
 
 // enterState transitions the backend into newState, updating internal
@@ -3222,8 +3246,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.authURL = ""
 	b.authURLSticky = ""
 	b.activeLogin = ""
-	b.setAtomicValuesFromPrefs(ipn.PrefsView{})
-	b.setTCPPortsIntercepted(nil)
+	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
@@ -3389,6 +3412,36 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 }
 
+func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
+	if b.netMap == nil || b.netMap.SelfNode == nil || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
+		// We're not logged in, so we don't have a profile.
+		// Don't try to load the serve config.
+		b.lastServeConfJSON = mem.B(nil)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
+	// TODO(maisem,bradfitz): prevent reading the config from disk
+	// if the profile has not changed.
+	confj, err := b.store.ReadState(confKey)
+	if err != nil {
+		b.lastServeConfJSON = mem.B(nil)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+	if b.lastServeConfJSON.Equal(mem.B(confj)) {
+		return
+	}
+	b.lastServeConfJSON = mem.B(confj)
+	var conf ipn.ServeConfig
+	if err := json.Unmarshal(confj, &conf); err != nil {
+		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
+		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+	b.serveConfig = conf.View()
+}
+
 // setTCPPortsInterceptedFromNetmapAndPrefsLocked calls setTCPPortsIntercepted with
 // the ports that tailscaled should handle as a function of b.netMap and b.prefs.
 //
@@ -3400,37 +3453,28 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		handlePorts = append(handlePorts, 22)
 	}
 
-	nm := b.netMap
-	if nm != nil && nm.SelfNode != nil {
-		profileID := b.pm.CurrentProfile().ID
-		confKey := ipn.ServeConfigKey(profileID)
-		if confj, err := b.store.ReadState(confKey); err == nil {
-			if !b.lastServeConfJSON.Equal(mem.B(confj)) {
-				b.lastServeConfJSON = mem.B(confj)
-				var conf ipn.ServeConfig
-				if err := json.Unmarshal(confj, &conf); err != nil {
-					b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
-					b.serveConfig = ipn.ServeConfigView{}
-				} else {
-					b.serveConfig = conf.View()
-				}
+	b.reloadServeConfigLocked(prefs)
+	if b.serveConfig.Valid() {
+		servePorts := make([]uint16, 0, 3)
+		b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+			if port > 0 {
+				servePorts = append(servePorts, uint16(port))
 			}
-			if b.serveConfig.Valid() {
-				servePorts := make([]uint16, 0, 3)
-				b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
-					if port > 0 {
-						servePorts = append(servePorts, uint16(port))
-					}
-					return true
-				})
-				handlePorts = append(handlePorts, servePorts...)
-				// don't listen on netmap addresses if we're in userspace mode
-				if !wgengine.IsNetstack(b.e) {
-					b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
-				}
-			}
+			return true
+		})
+		handlePorts = append(handlePorts, servePorts...)
+		// don't listen on netmap addresses if we're in userspace mode
+		if !wgengine.IsNetstack(b.e) {
+			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
 		}
 	}
+	// Kick off a Hostinfo update to control if WireIngress changed.
+	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
+		b.logf("Hostinfo.WireIngress changed to %v", wire)
+		b.hostinfo.WireIngress = wire
+		go b.doSetHostinfoFilterServices(b.hostinfo.Clone())
+	}
+
 	b.setTCPPortsIntercepted(handlePorts)
 }
 
@@ -4077,6 +4121,8 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	if err := b.initTKALocked(); err != nil {
 		return err
 	}
+	b.lastServeConfJSON = mem.B(nil)
+	b.serveConfig = ipn.ServeConfigView{}
 	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
 	return b.Start(ipn.Options{})
 }
