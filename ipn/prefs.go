@@ -696,13 +696,27 @@ type ProfileID string
 // LoginProfile represents a single login profile as managed
 // by the ProfileManager.
 type LoginProfile struct {
-	ID   ProfileID
-	Name string
-	Key  StateKey
+	// ID is a unique identifier for this profile.
+	// It is assigned on creation and never changes.
+	// It may seem redundant to have both ID and UserProfile.ID
+	// but they are different things. UserProfile.ID may change
+	// over time (e.g. if a device is tagged).
+	ID ProfileID
 
+	// Name is the user-visible name of this profile.
+	// It is filled in from the UserProfile.LoginName field.
+	Name string
+
+	// Key is the StateKey under which the profile is stored.
+	// It is assigned once at profile creation time and never changes.
+	Key StateKey
+
+	// UserProfile is the server provided UserProfile for this profile.
+	// This is updated whenever the server provides a new UserProfile.
 	UserProfile tailcfg.UserProfile
 
 	// LocalUserID is the user ID of the user who created this profile.
 	// It is only relevant on Windows where we have a multi-user system.
+	// It is assigned once at profile creation time and never changes.
 	LocalUserID string
 }

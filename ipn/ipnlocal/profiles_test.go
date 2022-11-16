@@ -9,6 +9,8 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
 )
@@ -53,15 +55,27 @@ func TestProfileManagement(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Use Hostname as a proxy for all prefs.
-			if got.Hostname() != wantProfiles[p.Name].Hostname() {
-				t.Fatalf("Prefs for profile %q = %v; want %v", p, got.Pretty(), wantProfiles[p.Name].Pretty())
+			if !got.Equals(wantProfiles[p.Name]) {
+				t.Fatalf("Prefs for profile %q =\n got=%+v\nwant=%v", p, got.Pretty(), wantProfiles[p.Name].Pretty())
 			}
 		}
 	}
+	logins := make(map[string]tailcfg.UserID)
 	setPrefs := func(t *testing.T, loginName string) ipn.PrefsView {
+		t.Helper()
 		p := pm.CurrentPrefs().AsStruct()
+		id := logins[loginName]
+		if id.IsZero() {
+			id = tailcfg.UserID(len(logins) + 1)
+			logins[loginName] = id
+		}
 		p.Persist = &persist.Persist{
-			LoginName: loginName,
+			LoginName:      loginName,
+			PrivateNodeKey: key.NewNode(),
+			UserProfile: tailcfg.UserProfile{
+				ID:        id,
+				LoginName: loginName,
+			},
 		}
 		if err := pm.SetPrefs(p.View()); err != nil {
 			t.Fatal(err)
@@ -117,6 +131,18 @@ func TestProfileManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkProfiles(t)
+
+	t.Logf("Create new profile again")
+	pm.NewProfile()
+	wantCurProfile = ""
+	wantProfiles[""] = emptyPrefs
+	checkProfiles(t)
+
+	t.Logf("Login with the existing profile")
+	wantProfiles["user@2.example.com"] = setPrefs(t, "user@2.example.com")
+	delete(wantProfiles, "")
+	wantCurProfile = "user@2.example.com"
+	checkProfiles(t)
 }
 
 // TestProfileManagementWindows tests going into and out of Unattended mode on
@@ -143,11 +169,21 @@ func TestProfileManagementWindows(t *testing.T) {
 			t.Fatalf("CurrentPrefs = %+v; want %+v", p.Pretty(), wantProfiles[wantCurProfile].Pretty())
 		}
 	}
+	logins := make(map[string]tailcfg.UserID)
 	setPrefs := func(t *testing.T, loginName string, forceDaemon bool) ipn.PrefsView {
+		id := logins[loginName]
+		if id.IsZero() {
+			id = tailcfg.UserID(len(logins) + 1)
+			logins[loginName] = id
+		}
 		p := pm.CurrentPrefs().AsStruct()
 		p.ForceDaemon = forceDaemon
 		p.Persist = &persist.Persist{
 			LoginName: loginName,
+			UserProfile: tailcfg.UserProfile{
+				ID:        id,
+				LoginName: loginName,
+			},
 		}
 		if err := pm.SetPrefs(p.View()); err != nil {
 			t.Fatal(err)
