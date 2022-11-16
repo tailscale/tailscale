@@ -1728,11 +1728,11 @@ func (b *LocalBackend) popBrowserAuthNow() {
 
 // validPopBrowserURL reports whether urlStr is a valid value for a
 // control server to send in a *URL field.
+//
 // b.mu must *not* be held.
 func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 	if urlStr == "" {
-		// Common case.
-		return true
+		return false
 	}
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -1753,7 +1753,7 @@ func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 }
 
 func (b *LocalBackend) tellClientToBrowseToURL(url string) {
-	if url != "" && b.validPopBrowserURL(url) {
+	if b.validPopBrowserURL(url) {
 		b.send(ipn.Notify{BrowseToURL: &url})
 	}
 }
