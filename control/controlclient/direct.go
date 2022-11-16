@@ -999,6 +999,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			metricMapResponsePings.Add(1)
 			go c.answerPing(pr)
 		}
+		if !c.validPopBrowserURL(resp.PopBrowserURL) {
+			resp.PopBrowserURL = ""
+		}
 		if u := resp.PopBrowserURL; u != "" && u != sess.lastPopBrowserURL {
 			sess.lastPopBrowserURL = u
 			if c.popBrowser != nil {
@@ -1700,6 +1703,28 @@ func (c *Direct) ReportHealthChange(sys health.Subsystem, sysErr error) {
 		return
 	}
 	res.Body.Close()
+}
+
+// validPopBrowserURL reports whether urlStr is a valid value for a
+// control server to send in a MapResponse.PopUpBrowserURL field.
+func (c *Direct) validPopBrowserURL(urlStr string) bool {
+	if urlStr == "" {
+		// Common case.
+		return true
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		// If the control server is using plain HTTP (likely a dev server),
+		// then permit http://.
+		return strings.HasPrefix(c.serverURL, "http://")
+	}
+	return false
 }
 
 var (
