@@ -32,6 +32,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kortschak/wol"
+	"golang.org/x/exp/slices"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
@@ -542,7 +543,37 @@ func (h *peerAPIHandler) logf(format string, a ...any) {
 	h.ps.b.logf("peerapi: "+format, a...)
 }
 
+func (h *peerAPIHandler) validateHost(r *http.Request) error {
+	if r.Host == "peer" {
+		return nil
+	}
+	ap, err := netip.ParseAddrPort(r.Host)
+	if err != nil {
+		return err
+	}
+	hostIPPfx := netip.PrefixFrom(ap.Addr(), ap.Addr().BitLen())
+	if !slices.Contains(h.ps.selfNode.Addresses, hostIPPfx) {
+		return fmt.Errorf("%v not found in self addresses", hostIPPfx)
+	}
+	return nil
+}
+
+func (h *peerAPIHandler) validatePeerAPIRequest(r *http.Request) error {
+	if r.Referer() != "" {
+		return errors.New("unexpected Referer")
+	}
+	if r.Header.Get("Origin") != "" {
+		return errors.New("unexpected Origin")
+	}
+	return h.validateHost(r)
+}
+
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := h.validatePeerAPIRequest(r); err != nil {
+		h.logf("invalid request from %v: %v", h.remoteAddr, err)
+		http.Error(w, "invalid peerapi request", http.StatusForbidden)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
 		h.handlePeerPut(w, r)
 		return
