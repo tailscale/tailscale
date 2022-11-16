@@ -45,6 +45,13 @@ func TestCloneState(t *testing.T) {
 			},
 		},
 		{
+			"StateID",
+			State{
+				StateID1: 42,
+				StateID2: 22,
+			},
+		},
+		{
 			"DisablementSecrets",
 			State{
 				DisablementSecrets: [][]byte{
@@ -222,6 +229,12 @@ func TestApplyUpdateErrors(t *testing.T) {
 				Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 			},
 			errors.New("parent AUMHash mismatch"),
+		},
+		{
+			"Bad StateID",
+			[]AUM{{MessageKind: AUMCheckpoint, State: &State{StateID1: 1}}},
+			State{Keys: []Key{{Kind: Key25519, Public: []byte{1}}}, StateID1: 42},
+			errors.New("checkpointed state has an incorrect stateID"),
 		},
 	}
 

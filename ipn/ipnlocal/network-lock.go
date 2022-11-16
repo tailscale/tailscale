@@ -6,7 +6,9 @@ package ipnlocal
 
 import (
 	"bytes"
+	"crypto/rand"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -418,6 +420,11 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 		return errors.New("no node-key: is tailscale logged in?")
 	}
 
+	var entropy [16]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		return err
+	}
+
 	// Generates a genesis AUM representing trust in the provided keys.
 	// We use an in-memory tailchonk because we don't want to commit to
 	// the filesystem until we've finished the initialization sequence,
@@ -429,6 +436,9 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 		//    - DisablementSecret: value needed to disable.
 		//    - DisablementValue: the KDF of the disablement secret, a public value.
 		DisablementSecrets: disablementValues,
+
+		StateID1: binary.LittleEndian.Uint64(entropy[:8]),
+		StateID2: binary.LittleEndian.Uint64(entropy[8:]),
 	}, nlPriv)
 	if err != nil {
 		return fmt.Errorf("tka.Create: %v", err)
