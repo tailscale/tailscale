@@ -396,7 +396,7 @@ func TestStateMachine(t *testing.T) {
 	// the user needs to visit a login URL.
 	t.Logf("\n\nLogin (url response)")
 	notifies.expect(1)
-	url1 := "http://localhost:1/1"
+	url1 := "https://localhost:1/1"
 	cc.send(nil, url1, false, nil)
 	{
 		cc.assertCalls("unpause")
@@ -442,7 +442,7 @@ func TestStateMachine(t *testing.T) {
 	// Provide a new interactive login URL.
 	t.Logf("\n\nLogin2 (url response)")
 	notifies.expect(1)
-	url2 := "http://localhost:1/2"
+	url2 := "https://localhost:1/2"
 	cc.send(nil, url2, false, nil)
 	{
 		cc.assertCalls("unpause", "unpause")
@@ -797,7 +797,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginDifferent")
 	notifies.expect(1)
 	b.StartLoginInteractive()
-	url3 := "http://localhost:1/3"
+	url3 := "https://localhost:1/3"
 	cc.send(nil, url3, false, nil)
 	{
 		nn := notifies.drain(1)
