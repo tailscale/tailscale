@@ -24,7 +24,7 @@ type WhoIsResponse struct {
 type FileTarget struct {
 	Node *tailcfg.Node
 
-	// PeerAPI is the http://ip:port URL base of the node's peer API,
+	// PeerAPI is the http://ip:port URL base of the node's PeerAPI,
 	// without any path (not even a single slash).
 	PeerAPIURL string
 }

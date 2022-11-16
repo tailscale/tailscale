@@ -461,7 +461,7 @@ type peerAPIListener struct {
 	// and urlStr are still populated.
 	ln net.Listener
 
-	// urlStr is the base URL to access the peer API (http://ip:port/).
+	// urlStr is the base URL to access the PeerAPI (http://ip:port/).
 	urlStr string
 	// port is just the port of urlStr.
 	port int
@@ -529,7 +529,7 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 	go httpServer.Serve(netutil.NewOneConnListener(c, pln.ln.Addr()))
 }
 
-// peerAPIHandler serves the Peer API for a source specific client.
+// peerAPIHandler serves the PeerAPI for a source specific client.
 type peerAPIHandler struct {
 	ps         *peerAPIServer
 	remoteAddr netip.AddrPort
