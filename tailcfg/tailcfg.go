@@ -1654,12 +1654,16 @@ type Oauth2Token struct {
 const (
 	// These are the capabilities that the self node has as listed in
 	// MapResponse.Node.Capabilities.
+	//
+	// We've since started referring to these as "Node Attributes" ("nodeAttrs"
+	// in the ACL policy file).
 
 	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
 	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
+	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
 
 	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 

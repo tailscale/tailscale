@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -113,6 +114,7 @@ func TestHandlePeerAPI(t *testing.T) {
 		name       string
 		isSelf     bool // the peer sending the request is owned by us
 		capSharing bool // self node has file sharing capability
+		debugCap   bool // self node has debug capability
 		omitRoot   bool // don't configure
 		req        *http.Request
 		checks     []check
@@ -140,15 +142,24 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
-			name:   "peer_api_goroutines_deny",
-			isSelf: false,
-			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
-			checks: checks(httpStatus(403)),
+			name:     "goroutines/deny-self-no-cap",
+			isSelf:   true,
+			debugCap: false,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks:   checks(httpStatus(403)),
 		},
 		{
-			name:   "peer_api_goroutines",
-			isSelf: true,
-			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
+			name:     "goroutines/deny-nonself",
+			isSelf:   false,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks:   checks(httpStatus(403)),
+		},
+		{
+			name:     "goroutines/accept-self",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
 			checks: checks(
 				httpStatus(200),
 				bodyContains("ServeHTTP"),
@@ -404,25 +415,28 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
-			name:   "host-val/bad-ip",
-			isSelf: true,
-			req:    httptest.NewRequest("GET", "http://12.23.45.66:1234/v0/env", nil),
+			name:     "host-val/bad-ip",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://12.23.45.66:1234/v0/env", nil),
 			checks: checks(
 				httpStatus(403),
 			),
 		},
 		{
-			name:   "host-val/no-port",
-			isSelf: true,
-			req:    httptest.NewRequest("GET", "http://100.100.100.101/v0/env", nil),
+			name:     "host-val/no-port",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://100.100.100.101/v0/env", nil),
 			checks: checks(
 				httpStatus(403),
 			),
 		},
 		{
-			name:   "host-val/peer",
-			isSelf: true,
-			req:    httptest.NewRequest("GET", "http://peer/v0/env", nil),
+			name:     "host-val/peer",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://peer/v0/env", nil),
 			checks: checks(
 				httpStatus(200),
 			),
@@ -430,10 +444,16 @@ func TestHandlePeerAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			selfNode := &tailcfg.Node{
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.100.100.101/32"),
+				},
+			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
+				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
 			}
 			e.ph = &peerAPIHandler{
 				isSelf: tt.isSelf,
@@ -441,13 +461,12 @@ func TestHandlePeerAPI(t *testing.T) {
 					ComputedName: "some-peer-name",
 				},
 				ps: &peerAPIServer{
-					b: lb,
-					selfNode: &tailcfg.Node{
-						Addresses: []netip.Prefix{
-							netip.MustParsePrefix("100.100.100.101/32"),
-						},
-					},
+					b:        lb,
+					selfNode: selfNode,
 				},
+			}
+			if tt.debugCap {
+				e.ph.ps.selfNode.Capabilities = append(e.ph.ps.selfNode.Capabilities, tailcfg.CapabilityDebug)
 			}
 			var rootDir string
 			if !tt.omitRoot {

@@ -778,6 +778,17 @@ func (h *peerAPIHandler) canPutFile() bool {
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
+	// Reread the selfNode as it may have changed since the peerAPIServer
+	// was created.
+	// TODO(maisem): handle this in other places too.
+	nm := h.ps.b.NetMap()
+	if nm == nil || nm.SelfNode == nil {
+		return false
+	}
+	if !slices.Contains(nm.SelfNode.Capabilities, tailcfg.CapabilityDebug) {
+		// This node does not expose debug info.
+		return false
+	}
 	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
 }
 
