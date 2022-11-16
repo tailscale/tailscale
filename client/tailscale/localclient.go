@@ -42,7 +42,7 @@ import (
 // package-level functions.
 var defaultLocalClient LocalClient
 
-// LocalClient is a client to Tailscale's "local API", communicating with the
+// LocalClient is a client to Tailscale's "LocalAPI", communicating with the
 // Tailscale daemon on the local machine. Its API is not necessarily stable and
 // subject to changes between releases. Some API calls have stricter
 // compatibility guarantees, once they've been widely adopted. See method docs

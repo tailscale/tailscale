@@ -100,7 +100,7 @@ var debugCmd = &ffcli.Command{
 		{
 			Name:      "local-creds",
 			Exec:      runLocalCreds,
-			ShortHelp: "print how to access Tailscale local API",
+			ShortHelp: "print how to access Tailscale LocalAPI",
 		},
 		{
 			Name:      "restun",

@@ -282,7 +282,7 @@ func calcAdvertiseRoutes(advertiseRoutes string, advertiseDefaultRoute bool) ([]
 // Note that the parameters upArgs and warnf are named intentionally
 // to shadow the globals to prevent accidental misuse of them. This
 // function exists for testing and should have no side effects or
-// outside interactions (e.g. no making Tailscale local API calls).
+// outside interactions (e.g. no making Tailscale LocalAPI calls).
 func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goos string) (*ipn.Prefs, error) {
 	routes, err := calcAdvertiseRoutes(upArgs.advertiseRoutes, upArgs.advertiseDefaultRoute)
 	if err != nil {
