@@ -12,30 +12,30 @@
 // As with most container things, configuration is passed through
 // environment variables. All configuration is optional.
 //
-//  - TS_AUTH_KEY: the authkey to use for login.
-//  - TS_ROUTES: subnet routes to advertise.
-//  - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
-//                destination.
-//  - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//  - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
-//  - TS_USERSPACE: run with userspace networking (the default)
-//                  instead of kernel networking.
-//  - TS_STATE_DIR: the directory in which to store tailscaled
-//                  state. The data should persist across container
-//                  restarts.
-//  - TS_ACCEPT_DNS: whether to use the tailnet's DNS configuration.
-//  - TS_KUBE_SECRET: the name of the Kubernetes secret in which to
-//                    store tailscaled state.
-//  - TS_SOCKS5_SERVER: the address on which to listen for SOCKS5
-//                      proxying into the tailnet.
-//  - TS_OUTBOUND_HTTP_PROXY_LISTEN: the address on which to listen
-//                                   for HTTP proxying into the tailnet.
-//  - TS_SOCKET: the path where the tailscaled local API socket should
-//               be created.
-//  - TS_AUTH_ONCE: if true, only attempt to log in if not already
-//                  logged in. If false (the default, for backwards
-//                  compatibility), forcibly log in every time the
-//                  container starts.
+//   - TS_AUTH_KEY: the authkey to use for login.
+//   - TS_ROUTES: subnet routes to advertise.
+//   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
+//     destination.
+//   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
+//   - TS_USERSPACE: run with userspace networking (the default)
+//     instead of kernel networking.
+//   - TS_STATE_DIR: the directory in which to store tailscaled
+//     state. The data should persist across container
+//     restarts.
+//   - TS_ACCEPT_DNS: whether to use the tailnet's DNS configuration.
+//   - TS_KUBE_SECRET: the name of the Kubernetes secret in which to
+//     store tailscaled state.
+//   - TS_SOCKS5_SERVER: the address on which to listen for SOCKS5
+//     proxying into the tailnet.
+//   - TS_OUTBOUND_HTTP_PROXY_LISTEN: the address on which to listen
+//     for HTTP proxying into the tailnet.
+//   - TS_SOCKET: the path where the tailscaled LocalAPI socket should
+//     be created.
+//   - TS_AUTH_ONCE: if true, only attempt to log in if not already
+//     logged in. If false (the default, for backwards
+//     compatibility), forcibly log in every time the
+//     container starts.
 //
 // When running on Kubernetes, TS_KUBE_SECRET takes precedence over
 // TS_STATE_DIR. Additionally, if TS_AUTH_KEY is not provided and the

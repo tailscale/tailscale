@@ -141,7 +141,7 @@ type Server struct {
 	tcpRtt                       metrics.LabelMap // histogram
 
 	// verifyClients only accepts client connections to the DERP server if the clientKey is a
-	// known peer in the network, as specified by a running tailscaled's client's local api.
+	// known peer in the network, as specified by a running tailscaled's client's LocalAPI.
 	verifyClients bool
 
 	mu       sync.Mutex
