@@ -3906,6 +3906,12 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	switch r.Host {
+	case "", tsaddr.TailscaleServiceIP().String(), tsaddr.TailscaleServiceIPv6().String():
+	default:
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
