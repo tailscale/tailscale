@@ -687,6 +687,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 	w.Header().Set("Content-Length", fmt.Sprint(size))
+	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, rc)
 }
 
