@@ -449,6 +449,9 @@ func TestHandlePeerAPI(t *testing.T) {
 					netip.MustParsePrefix("100.100.100.101/32"),
 				},
 			}
+			if tt.debugCap {
+				selfNode.Capabilities = append(selfNode.Capabilities, tailcfg.CapabilityDebug)
+			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
@@ -456,17 +459,14 @@ func TestHandlePeerAPI(t *testing.T) {
 				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
 			}
 			e.ph = &peerAPIHandler{
-				isSelf: tt.isSelf,
+				isSelf:   tt.isSelf,
+				selfNode: selfNode,
 				peerNode: &tailcfg.Node{
 					ComputedName: "some-peer-name",
 				},
 				ps: &peerAPIServer{
-					b:        lb,
-					selfNode: selfNode,
+					b: lb,
 				},
-			}
-			if tt.debugCap {
-				e.ph.ps.selfNode.Capabilities = append(e.ph.ps.selfNode.Capabilities, tailcfg.CapabilityDebug)
 			}
 			var rootDir string
 			if !tt.omitRoot {
@@ -507,15 +507,15 @@ func TestFileDeleteRace(t *testing.T) {
 			logf:           t.Logf,
 			capFileSharing: true,
 		},
-		selfNode: &tailcfg.Node{
-			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
-		},
 		rootDir: dir,
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
 		peerNode: &tailcfg.Node{
 			ComputedName: "some-peer-name",
+		},
+		selfNode: &tailcfg.Node{
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
 		},
 		ps: ps,
 	}
