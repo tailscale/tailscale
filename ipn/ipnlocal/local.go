@@ -1726,8 +1726,34 @@ func (b *LocalBackend) popBrowserAuthNow() {
 	}
 }
 
+// validPopBrowserURL reports whether urlStr is a valid value for a
+// control server to send in a *URL field.
+// b.mu must *not* be held.
+func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
+	if urlStr == "" {
+		// Common case.
+		return true
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		b.mu.Lock()
+		serverURL := b.serverURL
+		b.mu.Unlock()
+		// If the control server is using plain HTTP (likely a dev server),
+		// then permit http://.
+		return strings.HasPrefix(serverURL, "http://")
+	}
+	return false
+}
+
 func (b *LocalBackend) tellClientToBrowseToURL(url string) {
-	if url != "" {
+	if url != "" && b.validPopBrowserURL(url) {
 		b.send(ipn.Notify{BrowseToURL: &url})
 	}
 }
