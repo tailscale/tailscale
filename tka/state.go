@@ -36,6 +36,13 @@ type State struct {
 
 	// Keys are the public keys currently trusted by the TKA.
 	Keys []Key `cbor:"3,keyasint"`
+
+	// StateID's are nonce's, generated on enablement and fixed for
+	// the lifetime of the Tailnet Key Authority. We generate 16-bytes
+	// worth of keyspace here just in case we come up with a cool future
+	// use for this.
+	StateID1 uint64 `cbor:"4,keyasint,omitempty"`
+	StateID2 uint64 `cbor:"5,keyasint,omitempty"`
 }
 
 // GetKey returns the trusted key with the specified KeyID.
@@ -55,7 +62,10 @@ func (s State) GetKey(key tkatype.KeyID) (Key, error) {
 // slice for encoding purposes, so an implementation of Clone()
 // must take care to preserve this.
 func (s State) Clone() State {
-	out := State{}
+	out := State{
+		StateID1: s.StateID1,
+		StateID2: s.StateID2,
+	}
 
 	if s.LastAUMHash != nil {
 		dupe := *s.LastAUMHash
@@ -149,6 +159,13 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		return out, nil
 
 	case AUMCheckpoint:
+		if update.State == nil {
+			return State{}, errors.New("missing checkpoint state")
+		}
+		id1Match, id2Match := update.State.StateID1 == s.StateID1, update.State.StateID2 == s.StateID2
+		if !id1Match || !id2Match {
+			return State{}, errors.New("checkpointed state has an incorrect stateID")
+		}
 		return update.State.cloneForUpdate(&update), nil
 
 	case AUMAddKey:
