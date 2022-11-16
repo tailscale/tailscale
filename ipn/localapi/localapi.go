@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
+	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -137,6 +138,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server has no local backend", http.StatusInternalServerError)
 		return
 	}
+	if r.Referer() != "" || r.Header.Get("Origin") != "" || !validHost(r.Host) {
+		http.Error(w, "invalid localapi request", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Tailscale-Version", version.Long)
 	if h.RequiredPassword != "" {
 		_, pass, ok := r.BasicAuth()
@@ -154,6 +159,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.NotFound(w, r)
 	}
+}
+
+// validHost reports whether h is a valid Host header value for a LocalAPI request.
+func validHost(h string) bool {
+	// The client code sends a hostname of "local-tailscaled.sock".
+	switch h {
+	case "", apitype.LocalAPIHost:
+		return true
+	}
+	// Otherwise, any Host header we see should at most be an ip:port.
+	ap, err := netip.ParseAddrPort(h)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" && ap.Port() != safesocket.WindowsLocalPort {
+		return false
+	}
+	return ap.Addr().IsLoopback()
 }
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
