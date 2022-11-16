@@ -515,6 +515,7 @@ type Hostinfo struct {
 	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
 	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool           `json:",omitempty"` // indicates that the user has opted out of sending logs and support
+	WireIngress     bool           `json:",omitempty"` // indicates that the node wants the option to receive ingress connections
 	GoArch          string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
 	GoVersion       string         `json:",omitempty"` // Go version binary was built with
 	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
