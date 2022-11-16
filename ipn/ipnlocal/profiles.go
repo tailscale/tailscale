@@ -126,6 +126,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 		up.DisplayName = up.LoginName
 	}
 	cp := pm.currentProfile
+	wasNamedWithLoginName := cp.Name == cp.UserProfile.LoginName
 	if pm.isNewProfile {
 		pm.isNewProfile = false
 		cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
@@ -134,6 +135,9 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 		cp.LocalUserID = pm.currentUserID
 	} else {
 		cp.UserProfile = ps.UserProfile
+	}
+	if wasNamedWithLoginName {
+		cp.Name = ps.LoginName
 	}
 	pm.knownProfiles[cp.ID] = cp
 	if err := pm.writeKnownProfiles(); err != nil {

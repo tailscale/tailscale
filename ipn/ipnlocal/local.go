@@ -3300,10 +3300,10 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		if login == "" {
 			login = "<missing-profile>"
 		}
-		if cp := b.pm.CurrentProfile(); cp.ID != "" && cp.UserProfile.ID == 0 {
-			// Migration to profiles: we didn't use to persist
-			// the UserProfile, so if we don't have one, fill it
-			// in from the NetworkMap.
+		if cp := b.pm.CurrentProfile(); cp.ID != "" && cp.UserProfile.ID != up.ID {
+			// If the current profile doesn't match the
+			// network map's user profile, then we need to
+			// update the persisted UserProfile to match.
 			prefs := b.pm.CurrentPrefs().AsStruct()
 			prefs.Persist.UserProfile = up
 			b.pm.SetPrefs(prefs.View())
