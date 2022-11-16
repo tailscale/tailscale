@@ -31,8 +31,9 @@ func OS() string {
 }
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
-// process. It is true for the Mac App Store and macsys (System
-// Extension) version on macOS, and false for tailscaled-on-macOS.
+// process (either the app or the extension). It is true for the Mac App Store
+// and macsys (System Extension) version on macOS, and false for
+// tailscaled-on-macOS.
 func IsSandboxedMacOS() bool {
 	if runtime.GOOS != "darwin" {
 		return false
@@ -41,7 +42,7 @@ func IsSandboxedMacOS() bool {
 		return true
 	}
 	exe, _ := os.Executable()
-	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
+	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
 }
 
 var isMacSysExt syncs.AtomicValue[bool]
