@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/exp/slices"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/strs"
@@ -66,6 +67,15 @@ func (pm *profileManager) SetCurrentUser(uid string) error {
 		return err
 	}
 	pm.currentUserID = uid
+	return nil
+}
+
+func (pm *profileManager) findProfileByUserID(userID tailcfg.UserID) *ipn.LoginProfile {
+	for _, p := range pm.knownProfiles {
+		if p.UserProfile.ID == userID {
+			return p
+		}
+	}
 	return nil
 }
 
@@ -129,8 +139,14 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	wasNamedWithLoginName := cp.Name == cp.UserProfile.LoginName
 	if pm.isNewProfile {
 		pm.isNewProfile = false
-		cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
-		cp.Name = ps.LoginName
+		// Check if we already have a profile for this user.
+		existing := pm.findProfileByUserID(ps.UserProfile.ID)
+		if existing != nil && existing.ID != "" {
+			cp = existing
+		} else {
+			cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
+			cp.Name = ps.LoginName
+		}
 		cp.UserProfile = ps.UserProfile
 		cp.LocalUserID = pm.currentUserID
 	} else {
@@ -140,6 +156,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 		cp.Name = ps.LoginName
 	}
 	pm.knownProfiles[cp.ID] = cp
+	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
 		return err
 	}
