@@ -2809,7 +2809,6 @@ func (b *LocalBackend) initPeerAPIListener() {
 	ps := &peerAPIServer{
 		b:                       b,
 		rootDir:                 fileRoot,
-		selfNode:                selfNode,
 		directFileMode:          b.directFileRoot != "",
 		directFileDoFinalRename: b.directFileDoFinalRename,
 	}
