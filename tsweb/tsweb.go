@@ -474,7 +474,7 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			label, key = a, b
 		}
 	}
-	name := prefix + key
+	name := strings.ReplaceAll(prefix+key, "-", "_")
 
 	switch v := kv.Value.(type) {
 	case PrometheusVar:

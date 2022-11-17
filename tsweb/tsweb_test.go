@@ -360,6 +360,12 @@ func TestVarzHandler(t *testing.T) {
 			"# TYPE foo counter\nfoo 0\n",
 		},
 		{
+			"dash_in_metric_name",
+			"counter_foo-bar",
+			new(expvar.Int),
+			"# TYPE foo_bar counter\nfoo_bar 0\n",
+		},
+		{
 			"int_with_type_counter",
 			"counter_foo",
 			new(expvar.Int),
