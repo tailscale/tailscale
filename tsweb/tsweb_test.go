@@ -450,15 +450,15 @@ func TestVarzHandler(t *testing.T) {
 		},
 		{
 			"func_float64_gauge",
-			"gauge_x",
+			"gauge_y",
 			expvar.Func(func() any { return float64(1.2) }),
-			"# TYPE x gauge\nx 1.2\n",
+			"# TYPE y gauge\ny 1.2\n",
 		},
 		{
 			"func_float64_untyped",
-			"x",
+			"z",
 			expvar.Func(func() any { return float64(1.2) }),
-			"x 1.2\n",
+			"z 1.2\n",
 		},
 		{
 			"metrics_label_map",
