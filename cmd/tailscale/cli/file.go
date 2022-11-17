@@ -29,6 +29,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/quarantine"
 	"tailscale.com/version"
 )
 
@@ -392,6 +393,10 @@ func receiveFile(ctx context.Context, wf apitype.WaitingFile, dir string) (targe
 	f, err := openFileOrSubstitute(dir, wf.Name, getArgs.conflict)
 	if err != nil {
 		return "", 0, err
+	}
+	// Apply quarantine attribute before copying
+	if err := quarantine.SetOnFile(f); err != nil {
+		return "", 0, fmt.Errorf("failed to apply quarantine attribute to file %v: %v", f.Name(), err)
 	}
 	_, err = io.Copy(f, rc)
 	if err != nil {
