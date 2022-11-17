@@ -70,13 +70,30 @@ func (pm *profileManager) SetCurrentUser(uid string) error {
 	return nil
 }
 
-func (pm *profileManager) findProfileByUserID(userID tailcfg.UserID) *ipn.LoginProfile {
+func (pm *profileManager) findProfilesByNodeID(nodeID tailcfg.StableNodeID) []*ipn.LoginProfile {
+	if nodeID.IsZero() {
+		return nil
+	}
+	var out []*ipn.LoginProfile
 	for _, p := range pm.knownProfiles {
-		if p.UserProfile.ID == userID {
-			return p
+		if p.NodeID == nodeID {
+			out = append(out, p)
 		}
 	}
-	return nil
+	return out
+}
+
+func (pm *profileManager) findProfilesByUserID(userID tailcfg.UserID) []*ipn.LoginProfile {
+	if userID.IsZero() {
+		return nil
+	}
+	var out []*ipn.LoginProfile
+	for _, p := range pm.knownProfiles {
+		if p.UserProfile.ID == userID {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (pm *profileManager) findProfileByName(name string) *ipn.LoginProfile {
@@ -124,37 +141,42 @@ func init() {
 // provided prefs, which may be accessed via CurrentPrefs.
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	prefs := prefsIn.AsStruct().View()
-	ps := prefs.Persist()
-	if ps == nil || ps.LoginName == "" {
+	newPersist := prefs.Persist()
+	if newPersist == nil || newPersist.LoginName == "" {
 		return pm.setPrefsLocked(prefs)
 	}
-	up := ps.UserProfile
+	up := newPersist.UserProfile
 	if up.LoginName == "" {
-		up.LoginName = ps.LoginName
+		// Backwards compatibility with old prefs files.
+		up.LoginName = newPersist.LoginName
+	} else {
+		newPersist.LoginName = up.LoginName
 	}
 	if up.DisplayName == "" {
 		up.DisplayName = up.LoginName
 	}
 	cp := pm.currentProfile
-	wasNamedWithLoginName := cp.Name == cp.UserProfile.LoginName
 	if pm.isNewProfile {
 		pm.isNewProfile = false
 		// Check if we already have a profile for this user.
-		existing := pm.findProfileByUserID(ps.UserProfile.ID)
-		if existing != nil && existing.ID != "" {
-			cp = existing
-		} else {
+		existing := pm.findProfilesByUserID(newPersist.UserProfile.ID)
+		// Also check if we have a profile with the same NodeID.
+		existing = append(existing, pm.findProfilesByNodeID(newPersist.NodeID)...)
+		if len(existing) == 0 {
 			cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
-			cp.Name = ps.LoginName
+		} else {
+			// Only one profile per user/nodeID should exist.
+			for _, p := range existing[1:] {
+				// Best effort cleanup.
+				pm.DeleteProfile(p.ID)
+			}
+			cp = existing[0]
 		}
-		cp.UserProfile = ps.UserProfile
 		cp.LocalUserID = pm.currentUserID
-	} else {
-		cp.UserProfile = ps.UserProfile
 	}
-	if wasNamedWithLoginName {
-		cp.Name = ps.LoginName
-	}
+	cp.UserProfile = newPersist.UserProfile
+	cp.NodeID = newPersist.NodeID
+	cp.Name = up.LoginName
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {

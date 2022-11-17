@@ -473,6 +473,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginFinished")
 	notifies.expect(3)
 	cc.persist.LoginName = "user1"
+	cc.persist.UserProfile.LoginName = "user1"
 	cc.send(nil, "", true, &netmap.NetworkMap{})
 	{
 		nn := notifies.drain(3)
@@ -698,6 +699,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginFinished3")
 	notifies.expect(3)
 	cc.persist.LoginName = "user2"
+	cc.persist.UserProfile.LoginName = "user2"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
@@ -833,6 +835,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginDifferent URL visited")
 	notifies.expect(3)
 	cc.persist.LoginName = "user3"
+	cc.persist.UserProfile.LoginName = "user3"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})

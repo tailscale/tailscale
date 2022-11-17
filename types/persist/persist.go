@@ -38,6 +38,7 @@ type Persist struct {
 	LoginName         string
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
+	NodeID            tailcfg.StableNodeID
 }
 
 // PublicNodeKey returns the public key for the node key.
@@ -68,7 +69,8 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.Provider == p2.Provider &&
 		p.LoginName == p2.LoginName &&
 		p.UserProfile == p2.UserProfile &&
-		p.NetworkLockKey.Equal(p2.NetworkLockKey)
+		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
+		p.NodeID == p2.NodeID
 }
 
 func (p *Persist) Pretty() string {
