@@ -144,15 +144,15 @@ func Parse3339B(b []byte) (time.Time, error) {
 	return parse3339m(mem.B(b))
 }
 
-// ParseDuration is more expressive than time.ParseDuration, also accepting d
-// (days) and w (weeks) literals.
+// ParseDuration is more expressive than time.ParseDuration,
+// also accepting 'd' (days) and 'w' (weeks) literals.
 func ParseDuration(s string) (time.Duration, error) {
 	for {
 		end := strings.IndexAny(s, "dw")
 		if end < 0 {
 			break
 		}
-		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "012345789")))
+		start := end - (len(s[:end]) - len(strings.TrimRight(s[:end], "0123456789")))
 		n, err := strconv.Atoi(s[start:end])
 		if err != nil {
 			return 0, err
