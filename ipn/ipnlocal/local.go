@@ -669,6 +669,16 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			SSH_HostKeys: p.Hostinfo.SSH_HostKeys().AsSlice(),
 		}
 		peerStatusFromNode(ps, p)
+
+		p4, p6 := peerAPIPorts(p)
+		ip4 := nodeIP(p, netip.Addr.Is4)
+		ip6 := nodeIP(p, netip.Addr.Is6)
+		if p4 != 0 && ip4.IsValid() {
+			ps.PeerAPIURL = append(ps.PeerAPIURL, peerAPIURL(ip4, p4))
+		}
+		if p6 != 0 && ip6.IsValid() {
+			ps.PeerAPIURL = append(ps.PeerAPIURL, peerAPIURL(ip6, p6))
+		}
 		sb.AddPeer(p.Key, ps)
 	}
 }
@@ -3660,6 +3670,27 @@ func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
 	}
 }
 
+func peerAPIPorts(peer *tailcfg.Node) (p4, p6 uint16) {
+	svcs := peer.Hostinfo.Services()
+	for i, n := 0, svcs.Len(); i < n; i++ {
+		s := svcs.At(i)
+		switch s.Proto {
+		case tailcfg.PeerAPI4:
+			p4 = s.Port
+		case tailcfg.PeerAPI6:
+			p6 = s.Port
+		}
+	}
+	return
+}
+
+func peerAPIURL(ip netip.Addr, port uint16) string {
+	if port == 0 || !ip.IsValid() {
+		return ""
+	}
+	return fmt.Sprintf("http://%v", netip.AddrPortFrom(ip, port))
+}
+
 // peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
 // It returns the empty string if the peer doesn't support the peerapi
 // or there's no matching address family based on the netmap's own addresses.
@@ -3680,28 +3711,14 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 			have6 = true
 		}
 	}
-	var p4, p6 uint16
-	svcs := peer.Hostinfo.Services()
-	for i, n := 0, svcs.Len(); i < n; i++ {
-		s := svcs.At(i)
-		switch s.Proto {
-		case tailcfg.PeerAPI4:
-			p4 = s.Port
-		case tailcfg.PeerAPI6:
-			p6 = s.Port
-		}
-	}
-	var ipp netip.AddrPort
+	p4, p6 := peerAPIPorts(peer)
 	switch {
 	case have4 && p4 != 0:
-		ipp = netip.AddrPortFrom(nodeIP(peer, netip.Addr.Is4), p4)
+		return peerAPIURL(nodeIP(peer, netip.Addr.Is4), p4)
 	case have6 && p6 != 0:
-		ipp = netip.AddrPortFrom(nodeIP(peer, netip.Addr.Is6), p6)
+		return peerAPIURL(nodeIP(peer, netip.Addr.Is6), p6)
 	}
-	if !ipp.Addr().IsValid() {
-		return ""
-	}
-	return fmt.Sprintf("http://%v", ipp)
+	return ""
 }
 
 func nodeIP(n *tailcfg.Node, pred func(netip.Addr) bool) netip.Addr {
