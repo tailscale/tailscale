@@ -884,6 +884,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
 		}
+		if b.updatePersistFromNetMapLocked(st.NetMap, prefs) {
+			prefsChanged = true
+		}
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(st.NetMap, prefs.View())
 	}
@@ -3349,22 +3352,35 @@ func hasCapability(nm *netmap.NetworkMap, cap string) bool {
 	return false
 }
 
+func (b *LocalBackend) updatePersistFromNetMapLocked(nm *netmap.NetworkMap, prefs *ipn.Prefs) (changed bool) {
+	if nm == nil || nm.SelfNode == nil {
+		return
+	}
+	up := nm.UserProfiles[nm.User]
+	if prefs.Persist.UserProfile.ID != up.ID {
+		// If the current profile doesn't match the
+		// network map's user profile, then we need to
+		// update the persisted UserProfile to match.
+		prefs.Persist.UserProfile = up
+		changed = true
+	}
+	if prefs.Persist.NodeID == "" {
+		// If the current profile doesn't have a NodeID,
+		// then we need to update the persisted NodeID to
+		// match.
+		prefs.Persist.NodeID = nm.SelfNode.StableID
+		changed = true
+	}
+	return changed
+}
+
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.dialer.SetNetMap(nm)
 	var login string
 	if nm != nil {
-		up := nm.UserProfiles[nm.User]
-		login = up.LoginName
+		login = nm.UserProfiles[nm.User].LoginName
 		if login == "" {
 			login = "<missing-profile>"
-		}
-		if cp := b.pm.CurrentProfile(); cp.ID != "" && cp.UserProfile.ID != up.ID {
-			// If the current profile doesn't match the
-			// network map's user profile, then we need to
-			// update the persisted UserProfile to match.
-			prefs := b.pm.CurrentPrefs().AsStruct()
-			prefs.Persist.UserProfile = up
-			b.pm.SetPrefs(prefs.View())
 		}
 	}
 	b.netMap = nm

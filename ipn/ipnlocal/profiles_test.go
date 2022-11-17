@@ -5,6 +5,7 @@
 package ipnlocal
 
 import (
+	"fmt"
 	"testing"
 
 	"tailscale.com/ipn"
@@ -61,21 +62,28 @@ func TestProfileManagement(t *testing.T) {
 		}
 	}
 	logins := make(map[string]tailcfg.UserID)
+	nodeIDs := make(map[string]tailcfg.StableNodeID)
 	setPrefs := func(t *testing.T, loginName string) ipn.PrefsView {
 		t.Helper()
 		p := pm.CurrentPrefs().AsStruct()
-		id := logins[loginName]
-		if id.IsZero() {
-			id = tailcfg.UserID(len(logins) + 1)
-			logins[loginName] = id
+		uid := logins[loginName]
+		if uid.IsZero() {
+			uid = tailcfg.UserID(len(logins) + 1)
+			logins[loginName] = uid
+		}
+		nid := nodeIDs[loginName]
+		if nid.IsZero() {
+			nid = tailcfg.StableNodeID(fmt.Sprint(len(nodeIDs) + 1))
+			nodeIDs[loginName] = nid
 		}
 		p.Persist = &persist.Persist{
 			LoginName:      loginName,
 			PrivateNodeKey: key.NewNode(),
 			UserProfile: tailcfg.UserProfile{
-				ID:        id,
+				ID:        uid,
 				LoginName: loginName,
 			},
+			NodeID: nid,
 		}
 		if err := pm.SetPrefs(p.View()); err != nil {
 			t.Fatal(err)
@@ -132,7 +140,7 @@ func TestProfileManagement(t *testing.T) {
 	}
 	checkProfiles(t)
 
-	t.Logf("Create new profile again")
+	t.Logf("Create new profile - 2")
 	pm.NewProfile()
 	wantCurProfile = ""
 	wantProfiles[""] = emptyPrefs
@@ -141,6 +149,19 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Login with the existing profile")
 	wantProfiles["user@2.example.com"] = setPrefs(t, "user@2.example.com")
 	delete(wantProfiles, "")
+	wantCurProfile = "user@2.example.com"
+	checkProfiles(t)
+
+	t.Logf("Tag the current the profile")
+	nodeIDs["tagged-node.2.ts.net"] = nodeIDs["user@2.example.com"]
+	wantProfiles["tagged-node.2.ts.net"] = setPrefs(t, "tagged-node.2.ts.net")
+	delete(wantProfiles, "user@2.example.com")
+	wantCurProfile = "tagged-node.2.ts.net"
+	checkProfiles(t)
+
+	t.Logf("Relogin")
+	wantProfiles["user@2.example.com"] = setPrefs(t, "user@2.example.com")
+	delete(wantProfiles, "tagged-node.2.ts.net")
 	wantCurProfile = "user@2.example.com"
 	checkProfiles(t)
 }

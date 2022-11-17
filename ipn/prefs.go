@@ -715,6 +715,13 @@ type LoginProfile struct {
 	// This is updated whenever the server provides a new UserProfile.
 	UserProfile tailcfg.UserProfile
 
+	// NodeID is the NodeID of the node that this profile is logged into.
+	// This should be stable across tagging and untagging nodes.
+	// It may seem redundant to check against both the UserProfile.UserID
+	// and the NodeID. However the NodeID can change if the node is deleted
+	// from the admin panel.
+	NodeID tailcfg.StableNodeID
+
 	// LocalUserID is the user ID of the user who created this profile.
 	// It is only relevant on Windows where we have a multi-user system.
 	// It is assigned once at profile creation time and never changes.
