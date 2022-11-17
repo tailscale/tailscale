@@ -1682,6 +1682,11 @@ const (
 	CapabilityIngress = "https://tailscale.com/cap/ingress"
 )
 
+const (
+	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
+	NodeAttrFunnel = "funnel"
+)
+
 // SetDNSRequest is a request to add a DNS record.
 //
 // This is used for ACME DNS-01 challenges (so people can use

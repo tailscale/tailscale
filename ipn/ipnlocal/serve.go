@@ -234,7 +234,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 		return
 	}
 
-	if !sc.AllowIngress().Get(target) {
+	if !sc.AllowFunnel().Get(target) {
 		b.logf("localbackend: got ingress conn for unconfigured %q; rejecting", target)
 		sendRST()
 		return

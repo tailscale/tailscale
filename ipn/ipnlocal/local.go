@@ -2236,13 +2236,13 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 // optimization hint to know primarily which nodes are NOT using ingress, to
 // avoid doing work for regular nodes.
 //
-// Even if the user's ServeConfig.AllowIngress map was manually edited in raw
+// Even if the user's ServeConfig.AllowFunnel map was manually edited in raw
 // mode and contains map entries with false values, sending true (from Len > 0)
 // is still fine. This is only an optimization hint for the control plane and
 // doesn't affect security or correctness. And we also don't expect people to
 // modify their ServeConfig in raw mode.
 func (b *LocalBackend) wantIngressLocked() bool {
-	return b.serveConfig.Valid() && b.serveConfig.AllowIngress().Len() > 0
+	return b.serveConfig.Valid() && b.serveConfig.AllowFunnel().Len() > 0
 }
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
