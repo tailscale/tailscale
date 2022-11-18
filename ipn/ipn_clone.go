@@ -53,6 +53,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	NoSNAT                 bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
+	ProfileName            string
 	Persist                *persist.Persist
 }{})
 

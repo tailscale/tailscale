@@ -190,6 +190,11 @@ type Prefs struct {
 	// operate tailscaled without being root or using sudo.
 	OperatorUser string `json:",omitempty"`
 
+	// ProfileName is the desired name of the profile. If empty, then the users
+	// LoginName is used. It is only used for display purposes in the client UI
+	// and CLI.
+	ProfileName string `json:",omitempty"`
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -222,6 +227,7 @@ type MaskedPrefs struct {
 	NoSNATSet                 bool `json:",omitempty"`
 	NetfilterModeSet          bool `json:",omitempty"`
 	OperatorUserSet           bool `json:",omitempty"`
+	ProfileNameSet            bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -406,7 +412,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ForceDaemon == p2.ForceDaemon &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
-		p.Persist.Equals(p2.Persist)
+		p.Persist.Equals(p2.Persist) &&
+		p.ProfileName == p2.ProfileName
 }
 
 func compareIPNets(a, b []netip.Prefix) bool {

@@ -86,6 +86,7 @@ func (v PrefsView) AdvertiseRoutes() views.IPPrefixSlice {
 func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }
 func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
+func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
 func (v PrefsView) Persist() *persist.Persist {
 	if v.ж.Persist == nil {
 		return nil
@@ -116,6 +117,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	NoSNAT                 bool
 	NetfilterMode          preftype.NetfilterMode
 	OperatorUser           string
+	ProfileName            string
 	Persist                *persist.Persist
 }{})
 
