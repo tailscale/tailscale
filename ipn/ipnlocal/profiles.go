@@ -174,9 +174,13 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 		}
 		cp.LocalUserID = pm.currentUserID
 	}
+	if prefs.ProfileName() != "" {
+		cp.Name = prefs.ProfileName()
+	} else {
+		cp.Name = up.LoginName
+	}
 	cp.UserProfile = newPersist.UserProfile
 	cp.NodeID = newPersist.NodeID
-	cp.Name = up.LoginName
 	pm.knownProfiles[cp.ID] = cp
 	pm.currentProfile = cp
 	if err := pm.writeKnownProfiles(); err != nil {
