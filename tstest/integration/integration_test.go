@@ -846,7 +846,7 @@ func (n *testNode) MustUp(extraArgs ...string) {
 func (n *testNode) MustDown() {
 	t := n.env.t
 	t.Logf("Running down ...")
-	if err := n.Tailscale("down").Run(); err != nil {
+	if err := n.Tailscale("down", "--accept-risk=all").Run(); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 }
