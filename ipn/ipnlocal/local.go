@@ -2109,6 +2109,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 		// Keep this one just for testing.
 		errs = append(errs, errors.New("bad hostname [test]"))
 	}
+	if err := b.checkProfileNameLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	if err := b.checkSSHPrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
@@ -2224,6 +2227,23 @@ func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
 
 	// This should return the public prefs, not the private ones.
 	return stripKeysFromPrefs(newPrefs), nil
+}
+
+func (b *LocalBackend) checkProfileNameLocked(p *ipn.Prefs) error {
+	if p.ProfileName == "" {
+		// It is always okay to clear the profile name.
+		return nil
+	}
+	id := b.pm.ProfileIDForName(p.ProfileName)
+	if id == "" {
+		// No profile with that name exists. That's fine.
+		return nil
+	}
+	if id != b.pm.CurrentProfile().ID {
+		// Name is already in use by another profile.
+		return fmt.Errorf("profile name %q already in use", p.ProfileName)
+	}
+	return nil
 }
 
 // SetPrefs saves new user preferences and propagates them throughout

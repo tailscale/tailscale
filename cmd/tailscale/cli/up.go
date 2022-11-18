@@ -60,7 +60,7 @@ settings.)
 `),
 	FlagSet: upFlagSet,
 	Exec: func(ctx context.Context, args []string) error {
-		return runUp(ctx, args, upArgsGlobal)
+		return runUp(ctx, "up", args, upArgsGlobal)
 	},
 }
 
@@ -122,6 +122,10 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	}
 	upf.DurationVar(&upArgs.timeout, "timeout", 0, "maximum amount of time to wait for tailscaled to enter a Running state; default (0s) blocks forever")
 
+	if cmd == "login" {
+		upf.StringVar(&upArgs.profileName, "nickname", "", "short name for the login profile")
+	}
+
 	if cmd == "up" {
 		// Some flags are only for "up", not "login".
 		upf.BoolVar(&upArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
@@ -129,6 +133,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 		upf.BoolVar(&upArgs.forceReauth, "force-reauth", false, "force reauthentication")
 		registerAcceptRiskFlag(upf, &upArgs.acceptedRisks)
 	}
+
 	return upf
 }
 
@@ -163,6 +168,7 @@ type upArgsT struct {
 	json                   bool
 	timeout                time.Duration
 	acceptedRisks          string
+	profileName            string
 }
 
 func (a upArgsT) getAuthKey() (string, error) {
@@ -343,6 +349,7 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.Hostname = upArgs.hostname
 	prefs.ForceDaemon = upArgs.forceDaemon
 	prefs.OperatorUser = upArgs.opUser
+	prefs.ProfileName = upArgs.profileName
 
 	if goos == "linux" {
 		prefs.NoSNAT = !upArgs.snat
@@ -437,7 +444,7 @@ func presentSSHToggleRisk(wantSSH, haveSSH bool, acceptedRisks string) error {
 	return presentRiskToUser(riskLoseSSH, `You are connected using Tailscale SSH; this action will result in your session disconnecting.`, acceptedRisks)
 }
 
-func runUp(ctx context.Context, args []string, upArgs upArgsT) (retErr error) {
+func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retErr error) {
 	var egg bool
 	if len(args) > 0 {
 		egg = fmt.Sprint(args) == "[up down down left right left right b a]"
@@ -495,6 +502,11 @@ func runUp(ctx context.Context, args []string, upArgs upArgsT) (retErr error) {
 	curPrefs, err := localClient.GetPrefs(ctx)
 	if err != nil {
 		return err
+	}
+	if cmd == "up" {
+		// "tailscale up" should not be able to change the
+		// profile name.
+		prefs.ProfileName = curPrefs.ProfileName
 	}
 
 	env := upCheckEnv{
@@ -764,6 +776,7 @@ func init() {
 	addPrefFlagMapping("unattended", "ForceDaemon")
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
+	addPrefFlagMapping("nickname", "ProfileName")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {

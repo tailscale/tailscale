@@ -43,11 +43,13 @@ type setArgsT struct {
 	advertiseDefaultRoute  bool
 	opUser                 string
 	acceptedRisks          string
+	profileName            string
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf := newFlagSet("set")
 
+	setf.StringVar(&setArgs.profileName, "nickname", "", "nickname for the login profile")
 	setf.BoolVar(&setArgs.acceptRoutes, "accept-routes", false, "accept routes advertised by other Tailscale nodes")
 	setf.BoolVar(&setArgs.acceptDNS, "accept-dns", false, "accept DNS configuration from the admin panel")
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
@@ -81,6 +83,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 
 	maskedPrefs := &ipn.MaskedPrefs{
 		Prefs: ipn.Prefs{
+			ProfileName:            setArgs.profileName,
 			RouteAll:               setArgs.acceptRoutes,
 			CorpDNS:                setArgs.acceptDNS,
 			ExitNodeAllowLANAccess: setArgs.exitNodeAllowLANAccess,
@@ -131,6 +134,11 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		if err := presentSSHToggleRisk(wantSSH, haveSSH, setArgs.acceptedRisks); err != nil {
 			return err
 		}
+	}
+	checkPrefs := curPrefs.Clone()
+	checkPrefs.ApplyEdits(maskedPrefs)
+	if err := localClient.CheckPrefs(ctx, checkPrefs); err != nil {
+		return err
 	}
 
 	_, err = localClient.EditPrefs(ctx, maskedPrefs)

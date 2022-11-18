@@ -96,6 +96,16 @@ func (pm *profileManager) findProfilesByUserID(userID tailcfg.UserID) []*ipn.Log
 	return out
 }
 
+// ProfileIDForName returns the profile ID for the profile with the
+// given name. It returns "" if no such profile exists.
+func (pm *profileManager) ProfileIDForName(name string) ipn.ProfileID {
+	p := pm.findProfileByName(name)
+	if p == nil {
+		return ""
+	}
+	return p.ID
+}
+
 func (pm *profileManager) findProfileByName(name string) *ipn.LoginProfile {
 	for _, p := range pm.knownProfiles {
 		if p.Name == name {
