@@ -276,6 +276,10 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bugreport access denied", http.StatusForbidden)
 		return
 	}
+	if r.Method != "POST" {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
 	logMarker := func() string {
 		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
