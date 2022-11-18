@@ -1031,11 +1031,14 @@ func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	// As this is only meant for debug, verify there's no DNS name being used to
 	// access this.
-	if strings.IndexFunc(r.Host, unicode.IsLetter) != -1 {
+	if !strings.HasPrefix(r.Host, "localhost:") && strings.IndexFunc(r.Host, unicode.IsLetter) != -1 {
 		http.Error(w, "invalid host", http.StatusForbidden)
 		return
 	}
 
+	w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	st := s.b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
