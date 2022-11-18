@@ -2037,7 +2037,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("magicsock: disco: ignoring CallMeMaybe from %v; %v is unknown", sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
-		if !ep.canP2P() {
+		if !ep.canP2PLocked() {
 			return
 		}
 		if ep.discoKey != di.discoKey {
@@ -3580,12 +3580,12 @@ func (de *endpoint) DstToString() string { return de.publicKeyHex }
 func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
-// canP2P reports whether this endpoint understands the disco protocol
+// canP2PLocked reports whether this endpoint understands the disco protocol
 // and is expected to speak it.
 //
-// As of 2021-08-25, only a few hundred pre-0.100 clients understand
+// As of 2022-11-18, only a few dozen pre-0.100 clients understand
 // DERP but not disco, so this returns false very rarely.
-func (de *endpoint) canP2P() bool {
+func (de *endpoint) canP2PLocked() bool {
 	return !de.discoKey.IsZero()
 }
 
@@ -3617,7 +3617,7 @@ func (de *endpoint) heartbeat() {
 		return
 	}
 
-	if !de.canP2P() {
+	if !de.canP2PLocked() {
 		// Cannot form p2p connections, no heartbeating necessary.
 		return
 	}
@@ -3655,7 +3655,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
 		return false
 	}
-	if !de.canP2P() {
+	if !de.canP2PLocked() {
 		return false
 	}
 	if !de.bestAddr.IsValid() || de.lastFullPing.IsZero() {
@@ -3675,7 +3675,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 
 func (de *endpoint) noteActiveLocked() {
 	de.lastSend = mono.Now()
-	if de.heartBeatTimer == nil && de.canP2P() && !de.heartbeatDisabled {
+	if de.heartBeatTimer == nil && de.canP2PLocked() && !de.heartbeatDisabled {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
 }
@@ -3699,7 +3699,7 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
 		// IPv6 address, both 1ms away, and it's random who replies first.
 		de.startPingLocked(udpAddr, now, pingCLI)
-	} else if de.canP2P() {
+	} else if de.canP2PLocked() {
 		for ep := range de.endpointState {
 			de.startPingLocked(ep, now, pingCLI)
 		}
@@ -3723,7 +3723,7 @@ func (de *endpoint) send(b []byte) error {
 
 	now := mono.Now()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
-	if de.canP2P() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
+	if de.canP2PLocked() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
 		de.sendPingsLocked(now, true)
 	}
 	de.noteActiveLocked()
@@ -3819,7 +3819,7 @@ const (
 )
 
 func (de *endpoint) startPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose) {
-	if !de.canP2P() {
+	if !de.canP2PLocked() {
 		panic("tried to disco ping a peer that can't disco")
 	}
 	if runtime.GOOS == "js" {
@@ -4119,16 +4119,17 @@ func (st *endpointState) addPongReplyLocked(r pongReply) {
 // already sent to us via UDP, so their stateful firewall should be
 // open. Now we can Ping back and make it through.
 func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
-	if !de.canP2P() {
-		// How did we receive a disco message from a peer that can't disco?
-		panic("got call-me-maybe from peer with no discokey")
-	}
 	if runtime.GOOS == "js" {
 		// Nothing to do on js/wasm if we can't send UDP packets anyway.
 		return
 	}
 	de.mu.Lock()
 	defer de.mu.Unlock()
+
+	if !de.canP2PLocked() {
+		// How did we receive a disco message from a peer that can't disco?
+		panic("got call-me-maybe from peer with no discokey")
+	}
 
 	now := time.Now()
 	for ep := range de.isCallMeMaybeEP {
