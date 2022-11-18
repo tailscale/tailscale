@@ -6,6 +6,10 @@
 
 package netstat
 
+// OSMetadata includes any additional OS-specific information that may be
+// obtained during the retrieval of a given Entry.
+type OSMetadata struct{}
+
 func get() (*Table, error) {
 	return nil, ErrNotImplemented
 }

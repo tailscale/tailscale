@@ -17,6 +17,7 @@ type Entry struct {
 	Local, Remote netip.AddrPort
 	Pid           int
 	State         string // TODO: type?
+	OSMetadata    OSMetadata
 }
 
 // Table contains local machine's TCP connection entries.
