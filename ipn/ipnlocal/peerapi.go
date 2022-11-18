@@ -166,13 +166,13 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
-			if strings.HasSuffix(name, deletedSuffix) { // for Windows + tests
+			if name, ok := strs.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
 				// After we're done looping over files, then try
 				// to delete this file. Don't do it proactively,
 				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
 				// and we don't want to delete the ".deleted" file before
 				// enumerating to the "foo.jpg" file.
-				defer tryDeleteAgain(filepath.Join(s.rootDir, strings.TrimSuffix(name, deletedSuffix)))
+				defer tryDeleteAgain(filepath.Join(s.rootDir, name))
 				continue
 			}
 			if de.Type().IsRegular() {
@@ -225,11 +225,11 @@ func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
-			if strings.HasSuffix(name, deletedSuffix) { // for Windows + tests
+			if name, ok := strs.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
 				if deleted == nil {
 					deleted = map[string]bool{}
 				}
-				deleted[strings.TrimSuffix(name, deletedSuffix)] = true
+				deleted[name] = true
 				continue
 			}
 			if de.Type().IsRegular() {

@@ -32,6 +32,7 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
 
@@ -740,7 +741,7 @@ func structTypeSortedFields(t reflect.Type) []sortedStructField {
 // removed.
 func removeTypePrefixes(s string) string {
 	for _, prefix := range prefixesToTrim {
-		if trimmed := strings.TrimPrefix(s, prefix); trimmed != s {
+		if trimmed, ok := strs.CutPrefix(s, prefix); ok {
 			return trimmed
 		}
 	}
