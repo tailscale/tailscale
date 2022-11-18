@@ -27,6 +27,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"go4.org/mem"
 	"inet.af/peercred"
@@ -1024,7 +1025,17 @@ func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 	})
 }
 
+// ServeHTMLStatus serves an HTML status page at http://localhost:41112/ for
+// Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
+// is used to run a debug server.
 func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
+	// As this is only meant for debug, verify there's no DNS name being used to
+	// access this.
+	if strings.IndexFunc(r.Host, unicode.IsLetter) != -1 {
+		http.Error(w, "invalid host", http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	st := s.b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
