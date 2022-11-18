@@ -480,6 +480,19 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			distro: "", // not Synology
 			want:   accidentalUpPrefix + " --hostname=foo --accept-routes",
 		},
+		{
+			name:  "profile_name_ignored_in_up",
+			flags: []string{"--hostname=foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				ProfileName:      "foo",
+			},
+			goos: "linux",
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

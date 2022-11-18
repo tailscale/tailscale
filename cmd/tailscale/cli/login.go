@@ -27,6 +27,6 @@ This command is currently in alpha and may change in the future.`,
 		if err := localClient.SwitchToEmptyProfile(ctx); err != nil {
 			return err
 		}
-		return runUp(ctx, args, loginArgs)
+		return runUp(ctx, "login", args, loginArgs)
 	},
 }

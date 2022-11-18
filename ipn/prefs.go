@@ -190,7 +190,7 @@ type Prefs struct {
 	// operate tailscaled without being root or using sudo.
 	OperatorUser string `json:",omitempty"`
 
-	// ProfileName is the desired name of the profile. If empty, then the users
+	// ProfileName is the desired name of the profile. If empty, then the user's
 	// LoginName is used. It is only used for display purposes in the client UI
 	// and CLI.
 	ProfileName string `json:",omitempty"`
