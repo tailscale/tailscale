@@ -221,6 +221,9 @@ func NewDirect(opts Options) (*Direct, error) {
 		// handlers (register, map, set-dns, etc) do their own
 		// zstd compression per naclbox.
 		tr.DisableCompression = true
+		// Set an aggressive idle timeout; the TLS channel
+		// is so rarely used since the move to Noise.
+		tr.IdleConnTimeout = 5 * time.Second
 		httpc = &http.Client{Transport: tr}
 	}
 
@@ -1220,6 +1223,10 @@ func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string
 	if err != nil {
 		return nil, fmt.Errorf("create control key request: %v", err)
 	}
+	// Close connection after request since we only
+	// use the regular HTTPS channel for initial
+	// bootstrapping /key
+	req.Close = true
 	res, err := httpc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch control key: %v", err)
