@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/strs"
 )
 
 // Path is the canonical location of resolv.conf.
@@ -68,8 +69,7 @@ func Parse(r io.Reader) (*Config, error) {
 		line, _, _ = strings.Cut(line, "#") // remove any comments
 		line = strings.TrimSpace(line)
 
-		if strings.HasPrefix(line, "nameserver") {
-			s := strings.TrimPrefix(line, "nameserver")
+		if s, ok := strs.CutPrefix(line, "nameserver"); ok {
 			nameserver := strings.TrimSpace(s)
 			if len(nameserver) == len(s) {
 				return nil, fmt.Errorf("missing space after \"nameserver\" in %q", line)
@@ -82,8 +82,7 @@ func Parse(r io.Reader) (*Config, error) {
 			continue
 		}
 
-		if strings.HasPrefix(line, "search") {
-			s := strings.TrimPrefix(line, "search")
+		if s, ok := strs.CutPrefix(line, "search"); ok {
 			domain := strings.TrimSpace(s)
 			if len(domain) == len(s) {
 				// No leading space?!

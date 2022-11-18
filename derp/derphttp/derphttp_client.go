@@ -24,7 +24,6 @@ import (
 	"net/netip"
 	"net/url"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +38,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/strs"
 )
 
 // Client is a DERP-over-HTTP client.
@@ -1028,9 +1028,10 @@ var ErrClientClosed = errors.New("derphttp.Client closed")
 
 func parseMetaCert(certs []*x509.Certificate) (serverPub key.NodePublic, serverProtoVersion int) {
 	for _, cert := range certs {
-		if cn := cert.Subject.CommonName; strings.HasPrefix(cn, "derpkey") {
+		// Look for derpkey prefix added by initMetacert() on the server side.
+		if pubHex, ok := strs.CutPrefix(cert.Subject.CommonName, "derpkey"); ok {
 			var err error
-			serverPub, err = key.ParseNodePublicUntyped(mem.S(strings.TrimPrefix(cn, "derpkey")))
+			serverPub, err = key.ParseNodePublicUntyped(mem.S(pubHex))
 			if err == nil && cert.SerialNumber.BitLen() <= 8 { // supports up to version 255
 				return serverPub, int(cert.SerialNumber.Int64())
 			}

@@ -670,7 +670,11 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
 	}
-	suffix := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
+	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
 	if suffix == "" {
 		if r.Method != "GET" {
 			http.Error(w, "want GET to list files", 400)
@@ -774,7 +778,11 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upath := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	upath, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
 	stableIDStr, filenameEscaped, ok := strings.Cut(upath, "/")
 	if !ok {
 		http.Error(w, "bogus URL", 400)
@@ -1159,7 +1167,8 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/profiles/")
 	if !ok {
-		panic("misconfigured")
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
 	}
 	if suffix == "" {
 		switch r.Method {
