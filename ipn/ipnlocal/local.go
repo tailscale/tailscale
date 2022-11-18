@@ -2362,6 +2362,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkSSHPrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := b.checkExitNodePrefsLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	return multierr.New(errs...)
 }
 
@@ -2439,6 +2442,13 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 		return true // assume true until set otherwise
 	}
 	return prefs.ControlURLOrDefault() == ipn.DefaultControlURL
+}
+
+func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
+	if (p.ExitNodeIP.IsValid() || p.ExitNodeID != "") && p.AdvertisesExitNode() {
+		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
+	}
+	return nil
 }
 
 func (b *LocalBackend) EditPrefs(mp *ipn.MaskedPrefs) (ipn.PrefsView, error) {
