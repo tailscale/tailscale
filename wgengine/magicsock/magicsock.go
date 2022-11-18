@@ -195,14 +195,12 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 	if oldDiscoKey != ep.discoKey {
 		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
 	}
-	if !ep.discoKey.IsZero() {
-		set := m.nodesOfDisco[ep.discoKey]
-		if set == nil {
-			set = map[key.NodePublic]bool{}
-			m.nodesOfDisco[ep.discoKey] = set
-		}
-		set[ep.publicKey] = true
+	set := m.nodesOfDisco[ep.discoKey]
+	if set == nil {
+		set = map[key.NodePublic]bool{}
+		m.nodesOfDisco[ep.discoKey] = set
 	}
+	set[ep.publicKey] = true
 }
 
 // setNodeKeyForIPPort makes future peer lookups by ipp return the
@@ -1010,16 +1008,6 @@ func (c *Conn) DiscoPublicKey() key.DiscoPublic {
 		c.logf("magicsock: disco key = %v", c.discoShort)
 	}
 	return c.discoPublic
-}
-
-// PeerHasDiscoKey reports whether peer k supports discovery keys (client version 0.100.0+).
-func (c *Conn) PeerHasDiscoKey(k key.NodePublic) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ep, ok := c.peerMap.endpointForNodeKey(k); ok {
-		return ep.discoKey.IsZero()
-	}
-	return false
 }
 
 // c.mu must NOT be held.
@@ -2037,9 +2025,6 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("magicsock: disco: ignoring CallMeMaybe from %v; %v is unknown", sender.ShortString(), derpNodeSrc.ShortString())
 			return
 		}
-		if !ep.canP2PLocked() {
-			return
-		}
 		if ep.discoKey != di.discoKey {
 			metricRecvDiscoCallMeMaybeBadDisco.Add(1)
 			c.logf("[unexpected] CallMeMaybe from peer via DERP whose netmap discokey != disco source")
@@ -2390,19 +2375,9 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		return
 	}
 
-	numNoDisco := 0
-	for _, n := range nm.Peers {
-		if n.DiscoKey.IsZero() {
-			numNoDisco++
-		}
-	}
-
 	metricNumPeers.Set(int64(len(nm.Peers)))
 
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
-	if numNoDisco != 0 {
-		c.logf("magicsock: %d DERP-only peers (no discokey)", numNoDisco)
-	}
 	c.netMap = nm
 
 	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
@@ -2414,9 +2389,19 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	// handle full set updates.
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
+			if n.DiscoKey.IsZero() {
+				// Discokey transitioned from non-zero to zero? Ignore. Server's confused.
+				c.peerMap.deleteEndpoint(ep)
+				continue
+			}
 			oldDiscoKey := ep.discoKey
 			ep.updateFromNode(n, heartbeatDisabled)
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
+			continue
+		}
+		if n.DiscoKey.IsZero() {
+			// Ancient pre-0.100 node. Ignore, so we can assume elsewhere in magicsock
+			// that all nodes have a DiscoKey.
 			continue
 		}
 
@@ -2431,10 +2416,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		if len(n.Addresses) > 0 {
 			ep.nodeAddr = n.Addresses[0].Addr()
 		}
-		if !n.DiscoKey.IsZero() {
-			ep.discoKey = n.DiscoKey
-			ep.discoShort = n.DiscoKey.ShortString()
-		}
+		ep.discoKey = n.DiscoKey
+		ep.discoShort = n.DiscoKey.ShortString()
 		ep.initFakeUDPAddr()
 		if debugDisco() { // rather than making a new knob
 			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
@@ -3395,7 +3378,7 @@ type endpoint struct {
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
 
-	discoKey   key.DiscoPublic // for discovery messages. IsZero() if peer can't disco.
+	discoKey   key.DiscoPublic // for discovery messages. Should never be the zero value.
 	discoShort string          // ShortString of discoKey. Empty if peer can't disco.
 
 	heartBeatTimer *time.Timer    // nil when idle
@@ -3580,15 +3563,6 @@ func (de *endpoint) DstToString() string { return de.publicKeyHex }
 func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
-// canP2PLocked reports whether this endpoint understands the disco protocol
-// and is expected to speak it.
-//
-// As of 2022-11-18, only a few dozen pre-0.100 clients understand
-// DERP but not disco, so this returns false very rarely.
-func (de *endpoint) canP2PLocked() bool {
-	return !de.discoKey.IsZero()
-}
-
 // addrForSendLocked returns the address(es) that should be used for
 // sending the next packet. Zero, one, or both of UDP address and DERP
 // addr may be non-zero.
@@ -3614,11 +3588,6 @@ func (de *endpoint) heartbeat() {
 
 	if de.heartbeatDisabled {
 		// If control override to disable heartBeatTimer set, return early.
-		return
-	}
-
-	if !de.canP2PLocked() {
-		// Cannot form p2p connections, no heartbeating necessary.
 		return
 	}
 
@@ -3655,9 +3624,6 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 	if runtime.GOOS == "js" {
 		return false
 	}
-	if !de.canP2PLocked() {
-		return false
-	}
 	if !de.bestAddr.IsValid() || de.lastFullPing.IsZero() {
 		return true
 	}
@@ -3675,7 +3641,7 @@ func (de *endpoint) wantFullPingLocked(now mono.Time) bool {
 
 func (de *endpoint) noteActiveLocked() {
 	de.lastSend = mono.Now()
-	if de.heartBeatTimer == nil && de.canP2PLocked() && !de.heartbeatDisabled {
+	if de.heartBeatTimer == nil && !de.heartbeatDisabled {
 		de.heartBeatTimer = time.AfterFunc(heartbeatInterval, de.heartbeat)
 	}
 }
@@ -3699,7 +3665,7 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
 		// IPv6 address, both 1ms away, and it's random who replies first.
 		de.startPingLocked(udpAddr, now, pingCLI)
-	} else if de.canP2PLocked() {
+	} else {
 		for ep := range de.endpointState {
 			de.startPingLocked(ep, now, pingCLI)
 		}
@@ -3723,7 +3689,7 @@ func (de *endpoint) send(b []byte) error {
 
 	now := mono.Now()
 	udpAddr, derpAddr := de.addrForSendLocked(now)
-	if de.canP2PLocked() && (!udpAddr.IsValid() || now.After(de.trustBestAddrUntil)) {
+	if !udpAddr.IsValid() || now.After(de.trustBestAddrUntil) {
 		de.sendPingsLocked(now, true)
 	}
 	de.noteActiveLocked()
@@ -3819,9 +3785,6 @@ const (
 )
 
 func (de *endpoint) startPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose) {
-	if !de.canP2PLocked() {
-		panic("tried to disco ping a peer that can't disco")
-	}
 	if runtime.GOOS == "js" {
 		return
 	}
@@ -4125,11 +4088,6 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	}
 	de.mu.Lock()
 	defer de.mu.Unlock()
-
-	if !de.canP2PLocked() {
-		// How did we receive a disco message from a peer that can't disco?
-		panic("got call-me-maybe from peer with no discokey")
-	}
 
 	now := time.Now()
 	for ep := range de.isCallMeMaybeEP {

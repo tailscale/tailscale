@@ -607,54 +607,6 @@ func TestTwoDevicePing(t *testing.T) {
 	testTwoDevicePing(t, n)
 }
 
-// Legacy clients appear to new code as peers that know about DERP and
-// WireGuard, but don't have a disco key. Check that we can still
-// communicate successfully with such peers.
-func TestNoDiscoKey(t *testing.T) {
-	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
-
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
-	defer cleanup()
-
-	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
-	defer m1.Close()
-	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
-	defer m2.Close()
-
-	removeDisco := func(idx int, nm *netmap.NetworkMap) {
-		for _, p := range nm.Peers {
-			p.DiscoKey = key.DiscoPublic{}
-		}
-	}
-
-	cleanupMesh := meshStacks(t.Logf, removeDisco, m1, m2)
-	defer cleanupMesh()
-
-	// Wait for both peers to know about each other before we try to
-	// ping.
-	for {
-		if s1 := m1.Status(); len(s1.Peer) != 1 {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		if s2 := m2.Status(); len(s2.Peer) != 1 {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		break
-	}
-
-	pkt := tuntest.Ping(m2.IP(), m1.IP())
-	m1.tun.Outbound <- pkt
-	select {
-	case <-m2.tun.Inbound:
-		t.Logf("ping m1>m2 ok")
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timed out waiting for ping to transit")
-	}
-}
-
 func TestDiscokeyChange(t *testing.T) {
 	tstest.PanicOnLog()
 	tstest.ResourceCheck(t)
