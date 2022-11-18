@@ -973,19 +973,20 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 		t.Errorf("Hostname = %q; want foo", p.Hostname())
 	}
 
-	// Test that we can't see the PrivateNodeKey.
 	if !p.Persist().PrivateNodeKey.IsZero() {
 		t.Errorf("PrivateNodeKey = %v; want zero", p.Persist().PrivateNodeKey)
 	}
 
-	// Test that we can't see the PrivateNodeKey.
 	if !p.Persist().OldPrivateNodeKey.IsZero() {
 		t.Errorf("OldPrivateNodeKey = %v; want zero", p.Persist().OldPrivateNodeKey)
 	}
 
-	// Test that we can't see the PrivateNodeKey.
 	if !p.Persist().LegacyFrontendPrivateMachineKey.IsZero() {
 		t.Errorf("LegacyFrontendPrivateMachineKey = %v; want zero", p.Persist().LegacyFrontendPrivateMachineKey)
+	}
+
+	if !p.Persist().NetworkLockKey.IsZero() {
+		t.Errorf("NetworkLockKey= %v; want zero", p.Persist().NetworkLockKey)
 	}
 }
 
