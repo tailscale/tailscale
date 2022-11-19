@@ -273,3 +273,17 @@ fluffy
 bun
 mercat
 coyote
+alpine
+lamancha
+angora
+beetal
+girgentana
+jamnapari
+kamori
+kiko
+oberhasli
+pygmy
+pygora
+rove
+saanen
+bilberry
