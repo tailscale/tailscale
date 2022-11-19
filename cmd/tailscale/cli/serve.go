@@ -514,7 +514,7 @@ func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.S
 			tlsStatus = "TLS terminated"
 		}
 		fStatus := "tailnet only"
-		if sc.IsFunnelOn(hp) {
+		if sc.AllowFunnel[hp] {
 			fStatus = "Funnel on"
 		}
 		printf("|-- tcp://%s (%s, %s)\n", hp, tlsStatus, fStatus)
@@ -532,7 +532,7 @@ func printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) {
 		return
 	}
 	fStatus := "tailnet only"
-	if sc.IsFunnelOn(hp) {
+	if sc.AllowFunnel[hp] {
 		fStatus = "Funnel on"
 	}
 	host, portStr, _ := net.SplitHostPort(string(hp))
@@ -687,8 +687,7 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	}
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	hp := ipn.HostPort(dnsName + ":" + srvPortStr)
-	isFun := sc.IsFunnelOn(hp)
-	if on && isFun || !on && !isFun {
+	if on == sc.AllowFunnel[hp] {
 		// Nothing to do.
 		return nil
 	}

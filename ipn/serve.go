@@ -81,15 +81,18 @@ func (sc *ServeConfig) WebHandlerExists(hp HostPort, mount string) bool {
 // GetWebHandler returns the HTTPHandler for the given host:port and mount point.
 // Returns nil if the handler does not exist.
 func (sc *ServeConfig) GetWebHandler(hp HostPort, mount string) *HTTPHandler {
-	if sc.Web[hp] != nil {
-		return sc.Web[hp].Handlers[mount]
+	if sc == nil || sc.Web[hp] == nil {
+		return nil
 	}
-	return nil
+	return sc.Web[hp].Handlers[mount]
 }
 
 // GetTCPPortHandler returns the TCPPortHandler for the given port.
 // If the port is not configured, nil is returned.
 func (sc *ServeConfig) GetTCPPortHandler(port uint16) *TCPPortHandler {
+	if sc == nil {
+		return nil
+	}
 	return sc.TCP[port]
 }
 
@@ -97,7 +100,7 @@ func (sc *ServeConfig) GetTCPPortHandler(port uint16) *TCPPortHandler {
 // in TCPForward mode on any port.
 // This is exclusive of Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingAny() bool {
-	if len(sc.TCP) == 0 {
+	if sc == nil || len(sc.TCP) == 0 {
 		return false
 	}
 	for _, h := range sc.TCP {
@@ -112,7 +115,7 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 // in TCPForward mode on the given port.
 // This is exclusive of Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16) bool {
-	if sc.TCP[port] == nil {
+	if sc == nil || sc.TCP[port] == nil {
 		return false
 	}
 	return !sc.TCP[port].HTTPS
@@ -122,14 +125,22 @@ func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16) bool {
 // Web/HTTPS on the given port.
 // This is exclusive of TCPForwarding.
 func (sc *ServeConfig) IsServingWeb(port uint16) bool {
-	if sc.TCP[port] == nil {
+	if sc == nil || sc.TCP[port] == nil {
 		return false
 	}
 	return sc.TCP[port].HTTPS
 }
 
 // IsFunnelOn checks if ServeConfig is currently allowing
-// funnel traffic on for the given host:port.
-func (sc *ServeConfig) IsFunnelOn(hp HostPort) bool {
-	return sc.AllowFunnel[hp]
+// funnel traffic for any host:port.
+func (sc *ServeConfig) IsFunnelOn() bool {
+	if sc == nil {
+		return false
+	}
+	for _, b := range sc.AllowFunnel {
+		if b {
+			return true
+		}
+	}
+	return false
 }
