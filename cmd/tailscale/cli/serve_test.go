@@ -577,9 +577,9 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{ // try to start a tcp forwarder on the same port
+	add(step{ // try to start a tcp forwarder on the same serve port (443 default)
 		command: cmd("tcp 5432"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: anyErr(),
 	})
 
 	// And now run the steps above.
