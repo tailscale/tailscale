@@ -672,13 +672,11 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		peerStatusFromNode(ps, p)
 
 		p4, p6 := peerAPIPorts(p)
-		ip4 := nodeIP(p, netip.Addr.Is4)
-		ip6 := nodeIP(p, netip.Addr.Is6)
-		if p4 != 0 && ip4.IsValid() {
-			ps.PeerAPIURL = append(ps.PeerAPIURL, peerAPIURL(ip4, p4))
+		if u := peerAPIURL(nodeIP(p, netip.Addr.Is4), p4); u != "" {
+			ps.PeerAPIURL = append(ps.PeerAPIURL, u)
 		}
-		if p6 != 0 && ip6.IsValid() {
-			ps.PeerAPIURL = append(ps.PeerAPIURL, peerAPIURL(ip6, p6))
+		if u := peerAPIURL(nodeIP(p, netip.Addr.Is6), p6); u != "" {
+			ps.PeerAPIURL = append(ps.PeerAPIURL, u)
 		}
 		sb.AddPeer(p.Key, ps)
 	}
@@ -3701,6 +3699,10 @@ func peerAPIPorts(peer *tailcfg.Node) (p4, p6 uint16) {
 	return
 }
 
+// peerAPIURL returns an HTTP URL for the peer's peerapi service,
+// without a trailing slash.
+//
+// If ip or port is the zero value then it returns the empty string.
 func peerAPIURL(ip netip.Addr, port uint16) string {
 	if port == 0 || !ip.IsValid() {
 		return ""
