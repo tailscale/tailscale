@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 
 	"tailscale.com/syncs"
 )
@@ -73,4 +75,32 @@ func IsWindowsGUI() bool {
 	exe, _ := os.Executable()
 	exe = filepath.Base(exe)
 	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+}
+
+var (
+	isUnstableOnce  sync.Once
+	isUnstableBuild bool
+)
+
+// IsUnstableBuild reports whether this is an unstable build.
+// That is, whether its minor version number is odd.
+func IsUnstableBuild() bool {
+	isUnstableOnce.Do(initUnstable)
+	return isUnstableBuild
+}
+
+func initUnstable() {
+	_, rest, ok := strings.Cut(Short, ".")
+	if !ok {
+		return
+	}
+	minorStr, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return
+	}
+	minor, err := strconv.Atoi(minorStr)
+	if err != nil {
+		return
+	}
+	isUnstableBuild = minor%2 == 1
 }
