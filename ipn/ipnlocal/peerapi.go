@@ -34,6 +34,7 @@ import (
 	"github.com/kortschak/wol"
 	"golang.org/x/exp/slices"
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/http/httpguts"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -575,11 +576,49 @@ func (h *peerAPIHandler) validatePeerAPIRequest(r *http.Request) error {
 	return h.validateHost(r)
 }
 
+// peerAPIRequestShouldGetSecurityHeaders reports whether the PeerAPI request r
+// should get security response headers. It aims to report true for any request
+// from a browser and false for requests from tailscaled (Go) clients.
+//
+// PeerAPI is primarily an RPC mechanism between Tailscale instances. Some of
+// the HTTP handlers are useful for debugging with curl or browsers, but in
+// general the client is always tailscaled itself. Because PeerAPI only uses
+// HTTP/1 without HTTP/2 and its HPACK helping with repetitive headers, we try
+// to minimize header bytes sent in the common case when the client isn't a
+// browser. Minimizing bytes is important in particular with the ExitDNS service
+// provided by exit nodes, processing DNS clients from queries. We don't want to
+// waste bytes with security headers to non-browser clients. But if there's any
+// hint that the request is from a browser, then we do.
+func peerAPIRequestShouldGetSecurityHeaders(r *http.Request) bool {
+	// Accept-Encoding is a forbidden header
+	// (https://developer.mozilla.org/en-US/docs/Glossary/Forbidden_header_name)
+	// that Chrome, Firefox, Safari, etc send, but Go does not. So if we see it,
+	// it's probably a browser and not a Tailscale PeerAPI (Go) client.
+	if httpguts.HeaderValuesContainsToken(r.Header["Accept-Encoding"], "deflate") {
+		return true
+	}
+	// Clients can mess with their User-Agent, but if they say Mozilla or have a bunch
+	// of components (spaces) they're likely a browser.
+	if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "Mozilla/") || strings.Count(ua, " ") > 2 {
+		return true
+	}
+	// Tailscale/PeerAPI/Go clients don't have an Accept-Language.
+	if r.Header.Get("Accept-Language") != "" {
+		return true
+	}
+	return false
+}
+
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.validatePeerAPIRequest(r); err != nil {
 		h.logf("invalid request from %v: %v", h.remoteAddr, err)
 		http.Error(w, "invalid peerapi request", http.StatusForbidden)
 		return
+	}
+	if peerAPIRequestShouldGetSecurityHeaders(r) {
+		w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
 		h.handlePeerPut(w, r)
