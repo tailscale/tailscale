@@ -391,6 +391,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if st.Active {
 		e.Active = true
 	}
+	if st.PeerAPIURL != nil {
+		e.PeerAPIURL = st.PeerAPIURL
+	}
 }
 
 type StatusUpdater interface {
