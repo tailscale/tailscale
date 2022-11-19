@@ -114,6 +114,19 @@ EXAMPLES
 	}
 }
 
+func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.FlagSet {
+	onError, out := flag.ExitOnError, Stderr
+	if e.testFlagOut != nil {
+		onError, out = flag.ContinueOnError, e.testFlagOut
+	}
+	fs := flag.NewFlagSet(name, onError)
+	fs.SetOutput(out)
+	if setup != nil {
+		setup(fs)
+	}
+	return fs
+}
+
 // serveEnv is the environment the serve command runs within. All I/O should be
 // done via serveEnv methods so that it can be faked out for tests.
 //
@@ -133,6 +146,9 @@ type serveEnv struct {
 	testStdout               io.Writer
 }
 
+// getSelfDNSName returns the DNS name of the current node.
+// The trailing dot is removed.
+// Returns an error if local client status fails.
 func (e *serveEnv) getSelfDNSName(ctx context.Context) (string, error) {
 	st, err := e.getLocalClientStatus(ctx)
 	if err != nil {
@@ -141,6 +157,10 @@ func (e *serveEnv) getSelfDNSName(ctx context.Context) (string, error) {
 	return strings.TrimSuffix(st.Self.DNSName, "."), nil
 }
 
+// getLocalClientStatus calls LocalClient.Status, checks if
+// Status is ready.
+// Returns error if unable to reach tailscaled or if self node is nil.
+// Exits if status is not running or starting.
 func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, error) {
 	if e.testGetLocalClientStatus != nil {
 		return e.testGetLocalClientStatus(ctx)
@@ -160,19 +180,6 @@ func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, 
 	return st, nil
 }
 
-func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.FlagSet {
-	onError, out := flag.ExitOnError, Stderr
-	if e.testFlagOut != nil {
-		onError, out = flag.ContinueOnError, e.testFlagOut
-	}
-	fs := flag.NewFlagSet(name, onError)
-	fs.SetOutput(out)
-	if setup != nil {
-		setup(fs)
-	}
-	return fs
-}
-
 func (e *serveEnv) getServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
 	if e.testGetServeConfig != nil {
 		return e.testGetServeConfig(ctx)
@@ -185,13 +192,6 @@ func (e *serveEnv) setServeConfig(ctx context.Context, c *ipn.ServeConfig) error
 		return e.testSetServeConfig(ctx, c)
 	}
 	return localClient.SetServeConfig(ctx, c)
-}
-
-func (e *serveEnv) stdout() io.Writer {
-	if e.testStdout != nil {
-		return e.testStdout
-	}
-	return os.Stdout
 }
 
 // validateServePort returns --serve-port flag value,
@@ -221,12 +221,6 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		return flag.ErrHelp
 	}
 
-	srvPort, err := e.validateServePort()
-	if err != nil {
-		return err
-	}
-	srvPortStr := strconv.Itoa(int(srvPort))
-
 	// Undocumented debug command (not using ffcli subcommands) to set raw
 	// configs from stdin for now (2022-11-13).
 	if len(args) == 1 && args[0] == "set-raw" {
@@ -245,6 +239,12 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "error: invalid number of arguments\n\n")
 		return flag.ErrHelp
 	}
+
+	srvPort, err := e.validateServePort()
+	if err != nil {
+		return err
+	}
+	srvPortStr := strconv.Itoa(int(srvPort))
 
 	mount, err := cleanMountPoint(args[0])
 	if err != nil {
@@ -305,7 +305,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, srvPortStr))
 
-	if isTCPForwardingOnPort(sc, srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort) {
 		fmt.Fprintf(os.Stderr, "error: cannot serve web; already serving TCP\n")
 		return flag.ErrHelp
 	}
@@ -359,11 +359,11 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, mount string) error
 	if err != nil {
 		return err
 	}
-	if isTCPForwardingOnPort(sc, srvPort) {
+	if sc.IsTCPForwardingOnPort(srvPort) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, srvPortStr))
-	if !httpHandlerExists(sc, hp, mount) {
+	if !sc.WebHandlerExists(hp, mount) {
 		return errors.New("error: serve config does not exist")
 	}
 	// delete existing handler, then cascade delete if empty
@@ -381,18 +381,6 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, mount string) error
 	}
 	if err := e.setServeConfig(ctx, sc); err != nil {
 		return err
-	}
-	return nil
-}
-
-func httpHandlerExists(sc *ipn.ServeConfig, hp ipn.HostPort, mount string) bool {
-	h := getHTTPHandler(sc, hp, mount)
-	return h != nil
-}
-
-func getHTTPHandler(sc *ipn.ServeConfig, hp ipn.HostPort, mount string) *ipn.HTTPHandler {
-	if sc != nil && sc.Web[hp] != nil {
-		return sc.Web[hp].Handlers[mount]
 	}
 	return nil
 }
@@ -447,39 +435,6 @@ func expandProxyTarget(target string) (string, error) {
 	return url, nil
 }
 
-// isTCPForwardingAny checks if any TCP port is being forwarded.
-func isTCPForwardingAny(sc *ipn.ServeConfig) bool {
-	if sc == nil || len(sc.TCP) == 0 {
-		return false
-	}
-	for _, h := range sc.TCP {
-		if h.TCPForward != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// isTCPForwardingOnPort checks serve config to see if
-// we're specifically forwarding TCP on the given port.
-func isTCPForwardingOnPort(sc *ipn.ServeConfig, port uint16) bool {
-	if sc == nil || sc.TCP[port] == nil {
-		return false
-	}
-	return !sc.TCP[port].HTTPS
-}
-
-// isServingWeb checks serve config to see if
-// we're serving a web handler on the given port.
-func isServingWeb(sc *ipn.ServeConfig, port uint16) bool {
-	if sc == nil || sc.Web == nil || sc.TCP == nil ||
-		sc.TCP[port] == nil || sc.TCP[port].HTTPS == false {
-		// not listening on port
-		return false
-	}
-	return true
-}
-
 func allNumeric(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < '0' || s[i] > '9' {
@@ -516,7 +471,7 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if isTCPForwardingAny(sc) {
+	if sc.IsTCPForwardingAny() {
 		if err := printTCPStatusTree(ctx, sc, st); err != nil {
 			return err
 		}
@@ -540,6 +495,13 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 	return nil
 }
 
+func (e *serveEnv) stdout() io.Writer {
+	if e.testStdout != nil {
+		return e.testStdout
+	}
+	return os.Stdout
+}
+
 func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status) error {
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	for p, h := range sc.TCP {
@@ -552,7 +514,7 @@ func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.S
 			tlsStatus = "TLS terminated"
 		}
 		fStatus := "tailnet only"
-		if isFunnelOn(sc, hp) {
+		if sc.IsFunnelOn(hp) {
 			fStatus = "Funnel on"
 		}
 		printf("|-- tcp://%s (%s, %s)\n", hp, tlsStatus, fStatus)
@@ -570,7 +532,7 @@ func printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) {
 		return
 	}
 	fStatus := "tailnet only"
-	if isFunnelOn(sc, hp) {
+	if sc.IsFunnelOn(hp) {
 		fStatus = "Funnel on"
 	}
 	host, portStr, _ := net.SplitHostPort(string(hp))
@@ -649,12 +611,15 @@ func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 
 	fwdAddr := "127.0.0.1:" + portStr
 
-	if e.remove {
-		if isServingWeb(sc, srvPort) {
-			return errors.New("cannot remove TCP port; currently serving web")
+	if sc.IsServingWeb(srvPort) {
+		if e.remove {
+			return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", srvPort)
 		}
-		if sc.TCP != nil && sc.TCP[srvPort] != nil &&
-			sc.TCP[srvPort].TCPForward == fwdAddr {
+		return fmt.Errorf("cannot serve TCP; already serving web on %d", srvPort)
+	}
+
+	if e.remove {
+		if ph := sc.GetTCPPortHandler(srvPort); ph != nil && ph.TCPForward == fwdAddr {
 			delete(sc.TCP, srvPort)
 			// clear map mostly for testing
 			if len(sc.TCP) == 0 {
@@ -662,13 +627,7 @@ func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 			}
 			return e.setServeConfig(ctx, sc)
 		}
-
 		return errors.New("error: serve config does not exist")
-	}
-
-	if isServingWeb(sc, srvPort) {
-		fmt.Fprintf(os.Stderr, "error: cannot serve TCP; already serving Web\n\n")
-		return flag.ErrHelp
 	}
 
 	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{TCPForward: fwdAddr})
@@ -716,6 +675,9 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
 	st, err := e.getLocalClientStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("getting client status: %w", err)
@@ -725,13 +687,10 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	}
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
 	hp := ipn.HostPort(dnsName + ":" + srvPortStr)
-	if on && sc != nil && sc.AllowFunnel[hp] ||
-		!on && (sc == nil || !sc.AllowFunnel[hp]) {
+	isFun := sc.IsFunnelOn(hp)
+	if on && isFun || !on && !isFun {
 		// Nothing to do.
 		return nil
-	}
-	if sc == nil {
-		sc = &ipn.ServeConfig{}
 	}
 	if on {
 		mak.Set(&sc.AllowFunnel, hp, true)
@@ -746,8 +705,4 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
-}
-
-func isFunnelOn(sc *ipn.ServeConfig, hp ipn.HostPort) bool {
-	return sc != nil && sc.AllowFunnel[hp]
 }
