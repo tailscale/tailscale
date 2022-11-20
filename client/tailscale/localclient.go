@@ -426,8 +426,20 @@ func (lc *LocalClient) IDToken(ctx context.Context, aud string) (*tailcfg.TokenR
 	return decodeJSON[*tailcfg.TokenResponse](body)
 }
 
+// WaitingFiles returns the list of received Taildrop files that have been
+// received by the Tailscale daemon in its staging/cache directory but not yet
+// transferred by the user's CLI or GUI client and written to a user's home
+// directory somewhere.
 func (lc *LocalClient) WaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
-	body, err := lc.get200(ctx, "/localapi/v0/files/")
+	return lc.AwaitWaitingFiles(ctx, 0)
+}
+
+// AwaitWaitingFiles is like WaitingFiles but takes a duration to await for an answer.
+// If the duration is 0, it will return immediately. The duration is respected at second
+// granularity only. If no files are available, it returns (nil, nil).
+func (lc *LocalClient) AwaitWaitingFiles(ctx context.Context, d time.Duration) ([]apitype.WaitingFile, error) {
+	path := "/localapi/v0/files/?waitsec=" + fmt.Sprint(int(d.Seconds()))
+	body, err := lc.get200(ctx, path)
 	if err != nil {
 		return nil, err
 	}

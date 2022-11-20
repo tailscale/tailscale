@@ -7,6 +7,7 @@ package localapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -680,8 +681,20 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "want GET to list files", 400)
 			return
 		}
-		wfs, err := h.b.WaitingFiles()
-		if err != nil {
+		ctx := r.Context()
+		if s := r.FormValue("waitsec"); s != "" && s != "0" {
+			d, err := strconv.Atoi(s)
+			if err != nil {
+				http.Error(w, "invalid waitsec", http.StatusBadRequest)
+				return
+			}
+			deadline := time.Now().Add(time.Duration(d) * time.Second)
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+		wfs, err := h.b.AwaitWaitingFiles(ctx)
+		if err != nil && ctx.Err() == nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}

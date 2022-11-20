@@ -26,7 +26,6 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/quarantine"
@@ -529,30 +528,16 @@ func wipeInbox(ctx context.Context) error {
 }
 
 func waitForFile(ctx context.Context) error {
-	c, bc, pumpCtx, cancel := connect(ctx)
-	defer cancel()
-	fileWaiting := make(chan bool, 1)
-	notifyError := make(chan error, 1)
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.ErrMessage != nil {
-			notifyError <- fmt.Errorf("Notify.ErrMessage: %v", *n.ErrMessage)
+	for {
+		ff, err := localClient.AwaitWaitingFiles(ctx, time.Hour)
+		if len(ff) > 0 {
+			return nil
 		}
-		if n.FilesWaiting != nil {
-			select {
-			case fileWaiting <- true:
-			default:
-			}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-	})
-	go pump(pumpCtx, bc, c)
-	select {
-	case <-fileWaiting:
-		return nil
-	case <-pumpCtx.Done():
-		return pumpCtx.Err()
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-notifyError:
-		return err
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			return err
+		}
 	}
 }

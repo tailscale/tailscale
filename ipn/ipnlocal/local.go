@@ -180,7 +180,8 @@ type LocalBackend struct {
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
-	lastStatusTime   time.Time // status.AsOf value of the last processed status update
+	fileWaiters      map[*mapSetHandle]context.CancelFunc // handle => func to call on file received
+	lastStatusTime   time.Time                            // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
 	// intermediate buffered directory for "pick-up" later. If
@@ -1709,6 +1710,9 @@ func (b *LocalBackend) sendFileNotify() {
 	var n ipn.Notify
 
 	b.mu.Lock()
+	for _, wakeWaiter := range b.fileWaiters {
+		wakeWaiter()
+	}
 	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
 	if notifyFunc == nil || apiSrv == nil {
@@ -3579,11 +3583,61 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	return mk, nk
 }
 
+// mapSetHandle is a minimal (but non-zero) value whose address serves as a map
+// key for sets of non-comparable values that can't be map keys themselves.
+type mapSetHandle byte
+
+func (b *LocalBackend) setFileWaiter(handle *mapSetHandle, wakeWaiter context.CancelFunc) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if wakeWaiter == nil {
+		delete(b.fileWaiters, handle)
+	} else {
+		mak.Set(&b.fileWaiters, handle, wakeWaiter)
+	}
+}
+
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
 	b.mu.Lock()
 	apiSrv := b.peerAPIServer
 	b.mu.Unlock()
 	return apiSrv.WaitingFiles()
+}
+
+// AwaitWaitingFiles is like WaitingFiles but blocks while ctx is not done,
+// waiting for any files to be available.
+//
+// On return, exactly one of the results will be non-empty or non-nil,
+// respectively.
+func (b *LocalBackend) AwaitWaitingFiles(ctx context.Context) ([]apitype.WaitingFile, error) {
+	if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
+		return ff, err
+	}
+
+	for {
+		gotFile, gotFileCancel := context.WithCancel(context.Background())
+		defer gotFileCancel()
+
+		handle := new(mapSetHandle)
+		b.setFileWaiter(handle, gotFileCancel)
+		defer b.setFileWaiter(handle, nil)
+
+		// Now that we've registered ourselves, check again, in case
+		// of race. Otherwise there's a small window where we could
+		// miss a file arrival and wait forever.
+		if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
+			return ff, err
+		}
+
+		select {
+		case <-gotFile.Done():
+			if ff, err := b.WaitingFiles(); err != nil || len(ff) > 0 {
+				return ff, err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (b *LocalBackend) DeleteFile(name string) error {
