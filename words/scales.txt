@@ -194,3 +194,5 @@ snares
 rockhopper
 royal
 macaroni
+vibe
+vibes
