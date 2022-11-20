@@ -118,6 +118,10 @@ func (src *HTTPHandler) Clone() *HTTPHandler {
 	}
 	dst := new(HTTPHandler)
 	*dst = *src
+	if dst.Text != nil {
+		dst.Text = new(string)
+		*dst.Text = *src.Text
+	}
 	return dst
 }
 
@@ -125,7 +129,7 @@ func (src *HTTPHandler) Clone() *HTTPHandler {
 var _HTTPHandlerCloneNeedsRegeneration = HTTPHandler(struct {
 	Path  string
 	Proxy string
-	Text  string
+	Text  *string
 }{})
 
 // Clone makes a deep copy of WebServerConfig.

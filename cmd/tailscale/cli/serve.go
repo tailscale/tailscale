@@ -285,7 +285,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		}
 		h.Proxy = t
 	case "text":
-		h.Text = args[2]
+		h.Text = ptrTo(args[2])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown serve type %q\n\n", args[1])
 		return flag.ErrHelp
@@ -547,8 +547,8 @@ func printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) {
 			return "path", h.Path
 		case h.Proxy != "":
 			return "proxy", h.Proxy
-		case h.Text != "":
-			return "text", "\"" + elipticallyTruncate(h.Text, 20) + "\""
+		case h.Text != nil:
+			return "text", "\"" + elipticallyTruncate(*h.Text, 20) + "\""
 		}
 		return "", ""
 	}

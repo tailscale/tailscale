@@ -151,7 +151,7 @@ func TestServeConfigMutations(t *testing.T) {
 					"/abc": {Proxy: "http://127.0.0.1:3001"},
 				}},
 				"foo.test.ts.net:10000": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Text: "hi"},
+					"/": {Text: ptrTo("hi")},
 				}},
 			},
 		},
@@ -314,7 +314,7 @@ func TestServeConfigMutations(t *testing.T) {
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/": {Text: "hello"},
+					"/": {Text: ptrTo("hello")},
 				}},
 			},
 		},
@@ -547,7 +547,7 @@ func TestServeConfigMutations(t *testing.T) {
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
 				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/tcp": {Text: "foo"},
+					"/tcp": {Text: ptrTo("foo")},
 				}},
 			},
 		},

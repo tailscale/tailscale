@@ -395,9 +395,9 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if s := h.Text(); s != "" {
+	if s := h.Text(); s != nil {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		io.WriteString(w, s)
+		io.WriteString(w, *s)
 		return
 	}
 	if v := h.Path(); v != "" {

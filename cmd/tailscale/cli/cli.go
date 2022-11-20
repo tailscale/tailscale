@@ -53,6 +53,12 @@ func outln(a ...any) {
 	fmt.Fprintln(Stdout, a...)
 }
 
+// ptrTo returns a pointer to the provided value.
+// It's a convenience function to avoid having to write &value,
+// or where the language doesn't allow it.
+// Used primarily in tests.
+func ptrTo[T any](v T) *T { return &v }
+
 // ActLikeCLI reports whether a GUI application should act like the
 // CLI based on os.Args, GOOS, the context the process is running in
 // (pty, parent PID), etc.

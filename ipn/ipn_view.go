@@ -290,13 +290,19 @@ func (v *HTTPHandlerView) UnmarshalJSON(b []byte) error {
 
 func (v HTTPHandlerView) Path() string  { return v.ж.Path }
 func (v HTTPHandlerView) Proxy() string { return v.ж.Proxy }
-func (v HTTPHandlerView) Text() string  { return v.ж.Text }
+func (v HTTPHandlerView) Text() *string {
+	if v.ж.Text == nil {
+		return nil
+	}
+	x := *v.ж.Text
+	return &x
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HTTPHandlerViewNeedsRegeneration = HTTPHandler(struct {
 	Path  string
 	Proxy string
-	Text  string
+	Text  *string
 }{})
 
 // View returns a readonly view of WebServerConfig.

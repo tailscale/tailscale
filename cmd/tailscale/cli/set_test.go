@@ -13,8 +13,6 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
-func ptrTo[T any](v T) *T { return &v }
-
 func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 	pfx := netip.MustParsePrefix
 	tests := []struct {
