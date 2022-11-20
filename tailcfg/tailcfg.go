@@ -541,6 +541,14 @@ func (hi *Hostinfo) TailscaleSSHEnabled() bool {
 
 func (v HostinfoView) TailscaleSSHEnabled() bool { return v.ж.TailscaleSSHEnabled() }
 
+// TailscaleFunnelEnabled reports whether or not this node has explicitly
+// enabled Funnel.
+func (hi *Hostinfo) TailscaleFunnelEnabled() bool {
+	return hi != nil && hi.WireIngress
+}
+
+func (v HostinfoView) TailscaleFunnelEnabled() bool { return v.ж.TailscaleFunnelEnabled() }
+
 // NetInfo contains information about the host's network state.
 type NetInfo struct {
 	// MappingVariesByDestIP says whether the host's NAT mappings
