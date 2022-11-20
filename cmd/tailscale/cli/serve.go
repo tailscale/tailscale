@@ -285,6 +285,9 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		}
 		h.Proxy = t
 	case "text":
+		if args[2] == "" {
+			return errors.New("unable to serve; text cannot be an empty string")
+		}
 		h.Text = args[2]
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown serve type %q\n\n", args[1])
