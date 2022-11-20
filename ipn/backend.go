@@ -76,6 +76,8 @@ type Notify struct {
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
 	// user's preferred storage location.
+	//
+	// Deprecated: use LocalClient.AwaitWaitingFiles instead.
 	FilesWaiting *empty.Message `json:",omitempty"`
 
 	// IncomingFiles, if non-nil, specifies which files are in the
@@ -83,6 +85,8 @@ type Notify struct {
 	// Notify should not update the state of file transfers. A non-nil
 	// but empty IncomingFiles means that no files are in the middle
 	// of being transferred.
+	//
+	// Deprecated: use LocalClient.AwaitWaitingFiles instead.
 	IncomingFiles []PartialFile `json:",omitempty"`
 
 	// LocalTCPPort, if non-nil, informs the UI frontend which
