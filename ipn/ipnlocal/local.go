@@ -1122,6 +1122,17 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.mu.Lock()
+	if opts.UpdatePrefs != nil {
+		if err := b.checkPrefsLocked(opts.UpdatePrefs); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	} else if opts.LegacyMigrationPrefs != nil {
+		if err := b.checkPrefsLocked(opts.LegacyMigrationPrefs); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	}
 	profileID := b.pm.CurrentProfile().ID
 
 	// The iOS client sends a "Start" whenever its UI screen comes
