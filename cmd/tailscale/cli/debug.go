@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/http/httpproxy"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -261,11 +263,40 @@ func runLocalCreds(ctx context.Context, args []string) error {
 		return nil
 	}
 	if runtime.GOOS == "windows" {
-		printf("curl http://localhost:%v/localapi/v0/status\n", safesocket.WindowsLocalPort)
+		runLocalAPIProxy()
 		return nil
 	}
 	printf("curl --unix-socket %s http://local-tailscaled.sock/localapi/v0/status\n", paths.DefaultTailscaledSocket())
 	return nil
+}
+
+type localClientRoundTripper struct{}
+
+func (localClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return localClient.DoLocalRequest(req)
+}
+
+func runLocalAPIProxy() {
+	rp := httputil.NewSingleHostReverseProxy(&url.URL{
+		Scheme: "http",
+		Host:   apitype.LocalAPIHost,
+		Path:   "/",
+	})
+	dir := rp.Director
+	rp.Director = func(req *http.Request) {
+		dir(req)
+		req.Host = ""
+		req.RequestURI = ""
+	}
+	rp.Transport = localClientRoundTripper{}
+	lc, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Serving LocalAPI proxy on http://%s\n", lc.Addr())
+	fmt.Printf("curl.exe http://%v/localapi/v0/status\n", lc.Addr())
+	fmt.Printf("Ctrl+C to stop")
+	http.Serve(lc, rp)
 }
 
 var prefsArgs struct {
