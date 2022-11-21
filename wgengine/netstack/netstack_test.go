@@ -268,10 +268,11 @@ func looksLikeATailscaleSelfAddress(addr netip.Addr) bool {
 
 func TestShouldProcessInbound(t *testing.T) {
 	testCases := []struct {
-		name  string
-		pkt   *packet.Parsed
-		setup func(*Impl)
-		want  bool
+		name      string
+		pkt       *packet.Parsed
+		setup     func(*Impl)
+		want      bool
+		runOnGOOS string
 	}{
 		{
 			name: "ipv6-via",
@@ -349,7 +350,8 @@ func TestShouldProcessInbound(t *testing.T) {
 					return addr.String() == "100.101.102.104" // Dst, above
 				})
 			},
-			want: true,
+			want:      true,
+			runOnGOOS: "linux",
 		},
 		{
 			name: "tailscale-ssh-disabled",
@@ -443,6 +445,9 @@ func TestShouldProcessInbound(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.runOnGOOS != "" && runtime.GOOS != tc.runOnGOOS {
+				t.Skipf("skipping on GOOS=%v", runtime.GOOS)
+			}
 			impl := makeNetstack(t, func(i *Impl) {
 				defer t.Logf("netstack setup finished")
 
