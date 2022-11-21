@@ -1156,6 +1156,7 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 //   - GET /profiles/: list all profiles (JSON-encoded array of ipn.LoginProfiles)
 //   - PUT /profiles/: add new profile (no response). A separate
 //     StartLoginInteractive() is needed to populate and persist the new profile.
+//   - DELETE /profiles/: delete all profile (no response)
 //   - GET /profiles/current: current profile (JSON-ecoded ipn.LoginProfile)
 //   - GET /profiles/<id>: output profile (JSON-ecoded ipn.LoginProfile)
 //   - POST /profiles/<id>: switch to profile (no response)
@@ -1177,6 +1178,13 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(h.b.ListProfiles())
 		case http.MethodPut:
 			err := h.b.NewProfile()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodDelete:
+			err := h.b.DeleteAllProfiles()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

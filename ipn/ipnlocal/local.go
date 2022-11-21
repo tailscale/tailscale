@@ -4204,6 +4204,16 @@ func (b *LocalBackend) DeleteProfile(p ipn.ProfileID) error {
 	return b.resetForProfileChangeLockedOnEntry()
 }
 
+// DeleteProfiles removes all known profiles.
+func (b *LocalBackend) DeleteAllProfiles() error {
+	b.mu.Lock()
+	if err := b.pm.DeleteAllProfiles(); err != nil {
+		b.mu.Unlock()
+		return err
+	}
+	return b.resetForProfileChangeLockedOnEntry()
+}
+
 // CurrentProfile returns the current LoginProfile.
 // The value may be zero if the profile is not persisted.
 func (b *LocalBackend) CurrentProfile() ipn.LoginProfile {

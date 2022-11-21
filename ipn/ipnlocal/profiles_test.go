@@ -164,6 +164,14 @@ func TestProfileManagement(t *testing.T) {
 	delete(wantProfiles, "tagged-node.2.ts.net")
 	wantCurProfile = "user@2.example.com"
 	checkProfiles(t)
+
+	t.Logf("Delete all")
+	pm.DeleteAllProfiles()
+	wantProfiles = map[string]ipn.PrefsView{
+		"": emptyPrefs,
+	}
+	wantCurProfile = ""
+	checkProfiles(t)
 }
 
 // TestProfileManagementWindows tests going into and out of Unattended mode on

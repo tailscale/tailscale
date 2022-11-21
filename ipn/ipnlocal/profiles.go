@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"time"
 
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
@@ -349,6 +350,21 @@ func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 	return pm.writeKnownProfiles()
 }
 
+// DeleteAllProfiles removes all known profiles and switches to a new empty
+// profile.
+func (pm *profileManager) DeleteAllProfiles() error {
+	metricDeleteAllProfile.Add(1)
+
+	for _, kp := range pm.knownProfiles {
+		if err := pm.store.WriteState(kp.Key, nil); err != nil {
+			return err
+		}
+	}
+	pm.NewProfile()
+	maps.Clear(pm.knownProfiles)
+	return pm.writeKnownProfiles()
+}
+
 func (pm *profileManager) writeKnownProfiles() error {
 	b, err := json.Marshal(pm.knownProfiles)
 	if err != nil {
@@ -512,9 +528,10 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 }
 
 var (
-	metricNewProfile    = clientmetric.NewCounter("profiles_new")
-	metricSwitchProfile = clientmetric.NewCounter("profiles_switch")
-	metricDeleteProfile = clientmetric.NewCounter("profiles_delete")
+	metricNewProfile       = clientmetric.NewCounter("profiles_new")
+	metricSwitchProfile    = clientmetric.NewCounter("profiles_switch")
+	metricDeleteProfile    = clientmetric.NewCounter("profiles_delete")
+	metricDeleteAllProfile = clientmetric.NewCounter("profiles_delete_all")
 
 	metricMigration        = clientmetric.NewCounter("profiles_migration")
 	metricMigrationError   = clientmetric.NewCounter("profiles_migration_error")
