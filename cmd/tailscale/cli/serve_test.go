@@ -144,10 +144,10 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{
+	add(step{ // invalid port
 		command: cmd("--serve-port=9999 /abc proxy 3001"),
 		wantErr: anyErr(),
-	}) // invalid port
+	})
 	add(step{
 		command: cmd("--serve-port=8443 /abc proxy 3001"),
 		want: &ipn.ServeConfig{
@@ -606,12 +606,12 @@ func TestServeConfigMutations(t *testing.T) {
 		wantErr: anyErr(),
 	})
 
+	lc := &fakeLocalServeClient{}
 	// And now run the steps above.
-	var current *ipn.ServeConfig
 	for i, st := range steps {
 		if st.reset {
 			t.Logf("Executing step #%d, line %v: [reset]", i, st.line)
-			current = nil
+			lc.config = nil
 		}
 		if st.command == nil {
 			continue
@@ -620,26 +620,12 @@ func TestServeConfigMutations(t *testing.T) {
 
 		var stdout bytes.Buffer
 		var flagOut bytes.Buffer
-		var newState *ipn.ServeConfig
 		e := &serveEnv{
+			lc:          lc,
 			testFlagOut: &flagOut,
 			testStdout:  &stdout,
-			testGetLocalClientStatus: func(context.Context) (*ipnstate.Status, error) {
-				return &ipnstate.Status{
-					Self: &ipnstate.PeerStatus{
-						DNSName:      "foo.test.ts.net",
-						Capabilities: []string{tailcfg.NodeAttrFunnel},
-					},
-				}, nil
-			},
-			testGetServeConfig: func(context.Context) (*ipn.ServeConfig, error) {
-				return current, nil
-			},
-			testSetServeConfig: func(_ context.Context, c *ipn.ServeConfig) error {
-				newState = c
-				return nil
-			},
 		}
+		lastCount := lc.setCount
 		cmd := newServeCommand(e)
 		err := cmd.ParseAndRun(context.Background(), st.command)
 		if flagOut.Len() > 0 {
@@ -655,21 +641,59 @@ func TestServeConfigMutations(t *testing.T) {
 			continue
 		}
 		if st.wantErr != nil {
-			t.Fatalf("step #%d, line %v: got success (saved=%v), but wanted an error", i, st.line, newState != nil)
+			t.Fatalf("step #%d, line %v: got success (saved=%v), but wanted an error", i, st.line, lc.config != nil)
 		}
-		if !reflect.DeepEqual(newState, st.want) {
+		var got *ipn.ServeConfig = nil
+		if lc.setCount > lastCount {
+			got = lc.config
+		}
+		if !reflect.DeepEqual(got, st.want) {
 			t.Fatalf("[%d] %v: bad state. got:\n%s\n\nwant:\n%s\n",
-				i, st.command, asJSON(newState), asJSON(st.want))
+				i, st.command, asJSON(got), asJSON(st.want))
 			// NOTE: asJSON will omit empty fields, which might make
 			// result in bad state got/want diffs being the same, even
 			// though the actual state is different. Use below to debug:
 			// t.Fatalf("[%d] %v: bad state. got:\n%+v\n\nwant:\n%+v\n",
-			// i, st.command, newState, st.want)
-		}
-		if newState != nil {
-			current = newState
+			// 	i, st.command, got, st.want)
 		}
 	}
+}
+
+// fakeLocalServeClient is a fake tailscale.LocalClient for tests.
+// It's not a full implementation, just enough to test the serve command.
+//
+// The fake client is stateful, and is used to test manipulating
+// ServeConfig state. This implementation cannot be used concurrently.
+type fakeLocalServeClient struct {
+	config   *ipn.ServeConfig
+	setCount int // counts calls to SetServeConfig
+}
+
+// fakeStatus is a fake ipnstate.Status value for tests.
+// It's not a full implementation, just enough to test the serve command.
+//
+// It returns a state that's running, with a fake DNSName and the Funnel
+// node attribute capability.
+var fakeStatus = &ipnstate.Status{
+	BackendState: ipn.Running.String(),
+	Self: &ipnstate.PeerStatus{
+		DNSName:      "foo.test.ts.net",
+		Capabilities: []string{tailcfg.NodeAttrFunnel},
+	},
+}
+
+func (lc *fakeLocalServeClient) Status(ctx context.Context) (*ipnstate.Status, error) {
+	return fakeStatus, nil
+}
+
+func (lc *fakeLocalServeClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
+	return lc.config.Clone(), nil
+}
+
+func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
+	lc.setCount += 1
+	lc.config = config.Clone()
+	return nil
 }
 
 // exactError returns an error checker that wants exactly the provided want error.

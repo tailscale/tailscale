@@ -30,9 +30,9 @@ import (
 	"tailscale.com/version"
 )
 
-var serveCmd = newServeCommand(&serveEnv{})
+var serveCmd = newServeCommand(&serveEnv{lc: &localClient})
 
-// newServeCommand returns a new "serve" subcommand using e as its environmment.
+// newServeCommand returns a new "serve" subcommand using e as its environment.
 func newServeCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "serve",
@@ -127,8 +127,21 @@ func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.Fla
 	return fs
 }
 
+// localServeClient is an interface conforming to the subset of
+// tailscale.LocalClient. It includes only the methods used by the
+// serve command.
+//
+// The purpose of this interface is to allow tests to provide a mock.
+type localServeClient interface {
+	Status(context.Context) (*ipnstate.Status, error)
+	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
+	SetServeConfig(context.Context, *ipn.ServeConfig) error
+}
+
 // serveEnv is the environment the serve command runs within. All I/O should be
 // done via serveEnv methods so that it can be faked out for tests.
+// Calls to localClient should be done via the lc field, which is an interface
+// that can be faked out for tests.
 //
 // It also contains the flags, as registered with newServeCommand.
 type serveEnv struct {
@@ -138,12 +151,11 @@ type serveEnv struct {
 	remove       bool // remove a serve config
 	json         bool // output JSON (status only for now)
 
+	lc localServeClient // localClient interface, specific to serve
+
 	// optional stuff for tests:
-	testFlagOut              io.Writer
-	testGetServeConfig       func(context.Context) (*ipn.ServeConfig, error)
-	testSetServeConfig       func(context.Context, *ipn.ServeConfig) error
-	testGetLocalClientStatus func(context.Context) (*ipnstate.Status, error)
-	testStdout               io.Writer
+	testFlagOut io.Writer
+	testStdout  io.Writer
 }
 
 // getSelfDNSName returns the DNS name of the current node.
@@ -157,15 +169,12 @@ func (e *serveEnv) getSelfDNSName(ctx context.Context) (string, error) {
 	return strings.TrimSuffix(st.Self.DNSName, "."), nil
 }
 
-// getLocalClientStatus calls LocalClient.Status, checks if
-// Status is ready.
+// getLocalClientStatus returns the Status of the local client.
 // Returns error if unable to reach tailscaled or if self node is nil.
+//
 // Exits if status is not running or starting.
 func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, error) {
-	if e.testGetLocalClientStatus != nil {
-		return e.testGetLocalClientStatus(ctx)
-	}
-	st, err := localClient.Status(ctx)
+	st, err := e.lc.Status(ctx)
 	if err != nil {
 		return nil, fixTailscaledConnectError(err)
 	}
@@ -178,20 +187,6 @@ func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, 
 		return nil, errors.New("no self node")
 	}
 	return st, nil
-}
-
-func (e *serveEnv) getServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
-	if e.testGetServeConfig != nil {
-		return e.testGetServeConfig(ctx)
-	}
-	return localClient.GetServeConfig(ctx)
-}
-
-func (e *serveEnv) setServeConfig(ctx context.Context, c *ipn.ServeConfig) error {
-	if e.testSetServeConfig != nil {
-		return e.testSetServeConfig(ctx, c)
-	}
-	return localClient.SetServeConfig(ctx, c)
 }
 
 // validateServePort returns --serve-port flag value,
@@ -232,7 +227,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		if err := json.Unmarshal(valb, sc); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
-		return localClient.SetServeConfig(ctx, sc)
+		return e.lc.SetServeConfig(ctx, sc)
 	}
 
 	if !(len(args) == 3 || (e.remove && len(args) >= 1)) {
@@ -294,7 +289,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		return flag.ErrHelp
 	}
 
-	cursc, err := e.getServeConfig(ctx)
+	cursc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -337,7 +332,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 	}
 
 	if !reflect.DeepEqual(cursc, sc) {
-		if err := e.setServeConfig(ctx, sc); err != nil {
+		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 			return err
 		}
 	}
@@ -351,7 +346,7 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, mount string) error
 		return err
 	}
 	srvPortStr := strconv.Itoa(int(srvPort))
-	sc, err := e.getServeConfig(ctx)
+	sc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -382,7 +377,7 @@ func (e *serveEnv) handleWebServeRemove(ctx context.Context, mount string) error
 	if len(sc.TCP) == 0 {
 		sc.TCP = nil
 	}
-	if err := e.setServeConfig(ctx, sc); err != nil {
+	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 		return err
 	}
 	return nil
@@ -453,7 +448,7 @@ func allNumeric(s string) bool {
 //   - tailscale status
 //   - tailscale status --json
 func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
-	sc, err := e.getServeConfig(ctx)
+	sc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -603,7 +598,7 @@ func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "error: invalid port %q\n\n", portStr)
 	}
 
-	cursc, err := e.getServeConfig(ctx)
+	cursc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -628,7 +623,7 @@ func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 			if len(sc.TCP) == 0 {
 				sc.TCP = nil
 			}
-			return e.setServeConfig(ctx, sc)
+			return e.lc.SetServeConfig(ctx, sc)
 		}
 		return errors.New("error: serve config does not exist")
 	}
@@ -644,7 +639,7 @@ func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 	}
 
 	if !reflect.DeepEqual(cursc, sc) {
-		if err := e.setServeConfig(ctx, sc); err != nil {
+		if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 			return err
 		}
 	}
@@ -674,7 +669,7 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	default:
 		return flag.ErrHelp
 	}
-	sc, err := e.getServeConfig(ctx)
+	sc, err := e.lc.GetServeConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -703,7 +698,7 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 			sc.AllowFunnel = nil
 		}
 	}
-	if err := e.setServeConfig(ctx, sc); err != nil {
+	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 		return err
 	}
 	return nil
