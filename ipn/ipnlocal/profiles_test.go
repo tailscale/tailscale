@@ -16,6 +16,76 @@ import (
 	"tailscale.com/types/persist"
 )
 
+func TestProfileList(t *testing.T) {
+	store := new(mem.Store)
+
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := 0
+	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
+		id++
+		t.Helper()
+		pm.NewProfile()
+		p := pm.CurrentPrefs().AsStruct()
+		p.Persist = &persist.Persist{
+			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
+			LoginName:      loginName,
+			PrivateNodeKey: key.NewNode(),
+			UserProfile: tailcfg.UserProfile{
+				ID:        tailcfg.UserID(id),
+				LoginName: loginName,
+			},
+		}
+		if err := pm.SetPrefs(p.View()); err != nil {
+			t.Fatal(err)
+		}
+		return p.View()
+	}
+	checkProfiles := func(t *testing.T, want ...string) {
+		t.Helper()
+		got := pm.Profiles()
+		if len(got) != len(want) {
+			t.Fatalf("got %d profiles, want %d", len(got), len(want))
+		}
+		for i, w := range want {
+			if got[i].Name != w {
+				t.Errorf("got profile %d name %q, want %q", i, got[i].Name, w)
+			}
+		}
+	}
+
+	pm.SetCurrentUser("user1")
+	newProfile(t, "alice")
+	newProfile(t, "bob")
+	checkProfiles(t, "alice", "bob")
+
+	pm.SetCurrentUser("user2")
+	checkProfiles(t)
+	newProfile(t, "carol")
+	carol := pm.currentProfile
+	checkProfiles(t, "carol")
+
+	pm.SetCurrentUser("user1")
+	checkProfiles(t, "alice", "bob")
+	if lp := pm.findProfileByKey(carol.Key); lp != nil {
+		t.Fatalf("found profile for user2 in user1's profile list")
+	}
+	if lp := pm.findProfileByName(carol.Name); lp != nil {
+		t.Fatalf("found profile for user2 in user1's profile list")
+	}
+	if lp := pm.findProfilesByNodeID(carol.NodeID); lp != nil {
+		t.Fatalf("found profile for user2 in user1's profile list")
+	}
+	if lp := pm.findProfilesByUserID(carol.UserProfile.ID); lp != nil {
+		t.Fatalf("found profile for user2 in user1's profile list")
+	}
+
+	pm.SetCurrentUser("user2")
+	checkProfiles(t, "carol")
+}
+
 // TestProfileManagement tests creating, loading, and switching profiles.
 func TestProfileManagement(t *testing.T) {
 	store := new(mem.Store)
