@@ -134,7 +134,6 @@ type LocalBackend struct {
 	portpoll              *portlist.Poller // may be nil
 	portpollOnce          sync.Once        // guards starting readPoller
 	gotPortPollRes        chan struct{}    // closed upon first readPoller result
-	serverURL             string           // tailcontrol URL
 	newDecompressor       func() (controlclient.Decompressor, error)
 	varRoot               string // or empty if SetVarRoot never called
 	sshAtomicBool         atomic.Bool
@@ -1206,7 +1205,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	loggedOut := prefs.LoggedOut()
 
 	b.inServerMode = prefs.ForceDaemon()
-	b.serverURL = prefs.ControlURLOrDefault()
+	serverURL := prefs.ControlURLOrDefault()
 	if b.inServerMode || runtime.GOOS == "windows" {
 		b.logf("Start: serverMode=%v", b.inServerMode)
 	}
@@ -1259,7 +1258,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		GetMachinePrivateKey: b.createGetMachinePrivateKeyFunc(),
 		Logf:                 logger.WithPrefix(b.logf, "control: "),
 		Persist:              *persistv,
-		ServerURL:            b.serverURL,
+		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
 		Hostinfo:             hostinfo,
 		KeepAlive:            true,
@@ -1768,9 +1767,7 @@ func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 	case "https":
 		return true
 	case "http":
-		b.mu.Lock()
-		serverURL := b.serverURL
-		b.mu.Unlock()
+		serverURL := b.Prefs().ControlURLOrDefault()
 		// If the control server is using plain HTTP (likely a dev server),
 		// then permit http://.
 		return strings.HasPrefix(serverURL, "http://")
