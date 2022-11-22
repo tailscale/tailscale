@@ -564,6 +564,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 				writeMemstats(w, &ms)
 				return
 			}
+			if vs, ok := v.(string); ok && strings.HasSuffix(name, "version") {
+				fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
+				return
+			}
 			switch v := v.(type) {
 			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, float32, float64:
 				fmt.Fprintf(w, "%s %v\n", name, v)

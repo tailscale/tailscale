@@ -543,6 +543,12 @@ foo_totalY 4
 			"custom_var_value 42\n",
 		},
 		{
+			"string_version_var",
+			"foo_version",
+			expvar.Func(func() any { return "1.2.3-foo15" }),
+			"foo_version{version=\"1.2.3-foo15\"} 1\n",
+		},
+		{
 			"field_ordering",
 			"foo",
 			someExpVarWithFieldNamesSorting(),
