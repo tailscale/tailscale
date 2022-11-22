@@ -1287,6 +1287,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	endpoints := b.endpoints
+
+	if err := b.initTKALocked(); err != nil {
+		b.logf("initTKALocked: %v", err)
+	}
 	var tkaHead string
 	if b.tka != nil {
 		head, err := b.tka.authority.Head().MarshalText()
