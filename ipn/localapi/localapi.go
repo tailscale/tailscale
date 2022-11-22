@@ -80,6 +80,7 @@ var handler = map[string]localAPIHandler{
 	"serve-config":            (*Handler).serveServeConfig,
 	"set-dns":                 (*Handler).serveSetDNS,
 	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
+	"start":                   (*Handler).serveStart,
 	"status":                  (*Handler).serveStatus,
 	"tka/init":                (*Handler).serveTKAInit,
 	"tka/log":                 (*Handler).serveTKALog,
@@ -88,6 +89,7 @@ var handler = map[string]localAPIHandler{
 	"tka/status":              (*Handler).serveTKAStatus,
 	"tka/disable":             (*Handler).serveTKADisable,
 	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
+	"watch-ipn-bus":           (*Handler).serveWatchIPNBus,
 	"whois":                   (*Handler).serveWhoIs,
 }
 
@@ -572,6 +574,34 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e.Encode(st)
 }
 
+func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "denied", http.StatusForbidden)
+		return
+	}
+	f, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "not a flusher", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	f.Flush()
+
+	ctx := r.Context()
+	h.b.WatchNotifications(ctx, func(roNotify *ipn.Notify) (keepGoing bool) {
+		js, err := json.Marshal(roNotify)
+		if err != nil {
+			h.logf("json.Marshal: %v", err)
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "%s\n", js); err != nil {
+			return false
+		}
+		f.Flush()
+		return true
+	})
+}
+
 func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "login access denied", http.StatusForbidden)
@@ -584,6 +614,29 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 	h.b.StartLoginInteractive()
 	w.WriteHeader(http.StatusNoContent)
 	return
+}
+
+func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	var o ipn.Options
+	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err := h.b.Start(o)
+	if err != nil {
+		// TODO(bradfitz): map error to a good HTTP error
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {

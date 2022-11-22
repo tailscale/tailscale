@@ -555,6 +555,20 @@ func (lc *LocalClient) EditPrefs(ctx context.Context, mp *ipn.MaskedPrefs) (*ipn
 	return decodeJSON[*ipn.Prefs](body)
 }
 
+// StartLoginInteractive starts an interactive login.
+func (lc *LocalClient) StartLoginInteractive(ctx context.Context) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/login-interactive", http.StatusNoContent, nil)
+	return err
+}
+
+// Start applies the configuration specified in opts, and starts the
+// state machine.
+func (lc *LocalClient) Start(ctx context.Context, opts ipn.Options) error {
+	_, err := lc.send(ctx, "POST", "/localapi/v0/start", http.StatusNoContent, jsonBody(opts))
+	return err
+}
+
+// Logout logs out the current node.
 func (lc *LocalClient) Logout(ctx context.Context) error {
 	_, err := lc.send(ctx, "POST", "/localapi/v0/logout", http.StatusNoContent, nil)
 	return err
@@ -965,4 +979,79 @@ func (lc *LocalClient) SwitchProfile(ctx context.Context, profile ipn.ProfileID)
 func (lc *LocalClient) DeleteProfile(ctx context.Context, profile ipn.ProfileID) error {
 	_, err := lc.send(ctx, "DELETE", "/localapi/v0/profiles"+url.PathEscape(string(profile)), http.StatusNoContent, nil)
 	return err
+}
+
+// WatchIPNMask are filtering options for LocalClient.WatchIPNBus.
+//
+// The zero value is a valid WatchOpt that means to watch everything.
+//
+// TODO(bradfitz): flesh out.
+type WatchIPNMask uint64
+
+// WatchIPNBus subscribes to the IPN notification bus. It returns a watcher
+// once the bus is connected successfully.
+//
+// The context is used for the life of the watch, not just the call to
+// WatchIPNBus.
+//
+// The returned IPNBusWatcher's Close method must be called when done to release
+// resources.
+func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask WatchIPNMask) (*IPNBusWatcher, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+fmt.Sprint(mask),
+		nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		res.Body.Close()
+		return nil, errors.New(res.Status)
+	}
+	dec := json.NewDecoder(res.Body)
+	return &IPNBusWatcher{
+		ctx:     ctx,
+		httpRes: res,
+		dec:     dec,
+	}, nil
+}
+
+// IPNBusWatcher is an active subscription (watch) of the local tailscaled IPN bus.
+// It's returned by LocalClient.WatchIPNBus.
+//
+// It must be closed when done.
+type IPNBusWatcher struct {
+	ctx     context.Context // from original WatchIPNBus call
+	httpRes *http.Response
+	dec     *json.Decoder
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// Close stops the watcher and releases its resources.
+func (w *IPNBusWatcher) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	return w.httpRes.Body.Close()
+}
+
+// Next returns the next ipn.Notify from the stream.
+// If the context from LocalClient.WatchIPNBus is done, that error is returned.
+func (w *IPNBusWatcher) Next() (ipn.Notify, error) {
+	var n ipn.Notify
+	if err := w.dec.Decode(&n); err != nil {
+		if cerr := w.ctx.Err(); cerr != nil {
+			err = cerr
+		}
+		return ipn.Notify{}, err
+	}
+	return n, nil
 }
