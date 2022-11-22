@@ -181,7 +181,8 @@ type LocalBackend struct {
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
 	fileWaiters      map[*mapSetHandle]context.CancelFunc // handle => func to call on file received
-	lastStatusTime   time.Time                            // status.AsOf value of the last processed status update
+	notifyWatchers   map[*mapSetHandle]chan *ipn.Notify
+	lastStatusTime   time.Time // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
 	// intermediate buffered directory for "pick-up" later. If
@@ -1690,24 +1691,70 @@ func (b *LocalBackend) readPoller() {
 	}
 }
 
-// send delivers n to the connected frontend. If no frontend is
-// connected, the notification is dropped without being delivered.
+// WatchNotifications subscribes to the ipn.Notify message bus notification
+// messages.
+//
+// WatchNotifications blocks until ctx is done.
+//
+// The provided fn will only be called with non-nil pointers. The caller must
+// not modify roNotify. If fn returns false, the watch also stops.
+//
+// Failure to consume many notifications in a row will result in dropped
+// notifications. There is currently (2022-11-22) no mechanism provided to
+// detect when a message has been dropped.
+func (b *LocalBackend) WatchNotifications(ctx context.Context, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+	handle := new(mapSetHandle)
+	ch := make(chan *ipn.Notify, 128)
+
+	b.mu.Lock()
+	mak.Set(&b.notifyWatchers, handle, ch)
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.notifyWatchers, handle)
+		b.mu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case n := <-ch:
+			if !fn(n) {
+				return
+			}
+		}
+	}
+}
+
+// send delivers n to the connected frontend and any API watchers from
+// LocalBackend.WatchNotifications (via the LocalAPI).
+//
+// If no frontend is connected or API watchers are backed up, the notification
+// is dropped without being delivered.
 func (b *LocalBackend) send(n ipn.Notify) {
+	n.Version = version.Long
+
 	b.mu.Lock()
 	notifyFunc := b.notify
 	apiSrv := b.peerAPIServer
-	b.mu.Unlock()
-
-	if notifyFunc == nil {
-		return
-	}
-
 	if apiSrv.hasFilesWaiting() {
 		n.FilesWaiting = &empty.Message{}
 	}
 
-	n.Version = version.Long
-	notifyFunc(n)
+	for _, ch := range b.notifyWatchers {
+		select {
+		case ch <- &n:
+		default:
+			// Drop the notification if the channel is full.
+		}
+	}
+
+	b.mu.Unlock()
+
+	if notifyFunc != nil {
+		notifyFunc(n)
+	}
 }
 
 func (b *LocalBackend) sendFileNotify() {

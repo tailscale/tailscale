@@ -285,19 +285,23 @@ var watchIPNArgs struct {
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
-	c, bc, ctx, cancel := connect(ctx)
-	defer cancel()
-
-	bc.SetNotifyCallback(func(n ipn.Notify) {
+	watcher, err := localClient.WatchIPNBus(ctx, 0)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+	printf("Connected.\n")
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			return err
+		}
 		if !watchIPNArgs.netmap {
 			n.NetMap = nil
 		}
 		j, _ := json.MarshalIndent(n, "", "\t")
 		printf("%s\n", j)
-	})
-	bc.RequestEngineStatus()
-	pump(ctx, bc, c)
-	return errors.New("exit")
+	}
 }
 
 func runDERPMap(ctx context.Context, args []string) error {

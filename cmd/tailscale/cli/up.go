@@ -15,11 +15,13 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/signal"
 	"reflect"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	shellquote "github.com/kballard/go-shellquote"
@@ -535,109 +537,109 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		return err
 	}
 
-	// At this point we need to subscribe to the IPN bus to watch
-	// for state transitions and possible need to authenticate.
-	c, bc, pumpCtx, cancel := connect(ctx)
-	defer cancel()
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
 
-	running := make(chan bool, 1)         // gets value once in state ipn.Running
-	gotEngineUpdate := make(chan bool, 1) // gets value upon an engine update
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case <-interrupt:
+			cancelWatch()
+		case <-watchCtx.Done():
+		}
+	}()
+
+	running := make(chan bool, 1) // gets value once in state ipn.Running
 	pumpErr := make(chan error, 1)
-	go func() { pumpErr <- pump(pumpCtx, bc, c) }()
 
 	var printed bool // whether we've yet printed anything to stdout or stderr
 	var loginOnce sync.Once
-	startLoginInteractive := func() { loginOnce.Do(func() { bc.StartLoginInteractive() }) }
+	startLoginInteractive := func() { loginOnce.Do(func() { localClient.StartLoginInteractive(ctx) }) }
 
-	bc.SetNotifyCallback(func(n ipn.Notify) {
-		if n.Engine != nil {
-			select {
-			case gotEngineUpdate <- true:
-			default:
+	go func() {
+		for {
+			n, err := watcher.Next()
+			if err != nil {
+				pumpErr <- err
+				return
 			}
-		}
-		if n.ErrMessage != nil {
-			msg := *n.ErrMessage
-			if msg == ipn.ErrMsgPermissionDenied {
-				switch effectiveGOOS() {
-				case "windows":
-					msg += " (Tailscale service in use by other user?)"
-				default:
-					msg += " (try 'sudo tailscale up [...]')"
-				}
-			}
-			fatalf("backend error: %v\n", msg)
-		}
-		if s := n.State; s != nil {
-			switch *s {
-			case ipn.NeedsLogin:
-				startLoginInteractive()
-			case ipn.NeedsMachineAuth:
-				printed = true
-				if env.upArgs.json {
-					printUpDoneJSON(ipn.NeedsMachineAuth, "")
-				} else {
-					fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
-				}
-			case ipn.Running:
-				// Done full authentication process
-				if env.upArgs.json {
-					printUpDoneJSON(ipn.Running, "")
-				} else if printed {
-					// Only need to print an update if we printed the "please click" message earlier.
-					fmt.Fprintf(Stderr, "Success.\n")
-				}
-				select {
-				case running <- true:
-				default:
-				}
-				cancel()
-			}
-		}
-		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
-			printed = true
-			if upArgs.json {
-				js := &upOutputJSON{AuthURL: *url, BackendState: st.BackendState}
-
-				q, err := qrcode.New(*url, qrcode.Medium)
-				if err == nil {
-					png, err := q.PNG(128)
-					if err == nil {
-						js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+			if n.ErrMessage != nil {
+				msg := *n.ErrMessage
+				if msg == ipn.ErrMsgPermissionDenied {
+					switch effectiveGOOS() {
+					case "windows":
+						msg += " (Tailscale service in use by other user?)"
+					default:
+						msg += " (try 'sudo tailscale up [...]')"
 					}
 				}
-
-				data, err := json.MarshalIndent(js, "", "\t")
-				if err != nil {
-					printf("upOutputJSON marshalling error: %v", err)
-				} else {
-					outln(string(data))
-				}
-			} else {
-				fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
-				if upArgs.qr {
-					q, err := qrcode.New(*url, qrcode.Medium)
-					if err != nil {
-						log.Printf("QR code error: %v", err)
+				fatalf("backend error: %v\n", msg)
+			}
+			if s := n.State; s != nil {
+				switch *s {
+				case ipn.NeedsLogin:
+					startLoginInteractive()
+				case ipn.NeedsMachineAuth:
+					printed = true
+					if env.upArgs.json {
+						printUpDoneJSON(ipn.NeedsMachineAuth, "")
 					} else {
-						fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+						fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+					}
+				case ipn.Running:
+					// Done full authentication process
+					if env.upArgs.json {
+						printUpDoneJSON(ipn.Running, "")
+					} else if printed {
+						// Only need to print an update if we printed the "please click" message earlier.
+						fmt.Fprintf(Stderr, "Success.\n")
+					}
+					select {
+					case running <- true:
+					default:
+					}
+					cancelWatch()
+				}
+			}
+			if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
+				printed = true
+				if upArgs.json {
+					js := &upOutputJSON{AuthURL: *url, BackendState: st.BackendState}
+
+					q, err := qrcode.New(*url, qrcode.Medium)
+					if err == nil {
+						png, err := q.PNG(128)
+						if err == nil {
+							js.QR = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+						}
+					}
+
+					data, err := json.MarshalIndent(js, "", "\t")
+					if err != nil {
+						printf("upOutputJSON marshalling error: %v", err)
+					} else {
+						outln(string(data))
+					}
+				} else {
+					fmt.Fprintf(Stderr, "\nTo authenticate, visit:\n\n\t%s\n\n", *url)
+					if upArgs.qr {
+						q, err := qrcode.New(*url, qrcode.Medium)
+						if err != nil {
+							log.Printf("QR code error: %v", err)
+						} else {
+							fmt.Fprintf(Stderr, "%s\n", q.ToString(false))
+						}
 					}
 				}
 			}
 		}
-	})
-	// Wait for backend client to be connected so we know
-	// we're subscribed to updates. Otherwise we can miss
-	// an update upon its transition to running. Do so by causing some traffic
-	// back to the bus that we then wait on.
-	bc.RequestEngineStatus()
-	select {
-	case <-gotEngineUpdate:
-	case <-pumpCtx.Done():
-		return pumpCtx.Err()
-	case err := <-pumpErr:
-		return err
-	}
+	}()
 
 	// Special case: bare "tailscale up" means to just start
 	// running, if there's ever been a login.
@@ -660,10 +662,12 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
-		bc.Start(ipn.Options{
+		if err := localClient.Start(ctx, ipn.Options{
 			AuthKey:     authKey,
 			UpdatePrefs: prefs,
-		})
+		}); err != nil {
+			return err
+		}
 		if upArgs.forceReauth {
 			startLoginInteractive()
 		}
@@ -685,13 +689,13 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	select {
 	case <-running:
 		return nil
-	case <-pumpCtx.Done():
+	case <-watchCtx.Done():
 		select {
 		case <-running:
 			return nil
 		default:
 		}
-		return pumpCtx.Err()
+		return watchCtx.Err()
 	case err := <-pumpErr:
 		select {
 		case <-running:
