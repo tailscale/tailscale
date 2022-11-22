@@ -16,6 +16,62 @@ import (
 	"tailscale.com/types/persist"
 )
 
+func TestProfileCurrentUserSwitch(t *testing.T) {
+	store := new(mem.Store)
+
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := 0
+	newProfile := func(t *testing.T, loginName string) ipn.PrefsView {
+		id++
+		t.Helper()
+		pm.NewProfile()
+		p := pm.CurrentPrefs().AsStruct()
+		p.Persist = &persist.Persist{
+			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
+			LoginName:      loginName,
+			PrivateNodeKey: key.NewNode(),
+			UserProfile: tailcfg.UserProfile{
+				ID:        tailcfg.UserID(id),
+				LoginName: loginName,
+			},
+		}
+		if err := pm.SetPrefs(p.View()); err != nil {
+			t.Fatal(err)
+		}
+		return p.View()
+	}
+
+	pm.SetCurrentUser("user1")
+	newProfile(t, "user1")
+	cp := pm.currentProfile
+	pm.DeleteProfile(cp.ID)
+	if pm.currentProfile == nil {
+		t.Fatal("currentProfile is nil")
+	} else if pm.currentProfile.ID != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	}
+	if !pm.CurrentPrefs().Equals(emptyPrefs) {
+		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
+	}
+
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm.SetCurrentUser("user1")
+	if pm.currentProfile == nil {
+		t.Fatal("currentProfile is nil")
+	} else if pm.currentProfile.ID != "" {
+		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
+	}
+	if !pm.CurrentPrefs().Equals(emptyPrefs) {
+		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
+	}
+}
+
 func TestProfileList(t *testing.T) {
 	store := new(mem.Store)
 

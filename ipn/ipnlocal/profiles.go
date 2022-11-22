@@ -51,22 +51,38 @@ func (pm *profileManager) SetCurrentUser(uid string) error {
 	if pm.currentUserID == uid {
 		return nil
 	}
+	prev := pm.currentUserID
 	pm.currentUserID = uid
-	cpk := ipn.CurrentProfileKey(uid)
-	if b, err := pm.store.ReadState(cpk); err == nil {
-		pk := ipn.StateKey(string(b))
-		prefs, err := pm.loadSavedPrefs(pk)
-		if err != nil {
-			return err
-		}
-		pm.currentProfile = pm.findProfileByKey(pk)
-		pm.prefs = prefs
-		pm.isNewProfile = false
-	} else if err == ipn.ErrStateNotExist {
+	if uid == "" && prev != "" {
+		// This is a local user logout, or app shutdown.
+		// Clear the current profile.
 		pm.NewProfile()
-	} else {
+		return nil
+	}
+
+	// Read the CurrentProfileKey from the store which stores
+	// the selected profile for the current user.
+	b, err := pm.store.ReadState(ipn.CurrentProfileKey(uid))
+	if err == ipn.ErrStateNotExist || len(b) == 0 {
+		pm.NewProfile()
+		return nil
+	}
+
+	// Now attempt to load the profile using the key we just read.
+	pk := ipn.StateKey(string(b))
+	prof := pm.findProfileByKey(pk)
+	if prof == nil {
+		pm.NewProfile()
+		return nil
+	}
+	prefs, err := pm.loadSavedPrefs(pk)
+	if err != nil {
+		pm.NewProfile()
 		return err
 	}
+	pm.currentProfile = prof
+	pm.prefs = prefs
+	pm.isNewProfile = false
 	return nil
 }
 
@@ -299,10 +315,10 @@ func (pm *profileManager) setAsUserSelectedProfileLocked() error {
 
 func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error) {
 	bs, err := pm.store.ReadState(key)
+	if err == ipn.ErrStateNotExist || len(bs) == 0 {
+		return emptyPrefs, nil
+	}
 	if err != nil {
-		if err == ipn.ErrStateNotExist {
-			return emptyPrefs, nil
-		}
 		return ipn.PrefsView{}, err
 	}
 	savedPrefs, err := ipn.PrefsFromBytes(bs)
