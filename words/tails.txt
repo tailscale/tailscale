@@ -333,3 +333,10 @@ snares
 rockhopper
 royal
 macaroni
+bison
+buffalo
+gaur
+saola
+anoa
+banteng
+beefalo
