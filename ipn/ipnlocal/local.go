@@ -2769,10 +2769,12 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 	case len(dcfg.DefaultResolvers) != 0:
 		// Default resolvers already set.
 	case !prefs.ExitNodeID().IsZero():
-		// When using exit nodes, it's very likely the LAN
-		// resolvers will become unreachable. So, force use of the
-		// fallback resolvers until we implement DNS forwarding to
-		// exit nodes.
+		// When using an exit node, we send all DNS traffic to the exit node, so
+		// we don't need a fallback resolver.
+		//
+		// However, if the exit node is too old to run a DoH DNS proxy, then we
+		// need to use a fallback resolver as it's very likely the LAN resolvers
+		// will become unreachable.
 		//
 		// This is especially important on Apple OSes, where
 		// adding the default route to the tunnel interface makes
