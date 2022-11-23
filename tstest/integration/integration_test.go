@@ -809,7 +809,7 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		"TS_LOG_TARGET="+n.env.LogCatcherServer.URL,
 		"HTTP_PROXY="+n.env.TrafficTrapServer.URL,
 		"HTTPS_PROXY="+n.env.TrafficTrapServer.URL,
-		"TS_DEBUG_TAILSCALED_IPN_GOOS="+ipnGOOS,
+		"TS_DEBUG_FAKE_GOOS="+ipnGOOS,
 		"TS_LOGS_DIR="+t.TempDir(),
 		"TS_NETCHECK_GENERATE_204_URL="+n.env.ControlServer.URL+"/generate_204",
 	)

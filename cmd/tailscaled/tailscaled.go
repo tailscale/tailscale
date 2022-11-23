@@ -274,12 +274,7 @@ func statePathOrDefault() string {
 }
 
 func ipnServerOpts() (o ipnserver.Options) {
-	// Allow changing the OS-specific IPN behavior for tests
-	// so we can e.g. test Windows-specific behaviors on Linux.
-	goos := envknob.String("TS_DEBUG_TAILSCALED_IPN_GOOS")
-	if goos == "" {
-		goos = runtime.GOOS
-	}
+	goos := envknob.GOOS()
 
 	o.VarRoot = args.statedir
 
