@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,11 +41,44 @@ var netlockCmd = &ffcli.Command{
 	Exec: runNetworkLockStatus,
 }
 
+var nlInitArgs struct {
+	numDisablements       int
+	disablementForSupport bool
+	confirm               bool
+}
+
 var nlInitCmd = &ffcli.Command{
 	Name:       "init",
-	ShortUsage: "init <public-key>...",
-	ShortHelp:  "Initialize the tailnet key authority",
-	Exec:       runNetworkLockInit,
+	ShortUsage: "init [--gen-disablement-for-support] --gen-disablements N <trusted-key>...",
+	ShortHelp:  "Initialize tailnet lock",
+	LongHelp: strings.TrimSpace(`
+
+The 'tailscale lock init' command initializes tailnet lock across the
+entire tailnet. The specified keys are initially trusted to sign nodes
+or to make further changes to tailnet lock.
+
+You can identify the key for a node you wish to trust by running 'tailscale lock'
+on that node, and copying the node's tailnet lock key.
+
+In the event that tailnet lock need be disabled, it can be disabled using
+the 'tailscale lock disable' command and one of the disablement secrets.
+The number of disablement secrets to be generated is specified using the
+--gen-disablements flag. Initializing tailnet lock requires at least
+one disablement.
+
+If --gen-disablement-for-support is specified, an additional disablement secret
+will be generated and transmitted to Tailscale, which support can use to disable
+tailnet lock. We recommend setting this flag.
+
+`),
+	Exec: runNetworkLockInit,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("lock init")
+		fs.IntVar(&nlInitArgs.numDisablements, "gen-disablements", 1, "number of disablement secrets to generate")
+		fs.BoolVar(&nlInitArgs.disablementForSupport, "gen-disablement-for-support", false, "generates and transmits a disablement secret for Tailscale support")
+		fs.BoolVar(&nlInitArgs.confirm, "confirm", false, "do not prompt for confirmation")
+		return fs
+	})(),
 }
 
 func runNetworkLockInit(ctx context.Context, args []string) error {
@@ -62,12 +96,55 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return err
 	}
 
-	status, err := localClient.NetworkLockInit(ctx, keys, disablementValues)
-	if err != nil {
+	fmt.Println("You are initializing tailnet lock with trust in the following keys:")
+	for _, k := range keys {
+		fmt.Printf(" - %x (%s key)\n", k.Public, k.Kind.String())
+	}
+	fmt.Println()
+
+	if !nlInitArgs.confirm {
+		fmt.Printf("%d disablement secrets will be generated.\n", nlInitArgs.numDisablements)
+		if nlInitArgs.disablementForSupport {
+			fmt.Println("A disablement secret for support will be generated and transmitted to Tailscale.")
+		}
+
+		genSupportFlag := ""
+		if nlInitArgs.disablementForSupport {
+			genSupportFlag = "--gen-disablement-for-support "
+		}
+		fmt.Println("\nIf this is correct, please re-run this command with the --confirm flag:")
+		fmt.Printf("\t%s lock init --confirm --gen-disablements %d %s%s", os.Args[0], nlInitArgs.numDisablements, genSupportFlag, strings.Join(args, " "))
+		fmt.Println()
+		return nil
+	}
+
+	fmt.Printf("%d disablement secrets have been generated and are printed below. Take note of them now, they WILL NOT be shown again.\n", nlInitArgs.numDisablements)
+	for i := 0; i < nlInitArgs.numDisablements; i++ {
+		var secret [32]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			return err
+		}
+		fmt.Printf("\tdisablement-secret:%X\n", secret[:])
+		disablementValues = append(disablementValues, tka.DisablementKDF(secret[:]))
+	}
+
+	var supportDisablement []byte
+	if nlInitArgs.disablementForSupport {
+		supportDisablement = make([]byte, 32)
+		if _, err := rand.Read(supportDisablement); err != nil {
+			return err
+		}
+		disablementValues = append(disablementValues, tka.DisablementKDF(supportDisablement))
+		fmt.Println("A disablement secret for support has been generated and will be transmitted to Tailscale upon initialization.")
+	}
+
+	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
+	// because that has to tick through from netmaps.
+	if _, err := localClient.NetworkLockInit(ctx, keys, disablementValues, supportDisablement); err != nil {
 		return err
 	}
 
-	fmt.Printf("Status: %+v\n\n", status)
+	fmt.Println("Initialization complete.")
 	return nil
 }
 
@@ -84,18 +161,18 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if st.Enabled {
-		fmt.Println("Network-lock is ENABLED.")
+		fmt.Println("Tailnet-lock is ENABLED.")
 	} else {
-		fmt.Println("Network-lock is NOT enabled.")
+		fmt.Println("Tailnet-lock is NOT enabled.")
 	}
 	fmt.Println()
 
 	if st.Enabled && st.NodeKey != nil {
 		if st.NodeKeySigned {
-			fmt.Println("This node is trusted by network-lock.")
+			fmt.Println("This node is accessible under tailnet-lock.")
 		} else {
-			fmt.Println("This node IS NOT trusted by network-lock, and action is required to establish connectivity.")
-			fmt.Printf("Run the following command on a node with a network-lock key:\n\ttailscale lock sign %v\n", st.NodeKey)
+			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
+			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v\n", st.NodeKey)
 		}
 		fmt.Println()
 	}
@@ -105,12 +182,12 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("This node's public-key: %s\n", p)
+		fmt.Printf("This node's tailnet-lock key: %s\n", p)
 		fmt.Println()
 	}
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
-		fmt.Println("Keys trusted to make changes to network-lock:")
+		fmt.Println("Keys trusted to make changes to tailnet-lock:")
 		for _, k := range st.TrustedKeys {
 			key, err := k.Key.MarshalText()
 			if err != nil {
@@ -204,7 +281,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 		return fixTailscaledConnectError(err)
 	}
 	if !st.Enabled {
-		return errors.New("network-lock is not enabled")
+		return errors.New("tailnet-lock is not enabled")
 	}
 
 	addKeys, _, err := parseNLArgs(addArgs, true, false)
@@ -256,7 +333,7 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 var nlDisableCmd = &ffcli.Command{
 	Name:       "disable",
 	ShortUsage: "disable <disablement-secret>",
-	ShortHelp:  "Consumes a disablement secret to shut down network-lock across the tailnet",
+	ShortHelp:  "Consumes a disablement secret to shut down tailnet-lock across the tailnet",
 	Exec:       runNetworkLockDisable,
 }
 
@@ -274,7 +351,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
 	ShortUsage: "disablement-kdf <hex-encoded-disablement-secret>",
-	ShortHelp:  "Computes a disablement value from a disablement secret",
+	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
 }
 
@@ -297,7 +374,7 @@ var nlLogArgs struct {
 var nlLogCmd = &ffcli.Command{
 	Name:       "log",
 	ShortUsage: "log [--limit N]",
-	ShortHelp:  "List changes applied to network-lock",
+	ShortHelp:  "List changes applied to tailnet-lock",
 	Exec:       runNetworkLockLog,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")

@@ -69,6 +69,11 @@ type TKAInitFinishRequest struct {
 	// Signatures are serialized tka.NodeKeySignatures for all nodes
 	// in the tailnet.
 	Signatures map[NodeID]tkatype.MarshaledSignature
+
+	// SupportDisablement is a disablement secret for Tailscale support.
+	// This is only generated if --gen-disablement-for-support is specified
+	// in an invocation to 'tailscale lock init'.
+	SupportDisablement []byte `json:",omitempty"`
 }
 
 // TKAInitFinishResponse is the JSON response from a /tka/init/finish RPC.
