@@ -38,6 +38,7 @@ import (
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
@@ -2027,6 +2028,34 @@ func (b *LocalBackend) InServerMode() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.inServerMode
+}
+
+// CheckIPNConnectionAllowed returns an error if the identity in ci should not
+// be allowed to connect or make requests to the LocalAPI currently.
+//
+// Currently (as of 2022-11-23), this is only used on Windows to check if
+// we started in server mode and ci is from an identity other than the one
+// that started the server.
+func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	serverModeUid := b.pm.CurrentUser()
+	if serverModeUid == "" {
+		// Either this platform isn't a "multi-user" platform or we're not yet
+		// running as one.
+		return nil
+	}
+	if !b.inServerMode {
+		return nil
+	}
+	uid := ci.UserID()
+	if uid == "" {
+		return errors.New("empty user uid in connection identity")
+	}
+	if uid != serverModeUid {
+		return fmt.Errorf("Tailscale running in server mode (uid=%v); connection from %q not allowed", serverModeUid, uid)
+	}
+	return nil
 }
 
 // Login implements Backend.
@@ -4382,12 +4411,4 @@ func (b *LocalBackend) ListProfiles() []ipn.LoginProfile {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pm.Profiles()
-}
-
-// CurrentUser returns the current server mode user ID. It is only non-empty on
-// Windows where we have a multi-user system.
-func (b *LocalBackend) CurrentUser() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.pm.CurrentUser()
 }

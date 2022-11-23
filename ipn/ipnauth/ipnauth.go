@@ -44,7 +44,16 @@ type ConnIdentity struct {
 	user   *user.User
 }
 
-func (ci *ConnIdentity) UserID() string         { return ci.userID }
+// UserID returns the local machine's userid of the connection.
+//
+// It's suitable for passing to LookupUserFromID (os/user.LookupId) on any
+// operating system.
+//
+// TODO(bradfitz): it currently returns an empty string on everything
+// but Windows. We should make it return the actual uid also on all supported
+// peercred platforms from the creds if non-nil.
+func (ci *ConnIdentity) UserID() string { return ci.userID }
+
 func (ci *ConnIdentity) User() *user.User       { return ci.user }
 func (ci *ConnIdentity) Pid() int               { return ci.pid }
 func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }

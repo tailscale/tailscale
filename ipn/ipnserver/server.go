@@ -304,8 +304,8 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
 		}
 	}
-	if cu := s.b.CurrentUser(); cu != "" && cu != ci.UserID() {
-		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", s.b.CurrentUser())}
+	if err := s.b.CheckIPNConnectionAllowed(ci); err != nil {
+		return inUseOtherUserError{err}
 	}
 	return nil
 }
