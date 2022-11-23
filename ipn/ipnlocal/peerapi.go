@@ -620,6 +620,17 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
+	// PeerAPIOnly nodes may only access an allowlisted set of endpoints.
+	if h.peerNode != nil && h.peerNode.UnsignedPeerAPIOnly {
+		switch r.URL.Path {
+		case "/v0/ingress":
+		default:
+			h.logf("dropping request from %v, a UnsignedPeerAPIOnly peer", h.remoteAddr)
+			http.Error(w, "invalid peerapi request", http.StatusForbidden)
+			return
+		}
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
 		h.handlePeerPut(w, r)
 		return
