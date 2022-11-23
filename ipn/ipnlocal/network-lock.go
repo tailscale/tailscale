@@ -403,7 +403,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 // needing signatures is returned as a response.
 // The Finish RPC submits signatures for all these nodes, at which point
 // Control has everything it needs to atomically enable network lock.
-func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte) error {
+func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byte, supportDisablement []byte) error {
 	if err := b.CanSupportNetworkLock(); err != nil {
 		return err
 	}
@@ -471,7 +471,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	}
 
 	// Finalize enablement by transmitting signature for all nodes to Control.
-	_, err = b.tkaInitFinish(ourNodeKey, sigs)
+	_, err = b.tkaInitFinish(ourNodeKey, sigs, supportDisablement)
 	return err
 }
 
@@ -748,12 +748,13 @@ func (b *LocalBackend) tkaInitBegin(ourNodeKey key.NodePublic, aum tka.AUM) (*ta
 	return a, nil
 }
 
-func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.NodeID]tkatype.MarshaledSignature) (*tailcfg.TKAInitFinishResponse, error) {
+func (b *LocalBackend) tkaInitFinish(ourNodeKey key.NodePublic, nks map[tailcfg.NodeID]tkatype.MarshaledSignature, supportDisablement []byte) (*tailcfg.TKAInitFinishResponse, error) {
 	var req bytes.Buffer
 	if err := json.NewEncoder(&req).Encode(tailcfg.TKAInitFinishRequest{
-		Version:    tailcfg.CurrentCapabilityVersion,
-		NodeKey:    ourNodeKey,
-		Signatures: nks,
+		Version:            tailcfg.CurrentCapabilityVersion,
+		NodeKey:            ourNodeKey,
+		Signatures:         nks,
+		SupportDisablement: supportDisablement,
 	}); err != nil {
 		return nil, fmt.Errorf("encoding request: %v", err)
 	}

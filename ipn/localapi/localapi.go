@@ -1161,8 +1161,9 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type initRequest struct {
-		Keys              []tka.Key
-		DisablementValues [][]byte
+		Keys               []tka.Key
+		DisablementValues  [][]byte
+		SupportDisablement []byte
 	}
 	var req initRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1170,7 +1171,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues); err != nil {
+	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues, req.SupportDisablement); err != nil {
 		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
