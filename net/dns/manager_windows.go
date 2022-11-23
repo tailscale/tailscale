@@ -167,7 +167,16 @@ func (m *windowsManager) setHosts(hosts []*HostEntry) error {
 		return err
 	}
 	const fileMode = 0 // ignored on windows.
-	return atomicfile.WriteFile(hostsFile, outB, fileMode)
+
+	// This can fail spuriously with an access denied error, so retry it a
+	// few times.
+	for i := 0; i < 5; i++ {
+		if err = atomicfile.WriteFile(hostsFile, outB, fileMode); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return err
 }
 
 // setPrimaryDNS sets the given resolvers and domains as the Tailscale
