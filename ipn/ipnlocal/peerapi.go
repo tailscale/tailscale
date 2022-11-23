@@ -818,6 +818,10 @@ func (f *incomingFile) PartialFile() ipn.PartialFile {
 
 // canPutFile reports whether h can put a file ("Taildrop") to this node.
 func (h *peerAPIHandler) canPutFile() bool {
+	if h.peerNode.UnsignedPeerAPIOnly {
+		// Unsigned peers can't send files.
+		return false
+	}
 	return h.isSelf || h.peerHasCap(tailcfg.CapabilityFileSharingSend)
 }
 
@@ -826,6 +830,10 @@ func (h *peerAPIHandler) canPutFile() bool {
 func (h *peerAPIHandler) canDebug() bool {
 	if !slices.Contains(h.selfNode.Capabilities, tailcfg.CapabilityDebug) {
 		// This node does not expose debug info.
+		return false
+	}
+	if h.peerNode.UnsignedPeerAPIOnly {
+		// Unsigned peers can't debug.
 		return false
 	}
 	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
