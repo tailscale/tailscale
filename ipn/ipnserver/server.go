@@ -15,14 +15,12 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,24 +28,20 @@ import (
 	"unicode"
 
 	"go4.org/mem"
-	"inet.af/peercred"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/netstat"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/groupmember"
-	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
-	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -107,109 +101,20 @@ type Server struct {
 	bs   *ipn.BackendServer
 
 	mu             sync.Mutex
-	serverModeUser *user.User                   // or nil if not in server mode
-	lastUserID     string                       // tracks last userid; on change, Reset state for paranoia
-	allClients     map[net.Conn]connIdentity    // HTTP or IPN
-	clients        map[net.Conn]bool            // subset of allClients; only IPN protocol
-	disconnectSub  map[chan<- struct{}]struct{} // keys are subscribers of disconnects
+	serverModeUser *user.User                         // or nil if not in server mode
+	lastUserID     string                             // tracks last userid; on change, Reset state for paranoia
+	allClients     map[net.Conn]*ipnauth.ConnIdentity // HTTP or IPN
+	clients        map[net.Conn]bool                  // subset of allClients; only IPN protocol
+	disconnectSub  map[chan<- struct{}]struct{}       // keys are subscribers of disconnects
 }
 
 // LocalBackend returns the server's LocalBackend.
 func (s *Server) LocalBackend() *ipnlocal.LocalBackend { return s.b }
 
-// connIdentity represents the owner of a localhost TCP or unix socket connection.
-type connIdentity struct {
-	Conn       net.Conn
-	NotWindows bool // runtime.GOOS != "windows"
-
-	// Fields used when NotWindows:
-	IsUnixSock bool            // Conn is a *net.UnixConn
-	Creds      *peercred.Creds // or nil
-
-	// Used on Windows:
-	// TODO(bradfitz): merge these into the peercreds package and
-	// use that for all.
-	Pid    int
-	UserID string
-	User   *user.User
-}
-
-// getConnIdentity returns the localhost TCP connection's identity information
-// (pid, userid, user). If it's not Windows (for now), it returns a nil error
-// and a ConnIdentity with NotWindows set true. It's only an error if we expected
-// to be able to map it and couldn't.
-func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
-	ci = connIdentity{Conn: c}
-	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		ci.NotWindows = true
-		_, ci.IsUnixSock = c.(*net.UnixConn)
-		ci.Creds, _ = peercred.Get(c)
-		return ci, nil
-	}
-	la, err := netip.ParseAddrPort(c.LocalAddr().String())
-	if err != nil {
-		return ci, fmt.Errorf("parsing local address: %w", err)
-	}
-	ra, err := netip.ParseAddrPort(c.RemoteAddr().String())
-	if err != nil {
-		return ci, fmt.Errorf("parsing local remote: %w", err)
-	}
-	if !la.Addr().IsLoopback() || !ra.Addr().IsLoopback() {
-		return ci, errors.New("non-loopback connection")
-	}
-	tab, err := netstat.Get()
-	if err != nil {
-		return ci, fmt.Errorf("failed to get local connection table: %w", err)
-	}
-	pid := peerPid(tab.Entries, la, ra)
-	if pid == 0 {
-		return ci, errors.New("no local process found matching localhost connection")
-	}
-	ci.Pid = pid
-	uid, err := pidowner.OwnerOfPID(pid)
-	if err != nil {
-		var hint string
-		if runtime.GOOS == "windows" {
-			hint = " (WSL?)"
-		}
-		return ci, fmt.Errorf("failed to map connection's pid to a user%s: %w", hint, err)
-	}
-	ci.UserID = uid
-	u, err := lookupUserFromID(s.logf, uid)
-	if err != nil {
-		return ci, fmt.Errorf("failed to look up user from userid: %w", err)
-	}
-	ci.User = u
-	return ci, nil
-}
-
-func lookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
-	u, err := user.LookupId(uid)
-	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
-		// The below workaround is only applicable when uid represents a
-		// valid security principal. Omitting this check causes us to succeed
-		// even when uid represents a deleted user.
-		if !winutil.IsSIDValidPrincipal(uid) {
-			return nil, err
-		}
-
-		logf("[warning] issue 869: os/user.LookupId failed; ignoring")
-		// Work around https://github.com/tailscale/tailscale/issues/869 for
-		// now. We don't strictly need the username. It's just a nice-to-have.
-		// So make up a *user.User if their machine is broken in this way.
-		return &user.User{
-			Uid:      uid,
-			Username: "unknown-user-" + uid,
-			Name:     "unknown user " + uid,
-		}, nil
-	}
-	return u, err
-}
-
 // blockWhileInUse blocks while until either a Read from conn fails
 // (i.e. it's closed) or until the server is able to accept ci as a
 // user.
-func (s *Server) blockWhileInUse(conn io.Reader, ci connIdentity) {
+func (s *Server) blockWhileInUse(conn io.Reader, ci *ipnauth.ConnIdentity) {
 	s.logf("blocking client while server in use; connIdentity=%v", ci)
 	connDone := make(chan struct{})
 	go func() {
@@ -296,7 +201,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 
 	// Tell the LocalBackend about the identity we're now running as.
-	s.b.SetCurrentUserID(ci.UserID)
+	s.b.SetCurrentUserID(ci.UserID())
 
 	if isHTTPReq {
 		httpServer := &http.Server{
@@ -318,7 +223,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	defer s.removeAndCloseConn(c)
 	logf("[v1] incoming control connection")
 
-	if isReadonlyConn(ci, s.b.OperatorUserID(), logf) {
+	if ci.IsReadonlyConn(s.b.OperatorUserID(), logf) {
 		ctx = ipn.ReadonlyContextOf(ctx)
 	}
 
@@ -344,67 +249,6 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 	}
 }
 
-func isReadonlyConn(ci connIdentity, operatorUID string, logf logger.Logf) bool {
-	if runtime.GOOS == "windows" {
-		// Windows doesn't need/use this mechanism, at least yet. It
-		// has a different last-user-wins auth model.
-		return false
-	}
-	const ro = true
-	const rw = false
-	if !safesocket.PlatformUsesPeerCreds() {
-		return rw
-	}
-	creds := ci.Creds
-	if creds == nil {
-		logf("connection from unknown peer; read-only")
-		return ro
-	}
-	uid, ok := creds.UserID()
-	if !ok {
-		logf("connection from peer with unknown userid; read-only")
-		return ro
-	}
-	if uid == "0" {
-		logf("connection from userid %v; root has access", uid)
-		return rw
-	}
-	if selfUID := os.Getuid(); selfUID != 0 && uid == strconv.Itoa(selfUID) {
-		logf("connection from userid %v; connection from non-root user matching daemon has access", uid)
-		return rw
-	}
-	if operatorUID != "" && uid == operatorUID {
-		logf("connection from userid %v; is configured operator", uid)
-		return rw
-	}
-	if yes, err := isLocalAdmin(uid); err != nil {
-		logf("connection from userid %v; read-only; %v", uid, err)
-		return ro
-	} else if yes {
-		logf("connection from userid %v; is local admin, has access", uid)
-		return rw
-	}
-	logf("connection from userid %v; read-only", uid)
-	return ro
-}
-
-func isLocalAdmin(uid string) (bool, error) {
-	u, err := user.LookupId(uid)
-	if err != nil {
-		return false, err
-	}
-	var adminGroup string
-	switch {
-	case runtime.GOOS == "darwin":
-		adminGroup = "admin"
-	case distro.Get() == distro.QNAP:
-		adminGroup = "administrators"
-	default:
-		return false, fmt.Errorf("no system admin group found")
-	}
-	return groupmember.IsMemberOfGroup(adminGroup, u.Username)
-}
-
 // inUseOtherUserError is the error type for when the server is in use
 // by a different local user.
 type inUseOtherUserError struct{ error }
@@ -417,19 +261,19 @@ func (e inUseOtherUserError) Unwrap() error { return e.error }
 // The returned error, when non-nil, will be of type inUseOtherUserError.
 //
 // s.mu must be held.
-func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
+func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 	// If clients are already connected, verify they're the same user.
 	// This mostly matters on Windows at the moment.
 	if len(s.allClients) > 0 {
-		var active connIdentity
+		var active *ipnauth.ConnIdentity
 		for _, active = range s.allClients {
 			break
 		}
-		if ci.UserID != active.UserID {
-			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User.Username, active.Pid)}
+		if active != nil && ci.UserID() != active.UserID() {
+			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
 		}
 	}
-	if su := s.serverModeUser; su != nil && ci.UserID != su.Uid {
+	if su := s.serverModeUser; su != nil && ci.UserID() != su.Uid {
 		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
 	}
 	return nil
@@ -439,7 +283,7 @@ func (s *Server) checkConnIdentityLocked(ci connIdentity) error {
 // the Tailscale local daemon API.
 //
 // s.mu must not be held.
-func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
+func (s *Server) localAPIPermissions(ci *ipnauth.ConnIdentity) (read, write bool) {
 	switch runtime.GOOS {
 	case "windows":
 		s.mu.Lock()
@@ -451,8 +295,8 @@ func (s *Server) localAPIPermissions(ci connIdentity) (read, write bool) {
 	case "js":
 		return true, true
 	}
-	if ci.IsUnixSock {
-		return true, !isReadonlyConn(ci, s.b.OperatorUserID(), logger.Discard)
+	if ci.IsUnixSock() {
+		return true, !ci.IsReadonlyConn(s.b.OperatorUserID(), logger.Discard)
 	}
 	return false, false
 }
@@ -490,9 +334,9 @@ func isAllDigit(s string) bool {
 // TS_PERMIT_CERT_UID is set the to the userid of the peer
 // connection. It's intended to give your non-root webserver access
 // (www-data, caddy, nginx, etc) to certs.
-func (s *Server) connCanFetchCerts(ci connIdentity) bool {
-	if ci.IsUnixSock && ci.Creds != nil {
-		connUID, ok := ci.Creds.UserID()
+func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
+	if ci.IsUnixSock() && ci.Creds() != nil {
+		connUID, ok := ci.Creds().UserID()
 		if ok && connUID == userIDFromString(envknob.String("TS_PERMIT_CERT_UID")) {
 			return true
 		}
@@ -520,8 +364,8 @@ func (s *Server) registerDisconnectSub(ch chan<- struct{}, add bool) {
 //
 // If the returned error is of type inUseOtherUserError then the
 // returned connIdentity is also valid.
-func (s *Server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
-	ci, err = s.getConnIdentity(c)
+func (s *Server) addConn(c net.Conn, isHTTP bool) (ci *ipnauth.ConnIdentity, err error) {
+	ci, err = ipnauth.GetConnIdentity(s.logf, c)
 	if err != nil {
 		return
 	}
@@ -543,7 +387,7 @@ func (s *Server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 		s.clients = map[net.Conn]bool{}
 	}
 	if s.allClients == nil {
-		s.allClients = map[net.Conn]connIdentity{}
+		s.allClients = map[net.Conn]*ipnauth.ConnIdentity{}
 	}
 
 	if err := s.checkConnIdentityLocked(ci); err != nil {
@@ -555,11 +399,11 @@ func (s *Server) addConn(c net.Conn, isHTTP bool) (ci connIdentity, err error) {
 	}
 	s.allClients[c] = ci
 
-	if s.lastUserID != ci.UserID {
+	if s.lastUserID != ci.UserID() {
 		if s.lastUserID != "" {
 			doReset = true
 		}
-		s.lastUserID = ci.UserID
+		s.lastUserID = ci.UserID()
 	}
 	return ci, nil
 }
@@ -602,7 +446,7 @@ func (s *Server) stopAll() {
 //
 // s.mu must be held
 func (s *Server) setServerModeUserLocked() {
-	var ci connIdentity
+	var ci *ipnauth.ConnIdentity
 	var ok bool
 	for _, ci = range s.allClients {
 		ok = true
@@ -612,12 +456,12 @@ func (s *Server) setServerModeUserLocked() {
 		s.logf("ipnserver: [unexpected] now in server mode, but no connected client")
 		return
 	}
-	if ci.NotWindows {
+	if ci.NotWindows() {
 		return
 	}
-	if ci.User != nil {
-		s.logf("ipnserver: now in server mode; user=%v", ci.User.Username)
-		s.serverModeUser = ci.User
+	if ci.User() != nil {
+		s.logf("ipnserver: now in server mode; user=%v", ci.User().Username)
+		s.serverModeUser = ci.User()
 	} else {
 		s.logf("ipnserver: [unexpected] now in server mode, but nil User")
 	}
@@ -772,7 +616,7 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 
 	var serverModeUser *user.User
 	if uid := b.CurrentUser(); uid != "" {
-		u, err := lookupUserFromID(logf, uid)
+		u, err := ipnauth.LookupUserFromID(logf, uid)
 		if err != nil {
 			logf("ipnserver: found server mode auto-start key; failed to load user: %v", err)
 		} else {
@@ -1007,7 +851,7 @@ func (psc *protoSwitchConn) Close() error {
 	return nil
 }
 
-func (s *Server) localhostHandler(ci connIdentity) http.Handler {
+func (s *Server) localhostHandler(ci *ipnauth.ConnIdentity) http.Handler {
 	lah := localapi.NewHandler(s.b, s.logf, s.backendLogID)
 	lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 	lah.PermitCert = s.connCanFetchCerts(ci)
@@ -1017,7 +861,7 @@ func (s *Server) localhostHandler(ci connIdentity) http.Handler {
 			lah.ServeHTTP(w, r)
 			return
 		}
-		if ci.NotWindows {
+		if ci.NotWindows() {
 			io.WriteString(w, "<html><title>Tailscale</title><body><h1>Tailscale</h1>This is the local Tailscale daemon.")
 			return
 		}
@@ -1043,15 +887,6 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
 	st.WriteHTML(w)
-}
-
-func peerPid(entries []netstat.Entry, la, ra netip.AddrPort) int {
-	for _, e := range entries {
-		if e.Local == ra && e.Remote == la {
-			return e.Pid
-		}
-	}
-	return 0
 }
 
 // jsonNotifier returns a notify-writer func that writes ipn.Notify
