@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/exp/slices"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -423,7 +424,7 @@ func ReadStartupPrefsForTest(logf logger.Logf, store ipn.StateStore) (ipn.PrefsV
 // It also loads the list of known profiles from the StateStore.
 // If a state key is provided, it will be used to load the current profile.
 func newProfileManager(store ipn.StateStore, logf logger.Logf, stateKey ipn.StateKey) (*profileManager, error) {
-	return newProfileManagerWithGOOS(store, logf, stateKey, runtime.GOOS)
+	return newProfileManagerWithGOOS(store, logf, stateKey, envknob.GOOS())
 }
 
 func readAutoStartKey(store ipn.StateStore, goos string) (ipn.StateKey, error) {
