@@ -1271,6 +1271,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		LinkMonitor:          b.e.GetLinkMonitor(),
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
+		OnClientVersion:      b.onClientVersion,
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
@@ -1833,6 +1834,21 @@ func (b *LocalBackend) validPopBrowserURL(urlStr string) bool {
 func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 	if b.validPopBrowserURL(url) {
 		b.send(ipn.Notify{BrowseToURL: &url})
+	}
+}
+
+// onClientVersion is called on MapResponse updates when a MapResponse contains
+// a non-nil ClientVersion message.
+func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+	switch runtime.GOOS {
+	case "darwin", "ios":
+		// These auto-update well enough, and we haven't converted the
+		// ClientVersion types to Swift yet, so don't send them in ipn.Notify
+		// messages.
+	default:
+		// But everything else is a Go client and can deal with this field, even
+		// if they ignore it.
+		b.send(ipn.Notify{ClientVersion: v})
 	}
 }
 

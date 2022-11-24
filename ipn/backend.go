@@ -95,6 +95,10 @@ type Notify struct {
 	// macOS Network Extension.
 	LocalTCPPort *uint16 `json:",omitempty"`
 
+	// ClientVersion, if non-nil, describes whether a client version update
+	// is available.
+	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
+
 	// type is mirrored in xcode/Shared/IPN.swift
 }
 
