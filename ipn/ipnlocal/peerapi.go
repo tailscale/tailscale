@@ -94,10 +94,6 @@ const (
 	deletedSuffix = ".deleted"
 )
 
-func (s *peerAPIServer) canReceiveFiles() bool {
-	return s != nil && s.rootDir != ""
-}
-
 func validFilenameRune(r rune) bool {
 	switch r {
 	case '/':
@@ -861,6 +857,10 @@ func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
 }
 
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
+	if !envknob.CanTaildrop() {
+		http.Error(w, "Taildrop disabled on device", http.StatusForbidden)
+		return
+	}
 	if !h.canPutFile() {
 		http.Error(w, "Taildrop access denied", http.StatusForbidden)
 		return
