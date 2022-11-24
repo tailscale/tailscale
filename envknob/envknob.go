@@ -264,12 +264,17 @@ func LookupInt(envVar string) (v int, ok bool) {
 // of Work-In-Progress code.
 func UseWIPCode() bool { return Bool("TAILSCALE_USE_WIP_CODE") }
 
-// CanSSHD is whether the Tailscale SSH server is allowed to run.
+// CanSSHD reports whether the Tailscale SSH server is allowed to run.
 //
-// If disabled, the SSH server won't start (won't intercept port 22)
-// if already enabled and any attempt to re-enable it will result in
-// an error.
+// If disabled (when this reports false), the SSH server won't start (won't
+// intercept port 22) if previously configured to do so and any attempt to
+// re-enable it will result in an error.
 func CanSSHD() bool { return !Bool("TS_DISABLE_SSH_SERVER") }
+
+// CanTaildrop reports whether the Taildrop feature is allowed to function.
+//
+// If disabled, Taildrop won't receive files regardless of user & server config.
+func CanTaildrop() bool { return !Bool("TS_DISABLE_TAILDROP") }
 
 // SSHPolicyFile returns the path, if any, to the SSHPolicy JSON file for development.
 func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
