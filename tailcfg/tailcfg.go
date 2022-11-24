@@ -1425,6 +1425,40 @@ type MapResponse struct {
 	// server. An initial nil is equivalent to new(ControlDialPlan).
 	// A subsequent streamed nil means no change.
 	ControlDialPlan *ControlDialPlan `json:",omitempty"`
+
+	// ClientVersion describes the latest client version that's available for
+	// download and whether the client is using it. A nil value means no change
+	// or nothing to report.
+	ClientVersion *ClientVersion `json:",omitempty"`
+}
+
+// ClientVersion is information about the latest client version that's available
+// for the client (and whether they're already running it).
+//
+// It does not include a URL to download the client, as that varies by platform.
+type ClientVersion struct {
+	// RunningLatest is true if the client is running the latest build.
+	RunningLatest bool `json:",omitempty"`
+
+	// LatestVersion is the latest version.Short ("1.34.2") version available
+	// for download for the client's platform and packaging type.
+	// It won't be populated if RunningLatest is true.
+	// The primary purpose of the LatestVersion value is to invalidate the client's
+	// cache update check value, if any. This primarily applies to Windows.
+	LatestVersion string `json:",omitempty"`
+
+	// Notify is whether the client should do an OS-specific notification about
+	// a new version being available. This should not be populated if
+	// RunningLatest is true. The client should not notify multiple times for
+	// the same LatestVersion value.
+	Notify bool `json:",omitempty"`
+
+	// NotifyURL is a URL to open in the browser when the user clicks on the
+	// notification, when Notify is true.
+	NotifyURL string `json:",omitempty"`
+
+	// NotifyText is the text to show in the notification, when Notify is true.
+	NotifyText string `json:",omitempty"`
 }
 
 // ControlDialPlan is instructions from the control server to the client on how

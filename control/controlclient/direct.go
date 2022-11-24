@@ -74,8 +74,9 @@ type Direct struct {
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
-	popBrowser             func(url string) // or nil
-	c2nHandler             http.Handler     // or nil
+	popBrowser             func(url string)             // or nil
+	c2nHandler             http.Handler                 // or nil
+	onClientVersion        func(*tailcfg.ClientVersion) // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -109,13 +110,14 @@ type Options struct {
 	NewDecompressor      func() (Decompressor, error)
 	KeepAlive            bool
 	Logf                 logger.Logf
-	HTTPTestClient       *http.Client     // optional HTTP client to use (for tests only)
-	NoiseTestClient      *http.Client     // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags           []string         // debug settings to send to control
-	LinkMonitor          *monitor.Mon     // optional link monitor
-	PopBrowserURL        func(url string) // optional func to open browser
-	Dialer               *tsdial.Dialer   // non-nil
-	C2NHandler           http.Handler     // or nil
+	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
+	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags           []string                     // debug settings to send to control
+	LinkMonitor          *monitor.Mon                 // optional link monitor
+	PopBrowserURL        func(url string)             // optional func to open browser
+	OnClientVersion      func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
+	Dialer               *tsdial.Dialer               // non-nil
+	C2NHandler           http.Handler                 // or nil
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -241,6 +243,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		onClientVersion:        opts.OnClientVersion,
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 		dialPlan:               opts.DialPlan,
@@ -1007,6 +1010,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			} else {
 				c.logf("netmap: control says to open URL %v; no popBrowser func", u)
 			}
+		}
+		if resp.ClientVersion != nil && c.onClientVersion != nil {
+			c.onClientVersion(resp.ClientVersion)
 		}
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())
