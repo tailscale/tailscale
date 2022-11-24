@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strings"
 	"syscall"
@@ -491,4 +492,63 @@ func OpenKeyWait(k registry.Key, path RegistryPath, access uint32) (registry.Key
 
 		k = key
 	}
+}
+
+func lookupPseudoUser(uid string) (*user.User, error) {
+	sid, err := windows.StringToSid(uid)
+	if err != nil {
+		return nil, err
+	}
+
+	// We're looking for SIDs "S-1-5-x" where 17 <= x <= 20.
+	// This is checking for the the "5"
+	if sid.IdentifierAuthority() != windows.SECURITY_NT_AUTHORITY {
+		return nil, fmt.Errorf(`SID %q does not use "NT AUTHORITY"`, uid)
+	}
+
+	// This is ensuring that there is only one sub-authority.
+	// In other words, only one value after the "5".
+	if sid.SubAuthorityCount() != 1 {
+		return nil, fmt.Errorf("SID %q should have only one subauthority", uid)
+	}
+
+	// Get that sub-authority value (this is "x" above) and check it.
+	rid := sid.SubAuthority(0)
+	if rid < 17 || rid > 20 {
+		return nil, fmt.Errorf("SID %q does not represent a known pseudo-user", uid)
+	}
+
+	// We've got one of the known pseudo-users. Look up the localized name of the
+	// account.
+	username, domain, _, err := sid.LookupAccount("")
+	if err != nil {
+		return nil, err
+	}
+
+	// This call is best-effort. If it fails, homeDir will be empty.
+	homeDir, _ := findHomeDirInRegistry(uid)
+
+	result := &user.User{
+		Uid:      uid,
+		Gid:      uid, // Gid == Uid with these accounts.
+		Username: fmt.Sprintf(`%s\%s`, domain, username),
+		Name:     username,
+		HomeDir:  homeDir,
+	}
+	return result, nil
+}
+
+// findHomeDirInRegistry finds the user home path based on the uid.
+// This is borrowed from Go's std lib.
+func findHomeDirInRegistry(uid string) (dir string, err error) {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\`+uid, registry.QUERY_VALUE)
+	if err != nil {
+		return "", err
+	}
+	defer k.Close()
+	dir, _, err = k.GetStringValue("ProfileImagePath")
+	if err != nil {
+		return "", err
+	}
+	return dir, nil
 }

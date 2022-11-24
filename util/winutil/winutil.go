@@ -5,6 +5,10 @@
 // Package winutil contains misc Windows/Win32 helper functions.
 package winutil
 
+import (
+	"os/user"
+)
+
 // RegBase is the registry path inside HKEY_LOCAL_MACHINE where registry settings
 // are stored. This constant is a non-empty string only when GOOS=windows.
 const RegBase = regBase
@@ -61,4 +65,14 @@ func GetRegInteger(name string, defval uint64) uint64 {
 // OS will always return false.
 func IsSIDValidPrincipal(uid string) bool {
 	return isSIDValidPrincipal(uid)
+}
+
+// LookupPseudoUser attempts to resolve the user specified by uid by checking
+// against well-known pseudo-users on Windows. This is a temporary workaround
+// until https://github.com/golang/go/issues/49509 is resolved and shipped.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return an error.
+func LookupPseudoUser(uid string) (*user.User, error) {
+	return lookupPseudoUser(uid)
 }

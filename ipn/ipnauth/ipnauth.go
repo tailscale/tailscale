@@ -14,7 +14,6 @@ import (
 	"os/user"
 	"runtime"
 	"strconv"
-	"syscall"
 
 	"inet.af/peercred"
 	"tailscale.com/envknob"
@@ -22,6 +21,7 @@ import (
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/util/pidowner"
 	"tailscale.com/util/winutil"
@@ -122,11 +122,23 @@ func GetConnIdentity(logf logger.Logf, c net.Conn) (ci *ConnIdentity, err error)
 	return ci, nil
 }
 
+var metricIssue869Workaround = clientmetric.NewCounter("issue_869_workaround")
+
 // LookupUserFromID is a wrapper around os/user.LookupId that works around some
 // issues on Windows. On non-Windows platforms it's identical to user.LookupId.
 func LookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
 	u, err := user.LookupId(uid)
-	if err != nil && runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(0x534)) {
+	if err != nil && runtime.GOOS == "windows" {
+		// See if uid resolves as a pseudo-user. Temporary workaround until
+		// https://github.com/golang/go/issues/49509 resolves and ships.
+		if u, err := winutil.LookupPseudoUser(uid); err == nil {
+			return u, nil
+		}
+
+		// TODO(aaron): With LookupPseudoUser in place, I don't expect us to reach
+		// this point anymore. Leaving the below workaround in for now to confirm
+		// that pseudo-user resolution sufficiently handles this problem.
+
 		// The below workaround is only applicable when uid represents a
 		// valid security principal. Omitting this check causes us to succeed
 		// even when uid represents a deleted user.
@@ -134,6 +146,7 @@ func LookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {
 			return nil, err
 		}
 
+		metricIssue869Workaround.Add(1)
 		logf("[warning] issue 869: os/user.LookupId failed; ignoring")
 		// Work around https://github.com/tailscale/tailscale/issues/869 for
 		// now. We don't strictly need the username. It's just a nice-to-have.
