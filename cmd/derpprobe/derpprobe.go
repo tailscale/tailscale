@@ -35,6 +35,7 @@ import (
 var (
 	derpMapURL = flag.String("derp-map", "https://login.tailscale.com/derpmap/default", "URL to DERP map (https:// or file://)")
 	listen     = flag.String("listen", ":8030", "HTTP listen address")
+	probeOnce  = flag.Bool("once", false, "probe once and print results, then exit; ignores the listen flag")
 )
 
 // certReissueAfter is the time after which we expect all certs to be
@@ -62,6 +63,20 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, _ = getDERPMap(ctx)
+
+	if *probeOnce {
+		log.Printf("Starting probe (may take up to 1m)")
+		probe()
+		log.Printf("Probe results:")
+		st := getOverallStatus()
+		for _, s := range st.good {
+			log.Printf("good: %s", s)
+		}
+		for _, s := range st.bad {
+			log.Printf("bad: %s", s)
+		}
+		return
+	}
 
 	go probeLoop()
 	go slackLoop()
