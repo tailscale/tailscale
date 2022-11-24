@@ -165,11 +165,38 @@ func bufferIsConnect(br *bufio.Reader) bool {
 	return mem.HasPrefix(mem.B(peek), mem.S("CONN"))
 }
 
+// permitOldProtocol is whether we permit the old pre-HTTP protocol from the
+// client (cmd/tailscale or GUI client) to the tailscaled server.
+//
+// This is currently (2022-11-24) only permitted on Windows. There is an
+// outstanding change to the Windows GUI to finish the migration to the
+// HTTP-based protocol. Once it's in, this constant will go away and the old
+// protocol will not be permitted for any platform.
+const permitOldProtocol = runtime.GOOS == "windows"
+
+// ipnProtoAndMethodSniffTimeout returns the read timeout to try to read a few
+// bytes from incoming IPN connection to determine whether it's an old-style
+// IPN bus connection or a new-style HTTP connection. And if an HTTP connection,
+// what its HTTP method is.
+func ipnProtoAndMethodSniffTimeout() time.Duration {
+	if permitOldProtocol {
+		// In the old protocol, the client might not be sending anything at all
+		// and only receiving, so keep a short timeout as to not delay
+		// connecting to the IPN bus and getting ipn.Notify messages.
+		return 1 * time.Second
+	}
+	// But in the new protocol, there will always be an HTTP request to start,
+	// so we can take a long time to receive the first few bytes. 30s is
+	// overkill.
+	return 30 * time.Second
+}
+
 func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
-	// First see if it's an HTTP request.
+	// First sniff a few bytes to see if it's an HTTP request. And if so, which
+	// HTTP method.
 	br := bufio.NewReader(c)
-	c.SetReadDeadline(time.Now().Add(time.Second))
-	br.Peek(4)
+	c.SetReadDeadline(time.Now().Add(ipnProtoAndMethodSniffTimeout()))
+	br.Peek(4) // either 4 bytes old protocol length header, or HTTP "GET " etc.
 	c.SetReadDeadline(time.Time{})
 
 	// Handle logtail CONNECT requests early. (See docs on handleProxyConnectConn)
@@ -178,7 +205,10 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 		return
 	}
 
-	isHTTPReq := bufferHasHTTPRequest(br)
+	// If we don't permit the old "IPN bus" JSON bidi stream protocol, then
+	// assume it's HTTP. Otherwise sniff the first few bytes to see if it looks
+	// like HTTP.
+	isHTTPReq := !permitOldProtocol || bufferHasHTTPRequest(br)
 
 	ci, err := s.addConn(c, isHTTPReq)
 	if err != nil {
