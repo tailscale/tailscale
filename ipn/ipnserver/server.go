@@ -100,6 +100,8 @@ type Server struct {
 	bsMu sync.Mutex // lock order: bsMu, then mu
 	bs   *ipn.BackendServer
 
+	// mu guards the fields that follow.
+	// lock order: mu, then LocalBackend.mu
 	mu            sync.Mutex
 	lastUserID    string                             // tracks last userid; on change, Reset state for paranoia
 	allClients    map[net.Conn]*ipnauth.ConnIdentity // HTTP or IPN
