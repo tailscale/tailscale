@@ -6,10 +6,7 @@ package ipnserver
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,11 +35,9 @@ import (
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsdial"
-	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/systemd"
-	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/monitor"
@@ -97,65 +92,15 @@ type Server struct {
 	// is true, the ForceDaemon pref can override this.
 	resetOnZero bool
 
-	bsMu sync.Mutex // lock order: bsMu, then mu
-	bs   *ipn.BackendServer
-
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
-	mu            sync.Mutex
-	lastUserID    string                             // tracks last userid; on change, Reset state for paranoia
-	allClients    map[net.Conn]*ipnauth.ConnIdentity // HTTP or IPN
-	clients       map[net.Conn]bool                  // subset of allClients; only IPN protocol
-	disconnectSub map[chan<- struct{}]struct{}       // keys are subscribers of disconnects
+	mu         sync.Mutex
+	lastUserID string // tracks last userid; on change, Reset state for paranoia
+	allClients map[net.Conn]*ipnauth.ConnIdentity
 }
 
 // LocalBackend returns the server's LocalBackend.
 func (s *Server) LocalBackend() *ipnlocal.LocalBackend { return s.b }
-
-// blockWhileInUse blocks while until either a Read from conn fails
-// (i.e. it's closed) or until the server is able to accept ci as a
-// user.
-func (s *Server) blockWhileInUse(conn io.Reader, ci *ipnauth.ConnIdentity) {
-	s.logf("blocking client while server in use; connIdentity=%v", ci)
-	connDone := make(chan struct{})
-	go func() {
-		io.Copy(io.Discard, conn)
-		close(connDone)
-	}()
-	ch := make(chan struct{}, 1)
-	s.registerDisconnectSub(ch, true)
-	defer s.registerDisconnectSub(ch, false)
-	for {
-		select {
-		case <-connDone:
-			s.logf("blocked client Read completed; connIdentity=%v", ci)
-			return
-		case <-ch:
-			s.mu.Lock()
-			err := s.checkConnIdentityLocked(ci)
-			s.mu.Unlock()
-			if err == nil {
-				s.logf("unblocking client, server is free; connIdentity=%v", ci)
-				// Server is now available again for a new user.
-				// TODO(bradfitz): keep this connection alive. But for
-				// now just return and have our caller close the connection
-				// (which unblocks the io.Copy goroutine we started above)
-				// and then the client (e.g. Windows) will reconnect and
-				// discover that it works.
-				return
-			}
-		}
-	}
-}
-
-// bufferHasHTTPRequest reports whether br looks like it has an HTTP
-// request in it, without reading any bytes from it.
-func bufferHasHTTPRequest(br *bufio.Reader) bool {
-	peek, _ := br.Peek(br.Buffered())
-	return mem.HasPrefix(mem.B(peek), mem.S("GET ")) ||
-		mem.HasPrefix(mem.B(peek), mem.S("POST ")) ||
-		mem.Contains(mem.B(peek), mem.S(" HTTP/"))
-}
 
 // bufferIsConnect reports whether br looks like it's likely an HTTP
 // CONNECT request.
@@ -166,38 +111,11 @@ func bufferIsConnect(br *bufio.Reader) bool {
 	return mem.HasPrefix(mem.B(peek), mem.S("CONN"))
 }
 
-// permitOldProtocol is whether we permit the old pre-HTTP protocol from the
-// client (cmd/tailscale or GUI client) to the tailscaled server.
-//
-// This is currently (2022-11-24) only permitted on Windows. There is an
-// outstanding change to the Windows GUI to finish the migration to the
-// HTTP-based protocol. Once it's in, this constant will go away and the old
-// protocol will not be permitted for any platform.
-const permitOldProtocol = runtime.GOOS == "windows"
-
-// ipnProtoAndMethodSniffTimeout returns the read timeout to try to read a few
-// bytes from incoming IPN connection to determine whether it's an old-style
-// IPN bus connection or a new-style HTTP connection. And if an HTTP connection,
-// what its HTTP method is.
-func ipnProtoAndMethodSniffTimeout() time.Duration {
-	if permitOldProtocol {
-		// In the old protocol, the client might not be sending anything at all
-		// and only receiving, so keep a short timeout as to not delay
-		// connecting to the IPN bus and getting ipn.Notify messages.
-		return 1 * time.Second
-	}
-	// But in the new protocol, there will always be an HTTP request to start,
-	// so we can take a long time to receive the first few bytes. 30s is
-	// overkill.
-	return 30 * time.Second
-}
-
 func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
-	// First sniff a few bytes to see if it's an HTTP request. And if so, which
-	// HTTP method.
+	// First sniff a few bytes to check its HTTP method.
 	br := bufio.NewReader(c)
-	c.SetReadDeadline(time.Now().Add(ipnProtoAndMethodSniffTimeout()))
-	br.Peek(4) // either 4 bytes old protocol length header, or HTTP "GET " etc.
+	c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	br.Peek(len("GET / HTTP/1.1\r\n")) // reasonable sniff size to get HTTP method
 	c.SetReadDeadline(time.Time{})
 
 	// Handle logtail CONNECT requests early. (See docs on handleProxyConnectConn)
@@ -206,78 +124,28 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, logf logger.Logf) {
 		return
 	}
 
-	// If we don't permit the old "IPN bus" JSON bidi stream protocol, then
-	// assume it's HTTP. Otherwise sniff the first few bytes to see if it looks
-	// like HTTP.
-	isHTTPReq := !permitOldProtocol || bufferHasHTTPRequest(br)
-
-	ci, err := s.addConn(c, isHTTPReq)
+	ci, err := s.addConn(c)
 	if err != nil {
-		if isHTTPReq {
-			fmt.Fprintf(c, "HTTP/1.0 500 Nope\r\nContent-Type: text/plain\r\nX-Content-Type-Options: nosniff\r\n\r\n%s\n", err.Error())
-			c.Close()
-			return
-		}
-		defer c.Close()
-		bs := ipn.NewBackendServer(logf, nil, jsonNotifier(c, s.logf))
-		_, occupied := err.(inUseOtherUserError)
-		if occupied {
-			bs.SendInUseOtherUserErrorMessage(err.Error())
-			s.blockWhileInUse(c, ci)
-		} else {
-			bs.SendErrorMessage(err.Error())
-			time.Sleep(time.Second)
-		}
-		return
+		fmt.Fprintf(c, "HTTP/1.0 500 Nope\r\nContent-Type: text/plain\r\nX-Content-Type-Options: nosniff\r\n\r\n%s\n", err.Error())
+		c.Close()
 	}
 
 	// Tell the LocalBackend about the identity we're now running as.
 	s.b.SetCurrentUserID(ci.UserID())
 
-	if isHTTPReq {
-		httpServer := &http.Server{
-			// Localhost connections are cheap; so only do
-			// keep-alives for a short period of time, as these
-			// active connections lock the server into only serving
-			// that user. If the user has this page open, we don't
-			// want another switching user to be locked out for
-			// minutes. 5 seconds is enough to let browser hit
-			// favicon.ico and such.
-			IdleTimeout: 5 * time.Second,
-			ErrorLog:    logger.StdLogger(logf),
-			Handler:     s.localhostHandler(ci),
-		}
-		httpServer.Serve(netutil.NewOneConnListener(&protoSwitchConn{s: s, br: br, Conn: c}, nil))
-		return
+	httpServer := &http.Server{
+		// Localhost connections are cheap; so only do
+		// keep-alives for a short period of time, as these
+		// active connections lock the server into only serving
+		// that user. If the user has this page open, we don't
+		// want another switching user to be locked out for
+		// minutes. 5 seconds is enough to let browser hit
+		// favicon.ico and such.
+		IdleTimeout: 5 * time.Second,
+		ErrorLog:    logger.StdLogger(logf),
+		Handler:     s.localhostHandler(ci),
 	}
-
-	defer s.removeAndCloseConn(c)
-	logf("[v1] incoming control connection")
-
-	if ci.IsReadonlyConn(s.b.OperatorUserID(), logf) {
-		ctx = ipn.ReadonlyContextOf(ctx)
-	}
-
-	for ctx.Err() == nil {
-		msg, err := ipn.ReadMsg(br)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				logf("[v1] ReadMsg: %v", err)
-			} else if ctx.Err() == nil {
-				logf("ReadMsg: %v", err)
-			}
-			return
-		}
-		s.bsMu.Lock()
-		if err := s.bs.GotCommandMsg(ctx, msg); err != nil {
-			logf("GotCommandMsg: %v", err)
-		}
-		gotQuit := s.bs.GotQuit
-		s.bsMu.Unlock()
-		if gotQuit {
-			return
-		}
-	}
+	httpServer.Serve(netutil.NewOneConnListener(&protoSwitchConn{s: s, br: br, Conn: c}, nil))
 }
 
 // inUseOtherUserError is the error type for when the server is in use
@@ -375,27 +243,11 @@ func (s *Server) connCanFetchCerts(ci *ipnauth.ConnIdentity) bool {
 	return false
 }
 
-// registerDisconnectSub adds ch as a subscribe to connection disconnect
-// events. If add is false, the subscriber is removed.
-func (s *Server) registerDisconnectSub(ch chan<- struct{}, add bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if add {
-		if s.disconnectSub == nil {
-			s.disconnectSub = make(map[chan<- struct{}]struct{})
-		}
-		s.disconnectSub[ch] = struct{}{}
-	} else {
-		delete(s.disconnectSub, ch)
-	}
-
-}
-
 // addConn adds c to the server's list of clients.
 //
 // If the returned error is of type inUseOtherUserError then the
 // returned connIdentity is also valid.
-func (s *Server) addConn(c net.Conn, isHTTP bool) (ci *ipnauth.ConnIdentity, err error) {
+func (s *Server) addConn(c net.Conn) (ci *ipnauth.ConnIdentity, err error) {
 	ci, err = ipnauth.GetConnIdentity(s.logf, c)
 	if err != nil {
 		return
@@ -414,9 +266,6 @@ func (s *Server) addConn(c net.Conn, isHTTP bool) (ci *ipnauth.ConnIdentity, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.clients == nil {
-		s.clients = map[net.Conn]bool{}
-	}
 	if s.allClients == nil {
 		s.allClients = map[net.Conn]*ipnauth.ConnIdentity{}
 	}
@@ -425,9 +274,6 @@ func (s *Server) addConn(c net.Conn, isHTTP bool) (ci *ipnauth.ConnIdentity, err
 		return ci, err
 	}
 
-	if !isHTTP {
-		s.clients[c] = true
-	}
 	s.allClients[c] = ci
 
 	if s.lastUserID != ci.UserID() {
@@ -441,15 +287,8 @@ func (s *Server) addConn(c net.Conn, isHTTP bool) (ci *ipnauth.ConnIdentity, err
 
 func (s *Server) removeAndCloseConn(c net.Conn) {
 	s.mu.Lock()
-	delete(s.clients, c)
 	delete(s.allClients, c)
 	remain := len(s.allClients)
-	for sub := range s.disconnectSub {
-		select {
-		case sub <- struct{}{}:
-		default:
-		}
-	}
 	s.mu.Unlock()
 
 	if remain == 0 && s.resetOnZero {
@@ -463,36 +302,6 @@ func (s *Server) removeAndCloseConn(c net.Conn) {
 	c.Close()
 }
 
-func (s *Server) stopAll() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for c := range s.clients {
-		safesocket.ConnCloseRead(c)
-		safesocket.ConnCloseWrite(c)
-	}
-	s.clients = nil
-}
-
-var jsonEscapedZero = []byte(`\u0000`)
-
-func (s *Server) writeToClients(n ipn.Notify) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.clients) == 0 {
-		// Common case (at least on busy servers): nobody
-		// connected (no GUI, etc), so return before
-		// serializing JSON.
-		return
-	}
-
-	if b, ok := marshalNotify(n, s.logf); ok {
-		for c := range s.clients {
-			ipn.WriteMsg(c, b)
-		}
-	}
-}
-
 // Run runs a Tailscale backend service.
 // The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
 //
@@ -502,9 +311,6 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	runDone := make(chan struct{})
 	defer close(runDone)
 
-	var serverMu sync.Mutex
-	var serverOrNil *Server
-
 	// When the context is closed or when we return, whichever is first, close our listener
 	// and all open connections.
 	go func() {
@@ -512,11 +318,6 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 		case <-ctx.Done():
 		case <-runDone:
 		}
-		serverMu.Lock()
-		if s := serverOrNil; s != nil {
-			s.stopAll()
-		}
-		serverMu.Unlock()
 		ln.Close()
 	}()
 	logf("Listening on %v", ln.Addr())
@@ -542,13 +343,10 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 				break
 			}
 			logf("ipnserver%d: getEngine failed again: %v", i, err)
-			errMsg := err.Error()
-			go func() {
-				defer c.Close()
-				bs := ipn.NewBackendServer(logf, nil, jsonNotifier(c, logf))
-				bs.SendErrorMessage(errMsg)
-				time.Sleep(time.Second)
-			}()
+			// TODO(bradfitz): queue this error up for the next IPN bus watcher call
+			// to get for the Windows GUI? We used to send it over the pre-HTTP
+			// protocol to the Windows GUI. Just close it.
+			c.Close()
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -568,9 +366,6 @@ func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.State
 	if ns != nil {
 		ns.SetLocalBackend(server.LocalBackend())
 	}
-	serverMu.Lock()
-	serverOrNil = server
-	serverMu.Unlock()
 	return server.Run(ctx, ln)
 }
 
@@ -613,7 +408,6 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 		logf:         logf,
 		resetOnZero:  !opts.SurviveDisconnects,
 	}
-	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
 	return server, nil
 }
 
@@ -633,17 +427,11 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		case <-ctx.Done():
 		case <-runDone:
 		}
-		s.stopAll()
 		ln.Close()
 	}()
 
 	if s.b.Prefs().Valid() {
-		s.bs.GotCommand(ctx, &ipn.Command{
-			Version: version.Long,
-			Start: &ipn.StartArgs{
-				Opts: ipn.Options{},
-			},
-		})
+		s.b.Start(ipn.Options{})
 	}
 
 	systemd.Ready()
@@ -815,10 +603,9 @@ func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, *netstack.I
 	}
 }
 
-// protoSwitchConn is a net.Conn that's we want to speak HTTP to but
-// it's already had a few bytes read from it to determine that it's
-// HTTP. So we Read from its bufio.Reader. On Close, we we tell the
-// server it's closed, so the server can account the who's connected.
+// protoSwitchConn is a net.Conn with which we want to speak HTTP to but
+// it's already had a few bytes read from it to determine its HTTP method.
+// So we Read from its bufio.Reader. On Close, we we tell the
 type protoSwitchConn struct {
 	s *Server
 	net.Conn
@@ -868,28 +655,6 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
 	st.WriteHTML(w)
-}
-
-// jsonNotifier returns a notify-writer func that writes ipn.Notify
-// messages to w.
-func jsonNotifier(w io.Writer, logf logger.Logf) func(ipn.Notify) {
-	return func(n ipn.Notify) {
-		if b, ok := marshalNotify(n, logf); ok {
-			ipn.WriteMsg(w, b)
-		}
-	}
-}
-
-func marshalNotify(n ipn.Notify, logf logger.Logf) (b []byte, ok bool) {
-	b, err := json.Marshal(n)
-	if err != nil {
-		logf("ipnserver: [unexpected] error serializing JSON: %v", err)
-		return nil, false
-	}
-	if bytes.Contains(b, jsonEscapedZero) {
-		logf("[unexpected] zero byte in BackendServer.send notify message: %q", b)
-	}
-	return b, true
 }
 
 // listenerWithReadyConn is a net.Listener wrapper that has

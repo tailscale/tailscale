@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -470,14 +469,6 @@ func tailscaleUp(ctx context.Context, st *ipnstate.Status, forceReauth bool) (au
 		}
 		if n.ErrMessage != nil {
 			msg := *n.ErrMessage
-			if msg == ipn.ErrMsgPermissionDenied {
-				switch runtime.GOOS {
-				case "windows":
-					msg += " (Tailscale service in use by other user?)"
-				default:
-					msg += " (try 'sudo tailscale up [...]')"
-				}
-			}
 			return "", fmt.Errorf("backend error: %v", msg)
 		}
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {

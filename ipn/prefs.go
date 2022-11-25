@@ -665,6 +665,8 @@ func PrefsFromBytes(b []byte) (*Prefs, error) {
 	return p, err
 }
 
+var jsonEscapedZero = []byte(`\u0000`)
+
 // LoadPrefs loads a legacy relaynode config file into Prefs
 // with sensible migration defaults set.
 func LoadPrefs(filename string) (*Prefs, error) {
