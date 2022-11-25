@@ -30,8 +30,8 @@ type profileManager struct {
 
 	currentUserID  string // only used on Windows
 	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile
-	currentProfile *ipn.LoginProfile
-	prefs          ipn.PrefsView
+	currentProfile *ipn.LoginProfile // always non-nil
+	prefs          ipn.PrefsView     // always Valid.
 
 	// isNewProfile is a sentinel value that indicates that the
 	// current profile is new and has not been saved to disk yet.
@@ -407,6 +407,7 @@ func (pm *profileManager) Store() ipn.StateStore {
 }
 
 // CurrentPrefs returns a read-only view of the current prefs.
+// The returned view is always valid.
 func (pm *profileManager) CurrentPrefs() ipn.PrefsView {
 	return pm.prefs
 }
