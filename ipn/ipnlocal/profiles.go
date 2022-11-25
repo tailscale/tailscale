@@ -40,15 +40,15 @@ type profileManager struct {
 	isNewProfile bool
 }
 
-// CurrentUser returns the current user ID. It is only non-empty on
+// CurrentUserID returns the current user ID. It is only non-empty on
 // Windows where we have a multi-user system.
-func (pm *profileManager) CurrentUser() string {
+func (pm *profileManager) CurrentUserID() string {
 	return pm.currentUserID
 }
 
-// SetCurrentUser sets the current user ID. The uid is only non-empty
+// SetCurrentUserID sets the current user ID. The uid is only non-empty
 // on Windows where we have a multi-user system.
-func (pm *profileManager) SetCurrentUser(uid string) error {
+func (pm *profileManager) SetCurrentUserID(uid string) error {
 	if pm.currentUserID == uid {
 		return nil
 	}

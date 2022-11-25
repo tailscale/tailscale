@@ -2039,7 +2039,7 @@ func (b *LocalBackend) InServerMode() bool {
 func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	serverModeUid := b.pm.CurrentUser()
+	serverModeUid := b.pm.CurrentUserID()
 	if serverModeUid == "" {
 		// Either this platform isn't a "multi-user" platform or we're not yet
 		// running as one.
@@ -2053,9 +2053,19 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error
 		return errors.New("empty user uid in connection identity")
 	}
 	if uid != serverModeUid {
-		return fmt.Errorf("Tailscale running in server mode (uid=%v); connection from %q not allowed", serverModeUid, uid)
+		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(serverModeUid), b.tryLookupUserName(uid))
 	}
 	return nil
+}
+
+// tryLookupUserName tries to look up the username for the uid.
+// It returns the username on success, or the UID on failure.
+func (b *LocalBackend) tryLookupUserName(uid string) string {
+	u, err := ipnauth.LookupUserFromID(b.logf, uid)
+	if err != nil {
+		return uid
+	}
+	return u.Username
 }
 
 // Login implements Backend.
@@ -2221,11 +2231,11 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // On non-multi-user systems, the uid should be set to empty string.
 func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Lock()
-	if b.pm.CurrentUser() == uid {
+	if b.pm.CurrentUserID() == uid {
 		b.mu.Unlock()
 		return
 	}
-	if err := b.pm.SetCurrentUser(uid); err != nil {
+	if err := b.pm.SetCurrentUserID(uid); err != nil {
 		b.mu.Unlock()
 		return
 	}
