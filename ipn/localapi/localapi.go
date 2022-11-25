@@ -439,6 +439,20 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = h.b.DebugRebind()
 	case "restun":
 		err = h.b.DebugReSTUN()
+	case "enginestatus":
+		// serveRequestEngineStatus kicks off a call to RequestEngineStatus (via
+		// LocalBackend => UserspaceEngine => LocalBackend =>
+		// ipn.Notify{Engine}).
+		//
+		// This is a temporary (2022-11-25) measure for the Windows client's
+		// move to the LocalAPI HTTP interface. It was polling this over the IPN
+		// bus before every 2 seconds which is wasteful. We should add a bit to
+		// WatchIPNMask instead to let an IPN bus watcher say that it's
+		// interested in that info and then only send it on demand, not via
+		// polling. But for now we keep this interface because that's what the
+		// client already did. A future change will remove this, so don't depend
+		// on it.
+		h.b.RequestEngineStatus()
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
