@@ -100,12 +100,11 @@ type Server struct {
 	bsMu sync.Mutex // lock order: bsMu, then mu
 	bs   *ipn.BackendServer
 
-	mu             sync.Mutex
-	serverModeUser *user.User                         // or nil if not in server mode
-	lastUserID     string                             // tracks last userid; on change, Reset state for paranoia
-	allClients     map[net.Conn]*ipnauth.ConnIdentity // HTTP or IPN
-	clients        map[net.Conn]bool                  // subset of allClients; only IPN protocol
-	disconnectSub  map[chan<- struct{}]struct{}       // keys are subscribers of disconnects
+	mu            sync.Mutex
+	lastUserID    string                             // tracks last userid; on change, Reset state for paranoia
+	allClients    map[net.Conn]*ipnauth.ConnIdentity // HTTP or IPN
+	clients       map[net.Conn]bool                  // subset of allClients; only IPN protocol
+	disconnectSub map[chan<- struct{}]struct{}       // keys are subscribers of disconnects
 }
 
 // LocalBackend returns the server's LocalBackend.
@@ -303,8 +302,8 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
 		}
 	}
-	if su := s.serverModeUser; su != nil && ci.UserID() != su.Uid {
-		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", su.Username)}
+	if cu := s.b.CurrentUser(); cu != "" && cu != ci.UserID() {
+		return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s", s.b.CurrentUser())}
 	}
 	return nil
 }
@@ -472,49 +471,11 @@ func (s *Server) stopAll() {
 	s.clients = nil
 }
 
-// setServerModeUserLocked is called when we're in server mode but our s.serverModeUser is nil.
-//
-// s.mu must be held
-func (s *Server) setServerModeUserLocked() {
-	var ci *ipnauth.ConnIdentity
-	var ok bool
-	for _, ci = range s.allClients {
-		ok = true
-		break
-	}
-	if !ok {
-		s.logf("ipnserver: [unexpected] now in server mode, but no connected client")
-		return
-	}
-	if ci.NotWindows() {
-		return
-	}
-	if ci.User() != nil {
-		s.logf("ipnserver: now in server mode; user=%v", ci.User().Username)
-		s.serverModeUser = ci.User()
-	} else {
-		s.logf("ipnserver: [unexpected] now in server mode, but nil User")
-	}
-}
-
 var jsonEscapedZero = []byte(`\u0000`)
 
 func (s *Server) writeToClients(n ipn.Notify) {
-	inServerMode := s.b.InServerMode()
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if inServerMode {
-		if s.serverModeUser == nil {
-			s.setServerModeUserLocked()
-		}
-	} else {
-		if s.serverModeUser != nil {
-			s.logf("ipnserver: no longer in server mode")
-			s.serverModeUser = nil
-		}
-	}
 
 	if len(s.clients) == 0 {
 		// Common case (at least on busy servers): nobody
@@ -644,23 +605,11 @@ func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engi
 
 	}
 
-	var serverModeUser *user.User
-	if uid := b.CurrentUser(); uid != "" {
-		u, err := ipnauth.LookupUserFromID(logf, uid)
-		if err != nil {
-			logf("ipnserver: found server mode auto-start key; failed to load user: %v", err)
-		} else {
-			logf("ipnserver: found server mode auto-start key (user %s)", u.Username)
-			serverModeUser = u
-		}
-	}
-
 	server := &Server{
-		b:              b,
-		backendLogID:   logid,
-		logf:           logf,
-		resetOnZero:    !opts.SurviveDisconnects,
-		serverModeUser: serverModeUser,
+		b:            b,
+		backendLogID: logid,
+		logf:         logf,
+		resetOnZero:  !opts.SurviveDisconnects,
 	}
 	server.bs = ipn.NewBackendServer(logf, b, server.writeToClients)
 	return server, nil
