@@ -2163,6 +2163,22 @@ func (b *LocalBackend) shouldUploadServices() bool {
 	return !p.ShieldsUp() && b.netMap.CollectServices
 }
 
+// SetCurrentUserID is used to implement support for multi-user systems (only
+// Windows 2022-11-25). On such systems, the uid is used to determine which
+// user's state should be used. The current user is maintained by active
+// connections open to the backend.
+//
+// When the backend initially starts it will typically start with no user. Then,
+// the first connection to the backend from the GUI frontend will set the
+// current user. Once set, the current user cannot be changed until all previous
+// connections are closed. The user is also used to determine which
+// LoginProfiles are accessible.
+//
+// In unattended mode, the backend will start with the user which enabled
+// unattended mode. The user must disable unattended mode before the user can be
+// changed.
+//
+// On non-multi-user systems, the uid should be set to empty string.
 func (b *LocalBackend) SetCurrentUserID(uid string) {
 	b.mu.Lock()
 	if b.pm.CurrentUser() == uid {
