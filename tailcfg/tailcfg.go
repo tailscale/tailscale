@@ -1722,6 +1722,14 @@ const (
 	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
 	// CapabilityIngress grants the ability for a peer to send ingress traffic.
 	CapabilityIngress = "https://tailscale.com/cap/ingress"
+
+	// Funnel warning capabilities used for reporting errors to the user.
+
+	// CapabilityWarnFunnelNoInvite indicates an invite has not been accepted for the Funnel alpha.
+	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
+
+	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
+	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
 )
 
 const (
