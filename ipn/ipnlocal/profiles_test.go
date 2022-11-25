@@ -44,7 +44,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 		return p.View()
 	}
 
-	pm.SetCurrentUser("user1")
+	pm.SetCurrentUserID("user1")
 	newProfile(t, "user1")
 	cp := pm.currentProfile
 	pm.DeleteProfile(cp.ID)
@@ -61,7 +61,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pm.SetCurrentUser("user1")
+	pm.SetCurrentUserID("user1")
 	if pm.currentProfile == nil {
 		t.Fatal("currentProfile is nil")
 	} else if pm.currentProfile.ID != "" {
@@ -112,18 +112,18 @@ func TestProfileList(t *testing.T) {
 		}
 	}
 
-	pm.SetCurrentUser("user1")
+	pm.SetCurrentUserID("user1")
 	newProfile(t, "alice")
 	newProfile(t, "bob")
 	checkProfiles(t, "alice", "bob")
 
-	pm.SetCurrentUser("user2")
+	pm.SetCurrentUserID("user2")
 	checkProfiles(t)
 	newProfile(t, "carol")
 	carol := pm.currentProfile
 	checkProfiles(t, "carol")
 
-	pm.SetCurrentUser("user1")
+	pm.SetCurrentUserID("user1")
 	checkProfiles(t, "alice", "bob")
 	if lp := pm.findProfileByKey(carol.Key); lp != nil {
 		t.Fatalf("found profile for user2 in user1's profile list")
@@ -138,7 +138,7 @@ func TestProfileList(t *testing.T) {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
 
-	pm.SetCurrentUser("user2")
+	pm.SetCurrentUserID("user2")
 	checkProfiles(t, "carol")
 }
 
@@ -342,7 +342,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as logged in user")
-		if err := pm.SetCurrentUser("user1"); err != nil {
+		if err := pm.SetCurrentUserID("user1"); err != nil {
 			t.Fatal(err)
 		}
 		checkProfiles(t)
@@ -378,7 +378,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as current user")
-		if err := pm.SetCurrentUser("user1"); err != nil {
+		if err := pm.SetCurrentUserID("user1"); err != nil {
 			t.Fatal(err)
 		}
 		wantCurProfile = "test"
@@ -388,8 +388,8 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Logf("set unattended mode")
 		wantProfiles["test"] = setPrefs(t, "test", true)
 	}
-	if pm.CurrentUser() != "user1" {
-		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUser(), "user1")
+	if pm.CurrentUserID() != "user1" {
+		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), "user1")
 	}
 
 	// Recreate the profile manager to ensure that it starts with test profile.
@@ -398,7 +398,7 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkProfiles(t)
-	if pm.CurrentUser() != "user1" {
-		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUser(), "user1")
+	if pm.CurrentUserID() != "user1" {
+		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), "user1")
 	}
 }
