@@ -6,8 +6,8 @@ package ipnlocal
 
 import (
 	"bytes"
-	"crypto/rand"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"

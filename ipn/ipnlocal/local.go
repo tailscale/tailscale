@@ -157,7 +157,6 @@ type LocalBackend struct {
 	notify         func(ipn.Notify)
 	cc             controlclient.Client
 	ccAuto         *controlclient.Auto // if cc is of type *controlclient.Auto
-	inServerMode   bool
 	machinePrivKey key.MachinePrivate
 	tka            *tkaState
 	state          ipn.State
@@ -1207,10 +1206,9 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	loggedOut := prefs.LoggedOut()
 
-	b.inServerMode = prefs.ForceDaemon()
 	serverURL := prefs.ControlURLOrDefault()
-	if b.inServerMode || runtime.GOOS == "windows" {
-		b.logf("Start: serverMode=%v", b.inServerMode)
+	if inServerMode := prefs.ForceDaemon(); inServerMode || runtime.GOOS == "windows" {
+		b.logf("Start: serverMode=%v", inServerMode)
 	}
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
@@ -2027,7 +2025,7 @@ func (b *LocalBackend) State() ipn.State {
 func (b *LocalBackend) InServerMode() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.inServerMode
+	return b.pm.CurrentPrefs().ForceDaemon()
 }
 
 // CheckIPNConnectionAllowed returns an error if the identity in ci should not
@@ -2045,7 +2043,7 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error
 		// running as one.
 		return nil
 	}
-	if !b.inServerMode {
+	if !b.pm.CurrentPrefs().ForceDaemon() {
 		return nil
 	}
 	uid := ci.UserID()
@@ -2431,7 +2429,6 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// anyway. No-op if no exit node resolution is needed.
 	findExitNodeIDLocked(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
-	b.inServerMode = newp.ForceDaemon
 
 	oldHi := b.hostinfo
 	newHi := oldHi.Clone()
