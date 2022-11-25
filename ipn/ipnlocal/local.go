@@ -2012,6 +2012,17 @@ func (b *LocalBackend) State() ipn.State {
 	return b.state
 }
 
+// InServerMode reports whether the Tailscale backend is explicitly running in
+// "server mode" where it continues to run despite whatever the platform's
+// default is. In practice, this is only used on Windows, where the default
+// tailscaled behavior is to shut down whenever the GUI disconnects.
+//
+// On non-Windows platforms, this usually returns false (because people don't
+// set unattended mode on other platforms) and also isn't checked on other
+// platforms.
+//
+// TODO(bradfitz): rename to InWindowsUnattendedMode or something? Or make this
+// return true on Linux etc and always be called? It's kinda messy now.
 func (b *LocalBackend) InServerMode() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
