@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     if: "!contains(github.event.head_commit.message, '[ci skip]')"
 
@@ -39,10 +39,6 @@ jobs:
 
     - name: Get QEMU
       run: |
-        # The qemu in Ubuntu 20.04 (Focal) is too old; we need 5.x something
-        # to run Go binaries. 5.2.0 (Debian bullseye) empirically works, and
-        # use this PPA which brings in a modern qemu.
-        sudo add-apt-repository -y ppa:jacob/virtualisation
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
 
