@@ -23,5 +23,8 @@ cmd/tailscaled/tailscaled
 # to make this nonspecific.
 .envrc
 
-# vscode project specific settings
+# Ignore personal VS Code settings
 .vscode/
+
+# Ignore direnv nix-shell environment cache
+.direnv/
