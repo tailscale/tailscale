@@ -57,7 +57,6 @@ func (ci *ConnIdentity) UserID() string { return ci.userID }
 func (ci *ConnIdentity) User() *user.User       { return ci.user }
 func (ci *ConnIdentity) Pid() int               { return ci.pid }
 func (ci *ConnIdentity) IsUnixSock() bool       { return ci.isUnixSock }
-func (ci *ConnIdentity) NotWindows() bool       { return ci.notWindows }
 func (ci *ConnIdentity) Creds() *peercred.Creds { return ci.creds }
 
 // GetConnIdentity returns the localhost TCP connection's identity information

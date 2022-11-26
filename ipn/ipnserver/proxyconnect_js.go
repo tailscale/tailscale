@@ -4,14 +4,8 @@
 
 package ipnserver
 
-import (
-	"bufio"
-	"context"
-	"net"
+import "net/http"
 
-	"tailscale.com/types/logger"
-)
-
-func (s *Server) handleProxyConnectConn(ctx context.Context, br *bufio.Reader, c net.Conn, logf logger.Logf) {
+func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) {
 	panic("unreachable")
 }
