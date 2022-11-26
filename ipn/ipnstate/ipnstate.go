@@ -618,3 +618,11 @@ func sortKey(ps *PeerStatus) string {
 	raw := ps.PublicKey.Raw32()
 	return string(raw[:])
 }
+
+// DebugDERPRegionReport is the result of a "tailscale debug derp" command,
+// to let people debug a custom DERP setup.
+type DebugDERPRegionReport struct {
+	Info     []string
+	Warnings []string
+	Errors   []string
+}

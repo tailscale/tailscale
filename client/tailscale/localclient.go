@@ -981,6 +981,15 @@ func (lc *LocalClient) DeleteProfile(ctx context.Context, profile ipn.ProfileID)
 	return err
 }
 
+func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode string) (*ipnstate.DebugDERPRegionReport, error) {
+	v := url.Values{"region": {regionIDOrCode}}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-derp-region?"+v.Encode(), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[*ipnstate.DebugDERPRegionReport](body)
+}
+
 // WatchIPNMask are filtering options for LocalClient.WatchIPNBus.
 //
 // The zero value is a valid WatchOpt that means to watch everything.

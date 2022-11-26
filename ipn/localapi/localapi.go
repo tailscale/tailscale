@@ -65,6 +65,7 @@ var handler = map[string]localAPIHandler{
 	"check-prefs":             (*Handler).serveCheckPrefs,
 	"component-debug-logging": (*Handler).serveComponentDebugLogging,
 	"debug":                   (*Handler).serveDebug,
+	"debug-derp-region":       (*Handler).serveDebugDERPRegion,
 	"derpmap":                 (*Handler).serveDERPMap,
 	"dev-set-state-store":     (*Handler).serveDevSetStateStore,
 	"dial":                    (*Handler).serveDial,
