@@ -37,6 +37,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/must"
 	"tailscale.com/util/strs"
 )
 
@@ -159,6 +160,11 @@ var debugCmd = &ffcli.Command{
 				fs.BoolVar(&devStoreSetArgs.danger, "danger", false, "accept danger")
 				return fs
 			})(),
+		},
+		{
+			Name:      "derp",
+			Exec:      runDebugDERP,
+			ShortHelp: "test a DERP configuration",
 		},
 	},
 }
@@ -609,4 +615,16 @@ func runDevStoreSet(ctx context.Context, args []string) error {
 		val = string(valb)
 	}
 	return localClient.SetDevStoreKeyValue(ctx, key, val)
+}
+
+func runDebugDERP(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: debug derp <region>")
+	}
+	st, err := localClient.DebugDERPRegion(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", must.Get(json.MarshalIndent(st, "", " ")))
+	return nil
 }
