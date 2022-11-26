@@ -990,13 +990,6 @@ func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode strin
 	return decodeJSON[*ipnstate.DebugDERPRegionReport](body)
 }
 
-// WatchIPNMask are filtering options for LocalClient.WatchIPNBus.
-//
-// The zero value is a valid WatchOpt that means to watch everything.
-//
-// TODO(bradfitz): flesh out.
-type WatchIPNMask uint64
-
 // WatchIPNBus subscribes to the IPN notification bus. It returns a watcher
 // once the bus is connected successfully.
 //
@@ -1005,7 +998,9 @@ type WatchIPNMask uint64
 //
 // The returned IPNBusWatcher's Close method must be called when done to release
 // resources.
-func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask WatchIPNMask) (*IPNBusWatcher, error) {
+//
+// A default set of ipn.Notify messages are returned but the set can be modified by mask.
+func (lc *LocalClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*IPNBusWatcher, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"http://"+apitype.LocalAPIHost+"/localapi/v0/watch-ipn-bus?mask="+fmt.Sprint(mask),
 		nil)

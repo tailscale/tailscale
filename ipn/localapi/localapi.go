@@ -602,8 +602,17 @@ func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	f.Flush()
 
+	var mask ipn.NotifyWatchOpt
+	if s := r.FormValue("mask"); s != "" {
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			http.Error(w, "bad mask", http.StatusBadRequest)
+			return
+		}
+		mask = ipn.NotifyWatchOpt(v)
+	}
 	ctx := r.Context()
-	h.b.WatchNotifications(ctx, func(roNotify *ipn.Notify) (keepGoing bool) {
+	h.b.WatchNotifications(ctx, mask, func(roNotify *ipn.Notify) (keepGoing bool) {
 		js, err := json.Marshal(roNotify)
 		if err != nil {
 			h.logf("json.Marshal: %v", err)

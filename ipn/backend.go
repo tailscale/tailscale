@@ -52,6 +52,17 @@ type EngineStatus struct {
 	LivePeers      map[key.NodePublic]ipnstate.PeerStatusLite
 }
 
+// NotifyWatchOpt is a bitmask of options about what type of Notify messages
+// to subscribe to.
+type NotifyWatchOpt uint64
+
+const (
+	// NotifyWatchEngineUpdates, if set, causes Engine updates to be sent to the
+	// client either regularly or when they change, without having to ask for
+	// each one via RequestEngineStatus.
+	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
+)
+
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
 // (cmd/tailscale, iOS, macOS, Win Tasktray).
 // In any given notification, any or all of these may be nil, meaning
