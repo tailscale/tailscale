@@ -26,7 +26,6 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
-	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
@@ -35,8 +34,6 @@ import (
 	"tailscale.com/util/systemd"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/monitor"
-	"tailscale.com/wgengine/netstack"
 )
 
 // Options is the configuration of the Tailscale node agent.
@@ -306,73 +303,6 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 	return onDone, nil
 }
 
-// Run runs a Tailscale backend service.
-// The getEngine func is called repeatedly, once per connection, until it returns an engine successfully.
-//
-// Deprecated: use New and Server.Run instead.
-func Run(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, *netstack.Impl, error), opts Options) error {
-	getEngine = getEngineUntilItWorksWrapper(getEngine)
-	runDone := make(chan struct{})
-	defer close(runDone)
-
-	// When the context is closed or when we return, whichever is first, close our listener
-	// and all open connections.
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-runDone:
-		}
-		ln.Close()
-	}()
-	logf("Listening on %v", ln.Addr())
-
-	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
-	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
-
-	eng, ns, err := getEngine()
-	if err != nil {
-		logf("ipnserver: initial getEngine call: %v", err)
-		for i := 1; ctx.Err() == nil; i++ {
-			c, err := ln.Accept()
-			if err != nil {
-				logf("%d: Accept: %v", i, err)
-				bo.BackOff(ctx, err)
-				continue
-			}
-			logf("ipnserver: try%d: trying getEngine again...", i)
-			eng, ns, err = getEngine()
-			if err == nil {
-				logf("%d: GetEngine worked; exiting failure loop", i)
-				unservedConn = c
-				break
-			}
-			logf("ipnserver%d: getEngine failed again: %v", i, err)
-			// TODO(bradfitz): queue this error up for the next IPN bus watcher call
-			// to get for the Windows GUI? We used to send it over the pre-HTTP
-			// protocol to the Windows GUI. Just close it.
-			c.Close()
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	if unservedConn != nil {
-		ln = &listenerWithReadyConn{
-			Listener: ln,
-			c:        unservedConn,
-		}
-	}
-
-	server, err := New(logf, logid, store, eng, dialer, opts)
-	if err != nil {
-		return err
-	}
-	if ns != nil {
-		ns.SetLocalBackend(server.LocalBackend())
-	}
-	return server.Run(ctx, ln)
-}
-
 // New returns a new Server.
 //
 // To start it, use the Server.Run method.
@@ -472,29 +402,6 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	return nil
 }
 
-// getEngineUntilItWorksWrapper returns a getEngine wrapper that does
-// not call getEngine concurrently and stops calling getEngine once
-// it's returned a working engine.
-func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, *netstack.Impl, error)) func() (wgengine.Engine, *netstack.Impl, error) {
-	var mu sync.Mutex
-	var engGood wgengine.Engine
-	var nsGood *netstack.Impl
-	return func() (wgengine.Engine, *netstack.Impl, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if engGood != nil {
-			return engGood, nsGood, nil
-		}
-		e, ns, err := getEngine()
-		if err != nil {
-			return nil, nil, err
-		}
-		engGood = e
-		nsGood = ns
-		return e, ns, nil
-	}
-}
-
 // ServeHTMLStatus serves an HTML status page at http://localhost:41112/ for
 // Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
 // is used to run a debug server.
@@ -513,26 +420,6 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.b.Status()
 	// TODO(bradfitz): add LogID and opts to st?
 	st.WriteHTML(w)
-}
-
-// listenerWithReadyConn is a net.Listener wrapper that has
-// one net.Conn ready to be accepted already.
-type listenerWithReadyConn struct {
-	net.Listener
-
-	mu sync.Mutex
-	c  net.Conn // if non-nil, ready to be Accepted
-}
-
-func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
-	ln.mu.Lock()
-	c := ln.c
-	ln.c = nil
-	ln.mu.Unlock()
-	if c != nil {
-		return c, nil
-	}
-	return ln.Listener.Accept()
 }
 
 func findTaildropDir(dg distro.Distro) (string, error) {
