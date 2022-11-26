@@ -1702,7 +1702,7 @@ func (b *LocalBackend) readPoller() {
 // Failure to consume many notifications in a row will result in dropped
 // notifications. There is currently (2022-11-22) no mechanism provided to
 // detect when a message has been dropped.
-func (b *LocalBackend) WatchNotifications(ctx context.Context, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	handle := new(mapSetHandle)
 	ch := make(chan *ipn.Notify, 128)
 
@@ -1715,6 +1715,21 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, fn func(roNotify 
 		b.mu.Unlock()
 	}()
 
+	// The GUI clients want to know when peers become active or inactive.
+	// They've historically got this information by polling for it, which is
+	// wasteful. As a step towards making it efficient, they now set this
+	// NotifyWatchEngineUpdates bit to ask for us to send it to them only on
+	// change. That's not yet (as of 2022-11-26) plumbed everywhere in
+	// tailscaled yet, so just do the polling here. This ends up causing all IPN
+	// bus watchers to get the notification every 2 seconds instead of just the
+	// GUI client's bus watcher, but in practice there's only 1 total connection
+	// anyway. And if we're polling, at least the client isn't making a new HTTP
+	// request every 2 seconds.
+	// TODO(bradfitz): plumb this further and only send a Notify on change.
+	if mask&ipn.NotifyWatchEngineUpdates != 0 {
+		go b.pollRequestEngineStatus(ctx)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1723,6 +1738,21 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, fn func(roNotify 
 			if !fn(n) {
 				return
 			}
+		}
+	}
+}
+
+// pollRequestEngineStatus calls b.RequestEngineStatus every 2 seconds until ctx
+// is done.
+func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			b.RequestEngineStatus()
+		case <-ctx.Done():
+			return
 		}
 	}
 }
