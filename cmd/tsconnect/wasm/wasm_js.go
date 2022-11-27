@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
+	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
@@ -124,15 +125,17 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
-	srv, err := ipnserver.New(logf, lpc.PublicID.String(), store, eng, dialer, ipnserver.Options{
-		SurviveDisconnects: true,
-		LoginFlags:         controlclient.LoginEphemeral,
-		AutostartStateKey:  "wasm",
-	})
+	logid := lpc.PublicID.String()
+	srv := ipnserver.New(logf, logid)
+
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "wasm", dialer, eng, controlclient.LoginEphemeral)
 	if err != nil {
-		log.Fatalf("ipnserver.New: %v", err)
+		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
 	}
-	lb := srv.LocalBackend()
+	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
+		return smallzstd.NewDecoder(nil)
+	})
+	srv.SetLocalBackend(lb)
 	ns.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{

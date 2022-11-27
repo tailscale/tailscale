@@ -11,69 +11,27 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/user"
-	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
-	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
-	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/tsdial"
-	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/systemd"
-	"tailscale.com/version/distro"
-	"tailscale.com/wgengine"
 )
-
-// Options is the configuration of the Tailscale node agent.
-type Options struct {
-	// VarRoot is the Tailscale daemon's private writable
-	// directory (usually "/var/lib/tailscale" on Linux) that
-	// contains the "tailscaled.state" file, the "certs" directory
-	// for TLS certs, and the "files" directory for incoming
-	// Taildrop files before they're moved to a user directory.
-	// If empty, Taildrop and TLS certs don't function.
-	VarRoot string
-
-	// AutostartStateKey, if non-empty, immediately starts the agent
-	// using the given StateKey. If empty, the agent stays idle and
-	// waits for a frontend to start it.
-	AutostartStateKey ipn.StateKey
-
-	// SurviveDisconnects specifies how the server reacts to its
-	// frontend disconnecting. If true, the server keeps running on
-	// its existing state, and accepts new frontend connections. If
-	// false, the server dumps its state and becomes idle.
-	//
-	// This is effectively whether the platform is in "server
-	// mode" by default. On Linux, it's true; on Windows, it's
-	// false. But on some platforms (currently only Windows), the
-	// "server mode" can be overridden at runtime with a change in
-	// Prefs.ForceDaemon/WantRunning.
-	//
-	// To support CLI connections (notably, "tailscale status"),
-	// the actual definition of "disconnect" is when the
-	// connection count transitions from 1 to 0.
-	SurviveDisconnects bool
-
-	// LoginFlags specifies the LoginFlags to pass to the client.
-	LoginFlags controlclient.LoginFlags
-}
 
 // Server is an IPN backend and its set of 0 or more active localhost
 // TCP or unix socket connections talking to that backend.
 type Server struct {
-	b            *ipnlocal.LocalBackend
+	lb           atomic.Pointer[ipnlocal.LocalBackend]
 	logf         logger.Logf
 	backendLogID string
 	// resetOnZero is whether to call bs.Reset on transition from
@@ -83,6 +41,9 @@ type Server struct {
 	// is true, the ForceDaemon pref can override this.
 	resetOnZero bool
 
+	startBackendOnce sync.Once
+	runCalled        atomic.Bool
+
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu         sync.Mutex
@@ -90,8 +51,13 @@ type Server struct {
 	activeReqs map[*http.Request]*ipnauth.ConnIdentity
 }
 
-// LocalBackend returns the server's LocalBackend.
-func (s *Server) LocalBackend() *ipnlocal.LocalBackend { return s.b }
+func (s *Server) mustBackend() *ipnlocal.LocalBackend {
+	lb := s.lb.Load()
+	if lb == nil {
+		panic("unexpected: call to mustBackend in path where SetLocalBackend should've been called")
+	}
+	return lb
+}
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "CONNECT" {
@@ -101,6 +67,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "bad method for platform", http.StatusMethodNotAllowed)
 		}
+		return
+	}
+
+	// TODO(bradfitz): add a status HTTP handler that returns whether there's a
+	// LocalBackend yet, optionally blocking until there is one. See
+	// https://github.com/tailscale/tailscale/issues/6522
+	lb := s.lb.Load()
+	if lb == nil {
+		http.Error(w, "no backend", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -124,7 +99,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer onDone()
 
 	if strings.HasPrefix(r.URL.Path, "/localapi/") {
-		lah := localapi.NewHandler(s.b, s.logf, s.backendLogID)
+		lah := localapi.NewHandler(lb, s.logf, s.backendLogID)
 		lah.PermitRead, lah.PermitWrite = s.localAPIPermissions(ci)
 		lah.PermitCert = s.connCanFetchCerts(ci)
 		lah.ServeHTTP(w, r)
@@ -171,7 +146,7 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
 		}
 	}
-	if err := s.b.CheckIPNConnectionAllowed(ci); err != nil {
+	if err := s.mustBackend().CheckIPNConnectionAllowed(ci); err != nil {
 		return inUseOtherUserError{err}
 	}
 	return nil
@@ -194,7 +169,7 @@ func (s *Server) localAPIPermissions(ci *ipnauth.ConnIdentity) (read, write bool
 		return true, true
 	}
 	if ci.IsUnixSock() {
-		return true, !ci.IsReadonlyConn(s.b.OperatorUserID(), logger.Discard)
+		return true, !ci.IsReadonlyConn(s.mustBackend().OperatorUserID(), logger.Discard)
 	}
 	return false, false
 }
@@ -252,13 +227,15 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 		return nil, errors.New("internal error: nil connIdentity")
 	}
 
+	lb := s.mustBackend()
+
 	// If the connected user changes, reset the backend server state to make
 	// sure node keys don't leak between users.
 	var doReset bool
 	defer func() {
 		if doReset {
 			s.logf("identity changed; resetting server")
-			s.b.ResetForClientDisconnect()
+			lb.ResetForClientDisconnect()
 		}
 	}()
 
@@ -273,7 +250,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 
 	if uid := ci.WindowsUserID(); uid != "" && len(s.activeReqs) == 1 {
 		// Tell the LocalBackend about the identity we're now running as.
-		s.b.SetCurrentUserID(uid)
+		lb.SetCurrentUserID(uid)
 		if s.lastUserID != uid {
 			if s.lastUserID != "" {
 				doReset = true
@@ -289,11 +266,11 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 		s.mu.Unlock()
 
 		if remain == 0 && s.resetOnZero {
-			if s.b.InServerMode() {
+			if lb.InServerMode() {
 				s.logf("client disconnected; staying alive in server mode")
 			} else {
 				s.logf("client disconnected; stopping server")
-				s.b.ResetForClientDisconnect()
+				lb.ResetForClientDisconnect()
 			}
 		}
 	}
@@ -304,43 +281,46 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 // New returns a new Server.
 //
 // To start it, use the Server.Run method.
-func New(logf logger.Logf, logid string, store ipn.StateStore, eng wgengine.Engine, dialer *tsdial.Dialer, opts Options) (*Server, error) {
-	b, err := ipnlocal.NewLocalBackend(logf, logid, store, opts.AutostartStateKey, dialer, eng, opts.LoginFlags)
-	if err != nil {
-		return nil, fmt.Errorf("NewLocalBackend: %v", err)
-	}
-	b.SetVarRoot(opts.VarRoot)
-	b.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
-
-	if root := b.TailscaleVarRoot(); root != "" {
-		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
-	}
-
-	dg := distro.Get()
-	switch dg {
-	case distro.Synology, distro.TrueNAS, distro.QNAP:
-		// See if they have a "Taildrop" share.
-		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
-		path, err := findTaildropDir(dg)
-		if err != nil {
-			logf("%s Taildrop support: %v", dg, err)
-		} else {
-			logf("%s Taildrop: using %v", dg, path)
-			b.SetDirectFileRoot(path)
-			b.SetDirectFileDoFinalRename(true)
-		}
-
-	}
-
-	server := &Server{
-		b:            b,
+//
+// At some point, either before or after Run, the Server's SetLocalBackend
+// method must also be called before Server can do anything useful.
+func New(logf logger.Logf, logid string) *Server {
+	return &Server{
 		backendLogID: logid,
 		logf:         logf,
-		resetOnZero:  !opts.SurviveDisconnects,
+		resetOnZero:  envknob.GOOS() == "windows",
 	}
-	return server, nil
+}
+
+// SetLocalBackend sets the server's LocalBackend.
+//
+// If b.Run has already been called, then lb.Start will be called.
+// Otherwise Start will be called once Run is called.
+func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
+	if lb == nil {
+		panic("nil LocalBackend")
+	}
+	if !s.lb.CompareAndSwap(nil, lb) {
+		panic("already set")
+	}
+	s.startBackendIfNeeded()
+	// TODO(bradfitz): send status update to GUI long poller waiter. See
+	// https://github.com/tailscale/tailscale/issues/6522
+}
+
+func (b *Server) startBackendIfNeeded() {
+	if !b.runCalled.Load() {
+		return
+	}
+	lb := b.lb.Load()
+	if lb == nil {
+		return
+	}
+	if lb.Prefs().Valid() {
+		b.startBackendOnce.Do(func() {
+			lb.Start(ipn.Options{})
+		})
+	}
 }
 
 // connIdentityContextKey is the http.Request.Context's context.Value key for either an
@@ -351,8 +331,16 @@ type connIdentityContextKey struct{}
 //
 // If the context is done, the listener is closed. It is also the base context
 // of all HTTP requests.
+//
+// If the Server's LocalBackend has already been set, Run starts it.
+// Otherwise, the next call to SetLocalBackend will start it.
 func (s *Server) Run(ctx context.Context, ln net.Listener) error {
-	defer s.b.Shutdown()
+	s.runCalled.Store(true)
+	defer func() {
+		if lb := s.lb.Load(); lb != nil {
+			lb.Shutdown()
+		}
+	}()
 
 	runDone := make(chan struct{})
 	defer close(runDone)
@@ -367,9 +355,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		ln.Close()
 	}()
 
-	if s.b.Prefs().Valid() {
-		s.b.Start(ipn.Options{})
-	}
+	s.startBackendIfNeeded()
 	systemd.Ready()
 
 	hs := &http.Server{
@@ -404,6 +390,12 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 // Windows and via $DEBUG_LISTENER/debug/ipn when tailscaled's --debug flag
 // is used to run a debug server.
 func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
+	lb := s.lb.Load()
+	if lb == nil {
+		http.Error(w, "no LocalBackend", http.StatusServiceUnavailable)
+		return
+	}
+
 	// As this is only meant for debug, verify there's no DNS name being used to
 	// access this.
 	if !strings.HasPrefix(r.Host, "localhost:") && strings.IndexFunc(r.Host, unicode.IsLetter) != -1 {
@@ -415,78 +407,7 @@ func (s *Server) ServeHTMLStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	st := s.b.Status()
+	st := lb.Status()
 	// TODO(bradfitz): add LogID and opts to st?
 	st.WriteHTML(w)
-}
-
-func findTaildropDir(dg distro.Distro) (string, error) {
-	const name = "Taildrop"
-	switch dg {
-	case distro.Synology:
-		return findSynologyTaildropDir(name)
-	case distro.TrueNAS:
-		return findTrueNASTaildropDir(name)
-	case distro.QNAP:
-		return findQnapTaildropDir(name)
-	}
-	return "", fmt.Errorf("%s is an unsupported distro for Taildrop dir", dg)
-}
-
-// findSynologyTaildropDir looks for the first volume containing a
-// "Taildrop" directory.  We'd run "synoshare --get Taildrop" command
-// but on DSM7 at least, we lack permissions to run that.
-func findSynologyTaildropDir(name string) (dir string, err error) {
-	for i := 1; i <= 16; i++ {
-		dir = fmt.Sprintf("/volume%v/%s", i, name)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			return dir, nil
-		}
-	}
-	return "", fmt.Errorf("shared folder %q not found", name)
-}
-
-// findTrueNASTaildropDir returns the first matching directory of
-// /mnt/{name} or /mnt/*/{name}
-func findTrueNASTaildropDir(name string) (dir string, err error) {
-	// If we're running in a jail, a mount point could just be added at /mnt/Taildrop
-	dir = fmt.Sprintf("/mnt/%s", name)
-	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-		return dir, nil
-	}
-
-	// but if running on the host, it may be something like /mnt/Primary/Taildrop
-	fis, err := os.ReadDir("/mnt")
-	if err != nil {
-		return "", fmt.Errorf("error reading /mnt: %w", err)
-	}
-	for _, fi := range fis {
-		dir = fmt.Sprintf("/mnt/%s/%s", fi.Name(), name)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			return dir, nil
-		}
-	}
-	return "", fmt.Errorf("shared folder %q not found", name)
-}
-
-// findQnapTaildropDir checks if a Shared Folder named "Taildrop" exists.
-func findQnapTaildropDir(name string) (string, error) {
-	dir := fmt.Sprintf("/share/%s", name)
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return "", fmt.Errorf("shared folder %q not found", name)
-	}
-	if fi.IsDir() {
-		return dir, nil
-	}
-
-	// share/Taildrop is usually a symlink to CACHEDEV1_DATA/Taildrop/ or some such.
-	fullpath, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", fmt.Errorf("symlink to shared folder %q not found", name)
-	}
-	if fi, err = os.Stat(fullpath); err == nil && fi.IsDir() {
-		return dir, nil // return the symlink, how QNAP set it up
-	}
-	return "", fmt.Errorf("shared folder %q not found", name)
 }
