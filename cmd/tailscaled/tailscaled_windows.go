@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -40,16 +41,20 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/safesocket"
+	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
@@ -609,7 +614,7 @@ func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
 //
 // This works around issues on Windows with the wgengine.Engine/wintun creation
 // failing or hanging. See https://github.com/tailscale/tailscale/issues/6522.
-func ipnServerRunWithRetries(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, *netstack.Impl, error), opts ipnserver.Options) error {
+func ipnServerRunWithRetries(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, *netstack.Impl, error), opts serverOptions) error {
 	getEngine = getEngineUntilItWorksWrapper(getEngine)
 	runDone := make(chan struct{})
 	defer close(runDone)
@@ -662,12 +667,23 @@ func ipnServerRunWithRetries(ctx context.Context, logf logger.Logf, ln net.Liste
 		}
 	}
 
-	server, err := ipnserver.New(logf, logid, store, eng, dialer, opts)
+	server := ipnserver.New(logf, logid)
+
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, eng, opts.LoginFlags)
 	if err != nil {
-		return err
+		return fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
+	lb.SetVarRoot(opts.VarRoot)
+	if root := lb.TailscaleVarRoot(); root != "" {
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
+	}
+	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
+		return smallzstd.NewDecoder(nil)
+	})
+
+	server.SetLocalBackend(lb)
 	if ns != nil {
-		ns.SetLocalBackend(server.LocalBackend())
+		ns.SetLocalBackend(lb)
 	}
 	return server.Run(ctx, ln)
 }

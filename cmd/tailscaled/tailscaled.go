@@ -33,11 +33,13 @@ import (
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
@@ -45,6 +47,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/smallzstd"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -273,7 +276,21 @@ func statePathOrDefault() string {
 	return ""
 }
 
-func ipnServerOpts() (o ipnserver.Options) {
+// serverOptions is the configuration of the Tailscale node agent.
+type serverOptions struct {
+	// VarRoot is the Tailscale daemon's private writable
+	// directory (usually "/var/lib/tailscale" on Linux) that
+	// contains the "tailscaled.state" file, the "certs" directory
+	// for TLS certs, and the "files" directory for incoming
+	// Taildrop files before they're moved to a user directory.
+	// If empty, Taildrop and TLS certs don't function.
+	VarRoot string
+
+	// LoginFlags specifies the LoginFlags to pass to the client.
+	LoginFlags controlclient.LoginFlags
+}
+
+func ipnServerOpts() (o serverOptions) {
 	goos := envknob.GOOS()
 
 	o.VarRoot = args.statedir
@@ -297,9 +314,6 @@ func ipnServerOpts() (o ipnserver.Options) {
 		// TODO(bradfitz): if we start using browser LocalStorage
 		// or something, then rethink this.
 		o.LoginFlags = controlclient.LoginEphemeral
-		fallthrough
-	default:
-		o.SurviveDisconnects = true
 	case "windows":
 		// Not those.
 	}
@@ -445,11 +459,24 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("store.New: %w", err)
 	}
-	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, opts)
+	logid := pol.PublicID.String()
+
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, e, opts.LoginFlags)
 	if err != nil {
-		return fmt.Errorf("ipnserver.New: %w", err)
+		return fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
-	ns.SetLocalBackend(srv.LocalBackend())
+	lb.SetVarRoot(opts.VarRoot)
+	if root := lb.TailscaleVarRoot(); root != "" {
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
+	}
+	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
+		return smallzstd.NewDecoder(nil)
+	})
+	configureTaildrop(logf, lb)
+
+	srv := ipnserver.New(logf, logid)
+	srv.SetLocalBackend(lb)
+	ns.SetLocalBackend(lb)
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
