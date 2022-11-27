@@ -19,6 +19,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
+	"golang.org/x/net/idna"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
@@ -248,6 +249,11 @@ func isRunningOrStarting(st *ipnstate.Status) (description string, ok bool) {
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 	baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
 	if baseName != "" {
+		if strings.HasPrefix(baseName, "xn-") {
+			if u, err := idna.ToUnicode(baseName); err == nil {
+				return fmt.Sprintf("%s (%s)", baseName, u)
+			}
+		}
 		return baseName
 	}
 	return fmt.Sprintf("(%q)", dnsname.SanitizeHostname(ps.HostName))
