@@ -702,6 +702,12 @@ func SavePrefs(filename string, p *Prefs) {
 // profile. It is a 4 character hex string like "1ab3".
 type ProfileID string
 
+// WindowsUserID is a userid (suitable for passing to ipnauth.LookupUserFromID
+// or os/user.LookupId) but only set on Windows. It's empty on all other
+// platforms, unless envknob.GOOS is in used, making Linux act like Windows for
+// tests.
+type WindowsUserID string
+
 // LoginProfile represents a single login profile as managed
 // by the ProfileManager.
 type LoginProfile struct {
@@ -734,5 +740,5 @@ type LoginProfile struct {
 	// LocalUserID is the user ID of the user who created this profile.
 	// It is only relevant on Windows where we have a multi-user system.
 	// It is assigned once at profile creation time and never changes.
-	LocalUserID string
+	LocalUserID WindowsUserID
 }

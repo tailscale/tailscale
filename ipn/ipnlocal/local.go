@@ -2076,12 +2076,12 @@ func (b *LocalBackend) CheckIPNConnectionAllowed(ci *ipnauth.ConnIdentity) error
 	if !b.pm.CurrentPrefs().ForceDaemon() {
 		return nil
 	}
-	uid := ci.UserID()
+	uid := ci.WindowsUserID()
 	if uid == "" {
 		return errors.New("empty user uid in connection identity")
 	}
 	if uid != serverModeUid {
-		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(serverModeUid), b.tryLookupUserName(uid))
+		return fmt.Errorf("Tailscale running in server mode (%q); connection from %q not allowed", b.tryLookupUserName(string(serverModeUid)), b.tryLookupUserName(string(uid)))
 	}
 	return nil
 }
@@ -2257,7 +2257,7 @@ func (b *LocalBackend) shouldUploadServices() bool {
 // changed.
 //
 // On non-multi-user systems, the uid should be set to empty string.
-func (b *LocalBackend) SetCurrentUserID(uid string) {
+func (b *LocalBackend) SetCurrentUserID(uid ipn.WindowsUserID) {
 	b.mu.Lock()
 	if b.pm.CurrentUserID() == uid {
 		b.mu.Unlock()

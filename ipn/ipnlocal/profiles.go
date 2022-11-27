@@ -28,7 +28,7 @@ type profileManager struct {
 	store ipn.StateStore
 	logf  logger.Logf
 
-	currentUserID  string // only used on Windows
+	currentUserID  ipn.WindowsUserID
 	knownProfiles  map[ipn.ProfileID]*ipn.LoginProfile
 	currentProfile *ipn.LoginProfile // always non-nil
 	prefs          ipn.PrefsView     // always Valid.
@@ -42,13 +42,13 @@ type profileManager struct {
 
 // CurrentUserID returns the current user ID. It is only non-empty on
 // Windows where we have a multi-user system.
-func (pm *profileManager) CurrentUserID() string {
+func (pm *profileManager) CurrentUserID() ipn.WindowsUserID {
 	return pm.currentUserID
 }
 
 // SetCurrentUserID sets the current user ID. The uid is only non-empty
 // on Windows where we have a multi-user system.
-func (pm *profileManager) SetCurrentUserID(uid string) error {
+func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	if pm.currentUserID == uid {
 		return nil
 	}
@@ -63,7 +63,7 @@ func (pm *profileManager) SetCurrentUserID(uid string) error {
 
 	// Read the CurrentProfileKey from the store which stores
 	// the selected profile for the current user.
-	b, err := pm.store.ReadState(ipn.CurrentProfileKey(uid))
+	b, err := pm.store.ReadState(ipn.CurrentProfileKey(string(uid)))
 	if err == ipn.ErrStateNotExist || len(b) == 0 {
 		pm.NewProfile()
 		return nil
@@ -310,7 +310,7 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 }
 
 func (pm *profileManager) setAsUserSelectedProfileLocked() error {
-	k := ipn.CurrentProfileKey(pm.currentUserID)
+	k := ipn.CurrentProfileKey(string(pm.currentUserID))
 	return pm.store.WriteState(k, []byte(pm.currentProfile.Key))
 }
 
@@ -487,7 +487,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, stateKey 
 		}
 		if pm.currentProfile == nil {
 			if suf, ok := strs.CutPrefix(string(stateKey), "user-"); ok {
-				pm.currentUserID = suf
+				pm.currentUserID = ipn.WindowsUserID(suf)
 			}
 			pm.NewProfile()
 		} else {
