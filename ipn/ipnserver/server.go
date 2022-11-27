@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +86,7 @@ type Server struct {
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
 	mu         sync.Mutex
-	lastUserID string // tracks last userid; on change, Reset state for paranoia
+	lastUserID ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
 	activeReqs map[*http.Request]*ipnauth.ConnIdentity
 }
 
@@ -168,7 +167,7 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 		for _, active = range s.activeReqs {
 			break
 		}
-		if active != nil && ci.UserID() != active.UserID() {
+		if active != nil && ci.WindowsUserID() != active.WindowsUserID() {
 			return inUseOtherUserError{fmt.Errorf("Tailscale already in use by %s, pid %d", active.User().Username, active.Pid())}
 		}
 	}
@@ -183,7 +182,7 @@ func (s *Server) checkConnIdentityLocked(ci *ipnauth.ConnIdentity) error {
 //
 // s.mu must not be held.
 func (s *Server) localAPIPermissions(ci *ipnauth.ConnIdentity) (read, write bool) {
-	switch runtime.GOOS {
+	switch envknob.GOOS() {
 	case "windows":
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -272,8 +271,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 
 	mak.Set(&s.activeReqs, req, ci)
 
-	if envknob.GOOS() == "windows" && len(s.activeReqs) == 1 {
-		uid := ci.UserID()
+	if uid := ci.WindowsUserID(); uid != "" && len(s.activeReqs) == 1 {
 		// Tell the LocalBackend about the identity we're now running as.
 		s.b.SetCurrentUserID(uid)
 		if s.lastUserID != uid {

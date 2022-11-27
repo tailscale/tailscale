@@ -17,6 +17,8 @@ import (
 	"syscall"
 
 	"inet.af/peercred"
+	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/net/netstat"
 	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
@@ -40,19 +42,31 @@ type ConnIdentity struct {
 	// TODO(bradfitz): merge these into the peercreds package and
 	// use that for all.
 	pid    int
-	userID string
+	userID ipn.WindowsUserID
 	user   *user.User
 }
 
-// UserID returns the local machine's userid of the connection.
+// WindowsUserID returns the local machine's userid of the connection
+// if it's on Windows. Otherwise it returns the empty string.
 //
 // It's suitable for passing to LookupUserFromID (os/user.LookupId) on any
 // operating system.
-//
-// TODO(bradfitz): it currently returns an empty string on everything
-// but Windows. We should make it return the actual uid also on all supported
-// peercred platforms from the creds if non-nil.
-func (ci *ConnIdentity) UserID() string { return ci.userID }
+func (ci *ConnIdentity) WindowsUserID() ipn.WindowsUserID {
+	if envknob.GOOS() != "windows" {
+		return ""
+	}
+	if ci.userID != "" {
+		return ci.userID
+	}
+	// For Linux tests running as Windows:
+	const isBroken = true // TODO(bradfitz,maisem): fix tests; this doesn't work yet
+	if ci.creds != nil && !isBroken {
+		if uid, ok := ci.creds.UserID(); ok {
+			return ipn.WindowsUserID(uid)
+		}
+	}
+	return ""
+}
 
 func (ci *ConnIdentity) User() *user.User       { return ci.user }
 func (ci *ConnIdentity) Pid() int               { return ci.pid }
@@ -99,7 +113,7 @@ func GetConnIdentity(logf logger.Logf, c net.Conn) (ci *ConnIdentity, err error)
 		}
 		return ci, fmt.Errorf("failed to map connection's pid to a user%s: %w", hint, err)
 	}
-	ci.userID = uid
+	ci.userID = ipn.WindowsUserID(uid)
 	u, err := LookupUserFromID(logf, uid)
 	if err != nil {
 		return ci, fmt.Errorf("failed to look up user from userid: %w", err)
