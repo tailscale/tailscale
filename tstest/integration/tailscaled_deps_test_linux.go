@@ -36,6 +36,7 @@ import (
 	_ "tailscale.com/safesocket"
 	_ "tailscale.com/smallzstd"
 	_ "tailscale.com/ssh/tailssh"
+	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"
 	_ "tailscale.com/tsweb"
 	_ "tailscale.com/types/flagtype"

@@ -6,12 +6,14 @@ package ipnserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +27,7 @@ import (
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
 )
 
@@ -46,9 +49,10 @@ type Server struct {
 
 	// mu guards the fields that follow.
 	// lock order: mu, then LocalBackend.mu
-	mu         sync.Mutex
-	lastUserID ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
-	activeReqs map[*http.Request]*ipnauth.ConnIdentity
+	mu            sync.Mutex
+	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
+	activeReqs    map[*http.Request]*ipnauth.ConnIdentity
+	backendWaiter set.HandleSet[context.CancelFunc] // values are wake-up funcs of lb waiters
 }
 
 func (s *Server) mustBackend() *ipnlocal.LocalBackend {
@@ -59,7 +63,64 @@ func (s *Server) mustBackend() *ipnlocal.LocalBackend {
 	return lb
 }
 
+func (s *Server) awaitBackend(ctx context.Context) (_ *ipnlocal.LocalBackend, ok bool) {
+	lb := s.lb.Load()
+	if lb != nil {
+		return lb, true
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	s.mu.Lock()
+	h := s.backendWaiter.Add(cancel)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.backendWaiter, h)
+		s.mu.Unlock()
+	}()
+
+	// Try again, now that we've registered, in case there was a
+	// race.
+	lb = s.lb.Load()
+	if lb != nil {
+		return lb, true
+	}
+
+	<-ctx.Done()
+	lb = s.lb.Load()
+	return lb, lb != nil
+}
+
+// serveServerStatus serves the /server-status endpoint which reports whether
+// the LocalBackend is up yet.
+// This is primarily for the Windows GUI, because wintun can take awhile to
+// come up. See https://github.com/tailscale/tailscale/issues/6522.
+func (s *Server) serveServerStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	w.Header().Set("Content-Type", "application/json")
+	var res struct {
+		Error string `json:"error,omitempty"`
+	}
+
+	lb := s.lb.Load()
+	if lb == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if wait, _ := strconv.ParseBool(r.FormValue("wait")); wait {
+			w.(http.Flusher).Flush()
+			lb, _ = s.awaitBackend(ctx)
+		}
+	}
+
+	if lb == nil {
+		res.Error = "backend not ready"
+	}
+	json.NewEncoder(w).Encode(res)
+}
+
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	if r.Method == "CONNECT" {
 		if envknob.GOOS() == "windows" {
 			// For the GUI client when using an exit node. See docs on handleProxyConnectConn.
@@ -70,11 +131,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(bradfitz): add a status HTTP handler that returns whether there's a
-	// LocalBackend yet, optionally blocking until there is one. See
-	// https://github.com/tailscale/tailscale/issues/6522
-	lb := s.lb.Load()
-	if lb == nil {
+	// Check for this method before the awaitBackend call, as it reports whether
+	// the backend is available.
+	if r.Method == "GET" && r.URL.Path == "/server-status" {
+		s.serveServerStatus(w, r)
+		return
+	}
+
+	lb, ok := s.awaitBackend(ctx)
+	if !ok {
+		// Almost certainly because the context was canceled so the response
+		// here doesn't really matter. The client is gone.
 		http.Error(w, "no backend", http.StatusServiceUnavailable)
 		return
 	}
@@ -304,6 +371,13 @@ func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 		panic("already set")
 	}
 	s.startBackendIfNeeded()
+
+	s.mu.Lock()
+	for _, wake := range s.backendWaiter {
+		wake() // they'll remove themselves when woken
+	}
+	s.mu.Unlock()
+
 	// TODO(bradfitz): send status update to GUI long poller waiter. See
 	// https://github.com/tailscale/tailscale/issues/6522
 }

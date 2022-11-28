@@ -26,12 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -40,29 +38,17 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
-	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/ipn/ipnserver"
-	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/dnsfallback"
-	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
-	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
-	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/monitor"
-	"tailscale.com/wgengine/netstack"
-	"tailscale.com/wgengine/router"
 )
 
 func init() {
@@ -77,6 +63,37 @@ func init() {
 }
 
 const serviceName = "Tailscale"
+
+func init() {
+	tstunNew = tstunNewWithWindowsRetries
+}
+
+// tstunNewOrRetry is a wrapper around tstun.New that retries on Windows for certain
+// errors.
+//
+// TODO(bradfitz): move this into tstun and/or just fix the problems so it doesn't
+// require a few tries to work.
+func tstunNewWithWindowsRetries(logf logger.Logf, tunName string) (_ tun.Device, devName string, _ error) {
+	bo := backoff.NewBackoff("tstunNew", logf, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for {
+		dev, devName, err := tstun.New(logf, tunName)
+		if err == nil {
+			return dev, devName, err
+		}
+		if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) || windowsUptime() < 10*time.Minute {
+			// Wintun is not installing correctly. Dump the state of NetSetupSvc
+			// (which is a user-mode service that must be active for network devices
+			// to install) and its dependencies to the log.
+			winutil.LogSvcState(logf, "NetSetupSvc")
+		}
+		bo.BackOff(ctx, err)
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+	}
+}
 
 func isWindowsService() bool {
 	v, err := svc.IsWindowsService()
@@ -131,6 +148,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
@@ -236,7 +254,7 @@ func beWindowsSubprocess() bool {
 		}
 	}()
 
-	err := startIPNServer(context.Background(), logid)
+	err := startIPNServer(context.Background(), log.Printf, logid)
 	if err != nil {
 		log.Fatalf("ipnserver: %v", err)
 	}
@@ -281,140 +299,6 @@ func beFirewallKillswitch() bool {
 			log.Fatalf("failed to update routes (%v)", err)
 		}
 	}
-}
-
-func startIPNServer(ctx context.Context, logid string) error {
-	var logf logger.Logf = log.Printf
-
-	linkMon, err := monitor.New(logf)
-	if err != nil {
-		return fmt.Errorf("monitor: %w", err)
-	}
-	dialer := &tsdial.Dialer{Logf: logf}
-
-	getEngineRaw := func() (wgengine.Engine, *netstack.Impl, error) {
-		dev, devName, err := tstun.New(logf, "Tailscale")
-		if err != nil {
-			if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) {
-				// Wintun is not installing correctly. Dump the state of NetSetupSvc
-				// (which is a user-mode service that must be active for network devices
-				// to install) and its dependencies to the log.
-				winutil.LogSvcState(logf, "NetSetupSvc")
-			}
-			return nil, nil, fmt.Errorf("TUN: %w", err)
-		}
-		r, err := router.New(logf, dev, nil)
-		if err != nil {
-			dev.Close()
-			return nil, nil, fmt.Errorf("router: %w", err)
-		}
-		if shouldWrapNetstack() {
-			r = netstack.NewSubnetRouterWrapper(r)
-		}
-		d, err := dns.NewOSConfigurator(logf, devName)
-		if err != nil {
-			r.Close()
-			dev.Close()
-			return nil, nil, fmt.Errorf("DNS: %w", err)
-		}
-		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-			Tun:         dev,
-			Router:      r,
-			DNS:         d,
-			ListenPort:  41641,
-			LinkMonitor: linkMon,
-			Dialer:      dialer,
-		})
-		if err != nil {
-			r.Close()
-			dev.Close()
-			return nil, nil, fmt.Errorf("engine: %w", err)
-		}
-		ns, err := newNetstack(logf, dialer, eng)
-		if err != nil {
-			return nil, nil, fmt.Errorf("newNetstack: %w", err)
-		}
-		ns.ProcessLocalIPs = false
-		ns.ProcessSubnets = shouldWrapNetstack()
-		if err := ns.Start(); err != nil {
-			return nil, nil, fmt.Errorf("failed to start netstack: %w", err)
-		}
-		return wgengine.NewWatchdog(eng), ns, nil
-	}
-
-	type engineOrError struct {
-		Engine   wgengine.Engine
-		Netstack *netstack.Impl
-		Err      error
-	}
-	engErrc := make(chan engineOrError)
-	t0 := time.Now()
-	go func() {
-		const ms = time.Millisecond
-		for try := 1; ; try++ {
-			logf("tailscaled: getting engine... (try %v)", try)
-			t1 := time.Now()
-			eng, ns, err := getEngineRaw()
-			d, dt := time.Since(t1).Round(ms), time.Since(t1).Round(ms)
-			if err != nil {
-				logf("tailscaled: engine fetch error (try %v) in %v (total %v, sysUptime %v): %v",
-					try, d, dt, windowsUptime().Round(time.Second), err)
-			} else {
-				if try > 1 {
-					logf("tailscaled: got engine on try %v in %v (total %v)", try, d, dt)
-				} else {
-					logf("tailscaled: got engine in %v", d)
-				}
-			}
-			timer := time.NewTimer(5 * time.Second)
-			engErrc <- engineOrError{eng, ns, err}
-			if err == nil {
-				timer.Stop()
-				return
-			}
-			<-timer.C
-		}
-	}()
-
-	// getEngine is called by ipnserver to get the engine. It's
-	// not called concurrently and is not called again once it
-	// successfully returns an engine.
-	getEngine := func() (wgengine.Engine, *netstack.Impl, error) {
-		if msg := envknob.String("TS_DEBUG_WIN_FAIL"); msg != "" {
-			return nil, nil, fmt.Errorf("pretending to be a service failure: %v", msg)
-		}
-		for {
-			res := <-engErrc
-			if res.Engine != nil {
-				return res.Engine, res.Netstack, nil
-			}
-			if time.Since(t0) < time.Minute || windowsUptime() < 10*time.Minute {
-				// Ignore errors during early boot. Windows 10 auto logs in the GUI
-				// way sooner than the networking stack components start up.
-				// So the network will fail for a bit (and require a few tries) while
-				// the GUI is still fine.
-				continue
-			}
-			// Return nicer errors to users, annotated with logids, which helps
-			// when they file bugs.
-			return nil, nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
-		}
-	}
-	store, err := store.New(logf, statePathOrDefault())
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-
-	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
-	if err != nil {
-		return fmt.Errorf("safesocket.Listen: %v", err)
-	}
-
-	err = ipnServerRunWithRetries(ctx, logf, ln, store, linkMon, dialer, logid, getEngine, ipnServerOpts())
-	if err != nil {
-		logf("ipnserver.Run: %v", err)
-	}
-	return err
 }
 
 func handleSessionChange(chgRequest svc.ChangeRequest) {
@@ -562,128 +446,4 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		default:
 		}
 	}
-}
-
-// getEngineUntilItWorksWrapper returns a getEngine wrapper that does
-// not call getEngine concurrently and stops calling getEngine once
-// it's returned a working engine.
-func getEngineUntilItWorksWrapper(getEngine func() (wgengine.Engine, *netstack.Impl, error)) func() (wgengine.Engine, *netstack.Impl, error) {
-	var mu sync.Mutex
-	var engGood wgengine.Engine
-	var nsGood *netstack.Impl
-	return func() (wgengine.Engine, *netstack.Impl, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if engGood != nil {
-			return engGood, nsGood, nil
-		}
-		e, ns, err := getEngine()
-		if err != nil {
-			return nil, nil, err
-		}
-		engGood = e
-		nsGood = ns
-		return e, ns, nil
-	}
-}
-
-// listenerWithReadyConn is a net.Listener wrapper that has
-// one net.Conn ready to be accepted already.
-type listenerWithReadyConn struct {
-	net.Listener
-
-	mu sync.Mutex
-	c  net.Conn // if non-nil, ready to be Accepted
-}
-
-func (ln *listenerWithReadyConn) Accept() (net.Conn, error) {
-	ln.mu.Lock()
-	c := ln.c
-	ln.c = nil
-	ln.mu.Unlock()
-	if c != nil {
-		return c, nil
-	}
-	return ln.Listener.Accept()
-}
-
-// ipnServerRunWithRetries runs a Tailscale backend service.
-//
-// The getEngine func is called repeatedly, once per connection, until it
-// returns an engine successfully.
-//
-// This works around issues on Windows with the wgengine.Engine/wintun creation
-// failing or hanging. See https://github.com/tailscale/tailscale/issues/6522.
-func ipnServerRunWithRetries(ctx context.Context, logf logger.Logf, ln net.Listener, store ipn.StateStore, linkMon *monitor.Mon, dialer *tsdial.Dialer, logid string, getEngine func() (wgengine.Engine, *netstack.Impl, error), opts serverOptions) error {
-	getEngine = getEngineUntilItWorksWrapper(getEngine)
-	runDone := make(chan struct{})
-	defer close(runDone)
-
-	// When the context is closed or when we return, whichever is first, close our listener
-	// and all open connections.
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-runDone:
-		}
-		ln.Close()
-	}()
-	logf("Listening on %v", ln.Addr())
-
-	bo := backoff.NewBackoff("ipnserver", logf, 30*time.Second)
-	var unservedConn net.Conn // if non-nil, accepted, but hasn't served yet
-
-	eng, ns, err := getEngine()
-	if err != nil {
-		logf("ipnserver: initial getEngine call: %v", err)
-		for i := 1; ctx.Err() == nil; i++ {
-			c, err := ln.Accept()
-			if err != nil {
-				logf("%d: Accept: %v", i, err)
-				bo.BackOff(ctx, err)
-				continue
-			}
-			logf("ipnserver: try%d: trying getEngine again...", i)
-			eng, ns, err = getEngine()
-			if err == nil {
-				logf("%d: GetEngine worked; exiting failure loop", i)
-				unservedConn = c
-				break
-			}
-			logf("ipnserver%d: getEngine failed again: %v", i, err)
-			// TODO(bradfitz): queue this error up for the next IPN bus watcher call
-			// to get for the Windows GUI? We used to send it over the pre-HTTP
-			// protocol to the Windows GUI. Just close it.
-			c.Close()
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	if unservedConn != nil {
-		ln = &listenerWithReadyConn{
-			Listener: ln,
-			c:        unservedConn,
-		}
-	}
-
-	server := ipnserver.New(logf, logid)
-
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, eng, opts.LoginFlags)
-	if err != nil {
-		return fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
-	}
-	lb.SetVarRoot(opts.VarRoot)
-	if root := lb.TailscaleVarRoot(); root != "" {
-		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
-	}
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
-
-	server.SetLocalBackend(lb)
-	if ns != nil {
-		ns.SetLocalBackend(lb)
-	}
-	return server.Run(ctx, ln)
 }
