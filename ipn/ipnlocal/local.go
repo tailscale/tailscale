@@ -65,6 +65,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
+	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
@@ -180,8 +181,8 @@ type LocalBackend struct {
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
-	fileWaiters      map[*mapSetHandle]context.CancelFunc // handle => func to call on file received
-	notifyWatchers   map[*mapSetHandle]chan *ipn.Notify
+	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
+	notifyWatchers   set.HandleSet[chan *ipn.Notify]
 	lastStatusTime   time.Time // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
@@ -1703,11 +1704,10 @@ func (b *LocalBackend) readPoller() {
 // notifications. There is currently (2022-11-22) no mechanism provided to
 // detect when a message has been dropped.
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
-	handle := new(mapSetHandle)
 	ch := make(chan *ipn.Notify, 128)
 
 	b.mu.Lock()
-	mak.Set(&b.notifyWatchers, handle, ch)
+	handle := b.notifyWatchers.Add(ch)
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
@@ -3745,18 +3745,16 @@ func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeK
 	return mk, nk
 }
 
-// mapSetHandle is a minimal (but non-zero) value whose address serves as a map
-// key for sets of non-comparable values that can't be map keys themselves.
-type mapSetHandle byte
-
-func (b *LocalBackend) setFileWaiter(handle *mapSetHandle, wakeWaiter context.CancelFunc) {
+func (b *LocalBackend) removeFileWaiter(handle set.Handle) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if wakeWaiter == nil {
-		delete(b.fileWaiters, handle)
-	} else {
-		mak.Set(&b.fileWaiters, handle, wakeWaiter)
-	}
+	delete(b.fileWaiters, handle)
+}
+
+func (b *LocalBackend) addFileWaiter(wakeWaiter context.CancelFunc) set.Handle {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fileWaiters.Add(wakeWaiter)
 }
 
 func (b *LocalBackend) WaitingFiles() ([]apitype.WaitingFile, error) {
@@ -3780,9 +3778,8 @@ func (b *LocalBackend) AwaitWaitingFiles(ctx context.Context) ([]apitype.Waiting
 		gotFile, gotFileCancel := context.WithCancel(context.Background())
 		defer gotFileCancel()
 
-		handle := new(mapSetHandle)
-		b.setFileWaiter(handle, gotFileCancel)
-		defer b.setFileWaiter(handle, nil)
+		handle := b.addFileWaiter(gotFileCancel)
+		defer b.removeFileWaiter(handle)
 
 		// Now that we've registered ourselves, check again, in case
 		// of race. Otherwise there's a small window where we could
