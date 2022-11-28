@@ -19,15 +19,16 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/multierr"
+	"tailscale.com/util/set"
 )
 
 var (
 	// mu guards everything in this var block.
 	mu sync.Mutex
 
-	sysErr    = map[Subsystem]error{}                     // error key => err (or nil for no error)
-	watchers  = map[*watchHandle]func(Subsystem, error){} // opt func to run if error state changes
-	warnables = map[*Warnable]struct{}{}                  // set of warnables
+	sysErr    = map[Subsystem]error{}                   // error key => err (or nil for no error)
+	watchers  = set.HandleSet[func(Subsystem, error)]{} // opt func to run if error state changes
+	warnables = map[*Warnable]struct{}{}                // set of warnables
 	timer     *time.Timer
 
 	debugHandler = map[string]http.Handler{}
@@ -148,8 +149,6 @@ func AppendWarnableDebugFlags(base []string) []string {
 	return ret
 }
 
-type watchHandle byte
-
 // RegisterWatcher adds a function that will be called if an
 // error changes state either to unhealthy or from unhealthy. It is
 // not called on transition from unknown to healthy. It must be non-nil
@@ -157,8 +156,7 @@ type watchHandle byte
 func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 	mu.Lock()
 	defer mu.Unlock()
-	handle := new(watchHandle)
-	watchers[handle] = cb
+	handle := watchers.Add(cb)
 	if timer == nil {
 		timer = time.AfterFunc(time.Minute, timerSelfCheck)
 	}
@@ -174,23 +172,23 @@ func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 }
 
 // SetRouterHealth sets the state of the wgengine/router.Router.
-func SetRouterHealth(err error) { set(SysRouter, err) }
+func SetRouterHealth(err error) { setErr(SysRouter, err) }
 
 // RouterHealth returns the wgengine/router.Router error state.
 func RouterHealth() error { return get(SysRouter) }
 
 // SetDNSHealth sets the state of the net/dns.Manager
-func SetDNSHealth(err error) { set(SysDNS, err) }
+func SetDNSHealth(err error) { setErr(SysDNS, err) }
 
 // DNSHealth returns the net/dns.Manager error state.
 func DNSHealth() error { return get(SysDNS) }
 
 // SetDNSOSHealth sets the state of the net/dns.OSConfigurator
-func SetDNSOSHealth(err error) { set(SysDNSOS, err) }
+func SetDNSOSHealth(err error) { setErr(SysDNSOS, err) }
 
 // SetDNSManagerHealth sets the state of the Linux net/dns manager's
 // discovery of the /etc/resolv.conf situation.
-func SetDNSManagerHealth(err error) { set(SysDNSManager, err) }
+func SetDNSManagerHealth(err error) { setErr(SysDNSManager, err) }
 
 // DNSOSHealth returns the net/dns.OSConfigurator error state.
 func DNSOSHealth() error { return get(SysDNSOS) }
@@ -213,7 +211,7 @@ func get(key Subsystem) error {
 	return sysErr[key]
 }
 
-func set(key Subsystem, err error) {
+func setErr(key Subsystem, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	setLocked(key, err)
