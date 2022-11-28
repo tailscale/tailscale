@@ -19,6 +19,7 @@ import (
 	"go4.org/netipx"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/disco"
+	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/tstest"
@@ -283,11 +284,6 @@ func TestWriteAndInject(t *testing.T) {
 			t.Errorf("%s not received", packet)
 		}
 	}
-
-	// Statistics gathering is disabled by default.
-	if stats := tun.ExtractStatistics(); len(stats) > 0 {
-		t.Errorf("tun.ExtractStatistics = %v, want {}", stats)
-	}
 }
 
 func TestFilter(t *testing.T) {
@@ -336,15 +332,17 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
-	tun.SetStatisticsEnabled(true)
+	stats := new(connstats.Statistics)
+	tun.SetStatistics(stats)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var n int
 			var err error
 			var filtered bool
 
-			if stats := tun.ExtractStatistics(); len(stats) > 0 {
-				t.Errorf("tun.ExtractStatistics = %v, want {}", stats)
+			tunStats, _ := stats.Extract()
+			if len(tunStats) > 0 {
+				t.Errorf("connstats.Statistics.Extract = %v, want {}", stats)
 			}
 
 			if tt.dir == in {
@@ -377,7 +375,7 @@ func TestFilter(t *testing.T) {
 				}
 			}
 
-			got := tun.ExtractStatistics()
+			got, _ := stats.Extract()
 			want := map[netlogtype.Connection]netlogtype.Counts{}
 			if !tt.drop {
 				var p packet.Parsed

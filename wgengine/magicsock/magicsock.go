@@ -37,6 +37,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/connstats"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
@@ -52,7 +53,6 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
@@ -337,19 +337,7 @@ type Conn struct {
 	port atomic.Uint32
 
 	// stats maintains per-connection counters.
-	// See SetStatisticsEnabled and ExtractStatistics for details.
-	stats struct {
-		enabled atomic.Bool
-
-		// TODO(joetsai): A per-Conn map of connections is easiest to implement.
-		// Since every packet occurs within the context of an endpoint,
-		// we could track the counts within the endpoint itself,
-		// and then merge the results when ExtractStatistics is called.
-		// That would avoid a map lookup for every packet.
-
-		mu sync.Mutex
-		m  map[netlogtype.Connection]netlogtype.Counts
-	}
+	stats atomic.Pointer[connstats.Statistics]
 
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
@@ -1754,8 +1742,8 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache, 
 		ep = de
 	}
 	ep.noteRecvActivity()
-	if c.stats.enabled.Load() {
-		c.updateStats(ep.nodeAddr, ipp, netlogtype.Counts{RxPackets: 1, RxBytes: uint64(len(b))})
+	if stats := c.stats.Load(); stats != nil {
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, len(b))
 	}
 	return ep, true
 }
@@ -1812,8 +1800,8 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 	}
 
 	ep.noteRecvActivity()
-	if c.stats.enabled.Load() {
-		c.updateStats(ep.nodeAddr, ipp, netlogtype.Counts{RxPackets: 1, RxBytes: uint64(dm.n)})
+	if stats := c.stats.Load(); stats != nil {
+		stats.UpdateRxPhysical(ep.nodeAddr, ipp, dm.n)
 	}
 	return n, ep
 }
@@ -3306,37 +3294,10 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	})
 }
 
-// updateStats updates the statistics counters with the src, dst, and cnts.
-// It is the caller's responsibility to check whether logging is enabled.
-func (c *Conn) updateStats(src netip.Addr, dst netip.AddrPort, cnts netlogtype.Counts) {
-	conn := netlogtype.Connection{Src: netip.AddrPortFrom(src, 0), Dst: dst}
-	c.stats.mu.Lock()
-	defer c.stats.mu.Unlock()
-	mak.Set(&c.stats.m, conn, c.stats.m[conn].Add(cnts))
-}
-
-// SetStatisticsEnabled enables per-connection packet counters.
-// Disabling statistics gathering does not reset the counters.
-// ExtractStatistics must be called to reset the counters and
-// be periodically called while enabled to avoid unbounded memory use.
-func (c *Conn) SetStatisticsEnabled(enable bool) {
-	c.stats.enabled.Store(enable)
-}
-
-// ExtractStatistics extracts and resets the counters for all active connections.
-// It must be called periodically otherwise the memory used is unbounded.
-//
-// The source is always a peer's tailscale IP address,
-// while the destination is the peer's physical IP address and port.
-// As a special case, packets routed through DERP use a destination address
-// of 127.3.3.40 with the port being the DERP region.
-// This node's tailscale IP address never appears in the returned map.
-func (c *Conn) ExtractStatistics() map[netlogtype.Connection]netlogtype.Counts {
-	c.stats.mu.Lock()
-	defer c.stats.mu.Unlock()
-	m := c.stats.m
-	c.stats.m = nil
-	return m
+// SetStatistics specifies a per-connection statistics aggregator.
+// Nil may be specified to disable statistics gathering.
+func (c *Conn) SetStatistics(stats *connstats.Statistics) {
+	c.stats.Store(stats)
 }
 
 func ippDebugString(ua netip.AddrPort) string {
@@ -3701,14 +3662,14 @@ func (de *endpoint) send(b []byte) error {
 	var err error
 	if udpAddr.IsValid() {
 		_, err = de.c.sendAddr(udpAddr, de.publicKey, b)
-		if err == nil && de.c.stats.enabled.Load() {
-			de.c.updateStats(de.nodeAddr, udpAddr, netlogtype.Counts{TxPackets: 1, TxBytes: uint64(len(b))})
+		if stats := de.c.stats.Load(); err == nil && stats != nil {
+			stats.UpdateTxPhysical(de.nodeAddr, udpAddr, len(b))
 		}
 	}
 	if derpAddr.IsValid() {
 		if ok, _ := de.c.sendAddr(derpAddr, de.publicKey, b); ok {
-			if de.c.stats.enabled.Load() {
-				de.c.updateStats(de.nodeAddr, derpAddr, netlogtype.Counts{TxPackets: 1, TxBytes: uint64(len(b))})
+			if stats := de.c.stats.Load(); stats != nil {
+				stats.UpdateTxPhysical(de.nodeAddr, derpAddr, len(b))
 			}
 			if err != nil {
 				// UDP failed but DERP worked, so good enough:

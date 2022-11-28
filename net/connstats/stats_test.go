@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tunstats
+package connstats
 
 import (
 	"encoding/binary"
@@ -82,13 +82,13 @@ func TestConcurrent(t *testing.T) {
 
 				cnts := gots[i][t2]
 				if receive {
-					stats.UpdateRx(p)
+					stats.UpdateRxVirtual(p)
 					cnts.RxPackets++
 					cnts.RxBytes += uint64(len(p))
 				} else {
 					cnts.TxPackets++
 					cnts.TxBytes += uint64(len(p))
-					stats.UpdateTx(p)
+					stats.UpdateTxVirtual(p)
 				}
 				gots[i][t2] = cnts
 				time.Sleep(time.Duration(rn.Intn(1 + delay)))
@@ -96,11 +96,13 @@ func TestConcurrent(t *testing.T) {
 		}(i)
 	}
 	for range gots {
-		wants = append(wants, stats.Extract())
+		virtual, _ := stats.Extract()
+		wants = append(wants, virtual)
 		time.Sleep(time.Millisecond)
 	}
 	group.Wait()
-	wants = append(wants, stats.Extract())
+	virtual, _ := stats.Extract()
+	wants = append(wants, virtual)
 
 	got := make(map[netlogtype.Connection]netlogtype.Counts)
 	want := make(map[netlogtype.Connection]netlogtype.Counts)
@@ -126,7 +128,7 @@ func Benchmark(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var s Statistics
 			for j := 0; j < 1e3; j++ {
-				s.UpdateTx(p)
+				s.UpdateTxVirtual(p)
 			}
 		}
 	})
@@ -138,7 +140,7 @@ func Benchmark(b *testing.B) {
 			var s Statistics
 			for j := 0; j < 1e3; j++ {
 				binary.BigEndian.PutUint32(p[20:], uint32(j)) // unique port combination
-				s.UpdateTx(p)
+				s.UpdateTxVirtual(p)
 			}
 		}
 	})
@@ -154,7 +156,7 @@ func Benchmark(b *testing.B) {
 				go func() {
 					defer group.Done()
 					for k := 0; k < 1e3; k++ {
-						s.UpdateTx(p)
+						s.UpdateTxVirtual(p)
 					}
 				}()
 			}
@@ -179,7 +181,7 @@ func Benchmark(b *testing.B) {
 					j *= 1e3
 					for k := 0; k < 1e3; k++ {
 						binary.BigEndian.PutUint32(p[20:], uint32(j+k)) // unique port combination
-						s.UpdateTx(p)
+						s.UpdateTxVirtual(p)
 					}
 				}(j)
 			}
