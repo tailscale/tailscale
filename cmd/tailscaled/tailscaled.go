@@ -48,6 +48,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/syncs"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -109,6 +110,9 @@ func defaultPort() uint16 {
 		if p, err := strconv.ParseUint(s, 10, 16); err == nil {
 			return uint16(p)
 		}
+	}
+	if envknob.GOOS() == "windows" {
+		return 41641
 	}
 	return 0
 }
@@ -320,11 +324,13 @@ func ipnServerOpts() (o serverOptions) {
 	return o
 }
 
-func run() error {
-	var err error
+var logPol *logpolicy.Policy
+var debugMux *http.ServeMux
 
+func run() error {
 	pol := logpolicy.New(logtail.CollectionNode)
 	pol.SetVerbosityLevel(args.verbose)
+	logPol = pol
 	defer func() {
 		// Finish uploading logs after closing everything else.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -368,23 +374,87 @@ func run() error {
 		log.Printf("error in synology migration: %v", err)
 	}
 
-	var debugMux *http.ServeMux
 	if args.debug != "" {
 		debugMux = newDebugMux()
 	}
 
+	logid := pol.PublicID.String()
+	return startIPNServer(context.Background(), logf, logid)
+}
+
+func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
+	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
+	if err != nil {
+		return fmt.Errorf("safesocket.Listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Exit gracefully by cancelling the ipnserver context in most common cases:
+	// interrupted from the TTY or killed by a service manager.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+	// SIGPIPE sometimes gets generated when CLIs disconnect from
+	// tailscaled. The default action is to terminate the process, we
+	// want to keep running.
+	signal.Ignore(syscall.SIGPIPE)
+	go func() {
+		select {
+		case s := <-interrupt:
+			logf("tailscaled got signal %v; shutting down", s)
+			cancel()
+		case <-ctx.Done():
+			// continue
+		}
+	}()
+
+	srv := ipnserver.New(logf, logid)
+	if debugMux != nil {
+		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
+	}
+	var lbErr syncs.AtomicValue[error]
+
+	go func() {
+		t0 := time.Now()
+		lb, err := getLocalBackend(ctx, logf, logid)
+		if err == nil {
+			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
+			srv.SetLocalBackend(lb)
+			return
+		}
+		lbErr.Store(err) // before the following cancel
+		cancel()         // make srv.Run below complete
+	}()
+
+	err = srv.Run(ctx, ln)
+
+	if err != nil && lbErr.Load() != nil {
+		return fmt.Errorf("getLocalBackend error: %v", lbErr.Load())
+	}
+
+	// Cancelation is not an error: it is the only way to stop ipnserver.
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("ipnserver.Run: %w", err)
+	}
+
+	return nil
+}
+
+func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ipnlocal.LocalBackend, retErr error) {
 	linkMon, err := monitor.New(logf)
 	if err != nil {
-		return fmt.Errorf("monitor.New: %w", err)
+		return nil, fmt.Errorf("monitor.New: %w", err)
 	}
-	pol.Logtail.SetLinkMonitor(linkMon)
+	if logPol != nil {
+		logPol.Logtail.SetLinkMonitor(linkMon)
+	}
 
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	e, useNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
-		return fmt.Errorf("createEngine: %w", err)
+		return nil, fmt.Errorf("createEngine: %w", err)
 	}
 	if _, ok := e.(wgengine.ResolvingEngine).GetResolver(); !ok {
 		panic("internal error: exit node resolver not wired up")
@@ -400,7 +470,7 @@ func run() error {
 
 	ns, err := newNetstack(logf, dialer, e)
 	if err != nil {
-		return fmt.Errorf("newNetstack: %w", err)
+		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = useNetstack
 	ns.ProcessSubnets = useNetstack || shouldWrapNetstack()
@@ -434,36 +504,16 @@ func run() error {
 
 	e = wgengine.NewWatchdog(e)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	// Exit gracefully by cancelling the ipnserver context in most common cases:
-	// interrupted from the TTY or killed by a service manager.
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-	// SIGPIPE sometimes gets generated when CLIs disconnect from
-	// tailscaled. The default action is to terminate the process, we
-	// want to keep running.
-	signal.Ignore(syscall.SIGPIPE)
-	go func() {
-		select {
-		case s := <-interrupt:
-			logf("tailscaled got signal %v; shutting down", s)
-			cancel()
-		case <-ctx.Done():
-			// continue
-		}
-	}()
-
 	opts := ipnServerOpts()
 
 	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return fmt.Errorf("store.New: %w", err)
+		return nil, fmt.Errorf("store.New: %w", err)
 	}
-	logid := pol.PublicID.String()
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, e, opts.LoginFlags)
 	if err != nil {
-		return fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
+		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
 	lb.SetVarRoot(opts.VarRoot)
 	if root := lb.TailscaleVarRoot(); root != "" {
@@ -473,31 +523,11 @@ func run() error {
 		return smallzstd.NewDecoder(nil)
 	})
 	configureTaildrop(logf, lb)
-
-	srv := ipnserver.New(logf, logid)
-	srv.SetLocalBackend(lb)
 	ns.SetLocalBackend(lb)
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
-
-	if debugMux != nil {
-		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
-	}
-
-	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
-	if err != nil {
-		return fmt.Errorf("safesocket.Listen: %v", err)
-	}
-	defer dialer.Close()
-
-	err = srv.Run(ctx, ln)
-	// Cancelation is not an error: it is the only way to stop ipnserver.
-	if err != nil && err != context.Canceled {
-		return fmt.Errorf("ipnserver.Run: %w", err)
-	}
-
-	return nil
+	return lb, nil
 }
 
 func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, useNetstack bool, err error) {
@@ -533,6 +563,8 @@ func shouldWrapNetstack() bool {
 	return false
 }
 
+var tstunNew = tstun.New
+
 func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, useNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
@@ -564,7 +596,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			}
 		}
 	} else {
-		dev, devName, err := tstun.New(logf, name)
+		dev, devName, err := tstunNew(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name, err)
 			return nil, false, fmt.Errorf("tstun.New(%q): %w", name, err)
