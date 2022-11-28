@@ -485,6 +485,8 @@ Returns the updated ACL in JSON or HuJSON according to the `Accept` header on su
 ###### Headers
 `If-Match` - A request header. Set this value to the ETag header provided in an `ACL GET` request to avoid missed updates.
 
+A special value `ts-default` will ensure that ACL will be set only if current ACL is the default one (created automatically for each tailnet).
+
 `Accept` - Sets the return type of the updated ACL. Response is parsed `JSON` if `application/json` is explicitly named, otherwise HuJSON will be returned.
 
 ###### POST Body
@@ -497,6 +499,9 @@ An ACL policy may contain the following top-level properties:
 * `ACLs` - Access control lists.
 * `TagOwners` - Defines who is allowed to use which tags.
 * `Tests` - Run on ACL updates to check correct functionality of defined ACLs.
+* `AutoApprovers` - Defines which users can advertise routes or exit nodes without further approval.
+* `SSH` - Configures access policy for Tailscale SSH.
+* `NodeAttrs` - Defines which devices can use certain features.
 
 See https://tailscale.com/kb/1018/acls for more information on those properties.
 
