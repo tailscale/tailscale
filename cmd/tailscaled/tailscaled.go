@@ -416,6 +416,16 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
 
 	go func() {
 		t0 := time.Now()
+		if s, ok := envknob.LookupInt("TS_DEBUG_BACKEND_DELAY_SEC"); ok {
+			d := time.Duration(s) * time.Second
+			logf("sleeping %v before starting backend...", d)
+			select {
+			case <-time.After(d):
+				logf("slept %v; starting backend...", d)
+			case <-ctx.Done():
+				return
+			}
+		}
 		lb, err := getLocalBackend(ctx, logf, logid)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
