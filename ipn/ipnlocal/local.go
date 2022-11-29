@@ -904,8 +904,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	// Now complete the lock-free parts of what we started while locked.
 	if prefsChanged {
-		p := prefs.View()
-		b.send(ipn.Notify{Prefs: &p})
+		b.notifyPrefs(prefs.View())
 	}
 
 	if st.NetMap != nil {
@@ -1314,7 +1313,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.send(ipn.Notify{BackendLogID: &blid})
-	b.send(ipn.Notify{Prefs: &prefs})
+	b.notifyPrefs(prefs)
 
 	if !loggedOut && b.hasNodeKey() {
 		// Even if !WantRunning, we should verify our key, if there
@@ -1324,6 +1323,19 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	b.stateMachine()
 	return nil
+}
+
+// notifyPrefs delivers prefs to the connected frontend and any API watchers
+// from LocalBackend.WatchNotifications (via the LocalAPI).
+// It strips keys and other sensitive data prior to sending.
+//
+// If no frontend is connected or API watchers are backed up, the notification
+// is dropped without being delivered.
+//
+// b.mu must not be held.
+func (b *LocalBackend) notifyPrefs(p ipn.PrefsView) {
+	np := stripKeysFromPrefs(p)
+	b.send(ipn.Notify{Prefs: &np})
 }
 
 var warnInvalidUnsignedNodes = health.NewWarnable()
@@ -1762,6 +1774,8 @@ func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 //
 // If no frontend is connected or API watchers are backed up, the notification
 // is dropped without being delivered.
+//
+// b.mu must not be held.
 func (b *LocalBackend) send(n ipn.Notify) {
 	n.Version = version.Long
 
@@ -2520,7 +2534,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.authReconfig()
 	}
 
-	b.send(ipn.Notify{Prefs: &prefs})
+	b.notifyPrefs(prefs)
 	return prefs
 }
 
