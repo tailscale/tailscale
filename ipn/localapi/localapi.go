@@ -89,6 +89,7 @@ var handler = map[string]localAPIHandler{
 	"tka/sign":                (*Handler).serveTKASign,
 	"tka/status":              (*Handler).serveTKAStatus,
 	"tka/disable":             (*Handler).serveTKADisable,
+	"tka/force-local-disable": (*Handler).serveTKALocalDisable,
 	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
 	"watch-ipn-bus":           (*Handler).serveWatchIPNBus,
 	"whois":                   (*Handler).serveWhoIs,
@@ -1238,6 +1239,30 @@ func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.b.NetworkLockDisable(secret); err != nil {
 		http.Error(w, "network-lock disable failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Require a JSON stanza for the body as an additional CSRF protection.
+	var req struct{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockForceLocalDisable(); err != nil {
+		http.Error(w, "network-lock local disable failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(200)
