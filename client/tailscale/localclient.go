@@ -853,21 +853,6 @@ func (lc *LocalClient) NetworkLockLog(ctx context.Context, maxEntries int) ([]ip
 	return decodeJSON[[]ipnstate.NetworkLockUpdate](body)
 }
 
-// NetworkLockForceLocalDisable forcibly shuts down network lock on this node.
-func (lc *LocalClient) NetworkLockForceLocalDisable(ctx context.Context) error {
-	// This endpoint expects an empty JSON stanza as the payload.
-	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(struct{}{}); err != nil {
-		return err
-	}
-
-	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/force-local-disable", 200, &b); err != nil {
-		return fmt.Errorf("error: %w", err)
-	}
-	return nil
-}
-
-
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {

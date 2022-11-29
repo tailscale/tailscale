@@ -37,7 +37,6 @@ var netlockCmd = &ffcli.Command{
 		nlDisableCmd,
 		nlDisablementKDFCmd,
 		nlLogCmd,
-		nlLocalDisableCmd,
 	},
 	Exec: runNetworkLockStatus,
 }
@@ -347,17 +346,6 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 		return errors.New("usage: lock disable <disablement-secret>")
 	}
 	return localClient.NetworkLockDisable(ctx, secrets[0])
-}
-
-var nlLocalDisableCmd = &ffcli.Command{
-	Name:       "local-disable",
-	ShortUsage: "local-disable",
-	ShortHelp:  "Disables the currently-active tailnet lock for this node",
-	Exec:       runNetworkLockLocalDisable,
-}
-
-func runNetworkLockLocalDisable(ctx context.Context, args []string) error {
-	return localClient.NetworkLockForceLocalDisable(ctx)
 }
 
 var nlDisablementKDFCmd = &ffcli.Command{
