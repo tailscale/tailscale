@@ -909,7 +909,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	if st.NetMap != nil {
 		if envknob.NoLogsNoSupport() && hasCapability(st.NetMap, tailcfg.CapabilityDataPlaneAuditLogs) {
-			msg := "tailnet requires logging to be enabled. Remove -no-logs-no-support from tailscaled command line."
+			msg := "tailnet requires logging to be enabled. Remove --no-logs-no-support from tailscaled command line."
 			health.SetLocalLogConfigHealth(errors.New(msg))
 			// Connecting to this tailnet without logging is forbidden; boot us outta here.
 			b.mu.Lock()
