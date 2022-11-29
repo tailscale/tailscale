@@ -45,7 +45,7 @@ type Persist struct {
 	// this node will not operate network lock on. This is used to
 	// prevent bootstrapping TKA onto a key authority which was forcibly
 	// disabled.
-	DisallowedTKAStateIDs []string
+	DisallowedTKAStateIDs []string `json:",omitempty"`
 }
 
 // PublicNodeKey returns the public key for the node key.
