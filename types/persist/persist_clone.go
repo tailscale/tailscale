@@ -20,6 +20,7 @@ func (src *Persist) Clone() *Persist {
 	}
 	dst := new(Persist)
 	*dst = *src
+	dst.DisallowedTKAStateIDs = append(src.DisallowedTKAStateIDs[:0:0], src.DisallowedTKAStateIDs...)
 	return dst
 }
 
@@ -34,4 +35,5 @@ var _PersistCloneNeedsRegeneration = Persist(struct {
 	UserProfile                     tailcfg.UserProfile
 	NetworkLockKey                  key.NLPrivate
 	NodeID                          tailcfg.StableNodeID
+	DisallowedTKAStateIDs           []string
 }{})

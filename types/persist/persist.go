@@ -7,6 +7,7 @@ package persist
 
 import (
 	"fmt"
+	"reflect"
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -39,6 +40,12 @@ type Persist struct {
 	UserProfile       tailcfg.UserProfile
 	NetworkLockKey    key.NLPrivate
 	NodeID            tailcfg.StableNodeID
+
+	// DisallowedTKAStateIDs stores the tka.State.StateID values which
+	// this node will not operate network lock on. This is used to
+	// prevent bootstrapping TKA onto a key authority which was forcibly
+	// disabled.
+	DisallowedTKAStateIDs []string `json:",omitempty"`
 }
 
 // PublicNodeKey returns the public key for the node key.
@@ -53,6 +60,13 @@ func (p PersistView) PublicNodeKey() key.NodePublic {
 
 func (p PersistView) Equals(p2 PersistView) bool {
 	return p.ж.Equals(p2.ж)
+}
+
+func nilIfEmpty[E any](s []E) []E {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
 }
 
 func (p *Persist) Equals(p2 *Persist) bool {
@@ -70,7 +84,8 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.LoginName == p2.LoginName &&
 		p.UserProfile == p2.UserProfile &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
-		p.NodeID == p2.NodeID
+		p.NodeID == p2.NodeID &&
+		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))
 }
 
 func (p *Persist) Pretty() string {

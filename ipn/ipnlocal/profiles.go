@@ -179,7 +179,7 @@ func init() {
 // provided prefs, which may be accessed via CurrentPrefs.
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	prefs := prefsIn.AsStruct().View()
-	newPersist := prefs.Persist()
+	newPersist := prefs.Persist().AsStruct()
 	if newPersist == nil || newPersist.LoginName == "" {
 		return pm.setPrefsLocked(prefs)
 	}

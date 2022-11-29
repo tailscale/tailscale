@@ -517,7 +517,7 @@ func (b *LocalBackend) Shutdown() {
 }
 
 func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
-	if !p.Valid() || p.Persist() == nil {
+	if !p.Valid() || !p.Persist().Valid() {
 		return p
 	}
 
@@ -816,7 +816,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	b.mu.Lock()
 
 	if st.LogoutFinished != nil {
-		if p := b.pm.CurrentPrefs(); p.Persist() == nil || p.Persist().LoginName == "" {
+		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().LoginName() == "" {
 			b.mu.Unlock()
 			return
 		}
@@ -1203,7 +1203,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	if opts.UpdatePrefs != nil {
 		oldPrefs := b.pm.CurrentPrefs()
 		newPrefs := opts.UpdatePrefs.Clone()
-		newPrefs.Persist = oldPrefs.Persist()
+		newPrefs.Persist = oldPrefs.Persist().AsStruct()
 		pv := newPrefs.View()
 		if err := b.pm.SetPrefs(pv); err != nil {
 			b.logf("failed to save UpdatePrefs state: %v", err)
@@ -1228,7 +1228,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	b.applyPrefsToHostinfoLocked(hostinfo, prefs)
 
 	b.setNetMapLocked(nil)
-	persistv := prefs.Persist()
+	persistv := prefs.Persist().AsStruct()
 	if persistv == nil {
 		persistv = new(persist.Persist)
 	}
@@ -1947,8 +1947,8 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	var legacyMachineKey key.MachinePrivate
-	if p := b.pm.CurrentPrefs().Persist(); p != nil {
-		legacyMachineKey = p.LegacyFrontendPrivateMachineKey
+	if p := b.pm.CurrentPrefs().Persist(); p.Valid() {
+		legacyMachineKey = p.LegacyFrontendPrivateMachineKey()
 	}
 
 	keyText, err := b.store.ReadState(ipn.MachineKeyStateKey)
@@ -2481,7 +2481,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 
 	oldp := b.pm.CurrentPrefs()
 	if oldp.Valid() {
-		newp.Persist = oldp.Persist().Clone() // caller isn't allowed to override this
+		newp.Persist = oldp.Persist().AsStruct() // caller isn't allowed to override this
 	}
 	// findExitNodeIDLocked returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
@@ -3338,7 +3338,7 @@ func (b *LocalBackend) hasNodeKey() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	p := b.pm.CurrentPrefs()
-	return p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero()
+	return p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero()
 }
 
 // nextState returns the state the backend seems to be in, based on
@@ -3926,8 +3926,8 @@ func (b *LocalBackend) SetDNS(ctx context.Context, name, value string) error {
 
 	b.mu.Lock()
 	cc := b.ccAuto
-	if prefs := b.pm.CurrentPrefs(); prefs.Valid() {
-		req.NodeKey = prefs.Persist().PrivateNodeKey.Public()
+	if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.Persist().Valid() {
+		req.NodeKey = prefs.Persist().PrivateNodeKey().Public()
 	}
 	b.mu.Unlock()
 	if cc == nil {

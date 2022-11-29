@@ -24,10 +24,7 @@ func (src *Prefs) Clone() *Prefs {
 	*dst = *src
 	dst.AdvertiseTags = append(src.AdvertiseTags[:0:0], src.AdvertiseTags...)
 	dst.AdvertiseRoutes = append(src.AdvertiseRoutes[:0:0], src.AdvertiseRoutes...)
-	if dst.Persist != nil {
-		dst.Persist = new(persist.Persist)
-		*dst.Persist = *src.Persist
-	}
+	dst.Persist = src.Persist.Clone()
 	return dst
 }
 

@@ -345,10 +345,10 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		nodeKey *key.NodePublic
 		nlPriv  key.NLPrivate
 	)
-	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		nkp := p.Persist().PublicNodeKey()
 		nodeKey = &nkp
-		nlPriv = p.Persist().NetworkLockKey
+		nlPriv = p.Persist().NetworkLockKey()
 	}
 
 	if nlPriv.IsZero() {
@@ -411,9 +411,9 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
 	b.mu.Lock()
-	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
-		nlPriv = p.Persist().NetworkLockKey
+		nlPriv = p.Persist().NetworkLockKey()
 	}
 	b.mu.Unlock()
 	if ourNodeKey.IsZero() || nlPriv.IsZero() {
@@ -503,8 +503,8 @@ func (b *LocalBackend) NetworkLockSign(nodeKey key.NodePublic, rotationPublic []
 		defer b.mu.Unlock()
 
 		var nlPriv key.NLPrivate
-		if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil {
-			nlPriv = p.Persist().NetworkLockKey
+		if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
+			nlPriv = p.Persist().NetworkLockKey()
 		}
 		if nlPriv.IsZero() {
 			return key.NodePublic{}, tka.NodeKeySignature{}, errMissingNetmap
@@ -557,7 +557,7 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	defer b.mu.Unlock()
 
 	var ourNodeKey key.NodePublic
-	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if ourNodeKey.IsZero() {
@@ -568,8 +568,8 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return err
 	}
 	var nlPriv key.NLPrivate
-	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil {
-		nlPriv = p.Persist().NetworkLockKey
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
+		nlPriv = p.Persist().NetworkLockKey()
 	}
 	if nlPriv.IsZero() {
 		return errMissingNetmap
@@ -634,7 +634,7 @@ func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
 	)
 
 	b.mu.Lock()
-	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist() != nil && !p.Persist().PrivateNodeKey.IsZero() {
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 	}
 	if b.tka == nil {
