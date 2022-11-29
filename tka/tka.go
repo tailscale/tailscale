@@ -714,3 +714,10 @@ func (a *Authority) Keys() []Key {
 	}
 	return out
 }
+
+// StateIDs returns the stateIDs for this tailnet key authority. These
+// are values that are fixed for the lifetime of the authority: see
+// comments on the relevant fields in state.go.
+func (a *Authority) StateIDs() (uint64, uint64) {
+	return a.state.StateID1, a.state.StateID2
+}
