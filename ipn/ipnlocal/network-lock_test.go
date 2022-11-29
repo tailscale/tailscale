@@ -778,3 +778,103 @@ func TestTKASign(t *testing.T) {
 		t.Errorf("NetworkLockSign() failed: %v", err)
 	}
 }
+
+func TestTKAForceDisable(t *testing.T) {
+	envknob.Setenv("TAILSCALE_USE_WIP_CODE", "1")
+	defer envknob.Setenv("TAILSCALE_USE_WIP_CODE", "")
+	nodePriv := key.NewNode()
+
+	// Make a fake TKA authority, to seed local state.
+	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
+	nlPriv := key.NewNLPrivate()
+	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
+
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	must.Do(pm.SetPrefs((&ipn.Prefs{
+		Persist: &persist.Persist{
+			PrivateNodeKey: nodePriv,
+			NetworkLockKey: nlPriv,
+		},
+	}).View()))
+
+	temp := t.TempDir()
+	tkaPath := filepath.Join(temp, "tka-profile", string(pm.CurrentProfile().ID))
+	os.Mkdir(tkaPath, 0755)
+	chonk, err := tka.ChonkDir(tkaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, genesis, err := tka.Create(chonk, tka.State{
+		Keys:               []tka.Key{key},
+		DisablementSecrets: [][]byte{tka.DisablementKDF(disablementSecret)},
+	}, nlPriv)
+	if err != nil {
+		t.Fatalf("tka.Create() failed: %v", err)
+	}
+
+	ts, client := fakeNoiseServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		switch r.URL.Path {
+		case "/machine/tka/bootstrap":
+			body := new(tailcfg.TKABootstrapRequest)
+			if err := json.NewDecoder(r.Body).Decode(body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Version != tailcfg.CurrentCapabilityVersion {
+				t.Errorf("bootstrap CapVer = %v, want %v", body.Version, tailcfg.CurrentCapabilityVersion)
+			}
+			if body.NodeKey != nodePriv.Public() {
+				t.Errorf("nodeKey=%v, want %v", body.NodeKey, nodePriv.Public())
+			}
+
+			w.WriteHeader(200)
+			out := tailcfg.TKABootstrapResponse{
+				GenesisAUM: genesis.Serialize(),
+			}
+			if err := json.NewEncoder(w).Encode(out); err != nil {
+				t.Fatal(err)
+			}
+
+		default:
+			t.Errorf("unhandled endpoint path: %v", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+
+	cc := fakeControlClient(t, client)
+	b := LocalBackend{
+		varRoot: temp,
+		cc:      cc,
+		ccAuto:  cc,
+		logf:    t.Logf,
+		tka: &tkaState{
+			authority: authority,
+			storage:   chonk,
+		},
+		pm:    pm,
+		store: pm.Store(),
+	}
+
+	if err := b.NetworkLockForceLocalDisable(); err != nil {
+		t.Fatalf("NetworkLockForceLocalDisable() failed: %v", err)
+	}
+	if b.tka != nil {
+		t.Fatal("tka was not shut down")
+	}
+	if _, err := os.Stat(b.chonkPathLocked()); err == nil || !os.IsNotExist(err) {
+		t.Errorf("os.Stat(chonkDir) = %v, want ErrNotExist", err)
+	}
+
+	err = b.tkaSyncIfNeeded(&netmap.NetworkMap{
+		TKAEnabled: true,
+		TKAHead:    authority.Head(),
+	}, pm.CurrentPrefs())
+	if err != nil && err.Error() != "bootstrap: TKA with stateID of \"0:0\" is disallowed on this node" {
+		t.Errorf("tkaSyncIfNeededLocked() failed: %v", err)
+	}
+
+	if b.tka != nil {
+		t.Fatal("tka was re-initalized")
+	}
+}

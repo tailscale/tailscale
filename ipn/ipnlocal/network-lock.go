@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/persist"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/mak"
 )
@@ -134,7 +135,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		}
 
 		if wantEnabled && !isEnabled {
-			if err := b.tkaBootstrapFromGenesisLocked(bs.GenesisAUM); err != nil {
+			if err := b.tkaBootstrapFromGenesisLocked(bs.GenesisAUM, prefs.Persist()); err != nil {
 				return fmt.Errorf("bootstrap: %w", err)
 			}
 			isEnabled = true
@@ -278,7 +279,7 @@ func (b *LocalBackend) chonkPathLocked() string {
 // tailnet key authority, based on the given genesis AUM.
 //
 // b.mu must be held.
-func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) error {
+func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, persist persist.PersistView) error {
 	if err := b.CanSupportNetworkLock(); err != nil {
 		return err
 	}
@@ -286,6 +287,20 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM) err
 	var genesis tka.AUM
 	if err := genesis.Unserialize(g); err != nil {
 		return fmt.Errorf("reading genesis: %v", err)
+	}
+
+	if persist.Valid() && persist.DisallowedTKAStateIDs().Len() > 0 {
+		if genesis.State == nil {
+			return errors.New("invalid genesis: missing State")
+		}
+		bootstrapStateID := fmt.Sprintf("%d:%d", genesis.State.StateID1, genesis.State.StateID2)
+
+		for i := 0; i < persist.DisallowedTKAStateIDs().Len(); i++ {
+			stateID := persist.DisallowedTKAStateIDs().At(i)
+			if stateID == bootstrapStateID {
+				return fmt.Errorf("TKA with stateID of %q is disallowed on this node", stateID)
+			}
+		}
 	}
 
 	chonkDir := b.chonkPathLocked()
@@ -493,6 +508,31 @@ func (b *LocalBackend) NetworkLockKeyTrustedForTest(keyID tkatype.KeyID) bool {
 		panic("network lock not initialized")
 	}
 	return b.tka.authority.KeyTrusted(keyID)
+}
+
+// NetworkLockForceLocalDisable shuts down TKA locally, and denylists the current
+// TKA from being initialized locally in future.
+func (b *LocalBackend) NetworkLockForceLocalDisable() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return errNetworkLockNotActive
+	}
+
+	id1, id2 := b.tka.authority.StateIDs()
+	stateID := fmt.Sprintf("%d:%d", id1, id2)
+
+	newPrefs := b.pm.CurrentPrefs().AsStruct().Clone() // .Persist should always be initialized here.
+	newPrefs.Persist.DisallowedTKAStateIDs = append(newPrefs.Persist.DisallowedTKAStateIDs, stateID)
+	if err := b.pm.SetPrefs(newPrefs.View()); err != nil {
+		return fmt.Errorf("saving prefs: %w", err)
+	}
+
+	if err := os.RemoveAll(b.chonkPathLocked()); err != nil {
+		return fmt.Errorf("deleting TKA state: %w", err)
+	}
+	b.tka = nil
+	return nil
 }
 
 // NetworkLockSign signs the given node-key and submits it to the control plane.
