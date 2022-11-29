@@ -714,8 +714,3 @@ func (a *Authority) Keys() []Key {
 	}
 	return out
 }
-
-// StateIDs returns the stateIDs for this tailnet key authority.
-func (a *Authority) StateIDs() (uint64, uint64) {
-	return a.state.StateID1, a.state.StateID2
-}
