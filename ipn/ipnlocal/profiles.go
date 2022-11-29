@@ -98,21 +98,25 @@ func (pm *profileManager) matchingProfiles(f func(*ipn.LoginProfile) bool) (out 
 	return out
 }
 
-func (pm *profileManager) findProfilesByNodeID(nodeID tailcfg.StableNodeID) []*ipn.LoginProfile {
+// findProfilesByNodeID returns all profiles that have the provided nodeID and
+// belong to the same control server.
+func (pm *profileManager) findProfilesByNodeID(controlURL string, nodeID tailcfg.StableNodeID) []*ipn.LoginProfile {
 	if nodeID.IsZero() {
 		return nil
 	}
 	return pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.NodeID == nodeID
+		return p.NodeID == nodeID && p.ControlURL == controlURL
 	})
 }
 
-func (pm *profileManager) findProfilesByUserID(userID tailcfg.UserID) []*ipn.LoginProfile {
+// findProfilesByUserID returns all profiles that have the provided userID and
+// belong to the same control server.
+func (pm *profileManager) findProfilesByUserID(controlURL string, userID tailcfg.UserID) []*ipn.LoginProfile {
 	if userID.IsZero() {
 		return nil
 	}
 	return pm.matchingProfiles(func(p *ipn.LoginProfile) bool {
-		return p.UserProfile.ID == userID
+		return p.UserProfile.ID == userID && p.ControlURL == controlURL
 	})
 }
 
@@ -197,9 +201,9 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	if pm.isNewProfile {
 		pm.isNewProfile = false
 		// Check if we already have a profile for this user.
-		existing := pm.findProfilesByUserID(newPersist.UserProfile.ID)
+		existing := pm.findProfilesByUserID(prefs.ControlURL(), newPersist.UserProfile.ID)
 		// Also check if we have a profile with the same NodeID.
-		existing = append(existing, pm.findProfilesByNodeID(newPersist.NodeID)...)
+		existing = append(existing, pm.findProfilesByNodeID(prefs.ControlURL(), newPersist.NodeID)...)
 		if len(existing) == 0 {
 			cp.ID, cp.Key = newUnusedID(pm.knownProfiles)
 		} else {
@@ -217,6 +221,7 @@ func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	} else {
 		cp.Name = up.LoginName
 	}
+	cp.ControlURL = prefs.ControlURL()
 	cp.UserProfile = newPersist.UserProfile
 	cp.NodeID = newPersist.NodeID
 	pm.knownProfiles[cp.ID] = cp

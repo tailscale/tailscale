@@ -131,15 +131,22 @@ func TestProfileList(t *testing.T) {
 	if lp := pm.findProfileByName(carol.Name); lp != nil {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfilesByNodeID(carol.NodeID); lp != nil {
+	if lp := pm.findProfilesByNodeID(carol.ControlURL, carol.NodeID); lp != nil {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfilesByUserID(carol.UserProfile.ID); lp != nil {
+	if lp := pm.findProfilesByUserID(carol.ControlURL, carol.UserProfile.ID); lp != nil {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
 
 	pm.SetCurrentUserID("user2")
 	checkProfiles(t, "carol")
+	if lp := pm.findProfilesByNodeID(carol.ControlURL, carol.NodeID); lp == nil {
+		t.Fatalf("did not find profile for user2 in user2's profile list")
+	}
+	if lp := pm.findProfilesByUserID(carol.ControlURL, carol.UserProfile.ID); lp == nil {
+		t.Fatalf("did not find profile for user2 in user2's profile list")
+	}
+
 }
 
 // TestProfileManagement tests creating, loading, and switching profiles.
