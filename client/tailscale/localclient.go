@@ -28,6 +28,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
@@ -100,9 +101,6 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 		}
 	}
 	s := safesocket.DefaultConnectionStrategy(lc.socket())
-	// The user provided a non-default tailscaled socket address.
-	// Connect only to exactly what they provided.
-	s.UseFallback(false)
 	return safesocket.Connect(s)
 }
 
@@ -132,8 +130,8 @@ func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error)
 func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Response, error) {
 	res, err := lc.DoLocalRequest(req)
 	if err == nil {
-		if server := res.Header.Get("Tailscale-Version"); server != "" && server != ipn.IPCVersion() && onVersionMismatch != nil {
-			onVersionMismatch(ipn.IPCVersion(), server)
+		if server := res.Header.Get("Tailscale-Version"); server != "" && server != envknob.IPCVersion() && onVersionMismatch != nil {
+			onVersionMismatch(envknob.IPCVersion(), server)
 		}
 		if res.StatusCode == 403 {
 			all, _ := io.ReadAll(res.Body)

@@ -49,7 +49,7 @@ func TestBasics(t *testing.T) {
 
 	go func() {
 		s := DefaultConnectionStrategy(sock)
-		s.UsePort(port)
+		s.port = port
 		c, err := Connect(s)
 		if err != nil {
 			errs <- err
