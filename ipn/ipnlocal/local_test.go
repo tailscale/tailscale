@@ -743,3 +743,39 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 	}
 
 }
+
+// legacyBackend was the interface between Tailscale frontends
+// (e.g. cmd/tailscale, iOS/MacOS/Windows GUIs) and the tailscale
+// backend (e.g. cmd/tailscaled) running on the same machine.
+// (It has nothing to do with the interface between the backends
+// and the cloud control plane.)
+type legacyBackend interface {
+	// SetNotifyCallback sets the callback to be called on updates
+	// from the backend to the client.
+	SetNotifyCallback(func(ipn.Notify))
+	// Start starts or restarts the backend, typically when a
+	// frontend client connects.
+	Start(ipn.Options) error
+	// StartLoginInteractive requests to start a new interactive login
+	// flow. This should trigger a new BrowseToURL notification
+	// eventually.
+	StartLoginInteractive()
+	// Login logs in with an OAuth2 token.
+	Login(token *tailcfg.Oauth2Token)
+	// Logout terminates the current login session and stops the
+	// wireguard engine.
+	Logout()
+	// SetPrefs installs a new set of user preferences, including
+	// WantRunning. This may cause the wireguard engine to
+	// reconfigure or stop.
+	SetPrefs(*ipn.Prefs)
+	// RequestEngineStatus polls for an update from the wireguard
+	// engine. Only needed if you want to display byte
+	// counts. Connection events are emitted automatically without
+	// polling.
+	RequestEngineStatus()
+}
+
+// Verify that LocalBackend still implements the legacyBackend interface
+// for now, at least until the macOS and iOS clients move off of it.
+var _ legacyBackend = (*LocalBackend)(nil)
