@@ -489,7 +489,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[0].LoginFinished, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
-		c.Assert(nn[1].Prefs.Persist().LoginName, qt.Equals, "user1")
+		c.Assert(nn[1].Prefs.Persist().LoginName(), qt.Equals, "user1")
 		c.Assert(ipn.NeedsMachineAuth, qt.Equals, *nn[2].State)
 		c.Assert(ipn.NeedsMachineAuth, qt.Equals, b.State())
 	}
@@ -711,7 +711,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[1].Prefs.Persist(), qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().LoginName, qt.Equals, "user2")
+		c.Assert(nn[1].Prefs.Persist().LoginName(), qt.Equals, "user2")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
 		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
@@ -852,7 +852,7 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(nn[2].State, qt.IsNotNil)
 		// Prefs after finishing the login, so LoginName updated.
-		c.Assert(nn[1].Prefs.Persist().LoginName, qt.Equals, "user3")
+		c.Assert(nn[1].Prefs.Persist().LoginName(), qt.Equals, "user3")
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsFalse)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsTrue)
 		c.Assert(ipn.Starting, qt.Equals, *nn[2].State)
@@ -957,7 +957,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 			LegacyFrontendPrivateMachineKey: key.NewMachine(),
 		},
 	}).View())
-	if b.pm.CurrentPrefs().Persist().PrivateNodeKey.IsZero() {
+	if p := b.pm.CurrentPrefs().Persist(); !p.Valid() || p.PrivateNodeKey().IsZero() {
 		t.Fatalf("PrivateNodeKey not set")
 	}
 	p, err := b.EditPrefs(&ipn.MaskedPrefs{
@@ -973,20 +973,20 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 		t.Errorf("Hostname = %q; want foo", p.Hostname())
 	}
 
-	if !p.Persist().PrivateNodeKey.IsZero() {
-		t.Errorf("PrivateNodeKey = %v; want zero", p.Persist().PrivateNodeKey)
+	if !p.Persist().PrivateNodeKey().IsZero() {
+		t.Errorf("PrivateNodeKey = %v; want zero", p.Persist().PrivateNodeKey())
 	}
 
-	if !p.Persist().OldPrivateNodeKey.IsZero() {
-		t.Errorf("OldPrivateNodeKey = %v; want zero", p.Persist().OldPrivateNodeKey)
+	if !p.Persist().OldPrivateNodeKey().IsZero() {
+		t.Errorf("OldPrivateNodeKey = %v; want zero", p.Persist().OldPrivateNodeKey())
 	}
 
-	if !p.Persist().LegacyFrontendPrivateMachineKey.IsZero() {
-		t.Errorf("LegacyFrontendPrivateMachineKey = %v; want zero", p.Persist().LegacyFrontendPrivateMachineKey)
+	if !p.Persist().LegacyFrontendPrivateMachineKey().IsZero() {
+		t.Errorf("LegacyFrontendPrivateMachineKey = %v; want zero", p.Persist().LegacyFrontendPrivateMachineKey())
 	}
 
-	if !p.Persist().NetworkLockKey.IsZero() {
-		t.Errorf("NetworkLockKey= %v; want zero", p.Persist().NetworkLockKey)
+	if !p.Persist().NetworkLockKey().IsZero() {
+		t.Errorf("NetworkLockKey= %v; want zero", p.Persist().NetworkLockKey())
 	}
 }
 
