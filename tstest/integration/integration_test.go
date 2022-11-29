@@ -871,7 +871,6 @@ func (n *testNode) Ping(otherNode *testNode) error {
 func (n *testNode) AwaitListening() {
 	t := n.env.t
 	s := safesocket.DefaultConnectionStrategy(n.sockFile)
-	s.UseFallback(false) // connect only to the tailscaled that we started
 	if err := tstest.WaitFor(20*time.Second, func() (err error) {
 		c, err := safesocket.Connect(s)
 		if err != nil {

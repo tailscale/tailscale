@@ -9,39 +9,21 @@ package safesocket
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 )
 
-// TODO(apenwarr): handle magic cookie auth
 func connect(s *ConnectionStrategy) (net.Conn, error) {
 	if runtime.GOOS == "js" {
 		return nil, errors.New("safesocket.Connect not yet implemented on js/wasm")
 	}
-	if runtime.GOOS == "darwin" && s.fallback && s.path == "" && s.port == 0 {
-		return connectMacOSAppSandbox()
-	}
-	pipe, err := net.Dial("unix", s.path)
-	if err != nil {
-		if runtime.GOOS == "darwin" && s.fallback {
-			extConn, extErr := connectMacOSAppSandbox()
-			if extErr != nil {
-				return nil, fmt.Errorf("safesocket: failed to connect to %v: %v; failed to connect to Tailscale IPNExtension: %v", s.path, err, extErr)
-			}
-			return extConn, nil
-		}
-		return nil, err
-	}
-	return pipe, nil
+	return net.Dial("unix", s.path)
 }
 
-// TODO(apenwarr): handle magic cookie auth
 func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	// Unix sockets hang around in the filesystem even after nobody
 	// is listening on them. (Which is really unfortunate but long-
@@ -109,47 +91,4 @@ func socketPermissionsForOS() os.FileMode {
 	}
 	// Otherwise, root only.
 	return 0600
-}
-
-// connectMacOSAppSandbox connects to the Tailscale Network Extension (macOS App
-// Store build) or App Extension (macsys standalone build), where the CLI itself
-// is either running within the macOS App Sandbox or built separately (e.g.
-// homebrew or go install). This little dance to connect a regular user binary
-// to the sandboxed network extension is:
-//
-//   - the sandboxed IPNExtension picks a random localhost:0 TCP port
-//     to listen on
-//   - it also picks a random hex string that acts as an auth token
-//   - the CLI looks on disk for that TCP port + auth token (see localTCPPortAndTokenDarwin)
-//   - we send it upon TCP connect to prove to the Tailscale daemon that
-//     we're a suitably privileged user to have access the files on disk
-//     which the Network/App Extension wrote.
-func connectMacOSAppSandbox() (net.Conn, error) {
-	port, token, err := LocalTCPPortAndToken()
-	if err != nil {
-		return nil, fmt.Errorf("failed to find local Tailscale daemon: %w", err)
-	}
-	return connectMacTCP(port, token)
-}
-
-// connectMacTCP creates an authenticated net.Conn to the local macOS Tailscale
-// daemon for used by the "IPN" JSON message bus protocol (Tailscale's original
-// local non-HTTP IPC protocol).
-func connectMacTCP(port int, token string) (net.Conn, error) {
-	c, err := net.Dial("tcp", "localhost:"+strconv.Itoa(port))
-	if err != nil {
-		return nil, fmt.Errorf("error dialing IPNExtension: %w", err)
-	}
-	if _, err := io.WriteString(c, token+"\n"); err != nil {
-		return nil, fmt.Errorf("error writing auth token: %w", err)
-	}
-	buf := make([]byte, 5)
-	const authOK = "#IPN\n"
-	if _, err := io.ReadFull(c, buf); err != nil {
-		return nil, fmt.Errorf("error reading from IPNExtension post-auth: %w", err)
-	}
-	if string(buf) != authOK {
-		return nil, fmt.Errorf("invalid response reading from IPNExtension post-auth")
-	}
-	return c, nil
 }

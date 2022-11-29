@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/types/opt"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -431,4 +432,15 @@ func applyKeyValueEnv(r io.Reader) error {
 		Setenv(k, v)
 	}
 	return bs.Err()
+}
+
+// IPCVersion returns version.Long usually, unless TS_DEBUG_FAKE_IPC_VERSION is
+// set, in which it contains that value. This is only used for weird development
+// cases when testing mismatched versions and you want the client to act like it's
+// compatible with the server.
+func IPCVersion() string {
+	if v := String("TS_DEBUG_FAKE_IPC_VERSION"); v != "" {
+		return v
+	}
+	return version.Long
 }
