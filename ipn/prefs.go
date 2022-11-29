@@ -741,4 +741,8 @@ type LoginProfile struct {
 	// It is only relevant on Windows where we have a multi-user system.
 	// It is assigned once at profile creation time and never changes.
 	LocalUserID WindowsUserID
+
+	// ControlURL is the URL of the control server that this profile is logged
+	// into.
+	ControlURL string
 }
