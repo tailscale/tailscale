@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -41,6 +43,7 @@ type tkaState struct {
 	profile   ipn.ProfileID
 	authority *tka.Authority
 	storage   *tka.FS
+	filtered  []ipnstate.TKAFilteredPeer
 }
 
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
@@ -75,12 +78,30 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 {
 		peers := make([]*tailcfg.Node, 0, len(nm.Peers))
+		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete))
 		for i, p := range nm.Peers {
 			if !toDelete[i] {
 				peers = append(peers, p)
+			} else {
+				// Record information about the node we filtered out.
+				fp := ipnstate.TKAFilteredPeer{
+					Name:         p.Name,
+					ID:           p.ID,
+					StableID:     p.StableID,
+					TailscaleIPs: make([]netip.Addr, len(p.Addresses)),
+				}
+				for i, addr := range p.Addresses {
+					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+						fp.TailscaleIPs[i] = addr.Addr()
+					}
+				}
+				filtered = append(filtered, fp)
 			}
 		}
 		nm.Peers = peers
+		b.tka.filtered = filtered
+	} else {
+		b.tka.filtered = nil
 	}
 }
 
@@ -399,6 +420,11 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		}
 	}
 
+	filtered := make([]*ipnstate.TKAFilteredPeer, len(b.tka.filtered))
+	for i := 0; i < len(filtered); i++ {
+		filtered[i] = b.tka.filtered[i].Clone()
+	}
+
 	return &ipnstate.NetworkLockStatus{
 		Enabled:       true,
 		Head:          &head,
@@ -406,6 +432,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		NodeKey:       nodeKey,
 		NodeKeySigned: selfAuthorized,
 		TrustedKeys:   outKeys,
+		FilteredPeers: filtered,
 	}
 }
 
