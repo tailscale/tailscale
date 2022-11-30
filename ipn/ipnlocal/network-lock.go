@@ -46,13 +46,21 @@ type tkaState struct {
 	filtered  []ipnstate.TKAFilteredPeer
 }
 
+// permitTKAInitLocked returns true if tailnet lock initialization may
+// occur.
+// b.mu must be held.
+func (b *LocalBackend) permitTKAInitLocked() bool {
+	return envknob.UseWIPCode() || b.capTailnetLock
+}
+
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
-	if !envknob.UseWIPCode() {
-		return // Feature-flag till network-lock is in Alpha.
+	// TODO(tom): Remove this guard for 1.35 and later.
+	if b.tka == nil && !b.permitTKAInitLocked() {
+		return
 	}
 	if b.tka == nil {
 		return // TKA not enabled.
@@ -61,7 +69,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	var toDelete map[int]bool // peer index => true
 	for i, p := range nm.Peers {
 		if p.UnsignedPeerAPIOnly {
-			// Not subject to TKA.
+			// Not subject to tailnet lock.
 			continue
 		}
 		if len(p.KeySignature) == 0 {
@@ -123,17 +131,17 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 // tkaSyncIfNeeded immediately takes b.takeSyncLock which is held throughout,
 // and may take b.mu as required.
 func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsView) error {
-	if !envknob.UseWIPCode() {
-		// If the feature flag is not enabled, pretend we don't exist.
-		return nil
-	}
-
-	b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
-
 	b.tkaSyncLock.Lock() // take tkaSyncLock to make this function an exclusive section.
 	defer b.tkaSyncLock.Unlock()
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
+
+	// TODO(tom): Remove this guard for 1.35 and later.
+	if b.tka == nil && !b.permitTKAInitLocked() {
+		return nil
+	}
+
+	b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
 
 	ourNodeKey := prefs.Persist().PublicNodeKey()
 
@@ -352,10 +360,6 @@ func (b *LocalBackend) tkaBootstrapFromGenesisLocked(g tkatype.MarshaledAUM, per
 // CanSupportNetworkLock returns nil if tailscaled is able to operate
 // a local tailnet key authority (and hence enforce network lock).
 func (b *LocalBackend) CanSupportNetworkLock() error {
-	if !envknob.UseWIPCode() {
-		return errors.New("this feature is not yet complete, a later release may support this functionality")
-	}
-
 	if b.tka != nil {
 		// If the TKA is being used, it is supported.
 		return nil
@@ -453,6 +457,13 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	var ourNodeKey key.NodePublic
 	var nlPriv key.NLPrivate
 	b.mu.Lock()
+
+	// TODO(tom): Remove this guard for 1.35 and later.
+	if !b.permitTKAInitLocked() {
+		b.mu.Unlock()
+		return errors.New("this feature is not yet complete, a later release may support this functionality")
+	}
+
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
 		ourNodeKey = p.Persist().PublicNodeKey()
 		nlPriv = p.Persist().NetworkLockKey()
@@ -631,9 +642,6 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		return errors.New("no node-key: is tailscale logged in?")
 	}
 
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
 	var nlPriv key.NLPrivate
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
 		nlPriv = p.Persist().NetworkLockKey()
@@ -690,10 +698,6 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 
 // NetworkLockDisable disables network-lock using the provided disablement secret.
 func (b *LocalBackend) NetworkLockDisable(secret []byte) error {
-	if err := b.CanSupportNetworkLock(); err != nil {
-		return err
-	}
-
 	var (
 		ourNodeKey key.NodePublic
 		head       tka.AUMHash

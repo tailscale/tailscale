@@ -162,6 +162,7 @@ type LocalBackend struct {
 	tka            *tkaState
 	state          ipn.State
 	capFileSharing bool // whether netMap contains the file sharing capability
+	capTailnetLock bool // whether netMap contains the tailnet lock capability
 	// hostinfo is mutated in-place while mu is held.
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
@@ -869,6 +870,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 	// Prefs will be written out; this is not safe unless locked or cloned.
 	if st.NetMap != nil {
+		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLockAlpha)
+
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
 			b.logf("[v1] TKA sync error: %v", err)
