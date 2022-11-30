@@ -161,7 +161,7 @@ type Prefs struct {
 	ForceDaemon bool `json:"ForceDaemon,omitempty"`
 
 	// Egg is a optional debug flag.
-	Egg bool
+	Egg bool `json:",omitempty"`
 
 	// The following block of options only have an effect on Linux.
 
