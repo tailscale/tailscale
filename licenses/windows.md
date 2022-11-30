@@ -10,6 +10,7 @@ Windows][].  See also the dependencies in the [Tailscale CLI][].
 
 
  - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.0.0-rc.1/LICENSE))
+ - [github.com/Microsoft/go-winio](https://pkg.go.dev/github.com/Microsoft/go-winio) ([MIT](https://github.com/Microsoft/go-winio/blob/v0.6.0/LICENSE))
  - [github.com/alexbrainman/sspi](https://pkg.go.dev/github.com/alexbrainman/sspi) ([BSD-3-Clause](https://github.com/alexbrainman/sspi/blob/909beea2cc74/LICENSE))
  - [github.com/apenwarr/fixconsole](https://pkg.go.dev/github.com/apenwarr/fixconsole) ([Apache-2.0](https://github.com/apenwarr/fixconsole/blob/5a9f6489cc29/LICENSE))
  - [github.com/apenwarr/w32](https://pkg.go.dev/github.com/apenwarr/w32) ([BSD-3-Clause](https://github.com/apenwarr/w32/blob/aa00fece76ab/LICENSE))
