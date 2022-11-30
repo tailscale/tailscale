@@ -168,12 +168,17 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	}
 	fmt.Println()
 
-	if st.Enabled && st.NodeKey != nil {
+	if st.Enabled && st.NodeKey != nil && !st.PublicKey.IsZero() {
 		if st.NodeKeySigned {
 			fmt.Println("This node is accessible under tailnet-lock.")
 		} else {
+			p, err := st.PublicKey.MarshalText()
+			if err != nil {
+				return err
+			}
+
 			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
-			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v\n", st.NodeKey)
+			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, p)
 		}
 		fmt.Println()
 	}
