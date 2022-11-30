@@ -213,6 +213,26 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		}
 	}
 
+	if st.Enabled && len(st.FilteredPeers) > 0 {
+		fmt.Println()
+		fmt.Println("The following peers are locked out by tailnet lock & do not have connectivity:")
+		for _, p := range st.FilteredPeers {
+			var line strings.Builder
+			line.WriteString("\t")
+			line.WriteString(p.Name)
+			line.WriteString("\t")
+			for i, addr := range p.TailscaleIPs {
+				line.WriteString(addr.String())
+				if i < len(p.TailscaleIPs)-1 {
+					line.WriteString(", ")
+				}
+			}
+			line.WriteString("\t")
+			line.WriteString(string(p.StableID))
+			fmt.Println(line.String())
+		}
+	}
+
 	return nil
 }
 

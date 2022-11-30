@@ -24,6 +24,8 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TKAFilteredPeer
+
 // Status represents the entire state of the IPN network.
 type Status struct {
 	// Version is the daemon's long version (see version.Long).
@@ -74,6 +76,16 @@ type TKAKey struct {
 	Votes    uint
 }
 
+// TKAFilteredPeer describes a peer which was removed from the netmap
+// (i.e. no connectivity) because it failed tailnet lock
+// checks.
+type TKAFilteredPeer struct {
+	Name         string // DNS
+	ID           tailcfg.NodeID
+	StableID     tailcfg.StableNodeID
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
+}
+
 // NetworkLockStatus represents whether network-lock is enabled,
 // along with details about the locally-known state of the tailnet
 // key authority.
@@ -99,6 +111,11 @@ type NetworkLockStatus struct {
 	// TrustedKeys describes the keys currently trusted to make changes
 	// to network-lock.
 	TrustedKeys []TKAKey
+
+	// FilteredPeers describes peers which were removed from the netmap
+	// (i.e. no connectivity) because they failed tailnet lock
+	// checks.
+	FilteredPeers []*TKAFilteredPeer
 }
 
 // NetworkLockUpdate describes a change to network-lock state.
