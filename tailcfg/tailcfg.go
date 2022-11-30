@@ -87,7 +87,8 @@ type CapabilityVersion int
 //   - 48: 2022-11-02: Node.UnsignedPeerAPIOnly
 //   - 49: 2022-11-03: Client understands EarlyNoise
 //   - 50: 2022-11-14: Client understands CapabilityIngress
-const CurrentCapabilityVersion CapabilityVersion = 50
+//   - 51: 2022-11-30: Client understands CapabilityTailnetLockAlpha
+const CurrentCapabilityVersion CapabilityVersion = 51
 
 type StableID string
 
@@ -1706,6 +1707,12 @@ const (
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+
+	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
+	// and initialization of tailnet lock may proceed.
+	//
+	// TODO(tom): Remove this for 1.35 and later.
+	CapabilityTailnetLockAlpha = "https://tailscale.com/cap/tailnet-lock-alpha"
 
 	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 
