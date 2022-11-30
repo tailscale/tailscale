@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin && !ts_macext
+//go:build darwin
 
 package netns
 
 import (
+	"errors"
 	"fmt"
+	"log"
+	"net"
 	"strings"
 	"syscall"
 
@@ -27,7 +30,7 @@ func control(logf logger.Logf) func(network, address string, c syscall.RawConn) 
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
 func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) error {
-	if strings.HasPrefix(address, "127.") || address == "::1" {
+	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
 		return nil
 	}
@@ -36,6 +39,26 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 		logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
 		return nil
 	}
+
+	return bindConnToInterface(c, network, address, idx, logf)
+}
+
+// SetListenConfigInterfaceIndex sets lc.Control such that sockets are bound
+// to the provided interface index.
+func SetListenConfigInterfaceIndex(lc *net.ListenConfig, ifIndex int) error {
+	if lc == nil {
+		return errors.New("nil ListenConfig")
+	}
+	if lc.Control != nil {
+		return errors.New("ListenConfig.Control already set")
+	}
+	lc.Control = func(network, address string, c syscall.RawConn) error {
+		return bindConnToInterface(c, network, address, ifIndex, log.Printf)
+	}
+	return nil
+}
+
+func bindConnToInterface(c syscall.RawConn, network, address string, ifIndex int, logf logger.Logf) error {
 	v6 := strings.Contains(address, "]:") || strings.HasSuffix(network, "6") // hacky test for v6
 	proto := unix.IPPROTO_IP
 	opt := unix.IP_BOUND_IF
@@ -45,14 +68,14 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 	}
 
 	var sockErr error
-	err = c.Control(func(fd uintptr) {
-		sockErr = unix.SetsockoptInt(int(fd), proto, opt, idx)
+	err := c.Control(func(fd uintptr) {
+		sockErr = unix.SetsockoptInt(int(fd), proto, opt, ifIndex)
 	})
+	if sockErr != nil {
+		logf("[unexpected] netns: bindConnToInterface(%q, %q), v6=%v, index=%v: %v", network, address, v6, ifIndex, sockErr)
+	}
 	if err != nil {
 		return fmt.Errorf("RawConn.Control on %T: %w", c, err)
-	}
-	if sockErr != nil {
-		logf("[unexpected] netns: control(%q, %q), v6=%v, index=%v: %v", network, address, v6, idx, sockErr)
 	}
 	return sockErr
 }
