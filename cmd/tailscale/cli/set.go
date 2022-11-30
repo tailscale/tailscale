@@ -44,6 +44,7 @@ type setArgsT struct {
 	opUser                 string
 	acceptedRisks          string
 	profileName            string
+	forceDaemon            bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -62,6 +63,11 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
+	switch goos {
+	case "windows":
+		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
+	}
+
 	registerAcceptRiskFlag(setf, &setArgs.acceptedRisks)
 	return setf
 }
@@ -91,6 +97,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			RunSSH:                 setArgs.runSSH,
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
+			ForceDaemon:            setArgs.forceDaemon,
 		},
 	}
 
