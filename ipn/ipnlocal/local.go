@@ -570,6 +570,27 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		ss.Online = health.GetInPollNetMap()
+		if b.netMap != nil {
+			ss.InNetworkMap = true
+			ss.HostName = b.netMap.Hostinfo.Hostname
+			ss.DNSName = b.netMap.Name
+			ss.UserID = b.netMap.User
+			if sn := b.netMap.SelfNode; sn != nil {
+				peerStatusFromNode(ss, sn)
+				if c := sn.Capabilities; len(c) > 0 {
+					ss.Capabilities = append([]string(nil), c...)
+				}
+			}
+		} else {
+			ss.HostName, _ = os.Hostname()
+		}
+		for _, pln := range b.peerAPIListeners {
+			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
+		}
+	})
+	// MutateSelfStatus is called before MutateStatus, so that way the self node's tailscale ips can be assigned to ipn state's tailscale ips.
 	sb.MutateStatus(func(s *ipnstate.Status) {
 		s.Version = version.Long
 		s.BackendState = b.state.String()
@@ -599,6 +620,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			s.CurrentTailnet.MagicDNSSuffix = b.netMap.MagicDNSSuffix()
 			s.CurrentTailnet.MagicDNSEnabled = b.netMap.DNS.Proxied
 			s.CurrentTailnet.Name = b.netMap.Domain
+			s.TailscaleIPs = s.Self.TailscaleIPs
 			if prefs := b.pm.CurrentPrefs(); prefs.Valid() {
 				if !prefs.RouteAll() && b.netMap.AnyPeersAdvertiseRoutes() {
 					s.Health = append(s.Health, healthmsg.WarnAcceptRoutesOff)
@@ -619,29 +641,8 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			}
 		}
 	})
-	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
-		ss.Online = health.GetInPollNetMap()
-		if b.netMap != nil {
-			ss.InNetworkMap = true
-			ss.HostName = b.netMap.Hostinfo.Hostname
-			ss.DNSName = b.netMap.Name
-			ss.UserID = b.netMap.User
-			if sn := b.netMap.SelfNode; sn != nil {
-				peerStatusFromNode(ss, sn)
-				if c := sn.Capabilities; len(c) > 0 {
-					ss.Capabilities = append([]string(nil), c...)
-				}
-			}
-		} else {
-			ss.HostName, _ = os.Hostname()
-		}
-		for _, pln := range b.peerAPIListeners {
-			ss.PeerAPIURL = append(ss.PeerAPIURL, pln.urlStr)
-		}
-	})
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
-
 	if extraLocked != nil {
 		extraLocked(sb)
 	}
@@ -660,16 +661,9 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if p.LastSeen != nil {
 			lastSeen = *p.LastSeen
 		}
-		var tailscaleIPs = make([]netip.Addr, 0, len(p.Addresses))
-		for _, addr := range p.Addresses {
-			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
-				tailscaleIPs = append(tailscaleIPs, addr.Addr())
-			}
-		}
 		ps := &ipnstate.PeerStatus{
 			InNetworkMap: true,
 			UserID:       p.User,
-			TailscaleIPs: tailscaleIPs,
 			HostName:     p.Hostinfo.Hostname(),
 			DNSName:      p.Name,
 			OS:           p.Hostinfo.OS(),
@@ -706,6 +700,12 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 	if n.PrimaryRoutes != nil {
 		v := views.IPPrefixSliceOf(n.PrimaryRoutes)
 		ps.PrimaryRoutes = &v
+	}
+	ps.TailscaleIPs = make([]netip.Addr, 0, len(n.Addresses))
+	for _, addr := range n.Addresses {
+		if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
+			ps.TailscaleIPs = append(ps.TailscaleIPs, addr.Addr())
+		}
 	}
 }
 
