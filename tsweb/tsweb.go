@@ -239,7 +239,7 @@ func StdHandler(h ReturnHandler, opts HandlerOptions) http.Handler {
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard
 	}
-	return retHandler{h, opts}
+	return compressingHandler{retHandler{h, opts}}
 }
 
 // retHandler is an http.Handler that wraps a Handler and handles errors.
