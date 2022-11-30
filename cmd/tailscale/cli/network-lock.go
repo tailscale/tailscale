@@ -99,7 +99,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 
 	fmt.Println("You are initializing tailnet lock with trust in the following keys:")
 	for _, k := range keys {
-		fmt.Printf(" - %x (%s key)\n", k.Public, k.Kind.String())
+		fmt.Printf(" - tlpub:%x (%s key)\n", k.Public, k.Kind.String())
 	}
 	fmt.Println()
 
@@ -172,37 +172,23 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		if st.NodeKeySigned {
 			fmt.Println("This node is accessible under tailnet-lock.")
 		} else {
-			p, err := st.PublicKey.MarshalText()
-			if err != nil {
-				return err
-			}
-
 			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
-			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, p)
+			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
 		}
 		fmt.Println()
 	}
 
 	if !st.PublicKey.IsZero() {
-		p, err := st.PublicKey.MarshalText()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("This node's tailnet-lock key: %s\n", p)
+		fmt.Printf("This node's tailnet-lock key: %s\n", st.PublicKey.CLIString())
 		fmt.Println()
 	}
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
 		fmt.Println("Keys trusted to make changes to tailnet-lock:")
 		for _, k := range st.TrustedKeys {
-			key, err := k.Key.MarshalText()
-			if err != nil {
-				return err
-			}
-
 			var line strings.Builder
 			line.WriteString("\t")
-			line.WriteString(string(key))
+			line.WriteString(k.Key.CLIString())
 			line.WriteString("\t")
 			line.WriteString(fmt.Sprint(k.Votes))
 			line.WriteString("\t")
