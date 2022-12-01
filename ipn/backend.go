@@ -61,6 +61,10 @@ const (
 	// client either regularly or when they change, without having to ask for
 	// each one via RequestEngineStatus.
 	NotifyWatchEngineUpdates NotifyWatchOpt = 1 << iota
+
+	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL
+	NotifyInitialPrefs  // if set, the first Notify message (sent immediately) will contain the current Prefs
+	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
