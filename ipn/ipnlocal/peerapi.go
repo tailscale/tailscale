@@ -530,7 +530,7 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 	if addH2C != nil {
 		addH2C(httpServer)
 	}
-	go httpServer.Serve(netutil.NewOneConnListener(c, pln.ln.Addr()))
+	go httpServer.Serve(netutil.NewOneConnListener(c, nil))
 }
 
 // peerAPIHandler serves the PeerAPI for a source specific client.
