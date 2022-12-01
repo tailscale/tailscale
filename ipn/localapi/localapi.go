@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/strs"
@@ -605,6 +606,32 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e := json.NewEncoder(w)
 	e.SetIndent("", "\t")
 	e.Encode(st)
+}
+
+// InUseOtherUserIPNStream reports whether r is a request for the watch-ipn-bus
+// handler. If so, it writes an ipn.Notify InUseOtherUser message to the user
+// and returns true. Otherwise it returns false, in which case it doesn't write
+// to w.
+//
+// Unlike the regular watch-ipn-bus handler, this one doesn't block. The caller
+// (in ipnserver.Server) provides the blocking until the connection is no longer
+// in use.
+func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) (handled bool) {
+	if r.Method != "GET" || r.URL.Path != "/localapi/v0/watch-ipn-bus" {
+		return false
+	}
+	js, err := json.Marshal(&ipn.Notify{
+		Version:    version.Long,
+		State:      ptr.To(ipn.InUseOtherUser),
+		ErrMessage: ptr.To(err.Error()),
+	})
+	if err != nil {
+		return false
+	}
+	js = append(js, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(js)
+	return true
 }
 
 func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
