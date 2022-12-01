@@ -158,7 +158,9 @@ change in the future.
 			upCmd,
 			downCmd,
 			setCmd,
+			loginCmd,
 			logoutCmd,
+			switchCmd,
 			netcheckCmd,
 			ipCmd,
 			statusCmd,
@@ -192,10 +194,6 @@ change in the future.
 	switch {
 	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
-	case slices.Contains(args, "login"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, loginCmd)
-	case slices.Contains(args, "switch"):
-		rootCmd.Subcommands = append(rootCmd.Subcommands, switchCmd)
 	case slices.Contains(args, "serve"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, serveCmd)
 	}
