@@ -58,7 +58,7 @@ func switchProfile(ctx context.Context, args []string) error {
 		return listProfiles(ctx)
 	}
 	if len(args) != 1 {
-		outln("usage: tailscale profile switch NAME")
+		outln("usage: tailscale switch NAME")
 		os.Exit(1)
 	}
 	cp, all, err := localClient.ProfileStatus(ctx)
