@@ -133,6 +133,7 @@ var debugCmd = &ffcli.Command{
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("watch-ipn")
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
+				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
 				return fs
 			})(),
 		},
@@ -318,11 +319,16 @@ func runPrefs(ctx context.Context, args []string) error {
 }
 
 var watchIPNArgs struct {
-	netmap bool
+	netmap  bool
+	initial bool
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
-	watcher, err := localClient.WatchIPNBus(ctx, 0)
+	var mask ipn.NotifyWatchOpt
+	if watchIPNArgs.initial {
+		mask = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+	}
+	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
 		return err
 	}

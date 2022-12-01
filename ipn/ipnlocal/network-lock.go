@@ -499,7 +499,7 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 
 	b.logf("Generated genesis AUM to initialize network lock, trusting the following keys:")
 	for i, k := range genesisAUM.State.Keys {
-		b.logf(" - key[%d] = nlpub:%x with %d votes", i, k.Public, k.Votes)
+		b.logf(" - key[%d] = tlpub:%x with %d votes", i, k.Public, k.Votes)
 	}
 
 	// Phase 1/2 of initialization: Transmit the genesis AUM to Control.

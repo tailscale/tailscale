@@ -101,7 +101,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 
 	fmt.Println("You are initializing tailnet lock with the following trusted signing keys:")
 	for _, k := range keys {
-		fmt.Printf(" - %x (%s key)\n", k.Public, k.Kind.String())
+		fmt.Printf(" - tlpub:%x (%s key)\n", k.Public, k.Kind.String())
 	}
 	fmt.Println()
 
@@ -175,37 +175,23 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		if st.NodeKeySigned {
 			fmt.Println("This node is accessible under tailnet lock.")
 		} else {
-			p, err := st.PublicKey.MarshalText()
-			if err != nil {
-				return err
-			}
-
-			fmt.Println("This node is LOCKED OUT by tailnet lock, and action is required to establish connectivity.")
-			fmt.Printf("Run the following command on a node with a trusted signing key:\n\ttailscale lock sign %v %s\n", st.NodeKey, p)
+			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
+			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
 		}
 		fmt.Println()
 	}
 
 	if !st.PublicKey.IsZero() {
-		p, err := st.PublicKey.MarshalText()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("This node's tailnet lock key: %s\n", p)
+		fmt.Printf("This node's tailnet-lock key: %s\n", st.PublicKey.CLIString())
 		fmt.Println()
 	}
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
 		fmt.Println("Trusted signing keys:")
 		for _, k := range st.TrustedKeys {
-			key, err := k.Key.MarshalText()
-			if err != nil {
-				return err
-			}
-
 			var line strings.Builder
 			line.WriteString("\t")
-			line.WriteString(string(key))
+			line.WriteString(k.Key.CLIString())
 			line.WriteString("\t")
 			line.WriteString(fmt.Sprint(k.Votes))
 			line.WriteString("\t")
@@ -369,7 +355,7 @@ var nlDisableCmd = &ffcli.Command{
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock disable' command uses the specified disablement
-secret for tailnet lock.
+secret to disable tailnet lock.
 
 If tailnet lock is re-enabled, new disablement secrets can be generated.
 
@@ -394,7 +380,7 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 var nlLocalDisableCmd = &ffcli.Command{
 	Name:       "local-disable",
 	ShortUsage: "local-disable",
-	ShortHelp:  "Disables tailnet lock (currently enabled) for this node only",
+	ShortHelp:  "Disables tailnet lock for this node only",
 	LongHelp: strings.TrimSpace(`
 
 The 'tailscale lock local-disable' command disables tailnet lock for only

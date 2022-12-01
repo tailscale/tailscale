@@ -12,6 +12,7 @@ import (
 	"os/exec"
 
 	"golang.org/x/sys/unix"
+	"tailscale.com/types/ptr"
 	"tailscale.com/version/distro"
 )
 
@@ -22,8 +23,8 @@ func init() {
 }
 
 var (
-	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: ptrTo(freebsdVersionMeta)}
-	lazyOSVersion   = &lazyAtomicValue[string]{f: ptrTo(osVersionFreeBSD)}
+	lazyVersionMeta = &lazyAtomicValue[versionMeta]{f: ptr.To(freebsdVersionMeta)}
+	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionFreeBSD)}
 )
 
 func distroNameFreeBSD() string {

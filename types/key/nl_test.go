@@ -37,4 +37,13 @@ func TestNLPrivate(t *testing.T) {
 	if !bytes.Equal(decodedPub.k[:], pub.k[:]) {
 		t.Error("decoded and generated NLPublic bytes differ")
 	}
+
+	// Test decoding with CLI prefix: 'nlpub:' => 'tlpub:'
+	decodedPub = NLPublic{}
+	if err := decodedPub.UnmarshalText([]byte(pub.CLIString())); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decodedPub.k[:], pub.k[:]) {
+		t.Error("decoded and generated NLPublic bytes differ (CLI prefix)")
+	}
 }
