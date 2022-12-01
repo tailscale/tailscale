@@ -59,6 +59,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
@@ -534,6 +535,10 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 func (b *LocalBackend) Prefs() ipn.PrefsView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.prefsLocked()
+}
+
+func (b *LocalBackend) prefsLocked() ipn.PrefsView {
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
 }
 
@@ -1736,14 +1741,40 @@ func (b *LocalBackend) readPoller() {
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 
+	var ini *ipn.Notify
+
 	b.mu.Lock()
+	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+	if mask&initialBits != 0 {
+		ini = &ipn.Notify{}
+		if mask&ipn.NotifyInitialState != 0 {
+			ini.State = ptr.To(b.state)
+			if b.state == ipn.NeedsLogin {
+				ini.BrowseToURL = ptr.To(b.authURLSticky)
+			}
+		}
+		if mask&ipn.NotifyInitialPrefs != 0 {
+			ini.Prefs = ptr.To(b.prefsLocked())
+		}
+		if mask&ipn.NotifyInitialNetMap != 0 {
+			ini.NetMap = b.netMap
+		}
+	}
+
 	handle := b.notifyWatchers.Add(ch)
 	b.mu.Unlock()
+
 	defer func() {
 		b.mu.Lock()
 		delete(b.notifyWatchers, handle)
 		b.mu.Unlock()
 	}()
+
+	if ini != nil {
+		if !fn(ini) {
+			return
+		}
+	}
 
 	// The GUI clients want to know when peers become active or inactive.
 	// They've historically got this information by polling for it, which is
