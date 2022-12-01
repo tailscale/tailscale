@@ -28,7 +28,7 @@ import (
 var certCmd = &ffcli.Command{
 	Name:       "cert",
 	Exec:       runCert,
-	ShortHelp:  "get TLS certs",
+	ShortHelp:  "Get TLS certs",
 	ShortUsage: "cert [flags] <domain>",
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("cert")
