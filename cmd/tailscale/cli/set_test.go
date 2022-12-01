@@ -11,9 +11,8 @@ import (
 
 	"tailscale.com/ipn"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/types/ptr"
 )
-
-func ptrTo[T any](v T) *T { return &v }
 
 func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 	pfx := netip.MustParsePrefix
@@ -29,80 +28,80 @@ func TestCalcAdvertiseRoutesForSet(t *testing.T) {
 		},
 		{
 			name:    "advertise-exit",
-			setExit: ptrTo(true),
+			setExit: ptr.To(true),
 			want:    tsaddr.ExitRoutes(),
 		},
 		{
 			name:    "advertise-exit/already-routes",
 			was:     []netip.Prefix{pfx("34.0.0.0/16")},
-			setExit: ptrTo(true),
+			setExit: ptr.To(true),
 			want:    []netip.Prefix{pfx("34.0.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
 		},
 		{
 			name:    "advertise-exit/already-exit",
 			was:     tsaddr.ExitRoutes(),
-			setExit: ptrTo(true),
+			setExit: ptr.To(true),
 			want:    tsaddr.ExitRoutes(),
 		},
 		{
 			name:    "stop-advertise-exit",
 			was:     tsaddr.ExitRoutes(),
-			setExit: ptrTo(false),
+			setExit: ptr.To(false),
 			want:    nil,
 		},
 		{
 			name:    "stop-advertise-exit/with-routes",
 			was:     []netip.Prefix{pfx("34.0.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-			setExit: ptrTo(false),
+			setExit: ptr.To(false),
 			want:    []netip.Prefix{pfx("34.0.0.0/16")},
 		},
 		{
 			name:      "advertise-routes",
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16")},
 		},
 		{
 			name:      "advertise-routes/already-exit",
 			was:       tsaddr.ExitRoutes(),
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
 		},
 		{
 			name:      "advertise-routes/already-diff-routes",
 			was:       []netip.Prefix{pfx("34.0.0.0/16")},
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16")},
 		},
 		{
 			name:      "stop-advertise-routes",
 			was:       []netip.Prefix{pfx("34.0.0.0/16")},
-			setRoutes: ptrTo(""),
+			setRoutes: ptr.To(""),
 			want:      nil,
 		},
 		{
 			name:      "stop-advertise-routes/already-exit",
 			was:       []netip.Prefix{pfx("34.0.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-			setRoutes: ptrTo(""),
+			setRoutes: ptr.To(""),
 			want:      tsaddr.ExitRoutes(),
 		},
 		{
 			name:      "advertise-routes-and-exit",
-			setExit:   ptrTo(true),
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setExit:   ptr.To(true),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
 		},
 		{
 			name:      "advertise-routes-and-exit/already-exit",
 			was:       tsaddr.ExitRoutes(),
-			setExit:   ptrTo(true),
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setExit:   ptr.To(true),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
 		},
 		{
 			name:      "advertise-routes-and-exit/already-routes",
 			was:       []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16")},
-			setExit:   ptrTo(true),
-			setRoutes: ptrTo("10.0.0.0/24,192.168.0.0/16"),
+			setExit:   ptr.To(true),
+			setRoutes: ptr.To("10.0.0.0/24,192.168.0.0/16"),
 			want:      []netip.Prefix{pfx("10.0.0.0/24"), pfx("192.168.0.0/16"), tsaddr.AllIPv4(), tsaddr.AllIPv6()},
 		},
 	}

@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/winutil"
 )
 
@@ -20,8 +21,8 @@ func init() {
 }
 
 var (
-	lazyOSVersion   = &lazyAtomicValue[string]{f: ptrTo(osVersionWindows)}
-	lazyPackageType = &lazyAtomicValue[string]{f: ptrTo(packageTypeWindows)}
+	lazyOSVersion   = &lazyAtomicValue[string]{f: ptr.To(osVersionWindows)}
+	lazyPackageType = &lazyAtomicValue[string]{f: ptr.To(packageTypeWindows)}
 )
 
 func osVersionWindows() string {
