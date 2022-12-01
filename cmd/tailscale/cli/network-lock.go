@@ -27,7 +27,8 @@ import (
 var netlockCmd = &ffcli.Command{
 	Name:       "lock",
 	ShortUsage: "lock <sub-command> <arguments>",
-	ShortHelp:  "Manipulate the tailnet key authority",
+	ShortHelp:  "Manage tailnet lock",
+	LongHelp:  "Manage tailnet lock",
 	Subcommands: []*ffcli.Command{
 		nlInitCmd,
 		nlStatusCmd,
@@ -54,15 +55,16 @@ var nlInitCmd = &ffcli.Command{
 	ShortHelp:  "Initialize tailnet lock",
 	LongHelp: strings.TrimSpace(`
 
-The 'tailscale lock init' command initializes tailnet lock across the
-entire tailnet. The specified keys are initially trusted to sign nodes
-or to make further changes to tailnet lock.
+The 'tailscale lock init' command initializes tailnet lock for the
+entire tailnet. The tailnet lock keys specified are those initially
+trusted to sign nodes or to make further changes to tailnet lock.
 
-You can identify the key for a node you wish to trust by running 'tailscale lock'
-on that node, and copying the node's tailnet lock key.
+You can identify the tailnet lock key for a node you wish to trust by
+running 'tailscale lock' on that node, and copying the node's tailnet
+lock key.
 
-In the event that tailnet lock need be disabled, it can be disabled using
-the 'tailscale lock disable' command and one of the disablement secrets.
+To disable tailnet lock, use the 'tailscale lock disable' command
+along with one of the disablement secrets.
 The number of disablement secrets to be generated is specified using the
 --gen-disablements flag. Initializing tailnet lock requires at least
 one disablement.
@@ -88,7 +90,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if st.Enabled {
-		return errors.New("network-lock is already enabled")
+		return errors.New("tailnet lock is already enabled")
 	}
 
 	// Parse initially-trusted keys & disablement values.
@@ -97,7 +99,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Println("You are initializing tailnet lock with trust in the following keys:")
+	fmt.Println("You are initializing tailnet lock with the following trusted signing keys:")
 	for _, k := range keys {
 		fmt.Printf(" - tlpub:%x (%s key)\n", k.Public, k.Kind.String())
 	}
@@ -106,7 +108,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	if !nlInitArgs.confirm {
 		fmt.Printf("%d disablement secrets will be generated.\n", nlInitArgs.numDisablements)
 		if nlInitArgs.disablementForSupport {
-			fmt.Println("A disablement secret for support will be generated and transmitted to Tailscale.")
+			fmt.Println("A disablement secret will be generated and transmitted to Tailscale support.")
 		}
 
 		genSupportFlag := ""
@@ -136,7 +138,7 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 			return err
 		}
 		disablementValues = append(disablementValues, tka.DisablementKDF(supportDisablement))
-		fmt.Println("A disablement secret for support has been generated and will be transmitted to Tailscale upon initialization.")
+		fmt.Println("A disablement secret for Tailscale support has been generated and will be transmitted to Tailscale upon initialization.")
 	}
 
 	// The state returned by NetworkLockInit likely doesn't contain the initialized state,
@@ -153,6 +155,7 @@ var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "status",
 	ShortHelp:  "Outputs the state of network lock",
+	LongHelp:  "Outputs the state of network lock",
 	Exec:       runNetworkLockStatus,
 }
 
@@ -162,15 +165,15 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 	if st.Enabled {
-		fmt.Println("Tailnet-lock is ENABLED.")
+		fmt.Println("Tailnet lock is ENABLED.")
 	} else {
-		fmt.Println("Tailnet-lock is NOT enabled.")
+		fmt.Println("Tailnet lock is NOT enabled.")
 	}
 	fmt.Println()
 
 	if st.Enabled && st.NodeKey != nil && !st.PublicKey.IsZero() {
 		if st.NodeKeySigned {
-			fmt.Println("This node is accessible under tailnet-lock.")
+			fmt.Println("This node is accessible under tailnet lock.")
 		} else {
 			fmt.Println("This node is LOCKED OUT by tailnet-lock, and action is required to establish connectivity.")
 			fmt.Printf("Run the following command on a node with a trusted key:\n\ttailscale lock sign %v %s\n", st.NodeKey, st.PublicKey.CLIString())
@@ -184,7 +187,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	}
 
 	if st.Enabled && len(st.TrustedKeys) > 0 {
-		fmt.Println("Keys trusted to make changes to tailnet-lock:")
+		fmt.Println("Trusted signing keys:")
 		for _, k := range st.TrustedKeys {
 			var line strings.Builder
 			line.WriteString("\t")
@@ -201,7 +204,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 
 	if st.Enabled && len(st.FilteredPeers) > 0 {
 		fmt.Println()
-		fmt.Println("The following peers are locked out by tailnet lock & do not have connectivity:")
+		fmt.Println("The following nodes are locked out by tailnet lock and cannot connect to other nodes:")
 		for _, p := range st.FilteredPeers {
 			var line strings.Builder
 			line.WriteString("\t")
@@ -225,7 +228,8 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 var nlAddCmd = &ffcli.Command{
 	Name:       "add",
 	ShortUsage: "add <public-key>...",
-	ShortHelp:  "Adds one or more signing keys to the tailnet key authority",
+	ShortHelp:  "Adds one or more trusted signing keys to tailnet lock",
+	LongHelp:  "Adds one or more trusted signing keys to tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, args, nil)
 	},
@@ -234,7 +238,8 @@ var nlAddCmd = &ffcli.Command{
 var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
 	ShortUsage: "remove <public-key>...",
-	ShortHelp:  "Removes one or more signing keys to the tailnet key authority",
+	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
+	LongHelp:  "Removes one or more trusted signing keys from tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, nil, args)
 	},
@@ -293,7 +298,7 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 		return fixTailscaledConnectError(err)
 	}
 	if !st.Enabled {
-		return errors.New("tailnet-lock is not enabled")
+		return errors.New("tailnet lock is not enabled")
 	}
 
 	addKeys, _, err := parseNLArgs(addArgs, true, false)
@@ -317,7 +322,8 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
 	ShortUsage: "sign <node-key> [<rotation-key>]",
-	ShortHelp:  "Signs a node-key and transmits that signature to the control plane",
+	ShortHelp:  "Signs a node key and transmits the signature to the coordination server",
+	LongHelp:  "Signs a node key and transmits the signature to the coordination server",
 	Exec:       runNetworkLockSign,
 }
 
@@ -345,7 +351,18 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 var nlDisableCmd = &ffcli.Command{
 	Name:       "disable",
 	ShortUsage: "disable <disablement-secret>",
-	ShortHelp:  "Consumes a disablement secret to shut down tailnet-lock across the tailnet",
+	ShortHelp:  "Consumes a disablement secret to shut down tailnet lock for the tailnet",
+	LongHelp: strings.TrimSpace(`
+
+The 'tailscale lock disable' command uses the specified disablement
+secret to disable tailnet lock.
+
+If tailnet lock is re-enabled, new disablement secrets can be generated.
+
+Once this secret is used, it has been distributed
+to all nodes in the tailnet and should be considered public.
+
+`),
 	Exec:       runNetworkLockDisable,
 }
 
@@ -363,7 +380,18 @@ func runNetworkLockDisable(ctx context.Context, args []string) error {
 var nlLocalDisableCmd = &ffcli.Command{
 	Name:       "local-disable",
 	ShortUsage: "local-disable",
-	ShortHelp:  "Disables the currently-active tailnet lock for this node",
+	ShortHelp:  "Disables tailnet lock for this node only",
+	LongHelp: strings.TrimSpace(`
+
+The 'tailscale lock local-disable' command disables tailnet lock for only
+the current node.
+
+If the current node is locked out, this does not mean that it can initiate
+connections in a tailnet with tailnet lock enabled. Rather, this means
+that the current node will accept traffic from other nodes in the tailnet
+that are locked out.
+
+`),
 	Exec:       runNetworkLockLocalDisable,
 }
 
@@ -375,6 +403,7 @@ var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
 	ShortUsage: "disablement-kdf <hex-encoded-disablement-secret>",
 	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
+	LongHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
 }
 
@@ -397,7 +426,8 @@ var nlLogArgs struct {
 var nlLogCmd = &ffcli.Command{
 	Name:       "log",
 	ShortUsage: "log [--limit N]",
-	ShortHelp:  "List changes applied to tailnet-lock",
+	ShortHelp:  "List changes applied to tailnet lock",
+	LongHelp:  "List changes applied to tailnet lock",
 	Exec:       runNetworkLockLog,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")
