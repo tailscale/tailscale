@@ -725,18 +725,20 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
-	i, err := interfaces.GetList()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-
-	dr, err := interfaces.DefaultRoute()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<h1>Interfaces</h1>")
-	fmt.Fprintf(w, "<h3>Default route is %q(%d)</h3>\n", dr.InterfaceName, dr.InterfaceIndex)
+
+	if dr, err := interfaces.DefaultRoute(); err == nil {
+		fmt.Fprintf(w, "<h3>Default route is %q(%d)</h3>\n", html.EscapeString(dr.InterfaceName), dr.InterfaceIndex)
+	} else {
+		fmt.Fprintf(w, "<h3>Could not get the default route: %s</h3>\n", html.EscapeString(err.Error()))
+	}
+
+	i, err := interfaces.GetList()
+	if err != nil {
+		fmt.Fprintf(w, "Could not get interfaces: %s\n", html.EscapeString(err.Error()))
+		return
+	}
 
 	fmt.Fprintln(w, "<table>")
 	fmt.Fprint(w, "<tr>")
@@ -747,7 +749,7 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 	i.ForeachInterface(func(iface interfaces.Interface, ipps []netip.Prefix) {
 		fmt.Fprint(w, "<tr>")
 		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
-			fmt.Fprintf(w, "<td>%v</td> ", v)
+			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(fmt.Sprintf("%v", v)))
 		}
 		fmt.Fprint(w, "</tr>\n")
 	})
