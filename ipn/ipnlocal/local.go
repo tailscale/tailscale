@@ -1757,6 +1757,8 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	// request every 2 seconds.
 	// TODO(bradfitz): plumb this further and only send a Notify on change.
 	if mask&ipn.NotifyWatchEngineUpdates != 0 {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 		go b.pollRequestEngineStatus(ctx)
 	}
 
