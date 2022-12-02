@@ -6,11 +6,14 @@
 package distro
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"runtime"
 	"strconv"
 
 	"tailscale.com/syncs"
+	"tailscale.com/util/lineread"
 )
 
 type Distro string
@@ -97,6 +100,8 @@ func freebsdDistro() Distro {
 	return ""
 }
 
+var dsmVersion syncs.AtomicValue[int]
+
 // DSMVersion reports the Synology DSM major version.
 //
 // If not Synology, it reports 0.
@@ -107,6 +112,30 @@ func DSMVersion() int {
 	if Get() != Synology {
 		return 0
 	}
+	if v, ok := dsmVersion.LoadOk(); ok && v != 0 {
+		return v
+	}
+	// This is set when running as a package:
 	v, _ := strconv.Atoi(os.Getenv("SYNOPKG_DSM_VERSION_MAJOR"))
+	if v != 0 {
+		dsmVersion.Store(v)
+		return v
+	}
+	// But when run from the command line, we have to read it from the file:
+	lineread.File("/etc/VERSION", func(line []byte) error {
+		line = bytes.TrimSpace(line)
+		if string(line) == `majorversion="7"` {
+			v = 7
+			return io.EOF
+		}
+		if string(line) == `majorversion="6"` {
+			v = 6
+			return io.EOF
+		}
+		return nil
+	})
+	if v != 0 {
+		dsmVersion.Store(v)
+	}
 	return v
 }
