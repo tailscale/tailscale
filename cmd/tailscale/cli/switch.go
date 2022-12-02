@@ -17,10 +17,10 @@ import (
 
 var switchCmd = &ffcli.Command{
 	Name:      "switch",
-	ShortHelp: "Switches to a different Tailscale profile",
+	ShortHelp: "Switches to a different Tailscale account",
 	FlagSet: func() *flag.FlagSet {
 		fs := flag.NewFlagSet("switch", flag.ExitOnError)
-		fs.BoolVar(&switchArgs.list, "list", false, "list available profiles")
+		fs.BoolVar(&switchArgs.list, "list", false, "list available accounts")
 		return fs
 	}(),
 	Exec: switchProfile,
@@ -29,7 +29,7 @@ var switchCmd = &ffcli.Command{
   [ALPHA] switch <name>
   [ALPHA] switch --list
 
-"tailscale switch" switches between logged in profiles.
+"tailscale switch" switches between logged in accounts.
 This command is currently in alpha and may change in the future.`
 	},
 }
@@ -63,7 +63,7 @@ func switchProfile(ctx context.Context, args []string) error {
 	}
 	cp, all, err := localClient.ProfileStatus(ctx)
 	if err != nil {
-		errf("Failed to switch to profile: %v\n", err)
+		errf("Failed to switch to account: %v\n", err)
 		os.Exit(1)
 	}
 	var profID ipn.ProfileID
@@ -78,14 +78,14 @@ func switchProfile(ctx context.Context, args []string) error {
 		os.Exit(1)
 	}
 	if profID == cp.ID {
-		printf("Already on profile %q\n", args[0])
+		printf("Already on account %q\n", args[0])
 		os.Exit(0)
 	}
 	if err := localClient.SwitchProfile(ctx, profID); err != nil {
-		errf("Failed to switch to profile: %v\n", err)
+		errf("Failed to switch to account: %v\n", err)
 		os.Exit(1)
 	}
-	printf("Switching to profile %q\n", args[0])
+	printf("Switching to account %q\n", args[0])
 	for {
 		select {
 		case <-ctx.Done():
