@@ -1167,8 +1167,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		b.logf("Start: already running; sending notify")
 		nm := b.netMap
 		state := b.state
-		b.mu.Unlock()
 		p := b.pm.CurrentPrefs()
+		b.mu.Unlock()
 		b.send(ipn.Notify{
 			State:         &state,
 			NetMap:        nm,
