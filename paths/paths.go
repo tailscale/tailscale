@@ -37,6 +37,8 @@ func DefaultTailscaledSocket() string {
 		return "/var/packages/Tailscale/var/tailscaled.sock"
 	case distro.Gokrazy:
 		return "/perm/tailscaled/tailscaled.sock"
+	case distro.QNAP:
+		return "/tmp/tailscale/tailscaled.sock"
 	}
 	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
 		return "/var/run/tailscale/tailscaled.sock"
