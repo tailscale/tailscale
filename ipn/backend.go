@@ -192,23 +192,14 @@ type Options struct {
 	// frontend to the backend.
 	// If non-nil, they are imported as a new profile.
 	LegacyMigrationPrefs *Prefs `json:"Prefs"`
-	// UpdatePrefs, if provided, overrides Options.Prefs *and* the Prefs
-	// already stored in the backend state, *except* for the Persist
-	// Persist member. If you just want to provide prefs, this is
+	// UpdatePrefs, if provided, overrides Options.LegacyMigrationPrefs
+	// *and* the Prefs already stored in the backend state, *except* for
+	// the Persist member. If you just want to provide prefs, this is
 	// probably what you want.
 	//
-	// UpdatePrefs.Persist is always ignored. Prefs.Persist will still
-	// be used even if UpdatePrefs is provided. Other than Persist,
-	// UpdatePrefs takes precedence over Prefs.
-	//
-	// This is intended as a purely temporary workaround for the
-	// currently unexpected behaviour of Options.Prefs.
-	//
-	// TODO(apenwarr): Remove this, or rename Prefs to something else
-	//   and rename this to Prefs. Or, move Prefs.Persist elsewhere
-	//   entirely (as it always should have been), and then we wouldn't
-	//   need two separate fields at all. Or, move the fancy state
-	//   migration stuff out of Start().
+	// TODO(apenwarr): Rename this to Prefs, and possibly move Prefs.Persist
+	//   elsewhere entirely (as it always should have been). Or, move the
+	//   fancy state migration stuff out of Start().
 	UpdatePrefs *Prefs
 	// AuthKey is an optional node auth key used to authorize a
 	// new node key without user interaction.
