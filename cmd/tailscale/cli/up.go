@@ -125,7 +125,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.DurationVar(&upArgs.timeout, "timeout", 0, "maximum amount of time to wait for tailscaled to enter a Running state; default (0s) blocks forever")
 
 	if cmd == "login" {
-		upf.StringVar(&upArgs.profileName, "nickname", "", "short name for the login profile")
+		upf.StringVar(&upArgs.profileName, "nickname", "", "short name for the account")
 	}
 
 	if cmd == "up" {
