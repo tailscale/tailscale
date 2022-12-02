@@ -462,7 +462,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
-	e, useNetstack, err := createEngine(logf, linkMon, dialer)
+	e, onlyNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
 	}
@@ -482,10 +482,10 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 	if err != nil {
 		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
-	ns.ProcessLocalIPs = useNetstack
-	ns.ProcessSubnets = useNetstack || shouldWrapNetstack()
+	ns.ProcessLocalIPs = onlyNetstack
+	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
-	if useNetstack {
+	if onlyNetstack {
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 			_, ok := e.PeerForIP(ip)
 			return ok
@@ -540,16 +540,21 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 	return lb, nil
 }
 
-func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, useNetstack bool, err error) {
+// createEngine tries to the wgengine.Engine based on the order of tunnels
+// specified in the command line flags.
+//
+// onlyNetstack is true if the user has explicitly requested that we use netstack
+// for all networking.
+func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, onlyNetstack bool, err error) {
 	if args.tunname == "" {
 		return nil, false, errors.New("no --tun value specified")
 	}
 	var errs []error
 	for _, name := range strings.Split(args.tunname, ",") {
 		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
-		e, useNetstack, err = tryEngine(logf, linkMon, dialer, name)
+		e, onlyNetstack, err = tryEngine(logf, linkMon, dialer, name)
 		if err == nil {
-			return e, useNetstack, nil
+			return e, onlyNetstack, nil
 		}
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
 		errs = append(errs, err)
@@ -557,8 +562,12 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer)
 	return nil, false, multierr.New(errs...)
 }
 
-func shouldWrapNetstack() bool {
-	if v, ok := envknob.LookupBool("TS_DEBUG_WRAP_NETSTACK"); ok {
+// handleSubnetsInNetstack reports whether netstack should handle subnet routers
+// as opposed to the OS. We do this if the OS doesn't support subnet routers
+// (e.g. Windows) or if the user has explicitly requested it (e.g.
+// --tun=userspace-networking).
+func handleSubnetsInNetstack() bool {
+	if v, ok := envknob.LookupBool("TS_DEBUG_NETSTACK_SUBNETS"); ok {
 		return v
 	}
 	if distro.Get() == distro.Synology {
@@ -575,15 +584,15 @@ func shouldWrapNetstack() bool {
 
 var tstunNew = tstun.New
 
-func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, useNetstack bool, err error) {
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, onlyNetsack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
 		Dialer:      dialer,
 	}
 
-	useNetstack = name == "userspace-networking"
-	netns.SetEnabled(!useNetstack)
+	onlyNetsack = name == "userspace-networking"
+	netns.SetEnabled(!onlyNetsack)
 
 	if args.birdSocketPath != "" && createBIRDClient != nil {
 		log.Printf("Connecting to BIRD at %s ...", args.birdSocketPath)
@@ -592,7 +601,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			return nil, false, fmt.Errorf("createBIRDClient: %w", err)
 		}
 	}
-	if useNetstack {
+	if onlyNetsack {
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 			// On Synology in netstack mode, still init a DNS
 			// manager (directManager) to avoid the health check
@@ -631,15 +640,15 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 		}
 		conf.DNS = d
 		conf.Router = r
-		if shouldWrapNetstack() {
+		if handleSubnetsInNetstack() {
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 		}
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
-		return nil, useNetstack, err
+		return nil, onlyNetsack, err
 	}
-	return e, useNetstack, nil
+	return e, onlyNetsack, nil
 }
 
 func newDebugMux() *http.ServeMux {
