@@ -1746,7 +1746,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.mu.Lock()
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
 	if mask&initialBits != 0 {
-		ini = &ipn.Notify{}
+		ini = &ipn.Notify{Version: version.Long}
 		if mask&ipn.NotifyInitialState != 0 {
 			ini.State = ptr.To(b.state)
 			if b.state == ipn.NeedsLogin {
