@@ -535,10 +535,10 @@ func stripKeysFromPrefs(p ipn.PrefsView) ipn.PrefsView {
 func (b *LocalBackend) Prefs() ipn.PrefsView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.prefsLocked()
+	return b.sanitizedPrefsLocked()
 }
 
-func (b *LocalBackend) prefsLocked() ipn.PrefsView {
+func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 	return stripKeysFromPrefs(b.pm.CurrentPrefs())
 }
 
@@ -912,7 +912,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	// Now complete the lock-free parts of what we started while locked.
 	if prefsChanged {
-		b.notifyPrefs(prefs.View())
+		b.send(ipn.Notify{Prefs: ptr.To(prefs.View())})
 	}
 
 	if st.NetMap != nil {
@@ -927,8 +927,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				b.logf("Failed to save new controlclient state: %v", err)
 			}
 			b.mu.Unlock()
-			np := stripKeysFromPrefs(p)
-			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &np})
+			b.send(ipn.Notify{ErrMessage: &msg, Prefs: &p})
 			return
 		}
 		if netMap != nil {
@@ -1336,7 +1335,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.send(ipn.Notify{BackendLogID: &blid})
-	b.notifyPrefs(prefs)
+	b.send(ipn.Notify{Prefs: &prefs})
 
 	if !loggedOut && b.hasNodeKey() {
 		// Even if !WantRunning, we should verify our key, if there
@@ -1346,19 +1345,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	b.stateMachine()
 	return nil
-}
-
-// notifyPrefs delivers prefs to the connected frontend and any API watchers
-// from LocalBackend.WatchNotifications (via the LocalAPI).
-// It strips keys and other sensitive data prior to sending.
-//
-// If no frontend is connected or API watchers are backed up, the notification
-// is dropped without being delivered.
-//
-// b.mu must not be held.
-func (b *LocalBackend) notifyPrefs(p ipn.PrefsView) {
-	np := stripKeysFromPrefs(p)
-	b.send(ipn.Notify{Prefs: &np})
 }
 
 var warnInvalidUnsignedNodes = health.NewWarnable()
@@ -1754,7 +1740,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 			}
 		}
 		if mask&ipn.NotifyInitialPrefs != 0 {
-			ini.Prefs = ptr.To(b.prefsLocked())
+			ini.Prefs = ptr.To(b.sanitizedPrefsLocked())
 		}
 		if mask&ipn.NotifyInitialNetMap != 0 {
 			ini.NetMap = b.netMap
@@ -1833,8 +1819,13 @@ func (b *LocalBackend) DebugNotify(n ipn.Notify) {
 // If no frontend is connected or API watchers are backed up, the notification
 // is dropped without being delivered.
 //
+// If n contains Prefs, those will be sanitized before being delivered.
+//
 // b.mu must not be held.
 func (b *LocalBackend) send(n ipn.Notify) {
+	if n.Prefs != nil {
+		n.Prefs = ptr.To(stripKeysFromPrefs(*n.Prefs))
+	}
 	if n.Version == "" {
 		n.Version = version.Long
 	}
@@ -2594,7 +2585,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		b.authReconfig()
 	}
 
-	b.notifyPrefs(prefs)
+	b.send(ipn.Notify{Prefs: &prefs})
 	return prefs
 }
 
