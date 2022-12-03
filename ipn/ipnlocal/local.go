@@ -1820,6 +1820,13 @@ func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 	}
 }
 
+// DebugNotify injects a fake notify message to clients.
+//
+// It should only be used via the LocalAPI's debug handler.
+func (b *LocalBackend) DebugNotify(n ipn.Notify) {
+	b.send(n)
+}
+
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //
@@ -1828,7 +1835,9 @@ func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
 //
 // b.mu must not be held.
 func (b *LocalBackend) send(n ipn.Notify) {
-	n.Version = version.Long
+	if n.Version == "" {
+		n.Version = version.Long
+	}
 
 	b.mu.Lock()
 	notifyFunc := b.notify
