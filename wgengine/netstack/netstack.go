@@ -216,8 +216,8 @@ func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 // wrapProtoHandler returns protocol handler h wrapped in a version
 // that dynamically reconfigures ns's subnet addresses as needed for
 // outbound traffic.
-func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, *stack.PacketBuffer) bool) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
-	return func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
+func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, stack.PacketBufferPtr) bool) func(stack.TransportEndpointID, stack.PacketBufferPtr) bool {
+	return func(tei stack.TransportEndpointID, pb stack.PacketBufferPtr) bool {
 		addr := tei.LocalAddress
 		ip, ok := netip.AddrFromSlice(net.IP(addr))
 		if !ok {
@@ -451,7 +451,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
-		if pkt == nil {
+		if pkt.IsNil() {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
