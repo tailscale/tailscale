@@ -584,15 +584,15 @@ func handleSubnetsInNetstack() bool {
 
 var tstunNew = tstun.New
 
-func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, onlyNetsack bool, err error) {
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, onlyNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
 		Dialer:      dialer,
 	}
 
-	onlyNetsack = name == "userspace-networking"
-	netns.SetEnabled(!onlyNetsack)
+	onlyNetstack = name == "userspace-networking"
+	netns.SetEnabled(!onlyNetstack)
 
 	if args.birdSocketPath != "" && createBIRDClient != nil {
 		log.Printf("Connecting to BIRD at %s ...", args.birdSocketPath)
@@ -601,7 +601,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			return nil, false, fmt.Errorf("createBIRDClient: %w", err)
 		}
 	}
-	if onlyNetsack {
+	if onlyNetstack {
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 			// On Synology in netstack mode, still init a DNS
 			// manager (directManager) to avoid the health check
@@ -646,9 +646,9 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
-		return nil, onlyNetsack, err
+		return nil, onlyNetstack, err
 	}
-	return e, onlyNetsack, nil
+	return e, onlyNetstack, nil
 }
 
 func newDebugMux() *http.ServeMux {
