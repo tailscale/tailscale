@@ -14,6 +14,7 @@ import (
 	"html"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -45,7 +46,9 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netutil"
+	"tailscale.com/ssh/haulproto"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/wgengine"
@@ -711,6 +714,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		metricIngressCalls.Add(1)
 		h.handleServeIngress(w, r)
 		return
+	case "/v0/ssh-log-haul":
+		h.handleSSHLogHauling(w, r)
+		return
 	}
 	who := h.peerUser.DisplayName
 	fmt.Fprintf(w, `<html>
@@ -914,9 +920,29 @@ func (h *peerAPIHandler) canIngress() bool {
 	return h.peerHasCap(tailcfg.CapabilityIngress) || (allowSelfIngress() && h.isSelf)
 }
 
+var haulSSH = envknob.RegisterBool("TS_DEBUG_HAUL_SSH")
+
+// canSendSSHSession reports whether h can send SSH session logs to this node.
+func (h *peerAPIHandler) canSendSSHSession() bool {
+	if haulSSH() {
+		return true
+	}
+	return h.selfHasAttr(tailcfg.NodeAttrSSHAggregator) &&
+		(h.isSelf || h.peerHasCap(tailcfg.CapabilitySSHSessionHaul))
+}
+
 func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
 	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
 		if hasCap == wantCap {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *peerAPIHandler) selfHasAttr(wantAttr string) bool {
+	for _, hasAttr := range h.selfNode.Capabilities {
+		if hasAttr == wantAttr {
 			return true
 		}
 	}
@@ -1173,6 +1199,92 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 	sort.Strings(res.SentTo)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
+}
+
+func (h *peerAPIHandler) handleSSHLogHauling(w http.ResponseWriter, r *http.Request) {
+	if !h.canSendSSHSession() {
+		http.Error(w, "SSH audit log sending disallowed", http.StatusForbidden)
+		return
+	}
+	varRoot := h.ps.b.TailscaleVarRoot()
+	if varRoot == "" {
+		http.Error(w, "no var root for audit log storage", http.StatusInsufficientStorage)
+		return
+	}
+	// TODO(skriptble): Change this to be yyyy/mm/dd directory structure.
+	dir := filepath.Join(varRoot, "peer-ssh-sessions", string(h.peerNode.StableID))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		http.Error(w, "couldn't create audit log storage", http.StatusInternalServerError)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	const upgradeProto = "ts-ssh-haul"
+	if !strings.Contains(r.Header.Get("Connection"), "upgrade") ||
+		r.Header.Get("Upgrade") != upgradeProto {
+		http.Error(w, "bad ts-ssh-haul upgrade", http.StatusBadRequest)
+		return
+	}
+
+	// File name: ssh-session-<unix time>-<random>.cast
+	sshSessionName := r.Header.Get("SSH-Session-Name")
+	if sshSessionName == "" {
+		http.Error(w, "missing SSH-Session-ID header", http.StatusBadRequest)
+		return
+	}
+	sshSessionName = filepath.Base(sshSessionName)
+
+	file, err := os.OpenFile(filepath.Join(dir, sshSessionName), os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		h.logf("sshlog couldn't open file: %v", err)
+		http.Error(w, "invalid session name provided", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		h.logf("sshlog couldn't stat file: %v", err)
+		http.Error(w, "invalid session name provided", http.StatusBadRequest)
+		return
+	}
+	if info.IsDir() {
+		h.logf("sshlog peer provided directory name, not file name")
+		http.Error(w, "invalid session name provided", http.StatusBadRequest)
+		return
+	}
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "make request over HTTP/1", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Upgrade", upgradeProto)
+	w.Header().Set("Connection", "upgrade")
+	w.WriteHeader(http.StatusSwitchingProtocols)
+
+	reqConn, brw, err := hijacker.Hijack()
+	if err != nil {
+		h.logf("sshlog Hijack error: %v", err)
+		return
+	}
+	defer reqConn.Close()
+	if err := brw.Flush(); err != nil {
+		return
+	}
+
+	// TODO(skriptble): Change this logger back to h.logf.
+	lggr := logger.WithPrefix(log.Printf, sshSessionName+": ")
+	err = haulproto.NewServer(file, lggr).Run(r.Context(), reqConn)
+	if err != nil {
+		h.logf("sshlog-server run returned with error: %v", err)
+	}
+	return
 }
 
 func (h *peerAPIHandler) replyToDNSQueries() bool {

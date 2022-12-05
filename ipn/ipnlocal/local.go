@@ -4253,6 +4253,25 @@ func peerAPIURL(ip netip.Addr, port uint16) string {
 	return fmt.Sprintf("http://%v", netip.AddrPortFrom(ip, port))
 }
 
+// PeerAPIBase returns the "http://ip:port" URL base to reach the peerAPI for stableID.
+// It returns the empty string if the peer doesn't support the peerapi or there's
+// no matching address family based on the netmap's own addresses.
+func (b *LocalBackend) PeerAPIBase(id tailcfg.StableNodeID) (peerBase string, err error) {
+	nm := b.NetMap()
+	if nm == nil {
+		return "", errors.New("no netmap")
+	}
+	peer, ok := nm.PeerWithStableID(id)
+	if !ok {
+		return "", fmt.Errorf("no peer found with StableNodeID %v", id)
+	}
+	base := peerAPIBase(nm, peer)
+	if base == "" {
+		return "", fmt.Errorf("no peer API base found for peer %v (%v)", peer.ID, id)
+	}
+	return base, nil
+}
+
 // peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
 // It returns the empty string if the peer doesn't support the peerapi
 // or there's no matching address family based on the netmap's own addresses.
