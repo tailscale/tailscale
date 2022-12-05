@@ -28,7 +28,7 @@ var netlockCmd = &ffcli.Command{
 	Name:       "lock",
 	ShortUsage: "lock <sub-command> <arguments>",
 	ShortHelp:  "Manage tailnet lock",
-	LongHelp:  "Manage tailnet lock",
+	LongHelp:   "Manage tailnet lock",
 	Subcommands: []*ffcli.Command{
 		nlInitCmd,
 		nlStatusCmd,
@@ -155,7 +155,7 @@ var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "status",
 	ShortHelp:  "Outputs the state of network lock",
-	LongHelp:  "Outputs the state of network lock",
+	LongHelp:   "Outputs the state of network lock",
 	Exec:       runNetworkLockStatus,
 }
 
@@ -229,7 +229,7 @@ var nlAddCmd = &ffcli.Command{
 	Name:       "add",
 	ShortUsage: "add <public-key>...",
 	ShortHelp:  "Adds one or more trusted signing keys to tailnet lock",
-	LongHelp:  "Adds one or more trusted signing keys to tailnet lock",
+	LongHelp:   "Adds one or more trusted signing keys to tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, args, nil)
 	},
@@ -239,7 +239,7 @@ var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
 	ShortUsage: "remove <public-key>...",
 	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
-	LongHelp:  "Removes one or more trusted signing keys from tailnet lock",
+	LongHelp:   "Removes one or more trusted signing keys from tailnet lock",
 	Exec: func(ctx context.Context, args []string) error {
 		return runNetworkLockModify(ctx, nil, args)
 	},
@@ -310,12 +310,9 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 		return err
 	}
 
-	status, err := localClient.NetworkLockModify(ctx, addKeys, removeKeys)
-	if err != nil {
+	if err := localClient.NetworkLockModify(ctx, addKeys, removeKeys); err != nil {
 		return err
 	}
-
-	fmt.Printf("Status: %+v\n\n", status)
 	return nil
 }
 
@@ -323,7 +320,7 @@ var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
 	ShortUsage: "sign <node-key> [<rotation-key>]",
 	ShortHelp:  "Signs a node key and transmits the signature to the coordination server",
-	LongHelp:  "Signs a node key and transmits the signature to the coordination server",
+	LongHelp:   "Signs a node key and transmits the signature to the coordination server",
 	Exec:       runNetworkLockSign,
 }
 
@@ -363,7 +360,7 @@ Once this secret is used, it has been distributed
 to all nodes in the tailnet and should be considered public.
 
 `),
-	Exec:       runNetworkLockDisable,
+	Exec: runNetworkLockDisable,
 }
 
 func runNetworkLockDisable(ctx context.Context, args []string) error {
@@ -392,7 +389,7 @@ that the current node will accept traffic from other nodes in the tailnet
 that are locked out.
 
 `),
-	Exec:       runNetworkLockLocalDisable,
+	Exec: runNetworkLockLocalDisable,
 }
 
 func runNetworkLockLocalDisable(ctx context.Context, args []string) error {
@@ -403,7 +400,7 @@ var nlDisablementKDFCmd = &ffcli.Command{
 	Name:       "disablement-kdf",
 	ShortUsage: "disablement-kdf <hex-encoded-disablement-secret>",
 	ShortHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
-	LongHelp:  "Computes a disablement value from a disablement secret (advanced users only)",
+	LongHelp:   "Computes a disablement value from a disablement secret (advanced users only)",
 	Exec:       runNetworkLockDisablementKDF,
 }
 
@@ -427,7 +424,7 @@ var nlLogCmd = &ffcli.Command{
 	Name:       "log",
 	ShortUsage: "log [--limit N]",
 	ShortHelp:  "List changes applied to tailnet lock",
-	LongHelp:  "List changes applied to tailnet lock",
+	LongHelp:   "List changes applied to tailnet lock",
 	Exec:       runNetworkLockLog,
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")

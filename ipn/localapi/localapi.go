@@ -1254,14 +1254,7 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "network-lock modify failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
-	if err != nil {
-		http.Error(w, "JSON encoding error", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(j)
+	w.WriteHeader(204)
 }
 
 func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {

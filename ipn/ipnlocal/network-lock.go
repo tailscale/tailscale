@@ -654,6 +654,9 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 	if b.tka == nil {
 		return errNetworkLockNotActive
 	}
+	if !b.tka.authority.KeyTrusted(nlPriv.KeyID()) {
+		return errors.New("this node does not have a trusted tailnet lock key")
+	}
 
 	updater := b.tka.authority.NewUpdater(nlPriv)
 
