@@ -42,7 +42,7 @@ jobs:
           go-licenses report tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled > licenses/tailscale.md --template .github/licenses.tmpl
 
       - name: Get access token
-        uses: tibdex/github-app-token@f717b5ecd4534d3c4df4ce9b5c1c2214f0f7cd06 # v1.6.0
+        uses: tibdex/github-app-token@021a2405c7f990db57f5eae5397423dcc554159c # v1.7.0
         id: generate-token
         with:
           app_id: ${{ secrets.LICENSING_APP_ID }}
