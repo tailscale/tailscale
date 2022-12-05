@@ -63,17 +63,14 @@ var (
 )
 
 func init() {
-	var debugNetstackLeakMode = envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
-	// Note: netstacks refsvfs2 package that will eventually replace refs
-	// consumes the refs.LeakMode setting, but enables some checks when set to
-	// UninitializedLeakChecking which is what empty string becomes. This mode
-	// is largely un-useful, so it is explicitly disabled here, and more useful
-	// modes can be set via the envknob. See #4309 for more references.
-	if debugNetstackLeakMode == "" {
-		debugNetstackLeakMode = "disabled"
+	mode := envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
+	if mode == "" {
+		return
 	}
 	var lm refs.LeakMode
-	lm.Set(debugNetstackLeakMode)
+	if err := lm.Set(mode); err != nil {
+		panic(err)
+	}
 	refs.SetLeakMode(lm)
 }
 
@@ -216,8 +213,8 @@ func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 // wrapProtoHandler returns protocol handler h wrapped in a version
 // that dynamically reconfigures ns's subnet addresses as needed for
 // outbound traffic.
-func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, *stack.PacketBuffer) bool) func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
-	return func(tei stack.TransportEndpointID, pb *stack.PacketBuffer) bool {
+func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, stack.PacketBufferPtr) bool) func(stack.TransportEndpointID, stack.PacketBufferPtr) bool {
+	return func(tei stack.TransportEndpointID, pb stack.PacketBufferPtr) bool {
 		addr := tei.LocalAddress
 		ip, ok := netip.AddrFromSlice(net.IP(addr))
 		if !ok {
@@ -451,7 +448,7 @@ func (ns *Impl) DialContextUDP(ctx context.Context, ipp netip.AddrPort) (*gonet.
 func (ns *Impl) inject() {
 	for {
 		pkt := ns.linkEP.ReadContext(ns.ctx)
-		if pkt == nil {
+		if pkt.IsNil() {
 			if ns.ctx.Err() != nil {
 				// Return without logging.
 				return
