@@ -3,7 +3,7 @@
 The Tailscale API is a (mostly) RESTful API. Typically, POST bodies should be JSON encoded and responses will be JSON encoded.
 
 # Authentication
-Currently based on {some authentication method}. Visit the [admin panel](https://login.tailscale.com/admin) and navigate to the `Settings` page. Generate an API Key and keep it safe. Provide the key as the user key in basic auth when making calls to Tailscale API endpoints (leave the password blank).
+Currently based on {some authentication method}. Visit the [admin console](https://login.tailscale.com/admin) and navigate to the `Settings` page. Generate an API Key and keep it safe. Provide the key as the user key in basic auth when making calls to Tailscale API endpoints (leave the password blank).
 
 # APIs
 
