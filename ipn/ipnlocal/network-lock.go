@@ -300,6 +300,8 @@ func (b *LocalBackend) tkaApplyDisablementLocked(secret []byte) error {
 
 // chonkPathLocked returns the absolute path to the directory in which TKA
 // state (the 'tailchonk') is stored.
+//
+// b.mu must be held.
 func (b *LocalBackend) chonkPathLocked() string {
 	return filepath.Join(b.TailscaleVarRoot(), "tka-profiles", string(b.pm.CurrentProfile().ID))
 }

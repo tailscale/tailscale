@@ -829,7 +829,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if err := b.pm.DeleteProfile(b.pm.CurrentProfile().ID); err != nil {
 			b.logf("error deleting profile: %v", err)
 		}
-		b.resetForProfileChangeLockedOnEntry()
+		if err := b.resetForProfileChangeLockedOnEntry(); err != nil {
+			b.logf("resetForProfileChangeLockedOnEntry err: %v", err)
+		}
 		return
 	}
 
@@ -851,9 +853,6 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if !prefs.Persist.View().Equals(*st.Persist) {
 			prefsChanged = true
 			prefs.Persist = st.Persist.AsStruct()
-			if err := b.initTKALocked(); err != nil {
-				b.logf("initTKALocked: %v", err)
-			}
 		}
 	}
 	if st.URL != "" {
@@ -873,7 +872,26 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	if findExitNodeIDLocked(prefs, st.NetMap) {
 		prefsChanged = true
 	}
-	// Prefs will be written out; this is not safe unless locked or cloned.
+
+	// Perform all mutations of prefs based on the netmap here.
+	if st.NetMap != nil {
+		if b.updatePersistFromNetMapLocked(st.NetMap, prefs) {
+			prefsChanged = true
+		}
+	}
+	// Prefs will be written out if stale; this is not safe unless locked or cloned.
+	if prefsChanged {
+		if err := b.pm.SetPrefs(prefs.View()); err != nil {
+			b.logf("Failed to save new controlclient state: %v", err)
+		}
+	}
+	// initTKALocked is dependent on CurrentProfile.ID, which is initialized
+	// (for new profiles) on the first call to b.pm.SetPrefs.
+	if err := b.initTKALocked(); err != nil {
+		b.logf("initTKALocked: %v", err)
+	}
+
+	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
 		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLockAlpha)
 
@@ -896,17 +914,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		if !envknob.TKASkipSignatureCheck() {
 			b.tkaFilterNetmapLocked(st.NetMap)
 		}
-		if b.updatePersistFromNetMapLocked(st.NetMap, prefs) {
-			prefsChanged = true
-		}
 		b.setNetMapLocked(st.NetMap)
 		b.updateFilterLocked(st.NetMap, prefs.View())
-	}
-
-	if prefsChanged {
-		if err := b.pm.SetPrefs(prefs.View()); err != nil {
-			b.logf("Failed to save new controlclient state: %v", err)
-		}
 	}
 	b.mu.Unlock()
 
