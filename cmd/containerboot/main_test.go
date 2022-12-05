@@ -688,7 +688,7 @@ func (k *kubeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		w.Header().Set("Content-Type", "application/json")
 		ret := map[string]map[string]string{
-			"data": map[string]string{},
+			"data": {},
 		}
 		k.Lock()
 		defer k.Unlock()
