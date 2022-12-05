@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gvisor.dev/gvisor/pkg/refs"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
@@ -82,15 +81,6 @@ func getMemStats() (ms runtime.MemStats) {
 	runtime.GC()
 	runtime.ReadMemStats(&ms)
 	return
-}
-
-func TestNetstackLeakMode(t *testing.T) {
-	// See the comments in init(), and/or in issue #4309.
-	// Influenced by an envknob that may be useful in tests, so just check that
-	// it's not the oddly behaving zero value.
-	if refs.GetLeakMode() == 0 {
-		t.Fatalf("refs.leakMode is 0, want a non-zero value")
-	}
 }
 
 func makeNetstack(t *testing.T, config func(*Impl)) *Impl {

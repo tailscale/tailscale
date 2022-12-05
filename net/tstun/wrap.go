@@ -180,7 +180,7 @@ type Wrapper struct {
 type tunInjectedRead struct {
 	// Only one of packet or data should be set, and are read in that order of
 	// precedence.
-	packet *stack.PacketBuffer
+	packet stack.PacketBufferPtr
 	data   []byte
 }
 
@@ -604,7 +604,8 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 	metricPacketOut.Add(1)
 
 	var n int
-	if res.packet != nil {
+	if !res.packet.IsNil() {
+
 		n = copy(buf[offset:], res.packet.NetworkHeader().Slice())
 		n += copy(buf[offset+n:], res.packet.TransportHeader().Slice())
 		n += copy(buf[offset+n:], res.packet.Data().AsRange().ToSlice())
@@ -777,7 +778,7 @@ func (t *Wrapper) SetFilter(filt *filter.Filter) {
 //
 // This path is typically used to deliver synthesized packets to the
 // host networking stack.
-func (t *Wrapper) InjectInboundPacketBuffer(pkt *stack.PacketBuffer) error {
+func (t *Wrapper) InjectInboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	buf := make([]byte, PacketStartOffset+pkt.Size())
 
 	n := copy(buf[PacketStartOffset:], pkt.NetworkHeader().Slice())
@@ -876,7 +877,7 @@ func (t *Wrapper) InjectOutbound(packet []byte) error {
 // InjectOutboundPacketBuffer logically behaves as InjectOutbound. It takes ownership of one
 // reference count on the packet, and the packet may be mutated. The packet refcount will be
 // decremented after the injected buffer has been read.
-func (t *Wrapper) InjectOutboundPacketBuffer(packet *stack.PacketBuffer) error {
+func (t *Wrapper) InjectOutboundPacketBuffer(packet stack.PacketBufferPtr) error {
 	size := packet.Size()
 	if size > MaxPacketSize {
 		packet.DecRef()
