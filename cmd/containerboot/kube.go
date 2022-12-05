@@ -84,7 +84,7 @@ func storeDeviceID(ctx context.Context, secretName, deviceID string) error {
 	}
 
 	m := map[string]map[string]string{
-		"stringData": map[string]string{
+		"stringData": {
 			"device_id": deviceID,
 		},
 	}
