@@ -1052,7 +1052,8 @@ func (s *Server) verifyClient(clientKey key.NodePublic, info *clientInfo) error 
 	}
 	status, err := tailscale.Status(context.TODO())
 	if err != nil {
-		return fmt.Errorf("failed to query local tailscaled status: %w", err)
+		// fmt.log("failed to query local tailscaled status: %w", err)
+		return errors.New("failed to query local tailscaled status")
 	}
 	if clientKey == status.Self.PublicKey {
 		return nil
