@@ -129,9 +129,14 @@ func main() {
 		}
 	}
 
-	st, daemonPid, err := startAndAuthTailscaled(ctx, cfg)
+	client, daemonPid, err := startTailscaled(ctx, cfg)
 	if err != nil {
 		log.Fatalf("failed to bring up tailscale: %v", err)
+	}
+
+	st, err := authTailscaled(ctx, client, cfg)
+	if err != nil {
+		log.Fatalf("failed to auth tailscale: %v", err)
 	}
 
 	if cfg.ProxyTo != "" {
@@ -173,10 +178,7 @@ func main() {
 	}
 }
 
-// startAndAuthTailscaled starts the tailscale daemon and attempts to
-// auth it, according to the settings in cfg. If successful, returns
-// tailscaled's Status and pid.
-func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Status, int, error) {
+func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, int, error) {
 	args := tailscaledArgs(cfg)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, unix.SIGTERM, unix.SIGINT)
@@ -198,8 +200,7 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 		cmd.Process.Signal(unix.SIGTERM)
 	}()
 
-	// Wait for the socket file to appear, otherwise 'tailscale up'
-	// can fail.
+	// Wait for the socket file to appear, otherwise API ops will racily fail.
 	log.Printf("Waiting for tailscaled socket")
 	for {
 		if ctx.Err() != nil {
@@ -215,17 +216,24 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 		break
 	}
 
+	tsClient := &tailscale.LocalClient{
+		Socket:        cfg.Socket,
+		UseSocketOnly: true,
+	}
+
+	return tsClient, cmd.Process.Pid, nil
+}
+
+// startAndAuthTailscaled starts the tailscale daemon and attempts to
+// auth it, according to the settings in cfg. If successful, returns
+// tailscaled's Status and pid.
+func authTailscaled(ctx context.Context, client *tailscale.LocalClient, cfg *settings) (*ipnstate.Status, error) {
 	didLogin := false
 	if !cfg.AuthOnce {
 		if err := tailscaleUp(ctx, cfg); err != nil {
-			return nil, 0, fmt.Errorf("couldn't log in: %v", err)
+			return nil, fmt.Errorf("couldn't log in: %v", err)
 		}
 		didLogin = true
-	}
-
-	tsClient := tailscale.LocalClient{
-		Socket:        cfg.Socket,
-		UseSocketOnly: true,
 	}
 
 	// Poll for daemon state until it goes to either Running or
@@ -234,20 +242,20 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 	// reach the running state.
 	for {
 		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
+			return nil, ctx.Err()
 		}
 
 		loopCtx, cancel := context.WithTimeout(ctx, time.Second)
-		st, err := tsClient.Status(loopCtx)
+		st, err := client.Status(loopCtx)
 		cancel()
 		if err != nil {
-			return nil, 0, fmt.Errorf("Getting tailscaled state: %w", err)
+			return nil, fmt.Errorf("Getting tailscaled state: %w", err)
 		}
 
 		switch st.BackendState {
 		case "Running":
 			if len(st.TailscaleIPs) > 0 {
-				return st, cmd.Process.Pid, nil
+				return st, nil
 			}
 			log.Printf("No Tailscale IPs assigned yet")
 		case "NeedsLogin":
@@ -256,7 +264,7 @@ func startAndAuthTailscaled(ctx context.Context, cfg *settings) (*ipnstate.Statu
 				// LocalAPI, so we still have to shell out to the
 				// tailscale CLI for this bit.
 				if err := tailscaleUp(ctx, cfg); err != nil {
-					return nil, 0, fmt.Errorf("couldn't log in: %v", err)
+					return nil, fmt.Errorf("couldn't log in: %v", err)
 				}
 				didLogin = true
 			}
