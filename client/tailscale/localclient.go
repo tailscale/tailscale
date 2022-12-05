@@ -805,7 +805,7 @@ func (lc *LocalClient) NetworkLockInit(ctx context.Context, keys []tka.Key, disa
 }
 
 // NetworkLockModify adds and/or removes key(s) to the tailnet key authority.
-func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKeys []tka.Key) (*ipnstate.NetworkLockStatus, error) {
+func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKeys []tka.Key) error {
 	var b bytes.Buffer
 	type modifyRequest struct {
 		AddKeys    []tka.Key
@@ -813,14 +813,13 @@ func (lc *LocalClient) NetworkLockModify(ctx context.Context, addKeys, removeKey
 	}
 
 	if err := json.NewEncoder(&b).Encode(modifyRequest{AddKeys: addKeys, RemoveKeys: removeKeys}); err != nil {
-		return nil, err
+		return err
 	}
 
-	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/modify", 200, &b)
-	if err != nil {
-		return nil, fmt.Errorf("error: %w", err)
+	if _, err := lc.send(ctx, "POST", "/localapi/v0/tka/modify", 204, &b); err != nil {
+		return fmt.Errorf("error: %w", err)
 	}
-	return decodeJSON[*ipnstate.NetworkLockStatus](body)
+	return nil
 }
 
 // NetworkLockSign signs the specified node-key and transmits that signature to the control plane.
