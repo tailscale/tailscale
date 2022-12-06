@@ -784,6 +784,12 @@ func (k *kubeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer bearer_token" {
 		panic("client didn't provide bearer token in request")
 	}
+	if r.URL.Path == "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+		// Just say yes to all SARs, we don't enforce RBAC.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"status":{"allowed":true}}`)
+		return
+	}
 	if r.URL.Path != "/api/v1/namespaces/default/secrets/tailscale" {
 		panic(fmt.Sprintf("unhandled fake kube api path %q", r.URL.Path))
 	}

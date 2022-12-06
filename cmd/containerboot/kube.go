@@ -23,6 +23,54 @@ import (
 	"time"
 )
 
+// checkSecretPermissions checks that the current pod has permission to read,
+// write and patch secretName in the cluster.
+func checkSecretPermissions(ctx context.Context, secretName string) error {
+	for _, verb := range []string{"get", "update", "patch"} {
+		sar := map[string]any{
+			"apiVersion": "authorization.k8s.io/v1",
+			"kind":       "SelfSubjectAccessReview",
+			"spec": map[string]any{
+				"resourceAttributes": map[string]any{
+					"namespace": kubeNamespace,
+					"verb":      verb,
+					"resource":  "secrets",
+					"name":      secretName,
+				},
+			},
+		}
+		bs, err := json.Marshal(sar)
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequest("POST", "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews", bytes.NewReader(bs))
+		if err != nil {
+			return err
+		}
+		resp, err := doKubeRequest(ctx, req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		bs, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		var res struct {
+			Status struct {
+				Allowed bool `json:"allowed"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(bs, &res); err != nil {
+			return err
+		}
+		if !res.Status.Allowed {
+			return fmt.Errorf("missing permission: cannot %s secret %q", verb, secretName)
+		}
+	}
+	return nil
+}
+
 // findKeyInKubeSecret inspects the kube secret secretName for a data
 // field called "authkey", and returns its value if present.
 func findKeyInKubeSecret(ctx context.Context, secretName string) (string, error) {
@@ -193,8 +241,8 @@ func doKubeRequest(ctx context.Context, r *http.Request) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return resp, fmt.Errorf("got non-200 status code %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return resp, fmt.Errorf("got non-200/201 status code %d", resp.StatusCode)
 	}
 	return resp, nil
 }
