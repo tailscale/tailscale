@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -683,5 +684,69 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("[fe70::1]:12345")
 	if !h.replyToDNSQueries() {
 		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
+	}
+}
+
+func TestRedactErr(t *testing.T) {
+	testCases := []struct {
+		name string
+		err  func() error
+		want string
+	}{
+		{
+			name: "PathError",
+			err: func() error {
+				return &os.PathError{
+					Op:   "open",
+					Path: "/tmp/sensitive.txt",
+					Err:  fs.ErrNotExist,
+				}
+			},
+			want: `open redacted.41360718: file does not exist`,
+		},
+		{
+			name: "LinkError",
+			err: func() error {
+				return &os.LinkError{
+					Op:  "symlink",
+					Old: "/tmp/sensitive.txt",
+					New: "/tmp/othersensitive.txt",
+					Err: fs.ErrNotExist,
+				}
+			},
+			want: `symlink redacted.41360718 redacted.6bcf093a: file does not exist`,
+		},
+		{
+			name: "something else",
+			err:  func() error { return errors.New("i am another error type") },
+			want: `i am another error type`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// For debugging
+			var i int
+			for err := tc.err(); err != nil; err = errors.Unwrap(err) {
+				t.Logf("%d: %T @ %p", i, err, err)
+				i++
+			}
+
+			t.Run("Root", func(t *testing.T) {
+				got := redactErr(tc.err()).Error()
+				if got != tc.want {
+					t.Errorf("err = %q; want %q", got, tc.want)
+				}
+			})
+			t.Run("Wrapped", func(t *testing.T) {
+				wrapped := fmt.Errorf("wrapped error: %w", tc.err())
+				want := "wrapped error: " + tc.want
+
+				got := redactErr(wrapped).Error()
+				if got != want {
+					t.Errorf("err = %q; want %q", got, want)
+				}
+			})
+		})
 	}
 }
