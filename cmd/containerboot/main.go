@@ -116,16 +116,21 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.AuthKey == "" {
-		key, err := findKeyInKubeSecret(ctx, cfg.KubeSecret)
-		if err != nil {
-			log.Fatalf("Getting authkey from kube secret: %v", err)
+	if cfg.InKubernetes && cfg.KubeSecret != "" {
+		if err := checkSecretPermissions(ctx, cfg.KubeSecret); err != nil {
+			log.Fatalf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 		}
-		if key != "" {
-			log.Print("Using authkey found in kube secret")
-			cfg.AuthKey = key
-		} else {
-			log.Print("No authkey found in kube secret and TS_AUTHKEY not provided, login will be interactive if needed.")
+		if cfg.AuthKey == "" {
+			key, err := findKeyInKubeSecret(ctx, cfg.KubeSecret)
+			if err != nil {
+				log.Fatalf("Getting authkey from kube secret: %v", err)
+			}
+			if key != "" {
+				log.Print("Using authkey found in kube secret")
+				cfg.AuthKey = key
+			} else {
+				log.Print("No authkey found in kube secret and TS_AUTHKEY not provided, login will be interactive if needed.")
+			}
 		}
 	}
 
