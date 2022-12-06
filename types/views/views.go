@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/netip"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/net/tsaddr"
 )
 
@@ -213,7 +214,7 @@ func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
 
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
 func (v IPPrefixSlice) ContainsFunc(f func(netip.Prefix) bool) bool {
-	return tsaddr.PrefixesContainsFunc(v.ж.ж, f)
+	return slices.ContainsFunc(v.ж.ж, f)
 }
 
 // ContainsExitRoutes reports whether v contains ExitNode Routes.
