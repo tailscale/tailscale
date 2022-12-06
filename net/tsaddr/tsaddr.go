@@ -207,31 +207,10 @@ func NewContainsIPFunc(addrs []netip.Prefix) func(ip netip.Addr) bool {
 	return func(ip netip.Addr) bool { return m[ip] }
 }
 
-// PrefixesContainsFunc reports whether f is true for any IPPrefix in
-// ipp.
-func PrefixesContainsFunc(ipp []netip.Prefix, f func(netip.Prefix) bool) bool {
-	for _, v := range ipp {
-		if f(v) {
-			return true
-		}
-	}
-	return false
-}
-
 // PrefixesContainsIP reports whether any prefix in ipp contains ip.
 func PrefixesContainsIP(ipp []netip.Prefix, ip netip.Addr) bool {
 	for _, r := range ipp {
 		if r.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// IPsContainsFunc reports whether f is true for any IP in ips.
-func IPsContainsFunc(ips []netip.Addr, f func(netip.Addr) bool) bool {
-	for _, v := range ips {
-		if f(v) {
 			return true
 		}
 	}

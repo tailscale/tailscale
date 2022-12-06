@@ -2827,8 +2827,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs6) &&
-		!tsaddr.PrefixesContainsFunc(nm.Addresses, tsaddr.PrefixIs4)
+	selfV6Only := slices.ContainsFunc(nm.Addresses, tsaddr.PrefixIs6) &&
+		!slices.ContainsFunc(nm.Addresses, tsaddr.PrefixIs4)
 	dcfg.OnlyIPv6 = selfV6Only
 
 	// Populate MagicDNS records. We do this unconditionally so that
@@ -2844,7 +2844,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 		if err != nil {
 			return // TODO: propagate error?
 		}
-		have4 := tsaddr.PrefixesContainsFunc(addrs, tsaddr.PrefixIs4)
+		have4 := slices.ContainsFunc(addrs, tsaddr.PrefixIs4)
 		var ips []netip.Addr
 		for _, addr := range addrs {
 			if selfV6Only {
@@ -3258,7 +3258,7 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 		}
 	}
 
-	if tsaddr.PrefixesContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
+	if slices.ContainsFunc(rs.LocalAddrs, tsaddr.PrefixIs4) {
 		rs.Routes = append(rs.Routes, netip.PrefixFrom(tsaddr.TailscaleServiceIP(), 32))
 	}
 
