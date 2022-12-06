@@ -16,6 +16,7 @@ import (
 	_ "golang.org/x/sys/windows/svc"
 	_ "golang.org/x/sys/windows/svc/eventlog"
 	_ "golang.org/x/sys/windows/svc/mgr"
+	_ "golang.zx2c4.com/wintun"
 	_ "golang.zx2c4.com/wireguard/tun"
 	_ "golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	_ "tailscale.com/cmd/tailscaled/childproc"

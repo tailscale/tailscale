@@ -38,6 +38,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/envknob"
@@ -63,6 +64,12 @@ func init() {
 }
 
 const serviceName = "Tailscale"
+
+// Application-defined command codes between 128 and 255
+// See https://web.archive.org/web/20221007222822/https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-controlservice
+const (
+	cmdUninstallWinTun = svc.Cmd(128 + iota)
+)
 
 func init() {
 	tstunNew = tstunNewWithWindowsRetries
@@ -184,6 +191,26 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 				syslogf("Service session change notification")
 				handleSessionChange(cmd)
 				changes <- cmd.CurrentStatus
+			case cmdUninstallWinTun:
+				syslogf("Stopping tailscaled child process and uninstalling WinTun")
+				// At this point, doneCh is the channel which will be closed when the
+				// tailscaled subprocess exits. We save that to childDoneCh.
+				childDoneCh := doneCh
+				// We reset doneCh to a new channel that will keep the event loop
+				// running until the uninstallation is done.
+				doneCh = make(chan struct{})
+				// Trigger subprocess shutdown.
+				cancel()
+				go func() {
+					// When this goroutine completes, tell the service to break out of its
+					// event loop.
+					defer close(doneCh)
+					// Wait for the subprocess to shutdown.
+					<-childDoneCh
+					// Now uninstall WinTun.
+					uninstallWinTun(log.Printf)
+				}()
+				changes <- svc.Status{State: svc.StopPending}
 			}
 		}
 	}
@@ -221,6 +248,8 @@ func cmdName(c svc.Cmd) string {
 		return "SessionChange"
 	case svc.PreShutdown:
 		return "PreShutdown"
+	case cmdUninstallWinTun:
+		return "(Application Defined) Uninstall WinTun"
 	}
 	return fmt.Sprintf("Unknown-Service-Cmd-%d", c)
 }
@@ -446,4 +475,16 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		default:
 		}
 	}
+}
+
+func uninstallWinTun(logf logger.Logf) {
+	dll := windows.NewLazyDLL("wintun.dll")
+	if err := dll.Load(); err != nil {
+		logf("Cannot load wintun.dll for uninstall: %v", err)
+		return
+	}
+
+	logf("Removing wintun driver...")
+	err := wintun.Uninstall()
+	logf("Uninstall: %v", err)
 }
