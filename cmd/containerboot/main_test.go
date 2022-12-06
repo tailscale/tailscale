@@ -146,7 +146,7 @@ func TestContainerBoot(t *testing.T) {
 				"TS_STATE_DIR": filepath.Join(d, "tmp"),
 			},
 			WantArgs1: []string{
-				"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=/tmp --tun=userspace-networking",
+				"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --statedir=/tmp --tun=userspace-networking",
 				"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
 			},
 			Status1: ipnstate.Status{
