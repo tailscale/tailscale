@@ -6,9 +6,11 @@ package multierr_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	qt "github.com/frankban/quicktest"
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/util/multierr"
 )
@@ -77,4 +79,30 @@ func TestAll(t *testing.T) {
 		}
 		C.Assert(ee.Is(x), qt.IsFalse)
 	}
+}
+
+func TestRange(t *testing.T) {
+	C := qt.New(t)
+
+	errA := errors.New("A")
+	errB := errors.New("B")
+	errC := errors.New("C")
+	errD := errors.New("D")
+	errCD := multierr.New(errC, errD)
+	errCD1 := fmt.Errorf("1:%w", errCD)
+	errE := errors.New("E")
+	errE1 := fmt.Errorf("1:%w", errE)
+	errE2 := fmt.Errorf("2:%w", errE1)
+	errF := errors.New("F")
+	root := multierr.New(errA, errB, errCD1, errE2, errF)
+
+	var got []error
+	want := []error{root, errA, errB, errCD1, errCD, errC, errD, errE2, errE1, errE, errF}
+	multierr.Range(root, func(err error) bool {
+		got = append(got, err)
+		return true
+	})
+	C.Assert(got, qt.CmpEquals(cmp.Comparer(func(x, y error) bool {
+		return x.Error() == y.Error()
+	})), want)
 }
