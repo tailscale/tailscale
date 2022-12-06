@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/adler32"
 	"hash/crc32"
 	"html"
 	"io"
@@ -341,11 +342,81 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 // accidentally logging actual filenames anywhere.
 const redacted = "redacted"
 
+type redactedErr struct {
+	msg   string
+	inner error
+}
+
+func (re *redactedErr) Error() string {
+	return re.msg
+}
+
+func (re *redactedErr) Unwrap() error {
+	return re.inner
+}
+
+func redactString(s string) string {
+	hash := adler32.Checksum([]byte(s))
+
+	var buf [len(redacted) + len(".12345678")]byte
+	b := append(buf[:0], []byte(redacted)...)
+	b = append(b, '.')
+	b = strconv.AppendUint(b, uint64(hash), 16)
+	return string(b)
+}
+
 func redactErr(err error) error {
-	if pe, ok := err.(*os.PathError); ok {
-		pe.Path = redacted
+	var redactStrings []string
+
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		// If this is the root error, then we can redact it directly.
+		if err == pe {
+			pe.Path = redactString(pe.Path)
+			return pe
+		}
+
+		// Otherwise, we have a *PathError somewhere in the error
+		// chain, and we can't redact it because something later in the
+		// chain may have cached the Error() return already (as
+		// fmt.Errorf does).
+		//
+		// Add this path to the set of paths that we will redact, below.
+		redactStrings = append(redactStrings, pe.Path)
+
+		// Also redact the Path value so that anything that calls
+		// Unwrap in the future gets the redacted value.
+		pe.Path = redactString(pe.Path)
 	}
-	return err
+
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		// If this is the root error, then we can redact it directly.
+		if err == le {
+			le.New = redactString(le.New)
+			le.Old = redactString(le.Old)
+			return le
+		}
+
+		// As above
+		redactStrings = append(redactStrings, le.New, le.Old)
+		le.New = redactString(le.New)
+		le.Old = redactString(le.Old)
+	}
+
+	if len(redactStrings) == 0 {
+		return err
+	}
+
+	s := err.Error()
+	for _, toRedact := range redactStrings {
+		s = strings.Replace(s, toRedact, redactString(toRedact), -1)
+	}
+
+	// Stringify and and replace any paths that we found above, then return
+	// the error wrapped in a type that uses the newly-redacted string
+	// while also allowing Unwrap()-ing to the inner error type(s).
+	return &redactedErr{msg: s, inner: err}
 }
 
 func touchFile(path string) error {
