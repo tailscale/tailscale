@@ -60,7 +60,8 @@ import (
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn"
+	"tailscale.com/util/deephash"
 )
 
 func main() {
@@ -152,46 +153,149 @@ func main() {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
 
-	st, err := authTailscaled(ctx, client, cfg)
+	w, err := client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
-		log.Fatalf("failed to auth tailscale: %v", err)
+		log.Fatalf("failed to watch tailscaled for updates: %v", err)
 	}
 
-	if cfg.ProxyTo != "" {
-		if err := installIPTablesRule(ctx, cfg.ProxyTo, st.TailscaleIPs); err != nil {
-			log.Fatalf("installing proxy rules: %v", err)
+	// Because we're still shelling out to `tailscale up` to get access to its
+	// flag parser, we have to stop watching the IPN bus so that we can block on
+	// the subcommand without stalling anything. Then once it's done, we resume
+	// watching the bus.
+	//
+	// Depending on the requested mode of operation, this auth step happens at
+	// different points in containerboot's lifecycle, hence the helper function.
+	didLogin := false
+	authTailscale := func() error {
+		if didLogin {
+			return nil
+		}
+		didLogin = true
+		w.Close()
+		if err := tailscaleUp(ctx, cfg); err != nil {
+			return fmt.Errorf("failed to auth tailscale: %v", err)
+		}
+		w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+		if err != nil {
+			return fmt.Errorf("rewatching tailscaled for updates after auth: %v", err)
+		}
+		return nil
+	}
+
+	if !cfg.AuthOnce {
+		if err := authTailscale(); err != nil {
+			log.Fatalf("failed to auth tailscale: %v", err)
 		}
 	}
-	if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" {
-		if err := storeDeviceID(ctx, cfg.KubeSecret, string(st.Self.ID)); err != nil {
-			log.Fatalf("storing device ID in kube secret: %v", err)
+
+authLoop:
+	for {
+		n, err := w.Next()
+		if err != nil {
+			log.Fatalf("failed to read from tailscaled: %v", err)
 		}
-		if cfg.AuthOnce {
-			// We were told to only auth once, so any secret-bound
-			// authkey is no longer needed. We don't strictly need to
-			// wipe it, but it's good hygiene.
-			log.Printf("Deleting authkey from kube secret")
-			if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
-				log.Fatalf("deleting authkey from kube secret: %v", err)
+
+		if n.State != nil {
+			switch *n.State {
+			case ipn.NeedsLogin:
+				if err := authTailscale(); err != nil {
+					log.Fatalf("failed to auth tailscale: %v", err)
+				}
+			case ipn.NeedsMachineAuth:
+				log.Printf("machine authorization required, please visit the admin panel")
+			case ipn.Running:
+				// Technically, all we want is to keep monitoring the bus for
+				// netmap updates. However, in order to make the container crash
+				// if tailscale doesn't initially come up, the watch has a
+				// startup deadline on it. So, we have to break out of this
+				// watch loop, cancel the watch, and watch again with no
+				// deadline to continue monitoring for changes.
+				break authLoop
+			default:
+				log.Printf("tailscaled in state %q, waiting", *n.State)
 			}
 		}
 	}
 
-	log.Println("Startup complete, waiting for shutdown signal")
-	// Reap all processes, since we are PID1 and need to collect
-	// zombies.
+	w.Close()
+
+	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && cfg.AuthOnce {
+		// We were told to only auth once, so any secret-bound
+		// authkey is no longer needed. We don't strictly need to
+		// wipe it, but it's good hygiene.
+		log.Printf("Deleting authkey from kube secret")
+		if err := deleteAuthKey(ctx, cfg.KubeSecret); err != nil {
+			log.Fatalf("deleting authkey from kube secret: %v", err)
+		}
+	}
+
+	w, err = client.WatchIPNBus(context.Background(), ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+	if err != nil {
+		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
+	}
+
+	var (
+		wantProxy         = cfg.ProxyTo != ""
+		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
+		startupTasksDone  = false
+		currentIPs        deephash.Sum // tailscale IPs assigned to device
+		currentDeviceInfo deephash.Sum // device ID and fqdn
+	)
 	for {
-		var status unix.WaitStatus
-		pid, err := unix.Wait4(-1, &status, 0, nil)
-		if errors.Is(err, unix.EINTR) {
-			continue
-		}
+		n, err := w.Next()
 		if err != nil {
-			log.Fatalf("Waiting for exited processes: %v", err)
+			log.Fatalf("failed to read from tailscaled: %v", err)
 		}
-		if pid == daemonPid {
-			log.Printf("Tailscaled exited")
-			os.Exit(0)
+
+		if n.State != nil && *n.State != ipn.Running {
+			// Something's gone wrong and we've left the authenticated state.
+			// Our container image never recovered gracefully from this, and the
+			// control flow required to make it work now is hard. So, just crash
+			// the container and rely on the container runtime to restart us,
+			// whereupon we'll go through initial auth again.
+			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
+		}
+		if n.NetMap != nil {
+			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
+				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
+					log.Fatalf("installing proxy rules: %v", err)
+				}
+			}
+			deviceInfo := []any{n.NetMap.SelfNode.StableID, n.NetMap.SelfNode.Name}
+			if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
+				if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID, n.NetMap.SelfNode.Name); err != nil {
+					log.Fatalf("storing device ID in kube secret: %v", err)
+				}
+			}
+		}
+		if !startupTasksDone {
+			if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+				// This log message is used in tests to detect when all
+				// post-auth configuration is done.
+				log.Println("Startup complete, waiting for shutdown signal")
+				startupTasksDone = true
+
+				// Reap all processes, since we are PID1 and need to collect zombies. We can
+				// only start doing this once we've stopped shelling out to things
+				// `tailscale up`, otherwise this goroutine can reap the CLI subprocesses
+				// and wedge bringup.
+				go func() {
+					for {
+						var status unix.WaitStatus
+						pid, err := unix.Wait4(-1, &status, 0, nil)
+						if errors.Is(err, unix.EINTR) {
+							continue
+						}
+						if err != nil {
+							log.Fatalf("Waiting for exited processes: %v", err)
+						}
+						if pid == daemonPid {
+							log.Printf("Tailscaled exited")
+							os.Exit(0)
+						}
+					}
+				}()
+			}
 		}
 	}
 }
@@ -240,58 +344,6 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	}
 
 	return tsClient, cmd.Process.Pid, nil
-}
-
-// startAndAuthTailscaled starts the tailscale daemon and attempts to
-// auth it, according to the settings in cfg. If successful, returns
-// tailscaled's Status and pid.
-func authTailscaled(ctx context.Context, client *tailscale.LocalClient, cfg *settings) (*ipnstate.Status, error) {
-	didLogin := false
-	if !cfg.AuthOnce {
-		if err := tailscaleUp(ctx, cfg); err != nil {
-			return nil, fmt.Errorf("couldn't log in: %v", err)
-		}
-		didLogin = true
-	}
-
-	// Poll for daemon state until it goes to either Running or
-	// NeedsLogin. The latter only happens if cfg.AuthOnce is true,
-	// because in that case we only try to auth when it's necessary to
-	// reach the running state.
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		loopCtx, cancel := context.WithTimeout(ctx, time.Second)
-		st, err := client.Status(loopCtx)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("Getting tailscaled state: %w", err)
-		}
-
-		switch st.BackendState {
-		case "Running":
-			if len(st.TailscaleIPs) > 0 {
-				return st, nil
-			}
-			log.Printf("No Tailscale IPs assigned yet")
-		case "NeedsLogin":
-			if !didLogin {
-				// Alas, we cannot currently trigger an authkey login from
-				// LocalAPI, so we still have to shell out to the
-				// tailscale CLI for this bit.
-				if err := tailscaleUp(ctx, cfg); err != nil {
-					return nil, fmt.Errorf("couldn't log in: %v", err)
-				}
-				didLogin = true
-			}
-		default:
-			log.Printf("tailscaled in state %q, waiting", st.BackendState)
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 // tailscaledArgs uses cfg to construct the argv for tailscaled.
@@ -428,7 +480,7 @@ func ensureIPForwarding(root, proxyTo, routes string) error {
 	return nil
 }
 
-func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Addr) error {
+func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
@@ -438,16 +490,22 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Addr)
 		argv0 = "ip6tables"
 	}
 	var local string
-	for _, ip := range tsIPs {
-		if ip.Is4() != dst.Is4() {
+	for _, pfx := range tsIPs {
+		if !pfx.IsSingleIP() {
 			continue
 		}
-		local = ip.String()
+		if pfx.Addr().Is4() != dst.Is4() {
+			continue
+		}
+		local = pfx.Addr().String()
 		break
 	}
 	if local == "" {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
+	// Technically, if the control server ever changes the IPs assigned to this
+	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
+	// for now we'll live with it.
 	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-d", local, "-j", "DNAT", "--to-destination", dstStr)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

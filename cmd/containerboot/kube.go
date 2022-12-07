@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/multierr"
 )
 
@@ -140,9 +141,9 @@ func findKeyInKubeSecret(ctx context.Context, secretName string) (string, error)
 	return "", nil
 }
 
-// storeDeviceID writes deviceID into the "device_id" data field of
-// the kube secret secretName.
-func storeDeviceID(ctx context.Context, secretName, deviceID string) error {
+// storeDeviceInfo writes deviceID into the "device_id" data field of the kube
+// secret secretName.
+func storeDeviceInfo(ctx context.Context, secretName string, deviceID tailcfg.StableNodeID, fqdn string) error {
 	// First check if the secret exists at all. Even if running on
 	// kubernetes, we do not necessarily store state in a k8s secret.
 	req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", kubeNamespace, secretName), nil)
@@ -161,7 +162,8 @@ func storeDeviceID(ctx context.Context, secretName, deviceID string) error {
 
 	m := map[string]map[string]string{
 		"stringData": {
-			"device_id": deviceID,
+			"device_id":   string(deviceID),
+			"device_fqdn": fqdn,
 		},
 	}
 	var b bytes.Buffer
