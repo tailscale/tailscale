@@ -25,9 +25,9 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
+	"tailscale.com/syncs"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
 )
 
@@ -52,8 +52,8 @@ type Server struct {
 	mu            sync.Mutex
 	lastUserID    ipn.WindowsUserID // tracks last userid; on change, Reset state for paranoia
 	activeReqs    map[*http.Request]*ipnauth.ConnIdentity
-	backendWaiter waiterSet // of LocalBackend waiters
-	zeroReqWaiter waiterSet // of blockUntilZeroConnections waiters
+	backendWaiter syncs.WakeGroup // of LocalBackend waiters
+	zeroReqWaiter syncs.WakeGroup // of blockUntilZeroConnections waiters
 }
 
 func (s *Server) mustBackend() *ipnlocal.LocalBackend {
@@ -64,47 +64,13 @@ func (s *Server) mustBackend() *ipnlocal.LocalBackend {
 	return lb
 }
 
-// waiterSet is a set of callers waiting on something. Each item (map value) in
-// the set is a func that wakes up that waiter's context. The waiter is responsible
-// for removing itself from the set when woken up. The (*waiterSet).add method
-// returns a cleanup method which does that removal. The caller than defers that
-// cleanup.
-//
-// TODO(bradfitz): this is a generally useful pattern. Move elsewhere?
-type waiterSet set.HandleSet[context.CancelFunc]
-
-// add registers a new waiter in the set.
-// It aquires mu to add the waiter, and does so again when cleanup is called to remove it.
-// ready is closed when the waiter is ready (or ctx is done).
-func (s *waiterSet) add(mu *sync.Mutex, ctx context.Context) (ready <-chan struct{}, cleanup func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	hs := (*set.HandleSet[context.CancelFunc])(s) // change method set
-	mu.Lock()
-	h := hs.Add(cancel)
-	mu.Unlock()
-	return ctx.Done(), func() {
-		mu.Lock()
-		delete(*hs, h)
-		mu.Unlock()
-		cancel()
-	}
-}
-
-// wakeAll wakes up all waiters in the set.
-func (w waiterSet) wakeAll() {
-	for _, cancel := range w {
-		cancel() // they'll remove themselves
-	}
-}
-
 func (s *Server) awaitBackend(ctx context.Context) (_ *ipnlocal.LocalBackend, ok bool) {
 	lb := s.lb.Load()
 	if lb != nil {
 		return lb, true
 	}
 
-	ready, cleanup := s.backendWaiter.add(&s.mu, ctx)
-	defer cleanup()
+	ready := s.backendWaiter.Get()
 
 	// Try again, now that we've registered, in case there was a
 	// race.
@@ -264,9 +230,7 @@ func (s *Server) blockWhileIdentityInUse(ctx context.Context, ci *ipnauth.ConnId
 	}
 	for inUse() {
 		// Check whenever the connection count drops down to zero.
-		ready, cleanup := s.zeroReqWaiter.add(&s.mu, ctx)
-		<-ready
-		cleanup()
+		<-s.zeroReqWaiter.Get()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -398,9 +362,7 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 
 		// Wake up callers waiting for the server to be idle:
 		if remain == 0 {
-			s.mu.Lock()
-			s.zeroReqWaiter.wakeAll()
-			s.mu.Unlock()
+			s.zeroReqWaiter.Wake()
 		}
 	}
 
@@ -434,9 +396,7 @@ func (s *Server) SetLocalBackend(lb *ipnlocal.LocalBackend) {
 	}
 	s.startBackendIfNeeded()
 
-	s.mu.Lock()
-	s.backendWaiter.wakeAll()
-	s.mu.Unlock()
+	s.backendWaiter.Wake()
 
 	// TODO(bradfitz): send status update to GUI long poller waiter. See
 	// https://github.com/tailscale/tailscale/issues/6522
