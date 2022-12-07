@@ -117,15 +117,28 @@ func main() {
 	defer cancel()
 
 	if cfg.InKubernetes && cfg.KubeSecret != "" {
-		if err := checkSecretPermissions(ctx, cfg.KubeSecret); err != nil {
+		canPatch, err := checkSecretPermissions(ctx, cfg.KubeSecret)
+		if err != nil {
 			log.Fatalf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 		}
+		cfg.KubernetesCanPatch = canPatch
+
 		if cfg.AuthKey == "" {
 			key, err := findKeyInKubeSecret(ctx, cfg.KubeSecret)
 			if err != nil {
 				log.Fatalf("Getting authkey from kube secret: %v", err)
 			}
 			if key != "" {
+				// This behavior of pulling authkeys from kube secrets was added
+				// at the same time as the patch permission, so we can enforce
+				// that we must be able to patch out the authkey after
+				// authenticating if you want to use this feature. This avoids
+				// us having to deal with the case where we might leave behind
+				// an unnecessary reusable authkey in a secret, like a rake in
+				// the grass.
+				if !cfg.KubernetesCanPatch {
+					log.Fatalf("authkey found in TS_KUBE_SECRET, but the pod doesn't have patch permissions on the secret to manage the authkey.")
+				}
 				log.Print("Using authkey found in kube secret")
 				cfg.AuthKey = key
 			} else {
@@ -149,7 +162,7 @@ func main() {
 			log.Fatalf("installing proxy rules: %v", err)
 		}
 	}
-	if cfg.InKubernetes && cfg.KubeSecret != "" {
+	if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" {
 		if err := storeDeviceID(ctx, cfg.KubeSecret, string(st.Self.ID)); err != nil {
 			log.Fatalf("storing device ID in kube secret: %v", err)
 		}
@@ -446,21 +459,22 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Addr)
 
 // settings is all the configuration for containerboot.
 type settings struct {
-	AuthKey         string
-	Routes          string
-	ProxyTo         string
-	DaemonExtraArgs string
-	ExtraArgs       string
-	InKubernetes    bool
-	UserspaceMode   bool
-	StateDir        string
-	AcceptDNS       bool
-	KubeSecret      string
-	SOCKSProxyAddr  string
-	HTTPProxyAddr   string
-	Socket          string
-	AuthOnce        bool
-	Root            string
+	AuthKey            string
+	Routes             string
+	ProxyTo            string
+	DaemonExtraArgs    string
+	ExtraArgs          string
+	InKubernetes       bool
+	UserspaceMode      bool
+	StateDir           string
+	AcceptDNS          bool
+	KubeSecret         string
+	SOCKSProxyAddr     string
+	HTTPProxyAddr      string
+	Socket             string
+	AuthOnce           bool
+	Root               string
+	KubernetesCanPatch bool
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
