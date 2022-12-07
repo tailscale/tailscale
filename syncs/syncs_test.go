@@ -12,6 +12,44 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+func BenchmarkWakeGroup(b *testing.B) {
+	var kg WakeGroup
+	b.ResetTimer()
+	var wg, wg2 sync.WaitGroup
+	const workers = 100
+	wg.Add(workers)
+	wg2.Add(workers)
+	done := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			wg2.Done()
+			for i := 0; i < b.N; i++ {
+				select {
+				case <-kg.Get():
+				case <-done:
+				}
+			}
+		}()
+	}
+	wg2.Wait()
+	for i := 0; i < b.N; i++ {
+		kg.Wake()
+	}
+	close(done)
+	wg.Wait()
+}
+
+func TestWakeGroup(t *testing.T) {
+	var x WakeGroup
+	ch := x.Get()
+	if ch == nil {
+		t.Fatal("nil chan")
+	}
+	x.Wake()
+	<-ch
+}
+
 func TestWaitGroupChan(t *testing.T) {
 	wg := NewWaitGroupChan()
 

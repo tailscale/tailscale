@@ -13,6 +13,36 @@ import (
 	"tailscale.com/util/mak"
 )
 
+// WakeGroup provides a way to wake up multiple goroutines waiting on a
+// single event. It is meant be reused, so you can call Wake and then
+// Get again to wait for the next event.
+type WakeGroup struct {
+	v AtomicValue[chan struct{}]
+}
+
+// Get returns a channel that will be closed when Wake is called.
+func (g *WakeGroup) Get() chan struct{} {
+	c, ok := g.v.LoadOk()
+	if ok {
+		return c
+	}
+	// The WakeGroup is empty, so we need to create a new channel.
+	// This is only reached once per WakeGroup.
+	n := make(chan struct{})
+	if g.v.Init(n) {
+		return n
+	}
+	return g.v.Load()
+}
+
+// Wake wakes up all goroutines waiting on the WakeGroup.
+func (g *WakeGroup) Wake() {
+	c := g.v.Swap(make(chan struct{}))
+	if c != nil {
+		close(c)
+	}
+}
+
 // ClosedChan returns a channel that's already closed.
 func ClosedChan() <-chan struct{} { return closedChan }
 
@@ -60,6 +90,12 @@ func (v *AtomicValue[T]) Swap(x T) (old T) {
 		return oldV.(T)
 	}
 	return old
+}
+
+// Init provides a way to initialize the value. It returns true if the
+// value was initialized, false if it was already initialized.
+func (v *AtomicValue[T]) Init(newV T) (swapped bool) {
+	return v.v.CompareAndSwap(nil, newV)
 }
 
 // CompareAndSwap executes the compare-and-swap operation for the Value.
