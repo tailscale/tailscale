@@ -1803,3 +1803,16 @@ func TestDiscoMagicMatches(t *testing.T) {
 		t.Errorf("last 2 bytes of disco magic don't match, got %v want %v", discoMagic2, m2)
 	}
 }
+
+func TestRebindingUDPConn(t *testing.T) {
+	// Test that RebindingUDPConn can be re-bound to different connection
+	// types.
+	c := RebindingUDPConn{}
+	realConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer realConn.Close()
+	c.setConnLocked(realConn.(nettype.PacketConn))
+	c.setConnLocked(newBlockForeverConn())
+}
