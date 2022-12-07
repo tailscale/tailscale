@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+
+	"tailscale.com/util/httpclient"
 )
 
 // ACLRow defines a rule that grants access by a set of users or groups to a set
@@ -83,8 +85,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -183,8 +184,7 @@ func (c *Client) aclPOSTRequest(ctx context.Context, body []byte, avoidCollision
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		// check if test error
 		var ate ACLTestError
 		if err := json.Unmarshal(b, &ate); err != nil {
@@ -307,8 +307,7 @@ func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, preview
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if !httpclient.IsSuccess(resp.StatusCode) {
 		return nil, handleErrorResponse(b, resp)
 	}
 	if err = json.Unmarshal(b, &res); err != nil {
