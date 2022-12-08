@@ -21,6 +21,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/paths"
 	"tailscale.com/version"
 )
 
@@ -110,10 +111,15 @@ func runSSH(ctx context.Context, args []string) error {
 	// So don't use it for now. MagicDNS is usually working on macOS anyway
 	// and they're not in userspace mode, so 'nc' isn't very useful.
 	if runtime.GOOS != "darwin" {
+		socketArg := ""
+		if rootArgs.socket != "" && rootArgs.socket != paths.DefaultTailscaledSocket() {
+			socketArg = fmt.Sprintf("--socket=%q", rootArgs.socket)
+		}
+
 		argv = append(argv,
-			"-o", fmt.Sprintf("ProxyCommand %q --socket=%q nc %%h %%p",
+			"-o", fmt.Sprintf("ProxyCommand %q %s nc %%h %%p",
 				tailscaleBin,
-				rootArgs.socket,
+				socketArg,
 			))
 	}
 
