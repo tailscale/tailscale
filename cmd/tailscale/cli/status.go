@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -222,7 +223,42 @@ func runStatus(ctx context.Context, args []string) error {
 		outln()
 		printHealth()
 	}
+	printFunnelStatus(ctx)
 	return nil
+}
+
+// printFunnelStatus prints the status of the funnel, if it's running.
+// It prints nothing if the funnel is not running.
+func printFunnelStatus(ctx context.Context) {
+	sc, err := localClient.GetServeConfig(ctx)
+	if err != nil {
+		outln()
+		printf("# Funnel:\n")
+		printf("#     - Unable to get Funnel status: %v\n", err)
+		return
+	}
+	if !sc.IsFunnelOn() {
+		return
+	}
+	outln()
+	printf("# Funnel on:\n")
+	for hp, on := range sc.AllowFunnel {
+		if !on { // if present, should be on
+			continue
+		}
+		sni, portStr, _ := net.SplitHostPort(string(hp))
+		p, _ := strconv.ParseUint(portStr, 10, 16)
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p))
+		url := "https://"
+		if isTCP {
+			url = "tcp://"
+		}
+		url += sni
+		if isTCP || p != 443 {
+			url += ":" + portStr
+		}
+		printf("#     - %s\n", url)
+	}
 }
 
 // isRunningOrStarting reports whether st is in state Running or Starting.

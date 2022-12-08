@@ -540,37 +540,32 @@ func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "serve config denied", http.StatusForbidden)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
 	switch r.Method {
 	case "GET":
+		if !h.PermitRead {
+			http.Error(w, "serve config denied", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
 		config := h.b.ServeConfig()
 		json.NewEncoder(w).Encode(config)
 	case "POST":
-		configIn := new(ipn.ServeConfig)
-		if err := json.NewDecoder(r.Body).Decode(configIn); err != nil {
-			json.NewEncoder(w).Encode(struct {
-				Error error
-			}{
-				Error: fmt.Errorf("decoding config: %w", err),
-			})
+		if !h.PermitWrite {
+			http.Error(w, "serve config denied", http.StatusForbidden)
 			return
 		}
-		err := h.b.SetServeConfig(configIn)
-		if err != nil {
-			json.NewEncoder(w).Encode(struct {
-				Error error
-			}{
-				Error: fmt.Errorf("updating config: %w", err),
-			})
+		configIn := new(ipn.ServeConfig)
+		if err := json.NewDecoder(r.Body).Decode(configIn); err != nil {
+			writeErrorJSON(w, fmt.Errorf("decoding config: %w", err))
+			return
+		}
+		if err := h.b.SetServeConfig(configIn); err != nil {
+			writeErrorJSON(w, fmt.Errorf("updating config: %w", err))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
