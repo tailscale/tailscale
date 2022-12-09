@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -53,7 +51,7 @@ func TestInQemu(t *testing.T) {
 				}
 				t.Logf("using %v", look)
 			}
-			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"),
+			cmd := exec.Command("go",
 				"test",
 				"--exec="+execVia,
 				"-v",
