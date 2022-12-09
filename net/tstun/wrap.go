@@ -29,7 +29,10 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 )
@@ -87,6 +90,9 @@ type Wrapper struct {
 	destIPActivity syncs.AtomicValue[map[netip.Addr]func()]
 	destMACAtomic  syncs.AtomicValue[[6]byte]
 	discoKey       syncs.AtomicValue[key.DiscoPublic]
+
+	// natV4Config stores the current NAT configuration.
+	natV4Config atomic.Pointer[natV4Config]
 
 	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
 	// allocated in wrap() and the underlying arrays should never grow.
@@ -459,6 +465,139 @@ func (t *Wrapper) sendVectorOutbound(r tunVectorReadResult) {
 	t.vectorOutbound <- r
 }
 
+// snatV4 does SNAT on p if it's an IPv4 packet and the destination
+// address requires a different source address.
+func (t *Wrapper) snatV4(p *packet.Parsed) {
+	if p.IPVersion != 4 {
+		return
+	}
+
+	nc := t.natV4Config.Load()
+	oldSrc := p.Src.Addr()
+	newSrc := nc.selectSrcIP(oldSrc, p.Dst.Addr())
+	if oldSrc != newSrc {
+		p.UpdateSrcAddr(newSrc)
+	}
+}
+
+// dnatV4 does destination NAT on p if it's an IPv4 packet.
+func (t *Wrapper) dnatV4(p *packet.Parsed) {
+	if p.IPVersion != 4 {
+		return
+	}
+
+	nc := t.natV4Config.Load()
+	oldDst := p.Dst.Addr()
+	newDst := nc.mapDstIP(oldDst)
+	if newDst != oldDst {
+		p.UpdateDstAddr(newDst)
+	}
+}
+
+// findV4 returns the first Tailscale IPv4 address in addrs.
+func findV4(addrs []netip.Prefix) netip.Addr {
+	for _, ap := range addrs {
+		a := ap.Addr()
+		if a.Is4() && tsaddr.IsTailscaleIP(a) {
+			return a
+		}
+	}
+	return netip.Addr{}
+}
+
+// natV4Config is the configuration for IPv4 NAT.
+// It should be treated as immutable.
+//
+// The nil value is a valid configuration.
+type natV4Config struct {
+	// nativeAddr is the IPv4 Tailscale Address of the current node.
+	nativeAddr netip.Addr
+
+	// listenAddrs is the set of IPv4 addresses that should be
+	// mapped to the native address. These are the addresses that
+	// peers will use to connect to this node.
+	listenAddrs views.Map[netip.Addr, struct{}] // masqAddr -> struct{}
+
+	// dstMasqAddrs is map of dst addresses to their respective MasqueradeAsIP
+	// addresses. The MasqueradeAsIP address is the address that should be used
+	// as the source address for packets to dst.
+	dstMasqAddrs views.Map[netip.Addr, netip.Addr] // dst -> masqAddr
+
+	// TODO(maisem/nyghtowl): add support for subnets and exit nodes and test them.
+	// Determine IP routing table algorithm to use - e.g. ART?
+}
+
+// mapDstIP returns the destination IP to use for a packet to dst.
+// If dst is not one of the listen addresses, it is returned as-is,
+// otherwise the native address is returned.
+func (c *natV4Config) mapDstIP(oldDst netip.Addr) netip.Addr {
+	if c == nil {
+		return oldDst
+	}
+	if _, ok := c.listenAddrs.GetOk(oldDst); ok {
+		return c.nativeAddr
+	}
+	return oldDst
+}
+
+// selectSrcIP returns the source IP to use for a packet to dst.
+// If the packet is not from the native address, it is returned as-is.
+func (c *natV4Config) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
+	if c == nil {
+		return oldSrc
+	}
+	if oldSrc != c.nativeAddr {
+		return oldSrc
+	}
+	if eip, ok := c.dstMasqAddrs.GetOk(dst); ok {
+		return eip
+	}
+	return oldSrc
+}
+
+// natConfigFromNetMap generates a natV4Config from nm.
+// If v4 NAT is not required, it returns nil.
+func natConfigFromNetMap(nm *netmap.NetworkMap) *natV4Config {
+	if nm == nil || nm.SelfNode == nil {
+		return nil
+	}
+	nativeAddr := findV4(nm.SelfNode.Addresses)
+	if !nativeAddr.IsValid() {
+		return nil
+	}
+	var (
+		dstMasqAddrs map[netip.Addr]netip.Addr
+		listenAddrs  map[netip.Addr]struct{}
+	)
+	for _, p := range nm.Peers {
+		if !p.SelfNodeV4MasqAddrForThisPeer.IsValid() {
+			continue
+		}
+		peerV4 := findV4(p.Addresses)
+		if !peerV4.IsValid() {
+			continue
+		}
+		mak.Set(&dstMasqAddrs, peerV4, p.SelfNodeV4MasqAddrForThisPeer)
+		mak.Set(&listenAddrs, p.SelfNodeV4MasqAddrForThisPeer, struct{}{})
+	}
+	if len(listenAddrs) == 0 || len(dstMasqAddrs) == 0 {
+		return nil
+	}
+	return &natV4Config{
+		nativeAddr:   nativeAddr,
+		listenAddrs:  views.MapOf(listenAddrs),
+		dstMasqAddrs: views.MapOf(dstMasqAddrs),
+	}
+}
+
+// SetNetMap is called when a new NetworkMap is received.
+// It currently (2023-03-01) only updates the IPv4 NAT configuration.
+func (t *Wrapper) SetNetMap(nm *netmap.NetworkMap) {
+	cfg := natConfigFromNetMap(nm)
+	t.natV4Config.Store(cfg)
+	t.logf("nat config: %+v", cfg)
+}
+
 var (
 	magicDNSIPPort   = netip.AddrPortFrom(tsaddr.TailscaleServiceIP(), 0) // 100.100.100.100:0
 	magicDNSIPPortv6 = netip.AddrPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
@@ -541,8 +680,8 @@ func (t *Wrapper) IdleDuration() time.Duration {
 }
 
 func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
+	// packet from OS read and sent to WG
 	res, ok := <-t.vectorOutbound
-
 	if !ok {
 		return 0, io.EOF
 	}
@@ -566,6 +705,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	defer parsedPacketPool.Put(p)
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
+
+		t.snatV4(p)
 		if m := t.destIPActivity.Load(); m != nil {
 			if fn := m[p.Dst.Addr()]; fn != nil {
 				fn()
@@ -622,6 +763,7 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[offset : offset+n])
+	t.snatV4(p)
 
 	if m := t.destIPActivity.Load(); m != nil {
 		if fn := m[p.Dst.Addr()]; fn != nil {
@@ -738,11 +880,12 @@ func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed) filter.Resp
 func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	metricPacketIn.Add(int64(len(buffs)))
 	i := 0
-	if !t.disableFilter {
-		p := parsedPacketPool.Get().(*packet.Parsed)
-		defer parsedPacketPool.Put(p)
-		for _, buff := range buffs {
-			p.Decode(buff[offset:])
+	p := parsedPacketPool.Get().(*packet.Parsed)
+	defer parsedPacketPool.Put(p)
+	for _, buff := range buffs {
+		p.Decode(buff[offset:])
+		t.dnatV4(p)
+		if !t.disableFilter {
 			if t.filterPacketInboundFromWireGuard(p) != filter.Accept {
 				metricPacketInDrop.Add(1)
 			} else {
@@ -750,7 +893,8 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 				i++
 			}
 		}
-	} else {
+	}
+	if t.disableFilter {
 		i = len(buffs)
 	}
 	buffs = buffs[:i]
@@ -801,6 +945,10 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	if capt := t.captureHook.Load(); capt != nil {
 		capt(capture.SynthesizedToLocal, time.Now(), buf[PacketStartOffset:])
 	}
+	p := parsedPacketPool.Get().(*packet.Parsed)
+	defer parsedPacketPool.Put(p)
+	p.Decode(buf[PacketStartOffset:])
+	t.dnatV4(p)
 
 	return t.InjectInboundDirect(buf, PacketStartOffset)
 }
