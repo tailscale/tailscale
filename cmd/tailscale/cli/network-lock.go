@@ -154,8 +154,8 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "status",
-	ShortHelp:  "Outputs the state of network lock",
-	LongHelp:   "Outputs the state of network lock",
+	ShortHelp:  "Outputs the state of tailnet lock",
+	LongHelp:   "Outputs the state of tailnet lock",
 	Exec:       runNetworkLockStatus,
 }
 
