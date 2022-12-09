@@ -518,9 +518,11 @@ func TestPeerAPIBypass(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			p := new(packet.Parsed)
+			p.Decode(tt.pkt)
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
-			if got := tt.w.filterIn(tt.pkt); got != tt.want {
+			if got := tt.w.filterIn(p); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
@@ -548,7 +550,9 @@ func TestFilterDiscoLoop(t *testing.T) {
 	uh.Marshal(pkt)
 	copy(pkt[uh.Len():], discoPayload)
 
-	got := tw.filterIn(pkt)
+	p := new(packet.Parsed)
+	p.Decode(pkt)
+	got := tw.filterIn(p)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
