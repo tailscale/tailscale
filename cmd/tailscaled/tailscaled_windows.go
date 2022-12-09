@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/netip"
 	"os"
@@ -273,17 +274,24 @@ func beWindowsSubprocess() bool {
 		log.Printf("Error reading environment config: %v", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		b := make([]byte, 16)
 		for {
 			_, err := os.Stdin.Read(b)
+			if err == io.EOF {
+				// Parent wants us to shut down gracefully.
+				log.Printf("subproc received EOF from stdin")
+				cancel()
+				return
+			}
 			if err != nil {
 				log.Fatalf("stdin err (parent process died): %v", err)
 			}
 		}
 	}()
 
-	err := startIPNServer(context.Background(), log.Printf, logid)
+	err := startIPNServer(ctx, log.Printf, logid)
 	if err != nil {
 		log.Fatalf("ipnserver: %v", err)
 	}
@@ -365,8 +373,9 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 	}
 
 	var proc struct {
-		mu sync.Mutex
-		p  *os.Process
+		mu     sync.Mutex
+		p      *os.Process
+		wStdin *os.File
 	}
 
 	done := make(chan struct{})
@@ -378,15 +387,18 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		case sig = <-interrupt:
 			logf("babysitProc: got signal: %v", sig)
 			close(done)
+			proc.mu.Lock()
+			proc.p.Signal(sig)
+			proc.mu.Unlock()
 		case <-ctx.Done():
 			logf("babysitProc: context done")
-			sig = os.Kill
 			close(done)
+			proc.mu.Lock()
+			// Closing wStdin gives the subprocess a chance to shut down cleanly,
+			// which is important for cleaning up DNS settings etc.
+			proc.wStdin.Close()
+			proc.mu.Unlock()
 		}
-
-		proc.mu.Lock()
-		proc.p.Signal(sig)
-		proc.mu.Unlock()
 	}()
 
 	bo := backoff.NewBackoff("babysitProc", logf, 30*time.Second)
@@ -448,6 +460,7 @@ func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
 		} else {
 			proc.mu.Lock()
 			proc.p = cmd.Process
+			proc.wStdin = wStdin
 			proc.mu.Unlock()
 
 			err = cmd.Wait()
