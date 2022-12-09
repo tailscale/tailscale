@@ -25,12 +25,14 @@ import (
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/filter"
 )
@@ -591,5 +593,131 @@ func TestFilterDiscoLoop(t *testing.T) {
 	}
 	if got, want := memLog.String(), "[unexpected] received self disco out packet over tstun; dropping\n"; got != want {
 		t.Errorf("log output mismatch\n got: %q\nwant: %q\n", got, want)
+	}
+}
+
+func TestNATCfg(t *testing.T) {
+	node := func(ip, eip netip.Addr) *tailcfg.Node {
+		return &tailcfg.Node{
+			Addresses: []netip.Prefix{
+				netip.PrefixFrom(ip, ip.BitLen()),
+			},
+			SelfNodeV4MasqAddrForThisPeer: eip,
+		}
+	}
+	var (
+		noIP netip.Addr
+
+		selfNativeIP = netip.MustParseAddr("100.64.0.1")
+		selfEIP1     = netip.MustParseAddr("100.64.1.1")
+		selfEIP2     = netip.MustParseAddr("100.64.1.2")
+
+		peer1IP = netip.MustParseAddr("100.64.0.2")
+		peer2IP = netip.MustParseAddr("100.64.0.3")
+
+		// subnets should not be impacted.
+		// TODO(maisem/nyghtowl): add support for subnets and exit nodes and test them.
+		subnet = netip.MustParseAddr("192.168.0.1")
+	)
+
+	tests := []struct {
+		name    string
+		nm      *netmap.NetworkMap
+		snatMap map[netip.Addr]netip.Addr // dst -> src
+		dnatMap map[netip.Addr]netip.Addr
+	}{
+		{
+			name: "no-netmap",
+			nm:   nil,
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP: selfNativeIP,
+				peer2IP: selfNativeIP,
+				subnet:  selfNativeIP,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfEIP1,
+				selfEIP2:     selfEIP2,
+			},
+		},
+		{
+			name: "single-peer-requires-nat",
+			nm: &netmap.NetworkMap{
+				SelfNode: node(selfNativeIP, noIP),
+				Peers: []*tailcfg.Node{
+					node(peer1IP, noIP),
+					node(peer2IP, selfEIP1),
+				},
+			},
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP: selfNativeIP,
+				peer2IP: selfEIP1,
+				subnet:  selfNativeIP,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfNativeIP,
+				selfEIP2:     selfEIP2,
+				subnet:       subnet,
+			},
+		},
+		{
+			name: "multiple-peers-require-nat",
+			nm: &netmap.NetworkMap{
+				SelfNode: node(selfNativeIP, noIP),
+				Peers: []*tailcfg.Node{
+					node(peer1IP, selfEIP1),
+					node(peer2IP, selfEIP2),
+				},
+			},
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP: selfEIP1,
+				peer2IP: selfEIP2,
+				subnet:  selfNativeIP,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfNativeIP,
+				selfEIP2:     selfNativeIP,
+				subnet:       subnet,
+			},
+		},
+		{
+			name: "no-nat",
+			nm: &netmap.NetworkMap{
+				SelfNode: node(selfNativeIP, noIP),
+				Peers: []*tailcfg.Node{
+					node(peer1IP, noIP),
+					node(peer2IP, noIP),
+				},
+			},
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP: selfNativeIP,
+				peer2IP: selfNativeIP,
+				subnet:  selfNativeIP,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfEIP1,
+				selfEIP2:     selfEIP2,
+				subnet:       subnet,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ncfg := natConfigFromNetMap(tc.nm)
+			for peer, want := range tc.snatMap {
+				if got := ncfg.selectSrcIP(selfNativeIP, peer); got != want {
+					t.Errorf("selectSrcIP: got %v; want %v", got, want)
+				}
+			}
+			for dstIP, want := range tc.dnatMap {
+				if got := ncfg.mapDstIP(dstIP); got != want {
+					t.Errorf("mapDstIP: got %v; want %v", got, want)
+				}
+			}
+		})
 	}
 }

@@ -1205,6 +1205,7 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	e.netMap = nm
+	e.tundev.SetNetMap(nm)
 	callbacks := make([]NetworkMapCallback, 0, 4)
 	for _, fn := range e.networkMapCallbacks {
 		callbacks = append(callbacks, fn)
