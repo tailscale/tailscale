@@ -23,8 +23,7 @@ var (
 func TestFindModuleInfo(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "tailscaled-version-test")
-	goTool := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
-	out, err := exec.Command(goTool, "build", "-o", name, "tailscale.com/cmd/tailscaled").CombinedOutput()
+	out, err := exec.Command("go", "build", "-o", name, "tailscale.com/cmd/tailscaled").CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to build tailscaled: %v\n%s", err, out)
 	}

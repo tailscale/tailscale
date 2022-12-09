@@ -43,7 +43,7 @@ func TestFallbackRootWorks(t *testing.T) {
 	crtFile := filepath.Join(d, "tlsdial.test.crt")
 	keyFile := filepath.Join(d, "tlsdial.test.key")
 	caFile := filepath.Join(d, "rootCA.pem")
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"),
+	cmd := exec.Command("go",
 		"run", "filippo.io/mkcert",
 		"--cert-file="+crtFile,
 		"--key-file="+keyFile,

@@ -13,13 +13,11 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
 )
 
 func TestDeps(t *testing.T) {
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-json", ".")
+	cmd := exec.Command("go", "list", "-json", ".")
 	cmd.Env = append(os.Environ(), "GOOS=ios", "GOARCH=arm64")
 	out, err := cmd.Output()
 	if err != nil {
