@@ -29,6 +29,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/exp/maps"
+	wgconn "golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/derp"
@@ -364,9 +365,12 @@ func TestNewConn(t *testing.T) {
 	conn.SetPrivateKey(key.NewNode())
 
 	go func() {
-		var pkt [64 << 10]byte
+		pkts := make([][]byte, 1)
+		sizes := make([]int, 1)
+		eps := make([]wgconn.Endpoint, 1)
+		pkts[0] = make([]byte, 64<<10)
 		for {
-			_, _, err := conn.receiveIPv4(pkt[:])
+			_, err := conn.receiveIPv4(pkts, sizes, eps)
 			if err != nil {
 				return
 			}
@@ -1262,17 +1266,20 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	for i := range sendBuf {
 		sendBuf[i] = 'x'
 	}
-	buf := make([]byte, 2<<10)
+	buffs := make([][]byte, 1)
+	buffs[0] = make([]byte, 2<<10)
+	sizes := make([]int, 1)
+	eps := make([]wgconn.Endpoint, 1)
 	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			tb.Fatalf("WriteTo: %v", err)
 		}
-		n, ep, err := conn.receiveIPv4(buf)
+		n, err := conn.receiveIPv4(buffs, sizes, eps)
 		if err != nil {
 			tb.Fatal(err)
 		}
 		_ = n
-		_ = ep
+		_ = eps
 	}
 }
 
@@ -1330,6 +1337,9 @@ func TestGoMajorVersion(t *testing.T) {
 }
 
 func TestReceiveFromAllocs(t *testing.T) {
+	// TODO(jwhited): we are back to nonzero alloc due to our use of x/net until
+	//  https://github.com/golang/go/issues/45886 is implemented.
+	t.Skip("alloc tests are skipped until https://github.com/golang/go/issues/45886 is implemented and plumbed.")
 	if racebuild.On {
 		t.Skip("alloc tests are unreliable with -race")
 	}
@@ -1481,9 +1491,12 @@ func TestRebindStress(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		buf := make([]byte, 1500)
+		buffs := make([][]byte, 1)
+		sizes := make([]int, 1)
+		eps := make([]wgconn.Endpoint, 1)
+		buffs[0] = make([]byte, 1500)
 		for {
-			_, _, err := conn.receiveIPv4(buf)
+			_, err := conn.receiveIPv4(buffs, sizes, eps)
 			if ctx.Err() != nil {
 				errc <- nil
 				return
@@ -1813,6 +1826,6 @@ func TestRebindingUDPConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer realConn.Close()
-	c.setConnLocked(realConn.(nettype.PacketConn))
-	c.setConnLocked(newBlockForeverConn())
+	c.setConnLocked(realConn.(nettype.PacketConn), "udp4")
+	c.setConnLocked(newBlockForeverConn(), "")
 }

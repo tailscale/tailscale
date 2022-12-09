@@ -6,5 +6,4 @@
 
 package tstun
 
-func (*Wrapper) handleTAPFrame([]byte) bool        { panic("unreachable") }
-func (*Wrapper) tapWrite([]byte, int) (int, error) { panic("unreachable") }
+func (*Wrapper) handleTAPFrame([]byte) bool { panic("unreachable") }

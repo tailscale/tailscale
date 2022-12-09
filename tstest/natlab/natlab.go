@@ -812,6 +812,18 @@ func (c *conn) LocalAddr() net.Addr {
 	}
 }
 
+func (c *conn) Read(buf []byte) (int, error) {
+	panic("unimplemented stub")
+}
+
+func (c *conn) RemoteAddr() net.Addr {
+	panic("unimplemented stub")
+}
+
+func (c *conn) Write(buf []byte) (int, error) {
+	panic("unimplemented stub")
+}
+
 func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

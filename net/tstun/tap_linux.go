@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"golang.org/x/sys/unix"
@@ -23,6 +24,7 @@ import (
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/multierr"
 )
 
 // TODO: this was randomly generated once. Maybe do it per process start? But
@@ -69,13 +71,7 @@ func openDevice(fd int, tapName, bridgeName string) (tun.Device, error) {
 		}
 	}
 
-	// Also sets non-blocking I/O on fd when creating tun.Device.
-	dev, _, err := tun.CreateUnmonitoredTUNFromFD(fd) // TODO: MTU
-	if err != nil {
-		return nil, err
-	}
-
-	return dev, nil
+	return newTAPDevice(fd, tapName)
 }
 
 type etherType [2]byte
@@ -168,7 +164,8 @@ func (t *Wrapper) handleTAPFrame(ethBuf []byte) bool {
 			copy(res.HardwareAddressTarget(), req.HardwareAddressSender())
 			copy(res.ProtocolAddressTarget(), req.ProtocolAddressSender())
 
-			n, err := t.tdev.Write(buf, 0)
+			// TODO(raggi): reduce allocs!
+			n, err := t.tdev.Write([][]byte{buf}, 0)
 			if tapDebug {
 				t.logf("tap: wrote ARP reply %v, %v", n, err)
 			}
@@ -252,7 +249,9 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
 			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
-		n, err := t.tdev.Write(pkt, 0)
+
+		// TODO(raggi): reduce allocs!
+		n, err := t.tdev.Write([][]byte{pkt}, 0)
 		if tapDebug {
 			t.logf("tap: wrote DHCP OFFER %v, %v", n, err)
 		}
@@ -279,7 +278,8 @@ func (t *Wrapper) handleDHCPRequest(ethBuf []byte) bool {
 			netip.AddrPortFrom(netaddr.IPv4(100, 100, 100, 100), 67), // src
 			netip.AddrPortFrom(netaddr.IPv4(255, 255, 255, 255), 68), // dst
 		)
-		n, err := t.tdev.Write(pkt, 0)
+		// TODO(raggi): reduce allocs!
+		n, err := t.tdev.Write([][]byte{pkt}, 0)
 		if tapDebug {
 			t.logf("tap: wrote DHCP ACK %v, %v", n, err)
 		}
@@ -346,21 +346,108 @@ func (t *Wrapper) destMAC() [6]byte {
 	return t.destMACAtomic.Load()
 }
 
-func (t *Wrapper) tapWrite(buf []byte, offset int) (int, error) {
-	if offset < ethernetFrameSize {
-		return 0, fmt.Errorf("[unexpected] weird offset %d for TAP write", offset)
+func newTAPDevice(fd int, tapName string) (tun.Device, error) {
+	err := unix.SetNonblock(fd, true)
+	if err != nil {
+		return nil, err
 	}
-	eth := buf[offset-ethernetFrameSize:]
-	dst := t.destMAC()
-	copy(eth[:6], dst[:])
-	copy(eth[6:12], ourMAC[:])
-	et := etherTypeIPv4
-	if buf[offset]>>4 == 6 {
-		et = etherTypeIPv6
+	file := os.NewFile(uintptr(fd), "/dev/tap")
+	d := &tapDevice{
+		file:   file,
+		events: make(chan tun.Event),
+		name:   tapName,
 	}
-	eth[12], eth[13] = et[0], et[1]
-	if tapDebug {
-		t.logf("tap: tapWrite off=%v % x", offset, buf)
+	return d, nil
+}
+
+var (
+	_ setWrapperer = &tapDevice{}
+)
+
+type tapDevice struct {
+	file      *os.File
+	events    chan tun.Event
+	name      string
+	wrapper   *Wrapper
+	closeOnce sync.Once
+}
+
+func (t *tapDevice) setWrapper(wrapper *Wrapper) {
+	t.wrapper = wrapper
+}
+
+func (t *tapDevice) File() *os.File {
+	return t.file
+}
+
+func (t *tapDevice) Name() (string, error) {
+	return t.name, nil
+}
+
+func (t *tapDevice) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
+	n, err := t.file.Read(buffs[0][offset:])
+	if err != nil {
+		return 0, err
 	}
-	return t.tdev.Write(buf, offset-ethernetFrameSize)
+	sizes[0] = n
+	return 1, nil
+}
+
+func (t *tapDevice) Write(buffs [][]byte, offset int) (int, error) {
+	errs := make([]error, 0)
+	wrote := 0
+	for _, buff := range buffs {
+		if offset < ethernetFrameSize {
+			errs = append(errs, fmt.Errorf("[unexpected] weird offset %d for TAP write", offset))
+			return 0, multierr.New(errs...)
+		}
+		eth := buff[offset-ethernetFrameSize:]
+		dst := t.wrapper.destMAC()
+		copy(eth[:6], dst[:])
+		copy(eth[6:12], ourMAC[:])
+		et := etherTypeIPv4
+		if buff[offset]>>4 == 6 {
+			et = etherTypeIPv6
+		}
+		eth[12], eth[13] = et[0], et[1]
+		if tapDebug {
+			t.wrapper.logf("tap: tapWrite off=%v % x", offset, buff)
+		}
+		_, err := t.file.Write(buff[offset-ethernetFrameSize:])
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			wrote++
+		}
+	}
+	return wrote, multierr.New(errs...)
+}
+
+func (t *tapDevice) MTU() (int, error) {
+	ifr, err := unix.NewIfreq(t.name)
+	if err != nil {
+		return 0, err
+	}
+	err = unix.IoctlIfreq(int(t.file.Fd()), unix.SIOCGIFMTU, ifr)
+	if err != nil {
+		return 0, err
+	}
+	return int(ifr.Uint32()), nil
+}
+
+func (t *tapDevice) Events() <-chan tun.Event {
+	return t.events
+}
+
+func (t *tapDevice) Close() error {
+	var err error
+	t.closeOnce.Do(func() {
+		close(t.events)
+		err = t.file.Close()
+	})
+	return err
+}
+
+func (t *tapDevice) BatchSize() int {
+	return 1
 }

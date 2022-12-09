@@ -213,18 +213,18 @@ func newNilTun() tun.Device {
 	}
 }
 
-func (t *nilTun) File() *os.File         { return nil }
-func (t *nilTun) Flush() error           { return nil }
-func (t *nilTun) MTU() (int, error)      { return 1420, nil }
-func (t *nilTun) Name() (string, error)  { return "niltun", nil }
-func (t *nilTun) Events() chan tun.Event { return t.events }
+func (t *nilTun) File() *os.File           { return nil }
+func (t *nilTun) Flush() error             { return nil }
+func (t *nilTun) MTU() (int, error)        { return 1420, nil }
+func (t *nilTun) Name() (string, error)    { return "niltun", nil }
+func (t *nilTun) Events() <-chan tun.Event { return t.events }
 
-func (t *nilTun) Read(data []byte, offset int) (int, error) {
+func (t *nilTun) Read(data [][]byte, sizes []int, offset int) (int, error) {
 	<-t.closed
 	return 0, io.EOF
 }
 
-func (t *nilTun) Write(data []byte, offset int) (int, error) {
+func (t *nilTun) Write(data [][]byte, offset int) (int, error) {
 	<-t.closed
 	return 0, io.EOF
 }
@@ -235,18 +235,21 @@ func (t *nilTun) Close() error {
 	return nil
 }
 
+func (t *nilTun) BatchSize() int { return 1 }
+
 // A noopBind is a conn.Bind that does no actual binding work.
 type noopBind struct{}
 
 func (noopBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err error) {
 	return nil, 1, nil
 }
-func (noopBind) Close() error                          { return nil }
-func (noopBind) SetMark(mark uint32) error             { return nil }
-func (noopBind) Send(b []byte, ep conn.Endpoint) error { return nil }
+func (noopBind) Close() error                            { return nil }
+func (noopBind) SetMark(mark uint32) error               { return nil }
+func (noopBind) Send(b [][]byte, ep conn.Endpoint) error { return nil }
 func (noopBind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	return dummyEndpoint(s), nil
 }
+func (noopBind) BatchSize() int { return 1 }
 
 // A dummyEndpoint is a string holding the endpoint destination.
 type dummyEndpoint string
