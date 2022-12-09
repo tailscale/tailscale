@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"golang.zx2c4.com/wireguard/device"
+	"github.com/tailscale/wireguard-go/device"
 	"tailscale.com/syncs"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"

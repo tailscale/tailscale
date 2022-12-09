@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"

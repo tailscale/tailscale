@@ -7,7 +7,7 @@ package wgint
 import (
 	"testing"
 
-	"golang.zx2c4.com/wireguard/device"
+	"github.com/tailscale/wireguard-go/device"
 )
 
 func TestPeerStats(t *testing.T) {

@@ -12,12 +12,12 @@ import (
 	// transitive deps when we run "go install tailscaled" in a child
 	// process and can cache a prior success when a dependency changes.
 	_ "github.com/dblohm7/wingoes/com"
+	_ "github.com/tailscale/wireguard-go/tun"
 	_ "golang.org/x/sys/windows"
 	_ "golang.org/x/sys/windows/svc"
 	_ "golang.org/x/sys/windows/svc/eventlog"
 	_ "golang.org/x/sys/windows/svc/mgr"
 	_ "golang.zx2c4.com/wintun"
-	_ "golang.zx2c4.com/wireguard/tun"
 	_ "golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	_ "tailscale.com/cmd/tailscaled/childproc"
 	_ "tailscale.com/control/controlclient"

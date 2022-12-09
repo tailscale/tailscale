@@ -19,9 +19,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/tailscale/wireguard-go/tun"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/exp/slices"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"

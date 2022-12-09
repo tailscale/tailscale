@@ -19,10 +19,10 @@ import (
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/tailscale/netlink"
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"

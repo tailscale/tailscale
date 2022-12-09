@@ -15,10 +15,10 @@ import (
 	"time"
 
 	ole "github.com/go-ole/go-ole"
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/health"
 	"tailscale.com/net/interfaces"

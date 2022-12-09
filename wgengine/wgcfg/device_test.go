@@ -15,10 +15,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tailscale/wireguard-go/conn"
+	"github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/types/key"
 )
 

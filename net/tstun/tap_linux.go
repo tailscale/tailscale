@@ -15,8 +15,8 @@ import (
 	"sync"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
-	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"

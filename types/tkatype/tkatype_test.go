@@ -5,8 +5,9 @@
 package tkatype
 
 import (
-	"golang.org/x/crypto/blake2s"
 	"testing"
+
+	"golang.org/x/crypto/blake2s"
 )
 
 func TestSigHashSize(t *testing.T) {

@@ -121,8 +121,8 @@ func (s *Server) Dial(ctx context.Context, network, address string) (net.Conn, e
 // This is useful if you need to have your tsnet services connect to other devices on
 // your tailnet.
 func (s *Server) HTTPClient() *http.Client {
-	return &http.Client {
-		Transport: &http.Transport {
+	return &http.Client{
+		Transport: &http.Transport{
 			DialContext: s.Dial,
 		},
 	}

@@ -28,10 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tailscale/wireguard-go/conn"
 	"go4.org/mem"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-	"golang.zx2c4.com/wireguard/conn"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"

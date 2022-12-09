@@ -866,7 +866,6 @@ func (lc *LocalClient) NetworkLockForceLocalDisable(ctx context.Context) error {
 	return nil
 }
 
-
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
-	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
