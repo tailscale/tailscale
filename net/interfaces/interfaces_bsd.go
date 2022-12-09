@@ -84,7 +84,7 @@ func DefaultRouteInterfaceIndex() (int, error) {
 
 var defaultRouteInterfaceIndexFunc syncs.AtomicValue[func() int]
 
-// SetDefaultRouteInterfaceIndexFunc allows an alternate implementation of 
+// SetDefaultRouteInterfaceIndexFunc allows an alternate implementation of
 // DefaultRouteInterfaceIndex to be provided. If none is set, or if f() returns a 0
 // (indicating an unknown interface index), then the default implementation (that parses
 // the routing table) will be used.

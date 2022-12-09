@@ -11,8 +11,8 @@ import (
 	"net/netip"
 	"os/exec"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
 )

@@ -26,7 +26,7 @@ func main() {
 		flag.Usage()
 	}
 	tailnetURL := flag.Arg(0)
-	
+
 	s := new(tsnet.Server)
 	defer s.Close()
 

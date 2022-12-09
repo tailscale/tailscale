@@ -2,8 +2,6 @@ module tailscale.com
 
 go 1.19
 
-replace golang.zx2c4.com/wireguard => github.com/tailscale/wireguard-go v0.0.0-20221207223341-6be4ed075788
-
 require (
 	filippo.io/mkcert v1.4.3
 	github.com/Microsoft/go-winio v0.6.0
@@ -59,6 +57,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20220630195928-54599719472f
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
+	github.com/tailscale/wireguard-go v0.0.0-20221209221345-680a09da0b2e
 	github.com/tc-hib/winres v0.1.6
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
@@ -75,7 +74,6 @@ require (
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11
 	golang.org/x/tools v0.2.0
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224
-	golang.zx2c4.com/wireguard v0.0.0-20220920152132-bb719d3a6e2c
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gvisor.dev/gvisor v0.0.0-20220817001344-846276b3dbc5
 	honnef.co/go/tools v0.4.0-0.dev.0.20220517111757-f4a2f64ce238

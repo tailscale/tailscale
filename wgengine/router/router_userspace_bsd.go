@@ -13,8 +13,8 @@ import (
 	"os/exec"
 	"runtime"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"

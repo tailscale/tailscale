@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"github.com/tailscale/wireguard-go/tun"
 
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"

@@ -9,7 +9,7 @@ package tstun
 import (
 	"time"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
 )
 
