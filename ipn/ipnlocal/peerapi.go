@@ -607,6 +607,7 @@ func peerAPIRequestShouldGetSecurityHeaders(r *http.Request) bool {
 
 func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.validatePeerAPIRequest(r); err != nil {
+		metricInvalidRequests.Add(1)
 		h.logf("invalid request from %v: %v", h.remoteAddr, err)
 		http.Error(w, "invalid peerapi request", http.StatusForbidden)
 		return
@@ -617,10 +618,12 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	if strings.HasPrefix(r.URL.Path, "/v0/put/") {
+		metricPutCalls.Add(1)
 		h.handlePeerPut(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/dns-query") {
+		metricDNSCalls.Add(1)
 		h.handleDNSQuery(w, r)
 		return
 	}
@@ -641,12 +644,14 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleServeDNSFwd(w, r)
 		return
 	case "/v0/wol":
+		metricWakeOnLANCalls.Add(1)
 		h.handleWakeOnLAN(w, r)
 		return
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
 		return
 	case "/v0/ingress":
+		metricIngressCalls.Add(1)
 		h.handleServeIngress(w, r)
 		return
 	}
@@ -1370,3 +1375,13 @@ func (fl *fakePeerAPIListener) Accept() (net.Conn, error) {
 }
 
 func (fl *fakePeerAPIListener) Addr() net.Addr { return fl.addr }
+
+var (
+	metricInvalidRequests = clientmetric.NewCounter("peerapi_invalid_requests")
+
+	// Non-debug PeerAPI endpoints.
+	metricPutCalls       = clientmetric.NewCounter("peerapi_put")
+	metricDNSCalls       = clientmetric.NewCounter("peerapi_dns")
+	metricWakeOnLANCalls = clientmetric.NewCounter("peerapi_wol")
+	metricIngressCalls   = clientmetric.NewCounter("peerapi_ingress")
+)

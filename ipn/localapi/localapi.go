@@ -146,6 +146,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Referer() != "" || r.Header.Get("Origin") != "" || !validHost(r.Host) {
+		metricInvalidRequests.Add(1)
 		http.Error(w, "invalid localapi request", http.StatusForbidden)
 		return
 	}
@@ -156,10 +157,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.RequiredPassword != "" {
 		_, pass, ok := r.BasicAuth()
 		if !ok {
+			metricInvalidRequests.Add(1)
 			http.Error(w, "auth required", http.StatusUnauthorized)
 			return
 		}
 		if pass != h.RequiredPassword {
+			metricInvalidRequests.Add(1)
 			http.Error(w, "bad password", http.StatusForbidden)
 			return
 		}
@@ -900,6 +903,8 @@ func (h *Handler) serveFileTargets(w http.ResponseWriter, r *http.Request) {
 //
 //   - PUT /localapi/v0/file-put/:stableID/:escaped-filename
 func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
+	metricFilePutCalls.Add(1)
+
 	if !h.PermitWrite {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
@@ -1437,3 +1442,10 @@ func defBool(a string, def bool) bool {
 	}
 	return v
 }
+
+var (
+	metricInvalidRequests = clientmetric.NewCounter("localapi_invalid_requests")
+
+	// User-visible LocalAPI endpoints.
+	metricFilePutCalls = clientmetric.NewCounter("localapi_file_put")
+)
