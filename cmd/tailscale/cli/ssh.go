@@ -38,7 +38,7 @@ most users running the Tailscale SSH server will prefer to just use the normal
 
 The 'tailscale ssh' wrapper adds a few things:
 
-* It resolves the destination server name in its arugments using MagicDNS,
+* It resolves the destination server name in its arguments using MagicDNS,
   even if --accept-dns=false.
 * It works in userspace-networking mode, by supplying a ProxyCommand to the
   system 'ssh' command that connects via a pipe through tailscaled.
