@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Key represents a Tailscale auth key.
+// Key represents a Tailscale API or auth key.
 type Key struct {
 	ID           string          `json:"id"`
 	Created      time.Time       `json:"created"`
@@ -21,17 +21,17 @@ type Key struct {
 	Capabilities KeyCapabilities `json:"capabilities"`
 }
 
-// KeyCapabilities are the capabilities of an auth key.
+// KeyCapabilities are the capabilities of a Key.
 type KeyCapabilities struct {
 	Devices KeyDeviceCapabilities `json:"devices,omitempty"`
 }
 
-// KeyDeviceCapabilities are the device-related capabilities of an auth key.
+// KeyDeviceCapabilities are the device-related capabilities of a Key.
 type KeyDeviceCapabilities struct {
 	Create KeyDeviceCreateCapabilities `json:"create"`
 }
 
-// KeyDeviceCreateCapabilities are the device creation capabilities of an auth key.
+// KeyDeviceCreateCapabilities are the device creation capabilities of a Key.
 type KeyDeviceCreateCapabilities struct {
 	Reusable      bool     `json:"reusable"`
 	Ephemeral     bool     `json:"ephemeral"`
@@ -39,7 +39,7 @@ type KeyDeviceCreateCapabilities struct {
 	Tags          []string `json:"tags,omitempty"`
 }
 
-// Keys returns the list of auth keys for the current user.
+// Keys returns the list of keys for the current user.
 func (c *Client) Keys(ctx context.Context) ([]string, error) {
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys", c.baseURL(), c.tailnet)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
@@ -68,8 +68,9 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 	return ret, nil
 }
 
-// CreateKey creates a new auth key for the current user. Returns the auth key
-// itself, which cannot be retrieved again later, and the key metadata.
+// CreateKey creates a new key for the current user. Currently, only auth keys
+// can be created. Returns the key itself, which cannot be retrieved again
+// later, and the key metadata.
 func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities) (string, *Key, error) {
 	bs, err := json.Marshal(caps)
 	if err != nil {
@@ -100,7 +101,8 @@ func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities) (string, *
 	return key.Secret, &key.Key, nil
 }
 
-// Key returns the metadata for the given auth key ID.
+// Key returns the metadata for the given key ID. Currently, capabilities are
+// only returned for auth keys, API keys only return general metadata.
 func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys/%s", c.baseURL(), c.tailnet, id)
 	req, err := http.NewRequestWithContext(ctx, "GET", path, nil)
@@ -123,7 +125,7 @@ func (c *Client) Key(ctx context.Context, id string) (*Key, error) {
 	return &key, nil
 }
 
-// DeleteKey deletes the auth key with the given ID.
+// DeleteKey deletes the key with the given ID.
 func (c *Client) DeleteKey(ctx context.Context, id string) error {
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s/keys/%s", c.baseURL(), c.tailnet, id)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", path, nil)
