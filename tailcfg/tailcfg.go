@@ -86,7 +86,9 @@ type CapabilityVersion int
 //   - 47: 2022-10-11: Register{Request,Response}.NodeKeySignature
 //   - 48: 2022-11-02: Node.UnsignedPeerAPIOnly
 //   - 49: 2022-11-03: Client understands EarlyNoise
-const CurrentCapabilityVersion CapabilityVersion = 49
+//   - 50: 2022-11-14: Client understands CapabilityIngress
+//   - 51: 2022-11-30: Client understands CapabilityTailnetLockAlpha
+const CurrentCapabilityVersion CapabilityVersion = 51
 
 type StableID string
 
@@ -514,6 +516,7 @@ type Hostinfo struct {
 	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
 	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool           `json:",omitempty"` // indicates that the user has opted out of sending logs and support
+	WireIngress     bool           `json:",omitempty"` // indicates that the node wants the option to receive ingress connections
 	GoArch          string         `json:",omitempty"` // the host's GOARCH value (of the running binary)
 	GoVersion       string         `json:",omitempty"` // Go version binary was built with
 	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
@@ -538,6 +541,14 @@ func (hi *Hostinfo) TailscaleSSHEnabled() bool {
 }
 
 func (v HostinfoView) TailscaleSSHEnabled() bool { return v.ж.TailscaleSSHEnabled() }
+
+// TailscaleFunnelEnabled reports whether or not this node has explicitly
+// enabled Funnel.
+func (hi *Hostinfo) TailscaleFunnelEnabled() bool {
+	return hi != nil && hi.WireIngress
+}
+
+func (v HostinfoView) TailscaleFunnelEnabled() bool { return v.ж.TailscaleFunnelEnabled() }
 
 // NetInfo contains information about the host's network state.
 type NetInfo struct {
@@ -1415,6 +1426,40 @@ type MapResponse struct {
 	// server. An initial nil is equivalent to new(ControlDialPlan).
 	// A subsequent streamed nil means no change.
 	ControlDialPlan *ControlDialPlan `json:",omitempty"`
+
+	// ClientVersion describes the latest client version that's available for
+	// download and whether the client is using it. A nil value means no change
+	// or nothing to report.
+	ClientVersion *ClientVersion `json:",omitempty"`
+}
+
+// ClientVersion is information about the latest client version that's available
+// for the client (and whether they're already running it).
+//
+// It does not include a URL to download the client, as that varies by platform.
+type ClientVersion struct {
+	// RunningLatest is true if the client is running the latest build.
+	RunningLatest bool `json:",omitempty"`
+
+	// LatestVersion is the latest version.Short ("1.34.2") version available
+	// for download for the client's platform and packaging type.
+	// It won't be populated if RunningLatest is true.
+	// The primary purpose of the LatestVersion value is to invalidate the client's
+	// cache update check value, if any. This primarily applies to Windows.
+	LatestVersion string `json:",omitempty"`
+
+	// Notify is whether the client should do an OS-specific notification about
+	// a new version being available. This should not be populated if
+	// RunningLatest is true. The client should not notify multiple times for
+	// the same LatestVersion value.
+	Notify bool `json:",omitempty"`
+
+	// NotifyURL is a URL to open in the browser when the user clicks on the
+	// notification, when Notify is true.
+	NotifyURL string `json:",omitempty"`
+
+	// NotifyText is the text to show in the notification, when Notify is true.
+	NotifyText string `json:",omitempty"`
 }
 
 // ControlDialPlan is instructions from the control server to the client on how
@@ -1652,12 +1697,22 @@ type Oauth2Token struct {
 const (
 	// These are the capabilities that the self node has as listed in
 	// MapResponse.Node.Capabilities.
+	//
+	// We've since started referring to these as "Node Attributes" ("nodeAttrs"
+	// in the ACL policy file).
 
 	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
 	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
 	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
+	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+
+	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
+	// and initialization of tailnet lock may proceed.
+	//
+	// TODO(tom): Remove this for 1.35 and later.
+	CapabilityTailnetLockAlpha = "https://tailscale.com/cap/tailnet-lock-alpha"
 
 	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 
@@ -1672,6 +1727,21 @@ const (
 	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
 	// CapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
 	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
+	// CapabilityIngress grants the ability for a peer to send ingress traffic.
+	CapabilityIngress = "https://tailscale.com/cap/ingress"
+
+	// Funnel warning capabilities used for reporting errors to the user.
+
+	// CapabilityWarnFunnelNoInvite indicates an invite has not been accepted for the Funnel alpha.
+	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
+
+	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
+	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
+)
+
+const (
+	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
+	NodeAttrFunnel = "funnel"
 )
 
 // SetDNSRequest is a request to add a DNS record.

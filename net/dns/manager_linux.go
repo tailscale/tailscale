@@ -10,12 +10,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"tailscale.com/health"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpver"
 )
 
@@ -26,6 +29,8 @@ type kv struct {
 func (kv kv) String() string {
 	return fmt.Sprintf("%s=%s", kv.k, kv.v)
 }
+
+var publishOnce sync.Once
 
 func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurator, err error) {
 	env := newOSConfigEnv{
@@ -40,6 +45,12 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (ret OSConfigurat
 	if err != nil {
 		return nil, err
 	}
+	publishOnce.Do(func() {
+		sanitizedMode := strings.ReplaceAll(mode, "-", "_")
+		m := clientmetric.NewGauge(fmt.Sprintf("dns_manager_linux_mode_%s", sanitizedMode))
+		m.Set(1)
+	})
+	logf("dns: using %q mode", mode)
 	switch mode {
 	case "direct":
 		return newDirectManagerOnFS(logf, env.fs), nil

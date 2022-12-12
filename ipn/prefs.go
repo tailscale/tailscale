@@ -27,8 +27,6 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
-//go:generate go run tailscale.com/cmd/viewer -type=Prefs
-
 // DefaultControlURL is the URL base of the control plane
 // ("coordination server") for use when no explicit one is configured.
 // The default control plane is the hosted version run by Tailscale.com.
@@ -60,8 +58,9 @@ type Prefs struct {
 	// It would be more consistent to restart controlclient
 	// automatically whenever this variable changes.
 	//
-	// Meanwhile, you have to provide this as part of Options.Prefs or
-	// Options.UpdatePrefs when calling Backend.Start().
+	// Meanwhile, you have to provide this as part of
+	// Options.LegacyMigrationPrefs or Options.UpdatePrefs when
+	// calling Backend.Start().
 	ControlURL string
 
 	// RouteAll specifies whether to accept subnets advertised by
@@ -163,7 +162,7 @@ type Prefs struct {
 	ForceDaemon bool `json:"ForceDaemon,omitempty"`
 
 	// Egg is a optional debug flag.
-	Egg bool
+	Egg bool `json:",omitempty"`
 
 	// The following block of options only have an effect on Linux.
 
@@ -191,6 +190,11 @@ type Prefs struct {
 	// OperatorUser is the local machine user name who is allowed to
 	// operate tailscaled without being root or using sudo.
 	OperatorUser string `json:",omitempty"`
+
+	// ProfileName is the desired name of the profile. If empty, then the user's
+	// LoginName is used. It is only used for display purposes in the client UI
+	// and CLI.
+	ProfileName string `json:",omitempty"`
 
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
@@ -224,6 +228,7 @@ type MaskedPrefs struct {
 	NoSNATSet                 bool `json:",omitempty"`
 	NetfilterModeSet          bool `json:",omitempty"`
 	OperatorUserSet           bool `json:",omitempty"`
+	ProfileNameSet            bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -408,7 +413,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		p.ForceDaemon == p2.ForceDaemon &&
 		compareIPNets(p.AdvertiseRoutes, p2.AdvertiseRoutes) &&
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
-		p.Persist.Equals(p2.Persist)
+		p.Persist.Equals(p2.Persist) &&
+		p.ProfileName == p2.ProfileName
 }
 
 func compareIPNets(a, b []netip.Prefix) bool {
@@ -479,6 +485,9 @@ func (p *Prefs) ControlURLOrDefault() string {
 }
 
 // AdminPageURL returns the admin web site URL for the current ControlURL.
+func (p PrefsView) AdminPageURL() string { return p.ж.AdminPageURL() }
+
+// AdminPageURL returns the admin web site URL for the current ControlURL.
 func (p *Prefs) AdminPageURL() string {
 	url := p.ControlURLOrDefault()
 	if IsLoginServerSynonym(url) {
@@ -487,6 +496,10 @@ func (p *Prefs) AdminPageURL() string {
 	}
 	return url + "/admin/machines"
 }
+
+// AdvertisesExitNode reports whether p is advertising both the v4 and
+// v6 /0 exit node routes.
+func (p PrefsView) AdvertisesExitNode() bool { return p.ж.AdvertisesExitNode() }
 
 // AdvertisesExitNode reports whether p is advertising both the v4 and
 // v6 /0 exit node routes.
@@ -653,6 +666,8 @@ func PrefsFromBytes(b []byte) (*Prefs, error) {
 	return p, err
 }
 
+var jsonEscapedZero = []byte(`\u0000`)
+
 // LoadPrefs loads a legacy relaynode config file into Prefs
 // with sensible migration defaults set.
 func LoadPrefs(filename string) (*Prefs, error) {
@@ -682,4 +697,53 @@ func SavePrefs(filename string, p *Prefs) {
 	if err := atomicfile.WriteFile(filename, data, 0600); err != nil {
 		log.Printf("SavePrefs: %v\n", err)
 	}
+}
+
+// ProfileID is an auto-generated system-wide unique identifier for a login
+// profile. It is a 4 character hex string like "1ab3".
+type ProfileID string
+
+// WindowsUserID is a userid (suitable for passing to ipnauth.LookupUserFromID
+// or os/user.LookupId) but only set on Windows. It's empty on all other
+// platforms, unless envknob.GOOS is in used, making Linux act like Windows for
+// tests.
+type WindowsUserID string
+
+// LoginProfile represents a single login profile as managed
+// by the ProfileManager.
+type LoginProfile struct {
+	// ID is a unique identifier for this profile.
+	// It is assigned on creation and never changes.
+	// It may seem redundant to have both ID and UserProfile.ID
+	// but they are different things. UserProfile.ID may change
+	// over time (e.g. if a device is tagged).
+	ID ProfileID
+
+	// Name is the user-visible name of this profile.
+	// It is filled in from the UserProfile.LoginName field.
+	Name string
+
+	// Key is the StateKey under which the profile is stored.
+	// It is assigned once at profile creation time and never changes.
+	Key StateKey
+
+	// UserProfile is the server provided UserProfile for this profile.
+	// This is updated whenever the server provides a new UserProfile.
+	UserProfile tailcfg.UserProfile
+
+	// NodeID is the NodeID of the node that this profile is logged into.
+	// This should be stable across tagging and untagging nodes.
+	// It may seem redundant to check against both the UserProfile.UserID
+	// and the NodeID. However the NodeID can change if the node is deleted
+	// from the admin panel.
+	NodeID tailcfg.StableNodeID
+
+	// LocalUserID is the user ID of the user who created this profile.
+	// It is only relevant on Windows where we have a multi-user system.
+	// It is assigned once at profile creation time and never changes.
+	LocalUserID WindowsUserID
+
+	// ControlURL is the URL of the control server that this profile is logged
+	// into.
+	ControlURL string
 }

@@ -27,6 +27,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash/testtype"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
@@ -485,7 +486,7 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "time_ptr", // addressable, as opposed to "time" test above
-			val:  ptrTo(time.Unix(1234, 5678).In(time.UTC)),
+			val:  ptr.To(time.Unix(1234, 5678).In(time.UTC)),
 			out:  u8(1) + u64(1234) + u32(5678) + u32(0),
 		},
 		{
@@ -515,7 +516,7 @@ func TestGetTypeHasher(t *testing.T) {
 		},
 		{
 			name: "array_ptr_memhash",
-			val:  ptrTo([4]byte{1, 2, 3, 4}),
+			val:  ptr.To([4]byte{1, 2, 3, 4}),
 			out:  "\x01\x01\x02\x03\x04",
 		},
 		{
@@ -742,8 +743,6 @@ func BenchmarkHash(b *testing.B) {
 	}
 }
 
-func ptrTo[T any](v T) *T { return &v }
-
 // filterRules is a packet filter that has both everything populated (in its
 // first element) and also a few entries that are the typical shape for regular
 // packet filters as sent to clients.
@@ -753,7 +752,7 @@ var filterRules = []tailcfg.FilterRule{
 		SrcBits: []int{1, 2, 3},
 		DstPorts: []tailcfg.NetPortRange{{
 			IP:    "1.2.3.4/32",
-			Bits:  ptrTo(32),
+			Bits:  ptr.To(32),
 			Ports: tailcfg.PortRange{First: 1, Last: 2},
 		}},
 		IPProto: []int{1, 2, 3, 4},
@@ -936,7 +935,7 @@ func TestHashThroughView(t *testing.T) {
 		SSHPolicy: &sshPolicyOut{
 			Rules: []tailcfg.SSHRuleView{
 				(&tailcfg.SSHRule{
-					RuleExpires: ptrTo(time.Unix(123, 0)),
+					RuleExpires: ptr.To(time.Unix(123, 0)),
 				}).View(),
 			},
 		},

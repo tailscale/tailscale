@@ -7,12 +7,14 @@ package localapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -24,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -32,10 +35,12 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netutil"
+	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/strs"
@@ -52,6 +57,7 @@ var handler = map[string]localAPIHandler{
 	"cert/":     (*Handler).serveCert,
 	"file-put/": (*Handler).serveFilePut,
 	"files/":    (*Handler).serveFiles,
+	"profiles/": (*Handler).serveProfiles,
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
@@ -60,6 +66,7 @@ var handler = map[string]localAPIHandler{
 	"check-prefs":             (*Handler).serveCheckPrefs,
 	"component-debug-logging": (*Handler).serveComponentDebugLogging,
 	"debug":                   (*Handler).serveDebug,
+	"debug-derp-region":       (*Handler).serveDebugDERPRegion,
 	"derpmap":                 (*Handler).serveDERPMap,
 	"dev-set-state-store":     (*Handler).serveDevSetStateStore,
 	"dial":                    (*Handler).serveDial,
@@ -71,15 +78,21 @@ var handler = map[string]localAPIHandler{
 	"metrics":                 (*Handler).serveMetrics,
 	"ping":                    (*Handler).servePing,
 	"prefs":                   (*Handler).servePrefs,
-	"profile":                 (*Handler).serveProfile,
+	"pprof":                   (*Handler).servePprof,
+	"serve-config":            (*Handler).serveServeConfig,
 	"set-dns":                 (*Handler).serveSetDNS,
 	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
+	"start":                   (*Handler).serveStart,
 	"status":                  (*Handler).serveStatus,
 	"tka/init":                (*Handler).serveTKAInit,
+	"tka/log":                 (*Handler).serveTKALog,
 	"tka/modify":              (*Handler).serveTKAModify,
 	"tka/sign":                (*Handler).serveTKASign,
 	"tka/status":              (*Handler).serveTKAStatus,
+	"tka/disable":             (*Handler).serveTKADisable,
+	"tka/force-local-disable": (*Handler).serveTKALocalDisable,
 	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
+	"watch-ipn-bus":           (*Handler).serveWatchIPNBus,
 	"whois":                   (*Handler).serveWhoIs,
 }
 
@@ -132,7 +145,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server has no local backend", http.StatusInternalServerError)
 		return
 	}
+	if r.Referer() != "" || r.Header.Get("Origin") != "" || !validHost(r.Host) {
+		http.Error(w, "invalid localapi request", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Tailscale-Version", version.Long)
+	w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if h.RequiredPassword != "" {
 		_, pass, ok := r.BasicAuth()
 		if !ok {
@@ -149,6 +169,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.NotFound(w, r)
 	}
+}
+
+// validHost reports whether h is a valid Host header value for a LocalAPI request.
+func validHost(h string) bool {
+	// The client code sends a hostname of "local-tailscaled.sock".
+	switch h {
+	case "", apitype.LocalAPIHost:
+		return true
+	}
+	// Allow either localhost or loopback IP hosts.
+	host, portStr, err := net.SplitHostPort(h)
+	if err != nil {
+		return false
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" && port != safesocket.WindowsLocalPort {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	addr, err := netip.ParseAddr(h)
+	if err != nil {
+		return false
+	}
+	return addr.IsLoopback()
 }
 
 // handlerForPath returns the LocalAPI handler for the provided Request.URI.Path.
@@ -232,6 +281,10 @@ func (h *Handler) serveIDToken(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitRead {
 		http.Error(w, "bugreport access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -382,13 +435,44 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	action := r.FormValue("action")
+	// The action is normally in a POST form parameter, but
+	// some actions (like "notify") want a full JSON body, so
+	// permit some to have their action in a header.
+	var action string
+	switch v := r.Header.Get("Debug-Action"); v {
+	case "notify":
+		action = v
+	default:
+		action = r.FormValue("action")
+	}
 	var err error
 	switch action {
 	case "rebind":
 		err = h.b.DebugRebind()
 	case "restun":
 		err = h.b.DebugReSTUN()
+	case "enginestatus":
+		// serveRequestEngineStatus kicks off a call to RequestEngineStatus (via
+		// LocalBackend => UserspaceEngine => LocalBackend =>
+		// ipn.Notify{Engine}).
+		//
+		// This is a temporary (2022-11-25) measure for the Windows client's
+		// move to the LocalAPI HTTP interface. It was polling this over the IPN
+		// bus before every 2 seconds which is wasteful. We should add a bit to
+		// WatchIPNMask instead to let an IPN bus watcher say that it's
+		// interested in that info and then only send it on demand, not via
+		// polling. But for now we keep this interface because that's what the
+		// client already did. A future change will remove this, so don't depend
+		// on it.
+		h.b.RequestEngineStatus()
+	case "notify":
+		var n ipn.Notify
+		err = json.NewDecoder(r.Body).Decode(&n)
+		if err != nil {
+			break
+		}
+		h.b.DebugNotify(n)
+
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:
@@ -437,22 +521,52 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(res)
 }
 
-// serveProfileFunc is the implementation of Handler.serveProfile, after auth,
+// servePprofFunc is the implementation of Handler.servePprof, after auth,
 // for platforms where we want to link it in.
-var serveProfileFunc func(http.ResponseWriter, *http.Request)
+var servePprofFunc func(http.ResponseWriter, *http.Request)
 
-func (h *Handler) serveProfile(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) servePprof(w http.ResponseWriter, r *http.Request) {
 	// Require write access out of paranoia that the profile dump
 	// might contain something sensitive.
 	if !h.PermitWrite {
 		http.Error(w, "profile access denied", http.StatusForbidden)
 		return
 	}
-	if serveProfileFunc == nil {
+	if servePprofFunc == nil {
 		http.Error(w, "not implemented on this platform", http.StatusServiceUnavailable)
 		return
 	}
-	serveProfileFunc(w, r)
+	servePprofFunc(w, r)
+}
+
+func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		if !h.PermitRead {
+			http.Error(w, "serve config denied", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		config := h.b.ServeConfig()
+		json.NewEncoder(w).Encode(config)
+	case "POST":
+		if !h.PermitWrite {
+			http.Error(w, "serve config denied", http.StatusForbidden)
+			return
+		}
+		configIn := new(ipn.ServeConfig)
+		if err := json.NewDecoder(r.Body).Decode(configIn); err != nil {
+			writeErrorJSON(w, fmt.Errorf("decoding config: %w", err))
+			return
+		}
+		if err := h.b.SetServeConfig(configIn); err != nil {
+			writeErrorJSON(w, fmt.Errorf("updating config: %w", err))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
@@ -489,6 +603,69 @@ func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	e.Encode(st)
 }
 
+// InUseOtherUserIPNStream reports whether r is a request for the watch-ipn-bus
+// handler. If so, it writes an ipn.Notify InUseOtherUser message to the user
+// and returns true. Otherwise it returns false, in which case it doesn't write
+// to w.
+//
+// Unlike the regular watch-ipn-bus handler, this one doesn't block. The caller
+// (in ipnserver.Server) provides the blocking until the connection is no longer
+// in use.
+func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) (handled bool) {
+	if r.Method != "GET" || r.URL.Path != "/localapi/v0/watch-ipn-bus" {
+		return false
+	}
+	js, err := json.Marshal(&ipn.Notify{
+		Version:    version.Long,
+		State:      ptr.To(ipn.InUseOtherUser),
+		ErrMessage: ptr.To(err.Error()),
+	})
+	if err != nil {
+		return false
+	}
+	js = append(js, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(js)
+	return true
+}
+
+func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "denied", http.StatusForbidden)
+		return
+	}
+	f, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "not a flusher", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	f.Flush()
+
+	var mask ipn.NotifyWatchOpt
+	if s := r.FormValue("mask"); s != "" {
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			http.Error(w, "bad mask", http.StatusBadRequest)
+			return
+		}
+		mask = ipn.NotifyWatchOpt(v)
+	}
+	ctx := r.Context()
+	h.b.WatchNotifications(ctx, mask, func(roNotify *ipn.Notify) (keepGoing bool) {
+		js, err := json.Marshal(roNotify)
+		if err != nil {
+			h.logf("json.Marshal: %v", err)
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "%s\n", js); err != nil {
+			return false
+		}
+		f.Flush()
+		return true
+	})
+}
+
 func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) {
 	if !h.PermitWrite {
 		http.Error(w, "login access denied", http.StatusForbidden)
@@ -501,6 +678,29 @@ func (h *Handler) serveLoginInteractive(w http.ResponseWriter, r *http.Request) 
 	h.b.StartLoginInteractive()
 	w.WriteHeader(http.StatusNoContent)
 	return
+}
+
+func (h *Handler) serveStart(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "want POST", 400)
+		return
+	}
+	var o ipn.Options
+	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err := h.b.Start(o)
+	if err != nil {
+		// TODO(bradfitz): map error to a good HTTP error
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
@@ -589,14 +789,30 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
 	}
-	suffix := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
+	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
 	if suffix == "" {
 		if r.Method != "GET" {
 			http.Error(w, "want GET to list files", 400)
 			return
 		}
-		wfs, err := h.b.WaitingFiles()
-		if err != nil {
+		ctx := r.Context()
+		if s := r.FormValue("waitsec"); s != "" && s != "0" {
+			d, err := strconv.Atoi(s)
+			if err != nil {
+				http.Error(w, "invalid waitsec", http.StatusBadRequest)
+				return
+			}
+			deadline := time.Now().Add(time.Duration(d) * time.Second)
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+		wfs, err := h.b.AwaitWaitingFiles(ctx)
+		if err != nil && ctx.Err() == nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -624,6 +840,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 	w.Header().Set("Content-Length", fmt.Sprint(size))
+	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, rc)
 }
 
@@ -692,7 +909,11 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upath := strings.TrimPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	upath, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
 	stableIDStr, filenameEscaped, ok := strings.Cut(upath, "/")
 	if !ok {
 		http.Error(w, "bogus URL", 400)
@@ -980,8 +1201,9 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type initRequest struct {
-		Keys              []tka.Key
-		DisablementValues [][]byte
+		Keys               []tka.Key
+		DisablementValues  [][]byte
+		SupportDisablement []byte
 	}
 	var req initRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -989,7 +1211,7 @@ func (h *Handler) serveTKAInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues); err != nil {
+	if err := h.b.NetworkLockInit(req.Keys, req.DisablementValues, req.SupportDisablement); err != nil {
 		http.Error(w, "initialization failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1027,14 +1249,170 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "network-lock modify failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(204)
+}
 
-	j, err := json.MarshalIndent(h.b.NetworkLockStatus(), "", "\t")
+func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body := io.LimitReader(r.Body, 1024*1024)
+	secret, err := ioutil.ReadAll(body)
+	if err != nil {
+		http.Error(w, "reading secret", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockDisable(secret); err != nil {
+		http.Error(w, "network-lock disable failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (h *Handler) serveTKALocalDisable(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Require a JSON stanza for the body as an additional CSRF protection.
+	var req struct{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	if err := h.b.NetworkLockForceLocalDisable(); err != nil {
+		http.Error(w, "network-lock local disable failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "use GET", http.StatusMethodNotAllowed)
+		return
+	}
+
+	limit := 50
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		l, err := strconv.Atoi(limitStr)
+		if err != nil {
+			http.Error(w, "parsing 'limit' parameter: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		limit = int(l)
+	}
+
+	updates, err := h.b.NetworkLockLog(limit)
+	if err != nil {
+		http.Error(w, "reading log failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	j, err := json.MarshalIndent(updates, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", 500)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(j)
+}
+
+// serveProfiles serves profile switching-related endpoints. Supported methods
+// and paths are:
+//   - GET /profiles/: list all profiles (JSON-encoded array of ipn.LoginProfiles)
+//   - PUT /profiles/: add new profile (no response). A separate
+//     StartLoginInteractive() is needed to populate and persist the new profile.
+//   - GET /profiles/current: current profile (JSON-ecoded ipn.LoginProfile)
+//   - GET /profiles/<id>: output profile (JSON-ecoded ipn.LoginProfile)
+//   - POST /profiles/<id>: switch to profile (no response)
+//   - DELETE /profiles/<id>: delete profile (no response)
+func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "profiles access denied", http.StatusForbidden)
+		return
+	}
+	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/profiles/")
+	if !ok {
+		http.Error(w, "misconfigured", http.StatusInternalServerError)
+		return
+	}
+	if suffix == "" {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(h.b.ListProfiles())
+		case http.MethodPut:
+			err := h.b.NewProfile()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.Error(w, "use GET or PUT", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	suffix, err := url.PathUnescape(suffix)
+	if err != nil {
+		http.Error(w, "bad profile ID", http.StatusBadRequest)
+		return
+	}
+	if suffix == "current" {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(h.b.CurrentProfile())
+		default:
+			http.Error(w, "use GET", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	profileID := ipn.ProfileID(suffix)
+	switch r.Method {
+	case http.MethodGet:
+		profiles := h.b.ListProfiles()
+		profileIndex := slices.IndexFunc(profiles, func(p ipn.LoginProfile) bool {
+			return p.ID == profileID
+		})
+		if profileIndex == -1 {
+			http.Error(w, "Profile not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(profiles[profileIndex])
+	case http.MethodPost:
+		err := h.b.SwitchProfile(profileID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		err := h.b.DeleteProfile(profileID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "use POST or DELETE", http.StatusMethodNotAllowed)
+	}
 }
 
 func defBool(a string, def bool) bool {

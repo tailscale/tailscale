@@ -580,7 +580,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
-	var p *persist.Persist
+	var p *persist.PersistView
 	var loginFin, logoutFin *empty.Message
 	if state == StateAuthenticated {
 		loginFin = new(empty.Message)
@@ -708,7 +708,7 @@ func (c *Auto) Shutdown() {
 // used exclusively in tests.
 func (c *Auto) TestOnlyNodePublicKey() key.NodePublic {
 	priv := c.direct.GetPersist()
-	return priv.PrivateNodeKey.Public()
+	return priv.PrivateNodeKey().Public()
 }
 
 func (c *Auto) TestOnlySetAuthKey(authkey string) {

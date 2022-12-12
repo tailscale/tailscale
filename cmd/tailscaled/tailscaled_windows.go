@@ -20,6 +20,7 @@ package main // import "tailscale.com/cmd/tailscaled"
 //       to C:\ to run it, like tswin does.
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,31 +28,79 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/exec"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
+	"github.com/dblohm7/wingoes/com"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.zx2c4.com/wintun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn/ipnserver"
-	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
+	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
-	"tailscale.com/safesocket"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
-	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/monitor"
-	"tailscale.com/wgengine/netstack"
-	"tailscale.com/wgengine/router"
 )
 
+func init() {
+	// Initialize COM process-wide.
+	comProcessType := com.Service
+	if !isWindowsService() {
+		comProcessType = com.ConsoleApp
+	}
+	if err := com.StartRuntime(comProcessType); err != nil {
+		log.Printf("wingoes.com.StartRuntime(%d) failed: %v", comProcessType, err)
+	}
+}
+
 const serviceName = "Tailscale"
+
+// Application-defined command codes between 128 and 255
+// See https://web.archive.org/web/20221007222822/https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-controlservice
+const (
+	cmdUninstallWinTun = svc.Cmd(128 + iota)
+)
+
+func init() {
+	tstunNew = tstunNewWithWindowsRetries
+}
+
+// tstunNewOrRetry is a wrapper around tstun.New that retries on Windows for certain
+// errors.
+//
+// TODO(bradfitz): move this into tstun and/or just fix the problems so it doesn't
+// require a few tries to work.
+func tstunNewWithWindowsRetries(logf logger.Logf, tunName string) (_ tun.Device, devName string, _ error) {
+	bo := backoff.NewBackoff("tstunNew", logf, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for {
+		dev, devName, err := tstun.New(logf, tunName)
+		if err == nil {
+			return dev, devName, err
+		}
+		if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) || windowsUptime() < 10*time.Minute {
+			// Wintun is not installing correctly. Dump the state of NetSetupSvc
+			// (which is a user-mode service that must be active for network devices
+			// to install) and its dependencies to the log.
+			winutil.LogSvcState(logf, "NetSetupSvc")
+		}
+		bo.BackOff(ctx, err)
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+	}
+}
 
 func isWindowsService() bool {
 	v, err := svc.IsWindowsService()
@@ -106,6 +155,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	doneCh := make(chan struct{})
 	go func() {
 		defer close(doneCh)
@@ -117,7 +167,7 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 		// writer that logpolicy already installed as the global
 		// output.
 		logger := log.New(log.Default().Writer(), "", 0)
-		ipnserver.BabysitProc(ctx, args, logger.Printf)
+		babysitProc(ctx, args, logger.Printf)
 	}()
 
 	changes <- svc.Status{State: svc.Running, Accepts: svcAccepts}
@@ -141,6 +191,26 @@ func (service *ipnService) Execute(args []string, r <-chan svc.ChangeRequest, ch
 				syslogf("Service session change notification")
 				handleSessionChange(cmd)
 				changes <- cmd.CurrentStatus
+			case cmdUninstallWinTun:
+				syslogf("Stopping tailscaled child process and uninstalling WinTun")
+				// At this point, doneCh is the channel which will be closed when the
+				// tailscaled subprocess exits. We save that to childDoneCh.
+				childDoneCh := doneCh
+				// We reset doneCh to a new channel that will keep the event loop
+				// running until the uninstallation is done.
+				doneCh = make(chan struct{})
+				// Trigger subprocess shutdown.
+				cancel()
+				go func() {
+					// When this goroutine completes, tell the service to break out of its
+					// event loop.
+					defer close(doneCh)
+					// Wait for the subprocess to shutdown.
+					<-childDoneCh
+					// Now uninstall WinTun.
+					uninstallWinTun(log.Printf)
+				}()
+				changes <- svc.Status{State: svc.StopPending}
 			}
 		}
 	}
@@ -178,6 +248,8 @@ func cmdName(c svc.Cmd) string {
 		return "SessionChange"
 	case svc.PreShutdown:
 		return "PreShutdown"
+	case cmdUninstallWinTun:
+		return "(Application Defined) Uninstall WinTun"
 	}
 	return fmt.Sprintf("Unknown-Service-Cmd-%d", c)
 }
@@ -211,7 +283,7 @@ func beWindowsSubprocess() bool {
 		}
 	}()
 
-	err := startIPNServer(context.Background(), logid)
+	err := startIPNServer(context.Background(), log.Printf, logid)
 	if err != nil {
 		log.Fatalf("ipnserver: %v", err)
 	}
@@ -258,140 +330,6 @@ func beFirewallKillswitch() bool {
 	}
 }
 
-func startIPNServer(ctx context.Context, logid string) error {
-	var logf logger.Logf = log.Printf
-
-	linkMon, err := monitor.New(logf)
-	if err != nil {
-		return fmt.Errorf("monitor: %w", err)
-	}
-	dialer := &tsdial.Dialer{Logf: logf}
-
-	getEngineRaw := func() (wgengine.Engine, *netstack.Impl, error) {
-		dev, devName, err := tstun.New(logf, "Tailscale")
-		if err != nil {
-			if errors.Is(err, windows.ERROR_DEVICE_NOT_AVAILABLE) {
-				// Wintun is not installing correctly. Dump the state of NetSetupSvc
-				// (which is a user-mode service that must be active for network devices
-				// to install) and its dependencies to the log.
-				winutil.LogSvcState(logf, "NetSetupSvc")
-			}
-			return nil, nil, fmt.Errorf("TUN: %w", err)
-		}
-		r, err := router.New(logf, dev, nil)
-		if err != nil {
-			dev.Close()
-			return nil, nil, fmt.Errorf("router: %w", err)
-		}
-		if shouldWrapNetstack() {
-			r = netstack.NewSubnetRouterWrapper(r)
-		}
-		d, err := dns.NewOSConfigurator(logf, devName)
-		if err != nil {
-			r.Close()
-			dev.Close()
-			return nil, nil, fmt.Errorf("DNS: %w", err)
-		}
-		eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-			Tun:         dev,
-			Router:      r,
-			DNS:         d,
-			ListenPort:  41641,
-			LinkMonitor: linkMon,
-			Dialer:      dialer,
-		})
-		if err != nil {
-			r.Close()
-			dev.Close()
-			return nil, nil, fmt.Errorf("engine: %w", err)
-		}
-		ns, err := newNetstack(logf, dialer, eng)
-		if err != nil {
-			return nil, nil, fmt.Errorf("newNetstack: %w", err)
-		}
-		ns.ProcessLocalIPs = false
-		ns.ProcessSubnets = shouldWrapNetstack()
-		if err := ns.Start(); err != nil {
-			return nil, nil, fmt.Errorf("failed to start netstack: %w", err)
-		}
-		return wgengine.NewWatchdog(eng), ns, nil
-	}
-
-	type engineOrError struct {
-		Engine   wgengine.Engine
-		Netstack *netstack.Impl
-		Err      error
-	}
-	engErrc := make(chan engineOrError)
-	t0 := time.Now()
-	go func() {
-		const ms = time.Millisecond
-		for try := 1; ; try++ {
-			logf("tailscaled: getting engine... (try %v)", try)
-			t1 := time.Now()
-			eng, ns, err := getEngineRaw()
-			d, dt := time.Since(t1).Round(ms), time.Since(t1).Round(ms)
-			if err != nil {
-				logf("tailscaled: engine fetch error (try %v) in %v (total %v, sysUptime %v): %v",
-					try, d, dt, windowsUptime().Round(time.Second), err)
-			} else {
-				if try > 1 {
-					logf("tailscaled: got engine on try %v in %v (total %v)", try, d, dt)
-				} else {
-					logf("tailscaled: got engine in %v", d)
-				}
-			}
-			timer := time.NewTimer(5 * time.Second)
-			engErrc <- engineOrError{eng, ns, err}
-			if err == nil {
-				timer.Stop()
-				return
-			}
-			<-timer.C
-		}
-	}()
-
-	// getEngine is called by ipnserver to get the engine. It's
-	// not called concurrently and is not called again once it
-	// successfully returns an engine.
-	getEngine := func() (wgengine.Engine, *netstack.Impl, error) {
-		if msg := envknob.String("TS_DEBUG_WIN_FAIL"); msg != "" {
-			return nil, nil, fmt.Errorf("pretending to be a service failure: %v", msg)
-		}
-		for {
-			res := <-engErrc
-			if res.Engine != nil {
-				return res.Engine, res.Netstack, nil
-			}
-			if time.Since(t0) < time.Minute || windowsUptime() < 10*time.Minute {
-				// Ignore errors during early boot. Windows 10 auto logs in the GUI
-				// way sooner than the networking stack components start up.
-				// So the network will fail for a bit (and require a few tries) while
-				// the GUI is still fine.
-				continue
-			}
-			// Return nicer errors to users, annotated with logids, which helps
-			// when they file bugs.
-			return nil, nil, fmt.Errorf("%w\n\nlogid: %v", res.Err, logid)
-		}
-	}
-	store, err := store.New(logf, statePathOrDefault())
-	if err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-
-	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
-	if err != nil {
-		return fmt.Errorf("safesocket.Listen: %v", err)
-	}
-
-	err = ipnserver.Run(ctx, logf, ln, store, linkMon, dialer, logid, getEngine, ipnServerOpts())
-	if err != nil {
-		logf("ipnserver.Run: %v", err)
-	}
-	return err
-}
-
 func handleSessionChange(chgRequest svc.ChangeRequest) {
 	if chgRequest.Cmd != svc.SessionChange || chgRequest.EventType != windows.WTS_SESSION_UNLOCK {
 		return
@@ -414,4 +352,139 @@ var (
 func windowsUptime() time.Duration {
 	r, _, _ := getTickCount64Proc.Call()
 	return time.Duration(int64(r)) * time.Millisecond
+}
+
+// babysitProc runs the current executable as a child process with the
+// provided args, capturing its output, writing it to files, and
+// restarting the process on any crashes.
+func babysitProc(ctx context.Context, args []string, logf logger.Logf) {
+
+	executable, err := os.Executable()
+	if err != nil {
+		panic("cannot determine executable: " + err.Error())
+	}
+
+	var proc struct {
+		mu sync.Mutex
+		p  *os.Process
+	}
+
+	done := make(chan struct{})
+	go func() {
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+		var sig os.Signal
+		select {
+		case sig = <-interrupt:
+			logf("babysitProc: got signal: %v", sig)
+			close(done)
+		case <-ctx.Done():
+			logf("babysitProc: context done")
+			sig = os.Kill
+			close(done)
+		}
+
+		proc.mu.Lock()
+		proc.p.Signal(sig)
+		proc.mu.Unlock()
+	}()
+
+	bo := backoff.NewBackoff("babysitProc", logf, 30*time.Second)
+
+	for {
+		startTime := time.Now()
+		log.Printf("exec: %#v %v", executable, args)
+		cmd := exec.Command(executable, args...)
+
+		// Create a pipe object to use as the subproc's stdin.
+		// When the writer goes away, the reader gets EOF.
+		// A subproc can watch its stdin and exit when it gets EOF;
+		// this is a very reliable way to have a subproc die when
+		// its parent (us) disappears.
+		// We never need to actually write to wStdin.
+		rStdin, wStdin, err := os.Pipe()
+		if err != nil {
+			log.Printf("os.Pipe 1: %v", err)
+			return
+		}
+
+		// Create a pipe object to use as the subproc's stdout/stderr.
+		// We'll read from this pipe and send it to logf, line by line.
+		// We can't use os.exec's io.Writer for this because it
+		// doesn't care about lines, and thus ends up merging multiple
+		// log lines into one or splitting one line into multiple
+		// logf() calls. bufio is more appropriate.
+		rStdout, wStdout, err := os.Pipe()
+		if err != nil {
+			log.Printf("os.Pipe 2: %v", err)
+		}
+		go func(r *os.File) {
+			defer r.Close()
+			rb := bufio.NewReader(r)
+			for {
+				s, err := rb.ReadString('\n')
+				if s != "" {
+					logf("%s", s)
+				}
+				if err != nil {
+					break
+				}
+			}
+		}(rStdout)
+
+		cmd.Stdin = rStdin
+		cmd.Stdout = wStdout
+		cmd.Stderr = wStdout
+		err = cmd.Start()
+
+		// Now that the subproc is started, get rid of our copy of the
+		// pipe reader. Bad things happen on Windows if more than one
+		// process owns the read side of a pipe.
+		rStdin.Close()
+		wStdout.Close()
+
+		if err != nil {
+			log.Printf("starting subprocess failed: %v", err)
+		} else {
+			proc.mu.Lock()
+			proc.p = cmd.Process
+			proc.mu.Unlock()
+
+			err = cmd.Wait()
+			log.Printf("subprocess exited: %v", err)
+		}
+
+		// If the process finishes, clean up the write side of the
+		// pipe. We'll make a new one when we restart the subproc.
+		wStdin.Close()
+
+		if os.Getenv("TS_DEBUG_RESTART_CRASHED") == "0" {
+			log.Fatalf("Process ended.")
+		}
+
+		if time.Since(startTime) < 60*time.Second {
+			bo.BackOff(ctx, fmt.Errorf("subproc early exit: %v", err))
+		} else {
+			// Reset the timeout, since the process ran for a while.
+			bo.BackOff(ctx, nil)
+		}
+
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
+}
+
+func uninstallWinTun(logf logger.Logf) {
+	dll := windows.NewLazyDLL("wintun.dll")
+	if err := dll.Load(); err != nil {
+		logf("Cannot load wintun.dll for uninstall: %v", err)
+		return
+	}
+
+	logf("Removing wintun driver...")
+	err := wintun.Uninstall()
+	logf("Uninstall: %v", err)
 }

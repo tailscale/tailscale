@@ -89,7 +89,7 @@ func TestManagerWindowsGPMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
-	mgr := cfg.(windowsManager)
+	mgr := cfg.(*windowsManager)
 	defer mgr.Close()
 
 	usingGP := mgr.nrptDB.writeAsGP
@@ -218,7 +218,7 @@ func runTest(t *testing.T, isLocal bool) {
 	if err != nil {
 		t.Fatalf("NewOSConfigurator: %v\n", err)
 	}
-	mgr := cfg.(windowsManager)
+	mgr := cfg.(*windowsManager)
 	defer mgr.Close()
 
 	usingGP := mgr.nrptDB.writeAsGP

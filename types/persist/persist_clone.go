@@ -7,6 +7,7 @@
 package persist
 
 import (
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/structs"
 )
@@ -19,6 +20,7 @@ func (src *Persist) Clone() *Persist {
 	}
 	dst := new(Persist)
 	*dst = *src
+	dst.DisallowedTKAStateIDs = append(src.DisallowedTKAStateIDs[:0:0], src.DisallowedTKAStateIDs...)
 	return dst
 }
 
@@ -30,4 +32,8 @@ var _PersistCloneNeedsRegeneration = Persist(struct {
 	OldPrivateNodeKey               key.NodePrivate
 	Provider                        string
 	LoginName                       string
+	UserProfile                     tailcfg.UserProfile
+	NetworkLockKey                  key.NLPrivate
+	NodeID                          tailcfg.StableNodeID
+	DisallowedTKAStateIDs           []string
 }{})

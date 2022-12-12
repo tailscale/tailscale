@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/types/opt"
+	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
 
@@ -264,12 +265,17 @@ func LookupInt(envVar string) (v int, ok bool) {
 // of Work-In-Progress code.
 func UseWIPCode() bool { return Bool("TAILSCALE_USE_WIP_CODE") }
 
-// CanSSHD is whether the Tailscale SSH server is allowed to run.
+// CanSSHD reports whether the Tailscale SSH server is allowed to run.
 //
-// If disabled, the SSH server won't start (won't intercept port 22)
-// if already enabled and any attempt to re-enable it will result in
-// an error.
+// If disabled (when this reports false), the SSH server won't start (won't
+// intercept port 22) if previously configured to do so and any attempt to
+// re-enable it will result in an error.
 func CanSSHD() bool { return !Bool("TS_DISABLE_SSH_SERVER") }
+
+// CanTaildrop reports whether the Taildrop feature is allowed to function.
+//
+// If disabled, Taildrop won't receive files regardless of user & server config.
+func CanTaildrop() bool { return !Bool("TS_DISABLE_TAILDROP") }
 
 // SSHPolicyFile returns the path, if any, to the SSHPolicy JSON file for development.
 func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
@@ -277,10 +283,8 @@ func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
 // SSHIgnoreTailnetPolicy is whether to ignore the Tailnet SSH policy for development.
 func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY") }
 
-
 // TKASkipSignatureCheck is whether to skip node-key signature checking for development.
 func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION") }
-
 
 // NoLogsNoSupport reports whether the client's opted out of log uploads and
 // technical support.
@@ -428,4 +432,15 @@ func applyKeyValueEnv(r io.Reader) error {
 		Setenv(k, v)
 	}
 	return bs.Err()
+}
+
+// IPCVersion returns version.Long usually, unless TS_DEBUG_FAKE_IPC_VERSION is
+// set, in which it contains that value. This is only used for weird development
+// cases when testing mismatched versions and you want the client to act like it's
+// compatible with the server.
+func IPCVersion() string {
+	if v := String("TS_DEBUG_FAKE_IPC_VERSION"); v != "" {
+		return v
+	}
+	return version.Long
 }

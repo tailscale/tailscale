@@ -28,6 +28,7 @@ var (
 	noProxyUntil time.Time // if non-zero, time at which ProxyFromEnvironment should check again
 )
 
+// setNoProxyUntil stops calls to sysProxyEnv (if any) for the provided duration.
 func setNoProxyUntil(d time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -41,17 +42,20 @@ var _ = setNoProxyUntil // quiet staticcheck; Windows uses the above, more might
 // For example, WPAD PAC files on Windows.
 var sysProxyFromEnv func(*http.Request) (*url.URL, error)
 
+// ProxyFromEnvironment is like the standard library's http.ProxyFromEnvironment
+// but additionally does OS-specific proxy lookups if the environment variables
+// alone don't specify a proxy.
 func ProxyFromEnvironment(req *http.Request) (*url.URL, error) {
+	u, err := http.ProxyFromEnvironment(req)
+	if u != nil && err == nil {
+		return u, nil
+	}
+
 	mu.Lock()
 	noProxyTime := noProxyUntil
 	mu.Unlock()
 	if time.Now().Before(noProxyTime) {
 		return nil, nil
-	}
-
-	u, err := http.ProxyFromEnvironment(req)
-	if u != nil && err == nil {
-		return u, nil
 	}
 
 	if sysProxyFromEnv != nil {

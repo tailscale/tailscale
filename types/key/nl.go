@@ -15,12 +15,19 @@ import (
 
 const (
 	// nlPrivateHexPrefix is the prefix used to identify a
-	// hex-encoded network-lock key.
+	// hex-encoded tailnet-lock key.
 	nlPrivateHexPrefix = "nlpriv:"
 
 	// nlPublicHexPrefix is the prefix used to identify the public
-	// side of a hex-encoded network-lock key.
+	// side of a hex-encoded tailnet-lock key.
 	nlPublicHexPrefix = "nlpub:"
+
+	// nlPublicHexPrefixCLI is the prefix used for tailnet-lock keys
+	// when shown on the CLI.
+	// It's not practical for us to change the prefix everywhere due to
+	// compatibility with existing clients, but we can support both prefixes
+	// as well as use the CLI form when presenting to the user.
+	nlPublicHexPrefixCLI = "tlpub:"
 )
 
 // NLPrivate is a node-managed network-lock key, used for signing
@@ -58,6 +65,11 @@ func (k *NLPrivate) UnmarshalText(b []byte) error {
 // MarshalText implements encoding.TextMarshaler.
 func (k NLPrivate) MarshalText() ([]byte, error) {
 	return toHex(k.k[:], nlPrivateHexPrefix), nil
+}
+
+// Equal reports whether k and other are the same key.
+func (k NLPrivate) Equal(other NLPrivate) bool {
+	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1
 }
 
 // Public returns the public component of this key.
@@ -100,14 +112,39 @@ type NLPublic struct {
 	k [ed25519.PublicKeySize]byte
 }
 
-// MarshalText implements encoding.TextUnmarshaler.
+// NLPublicFromEd25519Unsafe converts an ed25519 public key into
+// a type of NLPublic.
+//
+// New uses of this function should be avoided, as its possible to
+// accidentally construct an NLPublic from a non network-lock key.
+func NLPublicFromEd25519Unsafe(public ed25519.PublicKey) NLPublic {
+	var out NLPublic
+	copy(out.k[:], public)
+	return out
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. This function
+// is able to decode both the CLI form (tlpub:<hex>) & the
+// regular form (nlpub:<hex>).
 func (k *NLPublic) UnmarshalText(b []byte) error {
+	if mem.HasPrefix(mem.B(b), mem.S(nlPublicHexPrefixCLI)) {
+		return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefixCLI))
+	}
 	return parseHex(k.k[:], mem.B(b), mem.S(nlPublicHexPrefix))
 }
 
-// MarshalText implements encoding.TextMarshaler.
+// MarshalText implements encoding.TextMarshaler, emitting a
+// representation of the form nlpub:<hex>.
 func (k NLPublic) MarshalText() ([]byte, error) {
 	return toHex(k.k[:], nlPublicHexPrefix), nil
+}
+
+// CLIString returns a marshalled representation suitable for use
+// with tailnet lock commands, of the form tlpub:<hex> instead of
+// the nlpub:<hex> form emitted by MarshalText. Both forms can
+// be decoded by UnmarshalText.
+func (k NLPublic) CLIString() string {
+	return string(toHex(k.k[:], nlPublicHexPrefixCLI))
 }
 
 // Verifier returns a ed25519.PublicKey that can be used to

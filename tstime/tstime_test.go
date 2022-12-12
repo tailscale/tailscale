@@ -109,6 +109,10 @@ func TestParseDuration(t *testing.T) {
 	}{
 		{"1h", time.Hour},
 		{"1d", 24 * time.Hour},
+		{"365d", 365 * 24 * time.Hour},
+		{"12345d", 12345 * 24 * time.Hour},
+		{"67890d", 67890 * 24 * time.Hour},
+		{"100d", 100 * 24 * time.Hour},
 		{"1d1d", 48 * time.Hour},
 		{"1h1d", 25 * time.Hour},
 		{"1d1h", 25 * time.Hour},

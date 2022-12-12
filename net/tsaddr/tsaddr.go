@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"sync"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 )
 
@@ -56,9 +57,14 @@ func TailscaleServiceIP() netip.Addr {
 //
 // For IPv4, use TailscaleServiceIP.
 func TailscaleServiceIPv6() netip.Addr {
-	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, "fd7a:115c:a1e0::53/128") })
+	serviceIPv6.Do(func() { mustPrefix(&serviceIPv6.v, TailscaleServiceIPv6String+"/128") })
 	return serviceIPv6.v.Addr()
 }
+
+const (
+	TailscaleServiceIPString   = "100.100.100.100"
+	TailscaleServiceIPv6String = "fd7a:115c:a1e0::53"
+)
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
 // Tailscale assigns from.
@@ -201,31 +207,10 @@ func NewContainsIPFunc(addrs []netip.Prefix) func(ip netip.Addr) bool {
 	return func(ip netip.Addr) bool { return m[ip] }
 }
 
-// PrefixesContainsFunc reports whether f is true for any IPPrefix in
-// ipp.
-func PrefixesContainsFunc(ipp []netip.Prefix, f func(netip.Prefix) bool) bool {
-	for _, v := range ipp {
-		if f(v) {
-			return true
-		}
-	}
-	return false
-}
-
 // PrefixesContainsIP reports whether any prefix in ipp contains ip.
 func PrefixesContainsIP(ipp []netip.Prefix, ip netip.Addr) bool {
 	for _, r := range ipp {
 		if r.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// IPsContainsFunc reports whether f is true for any IP in ips.
-func IPsContainsFunc(ips []netip.Addr, f func(netip.Addr) bool) bool {
-	for _, v := range ips {
-		if f(v) {
 			return true
 		}
 	}
@@ -265,6 +250,16 @@ func AllIPv6() netip.Prefix { return allIPv6 }
 
 // ExitRoutes returns a slice containing AllIPv4 and AllIPv6.
 func ExitRoutes() []netip.Prefix { return []netip.Prefix{allIPv4, allIPv6} }
+
+// SortPrefixes sorts the prefixes in place.
+func SortPrefixes(p []netip.Prefix) {
+	slices.SortFunc(p, func(ri, rj netip.Prefix) bool {
+		if ri.Addr() == rj.Addr() {
+			return ri.Bits() < rj.Bits()
+		}
+		return ri.Addr().Less(rj.Addr())
+	})
+}
 
 // FilterPrefixes returns a new slice, not aliasing in, containing elements of
 // in that match f.

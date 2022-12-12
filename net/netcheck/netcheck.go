@@ -1126,7 +1126,10 @@ func (c *Client) checkCaptivePortal(ctx context.Context, dm *tailcfg.DERPMap, pr
 		return false, err
 	}
 
-	chal := "tailscale " + node.HostName
+	// Note: the set of valid characters in a challenge and the total
+	// length is limited; see isChallengeChar in cmd/derper for more
+	// details.
+	chal := "ts_" + node.HostName
 	req.Header.Set("X-Tailscale-Challenge", chal)
 	r, err := noRedirectClient.Do(req)
 	if err != nil {

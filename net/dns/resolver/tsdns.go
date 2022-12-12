@@ -34,6 +34,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/strs"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -550,7 +551,7 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 			return tsaddr.TailscaleServiceIPv6(), dns.RCodeSuccess
 		}
 	}
-	// Special-case: 'via-<siteid>.<ipv4>' queries.
+	// Special-case: 4via6 DNS names.
 	if ip, ok := r.parseViaDomain(domain, typ); ok {
 		return ip, dns.RCodeSuccess
 	}
@@ -630,7 +631,9 @@ func (r *Resolver) resolveLocal(domain dnsname.FQDN, typ dns.Type) (netip.Addr, 
 }
 
 // parseViaDomain synthesizes an IP address for quad-A DNS requests of the form
-// `<IPv4-address>.via-<X>` and the deprecated form `via-<X>.<IPv4-address>`,
+// `<IPv4-address-with-hypens-instead-of-dots>-via-<siteid>[.*]`. Two prior formats that
+// didn't pan out (due to a Chrome issue and DNS search ndots issues) were
+// `<IPv4-address>.via-<X>` and the older `via-<X>.<IPv4-address>`,
 // where X is a decimal, or hex-encoded number with a '0x' prefix.
 //
 // This exists as a convenient mapping into Tailscales 'Via Range'.
@@ -650,14 +653,28 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 
 	var siteID string
 	var ip4Str string
-	if strings.HasPrefix(fqdn, "via-") {
+	switch {
+	case strings.Contains(fqdn, "-via-"):
+		// Format number 3: "192-168-1-2-via-7" or "192-168-1-2-via-7.foo.ts.net."
+		// Third time's a charm. The earlier two formats follow after this block.
+		firstLabel, domain, _ := strings.Cut(fqdn, ".") // "192-168-1-2-via-7"
+		if !(domain == "" || dnsname.HasSuffix(domain, "ts.net") || dnsname.HasSuffix(domain, "tailscale.net")) {
+			return netip.Addr{}, false
+		}
+		v4hyphens, suffix, ok := strings.Cut(firstLabel, "-via-")
+		if !ok {
+			return netip.Addr{}, false
+		}
+		siteID = suffix
+		ip4Str = strings.ReplaceAll(v4hyphens, "-", ".")
+	case strings.HasPrefix(fqdn, "via-"):
 		firstDot := strings.Index(fqdn, ".")
 		if firstDot < 0 {
 			return netip.Addr{}, false // missing dot delimiters
 		}
 		siteID = fqdn[len("via-"):firstDot]
 		ip4Str = fqdn[firstDot+1:]
-	} else {
+	default:
 		lastDot := strings.LastIndex(fqdn, ".")
 		if lastDot < 0 {
 			return netip.Addr{}, false // missing dot delimiters
@@ -672,12 +689,12 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 
 	ip4, err := netip.ParseAddr(ip4Str)
 	if err != nil {
-		return netip.Addr{}, false // badly formed, dont respond
+		return netip.Addr{}, false // badly formed, don't respond
 	}
 
 	prefix, err := strconv.ParseUint(siteID, 0, 32)
 	if err != nil {
-		return netip.Addr{}, false // badly formed, dont respond
+		return netip.Addr{}, false // badly formed, don't respond
 	}
 
 	// MapVia will never error when given an ipv4 netip.Prefix.
@@ -1199,8 +1216,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
 func unARPA(a string) (ipStr string, ok bool) {
 	const suf4 = ".in-addr.arpa."
-	if strings.HasSuffix(a, suf4) {
-		s := strings.TrimSuffix(a, suf4)
+	if s, ok := strs.CutSuffix(a, suf4); ok {
 		// Parse and reverse octets.
 		ip, err := netip.ParseAddr(s)
 		if err != nil || !ip.Is4() {

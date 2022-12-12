@@ -59,6 +59,9 @@ We require [Developer Certificate of
 Origin](https://en.wikipedia.org/wiki/Developer_Certificate_of_Origin)
 `Signed-off-by` lines in commits.
 
+See `git log` for our commit message style. It's basically the same as
+[Go's style](https://github.com/golang/go/wiki/CommitMessage).
+
 ## About Us
 
 [Tailscale](https://tailscale.com/) is primarily developed by the

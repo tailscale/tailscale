@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 )
@@ -25,6 +25,7 @@ var createTAP func(tapName, bridgeName string) (tun.Device, error)
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.
 func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
+	var disableTUNOffload = envknob.Bool("TS_DISABLE_TUN_OFFLOAD")
 	var dev tun.Device
 	var err error
 	if strings.HasPrefix(tunName, "tap:") {
@@ -51,6 +52,11 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 			tunMTU = mtu
 		}
 		dev, err = tun.CreateTUN(tunName, tunMTU)
+		if err == nil && disableTUNOffload {
+			if do, ok := dev.(tun.DisableOffloader); ok {
+				do.DisableOffload()
+			}
+		}
 	}
 	if err != nil {
 		return nil, "", err

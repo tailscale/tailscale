@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,9 +22,12 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/netmap"
+	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -106,10 +110,12 @@ func hexAll(v string) string {
 }
 
 func TestHandlePeerAPI(t *testing.T) {
+	const nodeFQDN = "self-node.tail-scale.ts.net."
 	tests := []struct {
 		name       string
 		isSelf     bool // the peer sending the request is owned by us
 		capSharing bool // self node has file sharing capability
+		debugCap   bool // self node has debug capability
 		omitRoot   bool // don't configure
 		req        *http.Request
 		checks     []check
@@ -137,15 +143,24 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
-			name:   "peer_api_goroutines_deny",
-			isSelf: false,
-			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
-			checks: checks(httpStatus(403)),
+			name:     "goroutines/deny-self-no-cap",
+			isSelf:   true,
+			debugCap: false,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks:   checks(httpStatus(403)),
 		},
 		{
-			name:   "peer_api_goroutines",
-			isSelf: true,
-			req:    httptest.NewRequest("GET", "/v0/goroutines", nil),
+			name:     "goroutines/deny-nonself",
+			isSelf:   false,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
+			checks:   checks(httpStatus(403)),
+		},
+		{
+			name:     "goroutines/accept-self",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "/v0/goroutines", nil),
 			checks: checks(
 				httpStatus(200),
 				bodyContains("ServeHTTP"),
@@ -400,16 +415,53 @@ func TestHandlePeerAPI(t *testing.T) {
 				bodyContains("bad filename"),
 			),
 		},
+		{
+			name:     "host-val/bad-ip",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://12.23.45.66:1234/v0/env", nil),
+			checks: checks(
+				httpStatus(403),
+			),
+		},
+		{
+			name:     "host-val/no-port",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://100.100.100.101/v0/env", nil),
+			checks: checks(
+				httpStatus(403),
+			),
+		},
+		{
+			name:     "host-val/peer",
+			isSelf:   true,
+			debugCap: true,
+			req:      httptest.NewRequest("GET", "http://peer/v0/env", nil),
+			checks: checks(
+				httpStatus(200),
+			),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			selfNode := &tailcfg.Node{
+				Addresses: []netip.Prefix{
+					netip.MustParsePrefix("100.100.100.101/32"),
+				},
+			}
+			if tt.debugCap {
+				selfNode.Capabilities = append(selfNode.Capabilities, tailcfg.CapabilityDebug)
+			}
 			var e peerAPITestEnv
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
+				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
 			}
 			e.ph = &peerAPIHandler{
-				isSelf: tt.isSelf,
+				isSelf:   tt.isSelf,
+				selfNode: selfNode,
 				peerNode: &tailcfg.Node{
 					ComputedName: "some-peer-name",
 				},
@@ -423,6 +475,9 @@ func TestHandlePeerAPI(t *testing.T) {
 				e.ph.ps.rootDir = rootDir
 			}
 			e.rr = httptest.NewRecorder()
+			if tt.req.Host == "example.com" {
+				tt.req.Host = "100.100.100.101:12345"
+			}
 			e.ph.ServeHTTP(e.rr, tt.req)
 			for _, f := range tt.checks {
 				f(t, &e)
@@ -460,12 +515,15 @@ func TestFileDeleteRace(t *testing.T) {
 		peerNode: &tailcfg.Node{
 			ComputedName: "some-peer-name",
 		},
+		selfNode: &tailcfg.Node{
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
+		},
 		ps: ps,
 	}
 	buf := make([]byte, 2<<20)
 	for i := 0; i < 30; i++ {
 		rr := httptest.NewRecorder()
-		ph.ServeHTTP(rr, httptest.NewRequest("PUT", "/v0/put/foo.txt", bytes.NewReader(buf[:rand.Intn(len(buf))])))
+		ph.ServeHTTP(rr, httptest.NewRequest("PUT", "http://100.100.100.101:123/v0/put/foo.txt", bytes.NewReader(buf[:rand.Intn(len(buf))])))
 		if res := rr.Result(); res.StatusCode != 200 {
 			t.Fatal(res.Status)
 		}
@@ -585,20 +643,23 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
-			e: eng,
+			e:     eng,
+			pm:    pm,
+			store: pm.Store(),
 		},
 	}
 	if h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly offering exit node")
 	}
-	h.ps.b.prefs = (&ipn.Prefs{
+	h.ps.b.pm.SetPrefs((&ipn.Prefs{
 		AdvertiseRoutes: []netip.Prefix{
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},
-	}).View()
+	}).View())
 	if !h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly not offering exit node")
 	}
@@ -623,5 +684,69 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("[fe70::1]:12345")
 	if !h.replyToDNSQueries() {
 		t.Errorf("unexpectedly IPv6 deny; wanted to be a DNS server")
+	}
+}
+
+func TestRedactErr(t *testing.T) {
+	testCases := []struct {
+		name string
+		err  func() error
+		want string
+	}{
+		{
+			name: "PathError",
+			err: func() error {
+				return &os.PathError{
+					Op:   "open",
+					Path: "/tmp/sensitive.txt",
+					Err:  fs.ErrNotExist,
+				}
+			},
+			want: `open redacted.41360718: file does not exist`,
+		},
+		{
+			name: "LinkError",
+			err: func() error {
+				return &os.LinkError{
+					Op:  "symlink",
+					Old: "/tmp/sensitive.txt",
+					New: "/tmp/othersensitive.txt",
+					Err: fs.ErrNotExist,
+				}
+			},
+			want: `symlink redacted.41360718 redacted.6bcf093a: file does not exist`,
+		},
+		{
+			name: "something else",
+			err:  func() error { return errors.New("i am another error type") },
+			want: `i am another error type`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// For debugging
+			var i int
+			for err := tc.err(); err != nil; err = errors.Unwrap(err) {
+				t.Logf("%d: %T @ %p", i, err, err)
+				i++
+			}
+
+			t.Run("Root", func(t *testing.T) {
+				got := redactErr(tc.err()).Error()
+				if got != tc.want {
+					t.Errorf("err = %q; want %q", got, tc.want)
+				}
+			})
+			t.Run("Wrapped", func(t *testing.T) {
+				wrapped := fmt.Errorf("wrapped error: %w", tc.err())
+				want := "wrapped error: " + tc.want
+
+				got := redactErr(wrapped).Error()
+				if got != want {
+					t.Errorf("err = %q; want %q", got, want)
+				}
+			})
+		})
 	}
 }

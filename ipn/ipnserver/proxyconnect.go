@@ -7,15 +7,11 @@
 package ipnserver
 
 import (
-	"bufio"
-	"context"
 	"io"
 	"net"
 	"net/http"
-	"time"
 
 	"tailscale.com/logpolicy"
-	"tailscale.com/types/logger"
 )
 
 // handleProxyConnectConn handles a CONNECT request to
@@ -27,39 +23,41 @@ import (
 // "Internet Kill Switch" installed by tailscaled for exit nodes
 // precludes that from working and instead the GUI fails to dial out.
 // So, go through tailscaled (with a CONNECT request) instead.
-func (s *Server) handleProxyConnectConn(ctx context.Context, br *bufio.Reader, c net.Conn, logf logger.Logf) {
-	defer c.Close()
-
-	c.SetReadDeadline(time.Now().Add(5 * time.Second)) // should be long enough to send the HTTP headers
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		logf("ReadRequest: %v", err)
-		return
-	}
-	c.SetReadDeadline(time.Time{})
-
-	if req.Method != "CONNECT" {
-		logf("ReadRequest: unexpected method %q, not CONNECT", req.Method)
-		return
+func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.Method != "CONNECT" {
+		panic("[unexpected] miswired")
 	}
 
-	hostPort := req.RequestURI
+	hostPort := r.RequestURI
 	logHost := logpolicy.LogHost()
 	allowed := net.JoinHostPort(logHost, "443")
 	if hostPort != allowed {
-		logf("invalid CONNECT target %q; want %q", hostPort, allowed)
-		io.WriteString(c, "HTTP/1.1 403 Forbidden\r\n\r\nBad CONNECT target.\n")
+		s.logf("invalid CONNECT target %q; want %q", hostPort, allowed)
+		http.Error(w, "Bad CONNECT target.", http.StatusForbidden)
 		return
 	}
 
 	tr := logpolicy.NewLogtailTransport(logHost)
 	back, err := tr.DialContext(ctx, "tcp", hostPort)
 	if err != nil {
-		logf("error CONNECT dialing %v: %v", hostPort, err)
-		io.WriteString(c, "HTTP/1.1 502 Fail\r\n\r\nConnect failure.\n")
+		s.logf("error CONNECT dialing %v: %v", hostPort, err)
+		http.Error(w, "Connect failure", http.StatusBadGateway)
 		return
 	}
 	defer back.Close()
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c, br, err := hj.Hijack()
+	if err != nil {
+		s.logf("CONNECT hijack: %v", err)
+		return
+	}
+	defer c.Close()
 
 	io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
 

@@ -5,18 +5,15 @@
 package safesocket
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"syscall"
+
+	"github.com/Microsoft/go-winio"
 )
 
 func connect(s *ConnectionStrategy) (net.Conn, error) {
-	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.port))
-	if err != nil {
-		return nil, err
-	}
-	return pipe, err
+	return winio.DialPipe(s.path, nil)
 }
 
 func setFlags(network, address string, c syscall.RawConn) error {
@@ -26,20 +23,21 @@ func setFlags(network, address string, c syscall.RawConn) error {
 	})
 }
 
-// TODO(apenwarr): use named pipes instead of sockets?
-//
-//	I tried to use winio.ListenPipe() here, but that code is a disaster,
-//	built on top of an API that's a disaster. So for now we'll hack it by
-//	just always using a TCP session on a fixed port on localhost. As a
-//	result, on Windows we ignore the vendor and name strings.
-//	NOTE(bradfitz): Jason did a new pipe package: https://go-review.googlesource.com/c/sys/+/299009
+// windowsSDDL is the Security Descriptor set on the namedpipe.
+// It provides read/write access to all users and the local system.
+const windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
+
 func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
-	lc := net.ListenConfig{
-		Control: setFlags,
-	}
-	pipe, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	lc, err := winio.ListenPipe(
+		path,
+		&winio.PipeConfig{
+			SecurityDescriptor: windowsSDDL,
+			InputBufferSize:    256 * 1024,
+			OutputBufferSize:   256 * 1024,
+		},
+	)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("namedpipe.Listen: %w", err)
 	}
-	return pipe, uint16(pipe.Addr().(*net.TCPAddr).Port), err
+	return lc, 0, nil
 }

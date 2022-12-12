@@ -32,6 +32,7 @@ import (
 	"tailscale.com/metrics"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
 
@@ -455,18 +456,30 @@ func WritePrometheusExpvar(w io.Writer, kv expvar.KeyValue) {
 	writePromExpVar(w, "", kv)
 }
 
-func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
-	key := kv.Key
+type prometheusMetricDetails struct {
+	Name  string
+	Type  string
+	Label string
+}
+
+var prometheusMetricCache sync.Map // string => *prometheusMetricDetails
+
+func prometheusMetric(prefix string, key string) (string, string, string) {
+	cachekey := prefix + key
+	if v, ok := prometheusMetricCache.Load(cachekey); ok {
+		d := v.(*prometheusMetricDetails)
+		return d.Name, d.Type, d.Label
+	}
 	var typ string
 	var label string
 	switch {
-	case strings.HasPrefix(kv.Key, gaugePrefix):
+	case strings.HasPrefix(key, gaugePrefix):
 		typ = "gauge"
-		key = strings.TrimPrefix(kv.Key, gaugePrefix)
+		key = strings.TrimPrefix(key, gaugePrefix)
 
-	case strings.HasPrefix(kv.Key, counterPrefix):
+	case strings.HasPrefix(key, counterPrefix):
 		typ = "counter"
-		key = strings.TrimPrefix(kv.Key, counterPrefix)
+		key = strings.TrimPrefix(key, counterPrefix)
 	}
 	if strings.HasPrefix(key, labelMapPrefix) {
 		key = strings.TrimPrefix(key, labelMapPrefix)
@@ -474,7 +487,18 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			label, key = a, b
 		}
 	}
-	name := prefix + key
+	d := &prometheusMetricDetails{
+		Name:  strings.ReplaceAll(prefix+key, "-", "_"),
+		Type:  typ,
+		Label: label,
+	}
+	prometheusMetricCache.Store(cachekey, d)
+	return d.Name, d.Type, d.Label
+}
+
+func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
+	key := kv.Key
+	name, typ, label := prometheusMetric(prefix, key)
 
 	switch v := kv.Value.(type) {
 	case PrometheusVar:
@@ -538,6 +562,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 			v := f()
 			if ms, ok := v.(runtime.MemStats); ok && name == "memstats" {
 				writeMemstats(w, &ms)
+				return
+			}
+			if vs, ok := v.(string); ok && strings.HasSuffix(name, "version") {
+				fmt.Fprintf(w, "%s{version=%q} 1\n", name, vs)
 				return
 			}
 			switch v := v.(type) {
@@ -717,7 +745,7 @@ func structTypeSortedFields(t reflect.Type) []sortedStructField {
 // removed.
 func removeTypePrefixes(s string) string {
 	for _, prefix := range prefixesToTrim {
-		if trimmed := strings.TrimPrefix(s, prefix); trimmed != s {
+		if trimmed, ok := strs.CutPrefix(s, prefix); ok {
 			return trimmed
 		}
 	}

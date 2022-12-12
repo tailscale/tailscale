@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"strings"
 
-	"tailscale.com/client/tailscale"
 	"tailscale.com/tsnet"
 )
 
@@ -39,7 +38,7 @@ func main() {
 
 	if *addr == ":443" {
 		ln = tls.NewListener(ln, &tls.Config{
-			GetCertificate: tailscale.GetCertificate,
+			GetCertificate: lc.GetCertificate,
 		})
 	}
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

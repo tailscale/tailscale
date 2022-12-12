@@ -27,14 +27,16 @@ import (
 	"time"
 	"unsafe"
 
+	wgconn "github.com/tailscale/wireguard-go/conn"
+	"github.com/tailscale/wireguard-go/device"
+	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"golang.org/x/exp/maps"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun/tuntest"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
@@ -133,6 +135,7 @@ func runDERPAndStun(t *testing.T, logf logger.Logf, l nettype.PacketListener, st
 type magicStack struct {
 	privateKey key.NodePrivate
 	epCh       chan []tailcfg.Endpoint // endpoint updates produced by this peer
+	stats      connstats.Statistics    // per-connection statistics
 	conn       *Conn                   // the magicsock itself
 	tun        *tuntest.ChannelTUN     // TUN device to send/receive packets
 	tsTun      *tstun.Wrapper          // wrapped tun that implements filtering and wgengine hooks
@@ -362,9 +365,12 @@ func TestNewConn(t *testing.T) {
 	conn.SetPrivateKey(key.NewNode())
 
 	go func() {
-		var pkt [64 << 10]byte
+		pkts := make([][]byte, 1)
+		sizes := make([]int, 1)
+		eps := make([]wgconn.Endpoint, 1)
+		pkts[0] = make([]byte, 64<<10)
 		for {
-			_, _, err := conn.receiveIPv4(pkt[:])
+			_, err := conn.receiveIPv4(pkts, sizes, eps)
 			if err != nil {
 				return
 			}
@@ -605,54 +611,6 @@ func TestTwoDevicePing(t *testing.T) {
 		stunIP: ip,
 	}
 	testTwoDevicePing(t, n)
-}
-
-// Legacy clients appear to new code as peers that know about DERP and
-// WireGuard, but don't have a disco key. Check that we can still
-// communicate successfully with such peers.
-func TestNoDiscoKey(t *testing.T) {
-	tstest.PanicOnLog()
-	tstest.ResourceCheck(t)
-
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
-	defer cleanup()
-
-	m1 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
-	defer m1.Close()
-	m2 := newMagicStack(t, t.Logf, localhostListener{}, derpMap)
-	defer m2.Close()
-
-	removeDisco := func(idx int, nm *netmap.NetworkMap) {
-		for _, p := range nm.Peers {
-			p.DiscoKey = key.DiscoPublic{}
-		}
-	}
-
-	cleanupMesh := meshStacks(t.Logf, removeDisco, m1, m2)
-	defer cleanupMesh()
-
-	// Wait for both peers to know about each other before we try to
-	// ping.
-	for {
-		if s1 := m1.Status(); len(s1.Peer) != 1 {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		if s2 := m2.Status(); len(s2.Peer) != 1 {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		break
-	}
-
-	pkt := tuntest.Ping(m2.IP(), m1.IP())
-	m1.tun.Outbound <- pkt
-	select {
-	case <-m2.tun.Inbound:
-		t.Logf("ping m1>m2 ok")
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timed out waiting for ping to transit")
-	}
 }
 
 func TestDiscokeyChange(t *testing.T) {
@@ -1095,11 +1053,11 @@ func testTwoDevicePing(t *testing.T, d *devices) {
 		}
 	}
 
-	m1.conn.SetStatisticsEnabled(true)
-	m2.conn.SetStatisticsEnabled(true)
+	m1.conn.SetStatistics(&m1.stats)
+	m2.conn.SetStatistics(&m2.stats)
 
 	checkStats := func(t *testing.T, m *magicStack, wantConns []netlogtype.Connection) {
-		stats := m.conn.ExtractStatistics()
+		_, stats := m.stats.Extract()
 		for _, conn := range wantConns {
 			if _, ok := stats[conn]; ok {
 				return
@@ -1308,17 +1266,20 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	for i := range sendBuf {
 		sendBuf[i] = 'x'
 	}
-	buf := make([]byte, 2<<10)
+	buffs := make([][]byte, 1)
+	buffs[0] = make([]byte, 2<<10)
+	sizes := make([]int, 1)
+	eps := make([]wgconn.Endpoint, 1)
 	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			tb.Fatalf("WriteTo: %v", err)
 		}
-		n, ep, err := conn.receiveIPv4(buf)
+		n, err := conn.receiveIPv4(buffs, sizes, eps)
 		if err != nil {
 			tb.Fatal(err)
 		}
 		_ = n
-		_ = ep
+		_ = eps
 	}
 }
 
@@ -1376,6 +1337,9 @@ func TestGoMajorVersion(t *testing.T) {
 }
 
 func TestReceiveFromAllocs(t *testing.T) {
+	// TODO(jwhited): we are back to nonzero alloc due to our use of x/net until
+	//  https://github.com/golang/go/issues/45886 is implemented.
+	t.Skip("alloc tests are skipped until https://github.com/golang/go/issues/45886 is implemented and plumbed.")
 	if racebuild.On {
 		t.Skip("alloc tests are unreliable with -race")
 	}
@@ -1527,9 +1491,12 @@ func TestRebindStress(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		buf := make([]byte, 1500)
+		buffs := make([][]byte, 1)
+		sizes := make([]int, 1)
+		eps := make([]wgconn.Endpoint, 1)
+		buffs[0] = make([]byte, 1500)
 		for {
-			_, _, err := conn.receiveIPv4(buf)
+			_, err := conn.receiveIPv4(buffs, sizes, eps)
 			if ctx.Err() != nil {
 				errc <- nil
 				return
@@ -1848,4 +1815,17 @@ func TestDiscoMagicMatches(t *testing.T) {
 	if m2 := binary.BigEndian.Uint16([]byte(disco.Magic[4:6])); m2 != discoMagic2 {
 		t.Errorf("last 2 bytes of disco magic don't match, got %v want %v", discoMagic2, m2)
 	}
+}
+
+func TestRebindingUDPConn(t *testing.T) {
+	// Test that RebindingUDPConn can be re-bound to different connection
+	// types.
+	c := RebindingUDPConn{}
+	realConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer realConn.Close()
+	c.setConnLocked(realConn.(nettype.PacketConn), "udp4")
+	c.setConnLocked(newBlockForeverConn(), "")
 }

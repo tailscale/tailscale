@@ -2,16 +2,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package version
+package version_test
 
 import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/tstest"
+	"tailscale.com/version"
 )
 
 func TestParse(t *testing.T) {
+	parse := version.ExportParse
+	type parsed = version.ExportParsed
+
 	tests := []struct {
 		version string
 		parsed  parsed
@@ -71,7 +75,7 @@ func TestAtLeast(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		got := AtLeast(test.v, test.m)
+		got := version.AtLeast(test.v, test.m)
 		if got != test.want {
 			t.Errorf("AtLeast(%q, %q) = %v, want %v", test.v, test.m, got, test.want)
 		}

@@ -24,6 +24,8 @@ import (
 	"tailscale.com/util/dnsname"
 )
 
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=TKAFilteredPeer
+
 // Status represents the entire state of the IPN network.
 type Status struct {
 	// Version is the daemon's long version (see version.Long).
@@ -67,6 +69,23 @@ type Status struct {
 	User map[tailcfg.UserID]tailcfg.UserProfile
 }
 
+// TKAKey describes a key trusted by network lock.
+type TKAKey struct {
+	Key      key.NLPublic
+	Metadata map[string]string
+	Votes    uint
+}
+
+// TKAFilteredPeer describes a peer which was removed from the netmap
+// (i.e. no connectivity) because it failed tailnet lock
+// checks.
+type TKAFilteredPeer struct {
+	Name         string // DNS
+	ID           tailcfg.NodeID
+	StableID     tailcfg.StableNodeID
+	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
+}
+
 // NetworkLockStatus represents whether network-lock is enabled,
 // along with details about the locally-known state of the tailnet
 // key authority.
@@ -78,8 +97,35 @@ type NetworkLockStatus struct {
 	// if network lock is not enabled.
 	Head *[32]byte
 
-	// PublicKey describes the nodes' network-lock public key.
+	// PublicKey describes the node's network-lock public key.
+	// It may be zero if the node has not logged in.
 	PublicKey key.NLPublic
+
+	// NodeKey describes the node's current node-key. This field is not
+	// populated if the node is not operating (i.e. waiting for a login).
+	NodeKey *key.NodePublic
+
+	// NodeKeySigned is true if our node is authorized by network-lock.
+	NodeKeySigned bool
+
+	// TrustedKeys describes the keys currently trusted to make changes
+	// to network-lock.
+	TrustedKeys []TKAKey
+
+	// FilteredPeers describes peers which were removed from the netmap
+	// (i.e. no connectivity) because they failed tailnet lock
+	// checks.
+	FilteredPeers []*TKAFilteredPeer
+}
+
+// NetworkLockUpdate describes a change to network-lock state.
+type NetworkLockUpdate struct {
+	Hash   [32]byte
+	Change string // values of tka.AUMKind.String()
+
+	// Raw contains the serialized AUM. The AUM is sent in serialized
+	// form to avoid transitive dependences bloating this package.
+	Raw []byte
 }
 
 // TailnetStatus is information about a Tailscale network ("tailnet").
@@ -372,6 +418,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if st.Active {
 		e.Active = true
 	}
+	if st.PeerAPIURL != nil {
+		e.PeerAPIURL = st.PeerAPIURL
+	}
 }
 
 type StatusUpdater interface {
@@ -585,4 +634,12 @@ func sortKey(ps *PeerStatus) string {
 	}
 	raw := ps.PublicKey.Raw32()
 	return string(raw[:])
+}
+
+// DebugDERPRegionReport is the result of a "tailscale debug derp" command,
+// to let people debug a custom DERP setup.
+type DebugDERPRegionReport struct {
+	Info     []string
+	Warnings []string
+	Errors   []string
 }

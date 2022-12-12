@@ -70,13 +70,13 @@ type Direct struct {
 	linkMon                *monitor.Mon // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
-	getNLPrivateKey        func() (key.NLPrivate, error) // or nil
 	debugFlags             []string
 	keepSharerAndUserSplit bool
 	skipIPForwardingCheck  bool
 	pinger                 Pinger
-	popBrowser             func(url string) // or nil
-	c2nHandler             http.Handler     // or nil
+	popBrowser             func(url string)             // or nil
+	c2nHandler             http.Handler                 // or nil
+	onClientVersion        func(*tailcfg.ClientVersion) // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -87,7 +87,7 @@ type Direct struct {
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
 
-	persist       persist.Persist
+	persist       persist.PersistView
 	authKey       string
 	tryingNewKey  key.NodePrivate
 	expiry        *time.Time
@@ -110,17 +110,14 @@ type Options struct {
 	NewDecompressor      func() (Decompressor, error)
 	KeepAlive            bool
 	Logf                 logger.Logf
-	HTTPTestClient       *http.Client     // optional HTTP client to use (for tests only)
-	NoiseTestClient      *http.Client     // optional HTTP client to use for noise RPCs (tests only)
-	DebugFlags           []string         // debug settings to send to control
-	LinkMonitor          *monitor.Mon     // optional link monitor
-	PopBrowserURL        func(url string) // optional func to open browser
-	Dialer               *tsdial.Dialer   // non-nil
-	C2NHandler           http.Handler     // or nil
-
-	// GetNLPrivateKey specifies an optional function to use
-	// Network Lock. If nil, it's not used.
-	GetNLPrivateKey func() (key.NLPrivate, error)
+	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
+	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
+	DebugFlags           []string                     // debug settings to send to control
+	LinkMonitor          *monitor.Mon                 // optional link monitor
+	PopBrowserURL        func(url string)             // optional func to open browser
+	OnClientVersion      func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
+	Dialer               *tsdial.Dialer               // non-nil
+	C2NHandler           http.Handler                 // or nil
 
 	// Status is called when there's a change in status.
 	Status func(Status)
@@ -232,13 +229,12 @@ func NewDirect(opts Options) (*Direct, error) {
 	c := &Direct{
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
-		getNLPrivateKey:        opts.GetNLPrivateKey,
 		serverURL:              opts.ServerURL,
 		timeNow:                opts.TimeNow,
 		logf:                   opts.Logf,
 		newDecompressor:        opts.NewDecompressor,
 		keepAlive:              opts.KeepAlive,
-		persist:                opts.Persist,
+		persist:                opts.Persist.View(),
 		authKey:                opts.AuthKey,
 		discoPubKey:            opts.DiscoPublicKey,
 		debugFlags:             opts.DebugFlags,
@@ -247,6 +243,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
+		onClientVersion:        opts.OnClientVersion,
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 		dialPlan:               opts.DialPlan,
@@ -333,7 +330,7 @@ func (c *Direct) SetTKAHead(tkaHead string) bool {
 	return true
 }
 
-func (c *Direct) GetPersist() persist.Persist {
+func (c *Direct) GetPersist() persist.PersistView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.persist
@@ -346,7 +343,7 @@ func (c *Direct) TryLogout(ctx context.Context) error {
 	c.logf("[v1] TryLogout control response: mustRegen=%v, newURL=%v, err=%v", mustRegen, newURL, err)
 
 	c.mu.Lock()
-	c.persist = persist.Persist{}
+	c.persist = new(persist.Persist).View()
 	c.mu.Unlock()
 
 	return err
@@ -421,7 +418,7 @@ func (c *Direct) hostInfoLocked() *tailcfg.Hostinfo {
 
 func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, newURL string, nks tkatype.MarshaledSignature, err error) {
 	c.mu.Lock()
-	persist := c.persist
+	persist := c.persist.AsStruct()
 	tryingNewKey := c.tryingNewKey
 	serverKey := c.serverKey
 	serverNoiseKey := c.serverNoiseKey
@@ -494,6 +491,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if !persist.OldPrivateNodeKey.IsZero() {
 		oldNodeKey = persist.OldPrivateNodeKey.Public()
 	}
+	if persist.NetworkLockKey.IsZero() {
+		persist.NetworkLockKey = key.NewNLPrivate()
+	}
+	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
@@ -502,19 +503,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 
-	var nlPub key.NLPublic
 	var nodeKeySignature tkatype.MarshaledSignature
-	if c.getNLPrivateKey != nil {
-		priv, err := c.getNLPrivateKey()
-		if err != nil {
-			return false, "", nil, fmt.Errorf("get nl key: %v", err)
-		}
-		nlPub = priv.Public()
-
-		if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
-			if nodeKeySignature, err = resignNKS(priv, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
-				c.logf("Failed re-signing node-key signature: %v", err)
-			}
+	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
+		if nodeKeySignature, err = resignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
+			c.logf("Failed re-signing node-key signature: %v", err)
 		}
 	}
 
@@ -633,6 +625,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if resp.Login.LoginName != "" {
 		persist.LoginName = resp.Login.LoginName
 	}
+	persist.UserProfile = tailcfg.UserProfile{
+		ID:            resp.User.ID,
+		DisplayName:   resp.Login.DisplayName,
+		ProfilePicURL: resp.Login.ProfilePicURL,
+		LoginName:     resp.Login.LoginName,
+	}
 
 	// TODO(crawshaw): RegisterResponse should be able to mechanically
 	// communicate some extra instructions from the server:
@@ -654,7 +652,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		// save it for the retry-with-URL
 		c.tryingNewKey = tryingNewKey
 	}
-	c.persist = persist
+	c.persist = persist.View()
 	c.mu.Unlock()
 
 	if err != nil {
@@ -817,7 +815,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		return errors.New("getMachinePrivKey returned zero key")
 	}
 
-	if persist.PrivateNodeKey.IsZero() {
+	if persist.PrivateNodeKey().IsZero() {
 		return errors.New("privateNodeKey is zero")
 	}
 	if backendLogID == "" {
@@ -865,9 +863,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	if health.RouterHealth() != nil {
 		extraDebugFlags = append(extraDebugFlags, "warn-router-unhealthy")
 	}
-	if health.NetworkCategoryHealth() != nil {
-		extraDebugFlags = append(extraDebugFlags, "warn-network-category-unhealthy")
-	}
+	extraDebugFlags = health.AppendWarnableDebugFlags(extraDebugFlags)
 	if hostinfo.DisabledEtcAptSource() {
 		extraDebugFlags = append(extraDebugFlags, "warn-etc-apt-source-disabled")
 	}
@@ -961,7 +957,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		}
 	}()
 
-	sess := newMapSession(persist.PrivateNodeKey)
+	sess := newMapSession(persist.PrivateNodeKey())
 	sess.logf = c.logf
 	sess.vlogf = vlogf
 	sess.machinePubKey = machinePubKey
@@ -1014,6 +1010,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			} else {
 				c.logf("netmap: control says to open URL %v; no popBrowser func", u)
 			}
+		}
+		if resp.ClientVersion != nil && c.onClientVersion != nil {
+			c.onClientVersion(resp.ClientVersion)
 		}
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())

@@ -705,3 +705,19 @@ func (a *Authority) KeyTrusted(keyID tkatype.KeyID) bool {
 	_, err := a.state.GetKey(keyID)
 	return err == nil
 }
+
+// Keys returns the set of keys trusted by the tailnet key authority.
+func (a *Authority) Keys() []Key {
+	out := make([]Key, len(a.state.Keys))
+	for i := range a.state.Keys {
+		out[i] = a.state.Keys[i].Clone()
+	}
+	return out
+}
+
+// StateIDs returns the stateIDs for this tailnet key authority. These
+// are values that are fixed for the lifetime of the authority: see
+// comments on the relevant fields in state.go.
+func (a *Authority) StateIDs() (uint64, uint64) {
+	return a.state.StateID1, a.state.StateID2
+}

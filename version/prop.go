@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 
 	"tailscale.com/syncs"
 )
@@ -31,8 +33,9 @@ func OS() string {
 }
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
-// process. It is true for the Mac App Store and macsys (System
-// Extension) version on macOS, and false for tailscaled-on-macOS.
+// process (either the app or the extension). It is true for the Mac App Store
+// and macsys (System Extension) version on macOS, and false for
+// tailscaled-on-macOS.
 func IsSandboxedMacOS() bool {
 	if runtime.GOOS != "darwin" {
 		return false
@@ -41,7 +44,7 @@ func IsSandboxedMacOS() bool {
 		return true
 	}
 	exe, _ := os.Executable()
-	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale")
+	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
 }
 
 var isMacSysExt syncs.AtomicValue[bool]
@@ -72,4 +75,32 @@ func IsWindowsGUI() bool {
 	exe, _ := os.Executable()
 	exe = filepath.Base(exe)
 	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+}
+
+var (
+	isUnstableOnce  sync.Once
+	isUnstableBuild bool
+)
+
+// IsUnstableBuild reports whether this is an unstable build.
+// That is, whether its minor version number is odd.
+func IsUnstableBuild() bool {
+	isUnstableOnce.Do(initUnstable)
+	return isUnstableBuild
+}
+
+func initUnstable() {
+	_, rest, ok := strings.Cut(Short, ".")
+	if !ok {
+		return
+	}
+	minorStr, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return
+	}
+	minor, err := strconv.Atoi(minorStr)
+	if err != nil {
+		return
+	}
+	isUnstableBuild = minor%2 == 1
 }

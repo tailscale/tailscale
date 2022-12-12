@@ -350,6 +350,18 @@ func TestResolveLocal(t *testing.T) {
 		{"x_via_dec", dnsname.FQDN("1.0.0.10.via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.0.0.10"), dns.RCodeSuccess},
 		{"via_invalid", dnsname.FQDN("via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 		{"via_invalid_2", dnsname.FQDN("2.3.4.5.via-."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+
+		// Hyphenated 4via6 format.
+		// Without any suffix domain:
+		{"via_form3_hex_bare", dnsname.FQDN("1-2-3-4-via-0xff."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:ff:1.2.3.4"), dns.RCodeSuccess},
+		{"via_form3_dec_bare", dnsname.FQDN("1-2-3-4-via-1."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
+		// With a Tailscale domain:
+		{"via_form3_dec_ts.net", dnsname.FQDN("1-2-3-4-via-1.foo.ts.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
+		{"via_form3_dec_tailscale.net", dnsname.FQDN("1-2-3-4-via-1.foo.tailscale.net."), dns.TypeAAAA, netip.MustParseAddr("fd7a:115c:a1e0:b1a:0:1:1.2.3.4"), dns.RCodeSuccess},
+		// Non-Tailscale domain suffixes aren't allowed for now: (the allowed
+		// suffixes are currently hard-coded and not plumbed via the netmap)
+		{"via_form3_dec_example.com", dnsname.FQDN("1-2-3-4-via-1.example.com."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
+		{"via_form3_dec_examplets.net", dnsname.FQDN("1-2-3-4-via-1.examplets.net."), dns.TypeAAAA, netip.Addr{}, dns.RCodeRefused},
 	}
 
 	for _, tt := range tests {

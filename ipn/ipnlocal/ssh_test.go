@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"testing"
 
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/must"
 )
@@ -49,7 +50,8 @@ type fakeSSHServer struct {
 }
 
 func TestGetSSHUsernames(t *testing.T) {
-	b := new(LocalBackend)
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	b := &LocalBackend{pm: pm, store: pm.Store()}
 	b.sshServer = fakeSSHServer{}
 	res, err := b.getSSHUsernames(new(tailcfg.C2NSSHUsernamesRequest))
 	if err != nil {

@@ -159,6 +159,15 @@ func (im *macOSImpl) addProcesses() error {
 		}
 		return nil
 	}
+	defer func() {
+		ps, err := lsofCmd.Process.Wait()
+		if err != nil || ps.ExitCode() != 0 {
+			log.Printf("portlist: can't run lsof in Mac sandbox; omitting process names from service list. Error: %v, exit code %d", err, ps.ExitCode())
+			lsofFailed.Store(true)
+		}
+	}()
+	defer lsofCmd.Process.Kill()
+
 	im.br.Reset(outPipe)
 
 	var cmd, proto string

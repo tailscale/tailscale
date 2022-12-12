@@ -56,6 +56,7 @@ func TestPrefsEqual(t *testing.T) {
 		"NoSNAT",
 		"NetfilterMode",
 		"OperatorUser",
+		"ProfileName",
 		"Persist",
 	}
 	if have := fieldsOf(reflect.TypeOf(Prefs{})); !reflect.DeepEqual(have, prefsHandles) {
@@ -271,6 +272,16 @@ func TestPrefsEqual(t *testing.T) {
 			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
 			true,
+		},
+		{
+			&Prefs{ProfileName: "work"},
+			&Prefs{ProfileName: "work"},
+			true,
+		},
+		{
+			&Prefs{ProfileName: "work"},
+			&Prefs{ProfileName: "home"},
+			false,
 		},
 	}
 	for i, tt := range tests {

@@ -85,6 +85,17 @@ func (k Key) ID() tkatype.KeyID {
 	}
 }
 
+// Ed25519 returns the ed25519 public key encoded by Key. An error is
+// returned for keys which do not represent ed25519 public keys.
+func (k Key) Ed25519() (ed25519.PublicKey, error) {
+	switch k.Kind {
+	case Key25519:
+		return ed25519.PublicKey(k.Public), nil
+	default:
+		return nil, fmt.Errorf("key is of type %v, not ed25519", k.Kind)
+	}
+}
+
 const maxMetaBytes = 512
 
 func (k Key) StaticValidate() error {

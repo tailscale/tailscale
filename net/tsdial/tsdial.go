@@ -341,7 +341,7 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 }
 
 // getPeerDialer returns the *net.Dialer to use to dial peers to use
-// peer API.
+// PeerAPI.
 //
 // This is not used in netstack mode.
 //

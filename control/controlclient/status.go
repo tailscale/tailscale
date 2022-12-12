@@ -75,7 +75,7 @@ type Status struct {
 	// use them. Please don't use these fields.
 	// TODO(apenwarr): Unexport or remove these.
 	State   State
-	Persist *persist.Persist // locally persisted configuration
+	Persist *persist.PersistView // locally persisted configuration
 }
 
 // Equal reports whether s and s2 are equal.

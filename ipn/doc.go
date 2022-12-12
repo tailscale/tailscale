@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:generate go run tailscale.com/cmd/viewer -type=Prefs,ServeConfig,TCPPortHandler,HTTPHandler,WebServerConfig
+
 // Package ipn implements the interactions between the Tailscale cloud
 // control plane and the local network stack.
 //

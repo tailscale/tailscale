@@ -33,12 +33,13 @@ import (
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
@@ -46,6 +47,8 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
+	"tailscale.com/smallzstd"
+	"tailscale.com/syncs"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
@@ -107,6 +110,9 @@ func defaultPort() uint16 {
 		if p, err := strconv.ParseUint(s, 10, 16); err == nil {
 			return uint16(p)
 		}
+	}
+	if envknob.GOOS() == "windows" {
+		return 41641
 	}
 	return 0
 }
@@ -274,13 +280,22 @@ func statePathOrDefault() string {
 	return ""
 }
 
-func ipnServerOpts() (o ipnserver.Options) {
-	// Allow changing the OS-specific IPN behavior for tests
-	// so we can e.g. test Windows-specific behaviors on Linux.
-	goos := envknob.String("TS_DEBUG_TAILSCALED_IPN_GOOS")
-	if goos == "" {
-		goos = runtime.GOOS
-	}
+// serverOptions is the configuration of the Tailscale node agent.
+type serverOptions struct {
+	// VarRoot is the Tailscale daemon's private writable
+	// directory (usually "/var/lib/tailscale" on Linux) that
+	// contains the "tailscaled.state" file, the "certs" directory
+	// for TLS certs, and the "files" directory for incoming
+	// Taildrop files before they're moved to a user directory.
+	// If empty, Taildrop and TLS certs don't function.
+	VarRoot string
+
+	// LoginFlags specifies the LoginFlags to pass to the client.
+	LoginFlags controlclient.LoginFlags
+}
+
+func ipnServerOpts() (o serverOptions) {
+	goos := envknob.GOOS()
 
 	o.VarRoot = args.statedir
 
@@ -303,21 +318,19 @@ func ipnServerOpts() (o ipnserver.Options) {
 		// TODO(bradfitz): if we start using browser LocalStorage
 		// or something, then rethink this.
 		o.LoginFlags = controlclient.LoginEphemeral
-		fallthrough
-	default:
-		o.SurviveDisconnects = true
-		o.AutostartStateKey = ipn.GlobalDaemonStateKey
 	case "windows":
 		// Not those.
 	}
 	return o
 }
 
-func run() error {
-	var err error
+var logPol *logpolicy.Policy
+var debugMux *http.ServeMux
 
+func run() error {
 	pol := logpolicy.New(logtail.CollectionNode)
 	pol.SetVerbosityLevel(args.verbose)
+	logPol = pol
 	defer func() {
 		// Finish uploading logs after closing everything else.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -361,23 +374,97 @@ func run() error {
 		log.Printf("error in synology migration: %v", err)
 	}
 
-	var debugMux *http.ServeMux
 	if args.debug != "" {
 		debugMux = newDebugMux()
 	}
 
+	logid := pol.PublicID.String()
+	return startIPNServer(context.Background(), logf, logid)
+}
+
+func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
+	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
+	if err != nil {
+		return fmt.Errorf("safesocket.Listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Exit gracefully by cancelling the ipnserver context in most common cases:
+	// interrupted from the TTY or killed by a service manager.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+	// SIGPIPE sometimes gets generated when CLIs disconnect from
+	// tailscaled. The default action is to terminate the process, we
+	// want to keep running.
+	signal.Ignore(syscall.SIGPIPE)
+	go func() {
+		select {
+		case s := <-interrupt:
+			logf("tailscaled got signal %v; shutting down", s)
+			cancel()
+		case <-ctx.Done():
+			// continue
+		}
+	}()
+
+	srv := ipnserver.New(logf, logid)
+	if debugMux != nil {
+		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
+	}
+	var lbErr syncs.AtomicValue[error]
+
+	go func() {
+		t0 := time.Now()
+		if s, ok := envknob.LookupInt("TS_DEBUG_BACKEND_DELAY_SEC"); ok {
+			d := time.Duration(s) * time.Second
+			logf("sleeping %v before starting backend...", d)
+			select {
+			case <-time.After(d):
+				logf("slept %v; starting backend...", d)
+			case <-ctx.Done():
+				return
+			}
+		}
+		lb, err := getLocalBackend(ctx, logf, logid)
+		if err == nil {
+			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
+			srv.SetLocalBackend(lb)
+			return
+		}
+		lbErr.Store(err) // before the following cancel
+		cancel()         // make srv.Run below complete
+	}()
+
+	err = srv.Run(ctx, ln)
+
+	if err != nil && lbErr.Load() != nil {
+		return fmt.Errorf("getLocalBackend error: %v", lbErr.Load())
+	}
+
+	// Cancelation is not an error: it is the only way to stop ipnserver.
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("ipnserver.Run: %w", err)
+	}
+
+	return nil
+}
+
+func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ipnlocal.LocalBackend, retErr error) {
 	linkMon, err := monitor.New(logf)
 	if err != nil {
-		return fmt.Errorf("monitor.New: %w", err)
+		return nil, fmt.Errorf("monitor.New: %w", err)
 	}
-	pol.Logtail.SetLinkMonitor(linkMon)
+	if logPol != nil {
+		logPol.Logtail.SetLinkMonitor(linkMon)
+	}
 
 	socksListener, httpProxyListener := mustStartProxyListeners(args.socksAddr, args.httpProxyAddr)
 
 	dialer := &tsdial.Dialer{Logf: logf} // mutated below (before used)
-	e, useNetstack, err := createEngine(logf, linkMon, dialer)
+	e, onlyNetstack, err := createEngine(logf, linkMon, dialer)
 	if err != nil {
-		return fmt.Errorf("createEngine: %w", err)
+		return nil, fmt.Errorf("createEngine: %w", err)
 	}
 	if _, ok := e.(wgengine.ResolvingEngine).GetResolver(); !ok {
 		panic("internal error: exit node resolver not wired up")
@@ -393,12 +480,12 @@ func run() error {
 
 	ns, err := newNetstack(logf, dialer, e)
 	if err != nil {
-		return fmt.Errorf("newNetstack: %w", err)
+		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
-	ns.ProcessLocalIPs = useNetstack
-	ns.ProcessSubnets = useNetstack || shouldWrapNetstack()
+	ns.ProcessLocalIPs = onlyNetstack
+	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
-	if useNetstack {
+	if onlyNetstack {
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 			_, ok := e.PeerForIP(ip)
 			return ok
@@ -427,69 +514,47 @@ func run() error {
 
 	e = wgengine.NewWatchdog(e)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	// Exit gracefully by cancelling the ipnserver context in most common cases:
-	// interrupted from the TTY or killed by a service manager.
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-	// SIGPIPE sometimes gets generated when CLIs disconnect from
-	// tailscaled. The default action is to terminate the process, we
-	// want to keep running.
-	signal.Ignore(syscall.SIGPIPE)
-	go func() {
-		select {
-		case s := <-interrupt:
-			logf("tailscaled got signal %v; shutting down", s)
-			cancel()
-		case <-ctx.Done():
-			// continue
-		}
-	}()
-
 	opts := ipnServerOpts()
 
 	store, err := store.New(logf, statePathOrDefault())
 	if err != nil {
-		return fmt.Errorf("store.New: %w", err)
+		return nil, fmt.Errorf("store.New: %w", err)
 	}
-	srv, err := ipnserver.New(logf, pol.PublicID.String(), store, e, dialer, nil, opts)
+
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, e, opts.LoginFlags)
 	if err != nil {
-		return fmt.Errorf("ipnserver.New: %w", err)
+		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
-	ns.SetLocalBackend(srv.LocalBackend())
+	lb.SetVarRoot(opts.VarRoot)
+	if root := lb.TailscaleVarRoot(); root != "" {
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
+	}
+	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
+		return smallzstd.NewDecoder(nil)
+	})
+	configureTaildrop(logf, lb)
+	ns.SetLocalBackend(lb)
 	if err := ns.Start(); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
-
-	if debugMux != nil {
-		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
-	}
-
-	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
-	if err != nil {
-		return fmt.Errorf("safesocket.Listen: %v", err)
-	}
-	defer dialer.Close()
-
-	err = srv.Run(ctx, ln)
-	// Cancelation is not an error: it is the only way to stop ipnserver.
-	if err != nil && err != context.Canceled {
-		return fmt.Errorf("ipnserver.Run: %w", err)
-	}
-
-	return nil
+	return lb, nil
 }
 
-func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, useNetstack bool, err error) {
+// createEngine tries to the wgengine.Engine based on the order of tunnels
+// specified in the command line flags.
+//
+// onlyNetstack is true if the user has explicitly requested that we use netstack
+// for all networking.
+func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer) (e wgengine.Engine, onlyNetstack bool, err error) {
 	if args.tunname == "" {
 		return nil, false, errors.New("no --tun value specified")
 	}
 	var errs []error
 	for _, name := range strings.Split(args.tunname, ",") {
 		logf("wgengine.NewUserspaceEngine(tun %q) ...", name)
-		e, useNetstack, err = tryEngine(logf, linkMon, dialer, name)
+		e, onlyNetstack, err = tryEngine(logf, linkMon, dialer, name)
 		if err == nil {
-			return e, useNetstack, nil
+			return e, onlyNetstack, nil
 		}
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", name, err)
 		errs = append(errs, err)
@@ -497,8 +562,12 @@ func createEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer)
 	return nil, false, multierr.New(errs...)
 }
 
-func shouldWrapNetstack() bool {
-	if v, ok := envknob.LookupBool("TS_DEBUG_WRAP_NETSTACK"); ok {
+// handleSubnetsInNetstack reports whether netstack should handle subnet routers
+// as opposed to the OS. We do this if the OS doesn't support subnet routers
+// (e.g. Windows) or if the user has explicitly requested it (e.g.
+// --tun=userspace-networking).
+func handleSubnetsInNetstack() bool {
+	if v, ok := envknob.LookupBool("TS_DEBUG_NETSTACK_SUBNETS"); ok {
 		return v
 	}
 	if distro.Get() == distro.Synology {
@@ -513,15 +582,17 @@ func shouldWrapNetstack() bool {
 	return false
 }
 
-func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, useNetstack bool, err error) {
+var tstunNew = tstun.New
+
+func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, name string) (e wgengine.Engine, onlyNetstack bool, err error) {
 	conf := wgengine.Config{
 		ListenPort:  args.port,
 		LinkMonitor: linkMon,
 		Dialer:      dialer,
 	}
 
-	useNetstack = name == "userspace-networking"
-	netns.SetEnabled(!useNetstack)
+	onlyNetstack = name == "userspace-networking"
+	netns.SetEnabled(!onlyNetstack)
 
 	if args.birdSocketPath != "" && createBIRDClient != nil {
 		log.Printf("Connecting to BIRD at %s ...", args.birdSocketPath)
@@ -530,7 +601,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			return nil, false, fmt.Errorf("createBIRDClient: %w", err)
 		}
 	}
-	if useNetstack {
+	if onlyNetstack {
 		if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 			// On Synology in netstack mode, still init a DNS
 			// manager (directManager) to avoid the health check
@@ -544,7 +615,7 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 			}
 		}
 	} else {
-		dev, devName, err := tstun.New(logf, name)
+		dev, devName, err := tstunNew(logf, name)
 		if err != nil {
 			tstun.Diagnose(logf, name, err)
 			return nil, false, fmt.Errorf("tstun.New(%q): %w", name, err)
@@ -569,15 +640,15 @@ func tryEngine(logf logger.Logf, linkMon *monitor.Mon, dialer *tsdial.Dialer, na
 		}
 		conf.DNS = d
 		conf.Router = r
-		if shouldWrapNetstack() {
+		if handleSubnetsInNetstack() {
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 		}
 	}
 	e, err = wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
-		return nil, useNetstack, err
+		return nil, onlyNetstack, err
 	}
-	return e, useNetstack, nil
+	return e, onlyNetstack, nil
 }
 
 func newDebugMux() *http.ServeMux {

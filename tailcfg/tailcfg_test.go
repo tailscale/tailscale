@@ -48,6 +48,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShieldsUp",
 		"ShareeNode",
 		"NoLogsNoSupport",
+		"WireIngress",
 		"GoArch",
 		"GoVersion",
 		"RoutableIPs",

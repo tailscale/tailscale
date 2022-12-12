@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/toqueteos/webbrowser"
+	"golang.org/x/net/idna"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
@@ -128,18 +130,21 @@ func runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// print health check information prior to checking LocalBackend state as
-	// it may provide an explanation to the user if we choose to exit early
-	if len(st.Health) > 0 {
+	printHealth := func() {
 		printf("# Health check:\n")
 		for _, m := range st.Health {
 			printf("#     - %s\n", m)
 		}
-		outln()
 	}
 
 	description, ok := isRunningOrStarting(st)
 	if !ok {
+		// print health check information if we're in a weird state, as it might
+		// provide context about why we're in that weird state.
+		if len(st.Health) > 0 && (st.BackendState == ipn.Starting.String() || st.BackendState == ipn.NoState.String()) {
+			printHealth()
+			outln()
+		}
 		outln(description)
 		os.Exit(1)
 	}
@@ -214,7 +219,46 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 	}
 	Stdout.Write(buf.Bytes())
+	if len(st.Health) > 0 {
+		outln()
+		printHealth()
+	}
+	printFunnelStatus(ctx)
 	return nil
+}
+
+// printFunnelStatus prints the status of the funnel, if it's running.
+// It prints nothing if the funnel is not running.
+func printFunnelStatus(ctx context.Context) {
+	sc, err := localClient.GetServeConfig(ctx)
+	if err != nil {
+		outln()
+		printf("# Funnel:\n")
+		printf("#     - Unable to get Funnel status: %v\n", err)
+		return
+	}
+	if !sc.IsFunnelOn() {
+		return
+	}
+	outln()
+	printf("# Funnel on:\n")
+	for hp, on := range sc.AllowFunnel {
+		if !on { // if present, should be on
+			continue
+		}
+		sni, portStr, _ := net.SplitHostPort(string(hp))
+		p, _ := strconv.ParseUint(portStr, 10, 16)
+		isTCP := sc.IsTCPForwardingOnPort(uint16(p))
+		url := "https://"
+		if isTCP {
+			url = "tcp://"
+		}
+		url += sni
+		if isTCP || p != 443 {
+			url += ":" + portStr
+		}
+		printf("#     - %s\n", url)
+	}
 }
 
 // isRunningOrStarting reports whether st is in state Running or Starting.
@@ -241,6 +285,11 @@ func isRunningOrStarting(st *ipnstate.Status) (description string, ok bool) {
 func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 	baseName := dnsname.TrimSuffix(ps.DNSName, st.MagicDNSSuffix)
 	if baseName != "" {
+		if strings.HasPrefix(baseName, "xn-") {
+			if u, err := idna.ToUnicode(baseName); err == nil {
+				return fmt.Sprintf("%s (%s)", baseName, u)
+			}
+		}
 		return baseName
 	}
 	return fmt.Sprintf("(%q)", dnsname.SanitizeHostname(ps.HostName))

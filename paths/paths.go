@@ -23,24 +23,22 @@ var AppSharedDir syncs.AtomicValue[string]
 // or the empty string if there's no reasonable default.
 func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "windows" {
-		return ""
+		return `\\.\pipe\ProtectedPrefix\Administrators\Tailscale\tailscaled`
 	}
 	if runtime.GOOS == "darwin" {
 		return "/var/run/tailscaled.socket"
 	}
 	switch distro.Get() {
 	case distro.Synology:
-		// TODO(maisem): be smarter about this. We can parse /etc/VERSION.
-		const dsm6Sock = "/var/packages/Tailscale/etc/tailscaled.sock"
-		const dsm7Sock = "/var/packages/Tailscale/var/tailscaled.sock"
-		if fi, err := os.Stat(dsm6Sock); err == nil && !fi.IsDir() {
-			return dsm6Sock
+		if distro.DSMVersion() == 6 {
+			return "/var/packages/Tailscale/etc/tailscaled.sock"
 		}
-		if fi, err := os.Stat(dsm7Sock); err == nil && !fi.IsDir() {
-			return dsm7Sock
-		}
+		// DSM 7 (and higher? or failure to detect.)
+		return "/var/packages/Tailscale/var/tailscaled.sock"
 	case distro.Gokrazy:
 		return "/perm/tailscaled/tailscaled.sock"
+	case distro.QNAP:
+		return "/tmp/tailscale/tailscaled.sock"
 	}
 	if fi, err := os.Stat("/var/run"); err == nil && fi.IsDir() {
 		return "/var/run/tailscale/tailscaled.sock"

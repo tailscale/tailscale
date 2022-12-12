@@ -16,8 +16,10 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"github.com/google/go-cmp/cmp"
+	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tka"
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -36,7 +38,7 @@ var geese = []string{"linux", "darwin", "windows", "freebsd"}
 func TestUpdateMaskedPrefsFromUpFlag(t *testing.T) {
 	for _, goos := range geese {
 		var upArgs upArgsT
-		fs := newUpFlagSet(goos, &upArgs)
+		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			mp := new(ipn.MaskedPrefs)
 			updateMaskedPrefsFromUpOrSetFlag(mp, f.Name)
@@ -478,6 +480,19 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 			distro: "", // not Synology
 			want:   accidentalUpPrefix + " --hostname=foo --accept-routes",
 		},
+		{
+			name:  "profile_name_ignored_in_up",
+			flags: []string{"--hostname=foo"},
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				CorpDNS:          true,
+				AllowSingleHosts: true,
+				NetfilterMode:    preftype.NetfilterOn,
+				ProfileName:      "foo",
+			},
+			goos: "linux",
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -486,7 +501,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 				goos = tt.goos
 			}
 			var upArgs upArgsT
-			flagSet := newUpFlagSet(goos, &upArgs)
+			flagSet := newUpFlagSet(goos, &upArgs, "up")
 			flags := CleanUpArgs(tt.flags)
 			flagSet.Parse(flags)
 			newPrefs, err := prefsFromUpArgs(upArgs, t.Logf, new(ipnstate.Status), goos)
@@ -513,7 +528,7 @@ func TestCheckForAccidentalSettingReverts(t *testing.T) {
 }
 
 func upArgsFromOSArgs(goos string, flagArgs ...string) (args upArgsT) {
-	fs := newUpFlagSet(goos, &args)
+	fs := newUpFlagSet(goos, &args, "up")
 	fs.Parse(flagArgs) // populates args
 	return
 }
@@ -773,7 +788,7 @@ func TestPrefFlagMapping(t *testing.T) {
 func TestFlagAppliesToOS(t *testing.T) {
 	for _, goos := range geese {
 		var upArgs upArgsT
-		fs := newUpFlagSet(goos, &upArgs)
+		fs := newUpFlagSet(goos, &upArgs, "up")
 		fs.VisitAll(func(f *flag.Flag) {
 			if !flagAppliesToOS(f.Name, goos) {
 				t.Errorf("flagAppliesToOS(%q, %q) = false but found in %s set", f.Name, goos, goos)
@@ -1068,7 +1083,7 @@ func TestUpdatePrefs(t *testing.T) {
 			if tt.env.goos == "" {
 				tt.env.goos = "linux"
 			}
-			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs)
+			tt.env.flagSet = newUpFlagSet(tt.env.goos, &tt.env.upArgs, "up")
 			flags := CleanUpArgs(tt.flags)
 			if err := tt.env.flagSet.Parse(flags); err != nil {
 				t.Fatal(err)
@@ -1141,5 +1156,83 @@ func TestCleanUpArgs(t *testing.T) {
 	for _, tt := range tests {
 		got := CleanUpArgs(tt.in)
 		c.Assert(got, qt.DeepEquals, tt.want)
+	}
+}
+
+func TestUpWorthWarning(t *testing.T) {
+	if !upWorthyWarning(healthmsg.WarnAcceptRoutesOff) {
+		t.Errorf("WarnAcceptRoutesOff of %q should be worth warning", healthmsg.WarnAcceptRoutesOff)
+	}
+	if !upWorthyWarning(healthmsg.TailscaleSSHOnBut + "some problem") {
+		t.Errorf("want true for SSH problems")
+	}
+	if upWorthyWarning("not in map poll") {
+		t.Errorf("want false for other misc errors")
+	}
+}
+
+func TestParseNLArgs(t *testing.T) {
+	tcs := []struct {
+		name              string
+		input             []string
+		parseKeys         bool
+		parseDisablements bool
+
+		wantErr          error
+		wantKeys         []tka.Key
+		wantDisablements [][]byte
+	}{
+		{
+			name:              "empty",
+			input:             nil,
+			parseKeys:         true,
+			parseDisablements: true,
+		},
+		{
+			name:      "key no votes",
+			input:     []string{"nlpub:" + strings.Repeat("00", 32)},
+			parseKeys: true,
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 1, Public: bytes.Repeat([]byte{0}, 32)}},
+		},
+		{
+			name:      "key with votes",
+			input:     []string{"nlpub:" + strings.Repeat("01", 32) + "?5"},
+			parseKeys: true,
+			wantKeys:  []tka.Key{{Kind: tka.Key25519, Votes: 5, Public: bytes.Repeat([]byte{1}, 32)}},
+		},
+		{
+			name:              "disablements",
+			input:             []string{"disablement:" + strings.Repeat("02", 32), "disablement-secret:" + strings.Repeat("03", 32)},
+			parseDisablements: true,
+			wantDisablements:  [][]byte{bytes.Repeat([]byte{2}, 32), bytes.Repeat([]byte{3}, 32)},
+		},
+		{
+			name:      "disablements not allowed",
+			input:     []string{"disablement:" + strings.Repeat("02", 32)},
+			parseKeys: true,
+			wantErr:   fmt.Errorf("parsing key 1: key hex string doesn't have expected type prefix nlpub:"),
+		},
+		{
+			name:              "keys not allowed",
+			input:             []string{"nlpub:" + strings.Repeat("02", 32)},
+			parseDisablements: true,
+			wantErr:           fmt.Errorf("parsing argument 1: expected value with \"disablement:\" or \"disablement-secret:\" prefix, got %q", "nlpub:0202020202020202020202020202020202020202020202020202020202020202"),
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, disablements, err := parseNLArgs(tc.input, tc.parseKeys, tc.parseDisablements)
+			if !reflect.DeepEqual(err, tc.wantErr) {
+				t.Fatalf("parseNLArgs(%v).err = %v, want %v", tc.input, err, tc.wantErr)
+			}
+
+			if !reflect.DeepEqual(keys, tc.wantKeys) {
+				t.Errorf("keys = %v, want %v", keys, tc.wantKeys)
+			}
+			if !reflect.DeepEqual(disablements, tc.wantDisablements) {
+				t.Errorf("disablements = %v, want %v", disablements, tc.wantDisablements)
+			}
+		})
 	}
 }

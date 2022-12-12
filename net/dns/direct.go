@@ -18,8 +18,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
+	"tailscale.com/health"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
@@ -130,20 +132,29 @@ type directManager struct {
 	// where a reader can see an empty or partial /etc/resolv.conf),
 	// but is better than having non-functioning DNS.
 	renameBroken bool
+
+	ctx      context.Context    // valid until Close
+	ctxClose context.CancelFunc // closes ctx
+
+	mu               sync.Mutex
+	wantResolvConf   []byte // if non-nil, what we expect /etc/resolv.conf to contain
+	lastWarnContents []byte // last resolv.conf contents that we warned about
 }
 
 func newDirectManager(logf logger.Logf) *directManager {
-	return &directManager{
-		logf: logf,
-		fs:   directFS{},
-	}
+	return newDirectManagerOnFS(logf, directFS{})
 }
 
 func newDirectManagerOnFS(logf logger.Logf, fs wholeFileFS) *directManager {
-	return &directManager{
-		logf: logf,
-		fs:   fs,
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &directManager{
+		logf:     logf,
+		fs:       fs,
+		ctx:      ctx,
+		ctxClose: cancel,
 	}
+	go m.runFileWatcher()
+	return m
 }
 
 func (m *directManager) readResolvFile(path string) (OSConfig, error) {
@@ -272,6 +283,63 @@ func (m *directManager) rename(old, new string) error {
 	return nil
 }
 
+// setWant sets the expected contents of /etc/resolv.conf, if any.
+//
+// A value of nil means no particular value is expected.
+//
+// m takes ownership of want.
+func (m *directManager) setWant(want []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wantResolvConf = want
+}
+
+var warnTrample = health.NewWarnable()
+
+// checkForFileTrample checks whether /etc/resolv.conf has been trampled
+// by another program on the system. (e.g. a DHCP client)
+func (m *directManager) checkForFileTrample() {
+	m.mu.Lock()
+	want := m.wantResolvConf
+	lastWarn := m.lastWarnContents
+	m.mu.Unlock()
+
+	if want == nil {
+		return
+	}
+
+	cur, err := m.fs.ReadFile(resolvConf)
+	if err != nil {
+		m.logf("trample: read error: %v", err)
+		return
+	}
+	if bytes.Equal(cur, want) {
+		warnTrample.Set(nil)
+		if lastWarn != nil {
+			m.mu.Lock()
+			m.lastWarnContents = nil
+			m.mu.Unlock()
+			m.logf("trample: resolv.conf again matches expected content")
+		}
+		return
+	}
+	if bytes.Equal(cur, lastWarn) {
+		// We already logged about this, so not worth doing it again.
+		return
+	}
+
+	m.mu.Lock()
+	m.lastWarnContents = cur
+	m.mu.Unlock()
+
+	show := cur
+	if len(show) > 1024 {
+		show = show[:1024]
+	}
+	m.logf("trample: resolv.conf changed from what we expected. did some other program interfere? current contents: %q", show)
+	warnTrample.Set(errors.New("Linux DNS config not ideal. /etc/resolv.conf overwritten. See https://tailscale.com/s/dns-fight"))
+}
+
 func (m *directManager) SetDNS(config OSConfig) (err error) {
 	defer func() {
 		if err != nil && errors.Is(err, fs.ErrPermission) && runtime.GOOS == "linux" &&
@@ -283,6 +351,7 @@ func (m *directManager) SetDNS(config OSConfig) (err error) {
 			err = nil
 		}
 	}()
+	m.setWant(nil) // reset our expectations before any work
 	var changed bool
 	if config.IsZero() {
 		changed, err = m.restoreBackup()
@@ -300,6 +369,11 @@ func (m *directManager) SetDNS(config OSConfig) (err error) {
 		if err := m.atomicWriteFile(m.fs, resolvConf, buf.Bytes(), 0644); err != nil {
 			return err
 		}
+
+		// Now that we've successfully written to the file, lock it in.
+		// If we see /etc/resolv.conf with different contents, we know somebody
+		// else trampled on it.
+		m.setWant(buf.Bytes())
 	}
 
 	// We might have taken over a configuration managed by resolved,

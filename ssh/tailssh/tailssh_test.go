@@ -507,7 +507,7 @@ func TestSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	lb, err := ipnlocal.NewLocalBackend(logf, "",
-		new(mem.Store),
+		new(mem.Store), "",
 		new(tsdial.Dialer),
 		eng, 0)
 	if err != nil {

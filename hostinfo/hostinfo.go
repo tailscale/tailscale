@@ -20,6 +20,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/lineread"
@@ -70,10 +71,8 @@ func condCall[T any](fn func() T) T {
 }
 
 var (
-	lazyInContainer = &lazyAtomicValue[opt.Bool]{f: ptrTo(inContainer)}
+	lazyInContainer = &lazyAtomicValue[opt.Bool]{f: ptr.To(inContainer)}
 )
-
-func ptrTo[T any](v T) *T { return &v }
 
 type lazyAtomicValue[T any] struct {
 	// f is a pointer to a fill function. If it's nil or points

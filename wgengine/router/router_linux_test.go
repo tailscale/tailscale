@@ -11,15 +11,17 @@ import (
 	"net/netip"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/tailscale/wireguard-go/tun"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/exp/slices"
-	"golang.zx2c4.com/wireguard/tun"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/monitor"
@@ -341,7 +343,7 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 			t.Fatalf("failed to set router config: %v", err)
 		}
 		got := fake.String()
-		want := strings.TrimSpace(states[i].want)
+		want := adjustFwmask(t, strings.TrimSpace(states[i].want))
 		if diff := cmp.Diff(got, want); diff != "" {
 			t.Fatalf("unexpected OS state (-got+want):\n%s", diff)
 		}
@@ -921,4 +923,24 @@ func TestCIDRDiff(t *testing.T) {
 			}
 		}
 	}
+}
+
+var (
+	fwmaskSupported     bool
+	fwmaskSupportedOnce sync.Once
+	fwmaskAdjustRe      = regexp.MustCompile(`(?m)(fwmark 0x[0-9a-f]+)/0x[0-9a-f]+`)
+)
+
+// adjustFwmask removes the "/0xmask" string from fwmask stanzas if the
+// installed 'ip' binary does not support that format.
+func adjustFwmask(t *testing.T, s string) string {
+	t.Helper()
+	fwmaskSupportedOnce.Do(func() {
+		fwmaskSupported, _ = ipCmdSupportsFwmask()
+	})
+	if fwmaskSupported {
+		return s
+	}
+
+	return fwmaskAdjustRe.ReplaceAllString(s, "$1")
 }

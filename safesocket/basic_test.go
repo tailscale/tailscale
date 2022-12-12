@@ -7,6 +7,7 @@ package safesocket
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -14,7 +15,12 @@ func TestBasics(t *testing.T) {
 	// Make the socket in a temp dir rather than the cwd
 	// so that the test can be run from a mounted filesystem (#2367).
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "test")
+	var sock string
+	if runtime.GOOS != "windows" {
+		sock = filepath.Join(dir, "test")
+	} else {
+		sock = fmt.Sprintf(`\\.\pipe\tailscale-test`)
+	}
 
 	l, port, err := Listen(sock, 0)
 	if err != nil {
@@ -49,7 +55,7 @@ func TestBasics(t *testing.T) {
 
 	go func() {
 		s := DefaultConnectionStrategy(sock)
-		s.UsePort(port)
+		s.port = port
 		c, err := Connect(s)
 		if err != nil {
 			errs <- err

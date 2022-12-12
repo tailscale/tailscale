@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
-	"strings"
 	"testing"
 
 	"go4.org/mem"
 	"tailscale.com/types/key"
+	"tailscale.com/util/strs"
 )
 
 func TestMarshalAndParse(t *testing.T) {
@@ -72,10 +72,10 @@ func TestMarshalAndParse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			foo := []byte("foo")
 			got := string(tt.m.AppendMarshal(foo))
-			if !strings.HasPrefix(got, "foo") {
+			got, ok := strs.CutPrefix(got, "foo")
+			if !ok {
 				t.Fatalf("didn't start with foo: got %q", got)
 			}
-			got = strings.TrimPrefix(got, "foo")
 
 			gotHex := fmt.Sprintf("% x", got)
 			if gotHex != tt.want {

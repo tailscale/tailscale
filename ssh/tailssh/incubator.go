@@ -8,7 +8,7 @@
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
 // then launches the requested `--cmd`.
 
-//go:build linux || (darwin && !ios)
+//go:build linux || (darwin && !ios) || freebsd
 
 package tailssh
 

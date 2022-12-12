@@ -22,3 +22,9 @@ cmd/tailscaled/tailscaled
 # direnv config, this may be different for other people so it's probably safer
 # to make this nonspecific.
 .envrc
+
+# Ignore personal VS Code settings
+.vscode/
+
+# Ignore direnv nix-shell environment cache
+.direnv/

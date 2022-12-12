@@ -9,9 +9,9 @@ package wgcfg
 import (
 	"net/netip"
 
-	"tailscale.com/logtail"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logid"
 )
 
 // Clone makes a deep copy of Config.
@@ -41,8 +41,8 @@ var _ConfigCloneNeedsRegeneration = Config(struct {
 	DNS            []netip.Addr
 	Peers          []Peer
 	NetworkLogging struct {
-		NodeID   logtail.PrivateID
-		DomainID logtail.PrivateID
+		NodeID   logid.PrivateID
+		DomainID logid.PrivateID
 	}
 }{})
 

@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/syncs"
 )
 
 func defaultRoute() (d DefaultRouteDetails, err error) {
@@ -36,7 +37,17 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	return d, nil
 }
 
+// DefaultRouteInterfaceIndex returns the index of the network interface that
+// owns the default route. It returns the first IPv4 or IPv6 default route it
+// finds (it does not prefer one or the other).
 func DefaultRouteInterfaceIndex() (int, error) {
+	if f := defaultRouteInterfaceIndexFunc.Load(); f != nil {
+		if ifIndex := f(); ifIndex != 0 {
+			return ifIndex, nil
+		}
+		// Fallthrough if we can't use the alternate implementation.
+	}
+
 	// $ netstat -nr
 	// Routing tables
 	// Internet:
@@ -69,6 +80,16 @@ func DefaultRouteInterfaceIndex() (int, error) {
 		}
 	}
 	return 0, errors.New("no gateway index found")
+}
+
+var defaultRouteInterfaceIndexFunc syncs.AtomicValue[func() int]
+
+// SetDefaultRouteInterfaceIndexFunc allows an alternate implementation of
+// DefaultRouteInterfaceIndex to be provided. If none is set, or if f() returns a 0
+// (indicating an unknown interface index), then the default implementation (that parses
+// the routing table) will be used.
+func SetDefaultRouteInterfaceIndexFunc(f func() int) {
+	defaultRouteInterfaceIndexFunc.Store(f)
 }
 
 func init() {

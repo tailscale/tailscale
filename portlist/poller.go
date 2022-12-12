@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 )
 
@@ -84,12 +85,18 @@ func NewPoller() (*Poller, error) {
 
 	// Do one initial poll synchronously so we can return an error
 	// early.
-	var err error
-	p.prev, err = p.getList()
-	if err != nil {
+	if pl, err := p.getList(); err != nil {
 		return nil, err
+	} else {
+		p.setPrev(pl)
 	}
 	return p, nil
+}
+
+func (p *Poller) setPrev(pl List) {
+	// Make a copy, as the pass in pl slice aliases pl.scratch and we don't want
+	// that to except to the caller.
+	p.prev = slices.Clone(pl)
 }
 
 func (p *Poller) initOSField() {
@@ -131,11 +138,14 @@ func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
 //
 // Run may only be called once.
 func (p *Poller) Run(ctx context.Context) error {
-	defer close(p.runDone)
-	defer close(p.c)
-
 	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
+	return p.runWithTickChan(ctx, tick.C)
+}
+
+func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) error {
+	defer close(p.runDone)
+	defer close(p.c)
 
 	// Send out the pre-generated initial value.
 	if sent, err := p.send(ctx, p.prev); !sent {
@@ -144,7 +154,7 @@ func (p *Poller) Run(ctx context.Context) error {
 
 	for {
 		select {
-		case <-tick.C:
+		case <-tickChan:
 			pl, err := p.getList()
 			if err != nil {
 				return err
@@ -152,9 +162,7 @@ func (p *Poller) Run(ctx context.Context) error {
 			if pl.equal(p.prev) {
 				continue
 			}
-			// New value. Make a copy, as pl might alias pl.scratch
-			// and prev must not.
-			p.prev = append([]Port(nil), pl...)
+			p.setPrev(pl)
 			if sent, err := p.send(ctx, p.prev); !sent {
 				return err
 			}

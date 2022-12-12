@@ -13,27 +13,27 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
-	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
-	"tailscale.com/ipn"
 	"tailscale.com/paths"
-	"tailscale.com/safesocket"
 	"tailscale.com/version/distro"
 )
 
 var Stderr io.Writer = os.Stderr
 var Stdout io.Writer = os.Stdout
+
+func errf(format string, a ...any) {
+	fmt.Fprintf(Stderr, format, a...)
+}
 
 func printf(format string, a ...any) {
 	fmt.Fprintf(Stdout, format, a...)
@@ -158,7 +158,9 @@ change in the future.
 			upCmd,
 			downCmd,
 			setCmd,
+			loginCmd,
 			logoutCmd,
+			switchCmd,
 			netcheckCmd,
 			ipCmd,
 			statusCmd,
@@ -183,12 +185,17 @@ change in the future.
 		}
 	}
 	if envknob.UseWIPCode() {
-		rootCmd.Subcommands = append(rootCmd.Subcommands, idTokenCmd)
+		rootCmd.Subcommands = append(rootCmd.Subcommands,
+			idTokenCmd,
+		)
 	}
 
-	// Don't advertise the debug command, but it exists.
-	if strSliceContains(args, "debug") {
+	// Don't advertise these commands, but they're still explicitly available.
+	switch {
+	case slices.Contains(args, "debug"):
 		rootCmd.Subcommands = append(rootCmd.Subcommands, debugCmd)
+	case slices.Contains(args, "serve"):
+		rootCmd.Subcommands = append(rootCmd.Subcommands, serveCmd)
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
@@ -232,67 +239,6 @@ var Fatalf func(format string, a ...any)
 
 var rootArgs struct {
 	socket string
-}
-
-func connect(ctx context.Context) (net.Conn, *ipn.BackendClient, context.Context, context.CancelFunc) {
-	s := safesocket.DefaultConnectionStrategy(rootArgs.socket)
-	c, err := safesocket.Connect(s)
-	if err != nil {
-		if runtime.GOOS != "windows" && rootArgs.socket == "" {
-			fatalf("--socket cannot be empty")
-		}
-		fatalf("Failed to connect to tailscaled. (safesocket.Connect: %v)\n", err)
-	}
-	clientToServer := func(b []byte) {
-		ipn.WriteMsg(c, b)
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-
-	go func() {
-		interrupt := make(chan os.Signal, 1)
-		signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
-		select {
-		case <-interrupt:
-		case <-ctx.Done():
-			// Context canceled elsewhere.
-			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-			return
-		}
-		c.Close()
-		cancel()
-	}()
-
-	bc := ipn.NewBackendClient(log.Printf, clientToServer)
-	return c, bc, ctx, cancel
-}
-
-// pump receives backend messages on conn and pushes them into bc.
-func pump(ctx context.Context, bc *ipn.BackendClient, conn net.Conn) error {
-	defer conn.Close()
-	for ctx.Err() == nil {
-		msg, err := ipn.ReadMsg(conn)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return fmt.Errorf("%w (tailscaled stopped running?)", err)
-			}
-			return err
-		}
-		bc.GotNotifyMsg(msg)
-	}
-	return ctx.Err()
-}
-
-func strSliceContains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // usageFuncNoDefaultValues is like usageFunc but doesn't print default values.

@@ -6,7 +6,7 @@
 
 package tstun
 
-import "golang.zx2c4.com/wireguard/tun"
+import "github.com/tailscale/wireguard-go/tun"
 
 func setLinkAttrs(iface tun.Device) error {
 	return nil

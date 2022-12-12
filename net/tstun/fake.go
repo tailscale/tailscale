@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"github.com/tailscale/wireguard-go/tun"
 )
 
 type fakeTUN struct {
@@ -34,21 +34,22 @@ func (t *fakeTUN) Close() error {
 	return nil
 }
 
-func (t *fakeTUN) Read(out []byte, offset int) (int, error) {
+func (t *fakeTUN) Read(out [][]byte, sizes []int, offset int) (int, error) {
 	<-t.closechan
 	return 0, io.EOF
 }
 
-func (t *fakeTUN) Write(b []byte, n int) (int, error) {
+func (t *fakeTUN) Write(b [][]byte, n int) (int, error) {
 	select {
 	case <-t.closechan:
 		return 0, ErrClosed
 	default:
 	}
-	return len(b), nil
+	return 1, nil
 }
 
-func (t *fakeTUN) Flush() error           { return nil }
-func (t *fakeTUN) MTU() (int, error)      { return 1500, nil }
-func (t *fakeTUN) Name() (string, error)  { return "FakeTUN", nil }
-func (t *fakeTUN) Events() chan tun.Event { return t.evchan }
+func (t *fakeTUN) Flush() error             { return nil }
+func (t *fakeTUN) MTU() (int, error)        { return 1500, nil }
+func (t *fakeTUN) Name() (string, error)    { return "FakeTUN", nil }
+func (t *fakeTUN) Events() <-chan tun.Event { return t.evchan }
+func (t *fakeTUN) BatchSize() int           { return 1 }
