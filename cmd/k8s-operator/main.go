@@ -7,14 +7,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -182,7 +178,13 @@ const (
 type ServiceReconciler struct {
 	client.Client
 	defaultTags []string
-	tsClient    *tailscale.Client
+	tsClient    tsClient
+}
+
+type tsClient interface {
+	DeleteDevice(ctx context.Context, id string) error
+	Tailnet() string
+	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
 }
 
 func childResourceLabels(parent *corev1.Service) map[string]string {
@@ -414,7 +416,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 	}
 
 	secret.StringData = map[string]string{
-		"authkey": authKey.Key,
+		"authkey": authKey,
 	}
 	if err := a.Create(ctx, secret); err != nil {
 		return "", err
@@ -463,36 +465,21 @@ type capability struct {
 	} `json:"devices"`
 }
 
-func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (*authKey, error) {
-	var nkr newKeyRequest
-	nkr.Capabilities.Devices.Create.Reusable = false
-	nkr.Capabilities.Devices.Create.Preauthorized = true
-	nkr.Capabilities.Devices.Create.Tags = tags
-	jc, err := json.Marshal(nkr)
+func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (string, error) {
+	caps := tailscale.KeyCapabilities{
+		Devices: tailscale.KeyDeviceCapabilities{
+			Create: tailscale.KeyDeviceCreateCapabilities{
+				Reusable:      false,
+				Preauthorized: true,
+				Tags:          tags,
+			},
+		},
+	}
+	key, _, err := a.tsClient.CreateKey(ctx, caps)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("https://unused/api/v2/tailnet/%s/keys", a.tsClient.Tailnet()), bytes.NewReader(jc))
-	if err != nil {
-		return nil, err
-	}
-	resp, err := a.tsClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	slurp := new(bytes.Buffer)
-	if _, err := io.Copy(slurp, resp.Body); err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d; %v", resp.StatusCode, slurp.String())
-	}
-	var ak authKey
-	if err := json.NewDecoder(slurp).Decode(&ak); err != nil {
-		return nil, err
-	}
-	return &ak, nil
+	return key, nil
 }
 
 //go:embed manifests/proxy.yaml
