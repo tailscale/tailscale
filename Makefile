@@ -35,6 +35,9 @@ buildlinuxarm:
 buildwasm:
 	GOOS=js GOARCH=wasm ./tool/go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
 
+buildlinuxloong64:
+	GOOS=linux GOARCH=loong64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+
 buildmultiarchimage:
 	./build_docker.sh
 
