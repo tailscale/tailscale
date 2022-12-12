@@ -1,0 +1,114 @@
+# Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: proxies
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxies
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["secrets"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxies
+subjects:
+- kind: ServiceAccount
+  name: proxies
+roleRef:
+  kind: Role
+  name: proxies
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tailscale-operator
+rules:
+- apiGroups: [""]
+  resources: ["services", "services/status"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tailscale-operator
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: tailscale-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operator
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["secrets"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["statefulsets"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: operator
+subjects:
+- kind: ServiceAccount
+  name: operator
+roleRef:
+  kind: Role
+  name: operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tailscale-operator
+  template:
+    metadata:
+      labels:
+        app: tailscale-operator
+    spec:
+      serviceAccountName: operator
+      containers:
+        - name: tailscale-operator
+          image: tailscale/k8s-operator:latest
+          resources:
+            requests:
+              cpu: 500m
+              memory: 100Mi
+          env:
+            - name: OPERATOR_HOSTNAME
+              value: tailscale-operator
+            - name: OPERATOR_SECRET
+              value: tailscale-operator
+            - name: PROXY_IMAGE
+              value: tailscale/tailscale:latest
+            - name: PROXY_TAGS
+              value: tag:k8s
