@@ -428,7 +428,7 @@ func TestAllocs(t *testing.T) {
 	ftun, tun := newFakeTUN(t.Logf, false)
 	defer tun.Close()
 
-	buf := [][]byte{[]byte{0x00}}
+	buf := [][]byte{{0x00}}
 	err := tstest.MinAllocsPerRun(t, 0, func() {
 		_, err := ftun.Write(buf, 0)
 		if err != nil {
