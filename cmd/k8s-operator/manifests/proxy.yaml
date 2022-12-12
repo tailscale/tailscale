@@ -1,0 +1,37 @@
+# This file is not a complete manifest, it's a skeleton that the operator embeds
+# at build time and then uses to construct Tailscale proxy pods.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+spec:
+  replicas: 1
+  template:
+    metadata:
+      deletionGracePeriodSeconds: 10
+    spec:
+      serviceAccountName: proxies
+      initContainers:
+        - name: sysctler
+          image: busybox
+          securityContext:
+            privileged: true
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
+      resources:
+        requests:
+          cpu: 1m
+          memory: 1Mi
+      containers:
+        - name: tailscale
+          imagePullPolicy: Always
+          env:
+            - name: TS_USERSPACE
+              value: "false"
+            - name: TS_AUTH_ONCE
+              value: "true"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
