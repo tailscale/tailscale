@@ -51,11 +51,13 @@ func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 		messagec:         make(chan eventMessage, 1),
 		noDeadlockTicker: time.NewTicker(5000 * time.Hour), // arbitrary
 	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
 
 	var err error
 	m.addressChangeCallback, err = winipcfg.RegisterUnicastAddressChangeCallback(m.unicastAddressChanged)
 	if err != nil {
 		m.logf("winipcfg.RegisterUnicastAddressChangeCallback error: %v", err)
+		m.cancel()
 		return nil, err
 	}
 
@@ -63,10 +65,9 @@ func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
 	if err != nil {
 		m.addressChangeCallback.Unregister()
 		m.logf("winipcfg.RegisterRouteChangeCallback error: %v", err)
+		m.cancel()
 		return nil, err
 	}
-
-	m.ctx, m.cancel = context.WithCancel(context.Background())
 
 	return m, nil
 }
