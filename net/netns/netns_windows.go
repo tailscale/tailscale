@@ -9,11 +9,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/josharian/native"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/endian"
 )
 
 func interfaceIndex(iface *winipcfg.IPAdapterAddresses) uint32 {
@@ -119,7 +119,7 @@ func bindSocket6(c syscall.RawConn, ifidx uint32) error {
 // representation, suitable for passing to Windows APIs that require a
 // mangled uint32.
 func nativeToBigEndian(i uint32) uint32 {
-	if endian.Big {
+	if native.IsBigEndian {
 		return i
 	}
 	return bits.ReverseBytes32(i)

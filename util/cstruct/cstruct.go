@@ -10,7 +10,7 @@ import (
 	"errors"
 	"io"
 
-	"tailscale.com/util/endian"
+	"github.com/josharian/native"
 )
 
 // Size of a pointer-typed value, in bits
@@ -121,7 +121,7 @@ func (d *Decoder) Uint16() uint16 {
 		d.err = err
 		return 0
 	}
-	return endian.Native.Uint16(d.dbuf[0:2])
+	return native.Endian.Uint16(d.dbuf[0:2])
 }
 
 // Uint32 returns a uint32 decoded from the buffer.
@@ -134,7 +134,7 @@ func (d *Decoder) Uint32() uint32 {
 		d.err = err
 		return 0
 	}
-	return endian.Native.Uint32(d.dbuf[0:4])
+	return native.Endian.Uint32(d.dbuf[0:4])
 }
 
 // Uint64 returns a uint64 decoded from the buffer.
@@ -147,7 +147,7 @@ func (d *Decoder) Uint64() uint64 {
 		d.err = err
 		return 0
 	}
-	return endian.Native.Uint64(d.dbuf[0:8])
+	return native.Endian.Uint64(d.dbuf[0:8])
 }
 
 // Uintptr returns a uintptr decoded from the buffer.

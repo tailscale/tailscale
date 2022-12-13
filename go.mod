@@ -34,6 +34,7 @@ require (
 	github.com/iancoleman/strcase v0.2.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
+	github.com/josharian/native v1.0.1-0.20221213033349-c1e37c09b531
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.15.4
@@ -203,7 +204,6 @@ require (
 	github.com/jirfag/go-printf-func-name v0.0.0-20200119135958-7558a9eaa5af // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
-	github.com/josharian/native v1.0.1-0.20220222152702-a938fb150d47 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/julz/importas v0.0.0-20210922140945-27e0a5d4dee2 // indirect
 	github.com/kevinburke/ssh_config v1.1.0 // indirect
