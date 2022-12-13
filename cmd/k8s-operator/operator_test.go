@@ -57,13 +57,59 @@ func TestController(t *testing.T) {
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
 
-	expectEqual(t, fc, &corev1.Secret{
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName))
+
+	// Normally the Tailscale proxy pod would come up here and write its info
+	// into the secret. Simulate that, then verify reconcile again and verify
+	// that we get to the end.
+	mustUpdate(t, fc, "operator-ns", fullName, func(s *corev1.Secret) {
+		if s.Data == nil {
+			s.Data = map[string][]byte{}
+		}
+		s.Data["device_id"] = []byte("ts-id-1234")
+		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
+	})
+	expectReconciled(t, sr, "default", "test")
+	want := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "test",
+			Namespace:       "default",
+			ResourceVersion: "4",
+			Finalizers:      []string{"tailscale.com/finalizer"},
+			UID:             types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP:         "10.20.30.40",
+			Type:              corev1.ServiceTypeLoadBalancer,
+			LoadBalancerClass: ptr.To("tailscale"),
+		},
+		Status: corev1.ServiceStatus{
+			LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{
+					{
+						Hostname: "tailscale.device.name",
+					},
+				},
+			},
+		},
+	}
+	expectEqual(t, fc, want)
+}
+
+func expectedSecret(name string) *corev1.Secret {
+	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fullName,
+			Name:            name,
 			Namespace:       "operator-ns",
 			ResourceVersion: "1",
 			Labels: map[string]string{
@@ -76,14 +122,17 @@ func TestController(t *testing.T) {
 		StringData: map[string]string{
 			"authkey": "secret-authkey",
 		},
-	})
-	expectEqual(t, fc, &corev1.Service{
+	}
+}
+
+func expectedHeadlessService(name string) *corev1.Service {
+	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            shortName,
+			Name:            name,
 			GenerateName:    "ts-test-",
 			Namespace:       "operator-ns",
 			ResourceVersion: "1",
@@ -100,14 +149,17 @@ func TestController(t *testing.T) {
 			},
 			ClusterIP: "None",
 		},
-	})
-	expectEqual(t, fc, &appsv1.StatefulSet{
+	}
+}
+
+func expectedSTS(stsName, secretName string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
 			APIVersion: "apps/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            shortName,
+			Name:            stsName,
 			Namespace:       "operator-ns",
 			ResourceVersion: "1",
 			Labels: map[string]string{
@@ -122,7 +174,7 @@ func TestController(t *testing.T) {
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "1234-UID"},
 			},
-			ServiceName: shortName,
+			ServiceName: stsName,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
@@ -149,7 +201,7 @@ func TestController(t *testing.T) {
 								{Name: "TS_USERSPACE", Value: "false"},
 								{Name: "TS_AUTH_ONCE", Value: "true"},
 								{Name: "TS_DEST_IP", Value: "10.20.30.40"},
-								{Name: "TS_KUBE_SECRET", Value: fullName},
+								{Name: "TS_KUBE_SECRET", Value: secretName},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
@@ -162,46 +214,7 @@ func TestController(t *testing.T) {
 				},
 			},
 		},
-	})
-
-	// Normally the Tailscale proxy pod would come up here and write its info
-	// into the secret. Simulate that, then verify reconcile again and verify
-	// that we get to the end.
-	mustUpdate(t, fc, "operator-ns", fullName, func(s *corev1.Secret) {
-		if s.Data == nil {
-			s.Data = map[string][]byte{}
-		}
-		s.Data["device_id"] = []byte("ts-id-1234")
-		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
-	})
-	expectReconciled(t, sr, "default", "test")
-	expectEqual(t, fc, &corev1.Service{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "test",
-			Namespace:       "default",
-			ResourceVersion: "4",
-			Finalizers:      []string{"tailscale.com/finalizer"},
-			UID:             types.UID("1234-UID"),
-		},
-		Spec: corev1.ServiceSpec{
-			ClusterIP:         "10.20.30.40",
-			Type:              corev1.ServiceTypeLoadBalancer,
-			LoadBalancerClass: ptr.To("tailscale"),
-		},
-		Status: corev1.ServiceStatus{
-			LoadBalancer: corev1.LoadBalancerStatus{
-				Ingress: []corev1.LoadBalancerIngress{
-					{
-						Hostname: "tailscale.device.name",
-					},
-				},
-			},
-		},
-	})
+	}
 }
 
 func findGenName(t *testing.T, client client.Client, ns, name string) (full, noSuffix string) {
