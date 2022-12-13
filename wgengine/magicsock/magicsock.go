@@ -3598,7 +3598,7 @@ type endpoint struct {
 	publicKey    key.NodePublic // peer public key (for WireGuard + DERP)
 	publicKeyHex string         // cached output of publicKey.UntypedHexString
 	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using
-	nodeAddr     netip.Addr     // the node's first tailscale address (only used for logging)
+	nodeAddr     netip.Addr     // the node's first tailscale address; used for logging & wireguard rate-limiting (Issue 6686)
 
 	// mu protects all following fields.
 	mu sync.Mutex // Lock ordering: Conn.mu, then endpoint.mu
@@ -3785,7 +3785,7 @@ func (de *endpoint) ClearSrc()           {}
 func (de *endpoint) SrcToString() string { panic("unused") } // unused by wireguard-go
 func (de *endpoint) SrcIP() netip.Addr   { panic("unused") } // unused by wireguard-go
 func (de *endpoint) DstToString() string { return de.publicKeyHex }
-func (de *endpoint) DstIP() netip.Addr   { panic("unused") }
+func (de *endpoint) DstIP() netip.Addr   { return de.nodeAddr } // see tailscale/tailscale#6686
 func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
 // addrForSendLocked returns the address(es) that should be used for
