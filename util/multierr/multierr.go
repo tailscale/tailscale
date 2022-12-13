@@ -9,6 +9,8 @@ package multierr
 import (
 	"errors"
 	"strings"
+
+	"golang.org/x/exp/slices"
 )
 
 // An Error represents multiple errors.
@@ -29,8 +31,18 @@ func (e Error) Error() string {
 
 // Errors returns a slice containing all errors in e.
 func (e Error) Errors() []error {
-	return append(e.errs[:0:0], e.errs...)
+	return slices.Clone(e.errs)
 }
+
+// TODO(https://go.dev/cl/53435): Implement Unwrap when Go 1.20 is released.
+/*
+// Unwrap returns the underlying errors as is.
+func (e Error) Unwrap() []error {
+	// Do not clone since Unwrap requires callers to not mutate the slice.
+	// See the documentation in the Go "errors" package.
+	return e.errs
+}
+*/
 
 // New returns an error composed from errs.
 // Some errors in errs get special treatment:
@@ -86,4 +98,39 @@ func (e Error) As(target any) bool {
 		}
 	}
 	return false
+}
+
+// Range performs a pre-order, depth-first iteration of the error tree
+// by successively unwrapping all error values.
+// For each iteration it calls fn with the current error value and
+// stops iteration if it ever reports false.
+func Range(err error, fn func(error) bool) bool {
+	if err == nil {
+		return true
+	}
+	if !fn(err) {
+		return false
+	}
+	switch err := err.(type) {
+	case interface{ Unwrap() error }:
+		if err := err.Unwrap(); err != nil {
+			if !Range(err, fn) {
+				return false
+			}
+		}
+	case interface{ Unwrap() []error }:
+		for _, err := range err.Unwrap() {
+			if !Range(err, fn) {
+				return false
+			}
+		}
+	// TODO(https://go.dev/cl/53435): Delete this when Error implements Unwrap.
+	case Error:
+		for _, err := range err.errs {
+			if !Range(err, fn) {
+				return false
+			}
+		}
+	}
+	return true
 }
