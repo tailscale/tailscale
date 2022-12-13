@@ -447,8 +447,16 @@ type dnsTCPSession struct {
 
 func (s *dnsTCPSession) handleWrites() {
 	defer s.conn.Close()
-	defer close(s.responses)
 	defer s.closeCtx()
+
+	// NOTE(andrew): we explicitly do not close the 'responses' channel
+	// when this function exits. If we hit an error and return, we could
+	// still have outstanding 'handleQuery' goroutines running, and if we
+	// closed this channel they'd end up trying to send on a closed channel
+	// when they finish.
+	//
+	// Because we call closeCtx, those goroutines will not hang since they
+	// select on <-s.ctx.Done() as well as s.responses.
 
 	for {
 		select {
@@ -476,6 +484,7 @@ func (s *dnsTCPSession) handleQuery(q []byte) {
 		return
 	}
 
+	// See note in handleWrites (above) regarding this select{}
 	select {
 	case <-s.ctx.Done():
 	case s.responses <- resp:
@@ -483,6 +492,7 @@ func (s *dnsTCPSession) handleQuery(q []byte) {
 }
 
 func (s *dnsTCPSession) handleReads() {
+	defer s.conn.Close()
 	defer close(s.readClosing)
 
 	for {
@@ -515,6 +525,11 @@ func (s *dnsTCPSession) handleReads() {
 			case <-s.ctx.Done():
 				return
 			default:
+				// NOTE: by kicking off the query handling in a
+				// new goroutine, it is possible that we'll
+				// deliver responses out-of-order. This is
+				// explicitly allowed by RFC7766, Section
+				// 6.2.1.1 ("Query Pipelining").
 				go s.handleQuery(buf)
 			}
 		}
