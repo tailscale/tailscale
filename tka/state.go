@@ -29,9 +29,6 @@ type State struct {
 
 	// DisablementSecrets are KDF-derived values which can be used
 	// to turn off the TKA in the event of a consensus-breaking bug.
-	//
-	// TODO(tom): This is an alpha feature, remove this mechanism once
-	//            we have confidence in our implementation.
 	DisablementSecrets [][]byte `cbor:"2,keyasint"`
 
 	// Keys are the public keys currently trusted by the TKA.
@@ -217,9 +214,15 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		return out, nil
 
 	default:
-		// TODO(tom): Instead of erroring, update lastHash and
-		// continue (to preserve future compatibility).
-		return State{}, fmt.Errorf("unhandled message: %v", update.MessageKind)
+		// An AUM with an unknown message kind was received! That means
+		// that a future version of tailscaled added some feature we don't
+		// understand.
+		//
+		// The future-compatibility contract for AUM message types is that
+		// they must only add new features, not change the semantics of existing
+		// mechanisms or features. As such, old clients can safely ignore them.
+		out := s.cloneForUpdate(&update)
+		return out, nil
 	}
 }
 
