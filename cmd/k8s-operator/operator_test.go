@@ -114,9 +114,9 @@ func TestLoadBalancerClass(t *testing.T) {
 	// synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
 	// didn't create any child resources since this is all faked, so the
 	// deletion goes through immediately.
-	expectRequeue(t, sr, "default", "test")
+	expectReconciled(t, sr, "default", "test")
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
-	// Second time around, the rest of cleanup happens.
+	// The deletion triggers another reconcile, to finish the cleanup.
 	expectReconciled(t, sr, "default", "test")
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
@@ -206,7 +206,7 @@ func TestAnnotations(t *testing.T) {
 	// synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
 	// didn't create any child resources since this is all faked, so the
 	// deletion goes through immediately.
-	expectRequeue(t, sr, "default", "test")
+	expectReconciled(t, sr, "default", "test")
 	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
 	// Second time around, the rest of cleanup happens.
 	expectReconciled(t, sr, "default", "test")
