@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -97,6 +98,18 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	keys, disablementValues, err := parseNLArgs(args, true, true)
 	if err != nil {
 		return err
+	}
+
+	// Common mistake: Not specifying the current node's key as one of the trusted keys.
+	foundSelfKey := false
+	for _, k := range keys {
+		if bytes.Equal(k.ID(), st.PublicKey.KeyID()) {
+			foundSelfKey = true
+			break
+		}
+	}
+	if !foundSelfKey {
+		return errors.New("the tailnet lock key of the current node must be one of the trusted keys during initialization")
 	}
 
 	fmt.Println("You are initializing tailnet lock with the following trusted signing keys:")
@@ -196,7 +209,7 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 			line.WriteString(fmt.Sprint(k.Votes))
 			line.WriteString("\t")
 			if k.Key == st.PublicKey {
-				line.WriteString("(us)")
+				line.WriteString("(self)")
 			}
 			fmt.Println(line.String())
 		}
