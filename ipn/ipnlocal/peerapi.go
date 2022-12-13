@@ -48,6 +48,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/multierr"
 	"tailscale.com/util/strs"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -365,58 +366,45 @@ func redactString(s string) string {
 	return string(b)
 }
 
-func redactErr(err error) error {
+func redactErr(root error) error {
+	// redactStrings is a list of sensitive strings that were redacted.
+	// It is not sufficient to just snub out sensitive fields in Go errors
+	// since some wrapper errors like fmt.Errorf pre-cache the error string,
+	// which would unfortunately remain unaffected.
 	var redactStrings []string
 
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		// If this is the root error, then we can redact it directly.
-		if err == pe {
-			pe.Path = redactString(pe.Path)
-			return pe
+	// Redact sensitive fields in known Go error types.
+	var unknownErrors int
+	multierr.Range(root, func(err error) bool {
+		switch err := err.(type) {
+		case *os.PathError:
+			redactStrings = append(redactStrings, err.Path)
+			err.Path = redactString(err.Path)
+		case *os.LinkError:
+			redactStrings = append(redactStrings, err.New, err.Old)
+			err.New = redactString(err.New)
+			err.Old = redactString(err.Old)
+		default:
+			unknownErrors++
 		}
+		return true
+	})
 
-		// Otherwise, we have a *PathError somewhere in the error
-		// chain, and we can't redact it because something later in the
-		// chain may have cached the Error() return already (as
-		// fmt.Errorf does).
-		//
-		// Add this path to the set of paths that we will redact, below.
-		redactStrings = append(redactStrings, pe.Path)
-
-		// Also redact the Path value so that anything that calls
-		// Unwrap in the future gets the redacted value.
-		pe.Path = redactString(pe.Path)
+	// If there are no redacted strings or no unknown error types,
+	// then we can return the possibly modified root error verbatim.
+	// Otherwise, we must replace redacted strings from any wrappers.
+	if len(redactStrings) == 0 || unknownErrors == 0 {
+		return root
 	}
 
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		// If this is the root error, then we can redact it directly.
-		if err == le {
-			le.New = redactString(le.New)
-			le.Old = redactString(le.Old)
-			return le
-		}
-
-		// As above
-		redactStrings = append(redactStrings, le.New, le.Old)
-		le.New = redactString(le.New)
-		le.Old = redactString(le.Old)
-	}
-
-	if len(redactStrings) == 0 {
-		return err
-	}
-
-	s := err.Error()
-	for _, toRedact := range redactStrings {
-		s = strings.Replace(s, toRedact, redactString(toRedact), -1)
-	}
-
-	// Stringify and and replace any paths that we found above, then return
+	// Stringify and replace any paths that we found above, then return
 	// the error wrapped in a type that uses the newly-redacted string
 	// while also allowing Unwrap()-ing to the inner error type(s).
-	return &redactedErr{msg: s, inner: err}
+	s := root.Error()
+	for _, toRedact := range redactStrings {
+		s = strings.ReplaceAll(s, toRedact, redactString(toRedact))
+	}
+	return &redactedErr{msg: s, inner: root}
 }
 
 func touchFile(path string) error {
