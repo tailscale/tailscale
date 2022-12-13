@@ -229,14 +229,15 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 	}
 	if sts != nil {
 		if !sts.GetDeletionTimestamp().IsZero() {
-			// Deletion in progress, check again later.
-			return reconcile.Result{RequeueAfter: time.Second}, nil
+			// Deletion in progress, check again later. We'll get another
+			// notification when the deletion is complete.
+			return reconcile.Result{}, nil
 		}
 		err := a.DeleteAllOf(ctx, &appsv1.StatefulSet{}, client.InNamespace(a.operatorNamespace), client.MatchingLabels(ml), client.PropagationPolicy(metav1.DeletePropagationForeground))
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting statefulset: %w", err)
 		}
-		return reconcile.Result{RequeueAfter: time.Second}, nil
+		return reconcile.Result{}, nil
 	}
 
 	id, _, err := a.getDeviceInfo(ctx, svc)
