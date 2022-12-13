@@ -72,7 +72,10 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 // can be created. Returns the key itself, which cannot be retrieved again
 // later, and the key metadata.
 func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities) (string, *Key, error) {
-	bs, err := json.Marshal(caps)
+	keyRequest := struct {
+		Capabilities KeyCapabilities `json:"capabilities"`
+	}{caps}
+	bs, err := json.Marshal(keyRequest)
 	if err != nil {
 		return "", nil, err
 	}
