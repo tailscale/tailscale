@@ -10,11 +10,13 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/exp/slices"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -46,31 +48,42 @@ func main() {
 		hostname    = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret  = defaultEnv("OPERATOR_SECRET", "")
 		tsNamespace = defaultEnv("OPERATOR_NAMESPACE", "default")
+		tslogging   = defaultEnv("OPERATOR_LOGGING", "info")
 		image       = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
 		tags        = defaultEnv("PROXY_TAGS", "tag:k8s")
 	)
 
-	// TODO: use logpolicy
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
-	logf.SetLogger(zap.New())
+	var opts []kzap.Opts
+	switch tslogging {
+	case "info":
+		opts = append(opts, kzap.Level(zapcore.InfoLevel))
+	case "debug":
+		opts = append(opts, kzap.Level(zapcore.DebugLevel))
+	case "dev":
+		opts = append(opts, kzap.UseDevMode(true), kzap.Level(zapcore.DebugLevel))
+	}
+	zlog := kzap.NewRaw(opts...).Sugar()
+	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
+	startlog := zlog.Named("startup")
 	s := &tsnet.Server{
 		Hostname: hostname,
-		Logf:     logger.Discard,
+		Logf:     zlog.Named("tailscaled").Debugf,
 	}
 	if kubeSecret != "" {
 		st, err := kubestore.New(logger.Discard, kubeSecret)
 		if err != nil {
-			log.Fatalf("creating kube store: %v", err)
+			startlog.Fatalf("creating kube store: %v", err)
 		}
 		s.Store = st
 	}
 	if err := s.Start(); err != nil {
-		log.Fatalf("starting tailscale server: %v", err)
+		startlog.Fatalf("starting tailscale server: %v", err)
 	}
 	defer s.Close()
 	lc, err := s.LocalClient()
 	if err != nil {
-		log.Fatalf("getting local client: %v", err)
+		startlog.Fatalf("getting local client: %v", err)
 	}
 
 	ctx := context.Background()
@@ -80,23 +93,23 @@ waitOnline:
 	for {
 		st, err := lc.StatusWithoutPeers(ctx)
 		if err != nil {
-			log.Fatalf("getting status: %v", err)
+			startlog.Fatalf("getting status: %v", err)
 		}
 		switch st.BackendState {
 		case "Running":
 			break waitOnline
 		case "NeedsLogin":
 			if !loginShown && st.AuthURL != "" {
-				log.Printf("tailscale needs login, please visit: %s", st.AuthURL)
+				startlog.Infof("tailscale needs login, please visit: %s", st.AuthURL)
 				loginShown = true
 			}
 		case "NeedsMachineAuth":
 			if !machineAuthShown {
-				log.Printf("Machine authorization required, please visit the admin panel to authorize")
+				startlog.Infof("Machine authorization required, please visit the admin panel to authorize")
 				machineAuthShown = true
 			}
 		default:
-			log.Printf("waiting for tailscale to start: %v", st.BackendState)
+			startlog.Debugf("waiting for tailscale to start: %v", st.BackendState)
 		}
 		time.Sleep(time.Second)
 	}
@@ -119,17 +132,18 @@ waitOnline:
 		}),
 	})
 	if err != nil {
-		log.Fatalf("could not create manager: %v", err)
+		startlog.Fatalf("could not create manager: %v", err)
 	}
 	tsClient, err := s.APIClient()
 	if err != nil {
-		log.Fatalf("getting tailscale client: %v", err)
+		startlog.Fatalf("getting tailscale client: %v", err)
 	}
 	sr := &ServiceReconciler{
 		tsClient:          tsClient,
 		defaultTags:       strings.Split(tags, ","),
 		operatorNamespace: tsNamespace,
 		proxyImage:        image,
+		logger:            zlog.Named("service-reconciler"),
 	}
 	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
 		ls := o.GetLabels()
@@ -155,12 +169,12 @@ waitOnline:
 		Watches(&source.Kind{Type: &corev1.Secret{}}, reconcileFilter).
 		Complete(sr)
 	if err != nil {
-		log.Fatalf("could not create controller: %v", err)
+		startlog.Fatalf("could not create controller: %v", err)
 	}
 
-	log.Printf("Startup complete, operator running")
+	startlog.Infof("Startup complete, operator running")
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
-		log.Fatalf("could not start manager: %v", err)
+		startlog.Fatalf("could not start manager: %v", err)
 	}
 }
 
@@ -183,6 +197,7 @@ type ServiceReconciler struct {
 	defaultTags       []string
 	operatorNamespace string
 	proxyImage        string
+	logger            *zap.SugaredLogger
 }
 
 type tsClient interface {
@@ -209,9 +224,10 @@ func childResourceLabels(parent *corev1.Service) map[string]string {
 //
 // This function is responsible for removing the finalizer from the service,
 // once all associated resources are gone.
-func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.Service) (reconcile.Result, error) {
+func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (reconcile.Result, error) {
 	ix := slices.Index(svc.Finalizers, FinalizerName)
 	if ix < 0 {
+		logger.Debugf("no finalizer, nothing to do")
 		return reconcile.Result{}, nil
 	}
 
@@ -231,12 +247,14 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 		if !sts.GetDeletionTimestamp().IsZero() {
 			// Deletion in progress, check again later. We'll get another
 			// notification when the deletion is complete.
+			logger.Debugf("waiting for statefulset %s/%s deletion", sts.GetNamespace(), sts.GetName())
 			return reconcile.Result{}, nil
 		}
 		err := a.DeleteAllOf(ctx, &appsv1.StatefulSet{}, client.InNamespace(a.operatorNamespace), client.MatchingLabels(ml), client.PropagationPolicy(metav1.DeletePropagationForeground))
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting statefulset: %w", err)
 		}
+		logger.Debugf("started deletion of statefulset %s/%s", sts.GetNamespace(), sts.GetName())
 		return reconcile.Result{}, nil
 	}
 
@@ -267,6 +285,11 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 		return reconcile.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
 	}
 
+	// Unlike most log entries in the reconcile loop, this will get printed
+	// exactly once at the very end of cleanup, because the final step of
+	// cleanup removes the tailscale finalizer, which will make all future
+	// reconciles exit early.
+	logger.Infof("unexposed service from tailnet")
 	return reconcile.Result{}, nil
 }
 
@@ -287,32 +310,35 @@ func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 }
 
 func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
-	defer func() {
-		if err != nil {
-			log.Printf("error reconciling %s/%s: %v", req.Namespace, req.Name, err)
-		}
-	}()
+	logger := a.logger.With("service-ns", req.Namespace, "service-name", req.Name)
+	logger.Debugf("starting reconcile")
+	defer logger.Debugf("reconcile finished")
 
 	svc := new(corev1.Service)
 	err = a.Get(ctx, req.NamespacedName, svc)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
+			logger.Debugf("service not found, assuming it was deleted")
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) {
-		return a.cleanupIfRequired(ctx, svc)
-	}
-
 	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
-		log.Printf("%s has ClusterIP=%q; nothing to do", svc.Name, svc.Spec.ClusterIP)
+		logger.Debugf("service is headless, nothing to do")
 		return reconcile.Result{}, nil
 	}
-	log.Printf("exposing %s", svc.Name)
+	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) {
+		logger.Debugf("service is being deleted or should not be exposed, cleaning up")
+		return a.cleanupIfRequired(ctx, logger, svc)
+	}
 
 	if !slices.Contains(svc.Finalizers, FinalizerName) {
+		// This log line is printed exactly once during initial provisioning,
+		// because once the finalizer is in place this block gets skipped. So,
+		// this is a nice place to tell the operator that the high level,
+		// multi-reconcile operation is underway.
+		logger.Infof("exposing service over tailscale")
 		svc.Finalizers = append(svc.Finalizers, FinalizerName)
 		if err := a.Update(ctx, svc); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
@@ -320,7 +346,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	}
 
 	// Do full reconcile.
-	hsvc, err := a.reconcileHeadlessService(ctx, svc)
+	hsvc, err := a.reconcileHeadlessService(ctx, logger, svc)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
@@ -329,16 +355,17 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
 		tags = strings.Split(tstr, ",")
 	}
-	secretName, err := a.createOrGetSecret(ctx, svc, hsvc, tags)
+	secretName, err := a.createOrGetSecret(ctx, logger, svc, hsvc, tags)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
-	_, err = a.reconcileSTS(ctx, svc, hsvc, secretName)
+	_, err = a.reconcileSTS(ctx, logger, svc, hsvc, secretName)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
 
 	if !a.hasLoadBalancerClass(svc) {
+		logger.Debugf("service is not a LoadBalancer, so not updating ingress")
 		return reconcile.Result{}, nil
 	}
 
@@ -347,6 +374,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, fmt.Errorf("failed to get device ID: %w", err)
 	}
 	if tsHost == "" {
+		logger.Debugf("no Tailscale hostname known yet, waiting for proxy pod to finish auth")
 		// No hostname yet. Wait for the proxy pod to auth.
 		svc.Status.LoadBalancer.Ingress = nil
 		if err := a.Status().Update(ctx, svc); err != nil {
@@ -355,6 +383,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	logger.Debugf("setting ingress hostname to %q", tsHost)
 	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
 		{
 			Hostname: tsHost,
@@ -366,7 +395,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	return reconcile.Result{}, nil
 }
 
-func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, svc *corev1.Service) (*corev1.Service, error) {
+func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (*corev1.Service, error) {
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "ts-" + svc.Name + "-",
@@ -380,10 +409,11 @@ func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, svc *c
 			},
 		},
 	}
+	logger.Debugf("reconciling headless service for StatefulSet")
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
-func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *corev1.Service, tags []string) (string, error) {
+func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, svc, hsvc *corev1.Service, tags []string) (string, error) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			// Hardcode a -0 suffix so that in future, if we support
@@ -395,6 +425,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 		},
 	}
 	if err := a.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
+		logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
 		return secret.Name, nil
 	} else if !apierrors.IsNotFound(err) {
 		return "", err
@@ -410,10 +441,12 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 	if sts != nil {
 		// StatefulSet exists, so we have already created the secret.
 		// If the secret is missing, they should delete the StatefulSet.
+		logger.Errorf("Tailscale proxy secret doesn't exist, but the corresponding StatefulSet %s/%s already does. Something is wrong, please delete the StatefulSet.", sts.GetNamespace(), sts.GetName())
 		return "", nil
 	}
 	// Create API Key secret which is going to be used by the statefulset
 	// to authenticate with Tailscale.
+	logger.Debugf("creating authkey for new tailscale proxy")
 	authKey, err := a.newAuthKey(ctx, tags)
 	if err != nil {
 		return "", err
@@ -466,7 +499,7 @@ func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (stri
 //go:embed manifests/proxy.yaml
 var proxyYaml []byte
 
-func (a *ServiceReconciler) reconcileSTS(ctx context.Context, parentSvc, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {
+func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, parentSvc, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {
 	var ss appsv1.StatefulSet
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -496,6 +529,7 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, parentSvc, headles
 	ss.Spec.Template.ObjectMeta.Labels = map[string]string{
 		"app": string(parentSvc.UID),
 	}
+	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
 }
 
