@@ -41,15 +41,15 @@ import (
 	"tailscale.com/types/logger"
 )
 
-var (
-	hostname    = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-	kubeSecret  = defaultEnv("OPERATOR_SECRET", "")
-	tsNamespace = defaultEnv("OPERATOR_NAMESPACE", "default")
-	image       = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-	tags        = defaultEnv("PROXY_TAGS", "tag:k8s")
-)
-
 func main() {
+	var (
+		hostname    = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret  = defaultEnv("OPERATOR_SECRET", "")
+		tsNamespace = defaultEnv("OPERATOR_NAMESPACE", "default")
+		image       = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		tags        = defaultEnv("PROXY_TAGS", "tag:k8s")
+	)
+
 	// TODO: use logpolicy
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 	logf.SetLogger(zap.New())
@@ -126,8 +126,10 @@ waitOnline:
 		log.Fatalf("getting tailscale client: %v", err)
 	}
 	sr := &ServiceReconciler{
-		tsClient:    tsClient,
-		defaultTags: strings.Split(tags, ","),
+		tsClient:          tsClient,
+		defaultTags:       strings.Split(tags, ","),
+		operatorNamespace: tsNamespace,
+		proxyImage:        image,
 	}
 	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
 		ls := o.GetLabels()
@@ -177,14 +179,15 @@ const (
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
 type ServiceReconciler struct {
 	client.Client
-	defaultTags []string
-	tsClient    tsClient
+	tsClient          tsClient
+	defaultTags       []string
+	operatorNamespace string
+	proxyImage        string
 }
 
 type tsClient interface {
-	DeleteDevice(ctx context.Context, id string) error
-	Tailnet() string
 	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
+	DeleteDevice(ctx context.Context, id string) error
 }
 
 func childResourceLabels(parent *corev1.Service) map[string]string {
@@ -220,7 +223,7 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 	// assuming k8s ordering semantics don't mess with us, that should avoid
 	// tailscale device deletion races where we fail to notice a device that
 	// should be removed.
-	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, ml)
+	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, ml)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("getting statefulset: %w", err)
 	}
@@ -229,7 +232,7 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 			// Deletion in progress, check again later.
 			return reconcile.Result{RequeueAfter: time.Second}, nil
 		}
-		err := a.DeleteAllOf(ctx, &appsv1.StatefulSet{}, client.InNamespace(tsNamespace), client.MatchingLabels(ml), client.PropagationPolicy(metav1.DeletePropagationForeground))
+		err := a.DeleteAllOf(ctx, &appsv1.StatefulSet{}, client.InNamespace(a.operatorNamespace), client.MatchingLabels(ml), client.PropagationPolicy(metav1.DeletePropagationForeground))
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting statefulset: %w", err)
 		}
@@ -253,7 +256,7 @@ func (a *ServiceReconciler) cleanupIfRequired(ctx context.Context, svc *corev1.S
 		&corev1.Secret{},
 	}
 	for _, typ := range types {
-		if err := a.DeleteAllOf(ctx, typ, client.InNamespace(tsNamespace), client.MatchingLabels(ml)); err != nil {
+		if err := a.DeleteAllOf(ctx, typ, client.InNamespace(a.operatorNamespace), client.MatchingLabels(ml)); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -366,7 +369,7 @@ func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, svc *c
 	hsvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "ts-" + svc.Name + "-",
-			Namespace:    tsNamespace,
+			Namespace:    a.operatorNamespace,
 			Labels:       childResourceLabels(svc),
 		},
 		Spec: corev1.ServiceSpec{
@@ -376,7 +379,7 @@ func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, svc *c
 			},
 		},
 	}
-	return createOrUpdate(ctx, a.Client, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
+	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
 }
 
 func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *corev1.Service, tags []string) (string, error) {
@@ -386,7 +389,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 			// multiple StatefulSet replicas, we can provision -N for
 			// those.
 			Name:      hsvc.Name + "-0",
-			Namespace: tsNamespace,
+			Namespace: a.operatorNamespace,
 			Labels:    childResourceLabels(svc),
 		},
 	}
@@ -399,7 +402,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 	// Secret doesn't exist yet, create one. Initially it contains
 	// only the Tailscale authkey, but once Tailscale starts it'll
 	// also store the daemon state.
-	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, childResourceLabels(svc))
+	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, childResourceLabels(svc))
 	if err != nil {
 		return "", err
 	}
@@ -425,7 +428,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, svc, hsvc *co
 }
 
 func (a *ServiceReconciler) getDeviceInfo(ctx context.Context, svc *corev1.Service) (id, hostname string, err error) {
-	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, childResourceLabels(svc))
+	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childResourceLabels(svc))
 	if err != nil {
 		return "", "", err
 	}
@@ -491,7 +494,7 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, parentSvc, headles
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
 	}
 	container := &ss.Spec.Template.Spec.Containers[0]
-	container.Image = image
+	container.Image = a.proxyImage
 	container.Env = append(container.Env,
 		corev1.EnvVar{
 			Name:  "TS_DEST_IP",
@@ -503,7 +506,7 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, parentSvc, headles
 		})
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
-		Namespace: tsNamespace,
+		Namespace: a.operatorNamespace,
 		Labels:    childResourceLabels(parentSvc),
 	}
 	ss.Spec.ServiceName = headlessSvc.Name
@@ -515,7 +518,7 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, parentSvc, headles
 	ss.Spec.Template.ObjectMeta.Labels = map[string]string{
 		"app": string(parentSvc.UID),
 	}
-	return createOrUpdate(ctx, a.Client, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
+	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
 }
 
 func (a *ServiceReconciler) InjectClient(c client.Client) error {
@@ -536,7 +539,7 @@ type ptrObject[T any] interface {
 //
 // obj is looked up by its Name and Namespace if Name is set, otherwise it's
 // looked up by labels.
-func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, obj O, update func(O)) (O, error) {
+func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, obj O, update func(O)) (O, error) {
 	var (
 		existing O
 		err      error
@@ -547,7 +550,7 @@ func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client,
 		existing.SetNamespace(obj.GetNamespace())
 		err = c.Get(ctx, client.ObjectKeyFromObject(obj), existing)
 	} else {
-		existing, err = getSingleObject[T, O](ctx, c, obj.GetLabels())
+		existing, err = getSingleObject[T, O](ctx, c, ns, obj.GetLabels())
 	}
 	if err == nil && existing != nil {
 		if update != nil {
@@ -571,7 +574,7 @@ func createOrUpdate[T any, O ptrObject[T]](ctx context.Context, c client.Client,
 // (e.g. corev1.Service) with the given labels, and returns
 // it. Returns nil if no objects match the labels, and an error if
 // more than one object matches.
-func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client, labels map[string]string) (O, error) {
+func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client, ns string, labels map[string]string) (O, error) {
 	ret := O(new(T))
 	kinds, _, err := c.Scheme().ObjectKinds(ret)
 	if err != nil {
@@ -587,7 +590,7 @@ func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client
 	gvk.Kind += "List"
 	lst := unstructured.UnstructuredList{}
 	lst.SetGroupVersionKind(gvk)
-	if err := c.List(ctx, &lst, client.InNamespace(tsNamespace), client.MatchingLabels(labels)); err != nil {
+	if err := c.List(ctx, &lst, client.InNamespace(ns), client.MatchingLabels(labels)); err != nil {
 		return nil, err
 	}
 
