@@ -445,29 +445,6 @@ func (a *ServiceReconciler) getDeviceInfo(ctx context.Context, svc *corev1.Servi
 	return id, hostname, nil
 }
 
-type authKey struct {
-	ID           string     `json:"id"`
-	Key          string     `json:"key"`
-	Created      time.Time  `json:"created"`
-	Expires      time.Time  `json:"expires"`
-	Capabilities capability `json:"capabilities"`
-}
-
-type newKeyRequest struct {
-	Capabilities capability `json:"capabilities"`
-}
-
-type capability struct {
-	Devices struct {
-		Create struct {
-			Reusable      bool
-			Ephemeral     bool
-			Preauthorized bool
-			Tags          []string
-		} `json:"create"`
-	} `json:"devices"`
-}
-
 func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (string, error) {
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
