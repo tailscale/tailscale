@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -28,12 +29,17 @@ import (
 func TestLoadBalancerClass(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sr := &ServiceReconciler{
 		Client:            fc,
 		tsClient:          ft,
 		defaultTags:       []string{"tag:k8s"},
 		operatorNamespace: "operator-ns",
 		proxyImage:        "tailscale/tailscale",
+		logger:            zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -142,12 +148,17 @@ func TestLoadBalancerClass(t *testing.T) {
 func TestAnnotations(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sr := &ServiceReconciler{
 		Client:            fc,
 		tsClient:          ft,
 		defaultTags:       []string{"tag:k8s"},
 		operatorNamespace: "operator-ns",
 		proxyImage:        "tailscale/tailscale",
+		logger:            zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -234,12 +245,17 @@ func TestAnnotations(t *testing.T) {
 func TestAnnotationIntoLB(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sr := &ServiceReconciler{
 		Client:            fc,
 		tsClient:          ft,
 		defaultTags:       []string{"tag:k8s"},
 		operatorNamespace: "operator-ns",
 		proxyImage:        "tailscale/tailscale",
+		logger:            zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -347,12 +363,17 @@ func TestAnnotationIntoLB(t *testing.T) {
 func TestLBIntoAnnotation(t *testing.T) {
 	fc := fake.NewFakeClient()
 	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sr := &ServiceReconciler{
 		Client:            fc,
 		tsClient:          ft,
 		defaultTags:       []string{"tag:k8s"},
 		operatorNamespace: "operator-ns",
 		proxyImage:        "tailscale/tailscale",
+		logger:            zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
