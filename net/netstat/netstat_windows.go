@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/josharian/native"
 	"golang.org/x/sys/windows"
 	"tailscale.com/net/netaddr"
-	"tailscale.com/util/endian"
 )
 
 // See https://docs.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable
@@ -94,7 +94,7 @@ func (t *Table) addEntries(fam int) error {
 	}
 	buf = buf[:size]
 
-	numEntries := endian.Native.Uint32(buf[:4])
+	numEntries := native.Endian.Uint32(buf[:4])
 	buf = buf[4:]
 
 	var recSize int
@@ -155,7 +155,7 @@ func state(v uint32) string {
 }
 
 func ipport4(addr uint32, port uint16) netip.AddrPort {
-	if !endian.Big {
+	if !native.IsBigEndian {
 		addr = bits.ReverseBytes32(addr)
 	}
 	return netip.AddrPortFrom(
@@ -173,7 +173,7 @@ func ipport6(addr [16]byte, scope uint32, port uint16) netip.AddrPort {
 }
 
 func port(v *uint32) uint16 {
-	if !endian.Big {
+	if !native.IsBigEndian {
 		return uint16(bits.ReverseBytes32(*v) >> 16)
 	}
 	return uint16(*v >> 16)
