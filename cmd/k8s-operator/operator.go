@@ -380,7 +380,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		if err := a.Status().Update(ctx, svc); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to update service status: %w", err)
 		}
-		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+		return reconcile.Result{}, nil
 	}
 
 	logger.Debugf("setting ingress hostname to %q", tsHost)
