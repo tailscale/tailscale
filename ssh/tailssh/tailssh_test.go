@@ -44,6 +44,7 @@ import (
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/must"
 	"tailscale.com/util/strs"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 )
 
@@ -754,4 +755,44 @@ func TestAcceptEnvPair(t *testing.T) {
 			t.Errorf("for %q, got %v; want %v", tt.in, got, tt.want)
 		}
 	}
+}
+
+func TestPathFromPAMEnvLine(t *testing.T) {
+	u := &user.User{Username: "foo", HomeDir: "/Homes/Foo"}
+	tests := []struct {
+		line string
+		u    *user.User
+		want string
+	}{
+		{"", &user.User{}, ""},
+		{`PATH   DEFAULT="/run/wrappers/bin:@{HOME}/.nix-profile/bin:/etc/profiles/per-user/@{PAM_USER}/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin"`,
+			u, "/run/wrappers/bin:/Homes/Foo/.nix-profile/bin:/etc/profiles/per-user/foo/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin"},
+		{`PATH   DEFAULT="@{SOMETHING_ELSE}:nope:@{HOME}"`,
+			u, ""},
+	}
+	for i, tt := range tests {
+		got := pathFromPAMEnvLine([]byte(tt.line), tt.u)
+		if got != tt.want {
+			t.Errorf("%d. got %q; want %q", i, got, tt.want)
+		}
+	}
+}
+
+func TestPathFromPAMEnvLineOnNixOS(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping on non-linux")
+	}
+	if distro.Get() != distro.NixOS {
+		t.Skip("skipping on non-NixOS")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := defaultPathForUserOnNixOS(u)
+	if got == "" {
+		x, err := os.ReadFile("/etc/pam/environment")
+		t.Fatalf("no result. file was: err=%v, contents=%s", err, x)
+	}
+	t.Logf("success; got=%q", got)
 }

@@ -31,11 +31,16 @@ import (
 	"github.com/creack/pty"
 	"github.com/pkg/sftp"
 	"github.com/u-root/u-root/pkg/termios"
+	"go4.org/mem"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
+	"tailscale.com/hostinfo"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/lineread"
+	"tailscale.com/util/strs"
+	"tailscale.com/version/distro"
 )
 
 func init() {
@@ -59,7 +64,14 @@ var maybeStartLoginSession = func(logf logger.Logf, ia incubatorArgs) (close fun
 //
 // If ss.srv.tailscaledPath is empty, this method is equivalent to
 // exec.CommandContext.
-func (ss *sshSession) newIncubatorCommand() *exec.Cmd {
+//
+// The returned Cmd.Env is guaranteed to be nil; the caller populates it.
+func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
+	defer func() {
+		if cmd.Env != nil {
+			panic("internal error")
+		}
+	}()
 	var (
 		name    string
 		args    []string
@@ -292,7 +304,7 @@ func (ss *sshSession) launchProcess() error {
 	} else {
 		return err
 	}
-	cmd.Env = append(cmd.Env, envForUser(ss.conn.localUser)...)
+	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
 		if acceptEnvPair(kv) {
 			cmd.Env = append(cmd.Env, kv)
@@ -567,7 +579,64 @@ func envForUser(u *user.User) []string {
 		fmt.Sprintf("SHELL=" + loginShell(u.Uid)),
 		fmt.Sprintf("USER=" + u.Username),
 		fmt.Sprintf("HOME=" + u.HomeDir),
+		fmt.Sprintf("PATH=" + defaultPathForUser(u)),
 	}
+}
+
+func defaultPathForUser(u *user.User) string {
+	isRoot := u.Uid == "0"
+	switch distro.Get() {
+	case distro.Debian:
+		hi := hostinfo.New()
+		if hi.Distro == "ubuntu" {
+			// distro.Get's Debian includes Ubuntu. But see if it's actually Ubuntu.
+			// Ubuntu doesn't empirically seem to distinguish between root and non-root for the default.
+			// And it includes /snap/bin.
+			return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+		}
+		if isRoot {
+			return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		}
+		return "/usr/local/bin:/usr/bin:/bin:/usr/bn/games"
+	case distro.NixOS:
+		return defaultPathForUserOnNixOS(u)
+	}
+	if isRoot {
+		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	return "/usr/local/bin:/usr/bin:/bin"
+}
+
+func defaultPathForUserOnNixOS(u *user.User) string {
+	var path string
+	lineread.File("/etc/pam/environment", func(lineb []byte) error {
+		if v := pathFromPAMEnvLine(lineb, u); v != "" {
+			path = v
+			return io.EOF // stop iteration
+		}
+		return nil
+	})
+	return path
+}
+
+func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {
+	if !mem.HasPrefix(mem.B(line), mem.S("PATH")) {
+		return ""
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(string(line), "PATH"))
+	if quoted, ok := strs.CutPrefix(rest, "DEFAULT="); ok {
+		if path, err := strconv.Unquote(quoted); err == nil {
+			path = strings.NewReplacer(
+				"@{HOME}", u.HomeDir,
+				"@{PAM_USER}", u.Username,
+			).Replace(path)
+			if !strings.Contains(path, "@{") {
+				// If no more expansions, use it. Otherwise we fail closed.
+				return path
+			}
+		}
+	}
+	return ""
 }
 
 // updateStringInSlice mutates ss to change the first occurrence of a
