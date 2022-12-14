@@ -79,6 +79,14 @@ roleRef:
   name: operator
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tailscale-operator-oauth
+stringData:
+  client_id: # SET CLIENT ID HERE
+  client_secret: # SET CLIENT SECRET HERE
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -96,6 +104,10 @@ spec:
         app: tailscale-operator
     spec:
       serviceAccountName: operator
+      volumes:
+      - name: oauth
+        secret:
+          secretName: tailscale-operator-oauth
       containers:
         - name: tailscale-operator
           image: tailscale/k8s-operator:latest
@@ -108,7 +120,15 @@ spec:
               value: tailscale-operator
             - name: OPERATOR_SECRET
               value: tailscale-operator
+            - name: CLIENT_ID_FILE
+              value: /oauth/client_id
+            - name: CLIENT_SECRET_FILE
+              value: /oauth/client_secret
             - name: PROXY_IMAGE
               value: tailscale/tailscale:latest
             - name: PROXY_TAGS
               value: tag:k8s
+          volumeMounts:
+          - name: oauth
+            mountPath: /oauth
+            readOnly: true

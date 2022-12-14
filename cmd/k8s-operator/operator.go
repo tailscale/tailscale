@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/exp/slices"
+	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,22 +39,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
 )
 
 func main() {
+	// Required to use our client API. We're fine with the instability since the
+	// client lives in the same repo as this code.
+	tailscale.I_Acknowledge_This_API_Is_Unstable = true
+
 	var (
-		hostname    = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret  = defaultEnv("OPERATOR_SECRET", "")
-		tsNamespace = defaultEnv("OPERATOR_NAMESPACE", "default")
-		tslogging   = defaultEnv("OPERATOR_LOGGING", "info")
-		image       = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		tags        = defaultEnv("PROXY_TAGS", "tag:k8s")
+		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
+		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		tsNamespace      = defaultEnv("OPERATOR_NAMESPACE", "default")
+		tslogging        = defaultEnv("OPERATOR_LOGGING", "info")
+		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
+		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
+		image            = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		tags             = defaultEnv("PROXY_TAGS", "tag:k8s")
 	)
 
-	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 	var opts []kzap.Opts
 	switch tslogging {
 	case "info":
@@ -66,6 +74,25 @@ func main() {
 	zlog := kzap.NewRaw(opts...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 	startlog := zlog.Named("startup")
+
+	if clientIDPath == "" || clientSecretPath == "" {
+		startlog.Fatalf("CLIENT_ID_FILE and CLIENT_SECRET_FILE must be set")
+	}
+	clientID, err := os.ReadFile(clientIDPath)
+	if err != nil {
+		startlog.Fatalf("reading client ID %q: %v", clientIDPath, err)
+	}
+	clientSecret, err := os.ReadFile(clientSecretPath)
+	if err != nil {
+		startlog.Fatalf("reading client secret %q: %v", clientSecretPath, err)
+	}
+	credentials := clientcredentials.Config{
+		ClientID:     string(clientID),
+		ClientSecret: string(clientSecret),
+		TokenURL:     "https://login.tailscale.com/api/v2/oauth/token",
+	}
+	tsClient := tailscale.NewClient("-", nil)
+	tsClient.HTTPClient = credentials.Client(context.Background())
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
@@ -87,10 +114,11 @@ func main() {
 	}
 
 	ctx := context.Background()
-	loginShown := false
+	loginDone := false
 	machineAuthShown := false
 waitOnline:
 	for {
+		startlog.Debugf("querying tailscaled status")
 		st, err := lc.StatusWithoutPeers(ctx)
 		if err != nil {
 			startlog.Fatalf("getting status: %v", err)
@@ -99,10 +127,32 @@ waitOnline:
 		case "Running":
 			break waitOnline
 		case "NeedsLogin":
-			if !loginShown && st.AuthURL != "" {
-				startlog.Infof("tailscale needs login, please visit: %s", st.AuthURL)
-				loginShown = true
+			if loginDone {
+				break
 			}
+			caps := tailscale.KeyCapabilities{
+				Devices: tailscale.KeyDeviceCapabilities{
+					Create: tailscale.KeyDeviceCreateCapabilities{
+						Reusable:      false,
+						Preauthorized: true,
+						Tags:          strings.Split(operatorTags, ","),
+					},
+				},
+			}
+			authkey, _, err := tsClient.CreateKey(ctx, caps)
+			if err != nil {
+				startlog.Fatalf("creating operator authkey: %v", err)
+			}
+			if err := lc.Start(ctx, ipn.Options{
+				AuthKey: authkey,
+			}); err != nil {
+				startlog.Fatalf("starting tailscale: %v", err)
+			}
+			if err := lc.StartLoginInteractive(ctx); err != nil {
+				startlog.Fatalf("starting login: %v", err)
+			}
+			startlog.Debugf("requested login by authkey")
+			loginDone = true
 		case "NeedsMachineAuth":
 			if !machineAuthShown {
 				startlog.Infof("Machine authorization required, please visit the admin panel to authorize")
@@ -112,6 +162,14 @@ waitOnline:
 			startlog.Debugf("waiting for tailscale to start: %v", st.BackendState)
 		}
 		time.Sleep(time.Second)
+	}
+
+	sr := &ServiceReconciler{
+		tsClient:          tsClient,
+		defaultTags:       strings.Split(tags, ","),
+		operatorNamespace: tsNamespace,
+		proxyImage:        image,
+		logger:            zlog.Named("service-reconciler"),
 	}
 
 	// For secrets and statefulsets, we only get permission to touch the objects
@@ -134,17 +192,7 @@ waitOnline:
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
 	}
-	tsClient, err := s.APIClient()
-	if err != nil {
-		startlog.Fatalf("getting tailscale client: %v", err)
-	}
-	sr := &ServiceReconciler{
-		tsClient:          tsClient,
-		defaultTags:       strings.Split(tags, ","),
-		operatorNamespace: tsNamespace,
-		proxyImage:        image,
-		logger:            zlog.Named("service-reconciler"),
-	}
+
 	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
 		ls := o.GetLabels()
 		if ls[LabelManaged] != "true" {
