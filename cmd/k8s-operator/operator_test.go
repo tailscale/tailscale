@@ -60,7 +60,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		},
 	})
 
-	expectRequeue(t, sr, "default", "test")
+	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
 
@@ -394,7 +394,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		},
 	})
 
-	expectRequeue(t, sr, "default", "test")
+	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
 
