@@ -54,7 +54,7 @@ func main() {
 		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
 		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
 		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
-		tsNamespace      = defaultEnv("OPERATOR_NAMESPACE", "default")
+		tsNamespace      = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging        = defaultEnv("OPERATOR_LOGGING", "info")
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
