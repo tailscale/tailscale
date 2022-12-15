@@ -516,6 +516,7 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		return err
 	}
 	return nil
 }
