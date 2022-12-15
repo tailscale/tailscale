@@ -7,6 +7,7 @@ package multierr_test
 import (
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	qt "github.com/frankban/quicktest"
@@ -105,4 +106,21 @@ func TestRange(t *testing.T) {
 	C.Assert(got, qt.CmpEquals(cmp.Comparer(func(x, y error) bool {
 		return x.Error() == y.Error()
 	})), want)
+}
+
+var sink error
+
+func BenchmarkEmpty(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = multierr.New(nil, nil, nil, multierr.Error{})
+	}
+}
+
+func BenchmarkNonEmpty(b *testing.B) {
+	merr := multierr.New(io.ErrShortBuffer, io.ErrNoProgress)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = multierr.New(io.ErrUnexpectedEOF, merr, io.ErrClosedPipe)
+	}
 }
