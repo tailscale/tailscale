@@ -187,8 +187,9 @@ type tunInjectedRead struct {
 // tunVectorReadResult is the result of a tun.Read(), or an injected packet
 // pretending to be a tun.Read().
 type tunVectorReadResult struct {
-	// Only one of err, data, or injected should be set, and are read in that
-	// order of precedence.
+	// When err AND data are nil, injected will be set with meaningful data
+	// (injected packet). If either err OR data is non-nil, injected should be
+	// ignored (a "real" tun.Read).
 	err      error
 	data     [][]byte
 	injected tunInjectedRead
@@ -543,7 +544,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	if !ok {
 		return 0, io.EOF
 	}
-	if res.err != nil {
+	if res.err != nil && len(res.data) == 0 {
 		return 0, res.err
 	}
 	if res.data == nil {
@@ -595,7 +596,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	}
 
 	t.noteActivity()
-	return buffsPos, nil
+	return buffsPos, res.err
 }
 
 // injectedRead handles injected reads, which bypass filters.
