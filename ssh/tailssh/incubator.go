@@ -35,6 +35,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
@@ -583,7 +584,21 @@ func envForUser(u *user.User) []string {
 	}
 }
 
+// defaultPathTmpl specifies the default PATH template to use for new sessions.
+//
+// If empty, a default value is used based on the OS & distro to match OpenSSH's
+// usually-hardcoded behavior. (see
+// https://github.com/tailscale/tailscale/issues/5285 for background).
+//
+// The template may contain @{HOME} or @{PAM_USER} which expand to the user's
+// home directory and username, respectively. (PAM is not used, despite the
+// name)
+var defaultPathTmpl = envknob.RegisterString("TAILSCALE_SSH_DEFAULT_PATH")
+
 func defaultPathForUser(u *user.User) string {
+	if s := defaultPathTmpl(); s != "" {
+		return expandDefaultPathTmpl(s, u)
+	}
 	isRoot := u.Uid == "0"
 	switch distro.Get() {
 	case distro.Debian:
@@ -626,17 +641,22 @@ func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {
 	rest := strings.TrimSpace(strings.TrimPrefix(string(line), "PATH"))
 	if quoted, ok := strs.CutPrefix(rest, "DEFAULT="); ok {
 		if path, err := strconv.Unquote(quoted); err == nil {
-			path = strings.NewReplacer(
-				"@{HOME}", u.HomeDir,
-				"@{PAM_USER}", u.Username,
-			).Replace(path)
-			if !strings.Contains(path, "@{") {
-				// If no more expansions, use it. Otherwise we fail closed.
-				return path
-			}
+			return expandDefaultPathTmpl(path, u)
 		}
 	}
 	return ""
+}
+
+func expandDefaultPathTmpl(t string, u *user.User) string {
+	p := strings.NewReplacer(
+		"@{HOME}", u.HomeDir,
+		"@{PAM_USER}", u.Username,
+	).Replace(t)
+	if strings.Contains(p, "@{") {
+		// If there are unknown expansions, conservatively fail closed.
+		return ""
+	}
+	return p
 }
 
 // updateStringInSlice mutates ss to change the first occurrence of a

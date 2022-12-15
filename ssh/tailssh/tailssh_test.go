@@ -764,7 +764,7 @@ func TestPathFromPAMEnvLine(t *testing.T) {
 		u    *user.User
 		want string
 	}{
-		{"", &user.User{}, ""},
+		{"", u, ""},
 		{`PATH   DEFAULT="/run/wrappers/bin:@{HOME}/.nix-profile/bin:/etc/profiles/per-user/@{PAM_USER}/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin"`,
 			u, "/run/wrappers/bin:/Homes/Foo/.nix-profile/bin:/etc/profiles/per-user/foo/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin"},
 		{`PATH   DEFAULT="@{SOMETHING_ELSE}:nope:@{HOME}"`,
@@ -772,6 +772,26 @@ func TestPathFromPAMEnvLine(t *testing.T) {
 	}
 	for i, tt := range tests {
 		got := pathFromPAMEnvLine([]byte(tt.line), tt.u)
+		if got != tt.want {
+			t.Errorf("%d. got %q; want %q", i, got, tt.want)
+		}
+	}
+}
+
+func TestExpandDefaultPathTmpl(t *testing.T) {
+	u := &user.User{Username: "foo", HomeDir: "/Homes/Foo"}
+	tests := []struct {
+		t    string
+		u    *user.User
+		want string
+	}{
+		{"", u, ""},
+		{`/run/wrappers/bin:@{HOME}/.nix-profile/bin:/etc/profiles/per-user/@{PAM_USER}/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin`,
+			u, "/run/wrappers/bin:/Homes/Foo/.nix-profile/bin:/etc/profiles/per-user/foo/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin"},
+		{`@{SOMETHING_ELSE}:nope:@{HOME}`, u, ""},
+	}
+	for i, tt := range tests {
+		got := expandDefaultPathTmpl(tt.t, tt.u)
 		if got != tt.want {
 			t.Errorf("%d. got %q; want %q", i, got, tt.want)
 		}
