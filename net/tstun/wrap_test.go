@@ -6,15 +6,17 @@ package tstun
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"unsafe"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
@@ -337,7 +339,8 @@ func TestFilter(t *testing.T) {
 	}()
 
 	var buf [MaxPacketSize]byte
-	stats := new(connstats.Statistics)
+	stats := connstats.NewStatistics(0, 0, nil)
+	defer stats.Shutdown(context.Background())
 	tun.SetStatistics(stats)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -346,7 +349,7 @@ func TestFilter(t *testing.T) {
 			var filtered bool
 			sizes := make([]int, 1)
 
-			tunStats, _ := stats.Extract()
+			tunStats, _ := stats.TestExtract()
 			if len(tunStats) > 0 {
 				t.Errorf("connstats.Statistics.Extract = %v, want {}", stats)
 			}
@@ -381,7 +384,7 @@ func TestFilter(t *testing.T) {
 				}
 			}
 
-			got, _ := stats.Extract()
+			got, _ := stats.TestExtract()
 			want := map[netlogtype.Connection]netlogtype.Counts{}
 			if !tt.drop {
 				var p packet.Parsed
@@ -395,8 +398,8 @@ func TestFilter(t *testing.T) {
 					want[conn] = netlogtype.Counts{TxPackets: 1, TxBytes: uint64(len(tt.data))}
 				}
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("tun.ExtractStatistics = %v, want %v", got, want)
+			if diff := cmp.Diff(got, want, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("stats.TestExtract (-got +want):\n%s", diff)
 			}
 		})
 	}

@@ -5,6 +5,7 @@
 package connstats
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -47,7 +48,20 @@ func testPacketV4(proto ipproto.Proto, srcAddr, dstAddr [4]byte, srcPort, dstPor
 func TestConcurrent(t *testing.T) {
 	c := qt.New(t)
 
-	var stats Statistics
+	const maxPeriod = 10 * time.Millisecond
+	const maxConns = 10
+	virtualAggregate := make(map[netlogtype.Connection]netlogtype.Counts)
+	stats := NewStatistics(maxPeriod, maxConns, func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts) {
+		c.Assert(start.IsZero(), qt.IsFalse)
+		c.Assert(end.IsZero(), qt.IsFalse)
+		c.Assert(end.Before(start), qt.IsFalse)
+		c.Assert(len(virtual) > 0 && len(virtual) <= maxConns, qt.IsTrue)
+		c.Assert(len(physical) == 0, qt.IsTrue)
+		for conn, cnts := range virtual {
+			virtualAggregate[conn] = virtualAggregate[conn].Add(cnts)
+		}
+	})
+	defer stats.Shutdown(context.Background())
 	var wants []map[netlogtype.Connection]netlogtype.Counts
 	gots := make([]map[netlogtype.Connection]netlogtype.Counts, runtime.NumCPU())
 	var group sync.WaitGroup
@@ -95,14 +109,9 @@ func TestConcurrent(t *testing.T) {
 			}
 		}(i)
 	}
-	for range gots {
-		virtual, _ := stats.Extract()
-		wants = append(wants, virtual)
-		time.Sleep(time.Millisecond)
-	}
 	group.Wait()
-	virtual, _ := stats.Extract()
-	wants = append(wants, virtual)
+	c.Assert(stats.Shutdown(context.Background()), qt.IsNil)
+	wants = append(wants, virtualAggregate)
 
 	got := make(map[netlogtype.Connection]netlogtype.Counts)
 	want := make(map[netlogtype.Connection]netlogtype.Counts)
@@ -126,7 +135,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			var s Statistics
+			s := NewStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				s.UpdateTxVirtual(p)
 			}
@@ -137,7 +146,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			var s Statistics
+			s := NewStatistics(0, 0, nil)
 			for j := 0; j < 1e3; j++ {
 				binary.BigEndian.PutUint32(p[20:], uint32(j)) // unique port combination
 				s.UpdateTxVirtual(p)
@@ -149,7 +158,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			var s Statistics
+			s := NewStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {
 				group.Add(1)
@@ -171,7 +180,7 @@ func Benchmark(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			var s Statistics
+			s := NewStatistics(0, 0, nil)
 			var group sync.WaitGroup
 			for j := 0; j < runtime.NumCPU(); j++ {
 				group.Add(1)
