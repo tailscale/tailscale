@@ -34,7 +34,7 @@ require (
 	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/illarion/gonotify v1.0.1
-	github.com/insomniacslk/dhcp v0.0.0-20211209223715-7d93572ebe8e
+	github.com/insomniacslk/dhcp v0.0.0-20221215072855-de60144f33f8
 	github.com/josharian/native v1.0.1-0.20221213033349-c1e37c09b531
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -287,7 +287,7 @@ require (
 	github.com/timakin/bodyclose v0.0.0-20210704033933-f49887972144 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.4.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.4.0 // indirect
-	github.com/u-root/uio v0.0.0-20221210192040-301ac5150d9e // indirect
+	github.com/u-root/uio v0.0.0-20221213070652-c3537552635f // indirect
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	github.com/ultraware/funlen v0.0.3 // indirect
 	github.com/ultraware/whitespace v0.0.4 // indirect
