@@ -53,7 +53,31 @@ func (e Error) Unwrap() []error {
 // If the resulting slice has length 1, New returns that error.
 // If the resulting slice has length > 1, New returns that slice as an Error.
 func New(errs ...error) error {
-	dst := make([]error, 0, len(errs))
+	// First count the number of errors to avoid allocating.
+	var n int
+	var errFirst error
+	for _, e := range errs {
+		switch e := e.(type) {
+		case nil:
+			continue
+		case Error:
+			n += len(e.errs)
+			if errFirst == nil && len(e.errs) > 0 {
+				errFirst = e.errs[0]
+			}
+		default:
+			n++
+			if errFirst == nil {
+				errFirst = e
+			}
+		}
+	}
+	if n <= 1 {
+		return errFirst // nil if n == 0
+	}
+
+	// More than one error, allocate slice and construct the multi-error.
+	dst := make([]error, 0, n)
 	for _, e := range errs {
 		switch e := e.(type) {
 		case nil:
@@ -63,18 +87,6 @@ func New(errs ...error) error {
 		default:
 			dst = append(dst, e)
 		}
-	}
-	// dst has been filtered and splatted.
-	switch len(dst) {
-	case 0:
-		return nil
-	case 1:
-		return dst[0]
-	}
-	// Zero any remaining elements of dst left over from errs, for GC.
-	tail := dst[len(dst):cap(dst)]
-	for i := range tail {
-		tail[i] = nil
 	}
 	return Error{errs: dst}
 }
