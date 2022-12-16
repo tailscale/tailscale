@@ -347,6 +347,31 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
+			Name: "kube_disk_storage",
+			Env: map[string]string{
+				"KUBERNETES_SERVICE_HOST":       kube.Host,
+				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
+				// Explicitly set to an empty value, to override the default of "tailscale".
+				"TS_KUBE_SECRET": "",
+				"TS_STATE_DIR":   filepath.Join(d, "tmp"),
+				"TS_AUTH_KEY":    "tskey-key",
+			},
+			KubeSecret: map[string]string{},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+					WantKubeSecret: map[string]string{},
+				},
+				{
+					Notify:         runningNotify,
+					WantKubeSecret: map[string]string{},
+				},
+			},
+		},
+		{
 			Name: "kube_storage_no_patch",
 			Env: map[string]string{
 				"KUBERNETES_SERVICE_HOST":       kube.Host,

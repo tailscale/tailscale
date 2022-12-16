@@ -4,13 +4,13 @@
 
 //go:build linux
 
-// The containerboot binary is a wrapper for starting tailscaled in a
-// container. It handles reading the desired mode of operation out of
-// environment variables, bringing up and authenticating Tailscale,
-// and any other kubernetes-specific side jobs.
+// The containerboot binary is a wrapper for starting tailscaled in a container.
+// It handles reading the desired mode of operation out of environment
+// variables, bringing up and authenticating Tailscale, and any other
+// kubernetes-specific side jobs.
 //
-// As with most container things, configuration is passed through
-// environment variables. All configuration is optional.
+// As with most container things, configuration is passed through environment
+// variables. All configuration is optional.
 //
 //   - TS_AUTH_KEY: the authkey to use for login.
 //   - TS_ROUTES: subnet routes to advertise.
@@ -37,9 +37,13 @@
 //     compatibility), forcibly log in every time the
 //     container starts.
 //
-// When running on Kubernetes, TS_KUBE_SECRET takes precedence over
-// TS_STATE_DIR. Additionally, if TS_AUTH_KEY is not provided and the
-// TS_KUBE_SECRET contains an "authkey" field, that key is used.
+// When running on Kubernetes, containerboot defaults to storing state in the
+// "tailscale" kube secret. To store state on local disk instead, set
+// TS_KUBE_SECRET="" and TS_STATE_DIR=/path/to/storage/dir. The state dir should
+// be persistent storage.
+//
+// Additionally, if TS_AUTH_KEY is not set and the TS_KUBE_SECRET contains an
+// "authkey" field, that key is used as the tailscale authkey.
 package main
 
 import (
@@ -538,7 +542,7 @@ type settings struct {
 // defaultEnv returns the value of the given envvar name, or defVal if
 // unset.
 func defaultEnv(name, defVal string) string {
-	if v := os.Getenv(name); v != "" {
+	if v, ok := os.LookupEnv(name); ok {
 		return v
 	}
 	return defVal
