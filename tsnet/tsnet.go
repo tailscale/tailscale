@@ -765,13 +765,12 @@ func (s *Server) ExposeHTTPS() (net.Listener, error) {
 	srvConfig := &ipn.ServeConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
 			443: &ipn.TCPPortHandler{
-				TCPForward:   ln.Addr().String(),
 				HTTPS: true,
 			},
 		},
 		Web: map[ipn.HostPort]*ipn.WebServerConfig{
 			hp: &ipn.WebServerConfig{
-				Handlers: map[string]*ipn.HTTPHandler {
+				Handlers: map[string]*ipn.HTTPHandler{
 					"/": &ipn.HTTPHandler{Proxy: ln.Addr().String()},
 				},
 			},
@@ -793,11 +792,11 @@ type funnelListenerWrapper struct {
 	s *Server
 }
 
-func (flw *funnelListenerWrapper) Accept() (net.Conn, error) {	
+func (flw *funnelListenerWrapper) Accept() (net.Conn, error) {
 	conn, err := flw.Listener.Accept()
 
 	flw.s.logf("got connection from %s", conn.RemoteAddr())
-	
+
 	return conn, err
 }
 
