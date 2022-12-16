@@ -30,6 +30,15 @@ type Message struct {
 }
 
 const (
+	messageJSON      = `{"nodeId":"n0123456789abcdefCNTRL",` + maxJSONTimeRange + `,` + minJSONTraffic + `}`
+	maxJSONTimeRange = `"start":` + maxJSONRFC3339 + `,"end":` + maxJSONRFC3339
+	maxJSONRFC3339   = `"0001-01-01T00:00:00.000000000Z"`
+	minJSONTraffic   = `"virtualTraffic":{},"subnetTraffic":{},"exitTraffic":{},"physicalTraffic":{}`
+
+	// MaxMessageJSONSize is the overhead size of Message when it is
+	// serialized as JSON assuming that each traffic map is populated.
+	MaxMessageJSONSize = len(messageJSON)
+
 	maxJSONConnCounts = `{` + maxJSONConn + `,` + maxJSONCounts + `}`
 	maxJSONConn       = `"proto":` + maxJSONProto + `,"src":` + maxJSONAddrPort + `,"dst":` + maxJSONAddrPort
 	maxJSONProto      = `255`
