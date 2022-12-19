@@ -545,7 +545,7 @@ func (b *LocalBackend) sanitizedPrefsLocked() ipn.PrefsView {
 // Status returns the latest status of the backend and its
 // sub-components.
 func (b *LocalBackend) Status() *ipnstate.Status {
-	sb := new(ipnstate.StatusBuilder)
+	sb := &ipnstate.StatusBuilder{WantPeers: true}
 	b.UpdateStatus(sb)
 	return sb.Status()
 }
@@ -553,15 +553,19 @@ func (b *LocalBackend) Status() *ipnstate.Status {
 // StatusWithoutPeers is like Status but omits any details
 // of peers.
 func (b *LocalBackend) StatusWithoutPeers() *ipnstate.Status {
-	sb := new(ipnstate.StatusBuilder)
-	b.updateStatus(sb, nil)
+	sb := &ipnstate.StatusBuilder{WantPeers: false}
+	b.UpdateStatus(sb)
 	return sb.Status()
 }
 
 // UpdateStatus implements ipnstate.StatusUpdater.
 func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	b.e.UpdateStatus(sb)
-	b.updateStatus(sb, b.populatePeerStatusLocked)
+	var extraLocked func(*ipnstate.StatusBuilder)
+	if sb.WantPeers {
+		extraLocked = b.populatePeerStatusLocked
+	}
+	b.updateStatus(sb, extraLocked)
 }
 
 // updateStatus populates sb with status.

@@ -1265,13 +1265,15 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		e.logf("wgengine: getStatus: %v", err)
 		return
 	}
-	for _, ps := range st.Peers {
-		sb.AddPeer(ps.NodeKey, &ipnstate.PeerStatus{
-			RxBytes:       int64(ps.RxBytes),
-			TxBytes:       int64(ps.TxBytes),
-			LastHandshake: ps.LastHandshake,
-			InEngine:      true,
-		})
+	if sb.WantPeers {
+		for _, ps := range st.Peers {
+			sb.AddPeer(ps.NodeKey, &ipnstate.PeerStatus{
+				RxBytes:       int64(ps.RxBytes),
+				TxBytes:       int64(ps.TxBytes),
+				LastHandshake: ps.LastHandshake,
+				InEngine:      true,
+			})
+		}
 	}
 
 	e.magicConn.UpdateStatus(sb)

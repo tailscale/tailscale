@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"go4.org/netipx"
+	"tailscale.com/control/controlclient"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
@@ -742,6 +744,45 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 		})
 	}
 
+}
+
+func TestStatusWithoutPeers(t *testing.T) {
+	logf := tstest.WhileTestRunningLogger(t)
+	store := new(testStateStorage)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	if err != nil {
+		t.Fatalf("NewFakeUserspaceEngine: %v", err)
+	}
+	t.Cleanup(e.Close)
+
+	b, err := NewLocalBackend(logf, "logid", store, "", nil, e, 0)
+	if err != nil {
+		t.Fatalf("NewLocalBackend: %v", err)
+	}
+	var cc *mockControl
+	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
+		cc = newClient(t, opts)
+
+		t.Logf("ccGen: new mockControl.")
+		cc.called("New")
+		return cc, nil
+	})
+	b.Start(ipn.Options{})
+	b.Login(nil)
+	cc.send(nil, "", false, &netmap.NetworkMap{
+		MachineStatus: tailcfg.MachineAuthorized,
+		Addresses:     ipps("100.101.101.101"),
+		SelfNode: &tailcfg.Node{
+			Addresses: ipps("100.101.101.101"),
+		},
+	})
+	got := b.StatusWithoutPeers()
+	if got.TailscaleIPs == nil {
+		t.Errorf("got nil, expected TailscaleIPs value to not be nil")
+	}
+	if !reflect.DeepEqual(got.TailscaleIPs, got.Self.TailscaleIPs) {
+		t.Errorf("got %v, expected %v", got.TailscaleIPs, got.Self.TailscaleIPs)
+	}
 }
 
 // legacyBackend was the interface between Tailscale frontends
