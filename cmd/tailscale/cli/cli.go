@@ -142,7 +142,7 @@ func Run(args []string) (err error) {
 	})
 
 	rootfs := newFlagSet("tailscale")
-	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled's unix socket")
+	rootfs.StringVar(&rootArgs.socket, "socket", paths.DefaultTailscaledSocket(), "path to tailscaled socket")
 
 	rootCmd := &ffcli.Command{
 		Name:       "tailscale",
@@ -297,7 +297,14 @@ func usageFuncOpt(c *ffcli.Command, withDefaults bool) string {
 			s += "\n    \t"
 			s += strings.ReplaceAll(usage, "\n", "\n    \t")
 
-			if f.DefValue != "" && withDefaults {
+			showDefault := f.DefValue != "" && withDefaults
+			// Issue 6766: don't show the default Windows socket path. It's long
+			// and distracting. And people on on Windows aren't likely to ever
+			// change it anyway.
+			if runtime.GOOS == "windows" && f.Name == "socket" && strings.HasPrefix(f.DefValue, `\\.\pipe\ProtectedPrefix\`) {
+				showDefault = false
+			}
+			if showDefault {
 				s += fmt.Sprintf(" (default %s)", f.DefValue)
 			}
 
