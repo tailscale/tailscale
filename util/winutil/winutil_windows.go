@@ -172,7 +172,7 @@ func deleteRegValueInternal(subKey, name string) error {
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err == registry.ErrNotExist {
+		if err != registry.ErrNotExist {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return 0, err
