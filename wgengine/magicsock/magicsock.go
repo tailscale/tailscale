@@ -3545,12 +3545,14 @@ func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 		ss.TailscaleIPs = tailscaleIPs
 	})
 
-	c.peerMap.forEachEndpoint(func(ep *endpoint) {
-		ps := &ipnstate.PeerStatus{InMagicSock: true}
-		//ps.Addrs = append(ps.Addrs, n.Endpoints...)
-		ep.populatePeerStatus(ps)
-		sb.AddPeer(ep.publicKey, ps)
-	})
+	if sb.WantPeers {
+		c.peerMap.forEachEndpoint(func(ep *endpoint) {
+			ps := &ipnstate.PeerStatus{InMagicSock: true}
+			//ps.Addrs = append(ps.Addrs, n.Endpoints...)
+			ep.populatePeerStatus(ps)
+			sb.AddPeer(ep.publicKey, ps)
+		})
+	}
 
 	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
 		// TODO(bradfitz): add to ipnstate.StatusBuilder

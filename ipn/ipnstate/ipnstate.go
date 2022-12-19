@@ -245,6 +245,8 @@ type PeerStatus struct {
 }
 
 type StatusBuilder struct {
+	WantPeers bool // whether caller wants peers
+
 	mu     sync.Mutex
 	locked bool
 	st     Status

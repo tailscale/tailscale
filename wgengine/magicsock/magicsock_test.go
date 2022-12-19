@@ -219,6 +219,7 @@ func (s *magicStack) Public() key.NodePublic {
 
 func (s *magicStack) Status() *ipnstate.Status {
 	var sb ipnstate.StatusBuilder
+	sb.WantPeers = true
 	s.conn.UpdateStatus(&sb)
 	return sb.Status()
 }
