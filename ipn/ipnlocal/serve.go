@@ -210,6 +210,20 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
 	}
 
+	// Close connections to proxy backends that are no longer present
+	// in configuration.
+	backends := make(map[string]bool)
+	for _, conf := range config.Web {
+		for _, h := range conf.Handlers {
+			backends[h.Proxy] = true
+		}
+	}
+	for be, tr := range b.serveProxyTransports {
+		if !backends[be] {
+			tr.CloseIdleConnections()
+		}
+	}
+
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 
 	return nil
@@ -415,12 +429,17 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rp := httputil.NewSingleHostReverseProxy(u)
-		rp.Transport = &http.Transport{
-			DialContext: b.dialer.SystemDial,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: insecure,
-			},
+		b.mu.Lock()
+		if _, ok := b.serveProxyTransports[v]; !ok {
+			mak.Set(&b.serveProxyTransports, v, &http.Transport{
+				DialContext: b.dialer.SystemDial,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: insecure,
+				},
+			})
 		}
+		rp.Transport = b.serveProxyTransports[v]
+		b.mu.Unlock()
 		rp.ServeHTTP(w, r)
 		return
 	}

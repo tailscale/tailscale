@@ -206,7 +206,8 @@ type LocalBackend struct {
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView // or !Valid if none
 
-	serveListeners map[netip.AddrPort]*serveListener // addrPort => serveListener
+	serveListeners       map[netip.AddrPort]*serveListener // addrPort => serveListener
+	serveProxyTransports map[string]*http.Transport        // proxy backend (HTTPHandler.Proxy) => http.Transport
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
