@@ -427,8 +427,8 @@ const (
 	// The RFCs don't specify the max size of a TCP-based DNS query,
 	// but we want to keep this reasonable. Given payloads are typically
 	// much larger and all known client send a single query, I've arbitrarily
-	// chosen 2k.
-	maxReqSizeTCP = 2048
+	// chosen 4k.
+	maxReqSizeTCP = 4096
 )
 
 // dnsTCPSession services DNS requests sent over TCP.
