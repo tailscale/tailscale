@@ -210,22 +210,7 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
 	}
 
-	// Close connections to proxy backends that are no longer present
-	// in configuration.
-	backends := make(map[string]bool)
-	for _, conf := range config.Web {
-		for _, h := range conf.Handlers {
-			backends[h.Proxy] = true
-		}
-	}
-	for be, tr := range b.serveProxyTransports {
-		if !backends[be] {
-			tr.CloseIdleConnections()
-		}
-	}
-
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
-
 	return nil
 }
 
@@ -403,6 +388,24 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	}
 }
 
+// proxyHandlerForBackend creates a new HTTP reverse proxy for a particular backend that
+// we serve requests for. `backend` is a HTTPHandler.Proxy string (url, hostport or just port).
+func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.ReverseProxy, error) {
+	targetURL, insecure := expandProxyArg(backend)
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
+	}
+	rp := httputil.NewSingleHostReverseProxy(u)
+	rp.Transport = &http.Transport{
+		DialContext: b.dialer.SystemDial,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecure,
+		},
+	}
+	return rp, nil
+}
+
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	h, mountPoint, ok := b.getServeHandler(r)
 	if !ok {
@@ -419,28 +422,12 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v := h.Proxy(); v != "" {
-		// TODO(bradfitz): this is a lot of setup per HTTP request. We should
-		// build the whole http.Handler with all the muxing and child handlers
-		// only on start/config change. But this works for now (2022-11-09).
-		targetURL, insecure := expandProxyArg(v)
-		u, err := url.Parse(targetURL)
-		if err != nil {
-			http.Error(w, "bad proxy config", http.StatusInternalServerError)
+		p, ok := b.serveProxyHandlers.Load(v)
+		if !ok {
+			http.Error(w, "unknown proxy destination", http.StatusInternalServerError)
 			return
 		}
-		rp := httputil.NewSingleHostReverseProxy(u)
-		b.mu.Lock()
-		if _, ok := b.serveProxyTransports[v]; !ok {
-			mak.Set(&b.serveProxyTransports, v, &http.Transport{
-				DialContext: b.dialer.SystemDial,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: insecure,
-				},
-			})
-		}
-		rp.Transport = b.serveProxyTransports[v]
-		b.mu.Unlock()
-		rp.ServeHTTP(w, r)
+		p.(http.Handler).ServeHTTP(w, r)
 		return
 	}
 

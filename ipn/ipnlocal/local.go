@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -206,8 +207,8 @@ type LocalBackend struct {
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView // or !Valid if none
 
-	serveListeners       map[netip.AddrPort]*serveListener // addrPort => serveListener
-	serveProxyTransports map[string]*http.Transport        // proxy backend (HTTPHandler.Proxy) => http.Transport
+	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
+	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => httputil.ReverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -3774,6 +3775,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 			return true
 		})
 		handlePorts = append(handlePorts, servePorts...)
+
+		b.setServeProxyHandlersLocked()
+
 		// don't listen on netmap addresses if we're in userspace mode
 		if !wgengine.IsNetstack(b.e) {
 			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
@@ -3787,6 +3791,46 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.setTCPPortsIntercepted(handlePorts)
+}
+
+// setServeProxyHandlersLocked ensures there is an http proxy handler for each
+// backend specified in serveConfig. It expects serveConfig to be valid and
+// up-to-date, so should be called after reloadServeConfigLocked.
+func (b *LocalBackend) setServeProxyHandlersLocked() {
+	if !b.serveConfig.Valid() {
+		return
+	}
+	config := b.serveConfig.AsStruct()
+	backends := make(map[string]bool)
+	for _, conf := range config.Web {
+		for _, h := range conf.Handlers {
+			backends[h.Proxy] = true
+			if _, ok := b.serveProxyHandlers.Load(h.Proxy); ok {
+				continue
+			}
+
+			b.logf("creating a new proxy handler for %s", h.Proxy)
+			p, err := b.proxyHandlerForBackend(h.Proxy)
+			if err != nil {
+				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
+				// in the CLI, so just log the error here.
+				b.logf("[unexpected] could not create proxy for %v: %s", h.Proxy, err)
+				continue
+			}
+			b.serveProxyHandlers.Store(h.Proxy, p)
+		}
+	}
+	// Clean up handlers for proxy backends that are no longer present
+	// in configuration.
+	b.serveProxyHandlers.Range(func(key, value any) bool {
+		backend := key.(string)
+		if !backends[backend] {
+			b.logf("closing idle connections to %s", backend)
+			value.(*httputil.ReverseProxy).Transport.(*http.Transport).CloseIdleConnections()
+			b.serveProxyHandlers.Delete(backend)
+		}
+		return true
+	})
 }
 
 // operatorUserName returns the current pref's OperatorUser's name, or the
