@@ -37,6 +37,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
 	"tailscale.com/health"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/connstats"
@@ -3208,6 +3209,14 @@ type RebindingUDPConn struct {
 func upgradePacketConn(p nettype.PacketConn, network string) nettype.PacketConn {
 	uc, ok := p.(*net.UDPConn)
 	if ok && runtime.GOOS == "linux" && (network == "udp4" || network == "udp6") {
+		// recvmmsg/sendmmsg were added in 2.6.33 but we support down to 2.6.32
+		// for old NAS devices. See https://github.com/tailscale/tailscale/issues/6807.
+		// As a cheap heuristic: if the Linux kernel starts with "2", just consider
+		// it too old for the fast paths. Nobody who cares about performance runs such
+		// ancient kernels.
+		if strings.HasPrefix(hostinfo.GetOSVersion(), "2") {
+			return p
+		}
 		// Non-Linux does not support batch operations. x/net will fall back to
 		// recv/sendmsg, but not all platforms have recv/sendmsg support. Keep
 		// this simple for now.
