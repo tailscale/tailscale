@@ -31,9 +31,10 @@ import (
 )
 
 var (
-	src = flag.String("src", "", "Source image")
-	dst = flag.String("dst", "", "Destination image")
-	max = flag.Int("max", 0, "Maximum number of tags to sync (0 for all tags)")
+	src    = flag.String("src", "", "Source image")
+	dst    = flag.String("dst", "", "Destination image")
+	max    = flag.Int("max", 0, "Maximum number of tags to sync (0 for all tags)")
+	dryRun = flag.Bool("dry-run", true, "Don't actually sync anything")
 )
 
 func main() {
@@ -69,9 +70,13 @@ func main() {
 		}
 	}
 	for _, tag := range add {
-		log.Printf("Syncing tag %q", tag)
-		if err := copyTag(*src, *dst, tag, opts...); err != nil {
-			log.Printf("Syncing tag %q: progress error: %v", tag, err)
+		if !*dryRun {
+			log.Printf("Syncing tag %q", tag)
+			if err := copyTag(*src, *dst, tag, opts...); err != nil {
+				log.Printf("Syncing tag %q: progress error: %v", tag, err)
+			}
+		} else {
+			log.Printf("Dry run: would sync tag %q", tag)
 		}
 	}
 
