@@ -29,6 +29,7 @@ require (
 	github.com/godbus/dbus/v5 v5.0.6
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/google/go-cmp v0.5.8
+	github.com/google/go-containerregistry v0.9.0
 	github.com/google/uuid v1.3.0
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3
@@ -184,7 +185,6 @@ require (
 	github.com/golangci/unconvert v0.0.0-20180507085042-28b1c447d1f4 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	github.com/google/gnostic v0.5.7-v3refs // indirect
-	github.com/google/go-containerregistry v0.9.0 // indirect
 	github.com/google/gofuzz v1.1.0 // indirect
 	github.com/google/goterm v0.0.0-20200907032337-555d40f16ae2 // indirect
 	github.com/google/rpmpack v0.0.0-20201206194719-59e495f2b7e1 // indirect
