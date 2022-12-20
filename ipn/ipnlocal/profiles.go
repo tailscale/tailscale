@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/netip"
 	"runtime"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/strs"
+	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 )
 
@@ -403,6 +405,20 @@ func (pm *profileManager) NewProfile() {
 var emptyPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
 	prefs.WantRunning = false
+
+	prefs.ControlURL = winutil.GetPolicyString("LoginURL", "")
+
+	if exitNode := winutil.GetPolicyString("ExitNodeIP", ""); exitNode != "" {
+		if ip, err := netip.ParseAddr(exitNode); err == nil {
+			prefs.ExitNodeIP = ip
+		}
+	}
+
+	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
+	// backend), so this has to convert between the two conventions.
+	prefs.ShieldsUp = winutil.GetPolicyString("AllowIncomingConnections", "") == "never"
+	prefs.ForceDaemon = winutil.GetPolicyString("UnattendedMode", "") == "always"
+
 	return prefs.View()
 }()
 
