@@ -330,7 +330,11 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.ControlURL = upArgs.server
 	prefs.WantRunning = true
 	prefs.RouteAll = upArgs.acceptRoutes
-
+	if distro.Get() == distro.Synology {
+		// ipn.NewPrefs returns a non-zero Netfilter default. But Synology only
+		// supports "off" mode.
+		prefs.NetfilterMode = preftype.NetfilterOff
+	}
 	if upArgs.exitNodeIP != "" {
 		if err := prefs.SetExitNodeIP(upArgs.exitNodeIP, st); err != nil {
 			var e ipn.ExitNodeLocalIPError
@@ -877,6 +881,10 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 		}
 		if flagName == "accept-routes" && valNew == false && env.goos == "linux" && env.distro == distro.Synology {
 			// Issue 3176. Old prefs had 'RouteAll: true' on disk, so ignore that.
+			continue
+		}
+		if flagName == "netfilter-mode" && valNew == preftype.NetfilterOn && env.goos == "linux" && env.distro == distro.Synology {
+			// Issue 6811. Ignore on Synology.
 			continue
 		}
 		missing = append(missing, fmtFlagValueArg(flagName, valCur))
