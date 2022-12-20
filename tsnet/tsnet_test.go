@@ -28,11 +28,15 @@ func TestListenerPort(t *testing.T) {
 		wantErr bool
 	}{
 		{"tcp", ":80", false},
+		{"tcp4", ":9001", false},
+		{"tcp6", ":10023", false},
+		{"tcp", ":80", false},
 		{"foo", ":80", true},
 		{"tcp", ":http", false},  // built-in name to Go; doesn't require cgo, /etc/services
 		{"tcp", ":https", false}, // built-in name to Go; doesn't require cgo, /etc/services
 		{"tcp", ":gibberishsdlkfj", true},
 		{"tcp", ":%!d(string=80)", true}, // issue 6201
+		{"tcp", "wharrgarbl:2023", true}, // issue 6815
 	}
 	for _, tt := range tests {
 		s := &Server{}

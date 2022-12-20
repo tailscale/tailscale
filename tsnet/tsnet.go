@@ -102,7 +102,7 @@ type Server struct {
 	logtail          *logtail.Logger
 
 	mu        sync.Mutex
-	listeners map[listenKey]*listener
+	listeners map[tcpListenKey]*listener
 	dialer    *tsdial.Dialer
 }
 
@@ -441,7 +441,7 @@ func (s *Server) printAuthURLLoop() {
 
 func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	s.mu.Lock()
-	ln, ok := s.listeners[listenKey{"tcp", "", port}]
+	ln, ok := s.listeners[tcpListenKey{port: port}]
 	s.mu.Unlock()
 	if !ok {
 		c.Close()
@@ -517,6 +517,7 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
+// The addr must not include a hostname, only a port, for example ":80".
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	switch network {
 	case "", "tcp", "tcp4", "tcp6":
@@ -527,6 +528,9 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tsnet: %w", err)
 	}
+	if host != "" {
+		return nil, errors.New("tsnet: a non-empty hostname is not supported")
+	}
 	port, err := net.LookupPort(network, portStr)
 	if err != nil || port < 0 || port > math.MaxUint16 {
 		return nil, fmt.Errorf("invalid port: %w", err)
@@ -535,10 +539,11 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 		return nil, err
 	}
 
-	key := listenKey{network, host, uint16(port)}
+	key := tcpListenKey{port: uint16(port)}
 	ln := &listener{
 		s:    s,
 		key:  key,
+		net:  network,
 		addr: addr,
 
 		conn: make(chan net.Conn),
@@ -553,15 +558,14 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return ln, nil
 }
 
-type listenKey struct {
-	network string
-	host    string
-	port    uint16
+type tcpListenKey struct {
+	port uint16
 }
 
 type listener struct {
 	s    *Server
-	key  listenKey
+	key  tcpListenKey
+	net  string
 	addr string
 	conn chan net.Conn
 }
@@ -590,5 +594,5 @@ func (ln *listener) Server() *Server { return ln.s }
 
 type addr struct{ ln *listener }
 
-func (a addr) Network() string { return a.ln.key.network }
+func (a addr) Network() string { return a.ln.net }
 func (a addr) String() string  { return a.ln.addr }
