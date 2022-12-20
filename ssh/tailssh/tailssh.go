@@ -368,8 +368,8 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		}
 		lu, err := user.Lookup(localUser)
 		if err != nil {
-			c.logf("failed to lookup %v: %v", localUser, err)
-			ctx.SendAuthBanner(fmt.Sprintf("failed to lookup %v\r\n", localUser))
+			c.logf("failed to look up %v: %v", localUser, err)
+			ctx.SendAuthBanner(fmt.Sprintf("failed to look up %v\r\n", localUser))
 			return err
 		}
 		gids, err := lu.GroupIds()
