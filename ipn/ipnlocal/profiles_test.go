@@ -53,7 +53,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	} else if pm.currentProfile.ID != "" {
 		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
 	}
-	if !pm.CurrentPrefs().Equals(emptyPrefs) {
+	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
 	}
 
@@ -67,7 +67,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 	} else if pm.currentProfile.ID != "" {
 		t.Fatalf("currentProfile.ID = %q, want empty", pm.currentProfile.ID)
 	}
-	if !pm.CurrentPrefs().Equals(emptyPrefs) {
+	if !pm.CurrentPrefs().Equals(defaultPrefs) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
 	}
 }
@@ -159,7 +159,7 @@ func TestProfileManagement(t *testing.T) {
 	}
 	wantCurProfile := ""
 	wantProfiles := map[string]ipn.PrefsView{
-		"": emptyPrefs,
+		"": defaultPrefs,
 	}
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
@@ -237,7 +237,7 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Create new profile")
 	pm.NewProfile()
 	wantCurProfile = ""
-	wantProfiles[""] = emptyPrefs
+	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
 
 	{
@@ -276,7 +276,7 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Create new profile - 2")
 	pm.NewProfile()
 	wantCurProfile = ""
-	wantProfiles[""] = emptyPrefs
+	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
 
 	t.Logf("Login with the existing profile")
@@ -310,7 +310,7 @@ func TestProfileManagementWindows(t *testing.T) {
 	}
 	wantCurProfile := ""
 	wantProfiles := map[string]ipn.PrefsView{
-		"": emptyPrefs,
+		"": defaultPrefs,
 	}
 	checkProfiles := func(t *testing.T) {
 		t.Helper()
@@ -363,7 +363,7 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Logf("Create new profile")
 		pm.NewProfile()
 		wantCurProfile = ""
-		wantProfiles[""] = emptyPrefs
+		wantProfiles[""] = defaultPrefs
 		checkProfiles(t)
 
 		t.Logf("Save as test profile")
@@ -380,7 +380,7 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantCurProfile = ""
-	wantProfiles[""] = emptyPrefs
+	wantProfiles[""] = defaultPrefs
 	checkProfiles(t)
 
 	{

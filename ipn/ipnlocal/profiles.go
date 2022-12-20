@@ -324,7 +324,7 @@ func (pm *profileManager) setAsUserSelectedProfileLocked() error {
 func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error) {
 	bs, err := pm.store.ReadState(key)
 	if err == ipn.ErrStateNotExist || len(bs) == 0 {
-		return emptyPrefs, nil
+		return defaultPrefs, nil
 	}
 	if err != nil {
 		return ipn.PrefsView{}, err
@@ -396,13 +396,13 @@ func (pm *profileManager) writeKnownProfiles() error {
 func (pm *profileManager) NewProfile() {
 	metricNewProfile.Add(1)
 
-	pm.prefs = emptyPrefs
+	pm.prefs = defaultPrefs
 	pm.isNewProfile = true
 	pm.currentProfile = &ipn.LoginProfile{}
 }
 
-// emptyPrefs is the default prefs for a new profile.
-var emptyPrefs = func() ipn.PrefsView {
+// defaultPrefs is the default prefs for a new profile.
+var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
 	prefs.WantRunning = false
 
