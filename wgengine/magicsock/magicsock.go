@@ -36,6 +36,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
@@ -1946,6 +1947,12 @@ const (
 	discoVerboseLog
 )
 
+// TS_DISCO_PONG_IPV4_DELAY, if set, is a time.Duration string that is how much
+// fake latency to add before replying to disco pings. This can be used to bias
+// peers towards using IPv6 when both IPv4 and IPv6 are available at similar
+// speeds.
+var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DELAY")
+
 // sendDiscoMessage sends discovery message m to dstDisco at dst.
 //
 // If dst is a DERP IP:port, then dstKey must be non-zero.
@@ -1953,6 +1960,11 @@ const (
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
 func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
+	isDERP := dst.Addr() == derpMagicIPAddr
+	if _, isPong := m.(*disco.Pong); isPong && !isDERP && dst.Addr().Is4() {
+		time.Sleep(debugIPv4DiscoPingPenalty())
+	}
+
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1968,7 +1980,6 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	di := c.discoInfoLocked(dstDisco)
 	c.mu.Unlock()
 
-	isDERP := dst.Addr() == derpMagicIPAddr
 	if isDERP {
 		metricSendDiscoDERP.Add(1)
 	} else {
