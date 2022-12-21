@@ -1742,6 +1742,24 @@ func (b *LocalBackend) readPoller() {
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 
+	origFn := fn
+	if mask&ipn.NotifyNoPrivateKeys != 0 {
+		fn = func(n *ipn.Notify) bool {
+			if n.NetMap == nil || n.NetMap.PrivateKey.IsZero() {
+				return origFn(n)
+			}
+
+			// The netmap in n is shared across all watchers, so to mutate it for a
+			// single watcher we have to clone the notify and the netmap. We can
+			// make shallow clones, at least.
+			nm2 := *n.NetMap
+			n2 := *n
+			n2.NetMap = &nm2
+			n2.NetMap.PrivateKey = key.NodePrivate{}
+			return origFn(&n2)
+		}
+	}
+
 	var ini *ipn.Notify
 
 	b.mu.Lock()

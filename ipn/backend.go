@@ -65,6 +65,8 @@ const (
 	NotifyInitialState  // if set, the first Notify message (sent immediately) will contain the current State + BrowseToURL
 	NotifyInitialPrefs  // if set, the first Notify message (sent immediately) will contain the current Prefs
 	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
+
+	NotifyNoPrivateKeys // if set, private keys that would normally be sent in updates are zeroed out
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
