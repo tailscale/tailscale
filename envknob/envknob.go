@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/types/opt"
 	"tailscale.com/version"
@@ -36,11 +37,12 @@ import (
 )
 
 var (
-	mu         sync.Mutex
-	set        = map[string]string{}
-	regStr     = map[string]*string{}
-	regBool    = map[string]*bool{}
-	regOptBool = map[string]*opt.Bool{}
+	mu          sync.Mutex
+	set         = map[string]string{}
+	regStr      = map[string]*string{}
+	regBool     = map[string]*bool{}
+	regOptBool  = map[string]*opt.Bool{}
+	regDuration = map[string]*time.Duration{}
 )
 
 func noteEnv(k, v string) {
@@ -96,6 +98,9 @@ func Setenv(envVar, val string) {
 	}
 	if p := regOptBool[envVar]; p != nil {
 		setOptBoolLocked(p, envVar, val)
+	}
+	if p := regDuration[envVar]; p != nil {
+		setDurationLocked(p, envVar, val)
 	}
 }
 
@@ -159,6 +164,25 @@ func RegisterOptBool(envVar string) func() opt.Bool {
 	return func() opt.Bool { return *p }
 }
 
+// RegisterDuration returns a func that gets the named environment variable as a
+// duration, without a map lookup per call. It assumes that any mutations happen
+// via envknob.Setenv.
+func RegisterDuration(envVar string) func() time.Duration {
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := regDuration[envVar]
+	if !ok {
+		val := os.Getenv(envVar)
+		if val != "" {
+			noteEnvLocked(envVar, val)
+		}
+		p = new(time.Duration)
+		setDurationLocked(p, envVar, val)
+		regDuration[envVar] = p
+	}
+	return func() time.Duration { return *p }
+}
+
 func setBoolLocked(p *bool, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
@@ -183,6 +207,19 @@ func setOptBoolLocked(p *opt.Bool, envVar, val string) {
 		log.Fatalf("invalid boolean environment variable %s value %q", envVar, val)
 	}
 	p.Set(b)
+}
+
+func setDurationLocked(p *time.Duration, envVar, val string) {
+	noteEnvLocked(envVar, val)
+	if val == "" {
+		*p = 0
+		return
+	}
+	var err error
+	*p, err = time.ParseDuration(val)
+	if err != nil {
+		log.Fatalf("invalid duration environment variable %s value %q", envVar, val)
+	}
 }
 
 // Bool returns the boolean value of the named environment variable.
