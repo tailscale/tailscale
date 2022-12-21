@@ -134,6 +134,7 @@ var debugCmd = &ffcli.Command{
 				fs := newFlagSet("watch-ipn")
 				fs.BoolVar(&watchIPNArgs.netmap, "netmap", true, "include netmap in messages")
 				fs.BoolVar(&watchIPNArgs.initial, "initial", false, "include initial status")
+				fs.BoolVar(&watchIPNArgs.showPrivateKey, "show-private-key", false, "include node private key in printed netmap")
 				return fs
 			})(),
 		},
@@ -319,14 +320,18 @@ func runPrefs(ctx context.Context, args []string) error {
 }
 
 var watchIPNArgs struct {
-	netmap  bool
-	initial bool
+	netmap         bool
+	initial        bool
+	showPrivateKey bool
 }
 
 func runWatchIPN(ctx context.Context, args []string) error {
 	var mask ipn.NotifyWatchOpt
 	if watchIPNArgs.initial {
 		mask = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
+	}
+	if !watchIPNArgs.showPrivateKey {
+		mask |= ipn.NotifyNoPrivateKeys
 	}
 	watcher, err := localClient.WatchIPNBus(ctx, mask)
 	if err != nil {
