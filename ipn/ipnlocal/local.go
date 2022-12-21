@@ -208,7 +208,7 @@ type LocalBackend struct {
 	serveConfig       ipn.ServeConfigView // or !Valid if none
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
-	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => httputil.ReverseProxy
+	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -3800,32 +3800,35 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 	if !b.serveConfig.Valid() {
 		return
 	}
-	config := b.serveConfig.AsStruct()
-	backends := make(map[string]bool)
-	for _, conf := range config.Web {
-		for _, h := range conf.Handlers {
-			backends[h.Proxy] = true
-			if _, ok := b.serveProxyHandlers.Load(h.Proxy); ok {
-				continue
+	var backends map[string]bool
+	b.serveConfig.Web().Range(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
+		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
+			backend := h.Proxy()
+			mak.Set(&backends, backend, true)
+			if _, ok := b.serveProxyHandlers.Load(backend); ok {
+				return true
 			}
 
-			b.logf("creating a new proxy handler for %s", h.Proxy)
-			p, err := b.proxyHandlerForBackend(h.Proxy)
+			b.logf("serve: creating a new proxy handler for %s", backend)
+			p, err := b.proxyHandlerForBackend(backend)
 			if err != nil {
 				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
 				// in the CLI, so just log the error here.
-				b.logf("[unexpected] could not create proxy for %v: %s", h.Proxy, err)
-				continue
+				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
+				return true
 			}
-			b.serveProxyHandlers.Store(h.Proxy, p)
-		}
-	}
+			b.serveProxyHandlers.Store(backend, p)
+			return true
+		})
+		return true
+	})
+
 	// Clean up handlers for proxy backends that are no longer present
 	// in configuration.
 	b.serveProxyHandlers.Range(func(key, value any) bool {
 		backend := key.(string)
 		if !backends[backend] {
-			b.logf("closing idle connections to %s", backend)
+			b.logf("serve: closing idle connections to %s", backend)
 			value.(*httputil.ReverseProxy).Transport.(*http.Transport).CloseIdleConnections()
 			b.serveProxyHandlers.Delete(backend)
 		}
