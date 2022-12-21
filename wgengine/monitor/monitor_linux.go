@@ -228,6 +228,10 @@ func (c *nlConn) Receive() (message, error) {
 			c.logf("%+v", rdm)
 		}
 		return rdm, nil
+	case unix.RTM_NEWLINK, unix.RTM_DELLINK:
+		// This is an unhandled message, but don't print an error.
+		// See https://github.com/tailscale/tailscale/issues/6806
+		return unspecifiedMessage{}, nil
 	default:
 		c.logf("unhandled netlink msg type %+v, %q", msg.Header, msg.Data)
 		return unspecifiedMessage{}, nil
