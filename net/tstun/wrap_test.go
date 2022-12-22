@@ -8,11 +8,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
@@ -30,6 +32,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/util/must"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -293,6 +296,17 @@ func TestWriteAndInject(t *testing.T) {
 	}
 }
 
+// mustHexDecode is like hex.DecodeString, but panics on error
+// and ignores whitespcae in s.
+func mustHexDecode(s string) []byte {
+	return must.Get(hex.DecodeString(strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)))
+}
+
 func TestFilter(t *testing.T) {
 	chtun, tun := newChannelTUN(t.Logf, true)
 	defer tun.Close()
@@ -310,8 +324,9 @@ func TestFilter(t *testing.T) {
 		drop bool
 		data []byte
 	}{
-		{"junk_in", in, true, []byte("\x45not a valid IPv4 packet")},
-		{"junk_out", out, true, []byte("\x45not a valid IPv4 packet")},
+		{"short_in", in, true, []byte("\x45xxx")},
+		{"short_out", out, true, []byte("\x45xxx")},
+		{"ip97_out", out, false, mustHexDecode("4500 0019 d186 4000 4061 751d 644a 4603 6449 e549 6865 6c6c 6f")},
 		{"bad_port_in", in, true, udp4("5.6.7.8", "1.2.3.4", 22, 22)},
 		{"bad_port_out", out, false, udp4("1.2.3.4", "5.6.7.8", 22, 22)},
 		{"bad_ip_in", in, true, udp4("8.1.1.1", "1.2.3.4", 89, 89)},
@@ -386,9 +401,11 @@ func TestFilter(t *testing.T) {
 
 			got, _ := stats.TestExtract()
 			want := map[netlogtype.Connection]netlogtype.Counts{}
+			var wasUDP bool
 			if !tt.drop {
 				var p packet.Parsed
 				p.Decode(tt.data)
+				wasUDP = p.IPProto == ipproto.UDP
 				switch tt.dir {
 				case in:
 					conn := netlogtype.Connection{Proto: ipproto.UDP, Src: p.Dst, Dst: p.Src}
@@ -398,8 +415,10 @@ func TestFilter(t *testing.T) {
 					want[conn] = netlogtype.Counts{TxPackets: 1, TxBytes: uint64(len(tt.data))}
 				}
 			}
-			if diff := cmp.Diff(got, want, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("stats.TestExtract (-got +want):\n%s", diff)
+			if wasUDP {
+				if diff := cmp.Diff(got, want, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("stats.TestExtract (-got +want):\n%s", diff)
+				}
 			}
 		})
 	}
@@ -525,6 +544,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			p.Decode(tt.pkt)
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
+			tt.w.logf = t.Logf
 			if got := tt.w.filterIn(p); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}

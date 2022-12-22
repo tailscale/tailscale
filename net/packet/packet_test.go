@@ -6,12 +6,16 @@ package packet
 
 import (
 	"bytes"
+	"encoding/hex"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode"
 
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/util/must"
 )
 
 const (
@@ -440,6 +444,17 @@ func TestParsedString(t *testing.T) {
 	}
 }
 
+// mustHexDecode is like hex.DecodeString, but panics on error
+// and ignores whitespcae in s.
+func mustHexDecode(s string) []byte {
+	return must.Get(hex.DecodeString(strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)))
+}
+
 func TestDecode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -459,6 +474,29 @@ func TestDecode(t *testing.T) {
 		{"ipv4_sctp", sctpBuffer, sctpDecode},
 		{"ipv4_frag", tcp4MediumFragmentBuffer, tcp4MediumFragmentDecode},
 		{"ipv4_fragtooshort", tcp4ShortFragmentBuffer, tcp4ShortFragmentDecode},
+
+		{"ip97", mustHexDecode("4500 0019 d186 4000 4061 751d 644a 4603 6449 e549 6865 6c6c 6f"), Parsed{
+			IPVersion: 4,
+			IPProto:   97,
+			Src:       netip.MustParseAddrPort("100.74.70.3:0"),
+			Dst:       netip.MustParseAddrPort("100.73.229.73:0"),
+			b:         mustHexDecode("4500 0019 d186 4000 4061 751d 644a 4603 6449 e549 6865 6c6c 6f"),
+			length:    25,
+			subofs:    20,
+		}},
+
+		// This packet purports to use protocol 0xFF, which is verboten and
+		// used internally as a sentinel value for fragments. So test that
+		// we map packets using 0xFF to Unknown (0) instead.
+		{"bogus_proto_ff", mustHexDecode("4500 0019 d186 4000 40" + "FF" /* bogus FF */ + " 751d 644a 4603 6449 e549 6865 6c6c 6f"), Parsed{
+			IPVersion: 4,
+			IPProto:   ipproto.Unknown, // 0, not bogus 0xFF
+			Src:       netip.MustParseAddrPort("100.74.70.3:0"),
+			Dst:       netip.MustParseAddrPort("100.73.229.73:0"),
+			b:         mustHexDecode("4500 0019 d186 4000 40" + "FF" /* bogus FF */ + " 751d 644a 4603 6449 e549 6865 6c6c 6f"),
+			length:    25,
+			subofs:    20,
+		}},
 	}
 
 	for _, tt := range tests {
