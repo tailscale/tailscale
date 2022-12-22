@@ -107,8 +107,8 @@ type Impl struct {
 	lb        *ipnlocal.LocalBackend // or nil
 	dns       *dns.Manager
 
-	peerapiPort4Atomic uint32 // uint16 port number for IPv4 peerapi
-	peerapiPort6Atomic uint32 // uint16 port number for IPv6 peerapi
+	peerapiPort4Atomic atomic.Uint32 // uint16 port number for IPv4 peerapi
+	peerapiPort6Atomic atomic.Uint32 // uint16 port number for IPv6 peerapi
 
 	// atomicIsLocalIPFunc holds a func that reports whether an IP
 	// is a local (non-subnet) Tailscale IP address of this
@@ -518,7 +518,7 @@ func (ns *Impl) processSSH() bool {
 	return ns.lb != nil && ns.lb.ShouldRunSSH()
 }
 
-func (ns *Impl) peerAPIPortAtomic(ip netip.Addr) *uint32 {
+func (ns *Impl) peerAPIPortAtomic(ip netip.Addr) *atomic.Uint32 {
 	if ip.Is4() {
 		return &ns.peerapiPort4Atomic
 	} else {
@@ -542,10 +542,10 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn {
 			if port, ok := ns.lb.GetPeerAPIPort(dstIP); ok {
 				peerAPIPort = port
-				atomic.StoreUint32(ns.peerAPIPortAtomic(dstIP), uint32(port))
+				ns.peerAPIPortAtomic(dstIP).Store(uint32(port))
 			}
 		} else {
-			peerAPIPort = uint16(atomic.LoadUint32(ns.peerAPIPortAtomic(dstIP)))
+			peerAPIPort = uint16(ns.peerAPIPortAtomic(dstIP).Load())
 		}
 		dport := p.Dst.Port()
 		if dport == peerAPIPort {
@@ -558,11 +558,6 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 	}
 	if p.IPVersion == 6 && !isLocal && viaRange.Contains(dstIP) {
 		return ns.lb != nil && ns.lb.ShouldHandleViaIP(dstIP)
-	}
-	if !ns.ProcessLocalIPs && !ns.ProcessSubnets {
-		// Fast path for common case (e.g. Linux server in TUN mode) where
-		// netstack isn't used at all; don't even do an isLocalIP lookup.
-		return false
 	}
 	if ns.ProcessLocalIPs && isLocal {
 		return true
