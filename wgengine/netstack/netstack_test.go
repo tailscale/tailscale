@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/netip"
 	"runtime"
-	"sync/atomic"
 	"testing"
 
 	"tailscale.com/ipn"
@@ -423,8 +422,8 @@ func TestShouldProcessInbound(t *testing.T) {
 				i.atomicIsLocalIPFunc.Store(func(netip.Addr) bool { return false })
 
 				// Set the PeerAPI port to the Dst port above.
-				atomic.StoreUint32(&i.peerapiPort4Atomic, 5555)
-				atomic.StoreUint32(&i.peerapiPort6Atomic, 5555)
+				i.peerapiPort4Atomic.Store(5555)
+				i.peerapiPort6Atomic.Store(5555)
 			},
 			want: false,
 		},
