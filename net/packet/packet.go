@@ -211,9 +211,11 @@ func (q *Parsed) decode4(b []byte) {
 			// Inter-tailscale messages.
 			q.dataofs = q.subofs
 			return
-		default:
+		case ipproto.Fragment:
+			// An IPProto value of 0xff (our Fragment constant for internal use)
+			// should never actually be used in the wild; if we see it,
+			// something's suspicious and we map it back to zero (unknown).
 			q.IPProto = unknown
-			return
 		}
 	} else {
 		// This is a fragment other than the first one.
@@ -312,7 +314,10 @@ func (q *Parsed) decode6(b []byte) {
 		// Inter-tailscale messages.
 		q.dataofs = q.subofs
 		return
-	default:
+	case ipproto.Fragment:
+		// An IPProto value of 0xff (our Fragment constant for internal use)
+		// should never actually be used in the wild; if we see it,
+		// something's suspicious and we map it back to zero (unknown).
 		q.IPProto = unknown
 		return
 	}

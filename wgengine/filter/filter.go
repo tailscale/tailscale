@@ -452,7 +452,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		return Accept, "tsmp ok"
 	default:
 		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q) {
-			return Accept, "otherproto ok"
+			return Accept, "other-portless ok"
 		}
 		return Drop, unknownProtoString(q.IPProto)
 	}
@@ -512,7 +512,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		return Accept, "tsmp ok"
 	default:
 		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q) {
-			return Accept, "otherproto ok"
+			return Accept, "other-portless ok"
 		}
 		return Drop, unknownProtoString(q.IPProto)
 	}
@@ -577,12 +577,7 @@ func (f *Filter) pre(q *packet.Parsed, rf RunFlags, dir direction) Response {
 		return Drop
 	}
 
-	switch q.IPProto {
-	case ipproto.Unknown:
-		// Unknown packets are dangerous; always drop them.
-		f.logRateLimit(rf, q, dir, Drop, "unknown")
-		return Drop
-	case ipproto.Fragment:
+	if q.IPProto == ipproto.Fragment {
 		// Fragments after the first always need to be passed through.
 		// Very small fragments are considered Junk by Parsed.
 		f.logRateLimit(rf, q, dir, Accept, "fragment")
