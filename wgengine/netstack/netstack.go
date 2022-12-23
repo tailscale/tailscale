@@ -204,12 +204,6 @@ func (ns *Impl) Close() error {
 	return nil
 }
 
-// SetLocalBackend sets the LocalBackend; it should only be run before
-// the Start method is called.
-func (ns *Impl) SetLocalBackend(lb *ipnlocal.LocalBackend) {
-	ns.lb = lb
-}
-
 // wrapProtoHandler returns protocol handler h wrapped in a version
 // that dynamically reconfigures ns's subnet addresses as needed for
 // outbound traffic.
@@ -231,7 +225,11 @@ func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, stack.PacketB
 
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
-func (ns *Impl) Start() error {
+func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
+	if lb == nil {
+		panic("nil LocalBackend")
+	}
+	ns.lb = lb
 	ns.e.AddNetworkMapCallback(ns.updateIPs)
 	// size = 0 means use default buffer size
 	const tcpReceiveBufferSize = 0

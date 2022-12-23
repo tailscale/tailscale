@@ -115,9 +115,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	}
 	ns.ProcessLocalIPs = true
 	ns.ProcessSubnets = true
-	if err := ns.Start(); err != nil {
-		log.Fatalf("failed to start netstack: %v", err)
-	}
+
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		return true
 	}
@@ -127,16 +125,17 @@ func newIPN(jsConfig js.Value) map[string]any {
 
 	logid := lpc.PublicID.String()
 	srv := ipnserver.New(logf, logid)
-
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "wasm", dialer, eng, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
+	}
+	if err := ns.Start(lb); err != nil {
+		log.Fatalf("failed to start netstack: %v", err)
 	}
 	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)
 	})
 	srv.SetLocalBackend(lb)
-	ns.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{
 		dialer:     dialer,
