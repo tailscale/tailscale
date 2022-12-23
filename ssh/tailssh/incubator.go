@@ -283,7 +283,20 @@ func beIncubator(args []string) error {
 			Foreground: true,
 		}
 	}
-	return cmd.Run()
+	err = cmd.Run()
+	if ee, ok := err.(*exec.ExitError); ok {
+		ps := ee.ProcessState
+		code := ps.ExitCode()
+		if code < 0 {
+			// TODO(bradfitz): do we need to also check the syscall.WaitStatus
+			// and make our process look like it also died by signal/same signal
+			// as our child process? For now we just do the exit code.
+			fmt.Fprintf(os.Stderr, "[tailscale-ssh: process died: %v]\n", ps.String())
+			code = 1 // for now. so we don't exit with negative
+		}
+		os.Exit(code)
+	}
+	return err
 }
 
 // launchProcess launches an incubator process for the provided session.
