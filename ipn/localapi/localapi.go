@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/net/tstun"
+	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -522,6 +523,14 @@ func (h *Handler) serveDebugExec(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+
+	if cmds[0] == ".screenlock" {
+		r, err := posture.Read()
+		response := fmt.Sprintf("Screenlock err %v result %+v", err, r)
+		w.Write([]byte(response))
+		return
+	}
+
 	var out bytes.Buffer
 	c := exec.Command(cmds[0], cmds[1:]...)
 	c.Stdout = &out
