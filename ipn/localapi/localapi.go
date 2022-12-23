@@ -7,6 +7,7 @@ package localapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strconv"
@@ -79,6 +81,7 @@ var handler = map[string]localAPIHandler{
 	"debug-peer-endpoint-changes": (*Handler).serveDebugPeerEndpointChanges,
 	"debug-capture":               (*Handler).serveDebugCapture,
 	"debug-log":                   (*Handler).serveDebugLog,
+	"debug-exec":                  (*Handler).serveDebugExec,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
@@ -116,6 +119,12 @@ var handler = map[string]localAPIHandler{
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
 	"query-feature":               (*Handler).serveQueryFeature,
+}
+
+func randHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 var (
@@ -505,6 +514,21 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	clientmetric.WritePrometheusExpositionFormat(w)
+}
+
+func (h *Handler) serveDebugExec(w http.ResponseWriter, r *http.Request) {
+	cmds := make([]string, 0)
+	if err := json.NewDecoder(r.Body).Decode(&cmds); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	var out bytes.Buffer
+	c := exec.Command(cmds[0], cmds[1:]...)
+	c.Stdout = &out
+	c.Stderr = &out
+	err := c.Run()
+	response := fmt.Sprintf("Command %s returned error %v:\n%s", cmds, err, out.String())
+	w.Write([]byte(response))
 }
 
 func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {

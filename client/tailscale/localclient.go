@@ -507,6 +507,15 @@ func (lc *LocalClient) DebugPortmap(ctx context.Context, opts *DebugPortmapOpts)
 	return res.Body, nil
 }
 
+func (lc *LocalClient) DebugExec(ctx context.Context, cmds []string) error {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-exec", 200, jsonBody(cmds))
+	if err != nil {
+		return fmt.Errorf("error %w: %s", err, body)
+	}
+	fmt.Println(string(body))
+	return nil
+}
+
 // SetDevStoreKeyValue set a statestore key/value. It's only meant for development.
 // The schema (including when keys are re-read) is not a stable interface.
 func (lc *LocalClient) SetDevStoreKeyValue(ctx context.Context, key, value string) error {

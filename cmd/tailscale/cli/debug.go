@@ -144,6 +144,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "see current control knobs",
 		},
 		{
+			Name:      "exec",
+			Exec:      localClient.DebugExec,
+			ShortHelp: "execute a command",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
