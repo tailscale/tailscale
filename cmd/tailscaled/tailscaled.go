@@ -533,8 +533,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 		return smallzstd.NewDecoder(nil)
 	})
 	configureTaildrop(logf, lb)
-	ns.SetLocalBackend(lb)
-	if err := ns.Start(); err != nil {
+	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
 	return lb, nil
