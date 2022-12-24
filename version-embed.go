@@ -18,3 +18,9 @@ var AlpineDockerTag string
 //
 //go:embed go.toolchain.rev
 var GoToolchainRev string
+
+// GoToolchainSRI is the Nix SRI hash of the Go toolchain identified
+// by GoToolchainRev. It may end in a newline.
+//
+//go:embed go.toolchain.sri
+var GoToolchainSRI string
