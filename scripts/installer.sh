@@ -187,7 +187,7 @@ main() {
 				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
 				PACKAGETYPE="yum"
 				;;
-			opensuse-leap)
+			opensuse-leap|sles)
 				OS="opensuse"
 				VERSION="leap/$VERSION_ID"
 				PACKAGETYPE="zypper"
