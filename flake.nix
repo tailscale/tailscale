@@ -141,14 +141,17 @@
       };
       devShell = pkgs.mkShell {
         packages = with upstreamPkgs; [
-          pkgs.tailscale_go
+          curl
           git
-          gotools
           gopls
+          gotools
           graphviz
+          perl
+          pkgs.tailscale_go
         ];
       };
     };
   in
     flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
 }
+# nix-direnv cache busting line: sha256-imidcDJGVor43PqdTX7Js4/tjQ0JA2E1GdjuyLiPDHI= sha256-+5icFKDHXt3JMbUjLQGes4R+GeUi48xRgGd0yPKVrw0=
