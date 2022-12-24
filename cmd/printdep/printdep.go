@@ -19,6 +19,7 @@ import (
 var (
 	goToolchain    = flag.Bool("go", false, "print the supported Go toolchain git hash (a github.com/tailscale/go commit)")
 	goToolchainURL = flag.Bool("go-url", false, "print the URL to the tarball of the Tailscale Go toolchain")
+	goToolchainSRI = flag.Bool("go-sri", false, "print the SRI hash of the Tailscale Go toolchain")
 	alpine         = flag.Bool("alpine", false, "print the tag of alpine docker image")
 )
 
@@ -47,5 +48,8 @@ func main() {
 			log.Fatalf("unsupported GOOS %q", runtime.GOOS)
 		}
 		fmt.Printf("https://github.com/tailscale/go/releases/download/build-%s/%s%s.tar.gz\n", strings.TrimSpace(ts.GoToolchainRev), runtime.GOOS, suffix)
+	}
+	if *goToolchainSRI {
+		fmt.Println(strings.TrimSpace(ts.GoToolchainSRI))
 	}
 }
