@@ -7,7 +7,6 @@
 # Also look into direnv: https://direnv.net/, this can make it so that you can
 # automatically get your environment set up when you change folders into the
 # project.
-
 (import (
   let
     lock = builtins.fromJSON (builtins.readFile ./flake.lock);
@@ -17,3 +16,4 @@
 ) {
   src =  ./.;
 }).shellNix
+# nix-direnv cache busting line: sha256-imidcDJGVor43PqdTX7Js4/tjQ0JA2E1GdjuyLiPDHI= sha256-+5icFKDHXt3JMbUjLQGes4R+GeUi48xRgGd0yPKVrw0=
