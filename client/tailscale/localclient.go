@@ -257,6 +257,23 @@ func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/metrics")
 }
 
+// TailDaemonLogs returns a stream the Tailscale daemon's logs as they arrive.
+// Close the context to stop the stream.
+func (lc *LocalClient) TailDaemonLogs(ctx context.Context) (io.Reader, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+apitype.LocalAPIHost+"/localapi/v0/logtap", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		return nil, errors.New(res.Status)
+	}
+	return res.Body, nil
+}
+
 // Pprof returns a pprof profile of the Tailscale daemon.
 func (lc *LocalClient) Pprof(ctx context.Context, pprofType string, sec int) ([]byte, error) {
 	var secArg string

@@ -77,6 +77,17 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "print tailscaled's goroutines",
 		},
 		{
+			Name:      "daemon-logs",
+			Exec:      runDaemonLogs,
+			ShortHelp: "watch tailscaled's server logs",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("daemon-logs")
+				fs.IntVar(&daemonLogsArgs.verbose, "verbose", 0, "verbosity level")
+				fs.BoolVar(&daemonLogsArgs.time, "time", false, "include client time")
+				return fs
+			})(),
+		},
+		{
 			Name:      "metrics",
 			Exec:      runDaemonMetrics,
 			ShortHelp: "print tailscaled's metrics",
@@ -417,6 +428,39 @@ func runDaemonGoroutines(ctx context.Context, args []string) error {
 	}
 	Stdout.Write(goroutines)
 	return nil
+}
+
+var daemonLogsArgs struct {
+	verbose int
+	time    bool
+}
+
+func runDaemonLogs(ctx context.Context, args []string) error {
+	logs, err := localClient.TailDaemonLogs(ctx)
+	if err != nil {
+		return err
+	}
+	d := json.NewDecoder(logs)
+	for {
+		var line struct {
+			Text    string `json:"text"`
+			Verbose int    `json:"v"`
+			Time    string `json:"client_time"`
+		}
+		err := d.Decode(&line)
+		if err != nil {
+			return err
+		}
+		line.Text = strings.TrimSpace(line.Text)
+		if line.Text == "" || line.Verbose > daemonLogsArgs.verbose {
+			continue
+		}
+		if daemonLogsArgs.time {
+			fmt.Printf("%s %s\n", line.Time, line.Text)
+		} else {
+			fmt.Println(line.Text)
+		}
+	}
 }
 
 var metricsArgs struct {

@@ -26,6 +26,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
 	tslogger "tailscale.com/types/logger"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -505,6 +506,7 @@ func (l *Logger) tryDrainWake() {
 }
 
 func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
+	tapSend(jsonBlob)
 	if logtailDisabled.Load() {
 		return len(jsonBlob), nil
 	}
@@ -757,4 +759,49 @@ func parseAndRemoveLogLevel(buf []byte) (level int, cleanBuf []byte) {
 		}
 	}
 	return 0, buf
+}
+
+var (
+	tapSetSize atomic.Int32
+	tapMu      sync.Mutex
+	tapSet     set.HandleSet[chan<- string]
+)
+
+// RegisterLogTap registers dst to get a copy of every log write. The caller
+// must call unregister when done watching.
+//
+// This would ideally be a method on Logger, but Logger isn't really available
+// in most places; many writes go via stderr which filch redirects to the
+// singleton Logger set up early. For better or worse, there's basically only
+// one Logger within the program. This mechanism at least works well for
+// tailscaled. It works less well for a binary with multiple tsnet.Servers. Oh
+// well. This then subscribes to all of them.
+func RegisterLogTap(dst chan<- string) (unregister func()) {
+	tapMu.Lock()
+	defer tapMu.Unlock()
+	h := tapSet.Add(dst)
+	tapSetSize.Store(int32(len(tapSet)))
+	return func() {
+		tapMu.Lock()
+		defer tapMu.Unlock()
+		delete(tapSet, h)
+		tapSetSize.Store(int32(len(tapSet)))
+	}
+}
+
+// tapSend relays the JSON blob to any/all registered local debug log watchers
+// (somebody running "tailscale debug daemon-logs").
+func tapSend(jsonBlob []byte) {
+	if tapSetSize.Load() == 0 {
+		return
+	}
+	s := string(jsonBlob)
+	tapMu.Lock()
+	defer tapMu.Unlock()
+	for _, dst := range tapSet {
+		select {
+		case dst <- s:
+		default:
+		}
+	}
 }
