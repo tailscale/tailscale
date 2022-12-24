@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/logtail"
 	"tailscale.com/net/netutil"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
@@ -77,6 +78,7 @@ var handler = map[string]localAPIHandler{
 	"id-token":                    (*Handler).serveIDToken,
 	"login-interactive":           (*Handler).serveLoginInteractive,
 	"logout":                      (*Handler).serveLogout,
+	"logtap":                      (*Handler).serveLogTap,
 	"metrics":                     (*Handler).serveMetrics,
 	"ping":                        (*Handler).servePing,
 	"prefs":                       (*Handler).servePrefs,
@@ -419,6 +421,45 @@ func (h *Handler) serveGoroutines(w http.ResponseWriter, r *http.Request) {
 	buf = buf[:runtime.Stack(buf, true)]
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(buf)
+}
+
+// serveLogTap taps into the tailscaled/logtail server output and streams
+// it to the client.
+func (h *Handler) serveLogTap(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Require write access (~root) as the logs could contain something
+	// sensitive.
+	if !h.PermitWrite {
+		http.Error(w, "logtap access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	f, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	io.WriteString(w, `{"text":"[logtap connected]\n"}`+"\n")
+	f.Flush()
+
+	msgc := make(chan string, 16)
+	unreg := logtail.RegisterLogTap(msgc)
+	defer unreg()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-msgc:
+			io.WriteString(w, msg)
+			f.Flush()
+		}
+	}
 }
 
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request) {
