@@ -91,10 +91,10 @@
     # or the empty string when building from a local checkout of the
     # tailscale repo.
     tailscaleRev = if builtins.hasAttr "rev" self then self.rev else "";
-    # tailscaleUnstable takes a nixpkgs package set, and builds
-    # Tailscale from the same commit as this flake. IOW, it provides
-    # "tailscale built from HEAD", where HEAD is "whatever commit you
-    # imported the flake at".
+    # tailscale takes a nixpkgs package set, and builds Tailscale from
+    # the same commit as this flake. IOW, it provides "tailscale built
+    # from HEAD", where HEAD is "whatever commit you imported the
+    # flake at".
     #
     # This is currently unfortunately brittle, because we have to
     # specify vendorSha256, and that sha changes any time we alter
@@ -108,8 +108,8 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscaleUnstable = pkgs: pkgs.buildGo119Module rec {
-      name = "tailscale-unstable";
+    tailscale = pkgs: pkgs.buildGo119Module rec {
+      name = "tailscale";
 
       src = ./.;
       vendorSha256 = fileContents ./go.mod.sri;
@@ -133,11 +133,11 @@
     flakeForSystem = nixpkgs: system: let
       upstreamPkgs = nixpkgs.legacyPackages.${system};
       pkgs = pkgsWithTailscaleGo upstreamPkgs;
-      ts = tailscaleUnstable pkgs;
+      ts = tailscale pkgs;
     in {
       packages = {
         tailscale-go = pkgs.tailscale-go;
-        tailscale-unstable = ts;
+        tailscale = ts;
       };
       devShell = pkgs.mkShell {
         packages = with upstreamPkgs; [
