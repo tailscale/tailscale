@@ -223,8 +223,8 @@ func qnapAuthnQtoken(r *http.Request, user, token string) (string, *qnapAuthResp
 		"user":   []string{user},
 	}
 	u := url.URL{
-		Scheme:   r.URL.Scheme,
-		Host:     r.URL.Host,
+		Scheme:   "http",
+		Host:     "127.0.0.1:8080",
 		Path:     "/cgi-bin/authLogin.cgi",
 		RawQuery: query.Encode(),
 	}
@@ -237,8 +237,8 @@ func qnapAuthnSid(r *http.Request, user, sid string) (string, *qnapAuthResponse,
 		"sid": []string{sid},
 	}
 	u := url.URL{
-		Scheme:   r.URL.Scheme,
-		Host:     r.URL.Host,
+		Scheme:   "http",
+		Host:     "127.0.0.1:8080",
 		Path:     "/cgi-bin/authLogin.cgi",
 		RawQuery: query.Encode(),
 	}
