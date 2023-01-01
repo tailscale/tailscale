@@ -10,7 +10,7 @@
 check_file() {
     got=$1
 
-    for year in `seq 2019 2022`; do
+    for year in `seq 2019 2023`; do
         want=$(cat <<EOF
 // Copyright (c) $year Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -21,6 +21,19 @@ EOF
             return 0
         fi
     done
+
+    # For the benefit of generated files, we also allow no year in
+    # the header. https://github.com/tailscale/tailscale/issues/6865
+    want=$(cat <<EOF
+// Copyright (c) Tailscale Inc & AUTHORS All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+EOF
+    )
+    if [ "$got" = "$want" ]; then
+        return 0
+    fi
+
     return 1
 }
 

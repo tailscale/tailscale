@@ -15,7 +15,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"time"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
@@ -54,7 +53,7 @@ func HasNoClone(structTag string) bool {
 	return false
 }
 
-const header = `// Copyright (c) %d Tailscale Inc & AUTHORS All rights reserved.
+const header = `// Copyright (c) Tailscale Inc & AUTHORS All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -105,7 +104,7 @@ func (it *ImportTracker) Write(w io.Writer) {
 }
 
 func writeHeader(w io.Writer, tool, pkg string) {
-	fmt.Fprintf(w, header, time.Now().Year(), tool, pkg)
+	fmt.Fprintf(w, header, tool, pkg)
 }
 
 // WritePackageFile adds a file with the provided imports and contents to package.
