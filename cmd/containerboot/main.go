@@ -12,7 +12,7 @@
 // As with most container things, configuration is passed through environment
 // variables. All configuration is optional.
 //
-//   - TS_AUTH_KEY: the authkey to use for login.
+//   - TS_AUTHKEY: the authkey to use for login.
 //   - TS_ROUTES: subnet routes to advertise.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
@@ -42,7 +42,7 @@
 // TS_KUBE_SECRET="" and TS_STATE_DIR=/path/to/storage/dir. The state dir should
 // be persistent storage.
 //
-// Additionally, if TS_AUTH_KEY is not set and the TS_KUBE_SECRET contains an
+// Additionally, if TS_AUTHKEY is not set and the TS_KUBE_SECRET contains an
 // "authkey" field, that key is used as the tailscale authkey.
 package main
 
@@ -73,7 +73,7 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg := &settings{
-		AuthKey:         defaultEnv("TS_AUTH_KEY", ""),
+		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Routes:          defaultEnv("TS_ROUTES", ""),
 		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
 		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
@@ -544,6 +544,15 @@ type settings struct {
 func defaultEnv(name, defVal string) string {
 	if v, ok := os.LookupEnv(name); ok {
 		return v
+	}
+	return defVal
+}
+
+func defaultEnvs(names []string, defVal string) string {
+	for _, name := range names {
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
 	}
 	return defVal
 }
