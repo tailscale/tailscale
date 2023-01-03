@@ -666,7 +666,11 @@ func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err err
 		}
 	}
 	for _, removeKey := range removeKeys {
-		if err := updater.RemoveKey(removeKey.ID()); err != nil {
+		keyID, err := removeKey.ID()
+		if err != nil {
+			return err
+		}
+		if err := updater.RemoveKey(keyID); err != nil {
 			return err
 		}
 	}

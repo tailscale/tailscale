@@ -19,7 +19,7 @@ func (s signer25519) SignAUM(sigHash tkatype.AUMSigHash) ([]tkatype.Signature, e
 	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
 
 	return []tkatype.Signature{{
-		KeyID:     key.ID(),
+		KeyID:     key.MustID(),
 		Signature: ed25519.Sign(priv, sigHash[:]),
 	}}, nil
 }
@@ -54,7 +54,7 @@ func TestAuthorityBuilderAddKey(t *testing.T) {
 	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
-	if _, err := a.state.GetKey(key2.ID()); err != nil {
+	if _, err := a.state.GetKey(key2.MustID()); err != nil {
 		t.Errorf("could not read new key: %v", err)
 	}
 }
@@ -75,7 +75,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	}
 
 	b := a.NewUpdater(signer25519(priv))
-	if err := b.RemoveKey(key2.ID()); err != nil {
+	if err := b.RemoveKey(key2.MustID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key2, err)
 	}
 	updates, err := b.Finalize(storage)
@@ -88,7 +88,7 @@ func TestAuthorityBuilderRemoveKey(t *testing.T) {
 	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
-	if _, err := a.state.GetKey(key2.ID()); err != ErrNoSuchKey {
+	if _, err := a.state.GetKey(key2.MustID()); err != ErrNoSuchKey {
 		t.Errorf("GetKey(key2).err = %v, want %v", err, ErrNoSuchKey)
 	}
 }
@@ -107,8 +107,8 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	}
 
 	b := a.NewUpdater(signer25519(priv))
-	if err := b.SetKeyVote(key.ID(), 5); err != nil {
-		t.Fatalf("SetKeyVote(%v) failed: %v", key.ID(), err)
+	if err := b.SetKeyVote(key.MustID(), 5); err != nil {
+		t.Fatalf("SetKeyVote(%v) failed: %v", key.MustID(), err)
 	}
 	updates, err := b.Finalize(storage)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestAuthorityBuilderSetKeyVote(t *testing.T) {
 	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
-	k, err := a.state.GetKey(key.ID())
+	k, err := a.state.GetKey(key.MustID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	}
 
 	b := a.NewUpdater(signer25519(priv))
-	if err := b.SetKeyMeta(key.ID(), map[string]string{"b": "c"}); err != nil {
+	if err := b.SetKeyMeta(key.MustID(), map[string]string{"b": "c"}); err != nil {
 		t.Fatalf("SetKeyMeta(%v) failed: %v", key, err)
 	}
 	updates, err := b.Finalize(storage)
@@ -156,7 +156,7 @@ func TestAuthorityBuilderSetKeyMeta(t *testing.T) {
 	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
-	k, err := a.state.GetKey(key.ID())
+	k, err := a.state.GetKey(key.MustID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,10 +185,10 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	if err := b.AddKey(key2); err != nil {
 		t.Fatalf("AddKey(%v) failed: %v", key2, err)
 	}
-	if err := b.SetKeyVote(key2.ID(), 42); err != nil {
+	if err := b.SetKeyVote(key2.MustID(), 42); err != nil {
 		t.Fatalf("SetKeyVote(%v) failed: %v", key2, err)
 	}
-	if err := b.RemoveKey(key.ID()); err != nil {
+	if err := b.RemoveKey(key.MustID()); err != nil {
 		t.Fatalf("RemoveKey(%v) failed: %v", key, err)
 	}
 	updates, err := b.Finalize(storage)
@@ -201,14 +201,14 @@ func TestAuthorityBuilderMultiple(t *testing.T) {
 	if err := a.Inform(storage, updates); err != nil {
 		t.Fatalf("could not apply generated updates: %v", err)
 	}
-	k, err := a.state.GetKey(key2.ID())
+	k, err := a.state.GetKey(key2.MustID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, want := k.Votes, uint(42); got != want {
 		t.Errorf("key.Votes = %d, want %d", got, want)
 	}
-	if _, err := a.state.GetKey(key.ID()); err != ErrNoSuchKey {
+	if _, err := a.state.GetKey(key.MustID()); err != ErrNoSuchKey {
 		t.Errorf("GetKey(key).err = %v, want %v", err, ErrNoSuchKey)
 	}
 }
@@ -243,7 +243,7 @@ func TestAuthorityBuilderCheckpointsAfterXUpdates(t *testing.T) {
 		if err := a.Inform(storage, updates); err != nil {
 			t.Fatalf("could not apply generated updates: %v", err)
 		}
-		if _, err := a.state.GetKey(key2.ID()); err != nil {
+		if _, err := a.state.GetKey(key2.MustID()); err != nil {
 			t.Fatal(err)
 		}
 

@@ -45,7 +45,12 @@ type State struct {
 // GetKey returns the trusted key with the specified KeyID.
 func (s State) GetKey(key tkatype.KeyID) (Key, error) {
 	for _, k := range s.Keys {
-		if bytes.Equal(k.ID(), key) {
+		keyID, err := k.ID()
+		if err != nil {
+			return Key{}, err
+		}
+
+		if bytes.Equal(keyID, key) {
 			return k, nil
 		}
 	}
@@ -169,7 +174,11 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		if update.Key == nil {
 			return State{}, errors.New("no key to add provided")
 		}
-		if _, err := s.GetKey(update.Key.ID()); err == nil {
+		keyID, err := update.Key.ID()
+		if err != nil {
+			return State{}, err
+		}
+		if _, err := s.GetKey(keyID); err == nil {
 			return State{}, errors.New("key already exists")
 		}
 		out := s.cloneForUpdate(&update)
@@ -192,7 +201,11 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 		}
 		out := s.cloneForUpdate(&update)
 		for i := range out.Keys {
-			if bytes.Equal(out.Keys[i].ID(), update.KeyID) {
+			keyID, err := out.Keys[i].ID()
+			if err != nil {
+				return State{}, err
+			}
+			if bytes.Equal(keyID, update.KeyID) {
 				out.Keys[i] = k
 			}
 		}
@@ -201,7 +214,11 @@ func (s State) applyVerifiedAUM(update AUM) (State, error) {
 	case AUMRemoveKey:
 		idx := -1
 		for i := range s.Keys {
-			if bytes.Equal(update.KeyID, s.Keys[i].ID()) {
+			keyID, err := s.Keys[i].ID()
+			if err != nil {
+				return State{}, err
+			}
+			if bytes.Equal(update.KeyID, keyID) {
 				idx = i
 				break
 			}
@@ -277,7 +294,17 @@ func (s *State) staticValidateCheckpoint() error {
 			if i == j {
 				continue
 			}
-			if bytes.Equal(k.ID(), k2.ID()) {
+
+			id1, err := k.ID()
+			if err != nil {
+				return fmt.Errorf("key[%d]: %w", i, err)
+			}
+			id2, err := k2.ID()
+			if err != nil {
+				return fmt.Errorf("key[%d]: %w", j, err)
+			}
+
+			if bytes.Equal(id1, id2) {
 				return fmt.Errorf("key[%d]: duplicates key[%d]", i, j)
 			}
 		}

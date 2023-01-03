@@ -189,7 +189,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Unary key",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.MustID()}},
 			},
 			State{
 				Keys: []Key{key},
@@ -199,7 +199,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Multiple keys",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.ID()}, {KeyID: key2.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.MustID()}, {KeyID: key2.MustID()}},
 			},
 			State{
 				Keys: []Key{key, key2},
@@ -209,7 +209,7 @@ func TestAUMWeight(t *testing.T) {
 		{
 			"Double use",
 			AUM{
-				Signatures: []tkatype.Signature{{KeyID: key.ID()}, {KeyID: key.ID()}},
+				Signatures: []tkatype.Signature{{KeyID: key.MustID()}, {KeyID: key.MustID()}},
 			},
 			State{
 				Keys: []Key{key},

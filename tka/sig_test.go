@@ -22,7 +22,7 @@ func TestSigDirect(t *testing.T) {
 
 	sig := NodeKeySignature{
 		SigKind: SigDirect,
-		KeyID:   k.ID(),
+		KeyID:   k.MustID(),
 		Pubkey:  nodeKeyPub,
 	}
 	sigHash := sig.SigHash()
@@ -65,7 +65,7 @@ func TestSigNested(t *testing.T) {
 	// the network-lock key.
 	nestedSig := NodeKeySignature{
 		SigKind:        SigDirect,
-		KeyID:          k.ID(),
+		KeyID:          k.MustID(),
 		Pubkey:         oldPub,
 		WrappingPubkey: rPub,
 	}
@@ -132,7 +132,7 @@ func TestSigNested_DeepNesting(t *testing.T) {
 	// the network-lock key.
 	nestedSig := NodeKeySignature{
 		SigKind:        SigDirect,
-		KeyID:          k.ID(),
+		KeyID:          k.MustID(),
 		Pubkey:         oldPub,
 		WrappingPubkey: rPub,
 	}
@@ -204,7 +204,7 @@ func TestSigCredential(t *testing.T) {
 	// public key.
 	nestedSig := NodeKeySignature{
 		SigKind:        SigCredential,
-		KeyID:          k.ID(),
+		KeyID:          k.MustID(),
 		WrappingPubkey: cPub,
 	}
 	sigHash := nestedSig.SigHash()
@@ -280,11 +280,11 @@ func TestSigSerializeUnserialize(t *testing.T) {
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 	sig := NodeKeySignature{
 		SigKind: SigDirect,
-		KeyID:   key.ID(),
+		KeyID:   key.MustID(),
 		Pubkey:  nodeKeyPub,
 		Nested: &NodeKeySignature{
 			SigKind: SigDirect,
-			KeyID:   key.ID(),
+			KeyID:   key.MustID(),
 			Pubkey:  nodeKeyPub,
 		},
 	}

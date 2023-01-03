@@ -124,7 +124,7 @@ func TestForkResolutionMessageType(t *testing.T) {
         L3.hashSeed = 18
     `,
 		optTemplate("addKey", AUM{MessageKind: AUMAddKey, Key: &key}),
-		optTemplate("removeKey", AUM{MessageKind: AUMRemoveKey, KeyID: key.ID()}))
+		optTemplate("removeKey", AUM{MessageKind: AUMRemoveKey, KeyID: key.MustID()}))
 
 	l1H := c.AUMHashes["L1"]
 	l2H := c.AUMHashes["L2"]
@@ -165,7 +165,7 @@ func TestComputeStateAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeStateAt(G1) failed: %v", err)
 	}
-	if _, err := state.GetKey(key.ID()); err != ErrNoSuchKey {
+	if _, err := state.GetKey(key.MustID()); err != ErrNoSuchKey {
 		t.Errorf("expected key to be missing: err = %v", err)
 	}
 	if *state.LastAUMHash != c.AUMHashes["G1"] {
@@ -182,7 +182,7 @@ func TestComputeStateAt(t *testing.T) {
 		if *state.LastAUMHash != wantHash {
 			t.Errorf("LastAUMHash = %x, want %x", *state.LastAUMHash, wantHash)
 		}
-		if _, err := state.GetKey(key.ID()); err != nil {
+		if _, err := state.GetKey(key.MustID()); err != nil {
 			t.Errorf("expected key to be present at state: err = %v", err)
 		}
 	}
@@ -234,7 +234,7 @@ func TestOpenAuthority(t *testing.T) {
 
 	i2, i2H := fakeAUM(t, 2, &i1H)
 	i3, i3H := fakeAUM(t, 5, &i2H)
-	l2, l2H := fakeAUM(t, AUM{MessageKind: AUMNoOp, KeyID: []byte{7}, Signatures: []tkatype.Signature{{KeyID: key.ID()}}}, &i3H)
+	l2, l2H := fakeAUM(t, AUM{MessageKind: AUMNoOp, KeyID: []byte{7}, Signatures: []tkatype.Signature{{KeyID: key.MustID()}}}, &i3H)
 	l3, l3H := fakeAUM(t, 4, &i3H)
 
 	g2, g2H := fakeAUM(t, 8, nil)
@@ -266,7 +266,7 @@ func TestOpenAuthority(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 	// Should include the key added in G1
-	if _, err := a.state.GetKey(key.ID()); err != nil {
+	if _, err := a.state.GetKey(key.MustID()); err != nil {
 		t.Errorf("missing G1 key: %v", err)
 	}
 	// The head of the chain should be L2.
@@ -338,10 +338,10 @@ func TestCreateBootstrapAuthority(t *testing.T) {
 	}
 
 	// Both authorities should trust the key laid down in the genesis state.
-	if !a1.KeyTrusted(key.ID()) {
+	if !a1.KeyTrusted(key.MustID()) {
 		t.Error("a1 did not trust genesis key")
 	}
-	if !a2.KeyTrusted(key.ID()) {
+	if !a2.KeyTrusted(key.MustID()) {
 		t.Error("a2 did not trust genesis key")
 	}
 }

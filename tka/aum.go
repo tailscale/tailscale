@@ -281,14 +281,20 @@ func (a *AUM) Parent() (h AUMHash, ok bool) {
 	return h, false
 }
 
-func (a *AUM) sign25519(priv ed25519.PrivateKey) {
+func (a *AUM) sign25519(priv ed25519.PrivateKey) error {
 	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
 	sigHash := a.SigHash()
 
+	keyID, err := key.ID()
+	if err != nil {
+		return err
+	}
+
 	a.Signatures = append(a.Signatures, tkatype.Signature{
-		KeyID:     key.ID(),
+		KeyID:     keyID,
 		Signature: ed25519.Sign(priv, sigHash[:]),
 	})
+	return nil
 }
 
 // Weight computes the 'signature weight' of the AUM
