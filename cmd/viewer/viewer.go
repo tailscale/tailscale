@@ -384,7 +384,7 @@ func main() {
 		genView(buf, it, typ, pkg.Types)
 	}
 	out := pkg.Name + "_view.go"
-	if err := codegen.WritePackageFile("tailscale/cmd/viewer", pkg, out, it, buf); err != nil {
+	if err := codegen.WritePackageFile("tailscale/cmd/viewer", pkg, out, codegen.CopyrightYear("."), it, buf); err != nil {
 		log.Fatal(err)
 	}
 	if runCloner {
