@@ -147,6 +147,24 @@ func TestContainerBoot(t *testing.T) {
 			// Userspace mode, ephemeral storage, authkey provided on every run.
 			Name: "authkey",
 			Env: map[string]string{
+				"TS_AUTHKEY": "tskey-key",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+					},
+				},
+				{
+					Notify: runningNotify,
+				},
+			},
+		},
+		{
+			// Userspace mode, ephemeral storage, authkey provided on every run.
+			Name: "authkey-old-flag",
+			Env: map[string]string{
 				"TS_AUTH_KEY": "tskey-key",
 			},
 			Phases: []phase{
@@ -164,7 +182,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "authkey_disk_state",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_STATE_DIR": filepath.Join(d, "tmp"),
 			},
 			Phases: []phase{
@@ -182,8 +200,8 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "routes",
 			Env: map[string]string{
-				"TS_AUTH_KEY": "tskey-key",
-				"TS_ROUTES":   "1.2.3.0/24,10.20.30.0/24",
+				"TS_AUTHKEY": "tskey-key",
+				"TS_ROUTES":  "1.2.3.0/24,10.20.30.0/24",
 			},
 			Phases: []phase{
 				{
@@ -204,7 +222,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "routes_kernel_ipv4",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_ROUTES":    "1.2.3.0/24,10.20.30.0/24",
 				"TS_USERSPACE": "false",
 			},
@@ -227,7 +245,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "routes_kernel_ipv6",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_ROUTES":    "::/64,1::/64",
 				"TS_USERSPACE": "false",
 			},
@@ -250,7 +268,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "routes_kernel_all_families",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_ROUTES":    "::/64,1.2.3.0/24",
 				"TS_USERSPACE": "false",
 			},
@@ -273,7 +291,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "proxy",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_DEST_IP":   "1.2.3.4",
 				"TS_USERSPACE": "false",
 			},
@@ -295,7 +313,7 @@ func TestContainerBoot(t *testing.T) {
 		{
 			Name: "authkey_once",
 			Env: map[string]string{
-				"TS_AUTH_KEY":  "tskey-key",
+				"TS_AUTHKEY":   "tskey-key",
 				"TS_AUTH_ONCE": "true",
 			},
 			Phases: []phase{
@@ -354,7 +372,7 @@ func TestContainerBoot(t *testing.T) {
 				// Explicitly set to an empty value, to override the default of "tailscale".
 				"TS_KUBE_SECRET": "",
 				"TS_STATE_DIR":   filepath.Join(d, "tmp"),
-				"TS_AUTH_KEY":    "tskey-key",
+				"TS_AUTHKEY":     "tskey-key",
 			},
 			KubeSecret: map[string]string{},
 			Phases: []phase{
@@ -376,7 +394,7 @@ func TestContainerBoot(t *testing.T) {
 			Env: map[string]string{
 				"KUBERNETES_SERVICE_HOST":       kube.Host,
 				"KUBERNETES_SERVICE_PORT_HTTPS": kube.Port,
-				"TS_AUTH_KEY":                   "tskey-key",
+				"TS_AUTHKEY":                    "tskey-key",
 			},
 			KubeSecret:    map[string]string{},
 			KubeDenyPatch: true,
