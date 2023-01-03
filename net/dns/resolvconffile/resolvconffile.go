@@ -83,17 +83,26 @@ func Parse(r io.Reader) (*Config, error) {
 		}
 
 		if s, ok := strs.CutPrefix(line, "search"); ok {
-			domain := strings.TrimSpace(s)
-			if len(domain) == len(s) {
+			domains := strings.TrimSpace(s)
+			if len(domains) == len(s) {
 				// No leading space?!
-				return nil, fmt.Errorf("missing space after \"domain\" in %q", line)
+				return nil, fmt.Errorf("missing space after \"search\" in %q", line)
 			}
-			fqdn, err := dnsname.ToFQDN(domain)
-			if err != nil {
-				return nil, fmt.Errorf("parsing search domains %q: %w", line, err)
+			for len(domains) > 0 {
+				domain := domains
+				i := strings.IndexAny(domain, " \t")
+				if i != -1 {
+					domain = domain[:i]
+					domains = strings.TrimSpace(domains[i+1:])
+				} else {
+					domains = ""
+				}
+				fqdn, err := dnsname.ToFQDN(domain)
+				if err != nil {
+					return nil, fmt.Errorf("parsing search domain %q in %q: %w", domain, line, err)
+				}
+				config.SearchDomains = append(config.SearchDomains, fqdn)
 			}
-			config.SearchDomains = append(config.SearchDomains, fqdn)
-			continue
 		}
 	}
 	return config, nil
