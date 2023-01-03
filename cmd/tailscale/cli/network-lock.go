@@ -103,7 +103,11 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	// Common mistake: Not specifying the current node's key as one of the trusted keys.
 	foundSelfKey := false
 	for _, k := range keys {
-		if bytes.Equal(k.ID(), st.PublicKey.KeyID()) {
+		keyID, err := k.ID()
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(keyID, st.PublicKey.KeyID()) {
 			foundSelfKey = true
 			break
 		}
@@ -457,8 +461,13 @@ func nlDescribeUpdate(update ipnstate.NetworkLockUpdate, color bool) (string, er
 	var stanza strings.Builder
 	printKey := func(key *tka.Key, prefix string) {
 		fmt.Fprintf(&stanza, "%sType: %s\n", prefix, key.Kind.String())
-		fmt.Fprintf(&stanza, "%sKeyID: %x\n", prefix, key.ID())
-		fmt.Fprintf(&stanza, "%sVotes: %d\n", prefix, key.Votes)
+		if keyID, err := key.ID(); err == nil {
+			fmt.Fprintf(&stanza, "%sKeyID: %x\n", prefix, keyID)
+		} else {
+			// Older versions of the client shouldn't explode when they encounter an
+			// unknown key type.
+			fmt.Fprintf(&stanza, "%sKeyID: <Error: %v>\n", prefix, err)
+		}
 		if key.Meta != nil {
 			fmt.Fprintf(&stanza, "%sMetadata: %+v\n", prefix, key.Meta)
 		}

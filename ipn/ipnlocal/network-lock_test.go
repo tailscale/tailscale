@@ -321,7 +321,7 @@ func TestTKASync(t *testing.T) {
 			name: "control has an update",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.RemoveKey(someKey.ID()); err != nil {
+				if err := b.RemoveKey(someKey.MustID()); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -336,7 +336,7 @@ func TestTKASync(t *testing.T) {
 			name: "node has an update",
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.RemoveKey(someKey.ID()); err != nil {
+				if err := b.RemoveKey(someKey.MustID()); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -351,7 +351,7 @@ func TestTKASync(t *testing.T) {
 			name: "node and control diverge",
 			controlAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.SetKeyMeta(someKey.ID(), map[string]string{"ye": "swiggity"}); err != nil {
+				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swiggity"}); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)
@@ -362,7 +362,7 @@ func TestTKASync(t *testing.T) {
 			},
 			nodeAUMs: func(t *testing.T, a *tka.Authority, storage tka.Chonk, signer tka.Signer) []tka.AUM {
 				b := a.NewUpdater(signer)
-				if err := b.SetKeyMeta(someKey.ID(), map[string]string{"ye": "swooty"}); err != nil {
+				if err := b.SetKeyMeta(someKey.MustID(), map[string]string{"ye": "swooty"}); err != nil {
 					t.Fatal(err)
 				}
 				aums, err := b.Finalize(storage)

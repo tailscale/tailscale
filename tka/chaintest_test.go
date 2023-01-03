@@ -267,7 +267,7 @@ func (c *testChain) makeAUM(v *testchainNode) AUM {
 	sigHash := aum.SigHash()
 	for _, key := range c.SignAllKeys {
 		aum.Signatures = append(aum.Signatures, tkatype.Signature{
-			KeyID:     c.Key[key].ID(),
+			KeyID:     c.Key[key].MustID(),
 			Signature: ed25519.Sign(c.KeyPrivs[key], sigHash[:]),
 		})
 	}
@@ -276,7 +276,7 @@ func (c *testChain) makeAUM(v *testchainNode) AUM {
 	// sign it using that key.
 	if key := v.SignedWith; key != "" {
 		aum.Signatures = append(aum.Signatures, tkatype.Signature{
-			KeyID:     c.Key[key].ID(),
+			KeyID:     c.Key[key].MustID(),
 			Signature: ed25519.Sign(c.KeyPrivs[key], sigHash[:]),
 		})
 	}

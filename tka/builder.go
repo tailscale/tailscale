@@ -60,7 +60,12 @@ func (b *UpdateBuilder) mkUpdate(update AUM) error {
 
 // AddKey adds a new key to the authority.
 func (b *UpdateBuilder) AddKey(key Key) error {
-	if _, err := b.state.GetKey(key.ID()); err == nil {
+	keyID, err := key.ID()
+	if err != nil {
+		return err
+	}
+
+	if _, err := b.state.GetKey(keyID); err == nil {
 		return fmt.Errorf("cannot add key %v: already exists", key)
 	}
 	return b.mkUpdate(AUM{MessageKind: AUMAddKey, Key: &key})

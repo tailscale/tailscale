@@ -74,14 +74,25 @@ func (k Key) Clone() Key {
 	return out
 }
 
-func (k Key) ID() tkatype.KeyID {
+// MustID returns the KeyID of the key, panicking if an error is
+// encountered. This must only be used for tests.
+func (k Key) MustID() tkatype.KeyID {
+	id, err := k.ID()
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// ID returns the KeyID of the key.
+func (k Key) ID() (tkatype.KeyID, error) {
 	switch k.Kind {
 	// Because 25519 public keys are so short, we just use the 32-byte
 	// public as their 'key ID'.
 	case Key25519:
-		return tkatype.KeyID(k.Public)
+		return tkatype.KeyID(k.Public), nil
 	default:
-		panic("unsupported key kind")
+		return nil, fmt.Errorf("unknown key kind: %v", k.Kind)
 	}
 }
 

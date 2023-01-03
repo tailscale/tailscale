@@ -49,7 +49,7 @@ func TestVerify25519(t *testing.T) {
 	sigHash := aum.SigHash()
 	aum.Signatures = []tkatype.Signature{
 		{
-			KeyID:     key.ID(),
+			KeyID:     key.MustID(),
 			Signature: ed25519.Sign(priv, sigHash[:]),
 		},
 	}
@@ -92,7 +92,7 @@ func TestNLPrivate(t *testing.T) {
 
 	// We manually compute the keyID, so make sure its consistent with
 	// tka.Key.ID().
-	if !bytes.Equal(k.ID(), p.KeyID()) {
-		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.ID(), p.KeyID())
+	if !bytes.Equal(k.MustID(), p.KeyID()) {
+		t.Errorf("private.KeyID() & tka KeyID differ: %x != %x", k.MustID(), p.KeyID())
 	}
 }
