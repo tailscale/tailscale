@@ -61,39 +61,41 @@ var handler = map[string]localAPIHandler{
 
 	// The other /localapi/v0/NAME handlers are exact matches and contain only NAME
 	// without a trailing slash:
-	"bugreport":               (*Handler).serveBugReport,
-	"check-ip-forwarding":     (*Handler).serveCheckIPForwarding,
-	"check-prefs":             (*Handler).serveCheckPrefs,
-	"component-debug-logging": (*Handler).serveComponentDebugLogging,
-	"debug":                   (*Handler).serveDebug,
-	"debug-derp-region":       (*Handler).serveDebugDERPRegion,
-	"derpmap":                 (*Handler).serveDERPMap,
-	"dev-set-state-store":     (*Handler).serveDevSetStateStore,
-	"dial":                    (*Handler).serveDial,
-	"file-targets":            (*Handler).serveFileTargets,
-	"goroutines":              (*Handler).serveGoroutines,
-	"id-token":                (*Handler).serveIDToken,
-	"login-interactive":       (*Handler).serveLoginInteractive,
-	"logout":                  (*Handler).serveLogout,
-	"metrics":                 (*Handler).serveMetrics,
-	"ping":                    (*Handler).servePing,
-	"prefs":                   (*Handler).servePrefs,
-	"pprof":                   (*Handler).servePprof,
-	"serve-config":            (*Handler).serveServeConfig,
-	"set-dns":                 (*Handler).serveSetDNS,
-	"set-expiry-sooner":       (*Handler).serveSetExpirySooner,
-	"start":                   (*Handler).serveStart,
-	"status":                  (*Handler).serveStatus,
-	"tka/init":                (*Handler).serveTKAInit,
-	"tka/log":                 (*Handler).serveTKALog,
-	"tka/modify":              (*Handler).serveTKAModify,
-	"tka/sign":                (*Handler).serveTKASign,
-	"tka/status":              (*Handler).serveTKAStatus,
-	"tka/disable":             (*Handler).serveTKADisable,
-	"tka/force-local-disable": (*Handler).serveTKALocalDisable,
-	"upload-client-metrics":   (*Handler).serveUploadClientMetrics,
-	"watch-ipn-bus":           (*Handler).serveWatchIPNBus,
-	"whois":                   (*Handler).serveWhoIs,
+	"bugreport":                   (*Handler).serveBugReport,
+	"check-ip-forwarding":         (*Handler).serveCheckIPForwarding,
+	"check-prefs":                 (*Handler).serveCheckPrefs,
+	"component-debug-logging":     (*Handler).serveComponentDebugLogging,
+	"debug":                       (*Handler).serveDebug,
+	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
+	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
+	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
+	"derpmap":                     (*Handler).serveDERPMap,
+	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
+	"dial":                        (*Handler).serveDial,
+	"file-targets":                (*Handler).serveFileTargets,
+	"goroutines":                  (*Handler).serveGoroutines,
+	"id-token":                    (*Handler).serveIDToken,
+	"login-interactive":           (*Handler).serveLoginInteractive,
+	"logout":                      (*Handler).serveLogout,
+	"metrics":                     (*Handler).serveMetrics,
+	"ping":                        (*Handler).servePing,
+	"prefs":                       (*Handler).servePrefs,
+	"pprof":                       (*Handler).servePprof,
+	"serve-config":                (*Handler).serveServeConfig,
+	"set-dns":                     (*Handler).serveSetDNS,
+	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
+	"start":                       (*Handler).serveStart,
+	"status":                      (*Handler).serveStatus,
+	"tka/init":                    (*Handler).serveTKAInit,
+	"tka/log":                     (*Handler).serveTKALog,
+	"tka/modify":                  (*Handler).serveTKAModify,
+	"tka/sign":                    (*Handler).serveTKASign,
+	"tka/status":                  (*Handler).serveTKAStatus,
+	"tka/disable":                 (*Handler).serveTKADisable,
+	"tka/force-local-disable":     (*Handler).serveTKALocalDisable,
+	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
+	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
+	"whois":                       (*Handler).serveWhoIs,
 }
 
 func randHex(n int) string {
@@ -504,6 +506,40 @@ func (h *Handler) serveDevSetStateStore(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	io.WriteString(w, "done\n")
+}
+
+func (h *Handler) serveDebugPacketFilterRules(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	nm := h.b.NetMap()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "\t")
+	enc.Encode(nm.PacketFilterRules)
+}
+
+func (h *Handler) serveDebugPacketFilterMatches(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	nm := h.b.NetMap()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "\t")
+	enc.Encode(nm.PacketFilter)
 }
 
 func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {

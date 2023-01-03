@@ -16,6 +16,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -38,9 +39,10 @@ type NetworkMap struct {
 	Peers         []*tailcfg.Node // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
 	// TODO(maisem) : replace with View.
-	Hostinfo     tailcfg.Hostinfo
-	PacketFilter []filter.Match
-	SSHPolicy    *tailcfg.SSHPolicy // or nil, if not enabled/allowed
+	Hostinfo          tailcfg.Hostinfo
+	PacketFilter      []filter.Match
+	PacketFilterRules views.Slice[tailcfg.FilterRule]
+	SSHPolicy         *tailcfg.SSHPolicy // or nil, if not enabled/allowed
 
 	// CollectServices reports whether this node's Tailnet has
 	// requested that info about services be included in HostInfo.

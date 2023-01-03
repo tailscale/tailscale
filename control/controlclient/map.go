@@ -16,6 +16,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -40,6 +41,7 @@ type mapSession struct {
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
+	lastPacketFilterRules  views.Slice[tailcfg.FilterRule]
 	lastParsedPacketFilter []filter.Match
 	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
@@ -96,6 +98,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 
 	if pf := resp.PacketFilter; pf != nil {
 		var err error
+		ms.lastPacketFilterRules = views.SliceOf(pf)
 		ms.lastParsedPacketFilter, err = filter.MatchesFromFilterRules(pf)
 		if err != nil {
 			ms.logf("parsePacketFilter: %v", err)
@@ -147,21 +150,22 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	nm := &netmap.NetworkMap{
-		NodeKey:          ms.privateNodeKey.Public(),
-		PrivateKey:       ms.privateNodeKey,
-		MachineKey:       ms.machinePubKey,
-		Peers:            resp.Peers,
-		UserProfiles:     make(map[tailcfg.UserID]tailcfg.UserProfile),
-		Domain:           ms.lastDomain,
-		DomainAuditLogID: ms.lastDomainAuditLogID,
-		DNS:              *ms.lastDNSConfig,
-		PacketFilter:     ms.lastParsedPacketFilter,
-		SSHPolicy:        ms.lastSSHPolicy,
-		CollectServices:  ms.collectServices,
-		DERPMap:          ms.lastDERPMap,
-		Debug:            debug,
-		ControlHealth:    ms.lastHealth,
-		TKAEnabled:       ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
+		NodeKey:           ms.privateNodeKey.Public(),
+		PrivateKey:        ms.privateNodeKey,
+		MachineKey:        ms.machinePubKey,
+		Peers:             resp.Peers,
+		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
+		Domain:            ms.lastDomain,
+		DomainAuditLogID:  ms.lastDomainAuditLogID,
+		DNS:               *ms.lastDNSConfig,
+		PacketFilter:      ms.lastParsedPacketFilter,
+		PacketFilterRules: ms.lastPacketFilterRules,
+		SSHPolicy:         ms.lastSSHPolicy,
+		CollectServices:   ms.collectServices,
+		DERPMap:           ms.lastDERPMap,
+		Debug:             debug,
+		ControlHealth:     ms.lastHealth,
+		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
 	ms.netMapBuilding = nm
 
