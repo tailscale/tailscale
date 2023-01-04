@@ -70,6 +70,9 @@ const (
 
 	// SysDNSManager is the name of the net/dns manager subsystem.
 	SysDNSManager = Subsystem("dns-manager")
+
+	// SysTKA is the name of the tailnet key authority subsystem.
+	SysTKA = Subsystem("tailnet-lock")
 )
 
 // NewWarnable returns a new warnable item that the caller can mark
@@ -193,6 +196,12 @@ func SetDNSManagerHealth(err error) { setErr(SysDNSManager, err) }
 
 // DNSOSHealth returns the net/dns.OSConfigurator error state.
 func DNSOSHealth() error { return get(SysDNSOS) }
+
+// SetTKAHealth sets the health of the tailnet key authority.
+func SetTKAHealth(err error) { setErr(SysTKA, err) }
+
+// TKAHealth returns the tailnet key authority error state.
+func TKAHealth() error { return get(SysTKA) }
 
 // SetLocalLogConfigHealth sets the error state of this client's local log configuration.
 func SetLocalLogConfigHealth(err error) {

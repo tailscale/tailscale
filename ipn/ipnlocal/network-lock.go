@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/tsaddr"
@@ -60,9 +61,11 @@ func (b *LocalBackend) permitTKAInitLocked() bool {
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	// TODO(tom): Remove this guard for 1.35 and later.
 	if b.tka == nil && !b.permitTKAInitLocked() {
+		health.SetTKAHealth(nil)
 		return
 	}
 	if b.tka == nil {
+		health.SetTKAHealth(nil)
 		return // TKA not enabled.
 	}
 
@@ -110,6 +113,13 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 		b.tka.filtered = filtered
 	} else {
 		b.tka.filtered = nil
+	}
+
+	// Check that we ourselves are not locked out, report a health issue if so.
+	if nm.SelfNode != nil && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key, nm.SelfNode.KeySignature) != nil {
+		health.SetTKAHealth(errors.New("this node is locked out; it will not have connectivity until it is signed. For more info, see https://tailscale.com/s/locked-out"))
+	} else {
+		health.SetTKAHealth(nil)
 	}
 }
 
@@ -177,6 +187,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 				b.logf("Disablement failed, leaving TKA enabled. Error: %v", err)
 			} else {
 				isEnabled = false
+				health.SetTKAHealth(nil)
 			}
 		} else {
 			return fmt.Errorf("[bug] unreachable invariant of wantEnabled /w isEnabled")
