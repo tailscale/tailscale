@@ -27,3 +27,5 @@ func isSIDValidPrincipal(uid string) bool { return false }
 func lookupPseudoUser(uid string) (*user.User, error) {
 	return nil, fmt.Errorf("unimplemented on %v", runtime.GOOS)
 }
+
+func IsCurrentProcessElevated() bool { return false }
