@@ -88,7 +88,8 @@ type CapabilityVersion int
 //   - 49: 2022-11-03: Client understands EarlyNoise
 //   - 50: 2022-11-14: Client understands CapabilityIngress
 //   - 51: 2022-11-30: Client understands CapabilityTailnetLockAlpha
-const CurrentCapabilityVersion CapabilityVersion = 51
+//   - 52: 2023-01-05: client can handle c2n POST /logtail/flush
+const CurrentCapabilityVersion CapabilityVersion = 52
 
 type StableID string
 

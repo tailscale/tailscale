@@ -526,6 +526,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}
 	lb.SetVarRoot(opts.VarRoot)
+	if logPol != nil {
+		lb.SetLogFlusher(logPol.Logtail.StartFlush)
+	}
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
 	}

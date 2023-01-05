@@ -26,6 +26,16 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		// Test handler.
 		body, _ := io.ReadAll(r.Body)
 		w.Write(body)
+	case "/logtail/flush":
+		if r.Method != "POST" {
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
+		}
+		if b.TryFlushLogs() {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
+		}
 	case "/debug/goroutines":
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write(goroutines.ScrubbedGoroutineDump())
