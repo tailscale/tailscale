@@ -461,10 +461,22 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded
 	return true, nil
 }
 
-// Flush uploads all logs to the server.
-// It blocks until complete or there is an unrecoverable error.
+// Flush uploads all logs to the server. It blocks until complete or there is an
+// unrecoverable error.
+//
+// TODO(bradfitz): this apparently just returns nil, as of tailscale/corp@9c2ec35.
+// Finish cleaning this up.
 func (l *Logger) Flush() error {
 	return nil
+}
+
+// StartFlush starts a log upload, if anything is pending.
+//
+// If l is nil, StartFlush is a no-op.
+func (l *Logger) StartFlush() {
+	if l != nil {
+		l.tryDrainWake()
+	}
 }
 
 // logtailDisabled is whether logtail uploads to logcatcher are disabled.

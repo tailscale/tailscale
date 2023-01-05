@@ -140,6 +140,7 @@ type LocalBackend struct {
 	gotPortPollRes        chan struct{}    // closed upon first readPoller result
 	newDecompressor       func() (controlclient.Decompressor, error)
 	varRoot               string // or empty if SetVarRoot never called
+	logFlushFunc          func() // or nil if SetLogFlusher wasn't called
 	sshAtomicBool         atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 
@@ -3013,6 +3014,25 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 // It should only be called before the LocalBackend is used.
 func (b *LocalBackend) SetVarRoot(dir string) {
 	b.varRoot = dir
+}
+
+// SetLogFlusher sets a func to be called to flush log uploads.
+//
+// It should only be called before the LocalBackend is used.
+func (b *LocalBackend) SetLogFlusher(flushFunc func()) {
+	b.logFlushFunc = flushFunc
+}
+
+// TryFlushLogs calls the log flush function. It returns false if a log flush
+// function was never initialized with SetLogFlusher.
+//
+// TryFlushLogs should not block.
+func (b *LocalBackend) TryFlushLogs() bool {
+	if b.logFlushFunc == nil {
+		return false
+	}
+	b.logFlushFunc()
+	return true
 }
 
 // TailscaleVarRoot returns the root directory of Tailscale's writable
