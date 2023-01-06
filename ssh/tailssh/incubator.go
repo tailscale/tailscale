@@ -8,7 +8,7 @@
 // and groups to the specified `--uid`, `--gid` and `--groups`, and
 // then launches the requested `--cmd`.
 
-//go:build linux || (darwin && !ios) || freebsd
+//go:build linux || (darwin && !ios) || freebsd || openbsd
 
 package tailssh
 
@@ -713,7 +713,7 @@ func (ia *incubatorArgs) loginArgs() []string {
 			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
 		}
 		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
-	case "darwin", "freebsd":
+	case "darwin", "freebsd", "openbsd":
 		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
