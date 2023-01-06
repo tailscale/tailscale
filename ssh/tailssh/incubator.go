@@ -693,3 +693,39 @@ func acceptEnvPair(kv string) bool {
 	}
 	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
 }
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func (ia *incubatorArgs) loginArgs() []string {
+	switch runtime.GOOS {
+	case "linux":
+		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
+			// See https://github.com/tailscale/tailscale/issues/4924
+			//
+			// Arch uses a different login binary that makes the -h flag set the PAM
+			// service to "remote". So if they don't have that configured, don't
+			// pass -h.
+			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
+		}
+		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
+	case "darwin", "freebsd":
+		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
+	}
+	panic("unimplemented")
+}
+
+func setGroups(groupIDs []int) error {
+	if runtime.GOOS == "darwin" && len(groupIDs) > 16 {
+		// darwin returns "invalid argument" if more than 16 groups are passed to syscall.Setgroups
+		// some info can be found here:
+		// https://opensource.apple.com/source/samba/samba-187.8/patches/support-darwin-initgroups-syscall.auto.html
+		// this fix isn't great, as anyone reading this has probably just wasted hours figuring out why
+		// some permissions thing isn't working, due to some arbitrary group ordering, but it at least allows
+		// this to work for more things than it previously did.
+		groupIDs = groupIDs[:16]
+	}
+	return syscall.Setgroups(groupIDs)
+}
