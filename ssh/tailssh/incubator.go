@@ -24,6 +24,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,6 +34,7 @@ import (
 	"github.com/u-root/u-root/pkg/termios"
 	"go4.org/mem"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/envknob"
@@ -727,5 +729,25 @@ func setGroups(groupIDs []int) error {
 		// this to work for more things than it previously did.
 		groupIDs = groupIDs[:16]
 	}
-	return syscall.Setgroups(groupIDs)
+
+	err := syscall.Setgroups(groupIDs)
+	if err != nil && os.Geteuid() != 0 && groupsMatchCurrent(groupIDs) {
+		// If we're not root, ignore a Setgroups failure if all groups are the same.
+		return nil
+	}
+	return err
+}
+
+func groupsMatchCurrent(groupIDs []int) bool {
+	existing, err := syscall.Getgroups()
+	if err != nil {
+		return false
+	}
+	if len(existing) != len(groupIDs) {
+		return false
+	}
+	groupIDs = slices.Clone(groupIDs)
+	sort.Ints(groupIDs)
+	sort.Ints(existing)
+	return slices.Equal(groupIDs, existing)
 }
