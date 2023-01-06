@@ -64,7 +64,7 @@ require (
 	github.com/tc-hib/winres v0.1.6
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
-	github.com/u-root/u-root v0.9.1-0.20221111022710-6e9699743f5d
+	github.com/u-root/u-root v0.9.1-0.20230109201855-948a78c969ad
 	github.com/vishvananda/netlink v1.1.1-0.20211118161826-650dca95af54
 	go.uber.org/zap v1.21.0
 	go4.org/mem v0.0.0-20210711025021-927187094b94
@@ -104,7 +104,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.1.1 // indirect
 	github.com/Masterminds/sprig v2.22.0+incompatible // indirect
 	github.com/OpenPeeDeeP/depguard v1.0.1 // indirect
-	github.com/ProtonMail/go-crypto v0.0.0-20211112122917-428f8eabeeb3 // indirect
+	github.com/ProtonMail/go-crypto v0.0.0-20221026131551-cf6655e29de4 // indirect
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
 	github.com/acomagu/bufpipe v1.0.3 // indirect
@@ -134,6 +134,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/charithe/durationcheck v0.0.9 // indirect
 	github.com/chavacava/garif v0.0.0-20210405164556-e8a0a408d6af // indirect
+	github.com/cloudflare/circl v1.1.0 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.11.4 // indirect
 	github.com/daixiang0/gci v0.2.9 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
