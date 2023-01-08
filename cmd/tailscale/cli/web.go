@@ -247,7 +247,14 @@ func qnapAuthnSid(r *http.Request, user, sid string) (string, *qnapAuthResponse,
 }
 
 func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
-	resp, err := http.Get(url)
+	// QNAP Force HTTPS mode uses a self-signed certificate. Even importing
+	// the QNAP root CA isn't enough, the cert doesn't have a usable CN nor
+	// SAN. See https://github.com/tailscale/tailscale/issues/6903
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr}
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", nil, err
 	}
