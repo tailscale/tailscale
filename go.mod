@@ -71,11 +71,11 @@ require (
 	go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf
 	golang.org/x/crypto v0.3.0
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db
-	golang.org/x/net v0.2.0
+	golang.org/x/net v0.5.0
 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
 	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.3.1-0.20221220025402-2204b6615fb8
-	golang.org/x/term v0.2.0
+	golang.org/x/sys v0.4.0
+	golang.org/x/term v0.4.0
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
 	golang.org/x/tools v0.2.0
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224
@@ -303,7 +303,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
 	golang.org/x/image v0.0.0-20201208152932-35266b937fa6 // indirect
 	golang.org/x/mod v0.6.0 // indirect
-	golang.org/x/text v0.4.0 // indirect
+	golang.org/x/text v0.6.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.2.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
