@@ -175,6 +175,7 @@ func (v NodeView) UnsignedPeerAPIOnly() bool         { return v.ж.UnsignedPeerA
 func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
 func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
+func (v NodeView) Expired() bool                     { return v.ж.Expired }
 func (v NodeView) Equal(v2 NodeView) bool            { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -207,6 +208,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	computedHostIfDifferent string
 	ComputedNameWithHost    string
 	DataPlaneAuditLogID     string
+	Expired                 bool
 }{})
 
 // View returns a readonly view of Hostinfo.

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/netip"
 	"sort"
+	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
@@ -52,6 +53,12 @@ type mapSession struct {
 	lastPopBrowserURL      string
 	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
 	lastTKAInfo            *tailcfg.TKAInfo
+	previouslyExpired      map[tailcfg.StableNodeID]bool // to avoid log spam
+
+	// clockDelta stores the delta between the current time and the time
+	// received from control such that:
+	//    time.Now().Add(clockDelta) == MapResponse.ControlTime
+	clockDelta time.Duration
 
 	// netMapBuilding is non-nil during a netmapForResponse call,
 	// containing the value to be returned, once fully populated.
@@ -60,11 +67,12 @@ type mapSession struct {
 
 func newMapSession(privateNodeKey key.NodePrivate) *mapSession {
 	ms := &mapSession{
-		privateNodeKey:  privateNodeKey,
-		logf:            logger.Discard,
-		vlogf:           logger.Discard,
-		lastDNSConfig:   new(tailcfg.DNSConfig),
-		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfile{},
+		privateNodeKey:    privateNodeKey,
+		logf:              logger.Discard,
+		vlogf:             logger.Discard,
+		lastDNSConfig:     new(tailcfg.DNSConfig),
+		lastUserProfile:   map[tailcfg.UserID]tailcfg.UserProfile{},
+		previouslyExpired: map[tailcfg.StableNodeID]bool{},
 	}
 	return ms
 }
@@ -85,6 +93,7 @@ func (ms *mapSession) addUserProfile(userID tailcfg.UserID) {
 // information from prior MapResponse values.
 func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.NetworkMap {
 	undeltaPeers(resp, ms.previousPeers)
+	ms.flagExpiredPeers(resp)
 
 	ms.previousPeers = cloneNodes(resp.Peers) // defensive/lazy clone, since this escapes to who knows where
 	for _, up := range resp.UserProfiles {
@@ -341,6 +350,83 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 	mapRes.Peers = newFull
 	mapRes.PeersChanged = nil
 	mapRes.PeersRemoved = nil
+}
+
+// For extra defense-in-depth, when we're testing expired nodes we check
+// ControlTime against this 'epoch' (set to the approximate time that this code
+// was written) such that if control (or Headscale, etc.) sends a ControlTime
+// that's sufficiently far in the past, we can safely ignore it.
+var flagExpiredPeersEpoch = time.Unix(1673373066, 0)
+
+// If the offset between the current time and the time received from control is
+// larger than this, we store an offset in our mapSession to adjust future
+// clock timings.
+const minClockDelta = 1 * time.Minute
+
+// flagExpiredPeers updates mapRes.Peers, mutating all peers that have expired,
+// taking into account any clock skew detected by using the ControlTime field
+// in the MapResponse. We don't actually remove expired peers from the Peers
+// array; instead, we clear some fields of the Node object, and set
+// Node.Expired so other parts of the codebase can provide more clear error
+// messages when attempting to e.g. ping an expired node.
+//
+// This is additionally a defense-in-depth against something going wrong with
+// control such that we start seeing expired peers with a valid Endpoints or
+// DERP field.
+func (ms *mapSession) flagExpiredPeers(mapRes *tailcfg.MapResponse) {
+	localNow := clockNow()
+
+	// If we have a ControlTime field, update our delta.
+	if mapRes.ControlTime != nil && !mapRes.ControlTime.IsZero() {
+		delta := mapRes.ControlTime.Sub(localNow)
+		if delta.Abs() > minClockDelta {
+			ms.logf("[v1] netmap: flagExpiredPeers: setting clock delta to %v", delta)
+			ms.clockDelta = delta
+		} else {
+			ms.clockDelta = 0
+		}
+	}
+
+	// Adjust our current time by any saved delta to adjust for clock skew.
+	controlNow := localNow.Add(ms.clockDelta)
+	if controlNow.Before(flagExpiredPeersEpoch) {
+		ms.logf("netmap: flagExpiredPeers: [unexpected] delta-adjusted current time is before hardcoded epoch; skipping")
+		return
+	}
+
+	for _, peer := range mapRes.Peers {
+		// Nodes that don't expire have KeyExpiry set to the zero time;
+		// skip those and peers that are already marked as expired
+		// (e.g. from control).
+		if peer.KeyExpiry.IsZero() || peer.KeyExpiry.After(controlNow) {
+			delete(ms.previouslyExpired, peer.StableID)
+			continue
+		} else if peer.Expired {
+			continue
+		}
+
+		if !ms.previouslyExpired[peer.StableID] {
+			ms.logf("[v1] netmap: flagExpiredPeers: clearing expired peer %v", peer.StableID)
+			ms.previouslyExpired[peer.StableID] = true
+		}
+
+		// Actually mark the node as expired
+		peer.Expired = true
+
+		// Control clears the Endpoints and DERP fields of expired
+		// nodes; do so here as well. The Expired bool is the correct
+		// thing to set, but this replicates the previous behaviour.
+		//
+		// NOTE: this is insufficient to actually break connectivity,
+		// since we discover endpoints via DERP, and due to DERP return
+		// path optimization.
+		peer.Endpoints = nil
+		peer.DERP = ""
+
+		// Defense-in-depth: break the node's public key as well, in
+		// case something tries to communicate.
+		peer.Key = key.NodePublicWithBadOldPrefix(peer.Key)
+	}
 }
 
 // ptrCopy returns a pointer to a newly allocated shallow copy of *v.
