@@ -255,6 +255,12 @@ type Node struct {
 
 	// DataPlaneAuditLogID is the per-node logtail ID used for data plane audit logging.
 	DataPlaneAuditLogID string `json:",omitempty"`
+
+	// Expired is whether this node's key has expired. Control may send
+	// this; clients are only allowed to set this from false to true. On
+	// the client, this is calculated client-side based on a timestamp sent
+	// from control, to avoid clock skew issues.
+	Expired bool `json:",omitempty"`
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1628,7 +1634,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags)
+		eqStrings(n.Tags, n2.Tags) &&
+		n.Expired == n2.Expired
 }
 
 func eqBoolPtr(a, b *bool) bool {

@@ -334,7 +334,7 @@ func TestNodeEqual(t *testing.T) {
 		"Capabilities",
 		"UnsignedPeerAPIOnly",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
-		"DataPlaneAuditLogID",
+		"DataPlaneAuditLogID", "Expired",
 	}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -511,6 +511,11 @@ func TestNodeEqual(t *testing.T) {
 		},
 		{
 			&Node{Tags: []string{"tag:foo"}},
+			&Node{},
+			false,
+		},
+		{
+			&Node{Expired: true},
 			&Node{},
 			false,
 		},
