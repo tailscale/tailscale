@@ -903,6 +903,9 @@ func (h *peerAPIHandler) canDebug() bool {
 
 // canWakeOnLAN reports whether h can send a Wake-on-LAN packet from this node.
 func (h *peerAPIHandler) canWakeOnLAN() bool {
+	if h.peerNode.UnsignedPeerAPIOnly {
+		return false
+	}
 	return h.isSelf || h.peerHasCap(tailcfg.CapabilityWakeOnLAN)
 }
 
