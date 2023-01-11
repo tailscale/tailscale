@@ -168,12 +168,21 @@ func runNetworkLockInit(ctx context.Context, args []string) error {
 	return nil
 }
 
+var nlStatusArgs struct {
+	json bool
+}
+
 var nlStatusCmd = &ffcli.Command{
 	Name:       "status",
 	ShortUsage: "status",
 	ShortHelp:  "Outputs the state of tailnet lock",
 	LongHelp:   "Outputs the state of tailnet lock",
 	Exec:       runNetworkLockStatus,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("lock status")
+		fs.BoolVar(&nlStatusArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
+		return fs
+	})(),
 }
 
 func runNetworkLockStatus(ctx context.Context, args []string) error {
@@ -181,6 +190,13 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
+
+	if nlStatusArgs.json {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(st)
+	}
+
 	if st.Enabled {
 		fmt.Println("Tailnet lock is ENABLED.")
 	} else {
@@ -435,6 +451,7 @@ func runNetworkLockDisablementKDF(ctx context.Context, args []string) error {
 
 var nlLogArgs struct {
 	limit int
+	json  bool
 }
 
 var nlLogCmd = &ffcli.Command{
@@ -446,6 +463,7 @@ var nlLogCmd = &ffcli.Command{
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("lock log")
 		fs.IntVar(&nlLogArgs.limit, "limit", 50, "max number of updates to list")
+		fs.BoolVar(&nlLogArgs.json, "json", false, "output in JSON format (WARNING: format subject to change)")
 		return fs
 	})(),
 }
@@ -523,6 +541,12 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 	if err != nil {
 		return fixTailscaledConnectError(err)
 	}
+	if nlLogArgs.json {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(updates)
+	}
+
 	useColor := isatty.IsTerminal(os.Stdout.Fd())
 
 	stdOut := colorable.NewColorableStdout()
