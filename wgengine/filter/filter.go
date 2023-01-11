@@ -59,7 +59,7 @@ type Filter struct {
 // filterState is a state cache of past seen packets.
 type filterState struct {
 	mu  sync.Mutex
-	lru *flowtrack.Cache // from flowtrack.Tuple -> nil
+	lru *flowtrack.Cache[struct{}] // from flowtrack.Tuple -> struct{}
 }
 
 // lruMax is the size of the LRU cache in filterState.
@@ -176,7 +176,7 @@ func New(matches []Match, localNets *netipx.IPSet, logIPs *netipx.IPSet, shareSt
 		state = shareStateWith.state
 	} else {
 		state = &filterState{
-			lru: &flowtrack.Cache{MaxEntries: lruMax},
+			lru: &flowtrack.Cache[struct{}]{MaxEntries: lruMax},
 		}
 	}
 	f := &Filter{
@@ -517,7 +517,7 @@ func (f *Filter) runOut(q *packet.Parsed) (r Response, why string) {
 			Src:   q.Dst, Dst: q.Src, // src/dst reversed
 		}
 		f.state.mu.Lock()
-		f.state.lru.Add(tuple, nil)
+		f.state.lru.Add(tuple, struct{}{})
 		f.state.mu.Unlock()
 	}
 	return Accept, "ok out"

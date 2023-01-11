@@ -34,7 +34,7 @@ func (t Tuple) String() string {
 // The zero value is valid to use.
 //
 // It is not safe for concurrent access.
-type Cache struct {
+type Cache[Value any] struct {
 	// MaxEntries is the maximum number of cache entries before
 	// an item is evicted. Zero means no limit.
 	MaxEntries int
@@ -44,9 +44,9 @@ type Cache struct {
 }
 
 // entry is the container/list element type.
-type entry struct {
+type entry[Value any] struct {
 	key   Tuple
-	value any
+	value Value
 }
 
 // Add adds a value to the cache, set or updating its associated
@@ -54,17 +54,17 @@ type entry struct {
 //
 // If MaxEntries is non-zero and the length of the cache is greater
 // after any addition, the least recently used value is evicted.
-func (c *Cache) Add(key Tuple, value any) {
+func (c *Cache[Value]) Add(key Tuple, value Value) {
 	if c.m == nil {
 		c.m = make(map[Tuple]*list.Element)
 		c.ll = list.New()
 	}
 	if ee, ok := c.m[key]; ok {
 		c.ll.MoveToFront(ee)
-		ee.Value.(*entry).value = value
+		ee.Value.(*entry[Value]).value = value
 		return
 	}
-	ele := c.ll.PushFront(&entry{key, value})
+	ele := c.ll.PushFront(&entry[Value]{key, value})
 	c.m[key] = ele
 	if c.MaxEntries != 0 && c.Len() > c.MaxEntries {
 		c.RemoveOldest()
@@ -73,23 +73,23 @@ func (c *Cache) Add(key Tuple, value any) {
 
 // Get looks up a key's value from the cache, also reporting
 // whether it was present.
-func (c *Cache) Get(key Tuple) (value any, ok bool) {
+func (c *Cache[Value]) Get(key Tuple) (value *Value, ok bool) {
 	if ele, hit := c.m[key]; hit {
 		c.ll.MoveToFront(ele)
-		return ele.Value.(*entry).value, true
+		return &ele.Value.(*entry[Value]).value, true
 	}
 	return nil, false
 }
 
 // Remove removes the provided key from the cache if it was present.
-func (c *Cache) Remove(key Tuple) {
+func (c *Cache[Value]) Remove(key Tuple) {
 	if ele, hit := c.m[key]; hit {
 		c.removeElement(ele)
 	}
 }
 
 // RemoveOldest removes the oldest item from the cache, if any.
-func (c *Cache) RemoveOldest() {
+func (c *Cache[Value]) RemoveOldest() {
 	if c.ll != nil {
 		if ele := c.ll.Back(); ele != nil {
 			c.removeElement(ele)
@@ -97,10 +97,10 @@ func (c *Cache) RemoveOldest() {
 	}
 }
 
-func (c *Cache) removeElement(e *list.Element) {
+func (c *Cache[Value]) removeElement(e *list.Element) {
 	c.ll.Remove(e)
-	delete(c.m, e.Value.(*entry).key)
+	delete(c.m, e.Value.(*entry[Value]).key)
 }
 
 // Len returns the number of items in the cache.
-func (c *Cache) Len() int { return len(c.m) }
+func (c *Cache[Value]) Len() int { return len(c.m) }
