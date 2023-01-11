@@ -139,8 +139,9 @@ type LocalBackend struct {
 	portpollOnce          sync.Once        // guards starting readPoller
 	gotPortPollRes        chan struct{}    // closed upon first readPoller result
 	newDecompressor       func() (controlclient.Decompressor, error)
-	varRoot               string // or empty if SetVarRoot never called
-	logFlushFunc          func() // or nil if SetLogFlusher wasn't called
+	varRoot               string         // or empty if SetVarRoot never called
+	logFlushFunc          func()         // or nil if SetLogFlusher wasn't called
+	em                    *expiryManager // non-nil
 	sshAtomicBool         atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 
@@ -151,6 +152,7 @@ type LocalBackend struct {
 	filterAtomic                 atomic.Pointer[filter.Filter]
 	containsViaIPFuncAtomic      syncs.AtomicValue[func(netip.Addr) bool]
 	shouldInterceptTCPPortAtomic syncs.AtomicValue[func(uint16) bool]
+	numClientStatusCalls         atomic.Uint32
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
@@ -170,6 +172,7 @@ type LocalBackend struct {
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap           *netmap.NetworkMap
+	nmExpiryTimer    *time.Timer // for updating netMap on node expiry; can be nil
 	nodeByAddr       map[netip.Addr]*tailcfg.Node
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
@@ -275,6 +278,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, state
 		backendLogID:   logid,
 		state:          ipn.NoState,
 		portpoll:       portpoll,
+		em:             newExpiryManager(logf),
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
 	}
@@ -805,7 +809,65 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		return
 	}
 
+	// Track the number of calls
+	currCall := b.numClientStatusCalls.Add(1)
+
 	b.mu.Lock()
+
+	// Handle node expiry in the netmap
+	if st.NetMap != nil {
+		b.em.flagExpiredPeers(st.NetMap)
+
+		// Always stop the existing netmap timer if we have a netmap;
+		// it's possible that we have no nodes expiring, so we should
+		// always cancel the timer and then possibly restart it below.
+		if b.nmExpiryTimer != nil {
+			// Ignore if we can't stop; the atomic check in the
+			// AfterFunc (below) will skip running.
+			b.nmExpiryTimer.Stop()
+
+			// Nil so we don't attempt to stop on the next netmap
+			b.nmExpiryTimer = nil
+		}
+
+		now := time.Now()
+
+		// Figure out when the next node in the netmap is expiring so we can
+		// start a timer to reconfigure at that point.
+		var nextExpiry time.Time // zero if none
+		for _, peer := range st.NetMap.Peers {
+			if peer.KeyExpiry.IsZero() {
+				continue // tagged node
+			} else if peer.Expired {
+				// Peer already expired; Expired is set by the
+				// flagExpiredPeers function, above.
+				continue
+			}
+			if nextExpiry.IsZero() || peer.KeyExpiry.Before(nextExpiry) {
+				nextExpiry = peer.KeyExpiry
+			}
+		}
+
+		if !nextExpiry.IsZero() {
+			tmrDuration := nextExpiry.Sub(now) + 10*time.Second
+			b.nmExpiryTimer = time.AfterFunc(tmrDuration, func() {
+				// Skip if the world has moved on past the
+				// saved call (e.g. if we race stopping this
+				// timer).
+				if b.numClientStatusCalls.Load() != currCall {
+					return
+				}
+
+				b.logf("setClientStatus: netmap expiry timer triggered after %v", tmrDuration)
+
+				// Call ourselves with the current status again; the logic in
+				// setClientStatus will take care of updating the expired field
+				// of peers in the netmap.
+				b.setClientStatus(st)
+			})
+		}
+	}
+
 	wasBlocked := b.blocked
 	keyExpiryExtended := false
 	if st.NetMap != nil {
@@ -1314,6 +1376,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
 		OnClientVersion:      b.onClientVersion,
+		OnControlTime:        b.em.onControlTime,
 		Dialer:               b.Dialer(),
 		Status:               b.setClientStatus,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),

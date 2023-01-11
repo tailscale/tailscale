@@ -77,6 +77,7 @@ type Direct struct {
 	popBrowser             func(url string)             // or nil
 	c2nHandler             http.Handler                 // or nil
 	onClientVersion        func(*tailcfg.ClientVersion) // or nil
+	onControlTime          func(time.Time)              // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -116,6 +117,7 @@ type Options struct {
 	LinkMonitor          *monitor.Mon                 // optional link monitor
 	PopBrowserURL        func(url string)             // optional func to open browser
 	OnClientVersion      func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
+	OnControlTime        func(time.Time)              // optional func to notify callers of new time from control
 	Dialer               *tsdial.Dialer               // non-nil
 	C2NHandler           http.Handler                 // or nil
 
@@ -244,6 +246,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
 		onClientVersion:        opts.OnClientVersion,
+		onControlTime:          opts.OnControlTime,
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
 		dialPlan:               opts.DialPlan,
@@ -1016,6 +1019,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		}
 		if resp.ControlTime != nil && !resp.ControlTime.IsZero() {
 			c.logf.JSON(1, "controltime", resp.ControlTime.UTC())
+			if c.onControlTime != nil {
+				c.onControlTime(*resp.ControlTime)
+			}
 		}
 		if resp.KeepAlive {
 			vlogf("netmap: got keep-alive")
