@@ -12,7 +12,7 @@ import (
 )
 
 func TestCache(t *testing.T) {
-	c := &Cache{MaxEntries: 2}
+	c := &Cache[int]{MaxEntries: 2}
 
 	k1 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("1.1.1.1:1")}
 	k2 := Tuple{Src: netip.MustParseAddrPort("1.1.1.1:1"), Dst: netip.MustParseAddrPort("2.2.2.2:2")}
@@ -25,13 +25,13 @@ func TestCache(t *testing.T) {
 			t.Fatalf("Len = %d; want %d", got, want)
 		}
 	}
-	wantVal := func(key Tuple, want any) {
+	wantVal := func(key Tuple, want int) {
 		t.Helper()
 		got, ok := c.Get(key)
 		if !ok {
 			t.Fatalf("Get(%q) failed; want value %v", key, want)
 		}
-		if got != want {
+		if *got != want {
 			t.Fatalf("Get(%q) = %v; want %v", key, got, want)
 		}
 	}
@@ -73,7 +73,7 @@ func TestCache(t *testing.T) {
 		if !ok {
 			t.Fatal("missing k3")
 		}
-		if got != 30 {
+		if *got != 30 {
 			t.Fatalf("got = %d; want 30", got)
 		}
 	})
