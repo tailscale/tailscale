@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -174,8 +175,10 @@ func getUPnPClient(ctx context.Context, logf logger.Logf, gw netip.Addr, meta uP
 		return nil, fmt.Errorf("unexpected host %q in %q", u.Host, meta.Location)
 	}
 	if ipp.Addr() != gw {
-		return nil, fmt.Errorf("UPnP discovered root %q does not match gateway IP %v; ignoring UPnP",
+		// https://github.com/tailscale/tailscale/issues/5502
+		logf("UPnP discovered root %q does not match gateway IP %v; repointing at gateway which is assumed to be floating",
 			meta.Location, gw)
+		u.Host = net.JoinHostPort(gw.String(), u.Port())
 	}
 
 	// We're fetching a smallish XML document over plain HTTP
