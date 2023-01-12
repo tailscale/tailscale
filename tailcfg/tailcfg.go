@@ -188,7 +188,7 @@ type Node struct {
 	Sharer UserID `json:",omitempty"`
 
 	Key          key.NodePublic
-	KeyExpiry    time.Time
+	KeyExpiry    time.Time                  // the zero value if this node does not expire
 	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 	Machine      key.MachinePublic
 	DiscoKey     key.DiscoPublic
