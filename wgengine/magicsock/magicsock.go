@@ -3647,6 +3647,8 @@ type endpoint struct {
 	// See #540 for background.
 	heartbeatDisabled bool
 	pathFinderRunning bool
+
+	expired bool // whether the node has expired
 }
 
 type pendingCLIPing struct {
@@ -3899,6 +3901,12 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
+	if de.expired {
+		res.Err = errExpired.Error()
+		cb(res)
+		return
+	}
+
 	de.pendingCLIPings = append(de.pendingCLIPings, pendingCLIPing{res, cb})
 
 	now := mono.Now()
@@ -3920,12 +3928,21 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 	de.noteActiveLocked()
 }
 
+var (
+	errExpired     = errors.New("peer's node key has expired")
+	errNoUDPOrDERP = errors.New("no UDP or DERP addr")
+)
+
 func (de *endpoint) send(buffs [][]byte) error {
 	if fn := de.sendFunc.Load(); fn != nil {
 		return fn(buffs)
 	}
 
 	de.mu.Lock()
+	if de.expired {
+		de.mu.Unlock()
+		return errExpired
+	}
 
 	// if heartbeat disabled, kick off pathfinder
 	if de.heartbeatDisabled {
@@ -3943,7 +3960,7 @@ func (de *endpoint) send(buffs [][]byte) error {
 	de.mu.Unlock()
 
 	if !udpAddr.IsValid() && !derpAddr.IsValid() {
-		return errors.New("no UDP or DERP addr")
+		return errNoUDPOrDERP
 	}
 	var err error
 	if udpAddr.IsValid() {
@@ -4112,6 +4129,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 	defer de.mu.Unlock()
 
 	de.heartbeatDisabled = heartbeatDisabled
+	de.expired = n.Expired
 
 	if de.discoKey != n.DiscoKey {
 		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
