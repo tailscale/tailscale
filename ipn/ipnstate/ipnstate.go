@@ -31,6 +31,10 @@ type Status struct {
 	// Version is the daemon's long version (see version.Long).
 	Version string
 
+	// TUN is whether /dev/net/tun (or equivalent kernel interface) is being
+	// used. If false, it's running in userspace mode.
+	TUN bool
+
 	// BackendState is an ipn.State string value:
 	//  "NoState", "NeedsLogin", "NeedsMachineAuth", "Stopped",
 	//  "Starting", "Running".
