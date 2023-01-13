@@ -579,6 +579,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	defer b.mu.Unlock()
 	sb.MutateStatus(func(s *ipnstate.Status) {
 		s.Version = version.Long
+		s.TUN = !wgengine.IsNetstack(b.e)
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
 		if err := health.OverallError(); err != nil {

@@ -58,6 +58,7 @@ type tmplData struct {
 	AdvertiseExitNode bool
 	AdvertiseRoutes   string
 	LicensesURL       string
+	TUNMode           bool
 }
 
 var webCmd = &ffcli.Command{
@@ -338,7 +339,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := localClient.Status(ctx)
+	st, err := localClient.StatusWithoutPeers(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -408,6 +409,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
 		LicensesURL:  licensesURL(),
+		TUNMode:      st.TUN,
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
