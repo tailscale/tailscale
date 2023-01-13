@@ -225,6 +225,11 @@ a {
 	background-color: rgba(249, 247, 246, var(--tw-bg-opacity));
 }
 
+.bg-orange-0 {
+	--tw-bg-opacity: 1;
+		background-color: rgba(255, 250, 238, var(--tw-bg-opacity));
+}
+
 .border-gray-200 {
 	--tw-border-opacity: 1;
 	border-color: rgba(238, 235, 234, var(--tw-border-opacity));
@@ -1117,6 +1122,11 @@ a {
 .text-gray-800 {
 	--tw-text-opacity: 1;
 	color: rgba(35, 34, 34, var(--tw-text-opacity));
+}
+
+.text-orange-800 {
+	--tw-text-opacity: 1;
+		color: rgba(66, 14, 17, var(--tw-text-opacity));
 }
 
 .leading-3 {

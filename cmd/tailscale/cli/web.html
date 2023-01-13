@@ -99,10 +99,12 @@
 		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
 	</div>
 	{{ if .IsSynology }}
-		<div class="mb-4">
-			<b>Outgoing access:</b>
-			{{ if .TUNMode }} enabled {{ else }} not configured {{ end }}
-			<nobr>[<a href="https://tailscale.com/kb/1152/synology-outbound/">docs</a>]</nobr>
+		<div class="border border-gray-200 bg-orange-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full text-orange-800">
+			Outgoing access {{ if true }}enabled{{ else }}not configured{{ end }}.
+			<nobr><a href="https://tailscale.com/kb/1152/synology-outbound/"
+				class="font-medium link"
+				target="_blank"
+				rel="noopener noreferrer">Learn more &rarr;</a></nobr>
 		</div>
 	{{ end }}
 	{{ end }}
