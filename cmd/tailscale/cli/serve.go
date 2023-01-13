@@ -89,7 +89,7 @@ EXAMPLES
 					"    $ tailscale serve tcp 5432",
 					"",
 					"  - Forward raw, TLS-terminated TCP packets to a local TCP server on port 5432:",
-					"    $ tailscale serve --terminate-tls tcp 5432",
+					"    $ tailscale serve tcp --terminate-tls 5432",
 				}, "\n"),
 				FlagSet: e.newFlags("serve-tcp", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.terminateTLS, "terminate-tls", false, "terminate TLS before forwarding TCP connection")
@@ -584,8 +584,8 @@ func elipticallyTruncate(s string, max int) string {
 //
 // Examples:
 //   - tailscale serve tcp 5432
-//   - tailscale --serve-port=8443 tcp 4430
-//   - tailscale --serve-port=10000 --terminate-tls tcp 8080
+//   - tailscale serve --serve-port=8443 tcp 4430
+//   - tailscale serve --serve-port=10000 tcp --terminate-tls 8080
 func (e *serveEnv) runServeTCP(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		fmt.Fprintf(os.Stderr, "error: invalid number of arguments\n\n")
