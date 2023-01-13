@@ -98,6 +98,13 @@
 	<div class="mb-4">
 		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
 	</div>
+	{{ if .IsSynology }}
+		<div class="mb-4">
+			<b>Outgoing access:</b>
+			{{ if .TUNMode }} enabled {{ else }} not configured {{ end }}
+			<nobr>[<a href="https://tailscale.com/kb/1152/synology-outbound/">docs</a>]</nobr>
+		</div>
+	{{ end }}
 	{{ end }}
 </main>
 <footer class="container max-w-lg mx-auto text-center">
