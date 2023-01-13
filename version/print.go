@@ -14,6 +14,9 @@ func String() string {
 	var ret strings.Builder
 	ret.WriteString(Short)
 	ret.WriteByte('\n')
+	if IsUnstableBuild() {
+		fmt.Fprintf(&ret, "  track: unstable (dev); frequent updates and bugs are likely\n")
+	}
 	if GitCommit != "" {
 		var dirty string
 		if GitDirty {
