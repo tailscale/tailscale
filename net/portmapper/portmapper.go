@@ -100,11 +100,11 @@ type mapping interface {
 	// but can be called asynchronously. Release should be idempotent, and thus even if called
 	// multiple times should not cause additional side-effects.
 	Release(context.Context)
-	// goodUntil will return the lease time that the mapping is valid for.
+	// GoodUntil will return the lease time that the mapping is valid for.
 	GoodUntil() time.Time
-	// renewAfter returns the earliest time that the mapping should be renewed.
+	// RenewAfter returns the earliest time that the mapping should be renewed.
 	RenewAfter() time.Time
-	// externalIPPort indicates what port the mapping can be reached from on the outside.
+	// External indicates what port the mapping can be reached from on the outside.
 	External() netip.AddrPort
 }
 
@@ -797,7 +797,11 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		switch port {
 		case c.upnpPort():
 			metricUPnPResponse.Add(1)
-			if ip == gw && mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
+			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
+				if ip != gw {
+					// https://github.com/tailscale/tailscale/issues/5502
+					c.logf("UPnP discovery response from %v, but gateway IP is %v", ip, gw)
+				}
 				meta, err := parseUPnPDiscoResponse(buf[:n])
 				if err != nil {
 					metricUPnPParseErr.Add(1)
