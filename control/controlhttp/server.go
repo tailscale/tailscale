@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -35,7 +36,7 @@ func AcceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 }
 
 func acceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate, earlyWrite func(protocolVersion int, w io.Writer) error) (_ *controlbase.Conn, retErr error) {
-	next := r.Header.Get("Upgrade")
+	next := strings.ToLower(r.Header.Get("Upgrade"))
 	if next == "" {
 		http.Error(w, "missing next protocol", http.StatusBadRequest)
 		return nil, errors.New("no next protocol in HTTP request")
