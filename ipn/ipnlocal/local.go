@@ -2275,6 +2275,9 @@ func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer *ta
 	if !ok {
 		return nil, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
 	}
+	if peer.Expired {
+		return nil, "", errors.New("peer's node key has expired")
+	}
 	base := peerAPIBase(nm, peer)
 	if base == "" {
 		return nil, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID, ip)
