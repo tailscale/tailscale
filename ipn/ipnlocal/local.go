@@ -715,6 +715,10 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 		v := views.IPPrefixSliceOf(n.PrimaryRoutes)
 		ps.PrimaryRoutes = &v
 	}
+
+	if n.Expired {
+		ps.Expired = true
+	}
 }
 
 // WhoIs reports the node and user who owns the node with the given IP:port.
