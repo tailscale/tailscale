@@ -388,6 +388,17 @@ func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) Response {
 	return r
 }
 
+var unknownProtoStringCache sync.Map // ipproto.Proto -> string
+
+func unknownProtoString(proto ipproto.Proto) string {
+	if v, ok := unknownProtoStringCache.Load(proto); ok {
+		return v.(string)
+	}
+	s := fmt.Sprintf("unknown-protocol-%d", proto)
+	unknownProtoStringCache.Store(proto, s)
+	return s
+}
+
 func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 	// A compromised peer could try to send us packets for
 	// destinations we didn't explicitly advertise. This check is to
@@ -443,7 +454,7 @@ func (f *Filter) runIn4(q *packet.Parsed) (r Response, why string) {
 		if f.matches4.matchProtoAndIPsOnlyIfAllPorts(q) {
 			return Accept, "otherproto ok"
 		}
-		return Drop, "Unknown proto"
+		return Drop, unknownProtoString(q.IPProto)
 	}
 	return Drop, "no rules matched"
 }
@@ -503,7 +514,7 @@ func (f *Filter) runIn6(q *packet.Parsed) (r Response, why string) {
 		if f.matches6.matchProtoAndIPsOnlyIfAllPorts(q) {
 			return Accept, "otherproto ok"
 		}
-		return Drop, "Unknown proto"
+		return Drop, unknownProtoString(q.IPProto)
 	}
 	return Drop, "no rules matched"
 }
