@@ -297,7 +297,7 @@ func TestWriteAndInject(t *testing.T) {
 }
 
 // mustHexDecode is like hex.DecodeString, but panics on error
-// and ignores whitespcae in s.
+// and ignores whitespace in s.
 func mustHexDecode(s string) []byte {
 	return must.Get(hex.DecodeString(strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
