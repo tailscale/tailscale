@@ -379,7 +379,7 @@ func (f *Filter) RunIn(q *packet.Parsed, rf RunFlags) Response {
 func (f *Filter) RunOut(q *packet.Parsed, rf RunFlags) Response {
 	dir := out
 	r := f.pre(q, rf, dir)
-	if r == Drop || r == Accept {
+	if r == Accept || r == Drop {
 		// already logged
 		return r
 	}
