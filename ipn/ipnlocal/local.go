@@ -1802,13 +1802,17 @@ func (b *LocalBackend) readPoller() {
 //
 // WatchNotifications blocks until ctx is done.
 //
-// The provided fn will only be called with non-nil pointers. The caller must
-// not modify roNotify. If fn returns false, the watch also stops.
+// The provided onWatchAdded, if non-nil, will be called once the watcher
+// is installed.
+//
+// The provided fn will be called for each notification. It will only be
+// called with non-nil pointers. The caller must not modify roNotify. If
+// fn returns false, the watch also stops.
 //
 // Failure to consume many notifications in a row will result in dropped
 // notifications. There is currently (2022-11-22) no mechanism provided to
 // detect when a message has been dropped.
-func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, fn func(roNotify *ipn.Notify) (keepGoing bool)) {
+func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 
 	origFn := fn
@@ -1857,6 +1861,10 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		delete(b.notifyWatchers, handle)
 		b.mu.Unlock()
 	}()
+
+	if onWatchAdded != nil {
+		onWatchAdded()
+	}
 
 	if ini != nil {
 		if !fn(ini) {

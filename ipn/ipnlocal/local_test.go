@@ -5,6 +5,7 @@
 package ipnlocal
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -820,3 +821,38 @@ type legacyBackend interface {
 // Verify that LocalBackend still implements the legacyBackend interface
 // for now, at least until the macOS and iOS clients move off of it.
 var _ legacyBackend = (*LocalBackend)(nil)
+
+func TestWatchNotificationsCallbacks(t *testing.T) {
+	b := new(LocalBackend)
+	n := new(ipn.Notify)
+	b.WatchNotifications(context.Background(), 0, func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		// Ensure a watcher has been installed.
+		if len(b.notifyWatchers) != 1 {
+			t.Fatalf("unexpected number of watchers in new LocalBackend, want: 1 got: %v", len(b.notifyWatchers))
+		}
+		// Send a notification. Range over notifyWatchers to get the channel
+		// because WatchNotifications doesn't expose the handle for it.
+		for _, c := range b.notifyWatchers {
+			select {
+			case c <- n:
+			default:
+				t.Fatalf("could not send notification")
+			}
+		}
+	}, func(roNotify *ipn.Notify) bool {
+		if roNotify != n {
+			t.Fatalf("unexpected notification received. want: %v got: %v", n, roNotify)
+		}
+		return false
+	})
+
+	// Ensure watchers have been cleaned up.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.notifyWatchers) != 0 {
+		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
+	}
+}
