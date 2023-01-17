@@ -82,6 +82,9 @@ func (a *Dialer) getProxyFunc() func(*http.Request) (*url.URL, error) {
 // httpsFallbackDelay is how long we'll wait for a.HTTPPort to work before
 // starting to try a.HTTPSPort.
 func (a *Dialer) httpsFallbackDelay() time.Duration {
+	if forceNoise443() {
+		return time.Nanosecond
+	}
 	if v := a.testFallbackDelay; v != 0 {
 		return v
 	}
@@ -248,6 +251,18 @@ func (a *Dialer) dial(ctx context.Context) (*ClientConn, error) {
 	return a.dialHost(ctx, netip.Addr{})
 }
 
+// The TS_FORCE_NOISE_443 envknob forces the controlclient noise dialer to
+// always use port 443 HTTPS connections to the controlplane and not try the
+// port 80 HTTP fast path.
+//
+// This is currently (2023-01-17) needed for Docker Desktop's "VPNKit" proxy
+// that breaks port 80 for us post-Noise-handshake, causing us to never try port
+// 443. Until one of Docker's proxy and/or this package's port 443 fallback is
+// fixed, this is a workaround. It might also be useful for future debugging.
+var forceNoise443 = envknob.RegisterBool("TS_FORCE_NOISE_443")
+
+var debugNoiseDial = envknob.RegisterBool("TS_DEBUG_NOISE_DIAL")
+
 // dialHost connects to the configured Dialer.Hostname and upgrades the
 // connection into a controlbase.Conn. If addr is valid, then no DNS is used
 // and the connection will be made to the provided address.
@@ -279,7 +294,13 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 	}
 	ch := make(chan tryURLRes) // must be unbuffered
 	try := func(u *url.URL) {
+		if debugNoiseDial() {
+			a.logf("trying noise dial (%v, %v) ...", u, addr)
+		}
 		cbConn, err := a.dialURL(ctx, u, addr)
+		if debugNoiseDial() {
+			a.logf("noise dial (%v, %v) = (%v, %v)", u, addr, cbConn, err)
+		}
 		select {
 		case ch <- tryURLRes{u, cbConn, err}:
 		case <-ctx.Done():
@@ -289,8 +310,10 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 		}
 	}
 
-	// Start the plaintext HTTP attempt first.
-	go try(u80)
+	// Start the plaintext HTTP attempt first, unless disabled by the envknob.
+	if !forceNoise443() {
+		go try(u80)
+	}
 
 	// In case outbound port 80 blocked or MITM'ed poorly, start a backup timer
 	// to dial port 443 if port 80 doesn't either succeed or fail quickly.
