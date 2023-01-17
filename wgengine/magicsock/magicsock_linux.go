@@ -258,7 +258,7 @@ func (c *Conn) receiveDisco(pc net.PacketConn, isIPV6 bool) {
 			metricRecvDiscoPacketIPv6.Add(1)
 		}
 
-		c.handleDiscoMessage(buf[udpHeaderSize:n], netip.AddrPortFrom(srcIP, srcPort), key.NodePublic{})
+		c.handleDiscoMessage(buf[udpHeaderSize:n], netip.AddrPortFrom(srcIP, srcPort), key.NodePublic{}, discoRXPathRawSocket)
 	}
 }
 
@@ -316,4 +316,91 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 			portableTrySetSocketBuffer(pconn, logf)
 		}
 	}
+}
+
+const (
+	// TODO(jwhited): upstream to unix?
+	socketOptionLevelUDP   = 17
+	socketOptionUDPSegment = 103
+	socketOptionUDPGRO     = 104
+)
+
+// tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
+// and returns two booleans indicating TX and RX UDP offload support.
+func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
+	if c, ok := pconn.(*net.UDPConn); ok {
+		rc, err := c.SyscallConn()
+		if err != nil {
+			return
+		}
+		err = rc.Control(func(fd uintptr) {
+			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPSegment)
+			if errSyscall != nil {
+				// no point in checking RX, TX support was added first.
+				return
+			}
+			hasTX = true
+			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPGRO, 1)
+			hasRX = errSyscall == nil
+		})
+		if err != nil {
+			return false, false
+		}
+	}
+	return hasTX, hasRX
+}
+
+// getGSOSizeFromControl returns the GSO size found in control. If no GSO size
+// is found or the len(control) < unix.SizeofCmsghdr, this function returns 0.
+// A non-nil error will be returned if len(control) > unix.SizeofCmsghdr but
+// its contents cannot be parsed as a socket control message.
+func getGSOSizeFromControl(control []byte) (int, error) {
+	var (
+		hdr  unix.Cmsghdr
+		data []byte
+		rem  = control
+		err  error
+	)
+
+	for len(rem) > unix.SizeofCmsghdr {
+		hdr, data, rem, err = unix.ParseOneSocketControlMessage(control)
+		if err != nil {
+			return 0, fmt.Errorf("error parsing socket control message: %w", err)
+		}
+		if hdr.Level == socketOptionLevelUDP && hdr.Type == socketOptionUDPGRO && len(data) >= 2 {
+			var gso uint16
+			// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
+			copy(unsafe.Slice((*byte)(unsafe.Pointer(&gso)), 2), data[:2])
+			return int(gso), nil
+		}
+	}
+	return 0, nil
+}
+
+// setGSOSizeInControl sets a socket control message in control containing
+// gsoSize. If len(control) < controlMessageSize control's len will be set to 0.
+func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
+	*control = (*control)[:0]
+	if cap(*control) < int(unsafe.Sizeof(unix.Cmsghdr{})) {
+		return
+	}
+	if cap(*control) < controlMessageSize {
+		return
+	}
+	*control = (*control)[:cap(*control)]
+	hdr := (*unix.Cmsghdr)(unsafe.Pointer(&(*control)[0]))
+	hdr.Level = socketOptionLevelUDP
+	hdr.Type = socketOptionUDPSegment
+	hdr.SetLen(unix.CmsgLen(2))
+	// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
+	copy((*control)[unix.SizeofCmsghdr:], unsafe.Slice((*byte)(unsafe.Pointer(&gsoSize)), 2))
+	*control = (*control)[:unix.CmsgSpace(2)]
+}
+
+var controlMessageSize = -1 // bomb if used for allocation before init
+
+func init() {
+	// controlMessageSize is set to hold a UDP_GRO or UDP_SEGMENT control
+	// message. These contain a single uint16 of data.
+	controlMessageSize = unix.CmsgSpace(2)
 }

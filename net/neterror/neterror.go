@@ -6,6 +6,7 @@ package neterror
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"syscall"
 )
@@ -56,4 +57,26 @@ func PacketWasTruncated(err error) bool {
 		return false
 	}
 	return packetWasTruncated(err)
+}
+
+var shouldDisableUDPGSO func(error) bool // non-nil on Linux
+
+func ShouldDisableUDPGSO(err error) bool {
+	if shouldDisableUDPGSO == nil {
+		return false
+	}
+	return shouldDisableUDPGSO(err)
+}
+
+type ErrUDPGSODisabled struct {
+	OnLaddr  string
+	RetryErr error
+}
+
+func (e ErrUDPGSODisabled) Error() string {
+	return fmt.Sprintf("disabled UDP GSO on %s, NIC(s) may not support checksum offload", e.OnLaddr)
+}
+
+func (e ErrUDPGSODisabled) Unwrap() error {
+	return e.RetryErr
 }
