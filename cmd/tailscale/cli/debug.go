@@ -28,6 +28,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/net/http/httpproxy"
+	"golang.org/x/net/http2"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlhttp"
 	"tailscale.com/hostinfo"
@@ -655,6 +656,57 @@ func runTS2021(ctx context.Context, args []string) error {
 	}
 
 	log.Printf("final underlying conn: %v / %v", conn.LocalAddr(), conn.RemoteAddr())
+
+	// Early payload
+	{
+		const (
+			hdrLen            = 9 // http2 frame header size; also size of our early payload size header
+			earlyPayloadMagic = "\xff\xff\xffTS"
+		)
+		var hdr [hdrLen]byte
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+			return err
+		}
+		if string(hdr[:len(earlyPayloadMagic)]) != earlyPayloadMagic {
+			// No early payload. We have to return the 9 bytes read we already
+			// consumed.
+			return errors.New("no early payload magic")
+		}
+		epLen := binary.BigEndian.Uint32(hdr[len(earlyPayloadMagic):])
+		if epLen > 10<<20 {
+			return errors.New("invalid early payload length")
+		}
+		payBuf := make([]byte, epLen)
+		if _, err := io.ReadFull(conn, payBuf); err != nil {
+			return fmt.Errorf("reading early payload: %v", err)
+		}
+		log.Printf("early payload: %q", payBuf)
+	}
+
+	// And send an HTTP request over it.
+	{
+		h2Transport, err := http2.ConfigureTransports(&http.Transport{
+			IdleConnTimeout: time.Minute,
+		})
+		if err != nil {
+			return err
+		}
+
+		h2cc, err := h2Transport.NewClientConn(conn)
+		if err != nil {
+			log.Printf("NewClientConn: %v", err)
+			return err
+		}
+		log.Printf("made thing")
+		c := &http.Client{Transport: h2cc}
+		res, err := c.Get("https://" + ts2021Args.host + "/machine/whoami")
+		if err != nil {
+			log.Printf("Head request: %v", err)
+			return nil
+		}
+		res.Write(os.Stdout)
+	}
+
 	return nil
 }
 
