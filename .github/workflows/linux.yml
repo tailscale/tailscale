@@ -32,6 +32,9 @@ jobs:
     - name: Basic build
       run: go build ./cmd/...
 
+    - name: Build test wrapper
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+
     - name: Build variants
       run: |
         go install --tags=ts_include_cli ./cmd/tailscaled
@@ -43,7 +46,7 @@ jobs:
         sudo apt-get -y install qemu-user
 
     - name: Run tests on linux
-      run: go test -bench=. -benchtime=1x ./...
+      run: go test -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
 
     - name: Check that no tracked files in the repo have been modified
       run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
