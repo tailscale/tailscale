@@ -89,7 +89,8 @@ type CapabilityVersion int
 //   - 50: 2022-11-14: Client understands CapabilityIngress
 //   - 51: 2022-11-30: Client understands CapabilityTailnetLockAlpha
 //   - 52: 2023-01-05: client can handle c2n POST /logtail/flush
-const CurrentCapabilityVersion CapabilityVersion = 52
+//   - 53: 2023-01-18: client respects explicit Node.Expired + auto-sets based on Node.KeyExpiry
+const CurrentCapabilityVersion CapabilityVersion = 53
 
 type StableID string
 
