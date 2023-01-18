@@ -29,11 +29,14 @@ jobs:
         go-version-file: go.mod
       id: go
 
+    - name: Build test wrapper
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+
     - name: Basic build
       run: go build ./cmd/...
 
     - name: Run tests and benchmarks with -race flag on linux
-      run: go test -race -bench=. -benchtime=1x ./...
+      run: go test -exec=/tmp/testwrapper -race -bench=. -benchtime=1x ./...
 
     - name: Check that no tracked files in the repo have been modified
       run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
