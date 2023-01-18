@@ -353,7 +353,8 @@ type Conn struct {
 	mu     sync.Mutex
 	muCond *sync.Cond
 
-	closed bool // Close was called
+	closed  bool        // Close was called
+	closing atomic.Bool // Close is in progress (or done)
 
 	// derpCleanupTimer is the timer that fires to occasionally clean
 	// up idle DERP connections. It's only used when there is a non-home
@@ -2859,6 +2860,7 @@ func (c *Conn) Close() error {
 	if c.closed {
 		return nil
 	}
+	c.closing.Store(true)
 	if c.derpCleanupTimerArmed {
 		c.derpCleanupTimer.Stop()
 	}
@@ -4441,7 +4443,9 @@ func (de *endpoint) stopAndReset() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoKey.ShortString())
+	if closing := de.c.closing.Load(); !closing {
+		de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoKey.ShortString())
+	}
 
 	de.resetLocked()
 	if de.heartBeatTimer != nil {
