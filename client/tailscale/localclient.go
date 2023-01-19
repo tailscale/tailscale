@@ -114,6 +114,7 @@ func (lc *LocalClient) defaultDialer(ctx context.Context, network, addr string) 
 //
 // DoLocalRequest may mutate the request to add Authorization headers.
 func (lc *LocalClient) DoLocalRequest(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
 	lc.tsClientOnce.Do(func() {
 		lc.tsClient = &http.Client{
 			Transport: &http.Transport{

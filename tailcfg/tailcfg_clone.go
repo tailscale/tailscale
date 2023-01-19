@@ -85,6 +85,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	DERP                    string
 	Hostinfo                HostinfoView
 	Created                 time.Time
+	Cap                     CapabilityVersion
 	Tags                    []string
 	PrimaryRoutes           []netip.Prefix
 	LastSeen                *time.Time

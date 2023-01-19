@@ -148,6 +148,7 @@ func (v NodeView) Endpoints() views.Slice[string]  { return views.SliceOf(v.ж.E
 func (v NodeView) DERP() string                    { return v.ж.DERP }
 func (v NodeView) Hostinfo() HostinfoView          { return v.ж.Hostinfo }
 func (v NodeView) Created() time.Time              { return v.ж.Created }
+func (v NodeView) Cap() CapabilityVersion          { return v.ж.Cap }
 func (v NodeView) Tags() views.Slice[string]       { return views.SliceOf(v.ж.Tags) }
 func (v NodeView) PrimaryRoutes() views.IPPrefixSlice {
 	return views.IPPrefixSliceOf(v.ж.PrimaryRoutes)
@@ -196,6 +197,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	DERP                    string
 	Hostinfo                HostinfoView
 	Created                 time.Time
+	Cap                     CapabilityVersion
 	Tags                    []string
 	PrimaryRoutes           []netip.Prefix
 	LastSeen                *time.Time
