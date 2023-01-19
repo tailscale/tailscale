@@ -15,7 +15,7 @@ var loginArgs upArgsT
 
 var loginCmd = &ffcli.Command{
 	Name:       "login",
-	ShortUsage: "[ALPHA] login [flags]",
+	ShortUsage: "login [flags]",
 	ShortHelp:  "Log in to a Tailscale account",
 	LongHelp: `"tailscale login" logs this machine in to your Tailscale network.
 This command is currently in alpha and may change in the future.`,
