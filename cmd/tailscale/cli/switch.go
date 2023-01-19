@@ -26,8 +26,8 @@ var switchCmd = &ffcli.Command{
 	Exec: switchProfile,
 	UsageFunc: func(*ffcli.Command) string {
 		return `USAGE
-  [ALPHA] switch <name>
-  [ALPHA] switch --list
+  switch <name>
+  switch --list
 
 "tailscale switch" switches between logged in accounts.
 This command is currently in alpha and may change in the future.`
