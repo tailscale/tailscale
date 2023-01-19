@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
@@ -251,6 +252,7 @@ func TestOneNodeUpAuth(t *testing.T) {
 }
 
 func TestTwoNodes(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
 	t.Parallel()
 	env := newTestEnv(t)
 
@@ -297,6 +299,7 @@ func TestTwoNodes(t *testing.T) {
 }
 
 func TestNodeAddressIPFields(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	t.Parallel()
 	env := newTestEnv(t)
 	n1 := newTestNode(t, env)
