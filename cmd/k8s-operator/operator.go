@@ -164,14 +164,6 @@ waitOnline:
 		time.Sleep(time.Second)
 	}
 
-	sr := &ServiceReconciler{
-		tsClient:          tsClient,
-		defaultTags:       strings.Split(tags, ","),
-		operatorNamespace: tsNamespace,
-		proxyImage:        image,
-		logger:            zlog.Named("service-reconciler"),
-	}
-
 	// For secrets and statefulsets, we only get permission to touch the objects
 	// in the controller's own namespace. This cannot be expressed by
 	// .Watches(...) below, instead you have to add a per-type field selector to
@@ -191,6 +183,15 @@ waitOnline:
 	})
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
+	}
+
+	sr := &ServiceReconciler{
+		Client:            mgr.GetClient(),
+		tsClient:          tsClient,
+		defaultTags:       strings.Split(tags, ","),
+		operatorNamespace: tsNamespace,
+		proxyImage:        image,
+		logger:            zlog.Named("service-reconciler"),
 	}
 
 	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
@@ -589,11 +590,6 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 	}
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
-}
-
-func (a *ServiceReconciler) InjectClient(c client.Client) error {
-	a.Client = c
-	return nil
 }
 
 // ptrObject is a type constraint for pointer types that implement
