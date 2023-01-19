@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -89,12 +90,7 @@ func getMemStats() (ms runtime.MemStats) {
 func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
 	tunDev := tstun.NewFake()
 	dialer := new(tsdial.Dialer)
-	logf := func(format string, args ...any) {
-		if !t.Failed() {
-			t.Helper()
-			t.Logf(format, args...)
-		}
-	}
+	logf := tstest.WhileTestRunningLogger(t)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Tun:    tunDev,
 		Dialer: dialer,
