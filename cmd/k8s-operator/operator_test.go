@@ -60,6 +60,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		},
 	})
 
+	expectRequeue(t, sr, "default", "test")
 	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
@@ -181,6 +182,7 @@ func TestAnnotations(t *testing.T) {
 		},
 	})
 
+	expectRequeue(t, sr, "default", "test")
 	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
@@ -278,6 +280,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		},
 	})
 
+	expectRequeue(t, sr, "default", "test")
 	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
@@ -394,6 +397,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		},
 	})
 
+	expectRequeue(t, sr, "default", "test")
 	expectReconciled(t, sr, "default", "test")
 
 	fullName, shortName := findGenName(t, fc, "default", "test")
@@ -692,11 +696,8 @@ func expectRequeue(t *testing.T, sr *ServiceReconciler, ns, name string) {
 	if err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
-	if res.Requeue {
-		t.Fatalf("unexpected immediate requeue")
-	}
-	if res.RequeueAfter == 0 {
-		t.Fatalf("expected timed requeue, got success")
+	if !res.Requeue && res.RequeueAfter == 0 {
+		t.Fatalf("expected timed or immediate requeue, got success")
 	}
 }
 

@@ -26,10 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	kzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -254,7 +256,7 @@ type tsClient interface {
 }
 
 func childResourceLabels(parent *corev1.Service) map[string]string {
-	// You might wonder why we're using owner references, since they seem to be
+	// You might wonder why we're not using owner references, since they seem to be
 	// built for exactly this. Unfortunately, Kubernetes does not support
 	// cross-namespace ownership, by design. This means we cannot make the
 	// service being exposed the owner of the implementation details of the
@@ -268,25 +270,45 @@ func childResourceLabels(parent *corev1.Service) map[string]string {
 	}
 }
 
-func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
+func (a *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := a.logger.With("service-ns", req.Namespace, "service-name", req.Name)
 	logger.Debugf("starting reconcile")
 	defer logger.Debugf("reconcile finished")
 
 	svc := new(corev1.Service)
-	err = a.Get(ctx, req.NamespacedName, svc)
-	if apierrors.IsNotFound(err) {
+	if err := a.Get(ctx, req.NamespacedName, svc); apierrors.IsNotFound(err) {
 		// Request object not found, could have been deleted after reconcile request.
 		logger.Debugf("service not found, assuming it was deleted")
 		return reconcile.Result{}, nil
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
+
+	// Add finalizer first (if not present), to avoid racing between init and deletion.
+	// If a Service resource is created and deleted (relatively quickly), before the finalizer is added,
+	// there is a risk that the deletion routine never gets called.
+	if !controllerutil.ContainsFinalizer(svc, FinalizerName) {
+		// This log line is printed exactly once during initial provisioning,
+		// because once the finalizer is in place this block gets skipped. So,
+		// this is a nice place to tell the operator that the high level,
+		// multi-reconcile operation is underway.
+		logger.Infof("exposing service over tailscale")
+		controllerutil.AddFinalizer(svc, FinalizerName)
+		if err := a.Update(ctx, svc); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
+		}
+
+		// If we just added the finalizer, we need to requeue the service to
+		return reconcile.Result{Requeue: true}, nil
+	}
+
+	// Handle deletion.
 	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) {
 		logger.Debugf("service is being deleted or should not be exposed, cleaning up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
+	// Handle normal reconciliation.
 	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
 }
 
@@ -369,18 +391,6 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
-	if !slices.Contains(svc.Finalizers, FinalizerName) {
-		// This log line is printed exactly once during initial provisioning,
-		// because once the finalizer is in place this block gets skipped. So,
-		// this is a nice place to tell the operator that the high level,
-		// multi-reconcile operation is underway.
-		logger.Infof("exposing service over tailscale")
-		svc.Finalizers = append(svc.Finalizers, FinalizerName)
-		if err := a.Update(ctx, svc); err != nil {
-			return fmt.Errorf("failed to add finalizer: %w", err)
-		}
-	}
-
 	// Do full reconcile.
 	hsvc, err := a.reconcileHeadlessService(ctx, logger, svc)
 	if err != nil {
