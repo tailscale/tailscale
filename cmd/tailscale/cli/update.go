@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -20,6 +21,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -222,13 +224,105 @@ func (up *updater) updateDebLike() error {
 	if up.currentOrDryRun(ver) {
 		return nil
 	}
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/debian/pool/tailscale_%s_%s.deb", up.track, ver, runtime.GOARCH)
-	// TODO(bradfitz): require root/sudo
-	// TODO(bradfitz): check https://pkgs.tailscale.com/stable/debian/dists/sid/InRelease, check gpg, get sha256
-	// And https://pkgs.tailscale.com/stable/debian/dists/sid/main/binary-amd64/Packages.gz and sha256 of it
-	//
 
-	return errors.New("TODO: Debian/Ubuntu deb download of " + url)
+	track := "unstable"
+	if stable, ok := versionIsStable(ver); !ok {
+		return fmt.Errorf("malformed version %q", ver)
+	} else if stable {
+		track = "stable"
+	}
+
+	if os.Geteuid() != 0 {
+		return errors.New("must be root; use sudo")
+	}
+
+	if updated, err := updateDebianAptSourcesList(track); err != nil {
+		return err
+	} else if updated {
+		fmt.Printf("Updated %s to use the %s track\n", aptSourcesFile, track)
+	}
+
+	cmd := exec.Command("apt-get", "update",
+		// Only update the tailscale repo, not the other ones, treating
+		// the tailscale.list file as the main "sources.list" file.
+		"-o", "Dir::Etc::SourceList=sources.list.d/tailscale.list",
+		// Disable the "sources.list.d" directory:
+		"-o", "Dir::Etc::SourceParts=-",
+		// Don't forget about packages in the other repos just because
+		// we're not updating them:
+		"-o", "APT::Get::List-Cleanup=0",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	cmd = exec.Command("apt-get", "install", "--yes", "--allow-downgrades", "tailscale="+ver)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+const aptSourcesFile = "/etc/apt/sources.list.d/tailscale.list"
+
+// updateDebianAptSourcesList updates the /etc/apt/sources.list.d/tailscale.list
+// file to make sure it has the provided track (stable or unstable) in it.
+//
+// If it already has the right track (including containing both stable and
+// unstable), it does nothing.
+func updateDebianAptSourcesList(dstTrack string) (rewrote bool, err error) {
+	was, err := os.ReadFile(aptSourcesFile)
+	if err != nil {
+		return false, err
+	}
+	newContent, err := updateDebianAptSourcesListBytes(was, dstTrack)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(was, newContent) {
+		return false, nil
+	}
+	return true, os.WriteFile(aptSourcesFile, newContent, 0644)
+}
+
+func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []byte, err error) {
+	trackURLPrefix := []byte("https://pkgs.tailscale.com/" + dstTrack + "/")
+	var buf bytes.Buffer
+	var changes int
+	bs := bufio.NewScanner(bytes.NewReader(was))
+	hadCorrect := false
+	commentLine := regexp.MustCompile(`^\s*\#`)
+	pkgsURL := regexp.MustCompile(`\bhttps://pkgs\.tailscale\.com/((un)?stable)/`)
+	for bs.Scan() {
+		line := bs.Bytes()
+		if !commentLine.Match(line) {
+			line = pkgsURL.ReplaceAllFunc(line, func(m []byte) []byte {
+				if bytes.Equal(m, trackURLPrefix) {
+					hadCorrect = true
+				} else {
+					changes++
+				}
+				return trackURLPrefix
+			})
+		}
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	if hadCorrect || (changes == 1 && bytes.Equal(bytes.TrimSpace(was), bytes.TrimSpace(buf.Bytes()))) {
+		// Unchanged or close enough.
+		return was, nil
+	}
+	if changes != 1 {
+		// No changes, or an unexpected number of changes (what?). Bail.
+		// They probably editted it by hand and we don't know what to do.
+		return nil, fmt.Errorf("unexpected/unsupported %s contents", aptSourcesFile)
+	}
+	return buf.Bytes(), nil
 }
 
 func (up *updater) updateMacSys() error {
