@@ -4348,18 +4348,30 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		return "", false
 	}
 	for _, p := range nm.Peers {
-		if p.StableID != exitNodeID {
-			continue
-		}
-		services := p.Hostinfo.Services()
-		for i, n := 0, services.Len(); i < n; i++ {
-			s := services.At(i)
-			if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
-				return peerAPIBase(nm, p) + "/dns-query", true
-			}
+		if p.StableID == exitNodeID && peerCanProxyDNS(p) {
+			return peerAPIBase(nm, p) + "/dns-query", true
 		}
 	}
 	return "", false
+}
+
+func peerCanProxyDNS(p *tailcfg.Node) bool {
+	if p.Cap >= 26 {
+		// Actually added at 25
+		// (https://github.com/tailscale/tailscale/blob/3ae6f898cfdb58fd0e30937147dd6ce28c6808dd/tailcfg/tailcfg.go#L51)
+		// so anything >= 26 can do it.
+		return true
+	}
+	// If p.Cap is not populated (e.g. older control server), then do the old
+	// thing of searching through services.
+	services := p.Hostinfo.Services()
+	for i, n := 0, services.Len(); i < n; i++ {
+		s := services.At(i)
+		if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *LocalBackend) DebugRebind() error {

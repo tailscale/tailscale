@@ -329,7 +329,7 @@ func TestNodeEqual(t *testing.T) {
 		"ID", "StableID", "Name", "User", "Sharer",
 		"Key", "KeyExpiry", "KeySignature", "Machine", "DiscoKey",
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
-		"Created", "Tags", "PrimaryRoutes",
+		"Created", "Cap", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "KeepAlive", "MachineAuthorized",
 		"Capabilities",
 		"UnsignedPeerAPIOnly",

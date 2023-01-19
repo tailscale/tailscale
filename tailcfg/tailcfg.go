@@ -29,7 +29,8 @@ import (
 // single monotonically increasing integer, rather than the relatively
 // complex x.y.z-xxxxx semver+hash(es). Whenever the client gains a
 // capability or wants to negotiate a change in semantics with the
-// server (control plane), bump this number and document what's new.
+// server (control plane),  peers (over PeerAPI), or frontend (over
+// LocalAPI), bump this number and document what's new.
 //
 // Previously (prior to 2022-03-06), it was known as the "MapRequest
 // version" or "mapVer" or "map cap" and that name and usage persists
@@ -90,7 +91,8 @@ type CapabilityVersion int
 //   - 51: 2022-11-30: Client understands CapabilityTailnetLockAlpha
 //   - 52: 2023-01-05: client can handle c2n POST /logtail/flush
 //   - 53: 2023-01-18: client respects explicit Node.Expired + auto-sets based on Node.KeyExpiry
-const CurrentCapabilityVersion CapabilityVersion = 53
+//   - 54: 2023-01-19: Node.Cap added, PeersChangedPatch.Cap, uses Node.Cap for ExitDNS before Hostinfo.Services fallback
+const CurrentCapabilityVersion CapabilityVersion = 54
 
 type StableID string
 
@@ -199,6 +201,7 @@ type Node struct {
 	DERP         string         `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
 	Hostinfo     HostinfoView
 	Created      time.Time
+	Cap          CapabilityVersion `json:",omitempty"` // if non-zero, the node's capability version; old servers might not send
 
 	// Tags are the list of ACL tags applied to this node.
 	// Tags take the form of `tag:<value>` where value starts
@@ -1627,6 +1630,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
 		eqStrings(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
+		n.Cap == n2.Cap &&
 		n.Hostinfo.Equal(n2.Hostinfo) &&
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
@@ -2000,6 +2004,9 @@ type PeerChange struct {
 	// DERPRegion, if non-zero, means that NodeID's home DERP
 	// region ID is now this number.
 	DERPRegion int `json:",omitempty"`
+
+	// Cap, if non-zero, means that NodeID's capability version has changed.
+	Cap CapabilityVersion `json:",omitempty"`
 
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.

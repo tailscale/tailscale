@@ -310,6 +310,9 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 				if ec.DERPRegion != 0 {
 					n.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, ec.DERPRegion)
 				}
+				if ec.Cap != 0 {
+					n.Cap = ec.Cap
+				}
 				if ec.Endpoints != nil {
 					n.Endpoints = ec.Endpoints
 				}
