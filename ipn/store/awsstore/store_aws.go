@@ -105,7 +105,7 @@ func (s *awsStore) LoadState() error {
 		context.TODO(),
 		&ssm.GetParameterInput{
 			Name:           aws.String(s.ParameterName()),
-			WithDecryption: true,
+			WithDecryption: aws.Bool(true),
 		},
 	)
 
@@ -167,7 +167,7 @@ func (s *awsStore) persistState() error {
 		&ssm.PutParameterInput{
 			Name:      aws.String(s.ParameterName()),
 			Value:     aws.String(string(bs)),
-			Overwrite: true,
+			Overwrite: aws.Bool(true),
 			Tier:      ssmTypes.ParameterTierStandard,
 			Type:      ssmTypes.ParameterTypeSecureString,
 		},
