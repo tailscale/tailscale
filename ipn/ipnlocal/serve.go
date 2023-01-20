@@ -33,6 +33,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/strs"
+	"tailscale.com/version"
 )
 
 // serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
@@ -91,7 +92,38 @@ func (s *serveListener) Close() error {
 // Listen is retried until the context is canceled.
 func (s *serveListener) Run() {
 	for {
-		ln, err := net.Listen("tcp", s.ap.String())
+		ip := s.ap.Addr()
+		ipStr := ip.String()
+
+		var lc net.ListenConfig
+		if initListenConfig != nil {
+			// On macOS, this sets the lc.Control hook to
+			// setsockopt the interface index to bind to. This is
+			// required by the network sandbox to allow binding to
+			// a specific interface. Without this hook, the system
+			// chooses a default interface to bind to.
+			if err := initListenConfig(&lc, ip, s.b.prevIfState, s.b.dialer.TUNName()); err != nil {
+				s.logf("serve failed to init listen config %v, backing off: %v", s.ap, err)
+				s.bo.BackOff(s.ctx, err)
+				continue
+			}
+			// On macOS (AppStore or macsys) and if we're binding to a privileged port,
+			if version.IsSandboxedMacOS() && s.ap.Port() < 1024 {
+				// On macOS, we need to bind to ""/all-interfaces due to
+				// the network sandbox. Ideally we would only bind to the
+				// Tailscale interface, but macOS errors out if we try to
+				// to listen on privileged ports binding only to a specific
+				// interface. (#6364)
+				ipStr = ""
+			}
+		}
+
+		tcp4or6 := "tcp4"
+		if ip.Is6() {
+			tcp4or6 = "tcp6"
+		}
+
+		ln, err := lc.Listen(s.ctx, tcp4or6, net.JoinHostPort(ipStr, fmt.Sprint(s.ap.Port())))
 		if err != nil {
 			if s.shouldWarnAboutListenError(err) {
 				s.logf("serve failed to listen on %v, backing off: %v", s.ap, err)
