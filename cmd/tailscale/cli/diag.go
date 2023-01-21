@@ -8,11 +8,13 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	ps "github.com/mitchellh/go-ps"
+	"tailscale.com/version/distro"
 )
 
 // fixTailscaledConnectError is called when the local tailscaled has
@@ -47,9 +49,27 @@ func fixTailscaledConnectError(origErr error) error {
 		case "darwin":
 			return fmt.Errorf("failed to connect to local Tailscale service; is Tailscale running?")
 		case "linux":
-			return fmt.Errorf("failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)")
+			var hint string
+			if isSystemdSystem() {
+				hint = " (sudo systemctl start tailscaled ?)"
+			}
+			return fmt.Errorf("failed to connect to local tailscaled; it doesn't appear to be running%s", hint)
 		}
 		return fmt.Errorf("failed to connect to local tailscaled process; it doesn't appear to be running")
 	}
 	return fmt.Errorf("failed to connect to local tailscaled (which appears to be running as %v, pid %v). Got error: %w", foundProc.Executable(), foundProc.Pid(), origErr)
+}
+
+// isSystemdSystem reports whether the current machine uses systemd
+// and in particular whether the systemctl command is available.
+func isSystemdSystem() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	switch distro.Get() {
+	case distro.QNAP, distro.Gokrazy, distro.Synology:
+		return false
+	}
+	_, err := exec.LookPath("systemctl")
+	return err == nil
 }
