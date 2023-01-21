@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tailcfg
+package tailcfg_test
 
 import (
 	"encoding"
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	. "tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/util/must"
@@ -660,7 +661,7 @@ func BenchmarkKeyMarshalText(b *testing.B) {
 	b.ReportAllocs()
 	var k [32]byte
 	for i := 0; i < b.N; i++ {
-		sinkBytes = keyMarshalText("prefix", k)
+		sinkBytes = ExportKeyMarshalText("prefix", k)
 	}
 }
 
@@ -670,7 +671,7 @@ func TestAppendKeyAllocs(t *testing.T) {
 	}
 	var k [32]byte
 	err := tstest.MinAllocsPerRun(t, 1, func() {
-		sinkBytes = keyMarshalText("prefix", k)
+		sinkBytes = ExportKeyMarshalText("prefix", k)
 	})
 	if err != nil {
 		t.Fatal(err)
