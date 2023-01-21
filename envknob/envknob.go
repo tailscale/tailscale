@@ -329,6 +329,13 @@ func NoLogsNoSupport() bool {
 	return Bool("TS_NO_LOGS_NO_SUPPORT")
 }
 
+var allowRemoteUpdate = RegisterBool("TS_ALLOW_ADMIN_CONSOLE_REMOTE_UPDATE")
+
+// AllowsRemoteUpdate reports whether this node has opted-in to letting the
+// Tailscale control plane initiate a Tailscale update (e.g. on behalf of an
+// admin on the admin console).
+func AllowsRemoteUpdate() bool { return allowRemoteUpdate() }
+
 // SetNoLogsNoSupport enables no-logs-no-support mode.
 func SetNoLogsNoSupport() {
 	Setenv("TS_NO_LOGS_NO_SUPPORT", "true")

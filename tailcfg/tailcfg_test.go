@@ -50,6 +50,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"ShareeNode",
 		"NoLogsNoSupport",
 		"WireIngress",
+		"AllowsUpdate",
 		"Machine",
 		"GoArch",
 		"GoArchVar",
