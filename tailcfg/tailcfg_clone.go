@@ -137,6 +137,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool
+	AllowsUpdate    bool
 	Machine         string
 	GoArch          string
 	GoArchVar       string

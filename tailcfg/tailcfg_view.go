@@ -276,6 +276,7 @@ func (v HostinfoView) ShieldsUp() bool        { return v.ж.ShieldsUp }
 func (v HostinfoView) ShareeNode() bool       { return v.ж.ShareeNode }
 func (v HostinfoView) NoLogsNoSupport() bool  { return v.ж.NoLogsNoSupport }
 func (v HostinfoView) WireIngress() bool      { return v.ж.WireIngress }
+func (v HostinfoView) AllowsUpdate() bool     { return v.ж.AllowsUpdate }
 func (v HostinfoView) Machine() string        { return v.ж.Machine }
 func (v HostinfoView) GoArch() string         { return v.ж.GoArch }
 func (v HostinfoView) GoArchVar() string      { return v.ж.GoArchVar }
@@ -312,6 +313,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool
+	AllowsUpdate    bool
 	Machine         string
 	GoArch          string
 	GoArchVar       string

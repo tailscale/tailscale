@@ -53,6 +53,7 @@ func New() *tailcfg.Hostinfo {
 		DeviceModel:     deviceModel(),
 		Cloud:           string(cloudenv.Get()),
 		NoLogsNoSupport: envknob.NoLogsNoSupport(),
+		AllowsUpdate:    envknob.AllowsRemoteUpdate(),
 	}
 }
 

@@ -92,7 +92,8 @@ type CapabilityVersion int
 //   - 52: 2023-01-05: client can handle c2n POST /logtail/flush
 //   - 53: 2023-01-18: client respects explicit Node.Expired + auto-sets based on Node.KeyExpiry
 //   - 54: 2023-01-19: Node.Cap added, PeersChangedPatch.Cap, uses Node.Cap for ExitDNS before Hostinfo.Services fallback
-const CurrentCapabilityVersion CapabilityVersion = 54
+//   - 55: 2023-01-23: start of c2n GET+POST /update handler
+const CurrentCapabilityVersion CapabilityVersion = 55
 
 type StableID string
 
@@ -528,6 +529,7 @@ type Hostinfo struct {
 	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
 	NoLogsNoSupport bool           `json:",omitempty"` // indicates that the user has opted out of sending logs and support
 	WireIngress     bool           `json:",omitempty"` // indicates that the node wants the option to receive ingress connections
+	AllowsUpdate    bool           `json:",omitempty"` // indicates that the node has opted-in to admin-console-drive remote updates
 	Machine         string         `json:",omitempty"` // the current host's machine type (uname -m)
 	GoArch          string         `json:",omitempty"` // GOARCH value (of the built binary)
 	GoArchVar       string         `json:",omitempty"` // GOARM, GOAMD64, etc (of the built binary)
