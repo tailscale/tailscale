@@ -74,7 +74,7 @@ func init() {
 // --exclude "*" --dirty --abbrev=200`.
 var GitCommit = ""
 
-// GitDirty is whether Go stamped the binary has having dirty version
+// GitDirty is whether Go stamped the binary as having dirty version
 // control changes in the working directory (debug.ReadBuildInfo
 // setting "vcs.modified" was true).
 var GitDirty bool
