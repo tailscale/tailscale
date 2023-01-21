@@ -16,6 +16,7 @@ import (
 	"time"
 
 	qt "github.com/frankban/quicktest"
+	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/netlogtype"
 )
@@ -46,6 +47,7 @@ func testPacketV4(proto ipproto.Proto, srcAddr, dstAddr [4]byte, srcPort, dstPor
 }
 
 func TestConcurrent(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7030")
 	c := qt.New(t)
 
 	const maxPeriod = 10 * time.Millisecond
