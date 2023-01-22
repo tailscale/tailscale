@@ -276,7 +276,9 @@ func (v HostinfoView) ShieldsUp() bool        { return v.ж.ShieldsUp }
 func (v HostinfoView) ShareeNode() bool       { return v.ж.ShareeNode }
 func (v HostinfoView) NoLogsNoSupport() bool  { return v.ж.NoLogsNoSupport }
 func (v HostinfoView) WireIngress() bool      { return v.ж.WireIngress }
+func (v HostinfoView) Machine() string        { return v.ж.Machine }
 func (v HostinfoView) GoArch() string         { return v.ж.GoArch }
+func (v HostinfoView) GoArchVar() string      { return v.ж.GoArchVar }
 func (v HostinfoView) GoVersion() string      { return v.ж.GoVersion }
 func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
 	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
@@ -310,7 +312,9 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	ShareeNode      bool
 	NoLogsNoSupport bool
 	WireIngress     bool
+	Machine         string
 	GoArch          string
+	GoArchVar       string
 	GoVersion       string
 	RoutableIPs     []netip.Prefix
 	RequestTags     []string
