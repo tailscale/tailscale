@@ -723,6 +723,10 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 	if n.Expired {
 		ps.Expired = true
 	}
+	if t := n.KeyExpiry; !t.IsZero() {
+		t = t.Round(time.Second)
+		ps.KeyExpiry = &t
+	}
 }
 
 // WhoIs reports the node and user who owns the node with the given IP:port.

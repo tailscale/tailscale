@@ -20,6 +20,7 @@ import (
 
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 )
@@ -251,6 +252,10 @@ type PeerStatus struct {
 	// information from control or optimisically set on the client if the
 	// expiration time has passed.
 	Expired bool `json:",omitempty"`
+
+	// KeyExpiry, if present, is the time at which the node key expired or
+	// will expire.
+	KeyExpiry *time.Time `json:",omitempty"`
 }
 
 type StatusBuilder struct {
@@ -434,6 +439,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if st.Expired {
 		e.Expired = true
+	}
+	if t := st.KeyExpiry; t != nil {
+		e.KeyExpiry = ptr.To(*t)
 	}
 }
 
