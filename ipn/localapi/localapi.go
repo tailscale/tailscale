@@ -1065,6 +1065,10 @@ func (h *Handler) serveDERPMap(w http.ResponseWriter, r *http.Request) {
 // serveSetExpirySooner sets the expiry date on the current machine, specified
 // by an `expiry` unix timestamp as POST or query param.
 func (h *Handler) serveSetExpirySooner(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return

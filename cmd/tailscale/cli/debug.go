@@ -167,6 +167,16 @@ var debugCmd = &ffcli.Command{
 			})(),
 		},
 		{
+			Name:      "set-expire",
+			Exec:      runSetExpire,
+			ShortHelp: "manipulate node key expiry for testing",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("set-expire")
+				fs.DurationVar(&setExpireArgs.in, "in", 0, "if non-zero, set node key to expire this duration from now")
+				return fs
+			})(),
+		},
+		{
 			Name:      "dev-store-set",
 			Exec:      runDevStoreSet,
 			ShortHelp: "set a key/value pair during development",
@@ -713,4 +723,15 @@ func runDebugDERP(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("%s\n", must.Get(json.MarshalIndent(st, "", " ")))
 	return nil
+}
+
+var setExpireArgs struct {
+	in time.Duration
+}
+
+func runSetExpire(ctx context.Context, args []string) error {
+	if len(args) != 0 || setExpireArgs.in == 0 {
+		return errors.New("usage --in=<duration>")
+	}
+	return localClient.DebugSetExpireIn(ctx, setExpireArgs.in)
 }
