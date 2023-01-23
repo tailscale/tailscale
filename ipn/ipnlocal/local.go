@@ -852,6 +852,13 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			}
 		}
 
+		// Ensure that we also fire this timer if our own node key expires.
+		if st.NetMap.SelfNode != nil {
+			if selfExpiry := st.NetMap.SelfNode.KeyExpiry; !selfExpiry.IsZero() && selfExpiry.Before(nextExpiry) {
+				nextExpiry = selfExpiry
+			}
+		}
+
 		if !nextExpiry.IsZero() {
 			tmrDuration := nextExpiry.Sub(now) + 10*time.Second
 			b.nmExpiryTimer = time.AfterFunc(tmrDuration, func() {
