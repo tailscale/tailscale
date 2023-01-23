@@ -247,6 +247,10 @@ type PeerStatus struct {
 	// In theory, all of InNetworkMap and InMagicSock and InEngine should all be true.
 	InEngine bool
 
+	// KeyExpiry is the time that this peer's node key will or has expired.
+	// This will be the zero time for nodes that do not expire.
+	KeyExpiry time.Time `json:",omitempty"`
+
 	// Expired means that this peer's node key has expired, based on either
 	// information from control or optimisically set on the client if the
 	// expiration time has passed.

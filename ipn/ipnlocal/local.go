@@ -720,6 +720,7 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 		ps.PrimaryRoutes = &v
 	}
 
+	ps.KeyExpiry = n.KeyExpiry
 	if n.Expired {
 		ps.Expired = true
 	}
