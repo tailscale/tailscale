@@ -36,6 +36,7 @@ type strCache struct {
 // This logger silences repetitive/unhelpful noisy log lines
 // and rewrites peer keys from wireguard-go into Tailscale format.
 func NewLogger(logf logger.Logf) *Logger {
+	const prefix = "wg: "
 	ret := new(Logger)
 	wrapper := func(format string, args ...any) {
 		if strings.Contains(format, "Routine:") && !strings.Contains(format, "receive incoming") {
@@ -81,8 +82,8 @@ func NewLogger(logf logger.Logf) *Logger {
 		logf(format, newargs...)
 	}
 	ret.DeviceLogger = &device.Logger{
-		Verbosef: logger.WithPrefix(wrapper, "[v2] "),
-		Errorf:   wrapper,
+		Verbosef: logger.WithPrefix(wrapper, prefix+"[v2] "),
+		Errorf:   logger.WithPrefix(wrapper, prefix),
 	}
 	ret.strs = make(map[key.NodePublic]*strCache)
 	return ret
