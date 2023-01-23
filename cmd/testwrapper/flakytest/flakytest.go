@@ -26,7 +26,7 @@ var issueRegexp = regexp.MustCompile(`\Ahttps://github\.com/tailscale/[a-zA-Z0-9
 // the status of the flaky test being marked, of the format:
 //
 //	https://github.com/tailscale/myRepo-H3re/issues/12345
-func Mark(t *testing.T, issue string) {
+func Mark(t testing.TB, issue string) {
 	if !issueRegexp.MatchString(issue) {
 		t.Fatalf("bad issue format: %q", issue)
 	}
