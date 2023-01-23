@@ -591,6 +591,7 @@ func newTestEnv(t testing.TB, opts ...testEnvOpt) *testEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7036")
 	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
 	control := &testcontrol.Server{
