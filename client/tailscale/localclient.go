@@ -1020,6 +1020,15 @@ func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode strin
 	return decodeJSON[*ipnstate.DebugDERPRegionReport](body)
 }
 
+// DebugSetExpireIn marks the current node key to expire in d.
+//
+// This is meant primarily for debug and testing.
+func (lc *LocalClient) DebugSetExpireIn(ctx context.Context, d time.Duration) error {
+	v := url.Values{"expiry": {fmt.Sprint(time.Now().Add(d).Unix())}}
+	_, err := lc.send(ctx, "POST", "/localapi/v0/set-expiry-sooner?"+v.Encode(), 200, nil)
+	return err
+}
+
 // WatchIPNBus subscribes to the IPN notification bus. It returns a watcher
 // once the bus is connected successfully.
 //
