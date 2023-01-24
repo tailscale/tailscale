@@ -487,7 +487,7 @@ main() {
 				;;
 			esac
 			$SUDO apt-get update
-			$SUDO apt-get install -y tailscale
+			$SUDO apt-get install -y tailscale tailscale-archive-keyring
 			if [ "$APT_SYSTEMCTL_START" = "true" ]; then
 				$SUDO systemctl enable --now tailscaled
 				$SUDO systemctl start tailscaled
