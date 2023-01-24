@@ -138,6 +138,7 @@ const (
 	FlyDotIo        = EnvType("fly")
 	Kubernetes      = EnvType("k8s")
 	DockerDesktop   = EnvType("dde")
+	Replit          = EnvType("repl")
 )
 
 var envType atomic.Value // of EnvType
@@ -225,6 +226,9 @@ func getEnvType() EnvType {
 	if inDockerDesktop() {
 		return DockerDesktop
 	}
+	if inReplit() {
+		return Replit
+	}
 	return ""
 }
 
@@ -307,6 +311,14 @@ func inAWSFargate() bool {
 
 func inFlyDotIo() bool {
 	if os.Getenv("FLY_APP_NAME") != "" && os.Getenv("FLY_REGION") != "" {
+		return true
+	}
+	return false
+}
+
+func inReplit() bool {
+	// https://docs.replit.com/programming-ide/getting-repl-metadata
+	if os.Getenv("REPL_OWNER") != "" && os.Getenv("REPL_SLUG") != "" {
 		return true
 	}
 	return false
