@@ -93,7 +93,8 @@ type CapabilityVersion int
 //   - 53: 2023-01-18: client respects explicit Node.Expired + auto-sets based on Node.KeyExpiry
 //   - 54: 2023-01-19: Node.Cap added, PeersChangedPatch.Cap, uses Node.Cap for ExitDNS before Hostinfo.Services fallback
 //   - 55: 2023-01-23: start of c2n GET+POST /update handler
-const CurrentCapabilityVersion CapabilityVersion = 55
+//   - 56: 2023-01-24: Client understands CapabilityDebugTSDNSResolution
+const CurrentCapabilityVersion CapabilityVersion = 56
 
 type StableID string
 
@@ -1754,6 +1755,13 @@ const (
 
 	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
 	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
+
+	// Debug logging capabilities
+
+	// CapabilityDebugTSDNSResolution enables verbose debug logging for DNS
+	// resolution for Tailscale-controlled domains (the control server, log
+	// server, DERP servers, etc.)
+	CapabilityDebugTSDNSResolution = "https://tailscale.com/cap/debug-ts-dns-resolution"
 )
 
 const (

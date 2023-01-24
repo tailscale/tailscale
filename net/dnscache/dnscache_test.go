@@ -22,7 +22,7 @@ func TestDialer(t *testing.T) {
 	if *dialTest == "" {
 		t.Skip("skipping; --dial-test is blank")
 	}
-	r := new(Resolver)
+	r := &Resolver{Logf: t.Logf}
 	var std net.Dialer
 	dialer := Dialer(std.DialContext, r)
 	t0 := time.Now()
@@ -113,6 +113,7 @@ func TestDialCall_uniqueIPs(t *testing.T) {
 
 func TestResolverAllHostStaticResult(t *testing.T) {
 	r := &Resolver{
+		Logf:       t.Logf,
 		SingleHost: "foo.bar",
 		SingleHostStaticResult: []netip.Addr{
 			netip.MustParseAddr("2001:4860:4860::8888"),
@@ -185,11 +186,12 @@ func TestShouldTryBootstrap(t *testing.T) {
 	errFailed := errors.New("some failure")
 
 	cacheWithFallback := &Resolver{
+		Logf: t.Logf,
 		LookupIPFallback: func(_ context.Context, _ string) ([]netip.Addr, error) {
 			panic("unimplemented")
 		},
 	}
-	cacheNoFallback := &Resolver{}
+	cacheNoFallback := &Resolver{Logf: t.Logf}
 
 	testCases := []struct {
 		name       string
