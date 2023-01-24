@@ -58,6 +58,7 @@ func main() {
 	postrm := flag.String("postrm", "", "debian postrm script path")
 	replaces := flag.String("replaces", "", "package which this package replaces, if any")
 	depends := flag.String("depends", "", "comma-separated list of packages this package depends on")
+	recommends := flag.String("recommends", "", "comma-separated list of packages this package recommends")
 	flag.Parse()
 
 	filesMap, err := parseFiles(*files)
@@ -92,6 +93,9 @@ func main() {
 
 	if len(*depends) != 0 {
 		info.Overridables.Depends = strings.Split(*depends, ",")
+	}
+	if len(*recommends) != 0 {
+		info.Overridables.Recommends = strings.Split(*recommends, ",")
 	}
 	if *replaces != "" {
 		info.Overridables.Replaces = []string{*replaces}
