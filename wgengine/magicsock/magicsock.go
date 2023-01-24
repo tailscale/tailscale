@@ -2499,15 +2499,25 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		return
 	}
 
-	if c.netMap != nil && nodesEqual(c.netMap.Peers, nm.Peers) {
+	priorNetmap := c.netMap
+	var priorDebug *tailcfg.Debug
+	if priorNetmap != nil {
+		priorDebug = priorNetmap.Debug
+	}
+	debugChanged := !reflect.DeepEqual(priorDebug, nm.Debug)
+	metricNumPeers.Set(int64(len(nm.Peers)))
+
+	// Update c.netMap regardless, before the following early return.
+	c.netMap = nm
+
+	if priorNetmap != nil && nodesEqual(priorNetmap.Peers, nm.Peers) && !debugChanged {
+		// The rest of this function is all adjusting state for peers that have
+		// changed. But if the set of peers is equal and the debug flags (for
+		// silent disco) haven't changed, no need to do anything else.
 		return
 	}
 
-	metricNumPeers.Set(int64(len(nm.Peers)))
-
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
-	c.netMap = nm
-
 	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
 
 	// Try a pass of just upserting nodes and creating missing

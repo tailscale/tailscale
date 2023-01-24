@@ -1836,3 +1836,21 @@ func TestRebindingUDPConn(t *testing.T) {
 	c.setConnLocked(realConn.(nettype.PacketConn), "udp4")
 	c.setConnLocked(newBlockForeverConn(), "")
 }
+
+// https://github.com/tailscale/tailscale/issues/6680: don't ignore
+// SetNetworkMap calls when there are no peers. (A too aggressive fast path was
+// previously bailing out early, thinking there were no changes since all zero
+// peers didn't change, but the netmap has non-peer info in it too we shouldn't discard)
+func TestSetNetworkMapWithNoPeers(t *testing.T) {
+	var c Conn
+	c.logf = logger.Discard
+
+	for i := 1; i <= 3; i++ {
+		nm := &netmap.NetworkMap{}
+		c.SetNetworkMap(nm)
+		t.Logf("ptr %d: %p", i, nm)
+		if c.netMap != nm {
+			t.Fatalf("call %d: didn't store netmap", i)
+		}
+	}
+}
