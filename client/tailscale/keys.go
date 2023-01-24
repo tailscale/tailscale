@@ -55,14 +55,14 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 		return nil, handleErrorResponse(b, resp)
 	}
 
-	var keys []struct {
-		ID string `json:"id"`
+	var keys struct {
+		Keys []*Key `json:"keys"`
 	}
 	if err := json.Unmarshal(b, &keys); err != nil {
 		return nil, err
 	}
-	ret := make([]string, 0, len(keys))
-	for _, k := range keys {
+	ret := make([]string, 0, len(keys.Keys))
+	for _, k := range keys.Keys {
 		ret = append(ret, k.ID)
 	}
 	return ret, nil
