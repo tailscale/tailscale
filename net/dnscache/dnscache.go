@@ -18,9 +18,11 @@ import (
 	"net/netip"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
 )
@@ -84,6 +86,11 @@ type Resolver struct {
 	// It is required when SingleHostStaticResult is present.
 	SingleHost string
 
+	// Logf optionally provides a log function to use for debug logs. If
+	// not present, log.Printf will be used. The prefix "dnscache: " will
+	// be added to all log messages printed with this logger.
+	Logf logger.Logf
+
 	sf singleflight.Group[string, ipRes]
 
 	mu      sync.Mutex
@@ -108,6 +115,20 @@ func (r *Resolver) fwd() *net.Resolver {
 		return r.Forward
 	}
 	return net.DefaultResolver
+}
+
+// dlogf logs a debug message if debug logging is enabled either globally via
+// the TS_DEBUG_DNS_CACHE environment variable or via the per-Resolver
+// configuration.
+func (r *Resolver) dlogf(format string, args ...any) {
+	logf := r.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+
+	if debug() || debugLogging.Load() {
+		logf("dnscache: "+format, args...)
+	}
 }
 
 // cloudHostResolver returns a Resolver for the current cloud hosting environment.
@@ -143,6 +164,27 @@ func (r *Resolver) ttl() time.Duration {
 
 var debug = envknob.RegisterBool("TS_DEBUG_DNS_CACHE")
 
+// debugLogging allows enabling debug logging at runtime, via
+// SetDebugLoggingEnabled.
+//
+// This is a global variable instead of a per-Resolver variable because we
+// create new Resolvers throughout the lifetime of the program (e.g. on every
+// new Direct client, etc.). When we enable debug logs, though, we want to do
+// so for every single created Resolver; we'd need to plumb a bunch of new code
+// through all of the intermediate packages to accomplish the same behaviour as
+// just using a global variable.
+var debugLogging atomic.Bool
+
+// SetDebugLoggingEnabled controls whether debug logging is enabled for this
+// package.
+//
+// These logs are also printed when the TS_DEBUG_DNS_CACHE envknob is set, but
+// we allow configuring this manually as well so that it can be changed at
+// runtime.
+func SetDebugLoggingEnabled(v bool) {
+	debugLogging.Store(v)
+}
+
 // LookupIP returns the host's primary IP address (either IPv4 or
 // IPv6, but preferring IPv4) and optionally its IPv6 address, if
 // there is both IPv4 and IPv6.
@@ -163,20 +205,17 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr
 			}
 			allIPs = append(allIPs, naIP)
 		}
+		r.dlogf("returning %d static results", len(allIPs))
 		return
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap()
-		if debug() {
-			log.Printf("dnscache: %q is an IP", host)
-		}
+		r.dlogf("%q is an IP", host)
 		return ip, zaddr, []netip.Addr{ip}, nil
 	}
 
 	if ip, ip6, allIPs, ok := r.lookupIPCache(host); ok {
-		if debug() {
-			log.Printf("dnscache: %q = %v (cached)", host, ip)
-		}
+		r.dlogf("%q = %v (cached)", host, ip)
 		return ip, ip6, allIPs, nil
 	}
 
@@ -192,23 +231,17 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr
 		if res.Err != nil {
 			if r.UseLastGood {
 				if ip, ip6, allIPs, ok := r.lookupIPCacheExpired(host); ok {
-					if debug() {
-						log.Printf("dnscache: %q using %v after error", host, ip)
-					}
+					r.dlogf("%q using %v after error", host, ip)
 					return ip, ip6, allIPs, nil
 				}
 			}
-			if debug() {
-				log.Printf("dnscache: error resolving %q: %v", host, res.Err)
-			}
+			r.dlogf("error resolving %q: %v", host, res.Err)
 			return zaddr, zaddr, nil, res.Err
 		}
 		r := res.Val
 		return r.ip, r.ip6, r.allIPs, nil
 	case <-ctx.Done():
-		if debug() {
-			log.Printf("dnscache: context done while resolving %q: %v", host, ctx.Err())
-		}
+		r.dlogf("context done while resolving %q: %v", host, ctx.Err())
 		return zaddr, zaddr, nil, ctx.Err()
 	}
 }
@@ -250,9 +283,7 @@ func (r *Resolver) lookupTimeoutForHost(host string) time.Duration {
 
 func (r *Resolver) lookupIP(host string) (ip, ip6 netip.Addr, allIPs []netip.Addr, err error) {
 	if ip, ip6, allIPs, ok := r.lookupIPCache(host); ok {
-		if debug() {
-			log.Printf("dnscache: %q found in cache as %v", host, ip)
-		}
+		r.dlogf("%q found in cache as %v", host, ip)
 		return ip, ip6, allIPs, nil
 	}
 
@@ -261,12 +292,18 @@ func (r *Resolver) lookupIP(host string) (ip, ip6 netip.Addr, allIPs []netip.Add
 	ips, err := r.fwd().LookupNetIP(ctx, "ip", host)
 	if err != nil || len(ips) == 0 {
 		if resolver, ok := r.cloudHostResolver(); ok {
+			r.dlogf("resolving %q via cloud resolver", host)
 			ips, err = resolver.LookupNetIP(ctx, "ip", host)
 		}
 	}
 	if (err != nil || len(ips) == 0) && r.LookupIPFallback != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if err != nil {
+			r.dlogf("resolving %q using fallback resolver due to error", host)
+		} else {
+			r.dlogf("resolving %q using fallback resolver due to no returned IPs", host)
+		}
 		ips, err = r.LookupIPFallback(ctx, host)
 	}
 	if err != nil {
@@ -305,15 +342,11 @@ func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Ad
 	if ip.IsPrivate() {
 		// Don't cache obviously wrong entries from captive portals.
 		// TODO: use DoH or DoT for the forwarding resolver?
-		if debug() {
-			log.Printf("dnscache: %q resolved to private IP %v; using but not caching", host, ip)
-		}
+		r.dlogf("%q resolved to private IP %v; using but not caching", host, ip)
 		return
 	}
 
-	if debug() {
-		log.Printf("dnscache: %q resolved to IP %v; caching", host, ip)
-	}
+	r.dlogf("%q resolved to IP %v; caching", host, ip)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -387,9 +420,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 	}
 	i4s := v4addrs(allIPs)
 	if len(i4s) < 2 {
-		if debug() {
-			log.Printf("dnscache: dialing %s, %s for %s", network, ip, address)
-		}
+		d.dnsCache.dlogf("dialing %s, %s for %s", network, ip, address)
 		c, err := dc.dialOne(ctx, ip.Unmap())
 		if err == nil || ctx.Err() != nil {
 			return c, err
@@ -411,26 +442,20 @@ func (d *dialer) shouldTryBootstrap(ctx context.Context, err error, dc *dialCall
 
 	// Can't try bootstrap DNS if we don't have a fallback function
 	if d.dnsCache.LookupIPFallback == nil {
-		if debug() {
-			log.Printf("dnscache: not using bootstrap DNS: no fallback")
-		}
+		d.dnsCache.dlogf("not using bootstrap DNS: no fallback")
 		return false
 	}
 
 	// We can't retry if the context is canceled, since any further
 	// operations with this context will fail.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		if debug() {
-			log.Printf("dnscache: not using bootstrap DNS: context error: %v", ctxErr)
-		}
+		d.dnsCache.dlogf("not using bootstrap DNS: context error: %v", ctxErr)
 		return false
 	}
 
 	wasTrustworthy := dc.dnsWasTrustworthy()
 	if wasTrustworthy {
-		if debug() {
-			log.Printf("dnscache: not using bootstrap DNS: DNS was trustworthy")
-		}
+		d.dnsCache.dlogf("not using bootstrap DNS: DNS was trustworthy")
 		return false
 	}
 

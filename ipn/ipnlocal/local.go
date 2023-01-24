@@ -45,6 +45,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netutil"
@@ -3820,6 +3821,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	}
 	b.capFileSharing = fs
 
+	b.setDebugLogsByCapabilityLocked(nm)
+
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
 		b.nodeByAddr = nil
@@ -3852,6 +3855,18 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		if v == nil {
 			delete(b.nodeByAddr, k)
 		}
+	}
+}
+
+// setDebugLogsByCapabilityLocked sets debug logging based on the self node's
+// capabilities in the provided NetMap.
+func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
+	// These are sufficiently cheap (atomic bools) that we don't need to
+	// store state and compare.
+	if hasCapability(nm, tailcfg.CapabilityDebugTSDNSResolution) {
+		dnscache.SetDebugLoggingEnabled(true)
+	} else {
+		dnscache.SetDebugLoggingEnabled(false)
 	}
 }
 
