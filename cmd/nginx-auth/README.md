@@ -127,7 +127,7 @@ the `Expected-Tailnet` header to your auth request:
 ```nginx
 location /auth {
   # ...
-  proxy_set_header Expected-Tailnet "corp.ts.net";
+  proxy_set_header Expected-Tailnet "tailnet012345.ts.net";
 }
 ```
 
