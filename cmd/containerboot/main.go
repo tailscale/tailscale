@@ -13,6 +13,7 @@
 // variables. All configuration is optional.
 //
 //   - TS_AUTHKEY: the authkey to use for login.
+//   - TS_HOSTNAME: the hostname to request for the node.
 //   - TS_ROUTES: subnet routes to advertise.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
@@ -74,6 +75,7 @@ func main() {
 
 	cfg := &settings{
 		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:        defaultEnv("TS_HOSTNAME", ""),
 		Routes:          defaultEnv("TS_ROUTES", ""),
 		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
 		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
@@ -394,6 +396,9 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.Routes != "" {
 		args = append(args, "--advertise-routes="+cfg.Routes)
 	}
+	if cfg.Hostname != "" {
+		args = append(args, "--hostname="+cfg.Hostname)
+	}
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}
@@ -522,6 +527,7 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefi
 // settings is all the configuration for containerboot.
 type settings struct {
 	AuthKey            string
+	Hostname           string
 	Routes             string
 	ProxyTo            string
 	DaemonExtraArgs    string

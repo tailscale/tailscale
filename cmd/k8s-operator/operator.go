@@ -43,6 +43,7 @@ import (
 	"tailscale.com/ipn/store/kubestore"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/dnsname"
 )
 
 func main() {
@@ -235,8 +236,9 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	AnnotationExpose = "tailscale.com/expose"
-	AnnotationTags   = "tailscale.com/tags"
+	AnnotationExpose   = "tailscale.com/expose"
+	AnnotationTags     = "tailscale.com/tags"
+	AnnotationHostname = "tailscale.com/hostname"
 )
 
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
@@ -370,6 +372,11 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
 func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+	hostname, err := nameForService(svc)
+	if err != nil {
+		return err
+	}
+
 	if !slices.Contains(svc.Finalizers, FinalizerName) {
 		// This log line is printed exactly once during initial provisioning,
 		// because once the finalizer is in place this block gets skipped. So,
@@ -396,7 +403,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	if err != nil {
 		return fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
-	_, err = a.reconcileSTS(ctx, logger, svc, hsvc, secretName)
+	_, err = a.reconcileSTS(ctx, logger, svc, hsvc, secretName, hostname)
 	if err != nil {
 		return fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
@@ -558,7 +565,7 @@ func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (stri
 //go:embed manifests/proxy.yaml
 var proxyYaml []byte
 
-func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, parentSvc, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {
+func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, parentSvc, headlessSvc *corev1.Service, authKeySecret, hostname string) (*appsv1.StatefulSet, error) {
 	var ss appsv1.StatefulSet
 	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
@@ -573,6 +580,10 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 		corev1.EnvVar{
 			Name:  "TS_KUBE_SECRET",
 			Value: authKeySecret,
+		},
+		corev1.EnvVar{
+			Name:  "TS_HOSTNAME",
+			Value: hostname,
 		})
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
@@ -678,4 +689,14 @@ func defaultEnv(envName, defVal string) string {
 		return defVal
 	}
 	return v
+}
+
+func nameForService(svc *corev1.Service) (string, error) {
+	if h, ok := svc.Annotations[AnnotationHostname]; ok {
+		if err := dnsname.ValidLabel(h); err != nil {
+			return "", fmt.Errorf("invalid Tailscale hostname %q: %w", h, err)
+		}
+		return h, nil
+	}
+	return svc.Namespace + "-" + svc.Name, nil
 }

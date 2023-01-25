@@ -66,7 +66,7 @@ func TestLoadBalancerClass(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(fullName))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, then verify reconcile again and verify
@@ -187,7 +187,7 @@ func TestAnnotations(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(fullName))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Service",
@@ -284,7 +284,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(fullName))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, since it would have normally happened at
@@ -328,7 +328,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 	// None of the proxy machinery should have changed...
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 	// ... but the service should have a LoadBalancer status.
 
 	want = &corev1.Service{
@@ -400,7 +400,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 
 	expectEqual(t, fc, expectedSecret(fullName))
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 
 	// Normally the Tailscale proxy pod would come up here and write its info
 	// into the secret. Simulate that, then verify reconcile again and verify
@@ -457,7 +457,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 	expectReconciled(t, sr, "default", "test")
 
 	expectEqual(t, fc, expectedHeadlessService(shortName))
-	expectEqual(t, fc, expectedSTS(shortName, fullName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test"))
 
 	want = &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -472,6 +472,108 @@ func TestLBIntoAnnotation(t *testing.T) {
 				"tailscale.com/expose": "true",
 			},
 			UID: types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	}
+	expectEqual(t, fc, want)
+}
+
+func TestCustomHostname(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client:            fc,
+		tsClient:          ft,
+		defaultTags:       []string{"tag:k8s"},
+		operatorNamespace: "operator-ns",
+		proxyImage:        "tailscale/tailscale",
+		logger:            zl.Sugar(),
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/expose":   "true",
+				"tailscale.com/hostname": "reindeer-flotilla",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test")
+
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "reindeer-flotilla"))
+	want := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Namespace:  "default",
+			Finalizers: []string{"tailscale.com/finalizer"},
+			UID:        types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/expose":   "true",
+				"tailscale.com/hostname": "reindeer-flotilla",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	}
+	expectEqual(t, fc, want)
+
+	// Turn the service back into a ClusterIP service, which should make the
+	// operator clean up.
+	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		delete(s.ObjectMeta.Annotations, "tailscale.com/expose")
+	})
+	// synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
+	// didn't create any child resources since this is all faked, so the
+	// deletion goes through immediately.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	// Second time around, the rest of cleanup happens.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+	want = &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			UID:       types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/hostname": "reindeer-flotilla",
+			},
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "10.20.30.40",
@@ -529,7 +631,7 @@ func expectedHeadlessService(name string) *corev1.Service {
 	}
 }
 
-func expectedSTS(stsName, secretName string) *appsv1.StatefulSet {
+func expectedSTS(stsName, secretName, hostname string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "StatefulSet",
@@ -578,6 +680,7 @@ func expectedSTS(stsName, secretName string) *appsv1.StatefulSet {
 								{Name: "TS_AUTH_ONCE", Value: "true"},
 								{Name: "TS_DEST_IP", Value: "10.20.30.40"},
 								{Name: "TS_KUBE_SECRET", Value: secretName},
+								{Name: "TS_HOSTNAME", Value: hostname},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
