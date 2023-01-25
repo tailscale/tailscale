@@ -550,6 +550,22 @@ func TestContainerBoot(t *testing.T) {
 				},
 			},
 		},
+		{
+			Name: "hostname",
+			Env: map[string]string{
+				"TS_HOSTNAME": "my-server",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --hostname=my-server",
+					},
+				}, {
+					Notify: runningNotify,
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
