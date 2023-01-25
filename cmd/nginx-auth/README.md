@@ -129,7 +129,7 @@ the `Expected-Tailnet` header to your auth request:
 ```nginx
 location /auth {
   # ...
-  proxy_set_header Expected-Tailnet "tailscale.com";
+  proxy_set_header Expected-Tailnet "tailnet012345.ts.net";
 }
 ```
 
@@ -145,6 +145,8 @@ generic "forbidden" error page:
 </body>
 </html>
 ```
+
+You can get the tailnet name from [the admin panel](https://login.tailscale.com/admin/dns).
 
 ## Building
 
