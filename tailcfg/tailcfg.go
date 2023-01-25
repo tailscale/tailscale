@@ -1747,6 +1747,9 @@ const (
 	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
 	// CapabilityIngress grants the ability for a peer to send ingress traffic.
 	CapabilityIngress = "https://tailscale.com/cap/ingress"
+	// CapabilitySSHSessionHaul grants the ability to receive SSH session logs
+	// from a peer.
+	CapabilitySSHSessionHaul = "https://tailscale.com/cap/ssh-session-haul"
 
 	// Funnel warning capabilities used for reporting errors to the user.
 
@@ -1767,6 +1770,8 @@ const (
 const (
 	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
 	NodeAttrFunnel = "funnel"
+	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.
+	NodeAttrSSHAggregator = "ssh-aggregator"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -1940,6 +1945,10 @@ type SSHAction struct {
 	// AllowLocalPortForwarding, if true, allows accepted connections
 	// to use local port forwarding if requested.
 	AllowLocalPortForwarding bool `json:"allowLocalPortForwarding,omitempty"`
+
+	// SessionHaulTargetNode, if non-empty, is the Stable ID of a peer to
+	// stream this SSH session's logs to.
+	SessionHaulTargetNode StableNodeID `json:"sessionHaulTargetNode,omitempty"`
 }
 
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
