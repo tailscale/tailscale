@@ -10,7 +10,7 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
 
  - [eliasnaur.com/font/roboto](https://pkg.go.dev/eliasnaur.com/font/roboto) ([BSD-3-Clause](https://git.sr.ht/~eliasnaur/font/tree/832bb8fc08c3/LICENSE))
  - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.0.0-rc.1/LICENSE))
- - [gioui.org](https://pkg.go.dev/gioui.org) ([MIT](https://git.sr.ht/~eliasnaur/gio/tree/aa2a948b863a/LICENSE))
+ - [gioui.org](https://pkg.go.dev/gioui.org) ([MIT](https://git.sr.ht/~eliasnaur/gio/tree/af7afea5a380/LICENSE))
  - [gioui.org/cpu](https://pkg.go.dev/gioui.org/cpu) ([MIT](https://git.sr.ht/~eliasnaur/gio-cpu/tree/8d6a761490d2/LICENSE))
  - [gioui.org/shader](https://pkg.go.dev/gioui.org/shader) ([MIT](https://git.sr.ht/~eliasnaur/gio-shader/tree/v1.0.6/LICENSE))
  - [github.com/benoitkugler/textlayout](https://pkg.go.dev/github.com/benoitkugler/textlayout) ([MIT](https://github.com/benoitkugler/textlayout/blob/v0.3.0/LICENSE))
