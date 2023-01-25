@@ -94,7 +94,8 @@ type CapabilityVersion int
 //   - 54: 2023-01-19: Node.Cap added, PeersChangedPatch.Cap, uses Node.Cap for ExitDNS before Hostinfo.Services fallback
 //   - 55: 2023-01-23: start of c2n GET+POST /update handler
 //   - 56: 2023-01-24: Client understands CapabilityDebugTSDNSResolution
-const CurrentCapabilityVersion CapabilityVersion = 56
+//   - 57: 2023-01-25: Client understands CapabilityBindToInterfaceByRoute
+const CurrentCapabilityVersion CapabilityVersion = 57
 
 type StableID string
 
@@ -1725,6 +1726,11 @@ const (
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+
+	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
+	// sockets (in the net/netns package). See that package for more
+	// details on the behaviour of this capability.
+	CapabilityBindToInterfaceByRoute = "https://tailscale.com/cap/bind-to-interface-by-route"
 
 	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
 	// and initialization of tailnet lock may proceed.

@@ -48,6 +48,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netns"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
@@ -3822,6 +3823,9 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.capFileSharing = fs
 
 	b.setDebugLogsByCapabilityLocked(nm)
+
+	// See the netns package for documentation on what this capability does.
+	netns.SetBindToInterfaceByRoute(hasCapability(nm, tailcfg.CapabilityBindToInterfaceByRoute))
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
 	if nm == nil {
