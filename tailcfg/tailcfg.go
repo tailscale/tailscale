@@ -1726,6 +1726,11 @@ const (
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
 
+	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
+	// sockets (in the net/netns package). See that package for more
+	// details on the behaviour of this capability.
+	CapabilityBindToInterfaceByRoute = "https://tailscale.com/cap/bind-to-interface-by-route"
+
 	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
 	// and initialization of tailnet lock may proceed.
 	//
