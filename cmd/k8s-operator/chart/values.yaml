@@ -1,0 +1,38 @@
+# Default values for chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+image:
+  repository: tailscale/k8s-operator
+  pullPolicy: IfNotPresent
+  tag: "v1.36.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+namespace: "tailscale"
+
+tailscaleCredential:
+  clientID: "" # YOUR CLIENT ID MUST GO HERE
+  clientSecret: "" # YOUR CLIENT SECRET MUST GO HERE
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 100Mi
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

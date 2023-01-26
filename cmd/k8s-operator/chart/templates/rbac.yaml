@@ -1,0 +1,126 @@
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxies
+  namespace: {{ .Values.namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxies
+  namespace: {{ .Values.namespace }}
+subjects:
+- kind: ServiceAccount
+  name: proxies
+  namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: proxies
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "chart.fullname" . }}-operator
+rules:
+- apiGroups: [""]
+  resources: ["services", "services/status"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "chart.fullname" . }}-operator
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "chart.fullname" . }}-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operator
+  namespace: {{ .Values.namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["statefulsets"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "chart.fullname" . }}-operator
+  namespace: {{ .Values.namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "chart.fullname" . }}-operator
+  namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "chart.fullname" . }}-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: tailscale
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      labels:
+        app: operator
+    spec:
+      serviceAccountName: operator
+      volumes:
+      - name: oauth
+        secret:
+          secretName: operator-oauth
+      containers:
+        - name: operator
+          image: tailscale/k8s-operator:latest
+          resources:
+            requests:
+              cpu: 500m
+              memory: 100Mi
+          env:
+            - name: OPERATOR_HOSTNAME
+              value: tailscale-operator
+            - name: OPERATOR_SECRET
+              value: operator
+            - name: OPERATOR_LOGGING
+              value: info
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CLIENT_ID_FILE
+              value: /oauth/client_id
+            - name: CLIENT_SECRET_FILE
+              value: /oauth/client_secret
+            - name: PROXY_IMAGE
+              value: tailscale/tailscale:latest
+            - name: PROXY_TAGS
+              value: tag:k8s
+          volumeMounts:
+          - name: oauth
+            mountPath: /oauth
+            readOnly: true
