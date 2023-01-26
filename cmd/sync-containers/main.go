@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/authn/github"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -47,8 +48,9 @@ func main() {
 		log.Fatalf("--dst is required")
 	}
 
+	keychain := authn.NewMultiKeychain(authn.DefaultKeychain, github.Keychain)
 	opts := []remote.Option{
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithAuthFromKeychain(keychain),
 		remote.WithContext(context.Background()),
 	}
 
