@@ -33,4 +33,5 @@ const (
 	OPTIONS   = "OPTIONS"
 	TRACE     = "TRACE"
 	SPACEJUMP = "SPACEJUMP" // https://www.w3.org/Protocols/HTTP/Methods/SpaceJump.html
+	BREW      = "BREW"      // https://datatracker.ietf.org/doc/html/rfc2324#section-2.1.1
 )
