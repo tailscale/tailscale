@@ -79,7 +79,7 @@ func main() {
 		w("}")
 	}
 	cloneOutput := pkg.Name + "_clone.go"
-	if err := codegen.WritePackageFile("tailscale.com/cmd/cloner", pkg, cloneOutput, codegen.CopyrightYear("."), it, buf); err != nil {
+	if err := codegen.WritePackageFile("tailscale.com/cmd/cloner", pkg, cloneOutput, it, buf); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -7,10 +7,8 @@ package main
 
 import (
 	_ "embed"
-	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/dave/jennifer/jen"
 	"github.com/iancoleman/strcase"
@@ -41,9 +39,8 @@ func main() {
 	}
 	defer fout.Close()
 
-	fmt.Fprintf(fout, "// Copyright (c) %d Tailscale Inc & AUTHORS All rights reserved.\n", time.Now().Year())
-	fout.WriteString("// Use of this source code is governed by a BSD-style\n")
-	fout.WriteString("// license that can be found in the LICENSE file.\n")
+	fout.WriteString("// Copyright (c) Tailscale Inc & AUTHORS\n")
+	fout.WriteString("// SPDX-License-Identifier: BSD-3-Clause\n")
 	fout.WriteString("\n")
 	fout.WriteString("// +build linux\n\n")
 
