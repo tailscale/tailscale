@@ -1,8 +1,7 @@
 #!/bin/sh
 #
-# Copyright (c) 2020 Tailscale Inc & AUTHORS All rights reserved.
-# Use of this source code is governed by a BSD-style
-# license that can be found in the LICENSE file.
+# Copyright (c) Tailscale Inc & AUTHORS
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # check_license_headers.sh checks that all Go files in the given
 # directory tree have a correct-looking Tailscale license header.
