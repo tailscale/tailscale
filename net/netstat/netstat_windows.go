@@ -20,6 +20,13 @@ import (
 // OSMetadata includes any additional OS-specific information that may be
 // obtained during the retrieval of a given Entry.
 type OSMetadata interface {
+	// GetModule returns the entry's module name.
+	//
+	// It returns ("", nil) if no entry is found. As of 2023-01-27, any returned
+	// error is silently discarded by its sole caller in portlist_windows.go and
+	// treated equivalently as returning ("", nil), but this may change in the
+	// future. An error should only be returned in casees that are worthy of
+	// being logged at least.
 	GetModule() (string, error)
 }
 
@@ -224,7 +231,13 @@ type moduleInfoConstraint interface {
 	_MIB_TCPROW_OWNER_MODULE | _MIB_TCP6ROW_OWNER_MODULE
 }
 
-// moduleInfo may return "", nil indicating a successful call but with empty data
+// moduleInfo implements OSMetadata.GetModule. It calls
+// getOwnerModuleFromTcpEntry or getOwnerModuleFromTcp6Entry.
+//
+// See
+// https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getownermodulefromtcpentry
+//
+// It may return "", nil indicating a successful call but with empty data.
 func moduleInfo[entryType moduleInfoConstraint](entry *entryType, proc *windows.LazyProc) (string, error) {
 	var buf []byte
 	var desiredLen uint32
@@ -241,28 +254,36 @@ func moduleInfo[entryType moduleInfoConstraint](entry *entryType, proc *windows.
 		if err == windows.ERROR_SUCCESS {
 			break
 		}
+		if err == windows.ERROR_NOT_FOUND {
+			return "", nil
+		}
 		if err != windows.ERROR_INSUFFICIENT_BUFFER {
 			return "", err
 		}
-
+		if desiredLen > 1<<20 {
+			// Sanity check before allocating too much.
+			return "", nil
+		}
 		buf = make([]byte, desiredLen)
 		addr = unsafe.Pointer(&buf[0])
 	}
-
-	basicInfo := (*_TCPIP_OWNER_MODULE_BASIC_INFO)(addr)
-	// GetOwnerModuleFromTcp*Entry is apparently using nil as an empty result
-	// under certain circumstances, so we check all the things.
-	if basicInfo == nil || basicInfo.moduleName == nil {
+	if addr == nil {
+		// GetOwnerModuleFromTcp*Entry can apparently return ERROR_SUCCESS
+		// (NO_ERROR) on the first call without the usual first
+		// ERROR_INSUFFICIENT_BUFFER result. Windows said success, so interpret
+		// that was sucessfully not having data.
 		return "", nil
 	}
-
+	basicInfo := (*_TCPIP_OWNER_MODULE_BASIC_INFO)(addr)
 	return windows.UTF16PtrToString(basicInfo.moduleName), nil
 }
 
+// GetModule implements OSMetadata.
 func (m *_MIB_TCPROW_OWNER_MODULE) GetModule() (string, error) {
 	return moduleInfo(m, getOwnerModuleFromTcpEntry)
 }
 
+// GetModule implements OSMetadata.
 func (m *_MIB_TCP6ROW_OWNER_MODULE) GetModule() (string, error) {
 	return moduleInfo(m, getOwnerModuleFromTcp6Entry)
 }
