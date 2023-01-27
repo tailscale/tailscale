@@ -33,11 +33,11 @@ spec:
       value: "{{TS_KUBE_SECRET}}"
     - name: TS_USERSPACE
       value: "false"
-    - name: TS_AUTH_KEY
+    - name: TS_AUTHKEY
       valueFrom:
         secretKeyRef:
           name: tailscale-auth
-          key: TS_AUTH_KEY
+          key: TS_AUTHKEY
           optional: true
     - name: TS_DEST_IP
       value: "{{TS_DEST_IP}}"
