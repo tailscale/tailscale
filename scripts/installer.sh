@@ -293,83 +293,28 @@ main() {
 		fi
 	fi
 
+	# Ideally we want to use curl, but on some installs we
+	# only have wget. Detect and use what's available.
+	CURL=
+	if type curl >/dev/null; then
+		CURL="curl -fsSL"
+	elif type wget >/dev/null; then
+		CURL="wget -q -O-"
+	fi
+	if [ -z "$CURL" ]; then
+		echo "The installer needs either curl or wget to download files."
+		echo "Please install either curl or wget to proceed."
+		exit 1
+	fi
+
 	# Step 2: having detected an OS we support, is it one of the
 	# versions we support?
 	OS_UNSUPPORTED=
 	case "$OS" in
-		ubuntu)
-			if [ "$VERSION" != "xenial" ] && \
-			   [ "$VERSION" != "bionic" ] && \
-			   [ "$VERSION" != "eoan" ] && \
-			   [ "$VERSION" != "focal" ] && \
-			   [ "$VERSION" != "groovy" ] && \
-			   [ "$VERSION" != "hirsute" ] && \
-			   [ "$VERSION" != "impish" ] && \
-			   [ "$VERSION" != "jammy" ] && \
-			   [ "$VERSION" != "kinetic" ] && \
-			   [ "$VERSION" != "lunar" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		debian)
-			if [ "$VERSION" != "stretch" ] && \
-			   [ "$VERSION" != "buster" ] && \
-			   [ "$VERSION" != "bullseye" ] && \
-			   [ "$VERSION" != "bookworm" ] && \
-			   [ "$VERSION" != "sid" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		raspbian)
-			if [ "$VERSION" != "stretch" ] && \
-			   [ "$VERSION" != "buster" ] && \
-			   [ "$VERSION" != "bullseye" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		centos)
-			if [ "$VERSION" != "7" ] && \
-			   [ "$VERSION" != "8" ] && \
-			   [ "$VERSION" != "9" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		oracle)
-			if [ "$VERSION" != "7" ] && \
-			   [ "$VERSION" != "8" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		rhel)
-			if [ "$VERSION" != "7" ] && \
-			   [ "$VERSION" != "8" ] && \
-			   [ "$VERSION" != "9" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		amazon-linux)
-			if [ "$VERSION" != "2" ] && \
-			   [ "$VERSION" != "2022" ] && \
-			   [ "$VERSION" != "2023" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
-		;;
-		opensuse)
-			if [ "$VERSION" != "leap/15.1" ] && \
-			   [ "$VERSION" != "leap/15.2" ] && \
-			   [ "$VERSION" != "leap/15.3" ] && \
-			   [ "$VERSION" != "leap/15.4" ] && \
-			   [ "$VERSION" != "tumbleweed" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
+		ubuntu|debian|raspbian|centos|oracle|rhel|amazon-linux|opensuse)
+			# Check with the package server whether a given version is supported.
+			URL="https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/installer-supported"
+			$CURL "$URL" 2> /dev/null | grep -q OK || OS_UNSUPPORTED=1
 			;;
 		fedora)
 			# All versions supported, no version checking required.
@@ -474,19 +419,6 @@ main() {
 	echo "Installing Tailscale for $OS $VERSION, using method $PACKAGETYPE"
 	case "$PACKAGETYPE" in
 		apt)
-			# Ideally we want to use curl, but on some installs we
-			# only have wget. Detect and use what's available.
-			CURL=
-			if type curl >/dev/null; then
-				CURL="curl -fsSL"
-			elif type wget >/dev/null; then
-				CURL="wget -q -O-"
-			fi
-			if [ -z "$CURL" ]; then
-				echo "The installer needs either curl or wget to download files."
-				echo "Please install either curl or wget to proceed."
-				exit 1
-			fi
 			export DEBIAN_FRONTEND=noninteractive
 			if [ "$APT_KEY_TYPE" = "legacy" ] && ! type gpg >/dev/null; then
 				$SUDO apt-get update
