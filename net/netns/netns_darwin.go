@@ -115,7 +115,11 @@ func interfaceIndexFor(addr netip.Addr, canRecurse bool) (int, error) {
 	}
 
 	rm := route.RouteMessage{
-		Version: unix.RTM_VERSION,
+		// NOTE: This is unix.RTM_VERSION, but we want to pin this to a
+		// particular constant so that it doesn't change under us if
+		// the x/sys/unix package changes down the road. Currently this
+		// is 0x5 on both Darwin x86 and ARM64.
+		Version: 0x5,
 		Type:    unix.RTM_GET,
 		Flags:   unix.RTF_UP,
 		ID:      uintptr(os.Getpid()),
@@ -132,6 +136,25 @@ func interfaceIndexFor(addr netip.Addr, canRecurse bool) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("writing message: %w", err)
 	}
+
+	// On macOS, the RTM_GET call should return exactly one route message.
+	// Given the following sizes and constants:
+	//    - sizeof(struct rt_msghdr) = 92
+	//    - RTAX_MAX = 8
+	//    - sizeof(struct sockaddr_in6) = 28
+	//    - sizeof(struct sockaddr_in) = 16
+	//    - sizeof(struct sockaddr_dl) = 20
+	//
+	// The maximum buffer size should be:
+	//    sizeof(struct rt_msghdr) + RTAX_MAX*sizeof(struct sockaddr_in6)
+	//    = 92 + 8*28
+	//    = 316
+	//
+	// During my testing, responses are typically ~120 bytes.
+	//
+	// We provide a much larger buffer just in case we're off by a bit, or
+	// the kernel decides to return more than one message; 2048 bytes
+	// should be plenty here. This also means we can do a single Read.
 	var buf [2048]byte
 	n, err := unix.Read(fd, buf[:])
 	if err != nil {
