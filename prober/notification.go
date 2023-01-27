@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"tailscale.com/util/httpm"
 )
 
 var (
@@ -59,7 +60,7 @@ func SendAlert(summary, details string) error {
 		return errors.New("no SQUADCAST_WEBHOOK configured")
 	}
 
-	req, err := http.NewRequest(http.MethodPost, webhookUrl, bytes.NewBuffer(sqBody))
+	req, err := http.NewRequest(httpm.POST, webhookUrl, bytes.NewBuffer(sqBody))
 	if err != nil {
 		alertFailed.Add(1)
 		return err
