@@ -78,7 +78,7 @@ require (
 	golang.org/x/term v0.4.0
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
 	golang.org/x/tools v0.2.0
-	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gvisor.dev/gvisor v0.0.0-20221203005347-703fd9b7fbc0
 	honnef.co/go/tools v0.4.0-0.dev.0.20220517111757-f4a2f64ce238
