@@ -224,6 +224,7 @@ type moduleInfoConstraint interface {
 	_MIB_TCPROW_OWNER_MODULE | _MIB_TCP6ROW_OWNER_MODULE
 }
 
+// moduleInfo may return "", nil indicating a successful call but with empty data
 func moduleInfo[entryType moduleInfoConstraint](entry *entryType, proc *windows.LazyProc) (string, error) {
 	var buf []byte
 	var desiredLen uint32
@@ -249,6 +250,12 @@ func moduleInfo[entryType moduleInfoConstraint](entry *entryType, proc *windows.
 	}
 
 	basicInfo := (*_TCPIP_OWNER_MODULE_BASIC_INFO)(addr)
+	// GetOwnerModuleFromTcp*Entry is apparently using nil as an empty result
+	// under certain circumstances, so we check all the things.
+	if basicInfo == nil || basicInfo.moduleName == nil {
+		return "", nil
+	}
+
 	return windows.UTF16PtrToString(basicInfo.moduleName), nil
 }
 
