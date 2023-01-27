@@ -1,6 +1,5 @@
-// Copyright (c) 2019 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 // Package magicsock implements a socket that can change its communication path while
 // in use, actively searching for the best way to communicate.
