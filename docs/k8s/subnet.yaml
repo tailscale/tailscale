@@ -19,11 +19,11 @@ spec:
       value: "{{TS_KUBE_SECRET}}"
     - name: TS_USERSPACE
       value: "true"
-    - name: TS_AUTH_KEY
+    - name: TS_AUTHKEY
       valueFrom:
         secretKeyRef:
           name: tailscale-auth
-          key: TS_AUTH_KEY
+          key: TS_AUTHKEY
           optional: true
     - name: TS_ROUTES
       value: "{{TS_ROUTES}}"
