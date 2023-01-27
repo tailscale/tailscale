@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+
+	"tailscale.com/util/httpm"
 )
 
 // TailnetDeleteRequest handles sending a DELETE request for a tailnet to control.
@@ -22,7 +24,7 @@ func (c *Client) TailnetDeleteRequest(ctx context.Context, tailnetID string) (er
 	}()
 
 	path := fmt.Sprintf("%s/api/v2/tailnet/%s", c.baseURL(), url.PathEscape(string(tailnetID)))
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, path, nil)
+	req, err := http.NewRequestWithContext(ctx, httpm.DELETE, path, nil)
 	if err != nil {
 		return err
 	}
