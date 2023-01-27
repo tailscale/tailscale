@@ -5,7 +5,6 @@
 package codegen
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"go/ast"
@@ -13,16 +12,12 @@ import (
 	"go/types"
 	"io"
 	"os"
-	"path/filepath"
 	"reflect"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/must"
 )
 
 // LoadTypes returns all named types in pkgName, keyed by their type name.
@@ -57,9 +52,8 @@ func HasNoClone(structTag string) bool {
 	return false
 }
 
-const copyrightHeader = `// Copyright (c) %d Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+const copyrightHeader = `// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 `
 
@@ -109,18 +103,16 @@ func (it *ImportTracker) Write(w io.Writer) {
 	fmt.Fprintf(w, ")\n\n")
 }
 
-func writeHeader(w io.Writer, tool, pkg string, copyrightYear int) {
-	if copyrightYear != 0 {
-		fmt.Fprintf(w, copyrightHeader, copyrightYear)
-	}
+func writeHeader(w io.Writer, tool, pkg string) {
+	fmt.Fprint(w, copyrightHeader)
 	fmt.Fprintf(w, genAndPackageHeader, tool, pkg)
 }
 
 // WritePackageFile adds a file with the provided imports and contents to package.
 // The tool param is used to identify the tool that generated package file.
-func WritePackageFile(tool string, pkg *packages.Package, path string, copyrightYear int, it *ImportTracker, contents *bytes.Buffer) error {
+func WritePackageFile(tool string, pkg *packages.Package, path string, it *ImportTracker, contents *bytes.Buffer) error {
 	buf := new(bytes.Buffer)
-	writeHeader(buf, tool, pkg.Name, copyrightYear)
+	writeHeader(buf, tool, pkg.Name)
 	it.Write(buf)
 	if _, err := buf.Write(contents.Bytes()); err != nil {
 		return err
@@ -270,52 +262,4 @@ func IsViewType(typ types.Type) bool {
 		return false
 	}
 	return t.Field(0).Name() == "ж"
-}
-
-// CopyrightYear reports the greatest copyright year in non-generated *.go files
-// in the current directory, for use in the copyright line of generated code.
-//
-// It panics on I/O error, as it's assumed this is only being used by "go
-// generate" or GitHub actions.
-//
-// TODO(bradfitz,dgentry): determine what heuristic to use for all this: latest
-// year, earliest, none? don't list years at all? IANAL. Get advice of others.
-// For now we just want to unbreak the tree. See Issue 6865.
-func CopyrightYear(dir string) (year int) {
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		panic(err)
-	}
-	rxYear := regexp.MustCompile(`^// Copyright \(c\) (20\d{2}) `)
-	rxGenerated := regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
-Files:
-	for _, f := range files {
-		name := f.Name()
-		if !f.Type().IsRegular() ||
-			strings.HasPrefix(name, ".") || // includes emacs noise
-			!strings.HasSuffix(name, ".go") ||
-			strings.HasSuffix(name, "_clone.go") ||
-			strings.HasSuffix(name, "_view.go") ||
-			strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			panic(err)
-		}
-		bs := bufio.NewScanner(bytes.NewReader(src))
-		for bs.Scan() {
-			line := bs.Bytes()
-			if m := rxYear.FindSubmatch(line); m != nil {
-				if y := must.Get(strconv.Atoi(string(m[1]))); y > year {
-					year = y
-				}
-				continue
-			}
-			if rxGenerated.Match(line) {
-				continue Files
-			}
-		}
-	}
-	return year
 }

@@ -14,26 +14,24 @@ import (
 )
 
 var (
-	year = flag.Int("year", 0, "copyright year")
 	file = flag.String("file", "", "file to modify")
 )
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `
-usage: addlicense -year YEAR -file FILE <subcommand args...>
+usage: addlicense -file FILE <subcommand args...>
 `[1:])
 
 	flag.PrintDefaults()
 	fmt.Fprintf(os.Stderr, `
-addlicense adds a Tailscale license to the beginning of file,
-using year as the copyright year.
+addlicense adds a Tailscale license to the beginning of file.
 
 It is intended for use with 'go generate', so it also runs a subcommand,
 which presumably creates the file.
 
 Sample usage:
 
-addlicense -year 2021 -file pull_strings.go stringer -type=pull
+addlicense -file pull_strings.go stringer -type=pull
 `[1:])
 	os.Exit(2)
 }
@@ -53,7 +51,7 @@ func main() {
 	check(err)
 	f, err := os.OpenFile(*file, os.O_TRUNC|os.O_WRONLY, 0644)
 	check(err)
-	_, err = fmt.Fprintf(f, license, *year)
+	_, err = fmt.Fprint(f, license)
 	check(err)
 	_, err = f.Write(b)
 	check(err)
@@ -69,8 +67,7 @@ func check(err error) {
 }
 
 var license = `
-// Copyright (c) %d Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 `[1:]
