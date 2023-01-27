@@ -158,7 +158,7 @@ func (d *derpProber) updateMap(ctx context.Context) error {
 	if err != nil {
 		return nil
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpOrFileClient.Do(req)
 	if err != nil {
 		d.Lock()
 		defer d.Unlock()
@@ -389,4 +389,12 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*de
 		return nil, fmt.Errorf("timeout waiting for ServerInfoMessage: %w", ctx.Err())
 	}
 	return dc, nil
+}
+
+var httpOrFileClient = &http.Client{Transport: httpOrFileTransport()}
+
+func httpOrFileTransport() http.RoundTripper {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.RegisterProtocol("file", http.NewFileTransport(http.Dir("/")))
+	return tr
 }
