@@ -214,7 +214,7 @@ func TestExpvar(t *testing.T) {
 
 	waitActiveProbes(t, p, clk, 1)
 
-	check := func(name string, want probeInfo) {
+	check := func(name string, want ProbeInfo) {
 		t.Helper()
 		err := tstest.WaitFor(convergenceTimeout, func() error {
 			vars := probeExpvar(t, p)
@@ -236,19 +236,20 @@ func TestExpvar(t *testing.T) {
 		}
 	}
 
-	check("probe", probeInfo{
+	check("probe", ProbeInfo{
 		Labels:  map[string]string{"label": "value"},
 		Start:   epoch,
 		End:     epoch.Add(aFewMillis),
 		Latency: aFewMillis.String(),
 		Result:  false,
+		Error:   "failing, as instructed by test",
 	})
 
 	succeed.Store(true)
 	clk.Advance(probeInterval + halfProbeInterval)
 
 	st := epoch.Add(probeInterval + halfProbeInterval + aFewMillis)
-	check("probe", probeInfo{
+	check("probe", ProbeInfo{
 		Labels:  map[string]string{"label": "value"},
 		Start:   st,
 		End:     st.Add(aFewMillis),
@@ -313,6 +314,31 @@ probe_result{name="testprobe",label="value"} 1
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOnceMode(t *testing.T) {
+	clk := newFakeTime()
+	p := newForTest(clk.Now, clk.NewTicker).WithOnce(true)
+
+	p.Run("probe1", probeInterval, nil, func(context.Context) error { return nil })
+	p.Run("probe2", probeInterval, nil, func(context.Context) error { return fmt.Errorf("error2") })
+	p.Run("probe3", probeInterval, nil, func(context.Context) error {
+		p.Run("probe4", probeInterval, nil, func(context.Context) error {
+			return fmt.Errorf("error4")
+		})
+		return nil
+	})
+
+	p.Wait()
+	info := p.ProbeInfo()
+	if len(info) != 4 {
+		t.Errorf("expected 4 probe results, got %+v", info)
+	}
+	for _, p := range info {
+		if p.End.IsZero() {
+			t.Errorf("expected all probes to finish; got %+v", p)
+		}
 	}
 }
 
@@ -409,10 +435,10 @@ func (t *fakeTime) activeTickers() (count int) {
 	return
 }
 
-func probeExpvar(t *testing.T, p *Prober) map[string]*probeInfo {
+func probeExpvar(t *testing.T, p *Prober) map[string]*ProbeInfo {
 	t.Helper()
 	s := p.Expvar().String()
-	ret := map[string]*probeInfo{}
+	ret := map[string]*ProbeInfo{}
 	if err := json.Unmarshal([]byte(s), &ret); err != nil {
 		t.Fatalf("expvar json decode failed: %v", err)
 	}

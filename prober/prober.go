@@ -33,6 +33,9 @@ type Prober struct {
 	// random delay before the first probe run.
 	spread bool
 
+	// Whether to run all probes once instead of running them in a loop.
+	once bool
+
 	// Time-related functions that get faked out during tests.
 	now       func() time.Time
 	newTicker func(time.Duration) ticker
@@ -57,6 +60,11 @@ func newForTest(now func() time.Time, newTicker func(time.Duration) ticker) *Pro
 // Expvar returns the metrics for running probes.
 func (p *Prober) Expvar() expvar.Var {
 	return varExporter{p}
+}
+
+// ProbeInfo returns information about most recent probe runs.
+func (p *Prober) ProbeInfo() map[string]ProbeInfo {
+	return varExporter{p}.probeInfo()
 }
 
 // Run executes fun every interval, and exports probe results under probeName.
@@ -101,7 +109,37 @@ func (p *Prober) WithSpread(s bool) *Prober {
 	return p
 }
 
-// Reports the number of registered probes. For tests only.
+// WithOnce mode can be used if you want to run all configured probes once
+// rather than on a schedule.
+func (p *Prober) WithOnce(s bool) *Prober {
+	p.once = s
+	return p
+}
+
+// Wait blocks until all probes have finished execution. It should typically
+// be used with the `once` mode to wait for probes to finish before collecting
+// their results.
+func (p *Prober) Wait() {
+	for {
+		chans := make([]chan struct{}, 0)
+		p.mu.Lock()
+		for _, p := range p.probes {
+			chans = append(chans, p.stopped)
+		}
+		p.mu.Unlock()
+		for _, c := range chans {
+			<-c
+		}
+
+		// Since probes can add other probes, retry if the number of probes has changed.
+		if p.activeProbes() != len(chans) {
+			continue
+		}
+		return
+	}
+}
+
+// Reports the number of registered probes.
 func (p *Prober) activeProbes() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -123,10 +161,11 @@ type Probe struct {
 	tick         ticker
 	labels       map[string]string
 
-	mu     sync.Mutex
-	start  time.Time // last time doProbe started
-	end    time.Time // last time doProbe returned
-	result bool      // whether the last doProbe call succeeded
+	mu      sync.Mutex
+	start   time.Time // last time doProbe started
+	end     time.Time // last time doProbe returned
+	result  bool      // whether the last doProbe call succeeded
+	lastErr error
 }
 
 // Close shuts down the Probe and unregisters it from its Prober.
@@ -155,6 +194,10 @@ func (p *Probe) loop() {
 		t.Stop()
 	} else {
 		p.run()
+	}
+
+	if p.prober.once {
+		return
 	}
 
 	p.tick = p.prober.newTicker(p.interval)
@@ -212,26 +255,26 @@ func (p *Probe) recordEnd(start time.Time, err error) {
 	defer p.mu.Unlock()
 	p.end = end
 	p.result = err == nil
+	p.lastErr = err
 }
 
 type varExporter struct {
 	p *Prober
 }
 
-// probeInfo is the state of a Probe. Used in expvar-format debug
+// ProbeInfo is the state of a Probe. Used in expvar-format debug
 // data.
-type probeInfo struct {
+type ProbeInfo struct {
 	Labels  map[string]string
 	Start   time.Time
 	End     time.Time
 	Latency string // as a string because time.Duration doesn't encode readably to JSON
 	Result  bool
+	Error   string
 }
 
-// String implements expvar.Var, returning the prober's state as an
-// encoded JSON map of probe name to its probeInfo.
-func (v varExporter) String() string {
-	out := map[string]probeInfo{}
+func (v varExporter) probeInfo() map[string]ProbeInfo {
+	out := map[string]ProbeInfo{}
 
 	v.p.mu.Lock()
 	probes := make([]*Probe, 0, len(v.p.probes))
@@ -242,11 +285,14 @@ func (v varExporter) String() string {
 
 	for _, probe := range probes {
 		probe.mu.Lock()
-		inf := probeInfo{
+		inf := ProbeInfo{
 			Labels: probe.labels,
 			Start:  probe.start,
 			End:    probe.end,
 			Result: probe.result,
+		}
+		if probe.lastErr != nil {
+			inf.Error = probe.lastErr.Error()
 		}
 		if probe.end.After(probe.start) {
 			inf.Latency = probe.end.Sub(probe.start).String()
@@ -254,8 +300,13 @@ func (v varExporter) String() string {
 		out[probe.name] = inf
 		probe.mu.Unlock()
 	}
+	return out
+}
 
-	bs, err := json.Marshal(out)
+// String implements expvar.Var, returning the prober's state as an
+// encoded JSON map of probe name to its ProbeInfo.
+func (v varExporter) String() string {
+	bs, err := json.Marshal(v.probeInfo())
 	if err != nil {
 		return fmt.Sprintf(`{"error": %q}`, err)
 	}
