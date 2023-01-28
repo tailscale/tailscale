@@ -23,19 +23,20 @@ set -eu
 export PATH=$PWD/tool:$PATH
 
 eval $(./build_dist.sh shellvars)
-DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
-DEFAULT_REPOS="tailscale/tailscale"
-DEFAULT_BASE="ghcr.io/tailscale/alpine-base:3.16"
+
 DEFAULT_TARGET="client"
+DEFAULT_TAGS="v${VERSION_SHORT},v${VERSION_MINOR}"
+DEFAULT_BASE="ghcr.io/tailscale/alpine-base:3.16"
 
 PUSH="${PUSH:-false}"
-REPOS="${REPOS:-${DEFAULT_REPOS}}"
+TARGET="${TARGET:-${DEFAULT_TARGET}}"
 TAGS="${TAGS:-${DEFAULT_TAGS}}"
 BASE="${BASE:-${DEFAULT_BASE}}"
-TARGET="${TARGET:-${DEFAULT_TARGET}}"
 
 case "$TARGET" in
   client)
+    DEFAULT_REPOS="tailscale/tailscale"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
       --gopaths="\
         tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
@@ -52,6 +53,8 @@ case "$TARGET" in
       /usr/local/bin/containerboot
     ;;
   operator)
+    DEFAULT_REPOS="tailscale/k8s-operator"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
     go run github.com/tailscale/mkctr \
       --gopaths="tailscale.com/cmd/k8s-operator:/usr/local/bin/operator" \
       --ldflags="\
