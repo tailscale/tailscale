@@ -3994,24 +3994,6 @@ func (b *LocalBackend) OperatorUserID() string {
 	return u.Uid
 }
 
-// TestOnlyPublicKeys returns the current machine and node public
-// keys. Used in tests only to facilitate automated node authorization
-// in the test harness.
-func (b *LocalBackend) TestOnlyPublicKeys() (machineKey key.MachinePublic, nodeKey key.NodePublic) {
-	b.mu.Lock()
-	machinePrivKey := b.machinePrivKey
-	prefs := b.pm.CurrentPrefs()
-	b.mu.Unlock()
-
-	if !prefs.Valid() || machinePrivKey.IsZero() {
-		return
-	}
-
-	mk := machinePrivKey.Public()
-	nk := prefs.Persist().PublicNodeKey()
-	return mk, nk
-}
-
 func (b *LocalBackend) removeFileWaiter(handle set.Handle) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
