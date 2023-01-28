@@ -145,7 +145,7 @@ spec:
             - name: CLIENT_SECRET_FILE
               value: /oauth/client_secret
             - name: PROXY_IMAGE
-              value: tailscale/tailscale:latest
+              value: tailscale/tailscale:unstable
             - name: PROXY_TAGS
               value: tag:k8s
           volumeMounts:
