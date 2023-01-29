@@ -4,9 +4,16 @@
 package localapi
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/hostinfo"
+	"tailscale.com/ipn/ipnlocal"
 )
 
 func TestValidHost(t *testing.T) {
@@ -30,5 +37,45 @@ func TestValidHost(t *testing.T) {
 				t.Errorf("validHost(%q)=%v, want %v", test.host, got, test.valid)
 			}
 		})
+	}
+}
+
+func TestSetPushDeviceToken(t *testing.T) {
+	origValidLocalHost := validLocalHost
+	validLocalHost = true
+	defer func() {
+		validLocalHost = origValidLocalHost
+	}()
+
+	h := &Handler{
+		PermitWrite: true,
+		b:           &ipnlocal.LocalBackend{},
+	}
+	s := httptest.NewServer(h)
+	defer s.Close()
+	c := s.Client()
+
+	want := "my-test-device-token"
+	body, err := json.Marshal(apitype.SetPushDeviceTokenRequest{PushDeviceToken: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest("POST", s.URL+"/localapi/v0/set-push-device-token", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != 200 {
+		t.Errorf("res.StatusCode=%d, want 200. body: %s", res.StatusCode, body)
+	}
+	if got := hostinfo.New().PushDeviceToken; got != want {
+		t.Errorf("hostinfo.PushDeviceToken=%q, want %q", got, want)
 	}
 }

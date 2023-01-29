@@ -525,6 +525,7 @@ type Hostinfo struct {
 	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
 	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")
+	PushDeviceToken string         `json:",omitempty"` // macOS/iOS APNs device token for notifications (and Android in the future)
 	Hostname        string         `json:",omitempty"` // name of the host the client runs on
 	ShieldsUp       bool           `json:",omitempty"` // indicates whether the host is blocking incoming connections
 	ShareeNode      bool           `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user

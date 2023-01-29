@@ -1811,6 +1811,21 @@ func (b *LocalBackend) readPoller() {
 	}
 }
 
+// ResendHostinfoIfNeeded is called to recompute the Hostinfo and send
+// the new version to the control server.
+func (b *LocalBackend) ResendHostinfoIfNeeded() {
+	hi := hostinfo.New()
+
+	b.mu.Lock()
+	if b.hostinfo != nil {
+		hi.Services = b.hostinfo.Services
+	}
+	b.hostinfo = hi
+	b.mu.Unlock()
+
+	b.doSetHostinfoFilterServices(hi)
+}
+
 // WatchNotifications subscribes to the ipn.Notify message bus notification
 // messages.
 //

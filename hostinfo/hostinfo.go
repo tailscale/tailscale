@@ -50,6 +50,7 @@ func New() *tailcfg.Hostinfo {
 		GoVersion:       runtime.Version(),
 		Machine:         condCall(unameMachine),
 		DeviceModel:     deviceModel(),
+		PushDeviceToken: pushDeviceToken(),
 		Cloud:           string(cloudenv.Get()),
 		NoLogsNoSupport: envknob.NoLogsNoSupport(),
 		AllowsUpdate:    envknob.AllowsRemoteUpdate(),
@@ -153,11 +154,15 @@ func GetEnvType() EnvType {
 }
 
 var (
-	deviceModelAtomic atomic.Value // of string
-	osVersionAtomic   atomic.Value // of string
-	desktopAtomic     atomic.Value // of opt.Bool
-	packagingType     atomic.Value // of string
+	pushDeviceTokenAtomic atomic.Value // of string
+	deviceModelAtomic     atomic.Value // of string
+	osVersionAtomic       atomic.Value // of string
+	desktopAtomic         atomic.Value // of opt.Bool
+	packagingType         atomic.Value // of string
 )
+
+// SetPushDeviceToken sets the device token for use in Hostinfo updates.
+func SetPushDeviceToken(token string) { pushDeviceTokenAtomic.Store(token) }
 
 // SetDeviceModel sets the device model for use in Hostinfo updates.
 func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
@@ -173,6 +178,11 @@ func SetPackage(v string) { packagingType.Store(v) }
 
 func deviceModel() string {
 	s, _ := deviceModelAtomic.Load().(string)
+	return s
+}
+
+func pushDeviceToken() string {
+	s, _ := pushDeviceTokenAtomic.Load().(string)
 	return s
 }
 
