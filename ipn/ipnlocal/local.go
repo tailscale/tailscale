@@ -2965,8 +2965,9 @@ func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS s
 // a runtime.GOOS.
 func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.Logf, versionOS string) *dns.Config {
 	dcfg := &dns.Config{
-		Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
-		Hosts:  map[dnsname.FQDN][]netip.Addr{},
+		Routes:          map[dnsname.FQDN][]*dnstype.Resolver{},
+		Hosts:           map[dnsname.FQDN][]netip.Addr{},
+		OnDemandDomains: append([]string(nil), nm.DNS.OnDemandDomains...),
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.

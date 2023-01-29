@@ -63,10 +63,18 @@ type OSConfig struct {
 	// from the OS, which will only work with OSConfigurators that
 	// report SupportsSplitDNS()=true.
 	MatchDomains []dnsname.FQDN
+	// OnDemandDomains are the set of domain names for which the OS
+	// should enable the tailscale client, if it is not already running.
+	//
+	// This is plumbed through to the onDemand rules of
+	// NETunnelProviderManager on macOS/iOS.
+	//
+	// The typical OnDemandDomains is ["ts.net"].
+	OnDemandDomains []string
 }
 
 func (o OSConfig) IsZero() bool {
-	return len(o.Nameservers) == 0 && len(o.SearchDomains) == 0 && len(o.MatchDomains) == 0
+	return len(o.Nameservers) == 0 && len(o.SearchDomains) == 0 && len(o.MatchDomains) == 0 && len(o.OnDemandDomains) == 0
 }
 
 func (a OSConfig) Equal(b OSConfig) bool {
@@ -92,6 +100,11 @@ func (a OSConfig) Equal(b OSConfig) bool {
 	}
 	for i := range a.MatchDomains {
 		if a.MatchDomains[i] != b.MatchDomains[i] {
+			return false
+		}
+	}
+	for i := range a.OnDemandDomains {
+		if a.OnDemandDomains[i] != b.OnDemandDomains[i] {
 			return false
 		}
 	}
@@ -121,6 +134,13 @@ func (a OSConfig) Format(f fmt.State, verb rune) {
 		}
 		w.WriteString(`] MatchDomains:[`)
 		for i, domain := range a.MatchDomains {
+			if i != 0 {
+				w.WriteString(" ")
+			}
+			fmt.Fprintf(w, "%+v", domain)
+		}
+		w.WriteString(`] OnDemandDomains:[`)
+		for i, domain := range a.OnDemandDomains {
 			if i != 0 {
 				w.WriteString(" ")
 			}

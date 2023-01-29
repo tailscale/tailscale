@@ -1190,6 +1190,15 @@ type DNSConfig struct {
 	//
 	// Matches are case insensitive.
 	ExitNodeFilteredSet []string
+
+	// OnDemandDomains are the set of domain names for which the OS
+	// should enable the tailscale client, if it is not already running.
+	//
+	// This is plumbed through to the onDemand rules of
+	// NETunnelProviderManager on macOS/iOS.
+	//
+	// The typical OnDemandDomains is ["ts.net"].
+	OnDemandDomains []string `json:",omitempty"`
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.

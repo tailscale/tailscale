@@ -44,6 +44,14 @@ type Config struct {
 	// OnlyIPv6, if true, uses the IPv6 service IP (for MagicDNS)
 	// instead of the IPv4 version (100.100.100.100).
 	OnlyIPv6 bool
+	// OnDemandDomains are the set of domain names for which the OS
+	// should enable the tailscale client, if it is not already running.
+	//
+	// This is plumbed through to the onDemand rules of
+	// NETunnelProviderManager on macOS/iOS.
+	//
+	// The typical OnDemandDomains is ["ts.net"].
+	OnDemandDomains []string `json:",omitempty"`
 }
 
 func (c *Config) serviceIP() netip.Addr {

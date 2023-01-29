@@ -305,6 +305,22 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
+		{
+			name: "on_demand_domains",
+			nm: &netmap.NetworkMap{
+				DNS: tailcfg.DNSConfig{
+					OnDemandDomains: []string{"ts.net"},
+				},
+			},
+			prefs: &ipn.Prefs{
+				CorpDNS: true,
+			},
+			want: &dns.Config{
+				Hosts:           map[dnsname.FQDN][]netip.Addr{},
+				Routes:          map[dnsname.FQDN][]*dnstype.Resolver{},
+				OnDemandDomains: []string{"ts.net"},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

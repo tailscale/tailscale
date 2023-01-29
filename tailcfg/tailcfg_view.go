@@ -533,6 +533,9 @@ func (v DNSConfigView) ExtraRecords() views.Slice[DNSRecord] { return views.Slic
 func (v DNSConfigView) ExitNodeFilteredSet() views.Slice[string] {
 	return views.SliceOf(v.ж.ExitNodeFilteredSet)
 }
+func (v DNSConfigView) OnDemandDomains() views.Slice[string] {
+	return views.SliceOf(v.ж.OnDemandDomains)
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
@@ -545,6 +548,7 @@ var _DNSConfigViewNeedsRegeneration = DNSConfig(struct {
 	CertDomains         []string
 	ExtraRecords        []DNSRecord
 	ExitNodeFilteredSet []string
+	OnDemandDomains     []string
 }{})
 
 // View returns a readonly view of RegisterResponse.

@@ -234,6 +234,7 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	dst.CertDomains = append(src.CertDomains[:0:0], src.CertDomains...)
 	dst.ExtraRecords = append(src.ExtraRecords[:0:0], src.ExtraRecords...)
 	dst.ExitNodeFilteredSet = append(src.ExitNodeFilteredSet[:0:0], src.ExitNodeFilteredSet...)
+	dst.OnDemandDomains = append(src.OnDemandDomains[:0:0], src.OnDemandDomains...)
 	return dst
 }
 
@@ -248,6 +249,7 @@ var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
 	CertDomains         []string
 	ExtraRecords        []DNSRecord
 	ExitNodeFilteredSet []string
+	OnDemandDomains     []string
 }{})
 
 // Clone makes a deep copy of RegisterResponse.
