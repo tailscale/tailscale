@@ -32,3 +32,9 @@ type WaitingFile struct {
 	Name string
 	Size int64
 }
+
+// SetPushDeviceTokenRequest is the body POSTed to the LocalAPI endpoint /set-device-token.
+type SetPushDeviceTokenRequest struct {
+	// PushDeviceToken is the iOS/macOS APNs device token (and any future Android equivalent).
+	PushDeviceToken string
+}

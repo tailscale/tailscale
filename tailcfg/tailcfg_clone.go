@@ -131,6 +131,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Desktop         opt.Bool
 	Package         string
 	DeviceModel     string
+	PushDeviceToken string
 	Hostname        string
 	ShieldsUp       bool
 	ShareeNode      bool

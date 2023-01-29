@@ -44,6 +44,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Desktop",
 		"Package",
 		"DeviceModel",
+		"PushDeviceToken",
 		"Hostname",
 		"ShieldsUp",
 		"ShareeNode",
