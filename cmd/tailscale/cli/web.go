@@ -228,33 +228,48 @@ func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
 	return "", nil, fmt.Errorf("not authenticated by any mechanism")
 }
 
+// qnapAuthnURL returns the auth URL to use by inferring where the UI is
+// running based on the request URL. This is necessary because QNAP has so
+// many options, see https://github.com/tailscale/tailscale/issues/7108
+// and https://github.com/tailscale/tailscale/issues/6903
+func qnapAuthnURL(requestUrl string, query url.Values) string {
+	in, err := url.Parse(requestUrl)
+	scheme := ""
+	host := ""
+	if err != nil || in.Scheme == "" {
+		log.Printf("Cannot parse QNAP login URL %v", err)
+
+		// try localhost and hope for the best
+		scheme = "http"
+		host = "localhost"
+	} else {
+		scheme = in.Scheme
+		host = in.Host
+	}
+
+	u := url.URL{
+		Scheme:   scheme,
+		Host:     host,
+		Path:     "/cgi-bin/authLogin.cgi",
+		RawQuery: query.Encode(),
+	}
+
+	return u.String()
+}
+
 func qnapAuthnQtoken(r *http.Request, user, token string) (string, *qnapAuthResponse, error) {
 	query := url.Values{
 		"qtoken": []string{token},
 		"user":   []string{user},
 	}
-	u := url.URL{
-		Scheme:   "http",
-		Host:     "127.0.0.1:8080",
-		Path:     "/cgi-bin/authLogin.cgi",
-		RawQuery: query.Encode(),
-	}
-
-	return qnapAuthnFinish(user, u.String())
+	return qnapAuthnFinish(user, qnapAuthnURL(r.URL.String(), query))
 }
 
 func qnapAuthnSid(r *http.Request, user, sid string) (string, *qnapAuthResponse, error) {
 	query := url.Values{
 		"sid": []string{sid},
 	}
-	u := url.URL{
-		Scheme:   "http",
-		Host:     "127.0.0.1:8080",
-		Path:     "/cgi-bin/authLogin.cgi",
-		RawQuery: query.Encode(),
-	}
-
-	return qnapAuthnFinish(user, u.String())
+	return qnapAuthnFinish(user, qnapAuthnURL(r.URL.String(), query))
 }
 
 func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
