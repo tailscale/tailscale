@@ -179,6 +179,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// validLocalHost allows either localhost or loopback IP hosts on platforms
+// that use token security.
+var validLocalHost = runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "android"
+
 // validHost reports whether h is a valid Host header value for a LocalAPI request.
 func validHost(h string) bool {
 	// The client code sends a hostname of "local-tailscaled.sock".
@@ -186,7 +190,9 @@ func validHost(h string) bool {
 	case "", apitype.LocalAPIHost:
 		return true
 	}
-	// Allow either localhost or loopback IP hosts.
+	if !validLocalHost {
+		return false
+	}
 	host, _, err := net.SplitHostPort(h)
 	if err != nil {
 		return false
@@ -194,7 +200,7 @@ func validHost(h string) bool {
 	if host == "localhost" {
 		return true
 	}
-	addr, err := netip.ParseAddr(h)
+	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false
 	}
