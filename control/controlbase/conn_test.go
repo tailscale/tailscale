@@ -21,7 +21,7 @@ import (
 
 	chp "golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/nettest"
-	tsnettest "tailscale.com/net/nettest"
+	"tailscale.com/net/memnet"
 	"tailscale.com/types/key"
 )
 
@@ -82,7 +82,7 @@ func (c *bufferedWriteConn) Write(bs []byte) (int, error) {
 // Noise frames at once and decode each in turn without making another
 // syscall.
 func TestFastPath(t *testing.T) {
-	s1, s2 := tsnettest.NewConn("noise", 128000)
+	s1, s2 := memnet.NewConn("noise", 128000)
 	b := &bufferedWriteConn{s1, bufio.NewWriterSize(s1, 10000), false}
 	client, server := pairWithConns(t, b, s2)
 
@@ -175,7 +175,7 @@ func (c readerConn) Read(bs []byte) (int, error) { return c.r.Read(bs) }
 // Check that the receiver can handle not being able to read an entire
 // frame in a single syscall.
 func TestDataTrickle(t *testing.T) {
-	s1, s2 := tsnettest.NewConn("noise", 128000)
+	s1, s2 := memnet.NewConn("noise", 128000)
 	client, server := pairWithConns(t, s1, readerConn{s2, iotest.OneByteReader(s2)})
 	serverReads := sinkReads(server)
 
@@ -199,7 +199,7 @@ func TestConnStd(t *testing.T) {
 	// they're not on our Conn due to cipher security.
 	t.Skip("not all tests can pass on this Conn, see https://github.com/golang/go/issues/46977")
 	nettest.TestConn(t, func() (c1 net.Conn, c2 net.Conn, stop func(), err error) {
-		s1, s2 := tsnettest.NewConn("noise", 4096)
+		s1, s2 := memnet.NewConn("noise", 4096)
 		controlKey := key.NewMachine()
 		machineKey := key.NewMachine()
 		serverErr := make(chan error, 1)
@@ -412,6 +412,6 @@ func pairWithConns(t *testing.T, clientConn, serverConn net.Conn) (*Conn, *Conn)
 }
 
 func pair(t *testing.T) (*Conn, *Conn) {
-	s1, s2 := tsnettest.NewConn("noise", 128000)
+	s1, s2 := memnet.NewConn("noise", 128000)
 	return pairWithConns(t, s1, s2)
 }

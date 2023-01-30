@@ -25,7 +25,7 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
-	"tailscale.com/net/nettest"
+	"tailscale.com/net/memnet"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -235,9 +235,9 @@ func TestSendFreeze(t *testing.T) {
 	// Then cathy stops processing messages.
 	// That should not interfere with alice talking to bob.
 
-	newClient := func(ctx context.Context, name string, k key.NodePrivate) (c *Client, clientConn nettest.Conn) {
+	newClient := func(ctx context.Context, name string, k key.NodePrivate) (c *Client, clientConn memnet.Conn) {
 		t.Helper()
-		c1, c2 := nettest.NewConn(name, 1024)
+		c1, c2 := memnet.NewConn(name, 1024)
 		go s.Accept(ctx, c1, bufio.NewReadWriter(bufio.NewReader(c1), bufio.NewWriter(c1)), name)
 
 		brw := bufio.NewReadWriter(bufio.NewReader(c2), bufio.NewWriter(c2))
