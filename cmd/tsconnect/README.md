@@ -11,7 +11,7 @@ To start the development server:
 ./tool/go run ./cmd/tsconnect dev
 ```
 
-The site is served at http://localhost:9090/. JavaScript and CSS changes can be picked up with a browser reload. Go changes (including to the `wasm` package) require the server to be stopped and restarted. In development mode the state the Tailscale client is stored in `sessionStorage` and will thus survive page reloads (but not the tab being closed).
+The site is served at http://localhost:9090/. JavaScript, CSS and Go `wasm` package changes can be picked up with a browser reload. Server-side Go changes require the server to be stopped and restarted. In development mode the state the Tailscale client state is stored in `sessionStorage` and will thus survive page reloads (but not the tab being closed).
 
 ## Deployment
 

@@ -124,7 +124,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 
 	logid := lpc.PublicID.String()
 	srv := ipnserver.New(logf, logid)
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "wasm", dialer, eng, controlclient.LoginEphemeral)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, eng, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
 	}
