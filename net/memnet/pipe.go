@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package nettest
+package memnet
 
 import (
 	"bytes"
@@ -216,10 +216,10 @@ func (p *Pipe) Block() error {
 	p.blocked = true
 
 	if closed {
-		return fmt.Errorf("nettest.Pipe(%q).Block: closed", p.name)
+		return fmt.Errorf("memnet.Pipe(%q).Block: closed", p.name)
 	}
 	if blocked {
-		return fmt.Errorf("nettest.Pipe(%q).Block: already blocked", p.name)
+		return fmt.Errorf("memnet.Pipe(%q).Block: already blocked", p.name)
 	}
 	p.cnd.Broadcast()
 	return nil
@@ -234,10 +234,10 @@ func (p *Pipe) Unblock() error {
 	p.blocked = false
 
 	if closed {
-		return fmt.Errorf("nettest.Pipe(%q).Block: closed", p.name)
+		return fmt.Errorf("memnet.Pipe(%q).Block: closed", p.name)
 	}
 	if !blocked {
-		return fmt.Errorf("nettest.Pipe(%q).Block: already unblocked", p.name)
+		return fmt.Errorf("memnet.Pipe(%q).Block: already unblocked", p.name)
 	}
 	p.cnd.Broadcast()
 	return nil

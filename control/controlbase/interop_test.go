@@ -11,14 +11,14 @@ import (
 	"net"
 	"testing"
 
-	tsnettest "tailscale.com/net/nettest"
+	"tailscale.com/net/memnet"
 	"tailscale.com/types/key"
 )
 
 // Can a reference Noise IK client talk to our server?
 func TestInteropClient(t *testing.T) {
 	var (
-		s1, s2      = tsnettest.NewConn("noise", 128000)
+		s1, s2      = memnet.NewConn("noise", 128000)
 		controlKey  = key.NewMachine()
 		machineKey  = key.NewMachine()
 		serverErr   = make(chan error, 2)
@@ -66,7 +66,7 @@ func TestInteropClient(t *testing.T) {
 // Can our client talk to a reference Noise IK server?
 func TestInteropServer(t *testing.T) {
 	var (
-		s1, s2      = tsnettest.NewConn("noise", 128000)
+		s1, s2      = memnet.NewConn("noise", 128000)
 		controlKey  = key.NewMachine()
 		machineKey  = key.NewMachine()
 		clientErr   = make(chan error, 2)

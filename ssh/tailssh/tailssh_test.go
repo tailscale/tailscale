@@ -32,7 +32,7 @@ import (
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/net/nettest"
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
@@ -429,7 +429,7 @@ func TestSSHAuthFlow(t *testing.T) {
 	src, dst := must.Get(netip.ParseAddrPort("100.100.100.101:2231")), must.Get(netip.ParseAddrPort("100.100.100.102:22"))
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sc, dc := nettest.NewTCPConn(src, dst, 1024)
+			sc, dc := memnet.NewTCPConn(src, dst, 1024)
 			s.lb = tc.state
 			sshUser := "alice"
 			if tc.sshUser != "" {

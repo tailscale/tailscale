@@ -34,7 +34,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
-	"tailscale.com/net/nettest"
+	"tailscale.com/net/memnet"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
@@ -380,8 +380,7 @@ func (s *Server) start() (reterr error) {
 
 	// Create an in-process listener.
 	// nettest.Listen provides a in-memory pipe based implementation for net.Conn.
-	// TODO(maisem): Rename nettest package to remove "test".
-	lal := nettest.Listen("local-tailscaled.sock:80")
+	lal := memnet.Listen("local-tailscaled.sock:80")
 	s.localAPIListener = lal
 	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
 	go func() {
