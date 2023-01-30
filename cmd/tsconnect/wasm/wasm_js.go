@@ -301,7 +301,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 	}()
 
 	go func() {
-		ln, _, err := safesocket.Listen("", 0)
+		ln, err := safesocket.Listen("")
 		if err != nil {
 			log.Fatalf("safesocket.Listen: %v", err)
 		}

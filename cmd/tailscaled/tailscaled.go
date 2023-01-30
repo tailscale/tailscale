@@ -382,7 +382,7 @@ func run() error {
 }
 
 func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
-	ln, _, err := safesocket.Listen(args.socketpath, safesocket.WindowsLocalPort)
+	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}

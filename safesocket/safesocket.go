@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-// WindowsLocalPort is the default localhost TCP port
-// used by safesocket on Windows.
-const WindowsLocalPort = 41112
-
 type closeable interface {
 	CloseRead() error
 	CloseWrite() error
@@ -95,7 +91,7 @@ type ConnectionStrategy struct {
 // It falls back to auto-discovery across sandbox boundaries on macOS.
 // TODO: maybe take no arguments, since path is irrelevant on Windows? Discussion in PR 3499.
 func DefaultConnectionStrategy(path string) *ConnectionStrategy {
-	return &ConnectionStrategy{path: path, port: WindowsLocalPort}
+	return &ConnectionStrategy{path: path}
 }
 
 // Connect connects to tailscaled using s
@@ -111,10 +107,9 @@ func Connect(s *ConnectionStrategy) (net.Conn, error) {
 }
 
 // Listen returns a listener either on Unix socket path (on Unix), or
-// the localhost port (on Windows).
-// If port is 0, the returned gotPort says which port was selected on Windows.
-func Listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
-	return listen(path, port)
+// the NamedPipe path (on Windows).
+func Listen(path string) (net.Listener, error) {
+	return listen(path)
 }
 
 var (

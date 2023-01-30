@@ -26,7 +26,7 @@ func setFlags(network, address string, c syscall.RawConn) error {
 // It provides read/write access to all users and the local system.
 const windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
 
-func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
+func listen(path string) (net.Listener, error) {
 	lc, err := winio.ListenPipe(
 		path,
 		&winio.PipeConfig{
@@ -36,7 +36,7 @@ func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) 
 		},
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("namedpipe.Listen: %w", err)
+		return nil, fmt.Errorf("namedpipe.Listen: %w", err)
 	}
-	return lc, 0, nil
+	return lc, nil
 }

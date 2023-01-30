@@ -11,9 +11,8 @@ import (
 
 const memName = "Tailscale-IPN"
 
-func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
-	ln, err := memconn.Listen("memu", memName)
-	return ln, 1, err
+func listen(path string) (net.Listener, error) {
+	return memconn.Listen("memu", memName)
 }
 
 func connect(_ *ConnectionStrategy) (net.Conn, error) {

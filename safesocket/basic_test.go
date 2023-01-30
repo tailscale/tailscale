@@ -21,7 +21,7 @@ func TestBasics(t *testing.T) {
 		sock = fmt.Sprintf(`\\.\pipe\tailscale-test`)
 	}
 
-	l, port, err := Listen(sock, 0)
+	l, err := Listen(sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,6 @@ func TestBasics(t *testing.T) {
 
 	go func() {
 		s := DefaultConnectionStrategy(sock)
-		s.port = port
 		c, err := Connect(s)
 		if err != nil {
 			errs <- err

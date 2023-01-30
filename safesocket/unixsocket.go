@@ -23,7 +23,7 @@ func connect(s *ConnectionStrategy) (net.Conn, error) {
 	return net.Dial("unix", s.path)
 }
 
-func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
+func listen(path string) (net.Listener, error) {
 	// Unix sockets hang around in the filesystem even after nobody
 	// is listening on them. (Which is really unfortunate but long-
 	// entrenched semantics.) Try connecting first; if it works, then
@@ -38,9 +38,9 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	if err == nil {
 		c.Close()
 		if tailscaledRunningUnderLaunchd() {
-			return nil, 0, fmt.Errorf("%v: address already in use; tailscaled already running under launchd (to stop, run: $ sudo launchctl stop com.tailscale.tailscaled)", path)
+			return nil, fmt.Errorf("%v: address already in use; tailscaled already running under launchd (to stop, run: $ sudo launchctl stop com.tailscale.tailscaled)", path)
 		}
-		return nil, 0, fmt.Errorf("%v: address already in use", path)
+		return nil, fmt.Errorf("%v: address already in use", path)
 	}
 	_ = os.Remove(path)
 
@@ -66,10 +66,10 @@ func listen(path string, port uint16) (ln net.Listener, _ uint16, err error) {
 	}
 	pipe, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	os.Chmod(path, perm)
-	return pipe, 0, err
+	return pipe, err
 }
 
 func tailscaledRunningUnderLaunchd() bool {

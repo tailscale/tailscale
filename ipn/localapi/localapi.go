@@ -35,7 +35,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/net/netutil"
-	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -188,15 +187,8 @@ func validHost(h string) bool {
 		return true
 	}
 	// Allow either localhost or loopback IP hosts.
-	host, portStr, err := net.SplitHostPort(h)
+	host, _, err := net.SplitHostPort(h)
 	if err != nil {
-		return false
-	}
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return false
-	}
-	if runtime.GOOS == "windows" && port != safesocket.WindowsLocalPort {
 		return false
 	}
 	if host == "localhost" {
