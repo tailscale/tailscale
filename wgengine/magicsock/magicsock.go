@@ -3747,10 +3747,10 @@ type endpointState struct {
 	// updated and use it to discard old candidates.
 	lastGotPing time.Time
 
-	// lastGotPingTxID, if lastGotPing is non-zero, contains the TxID for the
-	// last incoming ping. This is used to de-dup incoming pings that we may
-	// see on both the raw disco socket on Linux, and UDP socket. We cannot rely
-	// solely on the raw socket disco handling due to https://github.com/tailscale/tailscale/issues/7078.
+	// lastGotPingTxID contains the TxID for the last incoming ping. This is
+	// used to de-dup incoming pings that we may see on both the raw disco
+	// socket on Linux, and UDP socket. We cannot rely solely on the raw socket
+	// disco handling due to https://github.com/tailscale/tailscale/issues/7078.
 	lastGotPingTxID stun.TxID
 
 	// callMeMaybeTime, if non-zero, is the time this endpoint
@@ -4219,16 +4219,16 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 	defer de.mu.Unlock()
 
 	if st, ok := de.endpointState[ep]; ok {
+		duplicatePing = forRxPingTxID == st.lastGotPingTxID
+		if !duplicatePing {
+			st.lastGotPingTxID = forRxPingTxID
+		}
 		if st.lastGotPing.IsZero() {
 			// Already-known endpoint from the network map.
-			return false
-		}
-		if forRxPingTxID == st.lastGotPingTxID {
-			return true
+			return duplicatePing
 		}
 		st.lastGotPing = time.Now()
-		st.lastGotPingTxID = forRxPingTxID
-		return false
+		return duplicatePing
 	}
 
 	// Newly discovered endpoint. Exciting!
