@@ -491,7 +491,7 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
 	t.Cleanup(eng.Close)
-	lb, err := NewLocalBackend(logf, "logid", store, "default", nil, eng, 0)
+	lb, err := NewLocalBackend(logf, "logid", store, nil, eng, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestStatusWithoutPeers(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	b, err := NewLocalBackend(logf, "logid", store, "", nil, e, 0)
+	b, err := NewLocalBackend(logf, "logid", store, nil, e, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}

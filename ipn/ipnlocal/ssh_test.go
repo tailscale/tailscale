@@ -49,7 +49,7 @@ type fakeSSHServer struct {
 }
 
 func TestGetSSHUsernames(t *testing.T) {
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	b := &LocalBackend{pm: pm, store: pm.Store()}
 	b.sshServer = fakeSSHServer{}
 	res, err := b.getSSHUsernames(new(tailcfg.C2NSSHUsernamesRequest))

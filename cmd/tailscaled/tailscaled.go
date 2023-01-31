@@ -520,7 +520,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, "", dialer, e, opts.LoginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, e, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}

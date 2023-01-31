@@ -243,12 +243,12 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, stateKey ipn.StateKey, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: engine must not be nil")
 	}
 
-	pm, err := newProfileManager(store, logf, stateKey)
+	pm, err := newProfileManager(store, logf)
 	if err != nil {
 		return nil, err
 	}
