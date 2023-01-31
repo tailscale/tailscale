@@ -141,7 +141,7 @@ func TestTKAEnablementFlow(t *testing.T) {
 	temp := t.TempDir()
 
 	cc := fakeControlClient(t, client)
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -182,7 +182,7 @@ func TestTKADisablementFlow(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -377,7 +377,7 @@ func TestTKASync(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			nodePriv := key.NewNode()
 			nlPriv := key.NewNLPrivate()
-			pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+			pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 			must.Do(pm.SetPrefs((&ipn.Prefs{
 				Persist: &persist.Persist{
 					PrivateNodeKey: nodePriv,
@@ -604,7 +604,7 @@ func TestTKADisable(t *testing.T) {
 	disablementSecret := bytes.Repeat([]byte{0xa5}, 32)
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -697,7 +697,7 @@ func TestTKASign(t *testing.T) {
 	toSign := key.NewNode()
 	nlPriv := key.NewNLPrivate()
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,
@@ -788,7 +788,7 @@ func TestTKAForceDisable(t *testing.T) {
 	nlPriv := key.NewNLPrivate()
 	key := tka.Key{Kind: tka.Key25519, Public: nlPriv.Public().Verifier(), Votes: 2}
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	must.Do(pm.SetPrefs((&ipn.Prefs{
 		Persist: &persist.Persist{
 			PrivateNodeKey: nodePriv,

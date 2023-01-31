@@ -18,7 +18,7 @@ import (
 func TestProfileCurrentUserSwitch(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 		t.Fatalf("CurrentPrefs() = %v, want emptyPrefs", pm.CurrentPrefs().Pretty())
 	}
 
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 func TestProfileList(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestProfileList(t *testing.T) {
 func TestProfileManagement(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Recreate profile manager from store")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestProfileManagement(t *testing.T) {
 	t.Logf("Recreate profile manager from store after deleting default profile")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "linux")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestProfileManagement(t *testing.T) {
 func TestProfileManagementWindows(t *testing.T) {
 	store := new(mem.Store)
 
-	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "", "windows")
+	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "windows")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestProfileManagementWindows(t *testing.T) {
 	t.Logf("Recreate profile manager from store, should reset prefs")
 	// Recreate the profile manager to ensure that it can load the profiles
 	// from the store at startup.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "windows")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "windows")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestProfileManagementWindows(t *testing.T) {
 	}
 
 	// Recreate the profile manager to ensure that it starts with test profile.
-	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "", "windows")
+	pm, err = newProfileManagerWithGOOS(store, logger.Discard, "windows")
 	if err != nil {
 		t.Fatal(err)
 	}

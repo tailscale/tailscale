@@ -642,7 +642,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 	h.remoteAddr = netip.MustParseAddrPort("100.150.151.152:12345")
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf, ""))
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
 	h.ps = &peerAPIServer{
 		b: &LocalBackend{
 			e:     eng,
