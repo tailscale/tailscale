@@ -234,7 +234,7 @@ func runWasmOpt(path string) error {
 		return fmt.Errorf("Cannot stat %v: %w", path, err)
 	}
 	startSize := stat.Size()
-	cmd := exec.Command("../../tool/wasm-opt", "-Oz", path, "-o", path)
+	cmd := exec.Command("../../tool/wasm-opt", "--enable-bulk-memory", "-Oz", path, "-o", path)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
