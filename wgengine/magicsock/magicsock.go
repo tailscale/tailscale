@@ -3010,6 +3010,8 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 	return nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, network, addr)
 }
 
+var debugBindSocket = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_BIND_SOCKET")
+
 // bindSocket initializes rucPtr if necessary and binds a UDP socket to it.
 // Network indicates the UDP socket type; it must be "udp4" or "udp6".
 // If rucPtr had an existing UDP socket bound, it closes that socket.
@@ -3017,6 +3019,10 @@ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, er
 // If curPortFate is set to dropCurrentPort, no attempt is made to reuse
 // the current port.
 func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate currentPortFate) error {
+	if debugBindSocket() {
+		c.logf("magicsock: bindSocket: network=%q curPortFate=%v", network, curPortFate)
+	}
+
 	// Hold the ruc lock the entire time, so that the close+bind is atomic
 	// from the perspective of ruc receive functions.
 	ruc.mu.Lock()
@@ -3049,6 +3055,10 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 	// Remove duplicates. (All duplicates are consecutive.)
 	uniq.ModifySlice(&ports)
 
+	if debugBindSocket() {
+		c.logf("magicsock: bindSocket: candidate ports: %+v", ports)
+	}
+
 	var pconn nettype.PacketConn
 	for _, port := range ports {
 		// Close the existing conn, in case it is sitting on the port we want.
@@ -3064,6 +3074,9 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		}
 		trySetSocketBuffer(pconn, c.logf)
 		// Success.
+		if debugBindSocket() {
+			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
+		}
 		ruc.setConnLocked(pconn, network)
 		if network == "udp4" {
 			health.SetUDP4Unbound(false)
