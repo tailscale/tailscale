@@ -24,7 +24,9 @@ jobs:
       with:
         go-version-file: go.mod
     - name: Run gofmt (goimports)
-      run: go run golang.org/x/tools/cmd/goimports -d --format-only .
+      run: |
+        OUT=$(go run golang.org/x/tools/cmd/goimports -d --format-only .)
+        [ -z "$OUT" ] || (echo "Not gofmt'ed: $OUT" && exit 1)
     - uses: k0kubun/action-slack@v2.0.0
       with:
         payload: |
