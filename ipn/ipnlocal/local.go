@@ -4617,8 +4617,13 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 }
 
 func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
-	var checks []doctor.Check
+	// We can write logs too fast for logtail to handle, even when
+	// opting-out of rate limits. Limit ourselves to at most one message
+	// per 20ms and a burst of 60 log lines, which should be fast enough to
+	// not block for too long but slow enough that we can upload all lines.
+	logf = logger.SlowLoggerWithClock(ctx, logf, 20*time.Millisecond, 60, time.Now)
 
+	var checks []doctor.Check
 	checks = append(checks, routetable.Check{})
 
 	// TODO(andrew): more
