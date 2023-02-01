@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/netip"
 	"runtime"
+	"strings"
 	"time"
 
 	"golang.org/x/exp/slices"
@@ -18,7 +19,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
-	"tailscale.com/util/strs"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 )
@@ -520,7 +520,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 			}
 		}
 		if pm.currentProfile == nil {
-			if suf, ok := strs.CutPrefix(string(stateKey), "user-"); ok {
+			if suf, ok := strings.CutPrefix(string(stateKey), "user-"); ok {
 				pm.currentUserID = ipn.WindowsUserID(suf)
 			}
 			pm.NewProfile()

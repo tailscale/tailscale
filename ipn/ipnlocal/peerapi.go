@@ -48,7 +48,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
-	"tailscale.com/util/strs"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -164,7 +163,7 @@ func (s *peerAPIServer) hasFilesWaiting() bool {
 			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
-			if name, ok := strs.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
+			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
 				// After we're done looping over files, then try
 				// to delete this file. Don't do it proactively,
 				// as the OS may return "foo.jpg.deleted" before "foo.jpg"
@@ -223,7 +222,7 @@ func (s *peerAPIServer) WaitingFiles() (ret []apitype.WaitingFile, err error) {
 			if strings.HasSuffix(name, partialSuffix) {
 				continue
 			}
-			if name, ok := strs.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
+			if name, ok := strings.CutSuffix(name, deletedSuffix); ok { // for Windows + tests
 				if deleted == nil {
 					deleted = map[string]bool{}
 				}
@@ -946,7 +945,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawPath := r.URL.EscapedPath()
-	suffix, ok := strs.CutPrefix(rawPath, "/v0/put/")
+	suffix, ok := strings.CutPrefix(rawPath, "/v0/put/")
 	if !ok {
 		http.Error(w, "misconfigured internals", 500)
 		return

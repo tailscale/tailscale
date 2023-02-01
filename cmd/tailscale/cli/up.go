@@ -34,7 +34,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/util/strs"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -174,7 +173,7 @@ type upArgsT struct {
 
 func (a upArgsT) getAuthKey() (string, error) {
 	v := a.authKeyOrFile
-	if file, ok := strs.CutPrefix(v, "file:"); ok {
+	if file, ok := strings.CutPrefix(v, "file:"); ok {
 		b, err := os.ReadFile(file)
 		if err != nil {
 			return "", err

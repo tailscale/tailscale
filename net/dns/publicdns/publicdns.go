@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-
-	"tailscale.com/util/strs"
 )
 
 // dohOfIP maps from public DNS IPs to their DoH base URL.
@@ -82,7 +80,7 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 	if s := dohIPsOfBase[dohBase]; len(s) > 0 {
 		return s
 	}
-	if hexStr, ok := strs.CutPrefix(dohBase, "https://dns.nextdns.io/"); ok {
+	if hexStr, ok := strings.CutPrefix(dohBase, "https://dns.nextdns.io/"); ok {
 		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
 		// or /<profile-hex>?<query params>
 		// but only the <profile-hex> is required. Ignore the rest:

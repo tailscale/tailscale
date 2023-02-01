@@ -43,7 +43,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
 
@@ -213,7 +212,7 @@ func handlerForPath(urlPath string) (h localAPIHandler, ok bool) {
 	if urlPath == "/" {
 		return (*Handler).serveLocalAPIRoot, true
 	}
-	suff, ok := strs.CutPrefix(urlPath, "/localapi/v0/")
+	suff, ok := strings.CutPrefix(urlPath, "/localapi/v0/")
 	if !ok {
 		// Currently all LocalAPI methods start with "/localapi/v0/" to signal
 		// to people that they're not necessarily stable APIs. In practice we'll
@@ -886,7 +885,7 @@ func (h *Handler) serveFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file access denied", http.StatusForbidden)
 		return
 	}
-	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
+	suffix, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/files/")
 	if !ok {
 		http.Error(w, "misconfigured", http.StatusInternalServerError)
 		return
@@ -1008,7 +1007,7 @@ func (h *Handler) serveFilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upath, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
+	upath, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/file-put/")
 	if !ok {
 		http.Error(w, "misconfigured", http.StatusInternalServerError)
 		return
@@ -1448,7 +1447,7 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "profiles access denied", http.StatusForbidden)
 		return
 	}
-	suffix, ok := strs.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/profiles/")
+	suffix, ok := strings.CutPrefix(r.URL.EscapedPath(), "/localapi/v0/profiles/")
 	if !ok {
 		http.Error(w, "misconfigured", http.StatusInternalServerError)
 		return

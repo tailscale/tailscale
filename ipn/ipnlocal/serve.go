@@ -31,7 +31,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
-	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
 
@@ -552,7 +551,7 @@ func expandProxyArg(s string) (targetURL string, insecureSkipVerify bool) {
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 		return s, false
 	}
-	if rest, ok := strs.CutPrefix(s, "https+insecure://"); ok {
+	if rest, ok := strings.CutPrefix(s, "https+insecure://"); ok {
 		return "https://" + rest, true
 	}
 	if allNumeric(s) {

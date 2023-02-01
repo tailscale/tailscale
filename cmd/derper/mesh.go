@@ -16,7 +16,6 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/strs"
 )
 
 func startMesh(s *derp.Server) error {
@@ -50,7 +49,7 @@ func startMeshWithHost(s *derp.Server, host string) error {
 		}
 		var d net.Dialer
 		var r net.Resolver
-		if base, ok := strs.CutSuffix(host, ".tailscale.com"); ok && port == "443" {
+		if base, ok := strings.CutSuffix(host, ".tailscale.com"); ok && port == "443" {
 			subCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			vpcHost := base + "-vpc.tailscale.com"

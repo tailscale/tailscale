@@ -1001,11 +1001,11 @@ func FuzzTime(f *testing.F) {
 	) {
 		t1 := time.Unix(s1, ns1)
 		if loc1 {
-			t1.In(time.FixedZone(name1, off1))
+			_ = t1.In(time.FixedZone(name1, off1))
 		}
 		t2 := time.Unix(s2, ns2)
 		if loc2 {
-			t2.In(time.FixedZone(name2, off2))
+			_ = t2.In(time.FixedZone(name2, off2))
 		}
 		got := Hash(&t1) == Hash(&t2)
 		want := t1.Format(time.RFC3339Nano) == t2.Format(time.RFC3339Nano)

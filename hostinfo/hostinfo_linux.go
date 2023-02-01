@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/lineread"
-	"tailscale.com/util/strs"
 	"tailscale.com/version/distro"
 )
 
@@ -73,7 +72,7 @@ func linuxDeviceModel() string {
 
 func getQnapQtsVersion(versionInfo string) string {
 	for _, field := range strings.Fields(versionInfo) {
-		if suffix, ok := strs.CutPrefix(field, "QTSFW_"); ok {
+		if suffix, ok := strings.CutPrefix(field, "QTSFW_"); ok {
 			return suffix
 		}
 	}

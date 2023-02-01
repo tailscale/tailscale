@@ -42,7 +42,6 @@ import (
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineread"
 	"tailscale.com/util/must"
-	"tailscale.com/util/strs"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 )
@@ -286,7 +285,7 @@ func (ts *localState) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.User
 
 func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
-	k, ok := strs.CutPrefix(req.URL.Path, "/ssh-action/")
+	k, ok := strings.CutPrefix(req.URL.Path, "/ssh-action/")
 	if !ok {
 		rec.WriteHeader(http.StatusNotFound)
 	}

@@ -22,7 +22,6 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/strs"
 )
 
 func TestHairpinSTUN(t *testing.T) {
@@ -621,7 +620,7 @@ func TestLogConciseReport(t *testing.T) {
 			var buf bytes.Buffer
 			c := &Client{Logf: func(f string, a ...any) { fmt.Fprintf(&buf, f, a...) }}
 			c.logConciseReport(tt.r, dm)
-			if got, ok := strs.CutPrefix(buf.String(), "[v1] report: "); !ok {
+			if got, ok := strings.CutPrefix(buf.String(), "[v1] report: "); !ok {
 				t.Errorf("unexpected result.\n got: %#q\nwant: %#q\n", got, tt.want)
 			}
 		})
