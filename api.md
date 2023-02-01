@@ -800,6 +800,9 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
 ```
 
 ### Response in HuJSON format
+
+Successful response returns an HTTP code of '200' and the tailnet policy file in HuJSON format, as per the request header. No errors or warnings are returned.
+
 ``` jsonc
 ...
 Content-Type: application/hujson
@@ -847,6 +850,9 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
 ```
 
 ### Response in JSON format
+
+Successful response returns an HTTP code of '200' and the tailnet policy file in JSON format, as per the request header. No errors or warnings are returned.
+
 ``` jsonc
 ...
 Content-Type: application/json
@@ -886,7 +892,18 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl?details=1' \
 
 ### Response (with details)
 
-<!--JULIA -->
+Successful response returns an HTTP code of '200' and the tailnet policy file in a base64-encoded string representation of the huJSON format. In addition, errors and warnings are returned.
+
+``` sh
+{
+  "acl": "Ly8gRXhhbXBsZS9kZWZhdWx0IEFDTHMgZm9yIHVucmVzdHJpY3RlZCBjb25uZWN0aW9ucy4KewoJLy8gRGVjbGFyZSBzdGF0aWMgZ3JvdXBzIG9mIHVzZXJzIGJleW9uZCB0aG9zZSBpbiB0aGUgaWRlbnRpdHkgc2VydmljZS4KCSJncm91cHMiOiB7CgkJImdyb3VwOmV4YW1wbGUiOiBbInVzZXIxQGV4YW1wbGUuY29tIiwgInVzZXIyQGV4YW1wbGUuY29tIl0sCgl9LAoKCS8vIERlY2xhcmUgY29udmVuaWVudCBob3N0bmFtZSBhbGlhc2VzIHRvIHVzZSBpbiBwbGFjZSBvZiBJUCBhZGRyZXNzZXMuCgkiaG9zdHMiOiB7CgkJImV4YW1wbGUtaG9zdC0xIjogIjEwMC4xMDAuMTAwLjEwMCIsCgl9LAoKCS8vIEFjY2VzcyBjb250cm9sIGxpc3RzLgoJImFjbHMiOiBbCgkJLy8gTWF0Y2ggYWJzb2x1dGVseSBldmVyeXRoaW5nLgoJCS8vIENvbW1lbnQgdGhpcyBzZWN0aW9uIG91dCBpZiB5b3Ugd2FudCB0byBkZWZpbmUgc3BlY2lmaWMgcmVzdHJpY3Rpb25zLgoJCXsiYWN0aW9uIjogImFjY2VwdCIsICJ1c2VycyI6IFsiKiJdLCAicG9ydHMiOiBbIio6KiJdfSwKCV0sCgkic3NoIjogWwoJCS8vIEFsbG93IGFsbCB1c2VycyB0byBTU0ggaW50byB0aGVpciBvd24gZGV2aWNlcyBpbiBjaGVjayBtb2RlLgoJCS8vIENvbW1lbnQgdGhpcyBzZWN0aW9uIG91dCBpZiB5b3Ugd2FudCB0byBkZWZpbmUgc3BlY2lmaWMgcmVzdHJpY3Rpb25zLgoJCXsKCQkJImFjdGlvbiI6ICJjaGVjayIsCgkJCSJzcmMiOiAgICBbImF1dG9ncm91cDptZW1iZXJzIl0sCgkJCSJkc3QiOiAgICBbImF1dG9ncm91cDpzZWxmIl0sCgkJCSJ1c2VycyI6ICBbImF1dG9ncm91cDpub25yb290IiwgInJvb3QiXSwKCQl9LAoJXSwKCSJ0YWdPd25lcnMiOiB7CgkJInRhZzpnb2xpbmsiOiBbImV4YW1wbGUuY29tIl0sCgl9LAp9Cg==",
+  "warnings": [
+    "\"group:example\": user not found: \"user1@example.com\"",
+    "\"group:example\": user not found: \"user2@example.com\""
+  ],
+  "errors": null
+}
+```
 
 ## Set the ACL for a tailnet
 
@@ -950,6 +967,8 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
 
 ### Response
 
+A successful response returns an HTTP status of '200' and the modified tailnet policy file in JSON or HuJSON format, depending on the request header.
+
 ``` jsonc
 // Example/default ACLs for unrestricted connections.
 {
@@ -975,6 +994,7 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
 ```
 
 ### Response: failed test error
+
 ```
 {
     "message": "test(s) failed",
@@ -996,8 +1016,7 @@ POST /api/v2/tailnet/{tailnet}/acl/preview
 ```
 When given a user or IP port to match against, returns the tailnet policy rules that apply to that resource without saving the policy file to the server.
 
-### Query parameters
-JULIA BOTH ARE REQUIRED, AND BODY MUST BE PROVIDED REQUEST BODY IS THE FULL POLICY FILE. CALL IT PREVIEW RULE MATCHES ON A POLICY FILE FOR 
+### Query parameters 
 
 #### `type` (required)
 
@@ -1015,7 +1034,7 @@ Provide this parameter in the URL path as shown in the request example below.
 
 The provided ACL is queried with this parameter to determine which rules match. <!-- ??? -->
 
-#### Tailnet policy file
+#### Tailnet policy file (required)
 
 Provide the tailnet policy file in the `POST` body in JSON or HuJSON format. Learn about [tailnet policy file entries](https://tailscale.com/kb/1018).
 
@@ -1049,6 +1068,8 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFo
 
 ### Response
 
+A successful response returns an HTTP status of '200' and a list of rules that apply to the resource provided as an <!--WILL IS THIS AN ARRAY OF STRINGS--> array of strings in JSON format.
+
 ``` jsonc
 {"matches":[{"users":["*"],"ports":["*:*"],"lineNumber":19}],"user":"user1@example.com"}
 ```
@@ -1059,29 +1080,24 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFo
 POST /api/v2/tailnet/{tailnet}/acl/validate
 ```
 
-This endpoint works in one of two modes:
+This endpoint works in one of two modes, neither of which modifies your current tailnet policy file:
 
-1. with a request body that's a JSON array, the body is interpreted as ACL tests to run against the tailnet's current ACLs.
-2. with a request body that's a JSON object, the body is interpreted as a hypothetical new JSON (HuJSON) body with new ACLs, including any tests.
+- **Run ACL tests:** When the **request body is a JSON array**, Tailscale runs ACL tests against the tailnet's current policy file.
+- **Validate a new policy file:** When the **request body is a JSON object**, Tailscale interprets the body as a hypothetical new tailnet policy file with new ACLs, including any new rules and tests. It validates that the policy file is pareseable and runs tests to validate the existing rules. 
 
-In either case, this endpoint does not modify the ACL in any way.
+Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/acls/?q=ACLS#tests).
 
-<!-- VALIDATE ENDPOINT: you post to it, give it a json array of acl tests to run as the request body, it interprets it . gives a 200 with a message in case of an error! filed as bug
-
-if yoyu tive it an objest it interprest it as a policy file to replace 
-validates if the file is valid and parseable 
-
-this is dicussed in the TEST portion of the policy file article when you write access controls you make rules and anytime you change the policy file, we run teests to make sure the rules still work, so it parses the request AND runs those tests
-
-when you make changes to your acl and hit save it runs those questions automatially-->
+In either case, this endpoint does not modify the tailnet policy file in any way.
 
 ### Query parameters
 
-The POST body should be a JSON formatted array of ACL Tests.
+#### `POST` body (required)
 
-See https://tailscale.com/kb/1018/acls for more information on the format of ACL tests.
+- **To run ACL tests:** The `POST` body should be a JSON formatted array of ACL Tests. Learn more about [tailnet policy tests](https://tailscale.com/kb/1018/acls/?q=acls#tests).
 
-### Request example with tests
+- **To validate a new policy file:** The `POST` body should be a JSON object with a JSON or HuJSON representation of a tailnet policy file.
+
+### Request example to run ACL tests
 
 ``` http
 POST /api/v2/tailnet/example.com/acl/validate
@@ -1096,7 +1112,8 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
   ]'
 ```
 
-### Request example with an ACL body
+### Request example to validate a policy file
+
 ``` http
 POST /api/v2/tailnet/example.com/acl/validate
 ```
@@ -1136,7 +1153,7 @@ If there's a problem, the response body will be a JSON object with a non-empty `
 An empty body or a JSON object with no `message` is returned on success.
 
 ## Tailnet devices
-<!--Description JULIA-->
+<!--Description JULIA, WILL-->
 
 Endpoints:
 
@@ -1163,18 +1180,20 @@ Controls whether the response returns **all** fields or only a predefined subset
   * `advertisedRoutes`
   * `clientConnectivity` (which contains the following fields: `mappingVariesByDestIP`, `derp`, `endpoints`, `latency`, and `clientSupports`)
 
-Use commas to separate multiple options. If more than one option is indicated, then `all` is used. For example, for `fields=default,all`, all fields are returned. 
+Provide this parameter in the URL path as shown in the examples below. Use commas to separate multiple options. If more than one option is indicated, then `all` is used. For example, for `fields=default,all`, all fields are returned. 
 
 If the `fields` parameter is not provided, then the default (limited fields) option is used.
 
-### Request example
+### Request example for default set of fields
 
 ``` sh
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
   -u "tskey-yourapikey123:"
 ```
 
-### Response
+### Response with default set of fields
+
+If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details, excluding `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`.
 
 ``` jsonc
 {
@@ -1225,7 +1244,173 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
 }
 ```
 
-<a name=tailnet-keys></a>
+### Request example for all fields
+
+``` sh
+curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices?fields=all' \
+  -u "tskey-yourapikey123:"
+```
+
+### Response with all fields
+
+If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details, including `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`.
+
+``` jsonc
+{
+  "devices": [
+    {
+      "addresses": [
+        "100.108.247.11",
+        "fd7a:115c:a1e0:ab12:4843:cd96:626c:f70b"
+      ],
+      "id": "60828930103888201",
+      "nodeId": "nmL9cF5CNTRL",
+      "user": "julia.randall@gmail.com",
+      "name": "danys-macbook-pro-13.taile17db.ts.net",
+      "hostname": "Danys-MacBook-Pro-13",
+      "clientVersion": "1.34.0-tbb6e746f3-g8d1edab6f",
+      "updateAvailable": true,
+      "os": "macOS",
+      "created": "2022-11-18T16:51:23Z",
+      "lastSeen": "2023-02-01T16:49:36Z",
+      "keyExpiryDisabled": false,
+      "expires": "2023-06-05T23:13:53Z",
+      "authorized": true,
+      "isExternal": false,
+      "machineKey": "mkey:c0043101c25e07ca2bb7f829f5ff9dd5d0cb342a0fa88339d1888d0d571e002a",
+      "nodeKey": "nodekey:5dec45b43a8cc1ef103285a1cb38840629ab4f6ee2d9d01f6b2c789888cabf5b",
+      "tailnetLockKey": "nlpub:00147d30c323e009e62dda0314dcaa87a6245e361aed34442d34933c6566e68b",
+      "blocksIncomingConnections": false,
+      "enabledRoutes": [],
+      "advertisedRoutes": [],
+      "clientConnectivity": {
+        "endpoints": [
+          "98.42.44.20:41641",
+          "[2601:648:8900:37b0:8ca0:d089:4fd:24e1]:41641",
+          "10.0.0.152:41641",
+          "[2601:648:8900:37b0::f558]:41641",
+          "[2601:648:8900:37b0:184c:8fe5:f8a3:ee70]:41641"
+        ],
+        "derp": "",
+        "mappingVariesByDestIP": false,
+        "latency": {
+          "Los Angeles": {
+            "latencyMs": 34.354108000000004
+          },
+          "San Francisco": {
+            "preferred": true,
+            "latencyMs": 22.937421
+          },
+          "Seattle": {
+            "latencyMs": 42.493266
+          }
+        },
+        "clientSupports": {
+          "hairPinning": false,
+          "ipv6": true,
+          "pcp": false,
+          "pmp": false,
+          "udp": true,
+          "upnp": false
+        }
+      }
+    },
+    {
+      "addresses": [
+        "100.96.210.106",
+        "fd7a:115c:a1e0:ab12:4843:cd96:6260:d26a"
+      ],
+      "id": "39381946735751060",
+      "nodeId": "nZqeZf5CNTRL",
+      "user": "willnorris@github",
+      "name": "go-test.willnorris.ts.net",
+      "hostname": "go",
+      "clientVersion": "",
+      "updateAvailable": false,
+      "os": "linux",
+      "created": "",
+      "lastSeen": "2022-12-01T05:23:30Z",
+      "keyExpiryDisabled": true,
+      "expires": "2023-05-30T04:44:05Z",
+      "authorized": true,
+      "isExternal": true,
+      "machineKey": "",
+      "nodeKey": "nodekey:c368959c82afcbeb716bc9fd72cf46a5d46844fd3e97590b90b021469860d266",
+      "blocksIncomingConnections": false,
+      "enabledRoutes": [],
+      "advertisedRoutes": [],
+      "clientConnectivity": {
+        "endpoints": [
+          "172.17.0.2:41721",
+          "24.6.96.6:56325"
+        ],
+        "derp": "",
+        "mappingVariesByDestIP": false,
+        "latency": {},
+        "clientSupports": {
+          "hairPinning": false,
+          "ipv6": false,
+          "pcp": false,
+          "pmp": false,
+          "udp": true,
+          "upnp": false
+        }
+      },
+      "tags": [
+        "tag:golink",
+        "tag:server"
+      ]
+    },
+    {
+      "addresses": [
+        "100.75.209.36",
+        "fd7a:115c:a1e0:ab12:4843:cd96:624b:d124"
+      ],
+      "id": "48375643633226582",
+      "nodeId": "ntieaT7CNTRL",
+      "user": "example@example.com",
+      "name": "go.taile17db.ts.net",
+      "hostname": "go",
+      "clientVersion": "1.33.0-dev-t",
+      "updateAvailable": true,
+      "os": "macOS",
+      "created": "2022-12-07T23:24:32Z",
+      "lastSeen": "2022-12-22T19:59:28Z",
+      "keyExpiryDisabled": false,
+      "expires": "2023-06-05T23:24:32Z",
+      "authorized": true,
+      "isExternal": false,
+      "machineKey": "mkey:d922f7c6547df1fab2c32d80364e0e4822165ae1a2ef9421af34500d01f61474",
+      "nodeKey": "nodekey:56ba5e34ecffbbe2045d2fb132e9e9914753fce8a1585ceb25b616fc178bd123",
+      "tailnetLockKey": "nlpub:6d59607bc54a21bded5a674b236450cc080f5e5f9b21f17019c3f5d4df353479",
+      "blocksIncomingConnections": false,
+      "enabledRoutes": [],
+      "advertisedRoutes": [],
+      "clientConnectivity": {
+        "endpoints": [
+          "10.0.1.2:50764",
+          "10.0.100.242:50764",
+          "24.6.96.6:50764"
+        ],
+        "derp": "",
+        "mappingVariesByDestIP": false,
+        "latency": {},
+        "clientSupports": {
+          "hairPinning": false,
+          "ipv6": false,
+          "pcp": false,
+          "pmp": false,
+          "udp": true,
+          "upnp": false
+        }
+      },
+      "tags": [
+        "tag:golink"
+      ]
+    }
+  ]
+}
+```
 
 ## Tailnet keys
 
