@@ -235,9 +235,10 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	AnnotationExpose   = "tailscale.com/expose"
-	AnnotationTags     = "tailscale.com/tags"
-	AnnotationHostname = "tailscale.com/hostname"
+	AnnotationExpose      = "tailscale.com/expose"
+	AnnotationTags        = "tailscale.com/tags"
+	AnnotationHostname    = "tailscale.com/hostname"
+	AnnotationFunnelPorts = "tailscale.com/funnel-tcp-portforward"
 )
 
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
@@ -584,6 +585,21 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 			Name:  "TS_HOSTNAME",
 			Value: hostname,
 		})
+	if len(parentSvc.Annotations[AnnotationFunnelPorts]) > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_FUNNEL_TCP_PORTFORWARD",
+			Value: parentSvc.Annotations[AnnotationFunnelPorts],
+		})
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_USERSPACE",
+			Value: "true",
+		})
+	} else {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_USERSPACE",
+			Value: "false",
+		})
+	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,

@@ -90,8 +90,31 @@ func main() {
 		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
+	funnelForwardPorts := strings.Split(defaultEnv("TS_FUNNEL_TCP_PORTFORWARD", ""), ",")
+	if len(funnelForwardPorts) > 0 {
+		ffp := make(map[uint16]uint16)
+		for _, p := range funnelForwardPorts {
+			if p == "" {
+				continue
+			}
+			from, to, ok := strings.Cut(p, ":")
+			if !ok {
+				log.Fatalf("TS_FUNNEL_TCP_PORTFORWARD: %q is not a valid port pair", p)
+			}
+			fp, err := strconv.ParseUint(from, 10, 16)
+			if err != nil {
+				log.Fatalf("TS_FUNNEL_TCP_PORTFORWARD: %v", err)
+			}
+			tp, err := strconv.ParseUint(to, 10, 16)
+			if err != nil {
+				log.Fatalf("TS_FUNNEL_TCP_PORTFORWARD: %v", err)
+			}
+			ffp[uint16(fp)] = uint16(tp)
+		}
+		cfg.FunnelTCPPorts = ffp
+	}
 
-	if cfg.ProxyTo != "" && cfg.UserspaceMode {
+	if cfg.ProxyTo != "" && cfg.UserspaceMode && len(cfg.FunnelTCPPorts) == 0 {
 		log.Fatal("TS_DEST_IP is not supported with TS_USERSPACE")
 	}
 
@@ -240,10 +263,8 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != ""
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
-		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
 	)
 	for {
@@ -261,11 +282,6 @@ authLoop:
 			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 		}
 		if n.NetMap != nil {
-			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
-				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
-					log.Fatalf("installing proxy rules: %v", err)
-				}
-			}
 			deviceInfo := []any{n.NetMap.SelfNode.StableID, n.NetMap.SelfNode.Name}
 			if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
 				if err := storeDeviceInfo(ctx, cfg.KubeSecret, n.NetMap.SelfNode.StableID, n.NetMap.SelfNode.Name); err != nil {
@@ -274,7 +290,10 @@ authLoop:
 			}
 		}
 		if !startupTasksDone {
-			if (!wantProxy || currentIPs != deephash.Sum{}) && (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+			if (!wantDeviceInfo || currentDeviceInfo != deephash.Sum{}) {
+				if err := configureForwarding(ctx, client, cfg); err != nil {
+					log.Fatalf("configuring forwarding: %v", err)
+				}
 				// This log message is used in tests to detect when all
 				// post-auth configuration is done.
 				log.Println("Startup complete, waiting for shutdown signal")
@@ -303,6 +322,35 @@ authLoop:
 			}
 		}
 	}
+}
+
+func configureForwarding(ctx context.Context, client *tailscale.LocalClient, cfg *settings) error {
+	if cfg.ProxyTo == "" {
+		return nil
+	}
+	st, err := client.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if len(cfg.FunnelTCPPorts) == 0 {
+		return installIPTablesRule(ctx, cfg.ProxyTo, st.Self.TailscaleIPs)
+	}
+	if len(st.CertDomains) == 0 {
+		return errors.New("no cert domains, cannot configure TCP forwarding")
+	}
+	cd := st.CertDomains[0]
+	sc := &ipn.ServeConfig{
+		AllowFunnel: make(map[ipn.HostPort]bool),
+		TCP:         make(map[uint16]*ipn.TCPPortHandler),
+	}
+	for f, t := range cfg.FunnelTCPPorts {
+		sc.TCP[f] = &ipn.TCPPortHandler{
+			TCPForward:   fmt.Sprintf("%s:%d", cfg.ProxyTo, t),
+			TerminateTLS: cd,
+		}
+		sc.AllowFunnel[ipn.HostPort(fmt.Sprintf("%s:%d", cd, f))] = true
+	}
+	return client.SetServeConfig(ctx, sc)
 }
 
 func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, int, error) {
@@ -488,7 +536,7 @@ func ensureIPForwarding(root, proxyTo, routes string) error {
 	return nil
 }
 
-func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Addr) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
@@ -498,14 +546,11 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefi
 		argv0 = "ip6tables"
 	}
 	var local string
-	for _, pfx := range tsIPs {
-		if !pfx.IsSingleIP() {
+	for _, addr := range tsIPs {
+		if addr.Is4() != dst.Is4() {
 			continue
 		}
-		if pfx.Addr().Is4() != dst.Is4() {
-			continue
-		}
-		local = pfx.Addr().String()
+		local = addr.String()
 		break
 	}
 	if local == "" {
@@ -529,6 +574,7 @@ type settings struct {
 	Hostname           string
 	Routes             string
 	ProxyTo            string
+	FunnelTCPPorts     map[uint16]uint16 // from Tailscale port -> to ProxyTo port
 	DaemonExtraArgs    string
 	ExtraArgs          string
 	InKubernetes       bool

@@ -7,6 +7,7 @@ package kubestore
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"tailscale.com/ipn"
@@ -36,6 +37,7 @@ func (s *Store) String() string { return "kube.Store" }
 
 // ReadState implements the StateStore interface.
 func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
+	id = ipn.StateKey(strings.ReplaceAll(string(id), "/", "__"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -55,6 +57,7 @@ func (s *Store) ReadState(id ipn.StateKey) ([]byte, error) {
 
 // WriteState implements the StateStore interface.
 func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
+	id = ipn.StateKey(strings.ReplaceAll(string(id), "/", "__"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
