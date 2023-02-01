@@ -32,6 +32,8 @@ import (
 
 	"golang.org/x/crypto/acme"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
@@ -94,9 +96,9 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 		log.Printf("acme %T: %s", v, j)
 	}
 
-	if pair, ok := getCertPEMCached(dir, domain, now); ok {
+	if pair, ok := b.getCertPEMCached(dir, domain, now); ok {
 		future := now.AddDate(0, 0, 14)
-		if shouldStartDomainRenewal(dir, domain, future) {
+		if b.shouldStartDomainRenewal(dir, domain, future) {
 			logf("starting async renewal")
 			// Start renewal in the background.
 			go b.getCertPEM(context.Background(), logf, traceACME, dir, domain, future)
@@ -112,7 +114,7 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 	return pair, nil
 }
 
-func shouldStartDomainRenewal(dir, domain string, future time.Time) bool {
+func (b *LocalBackend) shouldStartDomainRenewal(dir, domain string, future time.Time) bool {
 	renewMu.Lock()
 	defer renewMu.Unlock()
 	now := time.Now()
@@ -122,7 +124,7 @@ func shouldStartDomainRenewal(dir, domain string, future time.Time) bool {
 		return false
 	}
 	lastRenewCheck[domain] = now
-	_, ok := getCertPEMCached(dir, domain, future)
+	_, ok := b.getCertPEMCached(dir, domain, future)
 	return !ok
 }
 
@@ -140,17 +142,36 @@ func certFile(dir, domain string) string { return filepath.Join(dir, domain+".cr
 // getCertPEMCached returns a non-nil keyPair and true if a cached
 // keypair for domain exists on disk in dir that is valid at the
 // provided now time.
-func getCertPEMCached(dir, domain string, now time.Time) (p *TLSCertKeyPair, ok bool) {
+func (b *LocalBackend) getCertPEMCached(dir, domain string, now time.Time) (p *TLSCertKeyPair, ok bool) {
 	if !validLookingCertDomain(domain) {
 		// Before we read files from disk using it, validate it's halfway
 		// reasonable looking.
 		return nil, false
 	}
-	if keyPEM, err := os.ReadFile(keyFile(dir, domain)); err == nil {
-		certPEM, _ := os.ReadFile(certFile(dir, domain))
-		if validCertPEM(domain, keyPEM, certPEM, now) {
-			return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, true
+	var keyPEM, certPEM []byte
+	var err error
+	if hostinfo.GetEnvType() == hostinfo.Kubernetes {
+		var err error
+		certPEM, err = b.store.ReadState(ipn.StateKey(domain + ".crt"))
+		if err != nil {
+			return nil, false
 		}
+		keyPEM, err = b.store.ReadState(ipn.StateKey(domain + ".key"))
+		if err != nil {
+			return nil, false
+		}
+	} else {
+		certPEM, err = os.ReadFile(keyFile(dir, domain))
+		if err != nil {
+			return nil, false
+		}
+		keyPEM, err = os.ReadFile(certFile(dir, domain))
+		if err != nil {
+			return nil, false
+		}
+	}
+	if validCertPEM(domain, keyPEM, certPEM, now) {
+		return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, true
 	}
 	return nil, false
 }
@@ -159,7 +180,7 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, logf logger.Logf, traceAC
 	acmeMu.Lock()
 	defer acmeMu.Unlock()
 
-	if p, ok := getCertPEMCached(dir, domain, now); ok {
+	if p, ok := b.getCertPEMCached(dir, domain, now); ok {
 		return p, nil
 	}
 
@@ -274,8 +295,14 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, logf logger.Logf, traceAC
 	if err := encodeECDSAKey(&privPEM, certPrivKey); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
-		return nil, err
+	if hostinfo.GetEnvType() == hostinfo.Kubernetes {
+		if err := b.store.WriteState(ipn.StateKey(domain+".key"), privPEM.Bytes()); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := os.WriteFile(keyFile(dir, domain), privPEM.Bytes(), 0600); err != nil {
+			return nil, err
+		}
 	}
 
 	csr, err := certRequest(certPrivKey, domain, nil)
@@ -297,8 +324,14 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, logf logger.Logf, traceAC
 			return nil, err
 		}
 	}
-	if err := os.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
-		return nil, err
+	if hostinfo.GetEnvType() == hostinfo.Kubernetes {
+		if err := b.store.WriteState(ipn.StateKey(domain+".crt"), certPEM.Bytes()); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := os.WriteFile(certFile(dir, domain), certPEM.Bytes(), 0644); err != nil {
+			return nil, err
+		}
 	}
 
 	return &TLSCertKeyPair{CertPEM: certPEM.Bytes(), KeyPEM: privPEM.Bytes()}, nil
