@@ -5,6 +5,7 @@ package vizerror
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"testing"
 )
@@ -26,5 +27,18 @@ func TestErrorf(t *testing.T) {
 	// ensure error wrapping still works
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("error chain does not contain fs.ErrNotExist")
+	}
+}
+
+func TestAs(t *testing.T) {
+	verr := New("visible error")
+	err := fmt.Errorf("wrap: %w", verr)
+
+	got, ok := As(err)
+	if !ok {
+		t.Errorf("As() return false, want true")
+	}
+	if got != verr {
+		t.Errorf("As() returned error %v, want %v", got, verr)
 	}
 }

@@ -266,11 +266,10 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err := h.rh.ServeHTTPReturn(lw, r)
 
 	var hErr HTTPError
-	var vizErr vizerror.Error
 	var hErrOK bool
 	if errors.As(err, &hErr) {
 		hErrOK = true
-	} else if errors.As(err, &vizErr) {
+	} else if vizErr, ok := vizerror.As(err); ok {
 		hErrOK = true
 		hErr = HTTPError{Msg: vizErr.Error()}
 	}
