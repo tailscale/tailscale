@@ -186,7 +186,6 @@ func TestStdHandler(t *testing.T) {
 			},
 		},
 
-
 		{
 			name:     "handler returns generic error",
 			rh:       handlerErr(0, testErr),
