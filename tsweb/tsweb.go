@@ -32,6 +32,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/strs"
+	"tailscale.com/util/vizerror"
 	"tailscale.com/version"
 )
 
@@ -263,7 +264,16 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lw := &loggingResponseWriter{ResponseWriter: w, logf: h.opts.Logf}
 	err := h.rh.ServeHTTPReturn(lw, r)
-	hErr, hErrOK := err.(HTTPError)
+
+	var hErr HTTPError
+	var vizErr vizerror.Error
+	var hErrOK bool
+	if errors.As(err, &hErr) {
+		hErrOK = true
+	} else if errors.As(err, &vizErr) {
+		hErrOK = true
+		hErr = HTTPError{Msg: vizErr.Error()}
+	}
 
 	if lw.code == 0 && err == nil && !lw.hijacked {
 		// If the handler didn't write and didn't send a header, that still means 200.

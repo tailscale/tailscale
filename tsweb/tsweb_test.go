@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/metrics"
 	"tailscale.com/tstest"
+	"tailscale.com/util/vizerror"
 	"tailscale.com/version"
 )
 
@@ -148,6 +149,23 @@ func TestStdHandler(t *testing.T) {
 				RequestURI: "/foo",
 				Err:        "not found",
 				Code:       404,
+			},
+		},
+
+		{
+			name:     "handler returns user visible error",
+			rh:       handlerErr(0, vizerror.New("visible error")),
+			r:        req(bgCtx, "http://example.com/foo"),
+			wantCode: 500,
+			wantLog: AccessLogRecord{
+				When:       clock.Start,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "visible error",
+				Code:       500,
 			},
 		},
 
