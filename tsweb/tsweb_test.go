@@ -153,7 +153,7 @@ func TestStdHandler(t *testing.T) {
 		},
 
 		{
-			name:     "handler returns user visible error",
+			name:     "handler returns user-visible error",
 			rh:       handlerErr(0, vizerror.New("visible error")),
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
@@ -168,6 +168,24 @@ func TestStdHandler(t *testing.T) {
 				Code:       500,
 			},
 		},
+
+		{
+			name:     "handler returns user-visible error wrapped by private error",
+			rh:       handlerErr(0, fmt.Errorf("private internal error: %w", vizerror.New("visible error"))),
+			r:        req(bgCtx, "http://example.com/foo"),
+			wantCode: 500,
+			wantLog: AccessLogRecord{
+				When:       clock.Start,
+				Seconds:    1.0,
+				Proto:      "HTTP/1.1",
+				Host:       "example.com",
+				Method:     "GET",
+				RequestURI: "/foo",
+				Err:        "visible error",
+				Code:       500,
+			},
+		},
+
 
 		{
 			name:     "handler returns generic error",

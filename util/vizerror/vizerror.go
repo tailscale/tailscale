@@ -20,12 +20,12 @@ func (e Error) Error() string {
 	return e.err.Error()
 }
 
-// New returns an error that formats as the given text. Always returns a vizerror.Error.
+// New returns an error that formats as the given text. It always returns a vizerror.Error.
 func New(text string) error {
 	return Error{errors.New(text)}
 }
 
-// Errorf returns an Error with the specified format and values. Always returns a vizerror.Error.
+// Errorf returns an Error with the specified format and values. It always returns a vizerror.Error.
 func Errorf(format string, a ...any) error {
 	return Error{fmt.Errorf(format, a...)}
 }
@@ -35,7 +35,7 @@ func (e Error) Unwrap() error {
 	return e.err
 }
 
-// Wrap err with a vizerror.Error.
+// Wrap wraps err with a vizerror.Error.
 func Wrap(err error) error {
 	if err == nil {
 		return nil
