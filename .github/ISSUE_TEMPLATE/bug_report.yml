@@ -12,7 +12,6 @@ body:
     attributes:
       label: What is the issue?
       description: What happened? What did you expect to happen?
-      placeholder: oh no
     validations:
       required: true
   - type: textarea
@@ -59,6 +58,13 @@ body:
       label: Tailscale version
       description: What Tailscale version are you using?
       placeholder: e.g., 1.14.4
+    validations:
+      required: false
+  - type: textarea
+    id: other-software
+    attributes:
+      label: Other software
+      description: What [other software](https://github.com/tailscale/tailscale/wiki/OtherSoftwareInterop) (networking, security, etc) are you running?
     validations:
       required: false
   - type: input
