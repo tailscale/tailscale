@@ -356,7 +356,11 @@ func tailscaledArgs(cfg *settings) []string {
 	args := []string{"--socket=" + cfg.Socket}
 	switch {
 	case cfg.InKubernetes && cfg.KubeSecret != "":
-		args = append(args, "--state=kube:"+cfg.KubeSecret, "--statedir=/tmp")
+		args = append(args, "--state=kube:"+cfg.KubeSecret)
+		if cfg.StateDir == "" {
+			cfg.StateDir = "/tmp"
+		}
+		fallthrough
 	case cfg.StateDir != "":
 		args = append(args, "--statedir="+cfg.StateDir)
 	default:
