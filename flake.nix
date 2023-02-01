@@ -67,7 +67,7 @@
     # nixpkgs style imports and flake semantics, unless upstream
     # nixpkgs exposes the buildGoModule constructor func explicitly.
     pkgsWithTailscaleGo = pkgs: pkgs.extend (final: prev: rec {
-      tailscale_go = prev.lib.overrideDerivation prev.go_1_19 (attrs: rec {
+      tailscale_go = prev.lib.overrideDerivation prev.go_1_20 (attrs: rec {
         name = "tailscale-go-${version}";
         version = tailscale-go-rev;
         src = pkgs.fetchFromGitHub {
@@ -82,9 +82,9 @@
         checkPhase = "";
         TAILSCALE_TOOLCHAIN_REV = tailscale-go-rev;
       });
-      # Override go_1_19 so that buildGo119Module below uses
+      # Override go_1_20 so that buildGo120Module below uses
       # tailscale's toolchain as well.
-      go_1_19 = tailscale_go;
+      go_1_20 = tailscale_go;
     });
 
     # tailscaleRev is the git commit at which this flake was imported,
@@ -108,7 +108,7 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscale = pkgs: pkgs.buildGo119Module rec {
+    tailscale = pkgs: pkgs.buildGo120Module rec {
       name = "tailscale";
 
       src = ./.;
