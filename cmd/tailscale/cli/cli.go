@@ -14,7 +14,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -45,52 +44,6 @@ func printf(format string, a ...any) {
 // which goes to stderr and formats slightly differently.
 func outln(a ...any) {
 	fmt.Fprintln(Stdout, a...)
-}
-
-// ActLikeCLI reports whether a GUI application should act like the
-// CLI based on os.Args, GOOS, the context the process is running in
-// (pty, parent PID), etc.
-func ActLikeCLI() bool {
-	// This function is only used on macOS.
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-
-	// Escape hatch to let people force running the macOS
-	// GUI Tailscale binary as the CLI.
-	if v, _ := strconv.ParseBool(os.Getenv("TAILSCALE_BE_CLI")); v {
-		return true
-	}
-
-	// If our parent is launchd, we're definitely not
-	// being run as a CLI.
-	if os.Getppid() == 1 {
-		return false
-	}
-
-	// Xcode adds the -NSDocumentRevisionsDebugMode flag on execution.
-	// If present, we are almost certainly being run as a GUI.
-	for _, arg := range os.Args {
-		if arg == "-NSDocumentRevisionsDebugMode" {
-			return false
-		}
-	}
-
-	// Looking at the environment of the GUI Tailscale app (ps eww
-	// $PID), empirically none of these environment variables are
-	// present. But all or some of these should be present with
-	// Terminal.all and bash or zsh.
-	for _, e := range []string{
-		"SHLVL",
-		"TERM",
-		"TERM_PROGRAM",
-		"PS1",
-	} {
-		if os.Getenv(e) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func newFlagSet(name string) *flag.FlagSet {
