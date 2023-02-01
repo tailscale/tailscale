@@ -48,6 +48,7 @@ var (
 	controlHealth           []string
 	lastLoginErr            error
 	localLogConfigErr       error
+	tlsConnectionErrors     = map[string]error{} // map[ServerName]error
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -207,6 +208,18 @@ func SetLocalLogConfigHealth(err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	localLogConfigErr = err
+}
+
+// SetTLSConnectionError sets the error state for connections to a specific
+// host. Setting the error to nil will clear any previously-set error.
+func SetTLSConnectionError(host string, err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if err == nil {
+		delete(tlsConnectionErrors, host)
+	} else {
+		tlsConnectionErrors[host] = err
+	}
 }
 
 func RegisterDebugHandler(typ string, h http.Handler) {
@@ -475,6 +488,9 @@ func overallErrorLocked() error {
 	}
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		errs = append(errs, err)
+	}
+	for serverName, err := range tlsConnectionErrors {
+		errs = append(errs, fmt.Errorf("TLS connection error for %q: %w", serverName, err))
 	}
 	if e := fakeErrForTesting(); len(errs) == 0 && e != "" {
 		return errors.New(e)
