@@ -8,9 +8,9 @@ package localapi
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/util/strs"
 )
 
 func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +18,7 @@ func (h *Handler) serveCert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cert access denied", http.StatusForbidden)
 		return
 	}
-	domain, ok := strs.CutPrefix(r.URL.Path, "/localapi/v0/cert/")
+	domain, ok := strings.CutPrefix(r.URL.Path, "/localapi/v0/cert/")
 	if !ok {
 		http.Error(w, "internal handler config wired wrong", 500)
 		return

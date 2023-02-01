@@ -41,7 +41,6 @@ import (
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/lineread"
-	"tailscale.com/util/strs"
 	"tailscale.com/version/distro"
 )
 
@@ -653,7 +652,7 @@ func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {
 		return ""
 	}
 	rest := strings.TrimSpace(strings.TrimPrefix(string(line), "PATH"))
-	if quoted, ok := strs.CutPrefix(rest, "DEFAULT="); ok {
+	if quoted, ok := strings.CutPrefix(rest, "DEFAULT="); ok {
 		if path, err := strconv.Unquote(quoted); err == nil {
 			return expandDefaultPathTmpl(path, u)
 		}

@@ -12,13 +12,17 @@ tidy:
 	./tool/go mod tidy
 
 updatedeps:
-	./tool/go run github.com/tailscale/depaware --update \
+	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
+	# it finds in its $$PATH is the right one.
+	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper
 
 depaware:
-	./tool/go run github.com/tailscale/depaware --check \
+	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
+	# it finds in its $$PATH is the right one.
+	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper

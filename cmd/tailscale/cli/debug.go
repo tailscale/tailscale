@@ -39,7 +39,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
-	"tailscale.com/util/strs"
 )
 
 var debugCmd = &ffcli.Command{
@@ -259,7 +258,7 @@ func runDebug(ctx context.Context, args []string) error {
 			e.Encode(wfs)
 			return nil
 		}
-		if name, ok := strs.CutPrefix(debugArgs.file, "delete:"); ok {
+		if name, ok := strings.CutPrefix(debugArgs.file, "delete:"); ok {
 			return localClient.DeleteWaitingFile(ctx, name)
 		}
 		rc, size, err := localClient.GetWaitingFile(ctx, debugArgs.file)

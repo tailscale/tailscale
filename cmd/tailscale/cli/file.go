@@ -31,7 +31,6 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/quarantine"
-	"tailscale.com/util/strs"
 	"tailscale.com/version"
 )
 
@@ -90,7 +89,7 @@ func runCp(ctx context.Context, args []string) error {
 		return errors.New("usage: tailscale file cp <files...> <target>:")
 	}
 	files, target := args[:len(args)-1], args[len(args)-1]
-	target, ok := strs.CutSuffix(target, ":")
+	target, ok := strings.CutSuffix(target, ":")
 	if !ok {
 		return fmt.Errorf("final argument to 'tailscale file cp' must end in colon")
 	}

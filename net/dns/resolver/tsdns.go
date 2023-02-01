@@ -33,7 +33,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/util/strs"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -1215,7 +1214,7 @@ func (r *Resolver) respond(query []byte) ([]byte, error) {
 // unARPA maps from "4.4.8.8.in-addr.arpa." to "8.8.4.4", etc.
 func unARPA(a string) (ipStr string, ok bool) {
 	const suf4 = ".in-addr.arpa."
-	if s, ok := strs.CutSuffix(a, suf4); ok {
+	if s, ok := strings.CutSuffix(a, suf4); ok {
 		// Parse and reverse octets.
 		ip, err := netip.ParseAddr(s)
 		if err != nil || !ip.Is4() {

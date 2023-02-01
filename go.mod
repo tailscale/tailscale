@@ -1,6 +1,6 @@
 module tailscale.com
 
-go 1.19
+go 1.20
 
 require (
 	filippo.io/mkcert v1.4.3
@@ -77,11 +77,11 @@ require (
 	golang.org/x/sys v0.4.0
 	golang.org/x/term v0.4.0
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
-	golang.org/x/tools v0.2.0
+	golang.org/x/tools v0.4.1-0.20221208213631-3f74d914ae6d
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gvisor.dev/gvisor v0.0.0-20221203005347-703fd9b7fbc0
-	honnef.co/go/tools v0.4.0-0.dev.0.20220517111757-f4a2f64ce238
+	honnef.co/go/tools v0.4.0-0.dev.0.20230130122044-c30b15588105
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/wf v0.0.0-20220728202103-50d96caab2f6
 	k8s.io/api v0.25.0
@@ -300,9 +300,9 @@ require (
 	github.com/yeya24/promlinter v0.1.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20220328175248-053ad81199eb // indirect
+	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
 	golang.org/x/image v0.0.0-20201208152932-35266b937fa6 // indirect
-	golang.org/x/mod v0.6.0 // indirect
+	golang.org/x/mod v0.7.0 // indirect
 	golang.org/x/text v0.6.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.2.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
