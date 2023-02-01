@@ -152,7 +152,9 @@ waitOnline:
 					},
 				},
 			}
-			authkey, _, err := tsClient.CreateKey(ctx, caps)
+			ninetyDays := 90 * 24 * time.Hour
+
+			authkey, _, err := tsClient.CreateKey(ctx, caps, int64(ninetyDays.Seconds()))
 			if err != nil {
 				startlog.Fatalf("creating operator authkey: %v", err)
 			}
@@ -286,7 +288,7 @@ type ServiceReconciler struct {
 }
 
 type tsClient interface {
-	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
+	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities, expirySeconds int64) (string, *tailscale.Key, error)
 	DeleteDevice(ctx context.Context, id string) error
 }
 
@@ -589,7 +591,8 @@ func (a *ServiceReconciler) newAuthKey(ctx context.Context, tags []string) (stri
 			},
 		},
 	}
-	key, _, err := a.tsClient.CreateKey(ctx, caps)
+	ninetyDays := 90 * 24 * time.Hour
+	key, _, err := a.tsClient.CreateKey(ctx, caps, int64(ninetyDays.Seconds()))
 	if err != nil {
 		return "", err
 	}

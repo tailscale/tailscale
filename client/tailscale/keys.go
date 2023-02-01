@@ -70,10 +70,18 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 // CreateKey creates a new key for the current user. Currently, only auth keys
 // can be created. Returns the key itself, which cannot be retrieved again
 // later, and the key metadata.
-func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities) (string, *Key, error) {
+func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities, expirySeconds int64) (string, *Key, error) {
+
+	ninetydays := int64(90 * 24 * 60 * 60)
+
+	if expirySeconds > ninetydays {
+		return "", nil, fmt.Errorf("expiry must be less than 90 days")
+	}
+
 	keyRequest := struct {
-		Capabilities KeyCapabilities `json:"capabilities"`
-	}{caps}
+		Capabilities  KeyCapabilities `json:"capabilities"`
+		ExpirySeconds int64           `json:"expirySeconds,omitempty"`
+	}{caps, int64(expirySeconds)}
 	bs, err := json.Marshal(keyRequest)
 	if err != nil {
 		return "", nil, err
