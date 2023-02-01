@@ -42,3 +42,9 @@ func Wrap(err error) error {
 	}
 	return Error{err}
 }
+
+// As returns the first vizerror.Error in err's chain.
+func As(err error) (e Error, ok bool) {
+	ok = errors.As(err, &e)
+	return
+}
