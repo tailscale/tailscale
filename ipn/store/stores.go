@@ -179,7 +179,7 @@ func (s *FileStore) WriteState(id ipn.StateKey, bs []byte) error {
 	if bytes.Equal(s.cache[id], bs) {
 		return nil
 	}
-	s.cache[id] = append([]byte(nil), bs...)
+	s.cache[id] = bytes.Clone(bs)
 	bs, err := json.MarshalIndent(s.cache, "", "  ")
 	if err != nil {
 		return err

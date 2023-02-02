@@ -126,7 +126,7 @@ func TestSendRecv(t *testing.T) {
 					if m.Source.IsZero() {
 						t.Errorf("zero Source address in ReceivedPacket")
 					}
-					recvChs[i] <- append([]byte(nil), m.Data...)
+					recvChs[i] <- bytes.Clone(m.Data)
 				}
 			}
 		}(i)

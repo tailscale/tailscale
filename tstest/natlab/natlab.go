@@ -49,7 +49,7 @@ func (p *Packet) Clone() *Packet {
 	return &Packet{
 		Src:     p.Src,
 		Dst:     p.Dst,
-		Payload: append([]byte(nil), p.Payload...),
+		Payload: bytes.Clone(p.Payload),
 		locator: p.locator,
 	}
 }
@@ -863,7 +863,7 @@ func (c *conn) WriteToUDPAddrPort(p []byte, ipp netip.AddrPort) (n int, err erro
 	pkt := &Packet{
 		Src:     c.ipp,
 		Dst:     ipp,
-		Payload: append([]byte(nil), p...),
+		Payload: bytes.Clone(p),
 	}
 	pkt.setLocator("mach=%s", c.m.Name)
 	pkt.Trace("PacketConn.WriteTo")

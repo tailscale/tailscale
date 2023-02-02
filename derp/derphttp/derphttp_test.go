@@ -4,6 +4,7 @@
 package derphttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"net"
@@ -102,7 +103,7 @@ func TestSendRecv(t *testing.T) {
 				case derp.PeerGoneMessage:
 					// Ignore.
 				case derp.ReceivedPacket:
-					recvChs[i] <- append([]byte(nil), m.Data...)
+					recvChs[i] <- bytes.Clone(m.Data)
 				}
 			}
 		}(i)
