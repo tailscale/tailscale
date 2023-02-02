@@ -52,9 +52,9 @@ func TestCache(t *testing.T) {
 				RegionCode: "r1",
 				RegionName: "r1",
 				Nodes: []*tailcfg.DERPNode{{
-					Name:     "1c",
+					Name:     "1f",
 					RegionID: 1,
-					HostName: "derp1c.tailscale.com",
+					HostName: "derp1f.tailscale.com",
 					IPv4:     "127.0.0.1",
 					IPv6:     "::1",
 				}},
@@ -99,7 +99,7 @@ func TestCache(t *testing.T) {
 	// we don't accidentally start allowing overwrites due to some of the
 	// test's assumptions changing out from underneath us as we update the
 	// JSON file of fallback servers.
-	if getStaticDERPMap().Regions[1].Nodes[0].HostName != "derp1c.tailscale.com" {
+	if getStaticDERPMap().Regions[1].Nodes[0].HostName != "derp1f.tailscale.com" {
 		t.Errorf("DERP server has a different name; please update this test")
 	}
 }
