@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/josharian/native"
+	"golang.org/x/sys/cpu"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/interfaces"
@@ -118,7 +118,7 @@ func bindSocket6(c syscall.RawConn, ifidx uint32) error {
 // representation, suitable for passing to Windows APIs that require a
 // mangled uint32.
 func nativeToBigEndian(i uint32) uint32 {
-	if native.IsBigEndian {
+	if cpu.IsBigEndian {
 		return i
 	}
 	return bits.ReverseBytes32(i)
