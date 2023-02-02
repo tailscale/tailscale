@@ -36,7 +36,7 @@ require (
 	github.com/iancoleman/strcase v0.2.0
 	github.com/illarion/gonotify v1.0.1
 	github.com/insomniacslk/dhcp v0.0.0-20221215072855-de60144f33f8
-	github.com/josharian/native v1.0.1-0.20221213033349-c1e37c09b531
+	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.15.4
@@ -74,7 +74,7 @@ require (
 	golang.org/x/net v0.5.0
 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
 	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.4.0
+	golang.org/x/sys v0.4.1-0.20230131160137-e7d7f63158de
 	golang.org/x/term v0.4.0
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
 	golang.org/x/tools v0.4.1-0.20221208213631-3f74d914ae6d
