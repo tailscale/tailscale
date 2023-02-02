@@ -4626,6 +4626,32 @@ func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
 	var checks []doctor.Check
 	checks = append(checks, routetable.Check{})
 
+	// Print a log message if any of the global DNS resolvers are Tailscale
+	// IPs; this can interfere with our ability to connect to the Tailscale
+	// controlplane.
+	checks = append(checks, doctor.CheckFunc("dns-resolvers", func(_ context.Context, logf logger.Logf) error {
+		b.mu.Lock()
+		nm := b.netMap
+		b.mu.Unlock()
+		if nm == nil {
+			return nil
+		}
+
+		for i, resolver := range nm.DNS.Resolvers {
+			ipp, ok := resolver.IPPort()
+			if ok && tsaddr.IsTailscaleIP(ipp.Addr()) {
+				logf("resolver %d is a Tailscale address: %v", i, resolver)
+			}
+		}
+		for i, resolver := range nm.DNS.FallbackResolvers {
+			ipp, ok := resolver.IPPort()
+			if ok && tsaddr.IsTailscaleIP(ipp.Addr()) {
+				logf("fallback resolver %d is a Tailscale address: %v", i, resolver)
+			}
+		}
+		return nil
+	}))
+
 	// TODO(andrew): more
 
 	numChecks := len(checks)
