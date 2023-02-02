@@ -33,15 +33,12 @@ func (e Error) Errors() []error {
 	return slices.Clone(e.errs)
 }
 
-// TODO(https://go.dev/cl/53435): Implement Unwrap when Go 1.20 is released.
-/*
-// Unwrap returns the underlying errors as is.
+// Unwrap returns the underlying errors as-is.
 func (e Error) Unwrap() []error {
 	// Do not clone since Unwrap requires callers to not mutate the slice.
 	// See the documentation in the Go "errors" package.
 	return e.errs
 }
-*/
 
 // New returns an error composed from errs.
 // Some errors in errs get special treatment:
@@ -131,13 +128,6 @@ func Range(err error, fn func(error) bool) bool {
 		}
 	case interface{ Unwrap() []error }:
 		for _, err := range err.Unwrap() {
-			if !Range(err, fn) {
-				return false
-			}
-		}
-	// TODO(https://go.dev/cl/53435): Delete this when Error implements Unwrap.
-	case Error:
-		for _, err := range err.errs {
 			if !Range(err, fn) {
 				return false
 			}
