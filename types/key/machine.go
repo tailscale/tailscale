@@ -4,6 +4,7 @@
 package key
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/hex"
 
@@ -86,7 +87,7 @@ func (k *MachinePrivate) UnmarshalText(b []byte) error {
 // specific raw byte serialization, please use
 // MarshalText/UnmarshalText.
 func (k MachinePrivate) UntypedBytes() []byte {
-	return append([]byte(nil), k.k[:]...)
+	return bytes.Clone(k.k[:])
 }
 
 // SealTo wraps cleartext into a NaCl box (see
@@ -230,7 +231,7 @@ func (k MachinePublic) UntypedHexString() string {
 // specific raw byte serialization, please use
 // MarshalText/UnmarshalText.
 func (k MachinePublic) UntypedBytes() []byte {
-	return append([]byte(nil), k.k[:]...)
+	return bytes.Clone(k.k[:])
 }
 
 // String returns the output of MarshalText as a string.

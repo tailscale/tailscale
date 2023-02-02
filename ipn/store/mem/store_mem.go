@@ -5,6 +5,7 @@
 package mem
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync"
 
@@ -43,7 +44,7 @@ func (s *Store) WriteState(id ipn.StateKey, bs []byte) error {
 	if s.cache == nil {
 		s.cache = map[ipn.StateKey][]byte{}
 	}
-	s.cache[id] = append([]byte(nil), bs...)
+	s.cache[id] = bytes.Clone(bs)
 	return nil
 }
 

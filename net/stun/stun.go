@@ -5,6 +5,7 @@
 package stun
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -300,7 +301,7 @@ func mappedAddress(b []byte) (addr []byte, port uint16, err error) {
 	if len(addrField) < addrLen {
 		return nil, 0, ErrMalformedAttrs
 	}
-	return append([]byte(nil), addrField[:addrLen]...), port, nil
+	return bytes.Clone(addrField[:addrLen]), port, nil
 }
 
 // Is reports whether b is a STUN message.
