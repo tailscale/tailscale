@@ -23,6 +23,7 @@ import (
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/envknob"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
@@ -341,7 +342,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 	default:
 		return nil, errors.New("unsupported exit node OS")
 	case "windows", "android":
-		return handleExitNodeDNSQueryWithNetPkg(ctx, nil, resp)
+		return handleExitNodeDNSQueryWithNetPkg(ctx, r.logf, nil, resp)
 	case "darwin":
 		// /etc/resolv.conf is a lie and only says one upstream DNS
 		// but for now that's probably good enough. Later we'll
@@ -385,6 +386,8 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 	}
 }
 
+var debugExitNodeDNSNetPkg = envknob.RegisterBool("TS_DEBUG_EXIT_NODE_DNS_NET_PKG")
+
 // handleExitNodeDNSQueryWithNetPkg takes a DNS query message in q and
 // return a reply (for the ExitDNS DoH service) using the net package's
 // native APIs. This is only used on Windows for now.
@@ -393,7 +396,8 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 //
 // response contains the pre-serialized response, which notably
 // includes the original question and its header.
-func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolver, resp *response) (res []byte, err error) {
+func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, logf logger.Logf, resolver *net.Resolver, resp *response) (res []byte, err error) {
+	logf = logger.WithPrefix(logf, "exitNodeDNSQueryWithNetPkg: ")
 	if resp.Question.Class != dns.ClassINET {
 		return nil, errors.New("unsupported class")
 	}
@@ -406,8 +410,15 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 
 	handleError := func(err error) (res []byte, _ error) {
 		if isGoNoSuchHostError(err) {
+			if debugExitNodeDNSNetPkg() {
+				logf(`converting Go "no such host" error to a NXDOMAIN: %v`, err)
+			}
 			resp.Header.RCode = dns.RCodeNameError
 			return marshalResponse(resp)
+		}
+
+		if debugExitNodeDNSNetPkg() {
+			logf("returning error: %v", err)
 		}
 		// TODO: map other errors to RCodeServerFailure?
 		// Or I guess our caller should do that?
@@ -422,6 +433,9 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 		if resp.Question.Type == dns.TypeAAAA {
 			network = "ip6"
 		}
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving %s %q", network, name)
+		}
 		ips, err := r.LookupIP(ctx, network, name)
 		if err != nil {
 			return handleError(err)
@@ -432,6 +446,9 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 			}
 		}
 	case dns.TypeTXT:
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving TXT %q", name)
+		}
 		strs, err := r.LookupTXT(ctx, name)
 		if err != nil {
 			return handleError(err)
@@ -443,6 +460,9 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 			// TODO: is this RCodeFormatError?
 			return nil, errors.New("bogus PTR name")
 		}
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving PTR %q", ipStr)
+		}
 		addrs, err := r.LookupAddr(ctx, ipStr)
 		if err != nil {
 			return handleError(err)
@@ -451,12 +471,18 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 			resp.Name, _ = dnsname.ToFQDN(addrs[0])
 		}
 	case dns.TypeCNAME:
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving CNAME %q", name)
+		}
 		cname, err := r.LookupCNAME(ctx, name)
 		if err != nil {
 			return handleError(err)
 		}
 		resp.CNAME = cname
 	case dns.TypeSRV:
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving SRV %q", name)
+		}
 		// Thanks, Go: "To accommodate services publishing SRV
 		// records under non-standard names, if both service
 		// and proto are empty strings, LookupSRV looks up
@@ -467,6 +493,9 @@ func handleExitNodeDNSQueryWithNetPkg(ctx context.Context, resolver *net.Resolve
 		}
 		resp.SRVs = srvs
 	case dns.TypeNS:
+		if debugExitNodeDNSNetPkg() {
+			logf("resolving NS %q", name)
+		}
 		nss, err := r.LookupNS(ctx, name)
 		if err != nil {
 			return handleError(err)
