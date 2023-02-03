@@ -12,6 +12,6 @@ if [ "$upstream" != "$current" ]; then
 	./update-flake.sh
 fi
 
-if [ -n "$(git diff-index --name-only HEAD -- go.toolchain.rev go.toolchain.sri go.mod.sri)" ]; then
+if [ -n "$(git diff-index --name-only HEAD -- go.toolchain.rev go.mod.sri)" ]; then
     echo "pull-toolchain.sh: changes imported. Use git commit to make them permanent." >&2
 fi
