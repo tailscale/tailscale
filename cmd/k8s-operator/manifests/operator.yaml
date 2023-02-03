@@ -148,6 +148,8 @@ spec:
               value: tailscale/tailscale:unstable
             - name: PROXY_TAGS
               value: tag:k8s
+            - name: AUTH_PROXY
+              value: "false"
           volumeMounts:
           - name: oauth
             mountPath: /oauth
