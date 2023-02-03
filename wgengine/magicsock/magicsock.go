@@ -793,12 +793,12 @@ func (c *Conn) setNetInfoHavePortMap() {
 		// No NetInfo yet. Nothing to update.
 		return
 	}
-	if c.netInfoLast.HavePortMap {
+	if v, _ := c.netInfoLast.HavePortMap.Get(); v {
 		// No change.
 		return
 	}
 	ni := c.netInfoLast.Clone()
-	ni.HavePortMap = true
+	ni.HavePortMap.Set(true)
 	c.callNetInfoCallbackLocked(ni)
 }
 
@@ -834,8 +834,8 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 		UPnP:                  report.UPnP,
 		PMP:                   report.PMP,
 		PCP:                   report.PCP,
-		HavePortMap:           c.portMapper.HaveMapping(),
 	}
+	ni.HavePortMap.Set(c.portMapper.HaveMapping())
 	for rid, d := range report.RegionV4Latency {
 		ni.DERPLatency[fmt.Sprintf("%d-v4", rid)] = d.Seconds()
 	}

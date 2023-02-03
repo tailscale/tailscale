@@ -593,7 +593,7 @@ type NetInfo struct {
 
 	// HavePortMap is whether we have an existing portmap open
 	// (UPnP, PMP, or PCP).
-	HavePortMap bool `json:",omitempty"`
+	HavePortMap opt.Bool
 
 	// UPnP is whether UPnP appears present on the LAN.
 	// Empty means not checked.
@@ -642,11 +642,11 @@ func (ni *NetInfo) String() string {
 }
 
 func (ni *NetInfo) portMapSummary() string {
-	if !ni.HavePortMap && ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
+	if ni.HavePortMap == "" && ni.UPnP == "" && ni.PMP == "" && ni.PCP == "" {
 		return "?"
 	}
 	var prefix string
-	if ni.HavePortMap {
+	if v, _ := ni.HavePortMap.Get(); v {
 		prefix = "active-"
 	}
 	return prefix + conciseOptBool(ni.UPnP, "U") + conciseOptBool(ni.PMP, "M") + conciseOptBool(ni.PCP, "C")
