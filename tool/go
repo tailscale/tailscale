@@ -58,14 +58,7 @@ get_cached() {
     rm -f "$archive.new" "$TOOLCHAIN.extracted"
     if [ ! -e "$archive" ]; then
             log "Need to download go '$REV'."
-            if [ "$ARCH" = "amd64" ]; then
-                # For historic reasons, the tailscale/go amd64 release artifacts don't
-                # have the arch in their name.
-                BUILD="$GOOS"
-            else
-                BUILD="$GOOS-$ARCH"
-            fi
-            curl -f -L -o "$archive.new" "https://github.com/tailscale/go/releases/download/build-${REV}/${BUILD}.tar.gz"
+            curl -f -L -o "$archive.new" "https://github.com/tailscale/go/releases/download/build-${REV}/${GOOS}-${ARCH}.tar.gz"
             rm -f "$archive"
             mv "$archive.new" "$archive"
     fi

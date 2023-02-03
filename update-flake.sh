@@ -8,11 +8,6 @@ REV=$(cat go.toolchain.rev)
 OUT=$(mktemp -d -t nar-hash-XXXXXX)
 rm -rf $OUT
 
-mkdir $OUT
-curl --silent -L https://github.com/tailscale/go/archive/refs/tags/build-$REV.tar.gz | tar -zx -C $OUT --strip-components 1
-go run tailscale.com/cmd/nardump --sri $OUT >go.toolchain.sri
-rm -rf $OUT
-
 go mod vendor -o $OUT
 go run tailscale.com/cmd/nardump --sri $OUT >go.mod.sri
 rm -rf $OUT
@@ -21,5 +16,5 @@ rm -rf $OUT
 # result, when we change a referenced SRI file, we have to cause some
 # change to shell.nix and flake.nix as well, so that nix-direnv
 # notices and reevaluates everything. Sigh.
-perl -pi -e "s,# nix-direnv cache busting line:.*,# nix-direnv cache busting line: $(cat go.toolchain.sri) $(cat go.mod.sri)," shell.nix
-perl -pi -e "s,# nix-direnv cache busting line:.*,# nix-direnv cache busting line: $(cat go.toolchain.sri) $(cat go.mod.sri)," flake.nix
+perl -pi -e "s,# nix-direnv cache busting line:.*,# nix-direnv cache busting line: $(cat go.mod.sri)," shell.nix
+perl -pi -e "s,# nix-direnv cache busting line:.*,# nix-direnv cache busting line: $(cat go.mod.sri)," flake.nix
