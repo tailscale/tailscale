@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
@@ -406,6 +407,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 const dohType = "application/dns-message"
 
 func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
+	ctx = sockstats.WithSockStats(ctx, "dns.forwarder:doh")
 	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
 	if err != nil {
@@ -485,6 +487,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		return nil, fmt.Errorf("unrecognized resolver type %q", rr.name.Addr)
 	}
 	metricDNSFwdUDP.Add(1)
+	ctx = sockstats.WithSockStats(ctx, "dns.forwarder:udp")
 
 	ln, err := f.packetListener(ipp.Addr())
 	if err != nil {

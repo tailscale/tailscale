@@ -24,6 +24,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/sockstats"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine/monitor"
@@ -426,6 +427,7 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // origlen of -1 indicates that the body is not compressed.
 func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded bool, err error) {
 	const maxUploadTime = 45 * time.Second
+	ctx = sockstats.WithSockStats(ctx, "logtail.Logger")
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
 	defer cancel()
 

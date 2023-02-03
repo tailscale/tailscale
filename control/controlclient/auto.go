@@ -13,6 +13,7 @@ import (
 
 	"tailscale.com/health"
 	"tailscale.com/logtail/backoff"
+	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -118,7 +119,11 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		statusFunc: opts.Status,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
+	c.authCtx = sockstats.WithSockStats(c.authCtx, "controlclient.Auto:auth")
+
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
+	c.mapCtx = sockstats.WithSockStats(c.mapCtx, "controlclient.Auto:map")
+
 	c.unregisterHealthWatch = health.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
 
@@ -206,6 +211,7 @@ func (c *Auto) cancelAuth() {
 	}
 	if !c.closed {
 		c.authCtx, c.authCancel = context.WithCancel(context.Background())
+		c.authCtx = sockstats.WithSockStats(c.authCtx, "controlclient.Auto:auth")
 	}
 	c.mu.Unlock()
 }
@@ -216,6 +222,8 @@ func (c *Auto) cancelMapLocked() {
 	}
 	if !c.closed {
 		c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
+		c.mapCtx = sockstats.WithSockStats(c.mapCtx, "controlclient.Auto:map")
+
 	}
 }
 

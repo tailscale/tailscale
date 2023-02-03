@@ -32,6 +32,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
@@ -614,6 +615,8 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 	resc := make(chan res) // must be unbuffered
 	ctx, cancel := context.WithTimeout(ctx, dialNodeTimeout)
 	defer cancel()
+
+	ctx = sockstats.WithSockStats(ctx, "derphttp.Client")
 
 	nwait := 0
 	startDial := func(dstPrimary, proto string) {
