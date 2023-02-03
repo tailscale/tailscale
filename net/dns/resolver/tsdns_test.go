@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"net/netip"
@@ -1122,7 +1123,7 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 	}
 
 	t.Run("no_such_host", func(t *testing.T) {
-		res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), backResolver, &response{
+		res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), t.Logf, backResolver, &response{
 			Header: dnsmessage.Header{
 				ID:       123,
 				Response: true,
@@ -1233,7 +1234,7 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%v_%v", tt.Type, strings.Trim(tt.Name, ".")), func(t *testing.T) {
-			got, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), backResolver, &response{
+			got, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), t.Logf, backResolver, &response{
 				Header: dnsmessage.Header{
 					ID:       123,
 					Response: true,
@@ -1395,7 +1396,7 @@ func (a *wrapResolverConn) WriteTo(q []byte, _ net.Addr) (n int, err error) {
 	if resp == nil {
 		return 0, errors.New("bad query")
 	}
-	res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), a.r, resp)
+	res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), log.Printf, a.r, resp)
 	if err != nil {
 		return 0, err
 	}
