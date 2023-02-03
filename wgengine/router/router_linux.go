@@ -111,6 +111,7 @@ type linuxRouter struct {
 	v6Available     bool
 	v6NATAvailable  bool
 	fwmaskWorks     bool // whether we can use 'ip rule...fwmark <mark>/<mask>'
+	iptFaked	bool
 
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
@@ -126,12 +127,14 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		return nil, err
 	}
 
+	iptFaked := false
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
-		return nil, err
+		logf("iptables not found from path, use netfilter-mode off; and configure iptables yourself.")
+		iptFaked = true
 	}
 
-	v6err := checkIPv6(logf)
+	v6err := checkIPv6(logf, iptFaked)
 	if v6err != nil {
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
@@ -147,7 +150,11 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		// if unavailable. We want that to be a non-fatal error.
 		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 		if err != nil {
-			return nil, err
+			if iptFaked {
+				ipt6 = nil
+			} else {
+				return nil, err
+			}
 		}
 	}
 
@@ -155,10 +162,10 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT)
+	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT, iptFaked)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool, iptMissing bool) (Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
@@ -167,6 +174,7 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 
 		v6Available:    supportsV6,
 		v6NATAvailable: supportsV6NAT,
+		iptFaked:	iptMissing,
 
 		ipt4: netfilter4,
 		ipt6: netfilter6,
@@ -222,6 +230,12 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 	} else if isMWAN3 {
 		r.ipPolicyPrefBase = 1300
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
+	}
+
+	if iptMissing {
+		if err := r.setNetfilterMode(netfilterOff); err != nil {
+			r.logf("error while disabling netfilter: %v", err)
+		}
 	}
 
 	return r, nil
@@ -1598,7 +1612,7 @@ func cleanup(logf logger.Logf, interfaceName string) {
 // missing.  It does not check that IPv6 is currently functional or
 // that there's a global address, just that the system would support
 // IPv6 if it were on an IPv6 network.
-func checkIPv6(logf logger.Logf) error {
+func checkIPv6(logf logger.Logf, iptAvailable bool) error {
 	_, err := os.Stat("/proc/sys/net/ipv6")
 	if os.IsNotExist(err) {
 		return err
@@ -1636,7 +1650,9 @@ func checkIPv6(logf logger.Logf) error {
 
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return err
+		if iptAvailable {
+			return err
+		}
 	}
 
 	return nil
