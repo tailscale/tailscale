@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -51,15 +52,16 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	var (
-		hostname         = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
-		kubeSecret       = defaultEnv("OPERATOR_SECRET", "")
-		operatorTags     = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
-		tsNamespace      = defaultEnv("OPERATOR_NAMESPACE", "")
-		tslogging        = defaultEnv("OPERATOR_LOGGING", "info")
-		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
-		clientSecretPath = defaultEnv("CLIENT_SECRET_FILE", "")
-		image            = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		tags             = defaultEnv("PROXY_TAGS", "tag:k8s")
+		hostname           = defaultEnv("OPERATOR_HOSTNAME", "tailscale-operator")
+		kubeSecret         = defaultEnv("OPERATOR_SECRET", "")
+		operatorTags       = defaultEnv("OPERATOR_INITIAL_TAGS", "tag:k8s-operator")
+		tsNamespace        = defaultEnv("OPERATOR_NAMESPACE", "")
+		tslogging          = defaultEnv("OPERATOR_LOGGING", "info")
+		clientIDPath       = defaultEnv("CLIENT_ID_FILE", "")
+		clientSecretPath   = defaultEnv("CLIENT_SECRET_FILE", "")
+		image              = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
+		shouldRunAuthProxy = defaultEnv("AUTH_PROXY", "false")
 	)
 
 	var opts []kzap.Opts
@@ -173,7 +175,8 @@ waitOnline:
 	nsFilter := cache.ObjectSelector{
 		Field: fields.SelectorFromSet(fields.Set{"metadata.namespace": tsNamespace}),
 	}
-	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{
+	restConfig := config.GetConfigOrDie()
+	mgr, err := manager.New(restConfig, manager.Options{
 		NewCache: cache.BuilderWithOptions(cache.Options{
 			SelectorsByObject: map[client.Object]cache.ObjectSelector{
 				&corev1.Secret{}:      nsFilter,
@@ -222,6 +225,17 @@ waitOnline:
 	}
 
 	startlog.Infof("Startup complete, operator running")
+	if shouldRunAuthProxy == "true" {
+		rc, err := rest.TransportFor(restConfig)
+		if err != nil {
+			startlog.Fatalf("could not get rest transport: %v", err)
+		}
+		authProxyListener, err := s.Listen("tcp", ":443")
+		if err != nil {
+			startlog.Fatalf("could not listen on :443: %v", err)
+		}
+		go runAuthProxy(lc, authProxyListener, rc, zlog.Named("auth-proxy").Infof)
+	}
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
 	}
