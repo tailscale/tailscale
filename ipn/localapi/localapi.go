@@ -314,6 +314,14 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.logf("user bugreport health: ok")
 	}
+	if nm := h.b.NetMap(); nm != nil {
+		if self := nm.SelfNode; self != nil {
+			h.logf("user bugreport node info: nodeid=%q stableid=%q expiry=%q", self.ID, self.StableID, self.KeyExpiry.Format(time.RFC3339))
+		}
+		h.logf("user bugreport public keys: machine=%q node=%q", nm.MachineKey, nm.NodeKey)
+	} else {
+		h.logf("user bugreport netmap: no active netmap")
+	}
 	if defBool(r.URL.Query().Get("diagnose"), false) {
 		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
 	}
