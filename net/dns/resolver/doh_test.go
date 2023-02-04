@@ -45,9 +45,7 @@ func TestDoH(t *testing.T) {
 		t.Fatal("no known DoH")
 	}
 
-	f := &forwarder{
-		dohSem: make(chan struct{}, 10),
-	}
+	f := &forwarder{}
 
 	for _, urlBase := range prefixes {
 		t.Run(urlBase, func(t *testing.T) {
