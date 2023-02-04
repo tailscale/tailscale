@@ -6,6 +6,9 @@
 package tshttpproxy
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -90,15 +93,29 @@ func GetAuthHeader(u *url.URL) (string, error) {
 	return "", nil
 }
 
-var condSetTransportGetProxyConnectHeader func(*http.Transport)
+const proxyAuthHeader = "Proxy-Authorization"
 
 // SetTransportGetProxyConnectHeader sets the provided Transport's
-// GetProxyConnectHeader field, if the current build of Go supports
-// it.
-//
-// See https://github.com/golang/go/issues/41048.
+// GetProxyConnectHeader field, and adds logging of the received response.
 func SetTransportGetProxyConnectHeader(tr *http.Transport) {
-	if f := condSetTransportGetProxyConnectHeader; f != nil {
-		f(tr)
+	tr.GetProxyConnectHeader = func(ctx context.Context, proxyURL *url.URL, target string) (http.Header, error) {
+		v, err := GetAuthHeader(proxyURL)
+		if err != nil {
+			log.Printf("failed to get proxy Auth header for %v; ignoring: %v", proxyURL, err)
+			return nil, nil
+		}
+		if v == "" {
+			return nil, nil
+		}
+		return http.Header{proxyAuthHeader: []string{v}}, nil
+	}
+	tr.OnProxyConnectResponse = func(ctx context.Context, proxyURL *url.URL, connectReq *http.Request, res *http.Response) error {
+		auth := connectReq.Header.Get(proxyAuthHeader)
+		const truncLen = 20
+		if len(auth) > truncLen {
+			auth = fmt.Sprintf("%s...(%d total bytes)", auth[:truncLen], len(auth))
+		}
+		log.Printf("tshttpproxy: CONNECT response from %v for target %q (auth %q): %v", proxyURL, connectReq.Host, auth, res.Status)
+		return nil
 	}
 }
