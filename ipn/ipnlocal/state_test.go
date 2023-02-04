@@ -473,6 +473,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(3)
 	cc.persist.LoginName = "user1"
 	cc.persist.UserProfile.LoginName = "user1"
+	cc.persist.NodeID = "node1"
 	cc.send(nil, "", true, &netmap.NetworkMap{})
 	{
 		nn := notifies.drain(3)
@@ -699,6 +700,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(3)
 	cc.persist.LoginName = "user2"
 	cc.persist.UserProfile.LoginName = "user2"
+	cc.persist.NodeID = "node2"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})
@@ -835,6 +837,7 @@ func TestStateMachine(t *testing.T) {
 	notifies.expect(3)
 	cc.persist.LoginName = "user3"
 	cc.persist.UserProfile.LoginName = "user3"
+	cc.persist.NodeID = "node3"
 	cc.send(nil, "", true, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 	})

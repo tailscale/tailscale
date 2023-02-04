@@ -185,7 +185,7 @@ func init() {
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	prefs := prefsIn.AsStruct().View()
 	newPersist := prefs.Persist().AsStruct()
-	if newPersist == nil || newPersist.LoginName == "" {
+	if newPersist == nil || newPersist.NodeID == "" {
 		return pm.setPrefsLocked(prefs)
 	}
 	up := newPersist.UserProfile

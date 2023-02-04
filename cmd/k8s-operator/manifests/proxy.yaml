@@ -27,8 +27,6 @@ spec:
         - name: tailscale
           imagePullPolicy: Always
           env:
-            - name: TS_USERSPACE
-              value: "false"
             - name: TS_AUTH_ONCE
               value: "true"
           securityContext:
