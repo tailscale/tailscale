@@ -128,18 +128,15 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
-		return nil, err
+		logf("iptables missing from path; netfilter is disabled");
 	}
 
-	v6err := checkIPv6(logf)
+	v6err := checkIPv6(logf, ipt4 != nil)
 	if v6err != nil {
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
-	supportsV6NAT := supportsV6 && supportsV6NAT()
-	if supportsV6 {
-		logf("v6nat = %v", supportsV6NAT)
-	}
+	supportsV6NAT := supportsV6 && supportsV6NAT(ipt4 != nil)
 
 	var ipt6 netfilterRunner
 	if supportsV6 {
@@ -147,7 +144,9 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		// if unavailable. We want that to be a non-fatal error.
 		ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 		if err != nil {
-			return nil, err
+			logf("ip6tables missing from path")
+		} else {
+			logf("v6nat = %v", supportsV6NAT)
 		}
 	}
 
@@ -222,6 +221,14 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 	} else if isMWAN3 {
 		r.ipPolicyPrefBase = 1300
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
+	}
+
+	if r.ipt4 == nil {
+		if err := r.setNetfilterMode(netfilterOff); err != nil {
+			r.logf("error while disabling netfilter: %v", err);
+		} else {
+			r.logf("iptables not available - netfilter=off; configure firewall youself.")
+		}
 	}
 
 	return r, nil
@@ -417,7 +424,11 @@ func (r *linuxRouter) Set(cfg *Config) error {
 		cfg = &shutdownConfig
 	}
 
-	if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
+	if _, err := exec.LookPath("iptables"); err != nil {
+		if err := r.setNetfilterMode(netfilterOff); err != nil {
+			errs = append(errs, err)
+		}
+	} else if err := r.setNetfilterMode(cfg.NetfilterMode); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -1598,7 +1609,7 @@ func cleanup(logf logger.Logf, interfaceName string) {
 // missing.  It does not check that IPv6 is currently functional or
 // that there's a global address, just that the system would support
 // IPv6 if it were on an IPv6 network.
-func checkIPv6(logf logger.Logf) error {
+func checkIPv6(logf logger.Logf, iptAvailable bool) error {
 	_, err := os.Stat("/proc/sys/net/ipv6")
 	if os.IsNotExist(err) {
 		return err
@@ -1635,8 +1646,10 @@ func checkIPv6(logf logger.Logf) error {
 	}
 
 	// Some distros ship ip6tables separately from iptables.
-	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return err
+	if iptAvailable {
+		if _, err := exec.LookPath("ip6tables"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1648,7 +1661,7 @@ func checkIPv6(logf logger.Logf) error {
 // The nat table was added after the initial release of ipv6
 // netfilter, so some older distros ship a kernel that can't NAT IPv6
 // traffic.
-func supportsV6NAT() bool {
+func supportsV6NAT(iptAvailable bool) bool {
 	bs, err := os.ReadFile("/proc/net/ip6_tables_names")
 	if err != nil {
 		// Can't read the file. Assume SNAT works.
@@ -1658,8 +1671,10 @@ func supportsV6NAT() bool {
 		return true
 	}
 	// In nftables mode, that proc file will be empty. Try another thing:
-	if exec.Command("modprobe", "ip6table_nat").Run() == nil {
-		return true
+	if iptAvailable {
+		if exec.Command("modprobe", "ip6table_nat").Run() == nil {
+			return true
+		}
 	}
 	return false
 }
