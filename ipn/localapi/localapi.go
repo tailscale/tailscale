@@ -68,6 +68,7 @@ var handler = map[string]localAPIHandler{
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
 	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
 	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
+	"debug-capture":               (*Handler).serveDebugCapture,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
@@ -1554,6 +1555,21 @@ func defBool(a string, def bool) bool {
 		return def
 	}
 	return v
+}
+
+func (h *Handler) serveDebugCapture(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(200)
+	w.(http.Flusher).Flush()
+	h.b.StreamDebugCapture(r.Context(), w)
 }
 
 var (

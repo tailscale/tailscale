@@ -200,3 +200,7 @@ func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()
 }
+
+func (e *watchdogEngine) InstallCaptureHook(cb CaptureCallback) {
+	e.wrap.InstallCaptureHook(cb)
+}

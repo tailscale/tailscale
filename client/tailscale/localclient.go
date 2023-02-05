@@ -1028,6 +1028,27 @@ func (lc *LocalClient) DebugSetExpireIn(ctx context.Context, d time.Duration) er
 	return err
 }
 
+// StreamDebugCapture streams a pcap-formatted packet capture.
+//
+// The provided context does not determine the lifetime of the
+// returned io.ReadCloser.
+func (lc *LocalClient) StreamDebugCapture(ctx context.Context) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-capture", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		res.Body.Close()
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		res.Body.Close()
+		return nil, errors.New(res.Status)
+	}
+	return res.Body, nil
+}
+
 // WatchIPNBus subscribes to the IPN notification bus. It returns a watcher
 // once the bus is connected successfully.
 //

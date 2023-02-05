@@ -13,6 +13,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
@@ -41,6 +42,12 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
+
+// CaptureCallback is the type used to record packets when
+// debugging packet-capture. This function must not take
+// ownership of the provided data slice: it may only copy
+// out of it within the lifetime of the function.
+type CaptureCallback func(capture.Path, time.Time, []byte)
 
 // someHandle is allocated so its pointer address acts as a unique
 // map key handle. (It needs to have non-zero size for Go to guarantee
@@ -171,4 +178,9 @@ type Engine interface {
 	// WhoIsIPPort looks up an IP:port in the temporary registrations,
 	// and returns a matching Tailscale IP, if it exists.
 	WhoIsIPPort(netip.AddrPort) (netip.Addr, bool)
+
+	// InstallCaptureHook registers a function to be called to capture
+	// packets traversing the data path. The hook can be uninstalled by
+	// calling this function with a nil value.
+	InstallCaptureHook(CaptureCallback)
 }
