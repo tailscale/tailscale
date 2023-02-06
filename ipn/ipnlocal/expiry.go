@@ -69,15 +69,16 @@ func (em *expiryManager) onControlTime(t time.Time) {
 // Node.Expired so other parts of the codebase can provide more clear error
 // messages when attempting to e.g. ping an expired node.
 //
+// The localNow time should be the output of time.Now for the local system; it
+// will be adjusted by any stored clock skew from ControlTime.
+//
 // This is additionally a defense-in-depth against something going wrong with
 // control such that we start seeing expired peers with a valid Endpoints or
 // DERP field.
 //
 // This function is safe to call concurrently with onControlTime but not
 // concurrently with any other call to flagExpiredPeers.
-func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap) {
-	localNow := em.timeNow()
-
+func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap, localNow time.Time) {
 	// Adjust our current time by any saved delta to adjust for clock skew.
 	controlNow := localNow.Add(em.clockDelta.Load())
 	if controlNow.Before(flagExpiredPeersEpoch) {
@@ -118,4 +119,96 @@ func (em *expiryManager) flagExpiredPeers(netmap *netmap.NetworkMap) {
 		// case something tries to communicate.
 		peer.Key = key.NodePublicWithBadOldPrefix(peer.Key)
 	}
+}
+
+// nextPeerExpiry returns the time that the next node in the netmap expires
+// (including the self node), based on their KeyExpiry. It skips nodes that are
+// already marked as Expired. If there are no nodes expiring in the future,
+// then the zero Time will be returned.
+//
+// The localNow time should be the output of time.Now for the local system; it
+// will be adjusted by any stored clock skew from ControlTime.
+//
+// This function is safe to call concurrently with other methods of this expiryManager.
+func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Time) time.Time {
+	if nm == nil {
+		return time.Time{}
+	}
+
+	controlNow := localNow.Add(em.clockDelta.Load())
+	if controlNow.Before(flagExpiredPeersEpoch) {
+		em.logf("netmap: nextPeerExpiry: [unexpected] delta-adjusted current time is before hardcoded epoch; skipping")
+		return time.Time{}
+	}
+
+	var nextExpiry time.Time // zero if none
+	for _, peer := range nm.Peers {
+		if peer.KeyExpiry.IsZero() {
+			continue // tagged node
+		} else if peer.Expired {
+			// Peer already expired; Expired is set by the
+			// flagExpiredPeers function, above.
+			continue
+		} else if peer.KeyExpiry.Before(controlNow) {
+			// This peer already expired, and peer.Expired
+			// isn't set for some reason. Skip this node.
+			continue
+		}
+
+		// nextExpiry being zero is a sentinel that we haven't yet set
+		// an expiry; otherwise, only update if this node's expiry is
+		// sooner than the currently-stored one (since we want the
+		// soonest-occuring expiry time).
+		if nextExpiry.IsZero() || peer.KeyExpiry.Before(nextExpiry) {
+			nextExpiry = peer.KeyExpiry
+		}
+	}
+
+	// Ensure that we also fire this timer if our own node key expires.
+	if nm.SelfNode != nil {
+		selfExpiry := nm.SelfNode.KeyExpiry
+
+		if selfExpiry.IsZero() {
+			// No expiry for self node
+		} else if selfExpiry.Before(controlNow) {
+			// Self node already expired; we don't want to return a
+			// time in the past, so skip this.
+		} else if nextExpiry.IsZero() || selfExpiry.Before(nextExpiry) {
+			// Self node expires after now, but before the soonest
+			// peer in the netmap; update our next expiry to this
+			// time.
+			nextExpiry = selfExpiry
+		}
+	}
+
+	// As an additional defense in depth, never return a time that is
+	// before the current time from the perspective of the local system
+	// (since timers with a zero or negative duration will fire
+	// immediately and can cause unnecessary reconfigurations).
+	//
+	// This can happen if the local clock is running fast; for example:
+	//    localTime   = 2pm
+	//    controlTime = 1pm    (real time)
+	//    nextExpiry  = 1:30pm (real time)
+	//
+	// In the above case, we'd return a nextExpiry of 1:30pm while the
+	// current clock reads 2pm; in this case, setting a timer for
+	// nextExpiry.Sub(now) would result in a negative duration and a timer
+	// that fired immediately.
+	//
+	// In this particular edge-case, return an expiry time 30 seconds after
+	// the local time so that any timers created based on this expiry won't
+	// fire too quickly.
+	//
+	// The alternative would be to do all comparisons in local time,
+	// unadjusted for clock skew, but that doesn't handle cases where the
+	// local clock is "fixed" between netmap updates.
+	if !nextExpiry.IsZero() && nextExpiry.Before(localNow) {
+		em.logf("netmap: nextPeerExpiry: skipping nextExpiry %q before local time %q due to clock skew",
+			nextExpiry.UTC().Format(time.RFC3339),
+			localNow.UTC().Format(time.RFC3339))
+		return localNow.Add(30 * time.Second)
+	}
+
+	return nextExpiry
 }

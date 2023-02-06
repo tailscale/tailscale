@@ -115,12 +115,164 @@ func TestFlagExpiredPeers(t *testing.T) {
 			if tt.controlTime != nil {
 				em.onControlTime(*tt.controlTime)
 			}
-			em.flagExpiredPeers(tt.netmap)
+			em.flagExpiredPeers(tt.netmap, now)
 			if !reflect.DeepEqual(tt.netmap.Peers, tt.want) {
 				t.Errorf("wrong results\n got: %s\nwant: %s", formatNodes(tt.netmap.Peers), formatNodes(tt.want))
 			}
 		})
 	}
+}
+
+func TestNextPeerExpiry(t *testing.T) {
+	n := func(id tailcfg.NodeID, name string, expiry time.Time, mod ...func(*tailcfg.Node)) *tailcfg.Node {
+		n := &tailcfg.Node{ID: id, Name: name, KeyExpiry: expiry}
+		for _, f := range mod {
+			f(n)
+		}
+		return n
+	}
+
+	now := time.Unix(1675725516, 0)
+
+	noExpiry := time.Time{}
+	timeInPast := now.Add(-1 * time.Hour)
+	timeInFuture := now.Add(1 * time.Hour)
+	timeInMoreFuture := now.Add(2 * time.Hour)
+
+	tests := []struct {
+		name   string
+		netmap *netmap.NetworkMap
+		want   time.Time
+	}{
+		{
+			name: "no_expiry",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", noExpiry),
+					n(2, "bar", noExpiry),
+				},
+				SelfNode: n(3, "self", noExpiry),
+			},
+			want: noExpiry,
+		},
+		{
+			name: "future_expiry_from_peer",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", noExpiry),
+					n(2, "bar", timeInFuture),
+				},
+				SelfNode: n(3, "self", noExpiry),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "future_expiry_from_self",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", noExpiry),
+					n(2, "bar", noExpiry),
+				},
+				SelfNode: n(3, "self", timeInFuture),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "future_expiry_from_multiple_peers",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", timeInFuture),
+					n(2, "bar", timeInMoreFuture),
+				},
+				SelfNode: n(3, "self", noExpiry),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "future_expiry_from_peer_and_self",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", timeInMoreFuture),
+				},
+				SelfNode: n(2, "self", timeInFuture),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "only_self",
+			netmap: &netmap.NetworkMap{
+				Peers:    []*tailcfg.Node{},
+				SelfNode: n(1, "self", timeInFuture),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "peer_already_expired",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", timeInPast),
+				},
+				SelfNode: n(2, "self", timeInFuture),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "self_already_expired",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", timeInFuture),
+				},
+				SelfNode: n(2, "self", timeInPast),
+			},
+			want: timeInFuture,
+		},
+		{
+			name: "all_nodes_already_expired",
+			netmap: &netmap.NetworkMap{
+				Peers: []*tailcfg.Node{
+					n(1, "foo", timeInPast),
+				},
+				SelfNode: n(2, "self", timeInPast),
+			},
+			want: noExpiry,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			em := newExpiryManager(t.Logf)
+			em.timeNow = func() time.Time { return now }
+			got := em.nextPeerExpiry(tt.netmap, now)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got.Format(time.RFC3339), tt.want.Format(time.RFC3339))
+			} else if !got.IsZero() && got.Before(now) {
+				t.Errorf("unexpectedly got expiry %q before now %q", got.Format(time.RFC3339), now.Format(time.RFC3339))
+			}
+		})
+	}
+
+	t.Run("ClockSkew", func(t *testing.T) {
+		t.Logf("local time:  %q", now.Format(time.RFC3339))
+		em := newExpiryManager(t.Logf)
+		em.timeNow = func() time.Time { return now }
+
+		// The local clock is "running fast"; our clock skew is -2h
+		em.clockDelta.Store(-2 * time.Hour)
+		t.Logf("'real' time: %q", now.Add(-2*time.Hour).Format(time.RFC3339))
+
+		// If we don't adjust for the local time, this would return a
+		// time in the past.
+		nm := &netmap.NetworkMap{
+			Peers: []*tailcfg.Node{
+				n(1, "foo", timeInPast),
+			},
+		}
+		got := em.nextPeerExpiry(nm, now)
+		want := now.Add(30 * time.Second)
+		if got != want {
+			t.Errorf("got %q, want %q", got.Format(time.RFC3339), want.Format(time.RFC3339))
+		}
+	})
 }
 
 func formatNodes(nodes []*tailcfg.Node) string {
