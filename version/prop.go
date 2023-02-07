@@ -4,107 +4,35 @@
 package version
 
 import (
-	"os"
-	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
-	"sync"
 
 	tailscaleroot "tailscale.com"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 )
 
 // IsMobile reports whether this is a mobile client build.
-func IsMobile() bool {
-	return runtime.GOOS == "android" || runtime.GOOS == "ios"
-}
+func IsMobile() bool { return isMobile }
 
 // OS returns runtime.GOOS, except instead of returning "darwin" it
 // returns "iOS" or "macOS".
-func OS() string {
-	if runtime.GOOS == "ios" {
-		return "iOS"
-	}
-	if runtime.GOOS == "darwin" {
-		return "macOS"
-	}
-	return runtime.GOOS
-}
+func OS() string { return legacyOS }
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
 // process (either the app or the extension). It is true for the Mac App Store
 // and macsys (System Extension) version on macOS, and false for
 // tailscaled-on-macOS.
-func IsSandboxedMacOS() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	if IsMacSysExt() {
-		return true
-	}
-	exe, _ := os.Executable()
-	return strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
-}
-
-var isMacSysExt syncs.AtomicValue[bool]
+func IsSandboxedMacOS() bool { return isSandboxedMacOS }
 
 // IsMacSysExt whether this binary is from the standalone "System
 // Extension" (a.k.a. "macsys") version of Tailscale for macOS.
-func IsMacSysExt() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	if b, ok := isMacSysExt.LoadOk(); ok {
-		return b
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	v := filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
-	isMacSysExt.Store(v)
-	return v
-}
+func IsMacSysExt() bool { return isMacSysExt }
 
 // IsWindowsGUI reports whether the current process is the Windows GUI.
-func IsWindowsGUI() bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-	exe, _ := os.Executable()
-	exe = filepath.Base(exe)
-	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
-}
-
-var (
-	isUnstableOnce  sync.Once
-	isUnstableBuild bool
-)
+func IsWindowsGUI() bool { return isWindowsGUI }
 
 // IsUnstableBuild reports whether this is an unstable build.
 // That is, whether its minor version number is odd.
-func IsUnstableBuild() bool {
-	isUnstableOnce.Do(initUnstable)
-	return isUnstableBuild
-}
-
-func initUnstable() {
-	_, rest, ok := strings.Cut(Short, ".")
-	if !ok {
-		return
-	}
-	minorStr, _, ok := strings.Cut(rest, ".")
-	if !ok {
-		return
-	}
-	minor, err := strconv.Atoi(minorStr)
-	if err != nil {
-		return
-	}
-	isUnstableBuild = minor%2 == 1
-}
+func IsUnstableBuild() bool { return isUnstable }
 
 // Meta is a JSON-serializable type that contains all the version
 // information.
