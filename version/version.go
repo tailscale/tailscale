@@ -80,6 +80,9 @@ var (
 
 	// isWindowsGUI is whether the current binary is the Windows GUI binary.
 	isWindowsGUI bool
+
+	// majorMinorPatch is the major.minor.patch portion of Short.
+	majorMinorPatch string
 )
 
 func init() {
@@ -89,6 +92,12 @@ func init() {
 }
 
 func initVersion() {
+	defer func() {
+		// Must be run after Short has been initialized, easiest way to do that
+		// is a defer.
+		majorMinorPatch, _, _ = strings.Cut(Short, "-")
+	}()
+
 	if Long != "" && Short != "" {
 		// Built in the recommended way, using build_dist.sh.
 		return
@@ -98,7 +107,7 @@ func initVersion() {
 	// stamping.
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		Long = strings.TrimSpace(tailscaleroot.Version) + "-ERR-BuildInfo"
+		Long = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
 		Short = Long
 		return
 	}
@@ -126,7 +135,7 @@ func initVersion() {
 	}
 
 	// Backup path, using Go 1.18's built-in git stamping.
-	Short = strings.TrimSpace(tailscaleroot.Version) + "-dev" + commitDate
+	Short = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + commitDate
 	Long = Short + "-t" + commitHashAbbrev + dirty
 }
 
