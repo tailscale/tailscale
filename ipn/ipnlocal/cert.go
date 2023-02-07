@@ -155,10 +155,9 @@ func (b *LocalBackend) getCertStore(dir string) certStore {
 type certFileStore struct {
 	dir string
 
-	// This field allows a test to inject PEM-formatted CA root(s) for
-	// certificate verification. If nil or empty, the default system pool is
-	// used.
-	testRoots []byte
+	// This field allows a test to overide the CA root(s) for certificate
+	// verification. If nil the default system pool is used.
+	testRoots *x509.CertPool
 }
 
 func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
@@ -194,10 +193,9 @@ func (f certFileStore) WriteKey(domain string, key []byte) error {
 type certStateStore struct {
 	ipn.StateStore
 
-	// This field allows a test to inject PEM-formatted CA root(s) for
-	// certificate verification. If nil or empty, the default system pool is
-	// used.
-	testRoots []byte
+	// This field allows a test to overide the CA root(s) for certificate
+	// verification. If nil the default system pool is used.
+	testRoots *x509.CertPool
 }
 
 func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
@@ -470,21 +468,17 @@ func acmeKey(dir string) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-func validCertPEM(domain string, keyPEM, certPEM, extraRoots []byte, now time.Time) bool {
+// validCertPEM reports whether the given certificate is valid for domain at now.
+//
+// If roots != nil, it is used instead of the system root pool. This is meant
+// to support testing, and production code should pass roots == nil.
+func validCertPEM(domain string, keyPEM, certPEM []byte, roots *x509.CertPool, now time.Time) bool {
 	if len(keyPEM) == 0 || len(certPEM) == 0 {
 		return false
 	}
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return false
-	}
-	var roots *x509.CertPool
-	if len(extraRoots) != 0 {
-		roots = x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(extraRoots) {
-			log.Print("cert check: failed append certificates")
-			return false
-		}
 	}
 
 	var leaf *x509.Certificate

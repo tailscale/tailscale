@@ -6,6 +6,7 @@
 package ipnlocal
 
 import (
+	"crypto/x509"
 	"embed"
 	"testing"
 	"time"
@@ -56,6 +57,11 @@ func TestCertStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(testRoot) {
+		t.Fatal("Unable to add test CA to the cert pool")
+	}
+
 	testCert, err := certTestFS.ReadFile("testdata/example.com.pem")
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +75,8 @@ func TestCertStoreRoundTrip(t *testing.T) {
 		name  string
 		store certStore
 	}{
-		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: testRoot}},
-		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: testRoot}},
+		{"FileStore", certFileStore{dir: t.TempDir(), testRoots: roots}},
+		{"StateStore", certStateStore{StateStore: new(mem.Store), testRoots: roots}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
