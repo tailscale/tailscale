@@ -155,8 +155,9 @@ func (b *LocalBackend) getCertStore(dir string) certStore {
 type certFileStore struct {
 	dir string
 
-	// This field allows a test to inject additional CA root(s) for certificate
-	// verification. If nil or empty, the default system pool is used.
+	// This field allows a test to inject PEM-formatted CA root(s) for
+	// certificate verification. If nil or empty, the default system pool is
+	// used.
 	testRoots []byte
 }
 
@@ -193,8 +194,9 @@ func (f certFileStore) WriteKey(domain string, key []byte) error {
 type certStateStore struct {
 	ipn.StateStore
 
-	// This field allows a test to inject additional CA root(s) for certificate
-	// verification. If nil or empty, the default system pool is used.
+	// This field allows a test to inject PEM-formatted CA root(s) for
+	// certificate verification. If nil or empty, the default system pool is
+	// used.
 	testRoots []byte
 }
 
