@@ -476,12 +476,9 @@ func validCertPEM(domain string, keyPEM, certPEM, extraRoots []byte, now time.Ti
 	if err != nil {
 		return false
 	}
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		log.Printf("cert check: failed to get system roots: %v", err)
-		return false
-	}
+	var roots *x509.CertPool
 	if len(extraRoots) != 0 {
+		roots = x509.NewCertPool()
 		if !roots.AppendCertsFromPEM(extraRoots) {
 			log.Print("cert check: failed append certificates")
 			return false
