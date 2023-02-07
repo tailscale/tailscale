@@ -316,6 +316,8 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.logf("user bugreport health: ok")
 	}
+
+	// Information about the current node from the netmap
 	if nm := h.b.NetMap(); nm != nil {
 		if self := nm.SelfNode; self != nil {
 			h.logf("user bugreport node info: nodeid=%q stableid=%q expiry=%q", self.ID, self.StableID, self.KeyExpiry.Format(time.RFC3339))
@@ -324,6 +326,12 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.logf("user bugreport netmap: no active netmap")
 	}
+
+	// Print all envknobs; we otherwise only print these on startup, and
+	// printing them here ensures we don't have to go spelunking through
+	// logs for them.
+	envknob.LogCurrent(logger.WithPrefix(h.logf, "user bugreport: "))
+
 	if defBool(r.URL.Query().Get("diagnose"), false) {
 		h.b.Doctor(r.Context(), logger.WithPrefix(h.logf, "diag: "))
 	}
