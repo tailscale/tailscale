@@ -155,7 +155,7 @@ func (b *LocalBackend) getCertStore(dir string) certStore {
 type certFileStore struct {
 	dir string
 
-	// This field allows a test to overide the CA root(s) for certificate
+	// This field allows a test to override the CA root(s) for certificate
 	// verification. If nil the default system pool is used.
 	testRoots *x509.CertPool
 }
@@ -193,7 +193,7 @@ func (f certFileStore) WriteKey(domain string, key []byte) error {
 type certStateStore struct {
 	ipn.StateStore
 
-	// This field allows a test to overide the CA root(s) for certificate
+	// This field allows a test to override the CA root(s) for certificate
 	// verification. If nil the default system pool is used.
 	testRoots *x509.CertPool
 }
