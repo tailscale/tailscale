@@ -176,7 +176,7 @@ func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, erro
 }
 
 func (f certFileStore) WriteCert(domain string, cert []byte) error {
-	return os.WriteFile(keyFile(string(f), domain), cert, 0644)
+	return os.WriteFile(certFile(string(f), domain), cert, 0644)
 }
 
 func (f certFileStore) WriteKey(domain string, key []byte) error {
