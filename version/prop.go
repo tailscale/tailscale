@@ -6,7 +6,6 @@ package version
 import (
 	"strings"
 
-	tailscaleroot "tailscale.com"
 	"tailscale.com/tailcfg"
 )
 
@@ -95,7 +94,7 @@ type Meta struct {
 // GetMeta returns version metadata about the current build.
 func GetMeta() Meta {
 	return Meta{
-		MajorMinorPatch: strings.TrimSpace(tailscaleroot.Version),
+		MajorMinorPatch: majorMinorPatch,
 		Short:           Short,
 		Long:            Long,
 		GitCommit:       GitCommit,
