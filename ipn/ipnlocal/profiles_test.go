@@ -6,6 +6,7 @@ package ipnlocal
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 
 	"tailscale.com/ipn"
@@ -338,6 +339,7 @@ func TestProfileManagementWindows(t *testing.T) {
 				ID:        id,
 				LoginName: loginName,
 			},
+			NodeID: tailcfg.StableNodeID(strconv.Itoa(int(id))),
 		}
 		if err := pm.SetPrefs(p.View()); err != nil {
 			t.Fatal(err)
