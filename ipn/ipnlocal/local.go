@@ -2498,6 +2498,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkExitNodePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
+	if runtime.GOOS == "windows" && p.WantRunning && !p.ForceDaemon && len(b.notifyWatchers) == 0 {
+		errs = append(errs, errors.New("Use 'tailscale up --unattended' on Windows without GUI"))
+	}
 	return multierr.New(errs...)
 }
 
