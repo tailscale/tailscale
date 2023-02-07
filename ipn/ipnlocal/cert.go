@@ -146,46 +146,56 @@ var errCertExpired = errors.New("cert expired")
 
 func (b *LocalBackend) getCertStore(dir string) certStore {
 	if hostinfo.GetEnvType() == hostinfo.Kubernetes && dir == "/tmp" {
-		return certStateStore{b.store}
+		return certStateStore{StateStore: b.store}
 	}
-	return certFileStore(dir)
+	return certFileStore{dir: dir}
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
-type certFileStore string // dir
+type certFileStore struct {
+	dir string
+
+	// This field allows a test to inject additional CA root(s) for certificate
+	// verification. If nil or empty, the default system pool is used.
+	testRoots []byte
+}
 
 func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
-	certPEM, err := os.ReadFile(keyFile(string(f), domain))
+	certPEM, err := os.ReadFile(certFile(f.dir, domain))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ipn.ErrStateNotExist
 		}
 		return nil, err
 	}
-	keyPEM, err := os.ReadFile(certFile(string(f), domain))
+	keyPEM, err := os.ReadFile(keyFile(f.dir, domain))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ipn.ErrStateNotExist
 		}
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, now) {
+	if !validCertPEM(domain, keyPEM, certPEM, f.testRoots, now) {
 		return nil, errCertExpired
 	}
 	return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
 }
 
 func (f certFileStore) WriteCert(domain string, cert []byte) error {
-	return os.WriteFile(certFile(string(f), domain), cert, 0644)
+	return os.WriteFile(certFile(f.dir, domain), cert, 0644)
 }
 
 func (f certFileStore) WriteKey(domain string, key []byte) error {
-	return os.WriteFile(keyFile(string(f), domain), key, 0600)
+	return os.WriteFile(keyFile(f.dir, domain), key, 0600)
 }
 
 // certStateStore implements certStore by storing the cert & key files in an ipn.StateStore.
 type certStateStore struct {
 	ipn.StateStore
+
+	// This field allows a test to inject additional CA root(s) for certificate
+	// verification. If nil or empty, the default system pool is used.
+	testRoots []byte
 }
 
 func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
@@ -197,7 +207,7 @@ func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, err
 	if err != nil {
 		return nil, err
 	}
-	if !validCertPEM(domain, keyPEM, certPEM, now) {
+	if !validCertPEM(domain, keyPEM, certPEM, s.testRoots, now) {
 		return nil, errCertExpired
 	}
 	return &TLSCertKeyPair{CertPEM: certPEM, KeyPEM: keyPEM, Cached: true}, nil
@@ -458,7 +468,7 @@ func acmeKey(dir string) (crypto.Signer, error) {
 	return privKey, nil
 }
 
-func validCertPEM(domain string, keyPEM, certPEM []byte, now time.Time) bool {
+func validCertPEM(domain string, keyPEM, certPEM, extraRoots []byte, now time.Time) bool {
 	if len(keyPEM) == 0 || len(certPEM) == 0 {
 		return false
 	}
@@ -466,6 +476,18 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, now time.Time) bool {
 	if err != nil {
 		return false
 	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		log.Printf("cert check: failed to get system roots: %v", err)
+		return false
+	}
+	if len(extraRoots) != 0 {
+		if !roots.AppendCertsFromPEM(extraRoots) {
+			log.Print("cert check: failed append certificates")
+			return false
+		}
+	}
+
 	var leaf *x509.Certificate
 	intermediates := x509.NewCertPool()
 	for i, certDER := range tlsCert.Certificate {
@@ -485,6 +507,7 @@ func validCertPEM(domain string, keyPEM, certPEM []byte, now time.Time) bool {
 	_, err = leaf.Verify(x509.VerifyOptions{
 		DNSName:       domain,
 		CurrentTime:   now,
+		Roots:         roots,
 		Intermediates: intermediates,
 	})
 	return err == nil
