@@ -18,9 +18,9 @@ import (
 	"tailscale.com/version/distro"
 )
 
-// configureHostCmd is the "tailscale configure-host" command which
-// was once used to configure Synology devices, but is now a redirect
-// to "tailscale configure synology".
+// configureHostCmd is the "tailscale configure-host" command which was once
+// used to configure Synology devices, but is now a compatibility alias to
+// "tailscale configure synology".
 var configureHostCmd = &ffcli.Command{
 	Name:      "configure-host",
 	Exec:      runConfigureSynology,
