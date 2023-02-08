@@ -189,7 +189,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 	// lowMem + long string
 	l.skipClientTime = false
 	l.lowMem = true
-	longStr := strings.Repeat("0", 512)
+	longStr := strings.Repeat("0", 5120)
 	io.WriteString(l, longStr)
 	body = <-ts.uploaded
 	data = unmarshalOne(t, body)
@@ -197,8 +197,8 @@ func TestEncodeSpecialCases(t *testing.T) {
 	if !ok {
 		t.Errorf("lowMem: no text %v", data)
 	}
-	if n := len(text.(string)); n > 300 {
-		t.Errorf("lowMem: got %d chars; want <300 chars", n)
+	if n := len(text.(string)); n > 4500 {
+		t.Errorf("lowMem: got %d chars; want <4500 chars", n)
 	}
 
 	// -------------------------------------------------------------------------
@@ -332,10 +332,10 @@ func unmarshalOne(t *testing.T, body []byte) map[string]any {
 
 func TestEncodeTextTruncation(t *testing.T) {
 	lg := &Logger{timeNow: time.Now, lowMem: true}
-	in := bytes.Repeat([]byte("a"), 300)
+	in := bytes.Repeat([]byte("a"), 5120)
 	b := lg.encodeText(in, true, 0, 0, 0)
 	got := string(b)
-	want := `{"text": "` + strings.Repeat("a", 255) + `…+45"}` + "\n"
+	want := `{"text": "` + strings.Repeat("a", 4096) + `…+1024"}` + "\n"
 	if got != want {
 		t.Errorf("got:\n%qwant:\n%q\n", got, want)
 	}
