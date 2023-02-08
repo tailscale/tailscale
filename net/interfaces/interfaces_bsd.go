@@ -40,9 +40,15 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 // owns the default route. It returns the first IPv4 or IPv6 default route it
 // finds (it does not prefer one or the other).
 func DefaultRouteInterfaceIndex() (int, error) {
+	disabledAlternateDefaultRouteInterface := false
 	if f := defaultRouteInterfaceIndexFunc.Load(); f != nil {
 		if ifIndex := f(); ifIndex != 0 {
-			return ifIndex, nil
+			if !disableAlternateDefaultRouteInterface.Load() {
+				return ifIndex, nil
+			} else {
+				disabledAlternateDefaultRouteInterface = true
+				log.Printf("interfaces_bsd: alternate default route interface function disabled, would have returned interface %d", ifIndex)
+			}
 		}
 		// Fallthrough if we can't use the alternate implementation.
 	}
@@ -75,6 +81,9 @@ func DefaultRouteInterfaceIndex() (int, error) {
 			continue
 		}
 		if isDefaultGateway(rm) {
+			if disabledAlternateDefaultRouteInterface {
+				log.Printf("interfaces_bsd: alternate default route interface function disabled, default implementation returned %d", rm.Index)
+			}
 			return rm.Index, nil
 		}
 	}
