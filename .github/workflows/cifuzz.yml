@@ -1,5 +1,5 @@
 name: CIFuzz
-on: [] # was: [pull_request], but disabled in https://github.com/tailscale/tailscale/pull/7156
+on: [pull_request]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
