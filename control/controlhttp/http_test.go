@@ -194,16 +194,16 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 	}
 
 	a := &Dialer{
-		Hostname:          "localhost",
-		HTTPPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
-		HTTPSPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
-		MachineKey:        client,
-		ControlKey:        server.Public(),
-		ProtocolVersion:   testProtocolVersion,
-		Dialer:            new(tsdial.Dialer).SystemDial,
-		Logf:              t.Logf,
-		insecureTLS:       true,
-		testFallbackDelay: 50 * time.Millisecond,
+		Hostname:             "localhost",
+		HTTPPort:             strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
+		HTTPSPort:            strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
+		MachineKey:           client,
+		ControlKey:           server.Public(),
+		ProtocolVersion:      testProtocolVersion,
+		Dialer:               new(tsdial.Dialer).SystemDial,
+		Logf:                 t.Logf,
+		omitCertErrorLogging: true,
+		testFallbackDelay:    50 * time.Millisecond,
 	}
 
 	if proxy != nil {
@@ -646,19 +646,19 @@ func TestDialPlan(t *testing.T) {
 
 			drained := make(chan struct{})
 			a := &Dialer{
-				Hostname:          host,
-				HTTPPort:          httpPort,
-				HTTPSPort:         httpsPort,
-				MachineKey:        client,
-				ControlKey:        server.Public(),
-				ProtocolVersion:   testProtocolVersion,
-				Dialer:            dialer.Dial,
-				Logf:              t.Logf,
-				DialPlan:          tt.plan,
-				proxyFunc:         func(*http.Request) (*url.URL, error) { return nil, nil },
-				drainFinished:     drained,
-				insecureTLS:       true,
-				testFallbackDelay: 50 * time.Millisecond,
+				Hostname:             host,
+				HTTPPort:             httpPort,
+				HTTPSPort:            httpsPort,
+				MachineKey:           client,
+				ControlKey:           server.Public(),
+				ProtocolVersion:      testProtocolVersion,
+				Dialer:               dialer.Dial,
+				Logf:                 t.Logf,
+				DialPlan:             tt.plan,
+				proxyFunc:            func(*http.Request) (*url.URL, error) { return nil, nil },
+				drainFinished:        drained,
+				omitCertErrorLogging: true,
+				testFallbackDelay:    50 * time.Millisecond,
 			}
 
 			conn, err := a.dial(ctx)
