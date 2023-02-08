@@ -18,9 +18,23 @@ import (
 	"tailscale.com/version/distro"
 )
 
+// configureHostCmd is the "tailscale configure-host" command which
+// was once used to configure Synology devices, but is now a redirect
+// to "tailscale configure synology".
 var configureHostCmd = &ffcli.Command{
 	Name:      "configure-host",
-	Exec:      runConfigureHost,
+	Exec:      runConfigureSynology,
+	ShortHelp: synologyConfigureCmd.ShortHelp,
+	LongHelp:  synologyConfigureCmd.LongHelp,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("configure-host")
+		return fs
+	})(),
+}
+
+var synologyConfigureCmd = &ffcli.Command{
+	Name:      "synology",
+	Exec:      runConfigureSynology,
 	ShortHelp: "Configure Synology to enable more Tailscale features",
 	LongHelp: strings.TrimSpace(`
 The 'configure-host' command is intended to run at boot as root
@@ -30,14 +44,12 @@ permission to use it.
 See: https://tailscale.com/kb/1152/synology-outbound/
 `),
 	FlagSet: (func() *flag.FlagSet {
-		fs := newFlagSet("configure-host")
+		fs := newFlagSet("synology")
 		return fs
 	})(),
 }
 
-var configureHostArgs struct{}
-
-func runConfigureHost(ctx context.Context, args []string) error {
+func runConfigureSynology(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return errors.New("unknown arguments")
 	}
