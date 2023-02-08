@@ -42,6 +42,16 @@ func SetBindToInterfaceByRoute(v bool) {
 	bindToInterfaceByRoute.Store(v)
 }
 
+var disableBindConnToInterface atomic.Bool
+
+// SetDisableBindConnToInterface disables the (normal) behavior of binding
+// connections to the default network interface.
+//
+// Currently, this only has an effect on Darwin.
+func SetDisableBindConnToInterface(v bool) {
+	disableBindConnToInterface.Store(v)
+}
+
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.

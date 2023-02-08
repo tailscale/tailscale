@@ -42,6 +42,11 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 		return nil
 	}
 
+	if disableBindConnToInterface.Load() {
+		logf("netns_darwin: binding connection to interfaces disabled")
+		return nil
+	}
+
 	idx, err := getInterfaceIndex(logf, address)
 	if err != nil {
 		// callee logged
