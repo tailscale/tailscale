@@ -69,12 +69,6 @@ var parsedPacketPool = sync.Pool{New: func() any { return new(packet.Parsed) }}
 // It must not hold onto the packet struct, as its backing storage will be reused.
 type FilterFunc func(*packet.Parsed, *Wrapper) filter.Response
 
-// CaptureFunc describes a callback to record packets when
-// debugging packet-capture. Such callbacks must not take
-// ownership of the provided data slice: it may only copy
-// out of it within the lifetime of the function.
-type CaptureFunc func(capture.Path, time.Time, []byte)
-
 // Wrapper augments a tun.Device with packet filtering and injection.
 type Wrapper struct {
 	logf        logger.Logf
@@ -181,7 +175,7 @@ type Wrapper struct {
 	// stats maintains per-connection counters.
 	stats atomic.Pointer[connstats.Statistics]
 
-	captureHook syncs.AtomicValue[CaptureFunc]
+	captureHook syncs.AtomicValue[capture.Callback]
 }
 
 // tunInjectedRead is an injected packet pretending to be a tun.Read().
@@ -942,6 +936,6 @@ var (
 	metricPacketOutDropSelfDisco = clientmetric.NewCounter("tstun_out_to_wg_drop_self_disco")
 )
 
-func (t *Wrapper) InstallCaptureHook(cb CaptureFunc) {
+func (t *Wrapper) InstallCaptureHook(cb capture.Callback) {
 	t.captureHook.Store(cb)
 }

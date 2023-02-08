@@ -44,6 +44,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
+	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -1580,6 +1581,7 @@ var (
 	metricNumMinorChanges = clientmetric.NewCounter("wgengine_minor_changes")
 )
 
-func (e *userspaceEngine) InstallCaptureHook(cb CaptureCallback) {
-	e.tundev.InstallCaptureHook(tstun.CaptureFunc(cb))
+func (e *userspaceEngine) InstallCaptureHook(cb capture.Callback) {
+	e.tundev.InstallCaptureHook(cb)
+	e.magicConn.InstallCaptureHook(cb)
 }

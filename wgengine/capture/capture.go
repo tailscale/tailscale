@@ -21,6 +21,13 @@ import (
 //go:embed ts-dissector.lua
 var DissectorLua string
 
+// Callback describes a function which is called to
+// record packets when debugging packet-capture.
+// Such callbacks must not take ownership of the
+// provided data slice: it may only copy out of it
+// within the lifetime of the function.
+type Callback func(Path, time.Time, []byte)
+
 var bufferPool = sync.Pool{
 	New: func() any {
 		return new(bytes.Buffer)
@@ -65,6 +72,9 @@ const (
 	// SynthesizedToPeer indicates the packet was generated from within tailscaled,
 	// and is being routed to a remote Wireguard peer.
 	SynthesizedToPeer Path = 3
+
+	// PathDisco indicates the packet is information about a disco frame.
+	PathDisco Path = 254
 )
 
 // New creates a new capture sink.

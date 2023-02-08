@@ -7,6 +7,7 @@ package magicsock
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
@@ -62,6 +63,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/monitor"
 )
 
@@ -347,6 +349,9 @@ type Conn struct {
 
 	// stats maintains per-connection counters.
 	stats atomic.Pointer[connstats.Statistics]
+
+	// captureHook, if non-nil, is the pcap logging callback when capturing.
+	captureHook syncs.AtomicValue[capture.Callback]
 
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
@@ -662,6 +667,14 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	return c, nil
+}
+
+// InstallCaptureHook installs a callback which is called to
+// log debug information into the pcap stream. This function
+// can be called with a nil argument to uninstall the capture
+// hook.
+func (c *Conn) InstallCaptureHook(cb capture.Callback) {
+	c.captureHook.Store(cb)
 }
 
 // ignoreSTUNPackets sets a STUN packet processing func that does nothing.
@@ -2017,6 +2030,34 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	return sent, err
 }
 
+// discoPcapFrame marshals the bytes for a pcap record that describe a
+// disco frame.
+//
+// Warning: Alloc garbage. Acceptable while capturing.
+func discoPcapFrame(src netip.AddrPort, derpNodeSrc key.NodePublic, payload []byte) []byte {
+	var (
+		b    bytes.Buffer
+		flag uint8
+	)
+	b.Grow(128) // Most disco frames will probably be smaller than this.
+
+	if src.Addr() == derpMagicIPAddr {
+		flag |= 0x01
+	}
+	b.WriteByte(flag) // 1b: flag
+
+	derpSrc := derpNodeSrc.Raw32()
+	b.Write(derpSrc[:])                                       // 32b: derp public key
+	binary.Write(&b, binary.LittleEndian, uint16(src.Port())) // 2b: port
+	addr, _ := src.Addr().MarshalBinary()
+	binary.Write(&b, binary.LittleEndian, uint16(len(addr)))    // 2b: len(addr)
+	b.Write(addr)                                               // Xb: addr
+	binary.Write(&b, binary.LittleEndian, uint16(len(payload))) // 2b: len(payload)
+	b.Write(payload)                                            // Xb: payload
+
+	return b.Bytes()
+}
+
 // handleDiscoMessage handles a discovery message and reports whether
 // msg was a Tailscale inter-node discovery message.
 //
@@ -2097,6 +2138,12 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		}
 		metricRecvDiscoBadKey.Add(1)
 		return
+	}
+
+	// Emit information about the disco frame into the pcap stream
+	// if a capture hook is installed.
+	if cb := c.captureHook.Load(); cb != nil {
+		cb(capture.PathDisco, time.Now(), discoPcapFrame(src, derpNodeSrc, payload))
 	}
 
 	dm, err := disco.Parse(payload)
