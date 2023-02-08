@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/monitor"
@@ -201,6 +202,6 @@ func (e *watchdogEngine) Wait() {
 	e.wrap.Wait()
 }
 
-func (e *watchdogEngine) InstallCaptureHook(cb CaptureCallback) {
+func (e *watchdogEngine) InstallCaptureHook(cb capture.Callback) {
 	e.wrap.InstallCaptureHook(cb)
 }
