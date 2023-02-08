@@ -78,9 +78,9 @@ type Dialer struct {
 	proxyFunc func(*http.Request) (*url.URL, error) // or nil
 
 	// For tests only
-	drainFinished     chan struct{}
-	insecureTLS       bool
-	testFallbackDelay time.Duration
+	drainFinished        chan struct{}
+	omitCertErrorLogging bool
+	testFallbackDelay    time.Duration
 }
 
 func strDef(v1, v2 string) string {
