@@ -6,6 +6,7 @@ package netutil
 import (
 	"io"
 	"net"
+	"runtime"
 	"testing"
 )
 
@@ -49,5 +50,18 @@ func TestOneConnListener(t *testing.T) {
 	ln = NewOneConnListener(c1, nil)
 	if ln.Addr() == nil {
 		t.Errorf("nil Addr")
+	}
+}
+
+func TestIPForwardingEnabledLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("skipping on %s", runtime.GOOS)
+	}
+	got, err := ipForwardingEnabledLinux(ipv4, "some-not-found-interface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Errorf("got true; want false")
 	}
 }
