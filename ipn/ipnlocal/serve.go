@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"golang.org/x/exp/slices"
+	"inet.af/tcpproxy"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
@@ -284,6 +285,26 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 	// TODO(bradfitz): pass ingressPeer etc in context to HandleInterceptedTCPConn,
 	// extend serveHTTPContext or similar.
 	b.HandleInterceptedTCPConn(uint16(port16), srcAddr, getConn, sendRST)
+}
+
+func (b *LocalBackend) HandleSassyTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
+	conn, ok := getConn()
+	if !ok {
+		b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+		return
+	}
+	var p tcpproxy.Proxy
+	p.ListenFunc = func(net, laddr string) (net.Listener, error) {
+		return netutil.NewOneConnListener(conn, nil), nil
+	}
+	p.AddSNIRouteFunc("100.84.193.39:443", func(ctx context.Context, sniName string) (t tcpproxy.Target, ok bool) {
+		return &tcpproxy.DialProxy{
+			Addr:        net.JoinHostPort(sniName, "443"),
+			DialContext: b.dialer.SystemDial,
+			DialTimeout: 5 * time.Second,
+		}, true
+	})
+	p.Start()
 }
 
 func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {

@@ -535,6 +535,8 @@ func (ns *Impl) shouldProcessInbound(p *packet.Parsed, t *tstun.Wrapper) bool {
 
 	// Handle TCP connection to the Tailscale IP(s) in some cases:
 	if ns.lb != nil && p.IPProto == ipproto.TCP && isLocal {
+		return true // XXX sassy test
+
 		var peerAPIPort uint16
 
 		if p.TCPFlags&packet.TCPSynAck == packet.TCPSyn {
@@ -885,6 +887,18 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.lb.HandleQuad100Port80Conn(c)
 			return
 		}
+		if ns.isLocalIP(dialIP) {
+			getTCPConn := func() (_ net.Conn, ok bool) {
+				c := createConn()
+				return c, c != nil
+			}
+			sendRST := func() {
+				r.Complete(true)
+			}
+			ns.lb.HandleSassyTCPConn(reqDetails.LocalPort, clientRemoteAddrPort, getTCPConn, sendRST)
+			return
+
+		}
 		if ns.lb.ShouldInterceptTCPPort(reqDetails.LocalPort) && ns.isLocalIP(dialIP) {
 			getTCPConn := func() (_ net.Conn, ok bool) {
 				c := createConn()
@@ -896,6 +910,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 			ns.lb.HandleInterceptedTCPConn(reqDetails.LocalPort, clientRemoteAddrPort, getTCPConn, sendRST)
 			return
 		}
+		return
 	}
 
 	if ns.ForwardTCPIn != nil {
