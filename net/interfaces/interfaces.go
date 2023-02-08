@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netaddr"
@@ -756,4 +757,15 @@ func HasCGNATInterface() (bool, error) {
 		return false, err
 	}
 	return hasCGNATInterface, nil
+}
+
+var disableAlternateDefaultRouteInterface atomic.Bool
+
+// SetDisableAlternateDefaultRouteInterface disables the optional external/
+// alternate mechanism for getting the default route network interface.
+//
+// Currently, this only changes the behaviour on BSD-like sytems (FreeBSD and
+// Darwin).
+func SetDisableAlternateDefaultRouteInterface(v bool) {
+	disableAlternateDefaultRouteInterface.Store(v)
 }
