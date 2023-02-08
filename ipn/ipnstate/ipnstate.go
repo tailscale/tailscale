@@ -183,13 +183,18 @@ type PeerStatusLite struct {
 }
 
 type PeerStatus struct {
-	ID           tailcfg.StableNodeID
-	PublicKey    key.NodePublic
-	HostName     string // HostInfo's Hostname (not a DNS name or necessarily unique)
-	DNSName      string
-	OS           string // HostInfo.OS
-	UserID       tailcfg.UserID
-	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
+	ID        tailcfg.StableNodeID
+	PublicKey key.NodePublic
+	HostName  string // HostInfo's Hostname (not a DNS name or necessarily unique)
+
+	// DNSName is the Peer's FQDN. It ends with a dot.
+	// It has the form "host.<MagicDNSSuffix>."
+	DNSName string
+	OS      string // HostInfo.OS
+	UserID  tailcfg.UserID
+
+	// TailscaleIPs are the IP addresses assigned to the node.
+	TailscaleIPs []netip.Addr
 
 	// Tags are the list of ACL tags applied to this node.
 	// See tailscale.com/tailcfg#Node.Tags for more information.
@@ -223,7 +228,15 @@ type PeerStatus struct {
 	// change.
 	Active bool
 
-	PeerAPIURL   []string
+	// PeerAPIURL are the URLs of the node's PeerAPI servers.
+	PeerAPIURL []string
+
+	// Capabilities are capabilities that the node has.
+	// They're free-form strings, but should be in the form of URLs/URIs
+	// such as:
+	//    "https://tailscale.com/cap/is-admin"
+	//    "https://tailscale.com/cap/file-sharing"
+	//    "funnel"
 	Capabilities []string `json:",omitempty"`
 
 	// SSH_HostKeys are the node's SSH host keys, if known.
