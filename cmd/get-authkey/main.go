@@ -35,6 +35,10 @@ func main() {
 		log.Fatal("TS_API_CLIENT_ID and TS_API_CLIENT_SECRET must be set")
 	}
 
+	if *tags == "" {
+		log.Fatal("at least one tag must be specified")
+	}
+
 	baseUrl := os.Getenv("TS_BASE_URL")
 	if baseUrl == "" {
 		baseUrl = "https://api.tailscale.com"
