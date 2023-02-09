@@ -45,6 +45,40 @@ func testPacketV4(proto ipproto.Proto, srcAddr, dstAddr [4]byte, srcPort, dstPor
 	return append(out, make([]byte, int(size)-len(out))...)
 }
 
+// TestInterval ensures that we receive at least one call to `dump` using only
+// maxPeriod.
+func TestInterval(t *testing.T) {
+	c := qt.New(t)
+
+	const maxPeriod = 10 * time.Millisecond
+	const maxConns = 2048
+
+	gotDump := make(chan struct{}, 1)
+	stats := NewStatistics(maxPeriod, maxConns, func(_, _ time.Time, _, _ map[netlogtype.Connection]netlogtype.Counts) {
+		select {
+		case gotDump <- struct{}{}:
+		default:
+		}
+	})
+	defer stats.Shutdown(context.Background())
+
+	srcAddr := netip.AddrFrom4([4]byte{192, 168, 0, byte(rand.Intn(16))})
+	dstAddr := netip.AddrFrom4([4]byte{192, 168, 0, byte(rand.Intn(16))})
+	srcPort := uint16(rand.Intn(16))
+	dstPort := uint16(rand.Intn(16))
+	size := uint16(64 + rand.Intn(1024))
+	p := testPacketV4(ipproto.TCP, srcAddr.As4(), dstAddr.As4(), srcPort, dstPort, size)
+	stats.UpdateRxVirtual(p)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		c.Fatal("didn't receive dump within context deadline")
+	case <-gotDump:
+	}
+}
+
 func TestConcurrent(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7030")
 	c := qt.New(t)

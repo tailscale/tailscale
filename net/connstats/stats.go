@@ -54,7 +54,7 @@ func NewStatistics(maxPeriod time.Duration, maxConns int, dump func(start, end t
 		// a time.Timer that is triggered upon network activity.
 		ticker := new(time.Ticker)
 		if maxPeriod > 0 {
-			ticker := time.NewTicker(maxPeriod)
+			ticker = time.NewTicker(maxPeriod)
 			defer ticker.Stop()
 		}
 
