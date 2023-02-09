@@ -707,6 +707,9 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v0/interfaces":
 		h.handleServeInterfaces(w, r)
 		return
+	case "/v0/doctor":
+		h.handleServeDoctor(w, r)
+		return
 	case "/v0/ingress":
 		metricIngressCalls.Add(1)
 		h.handleServeIngress(w, r)
@@ -816,6 +819,24 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprint(w, "</tr>\n")
 	})
 	fmt.Fprintln(w, "</table>")
+}
+
+func (h *peerAPIHandler) handleServeDoctor(w http.ResponseWriter, r *http.Request) {
+	if !h.canDebug() {
+		http.Error(w, "denied; no debug access", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintln(w, "<h1>Doctor Output</h1>")
+
+	fmt.Fprintln(w, "<pre>")
+
+	h.ps.b.Doctor(r.Context(), func(format string, args ...any) {
+		line := fmt.Sprintf(format, args)
+		fmt.Fprintln(w, html.EscapeString(line))
+	})
+
+	fmt.Fprintln(w, "</pre>")
 }
 
 type incomingFile struct {
