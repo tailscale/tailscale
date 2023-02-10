@@ -27,9 +27,13 @@
 		</svg>
 		<div class="flex items-center justify-end space-x-2 w-2/3">
 			{{ with .Profile.LoginName }}
-			<div class="text-right truncate leading-4">
+			<div class="text-right w-full leading-4">
 				<h4 class="truncate leading-normal">{{.}}</h4>
-				<a href="#" class="text-xs text-gray-500 hover:text-gray-700 js-loginButton">Switch account</a>
+				<div class="text-xs text-gray-500 text-right">
+					<a href="#" class="hover:text-gray-700 js-loginButton">Switch account</a> | <a href="#"
+						class="hover:text-gray-700 js-loginButton">Reauthenticate</a> | <a href="#"
+						class="hover:text-gray-700 js-logoutButton">Logout</a>
+				</div>
 			</div>
 			{{ end }}
 			<div class="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
@@ -44,7 +48,7 @@
 	</header>
 	{{ if .IP }}
 	<div
-		class="border border-gray-200 bg-gray-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full flex items-center justify-between">
+		class="border border-gray-200 bg-gray-0 rounded-md p-2 pl-3 pr-3 width-full flex items-center justify-between">
 		<div class="flex items-center min-width-0">
 			<svg class="flex-shrink-0 text-gray-600 mr-3 ml-1" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
 				viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
@@ -54,10 +58,21 @@
 				<line x1="6" y1="6" x2="6.01" y2="6"></line>
 				<line x1="6" y1="18" x2="6.01" y2="18"></line>
 			</svg>
-			<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
+			<div>
+				<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
+			</div>
 		</div>
 		<h5>{{.IP}}</h5>
 	</div>
+	<p class="mt-1 ml-1 mb-6 text-xs text-gray-600">
+		Debug info: Tailscale {{ .IPNVersion }}, tun={{.TUNMode}}{{ if .IsSynology }}, DSM{{ .DSMVersion}}
+			{{if not .TUNMode}}
+			(<a href="https://tailscale.com/kb/1152/synology-outbound/" class="link-underline text-gray-600" target="_blank"
+				aria-label="Configure outbound synology traffic"
+				rel="noopener noreferrer">outgoing access not configured</a>)
+			{{end}}
+		{{end}}
+	</p>
 	{{ end }}
 	{{ if or (eq .Status "NeedsLogin") (eq .Status "NoState") }}
 	{{ if .IP }}
@@ -95,18 +110,6 @@
 		{{end}}
 	</a>
 	</div>
-	<div class="mb-4">
-		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
-	</div>
-	{{ if .IsSynology }}
-		<div class="border border-gray-200 bg-orange-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full text-orange-800">
-			Outgoing access {{ if .TUNMode }}enabled{{ else }}not configured{{ end }}.
-			<nobr><a href="https://tailscale.com/kb/1152/synology-outbound/"
-				class="font-medium link"
-				target="_blank"
-				rel="noopener noreferrer">Learn more &rarr;</a></nobr>
-		</div>
-	{{ end }}
 	{{ end }}
 </main>
 <footer class="container max-w-lg mx-auto text-center">
@@ -118,7 +121,8 @@ let fetchingUrl = false;
 var data = {
 	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
 	AdvertiseExitNode: advertiseExitNode,
-	Reauthenticate: false
+	Reauthenticate: false,
+	ForceLogout: false
 };
 
 function postData(e) {
@@ -159,17 +163,23 @@ function postData(e) {
 			location.reload();
 		}
 	}).catch(err => {
-		alert("Failed to log in: " + err.message);
+		alert("Failed operation: " + err.message);
 	});
 }
 
-Array.from(document.querySelectorAll(".js-loginButton")).forEach(el => {
+document.querySelectorAll(".js-loginButton").forEach(function (el){
 	el.addEventListener("click", function(e) {
 		data.Reauthenticate = true;
 		postData(e);
 	});
 })
-Array.from(document.querySelectorAll(".js-advertiseExitNode")).forEach(el => {
+document.querySelectorAll(".js-logoutButton").forEach(function(el) {
+	el.addEventListener("click", function (e) {
+		data.ForceLogout = true;
+		postData(e);
+	});
+})
+document.querySelectorAll(".js-advertiseExitNode").forEach(function (el) {
 	el.addEventListener("click", function(e) {
 		data.AdvertiseExitNode = !advertiseExitNode;
 		postData(e);
