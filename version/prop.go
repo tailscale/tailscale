@@ -4,34 +4,126 @@
 package version
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 
 	"tailscale.com/tailcfg"
 )
 
 // IsMobile reports whether this is a mobile client build.
-func IsMobile() bool { return isMobile }
+func IsMobile() bool {
+	return runtime.GOOS == "android" || runtime.GOOS == "ios"
+}
 
-// OS returns runtime.GOOS, except instead of returning "darwin" it
-// returns "iOS" or "macOS".
-func OS() string { return legacyOS }
+// OS returns runtime.GOOS, except instead of returning "darwin" it returns
+// "iOS" or "macOS".
+func OS() string {
+	// If you're wondering why we have this function that just returns
+	// runtime.GOOS written differently: in the old days, Go reported
+	// GOOS=darwin for both iOS and macOS, so we needed this function to
+	// differentiate them. Then a later Go release added GOOS=ios as a separate
+	// platform, but by then the "iOS" and "macOS" values we'd picked, with that
+	// exact capitalization, were already baked into databases.
+	if runtime.GOOS == "ios" {
+		return "iOS"
+	}
+	if runtime.GOOS == "darwin" {
+		return "macOS"
+	}
+	return runtime.GOOS
+}
+
+var (
+	macFlavorOnce  sync.Once
+	isMacSysExt    bool
+	isMacSandboxed bool
+)
+
+func initMacFlavor() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	isMacSysExt = filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
+	isMacSandboxed = isMacSysExt || strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
+}
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
 // process (either the app or the extension). It is true for the Mac App Store
 // and macsys (System Extension) version on macOS, and false for
 // tailscaled-on-macOS.
-func IsSandboxedMacOS() bool { return isSandboxedMacOS }
+func IsSandboxedMacOS() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	macFlavorOnce.Do(initMacFlavor)
+	return isMacSandboxed
+}
 
 // IsMacSysExt whether this binary is from the standalone "System
 // Extension" (a.k.a. "macsys") version of Tailscale for macOS.
-func IsMacSysExt() bool { return isMacSysExt }
+func IsMacSysExt() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	macFlavorOnce.Do(initMacFlavor)
+	return isMacSysExt
+}
+
+var (
+	winFlavorOnce sync.Once
+	isWindowsGUI  bool
+)
+
+func initWinFlavor() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	isWindowsGUI = strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+}
 
 // IsWindowsGUI reports whether the current process is the Windows GUI.
-func IsWindowsGUI() bool { return isWindowsGUI }
+func IsWindowsGUI() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	exe, _ := os.Executable()
+	exe = filepath.Base(exe)
+	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+}
+
+var (
+	isUnstableOnce  sync.Once
+	isUnstableBuild bool
+)
 
 // IsUnstableBuild reports whether this is an unstable build.
 // That is, whether its minor version number is odd.
-func IsUnstableBuild() bool { return isUnstable }
+func IsUnstableBuild() bool {
+	isUnstableOnce.Do(initUnstable)
+	return isUnstableBuild
+}
+
+func initUnstable() {
+	_, rest, ok := strings.Cut(Short, ".")
+	if !ok {
+		return
+	}
+	minorStr, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return
+	}
+	minor, err := strconv.Atoi(minorStr)
+	if err != nil {
+		return
+	}
+	isUnstableBuild = minor%2 == 1
+}
 
 // Meta is a JSON-serializable type that contains all the version
 // information.
