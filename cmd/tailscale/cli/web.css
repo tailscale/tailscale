@@ -1286,6 +1286,28 @@ html {
 	color: rgba(25, 34, 74, var(--text-opacity));
 }
 
+.link-underline {
+	text-decoration: underline;
+}
+
+.link-underline:hover,
+.link-underline:active {
+	text-decoration: none;
+}
+
+.link-muted {
+	/* same as text-gray-500 */
+	--tw-text-opacity: 1;
+	color: rgba(112, 110, 109, var(--tw-text-opacity));
+}
+
+.link-muted:hover,
+.link-muted:active {
+	/* same as text-gray-500 */
+	--tw-text-opacity: 1;
+	color: rgba(68, 67, 66, var(--tw-text-opacity));
+}
+
 .button {
 	font-weight: 500;
 	padding-top: 0.45rem;
