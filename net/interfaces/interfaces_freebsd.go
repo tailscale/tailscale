@@ -22,3 +22,7 @@ func fetchRoutingTable() (rib []byte, err error) {
 func parseRoutingTable(rib []byte) ([]route.Message, error) {
 	return route.ParseRIB(syscall.NET_RT_IFLIST, rib)
 }
+
+func getDelegatedInterface(ifIndex int) (int, error) {
+	return 0, nil
+}
