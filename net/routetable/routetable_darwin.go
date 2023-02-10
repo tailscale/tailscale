@@ -23,9 +23,14 @@ var flags = map[int]string{
 	unix.RTF_GLOBAL:    "global",
 	unix.RTF_HOST:      "host",
 	unix.RTF_IFSCOPE:   "ifscope",
+	unix.RTF_LOCAL:     "local",
 	unix.RTF_MULTICAST: "multicast",
 	unix.RTF_REJECT:    "reject",
 	unix.RTF_ROUTER:    "router",
 	unix.RTF_STATIC:    "static",
 	unix.RTF_UP:        "up",
+	// More obscure flags, just to have full coverage.
+	unix.RTF_LLINFO:    "{RTF_LLINFO}",
+	unix.RTF_PRCLONING: "{RTF_PRCLONING}",
+	unix.RTF_CLONING:   "{RTF_CLONING}",
 }
