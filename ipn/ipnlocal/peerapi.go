@@ -832,7 +832,7 @@ func (h *peerAPIHandler) handleServeDoctor(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintln(w, "<pre>")
 
 	h.ps.b.Doctor(r.Context(), func(format string, args ...any) {
-		line := fmt.Sprintf(format, args)
+		line := fmt.Sprintf(format, args...)
 		fmt.Fprintln(w, html.EscapeString(line))
 	})
 
