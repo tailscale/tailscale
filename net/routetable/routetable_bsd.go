@@ -64,6 +64,16 @@ func (r RouteEntryBSD) Format(f fmt.State, verb rune) {
 		}
 		pr("Flags: %v", r.Flags)
 
+		unknownFlags := r.RawFlags
+		for fv := range flags {
+			if r.RawFlags&fv == fv {
+				unknownFlags &= ^fv
+			}
+		}
+		if unknownFlags != 0 {
+			pr("UnknownFlags: %x ", unknownFlags)
+		}
+
 		w.WriteString("}")
 	}).Format(f, verb)
 }
