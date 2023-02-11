@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/lazy"
 )
 
 // IsMobile reports whether this is a mobile client build.
@@ -37,20 +37,7 @@ func OS() string {
 	return runtime.GOOS
 }
 
-var (
-	macFlavorOnce  sync.Once
-	isMacSysExt    bool
-	isMacSandboxed bool
-)
-
-func initMacFlavor() {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	isMacSysExt = filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
-	isMacSandboxed = isMacSysExt || strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
-}
+var isSandboxedMacOS lazy.SyncValue[bool]
 
 // IsSandboxedMacOS reports whether this process is a sandboxed macOS
 // process (either the app or the extension). It is true for the Mac App Store
@@ -60,9 +47,19 @@ func IsSandboxedMacOS() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
-	macFlavorOnce.Do(initMacFlavor)
-	return isMacSandboxed
+	return isSandboxedMacOS.Get(func() bool {
+		if IsMacSysExt() {
+			return true
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension" || strings.HasSuffix(exe, "/Contents/MacOS/Tailscale") || strings.HasSuffix(exe, "/Contents/MacOS/IPNExtension")
+	})
 }
+
+var isMacSysExt lazy.SyncValue[bool]
 
 // IsMacSysExt whether this binary is from the standalone "System
 // Extension" (a.k.a. "macsys") version of Tailscale for macOS.
@@ -70,60 +67,56 @@ func IsMacSysExt() bool {
 	if runtime.GOOS != "darwin" {
 		return false
 	}
-	macFlavorOnce.Do(initMacFlavor)
-	return isMacSysExt
+	return isMacSysExt.Get(func() bool {
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
+	})
 }
 
-var (
-	winFlavorOnce sync.Once
-	isWindowsGUI  bool
-)
-
-func initWinFlavor() {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	isWindowsGUI = strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
-}
+var isWindowsGUI lazy.SyncValue[bool]
 
 // IsWindowsGUI reports whether the current process is the Windows GUI.
 func IsWindowsGUI() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	exe, _ := os.Executable()
-	exe = filepath.Base(exe)
-	return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+	return isWindowsGUI.Get(func() bool {
+		exe, err := os.Executable()
+		if err != nil {
+			return false
+		}
+		return strings.EqualFold(exe, "tailscale-ipn.exe") || strings.EqualFold(exe, "tailscale-ipn")
+	})
 }
 
-var (
-	isUnstableOnce  sync.Once
-	isUnstableBuild bool
-)
+var isUnstableBuild lazy.SyncValue[bool]
 
 // IsUnstableBuild reports whether this is an unstable build.
 // That is, whether its minor version number is odd.
 func IsUnstableBuild() bool {
-	isUnstableOnce.Do(initUnstable)
-	return isUnstableBuild
+	return isUnstableBuild.Get(func() bool {
+		_, rest, ok := strings.Cut(Short(), ".")
+		if !ok {
+			return false
+		}
+		minorStr, _, ok := strings.Cut(rest, ".")
+		if !ok {
+			return false
+		}
+		minor, err := strconv.Atoi(minorStr)
+		if err != nil {
+			return false
+		}
+		return minor%2 == 1
+	})
 }
 
-func initUnstable() {
-	_, rest, ok := strings.Cut(short, ".")
-	if !ok {
-		return
-	}
-	minorStr, _, ok := strings.Cut(rest, ".")
-	if !ok {
-		return
-	}
-	minor, err := strconv.Atoi(minorStr)
-	if err != nil {
-		return
-	}
-	isUnstableBuild = minor%2 == 1
-}
+var isDev = lazy.SyncFunc(func() bool {
+	return strings.Contains(Short(), "-dev")
+})
 
 // Meta is a JSON-serializable type that contains all the version
 // information.
@@ -183,16 +176,18 @@ type Meta struct {
 	Cap int `json:"cap"`
 }
 
+var getMeta lazy.SyncValue[Meta]
+
 // GetMeta returns version metadata about the current build.
 func GetMeta() Meta {
 	return Meta{
-		MajorMinorPatch: majorMinorPatch,
-		Short:           short,
-		Long:            long,
-		GitCommit:       gitCommit,
-		GitDirty:        gitDirty,
-		ExtraGitCommit:  extraGitCommit,
-		IsDev:           strings.Contains(short, "-dev"), // TODO(bradfitz): could make a bool for this in init
+		MajorMinorPatch: majorMinorPatch(),
+		Short:           Short(),
+		Long:            Long(),
+		GitCommit:       gitCommit(),
+		GitDirty:        gitDirty(),
+		ExtraGitCommit:  extraGitCommitStamp,
+		IsDev:           isDev(),
 		UnstableBranch:  IsUnstableBuild(),
 		Cap:             int(tailcfg.CurrentCapabilityVersion),
 	}

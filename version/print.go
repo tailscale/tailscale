@@ -7,25 +7,27 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+
+	"tailscale.com/types/lazy"
 )
 
-func String() string {
+var stringLazy = lazy.SyncFunc(func() string {
 	var ret strings.Builder
-	ret.WriteString(short)
+	ret.WriteString(Short())
 	ret.WriteByte('\n')
 	if IsUnstableBuild() {
 		fmt.Fprintf(&ret, "  track: unstable (dev); frequent updates and bugs are likely\n")
 	}
-	if gitCommit != "" {
-		var dirty string
-		if gitDirty {
-			dirty = "-dirty"
-		}
-		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", gitCommit, dirty)
+	if gitCommit() != "" {
+		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", gitCommit(), dirtyString())
 	}
-	if extraGitCommit != "" {
-		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommit)
+	if extraGitCommitStamp != "" {
+		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommitStamp)
 	}
 	fmt.Fprintf(&ret, "  go version: %s\n", runtime.Version())
 	return strings.TrimSpace(ret.String())
+})
+
+func String() string {
+	return stringLazy()
 }
