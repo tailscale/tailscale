@@ -134,6 +134,11 @@ var getEmbeddedInfo = lazy.SyncFunc(func() embeddedInfo {
 			ret.dirty = true
 		}
 	}
+	if ret.commit == "" || ret.commitDate == "" {
+		// Build info is present in the binary, but has no useful data. Act as
+		// if it's missing.
+		return embeddedInfo{}
+	}
 	return ret
 })
 
