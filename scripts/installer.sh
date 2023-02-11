@@ -102,7 +102,7 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
-			parrot)
+			parrot|mendel)
 				OS="debian"
 				PACKAGETYPE="apt"
 				if [ "$VERSION_ID" -lt 5 ]; then
@@ -171,7 +171,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux|nobara)
+			rocky|almalinux|nobara|openmandriva)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
