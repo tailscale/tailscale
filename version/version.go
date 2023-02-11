@@ -5,106 +5,160 @@
 package version
 
 import (
+	"fmt"
 	"runtime/debug"
 	"strings"
 
 	tailscaleroot "tailscale.com"
+	"tailscale.com/types/lazy"
 )
 
-var long = ""
+// Stamp vars can have their value set at build time by linker flags (see
+// build_dist.sh for an example). When set, these stamps serve as additional
+// inputs to computing the binary's version as returned by the functions in this
+// package.
+//
+// All stamps are optional.
+var (
+	// longStamp is the full version identifier of the build. If set, it is
+	// returned verbatim by Long() and other functions that return Long()'s
+	// output.
+	longStamp string
 
-var short = ""
+	// shortStamp is the short version identifier of the build. If set, it
+	// is returned verbatim by Short() and other functions that return Short()'s
+	// output.
+	shortStamp string
 
-// Long is a full version number for this build, of the form
-// "x.y.z-commithash" for builds stamped in the usual way (see
-// build_dist.sh in the root) or, for binaries built by hand with the
-// go tool, it's of the form "1.23.0-dev20220316-t29837428937{,-dirty}"
-// where "1.23.0" comes from ../VERSION.txt and the part after dev
-// is YYYYMMDD of the commit time, and the part after -t is the commit
-// hash. The dirty suffix is whether there are uncommitted changes.
+	// gitCommitStamp is the git commit of the github.com/tailscale/tailscale
+	// repository at which Tailscale was built. Its format is the one returned
+	// by `git rev-parse <commit>`. If set, it is used instead of any git commit
+	// information embedded by the Go tool.
+	gitCommitStamp string
+
+	// gitDirtyStamp is whether the git checkout from which the code was built
+	// was dirty. Its value is ORed with the dirty bit embedded by the Go tool.
+	//
+	// We need this because when we build binaries from another repo that
+	// imports tailscale.com, the Go tool doesn't stamp any dirtiness info into
+	// the binary. Instead, we have to inject the dirty bit ourselves here.
+	gitDirtyStamp bool
+
+	// extraGitCommit, is the git commit of a "supplemental" repository at which
+	// Tailscale was built. Its format is the same as gitCommit.
+	//
+	// extraGitCommit is used to track the source revision when the main
+	// Tailscale repository is integrated into and built from another repository
+	// (for example, Tailscale's proprietary code, or the Android OSS
+	// repository). Together, gitCommit and extraGitCommit exactly describe what
+	// repositories and commits were used in a build.
+	extraGitCommitStamp string
+)
+
+var long lazy.SyncValue[string]
+
+// Long returns a full version number for this build, of one of the forms:
+//
+//   - "x.y.z-commithash-otherhash" for release builds distributed by Tailscale
+//   - "x.y.z-commithash" for release builds built with build_dist.sh
+//   - "x.y.z-changecount-commithash-otherhash" for untagged release branch
+//     builds by Tailscale (these are not distributed).
+//   - "x.y.z-changecount-commithash" for untagged release branch builds
+//     built with build_dist.sh
+//   - "x.y.z-devYYYYMMDD-commithash{,-dirty}" for builds made with plain "go
+//     build" or "go install"
+//   - "x.y.z-ERR-BuildInfo" for builds made by plain "go run"
 func Long() string {
-	return long
+	return long.Get(func() string {
+		if longStamp != "" {
+			return longStamp
+		}
+		bi := getEmbeddedInfo()
+		if !bi.valid {
+			return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
+		}
+		return fmt.Sprintf("%s-dev%s-t%s%s", strings.TrimSpace(tailscaleroot.VersionDotTxt), bi.commitDate, bi.commitAbbrev(), dirtyString())
+	})
 }
 
-// Short is a short version number for this build, of the form
-// "x.y.z" for builds stamped in the usual way (see
-// build_dist.sh in the root) or, for binaries built by hand with the
-// go tool, it's like Long's dev form, but ending at the date part,
-// of the form "1.23.0-dev20220316".
+var short lazy.SyncValue[string]
+
+// Short returns a short version number for this build, of the forms:
+//
+//   - "x.y.z" for builds distributed by Tailscale or built with build_dist.sh
+//   - "x.y.z-devYYYYMMDD" for builds made with plain "go build" or "go install"
+//   - "x.y.z-ERR-BuildInfo" for builds made by plain "go run"
 func Short() string {
-	return short
+	return short.Get(func() string {
+		if shortStamp != "" {
+			return shortStamp
+		}
+		bi := getEmbeddedInfo()
+		if !bi.valid {
+			return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
+		}
+		return strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + bi.commitDate
+	})
 }
 
-func init() {
-	defer func() {
-		// Must be run after Short has been initialized, easiest way to do that
-		// is a defer.
-		majorMinorPatch, _, _ = strings.Cut(short, "-")
-	}()
+type embeddedInfo struct {
+	valid      bool
+	commit     string
+	commitDate string
+	dirty      bool
+}
 
-	if long != "" && short != "" {
-		// Built in the recommended way, using build_dist.sh.
-		return
+func (i embeddedInfo) commitAbbrev() string {
+	if len(i.commit) >= 9 {
+		return i.commit[:9]
 	}
+	return i.commit
+}
 
-	// Otherwise, make approximate version info using Go 1.18's built-in git
-	// stamping.
+var getEmbeddedInfo = lazy.SyncFunc(func() embeddedInfo {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		long = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
-		short = long
-		return
+		return embeddedInfo{}
 	}
-	var dirty string // "-dirty" suffix if dirty
-	var commitDate string
+	ret := embeddedInfo{valid: true}
 	for _, s := range bi.Settings {
 		switch s.Key {
 		case "vcs.revision":
-			gitCommit = s.Value
+			ret.commit = s.Value
 		case "vcs.time":
 			if len(s.Value) >= len("yyyy-mm-dd") {
-				commitDate = s.Value[:len("yyyy-mm-dd")]
-				commitDate = strings.ReplaceAll(commitDate, "-", "")
+				ret.commitDate = s.Value[:len("yyyy-mm-dd")]
+				ret.commitDate = strings.ReplaceAll(ret.commitDate, "-", "")
 			}
 		case "vcs.modified":
-			if s.Value == "true" {
-				dirty = "-dirty"
-				gitDirty = true
-			}
+			ret.dirty = true
 		}
 	}
-	commitHashAbbrev := gitCommit
-	if len(commitHashAbbrev) >= 9 {
-		commitHashAbbrev = commitHashAbbrev[:9]
-	}
+	return ret
+})
 
-	// Backup path, using Go 1.18's built-in git stamping.
-	short = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + commitDate
-	long = short + "-t" + commitHashAbbrev + dirty
+func gitCommit() string {
+	if gitCommitStamp != "" {
+		return gitCommitStamp
+	}
+	return getEmbeddedInfo().commit
 }
 
-// GitCommit, if non-empty, is the git commit of the
-// github.com/tailscale/tailscale repository at which Tailscale was
-// built. Its format is the one returned by `git describe --always
-// --exclude "*" --dirty --abbrev=200`.
-var gitCommit = ""
+func gitDirty() bool {
+	if gitDirtyStamp {
+		return true
+	}
+	return getEmbeddedInfo().dirty
+}
 
-// GitDirty is whether Go stamped the binary as having dirty version
-// control changes in the working directory (debug.ReadBuildInfo
-// setting "vcs.modified" was true).
-var gitDirty bool
+func dirtyString() string {
+	if gitDirty() {
+		return "-dirty"
+	}
+	return ""
+}
 
-// ExtraGitCommit, if non-empty, is the git commit of a "supplemental"
-// repository at which Tailscale was built. Its format is the same as
-// gitCommit.
-//
-// ExtraGitCommit is used to track the source revision when the main
-// Tailscale repository is integrated into and built from another
-// repository (for example, Tailscale's proprietary code, or the
-// Android OSS repository). Together, GitCommit and ExtraGitCommit
-// exactly describe what repositories and commits were used in a
-// build.
-var extraGitCommit = ""
-
-// majorMinorPatch is the major.minor.patch portion of Short.
-var majorMinorPatch string
+func majorMinorPatch() string {
+	ret, _, _ := strings.Cut(Short(), "-")
+	return ret
+}

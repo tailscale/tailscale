@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	ts "tailscale.com"
+	"tailscale.com/version"
 )
 
 func TestAlpineTag(t *testing.T) {
@@ -38,4 +39,13 @@ func readAlpineTag(t *testing.T, file string) string {
 		return string(suf)
 	}
 	return ""
+}
+
+func TestShortAllocs(t *testing.T) {
+	allocs := int(testing.AllocsPerRun(10000, func() {
+		_ = version.Short()
+	}))
+	if allocs > 0 {
+		t.Errorf("allocs = %v; want 0", allocs)
+	}
 }
