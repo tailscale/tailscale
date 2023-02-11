@@ -145,7 +145,7 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 		res.Err = "invalid JSON from cmd/tailscale version --json"
 		return
 	}
-	if ver.Long != version.Long {
+	if ver.Long != version.Long() {
 		res.Err = "cmd/tailscale version mismatch"
 		return
 	}

@@ -592,7 +592,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	sb.MutateStatus(func(s *ipnstate.Status) {
-		s.Version = version.Long
+		s.Version = version.Long()
 		s.TUN = !wgengine.IsNetstack(b.e)
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
@@ -1853,7 +1853,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	b.mu.Lock()
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
 	if mask&initialBits != 0 {
-		ini = &ipn.Notify{Version: version.Long}
+		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
 			ini.State = ptr.To(b.state)
 			if b.state == ipn.NeedsLogin {
@@ -1952,7 +1952,7 @@ func (b *LocalBackend) send(n ipn.Notify) {
 		n.Prefs = ptr.To(stripKeysFromPrefs(*n.Prefs))
 	}
 	if n.Version == "" {
-		n.Version = version.Long
+		n.Version = version.Long()
 	}
 
 	b.mu.Lock()

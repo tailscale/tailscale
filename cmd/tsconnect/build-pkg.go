@@ -54,7 +54,7 @@ func runBuildPkg() {
 		log.Fatalf("Cannot copy readme: %v", err)
 	}
 
-	log.Printf("Built package version %s", version.Long)
+	log.Printf("Built package version %s", version.Long())
 }
 
 func precompressWasm() error {
@@ -78,7 +78,7 @@ func updateVersion() error {
 	if err := json.Unmarshal(packageJSONBytes, &packageJSON); err != nil {
 		return fmt.Errorf("Could not unmarshal package.json: %w", err)
 	}
-	packageJSON["version"] = version.Long
+	packageJSON["version"] = version.Long()
 
 	packageJSONBytes, err = json.MarshalIndent(packageJSON, "", "  ")
 	if err != nil {

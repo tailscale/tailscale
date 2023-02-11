@@ -155,7 +155,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid localapi request", http.StatusForbidden)
 		return
 	}
-	w.Header().Set("Tailscale-Version", version.Long)
+	w.Header().Set("Tailscale-Version", version.Long())
 	w.Header().Set("Tailscale-Cap", strconv.Itoa(int(tailcfg.CurrentCapabilityVersion)))
 	w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
 	w.Header().Set("X-Frame-Options", "DENY")
@@ -731,7 +731,7 @@ func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) 
 		return false
 	}
 	js, err := json.Marshal(&ipn.Notify{
-		Version:    version.Long,
+		Version:    version.Long(),
 		State:      ptr.To(ipn.InUseOtherUser),
 		ErrMessage: ptr.To(err.Error()),
 	})

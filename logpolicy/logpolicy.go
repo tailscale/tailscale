@@ -612,7 +612,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 	log.SetOutput(logOutput)
 
 	log.Printf("Program starting: v%v, Go %v: %#v",
-		version.Long,
+		version.Long(),
 		goVersion(),
 		os.Args)
 	log.Printf("LogID: %v", newc.PublicID)

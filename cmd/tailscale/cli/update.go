@@ -160,12 +160,12 @@ type updater struct {
 }
 
 func (up *updater) currentOrDryRun(ver string) bool {
-	if version.Short == ver {
+	if version.Short() == ver {
 		fmt.Printf("already running %v; no update needed\n", ver)
 		return true
 	}
 	if updateArgs.dryRun {
-		fmt.Printf("Current: %v, Latest: %v\n", version.Short, ver)
+		fmt.Printf("Current: %v, Latest: %v\n", version.Short(), ver)
 		return true
 	}
 	return false
@@ -173,11 +173,11 @@ func (up *updater) currentOrDryRun(ver string) bool {
 
 func (up *updater) confirm(ver string) error {
 	if updateArgs.yes {
-		log.Printf("Updating Tailscale from %v to %v; --yes given, continuing without prompts.\n", version.Short, ver)
+		log.Printf("Updating Tailscale from %v to %v; --yes given, continuing without prompts.\n", version.Short(), ver)
 		return nil
 	}
 
-	fmt.Printf("This will update Tailscale from %v to %v. Continue? [y/n] ", version.Short, ver)
+	fmt.Printf("This will update Tailscale from %v to %v. Continue? [y/n] ", version.Short(), ver)
 	var resp string
 	fmt.Scanln(&resp)
 	resp = strings.ToLower(resp)
@@ -430,7 +430,7 @@ func installMSI(msi string) error {
 		if err == nil {
 			break
 		}
-		uninstallVersion := version.Short
+		uninstallVersion := version.Short()
 		if v := os.Getenv("TS_DEBUG_UNINSTALL_VERSION"); v != "" {
 			uninstallVersion = v
 		}

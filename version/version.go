@@ -11,6 +11,10 @@ import (
 	tailscaleroot "tailscale.com"
 )
 
+var long = ""
+
+var short = ""
+
 // Long is a full version number for this build, of the form
 // "x.y.z-commithash" for builds stamped in the usual way (see
 // build_dist.sh in the root) or, for binaries built by hand with the
@@ -18,23 +22,27 @@ import (
 // where "1.23.0" comes from ../VERSION.txt and the part after dev
 // is YYYYMMDD of the commit time, and the part after -t is the commit
 // hash. The dirty suffix is whether there are uncommitted changes.
-var Long = ""
+func Long() string {
+	return long
+}
 
 // Short is a short version number for this build, of the form
 // "x.y.z" for builds stamped in the usual way (see
 // build_dist.sh in the root) or, for binaries built by hand with the
 // go tool, it's like Long's dev form, but ending at the date part,
 // of the form "1.23.0-dev20220316".
-var Short = ""
+func Short() string {
+	return short
+}
 
 func init() {
 	defer func() {
 		// Must be run after Short has been initialized, easiest way to do that
 		// is a defer.
-		majorMinorPatch, _, _ = strings.Cut(Short, "-")
+		majorMinorPatch, _, _ = strings.Cut(short, "-")
 	}()
 
-	if Long != "" && Short != "" {
+	if long != "" && short != "" {
 		// Built in the recommended way, using build_dist.sh.
 		return
 	}
@@ -43,8 +51,8 @@ func init() {
 	// stamping.
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		Long = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
-		Short = Long
+		long = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-ERR-BuildInfo"
+		short = long
 		return
 	}
 	var dirty string // "-dirty" suffix if dirty
@@ -52,7 +60,7 @@ func init() {
 	for _, s := range bi.Settings {
 		switch s.Key {
 		case "vcs.revision":
-			GitCommit = s.Value
+			gitCommit = s.Value
 		case "vcs.time":
 			if len(s.Value) >= len("yyyy-mm-dd") {
 				commitDate = s.Value[:len("yyyy-mm-dd")]
@@ -61,30 +69,30 @@ func init() {
 		case "vcs.modified":
 			if s.Value == "true" {
 				dirty = "-dirty"
-				GitDirty = true
+				gitDirty = true
 			}
 		}
 	}
-	commitHashAbbrev := GitCommit
+	commitHashAbbrev := gitCommit
 	if len(commitHashAbbrev) >= 9 {
 		commitHashAbbrev = commitHashAbbrev[:9]
 	}
 
 	// Backup path, using Go 1.18's built-in git stamping.
-	Short = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + commitDate
-	Long = Short + "-t" + commitHashAbbrev + dirty
+	short = strings.TrimSpace(tailscaleroot.VersionDotTxt) + "-dev" + commitDate
+	long = short + "-t" + commitHashAbbrev + dirty
 }
 
 // GitCommit, if non-empty, is the git commit of the
 // github.com/tailscale/tailscale repository at which Tailscale was
 // built. Its format is the one returned by `git describe --always
 // --exclude "*" --dirty --abbrev=200`.
-var GitCommit = ""
+var gitCommit = ""
 
 // GitDirty is whether Go stamped the binary as having dirty version
 // control changes in the working directory (debug.ReadBuildInfo
 // setting "vcs.modified" was true).
-var GitDirty bool
+var gitDirty bool
 
 // ExtraGitCommit, if non-empty, is the git commit of a "supplemental"
 // repository at which Tailscale was built. Its format is the same as
@@ -96,7 +104,7 @@ var GitDirty bool
 // Android OSS repository). Together, GitCommit and ExtraGitCommit
 // exactly describe what repositories and commits were used in a
 // build.
-var ExtraGitCommit = ""
+var extraGitCommit = ""
 
 // majorMinorPatch is the major.minor.patch portion of Short.
 var majorMinorPatch string
