@@ -85,6 +85,15 @@ func main() {
 		log.Printf("%d tags to remove: %s\n", len(remove), strings.Join(remove, ", "))
 		log.Printf("Not removing any tags for safety.\n")
 	}
+
+	var wellKnown = [...]string{"latest", "stable"}
+	for _, tag := range wellKnown {
+		if needsUpdate(*src, *dst, tag) {
+			if err := copyTag(*src, *dst, tag, opts...); err != nil {
+				log.Printf("Updating tag %q: progress error: %v", tag, err)
+			}
+		}
+	}
 }
 
 func copyTag(srcStr, dstStr, tag string, opts ...remote.Option) error {
@@ -177,4 +186,27 @@ func diffTags(src, dst []string) (add, remove []string) {
 	sort.Strings(add)
 	sort.Strings(remove)
 	return add, remove
+}
+
+func needsUpdate(srcStr, dstStr, tag string) bool {
+	src, err := name.ParseReference(fmt.Sprintf("%s:%s", srcStr, tag))
+	if err != nil {
+		return false
+	}
+	dst, err := name.ParseReference(fmt.Sprintf("%s:%s", dstStr, tag))
+	if err != nil {
+		return false
+	}
+
+	srcDesc, err := remote.Get(src)
+	if err != nil {
+		return false
+	}
+
+	dstDesc, err := remote.Get(dst)
+	if err != nil {
+		return true
+	}
+
+	return srcDesc.Digest != dstDesc.Digest
 }
