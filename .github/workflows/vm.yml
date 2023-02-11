@@ -14,7 +14,8 @@ jobs:
   ubuntu2004-LTS-cloud-base:
     runs-on: [ self-hosted, linux, vm ]
 
-    if: "(github.repository == 'tailscale/tailscale') && !contains(github.event.head_commit.message, '[ci skip]')"
+    # VM tests run with some privileges, don't let them run on 3p PRs.
+    if: "github.repository == 'tailscale/tailscale'"
 
     steps:
       - name: Set GOPATH
