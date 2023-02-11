@@ -31,20 +31,11 @@ func main() {
 		fmt.Println(strings.TrimSpace(ts.GoToolchainRev))
 	}
 	if *goToolchainURL {
-		var suffix string
-		switch runtime.GOARCH {
-		case "amd64":
-			// None
-		case "arm64":
-			suffix = "-" + runtime.GOARCH
-		default:
-			log.Fatalf("unsupported GOARCH %q", runtime.GOARCH)
-		}
 		switch runtime.GOOS {
 		case "linux", "darwin":
 		default:
 			log.Fatalf("unsupported GOOS %q", runtime.GOOS)
 		}
-		fmt.Printf("https://github.com/tailscale/go/releases/download/build-%s/%s%s.tar.gz\n", strings.TrimSpace(ts.GoToolchainRev), runtime.GOOS, suffix)
+		fmt.Printf("https://github.com/tailscale/go/releases/download/build-%s/%s-%s.tar.gz\n", strings.TrimSpace(ts.GoToolchainRev), runtime.GOOS, runtime.GOARCH)
 	}
 }
