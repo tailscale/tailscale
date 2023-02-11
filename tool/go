@@ -27,14 +27,14 @@ fi
 
 # This works for linux and darwin, which is sufficient
 # (we do not build tailscale-go for other targets).
-GOOS=$(uname -s | tr A-Z a-z)
-ARCH="$(uname -m)"
-if [ "$ARCH" = "aarch64" ]; then
+host_os=$(uname -s | tr A-Z a-z)
+host_arch="$(uname -m)"
+if [ "$host_arch" = "aarch64" ]; then
     # Go uses the name "arm64".
-    ARCH="arm64"
-elif [ "$ARCH" = "x86_64" ]; then
+    host_arch="arm64"
+elif [ "$host_arch" = "x86_64" ]; then
     # Go uses the name "amd64".
-    ARCH="amd64"
+    host_arch="amd64"
 fi
 
 get_cached() {
@@ -58,7 +58,7 @@ get_cached() {
     rm -f "$archive.new" "$TOOLCHAIN.extracted"
     if [ ! -e "$archive" ]; then
             log "Need to download go '$REV'."
-            curl -f -L -o "$archive.new" "https://github.com/tailscale/go/releases/download/build-${REV}/${GOOS}-${ARCH}.tar.gz"
+            curl -f -L -o "$archive.new" "https://github.com/tailscale/go/releases/download/build-${REV}/${host_os}-${host_arch}.tar.gz"
             rm -f "$archive"
             mv "$archive.new" "$archive"
     fi
@@ -72,8 +72,8 @@ get_cached() {
 }
 
 if [ "${REV}" = "SKIP" ] ||
-   [ "${GOOS}" != "darwin" -a "${GOOS}" != "linux" ] ||
-   [ "${ARCH}" != "amd64" -a "${ARCH}" != "arm64" ]; then
+   [ "${host_os}" != "darwin" -a "${host_os}" != "linux" ] ||
+   [ "${host_arch}" != "amd64" -a "${host_arch}" != "arm64" ]; then
     # Use whichever go is available
     exec go "$@"
 else
