@@ -1,0 +1,325 @@
+# This is our main "CI tests" workflow. It runs everything that should run on
+# both PRs and merged commits, and for the latter reports failures to slack.
+name: CI
+
+on:
+  push:
+    branches:
+      - "main"
+      - "release-branch/*"
+  pull_request:
+    branches:
+      - "*"
+
+concurrency:
+  # For PRs, later CI runs preempt previous ones. e.g. a force push on a PR
+  # cancels running CI jobs and starts all new ones.
+  #
+  # For non-PR pushes, concurrency.group needs to be unique for every distinct
+  # CI run we want to have happen. Use run_id, which in practice means all
+  # non-PR CI runs will be allowed to run without preempting each other.
+  group: ${{ github.workflow }}-$${{ github.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          - goarch: amd64
+          - goarch: amd64
+            race: true
+          - goarch: "386" # thanks yaml
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: build all
+      run: ./tool/go build ./...
+      env:
+        GOARCH: ${{ matrix.goarch }}
+    - name: build variant CLIs
+      run: |
+        ./build_dist.sh --extra-small ./cmd/tailscaled
+        ./build_dist.sh --box ./cmd/tailscaled
+        ./build_dist.sh --extra-small --box ./cmd/tailscaled
+        rm -f tailscaled
+      env:
+        GOARCH: ${{ matrix.goarch }}
+    - name: get qemu # for tstest/archtest
+      if: matrix.goarch == 'amd64' && !matrix.race
+      run: |
+        sudo apt-get -y update
+        sudo apt-get -y install qemu-user
+    - name: build test wrapper
+      run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
+    - name: test all
+      if: "!matrix.race" # thanks yaml, unquoted !foo has a magical meaning
+      run: ./tool/go test -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
+      env:
+        GOARCH: ${{ matrix.goarch }}
+    - name: test all (race)
+      if: matrix.race
+      run: ./tool/go test -race -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
+      env:
+        GOARCH: ${{ matrix.goarch }}
+    - name: check that no tracked files changed
+      run: git diff --no-ext-diff --name-only --exit-code || (echo "Build/test modified the files above."; exit 1)
+    - name: check that no new files were added
+      run: |
+        # Note: The "error: pathspec..." you see below is normal!
+        # In the success case in which there are no new untracked files,
+        # git ls-files complains about the pathspec not matching anything.
+        # That's OK. It's not worth the effort to suppress. Please ignore it.
+        if git ls-files --others --exclude-standard --directory --no-empty-directory --error-unmatch -- ':/*'
+        then
+          echo "Build/test created untracked files in the repo (file names above)."
+          exit 1
+        fi
+
+  windows:
+    runs-on: windows-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: Restore Cache
+      uses: actions/cache@v3
+      with:
+        # Note: unlike the other setups, this is only grabbing the mod download
+        # cache, rather than the whole mod directory, as the download cache
+        # contains zips that can be unpacked in parallel faster than they can be
+        # fetched and extracted by tar
+        path: |
+          ~/go/pkg/mod/cache
+          ~\AppData\Local\go-build
+        # The -2- here should be incremented when the scheme of data to be
+        # cached changes (e.g. path above changes).
+        # TODO(raggi): add a go version here.
+        key: ${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
+    - name: test
+      # Don't use -bench=. -benchtime=1x.
+      # Somewhere in the layers (powershell?)
+      # the equals signs cause great confusion.
+      run: ./tool/go test -bench . -benchtime 1x ./...
+
+  vm:
+    runs-on: ["self-hosted", "linux", "vm"]
+    # VM tests run with some privileges, don't let them run on 3p PRs.
+    if: github.repository == 'tailscale/tailscale'
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: Run VM tests
+      run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
+      env:
+        HOME: "/tmp"
+        TMPDIR: "/tmp"
+        XDB_CACHE_HOME: "/var/lib/ghrunner/cache"
+  
+  cross: # cross-compile checks, build only.
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        include:
+          # Note: linux/amd64 is not in this matrix, because that goos/goarch is
+          # tested more exhaustively in the 'test' job above.
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: "386" # thanks yaml
+          - goos: linux
+            goarch: loong64
+          # macOS
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          # Windows
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          # BSDs
+          - goos: freebsd
+            goarch: amd64
+          - goos: openbsd
+            goarch: amd64
+
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: build all
+      run: ./tool/go build ./cmd/...
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: "0"
+    - name: build tests
+      run: |
+        toolgo=`pwd`/tool/go
+        for d in $($toolgo list -f '{{if .TestGoFiles}}{{.Dir}}{{end}}' ./... ); do
+          (echo $d; cd $d && $toolgo test -c)
+        done
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: "0"
+
+  ios: # similar to cross above, but iOS can't build most of the repo. So, just
+       #make it build a few smoke packages.
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: build some
+      run: ./tool/go build ./ipn/... ./wgengine/ ./types/... ./control/controlclient
+      env:
+        GOOS: ios
+        GOARCH: arm64
+
+  wasm: # builds tsconnect, which is the only wasm build we support
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: build tsconnect client
+      run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
+      env:
+        GOOS: js
+        GOARCH: wasm
+    - name: build tsconnect server
+      # Note, no GOOS/GOARCH in env on this build step, we're running a build
+      # tool that handles the build itself.
+      run: |
+        ./tool/go run ./cmd/tsconnect --fast-compression build
+        ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
+
+  fuzz:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - name: build fuzzers
+      id: build
+      uses: google/oss-fuzz/infra/cifuzz/actions/build_fuzzers@master
+      with:
+        oss-fuzz-project-name: 'tailscale'
+        dry-run: false
+        language: go
+    - name: run fuzzers
+      uses: google/oss-fuzz/infra/cifuzz/actions/run_fuzzers@master
+      with:
+        oss-fuzz-project-name: 'tailscale'
+        fuzz-seconds: 300
+        dry-run: false
+        language: go
+    - name: upload crash
+      uses: actions/upload-artifact@v3
+      if: failure() && steps.build.outcome == 'success'
+      with:
+        name: artifacts
+        path: ./out/artifacts
+
+  depaware:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: check depaware
+      run: |
+        export PATH=$(./tool/go env GOROOT)/bin:$PATH
+        find . -name 'depaware.txt' | xargs -n1 dirname | xargs ./tool/go run github.com/tailscale/depaware --check
+
+  go_generate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: check that 'go generate' is clean
+      run: |
+        pkgs=$(./tool/go list ./... | grep -v dnsfallback)
+        ./tool/go generate $pkgs
+        echo
+        echo
+        git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
+
+  go_mod_tidy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: check that 'go mod tidy' is clean
+      run: |
+        ./tool/go mod tidy
+        echo
+        echo
+        git diff --name-only --exit-code || (echo "Please run 'go mod tidy'."; exit 1)
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: check licenses
+      run: ./scripts/check_license_headers.sh .
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # don't abort the entire matrix if one element fails
+      matrix:
+        goos: ["linux", "windows", "darwin"]
+        goarch: ["amd64"]
+        include:
+          - goos: "windows"
+            goarch: "386"
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: install staticcheck
+      run: GOBIN=~/.local/bin ./tool/go install honnef.co/go/tools/cmd/staticcheck
+    - name: run staticcheck
+      run: |
+        export GOROOT=$(./tool/go env GOROOT)
+        export PATH=$GOROOT/bin:$PATH
+        staticcheck -- $(./tool/go list ./... | grep -v tempfork)
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+
+  notify_slack:
+    # Only notify slack for merged commits, not PR failures.
+    if: failure() && github.event_name == 'push'
+    # Any of these jobs failing causes a slack notification.
+    needs: 
+      - test
+      - windows
+      - vm
+      - cross
+      - ios
+      - wasm
+      - fuzz
+      - depaware
+      - go_generate
+      - go_mod_tidy
+      - licenses
+      - staticcheck
+    runs-on: ubuntu-latest
+    steps:
+    - name: notify  
+      uses: ruby/action-slack@v3.0.0
+      with:
+        payload: |
+          {
+            "attachments": [{
+              "title": "Failure: ${{ github.workflow }}",
+              "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",         
+              "text": "${{ github.repository }}@${{ github.ref_name }}: <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>",
+              "fields": [{ "value": ${{ toJson(github.event.head_commit.message) }}, "short": false }],
+              "footer": "${{ github.event.head_commit.committer.name }} at ${{ github.event.head_commit.timestamp }}",
+              "color": "danger"
+            }]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
