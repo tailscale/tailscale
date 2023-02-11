@@ -267,7 +267,7 @@ func beWindowsSubprocess() bool {
 	// Remove the date/time prefix; the logtail + file loggers add it.
 	log.SetFlags(0)
 
-	log.Printf("Program starting: v%v: %#v", version.Long, os.Args)
+	log.Printf("Program starting: v%v: %#v", version.Long(), os.Args)
 	log.Printf("subproc mode: logid=%v", logid)
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		log.Printf("Error reading environment config: %v", err)

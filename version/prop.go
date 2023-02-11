@@ -110,7 +110,7 @@ func IsUnstableBuild() bool {
 }
 
 func initUnstable() {
-	_, rest, ok := strings.Cut(Short, ".")
+	_, rest, ok := strings.Cut(short, ".")
 	if !ok {
 		return
 	}
@@ -187,12 +187,12 @@ type Meta struct {
 func GetMeta() Meta {
 	return Meta{
 		MajorMinorPatch: majorMinorPatch,
-		Short:           Short,
-		Long:            Long,
-		GitCommit:       GitCommit,
-		GitDirty:        GitDirty,
-		ExtraGitCommit:  ExtraGitCommit,
-		IsDev:           strings.Contains(Short, "-dev"), // TODO(bradfitz): could make a bool for this in init
+		Short:           short,
+		Long:            long,
+		GitCommit:       gitCommit,
+		GitDirty:        gitDirty,
+		ExtraGitCommit:  extraGitCommit,
+		IsDev:           strings.Contains(short, "-dev"), // TODO(bradfitz): could make a bool for this in init
 		UnstableBranch:  IsUnstableBuild(),
 		Cap:             int(tailcfg.CurrentCapabilityVersion),
 	}

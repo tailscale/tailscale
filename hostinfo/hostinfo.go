@@ -34,7 +34,7 @@ func New() *tailcfg.Hostinfo {
 	hostname, _ := os.Hostname()
 	hostname = dnsname.FirstLabel(hostname)
 	return &tailcfg.Hostinfo{
-		IPNVersion:      version.Long,
+		IPNVersion:      version.Long(),
 		Hostname:        hostname,
 		OS:              version.OS(),
 		OSVersion:       GetOSVersion(),

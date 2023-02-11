@@ -11,20 +11,20 @@ import (
 
 func String() string {
 	var ret strings.Builder
-	ret.WriteString(Short)
+	ret.WriteString(short)
 	ret.WriteByte('\n')
 	if IsUnstableBuild() {
 		fmt.Fprintf(&ret, "  track: unstable (dev); frequent updates and bugs are likely\n")
 	}
-	if GitCommit != "" {
+	if gitCommit != "" {
 		var dirty string
-		if GitDirty {
+		if gitDirty {
 			dirty = "-dirty"
 		}
-		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", GitCommit, dirty)
+		fmt.Fprintf(&ret, "  tailscale commit: %s%s\n", gitCommit, dirty)
 	}
-	if ExtraGitCommit != "" {
-		fmt.Fprintf(&ret, "  other commit: %s\n", ExtraGitCommit)
+	if extraGitCommit != "" {
+		fmt.Fprintf(&ret, "  other commit: %s\n", extraGitCommit)
 	}
 	fmt.Fprintf(&ret, "  go version: %s\n", runtime.Version())
 	return strings.TrimSpace(ret.String())

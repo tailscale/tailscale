@@ -1736,7 +1736,7 @@ func (s *Server) ExpVar() expvar.Var {
 	}))
 	m.Set("counter_tcp_rtt", &s.tcpRtt)
 	var expvarVersion expvar.String
-	expvarVersion.Set(version.Long)
+	expvarVersion.Set(version.Long())
 	m.Set("version", &expvarVersion)
 	return m
 }

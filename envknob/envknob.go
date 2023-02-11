@@ -485,5 +485,5 @@ func IPCVersion() string {
 	if v := String("TS_DEBUG_FAKE_IPC_VERSION"); v != "" {
 		return v
 	}
-	return version.Long
+	return version.Long()
 }

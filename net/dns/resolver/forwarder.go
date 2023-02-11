@@ -413,7 +413,7 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	}
 	req.Header.Set("Content-Type", dohType)
 	req.Header.Set("Accept", dohType)
-	req.Header.Set("User-Agent", "tailscaled/"+version.Long)
+	req.Header.Set("User-Agent", "tailscaled/"+version.Long())
 
 	hres, err := c.Do(req)
 	if err != nil {

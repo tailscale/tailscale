@@ -261,7 +261,7 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, logf logger.Logf, traceAC
 	}
 	ac := &acme.Client{
 		Key:       key,
-		UserAgent: "tailscaled/" + version.Long,
+		UserAgent: "tailscaled/" + version.Long(),
 	}
 
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)

@@ -52,7 +52,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
 
 	ret.KVFunc("Uptime", func() any { return Uptime() })
-	ret.KV("Version", version.Long)
+	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
 	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(VarzHandler))
 	ret.Handle("pprof/", "pprof", http.HandlerFunc(pprof.Index))
