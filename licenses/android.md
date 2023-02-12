@@ -10,7 +10,7 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
 
  - [eliasnaur.com/font/roboto](https://pkg.go.dev/eliasnaur.com/font/roboto) ([BSD-3-Clause](https://git.sr.ht/~eliasnaur/font/tree/832bb8fc08c3/LICENSE))
  - [filippo.io/edwards25519](https://pkg.go.dev/filippo.io/edwards25519) ([BSD-3-Clause](https://github.com/FiloSottile/edwards25519/blob/v1.0.0-rc.1/LICENSE))
- - [gioui.org](https://pkg.go.dev/gioui.org) ([MIT](https://git.sr.ht/~eliasnaur/gio/tree/af7afea5a380/LICENSE))
+ - [gioui.org](https://pkg.go.dev/gioui.org) ([MIT](https://git.sr.ht/~eliasnaur/gio/tree/32c6a9b10d0b/LICENSE))
  - [gioui.org/cpu](https://pkg.go.dev/gioui.org/cpu) ([MIT](https://git.sr.ht/~eliasnaur/gio-cpu/tree/8d6a761490d2/LICENSE))
  - [gioui.org/shader](https://pkg.go.dev/gioui.org/shader) ([MIT](https://git.sr.ht/~eliasnaur/gio-shader/tree/v1.0.6/LICENSE))
  - [github.com/benoitkugler/textlayout](https://pkg.go.dev/github.com/benoitkugler/textlayout) ([MIT](https://github.com/benoitkugler/textlayout/blob/v0.3.0/LICENSE))
@@ -51,7 +51,7 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
  - [go4.org/intern](https://pkg.go.dev/go4.org/intern) ([BSD-3-Clause](https://github.com/go4org/intern/blob/ae77deb06f29/LICENSE))
  - [go4.org/mem](https://pkg.go.dev/go4.org/mem) ([Apache-2.0](https://github.com/go4org/mem/blob/927187094b94/LICENSE))
  - [go4.org/netipx](https://pkg.go.dev/go4.org/netipx) ([BSD-3-Clause](https://github.com/go4org/netipx/blob/7e7bdc8411bf/LICENSE))
- - [go4.org/unsafe/assume-no-moving-gc](https://pkg.go.dev/go4.org/unsafe/assume-no-moving-gc) ([BSD-3-Clause](https://github.com/go4org/unsafe-assume-no-moving-gc/blob/928513b29760/LICENSE))
+ - [go4.org/unsafe/assume-no-moving-gc](https://pkg.go.dev/go4.org/unsafe/assume-no-moving-gc) ([BSD-3-Clause](https://github.com/go4org/unsafe-assume-no-moving-gc/blob/ee73d164e760/LICENSE))
  - [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) ([BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/v0.3.0:LICENSE))
  - [golang.org/x/exp](https://pkg.go.dev/golang.org/x/exp) ([BSD-3-Clause](https://cs.opensource.google/go/x/exp/+/47842c84:LICENSE))
  - [golang.org/x/exp/shiny](https://pkg.go.dev/golang.org/x/exp/shiny) ([BSD-3-Clause](https://cs.opensource.google/go/x/exp/+/334a2380:shiny/LICENSE))
