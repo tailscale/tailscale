@@ -79,7 +79,7 @@ jobs:
         fi
 
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
     - name: checkout
       uses: actions/checkout@v3
