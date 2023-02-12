@@ -179,6 +179,24 @@ jobs:
         GOOS: ios
         GOARCH: arm64
 
+  android:
+    # similar to cross above, but android fails to build a few pieces of the
+    # repo. We should fix those pieces, they're small, but as a stepping stone,
+    # only test the subset of android that our past smoke test checked.
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+      # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
+      # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
+      # some Android breakages early.
+      # TODO(bradfitz): better; see https://github.com/tailscale/tailscale/issues/4482
+    - name: build some
+      run: ./tool/go install ./net/netns ./ipn/ipnlocal ./wgengine/magicsock/ ./wgengine/ ./wgengine/router/ ./wgengine/netstack ./util/dnsname/ ./ipn/ ./net/interfaces ./wgengine/router/ ./tailcfg/ ./types/logger/ ./net/dns ./hostinfo ./version
+      env:
+        GOOS: android
+        GOARCH: arm64
+
   wasm: # builds tsconnect, which is the only wasm build we support
     runs-on: ubuntu-latest
     steps:
@@ -293,6 +311,7 @@ jobs:
     if: failure() && github.event_name == 'push'
     # Any of these jobs failing causes a slack notification.
     needs: 
+      - android
       - test
       - windows
       - vm
