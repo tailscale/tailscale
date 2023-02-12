@@ -31,7 +31,7 @@ jobs:
           - goarch: amd64
             variant: race
           - goarch: "386" # thanks yaml
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -146,7 +146,7 @@ jobs:
           - goos: openbsd
             goarch: amd64
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -169,7 +169,7 @@ jobs:
 
   ios: # similar to cross above, but iOS can't build most of the repo. So, just
        #make it build a few smoke packages.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -183,7 +183,7 @@ jobs:
     # similar to cross above, but android fails to build a few pieces of the
     # repo. We should fix those pieces, they're small, but as a stepping stone,
     # only test the subset of android that our past smoke test checked.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -198,7 +198,7 @@ jobs:
         GOARCH: arm64
 
   wasm: # builds tsconnect, which is the only wasm build we support
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -216,7 +216,7 @@ jobs:
 
   fuzz:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: build fuzzers
       id: build
@@ -240,7 +240,7 @@ jobs:
         path: ./out/artifacts
 
   depaware:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -250,7 +250,7 @@ jobs:
         find . -name 'depaware.txt' | xargs -n1 dirname | xargs ./tool/go run github.com/tailscale/depaware --check
 
   go_generate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -263,7 +263,7 @@ jobs:
         git diff --name-only --exit-code || (echo "The files above need updating. Please run 'go generate'."; exit 1)
 
   go_mod_tidy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -275,7 +275,7 @@ jobs:
         git diff --name-only --exit-code || (echo "Please run 'go mod tidy'."; exit 1)
 
   licenses:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: checkout
       uses: actions/checkout@v3
@@ -283,7 +283,7 @@ jobs:
       run: ./scripts/check_license_headers.sh .
 
   staticcheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
@@ -324,7 +324,7 @@ jobs:
       - go_mod_tidy
       - licenses
       - staticcheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
     - name: notify  
       uses: ruby/action-slack@v3.0.0
