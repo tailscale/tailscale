@@ -146,6 +146,12 @@ jobs:
             goarch: "386" # thanks yaml
           - goos: linux
             goarch: loong64
+          - goos: linux
+            goarch: arm
+            goarm: "5"
+          - goos: linux
+            goarch: arm
+            goarm: "7"
           # macOS
           - goos: darwin
             goarch: amd64
@@ -171,6 +177,7 @@ jobs:
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
+        GOARM: ${{ matrix.goarm }}
         CGO_ENABLED: "0"
     - name: build tests
       run: ./tool/go test -exec=true ./...
