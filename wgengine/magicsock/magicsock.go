@@ -4224,7 +4224,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 	de.expired = n.Expired
 
 	if de.discoKey != n.DiscoKey {
-		de.c.logf("[v1] magicsock: disco: node %s changed from discokey %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
+		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
 		de.discoKey = n.DiscoKey
 		de.discoShort = de.discoKey.ShortString()
 		de.resetLocked()
