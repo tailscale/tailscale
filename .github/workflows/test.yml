@@ -29,7 +29,7 @@ jobs:
         include:
           - goarch: amd64
           - goarch: amd64
-            race: true
+            variant: race
           - goarch: "386" # thanks yaml
     runs-on: ubuntu-latest
     steps:
@@ -48,19 +48,19 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: get qemu # for tstest/archtest
-      if: matrix.goarch == 'amd64' && !matrix.race
+      if: matrix.goarch == 'amd64' && matrix.variant == ''
       run: |
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      if: "!matrix.race" # thanks yaml, unquoted !foo has a magical meaning
+      if: matrix.variant != 'race'
       run: ./tool/go test -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: test all (race)
-      if: matrix.race
+      if: matrix.variant == 'race'
       run: ./tool/go test -race -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
       env:
         GOARCH: ${{ matrix.goarch }}
