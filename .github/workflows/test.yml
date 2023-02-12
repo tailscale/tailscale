@@ -171,11 +171,7 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: "0"
     - name: build tests
-      run: |
-        toolgo=`pwd`/tool/go
-        for d in $($toolgo list -f '{{if .TestGoFiles}}{{.Dir}}{{end}}' ./... ); do
-          (echo $d; cd $d && $toolgo test -c)
-        done
+      run: ./tool/go test -exec=true ./...
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
