@@ -43,9 +43,9 @@ case "$TARGET" in
         tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled, \
         tailscale.com/cmd/containerboot:/usr/local/bin/containerboot" \
       --ldflags="\
-        -X tailscale.com/version.long=${VERSION_LONG} \
-        -X tailscale.com/version.short=${VERSION_SHORT} \
-        -X tailscale.com/version.gitCommit=${VERSION_GIT_HASH}" \
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
       --base="${BASE}" \
       --tags="${TAGS}" \
       --repos="${REPOS}" \
@@ -58,9 +58,9 @@ case "$TARGET" in
     go run github.com/tailscale/mkctr \
       --gopaths="tailscale.com/cmd/k8s-operator:/usr/local/bin/operator" \
       --ldflags="\
-        -X tailscale.com/version.long=${VERSION_LONG} \
-        -X tailscale.com/version.short=${VERSION_SHORT} \
-        -X tailscale.com/version.gitCommit=${VERSION_GIT_HASH}" \
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
       --base="${BASE}" \
       --tags="${TAGS}" \
       --repos="${REPOS}" \
