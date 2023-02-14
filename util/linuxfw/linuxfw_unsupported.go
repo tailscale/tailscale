@@ -1,10 +1,10 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// NOTE: linux_386 and linux_loong64 are currently unsupported due to missing
+// NOTE: linux_{386,loong64,arm,armbe} are currently unsupported due to missing
 // support in upstream dependencies.
 
-//go:build !linux || (linux && (386 || loong64))
+//go:build !linux || (linux && (386 || loong64 || arm || armbe))
 
 package linuxfw
 
