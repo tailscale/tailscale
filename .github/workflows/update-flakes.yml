@@ -1,0 +1,49 @@
+name: update-flakes
+
+on:
+  # run action when a change lands in the main branch which updates go.mod. Also
+  # allow manual triggering.
+  push:
+    branches:
+      - main
+    paths:
+      - go.mod
+      - .github/workflows/update-flakes.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  tailscale:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Run update-flakes
+        run: ./update-flakes.sh
+
+      - name: Get access token
+        uses: tibdex/github-app-token@f717b5ecd4534d3c4df4ce9b5c1c2214f0f7cd06 # v1.6.0
+        id: generate-token
+        with:
+          app_id: ${{ secrets.LICENSING_APP_ID }}
+          installation_id: ${{ secrets.LICENSING_APP_INSTALLATION_ID }}
+          private_key: ${{ secrets.LICENSING_APP_PRIVATE_KEY }}
+
+      - name: Send pull request
+        uses: peter-evans/create-pull-request@ad43dccb4d726ca8514126628bec209b8354b6dd #v4.1.4
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          author: Flakes Updater <noreply@tailscale.com>
+          committer: Flakes Updater <noreply@tailscale.com>
+          branch: flakes
+          commit-message: "go.mod.sri: update SRI hash for go.mod changes"
+          title: "go.mod.sri: update SRI hash for go.mod changes"
+          body: Triggered by ${{ github.repository }}@${{ github.sha }}
+          signoff: true
+          delete-branch: true
+          reviewers: danderson
