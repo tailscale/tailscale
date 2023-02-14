@@ -129,16 +129,31 @@ func build(outDir string, targets ...string) error {
 }
 
 func findGo() (string, error) {
-	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
-	if fi, err := os.Stat(goBin); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("failed to find go at %v", goBin)
+	// Go 1.19 attempted to be helpful by prepending $PATH with GOROOT/bin based
+	// on the executed go binary when invoked using `go test` or `go generate`,
+	// however, this doesn't cover cases when run otherwise, such as via `go run`.
+	// runtime.GOROOT() may often be empty these days, so the safe thing to do
+	// here is, in order:
+	// 1. Look for a go binary in $PATH[0].
+	// 2. Look for a go binary in runtime.GOROOT()/bin if runtime.GOROOT() is non-empty.
+	// 3. Look for a go binary in $PATH.
+
+	paths := strings.FieldsFunc(os.Getenv("PATH"), func(r rune) bool { return os.IsPathSeparator(uint8(r)) })
+	if len(paths) > 0 {
+		candidate := filepath.Join(paths[0], "go"+exe())
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, err
 		}
-		return "", fmt.Errorf("looking for go binary: %v", err)
-	} else if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("%v is unexpected %v", goBin, fi.Mode())
 	}
-	return goBin, nil
+
+	if runtime.GOROOT() != "" {
+		candidate := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, err
+		}
+	}
+
+	return exec.LookPath("go")
 }
 
 func exe() string {
