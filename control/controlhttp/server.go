@@ -111,6 +111,10 @@ func acceptHTTP(ctx context.Context, w http.ResponseWriter, r *http.Request, pri
 	return nc, nil
 }
 
+func AcceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
+	return acceptWebsocket(ctx, w, r, private)
+}
+
 // acceptWebsocket upgrades a WebSocket connection (from a client that cannot
 // speak HTTP) to a Tailscale control protocol base transport connection.
 func acceptWebsocket(ctx context.Context, w http.ResponseWriter, r *http.Request, private key.MachinePrivate) (*controlbase.Conn, error) {
