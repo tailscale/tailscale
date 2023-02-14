@@ -1,4 +1,4 @@
-name: update-flakes
+name: update-flake
 
 on:
   # run action when a change lands in the main branch which updates go.mod. Also
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Run update-flakes
-        run: ./update-flakes.sh
+        run: ./update-flake.sh
 
       - name: Get access token
         uses: tibdex/github-app-token@f717b5ecd4534d3c4df4ce9b5c1c2214f0f7cd06 # v1.6.0
