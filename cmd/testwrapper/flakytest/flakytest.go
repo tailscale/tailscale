@@ -7,16 +7,20 @@
 package flakytest
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"testing"
 )
 
-// InTestWrapper returns whether or not this binary is running under our test
-// wrapper.
-func InTestWrapper() bool {
-	return os.Getenv("TS_IN_TESTWRAPPER") != ""
-}
+// FlakyTestLogMessage is a sentinel value that is printed to stderr when a
+// flaky test is marked. This is used by cmd/testwrapper to detect flaky tests
+// and retry them.
+const FlakyTestLogMessage = "flakytest: this is a known flaky test"
+
+// FlakeAttemptEnv is an environment variable that is set by cmd/testwrapper
+// when a flaky test is retried. It contains the attempt number, starting at 1.
+const FlakeAttemptEnv = "TS_TESTWRAPPER_ATTEMPT"
 
 var issueRegexp = regexp.MustCompile(`\Ahttps://github\.com/tailscale/[a-zA-Z0-9_.-]+/issues/\d+\z`)
 
@@ -30,16 +34,6 @@ func Mark(t testing.TB, issue string) {
 		t.Fatalf("bad issue format: %q", issue)
 	}
 
-	if !InTestWrapper() {
-		return
-	}
-
-	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("flakytest: signaling test wrapper to retry test")
-
-			// Signal to test wrapper that we should restart.
-			os.Exit(123)
-		}
-	})
+	fmt.Fprintln(os.Stderr, FlakyTestLogMessage) // sentinel value for testwrapper
+	t.Logf("flakytest: issue tracking this flaky test: %s", issue)
 }
