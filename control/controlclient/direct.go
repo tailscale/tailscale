@@ -59,6 +59,7 @@ import (
 	"tailscale.com/util/syspolicy/pkey"
 	"tailscale.com/util/syspolicy/policyclient"
 	"tailscale.com/util/testenv"
+	"tailscale.com/util/vizerror"
 	"tailscale.com/util/zstdframe"
 )
 
@@ -743,7 +744,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.Error != "" {
-		return false, "", nil, UserVisibleError(resp.Error)
+		return false, "", nil, vizerror.New(resp.Error)
 	}
 	if len(resp.NodeKeySignature) > 0 {
 		return true, "", resp.NodeKeySignature, nil

@@ -99,6 +99,7 @@ import (
 	"tailscale.com/util/syspolicy/ptype"
 	"tailscale.com/util/testenv"
 	"tailscale.com/util/usermetric"
+	"tailscale.com/util/vizerror"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
@@ -1583,9 +1584,8 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 			return
 		}
 		b.logf("Received error: %v", st.Err)
-		var uerr controlclient.UserVisibleError
-		if errors.As(st.Err, &uerr) {
-			s := uerr.UserVisibleError()
+		if vizerr, ok := vizerror.As(st.Err); ok {
+			s := vizerr.Error()
 			b.sendLocked(ipn.Notify{ErrMessage: &s})
 		}
 		return
