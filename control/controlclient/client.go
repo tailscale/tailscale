@@ -91,9 +91,3 @@ type Client interface {
 	// distinguish one client from another.
 	ClientID() int64
 }
-
-// UserVisibleError is an error that should be shown to users.
-type UserVisibleError string
-
-func (e UserVisibleError) Error() string            { return string(e) }
-func (e UserVisibleError) UserVisibleError() string { return string(e) }
