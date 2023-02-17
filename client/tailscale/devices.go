@@ -44,17 +44,18 @@ type Device struct {
 	Name      string   `json:"name"`
 	Hostname  string   `json:"hostname"`
 
-	ClientVersion     string `json:"clientVersion"`   // Empty for external devices.
-	UpdateAvailable   bool   `json:"updateAvailable"` // Empty for external devices.
-	OS                string `json:"os"`
-	Created           string `json:"created"` // Empty for external devices.
-	LastSeen          string `json:"lastSeen"`
-	KeyExpiryDisabled bool   `json:"keyExpiryDisabled"`
-	Expires           string `json:"expires"`
-	Authorized        bool   `json:"authorized"`
-	IsExternal        bool   `json:"isExternal"`
-	MachineKey        string `json:"machineKey"` // Empty for external devices.
-	NodeKey           string `json:"nodeKey"`
+	ClientVersion     string   `json:"clientVersion"`   // Empty for external devices.
+	UpdateAvailable   bool     `json:"updateAvailable"` // Empty for external devices.
+	OS                string   `json:"os"`
+	Tags              []string `json:"tags"`
+	Created           string   `json:"created"` // Empty for external devices.
+	LastSeen          string   `json:"lastSeen"`
+	KeyExpiryDisabled bool     `json:"keyExpiryDisabled"`
+	Expires           string   `json:"expires"`
+	Authorized        bool     `json:"authorized"`
+	IsExternal        bool     `json:"isExternal"`
+	MachineKey        string   `json:"machineKey"` // Empty for external devices.
+	NodeKey           string   `json:"nodeKey"`
 
 	// BlocksIncomingConnections is configured via the device's
 	// Tailscale client preferences. This field is only reported
