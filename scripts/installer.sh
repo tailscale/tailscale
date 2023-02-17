@@ -211,6 +211,11 @@ main() {
 				VERSION="$VERSION_ID"
 				PACKAGETYPE="apk"
 				;;
+			postmarketos)
+				OS="alpine"
+				VERSION="$VERSION_ID"
+				PACKAGETYPE="apk"
+				;;
 			nixos)
 				echo "Please add Tailscale to your NixOS configuration directly:"
 				echo
