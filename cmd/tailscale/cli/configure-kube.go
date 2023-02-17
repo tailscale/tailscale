@@ -17,6 +17,7 @@ import (
 	"golang.org/x/exp/slices"
 	"k8s.io/client-go/util/homedir"
 	"sigs.k8s.io/yaml"
+	"tailscale.com/version"
 )
 
 func init() {
@@ -39,6 +40,22 @@ The hostname argument should be set to the Tailscale hostname of the peer runnin
 	Exec: runConfigureKubeconfig,
 }
 
+// kubeconfigPath returns the path to the kubeconfig file for the current user.
+func kubeconfigPath() string {
+	var dir string
+	if version.IsSandboxedMacOS() {
+		// The HOME environment variable in macOS sandboxed apps is set to
+		// ~/Library/Containers/<app-id>/Data, but the kubeconfig file is
+		// located in ~/.kube/config. We rely on the "com.apple.security.temporary-exception.files.home-relative-path.read-write"
+		// entitlement to access the file.
+		containerHome := os.Getenv("HOME")
+		dir, _, _ = strings.Cut(containerHome, "/Library/Containers/")
+	} else {
+		dir = homedir.HomeDir()
+	}
+	return filepath.Join(dir, ".kube", "config")
+}
+
 func runConfigureKubeconfig(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		return errors.New("unknown arguments")
@@ -57,8 +74,7 @@ func runConfigureKubeconfig(ctx context.Context, args []string) error {
 		return fmt.Errorf("no peer found with hostname %q", hostOrFQDN)
 	}
 	targetFQDN = strings.TrimSuffix(targetFQDN, ".")
-	confPath := filepath.Join(homedir.HomeDir(), ".kube", "config")
-	if err := setKubeconfigForPeer(targetFQDN, confPath); err != nil {
+	if err := setKubeconfigForPeer(targetFQDN, kubeconfigPath()); err != nil {
 		return err
 	}
 	printf("kubeconfig configured for %q\n", hostOrFQDN)
@@ -140,9 +156,23 @@ func updateKubeconfig(cfgYaml []byte, fqdn string) ([]byte, error) {
 }
 
 func setKubeconfigForPeer(fqdn, filePath string) error {
+	dir := filepath.Dir(filePath)
+	if _, err := os.Stat(dir); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Mkdir(dir, 0755); err != nil {
+			if version.IsSandboxedMacOS() && errors.Is(err, os.ErrPermission) {
+				// macOS sandboxing prevents us from creating the .kube directory
+				// in the home directory.
+				return errors.New("unable to create .kube directory in home directory, please create it manually (e.g. mkdir ~/.kube")
+			}
+			return err
+		}
+	}
 	b, err := os.ReadFile(filePath)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return fmt.Errorf("reading kubeconfig: %w", err)
 	}
 	b, err = updateKubeconfig(b, fqdn)
 	if err != nil {
