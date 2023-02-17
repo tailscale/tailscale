@@ -542,7 +542,7 @@ func (a *ServiceReconciler) createOrGetSecret(ctx context.Context, logger *zap.S
 
 func (a *ServiceReconciler) getDeviceInfo(ctx context.Context, svc *corev1.Service) (id, hostname string, err error) {
 	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childResourceLabels(svc))
-	if err != nil {
+	if err != nil || sec == nil {
 		return "", "", err
 	}
 	id = string(sec.Data["device_id"])
