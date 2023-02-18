@@ -11,42 +11,25 @@
 
 set -eu
 
-IFS=".$IFS" read -r major minor patch <VERSION.txt
-git_hash=$(git rev-parse HEAD)
-if ! git diff-index --quiet HEAD; then
-	git_hash="${git_hash}-dirty"
-fi
-base_hash=$(git rev-list --max-count=1 HEAD -- VERSION.txt)
-change_count=$(git rev-list --count HEAD "^$base_hash")
-short_hash=$(echo "$git_hash" | cut -c1-9)
-
-if expr "$minor" : "[0-9]*[13579]$" >/dev/null; then
-	patch="$change_count"
-	change_suffix=""
-elif [ "$change_count" != "0" ]; then
-	change_suffix="-$change_count"
-else
-	change_suffix=""
+go="go"
+if [ -n "${TS_USE_TOOLCHAIN:-}" ]; then
+	go="./tool/go"
 fi
 
-long_suffix="$change_suffix-t$short_hash"
-MINOR="$major.$minor"
-SHORT="$MINOR.$patch"
-LONG="${SHORT}$long_suffix"
-GIT_HASH="$git_hash"
+eval `$go run ./cmd/mkversion`
 
 if [ "$1" = "shellvars" ]; then
 	cat <<EOF
-VERSION_MINOR="$MINOR"
-VERSION_SHORT="$SHORT"
-VERSION_LONG="$LONG"
-VERSION_GIT_HASH="$GIT_HASH"
+VERSION_MINOR="$VERSION_MINOR"
+VERSION_SHORT="$VERSION_SHORT"
+VERSION_LONG="$VERSION_LONG"
+VERSION_GIT_HASH="$VERSION_GIT_HASH"
 EOF
 	exit 0
 fi
 
 tags=""
-ldflags="-X tailscale.com/version.longStamp=${LONG} -X tailscale.com/version.shortStamp=${SHORT}"
+ldflags="-X tailscale.com/version.longStamp=${VERSION_LONG} -X tailscale.com/version.shortStamp=${VERSION_SHORT}"
 
 # build_dist.sh arguments must precede go build arguments.
 while [ "$#" -gt 1 ]; do
