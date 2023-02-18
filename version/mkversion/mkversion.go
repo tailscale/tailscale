@@ -25,6 +25,12 @@ import (
 
 // VersionInfo is version information extracted from a git checkout.
 type VersionInfo struct {
+	// Major is the major version number portion of Short.
+	Major int
+	// Minor is the minor version number portion of Short.
+	Minor int
+	// Patch is the patch version number portion of Short.
+	Patch int
 	// Short is the short version string. See the documentation of version.Short
 	// for possible values.
 	Short string
@@ -74,6 +80,9 @@ type VersionInfo struct {
 func (v VersionInfo) String() string {
 	f := fmt.Fprintf
 	var b bytes.Buffer
+	f(&b, "VERSION_MAJOR=%d\n", v.Major)
+	f(&b, "VERSION_MINOR=%d\n", v.Minor)
+	f(&b, "VERSION_PATCH=%d\n", v.Patch)
 	f(&b, "VERSION_SHORT=%q\n", v.Short)
 	f(&b, "VERSION_LONG=%q\n", v.Long)
 	f(&b, "VERSION_GIT_HASH=%q\n", v.GitHash)
@@ -193,6 +202,9 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 	xcodeMacOS := fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
 
 	return VersionInfo{
+		Major:           v.major,
+		Minor:           v.minor,
+		Patch:           v.patch,
 		Short:           fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch),
 		Long:            fmt.Sprintf("%d.%d.%d%s%s", v.major, v.minor, v.patch, changeSuffix, hashes),
 		GitHash:         fmt.Sprintf("%s", v.hash),
