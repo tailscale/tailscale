@@ -21,6 +21,7 @@ jobs:
         # GOROOT is specified so that the Go/Wasm that is trigged by build-pk
         # also picks up our custom Go toolchain.
         run: |
+          export TS_USE_TOOLCHAIN=1
           ./build_dist.sh tailscale.com/cmd/tsconnect
           GOROOT="${HOME}/.cache/tailscale-go" ./tsconnect build-pkg
 
