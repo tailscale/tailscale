@@ -70,7 +70,7 @@ require (
 	go.uber.org/zap v1.21.0
 	go4.org/mem v0.0.0-20210711025021-927187094b94
 	go4.org/netipx v0.0.0-20220725152314-7e7bdc8411bf
-	golang.org/x/crypto v0.3.0
+	golang.org/x/crypto v0.6.0
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db
 	golang.org/x/net v0.7.0
 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
