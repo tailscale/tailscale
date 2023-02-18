@@ -4,6 +4,9 @@
 name: CI
 
 on:
+  pull_request:
+    branches:
+      - "*"
   push:
     branches:
       - "main"
@@ -11,7 +14,7 @@ on:
 
 jobs:
   test:
-    uses: tailscale/tailscale/.github/workflows/test.yml@${{ github.sha }}
+    uses: ./.github/workflows/test.yml
 
   notify_slack:
     if: failure()
@@ -24,7 +27,7 @@ jobs:
         payload: |
           {
             "attachments": [{
-              "title": "Failure: ${{ github.workflow }}",
+              "title": "TEST TEST TEST I AM DOING A TEST: ${{ github.workflow }}",
               "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",         
               "text": "${{ github.repository }}@${{ github.ref_name }}: <https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>",
               "fields": [{ "value": ${{ toJson(github.event.head_commit.message) }}, "short": false }],

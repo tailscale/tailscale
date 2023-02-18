@@ -17,10 +17,11 @@ env:
   TS_FUZZ_CURRENTLY_BROKEN: false
 
 on:
-  pull_request:
-    branches:
-      - "*"
+  # pull_request:
+  #   branches:
+  #     - "*"
   merge_group:
+  workflow_call:
 
 concurrency:
   # For PRs, later CI runs preempt previous ones. e.g. a force push on a PR
@@ -52,7 +53,7 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
     - name: build variant CLIs
       run: |
-        export TS_USE_TOOLCHAIN=1
+        #export TS_USE_TOOLCHAIN=1
         ./build_dist.sh --extra-small ./cmd/tailscaled
         ./build_dist.sh --box ./cmd/tailscaled
         ./build_dist.sh --extra-small --box ./cmd/tailscaled
