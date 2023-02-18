@@ -23,27 +23,61 @@ import (
 	"github.com/google/uuid"
 )
 
+// VersionInfo is version information extracted from a git checkout.
 type VersionInfo struct {
-	Short           string
-	Long            string
-	OSSHash         string
-	CorpHash        string
-	Xcode           string // For embedding into Xcode metadata (iOS and macsys)
-	XcodeMacOS      string // For embedding into Xcode metadata (macOS)
-	Winres          string // For embedding into Windows metadata
-	OSSDate         string // Unix timestamp of commit date (git: %ct)
-	CorpDate        string // Unix timestamp of commit date (git: %ct)
-	Track           string
+	// Short is the short version string. See the documentation of version.Short
+	// for possible values.
+	Short string
+	// Long is the long version string. See the documentation for version.Long
+	// for possible values.
+	Long string
+	// GitHash is the git hash of the tailscale.com Go module.
+	GitHash string
+	// OtherHash is the git hash of a supplemental git repository, if any. For
+	// example, the commit of the tailscale-android repository.
+	OtherHash string
+	// Xcode is the version string that gets embedded into Xcode builds for the
+	// Tailscale iOS app and macOS standalone (aka "macsys") app.
+	//
+	// It is the same as Short, but with 100 added to the major version number.
+	// This is because Apple requires monotonically increasing version numbers,
+	// and very early builds of Tailscale used a single incrementing integer,
+	// which the Apple interprets as the major version number. When we switched
+	// to the current scheme, we started the major version number at 100 (v0,
+	// plus 100) to make the transition.
+	Xcode string
+	// XcodeMacOS is the version string that gets embedded into Xcode builds for
+	// the Tailscale macOS app store app.
+	//
+	// This used to be the same as Xcode, but at some point Xcode reverted to
+	// auto-incrementing build numbers instead of using the version we embedded.
+	// As a result, we had to alter the version scheme again, and switched to
+	// GitHash's commit date, in the format "YYYY.DDD.HHMMSS"
+	XcodeMacOS string
+	// Winres is the version string that gets embedded into Windows exe
+	// metadata. It is of the form "x,y,z,0".
+	Winres string
+	// GitDate is the unix timestamp of GitHash's commit date.
+	GitDate string
+	// OtherDate is the unix timestamp of OtherHash's commit date, if any.
+	OtherDate string
+	// Track is the release track of this build: "stable" if the minor version
+	// number is even, "unstable" if it's odd.
+	Track string
+	// MSIProductCodes is a map of Windows CPU architecture names to UUIDv5
+	// hashes that uniquely identify the version of the build. These are used in
+	// the MSI installer logic to uniquely identify particular builds.
 	MSIProductCodes map[string]string
 }
 
+// String returns v's information as shell variable assignments.
 func (v VersionInfo) String() string {
 	f := fmt.Fprintf
 	var b bytes.Buffer
 	f(&b, "VERSION_SHORT=%q\n", v.Short)
 	f(&b, "VERSION_LONG=%q\n", v.Long)
-	f(&b, "VERSION_GIT_HASH=%q\n", v.OSSHash)
-	f(&b, "VERSION_EXTRA_HASH=%q\n", v.CorpHash)
+	f(&b, "VERSION_GIT_HASH=%q\n", v.GitHash)
+	f(&b, "VERSION_EXTRA_HASH=%q\n", v.OtherHash)
 	f(&b, "VERSION_XCODE=%q\n", v.Xcode)
 	f(&b, "VERSION_XCODE_MACOS=%q\n", v.XcodeMacOS)
 	f(&b, "VERSION_WINRES=%q\n", v.Winres)
@@ -71,32 +105,34 @@ func Info() VersionInfo {
 func InfoFrom(dir string) (VersionInfo, error) {
 	runner := dirRunner(dir)
 
-	var v verInfo
 	var err error
-	v.corpHash, err = runner.output("git", "rev-parse", "HEAD")
+	otherHash, err := runner.output("git", "rev-parse", "HEAD")
 	if err != nil {
 		return VersionInfo{}, err
 	}
-	v.corpDate, err = runner.output("git", "log", "-n1", "--format=%ct", "HEAD")
+	otherDate, err := runner.output("git", "log", "-n1", "--format=%ct", "HEAD")
 	if err != nil {
 		return VersionInfo{}, err
 	}
 	if !runner.ok("git", "diff-index", "--quiet", "HEAD") {
-		v.corpHash = v.corpHash + "-dirty"
+		otherHash = otherHash + "-dirty"
 	}
 
-	ossHash, ossDir, err := parseGoMod(runner)
+	var v verInfo
+	hash, dir, err := parseGoMod(runner)
 	if err != nil {
 		return VersionInfo{}, err
 	}
-	if ossHash != "" {
-		v.ossInfo, err = infoFromCache(ossHash, runner)
+	if hash != "" {
+		v, err = infoFromCache(hash, runner)
 	} else {
-		v.ossInfo, err = infoFromDir(ossDir)
+		v, err = infoFromDir(dir)
 	}
 	if err != nil {
 		return VersionInfo{}, err
 	}
+	v.otherHash = otherHash
+	v.otherDate = otherDate
 
 	return mkOutput(v)
 
@@ -124,8 +160,8 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 	}
 
 	var hashes string
-	if v.corpHash != "" {
-		hashes = "-g" + shortHash(v.corpHash)
+	if v.otherHash != "" {
+		hashes = "-g" + shortHash(v.otherHash)
 	}
 	if v.hash != "" {
 		hashes = "-t" + shortHash(v.hash) + hashes
@@ -143,26 +179,26 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 	// based it on the actual version number we'd run into issues when doing
 	// cherrypick stable builds from a release branch after unstable builds from
 	// HEAD).
-	corpSec, err := strconv.ParseInt(v.corpDate, 10, 64)
+	otherSec, err := strconv.ParseInt(v.otherDate, 10, 64)
 	if err != nil {
-		return VersionInfo{}, fmt.Errorf("Culd not parse corpDate %q: %w", v.corpDate, err)
+		return VersionInfo{}, fmt.Errorf("Culd not parse otherDate %q: %w", v.otherDate, err)
 	}
-	corpTime := time.Unix(corpSec, 0).UTC()
+	otherTime := time.Unix(otherSec, 0).UTC()
 	// We started to need to do this in 2023, and the last Apple-generated
 	// incrementing build number was 273. To avoid using up the space, we
 	// use <year - 1750> as the major version (thus 273.*, 274.* in 2024, etc.),
 	// so that we we're still in the same range. This way if Apple goes back to
 	// auto-incrementing the number for us, we can go back to it with
 	// reasonable-looking numbers.
-	xcodeMacOS := fmt.Sprintf("%d.%d.%d", corpTime.Year()-1750, corpTime.YearDay(), corpTime.Hour()*60*60+corpTime.Minute()*60+corpTime.Second())
+	xcodeMacOS := fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
 
 	return VersionInfo{
 		Short:           fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch),
 		Long:            fmt.Sprintf("%d.%d.%d%s%s", v.major, v.minor, v.patch, changeSuffix, hashes),
-		OSSHash:         fmt.Sprintf("%s", v.hash),
-		OSSDate:         fmt.Sprintf("%s", v.ossInfo.date),
-		CorpHash:        fmt.Sprintf("%s", v.corpHash),
-		CorpDate:        fmt.Sprintf("%s", v.corpDate),
+		GitHash:         fmt.Sprintf("%s", v.hash),
+		GitDate:         fmt.Sprintf("%s", v.date),
+		OtherHash:       fmt.Sprintf("%s", v.otherHash),
+		OtherDate:       fmt.Sprintf("%s", v.otherDate),
 		Xcode:           fmt.Sprintf("%d.%d.%d", v.major+100, v.minor, v.patch),
 		XcodeMacOS:      xcodeMacOS,
 		Winres:          fmt.Sprintf("%d,%d,%d,0", v.major, v.minor, v.patch),
@@ -192,12 +228,12 @@ func makeMSIProductCodes(v verInfo, track string) map[string]string {
 func gitRootDir() (string, error) {
 	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to find git top level (not in corp git?): %w", err)
+		return "", fmt.Errorf("failed to find git top level: %w", err)
 	}
 	return strings.TrimSpace(string(top)), nil
 }
 
-func parseGoMod(runner dirRunner) (ossShortHash, localCheckout string, err error) {
+func parseGoMod(runner dirRunner) (shortHash, localCheckout string, err error) {
 	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
 	if !strings.HasPrefix(goBin, "/") {
 		// GOROOT got -trimpath'd, fall back to hoping $PATH has a
@@ -230,7 +266,7 @@ func parseGoMod(runner dirRunner) (ossShortHash, localCheckout string, err error
 		if r.Path != "tailscale.com" {
 			continue
 		}
-		shortHash := r.Version[strings.LastIndex(r.Version, "-")+1:]
+		shortHash = r.Version[strings.LastIndex(r.Version, "-")+1:]
 		return shortHash, "", nil
 	}
 	return "", "", fmt.Errorf("failed to find tailscale.com module in go.mod")
@@ -244,24 +280,21 @@ func exe() string {
 }
 
 type verInfo struct {
-	ossInfo
-	corpHash string
-	corpDate string
-}
-
-// unknownPatchVersion is the patch version used when the oss package
-// doesn't contain enough version information to derive the correct
-// version. Such builds only get used when generating bug reports in
-// an ephemeral working environment, so will never be distributed. As
-// such, we use a highly visible sentinel patch number.
-const unknownPatchVersion = 9999999
-
-type ossInfo struct {
 	major, minor, patch int
 	changeCount         int
 	hash                string
 	date                string
+
+	otherHash string
+	otherDate string
 }
+
+// unknownPatchVersion is the patch version used when the tailscale.com package
+// doesn't contain enough version information to derive the correct version.
+// Such builds only get used when generating bug reports in an ephemeral working
+// environment, so will never be distributed. As such, we use a highly visible
+// sentinel patch number.
+const unknownPatchVersion = 9999999
 
 func isBareRepo(r dirRunner) (bool, error) {
 	s, err := r.output("git", "rev-parse", "--is-bare-repository")
@@ -272,71 +305,71 @@ func isBareRepo(r dirRunner) (bool, error) {
 	return o == "true", nil
 }
 
-func infoFromCache(shortHash string, runner dirRunner) (ossInfo, error) {
+func infoFromCache(shortHash string, runner dirRunner) (verInfo, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return ossInfo{}, fmt.Errorf("Getting user cache dir: %w", err)
+		return verInfo{}, fmt.Errorf("Getting user cache dir: %w", err)
 	}
-	ossCache := filepath.Join(cacheDir, "tailscale-oss")
-	r := dirRunner(ossCache)
+	tailscaleCache := filepath.Join(cacheDir, "tailscale-oss")
+	r := dirRunner(tailscaleCache)
 
 	cloneRequired := false
-	if _, err := os.Stat(ossCache); err != nil {
+	if _, err := os.Stat(tailscaleCache); err != nil {
 		cloneRequired = true
 	} else {
 		isBare, err := isBareRepo(r)
 		if err != nil {
-			return ossInfo{}, err
+			return verInfo{}, err
 		}
 		if isBare {
 			cloneRequired = true
-			if err := os.RemoveAll(ossCache); err != nil {
-				return ossInfo{}, fmt.Errorf("removing old cache dir failed: %w", err)
+			if err := os.RemoveAll(tailscaleCache); err != nil {
+				return verInfo{}, fmt.Errorf("removing old cache dir failed: %w", err)
 			}
 		}
 	}
 
 	if cloneRequired {
-		if !runner.ok("git", "clone", "https://github.com/tailscale/tailscale", ossCache) {
-			return ossInfo{}, fmt.Errorf("cloning OSS repo failed")
+		if !runner.ok("git", "clone", "https://github.com/tailscale/tailscale", tailscaleCache) {
+			return verInfo{}, fmt.Errorf("cloning OSS repo failed")
 		}
 	}
 
 	if !r.ok("git", "cat-file", "-e", shortHash) {
 		if !r.ok("git", "fetch", "origin") {
-			return ossInfo{}, fmt.Errorf("updating OSS repo failed")
+			return verInfo{}, fmt.Errorf("updating OSS repo failed")
 		}
 	}
 	hash, err := r.output("git", "rev-parse", shortHash)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	date, err := r.output("git", "log", "-n1", "--format=%ct", shortHash)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	baseHash, err := r.output("git", "rev-list", "--max-count=1", hash, "--", "VERSION.txt")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	s, err := r.output("git", "show", baseHash+":VERSION.txt")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	major, minor, patch, err := parseVersion(s)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	s, err = r.output("git", "rev-list", "--count", hash, "^"+baseHash)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	changeCount, err := strconv.Atoi(s)
 	if err != nil {
-		return ossInfo{}, fmt.Errorf("infoFromCache: parsing changeCount %q: %w", changeCount, err)
+		return verInfo{}, fmt.Errorf("infoFromCache: parsing changeCount %q: %w", changeCount, err)
 	}
 
-	return ossInfo{
+	return verInfo{
 		major:       major,
 		minor:       minor,
 		patch:       patch,
@@ -346,17 +379,17 @@ func infoFromCache(shortHash string, runner dirRunner) (ossInfo, error) {
 	}, nil
 }
 
-func infoFromDir(dir string) (ossInfo, error) {
+func infoFromDir(dir string) (verInfo, error) {
 	r := dirRunner(dir)
 	gitDir := filepath.Join(dir, ".git")
 	if _, err := os.Stat(gitDir); err != nil {
 		// Raw directory fetch, get as much info as we can and make up the rest.
 		s, err := readFile(filepath.Join(dir, "VERSION.txt"))
 		if err != nil {
-			return ossInfo{}, err
+			return verInfo{}, err
 		}
 		major, minor, patch, err := parseVersion(s)
-		return ossInfo{
+		return verInfo{
 			major:       major,
 			minor:       minor,
 			patch:       patch,
@@ -366,34 +399,34 @@ func infoFromDir(dir string) (ossInfo, error) {
 
 	hash, err := r.output("git", "rev-parse", "HEAD")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	date, err := r.output("git", "log", "-n1", "--format=%%ct", "HEAD")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	baseHash, err := r.output("git", "rev-list", "--max-count=1", hash, "--", "VERSION.txt")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	s, err := r.output("git", "show", baseHash+":VERSION.txt")
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	major, minor, patch, err := parseVersion(s)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	s, err = r.output("git", "rev-list", "--count", hash, "^"+baseHash)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 	changeCount, err := strconv.Atoi(s)
 	if err != nil {
-		return ossInfo{}, err
+		return verInfo{}, err
 	}
 
-	return ossInfo{
+	return verInfo{
 		major:       major,
 		minor:       minor,
 		patch:       patch,
