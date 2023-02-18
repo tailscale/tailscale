@@ -8,19 +8,17 @@ package mkversion
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/mod/modfile"
 )
 
 // VersionInfo is version information extracted from a git checkout.
@@ -86,15 +84,16 @@ func (v VersionInfo) String() string {
 	f(&b, "VERSION_SHORT=%q\n", v.Short)
 	f(&b, "VERSION_LONG=%q\n", v.Long)
 	f(&b, "VERSION_GIT_HASH=%q\n", v.GitHash)
-	f(&b, "VERSION_EXTRA_HASH=%q\n", v.OtherHash)
-	f(&b, "VERSION_XCODE=%q\n", v.Xcode)
-	f(&b, "VERSION_XCODE_MACOS=%q\n", v.XcodeMacOS)
-	f(&b, "VERSION_WINRES=%q\n", v.Winres)
 	f(&b, "VERSION_TRACK=%q\n", v.Track)
-
-	// Ensure a predictable order for these variables for testing purposes.
-	for _, k := range []string{"amd64", "arm64", "x86"} {
-		f(&b, "VERSION_MSIPRODUCT_%s=%q\n", strings.ToUpper(k), v.MSIProductCodes[k])
+	if v.OtherHash != "" {
+		f(&b, "VERSION_EXTRA_HASH=%q\n", v.OtherHash)
+		f(&b, "VERSION_XCODE=%q\n", v.Xcode)
+		f(&b, "VERSION_XCODE_MACOS=%q\n", v.XcodeMacOS)
+		f(&b, "VERSION_WINRES=%q\n", v.Winres)
+		// Ensure a predictable order for these variables for testing purposes.
+		for _, k := range []string{"amd64", "arm64", "x86"} {
+			f(&b, "VERSION_MSIPRODUCT_%s=%q\n", strings.ToUpper(k), v.MSIProductCodes[k])
+		}
 	}
 
 	return b.String()
@@ -114,37 +113,83 @@ func Info() VersionInfo {
 func InfoFrom(dir string) (VersionInfo, error) {
 	runner := dirRunner(dir)
 
-	var err error
+	gitRoot, err := runner.output("git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return VersionInfo{}, fmt.Errorf("finding git root: %w", err)
+	}
+	runner = dirRunner(gitRoot)
+
+	modBs, err := os.ReadFile(filepath.Join(gitRoot, "go.mod"))
+	if err != nil {
+		return VersionInfo{}, fmt.Errorf("reading go.mod: %w", err)
+	}
+	modPath := modfile.ModulePath(modBs)
+
+	if modPath == "" {
+		return VersionInfo{}, fmt.Errorf("no module path in go.mod")
+	}
+	if modPath == "tailscale.com" {
+		// Invoked in the tailscale.com repo directly, just no further info to
+		// collect.
+		v, err := infoFromDir(gitRoot)
+		if err != nil {
+			return VersionInfo{}, err
+		}
+		return mkOutput(v)
+	}
+
+	// We seem to be in a repo that imports tailscale.com. Find the
+	// tailscale.com repo and collect additional info from it.
 	otherHash, err := runner.output("git", "rev-parse", "HEAD")
 	if err != nil {
-		return VersionInfo{}, err
+		return VersionInfo{}, fmt.Errorf("getting git hash: %w", err)
 	}
 	otherDate, err := runner.output("git", "log", "-n1", "--format=%ct", "HEAD")
 	if err != nil {
-		return VersionInfo{}, err
-	}
-	if !runner.ok("git", "diff-index", "--quiet", "HEAD") {
-		otherHash = otherHash + "-dirty"
+		return VersionInfo{}, fmt.Errorf("getting git date: %w", err)
 	}
 
-	var v verInfo
-	hash, dir, err := parseGoMod(runner)
+	// Note, this mechanism doesn't correctly support go.mod replacements,
+	// or go workdirs. We only parse out the commit hash from go.mod's
+	// "require" line, nothing else.
+	tailscaleHash, err := tailscaleModuleHash(modBs)
 	if err != nil {
 		return VersionInfo{}, err
 	}
-	if hash != "" {
-		v, err = infoFromCache(hash, runner)
-	} else {
-		v, err = infoFromDir(dir)
-	}
+
+	v, err := infoFromCache(tailscaleHash, runner)
 	if err != nil {
 		return VersionInfo{}, err
 	}
 	v.otherHash = otherHash
 	v.otherDate = otherDate
 
-	return mkOutput(v)
+	if !runner.ok("git", "diff-index", "--quiet", "HEAD") {
+		v.otherHash = v.otherHash + "-dirty"
+	}
 
+	return mkOutput(v)
+}
+
+// tailscaleModuleHash returns the git hash of the 'require tailscale.com' line
+// in the given go.mod bytes.
+func tailscaleModuleHash(modBs []byte) (string, error) {
+	mod, err := modfile.Parse("go.mod", modBs, nil)
+	if err != nil {
+		return "", err
+	}
+	for _, req := range mod.Require {
+		if req.Mod.Path != "tailscale.com" {
+			continue
+		}
+		// Get the last - separated part of req.Mod.Version
+		// (which is the git hash).
+		if i := strings.LastIndexByte(req.Mod.Version, '-'); i != -1 {
+			return req.Mod.Version[i+1:], nil
+		}
+		return "", fmt.Errorf("couldn't parse git hash from tailscale.com version %q", req.Mod.Version)
+	}
+	return "", fmt.Errorf("no require tailscale.com line in go.mod")
 }
 
 func mkOutput(v verInfo) (VersionInfo, error) {
@@ -183,40 +228,51 @@ func mkOutput(v verInfo) (VersionInfo, error) {
 		track = "stable"
 	}
 
-	// Generate a monotonically increasing version number for the macOS app, as
-	// expected by Apple. We use the date so that it's always increasing (if we
-	// based it on the actual version number we'd run into issues when doing
-	// cherrypick stable builds from a release branch after unstable builds from
-	// HEAD).
-	otherSec, err := strconv.ParseInt(v.otherDate, 10, 64)
-	if err != nil {
-		return VersionInfo{}, fmt.Errorf("Culd not parse otherDate %q: %w", v.otherDate, err)
+	ret := VersionInfo{
+		Major:   v.major,
+		Minor:   v.minor,
+		Patch:   v.patch,
+		Short:   fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch),
+		Long:    fmt.Sprintf("%d.%d.%d%s%s", v.major, v.minor, v.patch, changeSuffix, hashes),
+		GitHash: fmt.Sprintf("%s", v.hash),
+		GitDate: fmt.Sprintf("%s", v.date),
+		Track:   track,
 	}
-	otherTime := time.Unix(otherSec, 0).UTC()
-	// We started to need to do this in 2023, and the last Apple-generated
-	// incrementing build number was 273. To avoid using up the space, we
-	// use <year - 1750> as the major version (thus 273.*, 274.* in 2024, etc.),
-	// so that we we're still in the same range. This way if Apple goes back to
-	// auto-incrementing the number for us, we can go back to it with
-	// reasonable-looking numbers.
-	xcodeMacOS := fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
 
-	return VersionInfo{
-		Major:           v.major,
-		Minor:           v.minor,
-		Patch:           v.patch,
-		Short:           fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch),
-		Long:            fmt.Sprintf("%d.%d.%d%s%s", v.major, v.minor, v.patch, changeSuffix, hashes),
-		GitHash:         fmt.Sprintf("%s", v.hash),
-		GitDate:         fmt.Sprintf("%s", v.date),
-		OtherHash:       fmt.Sprintf("%s", v.otherHash),
-		OtherDate:       fmt.Sprintf("%s", v.otherDate),
-		Xcode:           fmt.Sprintf("%d.%d.%d", v.major+100, v.minor, v.patch),
-		XcodeMacOS:      xcodeMacOS,
-		Winres:          fmt.Sprintf("%d,%d,%d,0", v.major, v.minor, v.patch),
-		Track:           track,
-		MSIProductCodes: makeMSIProductCodes(v, track),
-	}, nil
+	if v.otherHash != "" {
+		ret.OtherHash = fmt.Sprintf("%s", v.otherHash)
+
+		// Technically we could populate these fields without the otherHash, but
+		// these version numbers only make sense when building from Tailscale's
+		// proprietary repo, so don't clutter open-source-only outputs with
+		// them.
+		ret.Xcode = fmt.Sprintf("%d.%d.%d", v.major+100, v.minor, v.patch)
+		ret.Winres = fmt.Sprintf("%d,%d,%d,0", v.major, v.minor, v.patch)
+		ret.MSIProductCodes = makeMSIProductCodes(v, track)
+	}
+	if v.otherDate != "" {
+		ret.OtherDate = fmt.Sprintf("%s", v.otherDate)
+
+		// Generate a monotonically increasing version number for the macOS app, as
+		// expected by Apple. We use the date so that it's always increasing (if we
+		// based it on the actual version number we'd run into issues when doing
+		// cherrypick stable builds from a release branch after unstable builds from
+		// HEAD).
+		otherSec, err := strconv.ParseInt(v.otherDate, 10, 64)
+		if err != nil {
+			return VersionInfo{}, fmt.Errorf("Could not parse otherDate %q: %w", v.otherDate, err)
+		}
+		otherTime := time.Unix(otherSec, 0).UTC()
+		// We started to need to do this in 2023, and the last Apple-generated
+		// incrementing build number was 273. To avoid using up the space, we
+		// use <year - 1750> as the major version (thus 273.*, 274.* in 2024, etc.),
+		// so that we we're still in the same range. This way if Apple goes back to
+		// auto-incrementing the number for us, we can go back to it with
+		// reasonable-looking numbers.
+		ret.XcodeMacOS = fmt.Sprintf("%d.%d.%d", otherTime.Year()-1750, otherTime.YearDay(), otherTime.Hour()*60*60+otherTime.Minute()*60+otherTime.Second())
+	}
+
+	return ret, nil
 }
 
 // makeMSIProductCodes produces per-architecture v5 UUIDs derived from the pkgs
@@ -237,60 +293,6 @@ func makeMSIProductCodes(v verInfo, track string) map[string]string {
 	return result
 }
 
-func gitRootDir() (string, error) {
-	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to find git top level: %w", err)
-	}
-	return strings.TrimSpace(string(top)), nil
-}
-
-func parseGoMod(runner dirRunner) (shortHash, localCheckout string, err error) {
-	goBin := filepath.Join(runtime.GOROOT(), "bin", "go"+exe())
-	if !strings.HasPrefix(goBin, "/") {
-		// GOROOT got -trimpath'd, fall back to hoping $PATH has a
-		// working go.
-		goBin = "go"
-	}
-	mod, err := runner.output(goBin, "mod", "edit", "--json")
-	if err != nil {
-		return "", "", err
-	}
-	var mj modJSON
-	if err := json.Unmarshal([]byte(mod), &mj); err != nil {
-		return "", "", fmt.Errorf("parsing go.mod: %w", err)
-	}
-
-	for _, r := range mj.Replace {
-		if r.Old.Path != "tailscale.com" {
-			continue
-		}
-		if filepath.IsAbs(r.New.Path) {
-			return "", r.New.Path, nil
-		}
-		gitRoot, err := gitRootDir()
-		if err != nil {
-			return "", "", err
-		}
-		return "", filepath.Join(gitRoot, r.New.Path), nil
-	}
-	for _, r := range mj.Require {
-		if r.Path != "tailscale.com" {
-			continue
-		}
-		shortHash = r.Version[strings.LastIndex(r.Version, "-")+1:]
-		return shortHash, "", nil
-	}
-	return "", "", fmt.Errorf("failed to find tailscale.com module in go.mod")
-}
-
-func exe() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
 type verInfo struct {
 	major, minor, patch int
 	changeCount         int
@@ -308,15 +310,6 @@ type verInfo struct {
 // sentinel patch number.
 const unknownPatchVersion = 9999999
 
-func isBareRepo(r dirRunner) (bool, error) {
-	s, err := r.output("git", "rev-parse", "--is-bare-repository")
-	if err != nil {
-		return false, err
-	}
-	o := strings.TrimSpace(s)
-	return o == "true", nil
-}
-
 func infoFromCache(shortHash string, runner dirRunner) (verInfo, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
@@ -325,25 +318,9 @@ func infoFromCache(shortHash string, runner dirRunner) (verInfo, error) {
 	tailscaleCache := filepath.Join(cacheDir, "tailscale-oss")
 	r := dirRunner(tailscaleCache)
 
-	cloneRequired := false
 	if _, err := os.Stat(tailscaleCache); err != nil {
-		cloneRequired = true
-	} else {
-		isBare, err := isBareRepo(r)
-		if err != nil {
-			return verInfo{}, err
-		}
-		if isBare {
-			cloneRequired = true
-			if err := os.RemoveAll(tailscaleCache); err != nil {
-				return verInfo{}, fmt.Errorf("removing old cache dir failed: %w", err)
-			}
-		}
-	}
-
-	if cloneRequired {
 		if !runner.ok("git", "clone", "https://github.com/tailscale/tailscale", tailscaleCache) {
-			return verInfo{}, fmt.Errorf("cloning OSS repo failed")
+			return verInfo{}, fmt.Errorf("cloning tailscale.com repo failed")
 		}
 	}
 
@@ -396,11 +373,11 @@ func infoFromDir(dir string) (verInfo, error) {
 	gitDir := filepath.Join(dir, ".git")
 	if _, err := os.Stat(gitDir); err != nil {
 		// Raw directory fetch, get as much info as we can and make up the rest.
-		s, err := readFile(filepath.Join(dir, "VERSION.txt"))
+		bs, err := os.ReadFile(filepath.Join(dir, "VERSION.txt"))
 		if err != nil {
 			return verInfo{}, err
 		}
-		major, minor, patch, err := parseVersion(s)
+		major, minor, patch, err := parseVersion(strings.TrimSpace(string(bs)))
 		return verInfo{
 			major:       major,
 			minor:       minor,
@@ -448,20 +425,6 @@ func infoFromDir(dir string) (verInfo, error) {
 	}, nil
 }
 
-type modJSON struct {
-	Require []goPath
-	Replace []modReplace
-}
-
-type modReplace struct {
-	Old, New goPath
-}
-
-type goPath struct {
-	Path    string
-	Version string
-}
-
 func parseVersion(s string) (major, minor, patch int, err error) {
 	fs := strings.Split(strings.TrimSpace(s), ".")
 	if len(fs) != 3 {
@@ -486,11 +449,6 @@ func shortHash(hash string) string {
 		return hash
 	}
 	return hash[:9]
-}
-
-func readFile(path string) (string, error) {
-	bs, err := ioutil.ReadFile(path)
-	return strings.TrimSpace(string(bs)), err
 }
 
 // dirRunner executes commands in the specified dir.
