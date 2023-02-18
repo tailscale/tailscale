@@ -24,6 +24,7 @@ on:
   pull_request:
     branches:
       - "*"
+  merge_group:
 
 concurrency:
   # For PRs, later CI runs preempt previous ones. e.g. a force push on a PR
