@@ -353,8 +353,7 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
 
   notify_slack:
-    # Only notify slack for merged commits, not PR failures.
-    if: failure() && github.event_name == 'push'
+    if: always()
     # Any of these jobs failing causes a slack notification.
     needs: 
       - android
@@ -373,6 +372,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: notify  
+      # Only notify slack for merged commits, not PR failures.
+      #
+      # It may be tempting to move this condition into the job's 'if' block, but
+      # don't: Github only collapses the test list into "everything is OK" if
+      # all jobs succeeded. A skipped job results in the list staying expanded.
+      # By having the job always run, but skipping its only step as needed, we
+      # let the CI output collapse nicely in PRs.
+      if: failure() && github.event_name == 'push'
       uses: ruby/action-slack@v3.0.0
       with:
         payload: |
