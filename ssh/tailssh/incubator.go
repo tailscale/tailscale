@@ -124,7 +124,11 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	} else {
 		if isShell {
 			incubatorArgs = append(incubatorArgs, "--shell")
-			// Currently (2022-05-09) `login` is only used for shells
+		}
+		if isShell || runtime.GOOS == "darwin" {
+			// Only the macOS version of the login command supports executing a
+			// command, all other versions only support launching a shell
+			// without taking any arguments.
 			if lp, err := exec.LookPath("login"); err == nil {
 				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
 			}
@@ -215,11 +219,12 @@ func beIncubator(args []string) error {
 
 	euid := uint64(os.Geteuid())
 	runningAsRoot := euid == 0
-	if runningAsRoot && ia.isShell && ia.loginCmdPath != "" && ia.hasTTY {
-		// If we are trying to launch a login shell, just exec into login
-		// instead. We can only do this if a TTY was requested, otherwise login
-		// exits immediately, which breaks things likes mosh and VSCode.
-		return unix.Exec(ia.loginCmdPath, ia.loginArgs(), os.Environ())
+	if runningAsRoot && ia.loginCmdPath != "" {
+		// Check if we can exec into the login command instead of trying to
+		// incubate ourselves.
+		if la := ia.loginArgs(); la != nil {
+			return unix.Exec(ia.loginCmdPath, la, os.Environ())
+		}
 	}
 
 	// Inform the system that we are about to log someone in.
@@ -707,9 +712,43 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// loginArgs returns the arguments to use to exec the login binary.
+// It returns nil if the login binary should not be used.
+// The login binary is only used:
+//   - on darwin, if the client is requesting a shell or a command.
+//   - on linux and BSD, if the client is requesting a shell with a TTY.
 func (ia *incubatorArgs) loginArgs() []string {
+	if ia.isSFTP {
+		return nil
+	}
 	switch runtime.GOOS {
+	case "darwin":
+		args := []string{
+			ia.loginCmdPath,
+			"-f", // already authenticated
+
+			// login typically discards the previous environment, but we want to
+			// preserve any environment variables that we currently have.
+			"-p",
+
+			"-h", ia.remoteIP, // -h is "remote host"
+			ia.localUser,
+		}
+		if !ia.hasTTY {
+			args[2] = "-pq" // -q is "quiet" which suppresses the login banner
+		}
+		if ia.cmdName != "" {
+			args = append(args, ia.cmdName)
+			args = append(args, ia.cmdArgs...)
+		}
+		return args
 	case "linux":
+		if !ia.isShell || !ia.hasTTY {
+			// We can only use login command if a shell was requested with a TTY. If
+			// there is no TTY, login exits immediately, which breaks things likes
+			// mosh and VSCode.
+			return nil
+		}
 		if distro.Get() == distro.Arch && !fileExists("/etc/pam.d/remote") {
 			// See https://github.com/tailscale/tailscale/issues/4924
 			//
@@ -719,7 +758,13 @@ func (ia *incubatorArgs) loginArgs() []string {
 			return []string{ia.loginCmdPath, "-f", ia.localUser, "-p"}
 		}
 		return []string{ia.loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
-	case "darwin", "freebsd", "openbsd":
+	case "freebsd", "openbsd":
+		if !ia.isShell || !ia.hasTTY {
+			// We can only use login command if a shell was requested with a TTY. If
+			// there is no TTY, login exits immediately, which breaks things likes
+			// mosh and VSCode.
+			return nil
+		}
 		return []string{ia.loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
 	}
 	panic("unimplemented")
