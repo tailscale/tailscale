@@ -83,7 +83,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	case "sftp":
 		isSFTP = true
 	case "":
-		name = loginShell(ss.conn.localUser.Uid)
+		name = loginShell(ss.conn.localUser)
 		if rawCmd := ss.RawCommand(); rawCmd != "" {
 			args = append(args, "-c", rawCmd)
 		} else {
@@ -572,14 +572,22 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return nil
 }
 
-func loginShell(uid string) string {
+func loginShell(u *user.User) string {
 	switch runtime.GOOS {
 	case "linux":
-		out, _ := exec.Command("getent", "passwd", uid).Output()
+		out, _ := exec.Command("getent", "passwd", u.Uid).Output()
 		// out is "root:x:0:0:root:/root:/bin/bash"
 		f := strings.SplitN(string(out), ":", 10)
 		if len(f) > 6 {
 			return strings.TrimSpace(f[6]) // shell
+		}
+	case "darwin":
+		// Note: /Users/username is key, and not the same as u.HomeDir.
+		out, _ := exec.Command("dscl", ".", "-read", filepath.Join("/Users", u.Username), "UserShell").Output()
+		// out is "UserShell: /bin/bash"
+		s, ok := strings.CutPrefix(string(out), "UserShell: ")
+		if ok {
+			return strings.TrimSpace(s)
 		}
 	}
 	if e := os.Getenv("SHELL"); e != "" {
@@ -590,7 +598,7 @@ func loginShell(uid string) string {
 
 func envForUser(u *user.User) []string {
 	return []string{
-		fmt.Sprintf("SHELL=" + loginShell(u.Uid)),
+		fmt.Sprintf("SHELL=" + loginShell(u)),
 		fmt.Sprintf("USER=" + u.Username),
 		fmt.Sprintf("HOME=" + u.HomeDir),
 		fmt.Sprintf("PATH=" + defaultPathForUser(u)),
