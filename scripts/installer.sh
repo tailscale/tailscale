@@ -113,6 +113,12 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
+			galliumos)
+				OS="ubuntu"
+				PACKAGETYPE="apt"
+				VERSION="bionic"
+				APT_KEY_TYPE="legacy"
+				;;
 			raspbian)
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
@@ -171,7 +177,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux|nobara|openmandriva)
+			rocky|almalinux|nobara|openmandriva|sangoma)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
