@@ -33,6 +33,11 @@ type LabelMap struct {
 	expvar.Map
 }
 
+// SetInt64 sets the *Int value stored under the given map key.
+func (m *LabelMap) SetInt64(key string, v int64) {
+	m.Get(key).Set(v)
+}
+
 // Get returns a direct pointer to the expvar.Int for key, creating it
 // if necessary.
 func (m *LabelMap) Get(key string) *expvar.Int {
