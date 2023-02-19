@@ -3326,7 +3326,7 @@ var (
 // peerRoutes returns the routerConfig.Routes to access peers.
 // If there are over cgnatThreshold CGNAT routes, one big CGNAT route
 // is used instead.
-func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) {
+func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) {
 	tsULA := tsaddr.TailscaleULARange()
 	cgNAT := tsaddr.CGNATRange()
 	var didULA bool
@@ -3334,6 +3334,18 @@ func peerRoutes(peers []wgcfg.Peer, cgnatThreshold int) (routes []netip.Prefix) 
 	for _, peer := range peers {
 		for _, aip := range peer.AllowedIPs {
 			aip = unmapIPPrefix(aip)
+
+			// Ensure that we're only accepting properly-masked
+			// prefixes; the control server should be masking
+			// these, so if we get them, skip.
+			if mm := aip.Masked(); aip != mm {
+				// To avoid a DoS where a peer could cause all
+				// reconfigs to fail by sending a bad prefix, we just
+				// skip, but don't error, on an unmasked route.
+				logf("advertised route %s from %s has non-address bits set; expected %s", aip, peer.PublicKey.ShortString(), mm)
+				continue
+			}
+
 			// Only add the Tailscale IPv6 ULA once, if we see anybody using part of it.
 			if aip.Addr().Is6() && aip.IsSingleIP() && tsULA.Contains(aip.Addr()) {
 				if !didULA {
@@ -3366,12 +3378,13 @@ func (b *LocalBackend) routerConfig(cfg *wgcfg.Config, prefs ipn.PrefsView, oneC
 	if oneCGNATRoute {
 		singleRouteThreshold = 1
 	}
+
 	rs := &router.Config{
 		LocalAddrs:       unmapIPPrefixes(cfg.Addresses),
 		SubnetRoutes:     unmapIPPrefixes(prefs.AdvertiseRoutes().AsSlice()),
 		SNATSubnetRoutes: !prefs.NoSNAT(),
 		NetfilterMode:    prefs.NetfilterMode(),
-		Routes:           peerRoutes(cfg.Peers, singleRouteThreshold),
+		Routes:           peerRoutes(b.logf, cfg.Peers, singleRouteThreshold),
 	}
 
 	if distro.Get() == distro.Synology {

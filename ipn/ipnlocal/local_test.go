@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
@@ -333,10 +334,25 @@ func TestPeerRoutes(t *testing.T) {
 				pp("100.64.0.2/32"),
 			},
 		},
+		{
+			name: "skip-unmasked-prefixes",
+			peers: []wgcfg.Peer{
+				{
+					PublicKey: key.NewNode().Public(),
+					AllowedIPs: []netip.Prefix{
+						pp("100.64.0.2/32"),
+						pp("10.0.0.100/16"),
+					},
+				},
+			},
+			want: []netip.Prefix{
+				pp("100.64.0.2/32"),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerRoutes(tt.peers, 2)
+			got := peerRoutes(t.Logf, tt.peers, 2)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
