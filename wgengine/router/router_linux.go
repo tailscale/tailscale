@@ -1300,7 +1300,7 @@ func (r *linuxRouter) addNetfilterBase4() error {
 	return nil
 }
 
-// addNetfilterBase4 adds some basic IPv6 processing rules to be
+// addNetfilterBase6 adds some basic IPv6 processing rules to be
 // supplemented by later calls to other helpers.
 func (r *linuxRouter) addNetfilterBase6() error {
 	// TODO: only allow traffic from Tailscale's ULA range to come
@@ -1314,8 +1314,13 @@ func (r *linuxRouter) addNetfilterBase6() error {
 	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
-	// TODO: drop forwarded traffic to tailscale0 from tailscale's ULA
-	// (see corresponding IPv4 CGNAT rule).
+
+	// Drop traffic from the Tailscale ULA range; by this rule, we know that
+	// it doesn't have our fwmark and is thus not from us and safe to drop.
+	args = []string{"-o", r.tunname, "-s", tsaddr.TailscaleULARange().String(), "-j", "DROP"}
+	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
+	}
 	args = []string{"-o", r.tunname, "-j", "ACCEPT"}
 	if err := r.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)

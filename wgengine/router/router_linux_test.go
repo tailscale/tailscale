@@ -117,6 +117,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 v6/nat/ts-postrouting -m mark --mark 0x40000/0xff0000 -j MASQUERADE
@@ -148,6 +149,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -181,6 +183,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -211,6 +214,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -237,6 +241,7 @@ v4/filter/ts-input ! -i tailscale0 -s 100.115.92.0/23 -j RETURN
 v4/filter/ts-input ! -i tailscale0 -s 100.64.0.0/10 -j DROP
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 `,
 		},
@@ -266,6 +271,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
@@ -298,6 +304,7 @@ v6/filter/FORWARD -j ts-forward
 v6/filter/INPUT -j ts-input
 v6/filter/ts-forward -i tailscale0 -j MARK --set-mark 0x40000/0xff0000
 v6/filter/ts-forward -m mark --mark 0x40000/0xff0000 -j ACCEPT
+v6/filter/ts-forward -o tailscale0 -s fd7a:115c:a1e0::/48 -j DROP
 v6/filter/ts-forward -o tailscale0 -j ACCEPT
 v6/nat/POSTROUTING -j ts-postrouting
 `,
