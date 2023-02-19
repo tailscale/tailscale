@@ -12,6 +12,42 @@ import (
 	"tailscale.com/util/mak"
 )
 
+// Waiter is used to wake up a goroutine waiting for something to happen.
+type Waiter struct {
+	ch chan struct{} // buffered chan of size 1
+}
+
+// NewWaiter returns a new Waiter.
+func NewWaiter() *Waiter {
+	return &Waiter{ch: make(chan struct{}, 1)}
+}
+
+// Wake wakes up a goroutine waiting on Wait. It returns true if it managed to
+// mark the waiter as woken up. If it returns false, a Wake was already pending.
+// If there are multiple goroutines waiting, only one will wake up.
+// If there are no goroutines waiting, the next call to Wait will return
+// immediately. Multiple calls to Wake without a call to Wait in between will
+// only wake up one goroutine.
+func (t *Waiter) Wake() (ok bool) {
+	select {
+	case t.ch <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Wait blocks until Wake is called. If a wake is already pending, it returns
+// immediately. If the context is canceled, it returns ctx.Err().
+func (t *Waiter) Wait(ctx context.Context) error {
+	select {
+	case <-t.ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ClosedChan returns a channel that's already closed.
 func ClosedChan() <-chan struct{} { return closedChan }
 

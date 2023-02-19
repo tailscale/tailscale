@@ -7,9 +7,33 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestWaiter(t *testing.T) {
+	w := NewWaiter()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !w.Wake() {
+		t.Fatal("Wake() = false; want true")
+	}
+	if w.Wake() { // second call should return false
+		t.Fatal("Wake() = true; want false")
+	}
+	if err := w.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if !w.Wake() {
+			t.Errorf("Wake() = false; want true")
+		}
+	}()
+	if err := w.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWaitGroupChan(t *testing.T) {
 	wg := NewWaitGroupChan()
