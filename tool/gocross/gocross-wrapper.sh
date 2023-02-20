@@ -28,7 +28,7 @@ if [ ! -d "$toolchain" ]; then
 
     # This works for linux and darwin, which is sufficient
     # (we do not build tailscale-go for other targets).
-    GOOS=$(uname -s | tr A-Z a-z)
+    OS=$(uname -s | tr A-Z a-z)
     ARCH="$(uname -m)"
     if [ "$ARCH" = "aarch64" ]; then
         # Go uses the name "arm64".
@@ -39,7 +39,7 @@ if [ ! -d "$toolchain" ]; then
     fi
 
     rm -rf "$toolchain" "$toolchain.extracted"
-    curl -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${GOOS}-${ARCH}.tar.gz"
+    curl -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${OS}-${ARCH}.tar.gz"
     mkdir -p "$toolchain"
     (cd "$toolchain" && tar --strip-components=1 -xf "$toolchain.tar.gz")
     echo "$REV" >"$toolchain.extracted"
