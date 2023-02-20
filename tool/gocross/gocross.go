@@ -9,8 +9,6 @@
 // upstream Go tools, but produce correctly configured, correctly linked
 // binaries stamped with version information.
 
-//go:build linux || darwin
-
 package main
 
 import (
@@ -19,8 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
-
-	"golang.org/x/sys/unix"
 )
 
 func main() {
@@ -95,7 +91,7 @@ func main() {
 
 	}
 
-	unix.Exec(filepath.Join(toolchain, "bin/go"), args, os.Environ())
+	doExec(filepath.Join(toolchain, "bin/go"), args, os.Environ())
 }
 
 func debug(format string, args ...interface{}) {
