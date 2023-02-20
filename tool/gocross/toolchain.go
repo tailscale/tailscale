@@ -47,39 +47,71 @@ func readRevFile(path string) (string, error) {
 	return string(bytes.TrimSpace(bs)), nil
 }
 
-func getToolchain() (string, error) {
+func getToolchain() (toolchainDir, gorootDir string, err error) {
 	cache := filepath.Join(os.Getenv("HOME"), ".cache")
-	toolchainDir := filepath.Join(cache, "tailscale-go")
+	toolchainDir = filepath.Join(cache, "tailscale-go")
+	gorootDir = filepath.Join(toolchainDir, "gocross-goroot")
+
+	if err := ensureToolchain(cache, toolchainDir); err != nil {
+		return "", "", err
+	}
+	// We put the goroot inside toolchainDir so that it gets wiped and rebuilt
+	// whenever a new toolchain shows up. But we have to check and build it
+	// separately from the toolchain, because gocross-wrapper.sh can download a
+	// bootstrap toolchain to build gocross. This will make toolchainDir exist
+	// but not gorootDir. This is also what happens during an upgrade from an
+	// older gocross that didn't create a goroot, to this one.
+	if err := ensureGoroot(toolchainDir, gorootDir); err != nil {
+		return "", "", err
+	}
+	return toolchainDir, gorootDir, nil
+}
+
+func ensureToolchain(cache, toolchainDir string) error {
 	stampFile := toolchainDir + ".extracted"
 
 	wantRev, err := toolchainRev()
 	if err != nil {
-		return "", err
+		return err
 	}
 	gotRev, err := readRevFile(stampFile)
 	if err != nil {
-		return "", fmt.Errorf("reading stamp file %q: %v", stampFile, err)
+		return fmt.Errorf("reading stamp file %q: %v", stampFile, err)
 	}
 	if gotRev == wantRev {
 		// Toolchain already good.
-		return toolchainDir, nil
+		return nil
 	}
 
 	if err := os.RemoveAll(toolchainDir); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.RemoveAll(stampFile); err != nil {
-		return "", err
+		return err
 	}
 
 	if err := downloadCachedgo(toolchainDir, wantRev); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.WriteFile(stampFile, []byte(wantRev), 0644); err != nil {
-		return "", err
+		return err
 	}
 
-	return toolchainDir, nil
+	return nil
+}
+
+func ensureGoroot(toolchainDir, gorootDir string) error {
+	if _, err := os.Stat(gorootDir); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := makeGoroot(toolchainDir, gorootDir); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func downloadCachedgo(toolchainDir, toolchainRev string) error {

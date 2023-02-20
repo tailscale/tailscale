@@ -44,24 +44,16 @@ func main() {
 			// actually gocross.
 			os.Exit(0)
 		case "make-goroot":
-			out := ".gocross-goroot"
-			if len(os.Args) > 2 {
-				out = os.Args[2]
-			}
-
-			toolchain, err := getToolchain()
+			_, goroot, err := getToolchain()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "getting toolchain: %v\n", err)
 				os.Exit(1)
 			}
 
-			if err := makeGoroot(toolchain, out); err != nil {
-				fmt.Fprintf(os.Stderr, "creating GOROOT: %v\n", err)
-				os.Exit(1)
-			}
+			fmt.Println(goroot)
 			os.Exit(0)
 		case "gocross-get-toolchain-go":
-			toolchain, err := getToolchain()
+			toolchain, _, err := getToolchain()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "getting toolchain: %v\n", err)
 				os.Exit(1)
@@ -71,7 +63,7 @@ func main() {
 		}
 	}
 
-	toolchain, err := getToolchain()
+	toolchain, goroot, err := getToolchain()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "getting toolchain: %v\n", err)
 		os.Exit(1)
@@ -79,7 +71,7 @@ func main() {
 
 	args := os.Args
 	if os.Getenv("GOCROSS_BYPASS") == "" {
-		newArgv, env, err := Autoflags(os.Args)
+		newArgv, env, err := Autoflags(os.Args, goroot)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "computing flags: %v\n", err)
 			os.Exit(1)

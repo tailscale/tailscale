@@ -25,9 +25,9 @@ func TestAutoflags(t *testing.T) {
 		name         string
 		env          map[string]string
 		argv         []string
+		goroot       string
 		nativeGOOS   string
 		nativeGOARCH string
-		goBinPath    string
 
 		wantEnv  map[string]string
 		envDiff  string
@@ -36,9 +36,9 @@ func TestAutoflags(t *testing.T) {
 		{
 			name:         "linux_amd64_to_linux_amd64",
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -48,7 +48,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -61,9 +61,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 		{
 			name:         "install_linux_amd64_to_linux_amd64",
 			argv:         []string{"gocross", "install", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -73,7 +73,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "install",
@@ -89,9 +89,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOARCH": "riscv64",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -101,7 +101,7 @@ GOARCH=riscv64 (was riscv64)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -117,9 +117,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOOS": "freebsd",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -129,7 +129,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=freebsd (was freebsd)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -142,9 +142,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 		{
 			name:         "linux_amd64_to_linux_amd64_race",
 			argv:         []string{"gocross", "test", "-race", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -154,7 +154,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "test",
@@ -171,9 +171,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOOS": "windows",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -183,7 +183,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=windows (was windows)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -196,9 +196,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 		{
 			name:         "darwin_arm64_to_darwin_arm64",
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "darwin",
 			nativeGOARCH: "arm64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -208,7 +208,7 @@ GOARCH=arm64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=darwin (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -224,9 +224,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOARCH": "amd64",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "darwin",
 			nativeGOARCH: "arm64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -236,7 +236,7 @@ GOARCH=amd64 (was amd64)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=darwin (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -252,9 +252,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOOS": "ios",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "darwin",
 			nativeGOARCH: "arm64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -264,7 +264,7 @@ GOARCH=arm64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=ios (was ios)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=1 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -286,9 +286,9 @@ TS_LINK_FAIL_REFLECT=1 (was <nil>)`,
 				"SDKROOT":                           "/my/sdk/root",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "darwin",
 			nativeGOARCH: "arm64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 -mmacosx-version-min=11.3 -isysroot /my/sdk/root -arch x86_64 (was <nil>)
@@ -298,7 +298,7 @@ GOARCH=amd64 (was amd64)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=darwin (was darwin)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -309,11 +309,11 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			},
 		},
 		{
-			name:         "linux_amd64_to_linux_amd64_in_goroot",
+			name:         "linux_amd64_to_linux_amd64_custom_goroot",
 			argv:         []string{"go", "build", "./cmd/tailcontrol"},
+			goroot:       "/special/toolchain/path",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/special/toolchain/path/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -336,9 +336,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 		{
 			name:         "linux_list_amd64_to_linux_amd64",
 			argv:         []string{"gocross", "list", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -348,7 +348,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "list",
@@ -364,9 +364,9 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"GOCROSS_GLIBC_DIR": "/my/glibc/path",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
 			nativeGOOS:   "linux",
 			nativeGOARCH: "amd64",
-			goBinPath:    "/usr/share/go/bin/go",
 
 			envDiff: `CC=cc (was <nil>)
 CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
@@ -376,7 +376,7 @@ GOARCH=amd64 (was <nil>)
 GOARM=5 (was <nil>)
 GOMIPS=softfloat (was <nil>)
 GOOS=linux (was <nil>)
-GOROOT=<nil> (was <nil>)
+GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
@@ -386,15 +386,42 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 				"./cmd/tailcontrol",
 			},
 		},
+		{
+			name: "linux_amd64_to_linux_amd64_preexisting_goroot",
+			env: map[string]string{
+				"GOROOT": "/some/other/goroot",
+			},
+			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
+			nativeGOOS:   "linux",
+			nativeGOARCH: "amd64",
+
+			envDiff: `CC=cc (was <nil>)
+CGO_CFLAGS=-O3 -std=gnu11 (was <nil>)
+CGO_ENABLED=1 (was <nil>)
+CGO_LDFLAGS= (was <nil>)
+GOARCH=amd64 (was <nil>)
+GOARM=5 (was <nil>)
+GOMIPS=softfloat (was <nil>)
+GOOS=linux (was <nil>)
+GOROOT=/goroot (was /some/other/goroot)
+TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
+			wantArgv: []string{
+				"gocross", "build",
+				"-trimpath",
+				"-tags=tailscale_go,osusergo,netgo",
+				"-ldflags", "-X tailscale.com/version.longStamp=1.2.3-long -X tailscale.com/version.shortStamp=1.2.3 -X tailscale.com/version.gitCommitStamp=abcd -X tailscale.com/version.extraGitCommitStamp=defg '-extldflags=-static'",
+				"./cmd/tailcontrol",
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			getver := func() mkversion.VersionInfo { return fakeVersion }
-			osExecutable := func() (string, error) { return test.goBinPath, nil }
 			env := newEnvironmentForTest(test.env, nil, nil)
 
-			gotArgv, env, err := autoflagsForTest(test.argv, env, test.nativeGOOS, test.nativeGOARCH, getver, osExecutable)
+			gotArgv, env, err := autoflagsForTest(test.argv, env, test.goroot, test.nativeGOOS, test.nativeGOARCH, getver)
 			if err != nil {
 				t.Fatalf("newAutoflagsForTest failed: %v", err)
 			}

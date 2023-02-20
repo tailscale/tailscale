@@ -5,8 +5,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -15,11 +13,11 @@ import (
 
 // Autoflags adjusts the commandline argv into a new commandline
 // newArgv and envvar alterations in env.
-func Autoflags(argv []string) (newArgv []string, env *Environment, err error) {
-	return autoflagsForTest(argv, NewEnvironment(), runtime.GOOS, runtime.GOARCH, mkversion.Info, os.Executable)
+func Autoflags(argv []string, goroot string) (newArgv []string, env *Environment, err error) {
+	return autoflagsForTest(argv, NewEnvironment(), goroot, runtime.GOOS, runtime.GOARCH, mkversion.Info)
 }
 
-func autoflagsForTest(argv []string, env *Environment, nativeGOOS, nativeGOARCH string, getVersion func() mkversion.VersionInfo, osExecutable func() (string, error)) (newArgv []string, newEnv *Environment, err error) {
+func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativeGOARCH string, getVersion func() mkversion.VersionInfo) (newArgv []string, newEnv *Environment, err error) {
 	// This is where all our "automatic flag injection" decisions get
 	// made. Modifying this code will modify the environment variables
 	// and commandline flags that the final `go` tool invocation will
@@ -40,7 +38,6 @@ func autoflagsForTest(argv []string, env *Environment, nativeGOOS, nativeGOARCH 
 		cgoLdflags  []string
 		ldflags     []string
 		tags        = []string{"tailscale_go"}
-		goroot      = ""
 		cgo         = false
 		failReflect = false
 	)
@@ -48,13 +45,6 @@ func autoflagsForTest(argv []string, env *Environment, nativeGOOS, nativeGOARCH 
 		subcommand = argv[1]
 	}
 
-	if filepath.Base(argv[0]) == "go" {
-		goBin, err := osExecutable()
-		if err != nil {
-			return nil, nil, fmt.Errorf("finding absolute path to faked GOROOT: %v", err)
-		}
-		goroot = filepath.Dir(filepath.Dir(goBin))
-	}
 	switch subcommand {
 	case "build", "env", "install", "run", "test", "list":
 	default:
@@ -161,11 +151,7 @@ func autoflagsForTest(argv []string, env *Environment, nativeGOOS, nativeGOARCH 
 	env.Set("CGO_LDFLAGS", strings.Join(cgoLdflags, " "))
 	env.Set("CC", "cc")
 	env.Set("TS_LINK_FAIL_REFLECT", boolStr(failReflect))
-	if goroot != "" {
-		env.Set("GOROOT", goroot)
-	} else {
-		env.Unset("GOROOT")
-	}
+	env.Set("GOROOT", goroot)
 
 	if subcommand == "env" {
 		return argv, env, nil

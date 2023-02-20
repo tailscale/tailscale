@@ -21,18 +21,21 @@ import (
 // It's useful for integrating with tooling that expects to be handed
 // a GOROOT, like the Goland IDE or depaware.
 func makeGoroot(toolchainRoot, outPath string) error {
+	fmt.Println("making goroot in ", outPath)
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("getting gocross's path: %v", err)
+	}
+	self, err = filepath.EvalSymlinks(self)
+	if err != nil {
+		return fmt.Errorf("evaluating gocross's path: %v", err)
 	}
 
 	os.RemoveAll(outPath)
 	if err := os.MkdirAll(filepath.Join(outPath, "bin"), 0750); err != nil {
 		return fmt.Errorf("making %q: %v", outPath, err)
 	}
-	// Copy the gocross binary rather than symlink, so that os.Executable
-	// consistently gives us the GOROOT path in future invocations.
-	if err := copyFile(self, filepath.Join(outPath, "bin/go")); err != nil {
+	if err := os.Symlink(self, filepath.Join(outPath, "bin/go")); err != nil {
 		return fmt.Errorf("linking gocross into outpath: %v", err)
 	}
 
