@@ -28,3 +28,5 @@ cmd/tailscaled/tailscaled
 
 # Ignore direnv nix-shell environment cache
 .direnv/
+
+/gocross
