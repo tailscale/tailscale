@@ -42,6 +42,7 @@ var (
 	regBool     = map[string]*bool{}
 	regOptBool  = map[string]*opt.Bool{}
 	regDuration = map[string]*time.Duration{}
+	regInt      = map[string]*int{}
 )
 
 func noteEnv(k, v string) {
@@ -182,6 +183,25 @@ func RegisterDuration(envVar string) func() time.Duration {
 	return func() time.Duration { return *p }
 }
 
+// RegisterInt returns a func that gets the named environment variable as an
+// integer, without a map lookup per call. It assumes that any mutations happen
+// via envknob.Setenv.
+func RegisterInt(envVar string) func() int {
+	mu.Lock()
+	defer mu.Unlock()
+	p, ok := regInt[envVar]
+	if !ok {
+		val := os.Getenv(envVar)
+		if val != "" {
+			noteEnvLocked(envVar, val)
+		}
+		p = new(int)
+		setIntLocked(p, envVar, val)
+		regInt[envVar] = p
+	}
+	return func() int { return *p }
+}
+
 func setBoolLocked(p *bool, envVar, val string) {
 	noteEnvLocked(envVar, val)
 	if val == "" {
@@ -218,6 +238,19 @@ func setDurationLocked(p *time.Duration, envVar, val string) {
 	*p, err = time.ParseDuration(val)
 	if err != nil {
 		log.Fatalf("invalid duration environment variable %s value %q", envVar, val)
+	}
+}
+
+func setIntLocked(p *int, envVar, val string) {
+	noteEnvLocked(envVar, val)
+	if val == "" {
+		*p = 0
+		return
+	}
+	var err error
+	*p, err = strconv.Atoi(val)
+	if err != nil {
+		log.Fatalf("invalid int environment variable %s value %q", envVar, val)
 	}
 }
 
