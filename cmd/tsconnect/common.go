@@ -28,10 +28,13 @@ const (
 func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	// Change cwd to to where this file lives -- that's where all inputs for
 	// esbuild and other build steps live.
-	if _, filename, _, ok := runtime.Caller(0); ok {
-		if err := os.Chdir(path.Dir(filename)); err != nil {
-			return nil, fmt.Errorf("Cannot change cwd: %w", err)
-		}
+	root, err := findRepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	tsConnectDir := filepath.Join(root, "cmd", "tsconnect")
+	if err := os.Chdir(tsConnectDir); err != nil {
+		return nil, fmt.Errorf("Cannot change cwd: %w", err)
 	}
 	if err := installJSDeps(); err != nil {
 		return nil, fmt.Errorf("Cannot install JS deps: %w", err)
@@ -65,6 +68,22 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 		},
 		JSXMode: esbuild.JSXModeAutomatic,
 	}, nil
+}
+
+func findRepoRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(path.Join(cwd, "go.mod")); err == nil {
+			return cwd, nil
+		}
+		if cwd == "/" {
+			return "", fmt.Errorf("Cannot find repo root")
+		}
+		cwd = path.Dir(cwd)
+	}
 }
 
 func commonPkgSetup(dev bool) (*esbuild.BuildOptions, error) {
