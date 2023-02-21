@@ -62,6 +62,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
@@ -1020,6 +1021,25 @@ func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency t
 	regionID := int(ep.Port())
 	res.DERPRegionID = regionID
 	res.DERPRegionCode = c.derpRegionCodeLocked(regionID)
+}
+
+// GetEndpointChanges returns the most recent changes for a particular
+// endpoint. The returned EndpointChange structs are for debug use only and
+// there are no guarantees about order, size, or content.
+func (c *Conn) GetEndpointChanges(peer *tailcfg.Node) ([]EndpointChange, error) {
+	c.mu.Lock()
+	if c.privateKey.IsZero() {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("tailscaled stopped")
+	}
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	c.mu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("unknown peer")
+	}
+
+	return ep.debugUpdates.GetAll(), nil
 }
 
 func (c *Conn) derpRegionCodeLocked(regionID int) string {
@@ -2540,6 +2560,8 @@ func nodesEqual(x, y []*tailcfg.Node) bool {
 	return true
 }
 
+var debugRingBufferMaxSizeBytes = envknob.RegisterInt("TS_DEBUG_MAGICSOCK_RING_BUFFER_MAX_SIZE_BYTES")
+
 // SetNetworkMap is called when the control client gets a new network
 // map from the control server. It must always be non-nil.
 //
@@ -2574,6 +2596,30 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
 	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
 
+	// Set a maximum size for our set of endpoint ring buffers by assuming
+	// that a single large update is ~500 bytes, and that we want to not
+	// use more than 1MiB of memory on phones / 4MiB on other devices.
+	// Calculate the per-endpoint ring buffer size by dividing that out,
+	// but always storing at least two entries.
+	var entriesPerBuffer int = 2
+	if len(nm.Peers) > 0 {
+		var maxRingBufferSize int
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+			maxRingBufferSize = 1 * 1024 * 1024
+		} else {
+			maxRingBufferSize = 4 * 1024 * 1024
+		}
+		if v := debugRingBufferMaxSizeBytes(); v > 0 {
+			maxRingBufferSize = v
+		}
+
+		const averageRingBufferElemSize = 512
+		entriesPerBuffer = maxRingBufferSize / (averageRingBufferElemSize * len(nm.Peers))
+		if entriesPerBuffer < 2 {
+			entriesPerBuffer = 2
+		}
+	}
+
 	// Try a pass of just upserting nodes and creating missing
 	// endpoints. If the set of nodes is the same, this is an
 	// efficient alloc-free update. If the set of nodes is different,
@@ -2599,6 +2645,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 
 		ep := &endpoint{
 			c:                 c,
+			debugUpdates:      ringbuffer.New[EndpointChange](entriesPerBuffer),
 			publicKey:         n.Key,
 			publicKeyHex:      n.Key.UntypedHexString(),
 			sentPing:          map[stun.TxID]sentPing{},
@@ -2749,6 +2796,16 @@ func (c *Conn) logActiveDerpLocked() {
 			fmt.Fprintf(buf, " derp-%d=cr%v,wr%v", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
 		})
 	}))
+}
+
+// EndpointChange is a structure containing information about changes made to a
+// particular endpoint. This is not a stable interface and could change at any
+// time.
+type EndpointChange struct {
+	When time.Time // when the change occurred
+	What string    // what this change is
+	From any       `json:",omitempty"` // information about the previous state
+	To   any       `json:",omitempty"` // information about the new state
 }
 
 func (c *Conn) logEndpointChange(endpoints []tailcfg.Endpoint) {
@@ -3706,6 +3763,7 @@ type endpoint struct {
 	lastRecv              mono.Time
 	numStopAndResetAtomic int64
 	sendFunc              syncs.AtomicValue[endpointSendFunc] // nil or unset means unused
+	debugUpdates          *ringbuffer.RingBuffer[EndpointChange]
 
 	// These fields are initialized once and never modified.
 	c            *Conn
@@ -3847,9 +3905,19 @@ func (st *endpointState) shouldDeleteLocked() bool {
 	}
 }
 
-func (de *endpoint) deleteEndpointLocked(ep netip.AddrPort) {
+func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
+	de.debugUpdates.Add(EndpointChange{
+		When: time.Now(),
+		What: "deleteEndpointLocked-" + why,
+		From: ep,
+	})
 	delete(de.endpointState, ep)
 	if de.bestAddr.AddrPort == ep {
+		de.debugUpdates.Add(EndpointChange{
+			When: time.Now(),
+			What: "deleteEndpointLocked-bestAddr-" + why,
+			From: de.bestAddr,
+		})
 		de.bestAddr = addrLatency{}
 	}
 }
@@ -4189,7 +4257,7 @@ func (de *endpoint) sendPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 	var sentAny bool
 	for ep, st := range de.endpointState {
 		if st.shouldDeleteLocked() {
-			de.deleteEndpointLocked(ep)
+			de.deleteEndpointLocked("sendPingsLocked", ep)
 			continue
 		}
 		if runtime.GOOS == "js" {
@@ -4233,17 +4301,39 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), de.discoKey, n.DiscoKey)
 		de.discoKey = n.DiscoKey
 		de.discoShort = de.discoKey.ShortString()
+		de.debugUpdates.Add(EndpointChange{
+			When: time.Now(),
+			What: "updateFromNode-resetLocked",
+		})
 		de.resetLocked()
 	}
 	if n.DERP == "" {
+		if de.derpAddr.IsValid() {
+			de.debugUpdates.Add(EndpointChange{
+				When: time.Now(),
+				What: "updateFromNode-remove-DERP",
+				From: de.derpAddr,
+			})
+		}
 		de.derpAddr = netip.AddrPort{}
 	} else {
-		de.derpAddr, _ = netip.ParseAddrPort(n.DERP)
+		newDerp, _ := netip.ParseAddrPort(n.DERP)
+		if de.derpAddr != newDerp {
+			de.debugUpdates.Add(EndpointChange{
+				When: time.Now(),
+				What: "updateFromNode-DERP",
+				From: de.derpAddr,
+				To:   newDerp,
+			})
+		}
+		de.derpAddr = newDerp
 	}
 
 	for _, st := range de.endpointState {
 		st.index = indexSentinelDeleted // assume deleted until updated in next loop
 	}
+
+	var newIpps []netip.AddrPort
 	for i, epStr := range n.Endpoints {
 		if i > math.MaxInt16 {
 			// Seems unlikely.
@@ -4258,14 +4348,22 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 			st.index = int16(i)
 		} else {
 			de.endpointState[ipp] = &endpointState{index: int16(i)}
+			newIpps = append(newIpps, ipp)
 		}
+	}
+	if len(newIpps) > 0 {
+		de.debugUpdates.Add(EndpointChange{
+			When: time.Now(),
+			What: "updateFromNode-new-Endpoints",
+			To:   newIpps,
+		})
 	}
 
 	// Now delete anything unless it's still in the network map or
 	// was a recently discovered endpoint.
 	for ep, st := range de.endpointState {
 		if st.shouldDeleteLocked() {
-			de.deleteEndpointLocked(ep)
+			de.deleteEndpointLocked("updateFromNode", ep)
 		}
 	}
 
@@ -4308,7 +4406,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 	if size := len(de.endpointState); size > 100 {
 		for ep, st := range de.endpointState {
 			if st.shouldDeleteLocked() {
-				de.deleteEndpointLocked(ep)
+				de.deleteEndpointLocked("addCandidateEndpoint", ep)
 			}
 		}
 		size2 := len(de.endpointState)
@@ -4386,9 +4484,21 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		thisPong := addrLatency{sp.to, latency}
 		if betterAddr(thisPong, de.bestAddr) {
 			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort, sp.to)
+			de.debugUpdates.Add(EndpointChange{
+				When: time.Now(),
+				What: "handlePingLocked-bestAddr-update",
+				From: de.bestAddr,
+				To:   thisPong,
+			})
 			de.bestAddr = thisPong
 		}
 		if de.bestAddr.AddrPort == thisPong.AddrPort {
+			de.debugUpdates.Add(EndpointChange{
+				When: time.Now(),
+				What: "handlePingLocked-bestAddr-latency",
+				From: de.bestAddr,
+				To:   thisPong,
+			})
 			de.bestAddr.latency = latency
 			de.bestAddrAt = now
 			de.trustBestAddrUntil = now.Add(trustUDPAddrDuration)
@@ -4415,6 +4525,10 @@ func portableTrySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 type addrLatency struct {
 	netip.AddrPort
 	latency time.Duration
+}
+
+func (a addrLatency) String() string {
+	return a.AddrPort.String() + "@" + a.latency.String()
 }
 
 // betterAddr reports whether a is a better addr to use than b.
@@ -4490,6 +4604,12 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		}
 	}
 	if len(newEPs) > 0 {
+		de.debugUpdates.Add(EndpointChange{
+			When: time.Now(),
+			What: "handleCallMeMaybe-new-endpoints",
+			To:   newEPs,
+		})
+
 		de.c.dlogf("[v1] magicsock: disco: call-me-maybe from %v %v added new endpoints: %v",
 			de.publicKey.ShortString(), de.discoShort,
 			logger.ArgWriter(func(w *bufio.Writer) {
@@ -4507,7 +4627,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	for ep, want := range de.isCallMeMaybeEP {
 		if !want {
 			delete(de.isCallMeMaybeEP, ep)
-			de.deleteEndpointLocked(ep)
+			de.deleteEndpointLocked("handleCallMeMaybe", ep)
 		}
 	}
 
@@ -4551,6 +4671,10 @@ func (de *endpoint) stopAndReset() {
 		de.c.logf("[v1] magicsock: doing cleanup for discovery key %s", de.discoKey.ShortString())
 	}
 
+	de.debugUpdates.Add(EndpointChange{
+		When: time.Now(),
+		What: "stopAndReset-resetLocked",
+	})
 	de.resetLocked()
 	if de.heartBeatTimer != nil {
 		de.heartBeatTimer.Stop()
