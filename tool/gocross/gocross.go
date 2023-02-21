@@ -103,7 +103,7 @@ func debug(format string, args ...interface{}) {
 	switch debug {
 	case "0", "":
 		return
-	case "1":
+	case "1", "stderr":
 		out = os.Stderr
 	default:
 		out, err = os.OpenFile(debug, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0640)
