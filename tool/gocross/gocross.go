@@ -56,6 +56,9 @@ func main() {
 			}
 			fmt.Println(filepath.Join(toolchain, "bin/go"))
 			os.Exit(0)
+		case "gocross-print-wrapper-script":
+			fmt.Println(wrapperScript)
+			os.Exit(0)
 		}
 	}
 
@@ -93,6 +96,9 @@ func main() {
 
 	doExec(filepath.Join(toolchain, "bin/go"), args, os.Environ())
 }
+
+//go:embed gocross-wrapper.sh
+var wrapperScript string
 
 func debug(format string, args ...interface{}) {
 	debug := os.Getenv("GOCROSS_DEBUG")
