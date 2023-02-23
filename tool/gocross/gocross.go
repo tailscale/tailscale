@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	runtimeDebug "runtime/debug"
+
+	"tailscale.com/atomicfile"
 )
 
 func main() {
@@ -56,8 +58,15 @@ func main() {
 			}
 			fmt.Println(filepath.Join(toolchain, "bin/go"))
 			os.Exit(0)
-		case "gocross-print-wrapper-script":
-			fmt.Println(wrapperScript)
+		case "gocross-write-wrapper-script":
+			if len(os.Args) != 3 {
+				fmt.Fprintf(os.Stderr, "usage: gocross write-wrapper-script <path>\n")
+				os.Exit(1)
+			}
+			if err := atomicfile.WriteFile(os.Args[2], wrapperScript, 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "writing wrapper script: %v\n", err)
+				os.Exit(1)
+			}
 			os.Exit(0)
 		}
 	}
@@ -98,7 +107,7 @@ func main() {
 }
 
 //go:embed gocross-wrapper.sh
-var wrapperScript string
+var wrapperScript []byte
 
 func debug(format string, args ...interface{}) {
 	debug := os.Getenv("GOCROSS_DEBUG")
