@@ -39,10 +39,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/kubestore"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 )
 
@@ -61,7 +63,7 @@ func main() {
 		clientSecretPath   = defaultEnv("CLIENT_SECRET_FILE", "")
 		image              = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
 		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
-		shouldRunAuthProxy = defaultEnv("AUTH_PROXY", "false")
+		shouldRunAuthProxy = defaultBool("AUTH_PROXY", false)
 	)
 
 	var opts []kzap.Opts
@@ -95,6 +97,13 @@ func main() {
 	}
 	tsClient := tailscale.NewClient("-", nil)
 	tsClient.HTTPClient = credentials.Client(context.Background())
+
+	if shouldRunAuthProxy {
+		hostinfo.SetPackage("k8s-operator-proxy")
+	} else {
+		hostinfo.SetPackage("k8s-operator")
+	}
+
 	s := &tsnet.Server{
 		Hostname: hostname,
 		Logf:     zlog.Named("tailscaled").Debugf,
@@ -225,7 +234,7 @@ waitOnline:
 	}
 
 	startlog.Infof("Startup complete, operator running")
-	if shouldRunAuthProxy == "true" {
+	if shouldRunAuthProxy {
 		rc, err := rest.TransportFor(restConfig)
 		if err != nil {
 			startlog.Fatalf("could not get rest transport: %v", err)
@@ -694,6 +703,15 @@ func getSingleObject[T any, O ptrObject[T]](ctx context.Context, c client.Client
 		return nil, err
 	}
 	return ret, nil
+}
+
+func defaultBool(envName string, defVal bool) bool {
+	vs := os.Getenv(envName)
+	if vs == "" {
+		return defVal
+	}
+	v, _ := opt.Bool(vs).Get()
+	return v
 }
 
 func defaultEnv(envName, defVal string) string {
