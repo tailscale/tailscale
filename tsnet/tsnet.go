@@ -204,11 +204,15 @@ func (s *Server) Close() error {
 	go func() {
 		defer wg.Done()
 		// Perform a best-effort final flush.
-		s.logtail.Shutdown(ctx)
-		s.logbuffer.Close()
+		if s.logtail != nil {
+			s.logtail.Shutdown(ctx)
+		}
+		if s.logbuffer != nil {
+			s.logbuffer.Close()
+		}
 	}()
 
-	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral {
+	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral && s.lb != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -221,11 +225,21 @@ func (s *Server) Close() error {
 		s.netstack.Close()
 		s.netstack = nil
 	}
-	s.shutdownCancel()
-	s.lb.Shutdown()
-	s.linkMon.Close()
-	s.dialer.Close()
-	s.localAPIListener.Close()
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
+	if s.lb != nil {
+		s.lb.Shutdown()
+	}
+	if s.linkMon != nil {
+		s.linkMon.Close()
+	}
+	if s.dialer != nil {
+		s.dialer.Close()
+	}
+	if s.localAPIListener != nil {
+		s.localAPIListener.Close()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
