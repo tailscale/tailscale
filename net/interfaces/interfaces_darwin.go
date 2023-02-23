@@ -4,6 +4,7 @@
 package interfaces
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -27,6 +28,10 @@ func parseRoutingTable(rib []byte) ([]route.Message, error) {
 var ifNames struct {
 	sync.Mutex
 	m map[int]string // ifindex => name
+}
+
+func init() {
+	interfaceDebugExtras = interfaceDebugExtrasDarwin
 }
 
 // getDelegatedInterface returns the interface index of the underlying interface
@@ -92,4 +97,15 @@ func getDelegatedInterface(ifIndex int) (int, error) {
 		return 0, errno
 	}
 	return int(ifr.ifr_delegated), nil
+}
+
+func interfaceDebugExtrasDarwin(ifIndex int) (string, error) {
+	delegated, err := getDelegatedInterface(ifIndex)
+	if err != nil {
+		return "", err
+	}
+	if delegated == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("delegated=%d", delegated), nil
 }
