@@ -96,6 +96,18 @@ type NodeKeySignature struct {
 	WrappingPubkey []byte `cbor:"6,keyasint,omitempty"`
 }
 
+// UnverifiedWrappingPublic returns the public key which must sign a
+// signature which embeds this one, if any.
+//
+// See docs on NodeKeySignature.WrappingPubkey & SigRotation for documentation
+// about wrapping public keys.
+//
+// SAFETY: The caller MUST verify the signature using
+// Authority.NodeKeyAuthorized if treating this as authentic information.
+func (s NodeKeySignature) UnverifiedWrappingPublic() (pub ed25519.PublicKey, ok bool) {
+	return s.wrappingPublic()
+}
+
 // wrappingPublic returns the public key which must sign a signature which
 // embeds this one, if any.
 func (s NodeKeySignature) wrappingPublic() (pub ed25519.PublicKey, ok bool) {
@@ -113,6 +125,15 @@ func (s NodeKeySignature) wrappingPublic() (pub ed25519.PublicKey, ok bool) {
 	default:
 		return nil, false
 	}
+}
+
+// UnverifiedAuthorizingKeyID returns the KeyID of the key which authorizes
+// this signature.
+//
+// SAFETY: The caller MUST verify the signature using
+// Authority.NodeKeyAuthorized if treating this as authentic information.
+func (s NodeKeySignature) UnverifiedAuthorizingKeyID() (tkatype.KeyID, error) {
+	return s.authorizingKeyID()
 }
 
 // authorizingKeyID returns the KeyID of the key trusted by network-lock which authorizes
