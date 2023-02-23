@@ -670,7 +670,7 @@ func (h *peerAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if peerAPIRequestShouldGetSecurityHeaders(r) {
-		w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'`)
+		w.Header().Set("Content-Security-Policy", `default-src 'none'; frame-ancestors 'none'; script-src 'none'; script-src-elem 'none'; script-src-attr 'none'; style-src 'unsafe-inline'`)
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
@@ -799,15 +799,21 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprintf(w, "<h3>Could not get the default route: %s</h3>\n", html.EscapeString(err.Error()))
 	}
 
+	if hasCGNATInterface, err := interfaces.HasCGNATInterface(); hasCGNATInterface {
+		fmt.Fprintln(w, "<p>There is another interface using the CGNAT range.</p>")
+	} else if err != nil {
+		fmt.Fprintf(w, "<p>Could not check for CGNAT interfaces: %s</p>\n", html.EscapeString(err.Error()))
+	}
+
 	i, err := interfaces.GetList()
 	if err != nil {
 		fmt.Fprintf(w, "Could not get interfaces: %s\n", html.EscapeString(err.Error()))
 		return
 	}
 
-	fmt.Fprintln(w, "<table>")
+	fmt.Fprintln(w, "<table style='border-collapse: collapse' border=1 cellspacing=0 cellpadding=2>")
 	fmt.Fprint(w, "<tr>")
-	for _, v := range []any{"Index", "Name", "MTU", "Flags", "Addrs"} {
+	for _, v := range []any{"Index", "Name", "MTU", "Flags", "Addrs", "Extra"} {
 		fmt.Fprintf(w, "<th>%v</th> ", v)
 	}
 	fmt.Fprint(w, "</tr>\n")
@@ -815,6 +821,11 @@ func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Re
 		fmt.Fprint(w, "<tr>")
 		for _, v := range []any{iface.Index, iface.Name, iface.MTU, iface.Flags, ipps} {
 			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(fmt.Sprintf("%v", v)))
+		}
+		if extras, err := interfaces.InterfaceDebugExtras(iface.Index); err == nil && extras != "" {
+			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(extras))
+		} else if err != nil {
+			fmt.Fprintf(w, "<td>%s</td> ", html.EscapeString(err.Error()))
 		}
 		fmt.Fprint(w, "</tr>\n")
 	})

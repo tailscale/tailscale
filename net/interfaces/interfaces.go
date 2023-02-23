@@ -756,3 +756,15 @@ func HasCGNATInterface() (bool, error) {
 	}
 	return hasCGNATInterface, nil
 }
+
+var interfaceDebugExtras func(ifIndex int) (string, error)
+
+// InterfaceDebugExtras returns extra debugging information about an interface
+// if any (an empty string will be returned if there are no additional details).
+// Formatting is platform-dependent and should not be parsed.
+func InterfaceDebugExtras(ifIndex int) (string, error) {
+	if interfaceDebugExtras != nil {
+		return interfaceDebugExtras(ifIndex)
+	}
+	return "", nil
+}
