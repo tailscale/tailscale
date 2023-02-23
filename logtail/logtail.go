@@ -198,8 +198,9 @@ type Logger struct {
 	procSequence uint64
 	flushTimer   *time.Timer // used when flushDelay is >0
 
-	shutdownStart chan struct{} // closed when shutdown begins
-	shutdownDone  chan struct{} // closed when shutdown complete
+	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
+	shutdownStart   chan struct{} // closed when shutdown begins
+	shutdownDone    chan struct{} // closed when shutdown complete
 }
 
 // SetVerbosityLevel controls the verbosity level that should be
@@ -240,7 +241,16 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 		close(done)
 	}()
 
+	l.shutdownStartMu.Lock()
+	select {
+	case <-l.shutdownStart:
+		l.shutdownStartMu.Unlock()
+		return nil
+	default:
+	}
 	close(l.shutdownStart)
+	l.shutdownStartMu.Unlock()
+
 	io.WriteString(l, "logger closing down\n")
 	<-done
 
