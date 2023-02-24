@@ -18,6 +18,7 @@ on:
     # The branches below must be a subset of the branches above
     branches: [ main ]
   merge_group:
+    branches: [ main ]
   schedule:
     - cron: '31 14 * * 5'
 
