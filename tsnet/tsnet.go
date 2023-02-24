@@ -87,6 +87,11 @@ type Server struct {
 	// If empty, the Tailscale default is used.
 	ControlURL string
 
+	// NotifyFunc is an optional callback function for engine updates from
+	// the LocalBackend. This can be used as an alternative to polling the
+	// LocalAPI in client applications.
+	NotifyFunc func(*ipn.Notify) (keepGoing bool)
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -341,6 +346,15 @@ func (s *Server) start() (reterr error) {
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, s.Store, s.dialer, eng, loginFlags)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
+	}
+	if s.NotifyFunc != nil {
+		notifCtx, cancel := context.WithCancel(context.Background())
+		closePool.addFunc(cancel)
+		go lb.WatchNotifications(
+			notifCtx,
+			ipn.NotifyWatchEngineUpdates,
+			s.NotifyFunc,
+		)
 	}
 	lb.SetVarRoot(s.rootPath)
 	logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
