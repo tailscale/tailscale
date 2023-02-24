@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	runtimeDebug "runtime/debug"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/version"
 )
 
 func main() {
@@ -29,12 +29,7 @@ func main() {
 		// any time.
 		switch os.Args[1] {
 		case "gocross-version":
-			hash, err := embeddedCommit()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "getting commit hash: %v", err)
-				os.Exit(1)
-			}
-			fmt.Println(hash)
+			fmt.Println(version.GetMeta().GitCommit)
 			os.Exit(0)
 		case "is-gocross":
 			// This subcommand exits with an error code when called on a
@@ -131,17 +126,4 @@ func debug(format string, args ...interface{}) {
 	}
 
 	fmt.Fprintf(out, format, args...)
-}
-
-func embeddedCommit() (string, error) {
-	bi, ok := runtimeDebug.ReadBuildInfo()
-	if !ok {
-		return "", fmt.Errorf("no build info")
-	}
-	for _, s := range bi.Settings {
-		if s.Key == "vcs.revision" {
-			return s.Value, nil
-		}
-	}
-	return "", fmt.Errorf("no git commit found")
 }
