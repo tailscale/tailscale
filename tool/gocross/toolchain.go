@@ -112,9 +112,18 @@ func ensureToolchain(cacheDir, toolchainDir string) error {
 		return err
 	}
 
-	if err := downloadCachedgo(toolchainDir, wantRev); err != nil {
-		return err
+	if filepath.IsAbs(wantRev) {
+		// Local dev toolchain.
+		if err := os.Symlink(wantRev, toolchainDir); err != nil {
+			return err
+		}
+		return nil
+	} else {
+		if err := downloadCachedgo(toolchainDir, wantRev); err != nil {
+			return err
+		}
 	}
+
 	if err := os.WriteFile(stampFile, []byte(wantRev), 0644); err != nil {
 		return err
 	}
