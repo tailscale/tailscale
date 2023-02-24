@@ -404,3 +404,27 @@ jobs:
           }
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  check_mergeability:
+    if: always()
+    runs-on: ubuntu-22.04
+    needs:
+      - android
+      - test
+      - windows
+      - vm
+      - cross
+      - ios
+      - wasm
+      - fuzz
+      - depaware
+      - go_generate
+      - go_mod_tidy
+      - licenses
+      - staticcheck
+    steps:
+    - name: Decide if change is okay to merge
+      if: github.event_name != 'push'
+      uses: re-actors/alls-green@release/v1
+      with:
+        jobs: ${{ toJSON(needs) }}
