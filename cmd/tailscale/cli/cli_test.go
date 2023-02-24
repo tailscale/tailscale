@@ -1078,6 +1078,13 @@ func TestUpdatePrefs(t *testing.T) {
 				old := getSSHClientEnvVar
 				getSSHClientEnvVar = func() string { return "100.100.100.100 1 1" }
 				t.Cleanup(func() { getSSHClientEnvVar = old })
+			} else if isSSHOverTailscale() {
+				// The test is being executed over a "real" tailscale SSH
+				// session, but sshOverTailscale is unset. Make the test appear
+				// as if it's not over tailscale SSH.
+				old := getSSHClientEnvVar
+				getSSHClientEnvVar = func() string { return "" }
+				t.Cleanup(func() { getSSHClientEnvVar = old })
 			}
 			if tt.env.goos == "" {
 				tt.env.goos = "linux"
