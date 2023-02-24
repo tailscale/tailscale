@@ -25,6 +25,8 @@ on:
     branches:
       - "*"
   merge_group:
+    branches:
+      - "main"
 
 concurrency:
   # For PRs, later CI runs preempt previous ones. e.g. a force push on a PR
