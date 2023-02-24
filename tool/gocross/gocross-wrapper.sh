@@ -12,6 +12,11 @@ if [ "${CI:-}" = "true" ]; then
     set -x
 fi
 
+# Locate a bootstrap toolchain and (re)build gocross if necessary. We run all of
+# this in a subshell because posix shell semantics make it very easy to
+# accidentally mutate the input environment that will get passed to gocross at
+# the bottom of this script.
+(
 repo_root="$(dirname $0)/../.."
 
 toolchain="$HOME/.cache/tailscale-go"
@@ -61,12 +66,13 @@ if [ -x "$gocross_path" ]; then
 	fi
 fi
 if [ "$gocross_ok" = "0" ]; then
-    (
-        unset GOOS
-        unset GOARCH
-        unset GO111MODULE
-        export CGO_ENABLED=0
-        "$toolchain/bin/go" build -o "$gocross_path" tailscale.com/tool/gocross
-    )
+    unset GOOS
+    unset GOARCH
+    unset GO111MODULE
+    unset GOROOT
+    export CGO_ENABLED=0
+    "$toolchain/bin/go" build -o "$gocross_path" -ldflags='-X tailscale.com/version/gitCommitStamp=$wantver' tailscale.com/tool/gocross
 fi
-exec "$gocross_path" "$@"
+) # End of the subshell execution.
+
+exec "$(dirname $0)/../../gocross" "$@"
