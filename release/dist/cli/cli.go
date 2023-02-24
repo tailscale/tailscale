@@ -84,7 +84,7 @@ func runList(ctx context.Context, filters []string, targets []dist.Target) error
 		fmt.Println(tgt)
 	}
 	return nil
-}
+} // why does github do this to me
 
 var buildArgs struct {
 	manifest string
