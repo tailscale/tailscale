@@ -31,23 +31,30 @@ if [ ! -d "$toolchain" ]; then
     # updates.
     read -r REV <$repo_root/go.toolchain.rev
 
-    # This works for linux and darwin, which is sufficient
-    # (we do not build tailscale-go for other targets).
-    HOST_OS=$(uname -s | tr A-Z a-z)
-    HOST_ARCH="$(uname -m)"
-    if [ "$HOST_ARCH" = "aarch64" ]; then
-        # Go uses the name "arm64".
-        HOST_ARCH="arm64"
-    elif [ "$HOST_ARCH" = "x86_64" ]; then
-        # Go uses the name "amd64".
-        HOST_ARCH="amd64"
-    fi
+    case "$REV" in
+    /*)
+        toolchain="$REV"
+        ;;
+    *)
+        # This works for linux and darwin, which is sufficient
+        # (we do not build tailscale-go for other targets).
+        HOST_OS=$(uname -s | tr A-Z a-z)
+        HOST_ARCH="$(uname -m)"
+        if [ "$HOST_ARCH" = "aarch64" ]; then
+            # Go uses the name "arm64".
+            HOST_ARCH="arm64"
+        elif [ "$HOST_ARCH" = "x86_64" ]; then
+            # Go uses the name "amd64".
+            HOST_ARCH="amd64"
+        fi
 
-    rm -rf "$toolchain" "$toolchain.extracted"
-    curl -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${HOST_OS}-${HOST_ARCH}.tar.gz"
-    mkdir -p "$toolchain"
-    (cd "$toolchain" && tar --strip-components=1 -xf "$toolchain.tar.gz")
-    echo "$REV" >"$toolchain.extracted"
+        rm -rf "$toolchain" "$toolchain.extracted"
+        curl -f -L -o "$toolchain.tar.gz" "https://github.com/tailscale/go/releases/download/build-${REV}/${HOST_OS}-${HOST_ARCH}.tar.gz"
+        mkdir -p "$toolchain"
+        (cd "$toolchain" && tar --strip-components=1 -xf "$toolchain.tar.gz")
+        echo "$REV" >"$toolchain.extracted"
+        ;;
+    esac
 fi
 
 # Binaries run with `gocross run` can reinvoke gocross, resulting in a
