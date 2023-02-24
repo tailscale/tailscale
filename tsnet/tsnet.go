@@ -28,6 +28,7 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/ipn/store"
 	"tailscale.com/ipn/store/mem"
@@ -144,6 +145,52 @@ func (s *Server) Start() error {
 	hostinfo.SetPackage("tsnet")
 	s.initOnce.Do(s.doInit)
 	return s.initErr
+}
+
+// Up connects the server to the tailnet and waits until it is running.
+// On success it returns the current status, including a Tailscale IP address.
+func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
+	lc, err := s.LocalClient() // calls Start
+	if err != nil {
+		return nil, fmt.Errorf("tsnet.Up: %w", err)
+	}
+
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyNoPrivateKeys)
+	if err != nil {
+		return nil, fmt.Errorf("tsnet.Up: %w", err)
+	}
+	defer watcher.Close()
+
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			return nil, fmt.Errorf("tsnet.Up: %w", err)
+		}
+		if n.ErrMessage != nil {
+			return nil, fmt.Errorf("tsnet.Up: backend: %s", *n.ErrMessage)
+		}
+		if s := n.State; s != nil {
+			switch *s {
+			case ipn.Running:
+				status, err := lc.Status(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("tsnet.Up: %w", err)
+				}
+				if len(status.TailscaleIPs) == 0 {
+					return nil, errors.New("tsnet.Up: running, but no ip")
+				}
+				return status, nil
+			case ipn.NeedsMachineAuth:
+				return nil, errors.New("tsnet.Up: tailnet requested machine auth")
+			}
+			// TODO: in the future, return an error on NeedsLogin
+			// to improve the UX of trying out the tsnet package.
+			//
+			// Unfortunately today, even when using an AuthKey we
+			// briefly see a NeedsLogin state. It would be nice
+			// to fix that.
+		}
+	}
 }
 
 // Close stops the server.
