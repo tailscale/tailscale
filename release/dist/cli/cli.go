@@ -73,6 +73,9 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 }
 
 func runList(ctx context.Context, filters []string, targets []dist.Target) error {
+	if len(filters) == 0 {
+		filters = []string{"all"}
+	}
 	tgts, err := dist.FilterTargets(targets, filters)
 	if err != nil {
 		return err
