@@ -99,9 +99,9 @@ func main() {
 	tsClient.HTTPClient = credentials.Client(context.Background())
 
 	if shouldRunAuthProxy {
-		hostinfo.SetPackage("k8s-operator-proxy")
+		hostinfo.SetApp("k8s-operator-proxy")
 	} else {
-		hostinfo.SetPackage("k8s-operator")
+		hostinfo.SetApp("k8s-operator")
 	}
 
 	s := &tsnet.Server{

@@ -41,6 +41,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Distro",
 		"DistroVersion",
 		"DistroCodeName",
+		"App",
 		"Desktop",
 		"Package",
 		"DeviceModel",
@@ -215,6 +216,16 @@ func TestHostinfoEqual(t *testing.T) {
 			&Hostinfo{SSH_HostKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO.... root@bar"}},
 			&Hostinfo{},
 			false,
+		},
+		{
+			&Hostinfo{App: "golink"},
+			&Hostinfo{App: "abc"},
+			false,
+		},
+		{
+			&Hostinfo{App: "golink"},
+			&Hostinfo{App: "golink"},
+			true,
 		},
 	}
 	for i, tt := range tests {

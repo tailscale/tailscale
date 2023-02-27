@@ -267,6 +267,7 @@ func (v HostinfoView) Env() string             { return v.ж.Env }
 func (v HostinfoView) Distro() string          { return v.ж.Distro }
 func (v HostinfoView) DistroVersion() string   { return v.ж.DistroVersion }
 func (v HostinfoView) DistroCodeName() string  { return v.ж.DistroCodeName }
+func (v HostinfoView) App() string             { return v.ж.App }
 func (v HostinfoView) Desktop() opt.Bool       { return v.ж.Desktop }
 func (v HostinfoView) Package() string         { return v.ж.Package }
 func (v HostinfoView) DeviceModel() string     { return v.ж.DeviceModel }
@@ -305,6 +306,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Distro          string
 	DistroVersion   string
 	DistroCodeName  string
+	App             string
 	Desktop         opt.Bool
 	Package         string
 	DeviceModel     string
