@@ -522,6 +522,9 @@ type Hostinfo struct {
 	DistroVersion  string   `json:",omitempty"` // "20.04", ...
 	DistroCodeName string   `json:",omitempty"` // "jammy", "bullseye", ...
 
+	// App is used to disambiguate Tailscale clients that run using tsnet.
+	App string `json:",omitempty"` // "k8s-operator", "golinks", ...
+
 	Desktop         opt.Bool       `json:",omitempty"` // if a desktop was detected on Linux
 	Package         string         `json:",omitempty"` // Tailscale package to disambiguate ("choco", "appstore", etc; "" for unknown)
 	DeviceModel     string         `json:",omitempty"` // mobile phone model ("Pixel 3a", "iPhone12,3")

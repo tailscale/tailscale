@@ -36,6 +36,7 @@ func New() *tailcfg.Hostinfo {
 	return &tailcfg.Hostinfo{
 		IPNVersion:      version.Long(),
 		Hostname:        hostname,
+		App:             appTypeCached(),
 		OS:              version.OS(),
 		OSVersion:       GetOSVersion(),
 		Container:       lazyInContainer.Get(),
@@ -112,6 +113,13 @@ func GetOSVersion() string {
 	return ""
 }
 
+func appTypeCached() string {
+	if v, ok := appType.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
 func packageTypeCached() string {
 	if v, _ := packagingType.Load().(string); v != "" {
 		return v
@@ -159,6 +167,7 @@ var (
 	osVersionAtomic       atomic.Value // of string
 	desktopAtomic         atomic.Value // of opt.Bool
 	packagingType         atomic.Value // of string
+	appType               atomic.Value // of string
 )
 
 // SetPushDeviceToken sets the device token for use in Hostinfo updates.
@@ -175,6 +184,11 @@ func SetOSVersion(v string) { osVersionAtomic.Store(v) }
 // As of 2022-03-25, this is used by Android ("nogoogle" for the
 // F-Droid build) and tsnet (set to "tsnet").
 func SetPackage(v string) { packagingType.Store(v) }
+
+// SetApp sets the app type for the app.
+// It is used by tsnet to specify what app is using it such as "golinks"
+// and "k8s-operator".
+func SetApp(v string) { appType.Store(v) }
 
 func deviceModel() string {
 	s, _ := deviceModelAtomic.Load().(string)

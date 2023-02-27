@@ -128,6 +128,7 @@ var _HostinfoCloneNeedsRegeneration = Hostinfo(struct {
 	Distro          string
 	DistroVersion   string
 	DistroCodeName  string
+	App             string
 	Desktop         opt.Bool
 	Package         string
 	DeviceModel     string
