@@ -23,9 +23,9 @@ func TestValidHost(t *testing.T) {
 	}{
 		{"", true},
 		{apitype.LocalAPIHost, true},
-		{"localhost:9109", validLocalHost},
-		{"127.0.0.1:9110", validLocalHost},
-		{"[::1]:9111", validLocalHost},
+		{"localhost:9109", false},
+		{"127.0.0.1:9110", false},
+		{"[::1]:9111", false},
 		{"100.100.100.100:41112", false},
 		{"10.0.0.1:41112", false},
 		{"37.16.9.210:41112", false},
@@ -33,7 +33,8 @@ func TestValidHost(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.host, func(t *testing.T) {
-			if got := validHost(test.host); got != test.valid {
+			h := &Handler{}
+			if got := h.validHost(test.host); got != test.valid {
 				t.Errorf("validHost(%q)=%v, want %v", test.host, got, test.valid)
 			}
 		})
@@ -41,10 +42,9 @@ func TestValidHost(t *testing.T) {
 }
 
 func TestSetPushDeviceToken(t *testing.T) {
-	origValidLocalHost := validLocalHost
-	validLocalHost = true
+	validLocalHostForTesting = true
 	defer func() {
-		validLocalHost = origValidLocalHost
+		validLocalHostForTesting = false
 	}()
 
 	h := &Handler{
