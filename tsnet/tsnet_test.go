@@ -9,16 +9,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
-	"os"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"tailscale.com/ipn/store/mem"
+	"tailscale.com/net/netns"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
-	"tailscale.com/net/netns"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/logger"
 )
@@ -63,7 +64,7 @@ func TestListenerPort(t *testing.T) {
 var verboseDERP = flag.Bool("verbose-derp", false, "if set, print DERP and STUN logs")
 var verboseNodes = flag.Bool("verbose-nodes", false, "if set, print tsnet.Server logs")
 
-func TestConn(t *testing.T) {
+func startControl(t *testing.T) (controlURL string) {
 	// Corp#4520: don't use netns for tests.
 	netns.SetEnabled(false)
 	t.Cleanup(func() {
@@ -81,14 +82,19 @@ func TestConn(t *testing.T) {
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	control.HTTPTestServer.Start()
 	t.Cleanup(control.HTTPTestServer.Close)
-	controlURL := control.HTTPTestServer.URL
+	controlURL = control.HTTPTestServer.URL
 	t.Logf("testcontrol listening on %s", controlURL)
+	return controlURL
+}
+
+func TestConn(t *testing.T) {
+	controlURL := startControl(t)
 
 	tmp := t.TempDir()
 	tmps1 := filepath.Join(tmp, "s1")
 	os.MkdirAll(tmps1, 0755)
 	s1 := &Server{
-		Dir: tmps1,
+		Dir:        tmps1,
 		ControlURL: controlURL,
 		Hostname:   "s1",
 		Store:      new(mem.Store),
@@ -99,7 +105,7 @@ func TestConn(t *testing.T) {
 	tmps2 := filepath.Join(tmp, "s1")
 	os.MkdirAll(tmps2, 0755)
 	s2 := &Server{
-		Dir: tmps2,
+		Dir:        tmps2,
 		ControlURL: controlURL,
 		Hostname:   "s2",
 		Store:      new(mem.Store),
@@ -165,5 +171,90 @@ func TestConn(t *testing.T) {
 	t.Logf("got: %q", got)
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestLoopbackLocalAPI(t *testing.T) {
+	controlURL := startControl(t)
+
+	tmp := t.TempDir()
+	tmps1 := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps1, 0755)
+	s1 := &Server{
+		Dir:        tmps1,
+		ControlURL: controlURL,
+		Hostname:   "s1",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+	}
+	defer s1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := s1.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	addr, cred, err := s1.LoopbackLocalAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	url := "http://" + addr + "/localapi/v0/status"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 403 {
+		t.Errorf("GET %s returned %d, want 403 without Sec- header", url, res.StatusCode)
+	}
+
+	req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Sec-Tailscale", "localapi")
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 401 {
+		t.Errorf("GET %s returned %d, want 401 without basic auth", url, res.StatusCode)
+	}
+
+	req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("", cred)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 403 {
+		t.Errorf("GET %s returned %d, want 403 without Sec- header", url, res.StatusCode)
+	}
+
+	req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Sec-Tailscale", "localapi")
+	req.SetBasicAuth("", cred)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Errorf("GET /status returned %d, want 200", res.StatusCode)
 	}
 }

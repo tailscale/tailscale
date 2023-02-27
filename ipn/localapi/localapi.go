@@ -150,7 +150,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server has no local backend", http.StatusInternalServerError)
 		return
 	}
-	if r.Referer() != "" || r.Header.Get("Origin") != "" || !validHost(r.Host) {
+	if r.Referer() != "" || r.Header.Get("Origin") != "" || !h.validHost(r.Host) {
 		metricInvalidRequests.Add(1)
 		http.Error(w, "invalid localapi request", http.StatusForbidden)
 		return
@@ -180,21 +180,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// validLocalHost allows either localhost or loopback IP hosts on platforms
-// that use token security.
-var validLocalHost = runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "android"
+// validLocalHostForTesting allows loopback handlers without RequiredPassword for testing.
+var validLocalHostForTesting = false
 
 // validHost reports whether h is a valid Host header value for a LocalAPI request.
-func validHost(h string) bool {
+func (h *Handler) validHost(hostname string) bool {
 	// The client code sends a hostname of "local-tailscaled.sock".
-	switch h {
+	switch hostname {
 	case "", apitype.LocalAPIHost:
 		return true
 	}
-	if !validLocalHost {
-		return false
+	if !validLocalHostForTesting && h.RequiredPassword == "" {
+		return false // only allow localhost with basic auth or in tests
 	}
-	host, _, err := net.SplitHostPort(h)
+	host, _, err := net.SplitHostPort(hostname)
 	if err != nil {
 		return false
 	}
