@@ -233,8 +233,7 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 			return nil, fmt.Errorf("tsnet.Up: backend: %s", *n.ErrMessage)
 		}
 		if s := n.State; s != nil {
-			switch *s {
-			case ipn.Running:
+			if *s == ipn.Running {
 				status, err := lc.Status(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("tsnet.Up: %w", err)
@@ -243,15 +242,13 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 					return nil, errors.New("tsnet.Up: running, but no ip")
 				}
 				return status, nil
-			case ipn.NeedsMachineAuth:
-				return nil, errors.New("tsnet.Up: tailnet requested machine auth")
 			}
-			// TODO: in the future, return an error on NeedsLogin
-			// to improve the UX of trying out the tsnet package.
+			// TODO: in the future, return an error on ipn.NeedsLogin
+			// and ipn.NeedsMachineAuth to improve the UX of trying
+			// out the tsnet package.
 			//
 			// Unfortunately today, even when using an AuthKey we
-			// briefly see a NeedsLogin state. It would be nice
-			// to fix that.
+			// briefly see these states. It would be nice to fix.
 		}
 	}
 }
