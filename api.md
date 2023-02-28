@@ -26,7 +26,7 @@ Supply the API access token as the **Username** in **Basic** authentication when
 
 - **Supply the API access token:** Authenticate to the Tailscale API by passing the access token in the HTTP header of your request.
 
-Access tokens have a similar structure to [auth keys](JULIA), but the two are used for different purposes. Auth (or pre-authentication) keys are used for _initial registration_ of new nodes to your tailnet.
+Access tokens have a similar structure to [auth keys](#tailnet-key-object), but the two are used for different purposes. Auth (or pre-authentication) keys are used for _initial registration_ of new nodes to your tailnet.
 
 ### **OAuth client** 
 
@@ -67,51 +67,58 @@ The Tailscale API v2 does not currently support pagination. All results are retu
 # APIs 
 
 **[Device](#device)**
-- [`GET /api/v2/device/{deviceid}`](#fetch-the-details-for-a-device)
-- [`DELETE /api/v2/device/{deviceID`}](#delete-a-device)
-- Routes
-  - [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes)
-  - [`](JULIA)
-- Authorize machine
-  - [`POST` device authorized](JULIA)
-- Tags
-  - [`POST` device tags](JULIA)
-- Key
-  - [`POST` device key](JULIA)
+- Get a device: [`GET /api/v2/device/{deviceid}`](#fetch-the-details-for-a-device)
+- Delete a device: [`DELETE /api/v2/device/{deviceID`}](#delete-a-device)
+- **Routes**
+  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes)
+  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device)
+- **Authorized**
+  - Authorize a device: [`POST /api/v2/device/{deviceID}/authorized`](#authorize-a-device)
+- **Tags**
+  - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
+- **Key**
+  - Set key expiry: [`POST /api/v2/device/{deviceID}/key`](#update-device-node-key-expiry)
 
-**[Tailnets](JULIA)**
-- ACLs
-  - [`GET` tailnet ACL](JULIA)
-  - [`POST` tailnet ACL](JULIA)
-  - [`POST` tailnet ACL preview](JULIA)
-  - [`POST` tailnet ACL validate](JULIA)
-- [Devices](JULIA)
-  - [`GET` tailnet devices](JULIA)
-- [Keys](JULIA)
-  - [`GET` tailnet keys](JULIA)
-  - [`POST` tailnet key](JULIA)
-  - [`GET` tailnet key](JULIA)
-  - [`DELETE` tailnet key](JULIA)
-- [DNS](JULIA)
-  - [`GET` tailnet DNS nameservers](JULIA)
-  - [`POST` tailnet DNS nameservers](JULIA)
-  - [`GET` tailnet DNS preferences](JULIA)
-  - [`POST` tailnet DNS preferences](JULIA)
-  - [`GET` tailnet DNS search paths](JULIA)
-  - [`POST` tailnet DNS search paths](JULIA)
+**[Tailnet](#tailnet)**
+- [**ACL**](#acl-in-the-tailnet-policy-file)
+  - Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
+  - Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
+  - Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
+  - Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
+- [**Devices**](#tailnet-devices)
+  - List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
+- [**Keys**](#tailnet-key-object)
+  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
+  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
+  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
+  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
+- [**DNS**](#dns)
+  - **Nameservers**
+    - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
+    - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
+  - **Preferences**
+    - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
+    - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
+  - **Search paths**
+    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
+    - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
 
 # Device 
 
 A Tailscale device (sometimes referred to as _node_ or _machine_), is any computer or mobile device that joins a tailnet.
 
 Endpoints: 
-- [`GET /api/v2/device/{deviceId}`](JULIA)
-- [`DELETE /api/v2/device/{deviceID}`](JULIA)
-- [`GET /api/v2/device/{deviceID}/routes`](JULIA)
-- [`POST /api/v2/device/{deviceID}/routes`](JULIA)
-- [`POST /api/v2/device/{deviceID}/authorized`](JULIA)
-- [`POST /api/v2/device/{deviceID}/tags`](JULIA)
-- [`POST /api/v2/device/{deviceID}/key`](JULIA)
+- Get a device: [`GET /api/v2/device/{deviceid}`](#fetch-the-details-for-a-device)
+- Delete a device: [`DELETE /api/v2/device/{deviceID`}](#delete-a-device)
+- **Routes**
+  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes)
+  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device)
+- **Authorized**
+  - Authorize a device: [`POST /api/v2/device/{deviceID}/authorized`](#authorize-a-device)
+- **Tags**
+  - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
+- **Key**
+  - Set key expiry: [`POST /api/v2/device/{deviceID}/key`](#update-device-node-key-expiry)
 
 ## Device object
 
@@ -375,7 +382,7 @@ curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
   ],
   "id":"12345",
 
-  // Additional fields as documented in Device section above
+  // Additional fields as documented in device "Attributes" section above
 }
 {
   "addresses":[
@@ -384,7 +391,7 @@ curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
   ],
   "id":"67891",
 
-  // Additional fields as documented in Device section above
+  // Additional fields as documented in device "Attributes" section above
 }
 ```
 
@@ -657,21 +664,28 @@ Where `{tailnet}` is indicated in the URL, you have two options:
 
 Endpoints:
 
-- [`GET /api/v2/tailnet/{tailnet}/acl`](#intro)
-- [`POST /api/v2/tailnet/{tailnet}/acl`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/acl/preview`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/acl/validate`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/devices`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/keys`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/keys`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](JULIA)
-- [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](JULIA)
+- [**ACL**](#acl-in-the-tailnet-policy-file)
+  - Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
+  - Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
+  - Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
+  - Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
+- [**Devices**](#tailnet-devices)
+  - List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
+- [**Keys**](#tailnet-key-object)
+  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
+  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
+  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
+  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
+- [**DNS**](#dns)
+  - **Nameservers**
+    - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
+    - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
+  - **Preferences**
+    - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
+    - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
+  - **Search paths**
+    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
+    - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
 
 ## ACL in the tailnet policy file
 
@@ -679,10 +693,10 @@ Access control lists (ACL) and rules are stored in the tailnet policy file and c
 
 Endpoints:
 
-- [`GET /api/v2/tailnet/{tailnet}/acl`](JULIA) 
-- [`POST /api/v2/tailnet/{tailnet}/acl`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/acl/preview`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}validate`](JULIA)
+- Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
+- Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
+- Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
+- Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
 
 ## Fetch the tailnet policy file 
 
@@ -971,7 +985,7 @@ Supply the tailnet policy file in the `POST` body in JSON or HuJSON format. Lear
 
 ### Request example 
 
-``` 
+``` sh 
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFor=user1@example.com&type=user' \
   -u "tskey-yourapikey123:" \
   --data-binary '// Example/default ACLs for unrestricted connections.
@@ -1111,7 +1125,7 @@ Refer to the Device resource description [above](#device). This endpoint address
 
 Endpoints:
 
-- [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
+- List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
 
 ## Fetch a list of tailnet devices 
 
@@ -1148,58 +1162,6 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
   -u "tskey-yourapikey123:"
 ```
 
-### Response with default set of fields 
-If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details, excluding `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`.
-
-``` jsonc
-{
-  "devices":[
-    {
-      "addresses":[
-        "100.XXX.XXX.XXX"
-      ],
-      "clientVersion":"date.20201107",
-      "os":"macOS",
-      "name":"user1-device.example.com",
-      "created":"2020-11-30T22:20:04Z",
-      "lastSeen":"2020-11-30T17:20:04-05:00",
-      "hostname":"User1-Device",
-      "machineKey":"mkey:user1-machine-key",
-      "nodeKey":"nodekey:user1-node-key",
-      "id":"12345",
-      "user":"user1@example.com",
-      "expires":"2021-05-29T22:20:04Z",
-      "keyExpiryDisabled":false,
-      "authorized":false,
-      "isExternal":false,
-      "updateAvailable":false,
-      "blocksIncomingConnections":false,
-    },
-    {
-      "addresses":[
-        "100.YYY.YYY.YYY"
-      ],
-      "clientVersion":"date.20201107",
-      "os":"macOS",
-      "name":"user2-device.example.com",
-      "created":"2020-11-30T22:21:03Z",
-      "lastSeen":"2020-11-30T17:21:03-05:00",
-      "hostname":"User2-Device",
-      "machineKey":"mkey:user2-machine-key",
-      "nodeKey":"nodekey:user2-node-key",
-      "id":"12345",
-      "user":"user2@example.com",
-      "expires":"2021-05-29T22:21:03Z",
-      "keyExpiryDisabled":false,
-      "authorized":false,
-      "isExternal":false,
-      "updateAvailable":false,
-      "blocksIncomingConnections":false,
-    }
-  ]
-}
-```
-
 ### Request example for all fields 
 
 ``` sh
@@ -1207,176 +1169,18 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices?fields=all' \
   -u "tskey-yourapikey123:"
 ```
 
-### Response with all fields 
-
-If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details, including `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`.
-
-``` jsonc
-{
-  "devices": [
-    {
-      "addresses": [
-        "100.XXX.XXX.XXX",
-        "a1b2:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:e5f6"
-      ],
-      "id": "1234560103888201",
-      "nodeId": "nmL9cXXXXTRL",
-      "user": "example@email.com",
-      "name": "x-macbook-13.taile17db.ts.net",
-      "hostname": "X-MacBook-13",
-      "clientVersion": "1.34.0-tbb6e746f3-g8d1edab6f",
-      "updateAvailable": true,
-      "os": "macOS",
-      "created": "2022-11-18T16:51:23Z",
-      "lastSeen": "2023-02-01T16:49:36Z",
-      "keyExpiryDisabled": false,
-      "expires": "2023-06-05T23:13:53Z",
-      "authorized": true,
-      "isExternal": false,
-      "machineKey": "mkey:k1l2m3n4o5p6q7r8s9t1u2v3w4x5y6z7k1l2m3n4o5p6q7r8s9t1u2v3w4x5z6",
-      "nodeKey": "nodekey:a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9",
-      "tailnetLockKey": "nlpub:XXXXXd30c323e009e62dda0314dcaa87a6245e361aedXXXXXd34933c6566e68b",
-      "blocksIncomingConnections": false,
-      "enabledRoutes": [],
-      "advertisedRoutes": [],
-      "clientConnectivity": {
-        "endpoints": [
-          "98.42.44.20:41641",
-          "[2601:648:XXXX:37b0:8ca0:XXXX:4fd:24e1]:XXXXX",
-          "10.0.0.152:41641",
-          "[2601:648:XXXX:37b0::f558]:41641",
-          "[2601:648:XXXX:37b0:184c:8fe5:f8a3:ee70]:XXXXX"
-        ],
-        "derp": "",
-        "mappingVariesByDestIP": false,
-        "latency": {
-          "Los Angeles": {
-            "latencyMs": 34.354108000000004
-          },
-          "San Francisco": {
-            "preferred": true,
-            "latencyMs": 22.937421
-          },
-          "Seattle": {
-            "latencyMs": 42.493266
-          }
-        },
-        "clientSupports": {
-          "hairPinning": false,
-          "ipv6": true,
-          "pcp": false,
-          "pmp": false,
-          "udp": true,
-          "upnp": false
-        }
-      }
-    },
-    {
-      "addresses": [
-        "100.96.XXX.XXX",
-        "e5f6:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:e5f6:a1b2"
-      ],
-      "id": "12345938735751060",
-      "nodeId": "nZqeZf5XXXX",
-      "user": "example@github",
-      "name": "go-test.exampl.ts.net",
-      "hostname": "go",
-      "clientVersion": "",
-      "updateAvailable": false,
-      "os": "linux",
-      "created": "",
-      "lastSeen": "2022-12-01T05:23:30Z",
-      "keyExpiryDisabled": true,
-      "expires": "2023-05-30T04:44:05Z",
-      "authorized": true,
-      "isExternal": true,
-      "machineKey": "",
-      "nodeKey": "nodekey:a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9",
-      "blocksIncomingConnections": false,
-      "enabledRoutes": [],
-      "advertisedRoutes": [],
-      "clientConnectivity": {
-        "endpoints": [
-          "172.17.0.2:41721",
-          "24.6.96.6:56325"
-        ],
-        "derp": "",
-        "mappingVariesByDestIP": false,
-        "latency": {},
-        "clientSupports": {
-          "hairPinning": false,
-          "ipv6": false,
-          "pcp": false,
-          "pmp": false,
-          "udp": true,
-          "upnp": false
-        }
-      },
-      "tags": [
-        "tag:golink",
-        "tag:server"
-      ]
-    },
-    {
-      "addresses": [
-        "100.XXX.XXX.XXX",
-        "a1b2:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:e5f6"
-      ],
-      "id": "483XXXXX3226582",
-      "nodeId": "abcdeT7XXXX",
-      "user": "example@example.com",
-      "name": "go.taile17db.ts.net",
-      "hostname": "go",
-      "clientVersion": "1.33.0-dev-t",
-      "updateAvailable": true,
-      "os": "macOS",
-      "created": "2022-12-07T23:24:32Z",
-      "lastSeen": "2022-12-22T19:59:28Z",
-      "keyExpiryDisabled": false,
-      "expires": "2023-06-05T23:24:32Z",
-      "authorized": true,
-      "isExternal": false,
-      "machineKey": "mkey:k1l2m3n4o5p6q7r8s9t1u2v3w4x5y6z7k1l2m3n4o5p6q7r8s9t1u2v3w4x5z6",
-      "nodeKey": "nodekey:a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9",
-      "tailnetLockKey": "nlpub:a1b2c3d4f6g6h7r8s9t1u2v3w4x5y6z7k1l2m3n4o5p6q7r8s9t1u2v3w4x5z6",
-      "blocksIncomingConnections": false,
-      "enabledRoutes": [],
-      "advertisedRoutes": [],
-      "clientConnectivity": {
-        "endpoints": [
-          "10.XXX.XXX.2:12345",
-          "10.XXX.XXX.242:23456",
-          "24.XXX.XXX.6:34567"
-        ],
-        "derp": "",
-        "mappingVariesByDestIP": false,
-        "latency": {},
-        "clientSupports": {
-          "hairPinning": false,
-          "ipv6": false,
-          "pcp": false,
-          "pmp": false,
-          "udp": true,
-          "upnp": false
-        }
-      },
-      "tags": [
-        "tag:golink"
-      ]
-    }
-  ]
-}
-```
+### Response 
+If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details. If the request was for `all` fields, the response includes all fields (refer to the [Device object attributes](#attributes) section for descriptions and examples); if the request was for the `default` set of fields, the response excludes `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`. 
 
 ## Tailnet key object
 
-This endpoint operates primarily on auth keys, and in some cases on [API access tokens](JULIA).
+This endpoint operates primarily on auth keys, and in some cases on [API access tokens](#api-access-token).
 
 - Auth keys: Pre-authentication keys ("auth keys” for short) let you register new nodes without needing to sign in via a web browser. Auth keys are identifiable by the prefix `tskey-auth...`. Use them to add devices to your tailnet. Auth keys are used for _initial registration_ of a new device to your tailnet (after a device has joined the tailnet, there are additional keys used for subsequent authentication; these include the node key and the machine key). 
 
   Generate or revoke an auth key in the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console. When you generate a new auth key, you can specify that the key should automatically authorize devices for which the auth key is used. When generating the auth key, you can choose the number of days (1 - 90 inclusive) for the automatic key expiry. To continue using an auth key after this key expires, you must generate a new key.
 
-- API access tokens: Discussed [above](JULIA).
+- API access tokens: Discussed [above](#api-access-token).
 
 Recently expired and revoked keys are shown on the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console. Learn more about [auth keys](https://tailscale.com/kb/1085/).
 
@@ -1385,10 +1189,11 @@ If you authenticate with a user-owned API access token, all the methods on tailn
 The `POST /api/v2/tailnet/{tailnet}/keys` endpoint is used to create auth keys only. The remaining three endpoints operate on auth keys and API access tokens.
 
 Endpoints:
-- [`GET /api/v2/tailnet/{tailnet}/keys`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/keys`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](JULIA)
-- [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](JULIA)
+
+  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
+  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
+  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
+  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
 
 ### Attributes 
 
@@ -1495,7 +1300,7 @@ Supply the tailnet in the path.
 
 #### Tailnet key object (required in `POST` body)
 
-Supply the tailnet key attributes as a JSON object in the `POST` body following the [query example](JULIA) below.
+Supply the tailnet key attributes as a JSON object in the `POST` body following the request example below.
 
 At minimum, the request `POST` body must have a `capabilities` object (see below). With nothing else supplied, such a request generates a single-use key with no tags.
 
@@ -1511,7 +1316,7 @@ Note the following about required vs. optional values:
 
 - **`expirySeconds`:** Optional in `POST` body. Defaults to 90d if not supplied.
 
-### Request example 
+### Request example
 
 ``` jsonc
 echo '{
@@ -1554,7 +1359,7 @@ The response is a JSON object that includes the `"key"` value, which will only b
 }
 ```
 
-## Fetch information for a specific key 
+## Fetch information for a specific tailnet key 
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/keys/{keyid}
@@ -1604,7 +1409,7 @@ The response is a JSON object with information about the key supplied.
 }
 ```
 
-## Delete a specific key 
+## Delete a specific tailnet key 
 
 ``` http
 DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}
@@ -1637,12 +1442,15 @@ The tailnet DNS endpoints are provided for fetching and modifying various DNS se
 
 Endpoints:
 
-- [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](JULIA)
-- [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths`](JULIA)
-- [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](JULIA)
+- **Nameservers**
+  - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
+  - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
+- **Preferences**
+  - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
+  - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
+- **Search paths**
+  - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
+  - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
 
 ## Fetch the global DNS nameservers for a tailnet 
 
@@ -1819,7 +1627,7 @@ If there are DNS servers, Tailscale returns the MagicDNS status:
 }
 ```
 
-## Retrieve the search paths for a tailnet 
+## Fetch the search paths for a tailnet 
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/dns/searchpaths
