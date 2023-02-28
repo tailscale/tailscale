@@ -56,7 +56,7 @@ For some methods, Tailscale provides the `fields` query parameter to explicitly 
 Some API calls let you select the format of the JSON returned in the response. Supply your preference as a parameter in the **Accept** header of the request. Two options are supported in these scenarios:
 
 - **JSON:** Standard parsed JSON format.
-- **HuJSON:** Human-readable JSON (this is the default if no format is specified). Learn more about [HuJSON](https://github.com/tailscale/hujson#hujson---human-json).
+- **HuJSON:** Human-readable JSON (this is the default if no format is specified). Learn more about [HuJSON](https://github.com/tailscale/hujson#readme).
 
 ## Errors 
 The Tailscale API sends status codes consistent with [standard HTTP conventions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status). In addition to the status code, client error messages may include additional information in the response body.
@@ -124,7 +124,7 @@ Endpoints:
 
 Each Tailscale-connected device has a globally-unique identifier number to which we refer as the `nodeId`. Use the `nodeId` to specify operations on a specific device, such as retrieving its subnet routes. 
 
-To find the `nodeId` for a particular device in the admin console, navigate to [**Settings** → **General**]() and copy the **organization** name. To retrieve a `nodeId` using the API, make a [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices) call to generate a list of devices on your network, then find the device you're looking for and get its `"nodeId"` value. 
+To find the `nodeId` for a particular device in the admin console, navigate to [**Settings** → **General**](https://login.tailscale.com/admin/settings/general) and copy the **organization** name. To retrieve a `nodeId` using the API, make a [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices) call to generate a list of devices on your network, then find the device you're looking for and get its `"nodeId"` value. 
 
 (While `nodeId` is the preferred way to identify a unique device, `id` is also still accepted when specifying operations on a particular device. Find the `id` of a particular device by [fetching device details](#fetch-the-details-for-a-device).)
 
@@ -336,8 +336,8 @@ A device can act as a subnet router if its subnet routes are both advertised and
 If a device has advertised routes, they are not exposed to traffic until they are enabled by the tailnet admin. Conversely, if a tailnet admin pre-approves certain routes by enabling them, they are not available for routing until the device in question has advertised them.
 
 The Devices endpoint exposes two methods for dealing with subnet routes:
-- [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes) to fetch lists of advertised and enabled routes for a device
-- [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device) to set enabled routes for a device
+  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes) to fetch lists of advertised and enabled routes for a device
+  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device) to set enabled routes for a device
 
 ## Fetch the details for a device 
 
@@ -875,7 +875,7 @@ Sets the return type of the updated tailnet policy file. Response is parsed `JSO
 
 Define the policy file in the `POST` body. Include the entire policy file. Note that the supplied object fully replaces your existing tailnet policy file.
 
-The `POST` body should be a JSON- or [HuJSON](https://github.com/tailscale/hujson#hujson---human-json)-formatted JSON object. Learn about the [ACL policy properties you can include in the request](https://tailscale.com/kb/1018/acls/#tailscale-policy-syntax). 
+The `POST` body should be a JSON- or [HuJSON](https://github.com/tailscale/hujson#readme)-formatted JSON object. Learn about the [ACL policy properties you can include in the request](https://tailscale.com/kb/1018/acls/#tailscale-policy-syntax). 
 
 ### Request example 
 
@@ -1045,8 +1045,6 @@ This endpoint works in one of two modes, neither of which modifies your current 
 - **Run ACL tests:** When the **request body contains ACL tests as a JSON array**, Tailscale runs ACL tests against the tailnet's current policy file. Learn more about [ACL tests](https://tailscale.com/kb/1018/acls/#tests).
 - **Validate a new policy file:** When the **request body is a JSON object**, Tailscale interprets the body as a hypothetical new tailnet policy file with new ACLs, including any new rules and tests. It validates that the policy file is parsable and runs tests to validate the existing rules. 
 
-Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/acls/ACLS#tests).
-
 In either case, this endpoint does not modify the tailnet policy file in any way.
 
 ### Input parameters for "Run ACL tests" mode 
@@ -1056,13 +1054,9 @@ Supply the tailnet in the path.
 
 #### ACL tests (required in `POST` body)
 
-The `POST` body should be a JSON formatted array of ACL Tests. Learn more about [tailnet policy tests](https://tailscale.com/kb/1018/acls/acls#tests).
+The `POST` body should be a JSON formatted array of ACL Tests. Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/acls/#tests).
 
 ### Request example to run ACL tests 
-
-``` http
-POST /api/v2/tailnet/example.com/acl/validate
-```
 
 ``` sh
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
@@ -1083,10 +1077,6 @@ Supply the tailnet in the path.
 The `POST` body should be a JSON object with a JSON or HuJSON representation of a tailnet policy file.
 
 ### Request example to validate a policy file 
-
-``` http
-POST /api/v2/tailnet/example.com/acl/validate
-```
 
 ``` sh
 curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
@@ -1121,7 +1111,7 @@ The HTTP status code will be '200' if the request was well formed and there were
   ```
 
 ## Tailnet devices 
-Refer to the Device resource description [above](#device). This endpoint addresses the devices registered to a tailnet.
+Refer to the Device resource description [above](#device-object). This endpoint addresses the devices registered to a tailnet.
 
 Endpoints:
 
