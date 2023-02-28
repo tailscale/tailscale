@@ -534,7 +534,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 		if err := pm.setPrefsLocked(prefs); err != nil {
 			return nil, err
 		}
-	} else if len(knownProfiles) == 0 && goos != "windows" {
+	} else if len(knownProfiles) == 0 {
 		// No known profiles, try a migration.
 		if err := pm.migrateFromLegacyPrefs(); err != nil {
 			return nil, err
