@@ -584,7 +584,7 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 					if env.upArgs.json {
 						printUpDoneJSON(ipn.NeedsMachineAuth, "")
 					} else {
-						fmt.Fprintf(Stderr, "\nTo authorize your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
+						fmt.Fprintf(Stderr, "\nTo approve your machine, visit (as admin):\n\n\t%s\n\n", prefs.AdminPageURL())
 					}
 				case ipn.Running:
 					// Done full authentication process
