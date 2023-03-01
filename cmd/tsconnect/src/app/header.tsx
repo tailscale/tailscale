@@ -30,7 +30,7 @@ const STATE_LABELS = {
   NoState: "Initializing…",
   InUseOtherUser: "In-use by another user",
   NeedsLogin: "Needs login",
-  NeedsMachineAuth: "Needs authorization",
+  NeedsMachineAuth: "Needs approval",
   Stopped: "Stopped",
   Starting: "Starting…",
   Running: "Running",
