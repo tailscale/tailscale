@@ -37,6 +37,11 @@ import (
 var (
 	errMissingNetmap        = errors.New("missing netmap: verify that you are logged in")
 	errNetworkLockNotActive = errors.New("network-lock is not active")
+
+	tkaCompactionDefaults = tka.CompactionOptions{
+		MinChain: 24,                  // Keep at minimum 24 AUMs since head.
+		MinAge:   14 * 24 * time.Hour, // Keep 2 weeks of AUMs.
+	}
 )
 
 type tkaState struct {
