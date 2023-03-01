@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/tstest"
+	"tailscale.com/types/logid"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -299,7 +300,7 @@ func TestPublicIDUnmarshalText(t *testing.T) {
 	const hexStr = "6c60a9e0e7af57170bb1347b2d477e4cbc27d4571a4923b21651456f931e3d55"
 	x := []byte(hexStr)
 
-	var id PublicID
+	var id logid.PublicID
 	if err := id.UnmarshalText(x); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestPublicIDUnmarshalText(t *testing.T) {
 		t.Errorf("String = %q; want %q", id.String(), hexStr)
 	}
 	err := tstest.MinAllocsPerRun(t, 0, func() {
-		var id PublicID
+		var id logid.PublicID
 		if err := id.UnmarshalText(x); err != nil {
 			t.Fatal(err)
 		}
