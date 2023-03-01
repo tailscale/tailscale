@@ -166,7 +166,7 @@ waitOnline:
 			loginDone = true
 		case "NeedsMachineAuth":
 			if !machineAuthShown {
-				startlog.Infof("Machine authorization required, please visit the admin panel to authorize")
+				startlog.Infof("Machine approval required, please visit the admin panel to approve")
 				machineAuthShown = true
 			}
 		default:
