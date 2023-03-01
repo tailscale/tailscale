@@ -19,7 +19,7 @@ func main() {
 
 	arch := winres.Arch(os.Args[1])
 	switch arch {
-	case winres.ArchAMD64, winres.ArchARM64, winres.ArchI386, winres.ArchARM:
+	case winres.ArchAMD64, winres.ArchARM64, winres.ArchI386:
 	default:
 		log.Fatalf("unsupported arch: %s", arch)
 	}
