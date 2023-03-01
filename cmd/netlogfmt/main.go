@@ -43,7 +43,7 @@ import (
 	jsonv2 "github.com/go-json-experiment/json"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
-	"tailscale.com/logtail"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/must"
 )
@@ -136,8 +136,8 @@ func processObject(dec *jsonv2.Decoder) {
 
 type message struct {
 	Logtail struct {
-		ID     logtail.PublicID `json:"id"`
-		Logged time.Time        `json:"server_time"`
+		ID     logid.PublicID `json:"id"`
+		Logged time.Time      `json:"server_time"`
 	} `json:"logtail"`
 	Logged time.Time `json:"logged"`
 	netlogtype.Message

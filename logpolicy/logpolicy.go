@@ -43,7 +43,9 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
@@ -94,8 +96,8 @@ func LogHost() string {
 // Config represents an instance of logs in a collection.
 type Config struct {
 	Collection string
-	PrivateID  logtail.PrivateID
-	PublicID   logtail.PublicID
+	PrivateID  logid.PrivateID
+	PublicID   logid.PublicID
 }
 
 // Policy is a logger and its public ID.
@@ -103,15 +105,12 @@ type Policy struct {
 	// Logtail is the logger.
 	Logtail *logtail.Logger
 	// PublicID is the logger's instance identifier.
-	PublicID logtail.PublicID
+	PublicID logid.PublicID
 }
 
 // NewConfig creates a Config with collection and a newly generated PrivateID.
 func NewConfig(collection string) *Config {
-	id, err := logtail.NewPrivateID()
-	if err != nil {
-		panic("logtail.NewPrivateID should never fail")
-	}
+	id := must.Get(logid.NewPrivateID())
 	return &Config{
 		Collection: collection,
 		PrivateID:  id,

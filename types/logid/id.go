@@ -33,7 +33,7 @@ func NewPrivateID() (id PrivateID, err error) {
 func (id PrivateID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {
-		return nil, fmt.Errorf("logtail.PrivateID.MarshalText: i=%d", i)
+		return nil, fmt.Errorf("logid.PrivateID.MarshalText: i=%d", i)
 	}
 	return b, nil
 }
@@ -61,10 +61,10 @@ func (id PrivateID) IsZero() bool { return id == PrivateID{} }
 func (id *PrivateID) UnmarshalText(s []byte) error {
 	b, err := hex.DecodeString(string(s))
 	if err != nil {
-		return fmt.Errorf("logtail.PrivateID.UnmarshalText: %v", err)
+		return fmt.Errorf("logid.PrivateID.UnmarshalText: %v", err)
 	}
 	if len(b) != len(id) {
-		return fmt.Errorf("logtail.PrivateID.UnmarshalText: invalid hex length: %d", len(b))
+		return fmt.Errorf("logid.PrivateID.UnmarshalText: invalid hex length: %d", len(b))
 	}
 	copy(id[:], b)
 	return nil
@@ -121,14 +121,14 @@ func MustParsePublicID(s string) PublicID {
 func (id PublicID) MarshalText() ([]byte, error) {
 	b := make([]byte, hex.EncodedLen(len(id)))
 	if i := hex.Encode(b, id[:]); i != len(b) {
-		return nil, fmt.Errorf("logtail.PublicID.MarshalText: i=%d", i)
+		return nil, fmt.Errorf("logid.PublicID.MarshalText: i=%d", i)
 	}
 	return b, nil
 }
 
 func (id *PublicID) UnmarshalText(s []byte) error {
 	if len(s) != len(id)*2 {
-		return fmt.Errorf("logtail.PublicID.UnmarshalText: invalid hex length: %d", len(s))
+		return fmt.Errorf("logid.PublicID.UnmarshalText: invalid hex length: %d", len(s))
 	}
 	for i := range id {
 		a, ok1 := fromHexChar(s[i*2+0])
