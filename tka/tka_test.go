@@ -474,3 +474,53 @@ func TestInteropWithNLKey(t *testing.T) {
 		t.Error("pub3 want untrusted, got trusted")
 	}
 }
+
+func TestAuthorityCompact(t *testing.T) {
+	pub, priv := testingKey25519(t, 1)
+	key := Key{Kind: Key25519, Public: pub, Votes: 2}
+
+	c := newTestchain(t, `
+        G -> A -> B -> C -> D -> E
+
+        G.template = genesis
+        C.template = checkpoint2
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{key},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		}}),
+		optTemplate("checkpoint2", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{key},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		}}),
+		optKey("key", key, priv),
+		optSignAllUsing("key"))
+
+	storage := &FS{base: t.TempDir()}
+	a, err := Bootstrap(storage, c.AUMs["G"])
+	if err != nil {
+		t.Fatalf("Bootstrap() failed: %v", err)
+	}
+	a.Inform(storage, []AUM{c.AUMs["A"], c.AUMs["B"], c.AUMs["C"], c.AUMs["D"], c.AUMs["E"]})
+
+	// Should compact down to C -> D -> E
+	if err := a.Compact(storage, CompactionOptions{MinChain: 2, MinAge: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if a.oldestAncestor.Hash() != c.AUMHashes["C"] {
+		t.Errorf("ancestor = %v, want %v", a.oldestAncestor.Hash(), c.AUMHashes["C"])
+	}
+
+	// Make sure the stored authority is still openable and resolves to the same state.
+	stored, err := Open(storage)
+	if err != nil {
+		t.Fatalf("Failed to open stored authority: %v", err)
+	}
+	if stored.Head() != a.Head() {
+		t.Errorf("Stored authority head differs: head = %v, want %v", stored.Head(), a.Head())
+	}
+	t.Logf("original ancestor = %v", c.AUMHashes["G"])
+	if anc, _ := storage.LastActiveAncestor(); *anc != c.AUMHashes["C"] {
+		t.Errorf("ancestor = %v, want %v", anc, c.AUMHashes["C"])
+	}
+}

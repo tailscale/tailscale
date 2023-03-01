@@ -173,6 +173,85 @@ func TestTailchonkFS_Commit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(chonk.base, "M7", "M7LL2NDB4NKCZIUPVS6RDM2GUOIMW6EEAFVBWMVCPUANQJPHT3SQ")); err != nil {
 		t.Errorf("stat of AUM parent failed: %v", err)
 	}
+
+	info, err := chonk.get(aum.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PurgedUnix > 0 {
+		t.Errorf("recently-created AUM PurgedUnix = %d, want 0", info.PurgedUnix)
+	}
+}
+
+func TestTailchonkFS_CommitTime(t *testing.T) {
+	chonk := &FS{base: t.TempDir()}
+	parentHash := randHash(t, 1)
+	aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+
+	if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
+		t.Fatal(err)
+	}
+	ct, err := chonk.CommitTime(aum.Hash())
+	if err != nil {
+		t.Fatalf("CommitTime() failed: %v", err)
+	}
+	if ct.Before(time.Now().Add(-time.Minute)) || ct.After(time.Now().Add(time.Minute)) {
+		t.Errorf("commit time was wrong: %v more than a minute off from now (%v)", ct, time.Now())
+	}
+}
+
+func TestTailchonkFS_PurgeAUMs(t *testing.T) {
+	chonk := &FS{base: t.TempDir()}
+	parentHash := randHash(t, 1)
+	aum := AUM{MessageKind: AUMNoOp, PrevAUMHash: parentHash[:]}
+
+	if err := chonk.CommitVerifiedAUMs([]AUM{aum}); err != nil {
+		t.Fatal(err)
+	}
+	if err := chonk.PurgeAUMs([]AUMHash{aum.Hash()}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := chonk.AUM(aum.Hash()); err != os.ErrNotExist {
+		t.Errorf("AUM() on purged AUM returned err = %v, want ErrNotExist", err)
+	}
+
+	info, err := chonk.get(aum.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PurgedUnix == 0 {
+		t.Errorf("recently-created AUM PurgedUnix = %d, want non-zero", info.PurgedUnix)
+	}
+}
+
+func TestTailchonkFS_AllAUMs(t *testing.T) {
+	chonk := &FS{base: t.TempDir()}
+	genesis := AUM{MessageKind: AUMRemoveKey, KeyID: []byte{1, 2}}
+	gHash := genesis.Hash()
+	intermediate := AUM{PrevAUMHash: gHash[:]}
+	iHash := intermediate.Hash()
+	leaf := AUM{PrevAUMHash: iHash[:]}
+
+	commitSet := []AUM{
+		genesis,
+		intermediate,
+		leaf,
+	}
+	if err := chonk.CommitVerifiedAUMs(commitSet); err != nil {
+		t.Fatalf("CommitVerifiedAUMs failed: %v", err)
+	}
+
+	hashes, err := chonk.AllAUMs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashesLess := func(a, b AUMHash) bool {
+		return bytes.Compare(a[:], b[:]) < 0
+	}
+	if diff := cmp.Diff([]AUMHash{genesis.Hash(), intermediate.Hash(), leaf.Hash()}, hashes, cmpopts.SortSlices(hashesLess)); diff != "" {
+		t.Fatalf("AllAUMs() output differs (-want, +got):\n%s", diff)
+	}
 }
 
 func TestMarkActiveChain(t *testing.T) {

@@ -720,3 +720,17 @@ func (a *Authority) Keys() []Key {
 func (a *Authority) StateIDs() (uint64, uint64) {
 	return a.state.StateID1, a.state.StateID2
 }
+
+// Compact deletes historical AUMs based on the given compaction options.
+func (a *Authority) Compact(storage CompactableChonk, o CompactionOptions) error {
+	newAncestor, err := Compact(storage, a.head.Hash(), o)
+	if err != nil {
+		return err
+	}
+	ancestor, err := storage.AUM(newAncestor)
+	if err != nil {
+		return err
+	}
+	a.oldestAncestor = ancestor
+	return nil
+}
