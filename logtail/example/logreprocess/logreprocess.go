@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"tailscale.com/logtail"
+	"tailscale.com/types/logid"
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 		log.Fatalf("logreprocess: read error %d: %s", resp.StatusCode, string(b))
 	}
 
-	tracebackCache := make(map[logtail.PublicID]*ProcessedMsg)
+	tracebackCache := make(map[logid.PublicID]*ProcessedMsg)
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -98,8 +98,8 @@ func main() {
 
 type Msg struct {
 	Logtail struct {
-		Instance   logtail.PublicID `json:"instance"`
-		ClientTime time.Time        `json:"client_time"`
+		Instance   logid.PublicID `json:"instance"`
+		ClientTime time.Time      `json:"client_time"`
 	} `json:"logtail"`
 
 	Text string `json:"text"`
@@ -110,6 +110,6 @@ type ProcessedMsg struct {
 		ClientTime time.Time `json:"client_time"`
 	} `json:"logtail"`
 
-	OrigInstance logtail.PublicID `json:"orig_instance"`
-	Text         string           `json:"text"`
+	OrigInstance logid.PublicID `json:"orig_instance"`
+	Text         string         `json:"text"`
 }

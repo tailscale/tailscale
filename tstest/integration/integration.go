@@ -31,12 +31,12 @@ import (
 	"go4.org/mem"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
-	"tailscale.com/logtail"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
 	"tailscale.com/version"
 )
@@ -283,7 +283,7 @@ func (lc *LogCatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// collectionName := pathPaths[0]
-	privID, err := logtail.ParsePrivateID(pathParts[1])
+	privID, err := logid.ParsePrivateID(pathParts[1])
 	if err != nil {
 		log.Printf("bad log ID: %q: %v", r.URL.Path, err)
 	}

@@ -11,11 +11,11 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
-	"tailscale.com/logtail"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/persist"
 	"tailscale.com/wgengine"
 )
@@ -37,8 +37,8 @@ func TestLocalLogLines(t *testing.T) {
 	// This lets the logListen tracker verify that the rate-limiter allows these key lines.
 	logf := logger.RateLimitedFnWithClock(logListen.Logf, 5*time.Second, 0, 10, time.Now)
 
-	logid := func(hex byte) logtail.PublicID {
-		var ret logtail.PublicID
+	logid := func(hex byte) logid.PublicID {
+		var ret logid.PublicID
 		for i := 0; i < len(ret); i++ {
 			ret[i] = hex
 		}

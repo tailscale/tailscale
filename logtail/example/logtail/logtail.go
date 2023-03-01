@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"tailscale.com/logtail"
+	"tailscale.com/types/logid"
 )
 
 func main() {
@@ -25,7 +26,7 @@ func main() {
 
 	log.SetFlags(0)
 
-	var id logtail.PrivateID
+	var id logid.PrivateID
 	if err := id.UnmarshalText([]byte(*privateID)); err != nil {
 		log.Fatalf("logtail: bad -privateid: %v", err)
 	}

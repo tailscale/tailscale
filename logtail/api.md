@@ -125,11 +125,11 @@ The caller can query-encode the following fields:
       "collections": {
         "collection1.yourcompany.com": {
           "instances": {
-            "<logtail.PublicID>" :{
+            "<logid.PublicID>" :{
               "first-seen": "timestamp",
               "size": 4096
             },
-            "<logtail.PublicID>" :{
+            "<logid.PublicID>" :{
               "first-seen": "timestamp",
               "size": 512000,
               "orphan": true,
