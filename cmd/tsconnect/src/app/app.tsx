@@ -38,7 +38,7 @@ class App extends Component<{}, AppState> {
     if (ipnState === "NeedsMachineAuth") {
       machineAuthInstructions = (
         <div class="container mx-auto px-4 text-center">
-          An administrator needs to authorize this device.
+          An administrator needs to approve this device.
         </div>
       )
     }
