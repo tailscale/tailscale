@@ -36,6 +36,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/tkatype"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -884,6 +885,15 @@ func (lc *LocalClient) NetworkLockSign(ctx context.Context, nodeKey key.NodePubl
 		return fmt.Errorf("error: %w", err)
 	}
 	return nil
+}
+
+// NetworkLockAffectedSigs returns all signatures signed by the specified keyID.
+func (lc *LocalClient) NetworkLockAffectedSigs(ctx context.Context, keyID tkatype.KeyID) ([]tkatype.MarshaledSignature, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/affected-sigs", 200, bytes.NewReader(keyID))
+	if err != nil {
+		return nil, fmt.Errorf("error: %w", err)
+	}
+	return decodeJSON[[]tkatype.MarshaledSignature](body)
 }
 
 // NetworkLockLog returns up to maxEntries number of changes to network-lock state.

@@ -267,14 +267,78 @@ var nlAddCmd = &ffcli.Command{
 	},
 }
 
+var nlRemoveArgs struct {
+	resign bool
+}
+
 var nlRemoveCmd = &ffcli.Command{
 	Name:       "remove",
-	ShortUsage: "remove <public-key>...",
+	ShortUsage: "remove [--re-sign=false] <public-key>...",
 	ShortHelp:  "Removes one or more trusted signing keys from tailnet lock",
 	LongHelp:   "Removes one or more trusted signing keys from tailnet lock",
-	Exec: func(ctx context.Context, args []string) error {
-		return runNetworkLockModify(ctx, nil, args)
-	},
+	Exec:       runNetworkLockRemove,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("lock remove")
+		fs.BoolVar(&nlRemoveArgs.resign, "re-sign", true, "resign signatures which would be invalidated by removal of trusted signing keys")
+		return fs
+	})(),
+}
+
+func runNetworkLockRemove(ctx context.Context, args []string) error {
+	removeKeys, _, err := parseNLArgs(args, true, false)
+	if err != nil {
+		return err
+	}
+	st, err := localClient.NetworkLockStatus(ctx)
+	if err != nil {
+		return fixTailscaledConnectError(err)
+	}
+	if !st.Enabled {
+		return errors.New("tailnet lock is not enabled")
+	}
+
+	if nlRemoveArgs.resign {
+		// Validate we are not removing trust in ourselves while resigning. This is because
+		// we resign with our own key, so the signatures would be immediately invalid.
+		for _, k := range removeKeys {
+			kID, err := k.ID()
+			if err != nil {
+				return fmt.Errorf("computing KeyID for key %v: %w", k, err)
+			}
+			if bytes.Equal(st.PublicKey.KeyID(), kID) {
+				return errors.New("cannot remove local trusted signing key while resigning; run command on a different node or with --re-sign=false")
+			}
+		}
+
+		// Resign affected signatures for each of the keys we are removing.
+		for _, k := range removeKeys {
+			kID, _ := k.ID() // err already checked above
+			sigs, err := localClient.NetworkLockAffectedSigs(ctx, kID)
+			if err != nil {
+				return fmt.Errorf("affected sigs for key %X: %w", kID, err)
+			}
+
+			for _, sigBytes := range sigs {
+				var sig tka.NodeKeySignature
+				if err := sig.Unserialize(sigBytes); err != nil {
+					return fmt.Errorf("failed decoding signature: %w", err)
+				}
+				var nodeKey key.NodePublic
+				if err := nodeKey.UnmarshalBinary(sig.Pubkey); err != nil {
+					return fmt.Errorf("failed decoding pubkey for signature: %w", err)
+				}
+
+				// Safety: NetworkLockAffectedSigs() verifies all signatures before
+				// successfully returning.
+				rotationKey, _ := sig.UnverifiedWrappingPublic()
+				if err := localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey)); err != nil {
+					return fmt.Errorf("failed to sign %v: %w", nodeKey, err)
+				}
+			}
+		}
+	}
+
+	return localClient.NetworkLockModify(ctx, nil, removeKeys)
 }
 
 // parseNLArgs parses a slice of strings into slices of tka.Key & disablement

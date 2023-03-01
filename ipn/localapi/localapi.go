@@ -99,6 +99,7 @@ var handler = map[string]localAPIHandler{
 	"tka/status":                  (*Handler).serveTKAStatus,
 	"tka/disable":                 (*Handler).serveTKADisable,
 	"tka/force-local-disable":     (*Handler).serveTKALocalDisable,
+	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
 	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
@@ -1595,6 +1596,32 @@ func (h *Handler) serveTKALog(w http.ResponseWriter, r *http.Request) {
 	j, err := json.MarshalIndent(updates, "", "\t")
 	if err != nil {
 		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
+}
+
+func (h *Handler) serveTKAAffectedSigs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	keyID, err := ioutil.ReadAll(http.MaxBytesReader(w, r.Body, 2048))
+	if err != nil {
+		http.Error(w, "reading body", http.StatusBadRequest)
+		return
+	}
+
+	sigs, err := h.b.NetworkLockAffectedSigs(keyID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	j, err := json.MarshalIndent(sigs, "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
