@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"tailscale.com/tstest"
-	"tailscale.com/types/logid"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -293,28 +292,6 @@ func TestParseAndRemoveLogLevel(t *testing.T) {
 			t.Errorf("parseAndRemoveLogLevel(%q): got:%q; want %q",
 				tt.log, gotLog, tt.wantLog)
 		}
-	}
-}
-
-func TestPublicIDUnmarshalText(t *testing.T) {
-	const hexStr = "6c60a9e0e7af57170bb1347b2d477e4cbc27d4571a4923b21651456f931e3d55"
-	x := []byte(hexStr)
-
-	var id logid.PublicID
-	if err := id.UnmarshalText(x); err != nil {
-		t.Fatal(err)
-	}
-	if id.String() != hexStr {
-		t.Errorf("String = %q; want %q", id.String(), hexStr)
-	}
-	err := tstest.MinAllocsPerRun(t, 0, func() {
-		var id logid.PublicID
-		if err := id.UnmarshalText(x); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

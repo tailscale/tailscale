@@ -5,6 +5,8 @@ package logid
 
 import (
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func TestIDs(t *testing.T) {
@@ -62,5 +64,16 @@ func TestIDs(t *testing.T) {
 	}
 	if id1 != id4 {
 		t.Fatalf("ParsePrivateID returned different id")
+	}
+
+	hexString := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	hexBytes := []byte(hexString)
+	if err := tstest.MinAllocsPerRun(t, 0, func() {
+		ParsePrivateID(hexString)
+		new(PrivateID).UnmarshalText(hexBytes)
+		ParsePublicID(hexString)
+		new(PublicID).UnmarshalText(hexBytes)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
