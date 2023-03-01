@@ -26,6 +26,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/sockstats"
 	tslogger "tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine/monitor"
 )
@@ -49,8 +50,8 @@ type Encoder interface {
 
 type Config struct {
 	Collection     string           // collection name, a domain name
-	PrivateID      PrivateID        // private ID for the primary log stream
-	CopyPrivateID  PrivateID        // private ID for a log stream that is a superset of this log stream
+	PrivateID      logid.PrivateID  // private ID for the primary log stream
+	CopyPrivateID  logid.PrivateID  // private ID for a log stream that is a superset of this log stream
 	BaseURL        string           // if empty defaults to "https://log.tailscale.io"
 	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
 	SkipClientTime bool             // if true, client_time is not written to logs
@@ -189,7 +190,7 @@ type Logger struct {
 	uploadCancel   func()
 	explainedRaw   bool
 	metricsDelta   func() string // or nil
-	privateID      PrivateID
+	privateID      logid.PrivateID
 	httpDoCalls    atomic.Int32
 
 	procID              uint32
@@ -222,7 +223,7 @@ func (l *Logger) SetLinkMonitor(lm *monitor.Mon) {
 // PrivateID returns the logger's private log ID.
 //
 // It exists for internal use only.
-func (l *Logger) PrivateID() PrivateID { return l.privateID }
+func (l *Logger) PrivateID() logid.PrivateID { return l.privateID }
 
 // Shutdown gracefully shuts down the logger while completing any
 // remaining uploads.
