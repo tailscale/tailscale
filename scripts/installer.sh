@@ -119,6 +119,12 @@ main() {
 				VERSION="bionic"
 				APT_KEY_TYPE="legacy"
 				;;
+			pureos)
+				OS="debian"
+				PACKAGETYPE="apt"
+				VERSION="bullseye"
+				APT_KEY_TYPE="keyring"
+				;;
 			raspbian)
 				OS="$ID"
 				VERSION="$VERSION_CODENAME"
@@ -347,7 +353,9 @@ main() {
 			fi
 		;;
 		amazon-linux)
-			if [ "$VERSION" != "2" ]
+			if [ "$VERSION" != "2" ] && \
+			   [ "$VERSION" != "2022" ] && \
+			   [ "$VERSION" != "2023" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
