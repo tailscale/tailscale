@@ -60,6 +60,7 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 				FlagSet: (func() *flag.FlagSet {
 					fs := flag.NewFlagSet("build", flag.ExitOnError)
 					fs.StringVar(&buildArgs.manifest, "manifest", "", "manifest file to write")
+					fs.BoolVar(&buildArgs.verbose, "verbose", false, "verbose logging")
 					return fs
 				})(),
 				LongHelp: strings.TrimSpace(`
@@ -88,6 +89,7 @@ func runList(ctx context.Context, filters []string, targets []dist.Target) error
 
 var buildArgs struct {
 	manifest string
+	verbose  bool
 }
 
 func runBuild(ctx context.Context, filters []string, targets []dist.Target) error {
@@ -109,6 +111,7 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 		return fmt.Errorf("creating build context: %w", err)
 	}
 	defer b.Close()
+	b.Verbose = buildArgs.verbose
 
 	out, err := b.Build(tgts)
 	if err != nil {
