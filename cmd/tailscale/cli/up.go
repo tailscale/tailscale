@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
 	"reflect"
 	"runtime"
@@ -115,8 +116,10 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	}
 	switch goos {
 	case "linux":
-		upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
-		upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+		if _, err := exec.LookPath("iptables"); err == nil {
+			upf.BoolVar(&upArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
+			upf.StringVar(&upArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
+		}
 	case "windows":
 		upf.BoolVar(&upArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
@@ -139,6 +142,9 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 
 func defaultNetfilterMode() string {
 	if distro.Get() == distro.Synology {
+		return "off"
+	}
+	if _, err := exec.LookPath("iptables"); err != nil {
 		return "off"
 	}
 	return "on"
@@ -355,7 +361,11 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 	prefs.OperatorUser = upArgs.opUser
 	prefs.ProfileName = upArgs.profileName
 
-	if goos == "linux" {
+	if _, err := exec.LookPath("iptables"); err == nil && goos == "linux" {
+		prefs.NoSNAT = true
+		prefs.NetfilterMode = preftype.NetfilterOff
+	} else if goos == "linux" && err == nil {
+
 		prefs.NoSNAT = !upArgs.snat
 
 		switch upArgs.netfilterMode {
@@ -1010,9 +1020,13 @@ func prefsToFlags(env upCheckEnv, prefs *ipn.Prefs) (flagVal map[string]any) {
 		case "advertise-exit-node":
 			set(hasExitNodeRoutes(prefs.AdvertiseRoutes))
 		case "snat-subnet-routes":
-			set(!prefs.NoSNAT)
+			if _, err := exec.LookPath("iptables"); err == nil {
+				set(!prefs.NoSNAT)
+			}
 		case "netfilter-mode":
-			set(prefs.NetfilterMode.String())
+			if _, err := exec.LookPath("iptables"); err == nil {
+				set(prefs.NetfilterMode.String())
+			}
 		case "unattended":
 			set(prefs.ForceDaemon)
 		}
