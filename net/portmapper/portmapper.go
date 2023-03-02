@@ -28,16 +28,18 @@ import (
 	"tailscale.com/util/clientmetric"
 )
 
-// Debug knobs for "tailscaled debug --portmap".
-var (
+// DebugKnobs contains debug configuration that can be provided when creating a
+// Client. The zero value is valid for use.
+type DebugKnobs struct {
+	// VerboseLogs tells the Client to print additional debug information
+	// to its logger.
 	VerboseLogs bool
 
 	// Disable* disables a specific service from mapping.
-
 	DisableUPnP bool
 	DisablePMP  bool
 	DisablePCP  bool
-)
+}
 
 // References:
 //
@@ -59,6 +61,7 @@ type Client struct {
 	logf         logger.Logf
 	ipAndGateway func() (gw, ip netip.Addr, ok bool)
 	onChange     func() // or nil
+	debug        DebugKnobs
 	testPxPPort  uint16 // if non-zero, pxpPort to use for tests
 	testUPnPPort uint16 // if non-zero, uPnPPort to use for tests
 
@@ -150,15 +153,22 @@ func (m *pmpMapping) Release(ctx context.Context) {
 
 // NewClient returns a new portmapping client.
 //
+// The debug argument allows configuring the behaviour of the portmapper for
+// debugging; if nil, a sensible set of defaults will be used.
+//
 // The optional onChange argument specifies a func to run in a new
 // goroutine whenever the port mapping status has changed. If nil,
 // it doesn't make a callback.
-func NewClient(logf logger.Logf, onChange func()) *Client {
-	return &Client{
+func NewClient(logf logger.Logf, debug *DebugKnobs, onChange func()) *Client {
+	ret := &Client{
 		logf:         logf,
 		ipAndGateway: interfaces.LikelyHomeRouterIP,
 		onChange:     onChange,
 	}
+	if debug != nil {
+		ret.debug = *debug
+	}
+	return ret
 }
 
 // SetGatewayLookupFunc set the func that returns the machine's default gateway IP, and
@@ -407,7 +417,7 @@ var wildcardIP = netip.MustParseAddr("0.0.0.0")
 // If no mapping is available, the error will be of type
 // NoMappingError; see IsNoMappingError.
 func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPort, err error) {
-	if DisableUPnP && DisablePCP && DisablePMP {
+	if c.debug.DisableUPnP && c.debug.DisablePCP && c.debug.DisablePMP {
 		return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 	}
 	gw, myIP, ok := c.gatewayAndSelfIP()
@@ -437,7 +447,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 		prevPort = m.External().Port()
 	}
 
-	if DisablePCP && DisablePMP {
+	if c.debug.DisablePCP && c.debug.DisablePMP {
 		c.mu.Unlock()
 		if external, ok := c.getUPnPPortMapping(ctx, gw, internalAddr, prevPort); ok {
 			return external, nil
@@ -486,7 +496,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 
 	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
 
-	preferPCP := !DisablePCP && (DisablePMP || (!haveRecentPMP && haveRecentPCP))
+	preferPCP := !c.debug.DisablePCP && (c.debug.DisablePMP || (!haveRecentPMP && haveRecentPCP))
 
 	// Create a mapping, defaulting to PMP unless only PCP was seen recently.
 	if preferPCP {
@@ -712,19 +722,19 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 	// https://github.com/tailscale/tailscale/issues/1001
 	if c.sawPMPRecently() {
 		res.PMP = true
-	} else if !DisablePMP {
+	} else if !c.debug.DisablePMP {
 		metricPMPSent.Add(1)
 		uc.WriteToUDPAddrPort(pmpReqExternalAddrPacket, pxpAddr)
 	}
 	if c.sawPCPRecently() {
 		res.PCP = true
-	} else if !DisablePCP {
+	} else if !c.debug.DisablePCP {
 		metricPCPSent.Add(1)
 		uc.WriteToUDPAddrPort(pcpAnnounceRequest(myIP), pxpAddr)
 	}
 	if c.sawUPnPRecently() {
 		res.UPnP = true
-	} else if !DisableUPnP {
+	} else if !c.debug.DisableUPnP {
 		// Strictly speaking, you discover UPnP services by sending an
 		// SSDP query (which uPnPPacket is) to udp/1900 on the SSDP
 		// multicast address, and then get a flood of responses back

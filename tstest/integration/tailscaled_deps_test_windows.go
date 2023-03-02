@@ -33,7 +33,6 @@ import (
 	_ "tailscale.com/net/dnsfallback"
 	_ "tailscale.com/net/interfaces"
 	_ "tailscale.com/net/netns"
-	_ "tailscale.com/net/portmapper"
 	_ "tailscale.com/net/proxymux"
 	_ "tailscale.com/net/socks5"
 	_ "tailscale.com/net/tsdial"

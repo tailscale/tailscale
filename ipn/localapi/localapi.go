@@ -35,6 +35,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
 	"tailscale.com/net/netutil"
+	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
@@ -44,6 +45,7 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/monitor"
 )
 
 type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
@@ -68,6 +70,7 @@ var handler = map[string]localAPIHandler{
 	"debug-derp-region":           (*Handler).serveDebugDERPRegion,
 	"debug-packet-filter-matches": (*Handler).serveDebugPacketFilterMatches,
 	"debug-packet-filter-rules":   (*Handler).serveDebugPacketFilterRules,
+	"debug-portmap":               (*Handler).serveDebugPortmap,
 	"debug-capture":               (*Handler).serveDebugCapture,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
@@ -598,6 +601,135 @@ func (h *Handler) serveDebugPacketFilterMatches(w http.ResponseWriter, r *http.R
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "\t")
 	enc.Encode(nm.PacketFilter)
+}
+
+func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "debug access denied", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+
+	dur, err := time.ParseDuration(r.FormValue("duration"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	gwSelf := r.FormValue("gateway_and_self")
+
+	// Update portmapper debug flags
+	debugKnobs := &portmapper.DebugKnobs{VerboseLogs: true}
+	switch r.FormValue("type") {
+	case "":
+	case "pmp":
+		debugKnobs.DisablePCP = true
+		debugKnobs.DisableUPnP = true
+	case "pcp":
+		debugKnobs.DisablePMP = true
+		debugKnobs.DisableUPnP = true
+	case "upnp":
+		debugKnobs.DisablePCP = true
+		debugKnobs.DisablePMP = true
+	default:
+		http.Error(w, "unknown portmap debug type", http.StatusBadRequest)
+		return
+	}
+
+	var logLock sync.Mutex
+	logf := func(format string, args ...any) {
+		if !strings.HasSuffix(format, "\n") {
+			format = format + "\n"
+		}
+
+		logLock.Lock()
+		defer logLock.Unlock()
+
+		// Write and flush each line to the client so that output is streamed
+		fmt.Fprintf(w, format, args...)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), dur)
+	defer cancel()
+
+	done := make(chan bool, 1)
+
+	var c *portmapper.Client
+	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), debugKnobs, func() {
+		logf("portmapping changed.")
+		logf("have mapping: %v", c.HaveMapping())
+
+		if ext, ok := c.GetCachedMappingOrStartCreatingOne(); ok {
+			logf("cb: mapping: %v", ext)
+			select {
+			case done <- true:
+			default:
+			}
+			return
+		}
+		logf("cb: no mapping")
+	})
+	linkMon, err := monitor.New(logger.WithPrefix(logf, "monitor: "))
+	if err != nil {
+		logf("error creating monitor: %v", err)
+		return
+	}
+
+	gatewayAndSelfIP := func() (gw, self netip.Addr, ok bool) {
+		if a, b, ok := strings.Cut(gwSelf, "/"); ok {
+			gw = netip.MustParseAddr(a)
+			self = netip.MustParseAddr(b)
+			return gw, self, true
+		}
+		return linkMon.GatewayAndSelfIP()
+	}
+
+	c.SetGatewayLookupFunc(gatewayAndSelfIP)
+
+	gw, selfIP, ok := gatewayAndSelfIP()
+	if !ok {
+		logf("no gateway or self IP; %v", linkMon.InterfaceState())
+		return
+	}
+	logf("gw=%v; self=%v", gw, selfIP)
+
+	uc, err := net.ListenPacket("udp", "0.0.0.0:0")
+	if err != nil {
+		return
+	}
+	defer uc.Close()
+	c.SetLocalPort(uint16(uc.LocalAddr().(*net.UDPAddr).Port))
+
+	res, err := c.Probe(ctx)
+	if err != nil {
+		logf("error in Probe: %v", err)
+		return
+	}
+	logf("Probe: %+v", res)
+
+	if !res.PCP && !res.PMP && !res.UPnP {
+		logf("no portmapping services available")
+		return
+	}
+
+	if ext, ok := c.GetCachedMappingOrStartCreatingOne(); ok {
+		logf("mapping: %v", ext)
+	} else {
+		logf("no mapping")
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if r.Context().Err() == nil {
+			logf("serveDebugPortmap: context done: %v", ctx.Err())
+		} else {
+			h.logf("serveDebugPortmap: context done: %v", ctx.Err())
+		}
+	}
 }
 
 func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Request) {

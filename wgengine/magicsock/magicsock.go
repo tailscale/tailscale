@@ -632,7 +632,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), nil, c.onPortMapChanged)
 	if opts.LinkMonitor != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.LinkMonitor.GatewayAndSelfIP)
 	}

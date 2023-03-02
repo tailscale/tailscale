@@ -367,6 +367,34 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// DebugPortmap invokes the debug-portmap endpoint, and returns an
+// io.ReadCloser that can be used to read the logs that are printed during this
+// process.
+func (lc *LocalClient) DebugPortmap(ctx context.Context, duration time.Duration, ty, gwSelf string) (io.ReadCloser, error) {
+	vals := make(url.Values)
+	vals.Set("duration", duration.String())
+	vals.Set("type", ty)
+	if gwSelf != "" {
+		vals.Set("gateway_and_self", gwSelf)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-portmap?"+vals.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, fmt.Errorf("HTTP %s: %s", res.Status, body)
+	}
+
+	return res.Body, nil
+}
+
 // SetDevStoreKeyValue set a statestore key/value. It's only meant for development.
 // The schema (including when keys are re-read) is not a stable interface.
 func (lc *LocalClient) SetDevStoreKeyValue(ctx context.Context, key, value string) error {
