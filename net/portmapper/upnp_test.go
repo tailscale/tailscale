@@ -112,7 +112,7 @@ func TestGetUPnPClient(t *testing.T) {
 			gw, _ := netip.AddrFromSlice(ts.Listener.Addr().(*net.TCPAddr).IP)
 			gw = gw.Unmap()
 			var logBuf tstest.MemLogger
-			c, err := getUPnPClient(context.Background(), logBuf.Logf, gw, uPnPDiscoResponse{
+			c, err := getUPnPClient(context.Background(), logBuf.Logf, DebugKnobs{}, gw, uPnPDiscoResponse{
 				Location: ts.URL + "/rootDesc.xml",
 			})
 			if err != nil {

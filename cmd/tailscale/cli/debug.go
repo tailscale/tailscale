@@ -201,6 +201,18 @@ var debugCmd = &ffcli.Command{
 				return fs
 			})(),
 		},
+		{
+			Name:      "portmap",
+			Exec:      debugPortmap,
+			ShortHelp: "run portmap debugging debugging",
+			FlagSet: (func() *flag.FlagSet {
+				fs := newFlagSet("portmap")
+				fs.DurationVar(&debugPortmapArgs.duration, "duration", 5*time.Second, "timeout for port mapping")
+				fs.StringVar(&debugPortmapArgs.ty, "type", "", `portmap debug type (one of "", "pmp", "pcp", or "upnp")`)
+				fs.StringVar(&debugPortmapArgs.gwSelf, "gw-self", "", `override gateway and self IP (format: "gatewayIP/selfIP")`)
+				return fs
+			})(),
+		},
 	},
 }
 
@@ -787,5 +799,26 @@ func runCapture(ctx context.Context, args []string) error {
 	defer f.Close()
 	fmt.Fprintln(os.Stderr, "Press Ctrl-C to stop the capture.")
 	_, err = io.Copy(f, stream)
+	return err
+}
+
+var debugPortmapArgs struct {
+	duration time.Duration
+	gwSelf   string
+	ty       string
+}
+
+func debugPortmap(ctx context.Context, args []string) error {
+	rc, err := localClient.DebugPortmap(ctx,
+		debugPortmapArgs.duration,
+		debugPortmapArgs.ty,
+		debugPortmapArgs.gwSelf,
+	)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	_, err = io.Copy(os.Stdout, rc)
 	return err
 }
