@@ -86,10 +86,9 @@ func TestQnapAuthnURL(t *testing.T) {
 		},
 		{
 			name: "err != nil",
-                        in:   "http://192.168.0.%31/",
+			in:   "http://192.168.0.%31/",
 			want: "http://localhost/cgi-bin/authLogin.cgi?qtoken=token",
 		},
-
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

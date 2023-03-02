@@ -101,6 +101,7 @@ var handler = map[string]localAPIHandler{
 	"tka/disable":                 (*Handler).serveTKADisable,
 	"tka/force-local-disable":     (*Handler).serveTKALocalDisable,
 	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
+	"tka/wrap-preauth-key":        (*Handler).serveTKAWrapPreauthKey,
 	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
@@ -1568,6 +1569,40 @@ func (h *Handler) serveTKAModify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		http.Error(w, "network-lock modify access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type wrapRequest struct {
+		TSKey  string
+		TKAKey string // key.NLPrivate.MarshalText
+	}
+	var req wrapRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 12*1024)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	var priv key.NLPrivate
+	if err := priv.UnmarshalText([]byte(req.TKAKey)); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	wrappedKey, err := h.b.NetworkLockWrapPreauthKey(req.TSKey, priv)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write([]byte(wrappedKey))
 }
 
 func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
