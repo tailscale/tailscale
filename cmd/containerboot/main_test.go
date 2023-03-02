@@ -607,7 +607,7 @@ func TestContainerBoot(t *testing.T) {
 			}()
 
 			var wantCmds []string
-			for _, p := range test.Phases {
+			for i, p := range test.Phases {
 				lapi.Notify(p.Notify)
 				wantCmds = append(wantCmds, p.WantCmds...)
 				waitArgs(t, 2*time.Second, d, argFile, strings.Join(wantCmds, "\n"))
@@ -626,7 +626,7 @@ func TestContainerBoot(t *testing.T) {
 					return nil
 				})
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("phase %d: %v", i, err)
 				}
 				err = tstest.WaitFor(2*time.Second, func() error {
 					for path, want := range p.WantFiles {
@@ -983,13 +983,13 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 			}
 		case "application/strategic-merge-patch+json":
 			req := struct {
-				Data map[string]string `json:"stringData"`
+				Data map[string][]byte `json:"data"`
 			}{}
 			if err := json.Unmarshal(bs, &req); err != nil {
 				panic(fmt.Sprintf("json decode failed: %v. Body:\n\n%s", err, string(bs)))
 			}
 			for key, val := range req.Data {
-				k.secret[key] = val
+				k.secret[key] = string(val)
 			}
 		default:
 			panic(fmt.Sprintf("unknown content type %q", r.Header.Get("Content-Type")))
