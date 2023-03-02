@@ -32,10 +32,14 @@ type Target interface {
 type Build struct {
 	// Repo is a path to the root Go module for the build.
 	Repo string
-	// Tmp is a temporary directory that gets deleted when the Builder is closed.
-	Tmp string
 	// Out is where build artifacts are written.
 	Out string
+	// Verbose is whether to print all command output, rather than just failed
+	// commands.
+	Verbose bool
+
+	// Tmp is a temporary directory that gets deleted when the Builder is closed.
+	Tmp string
 	// Go is the path to the Go binary to use for building.
 	Go string
 	// Version is the version info of the build.
@@ -198,7 +202,7 @@ func (b *Build) BuildGoBinary(path string, env map[string]string) (string, error
 		sort.Strings(envStrs)
 		log.Printf("Building %s (with env %s)", path, strings.Join(envStrs, " "))
 		buildDir := b.TmpDir()
-		cmd := b.Command(b.Repo, b.Go, "build", "-o", buildDir, path)
+		cmd := b.Command(b.Repo, b.Go, "build", "-v", "-o", buildDir, path)
 		for k, v := range env {
 			cmd.Cmd.Env = append(cmd.Cmd.Env, k+"="+v)
 		}
@@ -218,8 +222,13 @@ func (b *Build) Command(dir, cmd string, args ...string) *Command {
 	ret := &Command{
 		Cmd: exec.Command(cmd, args...),
 	}
-	ret.Cmd.Stdout = &ret.Output
-	ret.Cmd.Stderr = &ret.Output
+	if b.Verbose {
+		ret.Cmd.Stdout = os.Stdout
+		ret.Cmd.Stderr = os.Stderr
+	} else {
+		ret.Cmd.Stdout = &ret.Output
+		ret.Cmd.Stderr = &ret.Output
+	}
 	// dist always wants to use gocross if any Go is involved.
 	ret.Cmd.Env = append(os.Environ(), "TS_USE_GOCROSS=1")
 	ret.Cmd.Dir = dir
