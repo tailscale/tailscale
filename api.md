@@ -12,44 +12,26 @@ Examples in this document begin with `api/v2/...`.
 
 ## Authentication
 
-Tailscale uses several types of keys.
-The type of key is identified in the key prefix.
-All keys are structured as follows: `tskey-{key type}-{unique key value}`.
-The `key type` indicates the type of Tailscale key.
+Requests to the Tailscale API are authenticated with an API access token (sometimes called an API key).
+Access tokens can be supplied as the username portion of HTTP Basic authentication (leave the password blank) or as an OAuth Bearer token.
 
-Only two types of keys are relevant for authenticating to the API;
-these are the **API access token**, which functions as an access token when authenticating to the Tailscale API,
-and the **auth key**, which is used to register devices to a tailnet and discussed later in this document.
+Access tokens for individual users can be created and managed at the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
+These tokens will have the same permissions as the owning user, and can be set to expire in 1 to 90 days.
 
-### API access token
+Alternatively, an OAuth client can be used to create short-lived access tokens with scoped permission.
+Unlike access tokens, OAuth clients don't expire, and so can be used to provide ongoing access to the API by creating access tokens as needed.
+OAuth clients and access tokens they create are not tied to any individual Tailscale user.
+Learn more about [OAuth clients](https://tailscale.com/kb/1215/).
 
-Supply the API access token as the **Username** in **Basic** authentication when making calls to Tailscale API endpoints (leave the password blank).
+### Key format
 
-- **Prefix:** `tskey-api...`
+In addition to access tokens and OAuth client credentials, Tailscale uses several other types of keys, which all share a similar format.
+All keys are structred as `tskey-{key type}-{key data}`, with `{key type}` identifying the type of key.
+Relevant to the Tailscale API are:
 
-- **Obtain or revoke an API access token:**
-Generate an access token in the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
-You can also revoke an API key before its expiry. Recently expired and revoked keys are shown on the **Keys** page.
-
-- **Key expiry:**
-When generating the access token, you can choose the number of days (1 - 90 inclusive) for its automatic expiry.
-To continue using an access token after it expires, you must generate a new token.
-
-- **Supply the API access token:**
-Authenticate to the Tailscale API by passing the access token in the HTTP header of your request.
-
-Access tokens have a similar structure to [auth keys](#tailnet-key-object), but the two are used for different purposes.
-Auth (or pre-authentication) keys are used for _initial registration_ of new nodes to your tailnet.
-
-### **OAuth client**
-
-Use the OAuth client to provide ongoing access to the API with tokens defining scope of permissions.
-Unlike [API access tokens](#api-access-token), which expire and must be regenerated, OAuth clients have no expiry.
-And unlike API access tokens, OAuth clients specify permissions. Learn more about [OAuth clients](https://tailscale.com/kb/1215/).
-
-- **Prefix:** `tskey-client-...`
-
-- **Obtain or revoke an OAuth client:** Generate or revoke an OAuth client in the [**OAuth clients**](https://login.tailscale.com/admin/settings/oauth) page of the admin console.
+- API access token: `tskey-api-{key data}`
+- OAuth client secret: `tskey-client-{key data}`
+- Auth key: `tskey-auth-{key data}` (used in some [Key API methods](#tailnet-key-object))
 
 ## Terminology
 
