@@ -123,7 +123,7 @@ func main() {
 	defer cancel()
 
 	if cfg.InKubernetes && cfg.KubeSecret != "" {
-		canPatch, err := checkSecretPermissions(ctx, cfg.KubeSecret)
+		canPatch, err := kc.CheckSecretPermissions(ctx, cfg.KubeSecret)
 		if err != nil {
 			log.Fatalf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 		}
