@@ -126,6 +126,7 @@ github.com/aokoli/goutils v1.0.1/go.mod h1:SijmP0QR8LtwsmDs8Yii5Z/S4trXFGFC2oO5g
 github.com/armon/circbuf v0.0.0-20150827004946-bbbad097214e/go.mod h1:3U/XgcO3hCbHZ8TKRvWD2dDTCfh9M9ya+I9JpbB7O8o=
 github.com/armon/consul-api v0.0.0-20180202201655-eb2c6b5be1b6/go.mod h1:grANhF5doyWs3UAsr3K4I6qtAmlQcZDesFNEHPZAzj8=
 github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da/go.mod h1:Q73ZrmVTwzkszR9V5SSuryQ31EELlFMUz1kKyl939pY=
+github.com/armon/go-proxyproto v0.0.0-20210323213023-7e956b284f0a/go.mod h1:QmP9hvJ91BbJmGVGSbutW19IC0Q9phDCLGaomwTJbgU=
 github.com/armon/go-radix v0.0.0-20180808171621-7fddfc383310/go.mod h1:ufUuZ+zHj4x4TnLV4JWEpy2hxWSpsRywHrMgIH9cCH8=
 github.com/armon/go-radix v1.0.0/go.mod h1:ufUuZ+zHj4x4TnLV4JWEpy2hxWSpsRywHrMgIH9cCH8=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
@@ -1947,6 +1948,8 @@ howett.net/plist v1.0.0 h1:7CrbWYbPPO/PyNy38b2EB/+gYbjCe2DXBxgtOOZbSQM=
 howett.net/plist v1.0.0/go.mod h1:lqaXoTrLY4hg8tnEzNru53gicrbv7rrk+2xJA/7hw9g=
 inet.af/peercred v0.0.0-20210906144145-0893ea02156a h1:qdkS8Q5/i10xU2ArJMKYhVa1DORzBfYS/qA2UK2jheg=
 inet.af/peercred v0.0.0-20210906144145-0893ea02156a/go.mod h1:FjawnflS/udxX+SvpsMgZfdqx2aykOlkISeAsADi5IU=
+inet.af/tcpproxy v0.0.0-20221017015627-91f861402626 h1:2dMP3Ox/Wh5BiItwOt4jxRsfzkgyBrHzx2nW28Yg6nc=
+inet.af/tcpproxy v0.0.0-20221017015627-91f861402626/go.mod h1:Tojt5kmHpDIR2jMojxzZK2w2ZR7OILODmUo2gaSwjrk=
 inet.af/wf v0.0.0-20220728202103-50d96caab2f6 h1:BfgDtKnWJTeu+xI1aOEweXdPwqOhB3IbQUDj1XuftcY=
 inet.af/wf v0.0.0-20220728202103-50d96caab2f6/go.mod h1:bSAQ38BYbY68uwpasXOTZo22dKGy9SNvI6PZFeKomZE=
 k8s.io/api v0.25.0 h1:H+Q4ma2U/ww0iGB78ijZx6DRByPz6/733jIuFpX70e0=
