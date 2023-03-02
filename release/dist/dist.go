@@ -5,6 +5,7 @@
 package dist
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -146,11 +147,11 @@ func (b *Build) Extra(key any, constructor func() any) any {
 // GoPkg returns the path on disk of pkg.
 // The module of pkg must be imported in b.Repo's go.mod.
 func (b *Build) GoPkg(pkg string) (string, error) {
-	bs, err := exec.Command(b.Go, "list", "-f", "{{.Dir}}", pkg).Output()
+	out, err := b.Command(b.Repo, b.Go, "list", "-f", "{{.Dir}}", pkg).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("finding package %q: %w", pkg, err)
 	}
-	return strings.TrimSpace(string(bs)), nil
+	return strings.TrimSpace(out), nil
 }
 
 // TmpDir creates and returns a new empty temporary directory.
@@ -178,7 +179,7 @@ func (b *Build) BuildGoBinary(path string, env map[string]string) (string, error
 		// and do other initialization. Running `go version` once takes care of
 		// all of that and avoids that initialization happening concurrently
 		// later on in builds.
-		_, err := exec.Command(b.Go, "version").Output()
+		_, err := b.Command(b.Repo, b.Go, "version").CombinedOutput()
 		return err
 	})
 	if err != nil {
@@ -197,15 +198,10 @@ func (b *Build) BuildGoBinary(path string, env map[string]string) (string, error
 		sort.Strings(envStrs)
 		log.Printf("Building %s (with env %s)", path, strings.Join(envStrs, " "))
 		buildDir := b.TmpDir()
-		cmd := exec.Command(b.Go, "build", "-o", buildDir, path)
-		cmd.Dir = b.Repo
-		cmd.Env = os.Environ()
+		cmd := b.Command(b.Repo, b.Go, "build", "-o", buildDir, path)
 		for k, v := range env {
-			cmd.Env = append(cmd.Env, k+"="+v)
+			cmd.Cmd.Env = append(cmd.Cmd.Env, k+"="+v)
 		}
-		cmd.Env = append(cmd.Env, "TS_USE_GOCROSS=1")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return "", err
 		}
@@ -215,6 +211,46 @@ func (b *Build) BuildGoBinary(path string, env map[string]string) (string, error
 		}
 		return out, nil
 	})
+}
+
+// Command prepares an exec.Cmd to run [cmd, args...] in dir.
+func (b *Build) Command(dir, cmd string, args ...string) *Command {
+	ret := &Command{
+		Cmd: exec.Command(cmd, args...),
+	}
+	ret.Cmd.Stdout = &ret.Output
+	ret.Cmd.Stderr = &ret.Output
+	// dist always wants to use gocross if any Go is involved.
+	ret.Cmd.Env = append(os.Environ(), "TS_USE_GOCROSS=1")
+	ret.Cmd.Dir = dir
+	return ret
+}
+
+// Command runs an exec.Cmd and returns its exit status. If the command fails,
+// its output is printed to os.Stdout, otherwise it's suppressed.
+type Command struct {
+	Cmd    *exec.Cmd
+	Output bytes.Buffer
+}
+
+// Run is like c.Cmd.Run, but if the command fails, its output is printed to
+// os.Stdout before returning the error.
+func (c *Command) Run() error {
+	err := c.Cmd.Run()
+	if err != nil {
+		// Command failed, dump its output.
+		os.Stdout.Write(c.Output.Bytes())
+	}
+	return err
+}
+
+// CombinedOutput is like c.Cmd.CombinedOutput, but returns the output as a
+// string instead of a byte slice.
+func (c *Command) CombinedOutput() (string, error) {
+	c.Cmd.Stdout = nil
+	c.Cmd.Stderr = nil
+	bs, err := c.Cmd.CombinedOutput()
+	return string(bs), err
 }
 
 func findModRoot(path string) (string, error) {
