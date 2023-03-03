@@ -277,13 +277,11 @@ TS_LINK_FAIL_REFLECT=1 (was <nil>)`,
 		{
 			name: "darwin_arm64_to_darwin_amd64_xcode",
 			env: map[string]string{
-				"GOOS":                              "darwin",
-				"GOARCH":                            "amd64",
-				"XCODE_VERSION_ACTUAL":              "1300",
-				"DEPLOYMENT_TARGET_CLANG_FLAG_NAME": "mmacosx-version-min",
-				"MACOSX_DEPLOYMENT_TARGET":          "11.3",
-				"DEPLOYMENT_TARGET_CLANG_ENV_NAME":  "MACOSX_DEPLOYMENT_TARGET",
-				"SDKROOT":                           "/my/sdk/root",
+				"GOOS":                     "darwin",
+				"GOARCH":                   "amd64",
+				"XCODE_VERSION_ACTUAL":     "1300",
+				"MACOSX_DEPLOYMENT_TARGET": "11.3",
+				"SDKROOT":                  "/my/sdk/root",
 			},
 			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
 			goroot:       "/goroot",
@@ -300,6 +298,38 @@ GOMIPS=softfloat (was <nil>)
 GOOS=darwin (was darwin)
 GOROOT=/goroot (was <nil>)
 TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
+			wantArgv: []string{
+				"gocross", "build",
+				"-trimpath",
+				"-tags=tailscale_go,omitidna,omitpemdecrypt",
+				"-ldflags", "-X tailscale.com/version.longStamp=1.2.3-long -X tailscale.com/version.shortStamp=1.2.3 -X tailscale.com/version.gitCommitStamp=abcd -X tailscale.com/version.extraGitCommitStamp=defg -w",
+				"./cmd/tailcontrol",
+			},
+		},
+		{
+			name: "darwin_amd64_to_ios_arm64_xcode",
+			env: map[string]string{
+				"GOOS":                       "ios",
+				"GOARCH":                     "arm64",
+				"XCODE_VERSION_ACTUAL":       "1300",
+				"IPHONEOS_DEPLOYMENT_TARGET": "15.0",
+				"SDKROOT":                    "/my/sdk/root",
+			},
+			argv:         []string{"gocross", "build", "./cmd/tailcontrol"},
+			goroot:       "/goroot",
+			nativeGOOS:   "darwin",
+			nativeGOARCH: "amd64",
+
+			envDiff: `CC=cc (was <nil>)
+CGO_CFLAGS=-O3 -std=gnu11 -miphoneos-version-min=15.0 -isysroot /my/sdk/root -arch arm64 (was <nil>)
+CGO_ENABLED=1 (was <nil>)
+CGO_LDFLAGS=-miphoneos-version-min=15.0 -isysroot /my/sdk/root -arch arm64 (was <nil>)
+GOARCH=arm64 (was arm64)
+GOARM=5 (was <nil>)
+GOMIPS=softfloat (was <nil>)
+GOOS=ios (was ios)
+GOROOT=/goroot (was <nil>)
+TS_LINK_FAIL_REFLECT=1 (was <nil>)`,
 			wantArgv: []string{
 				"gocross", "build",
 				"-trimpath",
