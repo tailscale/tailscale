@@ -1,144 +1,100 @@
 # Tailscale API
 
-# Introduction
-
 The Tailscale API is a (mostly) RESTful API. Typically, both `POST` bodies and responses are JSON-encoded.
 
-## Endpoint URL
+## Base URL
 
-The Tailscale API URL path begins with `https://api.tailscale.com/api/v2/`.
+The base URL for the Tailscale API is `https://api.tailscale.com/api/v2/`.
 
-Examples in this document begin with `api/v2/...`.
+Examples in this document may abbreviate this to `/api/v2/`.
 
 ## Authentication
 
 Requests to the Tailscale API are authenticated with an API access token (sometimes called an API key).
-Access tokens can be supplied as the username portion of HTTP Basic authentication (leave the password blank) or as an OAuth Bearer token.
+Access tokens can be supplied as the username portion of HTTP Basic authentication (leave the password blank) or as an OAuth Bearer token:
 
-Access tokens for individual users can be created and managed at the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
+``` sh
+# passing token with basic auth
+curl -u "tskey-api-xxxxx:" https://api.tailscale.com/api/v2/...
+
+# passing token as bearer token
+curl -H "Authorization: Bearer tskey-api-xxxxx" https://api.tailscale.com/api/v2/...
+```
+
+Access tokens for individual users can be created and managed from the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
 These tokens will have the same permissions as the owning user, and can be set to expire in 1 to 90 days.
+Access tokens are identifiable by the prefix `tskey-api-`.
 
 Alternatively, an OAuth client can be used to create short-lived access tokens with scoped permission.
-Unlike access tokens, OAuth clients don't expire, and so can be used to provide ongoing access to the API by creating access tokens as needed.
-OAuth clients and access tokens they create are not tied to any individual Tailscale user.
+OAuth clients don't expire, and can therefore be used to provide ongoing access to the API, creating access tokens as needed.
+OAuth clients and the access tokens they create are not tied to an individual Tailscale user.
+OAuth client secrets are identifiable by the prefix `tskey-client-`.
 Learn more about [OAuth clients](https://tailscale.com/kb/1215/).
-
-### Key format
-
-In addition to access tokens and OAuth client credentials, Tailscale uses several other types of keys, which all share a similar format.
-All keys are structred as `tskey-{key type}-{key data}`, with `{key type}` identifying the type of key.
-Relevant to the Tailscale API are:
-
-- API access token: `tskey-api-{key data}`
-- OAuth client secret: `tskey-client-{key data}`
-- Auth key: `tskey-auth-{key data}` (used in some [Key API methods](#tailnet-key-object))
-
-## Terminology
-
-In the context of Tailscale, the terms _device_, _machine_, and _node_ are effectively synonymous.
-They all refer to a specific physical device (computer, mobile phone, virtual machine in the cloud, etc.) in a tailnet.
-To specify operations on an individual device, the `nodeId` is preferred wherever `deviceId` appears in an endpoint
-(a `nodeId` can be retrieved by [fetching a list of tailnet devices](#fetch-a-list-of-tailnet-devices).
-
-## Supplying input parameters
-
-Required input parameters can be passed in one of four places within the request:
-- URL path (e.g., `{deviceId}` in `/api/v2/device/{deviceId}`)
-- query string (e.g., `?fields=all` in `https://api.tailscale.com/api/v2/device/12345?fields=all`)
-- HTTP headers (e.g., `Accept`)
-- request body (e.g., a JSON object in the body of a `POST` request)
-
-## Control the fields in a response
-
-For some methods, Tailscale provides the `fields` query parameter to explicitly indicate whether **all** object fields are returned, or only a predefined subset of fields.
-Details are provided in the description of each method that accepts `fields` parameter.
-
-## Select JSON format for response
-
-Some API calls let you select the format of the JSON returned in the response.
-Supply your preference as a parameter in the **Accept** header of the request.
-Two options are supported in these scenarios:
-
-- **JSON:** Standard parsed JSON format.
-- **HuJSON:** Human-readable JSON (this is the default if no format is specified).
-  Learn more about [HuJSON](https://github.com/tailscale/hujson#readme).
 
 ## Errors
 
-The Tailscale API sends status codes consistent with [standard HTTP conventions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status).
-In addition to the status code, client error messages may include additional information in the response body.
+The Tailscale API returns status codes consistent with [standard HTTP conventions](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status).
+In addition to the status code, errors may include additional information in the response body:
+
+``` jsonc
+{
+  "message": "additional error information"
+}
+```
 
 ## Pagination
 
-The Tailscale API v2 does not currently support pagination.
-All results are returned at once.
+The Tailscale API does not currently support pagination. All results are returned at once.
 
 # APIs
 
 **[Device](#device)**
-- Get a device: [`GET /api/v2/device/{deviceid}`](#fetch-the-details-for-a-device)
-- Delete a device: [`DELETE /api/v2/device/{deviceID`}](#delete-a-device)
+- Get a device: [`GET /api/v2/device/{deviceid}`](#get-device)
+- Delete a device: [`DELETE /api/v2/device/{deviceID}`](#delete-device)
 - **Routes**
-  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes)
-  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device)
-- **Authorized**
-  - Authorize a device: [`POST /api/v2/device/{deviceID}/authorized`](#authorize-a-device)
+  - Get device routes: [`GET /api/v2/device/{deviceID}/routes`](#get-device-routes)
+  - Set device routes: [`POST /api/v2/device/{deviceID}/routes`](#set-device-routes)
+- **Authorize**
+  - Authorize a device: [`POST /api/v2/device/{deviceID}/authorized`](#authorize-device)
 - **Tags**
   - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
 - **Key**
-  - Set key expiry: [`POST /api/v2/device/{deviceID}/key`](#update-device-node-key-expiry)
+  - Update device key: [`POST /api/v2/device/{deviceID}/key`](#update-device-key)
 
 **[Tailnet](#tailnet)**
-- [**ACL**](#acl-in-the-tailnet-policy-file)
-  - Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
-  - Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
-  - Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
-  - Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
-- [**Devices**](#tailnet-devices)
-  - List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
-- [**Keys**](#tailnet-key-object)
-  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
-  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
-  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
-  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
+- [**Policy File**](#policy-file)
+  - Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#get-policy-file)
+  - Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-policy-file)
+  - Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches)
+  - Validate and test policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-policy-file)
+- Devices
+  - List tailnet devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#list-tailnet-devices)
+- [**Keys**](#tailnet-keys)
+  - List tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#list-tailnet-keys)
+  - Create an auth key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-auth-key)
+  - Get a key: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#get-key)
+  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-key)
 - [**DNS**](#dns)
   - **Nameservers**
-    - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
-    - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
+    - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#get-nameservers)
+    - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#set-nameservers)
   - **Preferences**
-    - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
-    - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
+    - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#get-dns-preferences)
+    - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#set-dns-preferences)
   - **Search paths**
-    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
-    - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
+    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#get-search-paths)
+    - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#set-search-paths)
 
 # Device
 
 A Tailscale device (sometimes referred to as _node_ or _machine_), is any computer or mobile device that joins a tailnet.
 
-Endpoints:
-- Get a device: [`GET /api/v2/device/{deviceid}`](#fetch-the-details-for-a-device)
-- Delete a device: [`DELETE /api/v2/device/{deviceID`}](#delete-a-device)
-- **Routes**
-  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes)
-  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device)
-- **Authorized**
-  - Authorize a device: [`POST /api/v2/device/{deviceID}/authorized`](#authorize-a-device)
-- **Tags**
-  - Update tags: [`POST /api/v2/device/{deviceID}/tags`](#update-device-tags)
-- **Key**
-  - Set key expiry: [`POST /api/v2/device/{deviceID}/key`](#update-device-node-key-expiry)
+Each device has a unique ID (`nodeId` in the JSON below) that is used to identify the device in API calls.
+This ID can be found by going to the [**Machines**](https://login.tailscale.com/admin/machines) page in the admin console,
+selecting the relevant device, then finding the ID in the Machine Details section.
+You can also [list all devices in the tailnet](#list-tailnet-devices) to get their `nodeId` values.
 
-## Device object
-
-Each Tailscale-connected device has a globally-unique identifier number to which we refer as the `nodeId`.
-Use the `nodeId` to specify operations on a specific device, such as retrieving its subnet routes.
-
-To find the `nodeId` for a particular device in the admin console, navigate to [**Settings** → **General**](https://login.tailscale.com/admin/settings/general) and copy the **organization** name.
-To retrieve a `nodeId` using the API, make a [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices) call to generate a list of devices on your network, then find the device you're looking for and get its `"nodeId"` value.
-
-(While `nodeId` is the preferred way to identify a unique device, `id` is also still accepted when specifying operations on a particular device.
-Find the `id` of a particular device by [fetching device details](#fetch-the-details-for-a-device).)
+(A device's numeric `id` value can also be used in API calls, but `nodeId` is preferred.)
 
 ### Attributes
 
@@ -148,34 +104,31 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
   // addresses for the device, including both ipv4 (formatted as 100.x.y.z)
   // and ipv6 (formatted as fd7a:115c:a1e0:a:b:c:d:e) addresses.
   "addresses": [
-    "100.96.XXX.XXX",
-    "a1b2:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:e5f6"
+    "100.87.74.78",
+    "fd7a:115c:a1e0:ac82:4843:ca90:697d:c36e"
   ],
 
-  // id (string) is the legacy identifier for a node (AKA device); you
+  // id (string) is the legacy identifier for a device; you
   // can supply this value wherever {deviceId} is indicated in the
-  // endpoint. Note that although "id" is still accpeted, "nodeId" is
+  // endpoint. Note that although "id" is still accepted, "nodeId" is
   // preferred.
-  "id": "393XXXXX735751060",
+  "id": "393735751060",
 
-  // nodeID (string) is the preferred identifier for a node (AKA device);
+  // nodeID (string) is the preferred identifier for a device;
   // supply this value wherever {deviceId} is indicated in the endpoint.
-  // Find the node ID value as "ID" in the Tailscale admin console's
-  // Machines tab, in the Machine Details section.
-  "nodeId": "abcdZf5XXXX",
+  "nodeId": "n5SUKe8CNTRL",
 
-  // user (string) For nodes that are not tagged, this is the user who
-  // originally created the node, or whose auth key was used to create the
-  // node (tag would override the user).
-  "user": "username@github",
+  // user (string) is the user who registered the node. For untagged nodes,
+  // this user is the device owner.
+  "user": "amelie@example.com",
 
-  // name (string) is THE MagicDNS name of the device.
-  // Learn more about MagicDNS at https://tailscale.com/kb/1081.
-  "name": "go-test.namename.ts.net",
+  // name (string) is the MagicDNS name of the device.
+  // Learn more about MagicDNS at https://tailscale.com/kb/1081/.
+  "name": "pangolin.tailfe8c.ts.net",
 
   // hostname (string) is the machine name in the admin console
-  // Learn more about machine names at https://tailscale.com/kb/1098.
-  "hostname": "go",
+  // Learn more about machine names at https://tailscale.com/kb/1098/.
+  "hostname": "pangolin",
 
   // clientVersion (string) is the version of the Tailscale client
   // software; this is empty for external devices.
@@ -190,17 +143,17 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
 
   // created (string) is the date on which the device was added
   // to the tailnet; this is empty for external devices.
-  "created": "",
+  "created": "2022-12-01T05:23:30Z",
 
   // lastSeen (string) is when device was last active on the tailnet.
   "lastSeen": "2022-12-01T05:23:30Z",
 
   // keyExpiryDisabled (boolean) is 'true' if the keys for the device
-  // will not expire. Learn more at https://tailscale.com/kb/1028.
+  // will not expire. Learn more at https://tailscale.com/kb/1028/.
   "keyExpiryDisabled": true,
 
   // expires (string) is the expiration date of the device's auth key.
-  // Learn more about key expiry at https://tailscale.com/kb/1028.
+  // Learn more about key expiry at https://tailscale.com/kb/1028/.
   "expires": "2023-05-30T04:44:05Z",
 
   // authorized (boolean) is 'true' if the device has been
@@ -211,7 +164,7 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
   // isExternal (boolean) if 'true', indicates that a device is not
   // a member of the tailnet, but is shared in to the tailnet;
   // if 'false', the device is a member of the tailnet.
-  // Learn more about node sharing at https://tailscale.com/kb/1084.
+  // Learn more about node sharing at https://tailscale.com/kb/1084/.
   "isExternal": true,
 
   // machineKey (string) is for internal use and is not required for
@@ -220,61 +173,53 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
 
   // nodeKey (string) is mostly for internal use, required for select
   // operations, such as adding a node to a locked tailnet.
-  // Most operations require "nodeId" or "id" rather than "nodeKey".
-  // Learn about tailnet locks at https://tailscale.com/kb/1226.
-  "nodeKey": "nodekey:a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9",
+  // Learn about tailnet locks at https://tailscale.com/kb/1226/.
+  "nodeKey": "nodekey:01234567890abcdef",
 
   // blocksIncomingConnections (boolean) is 'true' if the device is not
   // allowed to accept any connections over Tailscale, including pings.
-  // Reported starting with Tailscale v1.3.x. This setting is
-  // configured via the device's Tailscale client preferences.
   // Learn more in the "Allow incoming connections"
-  // section of https://tailscale.com/kb/1072.
+  // section of https://tailscale.com/kb/1072/.
   "blocksIncomingConnections": false,
 
   // enabledRoutes (array of strings) are the subnet routes for this
   // device that have been approved by the tailnet admin.
   // Learn more about subnet routes at https://tailscale.com/kb/1019/.
   "enabledRoutes" : [
-    "10.0.1.0/24",
-    "1.2.0.0/16",
-    "2.0.0.0/24"
+    "10.0.0.0/16",
+    "192.168.1.0/24",
   ],
 
   // advertisedRoutes (array of strings) are the subnets this device
   // intends to expose.
   // Learn more about subnet routes at https://tailscale.com/kb/1019/.
   "advertisedRoutes" : [
-    "10.0.1.0/24",
-    "1.2.0.0/16",
-    "2.0.0.0/24"
+    "10.0.0.0/16",
+    "192.168.1.0/24",
   ],
 
-  // clientConnectivity provides a report on your current physical
-  // network conditions
+  // clientConnectivity provides a report on the device's current physical
+  // network conditions.
   "clientConnectivity": {
 
     // endpoints (array of strings) Client's magicsock UDP IP:port
     // endpoints (IPv4 or IPv6)
     "endpoints":[
-      "209.XXX.87.XXX:59128",
-      "192.XXX.0.XXX:59128"
+      "199.9.14.201:59128",
+      "192.68.0.21:59128"
     ],
 
-    // derp (string) is the IP:port of the designated encrypted relay
-    // for packets (DERP) server currently being used; learn about DERP
-    // servers here: https://tailscale.com/kb/1232
+    // derp (string) is the IP:port of the DERP server currently being used.
+    // Learn about DERP servers at https://tailscale.com/kb/1232/.
     "derp":"",
 
-    // mappingVariesByDestIP (boolean) is 'true' if the host's network
-    // address translation (NAT-enables multiple machines behind a router
-    // to share the same public IP address) mappings vary based on the
-    // destination IP
+    // mappingVariesByDestIP (boolean) is 'true' if the host's NAT mappings
+    // vary based on the destination IP.
     "mappingVariesByDestIP":false,
 
-    // latency (map) lists DERP server locations and their current
+    // latency (JSON object) lists DERP server locations and their current
     // latency; "preferred" is 'true' for the node's preferred DERP
-    // server for incoming traffic
+    // server for incoming traffic.
     "latency":{
       "Dallas":{
         "latencyMs":60.463043
@@ -285,7 +230,7 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
       },
     },
 
-    // clientSupports (JSON object) features supported by the client's networking environment
+    // clientSupports (JSON object) identifies features supported by the client.
     "clientSupports":{
 
       // hairpinning (boolean) is 'true' if your router can route connections
@@ -298,20 +243,20 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
       "ipv6":false,
 
       // pcp (boolean) is 'true' if PCP port-mapping service exists on
-      // your router
+      // your router.
       "pcp":false,
 
       // pmp (boolean) is 'true' if NAT-PMP port-mapping service exists
-      // on your router
+      // on your router.
       "pmp":false,
 
       // udp (boolean) is 'true' if UDP traffic is enabled on the
       // current network; if 'false', Tailscale may be unable to make
-      // direct connections, and will rely on our DERP servers
+      // direct connections, and will rely on our DERP servers.
       "udp":true,
 
       // upnp (boolean) is 'true' if UPnP port-mapping service exists
-      // on your router
+      // on your router.
       "upnp":false
     },
   },
@@ -319,9 +264,9 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
   // tags (array of strings) let you assign an identity to a device that
   // is separate from human users, and use it as part of an ACL to restrict
   // access. Once a device is tagged, the tag is the owner of that device.
-  // A single node can have multiple tags assigned.
-  // Learn more about tags at https://tailscale.com/kb/1068/acl-tags/.
-  // This value is empty for external devices.
+  // A single node can have multiple tags assigned. This value is empty for
+  // external devices.
+  // Learn more about tags at https://tailscale.com/kb/1068/.
   "tags": [
     "tag:golink"
   ],
@@ -334,16 +279,16 @@ Find the `id` of a particular device by [fetching device details](#fetch-the-det
   // tailnetLockKey (string) is the node's tailnet lock key. Every node
   // generates a tailnet lock key (so the value will be present) even if
   // tailnet lock is not enabled.
-  // Learn more about tailnet lock at: https://tailscale.com/kb/1226/.
+  // Learn more about tailnet lock at https://tailscale.com/kb/1226/.
   "tailnetLockKey": "",
-},
+}
 ```
 
-### Subnet Routes
+### Subnet routes
 
-Nodes (or devices) within a tailnet can be set up as subnet routers.
+Devices within a tailnet can be set up as subnet routers.
 A subnet router acts as a gateway, relaying traffic from your Tailscale network onto your physical subnet.
-Setting up subnet routers exposes routes to other nodes in the tailnet.
+Setting up subnet routers exposes routes to other devices in the tailnet.
 Learn more about [subnet routers](https://tailscale.com/kb/1019).
 
 A device can act as a subnet router if its subnet routes are both advertised and enabled.
@@ -351,29 +296,32 @@ This is a two-step process, but the steps can occur in any order:
 - The device that intends to act as a subnet router exposes its routes by **advertising** them.
   This is done in the Tailscale command-line interface.
 - The tailnet admin must approve the routes by **enabling** them.
-  This is done in the [**Machines**](https://login.tailscale.com/admin/machines) page of the Tailscale admin console or in this API via the [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device) endpoint.
+  This is done in the [**Machines**](https://login.tailscale.com/admin/machines) page of the Tailscale admin console
+  or [via the API](#set-device-routes).
 
 If a device has advertised routes, they are not exposed to traffic until they are enabled by the tailnet admin.
 Conversely, if a tailnet admin pre-approves certain routes by enabling them, they are not available for routing until the device in question has advertised them.
 
-The Devices endpoint exposes two methods for dealing with subnet routes:
-  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#fetch-device-routes) to fetch lists of advertised and enabled routes for a device
-  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-enabled-subnet-routes-for-a-device) to set enabled routes for a device
+The API exposes two methods for dealing with subnet routes:
+  - Get routes: [`GET /api/v2/device/{deviceID}/routes`](#get-device-routes) to fetch lists of advertised and enabled routes for a device
+  - Set routes: [`POST /api/v2/device/{deviceID}/routes`](#set-device-routes) to set enabled routes for a device
 
-## Fetch the details for a device
+<a name="device-get"></a>
+
+## Get device
 
 ``` http
 GET /api/v2/device/{deviceid}
 ```
 
 Retrieve the details for the specified device.
-Returns a JSON `device` object listing either all device attributes, or a predefined subset of the attributes.
+This returns a JSON `device` object listing device attributes.
 
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
 
-Supply the device of interest in the path using its ID.
+The ID of the device.
 
 #### `fields` (optional in query string)
 
@@ -385,26 +333,20 @@ Currently, there are two supported options:
   - `advertisedRoutes`
   - `clientConnectivity` (which contains the following fields: `mappingVariesByDestIP`, `derp`, `endpoints`, `latency`, and `clientSupports`)
 
-Use commas to separate multiple options.
-If more than one option is indicated, then `all` is used.
-For example, for `fields=default,all`, all fields are returned.
-If the `fields` parameter is not supplied, then the default (limited fields) option is used.
-
-In the future, we plan to support querying specific fields by name.
-
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/device/12345?fields=all" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
+
 ``` jsonc
 {
   "addresses":[
-    "100.XXX.58.XXX"
-    "a1b2:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:e5f6"
+    "100.71.74.78",
+    "fd7a:115c:a1e0:ac82:4843:ca90:697d:c36e"
   ],
   "id":"12345",
 
@@ -412,16 +354,18 @@ curl 'https://api.tailscale.com/api/v2/device/12345?fields=all' \
 }
 {
   "addresses":[
-    "100.XXX.85.XXX"
-    "a1b2:c3d4:f6g6:h7i8:j9e5:a1b2:c3d4:m4xY"
+    "100.74.66.78",
+    "fd7a:115c:a1e0:ac82:4843:ca90:697d:c36f"
   ],
-  "id":"67891",
+  "id":"67890",
 
   // Additional fields as documented in device "Attributes" section above
 }
 ```
 
-## Delete a device
+<a href="device-delete"></a>
+
+## Delete device
 
 ``` http
 DELETE /api/v2/device/{deviceID}
@@ -430,19 +374,18 @@ DELETE /api/v2/device/{deviceID}
 Deletes the supplied device from its tailnet.
 The device must belong to the user's tailnet.
 Deleting shared/external devices is not supported.
-Supply the device to delete in the URL path using its ID.
 
-Returns an empty response if successful; otherwise, a '501' response if the device is not owned by the tailnet.
-
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
+
+The ID of the device.
 
 ### Request example
+
 ``` sh
 curl -X DELETE 'https://api.tailscale.com/api/v2/device/12345' \
-  -u "tskey-yourapikey123:" -v
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
@@ -450,124 +393,129 @@ curl -X DELETE 'https://api.tailscale.com/api/v2/device/12345' \
 If successful, the response should be empty:
 
 ``` http
-< HTTP/1.1 200 OK
-...
-* Connection #0 to host left intact
-* Closing connection 0
+HTTP/1.1 200 OK
 ```
 
 If the device is not owned by your tailnet:
 
 ``` http
-< HTTP/1.1 501 Not Implemented
+HTTP/1.1 501 Not Implemented
 ...
 {"message":"cannot delete devices outside of your tailnet"}
 ```
 
-## Fetch Device Routes
+<a href="device-routes-get">
+
+## Get device routes
+
 ``` http
 GET /api/v2/device/{deviceID}/routes
 ```
 
-Fetch a list of subnet routes that are advertised, and a list of subnet routes that are enabled for a device.
-Subnet routes are introduced [above](#subnet-routes) and discussed further in our [Knowledge Base](https://tailscale.com/kb/1019).
-
-This API call retrieves the list of subnet routes that a device is advertising, as well as those that are enabled for it:
+Retrieve the list of [subnet routes](#subnet-routes) that a device is advertising, as well as those that are enabled for it:
 - **Enabled routes:** The subnet routes for this device that have been approved by the tailnet admin.
 - **Advertised routes:** The subnets this device intends to expose.
 
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
+
+The ID of the device.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/11055/routes' \
--u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/device/11055/routes" \
+-u "tskey-api-xxxxx:"
 ```
 
 ### Response
+
+Returns the enabled and advertised subnet routes for a device.
+
 ``` jsonc
 {
    "advertisedRoutes" : [
-      "10.0.1.0/24",
-      "1.2.0.0/16",
-      "2.0.0.0/24"
+      "10.0.0.0/16",
+      "192.168.1.0/24"
    ],
    "enabledRoutes" : []
 }
 ```
 
-## Set enabled subnet routes for a device
+<a href="device-routes-post"></a>
+
+## Set device routes
 
 ``` http
 POST /api/v2/device/{deviceID}/routes
 ```
 
-Set the subnet routes that are enabled for a device.
-Subnet routes are introduced [above](#subnet-routes) and discussed further in our [Knowledge Base](https://tailscale.com/kb/1019/subnets/).
+Sets a device's enabled [subnet routes](#subnet-routes) by replacing the existing list of subnet routes with the supplied parameters.
+Advertised routes cannot be set through the API, since they must be set directly on the device.
 
-This call sets a device's enabled subnet routes by replacing the existing list of subnet routes with the supplied parameters.
-Tailscale returns a JSON list with enabled subnet routes and a list of advertised subnet routes for a device.
-
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
 
-#### `routes` (optional in `POST` body)
+The ID of the device.
 
-The new list of enabled subnet routes in JSON.
-Supply this parameter as an array of strings in the `POST` body, as shown:
+#### `routes` (required in `POST` body)
+
+The new list of enabled subnet routes.
 
 ``` jsonc
 {
-  "routes": ["10.0.1.0/24", "10.0.2.0/24"]
+  "routes": ["10.0.0.0/16", "192.168.1.0/24"]
 }
 ```
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/11055/routes' \
--u "tskey-yourapikey123:" \
---data-binary '{"routes": ["10.0.1.0/24", "10.0.2.0/24"]}'
+curl "https://api.tailscale.com/api/v2/device/11055/routes" \
+-u "tskey-api-xxxxx:" \
+--data-binary '{"routes": ["10.0.0.0/16", "192.168.1.0/24"]}'
 ```
 
 ### Response
 
+Returns the enabled and advertised subnet routes for a device.
+
 ``` jsonc
 {
    "advertisedRoutes" : [
-      "10.0.1.0/24",
-      "10.0.2.0/24",
-
+      "10.0.0.0/16",
+      "192.168.1.0/24"
    ],
    "enabledRoutes" : [
-      "10.0.1.0/24",
-      "10.0.2.0/24"
+      "10.0.0.0/16",
+      "192.168.1.0/24"
    ]
 }
 ```
 
-## Authorize a device
+<a href="#device-authorized-post"></a>
+
+## Authorize device
+
 ``` http
 POST /api/v2/device/{deviceID}/authorized
 ```
 
-Authorize a device. This call marks a device as authorized for Tailnets where device authorization is required.
+Authorize a device. This call marks a device as authorized for tailnets where device authorization is required.
 
-Tailscale returns a successful 2xx response with an empty JSON object in the response body.
+This returns a successful 2xx response with an empty JSON object in the response body.
 
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
 
-#### `authorized` (optional in `POST` body)
-Specify whether the device is authorized. Only 'true' is currently supported. Supply this parameter in the `POST` body, as shown:
+The ID of the device.
+
+#### `authorized` (required in `POST` body)
+
+Specify whether the device is authorized. Only 'true' is currently supported.
 
 ``` jsonc
 {
@@ -578,15 +526,19 @@ Specify whether the device is authorized. Only 'true' is currently supported. Su
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/11055/authorized' \
--u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/device/11055/authorized" \
+-u "tskey-api-xxxxx:" \
 --data-binary '{"authorized": true}'
 ```
 
 ### Response
+
 The response is 2xx on success. The response body is currently an empty JSON object.
 
+<a href="device-tags-post"></a>
+
 ## Update device tags
+
 ``` http
 POST /api/v2/device/{deviceID}/tags
 ```
@@ -595,22 +547,24 @@ Update the tags set on a device.
 Tags let you assign an identity to a device that is separate from human users, and use that identity as part of an ACL to restrict access.
 Tags are similar to role accounts, but more flexible.
 
-Tags are created in the tailnet policy file (also known as the ACL file); a tag is created by defining an owner.
+Tags are created in the tailnet policy file by defining the tag and an owner of the tag.
 Once a device is tagged, the tag is the owner of that device.
 A single node can have multiple tags assigned.
 
 Consult the policy file for your tailnet in the [admin console](https://login.tailscale.com/admin/acls) for the list of tags that have been created for your tailnet.
-Learn more about [tags](https://tailscale.com/kb/1068/acl-tags/).
+Learn more about [tags](https://tailscale.com/kb/1068/).
 
-Tailscale returns a 2xx code if successful, with an empty JSON object in the response body.
+This returns a 2xx code if successful, with an empty JSON object in the response body.
 
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
 
-#### `tags` (optional in `POST` body)
-The new list of tags for the device. Supply this parameter in the `POST` body as shown:
+The ID of the device.
+
+#### `tags` (required in `POST` body)
+
+The new list of tags for the device.
 
 ``` jsonc
 {
@@ -621,12 +575,13 @@ The new list of tags for the device. Supply this parameter in the `POST` body as
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/11055/tags' \
--u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/device/11055/tags" \
+-u "tskey-api-xxxxx:" \
 --data-binary '{"tags": ["tag:foo", "tag:bar"]}'
 ```
 
 ### Response
+
 The response is 2xx on success. The response body is currently an empty JSON object.
 
 If the tags supplied in the `POST` call do not exist in the tailnet policy file, the response is '400 Bad Request':
@@ -637,25 +592,31 @@ If the tags supplied in the `POST` call do not exist in the tailnet policy file,
 }
 ```
 
-## Update device node key expiry
+<a href="device-key-post"><a>
+
+## Update device key
+
 ``` http
 POST /api/v2/device/{deviceID}/key
 ```
 
-Disable or enable the expiry of the device's node key.
-When a device is added to a tailnet, its key expiry is set in the [General settings](https://login.tailscale.com/admin/settings/general) page of the admin console, with a duration between 1-180 days.
-If the key is not refreshed and expires, the device can no longer communicate with other devices in the tailnet.
+Update properties of the device key.
 
-Use this API call setting `"keyExpiryDisabled": true` to disable key expiry for the device, so that the device can rejoin the tailnet.
-You then have the option to update the key and call this endpoint again, this time with `"keyExpiryDisabled": false` to re-enable expiry.
-
-### Input parameters
+### Parameters
 
 #### `deviceid` (required in URL path)
-Supply the device of interest in the path using its ID.
+
+The ID of the device.
 
 #### `keyExpiryDisabled` (optional in `POST` body)
-Supply this parameter as a boolean in the `POST` body as shown:
+
+Disable or enable the expiry of the device's node key.
+
+When a device is added to a tailnet, its key expiry is set according to the tailnet's [key expiry](https://tailscale.com/kb/1028/) setting.
+If the key is not refreshed and expires, the device can no longer communicate with other devices in the tailnet.
+
+Set `"keyExpiryDisabled": true` to disable key expiry for the device and allow it to rejoin the tailnet (for example to access an accidentally expired device).
+You can then call this method again with `"keyExpiryDisabled": false` to re-enable expiry.
 
 ``` jsonc
 {
@@ -663,123 +624,89 @@ Supply this parameter as a boolean in the `POST` body as shown:
 }
 ```
 
-- Supply `true` to disable the device's key expiry.
+- If `true`, disable the device's key expiry.
   The original key expiry time is still maintained.
   Upon re-enabling, the key will expire at that original time.
-- Supply `false` to enable the device's key expiry.
+- If `false`, enable the device's key expiry.
   Sets the key to expire at the original expiry time prior to disabling.
   The key may already have expired. In that case, the device must be re-authenticated.
 - Empty value will not change the key expiry.
 
-Tailscale returns a 2xx code on success, with an empty JSON object in the response body.
+This returns a 2xx code on success, with an empty JSON object in the response body.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/device/11055/key' \
--u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/device/11055/key" \
+-u "tskey-api-xxxxx:" \
 --data-binary '{"keyExpiryDisabled": true}'
 ```
 
 ### Response
+
 The response is 2xx on success. The response body is currently an empty JSON object.
 
 # Tailnet
 
 A tailnet is your private network, composed of all the devices on it and their configuration.
-Learn more about [tailnets](https://tailscale.com/kb/1136/tailnet/).
+Learn more about [tailnets](https://tailscale.com/kb/1136/).
 
-When making API requests, URLs are structured as `/api/v2/tailnet/{tailnet}/`.
+When specifying a tailnet in the API, you can:
 
-Where `tailnet` is indicated in the URL, you have two options:
-
-- **Simply supply the `tailnet` value as a dash (`-`).**
-  This refers to the default tailnet of the authenticated user making the API call and is the best option for most users.
-  Your API call to the tailnet endpoint would start like this:
+- Provide a dash (`-`) to reference the default tailnet of the access token being used to make the API call.
+  This is the best option for most users.
+  Your API calls would start:
 
   ``` sh
-  curl 'https://api.tailscale.com/api/v2/tailnet/-/...'
+  curl "https://api.tailscale.com/api/v2/tailnet/-/..."
   ```
 
-- Alternately, you can supply the **organization** name found on the **[General Settings](https://login.tailscale.com/admin/settings/general)**
+- Provide the **organization** name found on the **[General Settings](https://login.tailscale.com/admin/settings/general)**
   page of the Tailscale admin console (not to be confused with the "tailnet name" found in the DNS tab).
 
-  For example, if your organization name is `alice@example.com`, your API call to the tailnet endpoint would start like this:
+  For example, if your organization name is `alice@gmail.com`, your API calls would start:
 
   ``` sh
-  curl 'https://api.tailscale.com/api/v2/tailnet/alice@example.com/...'
+  curl "https://api.tailscale.com/api/v2/tailnet/alice@gmail.com/..."
   ```
 
-Endpoints:
+## Policy File
 
-- [**ACL**](#acl-in-the-tailnet-policy-file)
-  - Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
-  - Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
-  - Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
-  - Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
-- [**Devices**](#tailnet-devices)
-  - List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
-- [**Keys**](#tailnet-key-object)
-  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
-  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
-  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
-  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
-- [**DNS**](#dns)
-  - **Nameservers**
-    - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
-    - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
-  - **Preferences**
-    - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
-    - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
-  - **Search paths**
-    - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
-    - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
-
-## ACL in the tailnet policy file
-
-Access control lists (ACL) and rules are stored in the tailnet policy file and can be expressed in two formats:
-plain JSON and HuJSON (human JSON, a superset of JSON that allows comments and trailing commas).
+The tailnet policy file contains access control lists and related configuration.
+The policy file is expressed using "[HuJSON](https://github.com/tailscale/hujson#readme)"
+(human JSON, a superset of JSON that allows comments and trailing commas).
+Most policy file API methods can also return regular JSON for compatibility with other tools.
 Learn more about [network access controls](https://tailscale.com/kb/1018/).
 
-Endpoints:
+<a href="tailnet-acl-get"></a>
 
-- Get policy file: [`GET /api/v2/tailnet/{tailnet}/acl`](#fetch-the-tailnet-policy-file)
-- Update policy file: [`POST /api/v2/tailnet/{tailnet}/acl`](#update-the-policy-file-for-a-tailnet)
-- Preview rule matches: [`POST /api/v2/tailnet/{tailnet}/acl/preview`](#preview-policy-file-rule-matches-for-a-resource)
-- Validate policy file: [`POST /api/v2/tailnet/{tailnet}/acl/validate`](#validate-and-test-tailnets-policy-file)
-
-## Fetch the tailnet policy file
+## Get Policy File
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/acl
 ```
 
 Retrieves the current policy file for the given tailnet; this includes the ACL along with the rules and tests that have been defined.
-Supply the tailnet of interest in the path.
-This endpoint can send back either the HuJSON of the ACL or a parsed JSON, depending on the `Accept` header.
 
-Returns the ACL HuJSON by default.
-Returns a parsed JSON of the ACL (sans comments) if the `Accept` type is explicitly set to `application/json`.
-The response also includes an `ETag` header, which can be optionally used in `POST` requests to avoid missed updates.
+This method can return the policy file as JSON or HuJSON, depending on the `Accept` header.
+The response also includes an `ETag` header, which can be optionally included when [updating the policy file](#update-policy-file) to avoid missed updates.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `Accept` (optional in request header)
-Response is parsed `JSON` if `application/json` is explicitly named, otherwise HuJSON will be returned.
 
-- **`application/hujson`:** The response will be parsed human JASON; this is also the default if no value is supplied.
-
-- **`application/json`:** The response will be parsed JSON.
+Response is encoded as JSON if `application/json` is requested, otherwise HuJSON will be returned.
 
 #### `details` (optional in query string)
 
-Request a detailed description of the tailnet policy file by providing `details=1` in the URL query string as follows: `api/v2/tailnet/-/acl?details=1`.
+Request a detailed description of the tailnet policy file by providing `details=1` in the URL query string.
 If using this, do not supply an `Accept` parameter in the header.
 
-Tailscale returns three fields:
+The response will contain a JSON object with the fields:
 - **tailnet policy file:** a base64-encoded string representation of the huJSON format
 - **warnings:** array of strings for syntactically valid but nonsensical entries
 - **errors:** an array of strings for parsing failures
@@ -787,72 +714,60 @@ Tailscale returns three fields:
 ### Request example (response in HuJSON format)
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
-  -u "tskey-yourapikey123:" \
-  -H "Accept: application/hujson" \
-  -v
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
+  -u "tskey-api-xxxxx:" \
 ```
 
 ### Response in HuJSON format
 
-Successful response returns an HTTP code of '200' and the tailnet policy file in HuJSON format, as per the request header.
+On success, returns a 200 status code and the tailnet policy file in HuJSON format.
 No errors or warnings are returned.
 
 ``` jsonc
 ...
 Content-Type: application/hujson
-Etag: "a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9"
+Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 ...
 
 // Example/default ACLs for unrestricted connections.
 {
-    "tests": [],
-    // Declare static groups of users beyond those in the identity service.
-    "groups": {
-        "group:example": [
-            "user1@example.com",
-            "user2@example.com"
-        ],
-    },
-    // Declare convenient hostname aliases to use in place of IP addresses.
-    "hosts": {
-        "example-host-1": "100.100.100.100",
-    },
-    // Access control lists.
-    "acls": [
-        // Match absolutely everything. Comment out this section if you want
-        // to define specific ACL restrictions.
-        {
-            "Action": "accept",
-            "Users": [
-                "*"
-            ],
-            "Ports": [
-                "*:*"
-            ]
-        },
-    ]
+  // Declare static groups of users beyond those in the identity service.
+  "groups": {
+    "group:example": ["user1@example.com", "user2@example.com"],
+  },
+
+  // Declare convenient hostname aliases to use in place of IP addresses.
+  "hosts": {
+    "example-host-1": "100.100.100.100",
+  },
+
+  // Access control lists.
+  "acls": [
+    // Match absolutely everything.
+    // Comment this section out if you want to define specific restrictions.
+    {"action": "accept", "src": ["*"], "dst": ["*:*"]},
+  ],
 }
+
 ```
 
 ### Request example (response in JSON format)
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
+  -u "tskey-api-xxxxx:" \
   -H "Accept: application/json" \
-  -v
 ```
 
 ### Response in JSON format
 
-Successful response returns an HTTP code of '200' and the tailnet policy file in JSON format, as per the request header.
+On success, returns a 200 status code and the tailnet policy file in JSON format.
 No errors or warnings are returned.
 
 ``` jsonc
 ...
 Content-Type: application/json
-Etag: "a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9"
+Etag: "e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c"
 ...
 {
    "acls" : [
@@ -881,20 +796,18 @@ Etag: "a1b2c3d4f6g6h7i8j9e5a1b2c3d4e5f6g6h7i8j9a1b2c3d4f6g6h7i8j9"
 ### Request example (with details)
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl?details=1' \
-  -u "tskey-yourapikey123:" \
-  -H
-  -v
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl?details=1" \
+  -u "tskey-api-xxxxx:" \
 ```
 
 ### Response (with details)
 
-Successful response returns an HTTP code of '200' and the tailnet policy file in a base64-encoded string representation of the huJSON format.
+On success, returns a 200 status code and the tailnet policy file in a base64-encoded string representation of the huJSON format.
 In addition, errors and warnings are returned.
 
 ``` sh
 {
-  "acl": "Ly8gRXhhbXBsZS9kZWZhdWx0IEFDTHMgZm9yIHVucmVzdHJpY3RlZCBjb25uZWN0aW9ucy4KewoJLy8gRGVjbGFyZSBzdGF0aWMgZ3JvdXBzIG9mIHVzZXJzIGJleW9uZCB0aG9zZSBpbiB0aGUgaWRlbnRpdHkgc2VydmljZS4KCSJncm91cHMiOiB7CgkJImdyb3VwOmV4YW1wbGUiOiBbInVzZXIxQGV4YW1wbGUuY29tIiwgInVzZXIyQGV4YW1wbGUuY29tIl0sCgl9LAoKCS8vIERlY2xhcmUgY29udmVuaWVudCBob3N0bmFtZSBhbGlhc2VzIHRvIHVzZSBpbiBwbGFjZSBvZiBJUCBhZGRyZXNzZXMuCgkiaG9zdHMiOiB7CgkJImV4YW1wbGUtaG9zdC0xIjogIjEwMC4xMDAuMTAwLjEwMCIsCgl9LAoKCS8vIEFjY2VzcyBjb250cm9sIGxpc3RzLgoJImFjbHMiOiBbCgkJLy8gTWF0Y2ggYWJzb2x1dGVseSBldmVyeXRoaW5nLgoJCS8vIENvbW1lbnQgdGhpcyBzZWN0aW9uIG91dCBpZiB5b3Ugd2FudCB0byBkZWZpbmUgc3BlY2lmaWMgcmVzdHJpY3Rpb25zLgoJCXsiYWN0aW9uIjogImFjY2VwdCIsICJ1c2VycyI6IFsiKiJdLCAicG9ydHMiOiBbIio6KiJdfSwKCV0sCgkic3NoIjogWwoJCS8vIEFsbG93IGFsbCB1c2VycyB0byBTU0ggaW50byB0aGVpciBvd24gZGV2aWNlcyBpbiBjaGVjayBtb2RlLgoJCS8vIENvbW1lbnQgdGhpcyBzZWN0aW9uIG91dCBpZiB5b3Ugd2FudCB0byBkZWZpbmUgc3BlY2lmaWMgcmVzdHJpY3Rpb25zLgoJCXsKCQkJImFjdGlvbiI6ICJjaGVjayIsCgkJCSJzcmMiOiAgICBbImF1dG9ncm91cDptZW1iZXJzIl0sCgkJCSJkc3QiOiAgICBbImF1dG9ncm91cDpzZWxmIl0sCgkJCSJ1c2VycyI6ICBbImF1dG9ncm91cDpub25yb290IiwgInJvb3QiXSwKCQl9LAoJXSwKCSJ0YWdPd25lcnMiOiB7CgkJInRhZzpnb2xpbmsiOiBbImV4YW1wbGUuY29tIl0sCgl9LAp9Cg==",
+  "acl": "Ly8gUG9raW5nIGFyb3VuZCBpbiB0aGUgQVBJIGRvY3MsIGhvcGluZyB5b3UnZCBmaW5kIHNvbWV0aGluZyBnb29kLCBlaD8KLy8gV2UgbGlrZSB5b3VyIHN0eWxlISAgR28gZ3JhYiB5b3Vyc2VsZiBhIFRhaWxzY2FsZSB0LXNoaXJ0IGlmIHRoZXJlIGFyZQovLyBzdGlsbCBzb21lIGF2YWlsYWJsZS4gQnV0IHNoaGguLi4gZG9uJ3QgdGVsbCBhbnlvbmUhCi8vCi8vICAgICAgICAgICAgIGh0dHBzOi8vc3dhZy5jb20vZ2lmdC82a29mNGs1Z3B1ZW95ZDB2NXd6MHJkYmMKewoJLy8gRGVjbGFyZSBzdGF0aWMgZ3JvdXBzIG9mIHVzZXJzIGJleW9uZCB0aG9zZSBpbiB0aGUgaWRlbnRpdHkgc2VydmljZS4KCSJncm91cHMiOiB7CgkJImdyb3VwOmV4YW1wbGUiOiBbInVzZXIxQGV4YW1wbGUuY29tIiwgInVzZXIyQGV4YW1wbGUuY29tIl0sCgl9LAoKCS8vIERlY2xhcmUgY29udmVuaWVudCBob3N0bmFtZSBhbGlhc2VzIHRvIHVzZSBpbiBwbGFjZSBvZiBJUCBhZGRyZXNzZXMuCgkiaG9zdHMiOiB7CgkJImV4YW1wbGUtaG9zdC0xIjogIjEwMC4xMDAuMTAwLjEwMCIsCgl9LAoKCS8vIEFjY2VzcyBjb250cm9sIGxpc3RzLgoJImFjbHMiOiBbCgkJLy8gTWF0Y2ggYWJzb2x1dGVseSBldmVyeXRoaW5nLgoJCS8vIENvbW1lbnQgdGhpcyBzZWN0aW9uIG91dCBpZiB5b3Ugd2FudCB0byBkZWZpbmUgc3BlY2lmaWMgcmVzdHJpY3Rpb25zLgoJCXsiYWN0aW9uIjogImFjY2VwdCIsICJ1c2VycyI6IFsiKiJdLCAicG9ydHMiOiBbIio6KiJdfSwKCV0sCn0K",
   "warnings": [
     "\"group:example\": user not found: \"user1@example.com\"",
     "\"group:example\": user not found: \"user2@example.com\""
@@ -903,7 +816,9 @@ In addition, errors and warnings are returned.
 }
 ```
 
-## Update the policy file for a tailnet
+<a href="tailnet-acl-post"></a>
+
+## Update policy file
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/acl`
@@ -916,25 +831,28 @@ An `If-Match` header can be set to avoid missed updates.
 On success, returns the updated ACL in JSON or HuJSON according to the `Accept` header.
 Otherwise, errors are returned for incorrectly defined ACLs, ACLs with failing tests on attempted updates, and mismatched `If-Match` header and ETag.
 
-### Input parameters
+### Parameters
 
 #### tailnet (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `If-Match` (optional in request header)
+
 This is a safety mechanism to avoid overwriting other users' updates to the tailnet policy file.
 
 - Set the `If-Match` value to that of the ETag header returned in a `GET` request to `/api/v2/tailnet/{tailnet}/acl`.
   Tailscale compares the ETag value in your request to that of the current tailnet file and only replaces the file if there's a match.
   (A mismatch indicates that another update has been made to the file.)
-  For example: `-H "If-Match: \"e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c\""`
+  For example: `-H "If-Match: \"e0b2816b418\""`
 - Alternately, set the `If-Match` value to `ts-default` to ensure that the policy file is replaced
   _only if the current policy file is still the untouched default_ created automatically for each tailnet.
   For example: `-H "If-Match: \"ts-default\""`
 
 #### `Accept` (optional in request header)
+
 Sets the return type of the updated tailnet policy file.
-Response is parsed `JSON` if `application/json` is explicitly named, otherwise HuJSON will be returned.
+Response is encoded as JSON if `application/json` is requested, otherwise HuJSON will be returned.
 
 #### Tailnet policy file entries (required in `POST` body)
 
@@ -942,15 +860,15 @@ Define the policy file in the `POST` body.
 Include the entire policy file.
 Note that the supplied object fully replaces your existing tailnet policy file.
 
-The `POST` body should be a JSON- or [HuJSON](https://github.com/tailscale/hujson#readme)-formatted JSON object.
-Learn about the [ACL policy properties you can include in the request](https://tailscale.com/kb/1018/acls/#tailscale-policy-syntax).
+The `POST` body should be formatted as JSON or HuJSON.
+Learn about the [ACL policy properties you can include in the request](https://tailscale.com/kb/1018/#tailscale-policy-syntax).
 
 ### Request example
 
 ``` sh
 POST /api/v2/tailnet/example.com/acl
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl" \
+  -u "tskey-api-xxxxx:" \
   -H "If-Match: \"e0b2816b418b3f266309d94426ac7668ab3c1fa87798785bf82f1085cc2f6d9c\""
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
@@ -1019,7 +937,9 @@ A successful response returns an HTTP status of '200' and the modified tailnet p
 }
 ```
 
-## Preview policy file rule matches for a resource
+<a href="tailnet-acl-preview-post"></a>
+
+## Preview policy file rule matches
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/acl/preview
@@ -1027,41 +947,39 @@ POST /api/v2/tailnet/{tailnet}/acl/preview
 When given a user or IP port to match against, returns the tailnet policy rules that
 apply to that resource without saving the policy file to the server.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `type` (required in query string)
 
 Specify for which type of resource (user or IP port) matching rules are to be fetched.
-Supply this parameter in the query string as shown in the request example below.
-Read about [previewing changes in the admin console](https://tailscale.com/kb/1018/acls/#previewing-changes).
+Read about [previewing changes in the admin console](https://tailscale.com/kb/1018/#previewing-changes).
 
-- **`user`:** Specify 'user' if the `previewFor` value is a user's email.
-  Note that `user` remains in the API for compatibility purposes, but has been replaced by "source" (`src`) in Tailscale.
-- **`ipport`:** Specify 'ipport' if the `previewFor` value is an IP address and port.
-  Note that `ipport` remains in the API for compatibility purposes, but has been replaced by "destination" (`dst`) in Tailscale.
+- `user`: Specify `user` if the `previewFor` value is a user's email.
+  Note that `user` remains in the API for compatibility purposes, but has been replaced by `src` in policy files.
+- `ipport`: Specify `ipport` if the `previewFor` value is an IP address and port.
+  Note that `ipport` remains in the API for compatibility purposes, but has been replaced by `dst` in policy files.
 
 #### `previewFor` (required in query string)
 
-Supply this parameter in the query string as shown in the request example below.
-
-- If `type`='user', supply the email of a valid user with registered machines.
-- If `type`='ipport', supply an IP address + port in this format: "10.0.0.1:80".
+- If `type=user`, provide the email of a valid user with registered machines.
+- If `type=ipport`, provide an IP address + port: `10.0.0.1:80`.
 
 The supplied policy file is queried with this parameter to determine which rules match.
 
 #### Tailnet policy file (required in `POST` body)
 
-Supply the tailnet policy file in the `POST` body in JSON or HuJSON format.
+Provide the tailnet policy file in the `POST` body in JSON or HuJSON format.
 Learn about [tailnet policy file entries](https://tailscale.com/kb/1018).
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFor=user1@example.com&type=user' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFor=user1@example.com&type=user" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '// Example/default ACLs for unrestricted connections.
 {
   // Declare tests to check functionality of ACL rules. User must be a valid user with registered machines.
@@ -1089,9 +1007,9 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/preview?previewFo
 
 A successful response returns an HTTP status of '200' and a list of rules that apply to the resource supplied as a list of matches as JSON objects.
 Each match object includes:
-- `users` as an array of strings indicating source entities affected by the rule
-- `ports` as an array of strings representing destinations that can be accessed
-- `lineNumber` as an integer indicating the rule's location in the policy file
+- `users`: array of strings indicating source entities affected by the rule
+- `ports`: array of strings representing destinations that can be accessed
+- `lineNumber`: integer indicating the rule's location in the policy file
 
 The response also echoes the `type` and `previewFor` values supplied in the request.
 
@@ -1109,48 +1027,52 @@ The response also echoes the `type` and `previewFor` values supplied in the requ
 }
 ```
 
-## Validate and test tailnet's policy file
+<a href="tailnet-acl-validate-post"></a>
+
+## Validate and test policy file
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/acl/validate
 ```
 
-This endpoint works in one of two modes, neither of which modifies your current tailnet policy file:
+This method works in one of two modes, neither of which modifies your current tailnet policy file:
 
 - **Run ACL tests:** When the **request body contains ACL tests as a JSON array**,
   Tailscale runs ACL tests against the tailnet's current policy file.
-  Learn more about [ACL tests](https://tailscale.com/kb/1018/acls/#tests).
+  Learn more about [ACL tests](https://tailscale.com/kb/1018/#tests).
 - **Validate a new policy file:** When the **request body is a JSON object**,
   Tailscale interprets the body as a hypothetical new tailnet policy file with new ACLs, including any new rules and tests.
   It validates that the policy file is parsable and runs tests to validate the existing rules.
 
-In either case, this endpoint does not modify the tailnet policy file in any way.
+In either case, this method does not modify the tailnet policy file in any way.
 
-### Input parameters for "Run ACL tests" mode
+### Parameters for "Run ACL tests" mode
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### ACL tests (required in `POST` body)
 
 The `POST` body should be a JSON formatted array of ACL Tests.
-Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/acls/#tests).
+Learn more about [tailnet policy file tests](https://tailscale.com/kb/1018/#tests).
 
 ### Request example to run ACL tests
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '
   [
     {"src": "user1@example.com", "accept": ["example-host-1:22"], "deny": ["example-host-2:100"]}
   ]'
 ```
 
-### Input parameters for "Validate a new policy file" mode
+### Parameters for "Validate a new policy file" mode
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### Entire tailnet policy file (required in `POST` body)
 
@@ -1159,8 +1081,8 @@ The `POST` body should be a JSON object with a JSON or HuJSON representation of 
 ### Request example to validate a policy file
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '
   {
     "acls": [
@@ -1191,31 +1113,22 @@ Look at the response body to determine whether there was a problem within your A
   }
   ```
 
-## Tailnet devices
-Refer to the Device resource description [above](#device-object).
-This endpoint addresses the devices registered to a tailnet.
+<a href="tailnet-devices"></a>
 
-Endpoints:
-
-- List devices: [`GET /api/v2/tailnet/{tailnet}/devices`](#fetch-a-list-of-tailnet-devices)
-
-## Fetch a list of tailnet devices
+## List tailnet devices
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/devices
 ```
 
 Lists the devices in a tailnet.
-Supply the tailnet of interest in the path.
 Optionally use the `fields` query parameter to explicitly indicate which fields are returned.
 
-This call is also useful for retrieving a device's `deviceID` (returned as `"id"`).
-A device ID is used in API requests where you must supply an ID in order to, for example, [fetch device details](#fetch-the-details-for-a-device) or [authorize a device](#authorize-a-device).
-
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `fields` (optional in query string)
 
@@ -1227,64 +1140,41 @@ Currently, there are two supported options:
   * `advertisedRoutes`
   * `clientConnectivity` (which contains the following fields: `mappingVariesByDestIP`, `derp`, `endpoints`, `latency`, and `clientSupports`)
 
-Supply this parameter in the query string as shown in the examples below.
-Use commas to separate multiple options.
-If more than one option is indicated, then `all` is used.
-For example, for `fields=default,all`, all fields are returned.
-
 If the `fields` parameter is not supplied, then the default (limited fields) option is used.
 
 ### Request example for default set of fields
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/devices" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Request example for all fields
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/devices?fields=all' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/devices?fields=all" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
-If successful, Tailscale returns an HTTP code of '200' and a JSON list of the tailnet devices and their details.
-If the request was for `all` fields, the response includes all fields (refer to the [Device object attributes](#attributes) section for descriptions and examples);
-if the request was for the `default` set of fields, the response excludes `enabledRoutes`, `advertisedRoutes`, and `clientConnectivity`.
 
-## Tailnet key object
+On success, returns a 200 status code and a JSON array of the tailnet devices and their details.
 
-This endpoint operates primarily on auth keys, and in some cases on [API access tokens](#api-access-token).
+## Tailnet keys
 
-- Auth keys: Pre-authentication keys ("auth keys” for short) let you register new nodes without needing to sign in via a web browser.
-  Auth keys are identifiable by the prefix `tskey-auth...`.
-  Use them to add devices to your tailnet.
-  Auth keys are used for _initial registration_ of a new device to your tailnet (after a device has joined the tailnet, there are additional keys used for subsequent authentication; these include the node key and the machine key).
+These methods operate primarily on auth keys, and in some cases on [API access tokens](#authentication).
 
-  Generate or revoke an auth key in the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
-  When you generate a new auth key, you can specify that the key should automatically authorize devices for which the auth key is used.
-  When generating the auth key, you can choose the number of days (1 - 90 inclusive) for the automatic key expiry.
-  To continue using an auth key after this key expires, you must generate a new key.
+- Auth keys: Pre-authentication keys (or "auth keys") let you register new devices on a tailnet without needing to sign in via a web browser.
+  Auth keys are identifiable by the prefix `tskey-auth-`. Learn more about [auth keys](https://tailscale.com/kb/1085/).
 
-- API access tokens: Discussed [above](#api-access-token).
-
-Recently expired and revoked keys are shown on the [**Keys**](https://login.tailscale.com/admin/settings/keys) page of the admin console.
-Learn more about [auth keys](https://tailscale.com/kb/1085/).
+- API access tokens: used to [authenticate API requests](#authentication).
 
 If you authenticate with a user-owned API access token, all the methods on tailnet keys operate on _keys owned by that user_.
 If you authenticate with an access token derived from an OAuth client, then these methods operate on _keys owned by the tailnet_.
 Learn more about [OAuth clients](https://tailscale.com/kb/1215).
 
-The `POST /api/v2/tailnet/{tailnet}/keys` endpoint is used to create auth keys only.
-The remaining three endpoints operate on auth keys and API access tokens.
-
-Endpoints:
-
-  - Get tailnet keys: [`GET /api/v2/tailnet/{tailnet}/keys`](#fetch-the-keys-for-a-tailnet)
-  - Create a key: [`POST /api/v2/tailnet/{tailnet}/keys`](#create-a-new-key-for-a-tailnet)
-  - Get key details: [`GET /api/v2/tailnet/{tailnet}/keys/{keyid}`](#fetch-information-for-a-specific-tailnet-key)
-  - Delete a key: [`DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}`](#delete-a-specific-tailnet-key)
+The `POST /api/v2/tailnet/{tailnet}/keys` method is used to create auth keys only.
+The remaining three methods operate on auth keys and API access tokens.
 
 ### Attributes
 
@@ -1294,35 +1184,34 @@ Endpoints:
   // actions.
   "capabilities": {
 
-    // devices (JSON object) specifies the key's permissions over devices
+    // devices (JSON object) specifies the key's permissions over devices.
     "devices": {
 
       // create (JSON object) specifies the key's permissions when
-      // creating devices
+      // creating devices.
       "create": {
 
         // reusable (boolean) for auth keys only; reusable auth keys
-        // can be used to connect multiple nodes.
-        // Learn more about reusable auth keys here:
-        // https://tailscale.com/kb/1085/auth-keys/#types-of-auth-keys
+        // can be used multiple times to register different devices.
+        // Learn more about reusable auth keys at
+        // https://tailscale.com/kb/1085/#types-of-auth-keys
         "reusable": false,
 
         // ephemeral (boolean) for auth keys only; ephemeral keys are
         // used to connect and then clean up short-lived devices.
-        // Learn about ephemeral nodes here:
-        // https://tailscale.com/kb/1111
+        // Learn about ephemeral nodes at https://tailscale.com/kb/1111/.
         "ephemeral": false,
 
         // preauthorized (boolean) for auth keys only; these are also
-        // referred to as "pre-approved" keys. 'true' means that Tailscale
-        // network administrators have already reviewed and approved new
-        // devices. Learn about device approval here:
-        // https://tailscale.com/kb/1099
+        // referred to as "pre-approved" keys. 'true' means that devices
+        // registered with this key won't require additional approval from a
+        // tailnet admin.
+        // Learn about device approval at https://tailscale.com/kb/1099/.
         "preauthorized": false,
 
-        // tags (string) are the tags specified for the key; tags are
-        // described in the "Update device tags" section above.
-        // Learn about tags here: https://tailscale.com/kb/1068
+        // tags (string) are the tags that will be set on devices registered
+        // with this key.
+        // Learn about tags at https://tailscale.com/kb/1068/.
         "tags": [
           "tag:example"
             ]
@@ -1330,66 +1219,71 @@ Endpoints:
         }
   }
 
-  // expirySeconds (int) is the duration in seconds of the key's validity
+  // expirySeconds (int) is the duration in seconds a new key is valid.
   "expirySeconds": 86400
 }
 ```
 
-## Fetch the keys for a tailnet
+<a href="tailnet-keys-get"></a>
+
+## List tailnet keys
+
 ``` http
 GET /api/v2/tailnet/{tailnet}/keys
 ```
 
-Returns a list of active auth keys and API access tokens for the tailnet supplied in the URL path, depending on permissions assigned to the caller:
-- If the API call is made  with a user-owned API access token, Tailscale returns only the keys owned by the caller.
-- If the API call is made with an access token derived from an OAuth client, Tailscale returns all keys owned by the tailnet that the caller's permissions allow.
+Returns a list of active auth keys and API access tokens. The set of keys returned depends on the access token used to make the request:
+- If the API call is made with a user-owned API access token, this returns only the keys owned by that user.
+- If the API call is made with an access token derived from an OAuth client, this returns all keys owned directly by the tailnet.
 
-Returns a JSON object with the IDs of all active keys.
-In the future, this method may return more information about each key than just the ID.
-
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/keys' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/keys" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
 
+Returns a JSON object with the IDs of all active keys.
+
 ``` jsonc
 {"keys": [
-	{"id": "XXXX14CNTRL"},
-	{"id": "XXXXZ3CNTRL"},
-	{"id": "XXXX43CNTRL"},
-	{"id": "XXXXgj1CNTRL"}
+  {"id": "XXXX14CNTRL"},
+  {"id": "XXXXZ3CNTRL"},
+  {"id": "XXXX43CNTRL"},
+  {"id": "XXXXgj1CNTRL"}
 ]}
 ```
 
-## Create a new key for a tailnet
+<a href="tailnet-keys-post"></a>
+
+## Create auth key
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/keys
 ```
 
-Creates a new auth key in a tailnet supplied in the URL path.
+Creates a new auth key in the specified tailnet.
 The key will be associated with the user who owns the API access token used to make this call,
 or, if the call is made with an access token derived from an OAuth client, the key will be owned by the tailnet.
-Supply the tailnet in the path.
 
 Returns a JSON object with the supplied capabilities in addition to the generated key.
 The key should be recorded and kept safe and secure because it wields the capabilities specified in the request.
 The identity of the key is embedded in the key itself and can be used to perform operations on the key (e.g., revoking it or retrieving information about it).
-The full key can no longer be retrieved by the server.
+The full key can no longer be retrieved after the initial response.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### Tailnet key object (required in `POST` body)
 
@@ -1402,19 +1296,24 @@ Note the following about required vs. optional values:
 
 - **`capabilities`:** A `capabilities` object is required and must contain `devices`.
 
-- **`devices`:** A `devices` nested object is required within `capabilities`, but can be an empty JSON object.
+- **`devices`:** A `devices` object is required within `capabilities`, but can be an empty JSON object.
 
 - **`tags`:** Whether tags are required or optional depends on the owner of the auth key:
-  - When creating an auth key _owned by the tailnet_, it must have tags.
+  - When creating an auth key _owned by the tailnet_ (using OAuth), it must have tags.
     The auth tags specified for that new auth key must exactly match the tags that are on the OAuth client used to create that auth key (or they must be tags that are owned by the tags that are on the OAuth client used to create the auth key).
-  - When creating an auth key _owned by a user_ (using an API access token), tags are optional.
+  - When creating an auth key _owned by a user_ (using a user's access token), tags are optional.
 
-- **`expirySeconds`:** Optional in `POST` body. Defaults to 90d if not supplied.
+- **`expirySeconds`:** Optional in `POST` body.
+  Specifies the duration in seconds until the key should expire.
+  Defaults to 90 days if not supplied.
 
 ### Request example
 
 ``` jsonc
-echo '{
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/keys" \
+  -u "tskey-api-xxxxx:" \
+  --data-binary '
+{
   "capabilities": {
     "devices": {
       "create": {
@@ -1424,26 +1323,25 @@ echo '{
         "tags": [ "tag:example" ]
       }
     }
-  }
-}' | curl -X POST --data-binary @- https://api.tailscale.com/api/v2/tailnet/example.com/keys \
-  -u "tskey-yourapikey123:" \
-  -H "Content-Type: application/json" | jsonfmt
+  },
+  "expirySeconds": 86400
+}'
 ```
 
 ### Response
 
-The response is a JSON object that includes the `"key"` value, which will only be returned once.
-Record and safely store the `"key"` returned.
+The response is a JSON object that includes the `key` value, which will only be returned once.
+Record and safely store the `key` returned.
 It holds the capabilities specified in the request and can no longer be retrieved by the server.
 
 ``` jsonc
 {
-	"id":           "XXXX456CNTRL",
-	"key":          "tskey-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
-	"created":      "2021-12-09T23:22:39Z",
-	"expires":      "2022-03-09T23:22:39Z",
+  "id":           "XXXX456CNTRL",
+  "key":          "tskey-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
+  "created":      "2021-12-09T23:22:39Z",
+  "expires":      "2022-03-09T23:22:39Z",
   "revoked":      "2022-03-12T23:22:39Z",
-	"capabilities": {
+  "capabilities": {
     "devices": {
       "create": {
         "reusable": false,
@@ -1456,30 +1354,31 @@ It holds the capabilities specified in the request and can no longer be retrieve
 }
 ```
 
-## Fetch information for a specific tailnet key
+<a href="tailnet-keys-key-get"></a>
+
+## Get key
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/keys/{keyid}
 ```
 
-Supply the tailnet and key ID of interest in the path.
-The key ID can be found in the [admin console](https://login.tailscale.com/admin/settings/keys).
+Returns a JSON object with information about a specific key, such as its creation and expiration dates and its capabilities.
 
-Returns a JSON object with information about specific key, such as its creation and expiration dates and its capabilities.
-
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `keyId` (required in URL path)
-Supply the key ID in the path.
+
+The ID of the key.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
@@ -1507,70 +1406,66 @@ The response is a JSON object with information about the key supplied.
 }
 ```
 
-## Delete a specific tailnet key
+<a href="tailnet-keys-key-delete"></a>
+
+## Delete key
 
 ``` http
 DELETE /api/v2/tailnet/{tailnet}/keys/{keyid}
 ```
 
-Deletes a specific key. Supply the tailnet and key ID of interest in the path.
+Deletes a specific key.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `keyId` (required in URL path)
-Supply the key ID in the path. The key ID can be found in the [admin console](https://login.tailscale.com/admin/settings/keys).
+
+The ID of the key. The key ID can be found in the [admin console](https://login.tailscale.com/admin/settings/keys).
 
 ### Request example
 
 ``` sh
 curl -X DELETE 'https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123456CNTRL' \
-  -u "tskey-yourapikey123:"
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
 
-Tailscale returns status 200 upon success.
+This returns status 200 upon success.
+
+<a href="tailnet-dns"></a>
 
 ## DNS
 
-The tailnet DNS endpoints are provided for fetching and modifying various DNS settings for a tailnet.
+The tailnet DNS methods are provided for fetching and modifying various DNS settings for a tailnet.
 These include nameservers, DNS preferences, and search paths.
-Learn more about [nameservers](https://tailscale.com/kb/1054/).
+Learn more about [DNS in Tailscale](https://tailscale.com/kb/1054/).
 
-Endpoints:
+<a href="tailnet-dns-nameservers-get"></a>
 
-- **Nameservers**
-  - Get nameservers: [`GET /api/v2/tailnet/{tailnet}/dns/nameservers`](#fetch-the-global-dns-nameservers-for-a-tailnet)
-  - Set nameservers: [`POST /api/v2/tailnet/{tailnet}/dns/nameservers`](#replace-the-list-of-global-dns-nameservers-for-a-tailnet)
-- **Preferences**
-  - Get DNS preferences: [`GET /api/v2/tailnet/{tailnet}/dns/preferences`](#fetch-the-dns-preferences-for-a-tailnet)
-  - Set DNS preferences: [`POST /api/v2/tailnet/{tailnet}/dns/preferences`](#replace-the-dns-preferences-for-a-tailnet)
-- **Search paths**
-  - Get search paths: [`GET /api/v2/tailnet/{tailnet}/dns/searchpaths](#fetch-the-search-paths-for-a-tailnet)
-  - Set search paths: [`POST /api/v2/tailnet/{tailnet}/dns/searchpaths`](#replace-the-search-paths-for-a-tailnet)
-
-## Fetch the global DNS nameservers for a tailnet
+## Get nameservers
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/dns/nameservers
 ```
 
 Lists the global DNS nameservers for a tailnet.
-Supply the tailnet of interest in the path.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
@@ -1581,21 +1476,23 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
 }
 ```
 
-## Replace the list of global DNS nameservers for a tailnet
+<a href="tailnet-dns-nameservers-post"></a>
+
+## Set nameservers
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/dns/nameservers
 ```
 
-Replaces the list of DNS nameservers for the given tailnet with the list supplied in the request.
-Supply the tailnet of interest in the path.
+Replaces the list of global DNS nameservers for the given tailnet with the list supplied in the request.
 Note that changing the list of DNS nameservers may also affect the status of MagicDNS (if MagicDNS is on; learn about [MagicDNS](https://tailscale.com/kb/1081).
 If all nameservers have been removed, MagicDNS will be automatically disabled (until explicitly turned back on by the user).
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### `dns` (required in `POST` body)
 
@@ -1612,8 +1509,8 @@ The new list of DNS nameservers in JSON.
 Adding DNS nameservers with the MagicDNS on:
 
 ``` sh
-curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '{"dns": ["8.8.8.8"]}'
 ```
 
@@ -1631,8 +1528,8 @@ The response is a JSON object containing the new list of nameservers and the sta
 ### Request example: removing all DNS nameservers, MagicDNS on
 
 ``` sh
-curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/nameservers" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '{"dns": []}'
 ```
 
@@ -1647,25 +1544,27 @@ The response is a JSON object containing the new list of nameservers and the sta
 }
 ```
 
-## Fetch the DNS preferences for a tailnet
+<a href="tailnet-dns-preferences-get"></a>
+
+## Get DNS preferences
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/dns/preferences`
 ```
 
 Retrieves the DNS preferences that are currently set for the given tailnet.
-Supply the tailnet of interest in the path.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
@@ -1676,13 +1575,15 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
 }
 ```
 
-## Replace the DNS preferences for a tailnet
+<a href="tailnet-dns-preferences-post"></a>
+
+## Set DNS preferences
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/dns/preferences
 ```
 
-Replaces the DNS preferences for a tailnet; specifically, the MagicDNS setting.
+Set the DNS preferences for a tailnet; specifically, the MagicDNS setting.
 Note that MagicDNS is dependent on DNS servers.
 Learn about [MagicDNS](https://tailscale.com/kb/1081).
 
@@ -1692,10 +1593,11 @@ Otherwise, it returns an error.
 Note that removing all nameservers will turn off MagicDNS.
 To reenable it, nameservers must be added back, and MagicDNS must be explicitly turned on.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 #### DNS preference (required in `POST` body)
 
@@ -1712,14 +1614,14 @@ The DNS preferences in JSON. Currently, MagicDNS is the only setting available:
 ### Request example
 
 ``` sh
-curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/preferences" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '{"magicDNS": true}'
 ```
 
 ### Response
 
-If there are no DNS servers, Tailscale returns an error message:
+If there are no DNS servers, this returns an error message:
 
 ``` jsonc
 {
@@ -1727,7 +1629,7 @@ If there are no DNS servers, Tailscale returns an error message:
 }
 ```
 
-If there are DNS servers, Tailscale returns the MagicDNS status:
+If there are DNS servers, this returns the MagicDNS status:
 
 ``` jsonc
 {
@@ -1735,25 +1637,27 @@ If there are DNS servers, Tailscale returns the MagicDNS status:
 }
 ```
 
-## Fetch the search paths for a tailnet
+<a href="tailnet-dns-searchpaths-get"></a>
+
+## Get search paths
 
 ``` http
 GET /api/v2/tailnet/{tailnet}/dns/searchpaths
 ```
 
 Retrieves the list of search paths, also referred to as _search domains_, that is currently set for the given tailnet.
-Supply the tailnet of interest in the path.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
-Supply the tailnet in the path.
+
+The tailnet organization name.
 
 ### Request example
 
 ``` sh
-curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
-  -u "tskey-yourapikey123:"
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths" \
+  -u "tskey-api-xxxxx:"
 ```
 
 ### Response
@@ -1764,7 +1668,9 @@ curl 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
 }
 ```
 
-## Replace the search paths for a tailnet
+<a href="tailnet-dns-searchpaths-post"></a>
+
+## Set search paths
 
 ``` http
 POST /api/v2/tailnet/{tailnet}/dns/searchpaths
@@ -1772,15 +1678,15 @@ POST /api/v2/tailnet/{tailnet}/dns/searchpaths
 
 Replaces the list of search paths with the list supplied by the user and returns an error otherwise.
 
-### Input parameters
+### Parameters
 
 #### `tailnet` (required in URL path)
 
-Supply the tailnet in the path.
+The tailnet organization name.
 
 #### `searchPaths` (required in `POST` body)
 
-Supply a list of search paths in JSON; for example:
+Specify a list of search paths in a JSON object:
 
 ``` jsonc
 {
@@ -1791,8 +1697,8 @@ Supply a list of search paths in JSON; for example:
 ### Request example
 
 ``` sh
-curl -X POST 'https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths' \
-  -u "tskey-yourapikey123:" \
+curl "https://api.tailscale.com/api/v2/tailnet/example.com/dns/searchpaths" \
+  -u "tskey-api-xxxxx:" \
   --data-binary '{"searchPaths": ["user1.example.com", "user2.example.com"]}'
 ```
 
