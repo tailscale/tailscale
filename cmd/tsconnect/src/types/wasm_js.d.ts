@@ -63,6 +63,7 @@ declare global {
   type IPNNetMap = {
     self: IPNNetMapSelfNode
     peers: IPNNetMapPeerNode[]
+    lockedOut: boolean
   }
 
   type IPNNetMapNode = {

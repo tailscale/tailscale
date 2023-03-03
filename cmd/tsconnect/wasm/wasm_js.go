@@ -272,6 +272,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 						TailscaleSSHEnabled: p.Hostinfo.TailscaleSSHEnabled(),
 					}
 				}),
+				LockedOut: nm.TKAEnabled && len(nm.SelfNode.KeySignature) == 0,
 			}
 			if jsonNetMap, err := json.Marshal(jsNetMap); err == nil {
 				jsCallbacks.Call("notifyNetMap", string(jsonNetMap))
@@ -521,8 +522,9 @@ func (w termWriter) Write(p []byte) (n int, err error) {
 }
 
 type jsNetMap struct {
-	Self  jsNetMapSelfNode   `json:"self"`
-	Peers []jsNetMapPeerNode `json:"peers"`
+	Self      jsNetMapSelfNode   `json:"self"`
+	Peers     []jsNetMapPeerNode `json:"peers"`
+	LockedOut bool               `json:"lockedOut"`
 }
 
 type jsNetMapNode struct {

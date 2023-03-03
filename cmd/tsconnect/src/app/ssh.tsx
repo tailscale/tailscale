@@ -60,11 +60,11 @@ function SSHSession({
 function NoSSHPeers() {
   return (
     <div class="container mx-auto px-4 text-center">
-      None of your machines have
+      None of your machines have{" "}
       <a href="https://tailscale.com/kb/1193/tailscale-ssh/" class="link">
         Tailscale SSH
       </a>
-      enabled. Give it a try!
+      {" "}enabled. Give it a try!
     </div>
   )
 }

@@ -108,6 +108,7 @@
           graphviz
           perl
           go_1_20
+          yarn
         ];
       };
     };
