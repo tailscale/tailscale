@@ -353,7 +353,7 @@ func (s *State) String() string {
 	return sb.String()
 }
 
-// ChangeFunc is a callback function (usually registeredw with
+// ChangeFunc is a callback function (usually registered with
 // wgengine/monitor's Mon) that's called when the network
 // changed. The changed parameter is whether the network changed
 // enough for State to have changed since the last callback.
