@@ -32,6 +32,7 @@ const (
 )
 
 var distro lazy.SyncValue[Distro]
+var isWSL lazy.SyncValue[bool]
 
 // Get returns the current distro, or the empty string if unknown.
 func Get() Distro {
@@ -44,6 +45,15 @@ func Get() Distro {
 		default:
 			return Distro("")
 		}
+	})
+}
+
+// IsWSL reports whether we're running in the Windows Subsystem for Linux.
+func IsWSL() bool {
+	return runtime.GOOS == "linux" && isWSL.Get(func() bool {
+		// We could look for $WSL_INTEROP instead, however that may be missing if
+		// the user has started to use systemd in WSL2.
+		return have("/proc/sys/fs/binfmt_misc/WSLInterop") || have("/mnt/wsl")
 	})
 }
 

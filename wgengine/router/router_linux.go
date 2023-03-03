@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -223,6 +224,8 @@ func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monit
 		r.ipPolicyPrefBase = 1300
 		r.logf("mwan3 on openWRT detected, switching policy base priority to 1300")
 	}
+
+	r.fixupWSLMTU()
 
 	return r, nil
 }
@@ -889,6 +892,45 @@ func (r *linuxRouter) downInterface() error {
 		return fmt.Errorf("bringing interface down, %w", err)
 	}
 	return netlink.LinkSetDown(link)
+}
+
+// fixupWSLMTU sets the MTU on the eth0 interface to 1360 bytes if running under
+// WSL, eth0 is the default route, and has the MTU 1280 bytes.
+func (r *linuxRouter) fixupWSLMTU() {
+	if !distro.IsWSL() {
+		return
+	}
+
+	if r.useIPCommand() {
+		r.logf("fixupWSLMTU: not implemented by ip command")
+		return
+	}
+
+	link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		r.logf("warning: fixupWSLMTU: could not open eth0: %v", err)
+		return
+	}
+
+	routes, err := netlink.RouteGet(net.IPv4(8, 8, 8, 8))
+	if err != nil || len(routes) == 0 {
+		if err == nil {
+			err = fmt.Errorf("none found")
+		}
+		r.logf("fixupWSLMTU: could not get default route: %v", err)
+		return
+	}
+
+	if routes[0].LinkIndex != link.Attrs().Index {
+		r.logf("fixupWSLMTU: default route is not via eth0")
+		return
+	}
+
+	if link.Attrs().MTU == 1280 {
+		if err := netlink.LinkSetMTU(link, 1360); err != nil {
+			r.logf("warning: fixupWSLMTU: could not raise eth0 MTU: %v", err)
+		}
+	}
 }
 
 // addrFamily is an address family: IPv4 or IPv6.
