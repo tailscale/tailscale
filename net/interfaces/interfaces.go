@@ -613,8 +613,18 @@ func LikelyHomeRouterIP() (gateway, myIP netip.Addr, ok bool) {
 		return
 	}
 	ForeachInterfaceAddress(func(i Interface, pfx netip.Prefix) {
+		if !i.IsUp() {
+			// Skip interfaces that aren't up.
+			return
+		} else if myIP.IsValid() {
+			// We already have a valid self IP; skip this one.
+			return
+		}
+
 		ip := pfx.Addr()
-		if !i.IsUp() || !ip.IsValid() || myIP.IsValid() {
+		if !ip.IsValid() || !ip.Is4() {
+			// Skip IPs that aren't valid or aren't IPv4, since we
+			// always return an IPv4 address.
 			return
 		}
 		if gateway.IsPrivate() && ip.IsPrivate() {
