@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/slicesx"
 )
 
 func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
@@ -56,8 +56,8 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 			}
 		}
 	}
-	rand.Shuffle(len(cands4), func(i, j int) { cands4[i], cands4[j] = cands4[j], cands4[i] })
-	rand.Shuffle(len(cands6), func(i, j int) { cands6[i], cands6[j] = cands6[j], cands6[i] })
+	slicesx.Shuffle(cands4)
+	slicesx.Shuffle(cands6)
 
 	const maxCands = 6
 	var cands []nameIP // up to maxCands alternating v4/v6 as long as we have both
@@ -87,7 +87,7 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 			continue
 		}
 		if ips := dm[host]; len(ips) > 0 {
-			rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+			slicesx.Shuffle(ips)
 			logf("bootstrapDNS(%q, %q) for %q = %v", cand.dnsName, cand.ip, host, ips)
 			return ips, nil
 		}
