@@ -11,7 +11,7 @@ package sockstats
 import (
 	"context"
 
-	"tailscale.com/wgengine/monitor"
+	"tailscale.com/net/interfaces"
 )
 
 type SockStats struct {
@@ -34,6 +34,13 @@ func Get() *SockStats {
 	return get()
 }
 
-func SetLinkMonitor(lm *monitor.Mon) {
+// LinkMonitor is the interface for the parts of wgengine/mointor's Mon that we
+// need, to avoid the dependency.
+type LinkMonitor interface {
+	InterfaceState() *interfaces.State
+	RegisterChangeCallback(interfaces.ChangeFunc) (unregister func())
+}
+
+func SetLinkMonitor(lm LinkMonitor) {
 	setLinkMonitor(lm)
 }

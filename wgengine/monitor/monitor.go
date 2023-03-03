@@ -48,12 +48,6 @@ type osMon interface {
 	IsInterestingInterface(iface string) bool
 }
 
-// ChangeFunc is a callback function that's called when the network
-// changed. The changed parameter is whether the network changed
-// enough for interfaces.State to have changed since the last
-// callback.
-type ChangeFunc func(changed bool, state *interfaces.State)
-
 // Mon represents a monitoring instance.
 type Mon struct {
 	logf   logger.Logf
@@ -62,7 +56,7 @@ type Mon struct {
 	stop   chan struct{} // closed on Stop
 
 	mu         sync.Mutex // guards all following fields
-	cbs        set.HandleSet[ChangeFunc]
+	cbs        set.HandleSet[interfaces.ChangeFunc]
 	ruleDelCB  set.HandleSet[RuleDeleteCallback]
 	ifState    *interfaces.State
 	gwValid    bool       // whether gw and gwSelfIP are valid
@@ -139,7 +133,7 @@ func (m *Mon) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 // RegisterChangeCallback adds callback to the set of parties to be
 // notified (in their own goroutine) when the network state changes.
 // To remove this callback, call unregister (or close the monitor).
-func (m *Mon) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
+func (m *Mon) RegisterChangeCallback(callback interfaces.ChangeFunc) (unregister func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	handle := m.cbs.Add(callback)
