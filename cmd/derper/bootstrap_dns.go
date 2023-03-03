@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"expvar"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -52,6 +53,13 @@ func refreshBootstrapDNS() {
 	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
 	defer cancel()
 	dnsEntries := resolveList(ctx, strings.Split(*bootstrapDNS, ","))
+	// Randomize the order of the IPs for each name to avoid the client biasing
+	// to IPv6
+	for k := range dnsEntries {
+		ips := dnsEntries[k]
+		rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+		dnsEntries[k] = ips
+	}
 	j, err := json.MarshalIndent(dnsEntries, "", "\t")
 	if err != nil {
 		// leave the old values in place
