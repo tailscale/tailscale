@@ -39,6 +39,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/integration/testcontrol"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -501,6 +502,110 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
+}
+
+// TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
+// tries to do bi-directional pings between them.
+func TestNATPing(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	registerNode := func() (*testNode, key.NodePublic) {
+		n := newTestNode(t, env)
+		n.StartDaemon()
+		n.AwaitListening()
+		n.MustUp()
+		n.AwaitRunning()
+		k := n.MustStatus().Self.PublicKey
+		return n, k
+	}
+	n1, k1 := registerNode()
+	n2, k2 := registerNode()
+
+	n1IP := n1.AwaitIP()
+	n2IP := n2.AwaitIP()
+
+	n1ExternalIP := netip.MustParseAddr("100.64.1.1")
+	n2ExternalIP := netip.MustParseAddr("100.64.2.1")
+
+	tests := []struct {
+		name       string
+		pairs      []testcontrol.MasqueradePair
+		n1SeesN2IP netip.Addr
+		n2SeesN1IP netip.Addr
+	}{
+		{
+			name:       "no_nat",
+			n1SeesN2IP: n2IP,
+			n2SeesN1IP: n1IP,
+		},
+		{
+			name: "n1_has_external_ip",
+			pairs: []testcontrol.MasqueradePair{
+				{
+					Node:              k1,
+					Peer:              k2,
+					NodeMasqueradesAs: n1ExternalIP,
+				},
+			},
+			n1SeesN2IP: n2IP,
+			n2SeesN1IP: n1ExternalIP,
+		},
+		{
+			name: "n2_has_external_ip",
+			pairs: []testcontrol.MasqueradePair{
+				{
+					Node:              k2,
+					Peer:              k1,
+					NodeMasqueradesAs: n2ExternalIP,
+				},
+			},
+			n1SeesN2IP: n2ExternalIP,
+			n2SeesN1IP: n1IP,
+		},
+		{
+			name: "both_have_external_ips",
+			pairs: []testcontrol.MasqueradePair{
+				{
+					Node:              k1,
+					Peer:              k2,
+					NodeMasqueradesAs: n1ExternalIP,
+				},
+				{
+					Node:              k2,
+					Peer:              k1,
+					NodeMasqueradesAs: n2ExternalIP,
+				},
+			},
+			n1SeesN2IP: n2ExternalIP,
+			n2SeesN1IP: n1ExternalIP,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env.Control.SetMasqueradeAddresses(tc.pairs)
+
+			s1 := n1.MustStatus()
+			n2AsN1Peer := s1.Peer[k2]
+			if got := n2AsN1Peer.TailscaleIPs[0]; got != tc.n1SeesN2IP {
+				t.Fatalf("n1 sees n2 as %v; want %v", got, tc.n1SeesN2IP)
+			}
+
+			s2 := n2.MustStatus()
+			n1AsN2Peer := s2.Peer[k1]
+			if got := n1AsN2Peer.TailscaleIPs[0]; got != tc.n2SeesN1IP {
+				t.Fatalf("n2 sees n1 as %v; want %v", got, tc.n2SeesN1IP)
+			}
+
+			if err := n1.Tailscale("ping", tc.n1SeesN2IP.String()).Run(); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := n2.Tailscale("ping", tc.n2SeesN1IP.String()).Run(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestLogoutRemovesAllPeers(t *testing.T) {
