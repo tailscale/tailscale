@@ -60,6 +60,12 @@ type Server struct {
 	pubKey     key.MachinePublic
 	privKey    key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
 
+	// masquerades is the set of masquerades that should be applied to
+	// MapResponses sent to clients. It is keyed by the requesting nodes
+	// public key, and then the peer node's public key. The value is the
+	// masquerade address to use for that peer.
+	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV4MasqAddrForThisPeer IP
+
 	noisePubKey  key.MachinePublic
 	noisePrivKey key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
 
@@ -286,6 +292,48 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.serveUnhandled(w, r)
 	}
+}
+
+// MasqueradePair is a pair of nodes and the IP address that the
+// Node masquerades as for the Peer.
+//
+// Setting this will have future MapResponses for Node to have
+// Peer.SelfNodeV4MasqAddrForThisPeer set to NodeMasqueradesAs.
+// MapResponses for the Peer will now see Node.Addresses as
+// NodeMasqueradesAs.
+type MasqueradePair struct {
+	Node              key.NodePublic
+	Peer              key.NodePublic
+	NodeMasqueradesAs netip.Addr
+}
+
+// SetMasqueradeAddresses sets the masquerade addresses for the server.
+// See MasqueradePair for more details.
+func (s *Server) SetMasqueradeAddresses(pairs []MasqueradePair) {
+	m := make(map[key.NodePublic]map[key.NodePublic]netip.Addr)
+	for _, p := range pairs {
+		if m[p.Node] == nil {
+			m[p.Node] = make(map[key.NodePublic]netip.Addr)
+		}
+		m[p.Node][p.Peer] = p.NodeMasqueradesAs
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.masquerades = m
+	s.updateLocked("SetMasqueradeAddresses", s.nodeIDsLocked(0))
+}
+
+// nodeIDsLocked returns the node IDs of all nodes in the server, except
+// for the node with the given ID.
+func (s *Server) nodeIDsLocked(except tailcfg.NodeID) []tailcfg.NodeID {
+	var ids []tailcfg.NodeID
+	for _, n := range s.nodes {
+		if n.ID == except {
+			continue
+		}
+		ids = append(ids, n.ID)
+	}
+	return ids
 }
 
 // Node returns the node for nodeKey. It's always nil or cloned memory.
@@ -588,12 +636,7 @@ func (s *Server) UpdateNode(n *tailcfg.Node) (peersToUpdate []tailcfg.NodeID) {
 		panic("zero nodekey")
 	}
 	s.nodes[n.Key] = n.Clone()
-	for _, n2 := range s.nodes {
-		if n.ID != n2.ID {
-			peersToUpdate = append(peersToUpdate, n2.ID)
-		}
-	}
-	return peersToUpdate
+	return s.nodeIDsLocked(n.ID)
 }
 
 func (s *Server) incrInServeMap(delta int) {
@@ -791,11 +834,28 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		DNSConfig:   dns,
 		ControlTime: &t,
 	}
+
+	s.mu.Lock()
+	nodeMasqs := s.masquerades[node.Key]
+	s.mu.Unlock()
 	for _, p := range s.AllNodes() {
-		if p.StableID != node.StableID {
-			res.Peers = append(res.Peers, p)
+		if p.StableID == node.StableID {
+			continue
 		}
+		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
+			p.SelfNodeV4MasqAddrForThisPeer = masqIP
+		}
+
+		s.mu.Lock()
+		peerAddress := s.masquerades[p.Key][node.Key]
+		s.mu.Unlock()
+		if peerAddress.IsValid() {
+			p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+		}
+		res.Peers = append(res.Peers, p)
 	}
+
 	sort.Slice(res.Peers, func(i, j int) bool {
 		return res.Peers[i].ID < res.Peers[j].ID
 	})
