@@ -7,8 +7,6 @@ package sockstats
 
 import (
 	"context"
-
-	"tailscale.com/wgengine/monitor"
 )
 
 func withSockStats(ctx context.Context, label string) context.Context {
@@ -19,5 +17,5 @@ func get() *SockStats {
 	return nil
 }
 
-func setLinkMonitor(lm *monitor.Mon) {
+func setLinkMonitor(lm LinkMonitor) {
 }

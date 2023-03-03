@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/net/interfaces"
-	"tailscale.com/wgengine/monitor"
 )
 
 type sockStatCounters struct {
@@ -113,7 +112,7 @@ func get() *SockStats {
 	return r
 }
 
-func setLinkMonitor(lm *monitor.Mon) {
+func setLinkMonitor(lm LinkMonitor) {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
 
