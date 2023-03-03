@@ -68,36 +68,37 @@ func (src *Node) Clone() *Node {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeCloneNeedsRegeneration = Node(struct {
-	ID                      NodeID
-	StableID                StableNodeID
-	Name                    string
-	User                    UserID
-	Sharer                  UserID
-	Key                     key.NodePublic
-	KeyExpiry               time.Time
-	KeySignature            tkatype.MarshaledSignature
-	Machine                 key.MachinePublic
-	DiscoKey                key.DiscoPublic
-	Addresses               []netip.Prefix
-	AllowedIPs              []netip.Prefix
-	Endpoints               []string
-	DERP                    string
-	Hostinfo                HostinfoView
-	Created                 time.Time
-	Cap                     CapabilityVersion
-	Tags                    []string
-	PrimaryRoutes           []netip.Prefix
-	LastSeen                *time.Time
-	Online                  *bool
-	KeepAlive               bool
-	MachineAuthorized       bool
-	Capabilities            []string
-	UnsignedPeerAPIOnly     bool
-	ComputedName            string
-	computedHostIfDifferent string
-	ComputedNameWithHost    string
-	DataPlaneAuditLogID     string
-	Expired                 bool
+	ID                            NodeID
+	StableID                      StableNodeID
+	Name                          string
+	User                          UserID
+	Sharer                        UserID
+	Key                           key.NodePublic
+	KeyExpiry                     time.Time
+	KeySignature                  tkatype.MarshaledSignature
+	Machine                       key.MachinePublic
+	DiscoKey                      key.DiscoPublic
+	Addresses                     []netip.Prefix
+	AllowedIPs                    []netip.Prefix
+	Endpoints                     []string
+	DERP                          string
+	Hostinfo                      HostinfoView
+	Created                       time.Time
+	Cap                           CapabilityVersion
+	Tags                          []string
+	PrimaryRoutes                 []netip.Prefix
+	LastSeen                      *time.Time
+	Online                        *bool
+	KeepAlive                     bool
+	MachineAuthorized             bool
+	Capabilities                  []string
+	UnsignedPeerAPIOnly           bool
+	ComputedName                  string
+	computedHostIfDifferent       string
+	ComputedNameWithHost          string
+	DataPlaneAuditLogID           string
+	Expired                       bool
+	SelfNodeV4MasqAddrForThisPeer netip.Addr
 }{})
 
 // Clone makes a deep copy of Hostinfo.

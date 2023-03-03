@@ -176,40 +176,44 @@ func (v NodeView) ComputedName() string              { return v.ж.ComputedName 
 func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
 func (v NodeView) Expired() bool                     { return v.ж.Expired }
-func (v NodeView) Equal(v2 NodeView) bool            { return v.ж.Equal(v2.ж) }
+func (v NodeView) SelfNodeV4MasqAddrForThisPeer() netip.Addr {
+	return v.ж.SelfNodeV4MasqAddrForThisPeer
+}
+func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NodeViewNeedsRegeneration = Node(struct {
-	ID                      NodeID
-	StableID                StableNodeID
-	Name                    string
-	User                    UserID
-	Sharer                  UserID
-	Key                     key.NodePublic
-	KeyExpiry               time.Time
-	KeySignature            tkatype.MarshaledSignature
-	Machine                 key.MachinePublic
-	DiscoKey                key.DiscoPublic
-	Addresses               []netip.Prefix
-	AllowedIPs              []netip.Prefix
-	Endpoints               []string
-	DERP                    string
-	Hostinfo                HostinfoView
-	Created                 time.Time
-	Cap                     CapabilityVersion
-	Tags                    []string
-	PrimaryRoutes           []netip.Prefix
-	LastSeen                *time.Time
-	Online                  *bool
-	KeepAlive               bool
-	MachineAuthorized       bool
-	Capabilities            []string
-	UnsignedPeerAPIOnly     bool
-	ComputedName            string
-	computedHostIfDifferent string
-	ComputedNameWithHost    string
-	DataPlaneAuditLogID     string
-	Expired                 bool
+	ID                            NodeID
+	StableID                      StableNodeID
+	Name                          string
+	User                          UserID
+	Sharer                        UserID
+	Key                           key.NodePublic
+	KeyExpiry                     time.Time
+	KeySignature                  tkatype.MarshaledSignature
+	Machine                       key.MachinePublic
+	DiscoKey                      key.DiscoPublic
+	Addresses                     []netip.Prefix
+	AllowedIPs                    []netip.Prefix
+	Endpoints                     []string
+	DERP                          string
+	Hostinfo                      HostinfoView
+	Created                       time.Time
+	Cap                           CapabilityVersion
+	Tags                          []string
+	PrimaryRoutes                 []netip.Prefix
+	LastSeen                      *time.Time
+	Online                        *bool
+	KeepAlive                     bool
+	MachineAuthorized             bool
+	Capabilities                  []string
+	UnsignedPeerAPIOnly           bool
+	ComputedName                  string
+	computedHostIfDifferent       string
+	ComputedNameWithHost          string
+	DataPlaneAuditLogID           string
+	Expired                       bool
+	SelfNodeV4MasqAddrForThisPeer netip.Addr
 }{})
 
 // View returns a readonly view of Hostinfo.
