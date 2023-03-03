@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"expvar"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"tailscale.com/syncs"
+	"tailscale.com/util/slicesx"
 )
 
 const refreshTimeout = time.Minute
@@ -57,7 +57,7 @@ func refreshBootstrapDNS() {
 	// to IPv6
 	for k := range dnsEntries {
 		ips := dnsEntries[k]
-		rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+		slicesx.Shuffle(ips)
 		dnsEntries[k] = ips
 	}
 	j, err := json.MarshalIndent(dnsEntries, "", "\t")
