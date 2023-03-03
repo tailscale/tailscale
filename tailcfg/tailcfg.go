@@ -95,7 +95,8 @@ type CapabilityVersion int
 //   - 56: 2023-01-24: Client understands CapabilityDebugTSDNSResolution
 //   - 57: 2023-01-25: Client understands CapabilityBindToInterfaceByRoute
 //   - 58: 2023-03-10: Client retries lite map updates before restarting map poll.
-const CurrentCapabilityVersion CapabilityVersion = 58
+//   - 59: 2023-03-16: Client understands Peers[].SelfNodeV4MasqAddrForThisPeer
+const CurrentCapabilityVersion CapabilityVersion = 59
 
 type StableID string
 
@@ -273,6 +274,21 @@ type Node struct {
 	// the client, this is calculated client-side based on a timestamp sent
 	// from control, to avoid clock skew issues.
 	Expired bool `json:",omitempty"`
+
+	// SelfNodeV4MasqAddrForThisPeer is the IPv4 that this peer knows the current node as.
+	// It may be empty if the peer knows the current node by its native
+	// IPv4 address.
+	// This field is only populated in a MapResponse for peers and not
+	// for the current node.
+	//
+	// If set, it should be used to masquerade traffic originating from the
+	// current node to this peer. The masquerade address is only relevant
+	// for this peer and not for other peers.
+	//
+	// This only applies to traffic originating from the current node to the
+	// peer or any of its subnets. Traffic originating from subnet routes will
+	// not be masqueraded (e.g. in case of --snat-subnet-routes).
+	SelfNodeV4MasqAddrForThisPeer netip.Addr `json:",omitempty"`
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1698,7 +1714,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
 		eqStrings(n.Tags, n2.Tags) &&
-		n.Expired == n2.Expired
+		n.Expired == n2.Expired &&
+		n.SelfNodeV4MasqAddrForThisPeer == n2.SelfNodeV4MasqAddrForThisPeer
 }
 
 func eqBoolPtr(a, b *bool) bool {
