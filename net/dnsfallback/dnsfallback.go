@@ -87,6 +87,7 @@ func Lookup(ctx context.Context, host string) ([]netip.Addr, error) {
 			continue
 		}
 		if ips := dm[host]; len(ips) > 0 {
+			rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
 			logf("bootstrapDNS(%q, %q) for %q = %v", cand.dnsName, cand.ip, host, ips)
 			return ips, nil
 		}
