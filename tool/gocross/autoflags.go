@@ -104,10 +104,15 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		if env.IsSet("XCODE_VERSION_ACTUAL") {
 			var xcodeFlags []string
 			// Minimum OS version being targeted, results in
-			// e.g. -mmacosx-version-min=11.3
-			minOSKey := env.Get("DEPLOYMENT_TARGET_CLANG_FLAG_NAME", "")
-			minOSVal := env.Get(env.Get("DEPLOYMENT_TARGET_CLANG_ENV_NAME", ""), "")
-			xcodeFlags = append(xcodeFlags, fmt.Sprintf("-%s=%s", minOSKey, minOSVal))
+			// e.g. -mmacosx-version-min=11.3, -miphoneos-version-min=15.0
+			switch {
+			case env.IsSet("IPHONEOS_DEPLOYMENT_TARGET"):
+				xcodeFlags = append(xcodeFlags, "-miphoneos-version-min="+env.Get("IPHONEOS_DEPLOYMENT_TARGET", ""))
+			case env.IsSet("MACOSX_DEPLOYMENT_TARGET"):
+				xcodeFlags = append(xcodeFlags, "-mmacosx-version-min="+env.Get("MACOSX_DEPLOYMENT_TARGET", ""))
+			default:
+				return nil, nil, fmt.Errorf("invoked by Xcode but couldn't figure out deployment target. Did Xcode change its envvars again?")
+			}
 
 			// Target-specific SDK directory. Must be passed as two
 			// words ("-isysroot PATH", not "-isysroot=PATH").
