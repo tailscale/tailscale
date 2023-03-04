@@ -84,6 +84,10 @@ type Impl struct {
 	// port other than accepting it and closing it.
 	ForwardTCPIn func(c net.Conn, port uint16)
 
+	// ForwardUDPIn, if non-nil, handles forwarding inbound UDP
+	// packets.
+	ForwardUDPIn func(c net.PacketConn, port uint16)
+
 	// ProcessLocalIPs is whether netstack should handle incoming
 	// traffic directed at the Node.Addresses (local IPs).
 	// It can only be set before calling Start.
@@ -1021,6 +1025,12 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 
 	c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
+
+	if ns.ForwardUDPIn != nil {
+		ns.ForwardUDPIn(c, r.ID().LocalPort)
+		return
+	}
+
 	go ns.forwardUDP(c, &wq, srcAddr, dstAddr)
 }
 
