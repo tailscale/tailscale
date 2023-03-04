@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 func TestGetState(t *testing.T) {
@@ -37,12 +39,110 @@ func TestGetState(t *testing.T) {
 }
 
 func TestLikelyHomeRouterIP(t *testing.T) {
+	ipnet := func(s string) net.Addr {
+		ip, ipnet, err := net.ParseCIDR(s)
+		ipnet.IP = ip
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ipnet
+	}
+
+	mockInterfaces := []Interface{
+		// Interface that's not running
+		{
+			Interface: &net.Interface{
+				Index: 1,
+				MTU:   1500,
+				Name:  "down0",
+				Flags: net.FlagBroadcast | net.FlagMulticast,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("10.0.0.100/8"),
+			},
+		},
+
+		// Interface that's up, but only has an IPv6 address
+		{
+			Interface: &net.Interface{
+				Index: 2,
+				MTU:   1500,
+				Name:  "ipsixonly0",
+				Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("76f9:2e7d:55dd:48e1:48d0:763a:b591:b1bc/64"),
+			},
+		},
+
+		// Fake interface with a gateway to the internet
+		{
+			Interface: &net.Interface{
+				Index: 3,
+				MTU:   1500,
+				Name:  "fake0",
+				Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+			},
+			AltAddrs: []net.Addr{
+				ipnet("23a1:99c9:3a88:1d29:74d4:957b:2133:3f4e/64"),
+				ipnet("192.168.7.100/24"),
+			},
+		},
+	}
+
+	// Mock out the responses from netInterfaces()
+	tstest.Replace(t, &altNetInterfaces, func() ([]Interface, error) {
+		return mockInterfaces, nil
+	})
+
+	// Mock out the likelyHomeRouterIP to return a known gateway.
+	tstest.Replace(t, &likelyHomeRouterIP, func() (netip.Addr, bool) {
+		return netip.MustParseAddr("192.168.7.1"), true
+	})
+
 	gw, my, ok := LikelyHomeRouterIP()
 	if !ok {
-		t.Logf("no result")
-		return
+		t.Fatal("expected success")
 	}
 	t.Logf("myIP = %v; gw = %v", my, gw)
+
+	if want := netip.MustParseAddr("192.168.7.1"); gw != want {
+		t.Errorf("got gateway %v; want %v", gw, want)
+	}
+	if want := netip.MustParseAddr("192.168.7.100"); my != want {
+		t.Errorf("got self IP %v; want %v", my, want)
+	}
+
+	// Verify that no IP is returned if there are no IPv4 addresses on
+	// local interfaces.
+	t.Run("NoIPv4Addrs", func(t *testing.T) {
+		tstest.Replace(t, &mockInterfaces, []Interface{
+			// Interface that's up, but only has an IPv6 address
+			{
+				Interface: &net.Interface{
+					Index: 2,
+					MTU:   1500,
+					Name:  "en0",
+					Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+				},
+				AltAddrs: []net.Addr{
+					ipnet("76f9:2e7d:55dd:48e1:48d0:763a:b591:b1bc/64"),
+				},
+			},
+		})
+
+		_, _, ok := LikelyHomeRouterIP()
+		if ok {
+			t.Fatal("expected no success")
+		}
+	})
+}
+
+func TestLikelyHomeRouterIP_NoMocks(t *testing.T) {
+	// Verify that this works properly when called on a real live system,
+	// without any mocks.
+	gw, my, ok := LikelyHomeRouterIP()
+	t.Logf("LikelyHomeRouterIP: gw=%v my=%v ok=%v", gw, my, ok)
 }
 
 func TestIsUsableV6(t *testing.T) {
