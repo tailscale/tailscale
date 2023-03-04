@@ -6,11 +6,28 @@ package tstest
 
 import (
 	"context"
+	"testing"
 	"time"
 
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/types/logger"
 )
+
+// Replace replaces the value of target with val.
+// The old value is restored when the test ends.
+func Replace[T any](t *testing.T, target *T, val T) {
+	t.Helper()
+	if target == nil {
+		t.Fatalf("Replace: nil pointer")
+	}
+	old := *target
+	t.Cleanup(func() {
+		*target = old
+	})
+
+	*target = val
+	return
+}
 
 // WaitFor retries try for up to maxWait.
 // It returns nil once try returns nil the first time.

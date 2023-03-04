@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"tailscale.com/tstest"
 )
 
 var dialTest = flag.String("dial-test", "", "if non-empty, addr:port to test dial")
@@ -142,9 +144,7 @@ func TestResolverAllHostStaticResult(t *testing.T) {
 }
 
 func TestShouldTryBootstrap(t *testing.T) {
-	oldDebug := debug
-	t.Cleanup(func() { debug = oldDebug })
-	debug = func() bool { return true }
+	tstest.Replace(t, &debug, func() bool { return true })
 
 	type step struct {
 		ip  netip.Addr // IP we pretended to dial
