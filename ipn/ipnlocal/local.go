@@ -84,6 +84,7 @@ import (
 	"tailscale.com/types/preftype"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cache"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -278,6 +279,8 @@ type LocalBackend struct {
 	// to use, unless overridden locally.
 	capForcedNetfilter string
 
+	controlKeyCache cache.Cache[string, *tailcfg.OverTLSPublicKeyResponse]
+
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView // or !Valid if none
@@ -388,6 +391,14 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		clock:               clock,
 		selfUpdateProgress:  make([]ipnstate.UpdateProgress, 0),
 		lastSelfUpdateState: ipnstate.UpdateFinished,
+
+		// NOTE: if we ever decide to cache this somewhere other than
+		// in-memory, ensure we're handling profile switches/shutdowns.
+		controlKeyCache: &cache.Single[string, *tailcfg.OverTLSPublicKeyResponse]{
+			// If we can't reach the control server, allow returning
+			// an expired value from the cache.
+			ServeExpired: true,
+		},
 	}
 
 	netMon := sys.NetMon.Get()
@@ -1795,6 +1806,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		C2NHandler:                 http.HandlerFunc(b.handleC2N),
 		DialPlan:                   &b.dialPlan, // pointer because it can't be copied
 		ControlKnobs:               b.sys.ControlKnobs(),
+
+		// Cache control key in-memory; this helps when moving to a
+		// network that does TLS MiTM, and allows us to continue using
+		// the previously-cached control key.
+		ControlKeyCache: b.controlKeyCache,
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.

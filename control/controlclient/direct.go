@@ -52,6 +52,7 @@ import (
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/cache"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
@@ -81,6 +82,9 @@ type Direct struct {
 	onTailnetDefaultAutoUpdate func(bool)                   // or nil
 
 	dialPlan ControlDialPlanner // can be nil
+
+	controlKeyMu    sync.Mutex // guards controlKeyCache
+	controlKeyCache cache.Cache[string, *tailcfg.OverTLSPublicKeyResponse]
 
 	mu             sync.Mutex        // mutex guards the following fields
 	serverKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key
@@ -151,6 +155,10 @@ type Options struct {
 	// If we receive a new DialPlan from the server, this value will be
 	// updated.
 	DialPlan ControlDialPlanner
+
+	// ControlKeyCache caches Noise keys returned from control; if nil, no
+	// cache will be used.
+	ControlKeyCache cache.Cache[string, *tailcfg.OverTLSPublicKeyResponse]
 }
 
 // ControlDialPlanner is the interface optionally supplied when creating a
@@ -264,6 +272,11 @@ func NewDirect(opts Options) (*Direct, error) {
 		httpc = &http.Client{Transport: tr}
 	}
 
+	ckcache := opts.ControlKeyCache
+	if ckcache == nil {
+		ckcache = cache.None[string, *tailcfg.OverTLSPublicKeyResponse]{}
+	}
+
 	c := &Direct{
 		httpc:                      httpc,
 		controlKnobs:               opts.ControlKnobs,
@@ -286,6 +299,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dialer:                     opts.Dialer,
 		dnsCache:                   dnsCache,
 		dialPlan:                   opts.DialPlan,
+		controlKeyCache:            ckcache,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -492,11 +506,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
 	if serverKey.IsZero() {
-		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
+		keys, cached, err := c.loadServerPubKeys(ctx)
 		if err != nil {
+			c.logf("error fetching control server key (serverURL=%q): %v", c.serverURL, err)
 			return regen, opt.URL, nil, err
 		}
-		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
+		c.logf("control server key from %s: cached=%v ts2021=%s, legacy=%v", c.serverURL, cached, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
 		c.mu.Lock()
 		c.serverKey = keys.LegacyPublicKey
@@ -1260,39 +1275,54 @@ func encode(v any, serverKey, serverNoiseKey key.MachinePublic, mkey key.Machine
 	return mkey.SealTo(serverKey, b), nil
 }
 
-func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string) (*tailcfg.OverTLSPublicKeyResponse, error) {
-	keyURL := fmt.Sprintf("%v/key?v=%d", serverURL, tailcfg.CurrentCapabilityVersion)
-	req, err := http.NewRequestWithContext(ctx, "GET", keyURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create control key request: %v", err)
-	}
-	res, err := httpc.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch control key: %v", err)
-	}
-	defer res.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
-	if err != nil {
-		return nil, fmt.Errorf("fetch control key response: %v", err)
-	}
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("fetch control key: %d", res.StatusCode)
-	}
-	var out tailcfg.OverTLSPublicKeyResponse
-	jsonErr := json.Unmarshal(b, &out)
-	if jsonErr == nil {
-		return &out, nil
-	}
+func (c *Direct) loadServerPubKeys(ctx context.Context) (ret *tailcfg.OverTLSPublicKeyResponse, cached bool, err error) {
+	c.controlKeyMu.Lock()
+	defer c.controlKeyMu.Unlock()
+	cached = true
 
-	// Some old control servers might not be updated to send the new format.
-	// Accept the old pre-JSON format too.
-	out = tailcfg.OverTLSPublicKeyResponse{}
-	k, err := key.ParseMachinePublicUntyped(mem.B(b))
-	if err != nil {
-		return nil, multierr.New(jsonErr, err)
-	}
-	out.LegacyPublicKey = k
-	return &out, nil
+	keyURL := fmt.Sprintf("%v/key?v=%d", c.serverURL, tailcfg.CurrentCapabilityVersion)
+	ret, err = c.controlKeyCache.Get(keyURL, func() (*tailcfg.OverTLSPublicKeyResponse, time.Time, error) {
+		cached = false
+		req, err := http.NewRequestWithContext(ctx, "GET", keyURL, nil)
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("create control key request: %v", err)
+		}
+		res, err := c.httpc.Do(req)
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("fetch control key: %v", err)
+		}
+		defer res.Body.Close()
+		b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("fetch control key response: %v", err)
+		}
+		if res.StatusCode != 200 {
+			return nil, time.Time{}, fmt.Errorf("fetch control key: %d", res.StatusCode)
+		}
+
+		// Cache keys for one minute at most, after which we'll
+		// re-fetch from the control server. However, if this cache has
+		// ServeExpired enabled, then we'll serve the expired key if
+		// the request to fetch a key fails.
+		expiry := c.clock.Now().Add(1 * time.Minute)
+
+		var out tailcfg.OverTLSPublicKeyResponse
+		jsonErr := json.Unmarshal(b, &out)
+		if jsonErr == nil {
+			return &out, expiry, nil
+		}
+
+		// Some old control servers might not be updated to send the new format.
+		// Accept the old pre-JSON format too.
+		out = tailcfg.OverTLSPublicKeyResponse{}
+		k, err := key.ParseMachinePublicUntyped(mem.B(b))
+		if err != nil {
+			return nil, time.Time{}, multierr.New(jsonErr, err)
+		}
+		out.LegacyPublicKey = k
+		return &out, expiry, nil
+	})
+	return
 }
 
 // DevKnob contains temporary internal-only debug knobs.
