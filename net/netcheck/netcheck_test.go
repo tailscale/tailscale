@@ -22,6 +22,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 )
 
 func TestHairpinSTUN(t *testing.T) {
@@ -679,9 +680,7 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 		}
 	})
 
-	oldTransport := noRedirectClient.Transport
-	t.Cleanup(func() { noRedirectClient.Transport = oldTransport })
-	noRedirectClient.Transport = tr
+	tstest.Replace(t, &noRedirectClient.Transport, http.RoundTripper(tr))
 
 	stunAddr, cleanup := stuntest.Serve(t)
 	defer cleanup()
