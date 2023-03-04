@@ -124,8 +124,15 @@ func addAnyPortMapping(
 			uint32(leaseDuration.Seconds()),
 		)
 	}
-	for externalPort == 0 {
-		externalPort = uint16(rand.Intn(65535))
+
+	// Some devices don't let clients add a port mapping for privileged
+	// ports (ports below 1024).
+	//
+	// Pick an external port that's greater than 1024 by getting a random
+	// number in [0, 65535 - 1024] and then adding 1024 to it, shifting the
+	// range to [1024, 65535].
+	if externalPort < 1024 {
+		externalPort = uint16(rand.Intn(65535-1024) + 1024)
 	}
 	err = upnp.AddPortMapping(
 		ctx,
