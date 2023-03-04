@@ -637,7 +637,10 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var logLock sync.Mutex
+	var (
+		logLock     sync.Mutex
+		handlerDone bool
+	)
 	logf := func(format string, args ...any) {
 		if !strings.HasSuffix(format, "\n") {
 			format = format + "\n"
@@ -646,12 +649,25 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 		logLock.Lock()
 		defer logLock.Unlock()
 
+		// The portmapper can call this log function after the HTTP
+		// handler returns, which is not allowed and can cause a panic.
+		// If this happens, ignore the log lines since this typically
+		// occurs due to a client disconnect.
+		if handlerDone {
+			return
+		}
+
 		// Write and flush each line to the client so that output is streamed
 		fmt.Fprintf(w, format, args...)
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 	}
+	defer func() {
+		logLock.Lock()
+		handlerDone = true
+		logLock.Unlock()
+	}()
 
 	ctx, cancel := context.WithTimeout(r.Context(), dur)
 	defer cancel()
