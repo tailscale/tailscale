@@ -44,11 +44,21 @@ type upnpMapping struct {
 	client upnpClient
 }
 
+// upnpProtocolUDP represents the protocol name for UDP, to be used in the UPnP
+// <AddPortMapping> message in the <NewProtocol> field.
+//
+// NOTE: this must be an upper-case string, or certain routers will reject the
+// mapping request. Other implementations like miniupnp send an upper-case
+// protocol as well. See:
+//
+//	https://github.com/tailscale/tailscale/issues/7377
+const upnpProtocolUDP = "UDP"
+
 func (u *upnpMapping) GoodUntil() time.Time     { return u.goodUntil }
 func (u *upnpMapping) RenewAfter() time.Time    { return u.renewAfter }
 func (u *upnpMapping) External() netip.AddrPort { return u.external }
 func (u *upnpMapping) Release(ctx context.Context) {
-	u.client.DeletePortMapping(ctx, "", u.external.Port(), "udp")
+	u.client.DeletePortMapping(ctx, "", u.external.Port(), upnpProtocolUDP)
 }
 
 // upnpClient is an interface over the multiple different clients exported by goupnp,
@@ -69,7 +79,7 @@ type upnpClient interface {
 		// `AddAnyPortMapping` is not supported.
 		externalPort uint16,
 
-		// protocol is whether this is over TCP or UDP. Either "tcp" or "udp".
+		// protocol is whether this is over TCP or UDP. Either "TCP" or "UDP".
 		protocol string,
 
 		// internalPort is the port that the gateway device forwards the traffic to.
@@ -116,7 +126,7 @@ func addAnyPortMapping(
 			ctx,
 			"",
 			externalPort,
-			"udp",
+			upnpProtocolUDP,
 			internalPort,
 			internalClient,
 			true,
@@ -138,7 +148,7 @@ func addAnyPortMapping(
 		ctx,
 		"",
 		externalPort,
-		"udp",
+		upnpProtocolUDP,
 		internalPort,
 		internalClient,
 		true,
