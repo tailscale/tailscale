@@ -805,33 +805,48 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			continue
 		}
 		ip = ip.Unmap()
+
+		handleUPnPResponse := func() {
+			metricUPnPResponse.Add(1)
+
+			if ip != gw {
+				// https://github.com/tailscale/tailscale/issues/5502
+				c.logf("UPnP discovery response from %v, but gateway IP is %v", ip, gw)
+			}
+			meta, err := parseUPnPDiscoResponse(buf[:n])
+			if err != nil {
+				metricUPnPParseErr.Add(1)
+				c.logf("unrecognized UPnP discovery response; ignoring: %v", err)
+				return
+			}
+			metricUPnPOK.Add(1)
+			c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
+			res.UPnP = true
+			c.mu.Lock()
+			c.uPnPSawTime = time.Now()
+			if c.uPnPMeta != meta {
+				c.logf("UPnP meta changed: %+v", meta)
+				c.uPnPMeta = meta
+				metricUPnPUpdatedMeta.Add(1)
+			}
+			c.mu.Unlock()
+		}
+
 		port := uint16(addr.(*net.UDPAddr).Port)
 		switch port {
 		case c.upnpPort():
-			metricUPnPResponse.Add(1)
 			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
-				if ip != gw {
-					// https://github.com/tailscale/tailscale/issues/5502
-					c.logf("UPnP discovery response from %v, but gateway IP is %v", ip, gw)
-				}
-				meta, err := parseUPnPDiscoResponse(buf[:n])
-				if err != nil {
-					metricUPnPParseErr.Add(1)
-					c.logf("unrecognized UPnP discovery response; ignoring: %v", err)
-					continue
-				}
-				metricUPnPOK.Add(1)
-				c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
-				res.UPnP = true
-				c.mu.Lock()
-				c.uPnPSawTime = time.Now()
-				if c.uPnPMeta != meta {
-					c.logf("UPnP meta changed: %+v", meta)
-					c.uPnPMeta = meta
-					metricUPnPUpdatedMeta.Add(1)
-				}
-				c.mu.Unlock()
+				handleUPnPResponse()
 			}
+
+		default:
+			// https://github.com/tailscale/tailscale/issues/7377
+			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {
+				c.logf("UPnP discovery response from non-UPnP port %d", port)
+				metricUPnPResponseAlternatePort.Add(1)
+				handleUPnPResponse()
+			}
+
 		case c.pxpPort(): // same value for PMP and PCP
 			metricPXPResponse.Add(1)
 			if pres, ok := parsePCPResponse(buf[:n]); ok {
@@ -982,6 +997,10 @@ var (
 
 	// metricUPnPResponse counts the number of times we received a UPnP response.
 	metricUPnPResponse = clientmetric.NewCounter("portmap_upnp_response")
+
+	// metricUPnPResponseAlternatePort counts the number of times we
+	// received a UPnP response from a port other than the UPnP port.
+	metricUPnPResponseAlternatePort = clientmetric.NewCounter("portmap_upnp_response_alternate_port")
 
 	// metricUPnPParseErr counts the number of times we failed to parse a UPnP response.
 	metricUPnPParseErr = clientmetric.NewCounter("portmap_upnp_parse_err")
