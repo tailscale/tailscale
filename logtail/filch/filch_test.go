@@ -12,6 +12,8 @@ import (
 	"testing"
 	"unicode"
 	"unsafe"
+
+	"tailscale.com/tstest"
 )
 
 type filchTest struct {
@@ -177,10 +179,7 @@ func TestFilchStderr(t *testing.T) {
 	defer pipeR.Close()
 	defer pipeW.Close()
 
-	stderrFD = int(pipeW.Fd())
-	defer func() {
-		stderrFD = 2
-	}()
+	tstest.Replace(t, &stderrFD, int(pipeW.Fd()))
 
 	filePrefix := t.TempDir()
 	f := newFilchTest(t, filePrefix, Options{ReplaceStderr: true})

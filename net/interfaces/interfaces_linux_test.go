@@ -10,14 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"tailscale.com/tstest"
 )
 
 // test the specific /proc/net/route path as found on Google Cloud Run instances
 func TestGoogleCloudRunDefaultRouteInterface(t *testing.T) {
 	dir := t.TempDir()
-	savedProcNetRoutePath := procNetRoutePath
-	defer func() { procNetRoutePath = savedProcNetRoutePath }()
-	procNetRoutePath = filepath.Join(dir, "CloudRun")
+	tstest.Replace(t, &procNetRoutePath, filepath.Join(dir, "CloudRun"))
 	buf := []byte("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
 		"eth0\t8008FEA9\t00000000\t0001\t0\t0\t0\t01FFFFFF\t0\t0\t0\n" +
 		"eth1\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0\n")
@@ -39,9 +39,7 @@ func TestGoogleCloudRunDefaultRouteInterface(t *testing.T) {
 // size can be handled.
 func TestExtremelyLongProcNetRoute(t *testing.T) {
 	dir := t.TempDir()
-	savedProcNetRoutePath := procNetRoutePath
-	defer func() { procNetRoutePath = savedProcNetRoutePath }()
-	procNetRoutePath = filepath.Join(dir, "VeryLong")
+	tstest.Replace(t, &procNetRoutePath, filepath.Join(dir, "VeryLong"))
 	f, err := os.Create(procNetRoutePath)
 	if err != nil {
 		t.Fatal(err)
@@ -76,9 +74,7 @@ func TestExtremelyLongProcNetRoute(t *testing.T) {
 // test the specific /proc/net/route path as found on AWS App Runner instances
 func TestAwsAppRunnerDefaultRouteInterface(t *testing.T) {
 	dir := t.TempDir()
-	savedProcNetRoutePath := procNetRoutePath
-	defer func() { procNetRoutePath = savedProcNetRoutePath }()
-	procNetRoutePath = filepath.Join(dir, "CloudRun")
+	tstest.Replace(t, &procNetRoutePath, filepath.Join(dir, "CloudRun"))
 	buf := []byte("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
 		"eth0\t00000000\tF9AFFEA9\t0003\t0\t0\t0\t00000000\t0\t0\t0\n" +
 		"*\tFEA9FEA9\t00000000\t0005\t0\t0\t0\tFFFFFFFF\t0\t0\t0\n" +

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"go4.org/mem"
+	"tailscale.com/tstest"
 )
 
 func TestWalkShallowOSSpecific(t *testing.T) {
@@ -28,9 +29,7 @@ func TestWalkShallowPortable(t *testing.T) {
 
 func testWalkShallow(t *testing.T, portable bool) {
 	if portable {
-		old := osWalkShallow
-		defer func() { osWalkShallow = old }()
-		osWalkShallow = nil
+		tstest.Replace(t, &osWalkShallow, nil)
 	}
 	d := t.TempDir()
 

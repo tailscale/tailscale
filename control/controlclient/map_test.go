@@ -13,6 +13,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
@@ -21,12 +22,11 @@ import (
 )
 
 func TestUndeltaPeers(t *testing.T) {
-	defer func(old func() time.Time) { clockNow = old }(clockNow)
-
 	var curTime time.Time
-	clockNow = func() time.Time {
+	tstest.Replace(t, &clockNow, func() time.Time {
 		return curTime
-	}
+	})
+
 	online := func(v bool) func(*tailcfg.Node) {
 		return func(n *tailcfg.Node) {
 			n.Online = &v
