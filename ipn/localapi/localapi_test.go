@@ -14,6 +14,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnlocal"
+	"tailscale.com/tstest"
 )
 
 func TestValidHost(t *testing.T) {
@@ -42,10 +43,7 @@ func TestValidHost(t *testing.T) {
 }
 
 func TestSetPushDeviceToken(t *testing.T) {
-	validLocalHostForTesting = true
-	defer func() {
-		validLocalHostForTesting = false
-	}()
+	tstest.Replace(t, &validLocalHostForTesting, true)
 
 	h := &Handler{
 		PermitWrite: true,

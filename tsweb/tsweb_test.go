@@ -600,10 +600,9 @@ foo_foo_b 1
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() { expvarDo = expvar.Do }()
-			expvarDo = func(f func(expvar.KeyValue)) {
+			tstest.Replace(t, &expvarDo, func(f func(expvar.KeyValue)) {
 				f(expvar.KeyValue{Key: tt.k, Value: tt.v})
-			}
+			})
 			rec := httptest.NewRecorder()
 			VarzHandler(rec, httptest.NewRequest("GET", "/", nil))
 			if got := rec.Body.Bytes(); string(got) != tt.want {
@@ -792,11 +791,10 @@ func TestSortedStructAllocs(t *testing.T) {
 }
 
 func TestVarzHandlerSorting(t *testing.T) {
-	defer func() { expvarDo = expvar.Do }()
-	expvarDo = func(f func(expvar.KeyValue)) {
+	tstest.Replace(t, &expvarDo, func(f func(expvar.KeyValue)) {
 		f(expvar.KeyValue{Key: "counter_zz", Value: new(expvar.Int)})
 		f(expvar.KeyValue{Key: "gauge_aa", Value: new(expvar.Int)})
-	}
+	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
 	VarzHandler(rec, req)

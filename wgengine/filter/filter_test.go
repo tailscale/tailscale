@@ -419,14 +419,8 @@ func TestOmitDropLogging(t *testing.T) {
 }
 
 func TestLoggingPrivacy(t *testing.T) {
-	oldDrop := dropBucket
-	oldAccept := acceptBucket
-	dropBucket = rate.NewLimiter(2^32, 2^32)
-	acceptBucket = dropBucket
-	defer func() {
-		dropBucket = oldDrop
-		acceptBucket = oldAccept
-	}()
+	tstest.Replace(t, &dropBucket, rate.NewLimiter(2^32, 2^32))
+	tstest.Replace(t, &acceptBucket, dropBucket)
 
 	var (
 		logged     bool

@@ -997,11 +997,8 @@ func TestMarshalResponseFormatError(t *testing.T) {
 }
 
 func TestForwardLinkSelection(t *testing.T) {
-	old := initListenConfig
-	defer func() { initListenConfig = old }()
-
 	configCall := make(chan string, 1)
-	initListenConfig = func(nc *net.ListenConfig, mon *monitor.Mon, tunName string) error {
+	tstest.Replace(t, &initListenConfig, func(nc *net.ListenConfig, mon *monitor.Mon, tunName string) error {
 		select {
 		case configCall <- tunName:
 			return nil
@@ -1009,7 +1006,7 @@ func TestForwardLinkSelection(t *testing.T) {
 			t.Error("buffer full")
 			return errors.New("buffer full")
 		}
-	}
+	})
 
 	// specialIP is some IP we pretend that our link selector
 	// routes differently.
