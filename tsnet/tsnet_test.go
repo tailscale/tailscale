@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -87,31 +88,31 @@ func startControl(t *testing.T) (controlURL string) {
 	return controlURL
 }
 
-func TestConn(t *testing.T) {
+func setupTwoNodes(t *testing.T) (s1, s2 *Server, ctx context.Context) {
 	controlURL := startControl(t)
 
 	tmp := t.TempDir()
 	tmps1 := filepath.Join(tmp, "s1")
 	os.MkdirAll(tmps1, 0755)
-	s1 := &Server{
+	s1 = &Server{
 		Dir:        tmps1,
 		ControlURL: controlURL,
 		Hostname:   "s1",
 		Store:      new(mem.Store),
 		Ephemeral:  true,
 	}
-	defer s1.Close()
+	t.Cleanup(func() { s1.Close() })
 
 	tmps2 := filepath.Join(tmp, "s1")
 	os.MkdirAll(tmps2, 0755)
-	s2 := &Server{
+	s2 = &Server{
 		Dir:        tmps2,
 		ControlURL: controlURL,
 		Hostname:   "s2",
 		Store:      new(mem.Store),
 		Ephemeral:  true,
 	}
-	defer s2.Close()
+	t.Cleanup(func() { s2.Close() })
 
 	if !*verboseNodes {
 		s1.Logf = logger.Discard
@@ -119,7 +120,7 @@ func TestConn(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	s1status, err := s1.Up(ctx)
 	if err != nil {
@@ -142,6 +143,12 @@ func TestConn(t *testing.T) {
 	}
 	t.Logf("ping success: %#+v", res)
 
+	return
+}
+
+func TestConn(t *testing.T) {
+	s1, s2, ctx := setupTwoNodes(t)
+
 	// pass some data through TCP.
 	ln, err := s1.Listen("tcp", ":8081")
 	if err != nil {
@@ -149,6 +156,7 @@ func TestConn(t *testing.T) {
 	}
 	defer ln.Close()
 
+	s1ip := s1.TailscaleIPs()[0]
 	w, err := s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8081", s1ip))
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +176,42 @@ func TestConn(t *testing.T) {
 	if _, err := io.ReadAtLeast(r, got, len(got)); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("got: %q", got)
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPackets(t *testing.T) {
+	s1, s2, ctx := setupTwoNodes(t)
+
+	want := "PACKET!!"
+	received := make(chan []byte)
+	go func() {
+		p, err := s1.ListenPacket("udp", ":5000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+
+		buf := make([]byte, len(want))
+		if _, _, err := p.ReadFrom(buf); err != nil {
+			t.Fatal(err)
+		}
+		received <- buf
+	}()
+
+	s1ip := s1.TailscaleIPs()[0]
+	w, err := s2.Dial(ctx, "udp", fmt.Sprintf("%s:5000", s1ip))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := io.WriteString(w, want); err != nil {
+		t.Fatal(err)
+	}
+
+	got := <-received
 	t.Logf("got: %q", got)
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -256,5 +300,34 @@ func TestLoopbackLocalAPI(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 200 {
 		t.Errorf("GET /status returned %d, want 200", res.StatusCode)
+	}
+}
+
+func TestTailscaleIPs(t *testing.T) {
+	controlURL := startControl(t)
+
+	tmp := t.TempDir()
+	tmps1 := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps1, 0755)
+	s1 := &Server{
+		Dir:        tmps1,
+		ControlURL: controlURL,
+		Hostname:   "s1",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+	}
+	defer s1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s1status, err := s1.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ips := s1.TailscaleIPs()
+	if !reflect.DeepEqual(ips, s1status.TailscaleIPs) {
+		t.Errorf("s1.TailscaleIPs returned a different result than S1.Up, %v != %v", ips, s1status.TailscaleIPs)
 	}
 }

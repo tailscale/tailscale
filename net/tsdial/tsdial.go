@@ -40,6 +40,7 @@ type Dialer struct {
 	// NetstackDialTCP dials the provided IPPort using netstack.
 	// If nil, it's not used.
 	NetstackDialTCP func(context.Context, netip.AddrPort) (net.Conn, error)
+	NetstackDialUDP func(context.Context, netip.AddrPort) (net.Conn, error)
 
 	peerClientOnce sync.Once
 	peerClient     *http.Client
@@ -306,10 +307,19 @@ func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, 
 		return nil, err
 	}
 	if d.UseNetstackForIP != nil && d.UseNetstackForIP(ipp.Addr()) {
-		if d.NetstackDialTCP == nil {
-			return nil, errors.New("Dialer not initialized correctly")
+		switch network {
+		case "udp", "udp4", "udp6":
+			if d.NetstackDialUDP == nil {
+				return nil, errors.New("Dialer not initialized correctly")
+			}
+			return d.NetstackDialUDP(ctx, ipp)
+
+		default:
+			if d.NetstackDialTCP == nil {
+				return nil, errors.New("Dialer not initialized correctly")
+			}
+			return d.NetstackDialTCP(ctx, ipp)
 		}
-		return d.NetstackDialTCP(ctx, ipp)
 	}
 	// TODO(bradfitz): netns, etc
 	var stdDialer net.Dialer

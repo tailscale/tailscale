@@ -307,7 +307,7 @@ func (s *Server) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ln := range s.listeners {
-		ln.Close()
+		ln.closeUnlocked()
 	}
 	s.listeners = nil
 
@@ -320,6 +320,17 @@ func (s *Server) doInit() {
 	if err := s.start(); err != nil {
 		s.initErr = fmt.Errorf("tsnet: %w", err)
 	}
+}
+
+func (s *Server) TailscaleIPs() []netip.Addr {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	st, err := s.localClient.Status(ctx)
+	if err != nil {
+		return []netip.Addr{}
+	}
+	return st.TailscaleIPs
 }
 
 func (s *Server) getAuthKey() string {
@@ -440,6 +451,7 @@ func (s *Server) start() (reterr error) {
 	}
 	ns.ProcessLocalIPs = true
 	ns.ForwardTCPIn = s.forwardTCP
+	ns.ForwardUDPIn = s.forwardUDP
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
@@ -447,6 +459,9 @@ func (s *Server) start() (reterr error) {
 	}
 	s.dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
+	}
+	s.dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+		return ns.DialContextUDP(ctx, dst)
 	}
 
 	if s.Store == nil {
@@ -579,6 +594,24 @@ func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	}
 }
 
+func (s *Server) forwardUDP(p net.PacketConn, port uint16) {
+	s.mu.Lock()
+	ln, ok := s.listeners[listenKey{"udp", "", port}]
+	s.mu.Unlock()
+	if !ok {
+		p.Close()
+		return
+	}
+
+	t := time.NewTimer(time.Second)
+	defer t.Stop()
+	select {
+	case ln.pkt <- p:
+	case <-t.C:
+		p.Close()
+	}
+}
+
 // getTSNetDir usually just returns filepath.Join(confDir, "tsnet-"+prog)
 // with no error.
 //
@@ -640,9 +673,12 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
-func (s *Server) Listen(network, addr string) (net.Listener, error) {
+func (s *Server) listen(network, addr string) (*listener, error) {
+	isPacket := false
 	switch network {
 	case "", "tcp", "tcp4", "tcp6":
+	case "udp", "udp4", "udp6":
+		isPacket = true
 	default:
 		return nil, errors.New("unsupported network type")
 	}
@@ -660,11 +696,13 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 
 	key := listenKey{network, host, uint16(port)}
 	ln := &listener{
-		s:    s,
-		key:  key,
-		addr: addr,
+		s:        s,
+		key:      key,
+		addr:     addr,
+		isPacket: isPacket,
 
 		conn: make(chan net.Conn),
+		pkt:  make(chan net.PacketConn, 1),
 	}
 	s.mu.Lock()
 	if _, ok := s.listeners[key]; ok {
@@ -676,6 +714,19 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 	return ln, nil
 }
 
+func (s *Server) Listen(network, addr string) (net.Listener, error) {
+	return s.listen(network, addr)
+}
+
+func (s *Server) ListenPacket(network, addr string) (net.PacketConn, error) {
+	ln, err := s.listen(network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return ln.GetPacketConn()
+}
+
 type listenKey struct {
 	network string
 	host    string
@@ -683,13 +734,18 @@ type listenKey struct {
 }
 
 type listener struct {
-	s    *Server
-	key  listenKey
-	addr string
-	conn chan net.Conn
+	s        *Server
+	key      listenKey
+	addr     string
+	isPacket bool
+	conn     chan net.Conn
+	pkt      chan net.PacketConn
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
+	if ln.isPacket {
+		return nil, fmt.Errorf("tsnet: listener is for packets (UDP, not TCP)")
+	}
 	c, ok := <-ln.conn
 	if !ok {
 		return nil, fmt.Errorf("tsnet: %w", net.ErrClosed)
@@ -697,13 +753,29 @@ func (ln *listener) Accept() (net.Conn, error) {
 	return c, nil
 }
 
+func (ln *listener) GetPacketConn() (net.PacketConn, error) {
+	if !ln.isPacket {
+		return nil, fmt.Errorf("tsnet: listener is for connections (TCP, not UDP)")
+	}
+
+	p, ok := <-ln.pkt
+	if !ok {
+		return nil, fmt.Errorf("tsnet: %w", net.ErrClosed)
+	}
+	return p, nil
+}
+
 func (ln *listener) Addr() net.Addr { return addr{ln} }
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
 	defer ln.s.mu.Unlock()
+	return ln.closeUnlocked()
+}
+func (ln *listener) closeUnlocked() error {
 	if v, ok := ln.s.listeners[ln.key]; ok && v == ln {
 		delete(ln.s.listeners, ln.key)
 		close(ln.conn)
+		close(ln.pkt)
 	}
 	return nil
 }
