@@ -49,6 +49,18 @@ func TestListenerPort(t *testing.T) {
 		{"tcp", ":https", false}, // built-in name to Go; doesn't require cgo, /etc/services
 		{"tcp", ":gibberishsdlkfj", true},
 		{"tcp", ":%!d(string=80)", true}, // issue 6201
+		{"udp", ":80", false},
+		{"udp", "100.102.104.108:80", false},
+		{"udp", "not-an-ip:80", true},
+		{"udp4", ":80", false},
+		{"udp4", "100.102.104.108:80", false},
+		{"udp4", "not-an-ip:80", true},
+
+		// Verify network type matches IP
+		{"tcp4", "1.2.3.4:80", false},
+		{"tcp6", "1.2.3.4:80", true},
+		{"tcp4", "[12::34]:80", true},
+		{"tcp6", "[12::34]:80", false},
 	}
 	for _, tt := range tests {
 		s := &Server{}

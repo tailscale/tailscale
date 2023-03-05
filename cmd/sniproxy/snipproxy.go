@@ -18,6 +18,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/nettype"
 )
 
 var ports = flag.String("ports", "443", "comma-separated list of ports to proxy")
@@ -45,6 +46,13 @@ func main() {
 		log.Printf("Serving on port %v ...", portStr)
 		go s.serve(ln)
 	}
+
+	ln, err := s.ts.Listen("udp", ":53")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go s.serveDNS(ln)
+
 	select {}
 }
 
@@ -61,6 +69,25 @@ func (s *server) serve(ln net.Listener) {
 		}
 		go s.serveConn(c)
 	}
+}
+
+func (s *server) serveDNS(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go s.serveDNSConn(c.(nettype.ConnPacketConn))
+	}
+}
+
+func (s *server) serveDNSConn(c nettype.ConnPacketConn) {
+	defer c.Close()
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 1500)
+	n, err := c.Read(buf)
+	log.Printf("got DNS packet: %q, %v", buf[:n], err)
+	// TODO: rest of the owl
 }
 
 func (s *server) serveConn(c net.Conn) {
