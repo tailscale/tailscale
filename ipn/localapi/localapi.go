@@ -689,6 +689,8 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 		}
 		logf("cb: no mapping")
 	})
+	defer c.Close()
+
 	linkMon, err := monitor.New(logger.WithPrefix(logf, "monitor: "))
 	if err != nil {
 		logf("error creating monitor: %v", err)
