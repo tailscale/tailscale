@@ -9,18 +9,24 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
 	"inet.af/tcpproxy"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tsnet"
 )
 
-var ports = flag.String("ports", "443", "comma-separated list of ports to proxy")
+var (
+	ports   = flag.String("ports", "443", "comma-separated list of ports to proxy")
+	dnsserv = flag.Bool("dns", true, "run a small DNS server to reply to any query with its own address")
+)
 
 func main() {
 	flag.Parse()
@@ -44,6 +50,9 @@ func main() {
 		}
 		log.Printf("Serving on port %v ...", portStr)
 		go s.serve(ln)
+	}
+	if *dnsserv {
+		go s.serveDns()
 	}
 	select {}
 }
@@ -87,4 +96,63 @@ func (s *server) serveConn(c net.Conn) {
 		}, true
 	})
 	p.Start()
+}
+
+// getAddresses returns the tsnet IP addresses of this process
+func (s *server) getAddresses() (ip4, ip6 netip.Addr) {
+	for _, ip := range s.ts.TailscaleIPs() {
+		if ip.Is6() {
+			ip6 = ip
+		}
+		if ip.Is4() {
+			ip4 = ip
+		}
+	}
+
+	return
+}
+
+func (s *server) serveDns() {
+	dns.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		switch r.Opcode {
+		case dns.OpcodeQuery:
+			m := s.dnsResponse(r)
+			m.SetReply(r)
+			w.WriteMsg(m)
+		}
+	})
+
+	pconn, err := s.ts.ListenPacket("udp", ":53")
+	if err != nil {
+		log.Printf("Failed to start DNS listener: %s\n ", err.Error())
+		return
+	}
+
+	dnsServer := &dns.Server{PacketConn: pconn}
+	err = dnsServer.ActivateAndServe()
+	if err != nil {
+		log.Printf("Failed to start DNS server: %s\n ", err.Error())
+	}
+}
+
+func (s *server) dnsResponse(requestMsg *dns.Msg) *dns.Msg {
+	responseMsg := new(dns.Msg)
+	if len(requestMsg.Question) == 0 {
+		return responseMsg
+	}
+
+	q := requestMsg.Question[0]
+	var rr dns.RR
+	ip4, ip6 := s.getAddresses()
+
+	switch q.Qtype {
+	case dns.TypeAAAA:
+		rr, _ = dns.NewRR(fmt.Sprintf("%s 120 IN AAAA %s", q.Name, ip6.String()))
+
+	case dns.TypeA:
+		rr, _ = dns.NewRR(fmt.Sprintf("%s 120 IN A %s", q.Name, ip4.String()))
+	}
+
+	responseMsg.Answer = append(responseMsg.Answer, rr)
+	return responseMsg
 }
