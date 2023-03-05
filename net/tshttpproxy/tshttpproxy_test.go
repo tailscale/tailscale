@@ -81,3 +81,127 @@ func TestProxyFromEnvironment_setNoProxyUntil(t *testing.T) {
 	}
 
 }
+
+func TestSetSelfProxy(t *testing.T) {
+	// Ensure we clean everything up at the end of our test
+	t.Cleanup(func() {
+		config = nil
+		proxyFunc = nil
+	})
+
+	testCases := []struct {
+		name      string
+		env       map[string]string
+		self      []string
+		wantHTTP  string
+		wantHTTPS string
+	}{
+		{
+			name: "no self proxy",
+			env: map[string]string{
+				"HTTP_PROXY":  "127.0.0.1:1234",
+				"HTTPS_PROXY": "127.0.0.1:1234",
+			},
+			self:      nil,
+			wantHTTP:  "127.0.0.1:1234",
+			wantHTTPS: "127.0.0.1:1234",
+		},
+		{
+			name: "skip proxies",
+			env: map[string]string{
+				"HTTP_PROXY":  "127.0.0.1:1234",
+				"HTTPS_PROXY": "127.0.0.1:5678",
+			},
+			self:      []string{"127.0.0.1:1234", "127.0.0.1:5678"},
+			wantHTTP:  "", // skipped
+			wantHTTPS: "", // skipped
+		},
+		{
+			name: "localhost normalization of env var",
+			env: map[string]string{
+				"HTTP_PROXY":  "localhost:1234",
+				"HTTPS_PROXY": "[::1]:5678",
+			},
+			self:      []string{"127.0.0.1:1234", "127.0.0.1:5678"},
+			wantHTTP:  "", // skipped
+			wantHTTPS: "", // skipped
+		},
+		{
+			name: "localhost normalization of addr",
+			env: map[string]string{
+				"HTTP_PROXY":  "127.0.0.1:1234",
+				"HTTPS_PROXY": "127.0.0.1:1234",
+			},
+			self:      []string{"[::1]:1234"},
+			wantHTTP:  "", // skipped
+			wantHTTPS: "", // skipped
+		},
+		{
+			name: "no ports",
+			env: map[string]string{
+				"HTTP_PROXY":  "myproxy",
+				"HTTPS_PROXY": "myproxy",
+			},
+			self:      []string{"127.0.0.1:1234"},
+			wantHTTP:  "myproxy",
+			wantHTTPS: "myproxy",
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				oldEnv, found := os.LookupEnv(k)
+				if found {
+					t.Cleanup(func() {
+						os.Setenv(k, oldEnv)
+					})
+				}
+				os.Setenv(k, v)
+			}
+
+			// Reset computed variables
+			config = nil
+			proxyFunc = func(*url.URL) (*url.URL, error) {
+				panic("should not be called")
+			}
+
+			SetSelfProxy(tt.self...)
+
+			if got := config.HTTPProxy; got != tt.wantHTTP {
+				t.Errorf("got HTTPProxy=%q; want %q", got, tt.wantHTTP)
+			}
+			if got := config.HTTPSProxy; got != tt.wantHTTPS {
+				t.Errorf("got HTTPSProxy=%q; want %q", got, tt.wantHTTPS)
+			}
+			if proxyFunc != nil {
+				t.Errorf("wanted nil proxyFunc")
+			}
+
+			// Verify that we do actually proxy through the
+			// expected proxy, if we have one configured.
+			pf := getProxyFunc()
+			if tt.wantHTTP != "" {
+				want := "http://" + tt.wantHTTP
+
+				uu, _ := url.Parse("http://tailscale.com")
+				dest, err := pf(uu)
+				if err != nil {
+					t.Error(err)
+				} else if dest.String() != want {
+					t.Errorf("got dest=%q; want %q", dest, want)
+				}
+			}
+			if tt.wantHTTPS != "" {
+				want := "http://" + tt.wantHTTPS
+
+				uu, _ := url.Parse("https://tailscale.com")
+				dest, err := pf(uu)
+				if err != nil {
+					t.Error(err)
+				} else if dest.String() != want {
+					t.Errorf("got dest=%q; want %q", dest, want)
+				}
+			}
+		})
+	}
+}

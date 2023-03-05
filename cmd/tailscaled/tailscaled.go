@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
@@ -494,11 +495,13 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		}
 	}
 	if socksListener != nil || httpProxyListener != nil {
+		var addrs []string
 		if httpProxyListener != nil {
 			hs := &http.Server{Handler: httpProxyHandler(dialer.UserDial)}
 			go func() {
 				log.Fatalf("HTTP proxy exited: %v", hs.Serve(httpProxyListener))
 			}()
+			addrs = append(addrs, httpProxyListener.Addr().String())
 		}
 		if socksListener != nil {
 			ss := &socks5.Server{
@@ -508,7 +511,9 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 			go func() {
 				log.Fatalf("SOCKS5 server exited: %v", ss.Serve(socksListener))
 			}()
+			addrs = append(addrs, socksListener.Addr().String())
 		}
+		tshttpproxy.SetSelfProxy(addrs...)
 	}
 
 	e = wgengine.NewWatchdog(e)
