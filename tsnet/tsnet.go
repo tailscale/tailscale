@@ -41,6 +41,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/nettype"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/monitor"
@@ -440,6 +441,7 @@ func (s *Server) start() (reterr error) {
 	}
 	ns.ProcessLocalIPs = true
 	ns.ForwardTCPIn = s.forwardTCP
+	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := eng.PeerForIP(ip)
@@ -577,6 +579,12 @@ func (s *Server) forwardTCP(c net.Conn, port uint16) {
 	case <-t.C:
 		c.Close()
 	}
+}
+
+func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
+	s.logf("rejecting incoming UDP flow: (%v, %v)", src, dst)
+	// TODO(bradfitz): hook up to Listen("udp", dst) so users of tsnet can hook into this.
+	return nil, true
 }
 
 // getTSNetDir usually just returns filepath.Join(confDir, "tsnet-"+prog)
