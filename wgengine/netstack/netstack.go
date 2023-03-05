@@ -47,6 +47,7 @@ import (
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/nettype"
 	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -78,11 +79,25 @@ func init() {
 // and implements wgengine.FakeImpl to act as a userspace network
 // stack when Tailscale is running in fake mode.
 type Impl struct {
-	// ForwardTCPIn, if non-nil, handles forwarding an inbound TCP
-	// connection.
-	// TODO(bradfitz): provide mechanism for tsnet to reject a
-	// port other than accepting it and closing it.
+	// ForwardTCPIn, if non-nil, handles forwarding an inbound TCP connection.
+	//
+	// TODO(bradfitz): convert this to the GetUDPHandlerForFlow pattern below to
+	// provide mechanism for tsnet to reject a port other than accepting it and
+	// closing it.
 	ForwardTCPIn func(c net.Conn, port uint16)
+
+	// GetUDPHandlerForFlow conditionally handles an incoming UDP flow for the
+	// provided (src/port, dst/port) 4-tuple.
+	//
+	// A nil value is equivalent to a func returning (nil, false).
+	//
+	// If func returns intercept=false, the default forwarding behavior (if
+	// ProcessLocalIPs and/or ProcesssSubnetIPs) takes place.
+	//
+	// When intercept=true, the behavior depends on whether the returned handler
+	// is non-nil: if nil, the connection is rejected. If non-nil, handler takes
+	// over the UDP flow.
+	GetUDPHandlerForFlow func(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool)
 
 	// ProcessLocalIPs is whether netstack should handle incoming
 	// traffic directed at the Node.Addresses (local IPs).
@@ -1020,8 +1035,20 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 		return
 	}
 
+	if get := ns.GetUDPHandlerForFlow; get != nil {
+		h, intercept := get(srcAddr, dstAddr)
+		if intercept {
+			if h == nil {
+				ep.Close()
+				return
+			}
+			go h(gonet.NewUDPConn(ns.ipstack, &wq, ep))
+			return
+		}
+	}
+
 	c := gonet.NewUDPConn(ns.ipstack, &wq, ep)
-	go ns.forwardUDP(c, &wq, srcAddr, dstAddr)
+	go ns.forwardUDP(c, srcAddr, dstAddr)
 }
 
 func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
@@ -1065,7 +1092,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 // dstAddr may be either a local Tailscale IP, in which we case we proxy to
 // 127.0.0.1, or any other IP (from an advertised subnet), in which case we
 // proxy to it directly.
-func (ns *Impl) forwardUDP(client *gonet.UDPConn, wq *waiter.Queue, clientAddr, dstAddr netip.AddrPort) {
+func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.AddrPort) {
 	port, srcPort := dstAddr.Port(), clientAddr.Port()
 	if debugNetstack() {
 		ns.logf("[v2] netstack: forwarding incoming UDP connection on port %v", port)

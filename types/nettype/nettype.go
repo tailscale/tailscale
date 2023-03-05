@@ -48,3 +48,9 @@ func (a packetListenerAdapter) ListenPacket(ctx context.Context, network, addres
 	}
 	return pc.(PacketConn), nil
 }
+
+// ConnPacketConn is the interface that's a superset of net.Conn and net.PacketConn.
+type ConnPacketConn interface {
+	net.Conn
+	net.PacketConn
+}
