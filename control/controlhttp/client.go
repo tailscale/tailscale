@@ -273,7 +273,7 @@ func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*ClientConn, er
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	ctx = sockstats.WithSockStats(ctx, "controlclient.Dialer")
+	ctx = sockstats.WithSockStats(ctx, sockstats.LabelControlClientDialer)
 
 	// u80 and u443 are the URLs we'll try to hit over HTTP or HTTPS,
 	// respectively, in order to do the HTTP upgrade to a net.Conn over which

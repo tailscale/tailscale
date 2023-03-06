@@ -3050,7 +3050,12 @@ func (c *Conn) ReSTUN(why string) {
 // listenPacket opens a packet listener.
 // The network must be "udp4" or "udp6".
 func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
-	ctx := sockstats.WithSockStats(context.Background(), fmt.Sprintf("magicsock.Conn:%s", network)) // unused without DNS name to resolve
+	ctx := context.Background() // unused without DNS name to resolve
+	if network == "udp4" {
+		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4)
+	} else {
+		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6)
+	}
 	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {
 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)

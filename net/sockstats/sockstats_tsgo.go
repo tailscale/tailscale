@@ -24,7 +24,7 @@ var sockStats = struct {
 	// mu protects fields in this group. It should not be held in the per-read/
 	// write callbacks.
 	mu              sync.Mutex
-	countersByLabel map[string]*sockStatCounters
+	countersByLabel map[Label]*sockStatCounters
 	knownInterfaces map[int]string // interface index -> name
 	usedInterfaces  map[int]int    // set of interface indexes
 
@@ -32,12 +32,12 @@ var sockStats = struct {
 	// write callbacks.
 	currentInterface atomic.Uint32
 }{
-	countersByLabel: make(map[string]*sockStatCounters),
+	countersByLabel: make(map[Label]*sockStatCounters),
 	knownInterfaces: make(map[int]string),
 	usedInterfaces:  make(map[int]int),
 }
 
-func withSockStats(ctx context.Context, label string) context.Context {
+func withSockStats(ctx context.Context, label Label) context.Context {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
 	counters, ok := sockStats.countersByLabel[label]
@@ -85,7 +85,7 @@ func get() *SockStats {
 	defer sockStats.mu.Unlock()
 
 	r := &SockStats{
-		Stats:      make(map[string]SockStat),
+		Stats:      make(map[Label]SockStat),
 		Interfaces: make([]string, 0, len(sockStats.usedInterfaces)),
 	}
 	for iface := range sockStats.usedInterfaces {
