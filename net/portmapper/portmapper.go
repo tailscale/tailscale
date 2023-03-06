@@ -249,7 +249,7 @@ func (c *Client) upnpPort() uint16 {
 }
 
 func (c *Client) listenPacket(ctx context.Context, network, addr string) (nettype.PacketConn, error) {
-	ctx = sockstats.WithSockStats(ctx, "portmapper.Client")
+	ctx = sockstats.WithSockStats(ctx, sockstats.LabelPortmapperClient)
 
 	// When running under testing conditions, we bind the IGD server
 	// to localhost, and may be running in an environment where our

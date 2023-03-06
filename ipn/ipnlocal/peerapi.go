@@ -879,11 +879,13 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "</thead>")
 
 	fmt.Fprintln(w, "<tbody>")
-	labels := make([]string, 0, len(stats.Stats))
+	labels := make([]sockstats.Label, 0, len(stats.Stats))
 	for label := range stats.Stats {
 		labels = append(labels, label)
 	}
-	sort.Strings(labels)
+	slices.SortFunc(labels, func(a, b sockstats.Label) bool {
+		return a.String() < b.String()
+	})
 
 	txTotal := int64(0)
 	rxTotal := int64(0)
@@ -893,7 +895,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	for _, label := range labels {
 		stat := stats.Stats[label]
 		fmt.Fprintln(w, "<tr>")
-		fmt.Fprintf(w, "<td>%s</td>", html.EscapeString(label))
+		fmt.Fprintf(w, "<td>%s</td>", html.EscapeString(label.String()))
 		fmt.Fprintf(w, "<td align=right>%d</td>", stat.TxBytes)
 		fmt.Fprintf(w, "<td align=right>%d</td>", stat.RxBytes)
 

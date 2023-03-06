@@ -9,7 +9,7 @@ import (
 	"context"
 )
 
-func withSockStats(ctx context.Context, label string) context.Context {
+func withSockStats(ctx context.Context, label Label) context.Context {
 	return ctx
 }
 
