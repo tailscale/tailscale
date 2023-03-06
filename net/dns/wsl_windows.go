@@ -5,6 +5,7 @@ package dns
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"os/user"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"tailscale.com/types/logger"
@@ -20,7 +22,13 @@ import (
 
 // wslDistros reports the names of the installed WSL2 linux distributions.
 func wslDistros() ([]string, error) {
-	b, err := wslCombinedOutput(exec.Command("wsl.exe", "-l"))
+	// There is a bug in some builds of wsl.exe that causes it to block
+	// indefinitely while executing this operation. Set a timeout so that we don't
+	// get wedged! (Issue #7476)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	b, err := wslCombinedOutput(exec.CommandContext(ctx, "wsl.exe", "-l"))
 	if err != nil {
 		return nil, fmt.Errorf("%v: %q", err, string(b))
 	}

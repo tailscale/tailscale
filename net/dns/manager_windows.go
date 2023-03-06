@@ -51,12 +51,14 @@ func NewOSConfigurator(logf logger.Logf, interfaceName string) (OSConfigurator, 
 		ret.nrptDB = newNRPTRuleDatabase(logf)
 	}
 
-	// Log WSL status once at startup.
-	if distros, err := wslDistros(); err != nil {
-		logf("WSL: could not list distributions: %v", err)
-	} else {
-		logf("WSL: found %d distributions", len(distros))
-	}
+	go func() {
+		// Log WSL status once at startup.
+		if distros, err := wslDistros(); err != nil {
+			logf("WSL: could not list distributions: %v", err)
+		} else {
+			logf("WSL: found %d distributions", len(distros))
+		}
+	}()
 
 	return ret, nil
 }
