@@ -299,3 +299,43 @@ func TestLoopbackSOCKS5(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestTailscaleIPs(t *testing.T) {
+	controlURL := startControl(t)
+
+	tmp := t.TempDir()
+	tmps1 := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps1, 0755)
+	s1 := &Server{
+		Dir:        tmps1,
+		ControlURL: controlURL,
+		Hostname:   "s1",
+		Store:      new(mem.Store),
+		Ephemeral:  true,
+	}
+	defer s1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s1status, err := s1.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var upIp4, upIp6 netip.Addr
+	for _, ip := range s1status.TailscaleIPs {
+		if ip.Is6() {
+			upIp6 = ip
+		}
+		if ip.Is4() {
+			upIp4 = ip
+		}
+	}
+
+	sIp4, sIp6 := s1.TailscaleIPs()
+	if !(upIp4 == sIp4 && upIp6 == sIp6) {
+		t.Errorf("s1.TailscaleIPs returned a different result than S1.Up, (%s, %s) != (%s, %s)",
+			sIp4, upIp4, sIp6, upIp6)
+	}
+}

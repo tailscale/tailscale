@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"inet.af/tcpproxy"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/net/netutil"
@@ -22,6 +23,8 @@ import (
 )
 
 var ports = flag.String("ports", "443", "comma-separated list of ports to proxy")
+
+var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 
 func main() {
 	flag.Parse()
@@ -86,8 +89,29 @@ func (s *server) serveDNSConn(c nettype.ConnPacketConn) {
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 1500)
 	n, err := c.Read(buf)
-	log.Printf("got DNS packet: %q, %v", buf[:n], err)
-	// TODO: rest of the owl
+	if err != nil {
+		log.Printf("c.Read failed: %v\n ", err)
+		return
+	}
+
+	var msg dnsmessage.Message
+	err = msg.Unpack(buf[:n])
+	if err != nil {
+		log.Printf("dnsmessage unpack failed: %v\n ", err)
+		return
+	}
+
+	buf, err = s.dnsResponse(&msg)
+	if err != nil {
+		log.Printf("s.dnsResponse failed: %v\n", err)
+		return
+	}
+
+	_, err = c.Write(buf)
+	if err != nil {
+		log.Printf("c.Write failed: %v\n", err)
+		return
+	}
 }
 
 func (s *server) serveConn(c net.Conn) {
@@ -107,11 +131,69 @@ func (s *server) serveConn(c net.Conn) {
 		return netutil.NewOneConnListener(c, nil), nil
 	}
 	p.AddSNIRouteFunc(addrPortStr, func(ctx context.Context, sniName string) (t tcpproxy.Target, ok bool) {
-		log.Printf("got req for %q from %v", sniName, c.RemoteAddr())
 		return &tcpproxy.DialProxy{
 			Addr:        net.JoinHostPort(sniName, port),
 			DialContext: dialer.DialContext,
 		}, true
 	})
 	p.Start()
+}
+
+func (s *server) dnsResponse(req *dnsmessage.Message) (buf []byte, err error) {
+	resp := dnsmessage.NewBuilder(buf,
+		dnsmessage.Header{
+			ID:            req.Header.ID,
+			Response:      true,
+			Authoritative: true,
+		})
+	resp.EnableCompression()
+
+	if len(req.Questions) == 0 {
+		buf, _ = resp.Finish()
+		return
+	}
+
+	q := req.Questions[0]
+	err = resp.StartQuestions()
+	if err != nil {
+		return
+	}
+	resp.Question(q)
+
+	ip4, ip6 := s.ts.TailscaleIPs()
+	err = resp.StartAnswers()
+	if err != nil {
+		return
+	}
+
+	switch q.Type {
+	case dnsmessage.TypeAAAA:
+		err = resp.AAAAResource(
+			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+			dnsmessage.AAAAResource{AAAA: ip6.As16()},
+		)
+
+	case dnsmessage.TypeA:
+		err = resp.AResource(
+			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+			dnsmessage.AResource{A: ip4.As4()},
+		)
+	case dnsmessage.TypeSOA:
+		err = resp.SOAResource(
+			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+			dnsmessage.SOAResource{NS: q.Name, MBox: tsMBox, Serial: 2023030600,
+				Refresh: 120, Retry: 120, Expire: 120, MinTTL: 60},
+		)
+	case dnsmessage.TypeNS:
+		err = resp.NSResource(
+			dnsmessage.ResourceHeader{Name: q.Name, Class: q.Class, TTL: 120},
+			dnsmessage.NSResource{NS: tsMBox},
+		)
+	}
+
+	if err != nil {
+		return
+	}
+
+	return resp.Finish()
 }
