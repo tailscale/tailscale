@@ -3682,6 +3682,21 @@ func (b *LocalBackend) resetControlClientLockedAsync() {
 	if b.cc == nil {
 		return
 	}
+
+	// When we clear the control client, stop any outstanding netmap expiry
+	// timer; synthesizing a new netmap while we don't have a control
+	// client will break things.
+	//
+	// See https://github.com/tailscale/tailscale/issues/7392
+	if b.nmExpiryTimer != nil {
+		b.nmExpiryTimer.Stop()
+		b.nmExpiryTimer = nil
+
+		// Also bump the epoch to ensure that if the timer started, it
+		// will abort.
+		b.numClientStatusCalls.Add(1)
+	}
+
 	go b.cc.Shutdown()
 	b.cc = nil
 	b.ccAuto = nil
