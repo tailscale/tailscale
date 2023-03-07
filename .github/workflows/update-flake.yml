@@ -27,7 +27,7 @@ jobs:
         run: ./update-flake.sh
 
       - name: Get access token
-        uses: tibdex/github-app-token@f717b5ecd4534d3c4df4ce9b5c1c2214f0f7cd06 # v1.6.0
+        uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92 # v1.8.0
         id: generate-token
         with:
           app_id: ${{ secrets.LICENSING_APP_ID }}
