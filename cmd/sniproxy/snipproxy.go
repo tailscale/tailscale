@@ -11,6 +11,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,7 +23,10 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-var ports = flag.String("ports", "443", "comma-separated list of ports to proxy")
+var (
+	ports        = flag.String("ports", "443", "comma-separated list of ports to proxy")
+	promoteHTTPS = flag.Bool("promote-https", true, "promote HTTP to HTTPS")
+)
 
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
 
@@ -55,6 +59,15 @@ func main() {
 		log.Fatal(err)
 	}
 	go s.serveDNS(ln)
+
+	if *promoteHTTPS {
+		ln, err := s.ts.Listen("tcp", ":80")
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Promoting HTTP to HTTPS ...")
+		go s.promoteHTTPS(ln)
+	}
 
 	select {}
 }
@@ -196,4 +209,11 @@ func (s *server) dnsResponse(req *dnsmessage.Message) (buf []byte, err error) {
 	}
 
 	return resp.Finish()
+}
+
+func (s *server) promoteHTTPS(ln net.Listener) {
+	err := http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusFound)
+	}))
+	log.Fatalf("promoteHTTPS http.Serve: %v", err)
 }
