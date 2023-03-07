@@ -318,3 +318,4 @@ uaru
 vimba
 wahoo
 zebra
+coelacanth
