@@ -214,7 +214,12 @@ func (s *Server) Loopback() (addr string, proxyCred, localAPICred string, err er
 		}()
 	}
 
-	return s.loopbackListener.Addr().String(), s.proxyCred, s.localAPICred, nil
+	lbAddr := s.loopbackListener.Addr()
+	if lbAddr == nil {
+		// https://github.com/tailscale/tailscale/issues/7488
+		panic("loopbackListener has no Addr")
+	}
+	return lbAddr.String(), s.proxyCred, s.localAPICred, nil
 }
 
 type localSecHandler struct {
