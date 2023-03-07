@@ -5,6 +5,7 @@
 package tstime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -163,4 +164,17 @@ func ParseDuration(s string) (time.Duration, error) {
 		s = s[:start] + s[end+1:] + strconv.Itoa(n*hours) + "h"
 	}
 	return time.ParseDuration(s)
+}
+
+// Sleep is like [time.Sleep] but returns early upon context cancelation.
+// It reports whether the full sleep duration was achieved.
+func Sleep(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
