@@ -79,12 +79,18 @@ func init() {
 // and implements wgengine.FakeImpl to act as a userspace network
 // stack when Tailscale is running in fake mode.
 type Impl struct {
-	// ForwardTCPIn, if non-nil, handles forwarding an inbound TCP connection.
+	// GetTCPHandlerForFlow conditionally handles an incoming TCP flow for the
+	// provided (src/port, dst/port) 4-tuple.
 	//
-	// TODO(bradfitz): convert this to the GetUDPHandlerForFlow pattern below to
-	// provide mechanism for tsnet to reject a port other than accepting it and
-	// closing it.
-	ForwardTCPIn func(c net.Conn, port uint16)
+	// A nil value is equivalent to a func returning (nil, false).
+	//
+	// If func returns intercept=false, the default forwarding behavior (if
+	// ProcessLocalIPs and/or ProcesssSubnetIPs) takes place.
+	//
+	// When intercept=true, the behavior depends on whether the returned handler
+	// is non-nil: if nil, the connection is rejected. If non-nil, handler takes
+	// over the TCP conn.
+	GetTCPHandlerForFlow func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
 
 	// GetUDPHandlerForFlow conditionally handles an incoming UDP flow for the
 	// provided (src/port, dst/port) 4-tuple.
@@ -795,6 +801,8 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	dialIP := netaddrIPFromNetstackIP(reqDetails.LocalAddress)
 	isTailscaleIP := tsaddr.IsTailscaleIP(dialIP)
 
+	dstAddrPort := netip.AddrPortFrom(dialIP, reqDetails.LocalPort)
+
 	if viaRange.Contains(dialIP) {
 		isTailscaleIP = false
 		dialIP = tsaddr.UnmapVia(dialIP)
@@ -913,13 +921,20 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 		}
 	}
 
-	if ns.ForwardTCPIn != nil {
-		c := createConn()
-		if c == nil {
+	if ns.GetTCPHandlerForFlow != nil {
+		handler, ok := ns.GetTCPHandlerForFlow(clientRemoteAddrPort, dstAddrPort)
+		if ok {
+			if handler == nil {
+				r.Complete(true)
+				return
+			}
+			c := createConn() // will send a RST if it fails
+			if c == nil {
+				return
+			}
+			handler(c)
 			return
 		}
-		ns.ForwardTCPIn(c, reqDetails.LocalPort)
-		return
 	}
 	if isTailscaleIP {
 		dialIP = netaddr.IPv4(127, 0, 0, 1)
