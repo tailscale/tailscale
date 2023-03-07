@@ -5,9 +5,10 @@
 // strings to a fixed length, respecting multi-byte codepoints.
 package truncate
 
-// String returns a prefix of a UTF-8 string s, having length no greater than
-// n bytes. If s exceeds this length, it is truncated at a point ≤ n so that
-// the result does not end in a partial UTF-8 encoding.
+// String returns a prefix of a UTF-8 string s, having length no greater than n
+// bytes. If s exceeds this length, it is truncated at a point ≤ n so that the
+// result does not end in a partial UTF-8 encoding.  If s is less than or equal
+// to this length, it is returned unmodified.
 func String(s string, n int) string {
 	if n >= len(s) {
 		return s
