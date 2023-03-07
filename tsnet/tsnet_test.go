@@ -175,6 +175,11 @@ func TestConn(t *testing.T) {
 	if string(got) != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+
+	_, err = s2.Dial(ctx, "tcp", fmt.Sprintf("%s:8082", s1ip)) // some random port
+	if err == nil {
+		t.Fatalf("unexpected success; should have seen a connection refused error")
+	}
 }
 
 func TestLoopbackLocalAPI(t *testing.T) {

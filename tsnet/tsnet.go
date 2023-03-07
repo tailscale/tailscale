@@ -491,7 +491,7 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
 	ns.ProcessLocalIPs = true
-	ns.ForwardTCPIn = s.forwardTCP
+	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
 	s.netstack = ns
 	s.dialer.UseNetstackForIP = func(ip netip.Addr) bool {
@@ -660,20 +660,12 @@ func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort) (_ *list
 	return nil, false
 }
 
-func (s *Server) forwardTCP(c net.Conn, port uint16) {
-	dstStr := c.LocalAddr().String()
-	ap, err := netip.ParseAddrPort(dstStr)
-	if err != nil {
-		s.logf("unexpected dst addr %q", dstStr)
-		c.Close()
-		return
-	}
-	ln, ok := s.listenerForDstAddr("tcp", ap)
+func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
+	ln, ok := s.listenerForDstAddr("tcp", dst)
 	if !ok {
-		c.Close()
-		return
+		return nil, true // don't handle, don't forward to localhost
 	}
-	ln.handle(c)
+	return ln.handle, true
 }
 
 func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
