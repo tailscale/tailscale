@@ -574,6 +574,7 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		c.Close()
 		return
 	}
+	logf("remoteAddr=%v", src)
 	h := &peerAPIHandler{
 		ps:         pln.ps,
 		isSelf:     nm.SelfNode.User == peerNode.User,
@@ -1022,6 +1023,8 @@ func (h *peerAPIHandler) canIngress() bool {
 }
 
 func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
+	h.logf("h.remoteAddr.Addr()=%v", h.remoteAddr.Addr())
+	h.logf("h.ps.b.PeerCaps(h.remoteAddr.Addr())=%v", h.ps.b.PeerCaps(h.remoteAddr.Addr()))
 	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
 		if hasCap == wantCap {
 			return true
