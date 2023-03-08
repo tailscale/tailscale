@@ -9,6 +9,7 @@ import (
 	"net/netip"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // Clone makes a deep copy of TKAFilteredPeer.
@@ -29,4 +30,5 @@ var _TKAFilteredPeerCloneNeedsRegeneration = TKAFilteredPeer(struct {
 	ID           tailcfg.NodeID
 	StableID     tailcfg.StableNodeID
 	TailscaleIPs []netip.Addr
+	NodeKey      key.NodePublic
 }{})

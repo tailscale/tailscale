@@ -106,6 +106,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 					ID:           p.ID,
 					StableID:     p.StableID,
 					TailscaleIPs: make([]netip.Addr, len(p.Addresses)),
+					NodeKey:      p.Key,
 				}
 				for i, addr := range p.Addresses {
 					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
