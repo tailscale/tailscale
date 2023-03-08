@@ -53,9 +53,22 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 			rxBytesByInterface: make(map[int]*atomic.Uint64),
 			txBytesByInterface: make(map[int]*atomic.Uint64),
 		}
-		for iface := range sockStats.knownInterfaces {
-			counters.rxBytesByInterface[iface] = &atomic.Uint64{}
-			counters.txBytesByInterface[iface] = &atomic.Uint64{}
+
+		// We might be called before setLinkMonitor has been called (and we've
+		// had a chance to populate knownInterfaces). In that case, we'll have
+		// to get the list of interfaces ourselves.
+		if len(sockStats.knownInterfaces) == 0 {
+			if ifaces, err := interfaces.GetList(); err == nil {
+				for _, iface := range ifaces {
+					counters.rxBytesByInterface[iface.Index] = &atomic.Uint64{}
+					counters.txBytesByInterface[iface.Index] = &atomic.Uint64{}
+				}
+			}
+		} else {
+			for iface := range sockStats.knownInterfaces {
+				counters.rxBytesByInterface[iface] = &atomic.Uint64{}
+				counters.txBytesByInterface[iface] = &atomic.Uint64{}
+			}
 		}
 		sockStats.countersByLabel[label] = counters
 	}
