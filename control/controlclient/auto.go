@@ -59,17 +59,15 @@ type Auto struct {
 
 	mu sync.Mutex // mutex guards the following fields
 
-	paused               bool // whether we should stop making HTTP requests
-	unpauseWaiters       []chan struct{}
-	loggedIn             bool       // true if currently logged in
-	loginGoal            *LoginGoal // non-nil if some login activity is desired
-	synced               bool       // true if our netmap is up-to-date
-	inPollNetMap         bool       // true if currently running a PollNetMap
-	inLiteMapUpdate      bool       // true if a lite (non-streaming) map request is outstanding
-	liteMapUpdateCancel  func()     // cancels a lite map update
-	liteMapUpdateCancels int        // how many times we've canceled a lite map update
-	inSendStatus         int        // number of sendStatus calls currently in progress
-	state                State
+	paused          bool // whether we should stop making HTTP requests
+	unpauseWaiters  []chan struct{}
+	loggedIn        bool       // true if currently logged in
+	loginGoal       *LoginGoal // non-nil if some login activity is desired
+	synced          bool       // true if our netmap is up-to-date
+	inPollNetMap    bool       // true if currently running a PollNetMap
+	inLiteMapUpdate bool       // true if a lite (non-streaming) map request is outstanding
+	inSendStatus    int        // number of sendStatus calls currently in progress
+	state           State
 
 	authCtx    context.Context // context used for auth requests
 	mapCtx     context.Context // context used for netmap requests
@@ -170,33 +168,13 @@ func (c *Auto) Start() {
 func (c *Auto) sendNewMapRequest() {
 	c.mu.Lock()
 
-	// If we're not already streaming a netmap, then tear down everything
-	// and start a new stream (which starts by sending a new map request)
-	if !c.inPollNetMap || !c.loggedIn {
+	// If we're not already streaming a netmap, or if we're already stuck
+	// in a lite update, then tear down everything and start a new stream
+	// (which starts by sending a new map request)
+	if !c.inPollNetMap || c.inLiteMapUpdate || !c.loggedIn {
 		c.mu.Unlock()
 		c.cancelMapSafely()
 		return
-	}
-
-	// If we are already in process of doing a LiteMapUpdate, cancel it and
-	// try a new one. If this is the 10th time we have done this
-	// cancelation, tear down everything and start again
-	if c.inLiteMapUpdate {
-		// Always cancel the in-flight lite map update, regardless of
-		// whether we cancel the streaming map request or not.
-		c.liteMapUpdateCancel()
-		c.inLiteMapUpdate = false
-
-		if c.liteMapUpdateCancels > 10 {
-			// Not making progress
-			c.mu.Unlock()
-			c.cancelMapSafely()
-			return
-		}
-
-		// Increment our cancel counter and continue below to start a
-		// new lite update.
-		c.liteMapUpdateCancels++
 	}
 
 	// Otherwise, send a lite update that doesn't keep a
@@ -204,21 +182,14 @@ func (c *Auto) sendNewMapRequest() {
 	defer c.mu.Unlock()
 	c.inLiteMapUpdate = true
 	ctx, cancel := context.WithTimeout(c.mapCtx, 10*time.Second)
-	c.liteMapUpdateCancel = cancel
 	go func() {
 		defer cancel()
 		t0 := time.Now()
 		err := c.direct.SendLiteMapUpdate(ctx)
 		d := time.Since(t0).Round(time.Millisecond)
-
 		c.mu.Lock()
 		c.inLiteMapUpdate = false
-		c.liteMapUpdateCancel = nil
-		if err == nil {
-			c.liteMapUpdateCancels = 0
-		}
 		c.mu.Unlock()
-
 		if err == nil {
 			c.logf("[v1] successful lite map update in %v", d)
 			return
@@ -226,13 +197,10 @@ func (c *Auto) sendNewMapRequest() {
 		if ctx.Err() == nil {
 			c.logf("lite map update after %v: %v", d, err)
 		}
-		if !errors.Is(ctx.Err(), context.Canceled) {
-			// Fall back to restarting the long-polling map
-			// request (the old heavy way) if the lite update
-			// failed for reasons other than the context being
-			// canceled.
-			c.cancelMapSafely()
-		}
+		// Fall back to restarting the long-polling map
+		// request (the old heavy way) if the lite update
+		// failed for any reason.
+		c.cancelMapSafely()
 	}()
 }
 
@@ -268,12 +236,6 @@ func (c *Auto) cancelMapUnsafely() {
 func (c *Auto) cancelMapSafely() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// Always reset our lite map cancels counter if we're canceling
-	// everything, since we're about to restart with a new map update; this
-	// allows future calls to sendNewMapRequest to retry sending lite
-	// updates.
-	c.liteMapUpdateCancels = 0
 
 	c.logf("[v1] cancelMapSafely: synced=%v", c.synced)
 
