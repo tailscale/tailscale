@@ -876,6 +876,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 		fmt.Fprintf(w, "<th>Tx (%s)</th>", html.EscapeString(iface))
 		fmt.Fprintf(w, "<th>Rx (%s)</th>", html.EscapeString(iface))
 	}
+	fmt.Fprintln(w, "<th>Validation</th>")
 	fmt.Fprintln(w, "</thead>")
 
 	fmt.Fprintln(w, "<tbody>")
@@ -887,10 +888,10 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 		return a.String() < b.String()
 	})
 
-	txTotal := int64(0)
-	rxTotal := int64(0)
-	txTotalByInterface := map[string]int64{}
-	rxTotalByInterface := map[string]int64{}
+	txTotal := uint64(0)
+	rxTotal := uint64(0)
+	txTotalByInterface := map[string]uint64{}
+	rxTotalByInterface := map[string]uint64{}
 
 	for _, label := range labels {
 		stat := stats.Stats[label]
@@ -908,6 +909,17 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 			txTotalByInterface[iface] += stat.TxBytesByInterface[iface]
 			rxTotalByInterface[iface] += stat.RxBytesByInterface[iface]
 		}
+
+		if stat.ValidationRxBytes > 0 || stat.ValidationTxBytes > 0 {
+			fmt.Fprintf(w, "<td>Tx=%d (%+d) Rx=%d (%+d)</td>",
+				stat.ValidationTxBytes,
+				int64(stat.ValidationTxBytes)-int64(stat.TxBytes),
+				stat.ValidationRxBytes,
+				int64(stat.ValidationRxBytes)-int64(stat.RxBytes))
+		} else {
+			fmt.Fprintln(w, "<td></td>")
+		}
+
 		fmt.Fprintln(w, "</tr>")
 	}
 	fmt.Fprintln(w, "</tbody>")
@@ -920,6 +932,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 		fmt.Fprintf(w, "<th>%d</th>", txTotalByInterface[iface])
 		fmt.Fprintf(w, "<th>%d</th>", rxTotalByInterface[iface])
 	}
+	fmt.Fprintln(w, "<th></th>")
 	fmt.Fprintln(w, "</tfoot>")
 
 	fmt.Fprintln(w, "</table>")

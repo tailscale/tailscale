@@ -42,10 +42,14 @@ const (
 )
 
 type SockStat struct {
-	TxBytes            int64
-	RxBytes            int64
-	TxBytesByInterface map[string]int64
-	RxBytesByInterface map[string]int64
+	TxBytes            uint64
+	RxBytes            uint64
+	TxBytesByInterface map[string]uint64
+	RxBytesByInterface map[string]uint64
+
+	// NOCOMMIT
+	ValidationTxBytes uint64
+	ValidationRxBytes uint64
 }
 
 func WithSockStats(ctx context.Context, label Label) context.Context {

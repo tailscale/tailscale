@@ -11,6 +11,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"tailscale.com/net/interfaces"
 )
@@ -18,6 +19,12 @@ import (
 type sockStatCounters struct {
 	txBytes, rxBytes                       atomic.Uint64
 	rxBytesByInterface, txBytesByInterface map[int]*atomic.Uint64
+
+	// Validate counts for TCP sockets by using the TCP_CONNECTION_INFO
+	// getsockopt. We get current counts, as well as save final values when
+	// sockets are closed.
+	validationConn                       atomic.Pointer[syscall.RawConn]
+	validationTxBytes, validationRxBytes atomic.Uint64
 }
 
 var sockStats = struct {
@@ -53,6 +60,23 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		sockStats.countersByLabel[label] = counters
 	}
 
+	didCreateTCPConn := func(c syscall.RawConn) {
+		counters.validationConn.Store(&c)
+	}
+
+	willCloseTCPConn := func(c syscall.RawConn) {
+		tx, rx := tcpConnStats(c)
+		counters.validationTxBytes.Add(tx)
+		counters.validationRxBytes.Add(rx)
+	}
+
+	// Don't bother adding these hooks if we can't get stats that they end up
+	// collecting.
+	if tcpConnStats == nil {
+		willCloseTCPConn = nil
+		didCreateTCPConn = nil
+	}
+
 	didRead := func(n int) {
 		counters.rxBytes.Add(uint64(n))
 		if currentInterface := int(sockStats.currentInterface.Load()); currentInterface != 0 {
@@ -74,11 +98,18 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 	}
 
 	return net.WithSockTrace(ctx, &net.SockTrace{
-		DidRead:       didRead,
-		DidWrite:      didWrite,
-		WillOverwrite: willOverwrite,
+		DidCreateTCPConn: didCreateTCPConn,
+		DidRead:          didRead,
+		DidWrite:         didWrite,
+		WillOverwrite:    willOverwrite,
+		WillCloseTCPConn: willCloseTCPConn,
 	})
 }
+
+// tcpConnStats returns the number of bytes sent and received on the
+// given TCP socket. Its implementation is platform-dependent (or it may not
+// be available at all).
+var tcpConnStats func(c syscall.RawConn) (tx, rx uint64)
 
 func get() *SockStats {
 	sockStats.mu.Lock()
@@ -93,20 +124,29 @@ func get() *SockStats {
 	}
 
 	for label, counters := range sockStats.countersByLabel {
-		r.Stats[label] = SockStat{
-			TxBytes:            int64(counters.txBytes.Load()),
-			RxBytes:            int64(counters.rxBytes.Load()),
-			TxBytesByInterface: make(map[string]int64),
-			RxBytesByInterface: make(map[string]int64),
+		s := SockStat{
+			TxBytes:            counters.txBytes.Load(),
+			RxBytes:            counters.rxBytes.Load(),
+			TxBytesByInterface: make(map[string]uint64),
+			RxBytesByInterface: make(map[string]uint64),
+
+			ValidationTxBytes: counters.validationTxBytes.Load(),
+			ValidationRxBytes: counters.validationRxBytes.Load(),
+		}
+		if c := counters.validationConn.Load(); c != nil && tcpConnStats != nil {
+			tx, rx := tcpConnStats(*c)
+			s.ValidationTxBytes += tx
+			s.ValidationRxBytes += rx
 		}
 		for iface, a := range counters.rxBytesByInterface {
 			ifName := sockStats.knownInterfaces[iface]
-			r.Stats[label].RxBytesByInterface[ifName] = int64(a.Load())
+			s.RxBytesByInterface[ifName] = a.Load()
 		}
 		for iface, a := range counters.txBytesByInterface {
 			ifName := sockStats.knownInterfaces[iface]
-			r.Stats[label].TxBytesByInterface[ifName] = int64(a.Load())
+			s.TxBytesByInterface[ifName] = a.Load()
 		}
+		r.Stats[label] = s
 	}
 
 	return r
