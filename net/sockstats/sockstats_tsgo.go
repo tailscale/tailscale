@@ -19,6 +19,8 @@ import (
 	"tailscale.com/util/clientmetric"
 )
 
+const IsAvailable = true
+
 type sockStatCounters struct {
 	txBytes, rxBytes                       atomic.Uint64
 	rxBytesByInterface, txBytesByInterface map[int]*atomic.Uint64
@@ -155,8 +157,9 @@ func get() *SockStats {
 	defer sockStats.mu.Unlock()
 
 	r := &SockStats{
-		Stats:      make(map[Label]SockStat),
-		Interfaces: make([]string, 0, len(sockStats.usedInterfaces)),
+		Stats:                    make(map[Label]SockStat),
+		Interfaces:               make([]string, 0, len(sockStats.usedInterfaces)),
+		CurrentInterfaceCellular: sockStats.currentInterfaceCellular.Load(),
 	}
 	for iface := range sockStats.usedInterfaces {
 		r.Interfaces = append(r.Interfaces, sockStats.knownInterfaces[iface])

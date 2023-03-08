@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -43,6 +44,8 @@ import (
 	"tailscale.com/ipn/ipnauth"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
+	"tailscale.com/log/sockstatlog"
+	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -149,6 +152,7 @@ type LocalBackend struct {
 	sshAtomicBool         atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
+	sockstatLogger        *sockstatlog.Logger
 
 	// getTCPHandlerForFunnelFlow returns a handler for an incoming TCP flow for
 	// the provided srcAddr and dstPort if one exists.
@@ -302,6 +306,14 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		em:             newExpiryManager(logf),
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
+	}
+
+	// for now, only log sockstats on unstable builds
+	if version.IsUnstableBuild() {
+		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf))
+		if err != nil {
+			log.Printf("error setting up sockstat logger: %v", err)
+		}
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
@@ -540,6 +552,10 @@ func (b *LocalBackend) Shutdown() {
 		b.debugSink = nil
 	}
 	b.mu.Unlock()
+
+	if b.sockstatLogger != nil {
+		b.sockstatLogger.Shutdown()
+	}
 
 	b.unregisterLinkMon()
 	b.unregisterHealthWatch()
@@ -1431,6 +1447,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	cc.SetTKAHead(tkaHead)
 
 	b.e.SetNetInfoCallback(b.setNetInfo)
+
+	if b.sockstatLogger != nil {
+		b.sockstatLogger.Start()
+	}
 
 	blid := b.backendLogID
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)

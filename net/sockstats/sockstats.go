@@ -18,8 +18,9 @@ import (
 // WithSockStats() function, along with the interfaces that we have
 // per-interface statistics for.
 type SockStats struct {
-	Stats      map[Label]SockStat
-	Interfaces []string
+	Stats                    map[Label]SockStat
+	Interfaces               []string
+	CurrentInterfaceCellular bool
 }
 
 // SockStat contains the sent and received bytes for a socket instrumented with
