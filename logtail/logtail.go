@@ -463,14 +463,6 @@ func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded
 		return uploaded, fmt.Errorf("log upload of %d bytes %s failed %d: %q", len(body), compressedNote, resp.StatusCode, b)
 	}
 
-	// Try to read to EOF, in case server's response is
-	// chunked. We want to reuse the TCP connection if it's
-	// HTTP/1. On success, we expect 0 bytes.
-	// TODO(bradfitz): can remove a few days after 2020-04-04 once
-	// server is fixed.
-	if resp.ContentLength == -1 {
-		resp.Body.Read(make([]byte, 1))
-	}
 	return true, nil
 }
 
