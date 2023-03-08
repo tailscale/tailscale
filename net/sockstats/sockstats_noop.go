@@ -9,6 +9,8 @@ import (
 	"context"
 )
 
+const IsAvailable = false
+
 func withSockStats(ctx context.Context, label Label) context.Context {
 	return ctx
 }

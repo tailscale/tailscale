@@ -192,9 +192,9 @@ func (l logWriter) Write(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
-// logsDir returns the directory to use for log configuration and
+// LogsDir returns the directory to use for log configuration and
 // buffer storage.
-func logsDir(logf logger.Logf) string {
+func LogsDir(logf logger.Logf) string {
 	if d := os.Getenv("TS_LOGS_DIR"); d != "" {
 		fi, err := os.Stat(d)
 		if err == nil && fi.IsDir() {
@@ -478,7 +478,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 	}
 
 	if dir == "" {
-		dir = logsDir(earlyLogf)
+		dir = LogsDir(earlyLogf)
 	}
 	if cmdName == "" {
 		cmdName = version.CmdName()
