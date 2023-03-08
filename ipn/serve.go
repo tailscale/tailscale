@@ -3,6 +3,11 @@
 
 package ipn
 
+import (
+	"net"
+	"net/netip"
+)
+
 // ServeConfigKey returns a StateKey that stores the
 // JSON-encoded ServeConfig for a config profile.
 func ServeConfigKey(profileID ProfileID) StateKey {
@@ -28,6 +33,26 @@ type ServeConfig struct {
 // HostPort is an SNI name and port number, joined by a colon.
 // There is no implicit port 443. It must contain a colon.
 type HostPort string
+
+// A FunnelConn wraps a net.Conn that is coming over a
+// Funnel connection. It can be used to determine further
+// information about the connection, like the source address
+// and the target SNI name.
+type FunnelConn struct {
+	// Conn is the underlying connection.
+	net.Conn
+
+	// Target is what was presented in the "Tailscale-Ingress-Target"
+	// HTTP header.
+	Target HostPort
+
+	// Src is the source address of the connection.
+	// This is the address of the client that initiated the
+	// connection, not the address of the Tailscale Funnel
+	// node which is relaying the connection. That address
+	// can be found in Conn.RemoteAddr.
+	Src netip.AddrPort
+}
 
 // WebServerConfig describes a web server's configuration.
 type WebServerConfig struct {

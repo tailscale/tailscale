@@ -519,6 +519,7 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}
+	lb.SetTCPHandlerForFunnelFlow(s.getTCPHandlerForFunnelFlow)
 	lb.SetVarRoot(s.rootPath)
 	logf("tsnet starting with hostname %q, varRoot %q", s.hostname, s.rootPath)
 	s.lb = lb
@@ -658,6 +659,27 @@ func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort) (_ *list
 		}
 	}
 	return nil, false
+}
+
+func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) (handler func(net.Conn)) {
+	ipv4, ipv6 := s.TailscaleIPs()
+	var dst netip.AddrPort
+	if src.Addr().Is4() {
+		if !ipv4.IsValid() {
+			return nil
+		}
+		dst = netip.AddrPortFrom(ipv4, dstPort)
+	} else {
+		if !ipv6.IsValid() {
+			return nil
+		}
+		dst = netip.AddrPortFrom(ipv6, dstPort)
+	}
+	ln, ok := s.listenerForDstAddr("tcp", dst)
+	if !ok {
+		return nil
+	}
+	return ln.handle
 }
 
 func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {

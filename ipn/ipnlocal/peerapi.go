@@ -761,12 +761,12 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 		bad("Tailscale-Ingress-Src header invalid; want ip:port")
 		return
 	}
-	target := r.Header.Get("Tailscale-Ingress-Target")
+	target := ipn.HostPort(r.Header.Get("Tailscale-Ingress-Target"))
 	if target == "" {
 		bad("Tailscale-Ingress-Target header not set")
 		return
 	}
-	if _, _, err := net.SplitHostPort(target); err != nil {
+	if _, _, err := net.SplitHostPort(string(target)); err != nil {
 		bad("Tailscale-Ingress-Target header invalid; want host:port")
 		return
 	}
@@ -779,13 +779,17 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 			return nil, false
 		}
 		io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\n\r\n")
-		return conn, true
+		return &ipn.FunnelConn{
+			Conn:   conn,
+			Src:    srcAddr,
+			Target: target,
+		}, true
 	}
 	sendRST := func() {
 		http.Error(w, "denied", http.StatusForbidden)
 	}
 
-	h.ps.b.HandleIngressTCPConn(h.peerNode, ipn.HostPort(target), srcAddr, getConn, sendRST)
+	h.ps.b.HandleIngressTCPConn(h.peerNode, target, srcAddr, getConn, sendRST)
 }
 
 func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Request) {
