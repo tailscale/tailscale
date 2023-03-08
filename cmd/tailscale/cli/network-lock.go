@@ -247,11 +247,13 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 			for i, addr := range p.TailscaleIPs {
 				line.WriteString(addr.String())
 				if i < len(p.TailscaleIPs)-1 {
-					line.WriteString(", ")
+					line.WriteString(",")
 				}
 			}
 			line.WriteString("\t")
 			line.WriteString(string(p.StableID))
+			line.WriteString("\t")
+			line.WriteString(p.NodeKey.String())
 			fmt.Println(line.String())
 		}
 	}

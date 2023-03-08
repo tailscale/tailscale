@@ -88,6 +88,7 @@ type TKAFilteredPeer struct {
 	ID           tailcfg.NodeID
 	StableID     tailcfg.StableNodeID
 	TailscaleIPs []netip.Addr // Tailscale IP(s) assigned to this node
+	NodeKey      key.NodePublic
 }
 
 // NetworkLockStatus represents whether network-lock is enabled,
