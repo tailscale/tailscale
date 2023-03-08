@@ -232,6 +232,15 @@ func runNetworkLockStatus(ctx context.Context, args []string) error {
 			if k.Key == st.PublicKey {
 				line.WriteString("(self)")
 			}
+			if k.Metadata["purpose"] == "pre-auth key" {
+				if preauthKeyID := k.Metadata["authkey_stableid"]; preauthKeyID != "" {
+					line.WriteString("(pre-auth key ")
+					line.WriteString(preauthKeyID)
+					line.WriteString(")")
+				} else {
+					line.WriteString("(pre-auth key)")
+				}
+			}
 			fmt.Println(line.String())
 		}
 	}
