@@ -281,9 +281,22 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 		sendRST()
 		return
 	}
+	dport := uint16(port16)
+	if b.getTCPHandlerForFunnelFlow != nil {
+		handler := b.getTCPHandlerForFunnelFlow(srcAddr, dport)
+		if handler != nil {
+			c, ok := getConn()
+			if !ok {
+				b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+				return
+			}
+			handler(c)
+			return
+		}
+	}
 	// TODO(bradfitz): pass ingressPeer etc in context to HandleInterceptedTCPConn,
 	// extend serveHTTPContext or similar.
-	b.HandleInterceptedTCPConn(uint16(port16), srcAddr, getConn, sendRST)
+	b.HandleInterceptedTCPConn(dport, srcAddr, getConn, sendRST)
 }
 
 func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
