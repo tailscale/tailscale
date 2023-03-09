@@ -100,6 +100,8 @@ type Server struct {
 	// If empty, the Tailscale default is used.
 	ControlURL string
 
+	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
 	initOnce         sync.Once
 	initErr          error
 	lb               *ipnlocal.LocalBackend
@@ -842,18 +844,28 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/s/https")
 	}
 
-	lc, err := s.LocalClient() // do local client first before listening.
-	if err != nil {
-		return nil, err
-	}
-
 	ln, err := s.listen(network, addr, listenOnTailnet)
 	if err != nil {
 		return nil, err
 	}
 	return tls.NewListener(ln, &tls.Config{
-		GetCertificate: lc.GetCertificate,
+		GetCertificate: s.getCert,
 	}), nil
+}
+
+// getCert is the GetCertificate function used by ListenTLS.
+//
+// It calls GetCertificate on the localClient, passing in the ClientHelloInfo.
+// For testing, if s.getCertForTesting is set, it will call that instead.
+func (s *Server) getCert(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if s.getCertForTesting != nil {
+		return s.getCertForTesting(hi)
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	return lc.GetCertificate(hi)
 }
 
 // FunnelOption is an option passed to ListenFunnel to configure the listener.
@@ -909,10 +921,7 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 		return nil, err
 	}
 
-	lc, err := s.LocalClient()
-	if err != nil {
-		return nil, err
-	}
+	lc := s.localClient
 
 	// May not have funnel enabled. Enable it.
 	srvConfig, err := lc.GetServeConfig(ctx)
@@ -944,7 +953,7 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 		return nil, err
 	}
 	return tls.NewListener(ln, &tls.Config{
-		GetCertificate: lc.GetCertificate,
+		GetCertificate: s.getCert,
 	}), nil
 }
 
