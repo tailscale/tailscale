@@ -12,7 +12,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -89,16 +88,15 @@ type Direct struct {
 	sfGroup     singleflight.Group[struct{}, *NoiseClient] // protects noiseClient creation.
 	noiseClient *NoiseClient
 
-	persist       persist.PersistView
-	authKey       string
-	tryingNewKey  key.NodePrivate
-	expiry        *time.Time
-	hostinfo      *tailcfg.Hostinfo // always non-nil
-	netinfo       *tailcfg.NetInfo
-	endpoints     []tailcfg.Endpoint
-	tkaHead       string
-	everEndpoints bool   // whether we've ever had non-empty endpoints
-	lastPingURL   string // last PingRequest.URL received, for dup suppression
+	persist      persist.PersistView
+	authKey      string
+	tryingNewKey key.NodePrivate
+	expiry       *time.Time
+	hostinfo     *tailcfg.Hostinfo // always non-nil
+	netinfo      *tailcfg.NetInfo
+	endpoints    []tailcfg.Endpoint
+	tkaHead      string
+	lastPingURL  string // last PingRequest.URL received, for dup suppression
 }
 
 type Options struct {
@@ -753,9 +751,6 @@ func (c *Direct) newEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	}
 	c.logf("[v2] client.newEndpoints(%v)", epStrs)
 	c.endpoints = append(c.endpoints[:0], endpoints...)
-	if len(endpoints) > 0 {
-		c.everEndpoints = true
-	}
 	return true // changed
 }
 
@@ -767,8 +762,6 @@ func (c *Direct) SetEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	//  if endpoints haven't changed. newEndpoints() will log it.)
 	return c.newEndpoints(endpoints)
 }
-
-func inTest() bool { return flag.Lookup("test.v") != nil }
 
 // PollNetMap makes a /map request to download the network map, calling cb with
 // each new netmap.
@@ -824,7 +817,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		epStrs = append(epStrs, ep.Addr.String())
 		epTypes = append(epTypes, ep.Type)
 	}
-	everEndpoints := c.everEndpoints
 	c.mu.Unlock()
 
 	machinePrivKey, err := c.getMachinePrivKey()
@@ -865,15 +857,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		OmitPeers:     cb == nil,
 		TKAHead:       c.tkaHead,
 
-		// On initial startup before we know our endpoints, set the ReadOnly flag
-		// to tell the control server not to distribute out our (empty) endpoints to peers.
-		// Presumably we'll learn our endpoints in a half second and do another post
-		// with useful results. The first POST just gets us the DERP map which we
-		// need to do the STUN queries to discover our endpoints.
-		// TODO(bradfitz): we skip this optimization in tests, though,
-		// because the e2e tests are currently hyper-specific about the
-		// ordering of things. The e2e tests need love.
-		ReadOnly: readOnly || (len(epStrs) == 0 && !everEndpoints && !inTest()),
+		// Previously we'd set ReadOnly to true if we didn't have any endpoints
+		// yet as we expected to learn them in a half second and restart the full
+		// streaming map poll, however as we are trying to reduce the number of
+		// times we restart the full streaming map poll we now just set ReadOnly
+		// false when we're doing a full streaming map poll.
+		//
+		// TODO(maisem/bradfitz): really ReadOnly should be set to true if for
+		// all streams and we should only do writes via lite map updates.
+		// However that requires an audit and a bunch of testing to make sure we
+		// don't break anything.
+		ReadOnly: readOnly && !allowStream,
 	}
 	var extraDebugFlags []string
 	if hi != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
