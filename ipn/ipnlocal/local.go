@@ -2536,9 +2536,6 @@ func (b *LocalBackend) checkSSHPrefsLocked(p *ipn.Prefs) error {
 		if version.IsSandboxedMacOS() {
 			return errors.New("The Tailscale SSH server does not run in sandboxed Tailscale GUI builds.")
 		}
-		if !envknob.UseWIPCode() {
-			return errors.New("The Tailscale SSH server is disabled on macOS tailscaled by default. To try, set env TAILSCALE_USE_WIP_CODE=1")
-		}
 	case "freebsd", "openbsd":
 	default:
 		return errors.New("The Tailscale SSH server is not supported on " + runtime.GOOS)
