@@ -7,18 +7,23 @@ package sockstats
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/clientmetric"
 )
 
 type sockStatCounters struct {
 	txBytes, rxBytes                       atomic.Uint64
 	rxBytesByInterface, txBytesByInterface map[int]*atomic.Uint64
+
+	txBytesMetric, rxBytesMetric *clientmetric.Metric
 
 	// Validate counts for TCP sockets by using the TCP_CONNECTION_INFO
 	// getsockopt. We get current counts, as well as save final values when
@@ -28,8 +33,9 @@ type sockStatCounters struct {
 }
 
 var sockStats = struct {
-	// mu protects fields in this group. It should not be held in the per-read/
-	// write callbacks.
+	// mu protects fields in this group (but not the fields within
+	// sockStatCounters). It should not be held in the per-read/write
+	// callbacks.
 	mu              sync.Mutex
 	countersByLabel map[Label]*sockStatCounters
 	knownInterfaces map[int]string // interface index -> name
@@ -37,11 +43,18 @@ var sockStats = struct {
 
 	// Separate atomic since the current interface is accessed in the per-read/
 	// write callbacks.
-	currentInterface atomic.Uint32
+	currentInterface         atomic.Uint32
+	currentInterfaceCellular atomic.Bool
+
+	txBytesMetric, rxBytesMetric, txBytesCellularMetric, rxBytesCellularMetric *clientmetric.Metric
 }{
-	countersByLabel: make(map[Label]*sockStatCounters),
-	knownInterfaces: make(map[int]string),
-	usedInterfaces:  make(map[int]int),
+	countersByLabel:       make(map[Label]*sockStatCounters),
+	knownInterfaces:       make(map[int]string),
+	usedInterfaces:        make(map[int]int),
+	txBytesMetric:         clientmetric.NewCounter("sockstats_tx_bytes"),
+	rxBytesMetric:         clientmetric.NewCounter("sockstats_rx_bytes"),
+	txBytesCellularMetric: clientmetric.NewCounter("sockstats_tx_bytes_cellular"),
+	rxBytesCellularMetric: clientmetric.NewCounter("sockstats_rx_bytes_cellular"),
 }
 
 func withSockStats(ctx context.Context, label Label) context.Context {
@@ -52,6 +65,8 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		counters = &sockStatCounters{
 			rxBytesByInterface: make(map[int]*atomic.Uint64),
 			txBytesByInterface: make(map[int]*atomic.Uint64),
+			txBytesMetric:      clientmetric.NewCounter(fmt.Sprintf("sockstats_tx_bytes_%s", label)),
+			rxBytesMetric:      clientmetric.NewCounter(fmt.Sprintf("sockstats_rx_bytes_%s", label)),
 		}
 
 		// We might be called before setLinkMonitor has been called (and we've
@@ -92,18 +107,28 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 
 	didRead := func(n int) {
 		counters.rxBytes.Add(uint64(n))
+		counters.rxBytesMetric.Add(int64(n))
+		sockStats.rxBytesMetric.Add(int64(n))
 		if currentInterface := int(sockStats.currentInterface.Load()); currentInterface != 0 {
 			if a := counters.rxBytesByInterface[currentInterface]; a != nil {
 				a.Add(uint64(n))
 			}
 		}
+		if sockStats.currentInterfaceCellular.Load() {
+			sockStats.rxBytesCellularMetric.Add(int64(n))
+		}
 	}
 	didWrite := func(n int) {
 		counters.txBytes.Add(uint64(n))
+		counters.txBytesMetric.Add(int64(n))
+		sockStats.txBytesMetric.Add(int64(n))
 		if currentInterface := int(sockStats.currentInterface.Load()); currentInterface != 0 {
 			if a := counters.txBytesByInterface[currentInterface]; a != nil {
 				a.Add(uint64(n))
 			}
+		}
+		if sockStats.currentInterfaceCellular.Load() {
+			sockStats.txBytesCellularMetric.Add(int64(n))
 		}
 	}
 	willOverwrite := func(trace *net.SockTrace) {
@@ -178,6 +203,7 @@ func setLinkMonitor(lm LinkMonitor) {
 	if ifName := state.DefaultRouteInterface; ifName != "" {
 		ifIndex := state.Interface[ifName].Index
 		sockStats.currentInterface.Store(uint32(ifIndex))
+		sockStats.currentInterfaceCellular.Store(isLikelyCellularInterface(ifName))
 		sockStats.usedInterfaces[ifIndex] = 1
 	}
 
@@ -194,10 +220,18 @@ func setLinkMonitor(lm LinkMonitor) {
 				if _, ok := sockStats.knownInterfaces[ifIndex]; ok {
 					sockStats.currentInterface.Store(uint32(ifIndex))
 					sockStats.usedInterfaces[ifIndex] = 1
+					sockStats.currentInterfaceCellular.Store(isLikelyCellularInterface(ifName))
 				} else {
 					sockStats.currentInterface.Store(0)
+					sockStats.currentInterfaceCellular.Store(false)
 				}
 			}
 		}
 	})
+}
+
+func isLikelyCellularInterface(ifName string) bool {
+	return strings.HasPrefix(ifName, "rmnet") || // Android
+		strings.HasPrefix(ifName, "ww") || // systemd naming scheme for WWAN
+		strings.HasPrefix(ifName, "pdp") // iOS
 }
