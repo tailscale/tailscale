@@ -14,9 +14,23 @@ import (
 	"tailscale.com/net/interfaces"
 )
 
+// SockStats contains statistics for sockets instrumented with the
+// WithSockStats() function, along with the interfaces that we have
+// per-interface statistics for.
 type SockStats struct {
 	Stats      map[Label]SockStat
 	Interfaces []string
+}
+
+// SockStat contains the sent and received bytes for a socket instrumented with
+// the WithSockStats() function. The bytes are also broken down by interface,
+// though this may be a subset of the total if interfaces were added after the
+// instrumented socket was created.
+type SockStat struct {
+	TxBytes            uint64
+	RxBytes            uint64
+	TxBytesByInterface map[string]uint64
+	RxBytesByInterface map[string]uint64
 }
 
 // Label is an identifier for a socket that stats are collected for. A finite
@@ -41,23 +55,36 @@ const (
 	LabelMagicsockConnUDP6   Label = 9 // wgengine/magicsock/magicsock.go
 )
 
-type SockStat struct {
-	TxBytes            uint64
-	RxBytes            uint64
-	TxBytesByInterface map[string]uint64
-	RxBytesByInterface map[string]uint64
-
-	// NOCOMMIT
-	ValidationTxBytes uint64
-	ValidationRxBytes uint64
-}
-
+// WithSockStats instruments a context so that sockets created with it will
+// have their statistics collected.
 func WithSockStats(ctx context.Context, label Label) context.Context {
 	return withSockStats(ctx, label)
 }
 
+// Get returns the current socket statistics.
 func Get() *SockStats {
 	return get()
+}
+
+// ValidationSockStats contains external validation numbers for sockets
+// instrumented with WithSockStats. It may be a subset of the all sockets,
+// depending on what externa measurement mechanisms the platform supports.
+type ValidationSockStats struct {
+	Stats map[Label]ValidationSockStat
+}
+
+// ValidationSockStat contains the validation bytes for a socket instrumented
+// with WithSockStats.
+type ValidationSockStat struct {
+	TxBytes uint64
+	RxBytes uint64
+}
+
+// GetWithValidation is a variant of GetWith that returns both the current stats
+// and external validation numbers for the stats. It is more expensive than
+// Get and should be used in debug interfaces only.
+func GetWithValidation() (*SockStats, *ValidationSockStats) {
+	return get(), getValidation()
 }
 
 // LinkMonitor is the interface for the parts of wgengine/mointor's Mon that we
@@ -67,6 +94,8 @@ type LinkMonitor interface {
 	RegisterChangeCallback(interfaces.ChangeFunc) (unregister func())
 }
 
+// SetLinkMonitor configures the sockstats package to monitor the active
+// interface, so that per-interface stats can be collected.
 func SetLinkMonitor(lm LinkMonitor) {
 	setLinkMonitor(lm)
 }

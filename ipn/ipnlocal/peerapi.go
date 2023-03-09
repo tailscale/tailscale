@@ -865,7 +865,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<!DOCTYPE html><h1>Socket Stats</h1>")
 
-	stats := sockstats.Get()
+	stats, validation := sockstats.GetWithValidation()
 	if stats == nil {
 		fmt.Fprintln(w, "No socket stats available")
 		return
@@ -914,12 +914,12 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 			rxTotalByInterface[iface] += stat.RxBytesByInterface[iface]
 		}
 
-		if stat.ValidationRxBytes > 0 || stat.ValidationTxBytes > 0 {
+		if validationStat, ok := validation.Stats[label]; ok && (validationStat.RxBytes > 0 || validationStat.TxBytes > 0) {
 			fmt.Fprintf(w, "<td>Tx=%d (%+d) Rx=%d (%+d)</td>",
-				stat.ValidationTxBytes,
-				int64(stat.ValidationTxBytes)-int64(stat.TxBytes),
-				stat.ValidationRxBytes,
-				int64(stat.ValidationRxBytes)-int64(stat.RxBytes))
+				validationStat.TxBytes,
+				int64(validationStat.TxBytes)-int64(stat.TxBytes),
+				validationStat.RxBytes,
+				int64(validationStat.RxBytes)-int64(stat.RxBytes))
 		} else {
 			fmt.Fprintln(w, "<td></td>")
 		}

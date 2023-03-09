@@ -96,6 +96,7 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		tx, rx := tcpConnStats(c)
 		counters.validationTxBytes.Add(tx)
 		counters.validationRxBytes.Add(rx)
+		counters.validationConn.Store(nil)
 	}
 
 	// Don't bother adding these hooks if we can't get stats that they end up
@@ -167,14 +168,6 @@ func get() *SockStats {
 			RxBytes:            counters.rxBytes.Load(),
 			TxBytesByInterface: make(map[string]uint64),
 			RxBytesByInterface: make(map[string]uint64),
-
-			ValidationTxBytes: counters.validationTxBytes.Load(),
-			ValidationRxBytes: counters.validationRxBytes.Load(),
-		}
-		if c := counters.validationConn.Load(); c != nil && tcpConnStats != nil {
-			tx, rx := tcpConnStats(*c)
-			s.ValidationTxBytes += tx
-			s.ValidationRxBytes += rx
 		}
 		for iface, a := range counters.rxBytesByInterface {
 			ifName := sockStats.knownInterfaces[iface]
@@ -183,6 +176,30 @@ func get() *SockStats {
 		for iface, a := range counters.txBytesByInterface {
 			ifName := sockStats.knownInterfaces[iface]
 			s.TxBytesByInterface[ifName] = a.Load()
+		}
+		r.Stats[label] = s
+	}
+
+	return r
+}
+
+func getValidation() *ValidationSockStats {
+	sockStats.mu.Lock()
+	defer sockStats.mu.Unlock()
+
+	r := &ValidationSockStats{
+		Stats: make(map[Label]ValidationSockStat),
+	}
+
+	for label, counters := range sockStats.countersByLabel {
+		s := ValidationSockStat{
+			TxBytes: counters.validationTxBytes.Load(),
+			RxBytes: counters.validationRxBytes.Load(),
+		}
+		if c := counters.validationConn.Load(); c != nil && tcpConnStats != nil {
+			tx, rx := tcpConnStats(*c)
+			s.TxBytes += tx
+			s.RxBytes += rx
 		}
 		r.Stats[label] = s
 	}
