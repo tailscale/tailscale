@@ -17,5 +17,9 @@ func get() *SockStats {
 	return nil
 }
 
+func getValidation() *ValidationSockStats {
+	return nil
+}
+
 func setLinkMonitor(lm LinkMonitor) {
 }
