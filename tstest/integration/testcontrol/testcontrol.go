@@ -26,6 +26,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
+	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
@@ -39,11 +40,12 @@ const msgLimit = 1 << 20 // encrypted message length limit
 // Server is a control plane server. Its zero value is ready for use.
 // Everything is stored in-memory in one tailnet.
 type Server struct {
-	Logf        logger.Logf      // nil means to use the log package
-	DERPMap     *tailcfg.DERPMap // nil means to use prod DERP map
-	RequireAuth bool
-	Verbose     bool
-	DNSConfig   *tailcfg.DNSConfig // nil means no DNS config
+	Logf           logger.Logf      // nil means to use the log package
+	DERPMap        *tailcfg.DERPMap // nil means to use prod DERP map
+	RequireAuth    bool
+	Verbose        bool
+	DNSConfig      *tailcfg.DNSConfig // nil means no DNS config
+	MagicDNSDomain string
 
 	// ExplicitBaseURL or HTTPTestServer must be set.
 	ExplicitBaseURL string           // e.g. "http://127.0.0.1:1234" with no trailing URL
@@ -328,6 +330,15 @@ func (s *Server) AddFakeNode() {
 	// TODO: send updates to other (non-fake?) nodes
 }
 
+func (s *Server) AllUsers() (users []*tailcfg.User) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.users {
+		users = append(users, u.Clone())
+	}
+	return users
+}
+
 func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -494,6 +505,11 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		Addresses:         allowedIPs,
 		AllowedIPs:        allowedIPs,
 		Hostinfo:          req.Hostinfo.View(),
+		Name:              req.Hostinfo.Hostname,
+		Capabilities: []string{
+			tailcfg.NodeAttrFunnel,
+			tailcfg.CapabilityFunnelPorts + "?ports=8080,443",
+		},
 	}
 	requireAuth := s.RequireAuth
 	if requireAuth && s.nodeKeyAuthed[nk] {
@@ -729,6 +745,20 @@ var keepAliveMsg = &struct {
 	KeepAlive: true,
 }
 
+func packetFilterWithIngressCaps() []tailcfg.FilterRule {
+	out := slices.Clone(tailcfg.FilterAllowAll)
+	out = append(out, tailcfg.FilterRule{
+		SrcIPs: []string{"*"},
+		CapGrant: []tailcfg.CapGrant{
+			{
+				Dsts: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
+				Caps: []string{tailcfg.CapabilityIngress},
+			},
+		},
+	})
+	return out
+}
+
 // MapResponse generates a MapResponse for a MapRequest.
 //
 // No updates to s are done here.
@@ -741,16 +771,24 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	}
 	user, _ := s.getUser(nk)
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
+	dns := s.DNSConfig
+	if dns != nil && s.MagicDNSDomain != "" {
+		dns = dns.Clone()
+		dns.CertDomains = []string{
+			fmt.Sprintf(node.Hostinfo.Hostname() + "." + s.MagicDNSDomain),
+		}
+	}
+
 	res = &tailcfg.MapResponse{
 		Node:            node,
 		DERPMap:         s.DERPMap,
 		Domain:          string(user.Domain),
 		CollectServices: "true",
-		PacketFilter:    tailcfg.FilterAllowAll,
+		PacketFilter:    packetFilterWithIngressCaps(),
 		Debug: &tailcfg.Debug{
 			DisableUPnP: "true",
 		},
-		DNSConfig:   s.DNSConfig,
+		DNSConfig:   dns,
 		ControlTime: &t,
 	}
 	for _, p := range s.AllNodes() {
@@ -761,6 +799,13 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	sort.Slice(res.Peers, func(i, j int) bool {
 		return res.Peers[i].ID < res.Peers[j].ID
 	})
+	for _, u := range s.AllUsers() {
+		res.UserProfiles = append(res.UserProfiles, tailcfg.UserProfile{
+			ID:          u.ID,
+			LoginName:   u.LoginName,
+			DisplayName: u.DisplayName,
+		})
+	}
 
 	v4Prefix := netip.PrefixFrom(netaddr.IPv4(100, 64, uint8(tailcfg.NodeID(user.ID)>>8), uint8(tailcfg.NodeID(user.ID))), 32)
 	v6Prefix := netip.PrefixFrom(tsaddr.Tailscale4To6(v4Prefix.Addr()), 128)
