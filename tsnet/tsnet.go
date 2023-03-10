@@ -9,6 +9,7 @@ package tsnet
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -415,9 +416,9 @@ func (s *Server) start() (reterr error) {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(s.rootPath, 0700); err != nil {
-			return err
-		}
+	}
+	if err := os.MkdirAll(s.rootPath, 0700); err != nil {
+		return err
 	}
 	if fi, err := os.Stat(s.rootPath); err != nil {
 		return err
@@ -645,7 +646,7 @@ func networkForFamily(netBase string, is6 bool) string {
 //   - ("tcp", "", port)
 //
 // The netBase is "tcp" or "udp" (without any '4' or '6' suffix).
-func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort) (_ *listener, ok bool) {
+func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort, funnel bool) (_ *listener, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, a := range [2]netip.Addr{0: dst.Addr()} {
@@ -653,7 +654,7 @@ func (s *Server) listenerForDstAddr(netBase string, dst netip.AddrPort) (_ *list
 			networkForFamily(netBase, dst.Addr().Is6()),
 			netBase,
 		} {
-			if ln, ok := s.listeners[listenKey{net, a, dst.Port()}]; ok {
+			if ln, ok := s.listeners[listenKey{net, a, dst.Port(), funnel}]; ok {
 				return ln, true
 			}
 		}
@@ -675,7 +676,7 @@ func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) 
 		}
 		dst = netip.AddrPortFrom(ipv6, dstPort)
 	}
-	ln, ok := s.listenerForDstAddr("tcp", dst)
+	ln, ok := s.listenerForDstAddr("tcp", dst, true)
 	if !ok {
 		return nil
 	}
@@ -683,7 +684,7 @@ func (s *Server) getTCPHandlerForFunnelFlow(src netip.AddrPort, dstPort uint16) 
 }
 
 func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-	ln, ok := s.listenerForDstAddr("tcp", dst)
+	ln, ok := s.listenerForDstAddr("tcp", dst, false)
 	if !ok {
 		return nil, true // don't handle, don't forward to localhost
 	}
@@ -691,7 +692,7 @@ func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 }
 
 func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
-	ln, ok := s.listenerForDstAddr("udp", dst)
+	ln, ok := s.listenerForDstAddr("udp", dst, false)
 	if !ok {
 		return nil, true // don't handle, don't forward to localhost
 	}
@@ -760,6 +761,136 @@ func (s *Server) APIClient() (*tailscale.Client, error) {
 // Listen announces only on the Tailscale network.
 // It will start the server if it has not been started yet.
 func (s *Server) Listen(network, addr string) (net.Listener, error) {
+	return s.listen(network, addr, listenOnTailnet)
+}
+
+// ListenTLS announces only on the Tailscale network.
+// It returns a TLS listener wrapping the tsnet listener.
+// It will start the server if it has not been started yet.
+func (s *Server) ListenTLS(network string, addr string) (net.Listener, error) {
+	if network != "tcp" {
+		return nil, fmt.Errorf("ListenTLS(%q, %q): only tcp is supported", network, addr)
+	}
+	ctx := context.Background()
+	st, err := s.Up(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(st.CertDomains) == 0 {
+		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed")
+	}
+
+	lc, err := s.LocalClient() // do local client first before listening.
+	if err != nil {
+		return nil, err
+	}
+
+	ln, err := s.listen(network, addr, listenOnTailnet)
+	if err != nil {
+		return nil, err
+	}
+	return tls.NewListener(ln, &tls.Config{
+		GetCertificate: lc.GetCertificate,
+	}), nil
+}
+
+// FunnelOption is an option passed to ListenFunnel to configure the listener.
+type FunnelOption interface {
+	funnelOption()
+}
+
+type funnelOnly int
+
+func (funnelOnly) funnelOption() {}
+
+// FunnelOnly configures the listener to only respond to connections from Tailscale Funnel.
+// The local tailnet will not be able to connect to the listener.
+func FunnelOnly() FunnelOption { return funnelOnly(1) }
+
+// ListenFunnel announces on the public internet using Tailscale Funnel.
+//
+// It also by default listens on your local tailnet, so connections can
+// come from either inside or outside your network. To restrict connections
+// to be just from the internet, use the FunnelOnly option.
+//
+// Currently (2023-03-10), Funnel only supports TCP on ports 443, 8443, and 10000.
+// The supported host name is limited to that configured for the tsnet.Server.
+// As such, the standard way to create funnel is:
+//
+//	s.ListenFunnel("tcp", ":443")
+//
+// and the only other supported addrs currently are ":8443" and ":10000".
+//
+// It will start the server if it has not been started yet.
+func (s *Server) ListenFunnel(network string, addr string, opts ...FunnelOption) (net.Listener, error) {
+	if network != "tcp" {
+		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
+	}
+	switch addr {
+	case ":443", ":8443", ":10000":
+	default:
+		return nil, fmt.Errorf(`ListenFunnel(%q, %q): only valid addrs are ":443", ":8443", and ":10000"`, network, addr)
+	}
+	ctx := context.Background()
+	st, err := s.Up(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(st.CertDomains) == 0 {
+		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed")
+	}
+	if err := ipn.CheckFunnelAccess(st.Self.Capabilities); err != nil {
+		return nil, err
+	}
+
+	lc, err := s.LocalClient() // do local client first before listening.
+	if err != nil {
+		return nil, err
+	}
+
+	// May not have funnel enabled. Enable it.
+	srvConfig, err := lc.GetServeConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if srvConfig == nil {
+		srvConfig = &ipn.ServeConfig{}
+	}
+	domain := st.CertDomains[0]
+	hp := ipn.HostPort(domain + addr) // valid only because of the strong restrictions on addr above
+	if !srvConfig.AllowFunnel[hp] {
+		mak.Set(&srvConfig.AllowFunnel, hp, true)
+		srvConfig.AllowFunnel[hp] = true
+		if err := lc.SetServeConfig(ctx, srvConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	// Start a funnel listener.
+	lnOn := listenOnBoth
+	for _, opt := range opts {
+		if _, ok := opt.(funnelOnly); ok {
+			lnOn = listenOnFunnel
+		}
+	}
+	ln, err := s.listen(network, addr, lnOn)
+	if err != nil {
+		return nil, err
+	}
+	return tls.NewListener(ln, &tls.Config{
+		GetCertificate: lc.GetCertificate,
+	}), nil
+}
+
+type listenOn string
+
+const (
+	listenOnTailnet = listenOn("listen-on-tailnet")
+	listenOnFunnel  = listenOn("listen-on-funnel")
+	listenOnBoth    = listenOn("listen-on-both")
+)
+
+func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, error) {
 	switch network {
 	case "", "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
 	default:
@@ -794,20 +925,37 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 		return nil, err
 	}
 
-	key := listenKey{network, bindHostOrZero, uint16(port)}
+	var keys []listenKey
+	switch lnOn {
+	case listenOnTailnet:
+		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), false})
+	case listenOnFunnel:
+		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), true})
+	case listenOnBoth:
+		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), false})
+		keys = append(keys, listenKey{network, bindHostOrZero, uint16(port), true})
+	}
+
 	ln := &listener{
 		s:    s,
-		key:  key,
+		keys: keys,
 		addr: addr,
 
 		conn: make(chan net.Conn),
 	}
 	s.mu.Lock()
-	if _, ok := s.listeners[key]; ok {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("tsnet: listener already open for %s, %s", network, addr)
+	for _, key := range keys {
+		if _, ok := s.listeners[key]; ok {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("tsnet: listener already open for %s, %s", network, addr)
+		}
 	}
-	mak.Set(&s.listeners, key, ln)
+	if s.listeners == nil {
+		s.listeners = make(map[listenKey]*listener)
+	}
+	for _, key := range keys {
+		s.listeners[key] = ln
+	}
 	s.mu.Unlock()
 	return ln, nil
 }
@@ -816,11 +964,12 @@ type listenKey struct {
 	network string
 	host    netip.Addr // or zero value for unspecified
 	port    uint16
+	funnel  bool
 }
 
 type listener struct {
 	s    *Server
-	key  listenKey
+	keys []listenKey
 	addr string
 	conn chan net.Conn
 }
@@ -837,10 +986,12 @@ func (ln *listener) Addr() net.Addr { return addr{ln} }
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
 	defer ln.s.mu.Unlock()
-	if v, ok := ln.s.listeners[ln.key]; ok && v == ln {
-		delete(ln.s.listeners, ln.key)
-		close(ln.conn)
+	for _, key := range ln.keys {
+		if v, ok := ln.s.listeners[key]; ok && v == ln {
+			delete(ln.s.listeners, key)
+		}
 	}
+	close(ln.conn)
 	return nil
 }
 
@@ -861,5 +1012,5 @@ func (ln *listener) Server() *Server { return ln.s }
 
 type addr struct{ ln *listener }
 
-func (a addr) Network() string { return a.ln.key.network }
+func (a addr) Network() string { return a.ln.keys[0].network }
 func (a addr) String() string  { return a.ln.addr }
