@@ -415,9 +415,9 @@ func (s *Server) start() (reterr error) {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(s.rootPath, 0700); err != nil {
-			return err
-		}
+	}
+	if err := os.MkdirAll(s.rootPath, 0700); err != nil {
+		return err
 	}
 	if fi, err := os.Stat(s.rootPath); err != nil {
 		return err
