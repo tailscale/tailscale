@@ -21,10 +21,8 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/exp/slices"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
@@ -679,7 +677,7 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting client status: %w", err)
 	}
-	if err := checkHasAccess(st.Self.Capabilities); err != nil {
+	if err := ipn.CheckFunnelAccess(st.Self.Capabilities); err != nil {
 		return err
 	}
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
@@ -699,25 +697,6 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	}
 	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
 		return err
-	}
-	return nil
-}
-
-// checkHasAccess checks three things: 1) an invite was used to join the
-// Funnel alpha; 2) HTTPS is enabled; 3) the node has the "funnel" attribute.
-// If any of these are false, an error is returned describing the problem.
-//
-// The nodeAttrs arg should be the node's Self.Capabilities which should contain
-// the attribute we're checking for and possibly warning-capabilities for Funnel.
-func checkHasAccess(nodeAttrs []string) error {
-	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
-		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/kb/1223/tailscale-funnel/.")
-	}
-	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoHTTPS) {
-		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/kb/1153/enabling-https/.")
-	}
-	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
-		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/kb/1223/tailscale-funnel/.")
 	}
 	return nil
 }

@@ -4,8 +4,12 @@
 package ipn
 
 import (
+	"errors"
 	"net"
 	"net/netip"
+
+	"golang.org/x/exp/slices"
+	"tailscale.com/tailcfg"
 )
 
 // ServeConfigKey returns a StateKey that stores the
@@ -167,4 +171,23 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 		}
 	}
 	return false
+}
+
+// CheckFunnelAccess checks three things: 1) an invite was used to join the
+// Funnel alpha; 2) HTTPS is enabled; 3) the node has the "funnel" attribute.
+// If any of these are false, an error is returned describing the problem.
+//
+// The nodeAttrs arg should be the node's Self.Capabilities which should contain
+// the attribute we're checking for and possibly warning-capabilities for Funnel.
+func CheckFunnelAccess(nodeAttrs []string) error {
+	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
+		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/kb/1223/tailscale-funnel/.")
+	}
+	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoHTTPS) {
+		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/kb/1153/enabling-https/.")
+	}
+	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
+		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/kb/1223/tailscale-funnel/.")
+	}
+	return nil
 }
