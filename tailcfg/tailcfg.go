@@ -94,7 +94,8 @@ type CapabilityVersion int
 //   - 55: 2023-01-23: start of c2n GET+POST /update handler
 //   - 56: 2023-01-24: Client understands CapabilityDebugTSDNSResolution
 //   - 57: 2023-01-25: Client understands CapabilityBindToInterfaceByRoute
-const CurrentCapabilityVersion CapabilityVersion = 57
+//   - 58: 2023-03-10: Client retries lite map updates before restarting map poll.
+const CurrentCapabilityVersion CapabilityVersion = 58
 
 type StableID string
 
