@@ -6,12 +6,14 @@ package sockstatlog
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 )
 
@@ -21,6 +23,7 @@ const pollPeriod = time.Second / 10
 // Logger logs statistics about network sockets.
 type Logger struct {
 	ticker    time.Ticker
+	logf      logger.Logf
 	logbuffer *filch.Filch
 }
 
@@ -46,7 +49,7 @@ type event struct {
 // NewLogger returns a new Logger that will store stats in logdir.
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
 // The returned Logger is not yet running.
-func NewLogger(logdir string) (*Logger, error) {
+func NewLogger(logdir string, logf logger.Logf) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
 	}
@@ -62,6 +65,7 @@ func NewLogger(logdir string) (*Logger, error) {
 
 	return &Logger{
 		ticker:    *time.NewTicker(pollPeriod),
+		logf:      logf,
 		logbuffer: filch,
 	}, nil
 }
@@ -92,7 +96,9 @@ func (l *Logger) poll() {
 				if stats.CurrentInterfaceCellular {
 					e.IsCellularInterface = 1
 				}
-				enc.Encode(e)
+				if err := enc.Encode(e); err != nil {
+					l.logf("sockstatlog: error encoding log: %v", err)
+				}
 			}
 		}
 		lastTime = t
@@ -103,6 +109,27 @@ func (l *Logger) poll() {
 func (l *Logger) Shutdown() {
 	l.ticker.Stop()
 	l.logbuffer.Close()
+}
+
+// WriteLogs reads local logs, combining logs into events, and writes them to w.
+// Logs within eventWindow are combined into the same event.
+func (l *Logger) WriteLogs(w io.Writer) {
+	if l == nil || l.logbuffer == nil {
+		return
+	}
+	for {
+		b, err := l.logbuffer.TryReadLine()
+		if err != nil {
+			l.logf("sockstatlog: error reading log: %v", err)
+			return
+		}
+		if b == nil {
+			// no more log messages
+			return
+		}
+
+		w.Write(b)
+	}
 }
 
 // delta calculates the delta stats between two SockStats snapshots.
