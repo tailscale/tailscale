@@ -35,11 +35,11 @@ var configureHostCmd = &ffcli.Command{
 var synologyConfigureCmd = &ffcli.Command{
 	Name:      "synology",
 	Exec:      runConfigureSynology,
-	ShortHelp: "Configure Synology to enable more Tailscale features",
+	ShortHelp: "Configure Synology to enable outbound connections",
 	LongHelp: strings.TrimSpace(`
-The 'configure-host' command is intended to run at boot as root
-to create the /dev/net/tun device and give the tailscaled binary
-permission to use it.
+This command is intended to run at boot as root on a Synology device to
+create the /dev/net/tun device and give the tailscaled binary permission
+to use it.
 
 See: https://tailscale.com/kb/1152/synology-outbound/
 `),
