@@ -21,6 +21,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -767,7 +768,7 @@ func (s *Server) Listen(network, addr string) (net.Listener, error) {
 // ListenTLS announces only on the Tailscale network.
 // It returns a TLS listener wrapping the tsnet listener.
 // It will start the server if it has not been started yet.
-func (s *Server) ListenTLS(network string, addr string) (net.Listener, error) {
+func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenTLS(%q, %q): only tcp is supported", network, addr)
 	}
@@ -822,28 +823,32 @@ func FunnelOnly() FunnelOption { return funnelOnly(1) }
 // and the only other supported addrs currently are ":8443" and ":10000".
 //
 // It will start the server if it has not been started yet.
-func (s *Server) ListenFunnel(network string, addr string, opts ...FunnelOption) (net.Listener, error) {
+func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.Listener, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("ListenFunnel(%q, %q): only tcp is supported", network, addr)
 	}
-	switch addr {
-	case ":443", ":8443", ":10000":
-	default:
-		return nil, fmt.Errorf(`ListenFunnel(%q, %q): only valid addrs are ":443", ":8443", and ":10000"`, network, addr)
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
 	}
+	if host != "" {
+		return nil, fmt.Errorf("ListenFunnel(%q, %q): host must be empty", network, addr)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx := context.Background()
 	st, err := s.Up(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(st.CertDomains) == 0 {
-		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed")
-	}
-	if err := ipn.CheckFunnelAccess(st.Self.Capabilities); err != nil {
+	if err := ipn.CheckFunnelAccess(uint16(port), st.Self.Capabilities); err != nil {
 		return nil, err
 	}
 
-	lc, err := s.LocalClient() // do local client first before listening.
+	lc, err := s.LocalClient()
 	if err != nil {
 		return nil, err
 	}
@@ -857,7 +862,7 @@ func (s *Server) ListenFunnel(network string, addr string, opts ...FunnelOption)
 		srvConfig = &ipn.ServeConfig{}
 	}
 	domain := st.CertDomains[0]
-	hp := ipn.HostPort(domain + addr) // valid only because of the strong restrictions on addr above
+	hp := ipn.HostPort(domain + ":" + portStr)
 	if !srvConfig.AllowFunnel[hp] {
 		mak.Set(&srvConfig.AllowFunnel, hp, true)
 		srvConfig.AllowFunnel[hp] = true

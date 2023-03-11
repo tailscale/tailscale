@@ -22,7 +22,7 @@ import (
 func main() {
 	flag.Parse()
 	s := &tsnet.Server{
-		Dir:      "./funnel-demo-config.state",
+		Dir:      "./funnel-demo-config",
 		Logf:     logger.Discard,
 		Hostname: "fun",
 	}
