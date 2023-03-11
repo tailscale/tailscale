@@ -34,6 +34,8 @@ func main() {
 	}
 	defer ln.Close()
 
+	fmt.Printf("Listening on https://%v\n", s.CertDomains()[0])
+
 	err = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "<html><body><h1>Hello, internet!</h1>")
 	}))
