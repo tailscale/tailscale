@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
@@ -366,11 +367,26 @@ func (s *Server) doInit() {
 	}
 }
 
+// CertDomains returns the list of domains for which the server can
+// provide TLS certificates. These are also the DNS names for the
+// Server.
+// If the server is not running, it returns nil.
+func (s *Server) CertDomains() []string {
+	nm := s.lb.NetMap()
+	if nm == nil {
+		return nil
+	}
+	return slices.Clone(nm.DNS.CertDomains)
+}
+
 // TailscaleIPs returns IPv4 and IPv6 addresses for this node. If the node
 // has not yet joined a tailnet or is otherwise unaware of its own IP addresses,
 // the returned ip4, ip6 will be !netip.IsValid().
 func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	nm := s.lb.NetMap()
+	if nm == nil {
+		return
+	}
 	for _, addr := range nm.Addresses {
 		ip := addr.Addr()
 		if ip.Is6() {
