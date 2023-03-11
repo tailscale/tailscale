@@ -189,14 +189,10 @@ func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, 
 // validateServePort returns --serve-port flag value,
 // or an error if the port is not a valid port to serve on.
 func (e *serveEnv) validateServePort() (port uint16, err error) {
-	// make sure e.servePort is uint16
+	// Make sure e.servePort is uint16.
 	port = uint16(e.servePort)
 	if uint(port) != e.servePort {
 		return 0, fmt.Errorf("serve-port %d is out of range", e.servePort)
-	}
-	// make sure e.servePort is 443, 8443 or 10000
-	if port != 443 && port != 8443 && port != 10000 {
-		return 0, fmt.Errorf("serve-port %d is invalid; must be 443, 8443 or 10000", e.servePort)
 	}
 	return port, nil
 }
@@ -677,7 +673,7 @@ func (e *serveEnv) runServeFunnel(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("getting client status: %w", err)
 	}
-	if err := ipn.CheckFunnelAccess(st.Self.Capabilities); err != nil {
+	if err := ipn.CheckFunnelAccess(srvPort, st.Self.Capabilities); err != nil {
 		return err
 	}
 	dnsName := strings.TrimSuffix(st.Self.DNSName, ".")

@@ -119,10 +119,6 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{ // invalid port
-		command: cmd("--serve-port=9999 /abc proxy 3001"),
-		wantErr: anyErr(),
-	})
 	add(step{
 		command: cmd("--serve-port=8443 /abc proxy 3001"),
 		want: &ipn.ServeConfig{
@@ -653,7 +649,7 @@ var fakeStatus = &ipnstate.Status{
 	BackendState: ipn.Running.String(),
 	Self: &ipnstate.PeerStatus{
 		DNSName:      "foo.test.ts.net",
-		Capabilities: []string{tailcfg.NodeAttrFunnel},
+		Capabilities: []string{tailcfg.NodeAttrFunnel, tailcfg.CapabilityFunnelPorts + "?ports=443,8443"},
 	},
 }
 

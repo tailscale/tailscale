@@ -9,17 +9,24 @@ import (
 )
 
 func TestCheckFunnelAccess(t *testing.T) {
+	portAttr := "https://tailscale.com/cap/funnel-ports?ports=443,8080-8090,8443,"
 	tests := []struct {
+		port    uint16
 		caps    []string
 		wantErr bool
 	}{
-		{[]string{}, true}, // No "funnel" attribute
-		{[]string{tailcfg.CapabilityWarnFunnelNoInvite}, true},
-		{[]string{tailcfg.CapabilityWarnFunnelNoHTTPS}, true},
-		{[]string{tailcfg.NodeAttrFunnel}, false},
+		{443, []string{portAttr}, true}, // No "funnel" attribute
+		{443, []string{portAttr, tailcfg.CapabilityWarnFunnelNoInvite}, true},
+		{443, []string{portAttr, tailcfg.CapabilityWarnFunnelNoHTTPS}, true},
+		{443, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
+		{8443, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
+		{8321, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
+		{8083, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
+		{8091, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
+		{3000, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
 	}
 	for _, tt := range tests {
-		err := CheckFunnelAccess(tt.caps)
+		err := CheckFunnelAccess(tt.port, tt.caps)
 		switch {
 		case err != nil && tt.wantErr,
 			err == nil && !tt.wantErr:

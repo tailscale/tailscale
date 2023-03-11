@@ -1058,6 +1058,11 @@ type PortRange struct {
 	Last  uint16
 }
 
+// Contains reports whether port is in pr.
+func (pr PortRange) Contains(port uint16) bool {
+	return port >= pr.First && port <= pr.Last
+}
+
 var PortRangeAny = PortRange{0, 65535}
 
 // NetPortRange represents a range of ports that's allowed for one or more IPs.
@@ -1818,6 +1823,12 @@ const (
 	// resolution for Tailscale-controlled domains (the control server, log
 	// server, DERP servers, etc.)
 	CapabilityDebugTSDNSResolution = "https://tailscale.com/cap/debug-ts-dns-resolution"
+
+	// CapabilityFunnelPorts specifies the ports that the Funnel is available on.
+	// The ports are specified as a comma-separated list of port numbers or port
+	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
+	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
+	CapabilityFunnelPorts = "https://tailscale.com/cap/funnel-ports"
 )
 
 const (

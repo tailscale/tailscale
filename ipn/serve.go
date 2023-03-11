@@ -5,8 +5,12 @@ package ipn
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"golang.org/x/exp/slices"
 	"tailscale.com/tailcfg"
@@ -173,13 +177,18 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 	return false
 }
 
-// CheckFunnelAccess checks three things: 1) an invite was used to join the
-// Funnel alpha; 2) HTTPS is enabled; 3) the node has the "funnel" attribute.
-// If any of these are false, an error is returned describing the problem.
+// CheckFunnelAccess checks whether Funnel access is allowed for the given node
+// and port.
+// It checks:
+//  1. an invite was used to join the Funnel alpha
+//  2. HTTPS is enabled on the Tailnet
+//  3. the node has the "funnel" nodeAttr
+//  4. the port is allowed for Funnel
 //
 // The nodeAttrs arg should be the node's Self.Capabilities which should contain
-// the attribute we're checking for and possibly warning-capabilities for Funnel.
-func CheckFunnelAccess(nodeAttrs []string) error {
+// the attribute we're checking for and possibly warning-capabilities for
+// Funnel.
+func CheckFunnelAccess(port uint16, nodeAttrs []string) error {
 	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
 		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/kb/1223/tailscale-funnel/.")
 	}
@@ -189,5 +198,61 @@ func CheckFunnelAccess(nodeAttrs []string) error {
 	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
 		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/kb/1223/tailscale-funnel/.")
 	}
-	return nil
+	return checkFunnelPort(port, nodeAttrs)
+}
+
+// checkFunnelPort checks whether the given port is allowed for Funnel.
+// It uses the tailcfg.CapabilityFunnelPorts nodeAttr to determine the allowed
+// ports.
+func checkFunnelPort(wantedPort uint16, nodeAttrs []string) error {
+	deny := func(allowedPorts string) error {
+		if allowedPorts == "" {
+			return fmt.Errorf("port %d is not allowed for funnel", wantedPort)
+		}
+		return fmt.Errorf("port %d is not allowed for funnel; allowed ports are: %v", wantedPort, allowedPorts)
+	}
+	var portsStr string
+	for _, attr := range nodeAttrs {
+		if !strings.HasPrefix(attr, tailcfg.CapabilityFunnelPorts) {
+			continue
+		}
+		u, err := url.Parse(attr)
+		if err != nil {
+			return deny("")
+		}
+		portsStr = u.Query().Get("ports")
+		if portsStr == "" {
+			return deny("")
+		}
+		u.RawQuery = ""
+		if u.String() != tailcfg.CapabilityFunnelPorts {
+			return deny("")
+		}
+	}
+	wantedPortString := strconv.Itoa(int(wantedPort))
+	for _, ps := range strings.Split(portsStr, ",") {
+		if ps == "" {
+			continue
+		}
+		first, last, ok := strings.Cut(ps, "-")
+		if !ok {
+			if first == wantedPortString {
+				return nil
+			}
+			continue
+		}
+		fp, err := strconv.ParseUint(first, 10, 16)
+		if err != nil {
+			continue
+		}
+		lp, err := strconv.ParseUint(last, 10, 16)
+		if err != nil {
+			continue
+		}
+		pr := tailcfg.PortRange{First: uint16(fp), Last: uint16(lp)}
+		if pr.Contains(wantedPort) {
+			return nil
+		}
+	}
+	return deny(portsStr)
 }
