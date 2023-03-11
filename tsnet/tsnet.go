@@ -277,6 +277,14 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 				if len(status.TailscaleIPs) == 0 {
 					return nil, errors.New("tsnet.Up: running, but no ip")
 				}
+
+				// Clear the persisted serve config state to prevent stale configuration
+				// from code changes. This is a temporary workaround until we have a better
+				// way to handle this. (2023-03-11)
+				if err := lc.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+					return nil, fmt.Errorf("tsnet.Up: %w", err)
+				}
+
 				return status, nil
 			}
 			// TODO: in the future, return an error on ipn.NeedsLogin
