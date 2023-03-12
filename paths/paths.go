@@ -21,6 +21,11 @@ var AppSharedDir syncs.AtomicValue[string]
 // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
 // or the empty string if there's no reasonable default.
 func DefaultTailscaledSocket() string {
+	envSocket := os.Getenv("TS_SOCKET")
+	if envSocket != "" {
+		return envSocket
+	}
+
 	if runtime.GOOS == "windows" {
 		return `\\.\pipe\ProtectedPrefix\Administrators\Tailscale\tailscaled`
 	}
