@@ -250,10 +250,13 @@ func SetCachePath(path string) {
 // logfunc stores the logging function to use for this package.
 var logfunc syncs.AtomicValue[logger.Logf]
 
-// SetLogger sets the logging function that this package will use. The default
-// logger if this function is not called is 'log.Printf'.
-func SetLogger(log logger.Logf) {
-	logfunc.Store(log)
+// SetLogger sets the logging function that this package will use, and returns
+// the old value (which may be nil).
+//
+// If this function is never called, or if this function is called with a nil
+// value, 'log.Printf' will be used to print logs.
+func SetLogger(log logger.Logf) (old logger.Logf) {
+	return logfunc.Swap(log)
 }
 
 func logf(format string, args ...any) {

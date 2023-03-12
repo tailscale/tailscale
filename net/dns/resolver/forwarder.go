@@ -384,6 +384,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	dialer := dnscache.Dialer(nsDialer.DialContext, &dnscache.Resolver{
 		SingleHost:             dohURL.Hostname(),
 		SingleHostStaticResult: allIPs,
+		Logf:                   f.logf,
 	})
 	c = &http.Client{
 		Transport: &http.Transport{
