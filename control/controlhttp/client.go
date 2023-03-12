@@ -388,12 +388,14 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr,
 		dns = &dnscache.Resolver{
 			SingleHostStaticResult: []netip.Addr{addr},
 			SingleHost:             u.Hostname(),
+			Logf:                   a.Logf, // not a.logf method; we want to propagate nil-ness
 		}
 	} else {
 		dns = &dnscache.Resolver{
 			Forward:          dnscache.Get().Forward,
 			LookupIPFallback: dnsfallback.Lookup,
 			UseLastGood:      true,
+			Logf:             a.Logf, // not a.logf method; we want to propagate nil-ness
 		}
 	}
 

@@ -212,6 +212,7 @@ func NewDirect(opts Options) (*Direct, error) {
 			Forward:          dnscache.Get().Forward, // use default cache's forwarder
 			UseLastGood:      true,
 			LookupIPFallback: dnsfallback.Lookup,
+			Logf:             opts.Logf,
 		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
