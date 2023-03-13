@@ -147,7 +147,7 @@ func getTailscaleUser(ctx context.Context, localClient *tailscale.LocalClient, i
 	if err != nil {
 		return nil, fmt.Errorf("failed to identify remote host: %w", err)
 	}
-	if len(whois.Node.Tags) != 0 {
+	if whois.Node.IsTagged() {
 		return nil, fmt.Errorf("tagged nodes are not users")
 	}
 	if whois.UserProfile == nil || whois.UserProfile.LoginName == "" {

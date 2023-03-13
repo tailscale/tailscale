@@ -102,7 +102,7 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 	ci := ss.conn.info
 	gids := strings.Join(ss.conn.userGroupIDs, ",")
 	remoteUser := ci.uprof.LoginName
-	if len(ci.node.Tags) > 0 {
+	if ci.node.IsTagged() {
 		remoteUser = strings.Join(ci.node.Tags, ",")
 	}
 

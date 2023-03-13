@@ -313,6 +313,11 @@ func (n *Node) DisplayNames(forOwner bool) (name, hostIfDifferent string) {
 	return n.ComputedName, ""
 }
 
+// IsTagged reports whether the node has any tags.
+func (n *Node) IsTagged() bool {
+	return len(n.Tags) > 0
+}
+
 // InitDisplayNames computes and populates n's display name
 // fields: n.ComputedName, n.computedHostIfDifferent, and
 // n.ComputedNameWithHost.
