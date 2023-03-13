@@ -67,6 +67,17 @@ type DERPRegion struct {
 	// away to a new region without Avoid set.
 	Avoid bool `json:",omitempty"`
 
+	// Location is an (optional) geographic location for this region; it is
+	// used in conjunction with ambient location information like the
+	// current cloud provider's region to try optimal regions first and
+	// exclude DERP regions on the other side of the world from being
+	// checked.
+	//
+	// If this region has no location, it should always be considered a
+	// candidate as maybe being the closest. That is, it should not be
+	// ruled out as a candidate if the node knows its own actual location.
+	Location *DERPLocation `json:",omitempty"`
+
 	// Nodes are the DERP nodes running in this region, in
 	// priority order for the current client. Client TLS
 	// connections should ideally only go to the first entry
@@ -142,6 +153,15 @@ type DERPNode struct {
 	// STUNTestIP is used in tests to override the STUN server's IP.
 	// If empty, it's assumed to be the same as the DERP server.
 	STUNTestIP string `json:",omitempty"`
+}
+
+// DERPLocation contains information about a DERP region's physical location.
+type DERPLocation struct {
+	// Latitude contains the latitude component of this location.
+	Latitude float64
+
+	// Longitude contains the longitude component of this location.
+	Longitude float64
 }
 
 // DotInvalid is a fake DNS TLD used in tests for an invalid hostname.

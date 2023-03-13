@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPLocation,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -668,6 +668,14 @@ func (v DERPRegionView) RegionID() int      { return v.ж.RegionID }
 func (v DERPRegionView) RegionCode() string { return v.ж.RegionCode }
 func (v DERPRegionView) RegionName() string { return v.ж.RegionName }
 func (v DERPRegionView) Avoid() bool        { return v.ж.Avoid }
+func (v DERPRegionView) Location() *DERPLocation {
+	if v.ж.Location == nil {
+		return nil
+	}
+	x := *v.ж.Location
+	return &x
+}
+
 func (v DERPRegionView) Nodes() views.SliceView[*DERPNode, DERPNodeView] {
 	return views.SliceOfViews[*DERPNode, DERPNodeView](v.ж.Nodes)
 }
@@ -678,7 +686,62 @@ var _DERPRegionViewNeedsRegeneration = DERPRegion(struct {
 	RegionCode string
 	RegionName string
 	Avoid      bool
+	Location   *DERPLocation
 	Nodes      []*DERPNode
+}{})
+
+// View returns a readonly view of DERPLocation.
+func (p *DERPLocation) View() DERPLocationView {
+	return DERPLocationView{ж: p}
+}
+
+// DERPLocationView provides a read-only view over DERPLocation.
+//
+// Its methods should only be called if `Valid()` returns true.
+type DERPLocationView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *DERPLocation
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v DERPLocationView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v DERPLocationView) AsStruct() *DERPLocation {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v DERPLocationView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *DERPLocationView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x DERPLocation
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v DERPLocationView) Latitude() float64  { return v.ж.Latitude }
+func (v DERPLocationView) Longitude() float64 { return v.ж.Longitude }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DERPLocationViewNeedsRegeneration = DERPLocation(struct {
+	Latitude  float64
+	Longitude float64
 }{})
 
 // View returns a readonly view of DERPMap.

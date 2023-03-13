@@ -285,6 +285,10 @@ func (src *DERPRegion) Clone() *DERPRegion {
 	}
 	dst := new(DERPRegion)
 	*dst = *src
+	if dst.Location != nil {
+		dst.Location = new(DERPLocation)
+		*dst.Location = *src.Location
+	}
 	dst.Nodes = make([]*DERPNode, len(src.Nodes))
 	for i := range dst.Nodes {
 		dst.Nodes[i] = src.Nodes[i].Clone()
@@ -298,7 +302,25 @@ var _DERPRegionCloneNeedsRegeneration = DERPRegion(struct {
 	RegionCode string
 	RegionName string
 	Avoid      bool
+	Location   *DERPLocation
 	Nodes      []*DERPNode
+}{})
+
+// Clone makes a deep copy of DERPLocation.
+// The result aliases no memory with the original.
+func (src *DERPLocation) Clone() *DERPLocation {
+	if src == nil {
+		return nil
+	}
+	dst := new(DERPLocation)
+	*dst = *src
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DERPLocationCloneNeedsRegeneration = DERPLocation(struct {
+	Latitude  float64
+	Longitude float64
 }{})
 
 // Clone makes a deep copy of DERPMap.
@@ -448,7 +470,7 @@ var _ControlDialPlanCloneNeedsRegeneration = ControlDialPlan(struct {
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPLocation,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -520,6 +542,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **DERPRegion:
+			*dst = src.Clone()
+			return true
+		}
+	case *DERPLocation:
+		switch dst := dst.(type) {
+		case *DERPLocation:
+			*dst = *src.Clone()
+			return true
+		case **DERPLocation:
 			*dst = src.Clone()
 			return true
 		}
