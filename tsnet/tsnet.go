@@ -822,7 +822,7 @@ func (s *Server) ListenTLS(network, addr string) (net.Listener, error) {
 		return nil, err
 	}
 	if len(st.CertDomains) == 0 {
-		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed")
+		return nil, errors.New("tsnet: you must enable HTTPS in the admin panel to proceed. See https://tailscale.com/kb/1153/enabling-https/")
 	}
 
 	lc, err := s.LocalClient() // do local client first before listening.

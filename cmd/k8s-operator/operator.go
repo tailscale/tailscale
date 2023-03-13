@@ -235,15 +235,11 @@ waitOnline:
 
 	startlog.Infof("Startup complete, operator running")
 	if shouldRunAuthProxy {
-		rc, err := rest.TransportFor(restConfig)
+		rt, err := rest.TransportFor(restConfig)
 		if err != nil {
 			startlog.Fatalf("could not get rest transport: %v", err)
 		}
-		authProxyListener, err := s.Listen("tcp", ":443")
-		if err != nil {
-			startlog.Fatalf("could not listen on :443: %v", err)
-		}
-		go runAuthProxy(lc, authProxyListener, rc, zlog.Named("auth-proxy").Infof)
+		go runAuthProxy(s, rt, zlog.Named("auth-proxy").Infof)
 	}
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		startlog.Fatalf("could not start manager: %v", err)
