@@ -5,10 +5,8 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -17,6 +15,7 @@ import (
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
 )
 
@@ -41,10 +40,26 @@ func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rp.ServeHTTP(w, r)
 }
 
-func runAuthProxy(lc *tailscale.LocalClient, ls net.Listener, rt http.RoundTripper, logf logger.Logf) {
+// runAuthProxy runs an HTTP server that authenticates requests using the
+// Tailscale LocalAPI and then proxies them to the Kubernetes API.
+// It listens on :443 and uses the Tailscale HTTPS certificate.
+// s will be started if it is not already running.
+// rt is used to proxy requests to the Kubernetes API.
+//
+// It never returns.
+func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
+	ln, err := s.ListenTLS("tcp", ":443")
+	if err != nil {
+		log.Fatalf("could not listen on :443: %v", err)
+	}
 	u, err := url.Parse(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	if err != nil {
 		log.Fatalf("runAuthProxy: failed to parse URL %v", err)
+	}
+
+	lc, err := s.LocalClient()
+	if err != nil {
+		log.Fatalf("could not get local client: %v", err)
 	}
 	ap := &authProxy{
 		logf: logf,
@@ -88,9 +103,7 @@ func runAuthProxy(lc *tailscale.LocalClient, ls net.Listener, rt http.RoundTripp
 			Transport: rt,
 		},
 	}
-	if err := http.Serve(tls.NewListener(ls, &tls.Config{
-		GetCertificate: lc.GetCertificate,
-	}), ap); err != nil {
+	if err := http.Serve(ln, ap); err != nil {
 		log.Fatalf("runAuthProxy: failed to serve %v", err)
 	}
 }
