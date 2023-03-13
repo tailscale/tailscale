@@ -51,18 +51,34 @@ func runAuthProxy(lc *tailscale.LocalClient, ls net.Listener, rt http.RoundTripp
 		lc:   lc,
 		rp: &httputil.ReverseProxy{
 			Director: func(r *http.Request) {
-				// Replace the request with the user's identity.
-				who := r.Context().Value(whoIsKey{}).(*apitype.WhoIsResponse)
-				r.Header.Set("Impersonate-User", who.UserProfile.LoginName)
+				// We want to proxy to the Kubernetes API, but we want to use
+				// the caller's identity to do so. We do this by impersonating
+				// the caller using the Kubernetes User Impersonation feature:
+				// https://kubernetes.io/docs/reference/access-authn-authz/authentication/#user-impersonation
 
-				// Remove all authentication headers.
+				// Out of paranoia, remove all authentication headers that might
+				// have been set by the client.
 				r.Header.Del("Authorization")
 				r.Header.Del("Impersonate-Group")
+				r.Header.Del("Impersonate-User")
 				r.Header.Del("Impersonate-Uid")
 				for k := range r.Header {
 					if strings.HasPrefix(k, "Impersonate-Extra-") {
 						r.Header.Del(k)
 					}
+				}
+
+				// Now add the impersonation headers that we want.
+				who := r.Context().Value(whoIsKey{}).(*apitype.WhoIsResponse)
+				if who.Node.IsTagged() {
+					// Use the nodes FQDN as the username, and the nodes tags as the groups.
+					// "Impersonate-Group" requires "Impersonate-User" to be set.
+					r.Header.Set("Impersonate-User", who.Node.Name)
+					for _, tag := range who.Node.Tags {
+						r.Header.Add("Impersonate-Group", tag)
+					}
+				} else {
+					r.Header.Set("Impersonate-User", who.UserProfile.LoginName)
 				}
 
 				// Replace the URL with the Kubernetes APIServer.
