@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // get-authkey allocates an authkey using an OAuth API client
-// https://tailscale.com/kb/1215/oauth-clients/ and prints it
+// https://tailscale.com/s/oauth-clients and prints it
 // to stdout for scripts to capture and use.
 package main
 
