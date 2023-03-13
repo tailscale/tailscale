@@ -56,7 +56,7 @@ func main() {
 			return
 		}
 
-		if len(info.Node.Tags) != 0 {
+		if info.Node.IsTagged() {
 			w.WriteHeader(http.StatusForbidden)
 			log.Printf("node %s is tagged", info.Node.Hostinfo.Hostname())
 			return
