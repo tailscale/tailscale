@@ -145,11 +145,11 @@ func newUpdater() (*updater, error) {
 		case strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
 			up.update = up.updateMacSys
 		default:
-			return nil, errors.New("This is the macOS App Store version of Tailscale; update in the App Store, or see https://tailscale.com/kb/1083/install-unstable/ to use TestFlight or to install the non-App Store version")
+			return nil, errors.New("This is the macOS App Store version of Tailscale; update in the App Store, or see https://tailscale.com/s/unstable-clients to use TestFlight or to install the non-App Store version")
 		}
 	}
 	if up.update == nil {
-		return nil, errors.New("The 'update' command is not supported on this platform; see https://tailscale.com/kb/1067/update/")
+		return nil, errors.New("The 'update' command is not supported on this platform; see https://tailscale.com/s/client-updates")
 	}
 	return up, nil
 }

@@ -190,13 +190,13 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 // Funnel.
 func CheckFunnelAccess(port uint16, nodeAttrs []string) error {
 	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
-		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/kb/1223/tailscale-funnel/.")
+		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/s/no-funnel.")
 	}
 	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoHTTPS) {
-		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/kb/1153/enabling-https/.")
+		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
 	}
 	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
-		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/kb/1223/tailscale-funnel/.")
+		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/s/no-funnel.")
 	}
 	return checkFunnelPort(port, nodeAttrs)
 }

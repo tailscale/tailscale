@@ -41,7 +41,7 @@ This command is intended to run at boot as root on a Synology device to
 create the /dev/net/tun device and give the tailscaled binary permission
 to use it.
 
-See: https://tailscale.com/kb/1152/synology-outbound/
+See: https://tailscale.com/s/synology-outbound
 `),
 	FlagSet: (func() *flag.FlagSet {
 		fs := newFlagSet("synology")

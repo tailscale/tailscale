@@ -65,7 +65,7 @@ func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, er
 		}
 		return nil, nil
 	}
-	const kbLink = "\nSee https://tailscale.com/kb/1104/enable-ip-forwarding/"
+	const kbLink = "\nSee https://tailscale.com/s/ip-forwarding"
 	if state == nil {
 		var err error
 		state, err = interfaces.GetState()
