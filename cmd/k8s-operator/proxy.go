@@ -88,7 +88,7 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 				if who.Node.IsTagged() {
 					// Use the nodes FQDN as the username, and the nodes tags as the groups.
 					// "Impersonate-Group" requires "Impersonate-User" to be set.
-					r.Header.Set("Impersonate-User", who.Node.Name)
+					r.Header.Set("Impersonate-User", strings.TrimSuffix(who.Node.Name, "."))
 					for _, tag := range who.Node.Tags {
 						r.Header.Add("Impersonate-Group", tag)
 					}

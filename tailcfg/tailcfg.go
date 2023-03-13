@@ -183,7 +183,12 @@ func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 type Node struct {
 	ID       NodeID
 	StableID StableNodeID
-	Name     string // DNS
+
+	// Name is the FQDN of the node.
+	// It is also the MagicDNS name for the node.
+	// It has a trailing dot.
+	// e.g. "host.tail-scale.ts.net."
+	Name string
 
 	// User is the user who created the node. If ACL tags are in
 	// use for the node then it doesn't reflect the ACL identity
