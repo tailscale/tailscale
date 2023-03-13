@@ -389,7 +389,7 @@ jobs:
       # By having the job always run, but skipping its only step as needed, we
       # let the CI output collapse nicely in PRs.
       if: failure() && github.event_name == 'push'
-      uses: ruby/action-slack@v3.0.0
+      uses: ruby/action-slack@v3.2.1
       with:
         payload: |
           {
