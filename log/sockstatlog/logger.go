@@ -26,7 +26,7 @@ type Logger struct {
 	ctx      context.Context
 	cancelFn context.CancelFunc
 
-	ticker    time.Ticker
+	ticker    *time.Ticker
 	logf      logger.Logf
 	logbuffer *filch.Filch
 }
@@ -52,7 +52,7 @@ type event struct {
 
 // NewLogger returns a new Logger that will store stats in logdir.
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
-// The returned Logger is not yet running.
+// The returned Logger must be shut down with Shutdown when it is no longer needed.
 func NewLogger(logdir string, logf logger.Logf) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
@@ -68,17 +68,17 @@ func NewLogger(logdir string, logf logger.Logf) (*Logger, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Logger{
+	logger := &Logger{
 		ctx:       ctx,
 		cancelFn:  cancel,
-		ticker:    *time.NewTicker(pollPeriod),
+		ticker:    time.NewTicker(pollPeriod),
 		logf:      logf,
 		logbuffer: filch,
-	}, nil
-}
+	}
 
-func (l *Logger) Start() {
-	go l.poll()
+	go logger.poll()
+
+	return logger, nil
 }
 
 // poll fetches the current socket stats at the configured time interval,
