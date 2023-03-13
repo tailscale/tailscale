@@ -349,12 +349,17 @@ func (s *Server) Close() error {
 		s.loopbackListener.Close()
 	}
 
+	var lns []*listener
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, ln := range s.listeners {
+		lns = append(lns, ln)
+	}
+	s.mu.Unlock()
+
+	for _, ln := range lns {
 		ln.Close()
 	}
-	s.listeners = nil
 
 	wg.Wait()
 	return nil
@@ -997,10 +1002,11 @@ type listenKey struct {
 }
 
 type listener struct {
-	s    *Server
-	keys []listenKey
-	addr string
-	conn chan net.Conn
+	s      *Server
+	keys   []listenKey
+	addr   string
+	conn   chan net.Conn
+	closed bool // guarded by s.mu
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
@@ -1015,12 +1021,16 @@ func (ln *listener) Addr() net.Addr { return addr{ln} }
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
 	defer ln.s.mu.Unlock()
+	if ln.closed {
+		return fmt.Errorf("tsnet: %w", net.ErrClosed)
+	}
 	for _, key := range ln.keys {
 		if v, ok := ln.s.listeners[key]; ok && v == ln {
 			delete(ln.s.listeners, key)
 		}
 	}
 	close(ln.conn)
+	ln.closed = true
 	return nil
 }
 
