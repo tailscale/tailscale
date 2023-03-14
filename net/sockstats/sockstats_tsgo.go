@@ -157,20 +157,37 @@ func get() *SockStats {
 	defer sockStats.mu.Unlock()
 
 	r := &SockStats{
-		Stats:                    make(map[Label]SockStat),
-		Interfaces:               make([]string, 0, len(sockStats.usedInterfaces)),
+		Stats:                    make(map[Label]SockStat, len(sockStats.countersByLabel)),
 		CurrentInterfaceCellular: sockStats.currentInterfaceCellular.Load(),
+	}
+
+	for label, counters := range sockStats.countersByLabel {
+		r.Stats[label] = SockStat{
+			TxBytes: counters.txBytes.Load(),
+			RxBytes: counters.rxBytes.Load(),
+		}
+	}
+
+	return r
+}
+
+func getInterfaces() *InterfaceSockStats {
+	sockStats.mu.Lock()
+	defer sockStats.mu.Unlock()
+
+	interfaceCount := len(sockStats.usedInterfaces)
+	r := &InterfaceSockStats{
+		Stats:      make(map[Label]InterfaceSockStat, len(sockStats.countersByLabel)),
+		Interfaces: make([]string, 0, interfaceCount),
 	}
 	for iface := range sockStats.usedInterfaces {
 		r.Interfaces = append(r.Interfaces, sockStats.knownInterfaces[iface])
 	}
 
 	for label, counters := range sockStats.countersByLabel {
-		s := SockStat{
-			TxBytes:            counters.txBytes.Load(),
-			RxBytes:            counters.rxBytes.Load(),
-			TxBytesByInterface: make(map[string]uint64),
-			RxBytesByInterface: make(map[string]uint64),
+		s := InterfaceSockStat{
+			TxBytesByInterface: make(map[string]uint64, interfaceCount),
+			RxBytesByInterface: make(map[string]uint64, interfaceCount),
 		}
 		for iface, a := range counters.rxBytesByInterface {
 			ifName := sockStats.knownInterfaces[iface]

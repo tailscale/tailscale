@@ -19,6 +19,10 @@ func get() *SockStats {
 	return nil
 }
 
+func getInterfaces() *InterfaceSockStats {
+	return nil
+}
+
 func getValidation() *ValidationSockStats {
 	return nil
 }

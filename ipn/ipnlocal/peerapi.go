@@ -865,7 +865,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<!DOCTYPE html><h1>Socket Stats</h1>")
 
-	stats, validation := sockstats.GetWithValidation()
+	stats, interfaceStats, validation := sockstats.Get(), sockstats.GetInterfaces(), sockstats.GetValidation()
 	if stats == nil {
 		fmt.Fprintln(w, "No socket stats available")
 		return
@@ -876,7 +876,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "<th>Label</th>")
 	fmt.Fprintln(w, "<th>Tx</th>")
 	fmt.Fprintln(w, "<th>Rx</th>")
-	for _, iface := range stats.Interfaces {
+	for _, iface := range interfaceStats.Interfaces {
 		fmt.Fprintf(w, "<th>Tx (%s)</th>", html.EscapeString(iface))
 		fmt.Fprintf(w, "<th>Rx (%s)</th>", html.EscapeString(iface))
 	}
@@ -907,11 +907,13 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 		txTotal += stat.TxBytes
 		rxTotal += stat.RxBytes
 
-		for _, iface := range stats.Interfaces {
-			fmt.Fprintf(w, "<td align=right>%d</td>", stat.TxBytesByInterface[iface])
-			fmt.Fprintf(w, "<td align=right>%d</td>", stat.RxBytesByInterface[iface])
-			txTotalByInterface[iface] += stat.TxBytesByInterface[iface]
-			rxTotalByInterface[iface] += stat.RxBytesByInterface[iface]
+		if interfaceStat, ok := interfaceStats.Stats[label]; ok {
+			for _, iface := range interfaceStats.Interfaces {
+				fmt.Fprintf(w, "<td align=right>%d</td>", interfaceStat.TxBytesByInterface[iface])
+				fmt.Fprintf(w, "<td align=right>%d</td>", interfaceStat.RxBytesByInterface[iface])
+				txTotalByInterface[iface] += interfaceStat.TxBytesByInterface[iface]
+				rxTotalByInterface[iface] += interfaceStat.RxBytesByInterface[iface]
+			}
 		}
 
 		if validationStat, ok := validation.Stats[label]; ok && (validationStat.RxBytes > 0 || validationStat.TxBytes > 0) {
@@ -932,7 +934,7 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "<th>Total</th>")
 	fmt.Fprintf(w, "<th>%d</th>", txTotal)
 	fmt.Fprintf(w, "<th>%d</th>", rxTotal)
-	for _, iface := range stats.Interfaces {
+	for _, iface := range interfaceStats.Interfaces {
 		fmt.Fprintf(w, "<th>%d</th>", txTotalByInterface[iface])
 		fmt.Fprintf(w, "<th>%d</th>", rxTotalByInterface[iface])
 	}
