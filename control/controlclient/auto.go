@@ -407,7 +407,13 @@ func (c *Auto) authRoutine() {
 				c.mu.Unlock()
 
 				c.sendStatus("authRoutine-url", err, url, nil)
-				bo.BackOff(ctx, err)
+				if goal.url == url {
+					// The server sent us the same URL we already tried,
+					// backoff to avoid a busy loop.
+					bo.BackOff(ctx, errors.New("login URL not changing"))
+				} else {
+					bo.BackOff(ctx, nil)
+				}
 				continue
 			}
 
