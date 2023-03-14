@@ -150,14 +150,14 @@ func InfoFrom(dir string) (VersionInfo, error) {
 	}
 
 	// Note, this mechanism doesn't correctly support go.mod replacements,
-	// or go workdirs. We only parse out the commit hash from go.mod's
+	// or go workdirs. We only parse out the commit ref from go.mod's
 	// "require" line, nothing else.
-	tailscaleHash, err := tailscaleModuleHash(modBs)
+	tailscaleRef, err := tailscaleModuleRef(modBs)
 	if err != nil {
 		return VersionInfo{}, err
 	}
 
-	v, err := infoFromCache(tailscaleHash, runner)
+	v, err := infoFromCache(tailscaleRef, runner)
 	if err != nil {
 		return VersionInfo{}, err
 	}
@@ -171,9 +171,10 @@ func InfoFrom(dir string) (VersionInfo, error) {
 	return mkOutput(v)
 }
 
-// tailscaleModuleHash returns the git hash of the 'require tailscale.com' line
-// in the given go.mod bytes.
-func tailscaleModuleHash(modBs []byte) (string, error) {
+// tailscaleModuleRef returns the git ref of the 'require tailscale.com' line
+// in the given go.mod bytes. The ref is either a short commit hash, or a git
+// tag.
+func tailscaleModuleRef(modBs []byte) (string, error) {
 	mod, err := modfile.Parse("go.mod", modBs, nil)
 	if err != nil {
 		return "", err
@@ -187,7 +188,8 @@ func tailscaleModuleHash(modBs []byte) (string, error) {
 		if i := strings.LastIndexByte(req.Mod.Version, '-'); i != -1 {
 			return req.Mod.Version[i+1:], nil
 		}
-		return "", fmt.Errorf("couldn't parse git hash from tailscale.com version %q", req.Mod.Version)
+		// If there are no dashes, the version is a tag.
+		return req.Mod.Version, nil
 	}
 	return "", fmt.Errorf("no require tailscale.com line in go.mod")
 }
@@ -310,7 +312,7 @@ type verInfo struct {
 // sentinel patch number.
 const unknownPatchVersion = 9999999
 
-func infoFromCache(shortHash string, runner dirRunner) (verInfo, error) {
+func infoFromCache(ref string, runner dirRunner) (verInfo, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return verInfo{}, fmt.Errorf("Getting user cache dir: %w", err)
@@ -324,16 +326,16 @@ func infoFromCache(shortHash string, runner dirRunner) (verInfo, error) {
 		}
 	}
 
-	if !r.ok("git", "cat-file", "-e", shortHash) {
+	if !r.ok("git", "cat-file", "-e", ref) {
 		if !r.ok("git", "fetch", "origin") {
 			return verInfo{}, fmt.Errorf("updating OSS repo failed")
 		}
 	}
-	hash, err := r.output("git", "rev-parse", shortHash)
+	hash, err := r.output("git", "rev-parse", ref)
 	if err != nil {
 		return verInfo{}, err
 	}
-	date, err := r.output("git", "log", "-n1", "--format=%ct", shortHash)
+	date, err := r.output("git", "log", "-n1", "--format=%ct", ref)
 	if err != nil {
 		return verInfo{}, err
 	}
