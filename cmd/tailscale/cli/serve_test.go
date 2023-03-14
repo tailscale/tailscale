@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -56,6 +57,8 @@ func TestServeConfigMutations(t *testing.T) {
 		want    *ipn.ServeConfig               // non-nil means we want a save of this value
 		wantErr func(error) (badErrMsg string) // nil means no error is wanted
 		line    int                            // line number of addStep call, for error messages
+
+		debugBreak func()
 	}
 	var steps []step
 	add := func(s step) {
@@ -66,19 +69,19 @@ func TestServeConfigMutations(t *testing.T) {
 	// funnel
 	add(step{reset: true})
 	add(step{
-		command: cmd("funnel on"),
+		command: cmd("funnel 443 on"),
 		want:    &ipn.ServeConfig{AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true}},
 	})
 	add(step{
-		command: cmd("funnel on"),
+		command: cmd("funnel 443 on"),
 		want:    nil, // nothing to save
 	})
 	add(step{
-		command: cmd("funnel off"),
+		command: cmd("funnel 443 off"),
 		want:    &ipn.ServeConfig{},
 	})
 	add(step{
-		command: cmd("funnel off"),
+		command: cmd("funnel 443 off"),
 		want:    nil, // nothing to save
 	})
 	add(step{
@@ -89,27 +92,48 @@ func TestServeConfigMutations(t *testing.T) {
 	// https
 	add(step{reset: true})
 	add(step{
-		command: cmd("/ proxy 0"), // invalid port, too low
+		command: cmd("https:443 / http://localhost:0"), // invalid port, too low
 		wantErr: anyErr(),
 	})
 	add(step{
-		command: cmd("/ proxy 65536"), // invalid port, too high
+		command: cmd("https:443 / http://localhost:65536"), // invalid port, too high
 		wantErr: anyErr(),
 	})
 	add(step{
-		command: cmd("/ proxy somehost"), // invalid host
+		command: cmd("https:443 / http://somehost:3000"), // invalid host
 		wantErr: anyErr(),
 	})
 	add(step{
-		command: cmd("/ proxy http://otherhost"), // invalid host
+		command: cmd("https:443 / httpz://127.0.0.1"), // invalid scheme
 		wantErr: anyErr(),
 	})
-	add(step{
-		command: cmd("/ proxy httpz://127.0.0.1"), // invalid scheme
-		wantErr: anyErr(),
+	add(step{ // allow omitting port (default to 443)
+		command: cmd("https / http://localhost:3000"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{ // support non Funnel port
+		command: cmd("https:9999 /abc http://localhost:3001"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 9999: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+				"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
+					"/abc": {Proxy: "http://127.0.0.1:3001"},
+				}},
+			},
+		},
 	})
 	add(step{
-		command: cmd("/ proxy 3000"),
+		command: cmd("https:9999 /abc off"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -120,7 +144,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--serve-port=8443 /abc proxy 3001"),
+		command: cmd("https:8443 /abc http://127.0.0.1:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -134,7 +158,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--serve-port=10000 / text hi"),
+		command: cmd("https:10000 / text:hi"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
 				443: {HTTPS: true}, 8443: {HTTPS: true}, 10000: {HTTPS: true}},
@@ -152,12 +176,12 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--remove /foo"),
+		command: cmd("https:443 /foo off"),
 		want:    nil, // nothing to save
 		wantErr: anyErr(),
 	}) // handler doesn't exist, so we get an error
 	add(step{
-		command: cmd("--remove --serve-port=10000 /"),
+		command: cmd("https:10000 / off"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -171,7 +195,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--remove /"),
+		command: cmd("https:443 / off"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -182,11 +206,11 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--remove --serve-port=8443 /abc"),
+		command: cmd("https:8443 /abc off"),
 		want:    &ipn.ServeConfig{},
 	})
-	add(step{
-		command: cmd("bar proxy https://127.0.0.1:8443"),
+	add(step{ // clean mount: "bar" becomes "/bar"
+		command: cmd("https:443 bar https://127.0.0.1:8443"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -197,12 +221,12 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("bar proxy https://127.0.0.1:8443"),
+		command: cmd("https:443 bar https://127.0.0.1:8443"),
 		want:    nil, // nothing to save
 	})
 	add(step{reset: true})
 	add(step{
-		command: cmd("/ proxy https+insecure://127.0.0.1:3001"),
+		command: cmd("https:443 / https+insecure://127.0.0.1:3001"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -214,7 +238,7 @@ func TestServeConfigMutations(t *testing.T) {
 	})
 	add(step{reset: true})
 	add(step{
-		command: cmd("/foo proxy localhost:3000"),
+		command: cmd("https:443 /foo localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -225,7 +249,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // test a second handler on the same port
-		command: cmd("--serve-port=8443 /foo proxy localhost:3000"),
+		command: cmd("https:8443 /foo localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -241,16 +265,35 @@ func TestServeConfigMutations(t *testing.T) {
 
 	// tcp
 	add(step{reset: true})
+	add(step{ // must include scheme for tcp
+		command: cmd("tls-terminated-tcp:443 localhost:5432"),
+		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+	})
+	add(step{ // !somehost, must be localhost or 127.0.0.1
+		command: cmd("tls-terminated-tcp:443 tcp://somehost:5432"),
+		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+	})
+	add(step{ // bad target port, too low
+		command: cmd("tls-terminated-tcp:443 tcp://somehost:0"),
+		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+	})
+	add(step{ // bad target port, too high
+		command: cmd("tls-terminated-tcp:443 tcp://somehost:65536"),
+		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+	})
 	add(step{
-		command: cmd("tcp 5432"),
+		command: cmd("tls-terminated-tcp:443 tcp://localhost:5432"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {TCPForward: "127.0.0.1:5432"},
+				443: {
+					TCPForward:   "127.0.0.1:5432",
+					TerminateTLS: "foo.test.ts.net",
+				},
 			},
 		},
 	})
 	add(step{
-		command: cmd("tcp -terminate-tls 8443"),
+		command: cmd("tls-terminated-tcp:443 tcp://127.0.0.1:8443"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
 				443: {
@@ -261,11 +304,11 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("tcp -terminate-tls 8443"),
+		command: cmd("tls-terminated-tcp:443 tcp://127.0.0.1:8443"),
 		want:    nil, // nothing to save
 	})
 	add(step{
-		command: cmd("tcp --terminate-tls 8444"),
+		command: cmd("tls-terminated-tcp:443 tcp://localhost:8444"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
 				443: {
@@ -276,35 +319,41 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("tcp -terminate-tls=false 8445"),
+		command: cmd("tls-terminated-tcp:443 tcp://127.0.0.1:8445"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {TCPForward: "127.0.0.1:8445"},
+				443: {
+					TCPForward:   "127.0.0.1:8445",
+					TerminateTLS: "foo.test.ts.net",
+				},
 			},
 		},
 	})
 	add(step{reset: true})
 	add(step{
-		command: cmd("tcp 123"),
+		command: cmd("tls-terminated-tcp:443 tcp://localhost:123"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {TCPForward: "127.0.0.1:123"},
+				443: {
+					TCPForward:   "127.0.0.1:123",
+					TerminateTLS: "foo.test.ts.net",
+				},
 			},
 		},
 	})
-	add(step{
-		command: cmd("--remove tcp 321"),
+	add(step{ // handler doesn't exist, so we get an error
+		command: cmd("tls-terminated-tcp:8443 off"),
 		wantErr: anyErr(),
-	}) // handler doesn't exist, so we get an error
+	})
 	add(step{
-		command: cmd("--remove tcp 123"),
+		command: cmd("tls-terminated-tcp:443 off"),
 		want:    &ipn.ServeConfig{},
 	})
 
 	// text
 	add(step{reset: true})
 	add(step{
-		command: cmd("/ text hello"),
+		command: cmd("https:443 / text:hello"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -325,7 +374,7 @@ func TestServeConfigMutations(t *testing.T) {
 	add(step{reset: true})
 	writeFile("foo", "this is foo")
 	add(step{
-		command: cmd("/ path " + filepath.Join(td, "foo")),
+		command: cmd("https:443 / " + filepath.Join(td, "foo")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -338,7 +387,7 @@ func TestServeConfigMutations(t *testing.T) {
 	os.MkdirAll(filepath.Join(td, "subdir"), 0700)
 	writeFile("subdir/file-a", "this is A")
 	add(step{
-		command: cmd("/some/where path " + filepath.Join(td, "subdir/file-a")),
+		command: cmd("https:443 /some/where " + filepath.Join(td, "subdir/file-a")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -349,13 +398,13 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{
-		command: cmd("/ path missing"),
+	add(step{ // bad path
+		command: cmd("https:443 / bad/path"),
 		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
 	})
 	add(step{reset: true})
 	add(step{
-		command: cmd("/ path " + filepath.Join(td, "subdir")),
+		command: cmd("https:443 / " + filepath.Join(td, "subdir")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -366,14 +415,14 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("--remove /"),
+		command: cmd("https:443 / off"),
 		want:    &ipn.ServeConfig{},
 	})
 
 	// combos
 	add(step{reset: true})
 	add(step{
-		command: cmd("/ proxy 3000"),
+		command: cmd("https:443 / localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -384,7 +433,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{
-		command: cmd("funnel on"),
+		command: cmd("funnel 443 on"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -396,7 +445,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // serving on secondary port doesn't change funnel
-		command: cmd("--serve-port=8443 /bar proxy 3001"),
+		command: cmd("https:8443 /bar localhost:3001"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
@@ -411,7 +460,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // turn funnel on for secondary port
-		command: cmd("--serve-port=8443 funnel on"),
+		command: cmd("funnel 8443 on"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true, "foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
@@ -426,7 +475,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // turn funnel off for primary port 443
-		command: cmd("funnel off"),
+		command: cmd("funnel 443 off"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {HTTPS: true}},
@@ -441,7 +490,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // remove secondary port
-		command: cmd("--serve-port=8443 --remove /bar"),
+		command: cmd("https:8443 /bar off"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
@@ -453,7 +502,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // start a tcp forwarder on 8443
-		command: cmd("--serve-port=8443 tcp 5432"),
+		command: cmd("tcp:8443 tcp://localhost:5432"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}, 8443: {TCPForward: "127.0.0.1:5432"}},
@@ -465,27 +514,27 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // remove primary port http handler
-		command: cmd("--remove /"),
+		command: cmd("https:443 / off"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
 			TCP:         map[uint16]*ipn.TCPPortHandler{8443: {TCPForward: "127.0.0.1:5432"}},
 		},
 	})
 	add(step{ // remove tcp forwarder
-		command: cmd("--serve-port=8443 --remove tcp 5432"),
+		command: cmd("tls-terminated-tcp:8443 off"),
 		want: &ipn.ServeConfig{
 			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
 		},
 	})
 	add(step{ // turn off funnel
-		command: cmd("--serve-port=8443 funnel off"),
+		command: cmd("funnel 8443 off"),
 		want:    &ipn.ServeConfig{},
 	})
 
 	// tricky steps
 	add(step{reset: true})
 	add(step{ // a directory with a trailing slash mount point
-		command: cmd("/dir path " + filepath.Join(td, "subdir")),
+		command: cmd("https:443 /dir " + filepath.Join(td, "subdir")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -496,7 +545,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // this should overwrite the previous one
-		command: cmd("/dir path " + filepath.Join(td, "foo")),
+		command: cmd("https:443 /dir " + filepath.Join(td, "foo")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -508,7 +557,7 @@ func TestServeConfigMutations(t *testing.T) {
 	})
 	add(step{reset: true}) // reset and do the opposite
 	add(step{              // a file without a trailing slash mount point
-		command: cmd("/dir path " + filepath.Join(td, "foo")),
+		command: cmd("https:443 /dir " + filepath.Join(td, "foo")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -519,7 +568,7 @@ func TestServeConfigMutations(t *testing.T) {
 		},
 	})
 	add(step{ // this should overwrite the previous one
-		command: cmd("/dir path " + filepath.Join(td, "subdir")),
+		command: cmd("https:443 /dir " + filepath.Join(td, "subdir")),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -532,37 +581,24 @@ func TestServeConfigMutations(t *testing.T) {
 
 	// error states
 	add(step{reset: true})
-	add(step{ // make sure we can't add "tcp" as if it was a mount
-		command: cmd("tcp text foo"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
-	})
-	add(step{ // "/tcp" is fine though as a mount
-		command: cmd("/tcp text foo"),
-		want: &ipn.ServeConfig{
-			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
-			Web: map[ipn.HostPort]*ipn.WebServerConfig{
-				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
-					"/tcp": {Text: "foo"},
-				}},
-			},
-		},
-	})
-	add(step{reset: true})
 	add(step{ // tcp forward 5432 on serve port 443
-		command: cmd("tcp 5432"),
+		command: cmd("tls-terminated-tcp:443 tcp://localhost:5432"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{
-				443: {TCPForward: "127.0.0.1:5432"},
+				443: {
+					TCPForward:   "127.0.0.1:5432",
+					TerminateTLS: "foo.test.ts.net",
+				},
 			},
 		},
 	})
 	add(step{ // try to start a web handler on the same port
-		command: cmd("/ proxy 3000"),
+		command: cmd("https:443 / localhost:3000"),
 		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
 	})
 	add(step{reset: true})
 	add(step{ // start a web handler on port 443
-		command: cmd("/ proxy 3000"),
+		command: cmd("https:443 / localhost:3000"),
 		want: &ipn.ServeConfig{
 			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
 			Web: map[ipn.HostPort]*ipn.WebServerConfig{
@@ -572,14 +608,17 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
-	add(step{ // try to start a tcp forwarder on the same serve port (443 default)
-		command: cmd("tcp 5432"),
+	add(step{ // try to start a tcp forwarder on the same serve port
+		command: cmd("tls-terminated-tcp:443 tcp://localhost:5432"),
 		wantErr: anyErr(),
 	})
 
 	lc := &fakeLocalServeClient{}
 	// And now run the steps above.
 	for i, st := range steps {
+		if st.debugBreak != nil {
+			st.debugBreak()
+		}
 		if st.reset {
 			t.Logf("Executing step #%d, line %v: [reset]", i, st.line)
 			lc.config = nil
@@ -597,8 +636,16 @@ func TestServeConfigMutations(t *testing.T) {
 			testStdout:  &stdout,
 		}
 		lastCount := lc.setCount
-		cmd := newServeCommand(e)
-		err := cmd.ParseAndRun(context.Background(), st.command)
+		var cmd *ffcli.Command
+		var args []string
+		if st.command[0] == "funnel" {
+			cmd = newFunnelCommand(e)
+			args = st.command[1:]
+		} else {
+			cmd = newServeCommand(e)
+			args = st.command
+		}
+		err := cmd.ParseAndRun(context.Background(), args)
 		if flagOut.Len() > 0 {
 			t.Logf("flag package output: %q", flagOut.Bytes())
 		}
@@ -689,7 +736,5 @@ func anyErr() func(error) string {
 }
 
 func cmd(s string) []string {
-	cmds := strings.Fields(s)
-	fmt.Printf("cmd: %v", cmds)
-	return cmds
+	return strings.Fields(s)
 }
