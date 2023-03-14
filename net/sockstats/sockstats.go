@@ -15,23 +15,17 @@ import (
 )
 
 // SockStats contains statistics for sockets instrumented with the
-// WithSockStats() function, along with the interfaces that we have
-// per-interface statistics for.
+// WithSockStats() function
 type SockStats struct {
 	Stats                    map[Label]SockStat
-	Interfaces               []string
 	CurrentInterfaceCellular bool
 }
 
 // SockStat contains the sent and received bytes for a socket instrumented with
-// the WithSockStats() function. The bytes are also broken down by interface,
-// though this may be a subset of the total if interfaces were added after the
-// instrumented socket was created.
+// the WithSockStats() function.
 type SockStat struct {
-	TxBytes            uint64
-	RxBytes            uint64
-	TxBytesByInterface map[string]uint64
-	RxBytesByInterface map[string]uint64
+	TxBytes uint64
+	RxBytes uint64
 }
 
 // Label is an identifier for a socket that stats are collected for. A finite
@@ -67,6 +61,28 @@ func Get() *SockStats {
 	return get()
 }
 
+// InterfaceSockStats contains statistics for sockets instrumented with the
+// WithSockStats() function, broken down by interface. The statistics may be a
+// subset of the total if interfaces were added after the instrumented socket
+// was created.
+type InterfaceSockStats struct {
+	Stats      map[Label]InterfaceSockStat
+	Interfaces []string
+}
+
+// InterfaceSockStat contains the per-interface sent and received bytes for a
+// socket instrumented with the WithSockStats() function.
+type InterfaceSockStat struct {
+	TxBytesByInterface map[string]uint64
+	RxBytesByInterface map[string]uint64
+}
+
+// GetWithInterfaces is a variant of Get that returns the current socket
+// statistics broken down by interface. It is slightly more expensive than Get.
+func GetInterfaces() *InterfaceSockStats {
+	return getInterfaces()
+}
+
 // ValidationSockStats contains external validation numbers for sockets
 // instrumented with WithSockStats. It may be a subset of the all sockets,
 // depending on what externa measurement mechanisms the platform supports.
@@ -81,11 +97,11 @@ type ValidationSockStat struct {
 	RxBytes uint64
 }
 
-// GetWithValidation is a variant of GetWith that returns both the current stats
-// and external validation numbers for the stats. It is more expensive than
-// Get and should be used in debug interfaces only.
-func GetWithValidation() (*SockStats, *ValidationSockStats) {
-	return get(), getValidation()
+// GetValidation is a variant of Get that returns external validation numbers
+// for stats. It is more expensive than Get and should be used in debug
+// interfaces only.
+func GetValidation() *ValidationSockStats {
+	return getValidation()
 }
 
 // LinkMonitor is the interface for the parts of wgengine/mointor's Mon that we

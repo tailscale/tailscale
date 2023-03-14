@@ -34,9 +34,6 @@ func TestDelta(t *testing.T) {
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {
 						TxBytes: 10,
-						TxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
 					},
 				},
 			},
@@ -44,9 +41,6 @@ func TestDelta(t *testing.T) {
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {
 						TxBytes: 10,
-						TxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
 					},
 				},
 			},
@@ -59,12 +53,8 @@ func TestDelta(t *testing.T) {
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {
 						TxBytes: 10,
-						TxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
 					},
 				},
-				Interfaces: []string{"en0"},
 			},
 			wantStats: map[sockstats.Label]deltaStat{
 				sockstats.LabelDERPHTTPClient: {10, 0},
@@ -77,30 +67,16 @@ func TestDelta(t *testing.T) {
 					sockstats.LabelDERPHTTPClient: {
 						TxBytes: 10,
 						RxBytes: 10,
-						TxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
-						RxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
 					},
 				},
-				Interfaces: []string{"en0"},
 			},
 			b: &sockstats.SockStats{
 				Stats: map[sockstats.Label]sockstats.SockStat{
 					sockstats.LabelDERPHTTPClient: {
 						TxBytes: 10,
 						RxBytes: 30,
-						TxBytesByInterface: map[string]uint64{
-							"en0": 10,
-						},
-						RxBytesByInterface: map[string]uint64{
-							"en0": 30,
-						},
 					},
 				},
-				Interfaces: []string{"en0"},
 			},
 			wantStats: map[sockstats.Label]deltaStat{
 				sockstats.LabelDERPHTTPClient: {0, 20},
