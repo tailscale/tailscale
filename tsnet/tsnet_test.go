@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -342,5 +343,28 @@ func TestTailscaleIPs(t *testing.T) {
 	if !(upIp4 == sIp4 && upIp6 == sIp6) {
 		t.Errorf("s1.TailscaleIPs returned a different result than S1.Up, (%s, %s) != (%s, %s)",
 			sIp4, upIp4, sIp6, upIp6)
+	}
+}
+
+// TestListenerCleanup is a regression test to verify that s.Close doesn't
+// deadlock if a listener is still open.
+func TestListenerCleanup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	controlURL := startControl(t)
+	s1, _ := startServer(t, ctx, controlURL, "s1")
+
+	ln, err := s1.Listen("tcp", ":8081")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second ln.Close error: %v, want net.ErrClosed", err)
 	}
 }

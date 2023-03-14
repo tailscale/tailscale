@@ -118,6 +118,7 @@ type Server struct {
 	mu        sync.Mutex
 	listeners map[listenKey]*listener
 	dialer    *tsdial.Dialer
+	closed    bool
 }
 
 // Dial connects to the address on the tailnet.
@@ -303,6 +304,11 @@ func (s *Server) Up(ctx context.Context) (*ipnstate.Status, error) {
 //
 // It must not be called before or concurrently with Start.
 func (s *Server) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("tsnet: %w", net.ErrClosed)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -350,14 +356,12 @@ func (s *Server) Close() error {
 		s.loopbackListener.Close()
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, ln := range s.listeners {
-		ln.Close()
+		ln.closeLocked()
 	}
-	s.listeners = nil
 
 	wg.Wait()
+	s.closed = true
 	return nil
 }
 
@@ -1017,10 +1021,11 @@ type listenKey struct {
 }
 
 type listener struct {
-	s    *Server
-	keys []listenKey
-	addr string
-	conn chan net.Conn
+	s      *Server
+	keys   []listenKey
+	addr   string
+	conn   chan net.Conn
+	closed bool // guarded by s.mu
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
@@ -1032,15 +1037,26 @@ func (ln *listener) Accept() (net.Conn, error) {
 }
 
 func (ln *listener) Addr() net.Addr { return addr{ln} }
+
 func (ln *listener) Close() error {
 	ln.s.mu.Lock()
 	defer ln.s.mu.Unlock()
+	return ln.closeLocked()
+}
+
+// closeLocked closes the listener.
+// It must be called with ln.s.mu held.
+func (ln *listener) closeLocked() error {
+	if ln.closed {
+		return fmt.Errorf("tsnet: %w", net.ErrClosed)
+	}
 	for _, key := range ln.keys {
 		if v, ok := ln.s.listeners[key]; ok && v == ln {
 			delete(ln.s.listeners, key)
 		}
 	}
 	close(ln.conn)
+	ln.closed = true
 	return nil
 }
 
