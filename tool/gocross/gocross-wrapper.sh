@@ -62,6 +62,7 @@ if [ ! -d "$toolchain" ]; then
         mkdir -p "$toolchain"
         (cd "$toolchain" && tar --strip-components=1 -xf "$toolchain.tar.gz")
         echo "$REV" >"$toolchain.extracted"
+        rm -f "$toolchain.tar.gz"
         ;;
     esac
 fi
