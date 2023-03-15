@@ -409,6 +409,12 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 		return false, nil, err
 	}
 
+	if env.upArgs.forceReauth && isSSHOverTailscale() {
+		if err := presentRiskToUser(riskLoseSSH, `You are connected over Tailscale; this action will result in your SSH session disconnecting.`, env.upArgs.acceptedRisks); err != nil {
+			return false, nil, err
+		}
+	}
+
 	tagsChanged := !reflect.DeepEqual(curPrefs.AdvertiseTags, prefs.AdvertiseTags)
 
 	simpleUp = env.flagSet.NFlag() == 0 &&
