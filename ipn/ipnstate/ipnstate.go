@@ -191,8 +191,8 @@ type PeerStatus struct {
 	// DNSName is the Peer's FQDN. It ends with a dot.
 	// It has the form "host.<MagicDNSSuffix>."
 	DNSName string
-	OS      string // HostInfo.OS
-	UserID  tailcfg.UserID
+	OS      string         // HostInfo.OS
+	UserID  tailcfg.UserID `json:",string"`
 
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
