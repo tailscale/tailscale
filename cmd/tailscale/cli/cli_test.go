@@ -1071,6 +1071,32 @@ func TestUpdatePrefs(t *testing.T) {
 			},
 			env: upCheckEnv{backendState: "Running"},
 		},
+		{
+			name:             "force_reauth_over_ssh_no_risk",
+			flags:            []string{"--force-reauth"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			env:          upCheckEnv{backendState: "Running"},
+			wantErrSubtr: "aborted, no changes made",
+		},
+		{
+			name:             "force_reauth_over_ssh",
+			flags:            []string{"--force-reauth", "--accept-risk=lose-ssh"},
+			sshOverTailscale: true,
+			curPrefs: &ipn.Prefs{
+				ControlURL:       "https://login.tailscale.com",
+				AllowSingleHosts: true,
+				CorpDNS:          true,
+				NetfilterMode:    preftype.NetfilterOn,
+			},
+			wantJustEditMP: nil,
+			env:            upCheckEnv{backendState: "Running"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
