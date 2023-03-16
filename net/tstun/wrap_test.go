@@ -544,7 +544,7 @@ func TestPeerAPIBypass(t *testing.T) {
 			tt.w.SetFilter(tt.filter)
 			tt.w.disableTSMPRejected = true
 			tt.w.logf = t.Logf
-			if got := tt.w.filterIn(p); got != tt.want {
+			if got := tt.w.filterPacketInboundFromWireGuard(p); got != tt.want {
 				t.Errorf("got = %v; want %v", got, tt.want)
 			}
 		})
@@ -574,7 +574,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 
 	p := new(packet.Parsed)
 	p.Decode(pkt)
-	got := tw.filterIn(p)
+	got := tw.filterPacketInboundFromWireGuard(p)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
@@ -585,7 +585,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 	memLog.Reset()
 	pp := new(packet.Parsed)
 	pp.Decode(pkt)
-	got = tw.filterOut(pp)
+	got = tw.filterPacketOutboundToWireGuard(pp)
 	if got != filter.DropSilently {
 		t.Errorf("got %v; want DropSilently", got)
 	}
