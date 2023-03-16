@@ -16,7 +16,7 @@ if [ -n "${TS_USE_TOOLCHAIN:-}" ]; then
 	go="./tool/go"
 fi
 
-eval `$go run ./cmd/mkversion`
+eval `GOOS=$($go env GOHOSTOS) GOARCH=$($go env GOHOSTARCH) $go run ./cmd/mkversion`
 
 if [ "$1" = "shellvars" ]; then
 	cat <<EOF
