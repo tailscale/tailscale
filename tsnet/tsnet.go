@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -53,6 +54,8 @@ import (
 	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 )
+
+func inTest() bool { return flag.Lookup("test.v") != nil }
 
 // Server is an embedded Tailscale server.
 //
@@ -456,44 +459,9 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("%v is not a directory", s.rootPath)
 	}
 
-	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
-
-	lpc, err := logpolicy.ConfigFromFile(cfgPath)
-	switch {
-	case os.IsNotExist(err):
-		lpc = logpolicy.NewConfig(logtail.CollectionNode)
-		if err := lpc.Save(cfgPath); err != nil {
-			return fmt.Errorf("logpolicy.Config.Save for %v: %w", cfgPath, err)
-		}
-	case err != nil:
-		return fmt.Errorf("logpolicy.LoadConfig for %v: %w", cfgPath, err)
+	if err := s.startLogger(&closePool); err != nil {
+		return err
 	}
-	if err := lpc.Validate(logtail.CollectionNode); err != nil {
-		return fmt.Errorf("logpolicy.Config.Validate for %v: %w", cfgPath, err)
-	}
-	s.logid = lpc.PublicID.String()
-
-	s.logbuffer, err = filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
-	if err != nil {
-		return fmt.Errorf("error creating filch: %w", err)
-	}
-	closePool.add(s.logbuffer)
-	c := logtail.Config{
-		Collection: lpc.Collection,
-		PrivateID:  lpc.PrivateID,
-		Stderr:     io.Discard, // log everything to Buffer
-		Buffer:     s.logbuffer,
-		NewZstdEncoder: func() logtail.Encoder {
-			w, err := smallzstd.NewEncoder(nil)
-			if err != nil {
-				panic(err)
-			}
-			return w
-		},
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
-	}
-	s.logtail = logtail.NewLogger(c, logf)
-	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
 
 	s.linkMon, err = monitor.New(logf)
 	if err != nil {
@@ -598,6 +566,51 @@ func (s *Server) start() (reterr error) {
 		}
 	}()
 	closePool.add(s.localAPIListener)
+	return nil
+}
+
+func (s *Server) startLogger(closePool *closeOnErrorPool) error {
+	if inTest() {
+		s.logid = "test"
+		return nil
+	}
+	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
+	lpc, err := logpolicy.ConfigFromFile(cfgPath)
+	switch {
+	case os.IsNotExist(err):
+		lpc = logpolicy.NewConfig(logtail.CollectionNode)
+		if err := lpc.Save(cfgPath); err != nil {
+			return fmt.Errorf("logpolicy.Config.Save for %v: %w", cfgPath, err)
+		}
+	case err != nil:
+		return fmt.Errorf("logpolicy.LoadConfig for %v: %w", cfgPath, err)
+	}
+	if err := lpc.Validate(logtail.CollectionNode); err != nil {
+		return fmt.Errorf("logpolicy.Config.Validate for %v: %w", cfgPath, err)
+	}
+	s.logid = lpc.PublicID.String()
+
+	s.logbuffer, err = filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
+	if err != nil {
+		return fmt.Errorf("error creating filch: %w", err)
+	}
+	closePool.add(s.logbuffer)
+	c := logtail.Config{
+		Collection: lpc.Collection,
+		PrivateID:  lpc.PrivateID,
+		Stderr:     io.Discard, // log everything to Buffer
+		Buffer:     s.logbuffer,
+		NewZstdEncoder: func() logtail.Encoder {
+			w, err := smallzstd.NewEncoder(nil)
+			if err != nil {
+				panic(err)
+			}
+			return w
+		},
+		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
+	}
+	s.logtail = logtail.NewLogger(c, s.logf)
+	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
 	return nil
 }
 
