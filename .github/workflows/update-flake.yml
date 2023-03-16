@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tailscale:
+  update-flake:
     runs-on: ubuntu-latest
 
     steps:

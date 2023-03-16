@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tailscale:
+  update-licenses:
     runs-on: ubuntu-latest
 
     steps:
