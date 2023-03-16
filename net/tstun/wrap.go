@@ -136,23 +136,23 @@ type Wrapper struct {
 	// filterFlags control the verbosity of logging packet drops/accepts.
 	filterFlags filter.RunFlags
 
-	// PreFilterIn is the inbound filter function that runs before the main filter
+	// PreFilterPacketInboundFromWireGuard is the inbound filter function that runs before the main filter
 	// and therefore sees the packets that may be later dropped by it.
-	PreFilterIn FilterFunc
-	// PostFilterIn is the inbound filter function that runs after the main filter.
-	PostFilterIn FilterFunc
-	// PreFilterFromTunToNetstack is a filter function that runs before the main filter
+	PreFilterPacketInboundFromWireGuard FilterFunc
+	// PostFilterPacketInboundFromWireGaurd is the inbound filter function that runs after the main filter.
+	PostFilterPacketInboundFromWireGaurd FilterFunc
+	// PreFilterPacketOutboundToWireGuardNetstackIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by netstack to hook
 	// packets that should be handled by netstack. If set, this filter runs before
 	// PreFilterFromTunToEngine.
-	PreFilterFromTunToNetstack FilterFunc
-	// PreFilterFromTunToEngine is a filter function that runs before the main filter
+	PreFilterPacketOutboundToWireGuardNetstackIntercept FilterFunc
+	// PreFilterPacketOutboundToWireGuardEngineIntercept is a filter function that runs before the main filter
 	// for packets from the local system. This filter is populated by wgengine to hook
 	// packets which it handles internally. If both this and PreFilterFromTunToNetstack
 	// filter functions are non-nil, this filter runs second.
-	PreFilterFromTunToEngine FilterFunc
-	// PostFilterOut is the outbound filter function that runs after the main filter.
-	PostFilterOut FilterFunc
+	PreFilterPacketOutboundToWireGuardEngineIntercept FilterFunc
+	// PostFilterPacketOutboundToWireGuard is the outbound filter function that runs after the main filter.
+	PostFilterPacketOutboundToWireGuard FilterFunc
 
 	// OnTSMPPongReceived, if non-nil, is called whenever a TSMP pong arrives.
 	OnTSMPPongReceived func(packet.TSMPPongReply)
@@ -464,7 +464,7 @@ var (
 	magicDNSIPPortv6 = netip.AddrPortFrom(tsaddr.TailscaleServiceIPv6(), 0)
 )
 
-func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
+func (t *Wrapper) filterPacketOutboundToWireGuard(p *packet.Parsed) filter.Response {
 	// Fake ICMP echo responses to MagicDNS (100.100.100.100).
 	if p.IsEchoRequest() {
 		switch p.Dst {
@@ -494,14 +494,14 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 		return filter.DropSilently
 	}
 
-	if t.PreFilterFromTunToNetstack != nil {
-		if res := t.PreFilterFromTunToNetstack(p, t); res.IsDrop() {
+	if t.PreFilterPacketOutboundToWireGuardNetstackIntercept != nil {
+		if res := t.PreFilterPacketOutboundToWireGuardNetstackIntercept(p, t); res.IsDrop() {
 			// Handled by netstack.Impl.handleLocalPackets (quad-100 DNS primarily)
 			return res
 		}
 	}
-	if t.PreFilterFromTunToEngine != nil {
-		if res := t.PreFilterFromTunToEngine(p, t); res.IsDrop() {
+	if t.PreFilterPacketOutboundToWireGuardEngineIntercept != nil {
+		if res := t.PreFilterPacketOutboundToWireGuardEngineIntercept(p, t); res.IsDrop() {
 			// Handled by userspaceEngine.handleLocalPackets (primarily handles
 			// quad-100 if netstack is not installed).
 			return res
@@ -518,8 +518,8 @@ func (t *Wrapper) filterOut(p *packet.Parsed) filter.Response {
 		return filter.Drop
 	}
 
-	if t.PostFilterOut != nil {
-		if res := t.PostFilterOut(p, t); res.IsDrop() {
+	if t.PostFilterPacketOutboundToWireGuard != nil {
+		if res := t.PostFilterPacketOutboundToWireGuard(p, t); res.IsDrop() {
 			return res
 		}
 	}
@@ -575,7 +575,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			capt(capture.FromLocal, time.Now(), data[res.dataOffset:])
 		}
 		if !t.disableFilter {
-			response := t.filterOut(p)
+			response := t.filterPacketOutboundToWireGuard(p)
 			if response != filter.Accept {
 				metricPacketOutDrop.Add(1)
 				continue
@@ -636,7 +636,7 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 	return n, nil
 }
 
-func (t *Wrapper) filterIn(p *packet.Parsed) filter.Response {
+func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed) filter.Response {
 	if capt := t.captureHook.Load(); capt != nil {
 		capt(capture.FromPeer, time.Now(), p.Buffer())
 	}
@@ -672,8 +672,8 @@ func (t *Wrapper) filterIn(p *packet.Parsed) filter.Response {
 		return filter.DropSilently
 	}
 
-	if t.PreFilterIn != nil {
-		if res := t.PreFilterIn(p, t); res.IsDrop() {
+	if t.PreFilterPacketInboundFromWireGuard != nil {
+		if res := t.PreFilterPacketInboundFromWireGuard(p, t); res.IsDrop() {
 			return res
 		}
 	}
@@ -724,8 +724,8 @@ func (t *Wrapper) filterIn(p *packet.Parsed) filter.Response {
 		return filter.Drop
 	}
 
-	if t.PostFilterIn != nil {
-		if res := t.PostFilterIn(p, t); res.IsDrop() {
+	if t.PostFilterPacketInboundFromWireGaurd != nil {
+		if res := t.PostFilterPacketInboundFromWireGaurd(p, t); res.IsDrop() {
 			return res
 		}
 	}
@@ -743,7 +743,7 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 		defer parsedPacketPool.Put(p)
 		for _, buff := range buffs {
 			p.Decode(buff[offset:])
-			if t.filterIn(p) != filter.Accept {
+			if t.filterPacketInboundFromWireGuard(p) != filter.Accept {
 				metricPacketInDrop.Add(1)
 			} else {
 				buffs[i] = buff

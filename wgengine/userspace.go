@@ -373,19 +373,19 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	tsTUNDev.SetDiscoKey(e.magicConn.DiscoPublicKey())
 
 	if conf.RespondToPing {
-		e.tundev.PostFilterIn = echoRespondToAll
+		e.tundev.PostFilterPacketInboundFromWireGaurd = echoRespondToAll
 	}
-	e.tundev.PreFilterFromTunToEngine = e.handleLocalPackets
+	e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.handleLocalPackets
 
 	if envknob.BoolDefaultTrue("TS_DEBUG_CONNECT_FAILURES") {
-		if e.tundev.PreFilterIn != nil {
+		if e.tundev.PreFilterPacketInboundFromWireGuard != nil {
 			return nil, errors.New("unexpected PreFilterIn already set")
 		}
-		e.tundev.PreFilterIn = e.trackOpenPreFilterIn
-		if e.tundev.PostFilterOut != nil {
+		e.tundev.PreFilterPacketInboundFromWireGuard = e.trackOpenPreFilterIn
+		if e.tundev.PostFilterPacketOutboundToWireGuard != nil {
 			return nil, errors.New("unexpected PostFilterOut already set")
 		}
-		e.tundev.PostFilterOut = e.trackOpenPostFilterOut
+		e.tundev.PostFilterPacketOutboundToWireGuard = e.trackOpenPostFilterOut
 	}
 
 	e.wgLogger = wglog.NewLogger(logf)
