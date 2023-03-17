@@ -45,7 +45,7 @@ serve https:<port> <mount-point> <source> [off]
 
 The 'tailscale serve' set of commands allows you to serve
 content and local servers from your Tailscale node to
-your tailnet. 
+your tailnet.
 
 You can also choose to enable the Tailscale Funnel with:
 'tailscale funnel on'. Funnel allows you to publish
@@ -66,10 +66,12 @@ EXAMPLES
   - To serve simple static text:
     $ tailscale serve https:8080 / text:"Hello, world!"
 
-  - To forward raw TCP packets to a local TCP server on port 5432:
+  - To forward incoming TCP connections on port 2222 to a local TCP server on
+    port 22 (e.g. to run OpenSSH in parallel with Tailscale SSH):
     $ tailscale serve tcp:2222 tcp://localhost:22
 
-  - To forward raw, TLS-terminated TCP packets to a local TCP server on port 80:
+  - To accept TCP TLS connections (terminated within tailscaled) proxied to a
+    local plaintext server on port 80:
     $ tailscale serve tls-terminated-tcp:443 tcp://localhost:80
 `),
 		Exec:      e.runServe,
