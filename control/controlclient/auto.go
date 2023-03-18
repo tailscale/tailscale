@@ -475,7 +475,7 @@ func (c *Auto) mapRoutine() {
 			}
 			continue
 		}
-		c.logf("[v1] mapRoutine: %s", c.state)
+		c.logf("mapRoutine: %s", c.state)
 		loggedIn := c.loggedIn
 		ctx := c.mapCtx
 		c.mu.Unlock()
@@ -488,7 +488,7 @@ func (c *Auto) mapRoutine() {
 		}
 
 		report := func(err error, msg string) {
-			c.logf("[v1] %s: %v", msg, err)
+			c.logf("%s: %v", msg, err)
 			err = fmt.Errorf("%s: %w", msg, err)
 			// don't send status updates for context errors,
 			// since context cancelation is always on purpose.
@@ -506,9 +506,9 @@ func (c *Auto) mapRoutine() {
 
 			select {
 			case <-ctx.Done():
-				c.logf("[v1] mapRoutine: context done.")
+				c.logf("mapRoutine: context done.")
 			case <-c.newMapCh:
-				c.logf("[v1] mapRoutine: new map needed while idle.")
+				c.logf("mapRoutine: new map needed while idle.")
 			}
 		} else {
 			// Be sure this is false when we're not inside

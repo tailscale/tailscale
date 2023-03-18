@@ -312,7 +312,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 	if version.IsUnstableBuild() {
 		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf)
 		if err != nil {
-			log.Printf("error setting up sockstat logger: %v", err)
+			b.logf("error setting up sockstat logger: %v", err)
 		}
 	}
 
@@ -498,6 +498,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 		case ipn.NoState, ipn.Stopped:
 			// Do nothing.
 		default:
+			b.logf("linkChange: calling b.authReconfig")
 			go b.authReconfig()
 		}
 	}
@@ -839,6 +840,7 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 // setClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) setClientStatus(st controlclient.Status) {
+	b.logf("setClientStatus called")
 	// The following do not depend on any data for which we need to lock b.
 	if st.Err != nil {
 		// TODO(crawshaw): display in the UI.
@@ -852,6 +854,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 			s := uerr.UserVisibleError()
 			b.send(ipn.Notify{ErrMessage: &s})
 		}
+		b.logf("setClientStatus status send failed, returning")
 		return
 	}
 
@@ -887,6 +890,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				// saved call (e.g. if we race stopping this
 				// timer).
 				if b.numClientStatusCalls.Load() != currCall {
+					b.logf("setClientStatus b.numClientStatusCalls.Load, returning")
 					return
 				}
 
@@ -920,8 +924,11 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	if st.LoginFinished != nil && wasBlocked {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
+		b.logf("ipnlocal: blockEngineUpdates returned")
 		b.authReconfig()
+		b.logf("ipnlocal: b.authReconfig returned")
 		b.send(ipn.Notify{LoginFinished: &empty.Message{}})
+		b.logf("ipnlocal: ipn.Notify returned")
 	}
 
 	// Lock b once and do only the things that require locking.
@@ -2764,7 +2771,9 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	if oldp.WantRunning() != newp.WantRunning {
 		b.stateMachine()
 	} else {
+		b.logf("setPrefsLockedOnEntry: calling b.authReconfig")
 		b.authReconfig()
+		b.logf("setPrefsLockedOnEntry: b.authReconfig returned")
 	}
 
 	b.send(ipn.Notify{Prefs: &prefs})
@@ -2893,24 +2902,28 @@ func (b *LocalBackend) blockEngineUpdates(block bool) {
 // updates are not currently blocked, based on the cached netmap and
 // user prefs.
 func (b *LocalBackend) authReconfig() {
+	b.logf("authReconfig: starting.")
 	b.mu.Lock()
+	b.logf("authReconfig: Lock acquired.")
 	blocked := b.blocked
 	prefs := b.pm.CurrentPrefs()
+	b.logf("authReconfig: CurrentPrefs returned.")
 	nm := b.netMap
 	hasPAC := b.prevIfState.HasPAC()
+	b.logf("authReconfig: HasPAC returned.")
 	disableSubnetsIfPAC := nm != nil && nm.Debug != nil && nm.Debug.DisableSubnetsIfPAC.EqualBool(true)
 	b.mu.Unlock()
 
 	if blocked {
-		b.logf("[v1] authReconfig: blocked, skipping.")
+		b.logf("authReconfig: blocked, skipping.")
 		return
 	}
 	if nm == nil {
-		b.logf("[v1] authReconfig: netmap not yet valid. Skipping.")
+		b.logf("authReconfig: netmap not yet valid. Skipping.")
 		return
 	}
 	if !prefs.WantRunning() {
-		b.logf("[v1] authReconfig: skipping because !WantRunning.")
+		b.logf("authReconfig: skipping because !WantRunning.")
 		return
 	}
 
@@ -2927,6 +2940,7 @@ func (b *LocalBackend) authReconfig() {
 			flags &^= netmap.AllowSubnetRoutes
 		}
 	}
+	b.logf("authReconfig: bitfields finished.")
 
 	// Keep the dialer updated about whether we're supposed to use
 	// an exit node's DNS server (so SOCKS5/HTTP outgoing dials
@@ -2936,24 +2950,31 @@ func (b *LocalBackend) authReconfig() {
 	} else {
 		b.dialer.SetExitDNSDoH("")
 	}
+	b.logf("authReconfig: exitNodeCanProxyDNS returned.")
 
 	cfg, err := nmcfg.WGCfg(nm, b.logf, flags, prefs.ExitNodeID())
 	if err != nil {
 		b.logf("wgcfg: %v", err)
 		return
 	}
+	b.logf("authReconfig: WGCfg exit node returned.")
 
 	oneCGNATRoute := shouldUseOneCGNATRoute(nm, b.logf, version.OS())
+	b.logf("authReconfig: shouldUseOneCGNATRoute.")
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
+	b.logf("authReconfig: routerConfig oneCGNATRoute.")
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
+	b.logf("authReconfig: dnsConfigForNetmap.")
 
 	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
 	if err == wgengine.ErrNoChanges {
+		b.logf("authReconfig: wgengine.ErrNoChanges.")
 		return
 	}
-	b.logf("[v1] authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
+	b.logf("authReconfig: ra=%v dns=%v 0x%02x: %v", prefs.RouteAll(), prefs.CorpDNS(), flags, err)
 
 	b.initPeerAPIListener()
+	b.logf("authReconfig: b.initPeerAPIListener.")
 }
 
 // shouldUseOneCGNATRoute reports whether we should prefer to make one big
@@ -3572,9 +3593,12 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 			systemd.Status("Stopped; run 'tailscale up' to log in")
 		}
 	case ipn.Starting, ipn.NeedsMachineAuth:
+		b.logf("enterStateLockedOnEntry: ipn.Starting, ipn.NeedsMachineAuth")
 		b.authReconfig()
+		b.logf("enterStateLockedOnEntry: authReconfig returned")
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
+		b.logf("enterStateLockedOnEntry: b.e.RequestStatus returned")
 	case ipn.Running:
 		var addrs []string
 		for _, addr := range netMap.Addresses {
@@ -3871,6 +3895,7 @@ func (b *LocalBackend) updatePersistFromNetMapLocked(nm *netmap.NetworkMap, pref
 }
 
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
+	b.logf("setNetMapLocked")
 	b.dialer.SetNetMap(nm)
 	var login string
 	if nm != nil {
@@ -4520,6 +4545,7 @@ type keyProvingNoiseRoundTripper struct {
 }
 
 func (n keyProvingNoiseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	log.Println("RoundTrip")
 	b := n.b
 
 	var priv key.NodePrivate
@@ -4820,6 +4846,7 @@ func (b *LocalBackend) initTKALocked() error {
 
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
 func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
+	b.logf("resetForProfileChangeLockedOnEntry")
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
@@ -4878,6 +4905,7 @@ func (b *LocalBackend) ListProfiles() []ipn.LoginProfile {
 // backend is left with a new profile, ready for StartLoginInterative to be
 // called to register it as new node.
 func (b *LocalBackend) ResetAuth() error {
+	b.logf("ResetAuth")
 	b.mu.Lock()
 	b.resetControlClientLockedAsync()
 	if err := b.clearMachineKeyLocked(); err != nil {
@@ -4934,6 +4962,7 @@ func (b *LocalBackend) StreamDebugCapture(ctx context.Context, w io.Writer) erro
 }
 
 func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr) ([]magicsock.EndpointChange, error) {
+	b.logf("GetPeerEndpointChanges")
 	pip, ok := b.e.PeerForIP(ip)
 	if !ok {
 		return nil, fmt.Errorf("no matching peer")

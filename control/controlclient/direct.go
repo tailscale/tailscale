@@ -767,11 +767,13 @@ func (c *Direct) SetEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 // PollNetMap makes a /map request to download the network map, calling cb with
 // each new netmap.
 func (c *Direct) PollNetMap(ctx context.Context, cb func(*netmap.NetworkMap)) error {
+	c.logf("PollNetMap")
 	return c.sendMapRequest(ctx, -1, false, cb)
 }
 
 // FetchNetMap fetches the netmap once.
 func (c *Direct) FetchNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+	c.logf("FetchNetMap")
 	var ret *netmap.NetworkMap
 	err := c.sendMapRequest(ctx, 1, false, func(nm *netmap.NetworkMap) {
 		ret = nm
@@ -786,6 +788,7 @@ func (c *Direct) FetchNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
 // but does not fetch anything. It returns an error if the server did not return a
 // successful 200 OK response.
 func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
+	c.logf("SendLiteMapUpdate")
 	return c.sendMapRequest(ctx, 1, false, nil)
 }
 
@@ -796,6 +799,7 @@ const pollTimeout = 120 * time.Second
 
 // cb nil means to omit peers.
 func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool, cb func(*netmap.NetworkMap)) error {
+	c.logf("sendMapRequest")
 	metricMapRequests.Add(1)
 	metricMapRequestsActive.Add(1)
 	defer metricMapRequestsActive.Add(-1)
@@ -822,21 +826,25 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 	machinePrivKey, err := c.getMachinePrivKey()
 	if err != nil {
+            c.logf("sendMapRequest: machinePrivKey failed")
 		return fmt.Errorf("getMachinePrivKey: %w", err)
 	}
 	if machinePrivKey.IsZero() {
+            c.logf("sendMapRequest: machinePrivKey isZero")
 		return errors.New("getMachinePrivKey returned zero key")
 	}
 
 	if persist.PrivateNodeKey().IsZero() {
+            c.logf("sendMapRequest: privateNodeKey isZero")
 		return errors.New("privateNodeKey is zero")
 	}
 	if backendLogID == "" {
+            c.logf("sendMapRequest: BackendLogID missing")
 		return errors.New("hostinfo: BackendLogID missing")
 	}
 
 	allowStream := maxPolls != 1
-	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
+	c.logf("PollNetMap: stream=%v ep=%v", allowStream, epStrs)
 
 	vlogf := logger.Discard
 	if DevKnob.DumpNetMaps() {
@@ -891,7 +899,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	}
 
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
-	if err != nil {
+	if err !=  nil {
+		c.logf("PollNetMap: encode failed")
 		vlogf("netmap: encode: %v", err)
 		return err
 	}
@@ -919,11 +928,13 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
+		c.logf("PollNetMap: NewRequestWithContext failed")
 		return err
 	}
 
 	res, err := httpc.Do(req)
 	if err != nil {
+		c.logf("PollNetMap: httpc.Do failed")
 		vlogf("netmap: Do: %v", err)
 		return err
 	}
@@ -931,6 +942,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
+		c.logf("PollNetMap: Status != 200")
 		return fmt.Errorf("initial fetch failed %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
@@ -940,6 +952,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 	if cb == nil {
 		io.Copy(io.Discard, res.Body)
+		c.logf("PollNetMap: cb == nil")
 		return nil
 	}
 
@@ -952,6 +965,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			select {
 			case <-pollDone:
 				vlogf("netmap: ending timeout goroutine")
+				c.logf("netmap: ending timeout goroutine")
 				return
 			case <-timeout.C:
 				c.logf("map response long-poll timed out!")
@@ -963,10 +977,12 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 					case <-timeout.C:
 					case <-pollDone:
 						vlogf("netmap: ending timeout goroutine")
+				c.logf("netmap: ending timeout goroutine")
 						return
 					}
 				}
 				vlogf("netmap: reset timeout timer")
+				c.logf("netmap: reset timeout timer")
 				timeout.Reset(pollTimeout)
 			}
 		}
@@ -989,6 +1005,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
+			c.logf("PollNetMap: io.ReadFull 4 bytes failed")
 			vlogf("netmap: size read error after %v: %v", time.Since(t0).Round(time.Millisecond), err)
 			return err
 		}
@@ -996,6 +1013,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		vlogf("netmap: read size %v after %v", size, time.Since(t0).Round(time.Millisecond))
 		msg = append(msg[:0], make([]byte, size)...)
 		if _, err := io.ReadFull(res.Body, msg); err != nil {
+			c.logf("PollNetMap: io.ReadFull all bytes failed")
 			vlogf("netmap: body read error: %v", err)
 			return err
 		}
@@ -1003,6 +1021,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 		var resp tailcfg.MapResponse
 		if err := c.decodeMsg(msg, &resp, machinePrivKey); err != nil {
+			c.logf("PollNetMap: decode error")
 			vlogf("netmap: decode error: %v")
 			return err
 		}
@@ -1048,6 +1067,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 				c.logf("netmap: [unexpected] new dial plan; nowhere to store it")
 			}
 		}
+		c.logf("PollNetMap: past dial plan")
 
 		select {
 		case timeoutReset <- struct{}{}:
