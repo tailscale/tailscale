@@ -204,6 +204,12 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 // OS, sets its UID and groups to the specified `--uid`, `--gid` and
 // `--groups` and then launches the requested `--cmd`.
 func beIncubator(args []string) error {
+	// To defend against issues like https://golang.org/issue/1435,
+	// defensively lock our current goroutine's thread to the current
+	// system thread before we start making any UID/GID/group changes.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ia := parseIncubatorArgs(args)
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
@@ -771,6 +777,20 @@ func (ia *incubatorArgs) loginArgs() []string {
 }
 
 func setGroups(groupIDs []int) error {
+	if runtime.GOOS == "freebsd" || runtime.GOOS == "darwin" {
+		// On FreeBSD and Darwin, the first entry returned from the
+		// getgroups(2) syscall is the egid, and changing it with
+		// setgroups(2) changes the egid of the process. This is
+		// technically a violation of the POSIX standard; see the
+		// following article for more detail:
+		//    https://www.usenix.org/system/files/login/articles/325-tsafrir.pdf
+		//
+		// In this case, we add an entry at the beginning of the
+		// groupIDs list containing the current egid, which replicates
+		// the behaviour on every other platform of just changing the
+		// supplementary groups and not the egid.
+		groupIDs = append([]int{os.Getegid()}, groupIDs...)
+	}
 	if runtime.GOOS == "darwin" && len(groupIDs) > 16 {
 		// darwin returns "invalid argument" if more than 16 groups are passed to syscall.Setgroups
 		// some info can be found here:
