@@ -153,11 +153,9 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 	if len(regular4) == 0 && len(regular6) == 0 {
 		// if we have no usable IP addresses then be willing to accept
 		// addresses we otherwise wouldn't, like:
-		//   + 169.254.x.x (AWS Lambda uses NAT with these)
+		//   + 169.254.x.x (AWS Lambda and Azure App Services use NAT with these)
 		//   + IPv6 ULA (Google Cloud Run uses these with address translation)
-		if hostinfo.GetEnvType() == hostinfo.AWSLambda {
-			regular4 = linklocal4
-		}
+		regular4 = linklocal4
 		regular6 = ula6
 	}
 	regular = append(regular4, regular6...)
@@ -645,7 +643,14 @@ func isUsableV4(ip netip.Addr) bool {
 		return false
 	}
 	if ip.IsLinkLocalUnicast() {
-		return hostinfo.GetEnvType() == hostinfo.AWSLambda
+		switch hostinfo.GetEnvType() {
+		case hostinfo.AWSLambda:
+			return true
+		case hostinfo.AzureAppService:
+			return true
+		default:
+			return false
+		}
 	}
 	return true
 }
