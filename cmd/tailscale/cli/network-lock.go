@@ -40,9 +40,17 @@ var netlockCmd = &ffcli.Command{
 		nlDisablementKDFCmd,
 		nlLogCmd,
 		nlLocalDisableCmd,
-		nlTskeyWrapCmd,
 	},
-	Exec: runNetworkLockStatus,
+	Exec: runNetworkLockNoSubcommand,
+}
+
+func runNetworkLockNoSubcommand(ctx context.Context, args []string) error {
+	// Detect & handle the deprecated command 'lock tskey-wrap'.
+	if len(args) >= 2 && args[0] == "tskey-wrap" {
+		return runTskeyWrapCmd(ctx, args[1:])
+	}
+
+	return runNetworkLockStatus(ctx, args)
 }
 
 var nlInitArgs struct {
@@ -427,13 +435,19 @@ func runNetworkLockModify(ctx context.Context, addArgs, removeArgs []string) err
 
 var nlSignCmd = &ffcli.Command{
 	Name:       "sign",
-	ShortUsage: "sign <node-key> [<rotation-key>]",
-	ShortHelp:  "Signs a node key and transmits the signature to the coordination server",
-	LongHelp:   "Signs a node key and transmits the signature to the coordination server",
-	Exec:       runNetworkLockSign,
+	ShortUsage: "sign <node-key> [<rotation-key>] or sign <auth-key>",
+	ShortHelp:  "Signs a node or pre-approved auth key",
+	LongHelp: `Either:
+  - signs a node key and transmits the signature to the coordination server, or
+  - signs a pre-approved auth key, printing it in a form that can be used to bring up nodes under tailnet lock`,
+	Exec: runNetworkLockSign,
 }
 
 func runNetworkLockSign(ctx context.Context, args []string) error {
+	if len(args) > 0 && strings.HasPrefix(args[0], "tskey-auth-") {
+		return runTskeyWrapCmd(ctx, args)
+	}
+
 	var (
 		nodeKey     key.NodePublic
 		rotationKey key.NLPublic
@@ -636,14 +650,6 @@ func runNetworkLockLog(ctx context.Context, args []string) error {
 	return nil
 }
 
-var nlTskeyWrapCmd = &ffcli.Command{
-	Name:       "tskey-wrap",
-	ShortUsage: "tskey-wrap <tailscale pre-auth key>",
-	ShortHelp:  "Modifies a pre-auth key from the admin panel to work with tailnet lock",
-	LongHelp:   "Modifies a pre-auth key from the admin panel to work with tailnet lock",
-	Exec:       runTskeyWrapCmd,
-}
-
 func runTskeyWrapCmd(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: lock tskey-wrap <tailscale pre-auth key>")
@@ -657,21 +663,25 @@ func runTskeyWrapCmd(ctx context.Context, args []string) error {
 		return fixTailscaledConnectError(err)
 	}
 
+	return wrapAuthKey(ctx, args[0], st)
+}
+
+func wrapAuthKey(ctx context.Context, keyStr string, status *ipnstate.Status) error {
 	// Generate a separate tailnet-lock key just for the credential signature.
 	// We use the free-form meta strings to mark a little bit of metadata about this
 	// key.
 	priv := key.NewNLPrivate()
 	m := map[string]string{
 		"purpose":            "pre-auth key",
-		"wrapper_stableid":   string(st.Self.ID),
+		"wrapper_stableid":   string(status.Self.ID),
 		"wrapper_createtime": fmt.Sprint(time.Now().Unix()),
 	}
-	if strings.HasPrefix(args[0], "tskey-auth-") && strings.Index(args[0][len("tskey-auth-"):], "-") > 0 {
+	if strings.HasPrefix(keyStr, "tskey-auth-") && strings.Index(keyStr[len("tskey-auth-"):], "-") > 0 {
 		// We don't want to accidentally embed the nonce part of the authkey in
 		// the event the format changes. As such, we make sure its in the format we
 		// expect (tskey-auth-<stableID, inc CNTRL suffix>-nonce) before we parse
 		// out and embed the stableID.
-		s := strings.TrimPrefix(args[0], "tskey-auth-")
+		s := strings.TrimPrefix(keyStr, "tskey-auth-")
 		m["authkey_stableid"] = s[:strings.Index(s, "-")]
 	}
 	k := tka.Key{
@@ -681,7 +691,7 @@ func runTskeyWrapCmd(ctx context.Context, args []string) error {
 		Meta:   m,
 	}
 
-	wrapped, err := localClient.NetworkLockWrapPreauthKey(ctx, args[0], priv)
+	wrapped, err := localClient.NetworkLockWrapPreauthKey(ctx, keyStr, priv)
 	if err != nil {
 		return fmt.Errorf("wrapping failed: %w", err)
 	}
