@@ -25,7 +25,7 @@ type sockStatCounters struct {
 	txBytes, rxBytes                       atomic.Uint64
 	rxBytesByInterface, txBytesByInterface map[int]*atomic.Uint64
 
-	txBytesMetric, rxBytesMetric *clientmetric.Metric
+	txBytesMetric, rxBytesMetric, txBytesCellularMetric, rxBytesCellularMetric *clientmetric.Metric
 
 	// Validate counts for TCP sockets by using the TCP_CONNECTION_INFO
 	// getsockopt. We get current counts, as well as save final values when
@@ -65,10 +65,12 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 	counters, ok := sockStats.countersByLabel[label]
 	if !ok {
 		counters = &sockStatCounters{
-			rxBytesByInterface: make(map[int]*atomic.Uint64),
-			txBytesByInterface: make(map[int]*atomic.Uint64),
-			txBytesMetric:      clientmetric.NewCounter(fmt.Sprintf("sockstats_tx_bytes_%s", label)),
-			rxBytesMetric:      clientmetric.NewCounter(fmt.Sprintf("sockstats_rx_bytes_%s", label)),
+			rxBytesByInterface:    make(map[int]*atomic.Uint64),
+			txBytesByInterface:    make(map[int]*atomic.Uint64),
+			txBytesMetric:         clientmetric.NewCounter(fmt.Sprintf("sockstats_tx_bytes_%s", label)),
+			rxBytesMetric:         clientmetric.NewCounter(fmt.Sprintf("sockstats_rx_bytes_%s", label)),
+			txBytesCellularMetric: clientmetric.NewCounter(fmt.Sprintf("sockstats_tx_bytes_cellular_%s", label)),
+			rxBytesCellularMetric: clientmetric.NewCounter(fmt.Sprintf("sockstats_rx_bytes_cellular_%s", label)),
 		}
 
 		// We might be called before setLinkMonitor has been called (and we've
@@ -119,6 +121,7 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		}
 		if sockStats.currentInterfaceCellular.Load() {
 			sockStats.rxBytesCellularMetric.Add(int64(n))
+			counters.rxBytesCellularMetric.Add(int64(n))
 		}
 	}
 	didWrite := func(n int) {
@@ -132,6 +135,7 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		}
 		if sockStats.currentInterfaceCellular.Load() {
 			sockStats.txBytesCellularMetric.Add(int64(n))
+			counters.txBytesCellularMetric.Add(int64(n))
 		}
 	}
 	willOverwrite := func(trace *net.SockTrace) {
