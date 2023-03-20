@@ -273,6 +273,17 @@ func derpProbeNodePair(ctx context.Context, dm *tailcfg.DERPMap, from, to *tailc
 		time.Sleep(100 * time.Millisecond) // pretty arbitrary
 	}
 
+	latency, err = runDerpProbeNodePair(ctx, from, to, fromc, toc)
+	if err != nil {
+		// Record pubkeys on failed probes to aid investigation.
+		err = fmt.Errorf("%s -> %s: %w",
+			fromc.SelfPublicKey().ShortString(),
+			toc.SelfPublicKey().ShortString(), err)
+	}
+	return latency, err
+}
+
+func runDerpProbeNodePair(ctx context.Context, from, to *tailcfg.DERPNode, fromc, toc *derphttp.Client) (latency time.Duration, err error) {
 	// Make a random packet
 	pkt := make([]byte, 8)
 	crand.Read(pkt)
