@@ -15,11 +15,21 @@ import (
 )
 
 func toolchainRev() (string, error) {
-	cwd, err := os.Getwd()
+	// gocross gets built in the root of the repo that has toolchain
+	// information, so we can use os.Args[0] to locate toolchain info.
+	//
+	// We might be getting invoked via the synthetic goroot that we create, so
+	// walk symlinks to find the true location of gocross.
+	start, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("getting CWD: %v", err)
+		return "", err
 	}
-	d := cwd
+	start, err = filepath.EvalSymlinks(start)
+	if err != nil {
+		return "", fmt.Errorf("evaluating symlinks in %q: %v", os.Args[0], err)
+	}
+	start = filepath.Dir(start)
+	d := start
 findTopLevel:
 	for {
 		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
@@ -29,7 +39,7 @@ findTopLevel:
 		}
 		d = filepath.Dir(d)
 		if d == "/" {
-			return "", fmt.Errorf("couldn't find .git starting from %q, cannot manage toolchain", cwd)
+			return "", fmt.Errorf("couldn't find .git starting from %q, cannot manage toolchain", start)
 		}
 	}
 
