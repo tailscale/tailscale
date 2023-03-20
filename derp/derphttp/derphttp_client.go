@@ -82,6 +82,10 @@ type Client struct {
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
 }
 
+func (c *Client) String() string {
+	return fmt.Sprintf("<derphttp_client.Client %s url=%s>", c.serverPubKey.ShortString(), c.url)
+}
+
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
 func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, getRegion func() *tailcfg.DERPRegion) *Client {
