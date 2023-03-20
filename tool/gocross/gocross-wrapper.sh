@@ -19,6 +19,13 @@ fi
 (
 repo_root="$(dirname $0)/../.."
 
+# Figuring out if gocross needs a rebuild, as well as the rebuild itself, need
+# to happen with CWD inside this repo. Since we're in a subshell entirely
+# dedicated to wrangling gocross and toolchains, cd over now before doing
+# anything further so that the rest of this logic works the same if gocross is
+# being invoked from somewhere else.
+cd "$repo_root"
+
 toolchain="$HOME/.cache/tailscale-go"
 
 if [ -d "$toolchain" ]; then
