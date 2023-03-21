@@ -1366,12 +1366,16 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		Env       map[string]string `json:"env"`
 
 		// Tailscale-specific fields:
-		SrcNode   string               `json:"srcNode"` // name
-		SrcNodeID tailcfg.StableNodeID `json:"srcNodeID"`
-		SSHUser   string               `json:"sshUser"`
-		LocalUser string               `json:"localUser"`
+		SrcNode     string               `json:"srcNode"` // node FQDN
+		SrcNodeID   tailcfg.StableNodeID `json:"srcNodeID"`
+		SrcNodeTags []string             `json:"srcNodeTags"`
+		SSHUser     string               `json:"sshUser"` // as presented by the client
+		LocalUser   string               `json:"localUser"`
+
+		SrcNodeUserID tailcfg.UserID `json:"srcNodeUserID"` // if not tagged
+		SrcNodeUser   string         `json:"srcNodeUser"`
 	}
-	j, err := json.Marshal(CastHeader{
+	ch := CastHeader{
 		Version:   2,
 		Width:     w.Width,
 		Height:    w.Height,
@@ -1389,9 +1393,16 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		},
 		SSHUser:   ss.conn.info.sshUser,
 		LocalUser: ss.conn.localUser.Username,
-		SrcNode:   ss.conn.info.node.Name,
+		SrcNode:   strings.TrimSuffix(ss.conn.info.node.Name, "."),
 		SrcNodeID: ss.conn.info.node.StableID,
-	})
+	}
+	if !ss.conn.info.node.IsTagged() {
+		ch.SrcNodeUser = ss.conn.info.uprof.LoginName
+		ch.SrcNodeUserID = ss.conn.info.node.User
+	} else {
+		ch.SrcNodeTags = ss.conn.info.node.Tags
+	}
+	j, err := json.Marshal(ch)
 	if err != nil {
 		return nil, err
 	}
