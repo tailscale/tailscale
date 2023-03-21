@@ -237,12 +237,11 @@ func TestExpvar(t *testing.T) {
 	}
 
 	check("probe", ProbeInfo{
-		Labels:  map[string]string{"label": "value"},
-		Start:   epoch,
-		End:     epoch.Add(aFewMillis),
-		Latency: aFewMillis.String(),
-		Result:  false,
-		Error:   "failing, as instructed by test",
+		Labels: map[string]string{"label": "value"},
+		Start:  epoch,
+		End:    epoch.Add(aFewMillis),
+		Result: false,
+		Error:  "failing, as instructed by test",
 	})
 
 	succeed.Store(true)
@@ -280,9 +279,8 @@ func TestPrometheus(t *testing.T) {
 probe_interval_secs{name="testprobe",label="value"} %f
 probe_start_secs{name="testprobe",label="value"} %d
 probe_end_secs{name="testprobe",label="value"} %d
-probe_latency_millis{name="testprobe",label="value"} %d
 probe_result{name="testprobe",label="value"} 0
-`, probeInterval.Seconds(), epoch.Unix(), epoch.Add(aFewMillis).Unix(), aFewMillis.Milliseconds()))
+`, probeInterval.Seconds(), epoch.Unix(), epoch.Add(aFewMillis).Unix()))
 		if diff := cmp.Diff(strings.TrimSpace(b.String()), want); diff != "" {
 			return fmt.Errorf("wrong probe stats (-got+want):\n%s", diff)
 		}
