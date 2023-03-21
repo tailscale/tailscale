@@ -62,7 +62,6 @@ type ipnLocalBackend interface {
 	NetMap() *netmap.NetworkMap
 	WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool)
 	DoNoiseRequest(req *http.Request) (*http.Response, error)
-	TailscaleVarRoot() string
 }
 
 type server struct {
@@ -987,12 +986,6 @@ func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) err
 	return nil
 }
 
-// recordSSH is a temporary dev knob to test the SSH recording
-// functionality and support off-node streaming.
-//
-// TODO(bradfitz,maisem): move this to SSHPolicy.
-var recordSSH = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
-
 // run is the entrypoint for a newly accepted SSH session.
 //
 // It handles ss once it's been accepted and determined
@@ -1127,10 +1120,9 @@ func (ss *sshSession) run() {
 
 func (ss *sshSession) shouldRecord() bool {
 	// for now only record pty sessions
-	// TODO(bradfitz,maisem): make configurable on SSHPolicy and
-	// support recording non-pty stuff too.
+	// TODO(bradfitz,maisem): support recording non-pty stuff too.
 	_, _, isPtyReq := ss.Pty()
-	return recordSSH() && isPtyReq
+	return isPtyReq && len(ss.conn.finalAction.Recorders) > 0
 }
 
 type sshConnInfo struct {
@@ -1313,10 +1305,15 @@ func randBytes(n int) []byte {
 }
 
 // startNewRecording starts a new SSH session recording.
-//
-// It writes an asciinema file to
-// $TAILSCALE_VAR_ROOT/ssh-sessions/ssh-session-<unixtime>-*.cast.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
+	if len(ss.conn.finalAction.Recorders) == 0 {
+		return nil, errors.New("no recorders configured")
+	}
+	recorder := ss.conn.finalAction.Recorders[0]
+	if len(ss.conn.finalAction.Recorders) > 1 {
+		ss.logf("warning: multiple recorders configured, using first one: %v", recorder)
+	}
+
 	var w ssh.Window
 	if ptyReq, _, isPtyReq := ss.Pty(); isPtyReq {
 		w = ptyReq.Window
@@ -1332,25 +1329,33 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		ss:    ss,
 		start: now,
 	}
-	varRoot := ss.conn.srv.lb.TailscaleVarRoot()
-	if varRoot == "" {
-		return nil, errors.New("no var root for recording storage")
-	}
-	dir := filepath.Join(varRoot, "ssh-sessions")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+
+	pr, pw := io.Pipe()
+	req, err := http.NewRequestWithContext(ss.ctx, "POST", fmt.Sprintf("http://%s:%d/record", recorder.Addr(), recorder.Port()), pr)
+	if err != nil {
+		pr.Close()
+		pw.Close()
 		return nil, err
 	}
-	defer func() {
+	go func() {
+		defer pw.Close()
+		ss.logf("starting asciinema recording to %s", recorder)
+
+		// We just use the default client here, which has a 30s dial timeout.
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			rec.Close()
+			ss.cancelCtx(err)
+			ss.logf("recording: error sending recording to %s: %v", recorder, err)
+			return
+		}
+		defer resp.Body.Close()
+		defer ss.cancelCtx(errors.New("recording: done"))
+		if resp.StatusCode != http.StatusOK {
+			ss.logf("recording: error sending recording to %s: %v", recorder, resp.Status)
 		}
 	}()
 
-	f, err := os.CreateTemp(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
-	if err != nil {
-		return nil, err
-	}
-	rec.out = f
+	rec.out = pw
 
 	// {"version": 2, "width": 221, "height": 84, "timestamp": 1647146075, "env": {"SHELL": "/bin/bash", "TERM": "screen"}}
 	type CastHeader struct {
@@ -1359,6 +1364,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		Height    int               `json:"height"`
 		Timestamp int64             `json:"timestamp"`
 		Env       map[string]string `json:"env"`
+
+		// Tailscale-specific fields:
+		SrcNode   string               `json:"srcNode"` // name
+		SrcNodeID tailcfg.StableNodeID `json:"srcNodeID"`
+		SSHUser   string               `json:"sshUser"`
+		LocalUser string               `json:"localUser"`
 	}
 	j, err := json.Marshal(CastHeader{
 		Version:   2,
@@ -1376,15 +1387,16 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 			// it. Then we can (1) make the cmd, (2) start the
 			// recording, (3) start the process.
 		},
+		SSHUser:   ss.conn.info.sshUser,
+		LocalUser: ss.conn.localUser.Username,
+		SrcNode:   ss.conn.info.node.Name,
+		SrcNodeID: ss.conn.info.node.StableID,
 	})
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
-	ss.logf("starting asciinema recording to %s", f.Name())
 	j = append(j, '\n')
-	if _, err := f.Write(j); err != nil {
-		f.Close()
+	if _, err := pw.Write(j); err != nil {
 		return nil, err
 	}
 	return rec, nil
@@ -1396,7 +1408,7 @@ type recording struct {
 	start time.Time
 
 	mu  sync.Mutex // guards writes to, close of out
-	out *os.File   // nil if closed
+	out io.WriteCloser
 }
 
 func (r *recording) Close() error {
@@ -1415,8 +1427,15 @@ func (r *recording) Close() error {
 // The dir should be "i" for input or "o" for output.
 //
 // If r is nil, it returns w unchanged.
+//
+// Currently (2023-03-21) we only record output, not input.
 func (r *recording) writer(dir string, w io.Writer) io.Writer {
 	if r == nil {
+		return w
+	}
+	if dir == "i" {
+		// TODO: record input? Maybe not, since it might contain
+		// passwords.
 		return w
 	}
 	return &loggingWriter{r, dir, w}
