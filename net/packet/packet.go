@@ -556,14 +556,18 @@ func updateV4PacketChecksums(p *Parsed, old, new netip.Addr) {
 	// TODO(maisem): more protocols (sctp, gre, dccp)
 }
 
-// updateV4Checksum calculates and updates the checksum in the packet buffer
-// for a change between old and new. The checksum is updated in place.
+// updateV4Checksum calculates and updates the checksum in the packet buffer for
+// a change between old and new. The oldSum must point to the 16-bit checksum
+// field in the packet buffer that holds the old checksum value, it will be
+// updated in place.
+//
+// The old and new must be the same length, and must be an even number of bytes.
 func updateV4Checksum(oldSum, old, new []byte) {
 	if len(old) != len(new) {
 		panic("old and new must be the same length")
 	}
 	if len(old)%2 != 0 {
-		panic("old and new must be even length")
+		panic("old and new must be of even length")
 	}
 	/*
 		RFC 1624
