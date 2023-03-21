@@ -161,11 +161,12 @@ type Probe struct {
 	tick         ticker
 	labels       map[string]string
 
-	mu      sync.Mutex
-	start   time.Time // last time doProbe started
-	end     time.Time // last time doProbe returned
-	result  bool      // whether the last doProbe call succeeded
-	lastErr error
+	mu        sync.Mutex
+	start     time.Time     // last time doProbe started
+	end       time.Time     // last time doProbe returned
+	latency   time.Duration // last successful probe latency
+	succeeded bool          // whether the last doProbe call succeeded
+	lastErr   error
 }
 
 // Close shuts down the Probe and unregisters it from its Prober.
@@ -254,8 +255,13 @@ func (p *Probe) recordEnd(start time.Time, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.end = end
-	p.result = err == nil
+	p.succeeded = err == nil
 	p.lastErr = err
+	if p.succeeded {
+		p.latency = end.Sub(p.start)
+	} else {
+		p.latency = 0
+	}
 }
 
 type varExporter struct {
@@ -289,13 +295,13 @@ func (v varExporter) probeInfo() map[string]ProbeInfo {
 			Labels: probe.labels,
 			Start:  probe.start,
 			End:    probe.end,
-			Result: probe.result,
+			Result: probe.succeeded,
 		}
 		if probe.lastErr != nil {
 			inf.Error = probe.lastErr.Error()
 		}
-		if probe.end.After(probe.start) {
-			inf.Latency = probe.end.Sub(probe.start).String()
+		if probe.latency > 0 {
+			inf.Latency = probe.latency.String()
 		}
 		out[probe.name] = inf
 		probe.mu.Unlock()
@@ -358,9 +364,10 @@ func (v varExporter) WritePrometheus(w io.Writer, prefix string) {
 		}
 		if !probe.end.IsZero() {
 			fmt.Fprintf(w, "%s_end_secs{%s} %d\n", prefix, labels, probe.end.Unix())
-			// Start is always present if end is.
-			fmt.Fprintf(w, "%s_latency_millis{%s} %d\n", prefix, labels, probe.end.Sub(probe.start).Milliseconds())
-			if probe.result {
+			if probe.latency > 0 {
+				fmt.Fprintf(w, "%s_latency_millis{%s} %d\n", prefix, labels, probe.latency.Milliseconds())
+			}
+			if probe.succeeded {
 				fmt.Fprintf(w, "%s_result{%s} 1\n", prefix, labels)
 			} else {
 				fmt.Fprintf(w, "%s_result{%s} 0\n", prefix, labels)
