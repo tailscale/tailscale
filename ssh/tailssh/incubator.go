@@ -160,7 +160,7 @@ func (stdRWC) Close() error {
 }
 
 type incubatorArgs struct {
-	uid          uint64
+	uid          int
 	gid          int
 	groups       string
 	localUser    string
@@ -177,7 +177,7 @@ type incubatorArgs struct {
 
 func parseIncubatorArgs(args []string) (a incubatorArgs) {
 	flags := flag.NewFlagSet("", flag.ExitOnError)
-	flags.Uint64Var(&a.uid, "uid", 0, "the uid of local-user")
+	flags.IntVar(&a.uid, "uid", 0, "the uid of local-user")
 	flags.IntVar(&a.gid, "gid", 0, "the gid of local-user")
 	flags.StringVar(&a.groups, "groups", "", "comma-separated list of gids of local-user")
 	flags.StringVar(&a.localUser, "local-user", "", "the user to run as")
@@ -217,7 +217,7 @@ func beIncubator(args []string) error {
 		}
 	}
 
-	euid := uint64(os.Geteuid())
+	euid := os.Geteuid()
 	runningAsRoot := euid == 0
 	if runningAsRoot && ia.loginCmdPath != "" {
 		// Check if we can exec into the login command instead of trying to
@@ -245,7 +245,7 @@ func beIncubator(args []string) error {
 		groupIDs = append(groupIDs, int(gid))
 	}
 
-	if err := dropPrivileges(logf, int(ia.uid), ia.gid, groupIDs); err != nil {
+	if err := dropPrivileges(logf, ia.uid, ia.gid, groupIDs); err != nil {
 		return err
 	}
 
