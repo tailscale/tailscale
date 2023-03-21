@@ -73,6 +73,7 @@ var handler = map[string]localAPIHandler{
 	"debug-portmap":               (*Handler).serveDebugPortmap,
 	"debug-peer-endpoint-changes": (*Handler).serveDebugPeerEndpointChanges,
 	"debug-capture":               (*Handler).serveDebugCapture,
+	"debug-log":                   (*Handler).serveDebugLog,
 	"derpmap":                     (*Handler).serveDERPMap,
 	"dev-set-state-store":         (*Handler).serveDevSetStateStore,
 	"set-push-device-token":       (*Handler).serveSetPushDeviceToken,
@@ -1818,6 +1819,47 @@ func (h *Handler) serveDebugCapture(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	w.(http.Flusher).Flush()
 	h.b.StreamDebugCapture(r.Context(), w)
+}
+
+func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "debug-log access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer h.b.TryFlushLogs() // kick off upload after we're done logging
+
+	type logRequestJSON struct {
+		Lines  []string
+		Prefix string
+	}
+
+	var logRequest logRequestJSON
+	if err := json.NewDecoder(r.Body).Decode(&logRequest); err != nil {
+		http.Error(w, "invalid JSON body", 400)
+		return
+	}
+
+	prefix := logRequest.Prefix
+	if prefix == "" {
+		prefix = "debug-log"
+	}
+	logf := logger.WithPrefix(h.logf, prefix+": ")
+
+	// We can write logs too fast for logtail to handle, even when
+	// opting-out of rate limits. Limit ourselves to at most one message
+	// per 20ms and a burst of 60 log lines, which should be fast enough to
+	// not block for too long but slow enough that we can upload all lines.
+	logf = logger.SlowLoggerWithClock(r.Context(), logf, 20*time.Millisecond, 60, time.Now)
+
+	for _, line := range logRequest.Lines {
+		logf("%s", line)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 var (
