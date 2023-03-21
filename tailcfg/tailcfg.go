@@ -1948,6 +1948,10 @@ type SSHRule struct {
 	// Action is the outcome to task.
 	// A nil or invalid action means to deny.
 	Action *SSHAction `json:"action"`
+
+	// Recorders defines the destinations of the SSH session recorders.
+	// The recording will be uploaded to http://addr:port/record.
+	Recorders []netip.AddrPort `json:"recorders"`
 }
 
 // SSHPrincipal is either a particular node or a user on any node.
