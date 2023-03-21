@@ -713,7 +713,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			}
 		}
 		if capt := t.captureHook.Load(); capt != nil {
-			capt(capture.FromLocal, time.Now(), data[res.dataOffset:])
+			capt(capture.FromLocal, time.Now(), p.Buffer())
 		}
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p)
@@ -722,13 +722,13 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				continue
 			}
 		}
-		n := copy(buffs[buffsPos][offset:], data[res.dataOffset:])
+		n := copy(buffs[buffsPos][offset:], p.Buffer())
 		if n != len(data)-res.dataOffset {
 			panic(fmt.Sprintf("short copy: %d != %d", n, len(data)-res.dataOffset))
 		}
 		sizes[buffsPos] = n
 		if stats := t.stats.Load(); stats != nil {
-			stats.UpdateTxVirtual(data[res.dataOffset:])
+			stats.UpdateTxVirtual(p.Buffer())
 		}
 		buffsPos++
 	}
@@ -942,12 +942,12 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	}
 	pkt.DecRef()
 
-	if capt := t.captureHook.Load(); capt != nil {
-		capt(capture.SynthesizedToLocal, time.Now(), buf[PacketStartOffset:])
-	}
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[PacketStartOffset:])
+	if capt := t.captureHook.Load(); capt != nil {
+		capt(capture.SynthesizedToLocal, time.Now(), p.Buffer())
+	}
 	t.dnatV4(p)
 
 	return t.InjectInboundDirect(buf, PacketStartOffset)
