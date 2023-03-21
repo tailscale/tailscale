@@ -371,11 +371,7 @@ func (src *SSHRule) Clone() *SSHRule {
 			dst.SSHUsers[k] = v
 		}
 	}
-	if dst.Action != nil {
-		dst.Action = new(SSHAction)
-		*dst.Action = *src.Action
-	}
-	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
+	dst.Action = src.Action.Clone()
 	return dst
 }
 
@@ -385,7 +381,30 @@ var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
-	Recorders   []netip.AddrPort
+}{})
+
+// Clone makes a deep copy of SSHAction.
+// The result aliases no memory with the original.
+func (src *SSHAction) Clone() *SSHAction {
+	if src == nil {
+		return nil
+	}
+	dst := new(SSHAction)
+	*dst = *src
+	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHActionCloneNeedsRegeneration = SSHAction(struct {
+	Message                  string
+	Reject                   bool
+	Accept                   bool
+	SessionDuration          time.Duration
+	AllowAgentForwarding     bool
+	HoldAndDelegate          string
+	AllowLocalPortForwarding bool
+	Recorders                []netip.AddrPort
 }{})
 
 // Clone makes a deep copy of SSHPrincipal.
@@ -428,7 +447,7 @@ var _ControlDialPlanCloneNeedsRegeneration = ControlDialPlan(struct {
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal,ControlDialPlan.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -527,6 +546,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **SSHRule:
+			*dst = src.Clone()
+			return true
+		}
+	case *SSHAction:
+		switch dst := dst.(type) {
+		case *SSHAction:
+			*dst = *src.Clone()
+			return true
+		case **SSHAction:
 			*dst = src.Clone()
 			return true
 		}
