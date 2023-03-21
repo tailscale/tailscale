@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHPrincipal,ControlDialPlan
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -865,15 +865,7 @@ func (v SSHRuleView) Principals() views.SliceView[*SSHPrincipal, SSHPrincipalVie
 }
 
 func (v SSHRuleView) SSHUsers() views.Map[string, string] { return views.MapOf(v.ж.SSHUsers) }
-func (v SSHRuleView) Action() *SSHAction {
-	if v.ж.Action == nil {
-		return nil
-	}
-	x := *v.ж.Action
-	return &x
-}
-
-func (v SSHRuleView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
+func (v SSHRuleView) Action() SSHActionView               { return v.ж.Action.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
@@ -881,7 +873,72 @@ var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
-	Recorders   []netip.AddrPort
+}{})
+
+// View returns a readonly view of SSHAction.
+func (p *SSHAction) View() SSHActionView {
+	return SSHActionView{ж: p}
+}
+
+// SSHActionView provides a read-only view over SSHAction.
+//
+// Its methods should only be called if `Valid()` returns true.
+type SSHActionView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *SSHAction
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v SSHActionView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v SSHActionView) AsStruct() *SSHAction {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v SSHActionView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *SSHActionView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x SSHAction
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v SSHActionView) Message() string                        { return v.ж.Message }
+func (v SSHActionView) Reject() bool                           { return v.ж.Reject }
+func (v SSHActionView) Accept() bool                           { return v.ж.Accept }
+func (v SSHActionView) SessionDuration() time.Duration         { return v.ж.SessionDuration }
+func (v SSHActionView) AllowAgentForwarding() bool             { return v.ж.AllowAgentForwarding }
+func (v SSHActionView) HoldAndDelegate() string                { return v.ж.HoldAndDelegate }
+func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
+func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _SSHActionViewNeedsRegeneration = SSHAction(struct {
+	Message                  string
+	Reject                   bool
+	Accept                   bool
+	SessionDuration          time.Duration
+	AllowAgentForwarding     bool
+	HoldAndDelegate          string
+	AllowLocalPortForwarding bool
+	Recorders                []netip.AddrPort
 }{})
 
 // View returns a readonly view of SSHPrincipal.
