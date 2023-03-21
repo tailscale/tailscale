@@ -82,9 +82,9 @@ fi
 # Anyway, build gocross in a stripped down universe.
 gocross_path="$repo_root/gocross"
 gocross_ok=0
+wantver="$(git rev-parse HEAD)"
 if [ -x "$gocross_path" ]; then
 	gotver="$($gocross_path gocross-version 2>/dev/null || echo '')"
-	wantver="$(git rev-parse HEAD)"
 	if [ "$gotver" = "$wantver" ]; then
 		gocross_ok=1
 	fi
@@ -95,7 +95,7 @@ if [ "$gocross_ok" = "0" ]; then
     unset GO111MODULE
     unset GOROOT
     export CGO_ENABLED=0
-    "$toolchain/bin/go" build -o "$gocross_path" -ldflags='-X tailscale.com/version/gitCommitStamp=$wantver' tailscale.com/tool/gocross
+    "$toolchain/bin/go" build -o "$gocross_path" -ldflags "-X tailscale.com/version.gitCommitStamp=$wantver" tailscale.com/tool/gocross
 fi
 ) # End of the subshell execution.
 
