@@ -306,7 +306,8 @@ main() {
 			   [ "$VERSION" != "hirsute" ] && \
 			   [ "$VERSION" != "impish" ] && \
 			   [ "$VERSION" != "jammy" ] && \
-			   [ "$VERSION" != "kinetic" ]
+			   [ "$VERSION" != "kinetic" ] && \
+			   [ "$VERSION" != "lunar" ]
 			then
 				OS_UNSUPPORTED=1
 			fi
