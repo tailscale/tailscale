@@ -1118,11 +1118,22 @@ func (ss *sshSession) run() {
 	return
 }
 
+// recorders returns the list of recorders to use for this session.
+// If the final action has a non-empty list of recorders, that list is
+// returned. Otherwise, the list of recorders from the initial action
+// is returned.
+func (ss *sshSession) recorders() []netip.AddrPort {
+	if len(ss.conn.finalAction.Recorders) > 0 {
+		return ss.conn.finalAction.Recorders
+	}
+	return ss.conn.action0.Recorders
+}
+
 func (ss *sshSession) shouldRecord() bool {
 	// for now only record pty sessions
 	// TODO(bradfitz,maisem): support recording non-pty stuff too.
 	_, _, isPtyReq := ss.Pty()
-	return isPtyReq && len(ss.conn.finalAction.Recorders) > 0
+	return isPtyReq && len(ss.recorders()) > 0
 }
 
 type sshConnInfo struct {
@@ -1306,11 +1317,12 @@ func randBytes(n int) []byte {
 
 // startNewRecording starts a new SSH session recording.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
-	if len(ss.conn.finalAction.Recorders) == 0 {
+	recorders := ss.recorders()
+	if len(recorders) == 0 {
 		return nil, errors.New("no recorders configured")
 	}
-	recorder := ss.conn.finalAction.Recorders[0]
-	if len(ss.conn.finalAction.Recorders) > 1 {
+	recorder := recorders[0]
+	if len(recorders) > 1 {
 		ss.logf("warning: multiple recorders configured, using first one: %v", recorder)
 	}
 
