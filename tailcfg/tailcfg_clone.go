@@ -375,6 +375,7 @@ func (src *SSHRule) Clone() *SSHRule {
 		dst.Action = new(SSHAction)
 		*dst.Action = *src.Action
 	}
+	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
 	return dst
 }
 
@@ -384,6 +385,7 @@ var _SSHRuleCloneNeedsRegeneration = SSHRule(struct {
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
+	Recorders   []netip.AddrPort
 }{})
 
 // Clone makes a deep copy of SSHPrincipal.

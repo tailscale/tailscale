@@ -873,12 +873,15 @@ func (v SSHRuleView) Action() *SSHAction {
 	return &x
 }
 
+func (v SSHRuleView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHRuleViewNeedsRegeneration = SSHRule(struct {
 	RuleExpires *time.Time
 	Principals  []*SSHPrincipal
 	SSHUsers    map[string]string
 	Action      *SSHAction
+	Recorders   []netip.AddrPort
 }{})
 
 // View returns a readonly view of SSHPrincipal.
