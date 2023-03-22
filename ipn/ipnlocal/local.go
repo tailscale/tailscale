@@ -298,7 +298,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		e:              e,
 		pm:             pm,
-		store:          pm.Store(),
+		store:          store,
 		dialer:         dialer,
 		backendLogID:   logid,
 		state:          ipn.NoState,
