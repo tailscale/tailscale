@@ -310,7 +310,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 
 	// for now, only log sockstats on unstable builds
 	if version.IsUnstableBuild() {
-		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf)
+		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logid)
 		if err != nil {
 			log.Printf("error setting up sockstat logger: %v", err)
 		}
