@@ -1343,7 +1343,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	}
 
 	pr, pw := io.Pipe()
-	req, err := http.NewRequestWithContext(ss.ctx, "POST", fmt.Sprintf("http://%s:%d/record", recorder.Addr(), recorder.Port()), pr)
+
+	// We want to use a background context for uploading and not ss.ctx.
+	// ss.ctx is closed when the session closes, but we don't want to break the upload at that time.
+	// Instead we want to wait for the session to close the writer when it finishes.
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s:%d/record", recorder.Addr(), recorder.Port()), pr)
 	if err != nil {
 		pr.Close()
 		pw.Close()
