@@ -255,6 +255,11 @@ main() {
 				VERSION="bullseye"
 				APT_KEY_TYPE="keyring"
 				;;
+			photon)
+				OS="photon"
+				VERSION="$(echo "$VERSION_ID" | cut -f1 -d.)"
+				PACKAGETYPE="tdnf"
+				;;
 
 			# TODO: wsl?
 			# TODO: synology? qnap?
@@ -344,6 +349,13 @@ main() {
 			;;
 		openbsd)
 			OS_UNSUPPORTED=1
+			;;
+		photon)
+			if [ "$VERSION" != "3" ] && \
+			   [ "$VERSION" != "4" ]
+			then
+				OS_UNSUPPORTED=1
+			fi
 			;;
 		macos)
 			# We delegate macOS installation to the app store, it will
@@ -457,6 +469,13 @@ main() {
 			set -x
 			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO dnf install -y tailscale
+			$SUDO systemctl enable --now tailscaled
+			set +x
+		;;
+		tdnf)
+			set -x
+			curl -fsSL "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo" > /etc/yum.repos.d/tailscale.repo
+			$SUDO tdnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 		;;
