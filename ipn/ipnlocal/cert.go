@@ -35,6 +35,8 @@ import (
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/ipn/store"
+	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -150,12 +152,20 @@ type certStore interface {
 var errCertExpired = errors.New("cert expired")
 
 func (b *LocalBackend) getCertStore() (certStore, error) {
+	switch b.store.(type) {
+	case *store.FileStore:
+	case *mem.Store:
+	default:
+		if hostinfo.GetEnvType() == hostinfo.Kubernetes {
+			// We're running in Kubernetes with a custom StateStore,
+			// use that instead of the cert directory.
+			// TODO(maisem): expand this to other environments?
+			return certStateStore{StateStore: b.store}, nil
+		}
+	}
 	dir, err := b.certDir()
 	if err != nil {
 		return nil, err
-	}
-	if hostinfo.GetEnvType() == hostinfo.Kubernetes && dir == "/tmp" {
-		return certStateStore{StateStore: b.store}, nil
 	}
 	return certFileStore{dir: dir}, nil
 }
