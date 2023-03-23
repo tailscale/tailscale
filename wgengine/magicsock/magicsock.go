@@ -2381,6 +2381,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		eps = append(eps, ep.Addr)
 	}
 	go de.c.sendDiscoMessage(derpAddr, de.publicKey, de.discoKey, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	if debugSendCallMeUnknownPeer() {
+		// Send a callMeMaybe packet to a non-existent peer
+		unknownKey := key.NewNode().Public()
+		c.logf("magicsock: sending CallMeMaybe to unknown peer per TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
+		go de.c.sendDiscoMessage(derpAddr, unknownKey, de.discoKey, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	}
 }
 
 // discoInfoLocked returns the previous or new discoInfo for k.
