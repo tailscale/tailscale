@@ -540,7 +540,8 @@ func TestSSH(t *testing.T) {
 		node:    &tailcfg.Node{},
 		uprof:   tailcfg.UserProfile{},
 	}
-	sc.finalAction = &tailcfg.SSHAction{Accept: true}
+	sc.action0 = &tailcfg.SSHAction{Accept: true}
+	sc.finalAction = sc.action0
 
 	sc.Handler = func(s ssh.Session) {
 		sc.newSSHSession(s).run()
