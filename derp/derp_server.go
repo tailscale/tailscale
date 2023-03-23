@@ -34,7 +34,6 @@ import (
 
 	"go4.org/mem"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
@@ -1283,11 +1282,6 @@ type sclient struct {
 	isDisabled     atomic.Bool         // whether sends to this peer are disabled due to active/active dups
 
 	debugLogging bool
-
-	// replaceLimiter controls how quickly two connections with
-	// the same client key can kick each other off the server by
-	// taking over ownership of a key.
-	replaceLimiter *rate.Limiter
 
 	// Owned by run, not thread-safe.
 	br          *bufio.Reader
