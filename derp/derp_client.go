@@ -348,9 +348,12 @@ type ReceivedPacket struct {
 func (ReceivedPacket) msg() {}
 
 // PeerGoneMessage is a ReceivedMessage that indicates that the client
-// identified by the underlying public key had previously sent you a
-// packet but has now disconnected from the server.
-type PeerGoneMessage key.NodePublic
+// identified by the underlying public key is not connected to this
+// server.
+type PeerGoneMessage struct {
+	Peer   key.NodePublic
+	Reason PeerGoneReasonType
+}
 
 func (PeerGoneMessage) msg() {}
 
@@ -524,7 +527,15 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 				c.logf("[unexpected] dropping short peerGone frame from DERP server")
 				continue
 			}
-			pg := PeerGoneMessage(key.NodePublicFromRaw32(mem.B(b[:keyLen])))
+			// Backward compatibility for the older peerGone without reason byte
+			reason := PeerGoneReasonDisconnected
+			if n > keyLen {
+				reason = PeerGoneReasonType(b[keyLen])
+			}
+			pg := PeerGoneMessage{
+				Peer:   key.NodePublicFromRaw32(mem.B(b[:keyLen])),
+				Reason: reason,
+			}
 			return pg, nil
 
 		case framePeerPresent:
