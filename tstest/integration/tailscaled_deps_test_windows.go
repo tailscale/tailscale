@@ -47,6 +47,7 @@ import (
 	_ "tailscale.com/types/flagtype"
 	_ "tailscale.com/types/key"
 	_ "tailscale.com/types/logger"
+	_ "tailscale.com/types/logid"
 	_ "tailscale.com/util/clientmetric"
 	_ "tailscale.com/util/multierr"
 	_ "tailscale.com/util/osshare"

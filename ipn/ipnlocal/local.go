@@ -63,6 +63,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
@@ -139,7 +140,7 @@ type LocalBackend struct {
 	pm                    *profileManager
 	store                 ipn.StateStore
 	dialer                *tsdial.Dialer // non-nil
-	backendLogID          string
+	backendLogID          logid.PublicID
 	unregisterLinkMon     func()
 	unregisterHealthWatch func()
 	portpoll              *portlist.Poller // may be nil
@@ -265,7 +266,7 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
+func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
 	if e == nil {
 		panic("ipn.NewLocalBackend: engine must not be nil")
 	}
@@ -300,7 +301,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 		pm:             pm,
 		store:          pm.Store(),
 		dialer:         dialer,
-		backendLogID:   logid,
+		backendLogID:   logID,
 		state:          ipn.NoState,
 		portpoll:       portpoll,
 		em:             newExpiryManager(logf),
@@ -310,7 +311,7 @@ func NewLocalBackend(logf logger.Logf, logid string, store ipn.StateStore, diale
 
 	// for now, only log sockstats on unstable builds
 	if version.IsUnstableBuild() {
-		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logid)
+		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID)
 		if err != nil {
 			log.Printf("error setting up sockstat logger: %v", err)
 		}
@@ -1294,7 +1295,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	hostinfo := hostinfo.New()
-	hostinfo.BackendLogID = b.backendLogID
+	hostinfo.BackendLogID = b.backendLogID.String()
 	hostinfo.FrontendLogID = opts.FrontendLogID
 	hostinfo.Userspace.Set(wgengine.IsNetstack(b.e))
 	hostinfo.UserspaceRouter.Set(wgengine.IsNetstackRouter(b.e))
@@ -1448,7 +1449,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	b.e.SetNetInfoCallback(b.setNetInfo)
 
-	blid := b.backendLogID
+	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
 	b.send(ipn.Notify{BackendLogID: &blid})
 	b.send(ipn.Notify{Prefs: &prefs})

@@ -21,6 +21,7 @@ import (
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/wgengine"
@@ -303,7 +304,7 @@ func TestStateMachine(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	b, err := NewLocalBackend(logf, "logid", store, nil, e, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, store, nil, e, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -946,7 +947,7 @@ func TestEditPrefsHasNoKeys(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 
-	b, err := NewLocalBackend(logf, "logid", new(mem.Store), nil, e, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), nil, e, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -1025,7 +1026,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
-	b, err := NewLocalBackend(logf, "logid", new(mem.Store), nil, eng, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), nil, eng, 0)
 	c.Assert(err, qt.IsNil)
 
 	var cc *mockControl

@@ -38,6 +38,7 @@ import (
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/lineread"
@@ -505,7 +506,7 @@ func TestSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, "",
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{},
 		new(mem.Store),
 		new(tsdial.Dialer),
 		eng, 0)

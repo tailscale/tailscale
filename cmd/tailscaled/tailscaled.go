@@ -51,6 +51,7 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
@@ -377,11 +378,10 @@ func run() error {
 		debugMux = newDebugMux()
 	}
 
-	logid := pol.PublicID.String()
-	return startIPNServer(context.Background(), logf, logid)
+	return startIPNServer(context.Background(), logf, pol.PublicID)
 }
 
-func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
+func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID) error {
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
@@ -407,7 +407,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
 		}
 	}()
 
-	srv := ipnserver.New(logf, logid)
+	srv := ipnserver.New(logf, logID)
 	if debugMux != nil {
 		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
 	}
@@ -425,7 +425,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
 				return
 			}
 		}
-		lb, err := getLocalBackend(ctx, logf, logid)
+		lb, err := getLocalBackend(ctx, logf, logID)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
 			srv.SetLocalBackend(lb)
@@ -449,7 +449,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logid string) error {
 	return nil
 }
 
-func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ipnlocal.LocalBackend, retErr error) {
+func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID) (_ *ipnlocal.LocalBackend, retErr error) {
 	linkMon, err := monitor.New(logf)
 	if err != nil {
 		return nil, fmt.Errorf("monitor.New: %w", err)
@@ -520,7 +520,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logid string) (_ *ip
 		return nil, fmt.Errorf("store.New: %w", err)
 	}
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, e, opts.LoginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, logID, store, dialer, e, opts.LoginFlags)
 	if err != nil {
 		return nil, fmt.Errorf("ipnlocal.NewLocalBackend: %w", err)
 	}

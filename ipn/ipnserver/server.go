@@ -25,6 +25,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/localapi"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
@@ -35,7 +36,7 @@ import (
 type Server struct {
 	lb           atomic.Pointer[ipnlocal.LocalBackend]
 	logf         logger.Logf
-	backendLogID string
+	backendLogID logid.PublicID
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 active HTTP requests. That is, this is whether the backend is
 	// being run in "client mode" that requires an active GUI
@@ -412,9 +413,9 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 //
 // At some point, either before or after Run, the Server's SetLocalBackend
 // method must also be called before Server can do anything useful.
-func New(logf logger.Logf, logid string) *Server {
+func New(logf logger.Logf, logID logid.PublicID) *Server {
 	return &Server{
-		backendLogID: logid,
+		backendLogID: logID,
 		logf:         logf,
 		resetOnZero:  envknob.GOOS() == "windows",
 	}

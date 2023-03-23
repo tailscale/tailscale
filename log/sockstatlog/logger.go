@@ -58,17 +58,17 @@ type event struct {
 }
 
 // SockstatLogID reproducibly derives a new logid.PrivateID for sockstat logging from a node's public backend log ID.
-// The returned PrivateID is the sha256 sum of id + "sockstat".
+// The returned PrivateID is the sha256 sum of logID + "sockstat".
 // If a node's public log ID becomes known, it is trivial to spoof sockstat logs for that node.
 // Given the this is just for debugging, we're not too concerned about that.
-func SockstatLogID(id string) logid.PrivateID {
-	return logid.PrivateID(sha256.Sum256([]byte(id + "sockstat")))
+func SockstatLogID(logID logid.PublicID) logid.PrivateID {
+	return logid.PrivateID(sha256.Sum256([]byte(logID.String() + "sockstat")))
 }
 
 // NewLogger returns a new Logger that will store stats in logdir.
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
 // The returned Logger must be shut down with Shutdown when it is no longer needed.
-func NewLogger(logdir string, logf logger.Logf, backendLogID string) (*Logger, error) {
+func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
 	}
@@ -91,7 +91,7 @@ func NewLogger(logdir string, logf logger.Logf, backendLogID string) (*Logger, e
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),
-		PrivateID:  SockstatLogID(backendLogID),
+		PrivateID:  SockstatLogID(logID),
 		Collection: "sockstats.log.tailscale.io",
 		Buffer:     filch,
 		NewZstdEncoder: func() logtail.Encoder {

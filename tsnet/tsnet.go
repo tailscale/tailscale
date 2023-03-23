@@ -48,6 +48,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
@@ -118,7 +119,7 @@ type Server struct {
 	localClient      *tailscale.LocalClient // in-memory
 	logbuffer        *filch.Filch
 	logtail          *logtail.Logger
-	logid            string
+	logid            logid.PublicID
 
 	mu        sync.Mutex
 	listeners map[listenKey]*listener
@@ -573,7 +574,6 @@ func (s *Server) start() (reterr error) {
 
 func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 	if inTest() {
-		s.logid = "test"
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")
@@ -590,7 +590,7 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 	if err := lpc.Validate(logtail.CollectionNode); err != nil {
 		return fmt.Errorf("logpolicy.Config.Validate for %v: %w", cfgPath, err)
 	}
-	s.logid = lpc.PublicID.String()
+	s.logid = lpc.PublicID
 
 	s.logbuffer, err = filch.New(filepath.Join(s.rootPath, "tailscaled"), filch.Options{ReplaceStderr: false})
 	if err != nil {
