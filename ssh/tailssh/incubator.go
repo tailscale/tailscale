@@ -303,9 +303,19 @@ func beIncubator(args []string) error {
 	return err
 }
 
-// TODO(andrew-d): verify that this works in more configurations before
-// enabling by default.
-const assertDropPrivileges = false
+const (
+	// This controls whether we assert that our privileges were dropped
+	// using geteuid/getegid; it's a const and not an envknob because the
+	// incubator doesn't see the parent's environment.
+	//
+	// TODO(andrew): remove this const and always do this after sufficient
+	// testing, e.g. the 1.40 release
+	assertPrivilegesWereDropped = true
+
+	// TODO(andrew-d): verify that this works in more configurations before
+	// enabling by default.
+	assertPrivilegesWereDroppedByAttemptingToUnDrop = false
+)
 
 // dropPrivileges contains all the logic for dropping privileges to a different
 // UID, GID, and set of supplementary groups. This function is
@@ -319,7 +329,7 @@ const assertDropPrivileges = false
 //	go test -c ./ssh/tailssh/ && sudo ./tailssh.test -test.v -test.run TestDropPrivileges
 func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups []int) error {
 	fatalf := func(format string, args ...any) {
-		logf(format, args...)
+		logf("[unexpected] error dropping privileges: "+format, args...)
 		os.Exit(1)
 	}
 
@@ -380,25 +390,25 @@ func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups 
 	// cannot reset the it back to our original values, and that the
 	// current egid/euid are the expected values after we change
 	// everything; if not, we exit the process.
-	if assertDropPrivileges {
+	if assertPrivilegesWereDroppedByAttemptingToUnDrop {
 		if egid != wantGid {
 			if err := syscall.Setegid(egid); err == nil {
-				fatalf("unexpectedly able to set egid back to %d", egid)
+				fatalf("able to set egid back to %d", egid)
 			}
 		}
 		if euid != wantUid {
 			if err := syscall.Seteuid(euid); err == nil {
-				fatalf("unexpectedly able to set euid back to %d", euid)
+				fatalf("able to set euid back to %d", euid)
 			}
 		}
-
+	}
+	if assertPrivilegesWereDropped {
 		if got := os.Getegid(); got != wantGid {
 			fatalf("got egid=%d, want %d", got, wantGid)
 		}
 		if got := os.Geteuid(); got != wantUid {
 			fatalf("got euid=%d, want %d", got, wantUid)
 		}
-
 		// TODO(andrew-d): assert that our supplementary groups are correct
 	}
 
