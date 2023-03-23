@@ -122,7 +122,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		return ns.DialContextTCP(ctx, dst)
 	}
 
-	logid := lpc.PublicID.String()
+	logid := lpc.PublicID
 	srv := ipnserver.New(logf, logid)
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng, controlclient.LoginEphemeral)
 	if err != nil {

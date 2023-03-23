@@ -47,6 +47,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/tstun"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
@@ -262,13 +263,13 @@ func beWindowsSubprocess() bool {
 	if len(os.Args) != 3 || os.Args[1] != "/subproc" {
 		return false
 	}
-	logid := os.Args[2]
+	logID := os.Args[2]
 
 	// Remove the date/time prefix; the logtail + file loggers add it.
 	log.SetFlags(0)
 
 	log.Printf("Program starting: v%v: %#v", version.Long(), os.Args)
-	log.Printf("subproc mode: logid=%v", logid)
+	log.Printf("subproc mode: logid=%v", logID)
 	if err := envknob.ApplyDiskConfigError(); err != nil {
 		log.Printf("Error reading environment config: %v", err)
 	}
@@ -290,7 +291,8 @@ func beWindowsSubprocess() bool {
 		}
 	}()
 
-	err := startIPNServer(ctx, log.Printf, logid)
+	publicLogID, _ := logid.ParsePublicID(logID)
+	err := startIPNServer(ctx, log.Printf, publicLogID)
 	if err != nil {
 		log.Fatalf("ipnserver: %v", err)
 	}

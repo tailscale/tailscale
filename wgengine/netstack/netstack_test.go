@@ -18,6 +18,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
+	"tailscale.com/types/logid"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -49,7 +50,7 @@ func TestInjectInboundLeak(t *testing.T) {
 		t.Fatal("failed to get internals")
 	}
 
-	lb, err := ipnlocal.NewLocalBackend(logf, "logid", new(mem.Store), dialer, eng, 0)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), dialer, eng, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
 	}
 	t.Cleanup(func() { ns.Close() })
 
-	lb, err := ipnlocal.NewLocalBackend(logf, "logid", new(mem.Store), dialer, eng, 0)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), dialer, eng, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
