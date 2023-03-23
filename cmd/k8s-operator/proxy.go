@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -48,7 +49,7 @@ func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //
 // It never returns.
 func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
-	ln, err := s.ListenTLS("tcp", ":443")
+	ln, err := s.Listen("tcp", ":443")
 	if err != nil {
 		log.Fatalf("could not listen on :443: %v", err)
 	}
@@ -103,7 +104,17 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 			Transport: rt,
 		},
 	}
-	if err := http.Serve(ln, ap); err != nil {
+	hs := &http.Server{
+		// Kubernetes uses SPDY for exec and port-forward, however SPDY is
+		// incompatible with HTTP/2; so disable HTTP/2 in the proxy.
+		TLSConfig: &tls.Config{
+			GetCertificate: lc.GetCertificate,
+			NextProtos:     []string{"http/1.1"},
+		},
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		Handler:      ap,
+	}
+	if err := hs.ServeTLS(ln, "", ""); err != nil {
 		log.Fatalf("runAuthProxy: failed to serve %v", err)
 	}
 }
