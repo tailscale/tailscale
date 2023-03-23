@@ -204,6 +204,16 @@ func parseIncubatorArgs(args []string) (a incubatorArgs) {
 // OS, sets its UID and groups to the specified `--uid`, `--gid` and
 // `--groups` and then launches the requested `--cmd`.
 func beIncubator(args []string) error {
+	// To defend against issues like https://golang.org/issue/1435,
+	// defensively lock our current goroutine's thread to the current
+	// system thread before we start making any UID/GID/group changes.
+	//
+	// This shouldn't matter on Linux because syscall.AllThreadsSyscall is
+	// used to invoke syscalls on all OS threads, but (as of 2023-03-23)
+	// that function is not implemented on all platforms.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ia := parseIncubatorArgs(args)
 	if ia.isSFTP && ia.isShell {
 		return fmt.Errorf("--sftp and --shell are mutually exclusive")
