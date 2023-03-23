@@ -1130,10 +1130,7 @@ func (ss *sshSession) recorders() []netip.AddrPort {
 }
 
 func (ss *sshSession) shouldRecord() bool {
-	// for now only record pty sessions
-	// TODO(bradfitz,maisem): support recording non-pty stuff too.
-	_, _, isPtyReq := ss.Pty()
-	return isPtyReq && len(ss.recorders()) > 0
+	return len(ss.recorders()) > 0
 }
 
 type sshConnInfo struct {
