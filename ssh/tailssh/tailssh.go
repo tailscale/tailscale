@@ -1315,6 +1315,56 @@ func randBytes(n int) []byte {
 	return b
 }
 
+// CastHeader is the header of an asciinema file.
+type CastHeader struct {
+	// Version is the asciinema file format version.
+	Version int `json:"version"`
+
+	// Width is the terminal width in characters.
+	// It is non-zero for Pty sessions.
+	Width int `json:"width"`
+
+	// Height is the terminal height in characters.
+	// It is non-zero for Pty sessions.
+	Height int `json:"height"`
+
+	// Timestamp is the unix timestamp of when the recording started.
+	Timestamp int64 `json:"timestamp"`
+
+	// Env is the environment variables of the session.
+	// Only "TERM" is set (2023-03-22).
+	Env map[string]string `json:"env"`
+
+	// Command is the command that was executed.
+	// Typically empty for shell sessions.
+	Command string `json:"command,omitempty"`
+
+	// Tailscale-specific fields:
+	// SrcNode is the FQDN of the node originating the connection.
+	// It is also the MagicDNS name for the node.
+	// It does not have a trailing dot.
+	// e.g. "host.tail-scale.ts.net"
+	SrcNode string `json:"srcNode"`
+
+	// SrcNodeID is the node ID of the node originating the connection.
+	SrcNodeID tailcfg.StableNodeID `json:"srcNodeID"`
+
+	// SrcNodeTags is the list of tags on the node originating the connection (if any).
+	SrcNodeTags []string `json:"srcNodeTags,omitempty"`
+
+	// SrcNodeUserID is the user ID of the node originating the connection (if not tagged).
+	SrcNodeUserID tailcfg.UserID `json:"srcNodeUserID,omitempty"` // if not tagged
+
+	// SrcNodeUser is the LoginName of the node originating the connection (if not tagged).
+	SrcNodeUser string `json:"srcNodeUser,omitempty"`
+
+	// SSHUser is the username as presented by the client.
+	SSHUser string `json:"sshUser"` // as presented by the client
+
+	// LocalUser is the effective username on the server.
+	LocalUser string `json:"localUser"`
+}
+
 // startNewRecording starts a new SSH session recording.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	recorders := ss.recorders()
@@ -1374,29 +1424,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 
 	rec.out = pw
 
-	// {"version": 2, "width": 221, "height": 84, "timestamp": 1647146075, "env": {"SHELL": "/bin/bash", "TERM": "screen"}}
-	type CastHeader struct {
-		Version   int               `json:"version"`
-		Width     int               `json:"width"`
-		Height    int               `json:"height"`
-		Timestamp int64             `json:"timestamp"`
-		Env       map[string]string `json:"env"`
-
-		// Tailscale-specific fields:
-		SrcNode     string               `json:"srcNode"` // node FQDN
-		SrcNodeID   tailcfg.StableNodeID `json:"srcNodeID"`
-		SrcNodeTags []string             `json:"srcNodeTags"`
-		SSHUser     string               `json:"sshUser"` // as presented by the client
-		LocalUser   string               `json:"localUser"`
-
-		SrcNodeUserID tailcfg.UserID `json:"srcNodeUserID"` // if not tagged
-		SrcNodeUser   string         `json:"srcNodeUser"`
-	}
 	ch := CastHeader{
 		Version:   2,
 		Width:     w.Width,
 		Height:    w.Height,
 		Timestamp: now.Unix(),
+		Command:   strings.Join(ss.Command(), " "),
 		Env: map[string]string{
 			"TERM": term,
 			// TODO(bradfitz): anything else important?
