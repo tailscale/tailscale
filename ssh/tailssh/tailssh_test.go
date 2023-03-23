@@ -237,6 +237,10 @@ var (
 	testSignerOnce sync.Once
 )
 
+func (ts *localState) Dialer() *tsdial.Dialer {
+	return nil
+}
+
 func (ts *localState) GetSSH_HostKeys() ([]gossh.Signer, error) {
 	testSignerOnce.Do(func() {
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
