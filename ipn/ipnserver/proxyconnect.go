@@ -37,8 +37,7 @@ func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tr := logpolicy.NewLogtailTransport(logHost)
-	back, err := tr.DialContext(ctx, "tcp", hostPort)
+	back, err := logpolicy.DialContext(ctx, "tcp", hostPort)
 	if err != nil {
 		s.logf("error CONNECT dialing %v: %v", hostPort, err)
 		http.Error(w, "Connect failure", http.StatusBadGateway)
