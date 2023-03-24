@@ -638,20 +638,23 @@ func (rs *reportState) waitHairCheck(ctx context.Context) {
 		return
 	}
 
+	// First, check whether we have a value before we check for timeouts.
+	select {
+	case <-rs.gotHairSTUN:
+		ret.HairPinning.Set(true)
+		return
+	default:
+	}
+
+	// Now, wait for a response or a timeout.
 	select {
 	case <-rs.gotHairSTUN:
 		ret.HairPinning.Set(true)
 	case <-rs.hairTimeout:
 		rs.c.vlogf("hairCheck timeout")
 		ret.HairPinning.Set(false)
-	default:
-		select {
-		case <-rs.gotHairSTUN:
-			ret.HairPinning.Set(true)
-		case <-rs.hairTimeout:
-			ret.HairPinning.Set(false)
-		case <-ctx.Done():
-		}
+	case <-ctx.Done():
+		rs.c.vlogf("hairCheck context timeout")
 	}
 }
 
