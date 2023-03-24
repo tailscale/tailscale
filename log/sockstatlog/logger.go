@@ -36,6 +36,8 @@ type Logger struct {
 	logf   logger.Logf
 
 	logger *logtail.Logger
+	filch  *filch.Filch
+	tr     *http.Transport
 }
 
 // deltaStat represents the bytes transferred during a time period.
@@ -88,6 +90,8 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 		cancelFn: cancel,
 		ticker:   time.NewTicker(pollPeriod),
 		logf:     logf,
+		filch:    filch,
+		tr:       logpolicy.NewLogtailTransport(logtail.DefaultHost),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),
@@ -107,7 +111,7 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 		},
 		Stderr: io.Discard, // don't log to stderr
 
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost)},
+		HTTPC: &http.Client{Transport: logger.tr},
 	}, logf)
 
 	go logger.poll()
@@ -166,8 +170,10 @@ func (l *Logger) Flush() {
 
 func (l *Logger) Shutdown() {
 	l.ticker.Stop()
-	l.logger.Shutdown(context.Background())
+	l.logger.Shutdown(l.ctx)
 	l.cancelFn()
+	l.filch.Close()
+	l.tr.CloseIdleConnections()
 }
 
 // delta calculates the delta stats between two SockStats snapshots.
