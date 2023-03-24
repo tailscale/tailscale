@@ -34,6 +34,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -320,8 +321,13 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		}
 	}
 
-	if len(upArgs.hostname) > 256 {
-		return nil, fmt.Errorf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
+	// RFC 1035 says the length of a DNS name is restricted to 255 octets or less.
+	if len(upArgs.hostname) > 255 {
+		return nil, fmt.Errorf("hostname too long: %d bytes (max 255)", len(upArgs.hostname))
+	}
+	// RFC 1035 says the length of a DNS label is restricted to 63 octets or less.
+	if shortname := dnsname.FirstLabel(upArgs.hostname); len(shortname) > 63 {
+		return nil, fmt.Errorf("first label of the hostname (%s) is too long: %d bytes (max 63)", shortname, len(shortname))
 	}
 
 	prefs := ipn.NewPrefs()

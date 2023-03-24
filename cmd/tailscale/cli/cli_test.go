@@ -621,9 +621,16 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_long_hostname",
 			args: upArgsT{
-				hostname: strings.Repeat("a", 300),
+				hostname: strings.Repeat(strings.Repeat("a", 63)+".", 5),
 			},
-			wantErr: `hostname too long: 300 bytes (max 256)`,
+			wantErr: `hostname too long: 320 bytes (max 255)`,
+		},
+		{
+			name: "error_long_label",
+			args: upArgsT{
+				hostname: strings.Repeat("a", 64) + ".example.com",
+			},
+			wantErr: `first label of the hostname (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) is too long: 64 bytes (max 63)`,
 		},
 		{
 			name: "error_linux_netfilter_empty",
