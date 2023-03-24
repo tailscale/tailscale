@@ -37,7 +37,7 @@ type Logger struct {
 
 	logger *logtail.Logger
 	filch  *filch.Filch
-	tr     *http.Transport
+	tr     http.RoundTripper
 }
 
 // deltaStat represents the bytes transferred during a time period.
@@ -119,6 +119,10 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 	return logger, nil
 }
 
+func (l *Logger) Write(p []byte) (int, error) {
+	return l.logger.Write(p)
+}
+
 // poll fetches the current socket stats at the configured time interval,
 // calculates the delta since the last poll, and logs any non-zero values.
 // This method does not return.
@@ -127,7 +131,7 @@ func (l *Logger) poll() {
 	var lastStats *sockstats.SockStats
 	var lastTime time.Time
 
-	enc := json.NewEncoder(l.logger)
+	enc := json.NewEncoder(l)
 	for {
 		select {
 		case <-l.ctx.Done():
@@ -169,11 +173,17 @@ func (l *Logger) Flush() {
 }
 
 func (l *Logger) Shutdown() {
-	l.ticker.Stop()
-	l.logger.Shutdown(l.ctx)
 	l.cancelFn()
+	l.ticker.Stop()
 	l.filch.Close()
-	l.tr.CloseIdleConnections()
+	l.logger.Shutdown(context.Background())
+
+	type closeIdler interface {
+		CloseIdleConnections()
+	}
+	if tr, ok := l.tr.(closeIdler); ok {
+		tr.CloseIdleConnections()
+	}
 }
 
 // delta calculates the delta stats between two SockStats snapshots.

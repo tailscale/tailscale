@@ -8,7 +8,28 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/tstest"
+	"tailscale.com/types/logger"
+	"tailscale.com/types/logid"
 )
+
+func TestResourceCleanup(t *testing.T) {
+	if !sockstats.IsAvailable {
+		t.Skip("sockstats not available")
+	}
+	tstest.ResourceCheck(t)
+	td := t.TempDir()
+	id, err := logid.NewPrivateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lg, err := NewLogger(td, logger.Discard, id.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lg.Write([]byte("hello"))
+	lg.Shutdown()
+}
 
 func TestDelta(t *testing.T) {
 	tests := []struct {
