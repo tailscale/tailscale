@@ -415,7 +415,10 @@ func (s *Server) getAuthKey() string {
 	if v := s.AuthKey; v != "" {
 		return v
 	}
-	return os.Getenv("TS_AUTHKEY")
+	if v := os.Getenv("TS_AUTHKEY"); v != "" {
+		return v
+	}
+	return os.Getenv("TS_AUTH_KEY")
 }
 
 func (s *Server) start() (reterr error) {
