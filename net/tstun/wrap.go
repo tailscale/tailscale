@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -594,8 +595,10 @@ func natConfigFromNetMap(nm *netmap.NetworkMap) *natV4Config {
 // It currently (2023-03-01) only updates the IPv4 NAT configuration.
 func (t *Wrapper) SetNetMap(nm *netmap.NetworkMap) {
 	cfg := natConfigFromNetMap(nm)
-	t.natV4Config.Store(cfg)
-	t.logf("nat config: %+v", cfg)
+	old := t.natV4Config.Swap(cfg)
+	if !reflect.DeepEqual(old, cfg) {
+		t.logf("nat config: %+v", cfg)
+	}
 }
 
 var (
