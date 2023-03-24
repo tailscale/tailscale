@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -51,6 +52,8 @@ import (
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
+
+func inTest() bool { return flag.Lookup("test.v") != nil }
 
 var getLogTargetOnce struct {
 	sync.Once
@@ -559,7 +562,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() {
+	if envknob.NoLogsNoSupport() || inTest() {
 		log.Println("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else if val := getLogTarget(); val != "" {
@@ -720,7 +723,10 @@ func DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 
 // NewLogtailTransport returns an HTTP Transport particularly suited to uploading
 // logs to the given host name. See DialContext for details on how it works.
-func NewLogtailTransport(host string) *http.Transport {
+func NewLogtailTransport(host string) http.RoundTripper {
+	if inTest() {
+		return noopPretendSuccessTransport{}
+	}
 	// Start with a copy of http.DefaultTransport and tweak it a bit.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 
