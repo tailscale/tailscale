@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/acme"
+	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
@@ -195,7 +196,7 @@ func (f certFileStore) ACMEKey() ([]byte, error) {
 
 func (f certFileStore) WriteACMEKey(b []byte) error {
 	pemName := filepath.Join(f.dir, acmePEMName)
-	return os.WriteFile(pemName, b, 0600)
+	return atomicfile.WriteFile(pemName, b, 0600)
 }
 
 func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, error) {
@@ -220,11 +221,11 @@ func (f certFileStore) Read(domain string, now time.Time) (*TLSCertKeyPair, erro
 }
 
 func (f certFileStore) WriteCert(domain string, cert []byte) error {
-	return os.WriteFile(certFile(f.dir, domain), cert, 0644)
+	return atomicfile.WriteFile(certFile(f.dir, domain), cert, 0644)
 }
 
 func (f certFileStore) WriteKey(domain string, key []byte) error {
-	return os.WriteFile(keyFile(f.dir, domain), key, 0600)
+	return atomicfile.WriteFile(keyFile(f.dir, domain), key, 0600)
 }
 
 // certStateStore implements certStore by storing the cert & key files in an ipn.StateStore.
