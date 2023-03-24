@@ -117,8 +117,10 @@ func newResolvedManager(logf logger.Logf, interfaceName string) (*resolvedManage
 }
 
 func (m *resolvedManager) SetDNS(config OSConfig) error {
+	// NOTE: don't close this channel, since it's possible that the SetDNS
+	// call will time out and return before the run loop answers, at which
+	// point it will send on the now-closed channel.
 	errc := make(chan error, 1)
-	defer close(errc)
 
 	select {
 	case <-m.ctx.Done():
