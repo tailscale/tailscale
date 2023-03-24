@@ -18,9 +18,9 @@ metadata:
   name: proxies
   namespace: tailscale
 rules:
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -28,9 +28,9 @@ metadata:
   name: proxies
   namespace: tailscale
 subjects:
-- kind: ServiceAccount
-  name: proxies
-  namespace: tailscale
+  - kind: ServiceAccount
+    name: proxies
+    namespace: tailscale
 roleRef:
   kind: Role
   name: proxies
@@ -47,18 +47,18 @@ kind: ClusterRole
 metadata:
   name: tailscale-operator
 rules:
-- apiGroups: [""]
-  resources: ["services", "services/status"]
-  verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["services", "services/status"]
+    verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: tailscale-operator
 subjects:
-- kind: ServiceAccount
-  name: operator
-  namespace: tailscale
+  - kind: ServiceAccount
+    name: operator
+    namespace: tailscale
 roleRef:
   kind: ClusterRole
   name: tailscale-operator
@@ -70,12 +70,12 @@ metadata:
   name: operator
   namespace: tailscale
 rules:
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["*"]
-- apiGroups: ["apps"]
-  resources: ["statefulsets"]
-  verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -83,9 +83,9 @@ metadata:
   name: operator
   namespace: tailscale
 subjects:
-- kind: ServiceAccount
-  name: operator
-  namespace: tailscale
+  - kind: ServiceAccount
+    name: operator
+    namespace: tailscale
 roleRef:
   kind: Role
   name: operator
@@ -119,9 +119,11 @@ spec:
     spec:
       serviceAccountName: operator
       volumes:
-      - name: oauth
-        secret:
-          secretName: operator-oauth
+        - name: config
+          emptyDir: {}
+        - name: oauth
+          secret:
+            secretName: operator-oauth
       containers:
         - name: operator
           image: tailscale/k8s-operator:unstable
@@ -151,6 +153,20 @@ spec:
             - name: AUTH_PROXY
               value: "false"
           volumeMounts:
-          - name: oauth
-            mountPath: /oauth
-            readOnly: true
+            - name: config
+              mountPath: /.config
+            - name: oauth
+              mountPath: /oauth
+              readOnly: true
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 3000
+        runAsNonRoot: true
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault

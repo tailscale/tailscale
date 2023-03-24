@@ -14,7 +14,10 @@ spec:
         - name: sysctler
           image: busybox
           securityContext:
-            privileged: true
+            capabilities:
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
           command: ["/bin/sh"]
           args:
             - -c
@@ -35,3 +38,13 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 3000
+        runAsNonRoot: true
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
