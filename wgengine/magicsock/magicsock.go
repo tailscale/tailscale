@@ -1727,7 +1727,19 @@ func (c *Conn) runDerpReader(ctx context.Context, derpFakeAddr netip.AddrPort, d
 		case derp.HealthMessage:
 			health.SetDERPRegionHealth(regionID, m.Problem)
 		case derp.PeerGoneMessage:
-			c.removeDerpPeerRoute(key.NodePublic(m), regionID, dc)
+			switch m.Reason {
+			case derp.PeerGoneReasonDisconnected:
+				// Do nothing.
+			case derp.PeerGoneReasonNotHere:
+				metricRecvDiscoDERPPeerNotHere.Add(1)
+				c.logf("[unexpected] magicsock: derp-%d does not know about peer %s, removing route",
+					regionID, key.NodePublic(m.Peer).ShortString())
+			default:
+				metricRecvDiscoDERPPeerGoneUnknown.Add(1)
+				c.logf("[unexpected] magicsock: derp-%d peer %s gone, reason %v, removing route",
+					regionID, key.NodePublic(m.Peer).ShortString(), m.Reason)
+			}
+			c.removeDerpPeerRoute(key.NodePublic(m.Peer), regionID, dc)
 		default:
 			// Ignore.
 			continue
@@ -2381,6 +2393,12 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		eps = append(eps, ep.Addr)
 	}
 	go de.c.sendDiscoMessage(derpAddr, de.publicKey, de.discoKey, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	if debugSendCallMeUnknownPeer() {
+		// Send a callMeMaybe packet to a non-existent peer
+		unknownKey := key.NewNode().Public()
+		c.logf("magicsock: sending CallMeMaybe to unknown peer per TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
+		go de.c.sendDiscoMessage(derpAddr, unknownKey, de.discoKey, &disco.CallMeMaybe{MyNumber: eps}, discoLog)
+	}
 }
 
 // discoInfoLocked returns the previous or new discoInfo for k.
@@ -4823,7 +4841,8 @@ var (
 	metricRecvDiscoCallMeMaybe         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
 	metricRecvDiscoCallMeMaybeBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
 	metricRecvDiscoCallMeMaybeBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
-
+	metricRecvDiscoDERPPeerNotHere     = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
+	metricRecvDiscoDERPPeerGoneUnknown = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")
 	// metricDERPHomeChange is how many times our DERP home region DI has
 	// changed from non-zero to a different non-zero.
 	metricDERPHomeChange = clientmetric.NewCounter("derp_home_change")
