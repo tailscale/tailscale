@@ -1077,6 +1077,13 @@ func (ss *sshSession) run() {
 	err := ss.launchProcess()
 	if err != nil {
 		logf("start failed: %v", err.Error())
+		if errors.Is(err, context.Canceled) {
+			err := context.Cause(ss.ctx)
+			uve := userVisibleError{}
+			if errors.As(err, &uve) {
+				fmt.Fprintf(ss, "%s\r\n", uve)
+			}
+		}
 		ss.Exit(1)
 		return
 	}
@@ -1425,20 +1432,35 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		pw.Close()
 		return nil, err
 	}
+	// We want to wait for the server to respond with 100 Continue to notifiy us
+	// that it's ready to receive data. We do this to block the session from
+	// starting until the server is ready to receive data.
+	// It also allows the server to reject the request before we start sending
+	// data.
+	req.Header.Set("Expect", "100-continue")
 	go func() {
 		defer pw.Close()
 		ss.logf("starting asciinema recording to %s", recorder)
 		hc := ss.conn.srv.sessionRecordingClient()
 		resp, err := hc.Do(req)
 		if err != nil {
-			ss.cancelCtx(err)
-			ss.logf("recording: error sending recording to %s: %v", recorder, err)
+			err := fmt.Errorf("recording: error sending recording: %w", err)
+			ss.logf("%v", err)
+			ss.cancelCtx(userVisibleError{
+				msg:   "recording: error sending recording",
+				error: err,
+			})
 			return
 		}
 		defer resp.Body.Close()
 		defer ss.cancelCtx(errors.New("recording: done"))
 		if resp.StatusCode != http.StatusOK {
-			ss.logf("recording: error sending recording to %s: %v", recorder, resp.Status)
+			err := fmt.Errorf("recording: server responded with %s", resp.Status)
+			ss.logf("%v", err)
+			ss.cancelCtx(userVisibleError{
+				msg:   "recording server responded with: " + resp.Status,
+				error: err,
+			})
 		}
 	}()
 
