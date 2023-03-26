@@ -316,7 +316,7 @@ main() {
 	# versions we support?
 	OS_UNSUPPORTED=
 	case "$OS" in
-		ubuntu|debian|raspbian|centos|oracle|rhel|amazon-linux|opensuse)
+		ubuntu|debian|raspbian|centos|oracle|rhel|amazon-linux|opensuse|photon)
 			# Check with the package server whether a given version is supported.
 			URL="https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/installer-supported"
 			$CURL "$URL" 2> /dev/null | grep -q OK || OS_UNSUPPORTED=1
@@ -349,13 +349,6 @@ main() {
 			;;
 		openbsd)
 			OS_UNSUPPORTED=1
-			;;
-		photon)
-			if [ "$VERSION" != "3" ] && \
-			   [ "$VERSION" != "4" ]
-			then
-				OS_UNSUPPORTED=1
-			fi
 			;;
 		macos)
 			# We delegate macOS installation to the app store, it will
