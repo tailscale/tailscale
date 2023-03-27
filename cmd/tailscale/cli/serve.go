@@ -33,7 +33,7 @@ var serveCmd = newServeCommand(&serveEnv{lc: &localClient})
 func newServeCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "serve",
-		ShortHelp: "[ALPHA] Serve from your Tailscale node",
+		ShortHelp: "[BETA] Serve from your Tailscale node",
 		ShortUsage: strings.TrimSpace(`
 serve https:<port> <mount-point> <source> [off]
   serve tcp:<port> tcp://localhost:<local-port> [off]
@@ -41,7 +41,7 @@ serve https:<port> <mount-point> <source> [off]
   serve status [--json]
 `),
 		LongHelp: strings.TrimSpace(`
-*** ALPHA; all of this is subject to change ***
+*** BETA; all of this is subject to change ***
 
 The 'tailscale serve' set of commands allows you to serve
 content and local servers from your Tailscale node to

@@ -29,7 +29,7 @@ var funnelCmd = newFunnelCommand(&serveEnv{lc: &localClient})
 func newFunnelCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "funnel",
-		ShortHelp: "[ALPHA] turn Tailscale Funnel on or off",
+		ShortHelp: "[BETA] turn Tailscale Funnel on or off",
 		ShortUsage: strings.TrimSpace(`
 funnel <serve-port> {on|off}
   funnel status [--json]
