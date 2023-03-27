@@ -117,6 +117,7 @@ type Server struct {
 	loopbackListener net.Listener           // optional loopback for localapi and proxies
 	localAPIListener net.Listener           // in-memory, used by localClient
 	localClient      *tailscale.LocalClient // in-memory
+	localAPIServer   *http.Server
 	logbuffer        *filch.Filch
 	logtail          *logtail.Logger
 	logid            logid.PublicID
@@ -327,6 +328,13 @@ func (s *Server) Close() error {
 		}
 		if s.logbuffer != nil {
 			s.logbuffer.Close()
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s.localAPIServer != nil {
+			s.localAPIServer.Shutdown(ctx)
 		}
 	}()
 
@@ -566,8 +574,9 @@ func (s *Server) start() (reterr error) {
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	s.localAPIListener = lal
 	s.localClient = &tailscale.LocalClient{Dial: lal.Dial}
+	s.localAPIServer = &http.Server{Handler: lah}
 	go func() {
-		if err := http.Serve(lal, lah); err != nil {
+		if err := s.localAPIServer.Serve(lal); err != nil {
 			logf("localapi serve error: %v", err)
 		}
 	}()
