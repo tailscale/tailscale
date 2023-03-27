@@ -81,7 +81,7 @@ func (m *manualCertManager) TLSConfig() *tls.Config {
 	return &tls.Config{
 		Certificates: nil,
 		NextProtos: []string{
-			"h2", "http/1.1", // enable HTTP/2
+			"http/1.1",
 		},
 		GetCertificate: m.getCertificate,
 	}
