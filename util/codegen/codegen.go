@@ -6,6 +6,7 @@ package codegen
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -19,6 +20,8 @@ import (
 	"golang.org/x/tools/imports"
 	"tailscale.com/util/mak"
 )
+
+var flagCopyright = flag.Bool("copyright", true, "add Tailscale copyright to generated file headers")
 
 // LoadTypes returns all named types in pkgName, keyed by their type name.
 func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]*types.Named, error) {
@@ -104,7 +107,9 @@ func (it *ImportTracker) Write(w io.Writer) {
 }
 
 func writeHeader(w io.Writer, tool, pkg string) {
-	fmt.Fprint(w, copyrightHeader)
+	if *flagCopyright {
+		fmt.Fprint(w, copyrightHeader)
+	}
 	fmt.Fprintf(w, genAndPackageHeader, tool, pkg)
 }
 
