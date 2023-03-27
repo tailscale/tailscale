@@ -34,6 +34,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
@@ -320,8 +321,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		}
 	}
 
-	if len(upArgs.hostname) > 256 {
-		return nil, fmt.Errorf("hostname too long: %d bytes (max 256)", len(upArgs.hostname))
+	if err := dnsname.ValidHostname(upArgs.hostname); upArgs.hostname != "" && err != nil {
+		return nil, err
 	}
 
 	prefs := ipn.NewPrefs()

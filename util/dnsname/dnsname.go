@@ -214,6 +214,21 @@ func FirstLabel(hostname string) string {
 	return first
 }
 
+// ValidHostname checks if a string is a valid hostname.
+func ValidHostname(hostname string) error {
+	fqdn, err := ToFQDN(hostname)
+	if err != nil {
+		return err
+	}
+
+	for _, label := range strings.Split(fqdn.WithoutTrailingDot(), ".") {
+		if err := ValidLabel(label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var separators = map[byte]bool{
 	' ': true,
 	'.': true,
