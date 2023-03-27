@@ -321,13 +321,8 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 		}
 	}
 
-	// RFC 1035 says the length of a DNS name is restricted to 255 octets or less.
-	if len(upArgs.hostname) > 255 {
-		return nil, fmt.Errorf("hostname too long: %d bytes (max 255)", len(upArgs.hostname))
-	}
-	// RFC 1035 says the length of a DNS label is restricted to 63 octets or less.
-	if shortname := dnsname.FirstLabel(upArgs.hostname); len(shortname) > 63 {
-		return nil, fmt.Errorf("first label of the hostname (%s) is too long: %d bytes (max 63)", shortname, len(shortname))
+	if err := dnsname.ValidHostname(upArgs.hostname); upArgs.hostname != "" && err != nil {
+		return nil, err
 	}
 
 	prefs := ipn.NewPrefs()

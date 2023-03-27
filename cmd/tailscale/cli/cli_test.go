@@ -621,16 +621,16 @@ func TestPrefsFromUpArgs(t *testing.T) {
 		{
 			name: "error_long_hostname",
 			args: upArgsT{
-				hostname: strings.Repeat(strings.Repeat("a", 63)+".", 5),
+				hostname: strings.Repeat(strings.Repeat("a", 63)+".", 4),
 			},
-			wantErr: `hostname too long: 320 bytes (max 255)`,
+			wantErr: `"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is too long to be a DNS name`,
 		},
 		{
 			name: "error_long_label",
 			args: upArgsT{
 				hostname: strings.Repeat("a", 64) + ".example.com",
 			},
-			wantErr: `first label of the hostname (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) is too long: 64 bytes (max 63)`,
+			wantErr: `"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is not a valid DNS label`,
 		},
 		{
 			name: "error_linux_netfilter_empty",

@@ -185,6 +185,31 @@ func TestTrimSuffix(t *testing.T) {
 	}
 }
 
+func TestValidHostname(t *testing.T) {
+	tests := []struct {
+		hostname string
+		wantErr  string
+	}{
+		{"example", ""},
+		{"example.com", ""},
+		{" example", `must start with a letter or number`},
+		{"example-.com", `must end with a letter or number`},
+		{strings.Repeat("a", 63), ""},
+		{strings.Repeat("a", 64), `is too long, max length is 63 bytes`},
+		{strings.Repeat(strings.Repeat("a", 63)+".", 4), "is too long to be a DNS name"},
+		{"www.what🤦lol.example.com", "contains invalid character"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.hostname, func(t *testing.T) {
+			err := ValidHostname(test.hostname)
+			if (err == nil) != (test.wantErr == "") || (err != nil && !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("ValidHostname(%s)=%v; expected %v", test.hostname, err, test.wantErr)
+			}
+		})
+	}
+}
+
 var sinkFQDN FQDN
 
 func BenchmarkToFQDN(b *testing.B) {
