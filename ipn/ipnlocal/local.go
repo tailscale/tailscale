@@ -315,6 +315,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 		if err != nil {
 			log.Printf("error setting up sockstat logger: %v", err)
 		}
+		if b.sockstatLogger != nil {
+			b.sockstatLogger.SetLoggingEnabled(true)
+		}
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
@@ -365,6 +368,7 @@ type componentLogState struct {
 
 var debuggableComponents = []string{
 	"magicsock",
+	"sockstats",
 }
 
 func componentStateKey(component string) ipn.StateKey {
@@ -389,6 +393,10 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 			return err
 		}
 		setEnabled = mc.SetDebugLoggingEnabled
+	case "sockstats":
+		if b.sockstatLogger != nil {
+			setEnabled = b.sockstatLogger.SetLoggingEnabled
+		}
 	}
 	if setEnabled == nil || !slices.Contains(debuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)
