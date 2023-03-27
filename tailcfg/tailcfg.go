@@ -1822,7 +1822,8 @@ const (
 
 	// Funnel warning capabilities used for reporting errors to the user.
 
-	// CapabilityWarnFunnelNoInvite indicates an invite has not been accepted for the Funnel alpha.
+	// CapabilityWarnFunnelNoInvite indicates whether Funnel is enabled for the tailnet.
+	// NOTE: In transition from Alpha to Beta, this capability is being reused as the enablement.
 	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
 
 	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.

@@ -180,7 +180,7 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 // CheckFunnelAccess checks whether Funnel access is allowed for the given node
 // and port.
 // It checks:
-//  1. an invite was used to join the Funnel alpha
+//  1. Funnel is enabled on the Tailnet
 //  2. HTTPS is enabled on the Tailnet
 //  3. the node has the "funnel" nodeAttr
 //  4. the port is allowed for Funnel
@@ -190,7 +190,7 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 // Funnel.
 func CheckFunnelAccess(port uint16, nodeAttrs []string) error {
 	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
-		return errors.New("Funnel not available; an invite is required to join the alpha. See https://tailscale.com/s/no-funnel.")
+		return errors.New("Funnel not enabled; See https://tailscale.com/s/no-funnel.")
 	}
 	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoHTTPS) {
 		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
