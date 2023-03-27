@@ -439,18 +439,26 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 	if err != nil {
 		return nil, fmt.Errorf("invalid url %s: %w", targetURL, err)
 	}
-	rp := httputil.NewSingleHostReverseProxy(u)
-	rp.Transport = &http.Transport{
-		DialContext: b.dialer.SystemDial,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: insecure,
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(u)
+			r.Out.Host = r.In.Host
+			if c, ok := r.Out.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext); ok {
+				r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
+			}
 		},
-		// Values for the following parameters have been copied from http.DefaultTransport.
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		Transport: &http.Transport{
+			DialContext: b.dialer.SystemDial,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: insecure,
+			},
+			// Values for the following parameters have been copied from http.DefaultTransport.
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 	}
 	return rp, nil
 }
