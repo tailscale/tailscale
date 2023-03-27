@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"tailscale.com/logpolicy"
@@ -29,6 +30,8 @@ const pollPeriod = time.Second / 10
 
 // Logger logs statistics about network sockets.
 type Logger struct {
+	enabled atomic.Bool
+
 	ctx      context.Context
 	cancelFn context.CancelFunc
 
@@ -69,7 +72,7 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 
 // NewLogger returns a new Logger that will store stats in logdir.
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
-// The returned Logger must be shut down with Shutdown when it is no longer needed.
+// The returned Logger is not yet enabled, and must be shut down with Shutdown when it is no longer needed.
 func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
@@ -84,14 +87,11 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	logger := &Logger{
-		ctx:      ctx,
-		cancelFn: cancel,
-		ticker:   time.NewTicker(pollPeriod),
-		logf:     logf,
-		filch:    filch,
-		tr:       logpolicy.NewLogtailTransport(logtail.DefaultHost),
+		ticker: time.NewTicker(pollPeriod),
+		logf:   logf,
+		filch:  filch,
+		tr:     logpolicy.NewLogtailTransport(logtail.DefaultHost),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),
@@ -114,9 +114,22 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 		HTTPC: &http.Client{Transport: logger.tr},
 	}, logf)
 
-	go logger.poll()
-
 	return logger, nil
+}
+
+// SetLoggingEnabled enables or disables logging.
+// When disabled, socket stats are not polled and no new logs are written to disk.
+// Existing logs can still be fetched via the C2N API.
+func (l *Logger) SetLoggingEnabled(v bool) {
+	old := l.enabled.Load()
+	if old != v && l.enabled.CompareAndSwap(old, v) {
+		if v {
+			l.ctx, l.cancelFn = context.WithCancel(context.Background())
+			go l.poll()
+		} else {
+			l.cancelFn()
+		}
+	}
 }
 
 func (l *Logger) Write(p []byte) (int, error) {
@@ -173,7 +186,9 @@ func (l *Logger) Flush() {
 }
 
 func (l *Logger) Shutdown() {
-	l.cancelFn()
+	if l.cancelFn != nil {
+		l.cancelFn()
+	}
 	l.ticker.Stop()
 	l.filch.Close()
 	l.logger.Shutdown(context.Background())
