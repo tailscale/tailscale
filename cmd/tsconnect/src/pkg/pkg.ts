@@ -38,3 +38,5 @@ export async function createIPN(config: IPNPackageConfig): Promise<IPN> {
 }
 
 export { runSSHSession } from "../lib/ssh"
+
+export type { IPNNetMap }
