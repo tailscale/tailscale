@@ -150,6 +150,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		timeNow:        cfg.TimeNow,
 		bo:             backoff.NewBackoff("logtail", stdLogf, 30*time.Second),
 		metricsDelta:   cfg.MetricsDelta,
+		sockstatsLabel: sockstats.LabelLogtailLogger,
 
 		procID:              procID,
 		includeProcSequence: cfg.IncludeProcSequence,
@@ -192,6 +193,7 @@ type Logger struct {
 	metricsDelta   func() string // or nil
 	privateID      logid.PrivateID
 	httpDoCalls    atomic.Int32
+	sockstatsLabel sockstats.Label
 
 	procID              uint32
 	includeProcSequence bool
@@ -218,6 +220,11 @@ func (l *Logger) SetVerbosityLevel(level int) {
 // only be set once.
 func (l *Logger) SetLinkMonitor(lm *monitor.Mon) {
 	l.linkMonitor = lm
+}
+
+// SetSockstatsLabel sets the label used in sockstat logs to identify network traffic from this logger.
+func (l *Logger) SetSockstatsLabel(label sockstats.Label) {
+	l.sockstatsLabel = label
 }
 
 // PrivateID returns the logger's private log ID.
@@ -428,7 +435,7 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // origlen of -1 indicates that the body is not compressed.
 func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded bool, err error) {
 	const maxUploadTime = 45 * time.Second
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelLogtailLogger)
+	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel)
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
 	defer cancel()
 
