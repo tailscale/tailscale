@@ -25,16 +25,15 @@ import (
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/packet"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
-	"tailscale.com/types/netmap"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 func udp4(src, dst string, sport, dport uint16) []byte {
@@ -597,13 +596,16 @@ func TestFilterDiscoLoop(t *testing.T) {
 }
 
 func TestNATCfg(t *testing.T) {
-	node := func(ip, eip netip.Addr) *tailcfg.Node {
-		return &tailcfg.Node{
-			Addresses: []netip.Prefix{
+	node := func(ip, eip netip.Addr, otherAllowedIPs ...netip.Prefix) wgcfg.Peer {
+		p := wgcfg.Peer{
+			PublicKey: key.NewNode().Public(),
+			AllowedIPs: []netip.Prefix{
 				netip.PrefixFrom(ip, ip.BitLen()),
 			},
-			SelfNodeV4MasqAddrForThisPeer: eip,
+			V4MasqAddr: eip,
 		}
+		p.AllowedIPs = append(p.AllowedIPs, otherAllowedIPs...)
+		return p
 	}
 	var (
 		noIP netip.Addr
@@ -615,20 +617,20 @@ func TestNATCfg(t *testing.T) {
 		peer1IP = netip.MustParseAddr("100.64.0.2")
 		peer2IP = netip.MustParseAddr("100.64.0.3")
 
-		// subnets should not be impacted.
-		// TODO(maisem/nyghtowl): add support for subnets and exit nodes and test them.
 		subnet = netip.MustParseAddr("192.168.0.1")
+
+		selfAddrs = []netip.Prefix{netip.PrefixFrom(selfNativeIP, selfNativeIP.BitLen())}
 	)
 
 	tests := []struct {
 		name    string
-		nm      *netmap.NetworkMap
+		wcfg    *wgcfg.Config
 		snatMap map[netip.Addr]netip.Addr // dst -> src
 		dnatMap map[netip.Addr]netip.Addr
 	}{
 		{
-			name: "no-netmap",
-			nm:   nil,
+			name: "no-cfg",
+			wcfg: nil,
 			snatMap: map[netip.Addr]netip.Addr{
 				peer1IP: selfNativeIP,
 				peer2IP: selfNativeIP,
@@ -642,9 +644,9 @@ func TestNATCfg(t *testing.T) {
 		},
 		{
 			name: "single-peer-requires-nat",
-			nm: &netmap.NetworkMap{
-				SelfNode: node(selfNativeIP, noIP),
-				Peers: []*tailcfg.Node{
+			wcfg: &wgcfg.Config{
+				Addresses: selfAddrs,
+				Peers: []wgcfg.Peer{
 					node(peer1IP, noIP),
 					node(peer2IP, selfEIP1),
 				},
@@ -663,9 +665,9 @@ func TestNATCfg(t *testing.T) {
 		},
 		{
 			name: "multiple-peers-require-nat",
-			nm: &netmap.NetworkMap{
-				SelfNode: node(selfNativeIP, noIP),
-				Peers: []*tailcfg.Node{
+			wcfg: &wgcfg.Config{
+				Addresses: selfAddrs,
+				Peers: []wgcfg.Peer{
 					node(peer1IP, selfEIP1),
 					node(peer2IP, selfEIP2),
 				},
@@ -683,10 +685,52 @@ func TestNATCfg(t *testing.T) {
 			},
 		},
 		{
+			name: "multiple-peers-require-nat-with-subnet",
+			wcfg: &wgcfg.Config{
+				Addresses: selfAddrs,
+				Peers: []wgcfg.Peer{
+					node(peer1IP, selfEIP1),
+					node(peer2IP, selfEIP2, netip.MustParsePrefix("192.168.0.0/24")),
+				},
+			},
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP: selfEIP1,
+				peer2IP: selfEIP2,
+				subnet:  selfEIP2,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfNativeIP,
+				selfEIP2:     selfNativeIP,
+				subnet:       subnet,
+			},
+		},
+		{
+			name: "multiple-peers-require-nat-with-default-route",
+			wcfg: &wgcfg.Config{
+				Addresses: selfAddrs,
+				Peers: []wgcfg.Peer{
+					node(peer1IP, selfEIP1),
+					node(peer2IP, selfEIP2, netip.MustParsePrefix("0.0.0.0/0")),
+				},
+			},
+			snatMap: map[netip.Addr]netip.Addr{
+				peer1IP:                        selfEIP1,
+				peer2IP:                        selfEIP2,
+				netip.MustParseAddr("8.8.8.8"): selfEIP2,
+			},
+			dnatMap: map[netip.Addr]netip.Addr{
+				selfNativeIP: selfNativeIP,
+				selfEIP1:     selfNativeIP,
+				selfEIP2:     selfNativeIP,
+				subnet:       subnet,
+			},
+		},
+		{
 			name: "no-nat",
-			nm: &netmap.NetworkMap{
-				SelfNode: node(selfNativeIP, noIP),
-				Peers: []*tailcfg.Node{
+			wcfg: &wgcfg.Config{
+				Addresses: selfAddrs,
+				Peers: []wgcfg.Peer{
 					node(peer1IP, noIP),
 					node(peer2IP, noIP),
 				},
@@ -707,15 +751,15 @@ func TestNATCfg(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ncfg := natConfigFromNetMap(tc.nm)
+			ncfg := natConfigFromWGConfig(tc.wcfg)
 			for peer, want := range tc.snatMap {
 				if got := ncfg.selectSrcIP(selfNativeIP, peer); got != want {
-					t.Errorf("selectSrcIP: got %v; want %v", got, want)
+					t.Errorf("selectSrcIP[%v]: got %v; want %v", peer, got, want)
 				}
 			}
 			for dstIP, want := range tc.dnatMap {
 				if got := ncfg.mapDstIP(dstIP); got != want {
-					t.Errorf("mapDstIP: got %v; want %v", got, want)
+					t.Errorf("mapDstIP[%v]: got %v; want %v", dstIP, got, want)
 				}
 			}
 		})

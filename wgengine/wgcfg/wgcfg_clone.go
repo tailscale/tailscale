@@ -62,6 +62,7 @@ var _PeerCloneNeedsRegeneration = Peer(struct {
 	PublicKey           key.NodePublic
 	DiscoKey            key.DiscoPublic
 	AllowedIPs          []netip.Prefix
+	V4MasqAddr          netip.Addr
 	PersistentKeepalive uint16
 	WGEndpoint          key.NodePublic
 }{})
