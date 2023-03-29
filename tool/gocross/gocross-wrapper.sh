@@ -31,7 +31,7 @@ toolchain="$HOME/.cache/tailscale-go"
 if [ -d "$toolchain" ]; then
     # A toolchain exists, but is it recent enough to compile gocross? If not,
     # wipe it out so that the next if block fetches a usable one.
-    want_go_minor=$(egrep '^go ' "$repo_root/go.mod" | cut -f2 -d'.')
+    want_go_minor=$(grep -E '^go ' "$repo_root/go.mod" | cut -f2 -d'.')
     have_go_minor=$(cut -f2 -d'.' <$toolchain/VERSION)
     if [ -z "$have_go_minor" -o "$have_go_minor" -lt "$want_go_minor" ]; then
         rm -rf "$toolchain" "$toolchain.extracted"
