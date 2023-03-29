@@ -4,8 +4,10 @@
 package ipn
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 )
 
@@ -70,6 +72,12 @@ type StateStore interface {
 	ReadState(id StateKey) ([]byte, error)
 	// WriteState saves bs as the state associated with ID.
 	WriteState(id StateKey, bs []byte) error
+}
+
+// StateStoreDialerSetter is an optional interface that StateStores
+// can implement to allow the caller to set a custom dialer.
+type StateStoreDialerSetter interface {
+	SetDialer(d func(ctx context.Context, network, address string) (net.Conn, error))
 }
 
 // ReadStoreInt reads an integer from a StateStore.

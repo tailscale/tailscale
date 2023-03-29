@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -88,6 +89,12 @@ func New() (*Client, error) {
 // This is used only for testing.
 func (c *Client) SetURL(url string) {
 	c.url = url
+}
+
+// SetDialer sets the dialer to use when establishing a connection
+// to the Kubernetes API server.
+func (c *Client) SetDialer(dialer func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	c.client.Transport.(*http.Transport).DialContext = dialer
 }
 
 func (c *Client) expireToken() {

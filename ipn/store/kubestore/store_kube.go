@@ -7,6 +7,7 @@ package kubestore
 
 import (
 	"context"
+	"net"
 	"strings"
 	"time"
 
@@ -31,6 +32,10 @@ func New(_ logger.Logf, secretName string) (*Store, error) {
 		client:     c,
 		secretName: secretName,
 	}, nil
+}
+
+func (s *Store) SetDialer(d func(ctx context.Context, network, address string) (net.Conn, error)) {
+	s.client.SetDialer(d)
 }
 
 func (s *Store) String() string { return "kube.Store" }
