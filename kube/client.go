@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/net/tsdial"
 	"tailscale.com/util/multierr"
 )
 
@@ -76,6 +77,7 @@ func New() (*Client, error) {
 		ns:  string(ns),
 		client: &http.Client{
 			Transport: &http.Transport{
+				DialContext: (&tsdial.Dialer{}).SystemDial,
 				TLSClientConfig: &tls.Config{
 					RootCAs: cp,
 				},
