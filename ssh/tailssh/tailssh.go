@@ -1065,7 +1065,12 @@ func (ss *sshSession) run() {
 			var err error
 			rec, err = ss.startNewRecording()
 			if err != nil {
-				fmt.Fprintf(ss, "can't start new recording\r\n")
+				var uve userVisibleError
+				if errors.As(err, &uve) {
+					fmt.Fprintf(ss, "%s\r\n", uve)
+				} else {
+					fmt.Fprintf(ss, "can't start new recording\r\n")
+				}
 				ss.logf("startNewRecording: %v", err)
 				ss.Exit(1)
 				return
@@ -1079,7 +1084,7 @@ func (ss *sshSession) run() {
 		logf("start failed: %v", err.Error())
 		if errors.Is(err, context.Canceled) {
 			err := context.Cause(ss.ctx)
-			uve := userVisibleError{}
+			var uve userVisibleError
 			if errors.As(err, &uve) {
 				fmt.Fprintf(ss, "%s\r\n", uve)
 			}
@@ -1500,6 +1505,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	}
 	j = append(j, '\n')
 	if _, err := pw.Write(j); err != nil {
+		if errors.Is(err, io.ErrClosedPipe) && ss.ctx.Err() != nil {
+			// If we got an io.ErrClosedPipe, it's likely because
+			// the recording server closed the connection on us. Return
+			// the original context error instead.
+			return nil, context.Cause(ss.ctx)
+		}
 		return nil, err
 	}
 	return rec, nil
