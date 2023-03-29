@@ -20,7 +20,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/winutil"
-	"tailscale.com/version"
 )
 
 // profileManager is a wrapper around a StateStore that manages
@@ -66,7 +65,13 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	// the selected profile for the current user.
 	b, err := pm.store.ReadState(ipn.CurrentProfileKey(string(uid)))
 	if err == ipn.ErrStateNotExist || len(b) == 0 {
-		pm.NewProfile()
+		if runtime.GOOS == "windows" {
+			if err := pm.migrateFromLegacyPrefs(); err != nil {
+				return err
+			}
+		} else {
+			pm.NewProfile()
+		}
 		return nil
 	}
 
@@ -424,12 +429,7 @@ var defaultPrefs = func() ipn.PrefsView {
 	prefs.WantRunning = false
 
 	prefs.ControlURL = winutil.GetPolicyString("LoginURL", "")
-
-	if exitNode := winutil.GetPolicyString("ExitNodeIP", ""); exitNode != "" {
-		if ip, err := netip.ParseAddr(exitNode); err == nil {
-			prefs.ExitNodeIP = ip
-		}
-	}
+	prefs.ExitNodeIP = resolveExitNodeIP(netip.Addr{})
 
 	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
 	// backend), so this has to convert between the two conventions.
@@ -438,6 +438,16 @@ var defaultPrefs = func() ipn.PrefsView {
 
 	return prefs.View()
 }()
+
+func resolveExitNodeIP(defIP netip.Addr) (ret netip.Addr) {
+	ret = defIP
+	if exitNode := winutil.GetPolicyString("ExitNodeIP", ""); exitNode != "" {
+		if ip, err := netip.ParseAddr(exitNode); err == nil {
+			ret = ip
+		}
+	}
+	return ret
+}
 
 // Store returns the StateStore used by the ProfileManager.
 func (pm *profileManager) Store() ipn.StateStore {
@@ -549,27 +559,16 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 func (pm *profileManager) migrateFromLegacyPrefs() error {
 	metricMigration.Add(1)
 	pm.NewProfile()
-	k := ipn.LegacyGlobalDaemonStateKey
-	switch {
-	case runtime.GOOS == "ios":
-		k = "ipn-go-bridge"
-	case version.IsSandboxedMacOS():
-		k = "ipn-go-bridge"
-	case runtime.GOOS == "android":
-		k = "ipn-android"
-	}
-	prefs, err := pm.loadSavedPrefs(k)
+	sentinel, prefs, err := pm.loadLegacyPrefs()
 	if err != nil {
 		metricMigrationError.Add(1)
-		return fmt.Errorf("calling ReadState on state store: %w", err)
+		return err
 	}
-	pm.logf("migrating %q profile to new format", k)
 	if err := pm.SetPrefs(prefs); err != nil {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}
-	// Do not delete the old state key, as we may be downgraded to an
-	// older version that still relies on it.
+	pm.completeMigration(sentinel)
 	metricMigrationSuccess.Add(1)
 	return nil
 }
