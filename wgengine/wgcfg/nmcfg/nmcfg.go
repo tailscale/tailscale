@@ -101,6 +101,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 		}
 
 		didExitNodeWarn := false
+		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer
 		for _, allowedIP := range peer.AllowedIPs {
 			if allowedIP.Bits() == 0 && peer.StableID != exitNode {
 				if didExitNodeWarn {

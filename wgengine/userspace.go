@@ -807,6 +807,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
+	e.tundev.SetWGConfig(cfg)
 	e.lastDNSConfig = dnsCfg
 
 	peerSet := make(map[key.NodePublic]struct{}, len(cfg.Peers))
@@ -1205,7 +1206,6 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	e.netMap = nm
-	e.tundev.SetNetMap(nm)
 	callbacks := make([]NetworkMapCallback, 0, 4)
 	for _, fn := range e.networkMapCallbacks {
 		callbacks = append(callbacks, fn)

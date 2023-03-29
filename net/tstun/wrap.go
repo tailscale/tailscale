@@ -25,17 +25,18 @@ import (
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun/table"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/netmap"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 const maxBufferSize = device.MaxMessageSize
@@ -522,10 +523,12 @@ type natV4Config struct {
 	// dstMasqAddrs is map of dst addresses to their respective MasqueradeAsIP
 	// addresses. The MasqueradeAsIP address is the address that should be used
 	// as the source address for packets to dst.
-	dstMasqAddrs views.Map[netip.Addr, netip.Addr] // dst -> masqAddr
+	dstMasqAddrs views.Map[key.NodePublic, netip.Addr] // dst -> masqAddr
 
-	// TODO(maisem/nyghtowl): add support for subnets and exit nodes and test them.
-	// Determine IP routing table algorithm to use - e.g. ART?
+	// dstAddrToPeerKeyMapper is the routing table used to map a given dst IP to
+	// the peer key responsible for that IP.
+	// It only contains peers that require a MasqueradeAsIP address.
+	dstAddrToPeerKeyMapper *table.RoutingTable
 }
 
 // mapDstIP returns the destination IP to use for a packet to dst.
@@ -550,51 +553,55 @@ func (c *natV4Config) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	if oldSrc != c.nativeAddr {
 		return oldSrc
 	}
-	if eip, ok := c.dstMasqAddrs.GetOk(dst); ok {
+	p, ok := c.dstAddrToPeerKeyMapper.Lookup(dst)
+	if !ok {
+		return oldSrc
+	}
+	if eip, ok := c.dstMasqAddrs.GetOk(p); ok {
 		return eip
 	}
 	return oldSrc
 }
 
-// natConfigFromNetMap generates a natV4Config from nm.
+// natConfigFromWireGuardConfig generates a natV4Config from nm.
 // If v4 NAT is not required, it returns nil.
-func natConfigFromNetMap(nm *netmap.NetworkMap) *natV4Config {
-	if nm == nil || nm.SelfNode == nil {
+func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
+	if wcfg == nil {
 		return nil
 	}
-	nativeAddr := findV4(nm.SelfNode.Addresses)
+	nativeAddr := findV4(wcfg.Addresses)
 	if !nativeAddr.IsValid() {
 		return nil
 	}
 	var (
-		dstMasqAddrs map[netip.Addr]netip.Addr
+		rt           table.RoutingTableBuilder
+		dstMasqAddrs map[key.NodePublic]netip.Addr
 		listenAddrs  map[netip.Addr]struct{}
 	)
-	for _, p := range nm.Peers {
-		if !p.SelfNodeV4MasqAddrForThisPeer.IsValid() {
+	for i := range wcfg.Peers {
+		p := &wcfg.Peers[i]
+		if !p.V4MasqAddr.IsValid() {
 			continue
 		}
-		peerV4 := findV4(p.Addresses)
-		if !peerV4.IsValid() {
-			continue
-		}
-		mak.Set(&dstMasqAddrs, peerV4, p.SelfNodeV4MasqAddrForThisPeer)
-		mak.Set(&listenAddrs, p.SelfNodeV4MasqAddrForThisPeer, struct{}{})
+		rt.InsertOrReplace(p.PublicKey, p.AllowedIPs...)
+		mak.Set(&dstMasqAddrs, p.PublicKey, p.V4MasqAddr)
+		mak.Set(&listenAddrs, p.V4MasqAddr, struct{}{})
 	}
 	if len(listenAddrs) == 0 || len(dstMasqAddrs) == 0 {
 		return nil
 	}
 	return &natV4Config{
-		nativeAddr:   nativeAddr,
-		listenAddrs:  views.MapOf(listenAddrs),
-		dstMasqAddrs: views.MapOf(dstMasqAddrs),
+		nativeAddr:             nativeAddr,
+		listenAddrs:            views.MapOf(listenAddrs),
+		dstMasqAddrs:           views.MapOf(dstMasqAddrs),
+		dstAddrToPeerKeyMapper: rt.Build(),
 	}
 }
 
 // SetNetMap is called when a new NetworkMap is received.
 // It currently (2023-03-01) only updates the IPv4 NAT configuration.
-func (t *Wrapper) SetNetMap(nm *netmap.NetworkMap) {
-	cfg := natConfigFromNetMap(nm)
+func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
+	cfg := natConfigFromWGConfig(wcfg)
 	old := t.natV4Config.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
 		t.logf("nat config: %+v", cfg)
