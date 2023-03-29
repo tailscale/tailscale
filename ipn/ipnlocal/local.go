@@ -276,6 +276,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 	if err != nil {
 		return nil, err
 	}
+	if sds, ok := store.(ipn.StateStoreDialerSetter); ok {
+		sds.SetDialer(dialer.SystemDial)
+	}
 
 	hi := hostinfo.New()
 	logf.JSON(1, "Hostinfo", hi)
