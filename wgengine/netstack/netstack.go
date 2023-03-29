@@ -394,6 +394,10 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 // the host and arriving at tailscaled. This method returns filter.DropSilently
 // to intercept a packet for handling, for instance traffic to quad-100.
 func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	if ns.ctx.Err() != nil {
+		return filter.DropSilently
+	}
+
 	// If it's not traffic to the service IP (i.e. magicDNS) we don't
 	// care; resume processing.
 	if dst := p.Dst.Addr(); dst != magicDNSIP && dst != magicDNSIPv6 {
@@ -670,6 +674,10 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 // whereas returning filter.DropSilently is done when netstack intercepts the
 // packet and no further processing towards to host should be done.
 func (ns *Impl) injectInbound(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
+	if ns.ctx.Err() != nil {
+		return filter.DropSilently
+	}
+
 	if !ns.shouldProcessInbound(p, t) {
 		// Let the host network stack (if any) deal with it.
 		return filter.Accept
