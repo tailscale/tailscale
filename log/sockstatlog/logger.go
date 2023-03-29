@@ -1,7 +1,9 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package sockstatlog provides a logger for capturing and storing network socket stats.
+// Package sockstatlog provides a logger for capturing network socket stats for debugging.
+// Stats are collected at a frequency of 10 Hz and logged to disk.
+// Stats are only uploaded to the log server on demand.
 package sockstatlog
 
 import (
@@ -25,19 +27,29 @@ import (
 	"tailscale.com/util/mak"
 )
 
-// pollPeriod specifies how often to poll for socket stats.
-const pollPeriod = time.Second / 10
+// pollInterval specifies how often to poll for socket stats.
+const pollInterval = time.Second / 10
+
+// logInterval specifies how often to log sockstat events to disk.
+// This delay is added to prevent an infinite loop when logs are uploaded,
+// which itself creates additional sockstat events.
+const logInterval = 3 * time.Second
 
 // Logger logs statistics about network sockets.
 type Logger struct {
+	// enabled identifies whether the logger is enabled.
 	enabled atomic.Bool
 
 	ctx      context.Context
 	cancelFn context.CancelFunc
 
-	ticker *time.Ticker
-	logf   logger.Logf
+	// eventCh is used to pass events from the poller to the logger.
+	eventCh chan event
 
+	logf logger.Logf
+
+	// logger is the underlying logtail logger than manages log files on disk
+	// and uploading to the log server.
 	logger *logtail.Logger
 	filch  *filch.Filch
 	tr     http.RoundTripper
@@ -73,6 +85,7 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 // NewLogger returns a new Logger that will store stats in logdir.
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
 // The returned Logger is not yet enabled, and must be shut down with Shutdown when it is no longer needed.
+// Logs will be uploaded to the log server using a new log ID derived from the provided backend logID.
 func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
@@ -88,10 +101,9 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 	}
 
 	logger := &Logger{
-		ticker: time.NewTicker(pollPeriod),
-		logf:   logf,
-		filch:  filch,
-		tr:     logpolicy.NewLogtailTransport(logtail.DefaultHost),
+		logf:  logf,
+		filch: filch,
+		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),
@@ -124,8 +136,14 @@ func (l *Logger) SetLoggingEnabled(v bool) {
 	old := l.enabled.Load()
 	if old != v && l.enabled.CompareAndSwap(old, v) {
 		if v {
+			if l.eventCh == nil {
+				// eventCh should be large enough for the number of events that will occur within logInterval.
+				// Add an extra second's worth of events to ensure we don't drop any.
+				l.eventCh = make(chan event, (logInterval+time.Second)/pollInterval)
+			}
 			l.ctx, l.cancelFn = context.WithCancel(context.Background())
 			go l.poll()
+			go l.logEvents()
 		} else {
 			l.cancelFn()
 		}
@@ -137,19 +155,21 @@ func (l *Logger) Write(p []byte) (int, error) {
 }
 
 // poll fetches the current socket stats at the configured time interval,
-// calculates the delta since the last poll, and logs any non-zero values.
+// calculates the delta since the last poll,
+// and writes any non-zero values to the logger event channel.
 // This method does not return.
 func (l *Logger) poll() {
 	// last is the last set of socket stats we saw.
 	var lastStats *sockstats.SockStats
 	var lastTime time.Time
 
-	enc := json.NewEncoder(l)
+	ticker := time.NewTicker(pollInterval)
 	for {
 		select {
 		case <-l.ctx.Done():
+			ticker.Stop()
 			return
-		case t := <-l.ticker.C:
+		case t := <-ticker.C:
 			stats := sockstats.Get()
 			if lastStats != nil {
 				diffstats := delta(lastStats, stats)
@@ -162,13 +182,39 @@ func (l *Logger) poll() {
 					if stats.CurrentInterfaceCellular {
 						e.IsCellularInterface = 1
 					}
-					if err := enc.Encode(e); err != nil {
-						l.logf("sockstatlog: error encoding log: %v", err)
-					}
+					l.eventCh <- e
 				}
 			}
 			lastTime = t
 			lastStats = stats
+		}
+	}
+}
+
+// logEvents reads events from the event channel at logInterval and logs them to disk.
+// This method does not return.
+func (l *Logger) logEvents() {
+	enc := json.NewEncoder(l)
+	flush := func() {
+		for {
+			select {
+			case e := <-l.eventCh:
+				if err := enc.Encode(e); err != nil {
+					l.logf("sockstatlog: error encoding log: %v", err)
+				}
+			default:
+				return
+			}
+		}
+	}
+	ticker := time.NewTicker(logInterval)
+	for {
+		select {
+		case <-l.ctx.Done():
+			ticker.Stop()
+			return
+		case <-ticker.C:
+			flush()
 		}
 	}
 }
@@ -189,7 +235,6 @@ func (l *Logger) Shutdown() {
 	if l.cancelFn != nil {
 		l.cancelFn()
 	}
-	l.ticker.Stop()
 	l.filch.Close()
 	l.logger.Shutdown(context.Background())
 
