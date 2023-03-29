@@ -35,6 +35,7 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/doctor"
+	"tailscale.com/doctor/permissions"
 	"tailscale.com/doctor/routetable"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -4698,7 +4699,10 @@ func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
 	logf = logger.SlowLoggerWithClock(ctx, logf, 20*time.Millisecond, 60, time.Now)
 
 	var checks []doctor.Check
-	checks = append(checks, routetable.Check{})
+	checks = append(checks,
+		permissions.Check{},
+		routetable.Check{},
+	)
 
 	// Print a log message if any of the global DNS resolvers are Tailscale
 	// IPs; this can interfere with our ability to connect to the Tailscale
