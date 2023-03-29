@@ -19,6 +19,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/net/connstats"
+	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
@@ -121,6 +122,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 		IncludeProcID:       true,
 		IncludeProcSequence: true,
 	}, log.Printf)
+	nl.logger.SetSockstatsLabel(sockstats.LabelNetlogLogger)
 
 	// Startup a data structure to track per-connection statistics.
 	// There is a maximum size for individual log messages that logtail

@@ -38,16 +38,18 @@ type Label uint8
 // Labels are named after the package and function/struct that uses the socket.
 // Values may be persisted and thus existing entries should not be re-numbered.
 const (
-	LabelControlClientAuto   Label = 0 // control/controlclient/auto.go
-	LabelControlClientDialer Label = 1 // control/controlhttp/client.go
-	LabelDERPHTTPClient      Label = 2 // derp/derphttp/derphttp_client.go
-	LabelLogtailLogger       Label = 3 // logtail/logtail.go
-	LabelDNSForwarderDoH     Label = 4 // net/dns/resolver/forwarder.go
-	LabelDNSForwarderUDP     Label = 5 // net/dns/resolver/forwarder.go
-	LabelNetcheckClient      Label = 6 // net/netcheck/netcheck.go
-	LabelPortmapperClient    Label = 7 // net/portmapper/portmapper.go
-	LabelMagicsockConnUDP4   Label = 8 // wgengine/magicsock/magicsock.go
-	LabelMagicsockConnUDP6   Label = 9 // wgengine/magicsock/magicsock.go
+	LabelControlClientAuto   Label = 0  // control/controlclient/auto.go
+	LabelControlClientDialer Label = 1  // control/controlhttp/client.go
+	LabelDERPHTTPClient      Label = 2  // derp/derphttp/derphttp_client.go
+	LabelLogtailLogger       Label = 3  // logtail/logtail.go
+	LabelDNSForwarderDoH     Label = 4  // net/dns/resolver/forwarder.go
+	LabelDNSForwarderUDP     Label = 5  // net/dns/resolver/forwarder.go
+	LabelNetcheckClient      Label = 6  // net/netcheck/netcheck.go
+	LabelPortmapperClient    Label = 7  // net/portmapper/portmapper.go
+	LabelMagicsockConnUDP4   Label = 8  // wgengine/magicsock/magicsock.go
+	LabelMagicsockConnUDP6   Label = 9  // wgengine/magicsock/magicsock.go
+	LabelNetlogLogger        Label = 10 // wgengine/netlog/logger.go
+	LabelSockstatlogLogger   Label = 11 // log/sockstatlog/logger.go
 )
 
 // WithSockStats instruments a context so that sockets created with it will

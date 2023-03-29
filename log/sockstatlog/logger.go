@@ -125,6 +125,7 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 
 		HTTPC: &http.Client{Transport: logger.tr},
 	}, logf)
+	logger.logger.SetSockstatsLabel(sockstats.LabelSockstatlogLogger)
 
 	return logger, nil
 }
