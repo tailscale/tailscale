@@ -385,6 +385,7 @@ func componentStateKey(component string) ipn.StateKey {
 // The following components are recognized:
 //
 //   - magicsock
+//   - sockstats
 func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Time) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
