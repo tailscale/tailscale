@@ -34,6 +34,14 @@ const (
 	TCPECNBits TCPFlag = TCPECNEcho | TCPCWR
 )
 
+// CaptureMeta contains metadata that is used when debugging.
+type CaptureMeta struct {
+	DidSNAT     bool           // SNAT was performed & the address was updated.
+	OriginalSrc netip.AddrPort // The source address before SNAT was performed.
+	DidDNAT     bool           // DNAT was performed & the address was updated.
+	OriginalDst netip.AddrPort // The destination address before DNAT was performed.
+}
+
 // Parsed is a minimal decoding of a packet suitable for use in filters.
 type Parsed struct {
 	// b is the byte buffer that this decodes.
@@ -58,6 +66,9 @@ type Parsed struct {
 	Dst netip.AddrPort
 	// TCPFlags is the packet's TCP flag bits. Valid iff IPProto == TCP.
 	TCPFlags TCPFlag
+
+	// CaptureMeta contains metadata that is used when debugging.
+	CaptureMeta CaptureMeta
 }
 
 func (p *Parsed) String() string {
@@ -84,6 +95,7 @@ func (p *Parsed) String() string {
 // and shouldn't need any memory allocation.
 func (q *Parsed) Decode(b []byte) {
 	q.b = b
+	q.CaptureMeta = CaptureMeta{} // Clear any capture metadata if it exists.
 
 	if len(b) < 1 {
 		q.IPVersion = 0
@@ -447,6 +459,8 @@ func (q *Parsed) UpdateSrcAddr(src netip.Addr) {
 	if q.IPVersion != 4 || src.Is6() {
 		panic("UpdateSrcAddr: only IPv4 is supported")
 	}
+	q.CaptureMeta.DidSNAT = true
+	q.CaptureMeta.OriginalSrc = q.Src
 
 	old := q.Src.Addr()
 	q.Src = netip.AddrPortFrom(src, q.Src.Port())
@@ -464,6 +478,9 @@ func (q *Parsed) UpdateDstAddr(dst netip.Addr) {
 	if q.IPVersion != 4 || dst.Is6() {
 		panic("UpdateDstAddr: only IPv4 is supported")
 	}
+
+	q.CaptureMeta.DidDNAT = true
+	q.CaptureMeta.OriginalDst = q.Dst
 
 	old := q.Dst.Addr()
 	q.Dst = netip.AddrPortFrom(dst, q.Dst.Port())
