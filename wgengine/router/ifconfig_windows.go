@@ -241,7 +241,7 @@ func interfaceFromLUID(luid winipcfg.LUID, flags winipcfg.GAAFlags) (*winipcfg.I
 var networkCategoryWarning = health.NewWarnable(health.WithMapDebugFlag("warn-network-category-unhealthy"))
 
 func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
-	const mtu = tstun.DefaultMTU
+	var mtu = tstun.DefaultMTU()
 	luid := winipcfg.LUID(tun.LUID())
 	iface, err := interfaceFromLUID(luid,
 		// Issue 474: on early boot, when the network is still

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 )
 
@@ -45,11 +44,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		}
 		dev, err = createTAP(tapName, bridgeName)
 	} else {
-		tunMTU := DefaultMTU
-		if mtu, ok := envknob.LookupInt("TS_DEBUG_MTU"); ok {
-			tunMTU = mtu
-		}
-		dev, err = tun.CreateTUN(tunName, tunMTU)
+		dev, err = tun.CreateTUN(tunName, int(DefaultMTU()))
 	}
 	if err != nil {
 		return nil, "", err
