@@ -713,6 +713,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 	var buffsPos int
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
+	captHook := t.captureHook.Load()
 	for _, data := range res.data {
 		p.Decode(data[res.dataOffset:])
 
@@ -722,8 +723,8 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 				fn()
 			}
 		}
-		if capt := t.captureHook.Load(); capt != nil {
-			capt(capture.FromLocal, time.Now(), p.Buffer())
+		if captHook != nil {
+			captHook(capture.FromLocal, time.Now(), p.Buffer(), p.CaptureMeta)
 		}
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p)
@@ -788,9 +789,9 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 	return n, nil
 }
 
-func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed) filter.Response {
-	if capt := t.captureHook.Load(); capt != nil {
-		capt(capture.FromPeer, time.Now(), p.Buffer())
+func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback) filter.Response {
+	if captHook != nil {
+		captHook(capture.FromPeer, time.Now(), p.Buffer(), p.CaptureMeta)
 	}
 
 	if p.IPProto == ipproto.TSMP {
@@ -892,11 +893,12 @@ func (t *Wrapper) Write(buffs [][]byte, offset int) (int, error) {
 	i := 0
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
+	captHook := t.captureHook.Load()
 	for _, buff := range buffs {
 		p.Decode(buff[offset:])
 		t.dnatV4(p)
 		if !t.disableFilter {
-			if t.filterPacketInboundFromWireGuard(p) != filter.Accept {
+			if t.filterPacketInboundFromWireGuard(p, captHook) != filter.Accept {
 				metricPacketInDrop.Add(1)
 			} else {
 				buffs[i] = buff
@@ -955,8 +957,9 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	p := parsedPacketPool.Get().(*packet.Parsed)
 	defer parsedPacketPool.Put(p)
 	p.Decode(buf[PacketStartOffset:])
-	if capt := t.captureHook.Load(); capt != nil {
-		capt(capture.SynthesizedToLocal, time.Now(), p.Buffer())
+	captHook := t.captureHook.Load()
+	if captHook != nil {
+		captHook(capture.SynthesizedToLocal, time.Now(), p.Buffer(), p.CaptureMeta)
 	}
 	t.dnatV4(p)
 
@@ -1048,22 +1051,22 @@ func (t *Wrapper) InjectOutbound(packet []byte) error {
 // InjectOutboundPacketBuffer logically behaves as InjectOutbound. It takes ownership of one
 // reference count on the packet, and the packet may be mutated. The packet refcount will be
 // decremented after the injected buffer has been read.
-func (t *Wrapper) InjectOutboundPacketBuffer(packet stack.PacketBufferPtr) error {
-	size := packet.Size()
+func (t *Wrapper) InjectOutboundPacketBuffer(pkt stack.PacketBufferPtr) error {
+	size := pkt.Size()
 	if size > MaxPacketSize {
-		packet.DecRef()
+		pkt.DecRef()
 		return errPacketTooBig
 	}
 	if size == 0 {
-		packet.DecRef()
+		pkt.DecRef()
 		return nil
 	}
 	if capt := t.captureHook.Load(); capt != nil {
-		b := packet.ToBuffer()
-		capt(capture.SynthesizedToPeer, time.Now(), b.Flatten())
+		b := pkt.ToBuffer()
+		capt(capture.SynthesizedToPeer, time.Now(), b.Flatten(), packet.CaptureMeta{})
 	}
 
-	t.injectOutbound(tunInjectedRead{packet: packet})
+	t.injectOutbound(tunInjectedRead{packet: pkt})
 	return nil
 }
 

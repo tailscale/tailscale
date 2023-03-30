@@ -4,7 +4,11 @@ end
 
 tsdebug_ll = Proto("tsdebug", "Tailscale debug")
 PATH = ProtoField.string("tsdebug.PATH","PATH", base.ASCII)
-tsdebug_ll.fields = {PATH}
+SNAT_IP_4 = ProtoField.ipv4("tsdebug.SNAT_IP_4", "Pre-NAT Source IPv4 address")
+SNAT_IP_6 = ProtoField.ipv4("tsdebug.SNAT_IP_6", "Pre-NAT Source IPv6 address")
+DNAT_IP_4 = ProtoField.ipv4("tsdebug.DNAT_IP_4", "Pre-NAT Dest IPv4 address")
+DNAT_IP_6 = ProtoField.ipv4("tsdebug.DNAT_IP_6", "Pre-NAT Dest IPv6 address")
+tsdebug_ll.fields = {PATH, SNAT_IP_4, SNAT_IP_6, DNAT_IP_4, DNAT_IP_6}
 
 function tsdebug_ll.dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = tsdebug_ll.name
@@ -14,13 +18,27 @@ function tsdebug_ll.dissector(buffer, pinfo, tree)
 
     -- -- Get path UINT16
     local path_id = buffer:range(offset, 2):le_uint()
-    if     path_id == 0 then subtree:add(PATH, "FromLocal")
-    elseif path_id == 1 then subtree:add(PATH, "FromPeer")
-    elseif path_id == 2 then subtree:add(PATH, "Synthesized (Inbound / ToLocal)")
-    elseif path_id == 3 then subtree:add(PATH, "Synthesized (Outbound / ToPeer)")
+    if     path_id == 0   then subtree:add(PATH, "FromLocal")
+    elseif path_id == 1   then subtree:add(PATH, "FromPeer")
+    elseif path_id == 2   then subtree:add(PATH, "Synthesized (Inbound / ToLocal)")
+    elseif path_id == 3   then subtree:add(PATH, "Synthesized (Outbound / ToPeer)")
     elseif path_id == 254 then subtree:add(PATH, "Disco frame")
     end
     offset = offset + 2
+
+    -- -- Get SNAT address
+    local snat_addr_len = buffer:range(offset, 1):le_uint()
+    if     snat_addr_len == 4 then subtree:add(SNAT_IP_4, buffer:range(offset + 1, snat_addr_len))
+    elseif snat_addr_len > 0  then subtree:add(SNAT_IP_6, buffer:range(offset + 1, snat_addr_len))
+    end
+    offset = offset + 1 + snat_addr_len
+
+    -- -- Get DNAT address
+    local dnat_addr_len = buffer:range(offset, 1):le_uint()
+    if     dnat_addr_len == 4 then subtree:add(DNAT_IP_4, buffer:range(offset + 1, dnat_addr_len))
+    elseif dnat_addr_len > 0  then subtree:add(DNAT_IP_6, buffer:range(offset + 1, dnat_addr_len))
+    end
+    offset = offset + 1 + dnat_addr_len
 
     -- -- Handover rest of data to lower-level dissector
     local data_buffer = buffer:range(offset, packet_length-offset):tvb()
