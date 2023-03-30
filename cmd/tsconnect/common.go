@@ -71,6 +71,9 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 }
 
 func findRepoRoot() (string, error) {
+	if *rootDir != "" {
+		return *rootDir, nil
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
