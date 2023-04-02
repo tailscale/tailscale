@@ -335,6 +335,31 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 2,
 			wantDERP:    2, // 2 got fast enough
 		},
+		{
+			name: "https://github.com/tailscale/corp/issues/10201",
+			steps: []step{
+				{0 * time.Second, report(
+					"d1", 2*time.Second,
+					"d3", 1*time.Second,
+					"d7", 2*time.Second,
+					"d8", 3*time.Second)},
+				{1 * time.Second, report(
+					"d1", 846*time.Millisecond,
+					"d3", 3*time.Second,
+					"d5", 900*time.Millisecond,
+					"d7", 2*time.Second,
+					"d8", 431*time.Millisecond)},
+				{2 * time.Second, report(
+					"d1", 3*time.Second,
+					"d3", 70*time.Millisecond,
+					"d5", 58*time.Second,
+					"d7", 596*time.Millisecond,
+					"d8", 227*time.Millisecond,
+					"d11", 900*time.Millisecond)},
+			},
+			wantPrevLen: 3,
+			wantDERP:    7,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
