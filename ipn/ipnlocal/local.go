@@ -313,15 +313,13 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 		loginFlags:     loginFlags,
 	}
 
-	// for now, only log sockstats on unstable builds
-	if version.IsUnstableBuild() {
-		b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID)
-		if err != nil {
-			log.Printf("error setting up sockstat logger: %v", err)
-		}
-		if b.sockstatLogger != nil {
-			b.sockstatLogger.SetLoggingEnabled(true)
-		}
+	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID)
+	if err != nil {
+		log.Printf("error setting up sockstat logger: %v", err)
+	}
+	// Enable sockstats logs only on unstable builds
+	if version.IsUnstableBuild() && b.sockstatLogger != nil {
+		b.sockstatLogger.SetLoggingEnabled(true)
 	}
 
 	// Default filter blocks everything and logs nothing, until Start() is called.
