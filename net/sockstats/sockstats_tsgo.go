@@ -9,11 +9,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"tailscale.com/net/interfaces"
 	"tailscale.com/util/clientmetric"
@@ -49,6 +51,7 @@ var sockStats = struct {
 	currentInterfaceCellular atomic.Bool
 
 	txBytesMetric, rxBytesMetric, txBytesCellularMetric, rxBytesCellularMetric *clientmetric.Metric
+	radioHighMetric                                                            *clientmetric.Metric
 }{
 	countersByLabel:       make(map[Label]*sockStatCounters),
 	knownInterfaces:       make(map[int]string),
@@ -57,6 +60,7 @@ var sockStats = struct {
 	rxBytesMetric:         clientmetric.NewCounter("sockstats_rx_bytes"),
 	txBytesCellularMetric: clientmetric.NewCounter("sockstats_tx_bytes_cellular"),
 	rxBytesCellularMetric: clientmetric.NewCounter("sockstats_rx_bytes_cellular"),
+	radioHighMetric:       clientmetric.NewGaugeFunc("sockstats_cellular_radio_high_fraction", radio.radioHighPercent),
 }
 
 func withSockStats(ctx context.Context, label Label) context.Context {
@@ -122,6 +126,9 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		if sockStats.currentInterfaceCellular.Load() {
 			sockStats.rxBytesCellularMetric.Add(int64(n))
 			counters.rxBytesCellularMetric.Add(int64(n))
+			if n > 0 {
+				radio.active()
+			}
 		}
 	}
 	didWrite := func(n int) {
@@ -136,6 +143,9 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		if sockStats.currentInterfaceCellular.Load() {
 			sockStats.txBytesCellularMetric.Add(int64(n))
 			counters.txBytesCellularMetric.Add(int64(n))
+			if n > 0 {
+				radio.active()
+			}
 		}
 	}
 	willOverwrite := func(trace *net.SockTrace) {
@@ -275,4 +285,78 @@ func isLikelyCellularInterface(ifName string) bool {
 	return strings.HasPrefix(ifName, "rmnet") || // Android
 		strings.HasPrefix(ifName, "ww") || // systemd naming scheme for WWAN
 		strings.HasPrefix(ifName, "pdp") // iOS
+}
+
+// radioMonitor tracks usage of the cellular radio, approximates the power state transitions,
+// and reports the percentage of time the radio was on.
+type radioMonitor struct {
+	// usage tracks the last time (as unix timestamp) the radio was used over the last hour.
+	// Values are indexed by the number of seconds since the beginning of the current hour.
+	usage [radioSampleSize]int64
+
+	// startTime is the time we started tracking radio usage.
+	startTime int64
+
+	now func() time.Time
+}
+
+// radioSampleSize is the number of samples to store and report for cellular radio usage.
+// Usage is measured once per second, so this is the number of seconds of history to track.
+const radioSampleSize = 3600 // 1 hour
+
+var radio = &radioMonitor{
+	now:       time.Now,
+	startTime: time.Now().Unix(),
+}
+
+// radioActivity should be called whenever network activity occurs on a cellular network interface.
+func (rm *radioMonitor) active() {
+	t := rm.now().Unix()
+	rm.usage[t%radioSampleSize] = t
+}
+
+// Timings for radio power state transitions taken from
+// https://developer.android.com/training/connectivity/network-access-optimization#radio-state
+// Even though that documents a typical 3G radio and newer radios are much more efficient,
+// it provides worst-case timings to use for analysis.
+const (
+	radioHighIdle = 5  // seconds radio idles in high power state before transitioning to low
+	radioLowIdle  = 12 // seconds radio idles in low power state before transitioning to off
+)
+
+// radioHighPercent returns the percentage of time (as an int from 0 to 100)
+// that the cellular radio was in high power mode during the past hour.
+// If the radio has been monitored for less than an hour,
+// the percentage is calculated based on the time monitored.
+func (rm *radioMonitor) radioHighPercent() int64 {
+	now := rm.now().Unix()
+	var periodLength int64 = radioSampleSize
+	if t := now - rm.startTime; t < periodLength {
+		periodLength = t
+	}
+	periodStart := now - periodLength // start of current reporting period
+
+	// slices of radio usage, with values in chronological order
+	slices := [2][]int64{
+		rm.usage[now%radioSampleSize:],
+		rm.usage[:now%radioSampleSize],
+	}
+	var highPowerSec int64 // total seconds radio was in high power (active or idle)
+	var c int              // counter
+	var lastActive int     // counter when radio was last active
+	for _, slice := range slices {
+		for _, v := range slice {
+			c++ // increment first so we don't have zero values
+			if v >= periodStart {
+				// radio on and active
+				highPowerSec++
+				lastActive = c
+			} else if lastActive > 0 && c-lastActive < radioHighIdle {
+				// radio on but idle
+				highPowerSec++
+			}
+		}
+	}
+
+	return int64(math.Round(float64(highPowerSec) / float64(periodLength) * 100))
 }
