@@ -9,7 +9,6 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -571,12 +570,6 @@ foo_totalY 4
 			"num_goroutines 123\n",
 		},
 		{
-			"var_that_exports_itself",
-			"custom_var",
-			promWriter{},
-			"custom_var_value 42\n",
-		},
-		{
 			"string_version_var",
 			"foo_version",
 			expvar.Func(func() any { return "1.2.3-foo15" }),
@@ -692,16 +685,6 @@ func (expvarAdapter2) String() string { return "{}" } // expvar JSON; unused in 
 
 func (a expvarAdapter2) PrometheusMetricsReflectRoot() any {
 	return a.st
-}
-
-type promWriter struct{}
-
-func (promWriter) WritePrometheus(w io.Writer, prefix string) {
-	fmt.Fprintf(w, "%s_value 42\n", prefix)
-}
-
-func (promWriter) String() string {
-	return ""
 }
 
 func TestAcceptsEncoding(t *testing.T) {
