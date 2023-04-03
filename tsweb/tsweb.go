@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
@@ -670,6 +672,39 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	for _, e := range s.kvs {
 		writePromExpVar(w, "", e.KeyValue)
 	}
+}
+
+// CombinedVarzHandler is an HTTP handler for Prometheus metrics that
+// combines native metrics with the ones converted from expvar.
+func CombinedVarzHandler(w http.ResponseWriter, r *http.Request) {
+	if err := gatherNativePrometheusMetrics(w); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	VarzHandler(w, r)
+}
+
+// gatherNativePrometheusMetrics writes metrics from the default
+// metric registry in text format.
+func gatherNativePrometheusMetrics(w http.ResponseWriter) error {
+	enc := expfmt.NewEncoder(w, expfmt.FmtText)
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		return fmt.Errorf("could not gather metrics from DefaultGatherer: %w", err)
+	}
+
+	for _, mf := range mfs {
+		if err := enc.Encode(mf); err != nil {
+			return fmt.Errorf("could not encode metric %v: %w", mf, err)
+		}
+	}
+	if closer, ok := enc.(expfmt.Closer); ok {
+		if err := closer.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PrometheusMetricsReflectRooter is an optional interface that expvar.Var implementations

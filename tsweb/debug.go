@@ -54,7 +54,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	ret.KVFunc("Uptime", func() any { return Uptime() })
 	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
-	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(VarzHandler))
+	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(CombinedVarzHandler))
 	ret.Handle("pprof/", "pprof", http.HandlerFunc(pprof.Index))
 	ret.URL("/debug/pprof/goroutine?debug=1", "Goroutines (collapsed)")
 	ret.URL("/debug/pprof/goroutine?debug=2", "Goroutines (full)")
