@@ -218,6 +218,11 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	prefs := b.pm.CurrentPrefs()
+	if config.IsFunnelOn() && prefs.ShieldsUp() {
+		return errors.New("Unable to turn on Funnel while shields-up is enabled")
+	}
+
 	nm := b.netMap
 	if nm == nil {
 		return errors.New("netMap is nil")
