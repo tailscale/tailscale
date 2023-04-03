@@ -5,7 +5,6 @@
 package main
 
 import (
-	"expvar"
 	"flag"
 	"fmt"
 	"html"
@@ -30,7 +29,7 @@ var (
 func main() {
 	flag.Parse()
 
-	p := prober.New().WithSpread(*spread).WithOnce(*probeOnce)
+	p := prober.New().WithSpread(*spread).WithOnce(*probeOnce).WithMetricNamespace("derpprobe")
 	dp, err := prober.DERP(p, *derpMapURL, *interval, *interval, *interval)
 	if err != nil {
 		log.Fatal(err)
@@ -53,7 +52,6 @@ func main() {
 
 	mux := http.NewServeMux()
 	tsweb.Debugger(mux)
-	expvar.Publish("derpprobe", p.Expvar())
 	mux.HandleFunc("/", http.HandlerFunc(serveFunc(p)))
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }

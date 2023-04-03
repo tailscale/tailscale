@@ -8,18 +8,15 @@ package prober
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"expvar"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"log"
 	"math/rand"
-	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // ProbeFunc is a function that probes something and reports whether
@@ -42,6 +39,9 @@ type Prober struct {
 
 	mu     sync.Mutex // protects all following fields
 	probes map[string]*Probe
+
+	namespace string
+	metrics   *prometheus.Registry
 }
 
 // New returns a new Prober.
@@ -50,21 +50,15 @@ func New() *Prober {
 }
 
 func newForTest(now func() time.Time, newTicker func(time.Duration) ticker) *Prober {
-	return &Prober{
+	p := &Prober{
 		now:       now,
 		newTicker: newTicker,
 		probes:    map[string]*Probe{},
+		metrics:   prometheus.NewRegistry(),
+		namespace: "prober",
 	}
-}
-
-// Expvar returns the metrics for running probes.
-func (p *Prober) Expvar() expvar.Var {
-	return varExporter{p}
-}
-
-// ProbeInfo returns information about most recent probe runs.
-func (p *Prober) ProbeInfo() map[string]ProbeInfo {
-	return varExporter{p}.probeInfo()
+	prometheus.DefaultRegisterer.MustRegister(p.metrics)
+	return p
 }
 
 // Run executes fun every interval, and exports probe results under probeName.
@@ -75,6 +69,11 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 	defer p.mu.Unlock()
 	if _, ok := p.probes[name]; ok {
 		panic(fmt.Sprintf("probe named %q already registered", name))
+	}
+
+	l := prometheus.Labels{"name": name}
+	for k, v := range labels {
+		l[k] = v
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,8 +87,17 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 		doProbe:      fun,
 		interval:     interval,
 		initialDelay: initialDelay(name, interval),
-		labels:       labels,
+		metrics:      prometheus.NewRegistry(),
+		mInterval:    prometheus.NewDesc("interval_secs", "Probe interval in seconds", nil, l),
+		mStartTime:   prometheus.NewDesc("start_secs", "Latest probe start time (seconds since epoch)", nil, l),
+		mEndTime:     prometheus.NewDesc("end_secs", "Latest probe end time (seconds since epoch)", nil, l),
+		mLatency:     prometheus.NewDesc("latency_millis", "Latest probe latency (ms)", nil, l),
+		mResult:      prometheus.NewDesc("result", "Latest probe result (1 = success, 0 = failure)", nil, l),
 	}
+
+	prometheus.WrapRegistererWithPrefix(p.namespace+"_", p.metrics).MustRegister(probe.metrics)
+	probe.metrics.MustRegister(probe)
+
 	p.probes[name] = probe
 	go probe.loop()
 	return probe
@@ -98,6 +106,8 @@ func (p *Prober) Run(name string, interval time.Duration, labels map[string]stri
 func (p *Prober) unregister(probe *Probe) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	probe.metrics.Unregister(probe)
+	p.metrics.Unregister(probe.metrics)
 	name := probe.name
 	delete(p.probes, name)
 }
@@ -113,6 +123,12 @@ func (p *Prober) WithSpread(s bool) *Prober {
 // rather than on a schedule.
 func (p *Prober) WithOnce(s bool) *Prober {
 	p.once = s
+	return p
+}
+
+// WithMetricNamespace allows changing metric name prefix from the default `prober`.
+func (p *Prober) WithMetricNamespace(n string) *Prober {
+	p.namespace = n
 	return p
 }
 
@@ -159,7 +175,16 @@ type Probe struct {
 	interval     time.Duration
 	initialDelay time.Duration
 	tick         ticker
-	labels       map[string]string
+
+	// metrics is a Prometheus metrics registry for metrics exported by this probe.
+	// Using a separate registry allows cleanly removing metrics exported by this
+	// probe when it gets unregistered.
+	metrics    *prometheus.Registry
+	mInterval  *prometheus.Desc
+	mStartTime *prometheus.Desc
+	mEndTime   *prometheus.Desc
+	mLatency   *prometheus.Desc
+	mResult    *prometheus.Desc
 
 	mu        sync.Mutex
 	start     time.Time     // last time doProbe started
@@ -264,35 +289,28 @@ func (p *Probe) recordEnd(start time.Time, err error) {
 	}
 }
 
-type varExporter struct {
-	p *Prober
-}
-
-// ProbeInfo is the state of a Probe. Used in expvar-format debug
-// data.
+// ProbeInfo is the state of a Probe.
 type ProbeInfo struct {
-	Labels  map[string]string
 	Start   time.Time
 	End     time.Time
-	Latency string // as a string because time.Duration doesn't encode readably to JSON
+	Latency string
 	Result  bool
 	Error   string
 }
 
-func (v varExporter) probeInfo() map[string]ProbeInfo {
+func (p *Prober) ProbeInfo() map[string]ProbeInfo {
 	out := map[string]ProbeInfo{}
 
-	v.p.mu.Lock()
-	probes := make([]*Probe, 0, len(v.p.probes))
-	for _, probe := range v.p.probes {
+	p.mu.Lock()
+	probes := make([]*Probe, 0, len(p.probes))
+	for _, probe := range p.probes {
 		probes = append(probes, probe)
 	}
-	v.p.mu.Unlock()
+	p.mu.Unlock()
 
 	for _, probe := range probes {
 		probe.mu.Lock()
 		inf := ProbeInfo{
-			Labels: probe.labels,
 			Start:  probe.start,
 			End:    probe.end,
 			Result: probe.succeeded,
@@ -309,71 +327,34 @@ func (v varExporter) probeInfo() map[string]ProbeInfo {
 	return out
 }
 
-// String implements expvar.Var, returning the prober's state as an
-// encoded JSON map of probe name to its ProbeInfo.
-func (v varExporter) String() string {
-	bs, err := json.Marshal(v.probeInfo())
-	if err != nil {
-		return fmt.Sprintf(`{"error": %q}`, err)
-	}
-	return string(bs)
+// Describe implements prometheus.Collector.
+func (p *Probe) Describe(ch chan<- *prometheus.Desc) {
+	ch <- p.mInterval
+	ch <- p.mStartTime
+	ch <- p.mEndTime
+	ch <- p.mResult
+	ch <- p.mLatency
 }
 
-// WritePrometheus writes the state of all probes to w.
-//
-// For each probe, WritePrometheus exports 5 variables:
-//   - <prefix>_interval_secs, how frequently the probe runs.
-//   - <prefix>_start_secs, when the probe last started running, in seconds since epoch.
-//   - <prefix>_end_secs, when the probe last finished running, in seconds since epoch.
-//   - <prefix>_latency_millis, how long the last probe cycle took, in
-//     milliseconds. This is just (end_secs-start_secs) in an easier to
-//     graph form.
-//   - <prefix>_result, 1 if the last probe succeeded, 0 if it failed.
-//
-// Each probe has a set of static key/value labels (defined once at
-// probe creation), which are added as Prometheus metric labels to
-// that probe's variables.
-func (v varExporter) WritePrometheus(w io.Writer, prefix string) {
-	v.p.mu.Lock()
-	probes := make([]*Probe, 0, len(v.p.probes))
-	for _, probe := range v.p.probes {
-		probes = append(probes, probe)
+// Collect implements prometheus.Collector.
+func (p *Probe) Collect(ch chan<- prometheus.Metric) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ch <- prometheus.MustNewConstMetric(p.mInterval, prometheus.GaugeValue, p.interval.Seconds())
+	if !p.start.IsZero() {
+		ch <- prometheus.MustNewConstMetric(p.mStartTime, prometheus.GaugeValue, float64(p.start.Unix()))
 	}
-	v.p.mu.Unlock()
-
-	sort.Slice(probes, func(i, j int) bool {
-		return probes[i].name < probes[j].name
-	})
-	for _, probe := range probes {
-		probe.mu.Lock()
-		keys := make([]string, 0, len(probe.labels))
-		for k := range probe.labels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "name=%q", probe.name)
-		for _, k := range keys {
-			fmt.Fprintf(&sb, ",%s=%q", k, probe.labels[k])
-		}
-		labels := sb.String()
-
-		fmt.Fprintf(w, "%s_interval_secs{%s} %f\n", prefix, labels, probe.interval.Seconds())
-		if !probe.start.IsZero() {
-			fmt.Fprintf(w, "%s_start_secs{%s} %d\n", prefix, labels, probe.start.Unix())
-		}
-		if !probe.end.IsZero() {
-			fmt.Fprintf(w, "%s_end_secs{%s} %d\n", prefix, labels, probe.end.Unix())
-			if probe.latency > 0 {
-				fmt.Fprintf(w, "%s_latency_millis{%s} %d\n", prefix, labels, probe.latency.Milliseconds())
-			}
-			if probe.succeeded {
-				fmt.Fprintf(w, "%s_result{%s} 1\n", prefix, labels)
-			} else {
-				fmt.Fprintf(w, "%s_result{%s} 0\n", prefix, labels)
-			}
-		}
-		probe.mu.Unlock()
+	if p.end.IsZero() {
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(p.mEndTime, prometheus.GaugeValue, float64(p.end.Unix()))
+	if p.succeeded {
+		ch <- prometheus.MustNewConstMetric(p.mResult, prometheus.GaugeValue, 1)
+	} else {
+		ch <- prometheus.MustNewConstMetric(p.mResult, prometheus.GaugeValue, 0)
+	}
+	if p.latency > 0 {
+		ch <- prometheus.MustNewConstMetric(p.mLatency, prometheus.GaugeValue, float64(p.latency.Milliseconds()))
 	}
 }
 
