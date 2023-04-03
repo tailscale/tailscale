@@ -63,6 +63,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
+	"tailscale.com/util/sysresources"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
@@ -1418,12 +1419,59 @@ func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (s
 	}
 }
 
-// bufferedDerpWritesBeforeDrop is how many packets writes can be
-// queued up the DERP client to write on the wire before we start
-// dropping.
-//
-// TODO: this is currently arbitrary. Figure out something better?
-const bufferedDerpWritesBeforeDrop = 32
+var (
+	bufferedDerpWrites     int
+	bufferedDerpWritesOnce sync.Once
+)
+
+// bufferedDerpWritesBeforeDrop returns how many packets writes can be queued
+// up the DERP client to write on the wire before we start dropping.
+func bufferedDerpWritesBeforeDrop() int {
+	// For mobile devices, always return the previous minimum value of 32;
+	// we can do this outside the sync.Once to avoid that overhead.
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+		return 32
+	}
+
+	bufferedDerpWritesOnce.Do(func() {
+		// Some rough sizing: for the previous fixed value of 32, the
+		// total consumed memory can be:
+		// = numDerpRegions * messages/region * sizeof(message)
+		//
+		// For sake of this calculation, assume 100 DERP regions; at
+		// time of writing (2023-04-03), we have 24.
+		//
+		// A reasonable upper bound for the worst-case average size of
+		// a message is a *disco.CallMeMaybe message with 16 endpoints;
+		// since sizeof(netip.AddrPort) = 32, that's 512 bytes. Thus:
+		// = 100 * 32 * 512
+		// = 1638400 (1.6MiB)
+		//
+		// On a reasonably-small node with 4GiB of memory that's
+		// connected to each region and handling a lot of load, 1.6MiB
+		// is about 0.04% of the total system memory.
+		//
+		// For sake of this calculation, then, let's double that memory
+		// usage to 0.08% and scale based on total system memory.
+		//
+		// For a 16GiB Linux box, this should buffer just over 256
+		// messages.
+		systemMemory := sysresources.TotalMemory()
+		memoryUsable := float64(systemMemory) * 0.0008
+
+		const (
+			theoreticalDERPRegions  = 100
+			messageMaximumSizeBytes = 512
+		)
+		bufferedDerpWrites = int(memoryUsable / (theoreticalDERPRegions * messageMaximumSizeBytes))
+
+		// Never drop below the previous minimum value.
+		if bufferedDerpWrites < 32 {
+			bufferedDerpWrites = 32
+		}
+	})
+	return bufferedDerpWrites
+}
 
 // derpWriteChanOfAddr returns a DERP client for fake UDP addresses that
 // represent DERP servers, creating them as necessary. For real UDP
@@ -1520,7 +1568,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 	dc.DNSCache = dnscache.Get()
 
 	ctx, cancel := context.WithCancel(c.connCtx)
-	ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop)
+	ch := make(chan derpWriteRequest, bufferedDerpWritesBeforeDrop())
 
 	ad.c = dc
 	ad.writeCh = ch
