@@ -1853,3 +1853,11 @@ func TestSetNetworkMapWithNoPeers(t *testing.T) {
 		}
 	}
 }
+
+func TestBufferedDerpWritesBeforeDrop(t *testing.T) {
+	vv := bufferedDerpWritesBeforeDrop()
+	if vv < 32 {
+		t.Fatalf("got bufferedDerpWritesBeforeDrop=%d, which is < 32", vv)
+	}
+	t.Logf("bufferedDerpWritesBeforeDrop = %d", vv)
+}
