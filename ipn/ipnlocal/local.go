@@ -400,7 +400,14 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 		setEnabled = mc.SetDebugLoggingEnabled
 	case "sockstats":
 		if b.sockstatLogger != nil {
-			setEnabled = b.sockstatLogger.SetLoggingEnabled
+			setEnabled = func(v bool) {
+				b.sockstatLogger.SetLoggingEnabled(v)
+				// Flush (and thus upload) logs when the enabled period ends,
+				// so that the logs are available for debugging.
+				if !v {
+					b.sockstatLogger.Flush()
+				}
+			}
 		}
 	}
 	if setEnabled == nil || !slices.Contains(debuggableComponents, component) {
