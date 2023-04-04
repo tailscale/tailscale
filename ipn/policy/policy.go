@@ -26,8 +26,8 @@ func IsInterestingService(s tailcfg.Service, os string) bool {
 		// there.
 		return true
 	}
-	// Windows has tons of TCP listeners. We need to move to a blacklist
-	// model later, but for now we just whitelist some common ones:
+	// Windows has tons of TCP listeners. We need to move to a denylist
+	// model later, but for now we just allow some common ones:
 	switch s.Port {
 	case 22, // ssh
 		80,    // http
