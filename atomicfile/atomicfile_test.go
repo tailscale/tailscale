@@ -7,7 +7,9 @@ package atomicfile
 
 import (
 	"net"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,18 +19,25 @@ func TestDoesNotOverwriteIrregularFiles(t *testing.T) {
 	// atomicfile.Write should likely not attempt to overwrite an irregular file
 	// such as a device node, socket, or named pipe.
 
-	d := t.TempDir()
-	special := filepath.Join(d, "special")
+	const filename = "TestDoesNotOverwriteIrregularFiles"
+	var path string
+	// macOS private temp does not allow unix socket creation, but /tmp does.
+	if runtime.GOOS == "darwin" {
+		path = filepath.Join("/tmp", filename)
+		t.Cleanup(func() { os.Remove(path) })
+	} else {
+		path = filepath.Join(t.TempDir(), filename)
+	}
 
 	// The least troublesome thing to make that is not a file is a unix socket.
 	// Making a null device sadly requries root.
-	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: special, Net: "unix"})
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 
-	err = WriteFile(special, []byte("hello"), 0644)
+	err = WriteFile(path, []byte("hello"), 0644)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
