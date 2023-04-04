@@ -16,6 +16,7 @@ import (
 )
 
 func TestInversePrefix(t *testing.T) {
+	t.Parallel()
 	for i := 0; i < 256; i++ {
 		for len := 0; len < 9; len++ {
 			addr := i & (0xFF << (8 - len))
@@ -29,6 +30,7 @@ func TestInversePrefix(t *testing.T) {
 }
 
 func TestHostIndex(t *testing.T) {
+	t.Parallel()
 	for i := 0; i < 256; i++ {
 		got := hostIndex(uint8(i))
 		want := prefixIndex(uint8(i), 8)
@@ -39,6 +41,7 @@ func TestHostIndex(t *testing.T) {
 }
 
 func TestStrideTableInsert(t *testing.T) {
+	t.Parallel()
 	// Verify that strideTable's lookup results after a bunch of inserts exactly
 	// match those of a naive implementation that just scans all prefixes on
 	// every lookup. The naive implementation is very slow, but its behavior is
@@ -66,6 +69,7 @@ func TestStrideTableInsert(t *testing.T) {
 }
 
 func TestStrideTableInsertShuffled(t *testing.T) {
+	t.Parallel()
 	// The order in which routes are inserted into a route table does not
 	// influence the final shape of the table, as long as the same set of
 	// prefixes is being inserted. This test verifies that strideTable behaves
@@ -111,6 +115,7 @@ func TestStrideTableInsertShuffled(t *testing.T) {
 }
 
 func TestStrideTableDelete(t *testing.T) {
+	t.Parallel()
 	// Compare route deletion to our reference slowTable.
 	pfxs := shufflePrefixes(allPrefixes())[:100]
 	slow := slowTable[int]{pfxs}
@@ -145,6 +150,7 @@ func TestStrideTableDelete(t *testing.T) {
 }
 
 func TestStrideTableDeleteShuffle(t *testing.T) {
+	t.Parallel()
 	// Same as TestStrideTableInsertShuffle, the order in which prefixes are
 	// deleted should not impact the final shape of the route table.
 
@@ -191,17 +197,17 @@ func TestStrideTableDeleteShuffle(t *testing.T) {
 	}
 }
 
-var benchRouteCount = []int{10, 50, 100, 200}
+var strideRouteCount = []int{10, 50, 100, 200}
 
 // forCountAndOrdering runs the benchmark fn with different sets of routes.
 //
 // fn is called once for each combination of {num_routes, order}, where
-// num_routes is the values in benchRouteCount, and order is the order of the
+// num_routes is the values in strideRouteCount, and order is the order of the
 // routes in the list: random, largest prefix first (/0 to /8), and smallest
 // prefix first (/8 to /0).
-func forCountAndOrdering(b *testing.B, fn func(b *testing.B, routes []slowEntry[int])) {
+func forStrideCountAndOrdering(b *testing.B, fn func(b *testing.B, routes []slowEntry[int])) {
 	routes := shufflePrefixes(allPrefixes())
-	for _, nroutes := range benchRouteCount {
+	for _, nroutes := range strideRouteCount {
 		b.Run(fmt.Sprint(nroutes), func(b *testing.B) {
 			routes := append([]slowEntry[int](nil), routes[:nroutes]...)
 			b.Run("random_order", func(b *testing.B) {
@@ -233,7 +239,7 @@ func forCountAndOrdering(b *testing.B, fn func(b *testing.B, routes []slowEntry[
 }
 
 func BenchmarkStrideTableInsertion(b *testing.B) {
-	forCountAndOrdering(b, func(b *testing.B, routes []slowEntry[int]) {
+	forStrideCountAndOrdering(b, func(b *testing.B, routes []slowEntry[int]) {
 		val := 0
 		for i := 0; i < b.N; i++ {
 			var rt strideTable[int]
@@ -250,7 +256,7 @@ func BenchmarkStrideTableInsertion(b *testing.B) {
 }
 
 func BenchmarkStrideTableDeletion(b *testing.B) {
-	forCountAndOrdering(b, func(b *testing.B, routes []slowEntry[int]) {
+	forStrideCountAndOrdering(b, func(b *testing.B, routes []slowEntry[int]) {
 		val := 0
 		var rt strideTable[int]
 		for _, route := range routes {

@@ -82,6 +82,11 @@ func (t *strideTable[T]) getOrCreateChild(addr uint8) *strideTable[T] {
 	return t.entries[idx].child
 }
 
+func (t *strideTable[T]) getValAndChild(addr uint8) (*T, *strideTable[T]) {
+	idx := hostIndex(addr)
+	return t.entries[idx].value, t.entries[idx].child
+}
+
 // allot updates entries whose stored prefixIndex matches oldPrefixIndex, in the
 // subtree rooted at idx. Matching entries have their stored prefixIndex set to
 // newPrefixIndex, and their value set to val.
