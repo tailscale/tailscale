@@ -39,8 +39,9 @@ var (
 // scanEntry contains the minimal data needed for quickly scanning
 // memory for changed values. It's small to reduce memory pressure.
 type scanEntry struct {
-	v          *int64 // Metric.v
-	lastLogged int64  // last logged value
+	v          *int64       // Metric.v
+	f          func() int64 // Metric.f
+	lastLogged int64        // last logged value
 }
 
 // Type is a metric type: counter or gauge.
@@ -55,10 +56,12 @@ const (
 //
 // It's safe for concurrent use.
 type Metric struct {
-	v      *int64 // atomic; the metric value
-	regIdx int    // index into lastLogVal and unsorted
-	name   string
-	typ    Type
+	v              *int64       // atomic; the metric value
+	f              func() int64 // value function (v is ignored if f is non-nil)
+	regIdx         int          // index into lastLogVal and unsorted
+	name           string
+	typ            Type
+	deltasDisabled bool
 
 	// The following fields are owned by the package-level 'mu':
 
@@ -74,13 +77,29 @@ type Metric struct {
 }
 
 func (m *Metric) Name() string { return m.name }
-func (m *Metric) Value() int64 { return atomic.LoadInt64(m.v) }
-func (m *Metric) Type() Type   { return m.typ }
+
+func (m *Metric) Value() int64 {
+	if m.f != nil {
+		return m.f()
+	}
+	return atomic.LoadInt64(m.v)
+}
+
+func (m *Metric) Type() Type { return m.typ }
+
+// DisableDeltas disables uploading of deltas for this metric (absolute values
+// are always uploaded).
+func (m *Metric) DisableDeltas() {
+	m.deltasDisabled = true
+}
 
 // Add increments m's value by n.
 //
 // If m is of type counter, n should not be negative.
 func (m *Metric) Add(n int64) {
+	if m.f != nil {
+		panic("Add() called on metric with value function")
+	}
 	atomic.AddInt64(m.v, n)
 }
 
@@ -88,6 +107,9 @@ func (m *Metric) Add(n int64) {
 //
 // If m is of type counter, Set should not be used.
 func (m *Metric) Set(v int64) {
+	if m.f != nil {
+		panic("Set() called on metric with value function")
+	}
 	atomic.StoreInt64(m.v, v)
 }
 
@@ -105,15 +127,19 @@ func (m *Metric) Publish() {
 	metrics[m.name] = m
 	sortedDirty = true
 
-	if len(valFreeList) == 0 {
-		valFreeList = make([]int64, 256)
+	if m.f != nil {
+		lastLogVal = append(lastLogVal, scanEntry{f: m.f})
+	} else {
+		if len(valFreeList) == 0 {
+			valFreeList = make([]int64, 256)
+		}
+		m.v = &valFreeList[0]
+		valFreeList = valFreeList[1:]
+		lastLogVal = append(lastLogVal, scanEntry{v: m.v})
 	}
-	m.v = &valFreeList[0]
-	valFreeList = valFreeList[1:]
 
 	m.regIdx = len(unsorted)
 	unsorted = append(unsorted, m)
-	lastLogVal = append(lastLogVal, scanEntry{v: m.v})
 }
 
 // Metrics returns the sorted list of metrics.
@@ -177,6 +203,26 @@ func NewGauge(name string) *Metric {
 	return m
 }
 
+// NewCounterFunc returns a counter metric that has its value determined by
+// calling the provided function (calling Add() and Set() will panic). No
+// locking guarantees are made for the invocation.
+func NewCounterFunc(name string, f func() int64) *Metric {
+	m := NewUnpublished(name, TypeCounter)
+	m.f = f
+	m.Publish()
+	return m
+}
+
+// NewGaugeFunc returns a gauge metric that has its value determined by
+// calling the provided function (calling Add() and Set() will panic). No
+// locking guarantees are made for the invocation.
+func NewGaugeFunc(name string, f func() int64) *Metric {
+	m := NewUnpublished(name, TypeGauge)
+	m.f = f
+	m.Publish()
+	return m
+}
+
 // WritePrometheusExpositionFormat writes all client metrics to w in
 // the Prometheus text-based exposition format.
 //
@@ -233,7 +279,12 @@ func EncodeLogTailMetricsDelta() string {
 
 	var enc *deltaEncBuf // lazy
 	for i, ent := range lastLogVal {
-		val := atomic.LoadInt64(ent.v)
+		var val int64
+		if ent.f != nil {
+			val = ent.f()
+		} else {
+			val = atomic.LoadInt64(ent.v)
+		}
 		delta := val - ent.lastLogged
 		if delta == 0 {
 			continue
@@ -248,9 +299,14 @@ func EncodeLogTailMetricsDelta() string {
 			numWireID++
 			m.wireID = numWireID
 		}
+
+		writeValue := m.deltasDisabled
 		if m.lastNamed.IsZero() || now.Sub(m.lastNamed) > metricLogNameFrequency {
 			enc.writeName(m.Name(), m.Type())
 			m.lastNamed = now
+			writeValue = true
+		}
+		if writeValue {
 			enc.writeValue(m.wireID, val)
 		} else {
 			enc.writeDelta(m.wireID, delta)
