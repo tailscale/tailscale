@@ -365,6 +365,8 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 		handler          func(w http.ResponseWriter, r *http.Request)
 		sshCommand       string
 		wantClientOutput string
+
+		clientOutputMustNotContain []string
 	}{
 		{
 			name: "upload-denied",
@@ -373,6 +375,8 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 			},
 			sshCommand:       "echo hello",
 			wantClientOutput: "recording: server responded with 403 Forbidden\r\n",
+
+			clientOutputMustNotContain: []string{"hello"},
 		},
 		{
 			name: "upload-fails-after-starting",
@@ -382,7 +386,9 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 			},
 			sshCommand:       "echo hello && sleep 1 && echo world",
-			wantClientOutput: "hello\n\r\n\r\nrecording server responded with: 500 Internal Server Error\r\n\r\n",
+			wantClientOutput: "\r\n\r\nrecording server responded with: 500 Internal Server Error\r\n\r\n",
+
+			clientOutputMustNotContain: []string{"world"},
 		},
 	}
 
@@ -416,8 +422,14 @@ func TestSSHRecordingCancelsSessionsOnUploadFailure(t *testing.T) {
 				} else {
 					t.Errorf("client did not get kicked out: %q", got)
 				}
-				if string(got) != tt.wantClientOutput {
+				gotStr := string(got)
+				if !strings.HasSuffix(gotStr, tt.wantClientOutput) {
 					t.Errorf("client got %q, want %q", got, tt.wantClientOutput)
+				}
+				for _, x := range tt.clientOutputMustNotContain {
+					if strings.Contains(gotStr, x) {
+						t.Errorf("client output must not contain %q", x)
+					}
 				}
 			}()
 			if err := s.HandleSSHConn(dc); err != nil {
