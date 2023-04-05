@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/version/distro"
 )
 
 var (
@@ -388,6 +389,15 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		if a.Accept {
 			c.finalAction = a
 		}
+		if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy {
+			// Gokrazy is a single-user appliance with ~no userspace.
+			// There aren't users to look up (no /etc/passwd, etc)
+			// so rather than fail below, just hardcode root.
+			// TODO(bradfitz): fix os/user upstream instead?
+			c.userGroupIDs = []string{"0"}
+			c.localUser = &user.User{Uid: "0", Gid: "0", Username: "root"}
+			return nil
+		}
 		lu, err := user.Lookup(localUser)
 		if err != nil {
 			c.logf("failed to look up %v: %v", localUser, err)
@@ -396,6 +406,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		}
 		gids, err := lu.GroupIds()
 		if err != nil {
+			c.logf("failed to look up local user's group IDs: %v", err)
 			return err
 		}
 		c.userGroupIDs = gids
