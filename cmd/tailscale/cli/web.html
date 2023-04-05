@@ -26,9 +26,9 @@
 			<circle opacity="0.2" cx="19.5" cy="19.5" r="2.7" fill="currentColor"></circle>
 		</svg>
 		<div class="flex items-center justify-end space-x-2 w-2/3">
-			{{ with .Profile.LoginName }}
+			{{ with .Profile }}
 			<div class="text-right w-full leading-4">
-				<h4 class="truncate leading-normal">{{.}}</h4>
+				<h4 class="truncate leading-normal">{{.LoginName}}</h4>
 				<div class="text-xs text-gray-500 text-right">
 					<a href="#" class="hover:text-gray-700 js-loginButton">Switch account</a> | <a href="#"
 						class="hover:text-gray-700 js-loginButton">Reauthenticate</a> | <a href="#"
