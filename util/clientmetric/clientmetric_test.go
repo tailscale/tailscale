@@ -72,3 +72,38 @@ func TestEncodeLogTailMetricsDelta(t *testing.T) {
 		t.Errorf("with increments = %q; want %q", got, want)
 	}
 }
+
+func TestDisableDeltas(t *testing.T) {
+	clearMetrics()
+
+	c := NewCounter("foo")
+	c.DisableDeltas()
+	c.Set(123)
+
+	if got, want := EncodeLogTailMetricsDelta(), "N06fooS02f601"; got != want {
+		t.Errorf("first = %q; want %q", got, want)
+	}
+
+	c.Set(456)
+	advanceTime()
+	if got, want := EncodeLogTailMetricsDelta(), "S029007"; got != want {
+		t.Errorf("second = %q; want %q", got, want)
+	}
+}
+
+func TestWithFunc(t *testing.T) {
+	clearMetrics()
+
+	v := int64(123)
+	NewCounterFunc("foo", func() int64 { return v })
+
+	if got, want := EncodeLogTailMetricsDelta(), "N06fooS02f601"; got != want {
+		t.Errorf("first = %q; want %q", got, want)
+	}
+
+	v = 456
+	advanceTime()
+	if got, want := EncodeLogTailMetricsDelta(), "I029a05"; got != want {
+		t.Errorf("second = %q; want %q", got, want)
+	}
+}
