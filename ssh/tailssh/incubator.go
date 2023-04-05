@@ -691,6 +691,9 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 func loginShell(u *user.User) string {
 	switch runtime.GOOS {
 	case "linux":
+		if distro.Get() == distro.Gokrazy {
+			return "/tmp/serial-busybox/ash"
+		}
 		out, _ := exec.Command("getent", "passwd", u.Uid).Output()
 		// out is "root:x:0:0:root:/root:/bin/bash"
 		f := strings.SplitN(string(out), ":", 10)

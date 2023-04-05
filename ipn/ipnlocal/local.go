@@ -3220,6 +3220,10 @@ func (b *LocalBackend) TailscaleVarRoot() string {
 	switch runtime.GOOS {
 	case "ios", "android", "darwin":
 		return paths.AppSharedDir.Load()
+	case "linux":
+		if distro.Get() == distro.Gokrazy {
+			return "/perm/tailscaled"
+		}
 	}
 	return ""
 }
