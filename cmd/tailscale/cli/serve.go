@@ -453,6 +453,7 @@ func expandProxyTarget(source string) (string, error) {
 	if u.Port() != "" {
 		url += ":" + u.Port()
 	}
+	url += u.Path
 	return url, nil
 }
 
