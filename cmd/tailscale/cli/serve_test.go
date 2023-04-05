@@ -262,6 +262,18 @@ func TestServeConfigMutations(t *testing.T) {
 			},
 		},
 	})
+	add(step{reset: true})
+	add(step{ // support path in proxy
+		command: cmd("https / http://127.0.0.1:3000/foo/bar"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000/foo/bar"},
+				}},
+			},
+		},
+	})
 
 	// tcp
 	add(step{reset: true})
