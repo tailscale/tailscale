@@ -205,7 +205,15 @@ func TestDeleteShuffled(t *testing.T) {
 	}
 }
 
-var benchRouteCount = []int{10, 100, 1000, 10_000, 100_000}
+// 100k routes for IPv6, at the current size of strideTable and strideEntry, is
+// in the ballpark of 4GiB if you assume worst-case prefix distribution. Future
+// optimizations will knock down the memory consumption by over an order of
+// magnitude, so for now just skip the 100k benchmarks to stay well away of
+// OOMs.
+//
+// TODO(go/bug/7781): reenable larger table tests once memory utilization is
+// optimized.
+var benchRouteCount = []int{10, 100, 1000, 10_000} //, 100_000}
 
 // forFamilyAndCount runs the benchmark fn with different sets of
 // routes.
