@@ -16,8 +16,10 @@ func debugOmitLocalAddresses() bool    { return false }
 func logDerpVerbose() bool             { return false }
 func debugReSTUNStopOnIdle() bool      { return false }
 func debugAlwaysDERP() bool            { return false }
+func debugUseDERPHTTP() bool           { return false }
 func debugEnableSilentDisco() bool     { return false }
 func debugSendCallMeUnknownPeer() bool { return false }
+func debugUseDERPAddr() string         { return "" }
 func debugUseDerpRouteEnv() string     { return "" }
 func debugUseDerpRoute() opt.Bool      { return "" }
 func inTest() bool                     { return false }

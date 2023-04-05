@@ -2572,6 +2572,29 @@ func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var derpAddr = debugUseDERPAddr()
+	if derpAddr != "" {
+		derpPort := 443
+		if debugUseDERPHTTP() {
+			// Match the port for -dev in derper.go
+			derpPort = 3340
+		}
+		dm = &tailcfg.DERPMap{
+			OmitDefaultRegions: true,
+			Regions: map[int]*tailcfg.DERPRegion{
+				999: {
+					RegionID: 999,
+					Nodes: []*tailcfg.DERPNode{{
+						Name:     "999dev",
+						RegionID: 999,
+						HostName: derpAddr,
+						DERPPort: derpPort,
+					}},
+				},
+			},
+		}
+	}
+
 	if reflect.DeepEqual(dm, c.derpMap) {
 		return
 	}

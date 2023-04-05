@@ -33,13 +33,19 @@ var (
 	debugReSTUNStopOnIdle = envknob.RegisterBool("TS_DEBUG_RESTUN_STOP_ON_IDLE")
 	// debugAlwaysDERP disables the use of UDP, forcing all peer communication over DERP.
 	debugAlwaysDERP = envknob.RegisterBool("TS_DEBUG_ALWAYS_USE_DERP")
+	// debugDERPAddr sets the derp address manually, overriding the DERP map from control.
+	debugUseDERPAddr = envknob.RegisterString("TS_DEBUG_USE_DERP_ADDR")
+	// debugDERPUseHTTP tells clients to connect to DERP via HTTP on port 3340 instead of
+	// HTTPS on 443.
+	debugUseDERPHTTP = envknob.RegisterBool("TS_DEBUG_USE_DERP_HTTP")
 	// debugEnableSilentDisco disables the use of heartbeatTimer on the endpoint struct
 	// and attempts to handle disco silently. See issue #540 for details.
 	debugEnableSilentDisco = envknob.RegisterBool("TS_DEBUG_ENABLE_SILENT_DISCO")
-	// DebugSendCallMeUnknownPeer sends a CallMeMaybe to a
-	// non-existent destination every time we send a real
-	// CallMeMaybe to test the PeerGoneNotHere logic.
+	// debugSendCallMeUnknownPeer sends a CallMeMaybe to a non-existent destination every
+	// time we send a real CallMeMaybe to test the PeerGoneNotHere logic.
 	debugSendCallMeUnknownPeer = envknob.RegisterBool("TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
+	// Hey you! Adding a new debugknob? Make sure to stub it out in the debugknob_stubs.go
+	// file too.
 )
 
 // inTest reports whether the running program is a test that set the

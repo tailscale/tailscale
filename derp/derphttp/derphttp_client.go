@@ -174,6 +174,10 @@ func urlPort(u *url.URL) string {
 	return ""
 }
 
+// debugDERPUseHTTP tells clients to connect to DERP via HTTP on port
+// 3340 instead of HTTPS on 443.
+var debugUseDERPHTTP = envknob.RegisterBool("TS_DEBUG_USE_DERP_HTTP")
+
 func (c *Client) targetString(reg *tailcfg.DERPRegion) string {
 	if c.url != nil {
 		return c.url.String()
@@ -185,6 +189,10 @@ func (c *Client) useHTTPS() bool {
 	if c.url != nil && c.url.Scheme == "http" {
 		return false
 	}
+	if debugUseDERPHTTP() {
+		return false
+	}
+
 	return true
 }
 
@@ -200,7 +208,11 @@ func (c *Client) urlString(node *tailcfg.DERPNode) string {
 	if c.url != nil {
 		return c.url.String()
 	}
-	return fmt.Sprintf("https://%s/derp", node.HostName)
+	proto := "https"
+	if debugUseDERPHTTP() {
+		proto = "http"
+	}
+	return fmt.Sprintf("%s://%s/derp", proto, node.HostName)
 }
 
 // AddressFamilySelector decides whether IPv6 is preferred for
