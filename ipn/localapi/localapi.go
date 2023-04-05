@@ -930,8 +930,8 @@ func InUseOtherUserIPNStream(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 func (h *Handler) serveWatchIPNBus(w http.ResponseWriter, r *http.Request) {
-	if !h.PermitWrite {
-		http.Error(w, "denied", http.StatusForbidden)
+	if !h.PermitRead {
+		http.Error(w, "watch ipn bus access denied", http.StatusForbidden)
 		return
 	}
 	f, ok := w.(http.Flusher)
