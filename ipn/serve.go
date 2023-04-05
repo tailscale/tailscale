@@ -165,6 +165,12 @@ func (sc *ServeConfig) IsServingWeb(port uint16) bool {
 
 // IsFunnelOn checks if ServeConfig is currently allowing
 // funnel traffic for any host:port.
+//
+// View version of ServeConfig.IsFunnelOn.
+func (v ServeConfigView) IsFunnelOn() bool { return v.ж.IsFunnelOn() }
+
+// IsFunnelOn checks if ServeConfig is currently allowing
+// funnel traffic for any host:port.
 func (sc *ServeConfig) IsFunnelOn() bool {
 	if sc == nil {
 		return false

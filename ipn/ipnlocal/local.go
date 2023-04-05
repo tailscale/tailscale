@@ -2530,6 +2530,9 @@ func (b *LocalBackend) checkPrefsLocked(p *ipn.Prefs) error {
 	if err := b.checkExitNodePrefsLocked(p); err != nil {
 		errs = append(errs, err)
 	}
+	if err := b.checkFunnelEnabledLocked(p); err != nil {
+		errs = append(errs, err)
+	}
 	return multierr.New(errs...)
 }
 
@@ -2610,6 +2613,13 @@ func (b *LocalBackend) isDefaultServerLocked() bool {
 func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 	if (p.ExitNodeIP.IsValid() || p.ExitNodeID != "") && p.AdvertisesExitNode() {
 		return errors.New("Cannot advertise an exit node and use an exit node at the same time.")
+	}
+	return nil
+}
+
+func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
+	if p.ShieldsUp && b.serveConfig.IsFunnelOn() {
+		return errors.New("Cannot enable shields-up when Funnel is enabled.")
 	}
 	return nil
 }
