@@ -48,6 +48,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/version"
 )
 
 func main() {
@@ -235,7 +236,7 @@ waitOnline:
 		startlog.Fatalf("could not create controller: %v", err)
 	}
 
-	startlog.Infof("Startup complete, operator running")
+	startlog.Infof("Startup complete, operator running, version: %s", version.Long())
 	if shouldRunAuthProxy {
 		cfg, err := restConfig.TransportConfig()
 		if err != nil {
