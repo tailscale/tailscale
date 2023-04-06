@@ -208,6 +208,12 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
 	}
 	if epDisco == nil {
+		// If the peer does not support Disco, but it does have an endpoint address,
+		// attempt to use that (e.g. WireGuardOnly peers).
+		if ep.bestAddr.AddrPort.IsValid() {
+			m.setNodeKeyForIPPort(ep.bestAddr.AddrPort, ep.publicKey)
+		}
+
 		return
 	}
 	set := m.nodesOfDisco[epDisco.key]
@@ -2732,8 +2738,14 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	// handle full set updates.
 	for _, n := range nm.Peers {
 		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
-			if n.DiscoKey.IsZero() {
-				// Discokey transitioned from non-zero to zero? Ignore. Server's confused.
+			if n.DiscoKey.IsZero() && !n.IsWireGuardOnly {
+				// Discokey transitioned from non-zero to zero? This should not
+				// happen in the wild, however it could mean:
+				// 1. A node was downgraded from post 0.100 to pre 0.100.
+				// 2. A Tailscale node key was extracted and used on a
+				//    non-Tailscale node (should not enter here due to the
+				//    IsWireGuardOnly check)
+				// 3. The server is misbehaving.
 				c.peerMap.deleteEndpoint(ep)
 				continue
 			}
@@ -2745,9 +2757,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
-		if n.DiscoKey.IsZero() {
-			// Ancient pre-0.100 node. Ignore, so we can assume elsewhere in magicsock
-			// that all nodes have a DiscoKey.
+		if n.DiscoKey.IsZero() && !n.IsWireGuardOnly {
+			// Ancient pre-0.100 node, which does not have a disco key, and will only be reachable via DERP.
 			continue
 		}
 
@@ -2763,35 +2774,40 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		if len(n.Addresses) > 0 {
 			ep.nodeAddr = n.Addresses[0].Addr()
 		}
-		ep.disco.Store(&endpointDisco{
-			key:   n.DiscoKey,
-			short: n.DiscoKey.ShortString(),
-		})
 		ep.initFakeUDPAddr()
-		if debugDisco() { // rather than making a new knob
-			c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
-				const derpPrefix = "127.3.3.40:"
-				if strings.HasPrefix(n.DERP, derpPrefix) {
-					ipp, _ := netip.ParseAddrPort(n.DERP)
-					regionID := int(ipp.Port())
-					code := c.derpRegionCodeLocked(regionID)
-					if code != "" {
-						code = "(" + code + ")"
-					}
-					fmt.Fprintf(w, "derp=%v%s ", regionID, code)
-				}
+		if n.DiscoKey.IsZero() {
+			ep.disco.Store(nil)
+		} else {
+			ep.disco.Store(&endpointDisco{
+				key:   n.DiscoKey,
+				short: n.DiscoKey.ShortString(),
+			})
 
-				for _, a := range n.AllowedIPs {
-					if a.IsSingleIP() {
-						fmt.Fprintf(w, "aip=%v ", a.Addr())
-					} else {
-						fmt.Fprintf(w, "aip=%v ", a)
+			if debugDisco() { // rather than making a new knob
+				c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
+					const derpPrefix = "127.3.3.40:"
+					if strings.HasPrefix(n.DERP, derpPrefix) {
+						ipp, _ := netip.ParseAddrPort(n.DERP)
+						regionID := int(ipp.Port())
+						code := c.derpRegionCodeLocked(regionID)
+						if code != "" {
+							code = "(" + code + ")"
+						}
+						fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 					}
-				}
-				for _, ep := range n.Endpoints {
-					fmt.Fprintf(w, "ep=%v ", ep)
-				}
-			}))
+
+					for _, a := range n.AllowedIPs {
+						if a.IsSingleIP() {
+							fmt.Fprintf(w, "aip=%v ", a.Addr())
+						} else {
+							fmt.Fprintf(w, "aip=%v ", a)
+						}
+					}
+					for _, ep := range n.Endpoints {
+						fmt.Fprintf(w, "ep=%v ", ep)
+					}
+				}))
+			}
 		}
 		ep.updateFromNode(n, heartbeatDisabled)
 		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
@@ -4626,6 +4642,22 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 
 	de.heartbeatDisabled = heartbeatDisabled
 	de.expired = n.Expired
+
+	// TODO(#7826): add support for more than one endpoint for pure WireGuard
+	// peers, and/or support for probing "bestness" for endpoints.
+	if n.IsWireGuardOnly {
+		for _, ep := range n.Endpoints {
+			ipp, err := netip.ParseAddrPort(ep)
+			if err != nil {
+				de.c.logf("magicsock: invalid endpoint: %s %s", ep, err)
+				continue
+			}
+			de.bestAddr = addrLatency{
+				AddrPort: ipp,
+			}
+			break
+		}
+	}
 
 	epDisco := de.disco.Load()
 	var discoKey key.DiscoPublic

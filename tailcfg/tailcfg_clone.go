@@ -99,6 +99,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer netip.Addr
+	IsWireGuardOnly               bool
 }{})
 
 // Clone makes a deep copy of Hostinfo.

@@ -39,6 +39,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/stun/stuntest"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
@@ -200,6 +201,7 @@ func newMagicStackWithKey(t testing.TB, logf logger.Logf, l nettype.PacketListen
 }
 
 func (s *magicStack) Reconfig(cfg *wgcfg.Config) error {
+	s.tsTun.SetWGConfig(cfg)
 	s.wgLogger.SetPeers(cfg.Peers)
 	return wgcfg.ReconfigDevice(s.dev, cfg, s.conn.logf)
 }
@@ -2100,5 +2102,177 @@ func Test_batchingUDPConn_coalesceMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newWireguard starts up a new wireguard-go device attached to a test tun, and
+// returns the device, tun and netpoint address. To add peers call device.IpcSet
+// with UAPI instructions.
+func newWireguard(t *testing.T, uapi string, aips []netip.Prefix) (*device.Device, *tuntest.ChannelTUN, netip.AddrPort) {
+	wgtun := tuntest.NewChannelTUN()
+	wglogf := func(f string, args ...any) {
+		t.Logf("wg-go: "+f, args...)
+	}
+	wglog := device.Logger{
+		Verbosef: func(string, ...any) {},
+		Errorf:   wglogf,
+	}
+	wgdev := wgcfg.NewDevice(wgtun.TUN(), wgconn.NewDefaultBind(), &wglog)
+
+	if err := wgdev.IpcSet(uapi); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wgdev.Up(); err != nil {
+		t.Fatal(err)
+	}
+
+	var wgEp netip.AddrPort
+
+	s, err := wgdev.IpcGet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		k, v, _ := strings.Cut(line, "=")
+		if k == "listen_port" {
+			wgEp = netip.MustParseAddrPort("127.0.0.1:" + v)
+			break
+		}
+	}
+
+	if !wgEp.IsValid() {
+		t.Fatalf("failed to get endpoint out of wg-go")
+	}
+	t.Logf("wg-go endpoint: %s", wgEp)
+
+	return wgdev, wgtun, wgEp
+}
+
+func TestIsWireGuardOnlyPeer(t *testing.T) {
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	tskey := key.NewNode()
+	tsaip := netip.MustParsePrefix("100.111.222.111/32")
+
+	wgkey := key.NewNode()
+	wgaip := netip.MustParsePrefix("100.222.111.222/32")
+
+	uapi := fmt.Sprintf("private_key=%s\npublic_key=%s\nallowed_ip=%s\n\n",
+		wgkey.UntypedHexString(), tskey.Public().UntypedHexString(), tsaip.String())
+	wgdev, wgtun, wgEp := newWireguard(t, uapi, []netip.Prefix{wgaip})
+	defer wgdev.Close()
+
+	m := newMagicStackWithKey(t, t.Logf, localhostListener{}, derpMap, tskey)
+	defer m.Close()
+
+	nm := &netmap.NetworkMap{
+		Name:       "ts",
+		PrivateKey: m.privateKey,
+		NodeKey:    m.privateKey.Public(),
+		Addresses:  []netip.Prefix{tsaip},
+		Peers: []*tailcfg.Node{
+			{
+				Key:             wgkey.Public(),
+				Endpoints:       []string{wgEp.String()},
+				IsWireGuardOnly: true,
+				Addresses:       []netip.Prefix{wgaip},
+				AllowedIPs:      []netip.Prefix{wgaip},
+			},
+		},
+	}
+	m.conn.SetNetworkMap(nm)
+
+	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSingleHosts|netmap.AllowSubnetRoutes, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Reconfig(cfg)
+
+	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
+	m.tun.Outbound <- pbuf
+
+	select {
+	case p := <-wgtun.Inbound:
+		if !bytes.Equal(p, pbuf) {
+			t.Errorf("got unexpected packet: %x", p)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no packet after 1s")
+	}
+}
+
+func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
+	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+	defer cleanup()
+
+	tskey := key.NewNode()
+	tsaip := netip.MustParsePrefix("100.111.222.111/32")
+
+	wgkey := key.NewNode()
+	wgaip := netip.MustParsePrefix("10.64.0.1/32")
+
+	// the ip that the wireguard peer has in allowed ips and expects as a masq source
+	masqip := netip.MustParsePrefix("10.64.0.2/32")
+
+	uapi := fmt.Sprintf("private_key=%s\npublic_key=%s\nallowed_ip=%s\n\n",
+		wgkey.UntypedHexString(), tskey.Public().UntypedHexString(), masqip.String())
+	wgdev, wgtun, wgEp := newWireguard(t, uapi, []netip.Prefix{wgaip})
+	defer wgdev.Close()
+
+	m := newMagicStackWithKey(t, t.Logf, localhostListener{}, derpMap, tskey)
+	defer m.Close()
+
+	nm := &netmap.NetworkMap{
+		Name:       "ts",
+		PrivateKey: m.privateKey,
+		NodeKey:    m.privateKey.Public(),
+		Addresses:  []netip.Prefix{tsaip},
+		Peers: []*tailcfg.Node{
+			{
+				Key:                           wgkey.Public(),
+				Endpoints:                     []string{wgEp.String()},
+				IsWireGuardOnly:               true,
+				Addresses:                     []netip.Prefix{wgaip},
+				AllowedIPs:                    []netip.Prefix{wgaip},
+				SelfNodeV4MasqAddrForThisPeer: masqip.Addr(),
+			},
+		},
+	}
+	m.conn.SetNetworkMap(nm)
+
+	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSingleHosts|netmap.AllowSubnetRoutes, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Reconfig(cfg)
+
+	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
+	m.tun.Outbound <- pbuf
+
+	select {
+	case p := <-wgtun.Inbound:
+
+		// TODO(raggi): move to a bytes.Equal based test later, once
+		// tuntest.Ping produces correct checksums!
+
+		var pkt packet.Parsed
+		pkt.Decode(p)
+		if pkt.ICMP4Header().Type != packet.ICMP4EchoRequest {
+			t.Fatalf("unexpected packet: %x", p)
+		}
+		if pkt.Src.Addr() != masqip.Addr() {
+			t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+		}
+		if pkt.Dst.Addr() != wgaip.Addr() {
+			t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no packet after 1s")
 	}
 }

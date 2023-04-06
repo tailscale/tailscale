@@ -179,6 +179,7 @@ func (v NodeView) Expired() bool                     { return v.ж.Expired }
 func (v NodeView) SelfNodeV4MasqAddrForThisPeer() netip.Addr {
 	return v.ж.SelfNodeV4MasqAddrForThisPeer
 }
+func (v NodeView) IsWireGuardOnly() bool  { return v.ж.IsWireGuardOnly }
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -214,6 +215,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer netip.Addr
+	IsWireGuardOnly               bool
 }{})
 
 // View returns a readonly view of Hostinfo.
