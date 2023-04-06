@@ -96,7 +96,8 @@ type CapabilityVersion int
 //   - 57: 2023-01-25: Client understands CapabilityBindToInterfaceByRoute
 //   - 58: 2023-03-10: Client retries lite map updates before restarting map poll.
 //   - 59: 2023-03-16: Client understands Peers[].SelfNodeV4MasqAddrForThisPeer
-const CurrentCapabilityVersion CapabilityVersion = 59
+//   - 60: 2023-04-06: Client understands IsWireGuardOnly
+const CurrentCapabilityVersion CapabilityVersion = 60
 
 type StableID string
 
@@ -289,6 +290,12 @@ type Node struct {
 	// peer or any of its subnets. Traffic originating from subnet routes will
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
 	SelfNodeV4MasqAddrForThisPeer netip.Addr `json:",omitempty"`
+
+	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
+	// is not expected to speak Disco or DERP, and it must have Endpoints in
+	// order to be reachable. TODO(#7826): 2023-04-06: only the first parseable
+	// Endpoint is used, see #7826 for updates.
+	IsWireGuardOnly bool `json:",omitempty"`
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1715,7 +1722,8 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
 		eqStrings(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
-		n.SelfNodeV4MasqAddrForThisPeer == n2.SelfNodeV4MasqAddrForThisPeer
+		n.SelfNodeV4MasqAddrForThisPeer == n2.SelfNodeV4MasqAddrForThisPeer &&
+		n.IsWireGuardOnly == n2.IsWireGuardOnly
 }
 
 func eqBoolPtr(a, b *bool) bool {
