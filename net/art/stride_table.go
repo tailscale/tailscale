@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,9 @@ type strideEntry[T any] struct {
 // The leaves of the binary tree are host routes (/8s). Each parent is a
 // successively larger prefix that encompasses its children (/7 through /0).
 type strideTable[T any] struct {
+	// prefix is the prefix represented by the 0/0 route of this strideTable. It
+	// is used in multi-level tables to support path compression.
+	prefix netip.Prefix
 	// entries is the nodes of the binary tree, laid out in a flattened array.
 	//
 	// The array indices are arranged by the prefixIndex function, such that the
@@ -76,7 +80,9 @@ func (t *strideTable[T]) deleteChild(idx int) {
 func (t *strideTable[T]) getOrCreateChild(addr uint8) *strideTable[T] {
 	idx := hostIndex(addr)
 	if t.entries[idx].child == nil {
-		t.entries[idx].child = new(strideTable[T])
+		t.entries[idx].child = &strideTable[T]{
+			prefix: childPrefixOf(t.prefix, addr),
+		}
 		t.refs++
 	}
 	return t.entries[idx].child
@@ -228,4 +234,30 @@ func formatPrefixTable(addr uint8, len int) string {
 		return "<nil>"
 	}
 	return fmt.Sprintf("%3d/%d", addr, len)
+}
+
+// childPrefixOf returns the child prefix of parent whose final byte
+// is stride. The parent prefix must be byte-aligned
+// (i.e. parent.Bits() must be a multiple of 8), and be no more
+// specific than /24 for IPv4 or /120 for IPv6.
+//
+// For example, childPrefixOf("192.168.0.0/16", 8) == "192.168.8.0/24".
+func childPrefixOf(parent netip.Prefix, stride uint8) netip.Prefix {
+	l := parent.Bits()
+	if l%8 != 0 {
+		panic("parent prefix is not 8-bit aligned")
+	}
+	if l >= parent.Addr().BitLen() {
+		panic("parent prefix cannot be extended further")
+	}
+	off := l / 8
+	if parent.Addr().Is4() {
+		bs := parent.Addr().As4()
+		bs[off] = stride
+		return netip.PrefixFrom(netip.AddrFrom4(bs), l+8)
+	} else {
+		bs := parent.Addr().As16()
+		bs[off] = stride
+		return netip.PrefixFrom(netip.AddrFrom16(bs), l+8)
+	}
 }

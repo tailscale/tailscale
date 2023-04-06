@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"net/netip"
 	"sort"
 	"strings"
 	"testing"
@@ -100,7 +101,7 @@ func TestStrideTableInsertShuffled(t *testing.T) {
 		for _, route := range routes2 {
 			rt2.insert(route.addr, route.len, route.val)
 		}
-		if diff := cmp.Diff(rt, rt2, cmp.AllowUnexported(strideTable[int]{}, strideEntry[int]{})); diff != "" {
+		if diff := cmp.Diff(rt, rt2, cmpDiffOpts...); diff != "" {
 			t.Errorf("tables ended up different with different insertion order (-got+want):\n%s\n\nOrder 1: %v\nOrder 2: %v", diff, formatSlowEntriesShort(routes), formatSlowEntriesShort(routes2))
 		}
 
@@ -108,7 +109,7 @@ func TestStrideTableInsertShuffled(t *testing.T) {
 		for _, route := range routes2 {
 			rtZero2.insert(route.addr, route.len, &zero)
 		}
-		if diff := cmp.Diff(rtZero, rtZero2, cmp.AllowUnexported(strideTable[int]{}, strideEntry[int]{})); diff != "" {
+		if diff := cmp.Diff(rtZero, rtZero2, cmpDiffOpts...); diff != "" {
 			t.Errorf("tables with identical vals ended up different with different insertion order (-got+want):\n%s\n\nOrder 1: %v\nOrder 2: %v", diff, formatSlowEntriesShort(routes), formatSlowEntriesShort(routes2))
 		}
 	}
@@ -180,7 +181,7 @@ func TestStrideTableDeleteShuffle(t *testing.T) {
 		for _, route := range toDelete2 {
 			rt2.delete(route.addr, route.len)
 		}
-		if diff := cmp.Diff(rt, rt2, cmp.AllowUnexported(strideTable[int]{}, strideEntry[int]{})); diff != "" {
+		if diff := cmp.Diff(rt, rt2, cmpDiffOpts...); diff != "" {
 			t.Errorf("tables ended up different with different deletion order (-got+want):\n%s\n\nOrder 1: %v\nOrder 2: %v", diff, formatSlowEntriesShort(toDelete), formatSlowEntriesShort(toDelete2))
 		}
 
@@ -191,7 +192,7 @@ func TestStrideTableDeleteShuffle(t *testing.T) {
 		for _, route := range toDelete2 {
 			rtZero2.delete(route.addr, route.len)
 		}
-		if diff := cmp.Diff(rtZero, rtZero2, cmp.AllowUnexported(strideTable[int]{}, strideEntry[int]{})); diff != "" {
+		if diff := cmp.Diff(rtZero, rtZero2, cmpDiffOpts...); diff != "" {
 			t.Errorf("tables with identical vals ended up different with different deletion order (-got+want):\n%s\n\nOrder 1: %v\nOrder 2: %v", diff, formatSlowEntriesShort(toDelete), formatSlowEntriesShort(toDelete2))
 		}
 	}
@@ -381,4 +382,9 @@ func formatSlowEntriesShort[T any](ents []slowEntry[T]) string {
 		ret = append(ret, fmt.Sprintf("%d/%d", ent.addr, ent.len))
 	}
 	return "[" + strings.Join(ret, " ") + "]"
+}
+
+var cmpDiffOpts = []cmp.Option{
+	cmp.AllowUnexported(strideTable[int]{}, strideEntry[int]{}),
+	cmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
 }
