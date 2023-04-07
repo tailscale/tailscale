@@ -332,6 +332,9 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 	now := rm.now().Unix()
 	var periodLength int64 = radioSampleSize
 	if t := now - rm.startTime; t < periodLength {
+		if t <= 0 {
+			return 0
+		}
 		periodLength = t
 	}
 	periodStart := now - periodLength // start of current reporting period
