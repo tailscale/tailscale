@@ -63,6 +63,14 @@ var sockStats = struct {
 	radioHighMetric:       clientmetric.NewGaugeFunc("sockstats_cellular_radio_high_fraction", radio.radioHighPercent),
 }
 
+func init() {
+	// Deltas are not useful for this gauge metric, we want the collector to be
+	// able to get current values without having to wait for the 4 hour
+	// metricLogNameFrequency interval (by which point the cell radio state may
+	// be very different).
+	sockStats.radioHighMetric.DisableDeltas()
+}
+
 func withSockStats(ctx context.Context, label Label) context.Context {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
