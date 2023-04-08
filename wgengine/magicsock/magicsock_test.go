@@ -1143,10 +1143,14 @@ func TestDiscoMessage(t *testing.T) {
 		Key:      key.NewNode().Public(),
 		DiscoKey: peer1Pub,
 	}
-	c.peerMap.upsertEndpoint(&endpoint{
+	ep := &endpoint{
 		publicKey: n.Key,
-		discoKey:  n.DiscoKey,
-	}, key.DiscoPublic{})
+	}
+	ep.disco.Store(&endpointDisco{
+		key:   n.DiscoKey,
+		short: n.DiscoKey.ShortString(),
+	})
+	c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
 
 	const payload = "why hello"
 
@@ -1458,8 +1462,12 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	if ok && de.publicKey != nodeKey2 {
 		t.Fatalf("discoEndpoint public key = %q; want %q", de.publicKey, nodeKey2)
 	}
-	if de.discoKey != discoKey {
-		t.Errorf("discoKey = %v; want %v", de.discoKey, discoKey)
+	deDisco := de.disco.Load()
+	if deDisco == nil {
+		t.Fatalf("discoEndpoint disco is nil")
+	}
+	if deDisco.key != discoKey {
+		t.Errorf("discoKey = %v; want %v", deDisco.key, discoKey)
 	}
 	if _, ok := conn.peerMap.endpointForNodeKey(nodeKey1); ok {
 		t.Errorf("didn't expect to find node for key1")
