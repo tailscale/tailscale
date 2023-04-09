@@ -2293,7 +2293,6 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			c.logf("[unexpected] CallMeMaybe from peer via DERP whose netmap discokey != disco source")
 			return
 		}
-		di.setNodeKey(nodeKey)
 		c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got call-me-maybe, %d endpoints",
 			c.discoShort, epDisco.short,
 			ep.publicKey.ShortString(), derpStr(src.String()),
@@ -2357,7 +2356,6 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	// mapping, and on subsequent disco handlePongLocked to establish
 	// the IP<>disco mapping.
 	if nk, ok := c.unambiguousNodeKeyOfPingLocked(dm, di.discoKey, derpNodeSrc); ok {
-		di.setNodeKey(nk)
 		if !isDerp {
 			c.peerMap.setNodeKeyForIPPort(src, nk)
 		}
@@ -4814,7 +4812,6 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 	knownTxID = true // for naked returns below
 	de.removeSentPingLocked(m.TxID, sp)
-	di.setNodeKey(de.publicKey)
 
 	now := mono.Now()
 	latency := now.Sub(sp.at)
@@ -5117,22 +5114,6 @@ type discoInfo struct {
 
 	// lastPingTime is the last time of a ping for discoKey.
 	lastPingTime time.Time
-
-	// lastNodeKey is the last NodeKey seen using discoKey.
-	// It's only updated if the NodeKey is unambiguous.
-	lastNodeKey key.NodePublic
-
-	// lastNodeKeyTime is the time a NodeKey was last seen using
-	// this discoKey. It's only updated if the NodeKey is
-	// unambiguous.
-	lastNodeKeyTime time.Time
-}
-
-// setNodeKey sets the most recent mapping from di.discoKey to the
-// NodeKey nk.
-func (di *discoInfo) setNodeKey(nk key.NodePublic) {
-	di.lastNodeKey = nk
-	di.lastNodeKeyTime = time.Now()
 }
 
 // derpAddrFamSelector is the derphttp.AddressFamilySelector we pass
