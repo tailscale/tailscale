@@ -370,6 +370,15 @@ type Conn struct {
 	// captureHook, if non-nil, is the pcap logging callback when capturing.
 	captureHook syncs.AtomicValue[capture.Callback]
 
+	// discoPrivate is the private naclbox key used for active
+	// discovery traffic. It is always present, and immutable.
+	discoPrivate key.DiscoPrivate
+	// public of discoPrivate. It is always present and immutable.
+	discoPublic key.DiscoPublic
+	// ShortString of discoPublic (to save logging work later). It is always
+	// present and immutable.
+	discoShort string
+
 	// ============================================================
 	// mu guards all following fields; see userspaceEngine lock
 	// ordering rules against the engine. For derphttp, mu must
@@ -421,12 +430,6 @@ type Conn struct {
 	// in other maps below that are keyed by peer public key.
 	peerSet map[key.NodePublic]struct{}
 
-	// discoPrivate is the private naclbox key used for active
-	// discovery traffic. It's created once near (but not during)
-	// construction.
-	discoPrivate key.DiscoPrivate
-	discoPublic  key.DiscoPublic // public of discoPrivate
-	discoShort   string          // ShortString of discoPublic (to save logging work later)
 	// nodeOfDisco tracks the networkmap Node entity for each peer
 	// discovery key.
 	peerMap peerMap
@@ -599,13 +602,17 @@ func (o *Options) derpActiveFunc() func() {
 // newConn is the error-free, network-listening-side-effect-free based
 // of NewConn. Mostly for tests.
 func newConn() *Conn {
+	discoPrivate := key.NewDisco()
 	c := &Conn{
 		derpRecvCh:   make(chan derpReadResult, 1), // must be buffered, see issue 3736
 		derpStarted:  make(chan struct{}),
 		peerLastDerp: make(map[key.NodePublic]int),
 		peerMap:      newPeerMap(),
 		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
+		discoPrivate: discoPrivate,
+		discoPublic:  discoPrivate.Public(),
 	}
+	c.discoShort = c.discoPublic.ShortString()
 	c.bind = &connBind{Conn: c, closed: true}
 	c.receiveBatchPool = sync.Pool{New: func() any {
 		msgs := make([]ipv6.Message, c.bind.BatchSize())
@@ -670,6 +677,7 @@ func NewConn(opts Options) (*Conn, error) {
 		c.logf("[v1] couldn't create raw v6 disco listener, using regular listener instead: %v", err)
 	}
 
+	c.logf("magicsock: disco key = %v", c.discoShort)
 	return c, nil
 }
 
@@ -1056,15 +1064,6 @@ func (c *Conn) derpRegionCodeLocked(regionID int) string {
 
 // DiscoPublicKey returns the discovery public key.
 func (c *Conn) DiscoPublicKey() key.DiscoPublic {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.discoPrivate.IsZero() {
-		priv := key.NewDisco()
-		c.discoPrivate = priv
-		c.discoPublic = priv.Public()
-		c.discoShort = c.discoPublic.ShortString()
-		c.logf("magicsock: disco key = %v", c.discoShort)
-	}
 	return c.discoPublic
 }
 
@@ -2184,12 +2183,6 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	if c.privateKey.IsZero() {
 		// Ignore disco messages when we're stopped.
 		// Still return true, to not pass it down to wireguard.
-		return
-	}
-	if c.discoPrivate.IsZero() {
-		if debugDisco() {
-			c.logf("magicsock: disco: ignoring disco-looking frame, no local key")
-		}
 		return
 	}
 
