@@ -36,7 +36,7 @@ import (
 	_ "tailscale.com/ssh/tailssh"
 	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"
-	_ "tailscale.com/tsweb"
+	_ "tailscale.com/tsweb/varz"
 	_ "tailscale.com/types/flagtype"
 	_ "tailscale.com/types/key"
 	_ "tailscale.com/types/logger"
