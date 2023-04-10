@@ -4085,6 +4085,8 @@ func ippDebugString(ua netip.AddrPort) string {
 // recalculated.
 type endpointSendFunc func([][]byte) error
 
+// endpointDisco is the current disco key and short string for an endpoint. This
+// structure is immutable.
 type endpointDisco struct {
 	key   key.DiscoPublic // for discovery messages.
 	short string          // ShortString of discoKey.
