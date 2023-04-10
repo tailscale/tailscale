@@ -865,6 +865,11 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintln(w, "<!DOCTYPE html><h1>Socket Stats</h1>")
 
+	if !sockstats.IsAvailable {
+		fmt.Fprintln(w, "Socket stats are not available for this client")
+		return
+	}
+
 	stats, interfaceStats, validation := sockstats.Get(), sockstats.GetInterfaces(), sockstats.GetValidation()
 	if stats == nil {
 		fmt.Fprintln(w, "No socket stats available")
