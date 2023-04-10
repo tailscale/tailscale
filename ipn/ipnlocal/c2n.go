@@ -89,6 +89,10 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
+		if b.sockstatLogger == nil {
+			http.Error(w, "no sockstatLogger", http.StatusInternalServerError)
+			return
+		}
 		b.sockstatLogger.Flush()
 		fmt.Fprintln(w, b.sockstatLogger.LogID())
 	default:
