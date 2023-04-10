@@ -217,6 +217,7 @@ func main() {
 		}
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
+	debug.Handle("flows", "Flows", http.HandlerFunc(s.ServeDebugFlows))
 
 	if *runSTUN {
 		go serveSTUN(listenHost, *stunPort)

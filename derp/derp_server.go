@@ -26,6 +26,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -87,6 +88,26 @@ const (
 	// then disables all of them.
 	disableFighters
 )
+
+// flowStats is a data structure containing stats for a client to
+// client data flow through this server. The counters are written
+// solely by run(), read by the debug server, and do not need to be
+// thread-safe.
+type flowStats struct {
+	bytes   int64
+	packets int64
+	// TODO: replace with a server thread that sweeps every N time
+	// units
+	lastActive time.Time
+}
+
+// uniqueConn is used to uniquely index flows by source, since the
+// source public key can be duplicated by multiple connected
+// clients. The connection number is used to disambiguate them.
+type uniqueConn struct {
+	key     key.NodePublic
+	connNum int64
+}
 
 type align64 [0]atomic.Int64 // for side effect of its 64-bit alignment
 
@@ -162,6 +183,19 @@ type Server struct {
 	// src.
 	sentTo map[key.NodePublic]map[key.NodePublic]int64 // src => dst => dst's latest sclient.connNum
 
+	// flows tracks statistics for the various client flows
+	// through this server. It includes flows that have a src or
+	// dst that is not a local client. Since client keys may be
+	// duplicated, we distinguish between flows to different
+	// duplicate clients using the connection number, like sentTo.
+	//
+	// The src sclient has a map with references to all the flows
+	// for which it is the source (indexed by dst key), so our
+	// first level map index is by dst key to be able to quickly
+	// delete the flows for which this sclient is the destination.
+	//
+	// TODO: this seems like it should obviously be merged with sentTo[][]
+	flows map[key.NodePublic]map[uniqueConn]*flowStats // dst => src,connNum => flow stats
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr map[netip.AddrPort]key.NodePublic
 }
@@ -318,6 +352,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		avgQueueDuration:     new(uint64),
 		tcpRtt:               metrics.LabelMap{Label: "le"},
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
+		flows:                map[key.NodePublic]map[uniqueConn]*flowStats{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -585,6 +620,17 @@ func (s *Server) unregisterClient(c *sclient) {
 		}
 	}
 
+	// Delete all the flows for which sclient is the srcKey. For
+	// each flow in c.flows, look up the corresponding flow in
+	// s.flows and delete it.
+	//
+	// c.flows[dstKey] = s.flows with srcKey = c.key, connNum = c.con, dstKey
+	for dstKey := range c.flows {
+		delete(s.flows[dstKey], uniqueConn{c.key, c.connNum})
+	}
+	// Delete all the flows for which sclient is the dstKey.
+	delete(s.flows, c.key)
+
 	if c.canMesh {
 		delete(s.watchers, c)
 	}
@@ -704,6 +750,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		peerGone:       make(chan peerGoneMsg),
 		canMesh:        clientInfo.MeshKey != "" && clientInfo.MeshKey == s.meshKey,
 		peerGoneLim:    rate.NewLimiter(rate.Every(time.Second), 3),
+		flows:          map[key.NodePublic]*flowStats{},
 	}
 
 	if c.canMesh {
@@ -885,11 +932,13 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 		return fmt.Errorf("client %x: recvForwardPacket: %v", c.key, err)
 	}
 	s.packetsForwardedIn.Add(1)
+	flow := c.flows[dstKey]
 
 	var dstLen int
 	var dst *sclient
 
 	s.mu.Lock()
+	// identical
 	if set, ok := s.clients[dstKey]; ok {
 		dstLen = set.Len()
 		dst = set.ActiveClient()
@@ -897,7 +946,13 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 	if dst != nil {
 		s.notePeerSendLocked(srcKey, dst)
 	}
+	if flow == nil {
+		flow = s.getFlowStatsLocked(c, dstKey)
+	}
+	// end identical
 	s.mu.Unlock()
+
+	c.updateFlowStats(flow, dstKey, contents)
 
 	if dst == nil {
 		reason := dropReasonUnknownDestOnFwd
@@ -931,6 +986,45 @@ func (s *Server) notePeerSendLocked(src key.NodePublic, dst *sclient) {
 	m[dst.key] = dst.connNum
 }
 
+// getFlowLocked allocates a flowStats to track bytes/packets sent
+// from this sclient to this destination key. It should only be called
+// when the src sclient's map is empty (and therefore the Server's?). XXX
+func (s *Server) getFlowStatsLocked(c *sclient, dstKey key.NodePublic) *flowStats {
+	if m, ok := s.flows[dstKey]; !ok {
+		// alloc the second level map
+		m = map[uniqueConn]*flowStats{}
+		s.flows[dstKey] = m
+	}
+	u := uniqueConn{c.key, c.connNum}
+	// debugging
+	if _, ok := s.flows[dstKey][u]; ok {
+		panic("server still has a flow but sclient does not")
+	}
+	// We have a map of unique connections => *flowStat, now alloc a flowStat
+	f := &flowStats{}
+	s.flows[dstKey][u] = f
+	// Populate the src sclient map outside the lock
+	return f
+}
+
+// updateFlowStats tracks every byte that enters the derp for a
+// src,dst pair. We let the dropped packet counters record drops. f
+// must be the valid flow, either looked up from the src client's
+// flows or recently allocated and stored only in the server flow map.
+func (c *sclient) updateFlowStats(f *flowStats, dstKey key.NodePublic, contents []byte) {
+	if f == nil {
+		panic("usage")
+	}
+	// We didn't populate this inside s.mu() so do it now
+	if c.flows[dstKey] == nil {
+		c.flows[dstKey] = f
+	}
+	// This stuff is
+	f.packets += 1
+	f.bytes += int64(len(contents))
+	f.lastActive = time.Now()
+}
+
 // handleFrameSendPacket reads a "send packet" frame from the client.
 func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	s := c.s
@@ -939,22 +1033,36 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 	if err != nil {
 		return fmt.Errorf("client %x: recvPacket: %v", c.key, err)
 	}
+	flow := c.flows[dstKey]
 
 	var fwd PacketForwarder
 	var dstLen int
 	var dst *sclient
 
 	s.mu.Lock()
+	// This bit is identical
 	if set, ok := s.clients[dstKey]; ok {
 		dstLen = set.Len()
 		dst = set.ActiveClient()
 	}
 	if dst != nil {
 		s.notePeerSendLocked(c.key, dst)
-	} else if dstLen < 1 {
+	}
+	if flow == nil {
+		flow = s.getFlowStatsLocked(c, dstKey)
+	}
+
+	// end identical
+	if dst == nil && dstLen < 1 {
 		fwd = s.clientsMesh[dstKey]
 	}
+
 	s.mu.Unlock()
+
+	// Track every byte that enters the derp for a
+	// srcKey,dstKey,connNum tuple. Let the dropped packet
+	// counters record the drops.
+	c.updateFlowStats(flow, dstKey, contents)
 
 	if dst == nil {
 		if fwd != nil {
@@ -962,7 +1070,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 			err := fwd.ForwardPacket(c.key, dstKey, contents)
 			c.debug("SendPacket for %s, forwarding via %s: %v", dstKey.ShortString(), fwd, err)
 			if err != nil {
-				// TODO:
+				// TODO: what???
 				return nil
 			}
 			return nil
@@ -1327,6 +1435,21 @@ type sclient struct {
 	// client that it's trying to establish a direct connection
 	// through us with a peer we have no record of.
 	peerGoneLim *rate.Limiter
+
+	// flows tracks the subset of flows for which we are the
+	// src. The server flows map tracks the addresses of all
+	// flowStats structs; the value of this is a copy of that
+	// address.
+	//
+	// Allocation of the underlying struct and population of
+	// server and client maps happens in run() under s.mu.
+	//
+	// Update of the counters inside flowStats happens in run()
+	// and they are not thread-safe.
+	//
+	// Deletion of the map entries happens under s.mu, also in
+	// run()
+	flows map[key.NodePublic]*flowStats // dst => src,connNum,dst flow stats
 }
 
 // peerConnState represents whether a peer is connected to the server
@@ -1929,6 +2052,50 @@ func (s *Server) ServeDebugTraffic(w http.ResponseWriter, r *http.Request) {
 		}
 		time.Sleep(minTimeBetweenLogs)
 	}
+}
+
+// Print a list of data flows that have gone through this server
+// between connected clients. Includes clients which are currently
+// communicating directly but still using this DERP server as their
+// home.
+//
+// TODO: What else do we want to know? Time connection was
+// established? Time since last packet? Average bandwidth?
+//
+// TODO: Convert into Prometheus histograms
+func (s *Server) ServeDebugFlows(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "current time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	type flowLine struct {
+		srcKey, dstKey key.NodePublic
+		connNum        int64
+		f              flowStats
+	}
+	flows := make([]flowLine, 0)
+	s.mu.Lock()
+	// Copy the whole map into a more sortable data structure so we
+	// can drop the server lock quickly.
+	for dstKey := range s.flows {
+		for u, f := range s.flows[dstKey] {
+			flows = append(flows, flowLine{
+				srcKey:  u.key,
+				dstKey:  dstKey,
+				connNum: u.connNum,
+				f:       *f})
+		}
+	}
+	s.mu.Unlock()
+
+	fmt.Fprintf(w, "number flows: %v\n", len(flows))
+	// Sort by largest flow
+	sort.Slice(flows, func(i, j int) bool { return flows[i].f.bytes < flows[j].f.bytes })
+
+	now := time.Now()
+	fmt.Fprintf(w, "src\tdst\tconn\tbytes\tpackets\tsecs_since_active\n")
+	for _, f := range flows {
+		fmt.Fprintf(w, "%v\t%v\t%v\t%v\t%v\t%d\n", f.srcKey.ShortString(), f.dstKey.ShortString(), f.connNum, f.f.bytes, f.f.packets, int64(now.Sub(f.f.lastActive).Seconds()))
+	}
+
+	w.(http.Flusher).Flush()
 }
 
 var bufioWriterPool = &sync.Pool{
