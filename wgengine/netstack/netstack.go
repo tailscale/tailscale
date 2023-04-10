@@ -215,6 +215,8 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
 	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
+	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
+	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	return ns, nil
 }
 
@@ -260,8 +262,6 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapProtoHandler(tcpFwd.HandlePacket))
 	ns.ipstack.SetTransportProtocolHandler(udp.ProtocolNumber, ns.wrapProtoHandler(udpFwd.HandlePacket))
 	go ns.inject()
-	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
-	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	return nil
 }
 
