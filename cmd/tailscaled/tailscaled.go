@@ -49,7 +49,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/syncs"
-	"tailscale.com/tsweb"
+	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/flagtype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -670,7 +670,7 @@ func newDebugMux() *http.ServeMux {
 
 func servePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	tsweb.VarzHandler(w, r)
+	varz.Handler(w, r)
 	clientmetric.WritePrometheusExpositionFormat(w)
 }
 
