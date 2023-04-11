@@ -33,14 +33,32 @@ func newFunnelCommand(e *serveEnv) *ffcli.Command {
 		ShortUsage: strings.TrimSpace(`
 funnel <serve-port> {on|off}
   funnel status [--json]
+  funnel https:<port> <mount-point> <source> [off]
 `),
-		LongHelp: strings.Join([]string{
-			"Funnel allows you to publish a 'tailscale serve'",
-			"server publicly, open to the entire internet.",
-			"",
-			"Turning off Funnel only turns off serving to the internet.",
-			"It does not affect serving to your tailnet.",
-		}, "\n"),
+		LongHelp: strings.TrimSpace(`
+*** BETA; all of this is subject to change ***
+
+Funnel allows you to publish a Tailscale Serve
+server publicly, open to the entire internet.
+
+EXAMPLES
+  - To toggle Funnel on HTTPS port 443 (default):
+    $ tailscale funnel 443 on
+    $ tailscale funnel 443 off
+
+    Turning off Funnel only turns off serving to the internet.
+    It does not affect serving to your tailnet.
+
+  - To proxy requests to a web server at 127.0.0.1:3000:
+    $ tailscale funnel https:443 / http://127.0.0.1:3000
+
+    Or, using the default port:
+    $ tailscale funnel https / http://127.0.0.1:3000
+
+  - To serve a single file or a directory of files:
+    $ tailscale funnel https / /home/alice/blog/index.html
+    $ tailscale funnel https /images/ /home/alice/blog/images
+`),
 		Exec:      e.runFunnel,
 		UsageFunc: usageFunc,
 		Subcommands: []*ffcli.Command{
@@ -58,10 +76,50 @@ funnel <serve-port> {on|off}
 }
 
 // runFunnel is the entry point for the "tailscale funnel" subcommand and
-// manages turning on/off funnel. Funnel is off by default.
+// handles the following cases:
+//
+// 1. `tailscale funnel status`
+//   - Prints the current status of the Funnel service.
+//
+// 2. `tailscale funnel <serve-port> {on|off}`
+//   - Turns the Funnel service on or off.
+//
+// 3. `tailsclae funnel https(:<serve-port>) <mount-point> <source>`
+//   - Starts a serve command and turns the Funnel service on.
 //
 // Note: funnel is only supported on single DNS name for now. (2022-11-15)
 func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
+	if len(args) == 2 {
+		switch args[1] {
+		case "on", "off":
+			return e.doToggleFunnel(ctx, args)
+		default:
+			return flag.ErrHelp
+		}
+	}
+
+	if len(args) > 2 {
+		if err := serveCmd.Exec(ctx, args); err != nil {
+			return err
+		}
+		_, portStr, _ := strings.Cut(args[0], ":")
+		if portStr == "" {
+			portStr = "443"
+		}
+		onOrOff := args[len(args)-1]
+		if onOrOff != "off" {
+			onOrOff = "on"
+		}
+
+		return e.doToggleFunnel(ctx, []string{portStr, onOrOff})
+	}
+
+	return flag.ErrHelp
+}
+
+// doToggleFunnel is the handler for "funnel <serve-port> {on|off}". It sets the
+// Funnel service to on or off for the given port.
+func (e *serveEnv) doToggleFunnel(ctx context.Context, args []string) error {
 	if len(args) != 2 {
 		return flag.ErrHelp
 	}

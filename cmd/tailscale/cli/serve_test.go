@@ -543,6 +543,61 @@ func TestServeConfigMutations(t *testing.T) {
 		want:    &ipn.ServeConfig{},
 	})
 
+	// Funnel HTTP tests
+	add(step{reset: true})
+	add(step{
+		command: cmd("funnel https / http://127.0.0.1:3000"),
+		want: &ipn.ServeConfig{
+			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("funnel https / http://127.0.0.1:3000 off"),
+		want:    &ipn.ServeConfig{},
+	})
+	add(step{
+		command: cmd("funnel https:443 / http://127.0.0.1:3000"),
+		want: &ipn.ServeConfig{
+			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:443": true},
+			TCP:         map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("funnel https:443 / http://127.0.0.1:3000 off"),
+		want:    &ipn.ServeConfig{},
+	})
+	add(step{
+		command: cmd("funnel https:8443 / http://127.0.0.1:3000"),
+		want: &ipn.ServeConfig{
+			AllowFunnel: map[ipn.HostPort]bool{"foo.test.ts.net:8443": true},
+			TCP:         map[uint16]*ipn.TCPPortHandler{8443: {HTTPS: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:8443": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("funnel https:8443 / http://127.0.0.1:3000 off"),
+		want:    &ipn.ServeConfig{},
+	})
+	add(step{ // invalid port
+		command: cmd("funnel https:8080 / http://127.0.0.1:3000"),
+		wantErr: anyErr(),
+	})
+
 	// tricky steps
 	add(step{reset: true})
 	add(step{ // a directory with a trailing slash mount point
@@ -652,9 +707,14 @@ func TestServeConfigMutations(t *testing.T) {
 		var args []string
 		if st.command[0] == "funnel" {
 			cmd = newFunnelCommand(e)
+			// The funnel command can call serve command, so we need to set the
+			// serveCmd variable.
+			serveCmd = newServeCommand(e)
 			args = st.command[1:]
 		} else {
 			cmd = newServeCommand(e)
+			// Reset the serveCmd variable from possible funnel command run.
+			serveCmd = cmd
 			args = st.command
 		}
 		err := cmd.ParseAndRun(context.Background(), args)
