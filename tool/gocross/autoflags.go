@@ -102,6 +102,10 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		cgo = nativeGOOS == "darwin"
 		tags = append(tags, "omitidna", "omitpemdecrypt")
 		if env.IsSet("XCODE_VERSION_ACTUAL") {
+			// If we're building via Xcode, we must be making the extension
+			// version (as opposed to tailscaled on Mac).
+			tags = append(tags, "ts_macext")
+
 			var xcodeFlags []string
 			// Minimum OS version being targeted, results in
 			// e.g. -mmacosx-version-min=11.3, -miphoneos-version-min=15.0
