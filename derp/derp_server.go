@@ -1449,7 +1449,7 @@ type sclient struct {
 	//
 	// Deletion of the map entries happens under s.mu, also in
 	// run()
-	flows map[key.NodePublic]*flowStats // dst => src,connNum,dst flow stats
+	flows map[key.NodePublic]*flowStats // dst => src,dst,connNum flow stats
 }
 
 // peerConnState represents whether a peer is connected to the server
@@ -2096,6 +2096,41 @@ func (s *Server) ServeDebugFlows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.(http.Flusher).Flush()
+}
+
+// CleanFlows periodically sweeps flows and frees old ones.
+func (s *Server) CleanFlows() {
+
+	const cleanInterval = 30 * time.Second
+
+	ticker := time.NewTicker(cleanInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.logf("running cleaner\n")
+		t := time.Now()
+		s.mu.Lock()
+		// TODO: hold lock shorter time
+		for dstKey := range s.flows {
+			s.logf("looking at s.flows for dst %s\n", dstKey.ShortString())
+			for src, f := range s.flows[dstKey] {
+				s.logf("looking at s.flows for src %s, dst%s, conn %d\n", src.key.ShortString(), dstKey.ShortString(), src.connNum)
+				if t.Sub(f.lastActive) > time.Second*5 {
+					s.logf("looking at src sclient %s\n", src.key.ShortString())
+					set := s.clients[src.key]
+					set.ForeachClient(func(c *sclient) {
+						s.logf("s.clients[%s] conn %d src conn %d\n", src.key.ShortString(), c.connNum, src.connNum)
+						if c.connNum == src.connNum {
+							s.logf("match! deleting dst flow %s\n", dstKey.ShortString())
+							delete(c.flows, dstKey)
+						}
+					})
+					delete(s.flows, dstKey)
+				}
+			}
+		}
+		s.mu.Unlock()
+	}
 }
 
 var bufioWriterPool = &sync.Pool{
