@@ -35,6 +35,12 @@ const pollInterval = time.Second / 10
 // which itself creates additional sockstat events.
 const logInterval = 3 * time.Second
 
+// maxLogFileSize specifies the maximum size of a log file before it is rotated.
+// Our logs are fairly compact, and we are mostly only looking at a few hours of data.
+// Combined with the fact that these are often uploaded over cellular connections,
+// we keep this relatively small.
+const maxLogFileSize = 5 << 20 // 5 MB
+
 // Logger logs statistics about network sockets.
 type Logger struct {
 	// enabled identifies whether the logger is enabled.
@@ -95,7 +101,10 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 		return nil, err
 	}
 	filchPrefix := filepath.Join(logdir, "sockstats")
-	filch, err := filch.New(filchPrefix, filch.Options{ReplaceStderr: false})
+	filch, err := filch.New(filchPrefix, filch.Options{
+		MaxFileSize:   maxLogFileSize,
+		ReplaceStderr: false,
+	})
 	if err != nil {
 		return nil, err
 	}
