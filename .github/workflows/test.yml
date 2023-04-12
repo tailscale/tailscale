@@ -235,6 +235,15 @@ jobs:
         ./tool/go run ./cmd/tsconnect --fast-compression build
         ./tool/go run ./cmd/tsconnect --fast-compression build-pkg
 
+  tailscale_go: # Subset of tests that depend on our custom Go toolchain.
+    runs-on: ubuntu-22.04
+    steps:
+    - name: checkout
+      uses: actions/checkout@v3
+    - name: test tailscale_go
+      run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
+
+
   fuzz:
     # This target periodically breaks (see TS_FUZZ_CURRENTLY_BROKEN at the top
     # of the file), so it's more complex than usual: the 'build fuzzers' step
@@ -372,6 +381,7 @@ jobs:
       - cross
       - ios
       - wasm
+      - tailscale_go
       - fuzz
       - depaware
       - go_generate
@@ -416,6 +426,7 @@ jobs:
       - cross
       - ios
       - wasm
+      - tailscale_go
       - fuzz
       - depaware
       - go_generate
