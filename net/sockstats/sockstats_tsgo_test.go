@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build tailscale_go && (darwin || ios || android)
+//go:build tailscale_go && (darwin || ios || android || ts_enable_sockstats)
 
 package sockstats
 
@@ -24,9 +24,9 @@ func (t *testTime) Add(d time.Duration) {
 
 func TestRadioMonitor(t *testing.T) {
 	tests := []struct {
-		name string
+		name     string
 		activity func(*testTime, *radioMonitor)
-		want int64
+		want     int64
 	}{
 		{
 			"no activity",
