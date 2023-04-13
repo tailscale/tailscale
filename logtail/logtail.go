@@ -435,7 +435,7 @@ func (l *Logger) awaitInternetUp(ctx context.Context) {
 // origlen of -1 indicates that the body is not compressed.
 func (l *Logger) upload(ctx context.Context, body []byte, origlen int) (uploaded bool, err error) {
 	const maxUploadTime = 45 * time.Second
-	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel)
+	ctx = sockstats.WithSockStats(ctx, l.sockstatsLabel, l.Logf)
 	ctx, cancel := context.WithTimeout(ctx, maxUploadTime)
 	defer cancel()
 

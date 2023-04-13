@@ -408,7 +408,7 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 const dohType = "application/dns-message"
 
 func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client, packet []byte) ([]byte, error) {
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderDoH)
+	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderDoH, f.logf)
 	metricDNSFwdDoH.Add(1)
 	req, err := http.NewRequestWithContext(ctx, "POST", urlBase, bytes.NewReader(packet))
 	if err != nil {
@@ -488,7 +488,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 		return nil, fmt.Errorf("unrecognized resolver type %q", rr.name.Addr)
 	}
 	metricDNSFwdUDP.Add(1)
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderUDP)
+	ctx = sockstats.WithSockStats(ctx, sockstats.LabelDNSForwarderUDP, f.logf)
 
 	ln, err := f.packetListener(ipp.Addr())
 	if err != nil {

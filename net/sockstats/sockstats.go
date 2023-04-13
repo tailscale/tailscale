@@ -12,6 +12,7 @@ import (
 	"context"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 )
 
 // SockStats contains statistics for sockets instrumented with the
@@ -54,8 +55,8 @@ const (
 
 // WithSockStats instruments a context so that sockets created with it will
 // have their statistics collected.
-func WithSockStats(ctx context.Context, label Label) context.Context {
-	return withSockStats(ctx, label)
+func WithSockStats(ctx context.Context, label Label, logf logger.Logf) context.Context {
+	return withSockStats(ctx, label, logf)
 }
 
 // Get returns the current socket statistics.
