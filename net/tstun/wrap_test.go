@@ -31,6 +31,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -602,7 +603,7 @@ func TestNATCfg(t *testing.T) {
 			AllowedIPs: []netip.Prefix{
 				netip.PrefixFrom(ip, ip.BitLen()),
 			},
-			V4MasqAddr: eip,
+			V4MasqAddr: ptr.To(eip),
 		}
 		p.AllowedIPs = append(p.AllowedIPs, otherAllowedIPs...)
 		return p

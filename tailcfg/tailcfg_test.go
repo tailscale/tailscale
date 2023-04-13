@@ -18,6 +18,7 @@ import (
 	. "tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
 	"tailscale.com/version"
 )
@@ -537,12 +538,12 @@ func TestNodeEqual(t *testing.T) {
 		},
 		{
 			&Node{},
-			&Node{SelfNodeV4MasqAddrForThisPeer: netip.MustParseAddr("100.64.0.1")},
+			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			false,
 		},
 		{
-			&Node{SelfNodeV4MasqAddrForThisPeer: netip.MustParseAddr("100.64.0.1")},
-			&Node{SelfNodeV4MasqAddrForThisPeer: netip.MustParseAddr("100.64.0.1")},
+			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
+			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			true,
 		},
 	}

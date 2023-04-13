@@ -176,9 +176,14 @@ func (v NodeView) ComputedName() string              { return v.ж.ComputedName 
 func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
 func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
 func (v NodeView) Expired() bool                     { return v.ж.Expired }
-func (v NodeView) SelfNodeV4MasqAddrForThisPeer() netip.Addr {
-	return v.ж.SelfNodeV4MasqAddrForThisPeer
+func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
+	if v.ж.SelfNodeV4MasqAddrForThisPeer == nil {
+		return nil
+	}
+	x := *v.ж.SelfNodeV4MasqAddrForThisPeer
+	return &x
 }
+
 func (v NodeView) IsWireGuardOnly() bool  { return v.ж.IsWireGuardOnly }
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
@@ -214,7 +219,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	ComputedNameWithHost          string
 	DataPlaneAuditLogID           string
 	Expired                       bool
-	SelfNodeV4MasqAddrForThisPeer netip.Addr
+	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 }{})
 

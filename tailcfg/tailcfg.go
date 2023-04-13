@@ -289,7 +289,7 @@ type Node struct {
 	// This only applies to traffic originating from the current node to the
 	// peer or any of its subnets. Traffic originating from subnet routes will
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
-	SelfNodeV4MasqAddrForThisPeer netip.Addr `json:",omitempty"`
+	SelfNodeV4MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
 
 	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
@@ -1705,7 +1705,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		bytes.Equal(n.KeySignature, n2.KeySignature) &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
-		eqBoolPtr(n.Online, n2.Online) &&
+		eqPtr(n.Online, n2.Online) &&
 		eqCIDRs(n.Addresses, n2.Addresses) &&
 		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
 		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
@@ -1722,11 +1722,11 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
 		eqStrings(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
-		n.SelfNodeV4MasqAddrForThisPeer == n2.SelfNodeV4MasqAddrForThisPeer &&
+		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		n.IsWireGuardOnly == n2.IsWireGuardOnly
 }
 
-func eqBoolPtr(a, b *bool) bool {
+func eqPtr[T comparable](a, b *T) bool {
 	if a == b { // covers nil
 		return true
 	}
@@ -1734,7 +1734,6 @@ func eqBoolPtr(a, b *bool) bool {
 		return false
 	}
 	return *a == *b
-
 }
 
 func eqStrings(a, b []string) bool {
