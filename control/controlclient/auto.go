@@ -121,10 +121,10 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		statusFunc: opts.Status,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
-	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto)
+	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
 	c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
-	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto)
+	c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, opts.Logf)
 
 	c.unregisterHealthWatch = health.RegisterWatcher(direct.ReportHealthChange)
 	return c, nil
@@ -244,7 +244,7 @@ func (c *Auto) cancelAuth() {
 	}
 	if !c.closed {
 		c.authCtx, c.authCancel = context.WithCancel(context.Background())
-		c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto)
+		c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, c.logf)
 	}
 	c.mu.Unlock()
 }
@@ -255,7 +255,7 @@ func (c *Auto) cancelMapLocked() {
 	}
 	if !c.closed {
 		c.mapCtx, c.mapCancel = context.WithCancel(context.Background())
-		c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto)
+		c.mapCtx = sockstats.WithSockStats(c.mapCtx, sockstats.LabelControlClientAuto, c.logf)
 
 	}
 }

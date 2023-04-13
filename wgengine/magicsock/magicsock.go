@@ -3226,9 +3226,9 @@ func (c *Conn) ReSTUN(why string) {
 func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
 	ctx := context.Background() // unused without DNS name to resolve
 	if network == "udp4" {
-		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4)
+		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP4, c.logf)
 	} else {
-		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6)
+		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
 	}
 	addr := net.JoinHostPort("", fmt.Sprint(port))
 	if c.testOnlyPacketListener != nil {

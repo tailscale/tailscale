@@ -787,7 +787,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	ctx, cancel := context.WithTimeout(ctx, overallProbeTimeout)
 	defer cancel()
 
-	ctx = sockstats.WithSockStats(ctx, sockstats.LabelNetcheckClient)
+	ctx = sockstats.WithSockStats(ctx, sockstats.LabelNetcheckClient, c.logf)
 
 	if dm == nil {
 		return nil, errors.New("netcheck: GetReport: DERP map is nil")

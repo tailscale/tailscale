@@ -8,7 +8,6 @@ package sockstats
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 )
 
@@ -71,7 +71,7 @@ func init() {
 	sockStats.radioHighMetric.DisableDeltas()
 }
 
-func withSockStats(ctx context.Context, label Label) context.Context {
+func withSockStats(ctx context.Context, label Label, logf logger.Logf) context.Context {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
 	counters, ok := sockStats.countersByLabel[label]
@@ -157,7 +157,7 @@ func withSockStats(ctx context.Context, label Label) context.Context {
 		}
 	}
 	willOverwrite := func(trace *net.SockTrace) {
-		log.Printf("sockstats: trace %q was overwritten by another", label)
+		logf("sockstats: trace %q was overwritten by another", label)
 	}
 
 	return net.WithSockTrace(ctx, &net.SockTrace{
