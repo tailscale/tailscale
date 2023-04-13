@@ -54,6 +54,10 @@ func (src *Peer) Clone() *Peer {
 	dst := new(Peer)
 	*dst = *src
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
+	if dst.V4MasqAddr != nil {
+		dst.V4MasqAddr = new(netip.Addr)
+		*dst.V4MasqAddr = *src.V4MasqAddr
+	}
 	return dst
 }
 
@@ -62,7 +66,7 @@ var _PeerCloneNeedsRegeneration = Peer(struct {
 	PublicKey           key.NodePublic
 	DiscoKey            key.DiscoPublic
 	AllowedIPs          []netip.Prefix
-	V4MasqAddr          netip.Addr
+	V4MasqAddr          *netip.Addr
 	PersistentKeepalive uint16
 	WGEndpoint          key.NodePublic
 }{})

@@ -580,12 +580,12 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	)
 	for i := range wcfg.Peers {
 		p := &wcfg.Peers[i]
-		if !p.V4MasqAddr.IsValid() {
+		if p.V4MasqAddr == nil || !p.V4MasqAddr.IsValid() {
 			continue
 		}
 		rt.InsertOrReplace(p.PublicKey, p.AllowedIPs...)
-		mak.Set(&dstMasqAddrs, p.PublicKey, p.V4MasqAddr)
-		mak.Set(&listenAddrs, p.V4MasqAddr, struct{}{})
+		mak.Set(&dstMasqAddrs, p.PublicKey, *p.V4MasqAddr)
+		mak.Set(&listenAddrs, *p.V4MasqAddr, struct{}{})
 	}
 	if len(listenAddrs) == 0 || len(dstMasqAddrs) == 0 {
 		return nil

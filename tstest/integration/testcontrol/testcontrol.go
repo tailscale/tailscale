@@ -33,6 +33,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/ptr"
 )
 
 const msgLimit = 1 << 20 // encrypted message length limit
@@ -843,7 +844,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			continue
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
-			p.SelfNodeV4MasqAddrForThisPeer = masqIP
+			p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
 		}
 
 		s.mu.Lock()
