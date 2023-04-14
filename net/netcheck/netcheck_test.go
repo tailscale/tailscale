@@ -830,9 +830,6 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestNodeAddrResolve(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	c := &Client{
 		Logf:        t.Logf,
 		UDPBindAddr: "127.0.0.1:0",
@@ -852,6 +849,29 @@ func TestNodeAddrResolve(t *testing.T) {
 		// No IPv4 or IPv6 addrs
 	}
 
+	// Checks whether IPv6 and IPv6 DNS resolution works on this platform.
+	ipv6Works := func(t *testing.T) bool {
+		// Verify that we can create an IPv6 socket.
+		ln, err := net.ListenPacket("udp6", "[::1]:0")
+		if err != nil {
+			t.Logf("IPv6 may not work on this machine: %v", err)
+			return false
+		}
+		ln.Close()
+
+		// Resolve a hostname that we know has an IPv6 address.
+		addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip6", "google.com")
+		if err != nil {
+			t.Logf("IPv6 DNS resolution error: %v", err)
+			return false
+		}
+		if len(addrs) == 0 {
+			t.Logf("IPv6 DNS resolution returned no addresses")
+			return false
+		}
+		return true
+	}
+
 	ctx := context.Background()
 	for _, tt := range []bool{true, false} {
 		t.Run(fmt.Sprintf("UseDNSCache=%v", tt), func(t *testing.T) {
@@ -869,6 +889,11 @@ func TestNodeAddrResolve(t *testing.T) {
 				t.Logf("got IPv4 addr: %v", ap)
 			})
 			t.Run("IPv6", func(t *testing.T) {
+				// Skip if IPv6 doesn't work on this machine.
+				if !ipv6Works(t) {
+					t.Skipf("IPv6 may not work on this machine")
+				}
+
 				ap := c.nodeAddr(ctx, dn, probeIPv6)
 				if !ap.IsValid() {
 					t.Fatal("expected valid AddrPort")
