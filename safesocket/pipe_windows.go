@@ -24,7 +24,8 @@ func setFlags(network, address string, c syscall.RawConn) error {
 
 // windowsSDDL is the Security Descriptor set on the namedpipe.
 // It provides read/write access to all users and the local system.
-const windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
+// It is a var for testing, do not change this value.
+var windowsSDDL = "O:BAG:BAD:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
 
 func listen(path string) (net.Listener, error) {
 	lc, err := winio.ListenPipe(
