@@ -660,6 +660,7 @@ func NewConn(opts Options) (*Conn, error) {
 		GetSTUNConn6:        func() netcheck.STUNConn { return &c.pconn6 },
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
+		UseDNSCache:         true,
 	}
 
 	c.ignoreSTUNPackets()
