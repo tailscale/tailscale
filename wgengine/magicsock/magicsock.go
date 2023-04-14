@@ -64,6 +64,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
+	"tailscale.com/util/set"
 	"tailscale.com/util/sysresources"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
@@ -418,6 +419,10 @@ type Conn struct {
 	// onEndpointRefreshed are funcs to run (in their own goroutines)
 	// when endpoints are refreshed.
 	onEndpointRefreshed map[*endpoint]func()
+
+	// endpointTracker tracks the set of cached endpoints that we advertise
+	// for a period of time before withdrawing them.
+	endpointTracker endpointTracker
 
 	// peerSet is the set of peers that are currently configured in
 	// WireGuard. These are not used to filter inbound or outbound
@@ -1195,6 +1200,22 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	}
 
 	c.ignoreSTUNPackets()
+
+	// Update our set of endpoints by adding any endpoints that we
+	// previously found but haven't expired yet. This also updates the
+	// cache with the set of endpoints discovered in this function.
+	//
+	// NOTE: we do this here and not below so that we don't cache local
+	// endpoints; we know that the local endpoints we discover are all
+	// possible local endpoints since we determine them by looking at the
+	// set of addresses on our local interfaces.
+	//
+	// TODO(andrew): If we pull in any cached endpoints, we should probably
+	// do something to ensure we're propagating the removal of those cached
+	// endpoints if they do actually time out without being rediscovered.
+	// For now, though, rely on a minor LinkChange event causing this to
+	// re-run.
+	eps = c.endpointTracker.update(time.Now(), eps)
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
@@ -4148,6 +4169,11 @@ const (
 	// STUN-derived endpoint valid for. UDP NAT mappings typically
 	// expire at 30 seconds, so this is a few seconds shy of that.
 	endpointsFreshEnoughDuration = 27 * time.Second
+
+	// endpointTrackerLifetime is how long we continue advertising an
+	// endpoint after we last see it. This is intentionally chosen to be
+	// slightly longer than a full netcheck period.
+	endpointTrackerLifetime = 5*time.Minute + 10*time.Second
 )
 
 // Constants that are variable for testing.
@@ -5103,6 +5129,79 @@ func (s derpAddrFamSelector) PreferIPv6() bool {
 		return r.IPv6
 	}
 	return false
+}
+
+type endpointTrackerEntry struct {
+	endpoint tailcfg.Endpoint
+	until    time.Time
+}
+
+type endpointTracker struct {
+	mu    sync.Mutex
+	cache map[netip.AddrPort]endpointTrackerEntry
+}
+
+func (et *endpointTracker) update(now time.Time, eps []tailcfg.Endpoint) (epsPlusCached []tailcfg.Endpoint) {
+	epsPlusCached = eps
+
+	var inputEps set.Slice[netip.AddrPort]
+	for _, ep := range eps {
+		inputEps.Add(ep.Addr)
+	}
+
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
+	// Add entries to the return array that aren't already there.
+	for k, ep := range et.cache {
+		// If the endpoint was in the input list, or has expired, skip it.
+		if inputEps.Contains(k) {
+			continue
+		} else if now.After(ep.until) {
+			continue
+		}
+
+		// We haven't seen this endpoint; add to the return array
+		epsPlusCached = append(epsPlusCached, ep.endpoint)
+	}
+
+	// Add entries from the original input array into the cache, and/or
+	// extend the lifetime of entries that are already in the cache.
+	until := now.Add(endpointTrackerLifetime)
+	for _, ep := range eps {
+		et.addLocked(now, ep, until)
+	}
+
+	// Remove everything that has now expired.
+	et.removeExpiredLocked(now)
+	return epsPlusCached
+}
+
+// add will store the provided endpoint(s) in the cache for a fixed period of
+// time, and remove any entries in the cache that have expired.
+//
+// et.mu must be held.
+func (et *endpointTracker) addLocked(now time.Time, ep tailcfg.Endpoint, until time.Time) {
+	// If we already have an entry for this endpoint, update the timeout on
+	// it; otherwise, add it.
+	entry, found := et.cache[ep.Addr]
+	if found {
+		entry.until = until
+	} else {
+		entry = endpointTrackerEntry{ep, until}
+	}
+	mak.Set(&et.cache, ep.Addr, entry)
+}
+
+// removeExpired will remove all expired entries from the cache
+//
+// et.mu must be held
+func (et *endpointTracker) removeExpiredLocked(now time.Time) {
+	for k, ep := range et.cache {
+		if now.After(ep.until) {
+			delete(et.cache, k)
+		}
+	}
 }
 
 var (
