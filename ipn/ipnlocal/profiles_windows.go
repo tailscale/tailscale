@@ -6,6 +6,7 @@ package ipnlocal
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -20,8 +21,6 @@ const (
 	legacyPrefsMigrationSentinelFile = "_migrated-to-profiles"
 	legacyPrefsExt                   = ".conf"
 )
-
-var errAlreadyMigrated = errors.New("profile migration already completed")
 
 func legacyPrefsDir(uid ipn.WindowsUserID) (string, error) {
 	// TODO(aaron): Ideally we'd have the impersonation token for the pipe's
@@ -56,6 +55,9 @@ func (pm *profileManager) loadLegacyPrefs() (string, ipn.PrefsView, error) {
 
 	prefsPath := filepath.Join(userLegacyPrefsDir, legacyPrefsFile+legacyPrefsExt)
 	prefs, err := ipn.LoadPrefs(prefsPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ipn.PrefsView{}, errAlreadyMigrated
+	}
 	if err != nil {
 		return "", ipn.PrefsView{}, err
 	}
