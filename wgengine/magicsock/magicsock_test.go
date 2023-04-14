@@ -374,8 +374,9 @@ func TestNewConn(t *testing.T) {
 		sizes := make([]int, 1)
 		eps := make([]wgconn.Endpoint, 1)
 		pkts[0] = make([]byte, 64<<10)
+		receiveIPv4 := conn.receiveIPv4()
 		for {
-			_, err := conn.receiveIPv4(pkts, sizes, eps)
+			_, err := receiveIPv4(pkts, sizes, eps)
 			if err != nil {
 				return
 			}
@@ -1284,11 +1285,12 @@ func setUpReceiveFrom(tb testing.TB) (roundTrip func()) {
 	buffs[0] = make([]byte, 2<<10)
 	sizes := make([]int, 1)
 	eps := make([]wgconn.Endpoint, 1)
+	receiveIPv4 := conn.receiveIPv4()
 	return func() {
 		if _, err := sendConn.WriteTo(sendBuf, dstAddr); err != nil {
 			tb.Fatalf("WriteTo: %v", err)
 		}
-		n, err := conn.receiveIPv4(buffs, sizes, eps)
+		n, err := receiveIPv4(buffs, sizes, eps)
 		if err != nil {
 			tb.Fatal(err)
 		}
@@ -1513,8 +1515,9 @@ func TestRebindStress(t *testing.T) {
 		sizes := make([]int, 1)
 		eps := make([]wgconn.Endpoint, 1)
 		buffs[0] = make([]byte, 1500)
+		receiveIPv4 := conn.receiveIPv4()
 		for {
-			_, err := conn.receiveIPv4(buffs, sizes, eps)
+			_, err := receiveIPv4(buffs, sizes, eps)
 			if ctx.Err() != nil {
 				errc <- nil
 				return
