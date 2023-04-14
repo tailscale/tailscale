@@ -1336,8 +1336,8 @@ It holds the capabilities specified in the request and can no longer be retrieve
 
 ``` jsonc
 {
-  "id":           "XXXX456CNTRL",
-  "key":          "tskey-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
+  "id":           "k123456CNTRL",
+  "key":          "tskey-auth-k123456CNTRL-abcdefghijklmnopqrstuvwxyz",
   "created":      "2021-12-09T23:22:39Z",
   "expires":      "2022-03-09T23:22:39Z",
   "revoked":      "2022-03-12T23:22:39Z",
@@ -1348,9 +1348,9 @@ It holds the capabilities specified in the request and can no longer be retrieve
         "ephemeral": false,
         "preauthorized": false,
         "tags": [ "tag:example" ]
-        }
       }
     }
+  }
 }
 ```
 
