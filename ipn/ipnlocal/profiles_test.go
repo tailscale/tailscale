@@ -5,7 +5,7 @@ package ipnlocal
 
 import (
 	"fmt"
-	"runtime"
+	"os/user"
 	"strconv"
 	"testing"
 
@@ -18,9 +18,6 @@ import (
 )
 
 func TestProfileCurrentUserSwitch(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	store := new(mem.Store)
 
 	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
@@ -77,9 +74,6 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 }
 
 func TestProfileList(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	store := new(mem.Store)
 
 	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
@@ -158,9 +152,6 @@ func TestProfileList(t *testing.T) {
 
 // TestProfileManagement tests creating, loading, and switching profiles.
 func TestProfileManagement(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	store := new(mem.Store)
 
 	pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
@@ -312,10 +303,11 @@ func TestProfileManagement(t *testing.T) {
 // TestProfileManagementWindows tests going into and out of Unattended mode on
 // Windows.
 func TestProfileManagementWindows(t *testing.T) {
-
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
 	}
+	uid := ipn.WindowsUserID(u.Uid)
 
 	store := new(mem.Store)
 
@@ -365,8 +357,8 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as logged in user")
-		if err := pm.SetCurrentUserID("user1"); err != nil {
-			t.Fatal(err)
+		if err := pm.SetCurrentUserID(uid); err != nil {
+			t.Fatalf("can't set user id: %s", err)
 		}
 		checkProfiles(t)
 		t.Logf("Save prefs for user1")
@@ -401,7 +393,7 @@ func TestProfileManagementWindows(t *testing.T) {
 
 	{
 		t.Logf("Set user1 as current user")
-		if err := pm.SetCurrentUserID("user1"); err != nil {
+		if err := pm.SetCurrentUserID(uid); err != nil {
 			t.Fatal(err)
 		}
 		wantCurProfile = "test"
@@ -411,8 +403,8 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Logf("set unattended mode")
 		wantProfiles["test"] = setPrefs(t, "test", true)
 	}
-	if pm.CurrentUserID() != "user1" {
-		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), "user1")
+	if pm.CurrentUserID() != uid {
+		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), uid)
 	}
 
 	// Recreate the profile manager to ensure that it starts with test profile.
@@ -421,7 +413,7 @@ func TestProfileManagementWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkProfiles(t)
-	if pm.CurrentUserID() != "user1" {
-		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), "user1")
+	if pm.CurrentUserID() != uid {
+		t.Fatalf("CurrentUserID = %q; want %q", pm.CurrentUserID(), uid)
 	}
 }
