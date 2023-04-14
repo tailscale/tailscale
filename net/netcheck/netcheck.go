@@ -25,6 +25,7 @@ import (
 	"github.com/tcnksm/go-httpstat"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/envknob"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
@@ -181,6 +182,15 @@ type Client struct {
 	// If nil, portmap discovery is not done.
 	PortMapper *portmapper.Client // lazily initialized on first use
 
+	// UseDNSCache controls whether this client should use a
+	// *dnscache.Resolver to resolve DERP hostnames, when no IP address is
+	// provided in the DERP map. Note that Tailscale-provided DERP servers
+	// all specify explicit IPv4 and IPv6 addresses, so this is mostly
+	// helpful for users with custom DERP servers.
+	//
+	// If false, the default net.Resolver will be used, with no caching.
+	UseDNSCache bool
+
 	// For tests
 	testEnoughRegions      int
 	testCaptivePortalDelay time.Duration
@@ -191,6 +201,7 @@ type Client struct {
 	last     *Report               // most recent report
 	lastFull time.Time             // time of last full (non-incremental) report
 	curState *reportState          // non-nil if we're in a call to GetReportn
+	resolver *dnscache.Resolver    // only set if UseDNSCache is true
 }
 
 // STUNConn is the interface required by the netcheck Client when
@@ -1514,6 +1525,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	addr := c.nodeAddr(ctx, node, probe.proto)
 	if !addr.IsValid() {
+		c.logf("netcheck.runProbe: named node %q has no address", probe.node)
 		return
 	}
 
@@ -1597,12 +1609,46 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 		return
 	}
 
-	// TODO(bradfitz): add singleflight+dnscache here.
-	addrs, _ := net.DefaultResolver.LookupIPAddr(ctx, n.HostName)
+	// The default lookup function if we don't set UseDNSCache is to use net.DefaultResolver.
+	lookupIPAddr := func(ctx context.Context, host string) ([]netip.Addr, error) {
+		addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+
+		var naddrs []netip.Addr
+		for _, addr := range addrs {
+			na, ok := netip.AddrFromSlice(addr.IP)
+			if !ok {
+				continue
+			}
+			naddrs = append(naddrs, na.Unmap())
+		}
+		return naddrs, nil
+	}
+
+	c.mu.Lock()
+	if c.UseDNSCache {
+		if c.resolver == nil {
+			c.resolver = &dnscache.Resolver{
+				Forward:     net.DefaultResolver,
+				UseLastGood: true,
+				Logf:        c.logf,
+			}
+		}
+		resolver := c.resolver
+		lookupIPAddr = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			_, _, allIPs, err := resolver.LookupIP(ctx, host)
+			return allIPs, err
+		}
+	}
+	c.mu.Unlock()
+
+	probeIsV4 := proto == probeIPv4
+	addrs, _ := lookupIPAddr(ctx, n.HostName)
 	for _, a := range addrs {
-		if (a.IP.To4() != nil) == (proto == probeIPv4) {
-			na, _ := netip.AddrFromSlice(a.IP.To4())
-			return netip.AddrPortFrom(na.Unmap(), uint16(port))
+		if (a.Is4() && probeIsV4) || (a.Is6() && !probeIsV4) {
+			return netip.AddrPortFrom(a, uint16(port))
 		}
 	}
 	return

@@ -824,3 +824,60 @@ type RoundTripFunc func(req *http.Request) *http.Response
 func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
 }
+
+func TestNodeAddrResolve(t *testing.T) {
+	c := &Client{
+		Logf:        t.Logf,
+		UDPBindAddr: "127.0.0.1:0",
+		UseDNSCache: true,
+	}
+
+	dn := &tailcfg.DERPNode{
+		Name:     "derptest1a",
+		RegionID: 901,
+		HostName: "tailscale.com",
+		// No IPv4 or IPv6 addrs
+	}
+	dnV4Only := &tailcfg.DERPNode{
+		Name:     "derptest1b",
+		RegionID: 901,
+		HostName: "ipv4.google.com",
+		// No IPv4 or IPv6 addrs
+	}
+
+	ctx := context.Background()
+	for _, tt := range []bool{true, false} {
+		t.Run(fmt.Sprintf("UseDNSCache=%v", tt), func(t *testing.T) {
+			c.resolver = nil
+			c.UseDNSCache = tt
+
+			t.Run("IPv4", func(t *testing.T) {
+				ap := c.nodeAddr(ctx, dn, probeIPv4)
+				if !ap.IsValid() {
+					t.Fatal("expected valid AddrPort")
+				}
+				if !ap.Addr().Is4() {
+					t.Fatalf("expected IPv4 addr, got: %v", ap.Addr())
+				}
+				t.Logf("got IPv4 addr: %v", ap)
+			})
+			t.Run("IPv6", func(t *testing.T) {
+				ap := c.nodeAddr(ctx, dn, probeIPv6)
+				if !ap.IsValid() {
+					t.Fatal("expected valid AddrPort")
+				}
+				if !ap.Addr().Is6() {
+					t.Fatalf("expected IPv6 addr, got: %v", ap.Addr())
+				}
+				t.Logf("got IPv6 addr: %v", ap)
+			})
+			t.Run("IPv6 Failure", func(t *testing.T) {
+				ap := c.nodeAddr(ctx, dnV4Only, probeIPv6)
+				if ap.IsValid() {
+					t.Fatalf("expected no addr but got: %v", ap)
+				}
+				t.Logf("correctly got invalid addr")
+			})
+		})
+	}
+}
