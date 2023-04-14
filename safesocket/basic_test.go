@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
+// downgradeSDDL is a no-op test helper on non-Windows systems.
+var downgradeSDDL = func() func() { return func() {} }
+
 func TestBasics(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	// Make the socket in a temp dir rather than the cwd
 	// so that the test can be run from a mounted filesystem (#2367).
 	dir := t.TempDir()
@@ -22,6 +22,7 @@ func TestBasics(t *testing.T) {
 		sock = filepath.Join(dir, "test")
 	} else {
 		sock = fmt.Sprintf(`\\.\pipe\tailscale-test`)
+		t.Cleanup(downgradeSDDL())
 	}
 
 	l, err := Listen(sock)
