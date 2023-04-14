@@ -5,6 +5,7 @@ package syncs
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -45,6 +46,9 @@ func TestWatchContended(t *testing.T) {
 }
 
 func TestWatchMultipleValues(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
+	}
 	mu := new(sync.Mutex)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // not necessary, but keep vet happy

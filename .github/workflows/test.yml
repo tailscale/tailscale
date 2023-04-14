@@ -101,6 +101,13 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@v3
+
+    - name: Install Go
+      uses: actions/setup-go@v3
+      with:
+        go-version-file: go.mod
+        cache: false
+
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -119,7 +126,7 @@ jobs:
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
-      run: ./tool/go test -bench . -benchtime 1x ./...
+      run: go test -bench . -benchtime 1x ./...
 
   vm:
     runs-on: ["self-hosted", "linux", "vm"]
