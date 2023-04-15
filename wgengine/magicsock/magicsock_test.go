@@ -1801,7 +1801,7 @@ func TestBlockForeverConnUnblocks(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		_, _, err := c.ReadFrom(make([]byte, 1))
+		_, _, err := c.ReadFromUDPAddrPort(make([]byte, 1))
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond) // give ReadFrom time to get blocked

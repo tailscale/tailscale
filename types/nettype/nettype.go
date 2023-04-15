@@ -30,11 +30,11 @@ func (Std) ListenPacket(ctx context.Context, network, address string) (net.Packe
 	return conf.ListenPacket(ctx, network, address)
 }
 
-// PacketConn is a net.PacketConn that's about halfway (as of 2023-04-15)
-// converted to use netip.AddrPort.
+// PacketConn is like a net.PacketConn but uses the newer netip.AddrPort
+// write/read methods.
 type PacketConn interface {
 	WriteToUDPAddrPort([]byte, netip.AddrPort) (int, error)
-	ReadFrom(p []byte) (int, net.Addr, error)
+	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
 	io.Closer
 	LocalAddr() net.Addr
 	SetDeadline(time.Time) error

@@ -208,7 +208,7 @@ type Client struct {
 // reusing an existing UDP connection.
 type STUNConn interface {
 	WriteToUDPAddrPort([]byte, netip.AddrPort) (int, error)
-	ReadFrom([]byte) (int, net.Addr, error)
+	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
 }
 
 func (c *Client) enoughRegions() int {
@@ -518,7 +518,7 @@ func nodeMight4(n *tailcfg.DERPNode) bool {
 }
 
 type packetReaderFromCloser interface {
-	ReadFrom([]byte) (int, net.Addr, error)
+	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
 	io.Closer
 }
 
@@ -538,7 +538,7 @@ func (c *Client) readPackets(ctx context.Context, pc packetReaderFromCloser) {
 
 	var buf [64 << 10]byte
 	for {
-		n, addr, err := pc.ReadFrom(buf[:])
+		n, addr, err := pc.ReadFromUDPAddrPort(buf[:])
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -546,16 +546,11 @@ func (c *Client) readPackets(ctx context.Context, pc packetReaderFromCloser) {
 			c.logf("ReadFrom: %v", err)
 			return
 		}
-		ua, ok := addr.(*net.UDPAddr)
-		if !ok {
-			c.logf("ReadFrom: unexpected addr %T", addr)
-			continue
-		}
 		pkt := buf[:n]
 		if !stun.Is(pkt) {
 			continue
 		}
-		if ap := netaddr.Unmap(ua.AddrPort()); ap.IsValid() {
+		if ap := netaddr.Unmap(addr); ap.IsValid() {
 			c.ReceiveSTUNPacket(pkt, ap)
 		}
 	}
