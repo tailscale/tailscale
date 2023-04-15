@@ -517,9 +517,14 @@ func nodeMight4(n *tailcfg.DERPNode) bool {
 	return ip.Is4()
 }
 
+type packetReaderFromCloser interface {
+	ReadFrom([]byte) (int, net.Addr, error)
+	io.Closer
+}
+
 // readPackets reads STUN packets from pc until there's an error or ctx is done.
 // In either case, it closes pc.
-func (c *Client) readPackets(ctx context.Context, pc net.PacketConn) {
+func (c *Client) readPackets(ctx context.Context, pc packetReaderFromCloser) {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -902,7 +907,9 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	// So do that for now. In the future we might want to classify networks
 	// that do and don't require this separately. But for now help it.
 	const documentationIP = "203.0.113.1"
-	rs.pc4Hair.WriteTo([]byte("tailscale netcheck; see https://github.com/tailscale/tailscale/issues/188"), &net.UDPAddr{IP: net.ParseIP(documentationIP), Port: 12345})
+	rs.pc4Hair.WriteToUDPAddrPort(
+		[]byte("tailscale netcheck; see https://github.com/tailscale/tailscale/issues/188"),
+		netip.AddrPortFrom(netip.MustParseAddr(documentationIP), 12345))
 
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
