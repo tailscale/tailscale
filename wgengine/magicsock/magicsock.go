@@ -3433,10 +3433,6 @@ func (c *batchingUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	return c.pc.ReadFrom(p)
 }
 
-func (c *batchingUDPConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
-	return c.pc.WriteTo(b, addr)
-}
-
 func (c *batchingUDPConn) SetDeadline(t time.Time) error {
 	return c.pc.SetDeadline(t)
 }
@@ -3867,17 +3863,6 @@ func (c *RebindingUDPConn) writeToUDPAddrPortWithInitPconn(pconn nettype.PacketC
 	}
 }
 
-func (c *RebindingUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	for {
-		pconn := *c.pconnAtomic.Load()
-		n, err := pconn.WriteTo(b, addr)
-		if err != nil && pconn != c.currentConn() {
-			continue
-		}
-		return n, err
-	}
-}
-
 func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
 	return c.writeToUDPAddrPortWithInitPconn(*c.pconnAtomic.Load(), b, addr)
 }
@@ -3902,11 +3887,6 @@ func (c *blockForeverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	}
 	c.mu.Unlock()
 	return 0, nil, net.ErrClosed
-}
-
-func (c *blockForeverConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	// Silently drop writes.
-	return len(p), nil
 }
 
 func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {
