@@ -521,7 +521,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 
 	// The 1 extra byte is to detect packet truncation.
 	out := make([]byte, maxResponseBytes+1)
-	n, _, err := conn.ReadFrom(out)
+	n, _, err := conn.ReadFromUDPAddrPort(out)
 	if err != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err

@@ -531,7 +531,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 
 	res := make([]byte, 1500)
 	for {
-		n, srci, err := uc.ReadFrom(res)
+		n, src, err := uc.ReadFromUDPAddrPort(res)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
 				return netip.AddrPort{}, err
@@ -542,8 +542,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 			}
 			return netip.AddrPort{}, NoMappingError{ErrNoPortMappingServices}
 		}
-		srcu := srci.(*net.UDPAddr)
-		src := netaddr.Unmap(srcu.AddrPort())
+		src = netaddr.Unmap(src)
 		if !src.IsValid() {
 			continue
 		}
@@ -793,18 +792,14 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			// Nothing more to discover.
 			return res, nil
 		}
-		n, addr, err := uc.ReadFrom(buf)
+		n, src, err := uc.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				err = nil
 			}
 			return res, err
 		}
-		ip, ok := netip.AddrFromSlice(addr.(*net.UDPAddr).IP)
-		if !ok {
-			continue
-		}
-		ip = ip.Unmap()
+		ip := src.Addr().Unmap()
 
 		handleUPnPResponse := func() {
 			metricUPnPResponse.Add(1)
@@ -832,7 +827,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			c.mu.Unlock()
 		}
 
-		port := uint16(addr.(*net.UDPAddr).Port)
+		port := src.Port()
 		switch port {
 		case c.upnpPort():
 			if mem.Contains(mem.B(buf[:n]), mem.S(":InternetGatewayDevice:")) {

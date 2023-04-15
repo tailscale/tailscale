@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netaddr"
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netns"
@@ -3420,7 +3421,7 @@ type batchingUDPConn struct {
 	sendBatchPool         sync.Pool
 }
 
-func (c *batchingUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+func (c *batchingUDPConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
 	if c.rxOffload {
 		// UDP_GRO is opt-in on Linux via setsockopt(). Once enabled you may
 		// receive a "monster datagram" from any read call. The ReadFrom() API
@@ -3428,9 +3429,9 @@ func (c *batchingUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		// case. Other platforms may vary in behavior, but we go with the most
 		// conservative approach to prevent this from becoming a footgun in the
 		// future.
-		return 0, nil, errors.New("rx UDP offload is enabled on this socket, single packet reads are unavailable")
+		return 0, netip.AddrPort{}, errors.New("rx UDP offload is enabled on this socket, single packet reads are unavailable")
 	}
-	return c.pc.ReadFrom(p)
+	return c.pc.ReadFromUDPAddrPort(p)
 }
 
 func (c *batchingUDPConn) SetDeadline(t time.Time) error {
@@ -3753,9 +3754,9 @@ func (c *RebindingUDPConn) currentConn() nettype.PacketConn {
 	return c.pconn
 }
 
-func (c *RebindingUDPConn) readFromWithInitPconn(pconn nettype.PacketConn, b []byte) (int, net.Addr, error) {
+func (c *RebindingUDPConn) readFromWithInitPconn(pconn nettype.PacketConn, b []byte) (int, netip.AddrPort, error) {
 	for {
-		n, addr, err := pconn.ReadFrom(b)
+		n, addr, err := pconn.ReadFromUDPAddrPort(b)
 		if err != nil && pconn != c.currentConn() {
 			pconn = *c.pconnAtomic.Load()
 			continue
@@ -3764,9 +3765,9 @@ func (c *RebindingUDPConn) readFromWithInitPconn(pconn nettype.PacketConn, b []b
 	}
 }
 
-// ReadFrom reads a packet from c into b.
+// ReadFromUDPAddrPort reads a packet from c into b.
 // It returns the number of bytes copied and the source address.
-func (c *RebindingUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
+func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 	return c.readFromWithInitPconn(*c.pconnAtomic.Load(), b)
 }
 
@@ -3803,9 +3804,10 @@ func (c *RebindingUDPConn) ReadBatch(msgs []ipv6.Message, flags int) (int, error
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(*batchingUDPConn)
 		if !ok {
-			var err error
-			msgs[0].N, msgs[0].Addr, err = c.readFromWithInitPconn(pconn, msgs[0].Buffers[0])
+			n, ap, err := c.readFromWithInitPconn(pconn, msgs[0].Buffers[0])
 			if err == nil {
+				msgs[0].N = n
+				msgs[0].Addr = net.UDPAddrFromAddrPort(netaddr.Unmap(ap))
 				return 1, nil
 			}
 			return 0, err
@@ -3880,13 +3882,13 @@ type blockForeverConn struct {
 	closed bool
 }
 
-func (c *blockForeverConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+func (c *blockForeverConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
 	c.mu.Lock()
 	for !c.closed {
 		c.cond.Wait()
 	}
 	c.mu.Unlock()
-	return 0, nil, net.ErrClosed
+	return 0, netip.AddrPort{}, net.ErrClosed
 }
 
 func (c *blockForeverConn) WriteToUDPAddrPort(p []byte, addr netip.AddrPort) (int, error) {

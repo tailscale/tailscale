@@ -824,13 +824,21 @@ func (c *conn) Write(buf []byte) (int, error) {
 }
 
 func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, ap, err := c.ReadFromUDPAddrPort(p)
+	if err != nil {
+		return 0, nil, err
+	}
+	return n, net.UDPAddrFromAddrPort(ap), nil
+}
+
+func (c *conn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ar := &activeRead{cancel: cancel}
 
 	if err := c.canRead(); err != nil {
-		return 0, nil, err
+		return 0, netip.AddrPort{}, err
 	}
 
 	c.registerActiveRead(ar, true)
@@ -840,14 +848,9 @@ func (c *conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	case pkt := <-c.in:
 		n = copy(p, pkt.Payload)
 		pkt.Trace("PacketConn.ReadFrom")
-		ua := &net.UDPAddr{
-			IP:   pkt.Src.Addr().AsSlice(),
-			Port: int(pkt.Src.Port()),
-			Zone: pkt.Src.Addr().Zone(),
-		}
-		return n, ua, nil
+		return n, pkt.Src, nil
 	case <-ctx.Done():
-		return 0, nil, context.DeadlineExceeded
+		return 0, netip.AddrPort{}, context.DeadlineExceeded
 	}
 }
 
