@@ -268,7 +268,6 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 }
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
-// It implements wireguard/conn.Bind.
 type Conn struct {
 	// This block mirrors the contents and field order of the Options
 	// struct. Initialized once at construction, then constant.
@@ -1280,6 +1279,9 @@ var errNetworkDown = errors.New("magicsock: network down")
 
 func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
 
+// Send implements conn.Bind.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Send
 func (c *Conn) Send(buffs [][]byte, ep conn.Endpoint) error {
 	n := int64(len(buffs))
 	metricSendData.Add(n)
@@ -1952,7 +1954,7 @@ func (c *connBind) receiveDERP(buffs [][]byte, sizes []int, eps []conn.Endpoint)
 	defer health.ReceiveDERP.Exit()
 
 	for dm := range c.derpRecvCh {
-		if c.Closed() {
+		if c.isClosed() {
 			break
 		}
 		n, ep := c.processDERPReadResult(dm, buffs[0])
@@ -2989,6 +2991,8 @@ func (c *Conn) DERPs() int {
 }
 
 // Bind returns the wireguard-go conn.Bind for c.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind
 func (c *Conn) Bind() conn.Bind {
 	return c.bind
 }
@@ -3004,6 +3008,12 @@ type connBind struct {
 	closed bool
 }
 
+var _ conn.Bind = (*connBind)(nil)
+
+// BatchSize returns the number of buffers expected to be passed to
+// the ReceiveFuncs, and the maximum expected to be passed to SendBatch.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.BatchSize
 func (c *connBind) BatchSize() int {
 	// TODO(raggi): determine by properties rather than hardcoding platform behavior
 	switch runtime.GOOS {
@@ -3017,6 +3027,8 @@ func (c *connBind) BatchSize() int {
 // Open is called by WireGuard to create a UDP binding.
 // The ignoredPort comes from wireguard-go, via the wgcfg config.
 // We ignore that port value here, since we have the local port available easily.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Open
 func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -3035,11 +3047,15 @@ func (c *connBind) Open(ignoredPort uint16) ([]conn.ReceiveFunc, uint16, error) 
 
 // SetMark is used by wireguard-go to set a mark bit for packets to avoid routing loops.
 // We handle that ourselves elsewhere.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.SetMark
 func (c *connBind) SetMark(value uint32) error {
 	return nil
 }
 
 // Close closes the connBind, unless it is already closed.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.Close
 func (c *connBind) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -3063,8 +3079,8 @@ func (c *connBind) Close() error {
 	return nil
 }
 
-// Closed reports whether c is closed.
-func (c *connBind) Closed() bool {
+// isClosed reports whether c is closed.
+func (c *connBind) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
@@ -3370,7 +3386,9 @@ func packIPPort(ua netip.AddrPort) []byte {
 	return b
 }
 
-// ParseEndpoint is called by WireGuard to connect to an endpoint.
+// ParseEndpoint implements conn.Bind; it's called by WireGuard to connect to an endpoint.
+//
+// See https://pkg.go.dev/golang.zx2c4.com/wireguard/conn#Bind.ParseEndpoint
 func (c *Conn) ParseEndpoint(nodeKeyStr string) (conn.Endpoint, error) {
 	k, err := key.ParseNodePublicUntyped(mem.S(nodeKeyStr))
 	if err != nil {
