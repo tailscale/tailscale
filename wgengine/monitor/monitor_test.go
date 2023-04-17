@@ -5,6 +5,7 @@ package monitor
 
 import (
 	"flag"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,7 +56,10 @@ func TestMonitorInjectEvent(t *testing.T) {
 	}
 }
 
-var monitor = flag.String("monitor", "", `go into monitor mode like 'route monitor'; test never terminates. Value can be either "raw" or "callback"`)
+var (
+	monitor         = flag.String("monitor", "", `go into monitor mode like 'route monitor'; test never terminates. Value can be either "raw" or "callback"`)
+	monitorDuration = flag.Duration("monitor-duration", 0, "if non-zero, how long to run TestMonitorMode. Zero means forever.")
+)
 
 func TestMonitorMode(t *testing.T) {
 	switch *monitor {
@@ -71,18 +75,38 @@ func TestMonitorMode(t *testing.T) {
 	}
 	switch *monitor {
 	case "raw":
+		var closed atomic.Bool
+		if *monitorDuration != 0 {
+			t := time.AfterFunc(*monitorDuration, func() {
+				closed.Store(true)
+				mon.Close()
+			})
+			defer t.Stop()
+		}
 		for {
 			msg, err := mon.om.Receive()
+			if closed.Load() {
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Logf("msg: %#v", msg)
 		}
 	case "callback":
+		var done <-chan time.Time
+		if *monitorDuration != 0 {
+			t := time.NewTimer(*monitorDuration)
+			defer t.Stop()
+			done = t.C
+		}
+		n := 0
 		mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+			n++
 			t.Logf("cb: changed=%v, ifSt=%v", changed, st)
 		})
 		mon.Start()
-		select {}
+		<-done
+		t.Logf("%v callbacks", n)
 	}
 }
