@@ -329,7 +329,15 @@ var logPol *logpolicy.Policy
 var debugMux *http.ServeMux
 
 func run() error {
-	pol := logpolicy.New(logtail.CollectionNode)
+	var logf logger.Logf = log.Printf
+	netMon, err := netmon.New(func(format string, args ...any) {
+		logf(format, args...)
+	})
+	if err != nil {
+		return fmt.Errorf("netmon.New: %w", err)
+	}
+
+	pol := logpolicy.New(logtail.CollectionNode, netMon)
 	pol.SetVerbosityLevel(args.verbose)
 	logPol = pol
 	defer func() {
@@ -353,7 +361,6 @@ func run() error {
 		return nil
 	}
 
-	var logf logger.Logf = log.Printf
 	if envknob.Bool("TS_DEBUG_MEMORY") {
 		logf = logger.RusagePrefixLog(logf)
 	}
@@ -379,10 +386,10 @@ func run() error {
 		debugMux = newDebugMux()
 	}
 
-	return startIPNServer(context.Background(), logf, pol.PublicID)
+	return startIPNServer(context.Background(), logf, pol.PublicID, netMon)
 }
 
-func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID) error {
+func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) error {
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
@@ -408,7 +415,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID)
 		}
 	}()
 
-	srv := ipnserver.New(logf, logID)
+	srv := ipnserver.New(logf, logID, netMon)
 	if debugMux != nil {
 		debugMux.HandleFunc("/debug/ipn", srv.ServeHTMLStatus)
 	}
@@ -426,7 +433,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID)
 				return
 			}
 		}
-		lb, err := getLocalBackend(ctx, logf, logID)
+		lb, err := getLocalBackend(ctx, logf, logID, netMon)
 		if err == nil {
 			logf("got LocalBackend in %v", time.Since(t0).Round(time.Millisecond))
 			srv.SetLocalBackend(lb)
@@ -450,11 +457,7 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID)
 	return nil
 }
 
-func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID) (_ *ipnlocal.LocalBackend, retErr error) {
-	netMon, err := netmon.New(logf)
-	if err != nil {
-		return nil, fmt.Errorf("netmon.New: %w", err)
-	}
+func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) (_ *ipnlocal.LocalBackend, retErr error) {
 	if logPol != nil {
 		logPol.Logtail.SetNetMon(netMon)
 	}

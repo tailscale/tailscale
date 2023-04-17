@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
 
@@ -49,7 +50,7 @@ func SetAndroidProtectFunc(f func(fd int) error) {
 	androidProtectFunc = f
 }
 
-func control(logger.Logf) func(network, address string, c syscall.RawConn) error {
+func control(logger.Logf, *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return controlC
 }
 

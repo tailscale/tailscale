@@ -380,11 +380,12 @@ func (f *forwarder) getKnownDoHClientForProvider(urlBase string) (c *http.Client
 	if err != nil {
 		return nil, false
 	}
-	nsDialer := netns.NewDialer(f.logf)
+	nsDialer := netns.NewDialer(f.logf, f.netMon)
 	dialer := dnscache.Dialer(nsDialer.DialContext, &dnscache.Resolver{
 		SingleHost:             dohURL.Hostname(),
 		SingleHostStaticResult: allIPs,
 		Logf:                   f.logf,
+		NetMon:                 f.netMon,
 	})
 	c = &http.Client{
 		Transport: &http.Transport{

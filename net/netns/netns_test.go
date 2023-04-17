@@ -24,7 +24,7 @@ func TestDial(t *testing.T) {
 	if !*extNetwork {
 		t.Skip("skipping test without --use-external-network")
 	}
-	d := NewDialer(t.Logf)
+	d := NewDialer(t.Logf, nil)
 	c, err := d.Dial("tcp", "google.com:80")
 	if err != nil {
 		t.Fatal(err)

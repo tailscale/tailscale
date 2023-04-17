@@ -249,13 +249,13 @@ func getValidation() *ValidationSockStats {
 	return r
 }
 
-func setNetMon(lm *netmon.Monitor) {
+func setNetMon(netMon *netmon.Monitor) {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
 
 	// We intentionally populate all known interfaces now, so that we can
 	// increment stats for them without holding mu.
-	state := lm.InterfaceState()
+	state := netMon.InterfaceState()
 	for ifName, iface := range state.Interface {
 		sockStats.knownInterfaces[iface.Index] = ifName
 	}
@@ -266,7 +266,7 @@ func setNetMon(lm *netmon.Monitor) {
 		sockStats.usedInterfaces[ifIndex] = 1
 	}
 
-	lm.RegisterChangeCallback(func(changed bool, state *interfaces.State) {
+	netMon.RegisterChangeCallback(func(changed bool, state *interfaces.State) {
 		if changed {
 			if ifName := state.DefaultRouteInterface; ifName != "" {
 				ifIndex := state.Interface[ifName].Index

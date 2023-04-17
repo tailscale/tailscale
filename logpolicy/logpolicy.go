@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/netknob"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -450,14 +451,15 @@ func tryFixLogStateLocation(dir, cmdname string) {
 
 // New returns a new log policy (a logger and its instance ID) for a
 // given collection name.
-func New(collection string) *Policy {
-	return NewWithConfigPath(collection, "", "")
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func New(collection string, netMon *netmon.Monitor) *Policy {
+	return NewWithConfigPath(collection, "", "", netMon)
 }
 
 // NewWithConfigPath is identical to New,
 // but uses the specified directory and command name.
 // If either is empty, it derives them automatically.
-func NewWithConfigPath(collection, dir, cmdName string) *Policy {
+func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor) *Policy {
 	var lflags int
 	if term.IsTerminal(2) || runtime.GOOS == "windows" {
 		lflags = 0
@@ -554,7 +556,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost)},
+		HTTPC: &http.Client{Transport: NewLogtailTransport(logtail.DefaultHost, netMon)},
 	}
 	if collection == logtail.CollectionNode {
 		conf.MetricsDelta = clientmetric.EncodeLogTailMetricsDelta
@@ -569,7 +571,7 @@ func NewWithConfigPath(collection, dir, cmdName string) *Policy {
 		log.Println("You have enabled a non-default log target. Doing without being told to by Tailscale staff or your network administrator will make getting support difficult.")
 		conf.BaseURL = val
 		u, _ := url.Parse(val)
-		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host)}
+		conf.HTTPC = &http.Client{Transport: NewLogtailTransport(u.Host, netMon)}
 	}
 
 	filchOptions := filch.Options{
@@ -670,13 +672,22 @@ func (p *Policy) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// DialContext is a net.Dialer.DialContext specialized for use by logtail.
+// MakeDialFunc creates a net.Dialer.DialContext function specialized for use
+// by logtail.
 // It does the following:
 //   - If DNS lookup fails, consults the bootstrap DNS list of Tailscale hostnames.
 //   - If TLS connection fails, try again using LetsEncrypt's built-in root certificate,
 //     for the benefit of older OS platforms which might not include it.
-func DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
-	nd := netns.FromDialer(log.Printf, &net.Dialer{
+//
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func MakeDialFunc(netMon *netmon.Monitor) func(ctx context.Context, netw, addr string) (net.Conn, error) {
+	return func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		return dialContext(ctx, netw, addr, netMon)
+	}
+}
+
+func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor) (net.Conn, error) {
+	nd := netns.FromDialer(log.Printf, netMon, &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
@@ -711,7 +722,8 @@ func DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 	dnsCache := &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward, // use default cache's forwarder
 		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.Lookup(log.Printf),
+		LookupIPFallback: dnsfallback.MakeLookupFunc(log.Printf, netMon),
+		NetMon:           netMon,
 	}
 	dialer := dnscache.Dialer(nd.DialContext, dnsCache)
 	c, err = dialer(ctx, netw, addr)
@@ -723,7 +735,8 @@ func DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 
 // NewLogtailTransport returns an HTTP Transport particularly suited to uploading
 // logs to the given host name. See DialContext for details on how it works.
-func NewLogtailTransport(host string) http.RoundTripper {
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func NewLogtailTransport(host string, netMon *netmon.Monitor) http.RoundTripper {
 	if inTest() {
 		return noopPretendSuccessTransport{}
 	}
@@ -739,7 +752,7 @@ func NewLogtailTransport(host string) http.RoundTripper {
 	tr.DisableCompression = true
 
 	// Log whenever we dial:
-	tr.DialContext = DialContext
+	tr.DialContext = MakeDialFunc(netMon)
 
 	// We're contacting exactly 1 hostname, so the default's 100
 	// max idle conns is very high for our needs. Even 2 is

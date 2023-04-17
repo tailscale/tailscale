@@ -30,7 +30,7 @@ func getValidation() *ValidationSockStats {
 	return nil
 }
 
-func setNetMon(lm *netmon.Monitor) {
+func setNetMon(netMon *netmon.Monitor) {
 }
 
 func debugInfo() string {

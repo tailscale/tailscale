@@ -128,14 +128,14 @@ func (d *Dialer) Close() error {
 	return nil
 }
 
-func (d *Dialer) SetNetMon(mon *netmon.Monitor) {
+func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.netMonUnregister != nil {
 		go d.netMonUnregister()
 		d.netMonUnregister = nil
 	}
-	d.netMon = mon
+	d.netMon = netMon
 	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
 }
 
@@ -279,7 +279,7 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 		if logf == nil {
 			logf = logger.Discard
 		}
-		d.netnsDialer = netns.NewDialer(logf)
+		d.netnsDialer = netns.NewDialer(logf, d.netMon)
 	})
 	c, err := d.netnsDialer.DialContext(ctx, network, addr)
 	if err != nil {

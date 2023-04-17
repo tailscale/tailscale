@@ -313,7 +313,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 		loginFlags:     loginFlags,
 	}
 
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID)
+	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, e.GetNetMon())
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}

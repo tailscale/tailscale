@@ -64,6 +64,7 @@ type Manager struct {
 }
 
 // NewManagers created a new manager from the given config.
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")

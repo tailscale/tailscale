@@ -31,6 +31,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/envknob"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tlsdial"
@@ -55,6 +56,7 @@ type Client struct {
 
 	privateKey key.NodePrivate
 	logf       logger.Logf
+	netMon     *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	dialer     func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// Either url or getRegion is non-nil:
@@ -88,11 +90,13 @@ func (c *Client) String() string {
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
 // To trigger a connection, use Connect.
-func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, getRegion func() *tailcfg.DERPRegion) *Client {
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmon.Monitor, getRegion func() *tailcfg.DERPRegion) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		privateKey: privateKey,
 		logf:       logf,
+		netMon:     netMon,
 		getRegion:  getRegion,
 		ctx:        ctx,
 		cancelCtx:  cancel,
@@ -492,7 +496,7 @@ func (c *Client) dialURL(ctx context.Context) (net.Conn, error) {
 		return c.dialer(ctx, "tcp", net.JoinHostPort(host, urlPort(c.url)))
 	}
 	hostOrIP := host
-	dialer := netns.NewDialer(c.logf)
+	dialer := netns.NewDialer(c.logf, c.netMon)
 
 	if c.DNSCache != nil {
 		ip, _, _, err := c.DNSCache.LookupIP(ctx, host)
@@ -587,7 +591,7 @@ func (c *Client) DialRegionTLS(ctx context.Context, reg *tailcfg.DERPRegion) (tl
 }
 
 func (c *Client) dialContext(ctx context.Context, proto, addr string) (net.Conn, error) {
-	return netns.NewDialer(c.logf).DialContext(ctx, proto, addr)
+	return netns.NewDialer(c.logf, c.netMon).DialContext(ctx, proto, addr)
 }
 
 // shouldDialProto reports whether an explicitly provided IPv4 or IPv6

@@ -34,7 +34,7 @@ func TestGetInterfaceIndex(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			idx, err := getInterfaceIndex(t.Logf, tc.addr)
+			idx, err := getInterfaceIndex(t.Logf, nil, tc.addr)
 			if err != nil {
 				if tc.err == "" {
 					t.Fatalf("got unexpected error: %v", err)
@@ -68,7 +68,7 @@ func TestGetInterfaceIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		idx, err := getInterfaceIndex(t.Logf, "100.100.100.100:53")
+		idx, err := getInterfaceIndex(t.Logf, nil, "100.100.100.100:53")
 		if err != nil {
 			t.Fatal(err)
 		}

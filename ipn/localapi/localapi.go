@@ -125,8 +125,10 @@ var (
 	metrics   = map[string]*clientmetric.Metric{}
 )
 
-func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, logID logid.PublicID) *Handler {
-	return &Handler{b: b, logf: logf, backendLogID: logID}
+// NewHandler creates a new LocalAPI HTTP handler. All parameters except netMon
+// are required (if non-nil it's used to do faster interface lookups).
+func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, netMon *netmon.Monitor, logID logid.PublicID) *Handler {
+	return &Handler{b: b, logf: logf, netMon: netMon, backendLogID: logID}
 }
 
 type Handler struct {
@@ -150,6 +152,7 @@ type Handler struct {
 
 	b            *ipnlocal.LocalBackend
 	logf         logger.Logf
+	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	backendLogID logid.PublicID
 }
 
@@ -679,7 +682,7 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 	done := make(chan bool, 1)
 
 	var c *portmapper.Client
-	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), debugKnobs, func() {
+	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), h.netMon, debugKnobs, func() {
 		logf("portmapping changed.")
 		logf("have mapping: %v", c.HaveMapping())
 

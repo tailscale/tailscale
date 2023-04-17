@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -69,6 +70,8 @@ type Dialer struct {
 	// Logf, if set, is a logging function to use; if unset, logs are
 	// dropped.
 	Logf logger.Logf
+
+	NetMon *netmon.Monitor
 
 	// DialPlan, if set, contains instructions from the control server on
 	// how to connect to it. If present, we will try the methods in this

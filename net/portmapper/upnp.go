@@ -237,7 +237,7 @@ func (c *Client) upnpHTTPClientLocked() *http.Client {
 	if c.uPnPHTTPClient == nil {
 		c.uPnPHTTPClient = &http.Client{
 			Transport: &http.Transport{
-				DialContext:     netns.NewDialer(c.logf).DialContext,
+				DialContext:     netns.NewDialer(c.logf, c.netMon).DialContext,
 				IdleConnTimeout: 2 * time.Second, // LAN is cheap
 			},
 		}

@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/net/netknob"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
 
@@ -55,19 +56,21 @@ func SetDisableBindConnToInterface(v bool) {
 // Listener returns a new net.Listener with its Control hook func
 // initialized as necessary to run in logical network namespace that
 // doesn't route back into Tailscale.
-func Listener(logf logger.Logf) *net.ListenConfig {
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func Listener(logf logger.Logf, netMon *netmon.Monitor) *net.ListenConfig {
 	if disabled.Load() {
 		return new(net.ListenConfig)
 	}
-	return &net.ListenConfig{Control: control(logf)}
+	return &net.ListenConfig{Control: control(logf, netMon)}
 }
 
 // NewDialer returns a new Dialer using a net.Dialer with its Control
 // hook func initialized as necessary to run in a logical network
 // namespace that doesn't route back into Tailscale. It also handles
 // using a SOCKS if configured in the environment with ALL_PROXY.
-func NewDialer(logf logger.Logf) Dialer {
-	return FromDialer(logf, &net.Dialer{
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func NewDialer(logf logger.Logf, netMon *netmon.Monitor) Dialer {
+	return FromDialer(logf, netMon, &net.Dialer{
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
 }
@@ -76,11 +79,12 @@ func NewDialer(logf logger.Logf) Dialer {
 // network namespace that doesn't route back into Tailscale. It also
 // handles using a SOCKS if configured in the environment with
 // ALL_PROXY.
-func FromDialer(logf logger.Logf, d *net.Dialer) Dialer {
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func FromDialer(logf logger.Logf, netMon *netmon.Monitor, d *net.Dialer) Dialer {
 	if disabled.Load() {
 		return d
 	}
-	d.Control = control(logf)
+	d.Control = control(logf, netMon)
 	if wrapDialer != nil {
 		return wrapDialer(d)
 	}

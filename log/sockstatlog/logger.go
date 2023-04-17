@@ -20,6 +20,7 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
@@ -92,7 +93,8 @@ func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 // On platforms that do not support sockstat logging, a nil Logger will be returned.
 // The returned Logger is not yet enabled, and must be shut down with Shutdown when it is no longer needed.
 // Logs will be uploaded to the log server using a new log ID derived from the provided backend logID.
-func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, error) {
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) (*Logger, error) {
 	if !sockstats.IsAvailable {
 		return nil, nil
 	}
@@ -112,7 +114,7 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID) (*Logger, 
 	logger := &Logger{
 		logf:  logf,
 		filch: filch,
-		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost),
+		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),

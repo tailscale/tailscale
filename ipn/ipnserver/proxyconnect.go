@@ -37,7 +37,8 @@ func (s *Server) handleProxyConnectConn(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	back, err := logpolicy.DialContext(ctx, "tcp", hostPort)
+	dialContext := logpolicy.MakeDialFunc(s.netMon)
+	back, err := dialContext(ctx, "tcp", hostPort)
 	if err != nil {
 		s.logf("error CONNECT dialing %v: %v", hostPort, err)
 		http.Error(w, "Connect failure", http.StatusBadGateway)
