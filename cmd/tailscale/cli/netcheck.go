@@ -97,7 +97,6 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	var err error
 	switch netcheckArgs.format {
 	case "":
-		break
 	case "json":
 		j, err = json.MarshalIndent(report, "", "\t")
 	case "json-line":

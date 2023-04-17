@@ -3160,7 +3160,6 @@ func (c *Conn) goroutinesRunningLocked() bool {
 	if c.activeDerp != nil {
 		select {
 		case <-c.derpStarted:
-			break
 		default:
 			return true
 		}
