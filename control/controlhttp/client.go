@@ -393,7 +393,7 @@ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr,
 	} else {
 		dns = &dnscache.Resolver{
 			Forward:          dnscache.Get().Forward,
-			LookupIPFallback: dnsfallback.Lookup,
+			LookupIPFallback: dnsfallback.Lookup(a.logf),
 			UseLastGood:      true,
 			Logf:             a.Logf, // not a.logf method; we want to propagate nil-ness
 		}

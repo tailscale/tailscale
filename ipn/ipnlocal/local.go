@@ -1077,7 +1077,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		b.e.SetDERPMap(st.NetMap.DERPMap)
 
 		// Update our cached DERP map
-		dnsfallback.UpdateCache(st.NetMap.DERPMap)
+		dnsfallback.UpdateCache(st.NetMap.DERPMap, b.logf)
 
 		b.send(ipn.Notify{NetMap: st.NetMap})
 	}

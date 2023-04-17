@@ -41,7 +41,6 @@ import (
 	"tailscale.com/logpolicy"
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
-	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/memnet"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
@@ -649,25 +648,6 @@ func (s *Server) logf(format string, a ...interface{}) {
 		return
 	}
 	log.Printf(format, a...)
-}
-
-// ReplaceGlobalLoggers will replace any Tailscale-specific package-global
-// loggers with this Server's logger. It returns a function that, when called,
-// will undo any changes made.
-//
-// Note that calling this function from multiple Servers will result in the
-// last call taking all logs; logs are not duplicated.
-func (s *Server) ReplaceGlobalLoggers() (undo func()) {
-	var undos []func()
-
-	oldDnsFallback := dnsfallback.SetLogger(s.logf)
-	undos = append(undos, func() { dnsfallback.SetLogger(oldDnsFallback) })
-
-	return func() {
-		for _, fn := range undos {
-			fn()
-		}
-	}
 }
 
 // printAuthURLLoop loops once every few seconds while the server is still running and
