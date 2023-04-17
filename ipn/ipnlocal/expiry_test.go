@@ -243,7 +243,7 @@ func TestNextPeerExpiry(t *testing.T) {
 			em := newExpiryManager(t.Logf)
 			em.timeNow = func() time.Time { return now }
 			got := em.nextPeerExpiry(tt.netmap, now)
-			if got != tt.want {
+			if !got.Equal(tt.want) {
 				t.Errorf("got %q, want %q", got.Format(time.RFC3339), tt.want.Format(time.RFC3339))
 			} else if !got.IsZero() && got.Before(now) {
 				t.Errorf("unexpectedly got expiry %q before now %q", got.Format(time.RFC3339), now.Format(time.RFC3339))
@@ -269,7 +269,7 @@ func TestNextPeerExpiry(t *testing.T) {
 		}
 		got := em.nextPeerExpiry(nm, now)
 		want := now.Add(30 * time.Second)
-		if got != want {
+		if !got.Equal(want) {
 			t.Errorf("got %q, want %q", got.Format(time.RFC3339), want.Format(time.RFC3339))
 		}
 	})

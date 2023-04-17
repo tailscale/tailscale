@@ -405,7 +405,7 @@ func DisabledEtcAptSource() bool {
 		return false
 	}
 	mod := fi.ModTime()
-	if c, ok := etcAptSrcCache.Load().(etcAptSrcResult); ok && c.mod == mod {
+	if c, ok := etcAptSrcCache.Load().(etcAptSrcResult); ok && c.mod.Equal(mod) {
 		return c.disabled
 	}
 	f, err := os.Open(path)

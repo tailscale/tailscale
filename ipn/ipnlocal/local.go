@@ -438,7 +438,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 			// unchanged when the timer actually fires.
 			b.mu.Lock()
 			defer b.mu.Unlock()
-			if ls := b.componentLogUntil[component]; ls.until == until {
+			if ls := b.componentLogUntil[component]; ls.until.Equal(until) {
 				setEnabled(false)
 				b.logf("debugging logging for component %q disabled (by timer)", component)
 			}
