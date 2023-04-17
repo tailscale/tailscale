@@ -3,6 +3,7 @@ linters:
   # enable in the list below.
   disable-all: true
   enable:
+    - bidichk
     - gofmt
     - goimports
     - misspell
@@ -24,6 +25,9 @@ issues:
 
 # Per-linter settings are contained in this top-level key
 linters-settings:
+  # Enable all rules by default; we don't use invisible unicode runes.
+  bidichk:
+
   gofmt:
     rewrite-rules:
       - pattern: 'interface{}'
