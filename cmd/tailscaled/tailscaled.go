@@ -534,7 +534,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 		lb.SetLogFlusher(logPol.Logtail.StartFlush)
 	}
 	if root := lb.TailscaleVarRoot(); root != "" {
-		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"))
+		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
 	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
 		return smallzstd.NewDecoder(nil)

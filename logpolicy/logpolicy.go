@@ -711,7 +711,7 @@ func DialContext(ctx context.Context, netw, addr string) (net.Conn, error) {
 	dnsCache := &dnscache.Resolver{
 		Forward:          dnscache.Get().Forward, // use default cache's forwarder
 		UseLastGood:      true,
-		LookupIPFallback: dnsfallback.Lookup,
+		LookupIPFallback: dnsfallback.Lookup(log.Printf),
 	}
 	dialer := dnscache.Dialer(nd.DialContext, dnsCache)
 	c, err = dialer(ctx, netw, addr)

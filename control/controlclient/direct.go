@@ -211,7 +211,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache := &dnscache.Resolver{
 			Forward:          dnscache.Get().Forward, // use default cache's forwarder
 			UseLastGood:      true,
-			LookupIPFallback: dnsfallback.Lookup,
+			LookupIPFallback: dnsfallback.Lookup(opts.Logf),
 			Logf:             opts.Logf,
 		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
