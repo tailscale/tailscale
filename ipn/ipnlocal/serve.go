@@ -17,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	pathpkg "path"
 	"strconv"
 	"strings"
 	"sync"
@@ -420,19 +419,19 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 	if h, ok := wsc.Handlers().GetOk(r.URL.Path); ok {
 		return h, r.URL.Path, true
 	}
-	path := path.Clean(r.URL.Path)
+	pth := path.Clean(r.URL.Path)
 	for {
-		withSlash := path + "/"
+		withSlash := pth + "/"
 		if h, ok := wsc.Handlers().GetOk(withSlash); ok {
 			return h, withSlash, true
 		}
-		if h, ok := wsc.Handlers().GetOk(path); ok {
-			return h, path, true
+		if h, ok := wsc.Handlers().GetOk(pth); ok {
+			return h, pth, true
 		}
-		if path == "/" {
+		if pth == "/" {
 			return z, "", false
 		}
-		path = pathpkg.Dir(path)
+		pth = path.Dir(pth)
 	}
 }
 
