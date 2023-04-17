@@ -788,7 +788,7 @@ func markDescendantAUMs(storage Chonk, verdict map[AUMHash]retainState) error {
 		nextIterScan := make([]AUMHash, 0, len(verdict))
 		for _, h := range toScan {
 			if verdict[h]&retainStateLeaf != 0 {
-				// This AUM and its decendants have already been marked.
+				// This AUM and its descendants have already been marked.
 				continue
 			}
 			verdict[h] |= retainStateLeaf
@@ -832,7 +832,7 @@ func Compact(storage CompactableChonk, head AUMHash, opts CompactionOptions) (la
 		return AUMHash{}, fmt.Errorf("marking young AUMs: %w", err)
 	}
 	if err := markDescendantAUMs(storage, verdict); err != nil {
-		return AUMHash{}, fmt.Errorf("marking decendant AUMs: %w", err)
+		return AUMHash{}, fmt.Errorf("marking descendant AUMs: %w", err)
 	}
 	if lastActiveAncestor, err = markAncestorIntersectionAUMs(storage, verdict, lastActiveAncestor); err != nil {
 		return AUMHash{}, fmt.Errorf("marking ancestor intersection: %w", err)

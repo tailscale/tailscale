@@ -139,9 +139,9 @@ type userspaceEngine struct {
 	// pongCallback is the map of response handlers waiting for disco or TSMP
 	// pong callbacks. The map key is a random slice of bytes.
 	pongCallback map[[8]byte]func(packet.TSMPPongReply)
-	// icmpEchoResponseCallback is the map of reponse handlers waiting for ICMP
+	// icmpEchoResponseCallback is the map of response handlers waiting for ICMP
 	// echo responses. The map key is a random uint32 that is the little endian
-	// value of the ICMP identifer and sequence number concatenated.
+	// value of the ICMP identifier and sequence number concatenated.
 	icmpEchoResponseCallback map[uint32]func()
 
 	// networkLogger logs statistics about network connections.

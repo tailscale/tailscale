@@ -158,7 +158,7 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 		// nextExpiry being zero is a sentinel that we haven't yet set
 		// an expiry; otherwise, only update if this node's expiry is
 		// sooner than the currently-stored one (since we want the
-		// soonest-occuring expiry time).
+		// soonest-occurring expiry time).
 		if nextExpiry.IsZero() || peer.KeyExpiry.Before(nextExpiry) {
 			nextExpiry = peer.KeyExpiry
 		}

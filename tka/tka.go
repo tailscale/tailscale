@@ -390,7 +390,7 @@ func computeActiveAncestor(storage Chonk, chains []chain) (AUMHash, error) {
 //     formerly (in a previous run) part of the chain.
 //  3. Compute the state of the state machine at this ancestor. This is
 //     needed for fast-forward, as each update operates on the state of
-//     the update preceeding it.
+//     the update preceding it.
 //  4. Iteratively apply updates till we reach head ('fast forward').
 func computeActiveChain(storage Chonk, lastKnownOldest *AUMHash, maxIter int) (chain, error) {
 	chains, err := computeChainCandidates(storage, lastKnownOldest, maxIter)

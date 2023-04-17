@@ -346,7 +346,7 @@ func (d *Dialer) dialPeerAPI(ctx context.Context, network, addr string) (net.Con
 //
 // The primary function of this is to work on macOS & iOS's in the
 // Network/System Extension so it can mark the dialer as staying
-// withing the network namespace/sandbox.
+// within the network namespace/sandbox.
 func (d *Dialer) getPeerDialer() *net.Dialer {
 	d.peerDialerOnce.Do(func() {
 		d.peerDialer = &net.Dialer{

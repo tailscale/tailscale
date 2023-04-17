@@ -134,7 +134,7 @@ func newTestchain(t *testing.T, input string, options ...testchainOpt) *testChai
 			out.recordPos(s.TokenText(), s.Pos())
 			// If the last token was '->', that means
 			// that the next identifier has a child relationship
-			// with the identifier preceeding '->'.
+			// with the identifier preceding '->'.
 			if lastWasChain {
 				out.recordParent(t, s.TokenText(), lastIdent)
 			}

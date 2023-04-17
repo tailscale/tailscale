@@ -30,7 +30,7 @@ func TestDoesNotOverwriteIrregularFiles(t *testing.T) {
 	}
 
 	// The least troublesome thing to make that is not a file is a unix socket.
-	// Making a null device sadly requries root.
+	// Making a null device sadly requires root.
 	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)

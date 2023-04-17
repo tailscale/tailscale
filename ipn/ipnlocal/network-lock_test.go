@@ -875,7 +875,7 @@ func TestTKAForceDisable(t *testing.T) {
 	}
 
 	if b.tka != nil {
-		t.Fatal("tka was re-initalized")
+		t.Fatal("tka was re-initialized")
 	}
 }
 
