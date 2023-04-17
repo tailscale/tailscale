@@ -6,6 +6,7 @@
 package tooldeps
 
 import (
+	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 	_ "github.com/tailscale/depaware/depaware"
 	_ "golang.org/x/tools/cmd/goimports"
 )

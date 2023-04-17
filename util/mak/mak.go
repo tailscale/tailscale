@@ -26,7 +26,7 @@ func Set[K comparable, V any, T ~map[K]V](m *T, k K, v V) {
 // the field to be defined after they decode the JSON.)
 //
 // Deprecated: use NonNilSliceForJSON or NonNilMapForJSON instead.
-func NonNil(ptr interface{}) {
+func NonNil(ptr any) {
 	if ptr == nil {
 		panic("nil interface")
 	}

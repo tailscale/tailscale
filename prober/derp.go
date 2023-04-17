@@ -35,7 +35,7 @@ type derpProber struct {
 	meshInterval time.Duration
 	tlsInterval  time.Duration
 
-	// Probe functions that can be overriden for testing.
+	// Probe functions that can be overridden for testing.
 	tlsProbeFn  func(string) ProbeFunc
 	udpProbeFn  func(string, int) ProbeFunc
 	meshProbeFn func(string, string) ProbeFunc

@@ -649,7 +649,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 // candidate AUMs must exist in verdict.
 func markYoungAUMs(storage CompactableChonk, verdict map[AUMHash]retainState, minAge time.Duration) error {
 	minTime := time.Now().Add(-minAge)
-	for h, _ := range verdict {
+	for h := range verdict {
 		commitTime, err := storage.CommitTime(h)
 		if err != nil {
 			return err
@@ -788,7 +788,7 @@ func markDescendantAUMs(storage Chonk, verdict map[AUMHash]retainState) error {
 		nextIterScan := make([]AUMHash, 0, len(verdict))
 		for _, h := range toScan {
 			if verdict[h]&retainStateLeaf != 0 {
-				// This AUM and its decendants have already been marked.
+				// This AUM and its descendants have already been marked.
 				continue
 			}
 			verdict[h] |= retainStateLeaf
@@ -832,7 +832,7 @@ func Compact(storage CompactableChonk, head AUMHash, opts CompactionOptions) (la
 		return AUMHash{}, fmt.Errorf("marking young AUMs: %w", err)
 	}
 	if err := markDescendantAUMs(storage, verdict); err != nil {
-		return AUMHash{}, fmt.Errorf("marking decendant AUMs: %w", err)
+		return AUMHash{}, fmt.Errorf("marking descendant AUMs: %w", err)
 	}
 	if lastActiveAncestor, err = markAncestorIntersectionAUMs(storage, verdict, lastActiveAncestor); err != nil {
 		return AUMHash{}, fmt.Errorf("marking ancestor intersection: %w", err)

@@ -961,7 +961,7 @@ var (
 	metricPMPSent = clientmetric.NewCounter("portmap_pmp_sent")
 
 	// metricPMPOK counts the number of times
-	// we received a succesful PMP response.
+	// we received a successful PMP response.
 	metricPMPOK = clientmetric.NewCounter("portmap_pmp_ok")
 
 	// metricPMPUnhandledOpcode counts the number of times

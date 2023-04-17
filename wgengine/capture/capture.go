@@ -154,7 +154,7 @@ func (s *Sink) Close() error {
 	return nil
 }
 
-// WaitCh returns a channel which blocks untill
+// WaitCh returns a channel which blocks until
 // the sink is closed.
 func (s *Sink) WaitCh() <-chan struct{} {
 	return s.ctx.Done()

@@ -639,7 +639,7 @@ func (p closeOnErrorPool) closeAllIfError(errp *error) {
 	}
 }
 
-func (s *Server) logf(format string, a ...interface{}) {
+func (s *Server) logf(format string, a ...any) {
 	if s.logtail != nil {
 		s.logtail.Logf(format, a...)
 	}

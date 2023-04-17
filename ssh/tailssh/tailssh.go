@@ -838,7 +838,7 @@ type sshSession struct {
 	exitOnce sync.Once
 }
 
-func (ss *sshSession) vlogf(format string, args ...interface{}) {
+func (ss *sshSession) vlogf(format string, args ...any) {
 	if sshVerboseLogging() {
 		ss.logf(format, args...)
 	}
@@ -1575,7 +1575,7 @@ type loggingWriter struct {
 }
 
 func (w loggingWriter) Write(p []byte) (n int, err error) {
-	j, err := json.Marshal([]interface{}{
+	j, err := json.Marshal([]any{
 		time.Since(w.r.start).Seconds(),
 		w.dir,
 		string(p),

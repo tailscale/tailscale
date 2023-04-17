@@ -600,7 +600,7 @@ type compactingChonkFake struct {
 
 func (c *compactingChonkFake) AllAUMs() ([]AUMHash, error) {
 	out := make([]AUMHash, 0, len(c.Mem.aums))
-	for h, _ := range c.Mem.aums {
+	for h := range c.Mem.aums {
 		out = append(out, h)
 	}
 	return out, nil

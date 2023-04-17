@@ -108,7 +108,7 @@ func TestDNSOverTCP(t *testing.T) {
 		"bradfitz.ts.com.": "2.3.4.5",
 	}
 
-	for domain, _ := range wantResults {
+	for domain := range wantResults {
 		b := mkDNSRequest(domain, dns.TypeA, addEDNS)
 		binary.Write(c, binary.BigEndian, uint16(len(b)))
 		c.Write(b)

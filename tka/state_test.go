@@ -153,7 +153,7 @@ func TestApplyUpdatesChain(t *testing.T) {
 					Keys: []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 				}, PrevAUMHash: fromHex("f09bda3bb7cf6756ea9adc25770aede4b3ca8142949d6ef5ca0add29af912fd4")},
 			},
-			State{DisablementSecrets: [][]byte{[]byte{1, 2, 3, 4}}},
+			State{DisablementSecrets: [][]byte{{1, 2, 3, 4}}},
 			State{
 				Keys:        []Key{{Kind: Key25519, Public: []byte{1, 2, 3, 4}}},
 				LastAUMHash: hashFromHex("57343671da5eea3cfb502954e976e8028bffd3540b50a043b2a65a8d8d8217d0"),

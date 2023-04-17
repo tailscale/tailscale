@@ -1,0 +1,33 @@
+linters:
+  # Don't enable any linters by default; just the ones that we explicitly
+  # enable in the list below.
+  disable-all: true
+  enable:
+    - gofmt
+    - goimports
+    - misspell
+
+# Configuration for how we run golangci-lint
+run:
+  timeout: 5m
+
+issues:
+  # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude-rules:
+    # These are forks of an upstream package and thus are exempt from stylistic
+    # changes that would make pulling in upstream changes harder.
+    - path: tempfork/.*\.go
+      text: "File is not `gofmt`-ed with `-s` `-r 'interface{} -> any'`"
+    - path: util/singleflight/.*\.go
+      text: "File is not `gofmt`-ed with `-s` `-r 'interface{} -> any'`"
+
+# Per-linter settings are contained in this top-level key
+linters-settings:
+  gofmt:
+    rewrite-rules:
+      - pattern: 'interface{}'
+        replacement: 'any'
+
+  goimports:
+
+  misspell:

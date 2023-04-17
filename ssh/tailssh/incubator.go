@@ -548,7 +548,7 @@ var opcodeShortName = map[uint8]string{
 	gossh.TTY_OP_OSPEED: "tty_op_ospeed",
 }
 
-// startWithPTY starts cmd with a psuedo-terminal attached to Stdin, Stdout and Stderr.
+// startWithPTY starts cmd with a pseudo-terminal attached to Stdin, Stdout and Stderr.
 func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 	ptyReq := ss.ptyReq
 	cmd := ss.cmd

@@ -272,7 +272,7 @@ func (p *proxy) serve(sessionID int64, c net.Conn) error {
 	}
 	if buf[0] != 'S' {
 		p.errors.Add("upstream-bad-protocol", 1)
-		return fmt.Errorf("upstream didn't acknowldge start-ssl, said %q", buf[0])
+		return fmt.Errorf("upstream didn't acknowledge start-ssl, said %q", buf[0])
 	}
 	tlsConf := &tls.Config{
 		ServerName: p.upstreamHost,

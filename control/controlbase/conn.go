@@ -398,7 +398,7 @@ type maxMsgBuffer [maxMessageSize]byte
 
 // bufPool holds the temporary buffers for Conn.Read & Write.
 var bufPool = &sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new(maxMsgBuffer)
 	},
 }

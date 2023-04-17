@@ -224,7 +224,7 @@ func TestStateString(t *testing.T) {
 					},
 				},
 				InterfaceIPs: map[string][]netip.Prefix{
-					"eth0": []netip.Prefix{
+					"eth0": {
 						netip.MustParsePrefix("10.0.0.2/8"),
 					},
 				},
