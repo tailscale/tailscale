@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/net/packet"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/netlogtype"
 )
 
@@ -92,12 +93,26 @@ func (s *Statistics) UpdateRxVirtual(b []byte) {
 	s.updateVirtual(b, true)
 }
 
+var (
+	tailscaleServiceIPv4 = tsaddr.TailscaleServiceIP()
+	tailscaleServiceIPv6 = tsaddr.TailscaleServiceIPv6()
+)
+
 func (s *Statistics) updateVirtual(b []byte, receive bool) {
 	var p packet.Parsed
 	p.Decode(b)
 	conn := netlogtype.Connection{Proto: p.IPProto, Src: p.Src, Dst: p.Dst}
 	if receive {
 		conn.Src, conn.Dst = conn.Dst, conn.Src
+	}
+
+	// Network logging is defined as traffic between two Tailscale nodes.
+	// Traffic with the internal Tailscale service is not with another node
+	// and should not be logged. It also happens to be a high volume
+	// amount of discrete traffic flows (e.g., DNS lookups).
+	switch conn.Dst.Addr() {
+	case tailscaleServiceIPv4, tailscaleServiceIPv6:
+		return
 	}
 
 	s.mu.Lock()
