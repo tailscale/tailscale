@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"tailscale.com/atomicfile"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
@@ -31,13 +32,16 @@ import (
 	"tailscale.com/util/slicesx"
 )
 
-func Lookup(logf logger.Logf) func(ctx context.Context, host string) ([]netip.Addr, error) {
+// MakeLookupFunc creates a function that can be used to resolve hostnames
+// (e.g. as a LookupIPFallback from dnscache.Resolver).
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor) func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return func(ctx context.Context, host string) ([]netip.Addr, error) {
-		return lookup(ctx, host, logf)
+		return lookup(ctx, host, logf, netMon)
 	}
 }
 
-func lookup(ctx context.Context, host string, logf logger.Logf) ([]netip.Addr, error) {
+func lookup(ctx context.Context, host string, logf logger.Logf, netMon *netmon.Monitor) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil && ip.IsValid() {
 		return []netip.Addr{ip}, nil
 	}
@@ -85,7 +89,7 @@ func lookup(ctx context.Context, host string, logf logger.Logf) ([]netip.Addr, e
 		logf("trying bootstrapDNS(%q, %q) for %q ...", cand.dnsName, cand.ip, host)
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		dm, err := bootstrapDNSMap(ctx, cand.dnsName, cand.ip, host, logf)
+		dm, err := bootstrapDNSMap(ctx, cand.dnsName, cand.ip, host, logf, netMon)
 		if err != nil {
 			logf("bootstrapDNS(%q, %q) for %q error: %v", cand.dnsName, cand.ip, host, err)
 			continue
@@ -104,8 +108,8 @@ func lookup(ctx context.Context, host string, logf logger.Logf) ([]netip.Addr, e
 
 // serverName and serverIP of are, say, "derpN.tailscale.com".
 // queryName is the name being sought (e.g. "controlplane.tailscale.com"), passed as hint.
-func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string, logf logger.Logf) (dnsMap, error) {
-	dialer := netns.NewDialer(logf)
+func bootstrapDNSMap(ctx context.Context, serverName string, serverIP netip.Addr, queryName string, logf logger.Logf, netMon *netmon.Monitor) (dnsMap, error) {
+	dialer := netns.NewDialer(logf, netMon)
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = tshttpproxy.ProxyFromEnvironment
 	tr.DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {

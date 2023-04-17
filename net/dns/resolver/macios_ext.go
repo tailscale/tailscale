@@ -17,8 +17,8 @@ func init() {
 	initListenConfig = initListenConfigNetworkExtension
 }
 
-func initListenConfigNetworkExtension(nc *net.ListenConfig, mon *netmon.Monitor, tunName string) error {
-	nif, ok := mon.InterfaceState().Interface[tunName]
+func initListenConfigNetworkExtension(nc *net.ListenConfig, netMon *netmon.Monitor, tunName string) error {
+	nif, ok := netMon.InterfaceState().Interface[tunName]
 	if !ok {
 		return errors.New("utun not found")
 	}

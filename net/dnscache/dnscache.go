@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"tailscale.com/envknob"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
@@ -90,6 +91,11 @@ type Resolver struct {
 	// not present, log.Printf will be used. The prefix "dnscache: " will
 	// be added to all log messages printed with this logger.
 	Logf logger.Logf
+
+	// NetMon optionally provides a netmon.Monitor to use to get the current
+	// (cached) network interface.
+	// If nil, the interface will be looked up dynamically.
+	NetMon *netmon.Monitor
 
 	sf singleflight.Group[string, ipRes]
 

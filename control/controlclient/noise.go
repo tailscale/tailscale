@@ -19,9 +19,11 @@ import (
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
@@ -167,6 +169,9 @@ type NoiseClient struct {
 	// be nil.
 	dialPlan func() *tailcfg.ControlDialPlan
 
+	logf   logger.Logf
+	netMon *netmon.Monitor
+
 	// mu only protects the following variables.
 	mu       sync.Mutex
 	last     *noiseConn // or nil
@@ -177,8 +182,9 @@ type NoiseClient struct {
 // NewNoiseClient returns a new noiseClient for the provided server and machine key.
 // serverURL is of the form https://<host>:<port> (no trailing slash).
 //
+// netMon may be nil, if non-nil it's used to do faster interface lookups.
 // dialPlan may be nil
-func NewNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, dialPlan func() *tailcfg.ControlDialPlan) (*NoiseClient, error) {
+func NewNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, logf logger.Logf, netMon *netmon.Monitor, dialPlan func() *tailcfg.ControlDialPlan) (*NoiseClient, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, err
@@ -207,6 +213,8 @@ func NewNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, 
 		httpsPort:    httpsPort,
 		dialer:       dialer,
 		dialPlan:     dialPlan,
+		logf:         logf,
+		netMon:       netMon,
 	}
 
 	// Create the HTTP/2 Transport using a net/http.Transport
@@ -366,6 +374,8 @@ func (nc *NoiseClient) dial() (*noiseConn, error) {
 		ProtocolVersion: uint16(tailcfg.CurrentCapabilityVersion),
 		Dialer:          nc.dialer.SystemDial,
 		DialPlan:        dialPlan,
+		Logf:            nc.logf,
+		NetMon:          nc.netMon,
 	}).Dial(ctx)
 	if err != nil {
 		return nil, err

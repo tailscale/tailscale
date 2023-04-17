@@ -997,7 +997,7 @@ func TestMarshalResponseFormatError(t *testing.T) {
 
 func TestForwardLinkSelection(t *testing.T) {
 	configCall := make(chan string, 1)
-	tstest.Replace(t, &initListenConfig, func(nc *net.ListenConfig, mon *netmon.Monitor, tunName string) error {
+	tstest.Replace(t, &initListenConfig, func(nc *net.ListenConfig, netMon *netmon.Monitor, tunName string) error {
 		select {
 		case configCall <- tunName:
 			return nil

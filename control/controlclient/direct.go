@@ -211,8 +211,9 @@ func NewDirect(opts Options) (*Direct, error) {
 		dnsCache := &dnscache.Resolver{
 			Forward:          dnscache.Get().Forward, // use default cache's forwarder
 			UseLastGood:      true,
-			LookupIPFallback: dnsfallback.Lookup(opts.Logf),
+			LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon),
 			Logf:             opts.Logf,
+			NetMon:           opts.NetMon,
 		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
@@ -1508,7 +1509,7 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 			return nil, err
 		}
 		c.logf("creating new noise client")
-		nc, err := NewNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, dp)
+		nc, err := NewNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, c.logf, c.netMon, dp)
 		if err != nil {
 			return nil, err
 		}

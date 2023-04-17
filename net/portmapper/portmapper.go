@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/types/logger"
@@ -59,6 +60,7 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 // Client is a port mapping client.
 type Client struct {
 	logf         logger.Logf
+	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	ipAndGateway func() (gw, ip netip.Addr, ok bool)
 	onChange     func() // or nil
 	debug        DebugKnobs
@@ -153,15 +155,19 @@ func (m *pmpMapping) Release(ctx context.Context) {
 
 // NewClient returns a new portmapping client.
 //
+// The netMon parameter is optional; if non-nil it's used to do faster interface
+// lookups.
+//
 // The debug argument allows configuring the behaviour of the portmapper for
 // debugging; if nil, a sensible set of defaults will be used.
 //
 // The optional onChange argument specifies a func to run in a new
 // goroutine whenever the port mapping status has changed. If nil,
 // it doesn't make a callback.
-func NewClient(logf logger.Logf, debug *DebugKnobs, onChange func()) *Client {
+func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, onChange func()) *Client {
 	ret := &Client{
 		logf:         logf,
+		netMon:       netMon,
 		ipAndGateway: interfaces.LikelyHomeRouterIP,
 		onChange:     onChange,
 	}
@@ -271,7 +277,7 @@ func (c *Client) listenPacket(ctx context.Context, network, addr string) (nettyp
 		}
 		return pc.(*net.UDPConn), nil
 	}
-	pc, err := netns.Listener(c.logf).ListenPacket(ctx, network, addr)
+	pc, err := netns.Listener(c.logf, c.netMon).ListenPacket(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

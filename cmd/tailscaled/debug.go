@@ -193,8 +193,8 @@ func checkDerp(ctx context.Context, derpRegion string) (err error) {
 	priv1 := key.NewNode()
 	priv2 := key.NewNode()
 
-	c1 := derphttp.NewRegionClient(priv1, log.Printf, getRegion)
-	c2 := derphttp.NewRegionClient(priv2, log.Printf, getRegion)
+	c1 := derphttp.NewRegionClient(priv1, log.Printf, nil, getRegion)
+	c2 := derphttp.NewRegionClient(priv2, log.Printf, nil, getRegion)
 	defer func() {
 		if err != nil {
 			c1.Close()

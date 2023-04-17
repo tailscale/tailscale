@@ -109,8 +109,8 @@ func GetValidation() *ValidationSockStats {
 
 // SetNetMon configures the sockstats package to monitor the active
 // interface, so that per-interface stats can be collected.
-func SetNetMon(lm *netmon.Monitor) {
-	setNetMon(lm)
+func SetNetMon(netMon *netmon.Monitor) {
+	setNetMon(netMon)
 }
 
 // DebugInfo returns a string containing debug information about the tracked

@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
@@ -52,8 +53,9 @@ type Pinger struct {
 
 // New creates a new Pinger. The Context provided will be used to create
 // network listeners, and to set an absolute deadline (if any) on the net.Conn
-func New(ctx context.Context, logf logger.Logf) (*Pinger, error) {
-	p, err := newUnstarted(ctx, logf)
+// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
+func New(ctx context.Context, logf logger.Logf, netMon *netmon.Monitor) (*Pinger, error) {
+	p, err := newUnstarted(ctx, logf, netMon)
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +74,14 @@ func New(ctx context.Context, logf logger.Logf) (*Pinger, error) {
 	return p, nil
 }
 
-func newUnstarted(ctx context.Context, logf logger.Logf) (*Pinger, error) {
+func newUnstarted(ctx context.Context, logf logger.Logf, netMon *netmon.Monitor) (*Pinger, error) {
 	var id [2]byte
 	_, err := rand.Read(id[:])
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := netns.Listener(logf).ListenPacket(ctx, "ip4:icmp", "0.0.0.0")
+	conn, err := netns.Listener(logf, netMon).ListenPacket(ctx, "ip4:icmp", "0.0.0.0")
 	if err != nil {
 		return nil, err
 	}

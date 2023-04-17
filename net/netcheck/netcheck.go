@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/ping"
 	"tailscale.com/net/portmapper"
@@ -157,6 +158,11 @@ type Client struct {
 	// Logf optionally specifies where to log to.
 	// If nil, log.Printf is used.
 	Logf logger.Logf
+
+	// NetMon optionally provides a netmon.Monitor to use to get the current
+	// (cached) network interface.
+	// If nil, the interface will be looked up dynamically.
+	NetMon *netmon.Monitor
 
 	// TimeNow, if non-nil, is used instead of time.Now.
 	TimeNow func() time.Time
@@ -864,22 +870,29 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		return c.finishAndStoreReport(rs, dm), nil
 	}
 
-	ifState, err := interfaces.GetState()
-	if err != nil {
-		c.logf("[v1] interfaces: %v", err)
-		return nil, err
+	var ifState *interfaces.State
+	if c.NetMon == nil {
+		directState, err := interfaces.GetState()
+		if err != nil {
+			c.logf("[v1] interfaces: %v", err)
+			return nil, err
+		} else {
+			ifState = directState
+		}
+	} else {
+		ifState = c.NetMon.InterfaceState()
 	}
 
 	// See if IPv6 works at all, or if it's been hard disabled at the
 	// OS level.
-	v6udp, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, "udp6", "[::1]:0")
+	v6udp, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.NetMon)).ListenPacket(ctx, "udp6", "[::1]:0")
 	if err == nil {
 		rs.report.OSHasIPv6 = true
 		v6udp.Close()
 	}
 
 	// Create a UDP4 socket used for sending to our discovered IPv4 address.
-	rs.pc4Hair, err = nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, "udp4", ":0")
+	rs.pc4Hair, err = nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, c.NetMon)).ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		c.logf("udp4: %v", err)
 		return nil, err
@@ -909,7 +922,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	if f := c.GetSTUNConn4; f != nil {
 		rs.pc4 = f()
 	} else {
-		u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, "udp4", c.udpBindAddr())
+		u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp4", c.udpBindAddr())
 		if err != nil {
 			c.logf("udp4: %v", err)
 			return nil, err
@@ -922,7 +935,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		if f := c.GetSTUNConn6; f != nil {
 			rs.pc6 = f()
 		} else {
-			u6, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf)).ListenPacket(ctx, "udp6", c.udpBindAddr())
+			u6, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp6", c.udpBindAddr())
 			if err != nil {
 				c.logf("udp6: %v", err)
 			} else {
@@ -1297,7 +1310,7 @@ func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, nee
 	ctx, done := context.WithTimeout(ctx, icmpProbeTimeout)
 	defer done()
 
-	p, err := ping.New(ctx, c.logf)
+	p, err := ping.New(ctx, c.logf, c.NetMon)
 	if err != nil {
 		return err
 	}
@@ -1635,6 +1648,7 @@ func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeP
 				Forward:     net.DefaultResolver,
 				UseLastGood: true,
 				Logf:        c.logf,
+				NetMon:      c.NetMon,
 			}
 		}
 		resolver := c.resolver

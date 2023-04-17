@@ -19,6 +19,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netcheck"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
@@ -45,9 +46,14 @@ var netcheckArgs struct {
 }
 
 func runNetcheck(ctx context.Context, args []string) error {
+	logf := logger.WithPrefix(log.Printf, "portmap: ")
+	netMon, err := netmon.New(logf)
+	if err != nil {
+		return err
+	}
 	c := &netcheck.Client{
 		UDPBindAddr: envknob.String("TS_DEBUG_NETCHECK_UDP_BIND"),
-		PortMapper:  portmapper.NewClient(logger.WithPrefix(log.Printf, "portmap: "), nil, nil),
+		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil),
 		UseDNSCache: false, // always resolve, don't cache
 	}
 	if netcheckArgs.verbose {

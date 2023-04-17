@@ -19,24 +19,25 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/envknob"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 )
 
-func control(logf logger.Logf) func(network, address string, c syscall.RawConn) error {
+func control(logf logger.Logf, netMon *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
-		return controlLogf(logf, network, address, c)
+		return controlLogf(logf, netMon, network, address, c)
 	}
 }
 
 var bindToInterfaceByRouteEnv = envknob.RegisterBool("TS_BIND_TO_INTERFACE_BY_ROUTE")
 
-var errInterfaceIndexInvalid = errors.New("interface index invalid")
+var errInterfaceStateInvalid = errors.New("interface state invalid")
 
 // controlLogf marks c as necessary to dial in a separate network namespace.
 //
 // It's intentionally the same signature as net.Dialer.Control
 // and net.ListenConfig.Control.
-func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) error {
+func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address string, c syscall.RawConn) error {
 	if isLocalhost(address) {
 		// Don't bind to an interface for localhost connections.
 		return nil
@@ -47,7 +48,7 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 		return nil
 	}
 
-	idx, err := getInterfaceIndex(logf, address)
+	idx, err := getInterfaceIndex(logf, netMon, address)
 	if err != nil {
 		// callee logged
 		return nil
@@ -56,20 +57,31 @@ func controlLogf(logf logger.Logf, network, address string, c syscall.RawConn) e
 	return bindConnToInterface(c, network, address, idx, logf)
 }
 
-func getInterfaceIndex(logf logger.Logf, address string) (int, error) {
+func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string) (int, error) {
 	// Helper so we can log errors.
 	defaultIdx := func() (int, error) {
-		idx, err := interfaces.DefaultRouteInterfaceIndex()
-		if err != nil {
-			// It's somewhat common for there to be no default gateway route
-			// (e.g. on a phone with no connectivity), don't log those errors
-			// since they are expected.
-			if !errors.Is(err, interfaces.ErrNoGatewayIndexFound) {
-				logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+		if netMon == nil {
+			idx, err := interfaces.DefaultRouteInterfaceIndex()
+			if err != nil {
+				// It's somewhat common for there to be no default gateway route
+				// (e.g. on a phone with no connectivity), don't log those errors
+				// since they are expected.
+				if !errors.Is(err, interfaces.ErrNoGatewayIndexFound) {
+					logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+				}
+				return -1, err
 			}
-			return -1, err
+			return idx, nil
 		}
-		return idx, nil
+		state := netMon.InterfaceState()
+		if state == nil {
+			return -1, errInterfaceStateInvalid
+		}
+
+		if iface, ok := state.Interface[state.DefaultRouteInterface]; ok {
+			return iface.Index, nil
+		}
+		return -1, errInterfaceStateInvalid
 	}
 
 	useRoute := bindToInterfaceByRoute.Load() || bindToInterfaceByRouteEnv()
