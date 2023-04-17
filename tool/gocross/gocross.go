@@ -104,7 +104,7 @@ func main() {
 //go:embed gocross-wrapper.sh
 var wrapperScript []byte
 
-func debug(format string, args ...interface{}) {
+func debug(format string, args ...any) {
 	debug := os.Getenv("GOCROSS_DEBUG")
 	var (
 		out *os.File

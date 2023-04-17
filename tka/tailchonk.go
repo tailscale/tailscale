@@ -649,7 +649,7 @@ func markActiveChain(storage Chonk, verdict map[AUMHash]retainState, minChain in
 // candidate AUMs must exist in verdict.
 func markYoungAUMs(storage CompactableChonk, verdict map[AUMHash]retainState, minAge time.Duration) error {
 	minTime := time.Now().Add(-minAge)
-	for h, _ := range verdict {
+	for h := range verdict {
 		commitTime, err := storage.CommitTime(h)
 		if err != nil {
 			return err

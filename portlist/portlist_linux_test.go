@@ -56,7 +56,7 @@ func TestParsePorts(t *testing.T) {
   2: 5501A8C0:ADD4 B25E9536:01BB 01 00000000:00000000 02:00000B2B 00000000  1000        0 155276677 2 0000000000000000 22 4 30 10 -1
 `,
 			want: map[string]*portMeta{
-				"socket:[34062]": &portMeta{
+				"socket:[34062]": {
 					port: Port{Proto: "tcp", Port: 22},
 				},
 			},
@@ -71,10 +71,10 @@ func TestParsePorts(t *testing.T) {
    3: 69050120005716BC64906EBE009ECD4D:D506 0047062600000000000000006E171268:01BB 01 00000000:00000000 02:0000009E 00000000  1000        0 151042856 2 0000000000000000 21 4 28 10 -1
 `,
 			want: map[string]*portMeta{
-				"socket:[142240557]": &portMeta{
+				"socket:[142240557]": {
 					port: Port{Proto: "tcp", Port: 8081},
 				},
-				"socket:[34064]": &portMeta{
+				"socket:[34064]": {
 					port: Port{Proto: "tcp", Port: 22},
 				},
 			},

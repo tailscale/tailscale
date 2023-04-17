@@ -147,4 +147,3 @@ func SelectControlURL(reg, disk string) string {
 	}
 	return def
 }
-

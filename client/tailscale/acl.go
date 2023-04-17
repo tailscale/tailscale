@@ -436,7 +436,7 @@ func (c *Client) ValidateACLJSON(ctx context.Context, source, dest string) (test
 		}
 	}()
 
-	tests := []ACLTest{ACLTest{User: source, Allow: []string{dest}}}
+	tests := []ACLTest{{User: source, Allow: []string{dest}}}
 	postData, err := json.Marshal(tests)
 	if err != nil {
 		return nil, err

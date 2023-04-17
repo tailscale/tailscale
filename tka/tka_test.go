@@ -195,7 +195,7 @@ func TestComputeStateAt(t *testing.T) {
 // provided int can be used to tweak the resulting hash (needed
 // for tests you want one AUM to be 'lower' than another, so that
 // that chain is taken based on fork resolution rules).
-func fakeAUM(t *testing.T, template interface{}, parent *AUMHash) (AUM, AUMHash) {
+func fakeAUM(t *testing.T, template any, parent *AUMHash) (AUM, AUMHash) {
 	if seed, ok := template.(int); ok {
 		a := AUM{MessageKind: AUMNoOp, KeyID: []byte{byte(seed)}}
 		if parent != nil {

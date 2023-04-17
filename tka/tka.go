@@ -359,7 +359,7 @@ func computeActiveAncestor(storage Chonk, chains []chain) (AUMHash, error) {
 
 	if len(ancestors) == 1 {
 		// There's only one. DOPE.
-		for k, _ := range ancestors {
+		for k := range ancestors {
 			return k, nil
 		}
 	}

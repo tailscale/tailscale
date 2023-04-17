@@ -502,7 +502,7 @@ func genRandomSubdomains(t *testing.T, n int) []dnsname.FQDN {
 	for len(domains) < cap(domains) {
 		l := r.Intn(19) + 1
 		b := make([]byte, l)
-		for i, _ := range b {
+		for i := range b {
 			b[i] = charset[r.Intn(len(charset))]
 		}
 		d := string(b) + ".example.com"
