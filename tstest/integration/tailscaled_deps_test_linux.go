@@ -24,6 +24,7 @@ import (
 	_ "tailscale.com/net/dns"
 	_ "tailscale.com/net/dnsfallback"
 	_ "tailscale.com/net/interfaces"
+	_ "tailscale.com/net/netmon"
 	_ "tailscale.com/net/netns"
 	_ "tailscale.com/net/proxymux"
 	_ "tailscale.com/net/socks5"
@@ -47,7 +48,6 @@ import (
 	_ "tailscale.com/version"
 	_ "tailscale.com/version/distro"
 	_ "tailscale.com/wgengine"
-	_ "tailscale.com/wgengine/monitor"
 	_ "tailscale.com/wgengine/netstack"
 	_ "tailscale.com/wgengine/router"
 )

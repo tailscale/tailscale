@@ -25,6 +25,7 @@ import (
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/neterror"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
@@ -34,7 +35,6 @@ import (
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/monitor"
 )
 
 // headerBytes is the number of bytes in a DNS message header.
@@ -176,7 +176,7 @@ type resolverAndDelay struct {
 // forwarder forwards DNS packets to a number of upstream nameservers.
 type forwarder struct {
 	logf    logger.Logf
-	linkMon *monitor.Mon
+	netMon  *netmon.Monitor
 	linkSel ForwardLinkSelector // TODO(bradfitz): remove this when tsdial.Dialer absorbs it
 	dialer  *tsdial.Dialer
 
@@ -206,10 +206,10 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func newForwarder(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
+func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
 	f := &forwarder{
 		logf:    logger.WithPrefix(logf, "forward: "),
-		linkMon: linkMon,
+		netMon:  netMon,
 		linkSel: linkSel,
 		dialer:  dialer,
 	}
@@ -355,7 +355,7 @@ func (f *forwarder) packetListener(ip netip.Addr) (nettype.PacketListenerWithNet
 		return stdNetPacketListener, nil
 	}
 	lc := new(net.ListenConfig)
-	if err := initListenConfig(lc, f.linkMon, linkName); err != nil {
+	if err := initListenConfig(lc, f.netMon, linkName); err != nil {
 		return nil, err
 	}
 	return nettype.MakePacketListenerWithNetIP(lc), nil
@@ -763,7 +763,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	}
 }
 
-var initListenConfig func(_ *net.ListenConfig, _ *monitor.Mon, tunName string) error
+var initListenConfig func(_ *net.ListenConfig, _ *netmon.Monitor, tunName string) error
 
 // nameFromQuery extracts the normalized query name from bs.
 func nameFromQuery(bs []byte) (dnsname.FQDN, error) {

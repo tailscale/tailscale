@@ -143,7 +143,7 @@ func (s *serveListener) Run() {
 }
 
 func (s *serveListener) shouldWarnAboutListenError(err error) bool {
-	if !s.b.e.GetLinkMonitor().InterfaceState().HasIP(s.ap.Addr()) {
+	if !s.b.e.GetNetMon().InterfaceState().HasIP(s.ap.Addr()) {
 		// Machine likely doesn't have IPv6 enabled (or the IP is still being
 		// assigned). No need to warn. Notably, WSL2 (Issue 6303).
 		return false

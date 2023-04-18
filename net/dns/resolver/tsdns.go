@@ -26,6 +26,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/dns/resolvconffile"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/syncs"
@@ -34,7 +35,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/wgengine/monitor"
 )
 
 const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
@@ -179,7 +179,7 @@ func WriteRoutes(w *bufio.Writer, routes map[dnsname.FQDN][]*dnstype.Resolver) {
 // it delegates to upstream nameservers if any are set.
 type Resolver struct {
 	logf               logger.Logf
-	linkMon            *monitor.Mon     // or nil
+	netMon             *netmon.Monitor  // or nil
 	dialer             *tsdial.Dialer   // non-nil
 	saveConfigForTests func(cfg Config) // used in tests to capture resolver config
 	// forwarder forwards requests to upstream nameservers.
@@ -205,20 +205,20 @@ type ForwardLinkSelector interface {
 }
 
 // New returns a new resolver.
-// linkMon optionally specifies a link monitor to use for socket rebinding.
-func New(logf logger.Logf, linkMon *monitor.Mon, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *Resolver {
+// netMon optionally specifies a network monitor to use for socket rebinding.
+func New(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *Resolver {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
 	r := &Resolver{
 		logf:     logger.WithPrefix(logf, "resolver: "),
-		linkMon:  linkMon,
+		netMon:   netMon,
 		closed:   make(chan struct{}),
 		hostToIP: map[dnsname.FQDN][]netip.Addr{},
 		ipToHost: map[netip.Addr]dnsname.FQDN{},
 		dialer:   dialer,
 	}
-	r.forwarder = newForwarder(r.logf, linkMon, linkSel, dialer)
+	r.forwarder = newForwarder(r.logf, netMon, linkSel, dialer)
 	return r
 }
 

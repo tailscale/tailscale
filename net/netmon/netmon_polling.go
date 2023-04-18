@@ -3,13 +3,13 @@
 
 //go:build (!linux && !freebsd && !windows && !darwin) || android
 
-package monitor
+package netmon
 
 import (
 	"tailscale.com/types/logger"
 )
 
-func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
 	return newPollingMon(logf, m)
 }
 

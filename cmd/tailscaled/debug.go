@@ -23,10 +23,10 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
-	"tailscale.com/wgengine/monitor"
 )
 
 var debugArgs struct {
@@ -42,7 +42,7 @@ var debugModeFunc = debugMode // so it can be addressable
 func debugMode(args []string) error {
 	fs := flag.NewFlagSet("debug", flag.ExitOnError)
 	fs.BoolVar(&debugArgs.ifconfig, "ifconfig", false, "If true, print network interface state")
-	fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run link monitor forever. Precludes all other options.")
+	fs.BoolVar(&debugArgs.monitor, "monitor", false, "If true, run network monitor forever. Precludes all other options.")
 	fs.BoolVar(&debugArgs.portmap, "portmap", false, "If true, run portmap debugging. Precludes all other options.")
 	fs.StringVar(&debugArgs.getURL, "get-url", "", "If non-empty, fetch provided URL.")
 	fs.StringVar(&debugArgs.derpCheck, "derp", "", "if non-empty, test a DERP ping via named region code")
@@ -76,7 +76,7 @@ func runMonitor(ctx context.Context, loop bool) error {
 		j, _ := json.MarshalIndent(st, "", "    ")
 		os.Stderr.Write(j)
 	}
-	mon, err := monitor.New(log.Printf)
+	mon, err := netmon.New(log.Printf)
 	if err != nil {
 		return err
 	}
@@ -84,10 +84,10 @@ func runMonitor(ctx context.Context, loop bool) error {
 
 	mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		if !changed {
-			log.Printf("Link monitor fired; no change")
+			log.Printf("Network monitor fired; no change")
 			return
 		}
-		log.Printf("Link monitor fired. New state:")
+		log.Printf("Network monitor fired. New state:")
 		dump(st)
 	})
 	if loop {

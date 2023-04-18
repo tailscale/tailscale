@@ -10,12 +10,12 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -92,8 +92,8 @@ type Engine interface {
 	// WireGuard status changes.
 	SetStatusCallback(StatusCallback)
 
-	// GetLinkMonitor returns the link monitor.
-	GetLinkMonitor() *monitor.Mon
+	// GetNetMon returns the network monitor.
+	GetNetMon() *netmon.Monitor
 
 	// RequestStatus requests a WireGuard status update right
 	// away, sent to the callback registered via SetStatusCallback.
@@ -119,7 +119,7 @@ type Engine interface {
 	//
 	// Deprecated: don't use this method. It was removed shortly
 	// before the Tailscale 1.6 release when we remembered that
-	// Android doesn't use the Linux-based link monitor and has
+	// Android doesn't use the Linux-based network monitor and has
 	// its own mechanism that uses LinkChange. Android is the only
 	// caller of this method now. Don't add more.
 	LinkChange(isExpensive bool)

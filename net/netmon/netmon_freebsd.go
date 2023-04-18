@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package monitor
+package netmon
 
 import (
 	"bufio"
@@ -24,7 +24,7 @@ type devdConn struct {
 	conn net.Conn
 }
 
-func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
 	conn, err := net.Dial("unixpacket", "/var/run/devd.seqpacket.pipe")
 	if err != nil {
 		logf("devd dial error: %v, falling back to polling method", err)

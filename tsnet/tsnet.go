@@ -42,6 +42,7 @@ import (
 	"tailscale.com/logtail"
 	"tailscale.com/logtail/filch"
 	"tailscale.com/net/memnet"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
@@ -51,7 +52,6 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/monitor"
 	"tailscale.com/wgengine/netstack"
 )
 
@@ -106,7 +106,7 @@ type Server struct {
 	initErr          error
 	lb               *ipnlocal.LocalBackend
 	netstack         *netstack.Impl
-	linkMon          *monitor.Mon
+	netMon           *netmon.Monitor
 	rootPath         string // the state directory
 	hostname         string
 	shutdownCtx      context.Context
@@ -356,8 +356,8 @@ func (s *Server) Close() error {
 	if s.lb != nil {
 		s.lb.Shutdown()
 	}
-	if s.linkMon != nil {
-		s.linkMon.Close()
+	if s.netMon != nil {
+		s.netMon.Close()
 	}
 	if s.dialer != nil {
 		s.dialer.Close()
@@ -476,17 +476,17 @@ func (s *Server) start() (reterr error) {
 		return err
 	}
 
-	s.linkMon, err = monitor.New(logf)
+	s.netMon, err = netmon.New(logf)
 	if err != nil {
 		return err
 	}
-	closePool.add(s.linkMon)
+	closePool.add(s.netMon)
 
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		ListenPort:  0,
-		LinkMonitor: s.linkMon,
-		Dialer:      s.dialer,
+		ListenPort: 0,
+		NetMon:     s.netMon,
+		Dialer:     s.dialer,
 	})
 	if err != nil {
 		return err

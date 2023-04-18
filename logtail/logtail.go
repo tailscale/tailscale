@@ -24,11 +24,11 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	tslogger "tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/set"
-	"tailscale.com/wgengine/monitor"
 )
 
 // DefaultHost is the default host name to upload logs to when
@@ -179,7 +179,7 @@ type Logger struct {
 	url            string
 	lowMem         bool
 	skipClientTime bool
-	linkMonitor    *monitor.Mon
+	netMonitor     *netmon.Monitor
 	buffer         Buffer
 	drainWake      chan struct{}        // signal to speed up drain
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
@@ -214,12 +214,12 @@ func (l *Logger) SetVerbosityLevel(level int) {
 	atomic.StoreInt64(&l.stderrLevel, int64(level))
 }
 
-// SetLinkMonitor sets the optional the link monitor.
+// SetNetMon sets the optional the network monitor.
 //
 // It should not be changed concurrently with log writes and should
 // only be set once.
-func (l *Logger) SetLinkMonitor(lm *monitor.Mon) {
-	l.linkMonitor = lm
+func (l *Logger) SetNetMon(lm *netmon.Monitor) {
+	l.netMonitor = lm
 }
 
 // SetSockstatsLabel sets the label used in sockstat logs to identify network traffic from this logger.
@@ -403,16 +403,16 @@ func (l *Logger) uploading(ctx context.Context) {
 }
 
 func (l *Logger) internetUp() bool {
-	if l.linkMonitor == nil {
+	if l.netMonitor == nil {
 		// No way to tell, so assume it is.
 		return true
 	}
-	return l.linkMonitor.InterfaceState().AnyInterfaceUp()
+	return l.netMonitor.InterfaceState().AnyInterfaceUp()
 }
 
 func (l *Logger) awaitInternetUp(ctx context.Context) {
 	upc := make(chan bool, 1)
-	defer l.linkMonitor.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+	defer l.netMonitor.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
 		if st.AnyInterfaceUp() {
 			select {
 			case upc <- true:

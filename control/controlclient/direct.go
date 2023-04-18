@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
@@ -54,7 +55,6 @@ import (
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/systemd"
-	"tailscale.com/wgengine/monitor"
 )
 
 // Direct is the client that connects to a tailcontrol server for a node.
@@ -67,7 +67,7 @@ type Direct struct {
 	newDecompressor        func() (Decompressor, error)
 	keepAlive              bool
 	logf                   logger.Logf
-	linkMon                *monitor.Mon // or nil
+	netMon                 *netmon.Monitor // or nil
 	discoPubKey            key.DiscoPublic
 	getMachinePrivKey      func() (key.MachinePrivate, error)
 	debugFlags             []string
@@ -113,7 +113,7 @@ type Options struct {
 	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
 	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
 	DebugFlags           []string                     // debug settings to send to control
-	LinkMonitor          *monitor.Mon                 // optional link monitor
+	NetMon               *netmon.Monitor              // optional network monitor
 	PopBrowserURL        func(url string)             // optional func to open browser
 	OnClientVersion      func(*tailcfg.ClientVersion) // optional func to inform GUI of client version status
 	OnControlTime        func(time.Time)              // optional func to notify callers of new time from control
@@ -241,7 +241,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		discoPubKey:            opts.DiscoPublicKey,
 		debugFlags:             opts.DebugFlags,
 		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
-		linkMon:                opts.LinkMonitor,
+		netMon:                 opts.NetMon,
 		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
 		pinger:                 opts.Pinger,
 		popBrowser:             opts.PopBrowserURL,
@@ -871,8 +871,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		ReadOnly: readOnly && !allowStream,
 	}
 	var extraDebugFlags []string
-	if hi != nil && c.linkMon != nil && !c.skipIPForwardingCheck &&
-		ipForwardingBroken(hi.RoutableIPs, c.linkMon.InterfaceState()) {
+	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
+		ipForwardingBroken(hi.RoutableIPs, c.netMon.InterfaceState()) {
 		extraDebugFlags = append(extraDebugFlags, "warn-ip-forwarding-off")
 	}
 	if health.RouterHealth() != nil {

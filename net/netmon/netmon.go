@@ -4,7 +4,7 @@
 // Package monitor provides facilities for monitoring network
 // interface and route changes. It primarily exists to know when
 // portable devices move between different networks.
-package monitor
+package netmon
 
 import (
 	"encoding/json"
@@ -48,15 +48,15 @@ type osMon interface {
 	IsInterestingInterface(iface string) bool
 }
 
-// Mon represents a monitoring instance.
-type Mon struct {
+// Monitor represents a monitoring instance.
+type Monitor struct {
 	logf   logger.Logf
 	om     osMon // nil means not supported on this platform
 	change chan struct{}
 	stop   chan struct{} // closed on Stop
 
 	mu         sync.Mutex // guards all following fields
-	cbs        set.HandleSet[interfaces.ChangeFunc]
+	cbs        set.HandleSet[ChangeFunc]
 	ruleDelCB  set.HandleSet[RuleDeleteCallback]
 	ifState    *interfaces.State
 	gwValid    bool       // whether gw and gwSelfIP are valid
@@ -70,12 +70,17 @@ type Mon struct {
 	timeJumped bool // whether we need to send a changed=true after a big time jump
 }
 
+// ChangeFunc is a callback function registered with Monitor that's called when the
+// network changed. The changed parameter is whether the network changed
+// enough for State to have changed since the last callback.
+type ChangeFunc func(changed bool, state *interfaces.State)
+
 // New instantiates and starts a monitoring instance.
 // The returned monitor is inactive until it's started by the Start method.
 // Use RegisterChangeCallback to get notified of network changes.
-func New(logf logger.Logf) (*Mon, error) {
+func New(logf logger.Logf) (*Monitor, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
-	m := &Mon{
+	m := &Monitor{
 		logf:     logf,
 		change:   make(chan struct{}, 1),
 		stop:     make(chan struct{}),
@@ -102,13 +107,13 @@ func New(logf logger.Logf) (*Mon, error) {
 // interfaces.
 //
 // The returned value is owned by Mon; it must not be modified.
-func (m *Mon) InterfaceState() *interfaces.State {
+func (m *Monitor) InterfaceState() *interfaces.State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.ifState
 }
 
-func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
+func (m *Monitor) interfaceStateUncached() (*interfaces.State, error) {
 	return interfaces.GetState()
 }
 
@@ -117,7 +122,7 @@ func (m *Mon) interfaceStateUncached() (*interfaces.State, error) {
 //
 // It's the same as interfaces.LikelyHomeRouterIP, but it caches the
 // result until the monitor detects a network change.
-func (m *Mon) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
+func (m *Monitor) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.gwValid {
@@ -133,7 +138,7 @@ func (m *Mon) GatewayAndSelfIP() (gw, myIP netip.Addr, ok bool) {
 // RegisterChangeCallback adds callback to the set of parties to be
 // notified (in their own goroutine) when the network state changes.
 // To remove this callback, call unregister (or close the monitor).
-func (m *Mon) RegisterChangeCallback(callback interfaces.ChangeFunc) (unregister func()) {
+func (m *Monitor) RegisterChangeCallback(callback ChangeFunc) (unregister func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	handle := m.cbs.Add(callback)
@@ -153,7 +158,7 @@ type RuleDeleteCallback func(table uint8, priority uint32)
 // RegisterRuleDeleteCallback adds callback to the set of parties to be
 // notified (in their own goroutine) when a Linux ip rule is deleted.
 // To remove this callback, call unregister (or close the monitor).
-func (m *Mon) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unregister func()) {
+func (m *Monitor) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unregister func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	handle := m.ruleDelCB.Add(callback)
@@ -166,7 +171,7 @@ func (m *Mon) RegisterRuleDeleteCallback(callback RuleDeleteCallback) (unregiste
 
 // Start starts the monitor.
 // A monitor can only be started & closed once.
-func (m *Mon) Start() {
+func (m *Monitor) Start() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.started || m.closed {
@@ -187,7 +192,7 @@ func (m *Mon) Start() {
 }
 
 // Close closes the monitor.
-func (m *Mon) Close() error {
+func (m *Monitor) Close() error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -218,7 +223,7 @@ func (m *Mon) Close() error {
 // change and re-check the state of the network. Any registered
 // ChangeFunc callbacks will be called within the event coalescing
 // period (under a fraction of a second).
-func (m *Mon) InjectEvent() {
+func (m *Monitor) InjectEvent() {
 	select {
 	case m.change <- struct{}{}:
 	default:
@@ -228,7 +233,7 @@ func (m *Mon) InjectEvent() {
 	}
 }
 
-func (m *Mon) stopped() bool {
+func (m *Monitor) stopped() bool {
 	select {
 	case <-m.stop:
 		return true
@@ -239,7 +244,7 @@ func (m *Mon) stopped() bool {
 
 // pump continuously retrieves messages from the connection, notifying
 // the change channel of changes, and stopping when a stop is issued.
-func (m *Mon) pump() {
+func (m *Monitor) pump() {
 	defer m.goroutines.Done()
 	for !m.stopped() {
 		msg, err := m.om.Receive()
@@ -263,7 +268,7 @@ func (m *Mon) pump() {
 	}
 }
 
-func (m *Mon) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
+func (m *Monitor) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, cb := range m.ruleDelCB {
@@ -274,13 +279,13 @@ func (m *Mon) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 // isInterestingInterface reports whether the provided interface should be
 // considered when checking for network state changes.
 // The ips parameter should be the IPs of the provided interface.
-func (m *Mon) isInterestingInterface(i interfaces.Interface, ips []netip.Prefix) bool {
+func (m *Monitor) isInterestingInterface(i interfaces.Interface, ips []netip.Prefix) bool {
 	return m.om.IsInterestingInterface(i.Name) && interfaces.UseInterestingInterfaces(i, ips)
 }
 
 // debounce calls the callback function with a delay between events
 // and exits when a stop is issued.
-func (m *Mon) debounce() {
+func (m *Monitor) debounce() {
 	defer m.goroutines.Done()
 	for {
 		select {
@@ -343,7 +348,7 @@ func wallTime() time.Time {
 	return time.Now().Round(0)
 }
 
-func (m *Mon) pollWallTime() {
+func (m *Monitor) pollWallTime() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -365,7 +370,7 @@ const shouldMonitorTimeJump = runtime.GOOS != "android" && runtime.GOOS != "ios"
 // checkWallTimeAdvanceLocked reports whether wall time jumped more than 150% of
 // pollWallTimeInterval, indicating we probably just came out of sleep. Once a
 // time jump is detected it must be reset by calling resetTimeJumpedLocked.
-func (m *Mon) checkWallTimeAdvanceLocked() bool {
+func (m *Monitor) checkWallTimeAdvanceLocked() bool {
 	if !shouldMonitorTimeJump {
 		panic("unreachable") // if callers are correct
 	}
@@ -378,7 +383,7 @@ func (m *Mon) checkWallTimeAdvanceLocked() bool {
 }
 
 // resetTimeJumpedLocked consumes the signal set by checkWallTimeAdvanceLocked.
-func (m *Mon) resetTimeJumpedLocked() {
+func (m *Monitor) resetTimeJumpedLocked() {
 	m.timeJumped = false
 }
 

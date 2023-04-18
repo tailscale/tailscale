@@ -3,7 +3,7 @@
 
 //go:build !android
 
-package monitor
+package netmon
 
 import (
 	"net"
@@ -44,7 +44,7 @@ type nlConn struct {
 	addrCache map[uint32]map[netip.Addr]bool
 }
 
-func newOSMon(logf logger.Logf, m *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, m *Monitor) (osMon, error) {
 	conn, err := netlink.Dial(unix.NETLINK_ROUTE, &netlink.Config{
 		// Routes get us most of the events of interest, but we need
 		// address as well to cover things like DHCP deciding to give

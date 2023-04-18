@@ -3,7 +3,7 @@
 
 //go:build !windows && !darwin
 
-package monitor
+package netmon
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-func newPollingMon(logf logger.Logf, m *Mon) (osMon, error) {
+func newPollingMon(logf logger.Logf, m *Monitor) (osMon, error) {
 	return &pollingMon{
 		logf: logf,
 		m:    m,
@@ -30,7 +30,7 @@ func newPollingMon(logf logger.Logf, m *Mon) (osMon, error) {
 // of anything to subscribe to.
 type pollingMon struct {
 	logf logger.Logf
-	m    *Mon
+	m    *Monitor
 
 	closeOnce sync.Once
 	stop      chan struct{}
