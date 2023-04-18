@@ -35,6 +35,10 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	return d, nil
 }
 
+// ErrNoGatewayIndexFound is returned by DefaultRouteInterfaceIndex when no
+// default route is found.
+var ErrNoGatewayIndexFound = errors.New("no gateway index found")
+
 // DefaultRouteInterfaceIndex returns the index of the network interface that
 // owns the default route. It returns the first IPv4 or IPv6 default route it
 // finds (it does not prefer one or the other).
@@ -75,7 +79,7 @@ func DefaultRouteInterfaceIndex() (int, error) {
 			return rm.Index, nil
 		}
 	}
-	return 0, errors.New("no gateway index found")
+	return 0, ErrNoGatewayIndexFound
 }
 
 func init() {
