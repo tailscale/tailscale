@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package monitor
+package netmon
 
 import (
 	"context"
@@ -44,7 +44,7 @@ type winMon struct {
 	noDeadlockTicker *time.Ticker
 }
 
-func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, _ *Monitor) (osMon, error) {
 	m := &winMon{
 		logf:             logf,
 		messagec:         make(chan eventMessage, 1),

@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package monitor
+package netmon
 
 import (
 	"fmt"
@@ -24,7 +24,7 @@ type unspecifiedMessage struct{}
 
 func (unspecifiedMessage) ignore() bool { return false }
 
-func newOSMon(logf logger.Logf, _ *Mon) (osMon, error) {
+func newOSMon(logf logger.Logf, _ *Monitor) (osMon, error) {
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
 	if err != nil {
 		return nil, err

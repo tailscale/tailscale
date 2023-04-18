@@ -34,6 +34,7 @@ import (
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
@@ -46,7 +47,6 @@ import (
 	"tailscale.com/util/httpm"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/monitor"
 )
 
 type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
@@ -695,7 +695,7 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 	})
 	defer c.Close()
 
-	linkMon, err := monitor.New(logger.WithPrefix(logf, "monitor: "))
+	netMon, err := netmon.New(logger.WithPrefix(logf, "monitor: "))
 	if err != nil {
 		logf("error creating monitor: %v", err)
 		return
@@ -707,14 +707,14 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 			self = netip.MustParseAddr(b)
 			return gw, self, true
 		}
-		return linkMon.GatewayAndSelfIP()
+		return netMon.GatewayAndSelfIP()
 	}
 
 	c.SetGatewayLookupFunc(gatewayAndSelfIP)
 
 	gw, selfIP, ok := gatewayAndSelfIP()
 	if !ok {
-		logf("no gateway or self IP; %v", linkMon.InterfaceState())
+		logf("no gateway or self IP; %v", netMon.InterfaceState())
 		return
 	}
 	logf("gw=%v; self=%v", gw, selfIP)

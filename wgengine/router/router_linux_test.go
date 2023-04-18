@@ -21,9 +21,9 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/exp/slices"
+	"tailscale.com/net/netmon"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/monitor"
 )
 
 func TestRouterStates(t *testing.T) {
@@ -320,7 +320,7 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 		},
 	}
 
-	mon, err := monitor.New(logger.Discard)
+	mon, err := netmon.New(logger.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ func createTestTUN(t *testing.T) tun.Device {
 
 type linuxTest struct {
 	tun       tun.Device
-	mon       *monitor.Mon
+	mon       *netmon.Monitor
 	r         *linuxRouter
 	logOutput tstest.MemLogger
 }
@@ -684,7 +684,7 @@ func newLinuxRootTest(t *testing.T) *linuxTest {
 
 	logf := lt.logOutput.Logf
 
-	mon, err := monitor.New(logger.Discard)
+	mon, err := netmon.New(logger.Discard)
 	if err != nil {
 		lt.Close()
 		t.Fatal(err)

@@ -14,21 +14,21 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
-	"tailscale.com/wgengine/monitor"
 )
 
 type userspaceBSDRouter struct {
 	logf    logger.Logf
-	linkMon *monitor.Mon
+	netMon  *netmon.Monitor
 	tunname string
 	local   []netip.Prefix
 	routes  map[netip.Prefix]bool
 }
 
-func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor.Mon) (Router, error) {
+func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (Router, error) {
 	tunname, err := tundev.Name()
 	if err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, linkMon *monitor
 
 	return &userspaceBSDRouter{
 		logf:    logf,
-		linkMon: linkMon,
+		netMon:  netMon,
 		tunname: tunname,
 	}, nil
 }

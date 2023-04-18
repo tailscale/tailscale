@@ -24,11 +24,11 @@ import (
 	miekdns "github.com/miekg/dns"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/util/dnsname"
-	"tailscale.com/wgengine/monitor"
 )
 
 var (
@@ -315,7 +315,7 @@ func TestRDNSNameToIPv6(t *testing.T) {
 }
 
 func newResolver(t testing.TB) *Resolver {
-	return New(t.Logf, nil /* no link monitor */, nil /* no link selector */, new(tsdial.Dialer))
+	return New(t.Logf, nil /* no network monitor */, nil /* no link selector */, new(tsdial.Dialer))
 }
 
 func TestResolveLocal(t *testing.T) {
@@ -997,7 +997,7 @@ func TestMarshalResponseFormatError(t *testing.T) {
 
 func TestForwardLinkSelection(t *testing.T) {
 	configCall := make(chan string, 1)
-	tstest.Replace(t, &initListenConfig, func(nc *net.ListenConfig, mon *monitor.Mon, tunName string) error {
+	tstest.Replace(t, &initListenConfig, func(nc *net.ListenConfig, mon *netmon.Monitor, tunName string) error {
 		select {
 		case configCall <- tunName:
 			return nil

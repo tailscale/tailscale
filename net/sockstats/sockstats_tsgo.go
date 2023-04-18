@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 )
@@ -84,7 +85,7 @@ func withSockStats(ctx context.Context, label Label, logf logger.Logf) context.C
 			rxBytesCellularMetric: clientmetric.NewCounter(fmt.Sprintf("sockstats_rx_bytes_cellular_%s", label)),
 		}
 
-		// We might be called before setLinkMonitor has been called (and we've
+		// We might be called before setNetMon has been called (and we've
 		// had a chance to populate knownInterfaces). In that case, we'll have
 		// to get the list of interfaces ourselves.
 		if len(sockStats.knownInterfaces) == 0 {
@@ -248,7 +249,7 @@ func getValidation() *ValidationSockStats {
 	return r
 }
 
-func setLinkMonitor(lm LinkMonitor) {
+func setNetMon(lm *netmon.Monitor) {
 	sockStats.mu.Lock()
 	defer sockStats.mu.Unlock()
 

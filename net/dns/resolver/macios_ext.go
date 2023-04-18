@@ -9,15 +9,15 @@ import (
 	"errors"
 	"net"
 
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
-	"tailscale.com/wgengine/monitor"
 )
 
 func init() {
 	initListenConfig = initListenConfigNetworkExtension
 }
 
-func initListenConfigNetworkExtension(nc *net.ListenConfig, mon *monitor.Mon, tunName string) error {
+func initListenConfigNetworkExtension(nc *net.ListenConfig, mon *netmon.Monitor, tunName string) error {
 	nif, ok := mon.InterfaceState().Interface[tunName]
 	if !ok {
 		return errors.New("utun not found")

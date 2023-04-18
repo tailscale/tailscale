@@ -167,8 +167,8 @@ func defaultRoute() (d DefaultRouteDetails, err error) {
 	// /proc/net/route. Use netlink to find the default route.
 	//
 	// TODO(bradfitz): this allocates a fair bit. We should track
-	// this in wgengine/monitor instead and have
-	// interfaces.GetState take a link monitor or similar so the
+	// this in net/interfaces/monitor instead and have
+	// interfaces.GetState take a netmon.Monitor or similar so the
 	// routing table can be cached and the monitor's existing
 	// subscription to route changes can update the cached state,
 	// rather than querying the whole thing every time like

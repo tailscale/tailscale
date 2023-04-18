@@ -10,11 +10,11 @@ import (
 	"runtime"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
-	"tailscale.com/wgengine/monitor"
 )
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mon) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor) (Router, error) {
 	return nil, fmt.Errorf("unsupported OS %q", runtime.GOOS)
 }
 

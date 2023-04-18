@@ -39,10 +39,10 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		traf: traf,
 	}
 	e1, err := wgengine.NewUserspaceEngine(l1, wgengine.Config{
-		Router:      router.NewFake(l1),
-		LinkMonitor: nil,
-		ListenPort:  0,
-		Tun:         t1,
+		Router:     router.NewFake(l1),
+		NetMon:     nil,
+		ListenPort: 0,
+		Tun:        t1,
 	})
 	if err != nil {
 		log.Fatalf("e1 init: %v", err)
@@ -63,10 +63,10 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		traf: traf,
 	}
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
-		Router:      router.NewFake(l2),
-		LinkMonitor: nil,
-		ListenPort:  0,
-		Tun:         t2,
+		Router:     router.NewFake(l2),
+		NetMon:     nil,
+		ListenPort: 0,
+		Tun:        t2,
 	})
 	if err != nil {
 		log.Fatalf("e2 init: %v", err)

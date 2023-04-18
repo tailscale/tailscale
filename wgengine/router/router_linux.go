@@ -24,12 +24,12 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine/monitor"
 )
 
 const (
@@ -94,8 +94,8 @@ type linuxRouter struct {
 	closed           atomic.Bool
 	logf             func(fmt string, args ...any)
 	tunname          string
-	linkMon          *monitor.Mon
-	unregLinkMon     func()
+	netMon           *netmon.Monitor
+	unregNetMon      func()
 	addrs            map[netip.Prefix]bool
 	routes           map[netip.Prefix]bool
 	localRoutes      map[netip.Prefix]bool
@@ -121,7 +121,7 @@ type linuxRouter struct {
 	cmd  commandRunner
 }
 
-func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mon) (Router, error) {
+func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor) (Router, error) {
 	tunname, err := tunDev.Name()
 	if err != nil {
 		return nil, err
@@ -156,15 +156,15 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, linkMon *monitor.Mo
 		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, linkMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT)
+	return newUserspaceRouterAdvanced(logf, tunname, netMon, ipt4, ipt6, cmd, supportsV6, supportsV6NAT)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, linkMon *monitor.Mon, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, netfilter4, netfilter6 netfilterRunner, cmd commandRunner, supportsV6, supportsV6NAT bool) (Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
-		linkMon:       linkMon,
+		netMon:        netMon,
 
 		v6Available:    supportsV6,
 		v6NATAvailable: supportsV6NAT,
@@ -336,8 +336,8 @@ func (r *linuxRouter) useIPCommand() bool {
 	return !ok
 }
 
-// onIPRuleDeleted is the callback from the link monitor for when an IP policy
-// rule is deleted. See Issue 1591.
+// onIPRuleDeleted is the callback from the network monitor for when an IP
+// policy rule is deleted. See Issue 1591.
 //
 // If an ip rule is deleted (with pref number 52xx, as Tailscale sets), then
 // set a timer to restore our rules, in case they were deleted. The timer lets
@@ -372,8 +372,8 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 }
 
 func (r *linuxRouter) Up() error {
-	if r.unregLinkMon == nil && r.linkMon != nil {
-		r.unregLinkMon = r.linkMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
+	if r.unregNetMon == nil && r.netMon != nil {
+		r.unregNetMon = r.netMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
 	}
 	if err := r.addIPRules(); err != nil {
 		return fmt.Errorf("adding IP rules: %w", err)
@@ -390,8 +390,8 @@ func (r *linuxRouter) Up() error {
 
 func (r *linuxRouter) Close() error {
 	r.closed.Store(true)
-	if r.unregLinkMon != nil {
-		r.unregLinkMon()
+	if r.unregNetMon != nil {
+		r.unregNetMon()
 	}
 	if err := r.downInterface(); err != nil {
 		return err
