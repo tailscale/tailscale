@@ -61,7 +61,12 @@ func getInterfaceIndex(logf logger.Logf, address string) (int, error) {
 	defaultIdx := func() (int, error) {
 		idx, err := interfaces.DefaultRouteInterfaceIndex()
 		if err != nil {
-			logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+			// It's somewhat common for there to be no default gateway route
+			// (e.g. on a phone with no connectivity), don't log those errors
+			// since they are expected.
+			if !errors.Is(err, interfaces.ErrNoGatewayIndexFound) {
+				logf("[unexpected] netns: DefaultRouteInterfaceIndex: %v", err)
+			}
 			return -1, err
 		}
 		return idx, nil
