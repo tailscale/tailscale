@@ -4,17 +4,24 @@
 package localapi
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"time"
 
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/net/netaddr"
+	"tailscale.com/net/netns"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/types/nettype"
 )
 
 func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +139,92 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 		return hasIPv4 || hasIPv6
 	}
 
+	checkSTUN4 := func(derpNode *tailcfg.DERPNode) {
+		u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(h.logf)).ListenPacket(ctx, "udp4", ":0")
+		if err != nil {
+			st.Errors = append(st.Errors, fmt.Sprintf("Error creating IPv4 STUN listener: %v", err))
+			return
+		}
+		defer u4.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var addr netip.Addr
+		if derpNode.IPv4 != "" {
+			addr, err = netip.ParseAddr(derpNode.IPv4)
+			if err != nil {
+				// Error printed elsewhere
+				return
+			}
+		} else {
+			addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", derpNode.HostName)
+			if err != nil {
+				st.Errors = append(st.Errors, fmt.Sprintf("Error resolving node %q IPv4 addresses: %v", derpNode.HostName, err))
+				return
+			}
+			addr = addrs[0]
+		}
+
+		addrPort := netip.AddrPortFrom(addr, uint16(firstNonzero(derpNode.STUNPort, 3478)))
+
+		txID := stun.NewTxID()
+		req := stun.Request(txID)
+
+		done := make(chan struct{})
+		defer close(done)
+
+		go func() {
+			select {
+			case <-ctx.Done():
+			case <-done:
+			}
+			u4.Close()
+		}()
+
+		gotResponse := make(chan netip.AddrPort, 1)
+		go func() {
+			defer u4.Close()
+
+			var buf [64 << 10]byte
+			for {
+				n, addr, err := u4.ReadFromUDPAddrPort(buf[:])
+				if err != nil {
+					return
+				}
+				pkt := buf[:n]
+				if !stun.Is(pkt) {
+					continue
+				}
+				ap := netaddr.Unmap(addr)
+				if !ap.IsValid() {
+					continue
+				}
+				tx, addrPort, err := stun.ParseResponse(pkt)
+				if err != nil {
+					continue
+				}
+				if tx == txID {
+					gotResponse <- addrPort
+					return
+				}
+			}
+		}()
+
+		_, err = u4.WriteToUDPAddrPort(req, addrPort)
+		if err != nil {
+			st.Errors = append(st.Errors, fmt.Sprintf("Error sending IPv4 STUN packet to %v (%q): %v", addrPort, derpNode.HostName, err))
+			return
+		}
+
+		select {
+		case resp := <-gotResponse:
+			st.Info = append(st.Info, fmt.Sprintf("Node %q returned IPv4 STUN response: %v", derpNode.HostName, resp))
+		case <-ctx.Done():
+			st.Warnings = append(st.Warnings, fmt.Sprintf("Node %q did not return a IPv4 STUN response", derpNode.HostName))
+		}
+	}
+
 	// Start by checking whether we can establish a HTTP connection
 	for _, derpNode := range reg.Nodes {
 		connSuccess := checkConn(derpNode)
@@ -178,6 +271,10 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 		if len(serverPubKeys) > 1 {
 			st.Errors = append(st.Errors, fmt.Sprintf("Received multiple server public keys (%d); is the DERP server behind a load balancer?", len(serverPubKeys)))
 		}
+
+		// Send a STUN query to this node to verify whether or not it
+		// correctly returns an IP address.
+		checkSTUN4(derpNode)
 	}
 
 	// TODO(bradfitz): finish:
@@ -191,7 +288,6 @@ func (h *Handler) serveDebugDERPRegion(w http.ResponseWriter, r *http.Request) {
 	//   protocol to say how many peers it's meshed with. Should match count
 	//   in DERPRegion. Or maybe even list all their server pub keys that it's peered
 	//   with.
-	// * try STUN queries
 	// * If their certificate is bad, either expired or just wrongly
 	//   issued in the first place, tell them specifically that the
 	// 	 cert is bad not just that the connection failed.
