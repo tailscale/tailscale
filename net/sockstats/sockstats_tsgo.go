@@ -8,7 +8,6 @@ package sockstats
 import (
 	"context"
 	"fmt"
-	"math"
 	"net"
 	"strings"
 	"sync"
@@ -347,10 +346,12 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 	}
 	periodStart := now - periodLength // start of current reporting period
 
-	// slices of radio usage, with values in chronological order
+	// split into slices of radio usage, with values in chronological order.
+	// split at now+1 so that the current second is in the second slice.
+	split := (now + 1) % radioSampleSize
 	slices := [2][]int64{
-		rm.usage[now%radioSampleSize:],
-		rm.usage[:now%radioSampleSize],
+		rm.usage[split:],
+		rm.usage[:split],
 	}
 	var highPowerSec int64 // total seconds radio was in high power (active or idle)
 	var c int              // counter
@@ -369,5 +370,8 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 		}
 	}
 
-	return int64(math.Round(float64(highPowerSec) / float64(periodLength) * 100))
+	if highPowerSec == 0 {
+		return 0
+	}
+	return highPowerSec * 100 / periodLength
 }
