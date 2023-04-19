@@ -31,3 +31,7 @@ func getValidation() *ValidationSockStats {
 
 func setLinkMonitor(lm LinkMonitor) {
 }
+
+func debugInfo() string {
+	return ""
+}
