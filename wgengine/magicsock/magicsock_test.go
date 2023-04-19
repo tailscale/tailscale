@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -47,6 +48,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstest/natlab"
+	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netlogtype"
@@ -2392,4 +2394,241 @@ func TestEndpointTracker(t *testing.T) {
 			t.Errorf("endpoints mismatch\ngot: %+v\nwant: %+v", got, tt.want)
 		}
 	}
+}
+
+func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
+	t.Run("choose lowest latency for useable IPv4 and IPv6", func(t *testing.T) {
+		testTime := mono.Now()
+
+		endpointDetails := []struct {
+			addrPort netip.AddrPort
+			latency  time.Duration
+		}{
+			{
+				addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+				latency:  100 * time.Millisecond,
+			},
+			{
+				addrPort: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222"),
+				latency:  10 * time.Millisecond,
+			},
+		}
+		want := endpointDetails[1].addrPort
+
+		endpoint := &endpoint{
+			isWireguardOnly: true,
+			endpointState:   map[netip.AddrPort]*endpointState{},
+			c: &Conn{
+				noV4: atomic.Bool{},
+				noV6: atomic.Bool{},
+			},
+		}
+
+		for _, epd := range endpointDetails {
+			endpoint.endpointState[epd.addrPort] = &endpointState{}
+		}
+
+		udpAddr, _ := endpoint.addrForSendLocked(testTime)
+		if udpAddr != want {
+			t.Errorf("returned udpAddr chosen without latency info is not expected: got %v, want %v", udpAddr, want)
+		}
+
+		for _, epd := range endpointDetails {
+			state, ok := endpoint.endpointState[epd.addrPort]
+			if !ok {
+				t.Errorf("addr does not exist in endpoint state map")
+			}
+
+			latency, ok := state.latencyLocked()
+			if ok {
+				t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+			}
+			state.recentPongs = append(state.recentPongs, pongReply{
+				latency: epd.latency,
+			})
+			state.recentPong = 0
+		}
+
+		udpAddr, _ = endpoint.addrForSendLocked(testTime.Add(2 * time.Minute))
+		if udpAddr != want {
+			t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, want)
+		}
+	})
+
+	t.Run("choose IPv4 when IPv6 is not useable", func(t *testing.T) {
+		testTime := mono.Now()
+		endpointDetails := []struct {
+			addrPort netip.AddrPort
+			latency  time.Duration
+		}{
+			{
+				addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+				latency:  100 * time.Millisecond,
+			},
+			{
+				addrPort: netip.MustParseAddrPort("[1::1]:567"),
+			},
+		}
+		want := endpointDetails[0].addrPort
+
+		endpoint := &endpoint{
+			isWireguardOnly: true,
+			endpointState:   map[netip.AddrPort]*endpointState{},
+			c: &Conn{
+				noV4: atomic.Bool{},
+				noV6: atomic.Bool{},
+			},
+		}
+		endpoint.c.noV6.Store(true)
+
+		for _, epd := range endpointDetails {
+			endpoint.endpointState[epd.addrPort] = &endpointState{}
+		}
+
+		udpAddr, _ := endpoint.addrForSendLocked(testTime)
+		if udpAddr != want {
+			t.Errorf("returned udpAddr chosen without latency info is not expected: got %v, want %v", udpAddr, want)
+		}
+
+		for _, epd := range endpointDetails {
+			state, ok := endpoint.endpointState[epd.addrPort]
+			if !ok {
+				t.Errorf("addr does not exist in endpoint state map")
+			}
+
+			latency, ok := state.latencyLocked()
+			if ok {
+				t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+			}
+			if epd.latency != 0 {
+				state.recentPongs = append(state.recentPongs, pongReply{
+					latency: epd.latency,
+				})
+				state.recentPong = 0
+			}
+		}
+
+		udpAddr, _ = endpoint.addrForSendLocked(testTime.Add(2 * time.Minute))
+		if udpAddr != want {
+			t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, want)
+		}
+	})
+
+	t.Run("choose IPv6 when IPv4 is not useable", func(t *testing.T) {
+		testTime := mono.Now()
+		endpointDetails := []struct {
+			addrPort netip.AddrPort
+			latency  time.Duration
+		}{
+			{
+				addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+			},
+			{
+				addrPort: netip.MustParseAddrPort("[1::1]:567"),
+				latency:  100 * time.Millisecond,
+			},
+		}
+		want := endpointDetails[1].addrPort
+
+		endpoint := &endpoint{
+			isWireguardOnly: true,
+			endpointState:   map[netip.AddrPort]*endpointState{},
+			c: &Conn{
+				noV4: atomic.Bool{},
+				noV6: atomic.Bool{},
+			},
+		}
+		endpoint.c.noV4.Store(true)
+
+		for _, epd := range endpointDetails {
+			endpoint.endpointState[epd.addrPort] = &endpointState{}
+		}
+
+		udpAddr, _ := endpoint.addrForSendLocked(testTime)
+		if udpAddr != want {
+			t.Errorf("returned udpAddr chosen without latency info is not expected: got %v, want %v", udpAddr, want)
+		}
+
+		for _, epd := range endpointDetails {
+			state, ok := endpoint.endpointState[epd.addrPort]
+			if !ok {
+				t.Errorf("addr does not exist in endpoint state map")
+			}
+
+			latency, ok := state.latencyLocked()
+			if ok {
+				t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+			}
+			if epd.latency != 0 {
+				state.recentPongs = append(state.recentPongs, pongReply{
+					latency: epd.latency,
+				})
+				state.recentPong = 0
+			}
+		}
+
+		udpAddr, _ = endpoint.addrForSendLocked(testTime.Add(2 * time.Minute))
+		if udpAddr != want {
+			t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, want)
+		}
+	})
+
+	t.Run("choose IPv6 address when latency is the same for v4 and v6", func(t *testing.T) {
+		testTime := mono.Now()
+		endpointDetails := []struct {
+			addrPort netip.AddrPort
+			latency  time.Duration
+		}{
+			{
+				addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+				latency:  100 * time.Millisecond,
+			},
+			{
+				addrPort: netip.MustParseAddrPort("[1::1]:567"),
+				latency:  100 * time.Millisecond,
+			},
+		}
+		want := endpointDetails[1].addrPort
+
+		endpoint := &endpoint{
+			isWireguardOnly: true,
+			endpointState:   map[netip.AddrPort]*endpointState{},
+			c: &Conn{
+				noV4: atomic.Bool{},
+				noV6: atomic.Bool{},
+			},
+		}
+
+		for _, epd := range endpointDetails {
+			endpoint.endpointState[epd.addrPort] = &endpointState{}
+		}
+
+		udpAddr, _ := endpoint.addrForSendLocked(testTime)
+		if udpAddr != want {
+			t.Errorf("returned udpAddr chosen without latency info is not expected: got %v, want %v", udpAddr, want)
+		}
+
+		for _, epd := range endpointDetails {
+			state, ok := endpoint.endpointState[epd.addrPort]
+			if !ok {
+				t.Errorf("addr does not exist in endpoint state map")
+			}
+
+			latency, ok := state.latencyLocked()
+			if ok {
+				t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+			}
+			if epd.latency != 0 {
+				state.recentPongs = append(state.recentPongs, pongReply{
+					latency: epd.latency,
+				})
+				state.recentPong = 0
+			}
+		}
+
+		udpAddr, _ = endpoint.addrForSendLocked(testTime.Add(2 * time.Minute))
+		if udpAddr != want {
+			t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, want)
+		}
+	})
 }
