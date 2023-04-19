@@ -947,6 +947,12 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	fmt.Fprintln(w, "</tfoot>")
 
 	fmt.Fprintln(w, "</table>")
+
+	fmt.Fprintln(w, "<h2>Debug Info</h2>")
+
+	fmt.Fprintln(w, "<pre>")
+	fmt.Fprintln(w, html.EscapeString(sockstats.DebugInfo()))
+	fmt.Fprintln(w, "</pre>")
 }
 
 type incomingFile struct {

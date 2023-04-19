@@ -119,3 +119,9 @@ type LinkMonitor interface {
 func SetLinkMonitor(lm LinkMonitor) {
 	setLinkMonitor(lm)
 }
+
+// DebugInfo returns a string containing debug information about the tracked
+// statistics.
+func DebugInfo() string {
+	return debugInfo()
+}
