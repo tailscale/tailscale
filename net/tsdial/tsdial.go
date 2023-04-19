@@ -367,6 +367,8 @@ func (d *Dialer) PeerAPIHTTPClient() *http.Client {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Dial = nil
 		t.DialContext = d.dialPeerAPI
+		// Do not use the environment proxy for PeerAPI.
+		t.Proxy = nil
 		d.peerClient = &http.Client{Transport: t}
 	})
 	return d.peerClient
