@@ -601,7 +601,15 @@ func TestNATPing(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			if err := n1.Tailscale("ping", "-peerapi", tc.n1SeesN2IP.String()).Run(); err != nil {
+				t.Fatal(err)
+			}
+
 			if err := n2.Tailscale("ping", tc.n2SeesN1IP.String()).Run(); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := n2.Tailscale("ping", "-peerapi", tc.n2SeesN1IP.String()).Run(); err != nil {
 				t.Fatal(err)
 			}
 		})
