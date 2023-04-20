@@ -97,7 +97,8 @@ type CapabilityVersion int
 //   - 58: 2023-03-10: Client retries lite map updates before restarting map poll.
 //   - 59: 2023-03-16: Client understands Peers[].SelfNodeV4MasqAddrForThisPeer
 //   - 60: 2023-04-06: Client understands IsWireGuardOnly
-const CurrentCapabilityVersion CapabilityVersion = 60
+//   - 61: 2023-04-18: Client understand SSHAction.SSHRecorderFailureAction
+const CurrentCapabilityVersion CapabilityVersion = 61
 
 type StableID string
 
