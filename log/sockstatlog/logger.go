@@ -33,7 +33,7 @@ const pollInterval = time.Second / 10
 // logInterval specifies how often to log sockstat events to disk.
 // This delay is added to prevent an infinite loop when logs are uploaded,
 // which itself creates additional sockstat events.
-const logInterval = 3 * time.Second
+const logInterval = 10 * time.Second
 
 // maxLogFileSize specifies the maximum size of a log file before it is rotated.
 // Our logs are fairly compact, and we are mostly only looking at a few hours of data.
@@ -83,7 +83,7 @@ type event struct {
 // SockstatLogID reproducibly derives a new logid.PrivateID for sockstat logging from a node's public backend log ID.
 // The returned PrivateID is the sha256 sum of logID + "sockstat".
 // If a node's public log ID becomes known, it is trivial to spoof sockstat logs for that node.
-// Given the this is just for debugging, we're not too concerned about that.
+// Given that this is just for debugging, we're not too concerned about that.
 func SockstatLogID(logID logid.PublicID) logid.PrivateID {
 	return logid.PrivateID(sha256.Sum256([]byte(logID.String() + "sockstat")))
 }
