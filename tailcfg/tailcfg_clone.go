@@ -353,6 +353,7 @@ var _DERPNodeCloneNeedsRegeneration = DERPNode(struct {
 	DERPPort         int
 	InsecureForTests bool
 	STUNTestIP       string
+	CanPort80        bool
 }{})
 
 // Clone makes a deep copy of SSHRule.

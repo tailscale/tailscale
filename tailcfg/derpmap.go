@@ -142,6 +142,10 @@ type DERPNode struct {
 	// STUNTestIP is used in tests to override the STUN server's IP.
 	// If empty, it's assumed to be the same as the DERP server.
 	STUNTestIP string `json:",omitempty"`
+
+	// CanPort80 specifies whether this DERP node is accessible over HTTP
+	// on port 80 specifically. This is used for captive portal checks.
+	CanPort80 bool `json:",omitempty"`
 }
 
 // DotInvalid is a fake DNS TLD used in tests for an invalid hostname.
