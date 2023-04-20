@@ -3,9 +3,11 @@ linters:
   # enable in the list below.
   disable-all: true
   enable:
+    - bidichk
     - gofmt
     - goimports
     - misspell
+    - revive
 
 # Configuration for how we run golangci-lint
 run:
@@ -23,6 +25,9 @@ issues:
 
 # Per-linter settings are contained in this top-level key
 linters-settings:
+  # Enable all rules by default; we don't use invisible unicode runes.
+  bidichk:
+
   gofmt:
     rewrite-rules:
       - pattern: 'interface{}'
@@ -31,3 +36,26 @@ linters-settings:
   goimports:
 
   misspell:
+
+  revive:
+    enable-all-rules: false
+    ignore-generated-header: true
+    rules:
+      - name: atomic
+      - name: context-keys-type
+      - name: defer
+        arguments: [[
+          # Calling 'recover' at the time a defer is registered (i.e. "defer recover()") has no effect.
+          "immediate-recover",
+          # Calling 'recover' outside of a deferred function has no effect
+          "recover",
+          # Returning values from a deferred function has no effect
+          "return",
+        ]]
+      - name: duplicated-imports
+      - name: errorf
+      - name: string-of-int
+      - name: time-equal
+      - name: unconditional-recursion
+      - name: useless-break
+      - name: waitgroup-by-value

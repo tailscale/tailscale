@@ -22,7 +22,6 @@ import (
 	"time"
 
 	miekdns "github.com/miekg/dns"
-	"golang.org/x/net/dns/dnsmessage"
 	dns "golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsdial"
@@ -1121,15 +1120,15 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 
 	t.Run("no_such_host", func(t *testing.T) {
 		res, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), t.Logf, backResolver, &response{
-			Header: dnsmessage.Header{
+			Header: dns.Header{
 				ID:       123,
 				Response: true,
 				OpCode:   0, // query
 			},
-			Question: dnsmessage.Question{
-				Name:  dnsmessage.MustNewName("nx-domain.test."),
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
+			Question: dns.Question{
+				Name:  dns.MustNewName("nx-domain.test."),
+				Type:  dns.TypeA,
+				Class: dns.ClassINET,
 			},
 		})
 		if err != nil {
@@ -1156,74 +1155,74 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 	}
 
 	tests := []struct {
-		Type  dnsmessage.Type
+		Type  dns.Type
 		Name  string
 		Check func(t testing.TB, got []byte)
 	}{
 		{
-			Type:  dnsmessage.TypeA,
+			Type:  dns.TypeA,
 			Name:  "one-a.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x05one-a\x04test\x00\x00\x01\x00\x01\x05one-a\x04test\x00\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x01\x02\x03\x04"),
 		},
 		{
-			Type:  dnsmessage.TypeA,
+			Type:  dns.TypeA,
 			Name:  "two-a.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x05two-a\x04test\x00\x00\x01\x00\x01\xc0\f\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x01\x02\x03\x04\xc0\f\x00\x01\x00\x01\x00\x00\x02X\x00\x04\x05\x06\a\b"),
 		},
 		{
-			Type:  dnsmessage.TypeAAAA,
+			Type:  dns.TypeAAAA,
 			Name:  "one-aaaa.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\bone-aaaa\x04test\x00\x00\x1c\x00\x01\bone-aaaa\x04test\x00\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02"),
 		},
 		{
-			Type:  dnsmessage.TypeAAAA,
+			Type:  dns.TypeAAAA,
 			Name:  "two-aaaa.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\btwo-aaaa\x04test\x00\x00\x1c\x00\x01\xc0\f\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\xc0\f\x00\x1c\x00\x01\x00\x00\x02X\x00\x10\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04"),
 		},
 		{
-			Type:  dnsmessage.TypePTR,
+			Type:  dns.TypePTR,
 			Name:  "4.3.2.1.in-addr.arpa.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x014\x013\x012\x011\ain-addr\x04arpa\x00\x00\f\x00\x01\x014\x013\x012\x011\ain-addr\x04arpa\x00\x00\f\x00\x01\x00\x00\x02X\x00\t\x03foo\x03com\x00"),
 		},
 		{
-			Type:  dnsmessage.TypeCNAME,
+			Type:  dns.TypeCNAME,
 			Name:  "cname.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x01\x00\x00\x00\x00\x05cname\x04test\x00\x00\x05\x00\x01\x05cname\x04test\x00\x00\x05\x00\x01\x00\x00\x02X\x00\x10\nthe-target\x03foo\x00"),
 		},
 
 		// No records of various types
 		{
-			Type:  dnsmessage.TypeA,
+			Type:  dns.TypeA,
 			Name:  "no-records.test.",
 			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x01\x00\x01"),
 		},
 		{
-			Type:  dnsmessage.TypeAAAA,
+			Type:  dns.TypeAAAA,
 			Name:  "no-records.test.",
 			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x1c\x00\x01"),
 		},
 		{
-			Type:  dnsmessage.TypeCNAME,
+			Type:  dns.TypeCNAME,
 			Name:  "no-records.test.",
 			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00\x05\x00\x01"),
 		},
 		{
-			Type:  dnsmessage.TypeSRV,
+			Type:  dns.TypeSRV,
 			Name:  "no-records.test.",
 			Check: matchPacked("\x00{\x84\x03\x00\x01\x00\x00\x00\x00\x00\x00\nno-records\x04test\x00\x00!\x00\x01"),
 		},
 		{
-			Type:  dnsmessage.TypeTXT,
+			Type:  dns.TypeTXT,
 			Name:  "txt.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x03\x00\x00\x00\x00\x03txt\x04test\x00\x00\x10\x00\x01\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\t\btxt1=one\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\t\btxt2=two\x03txt\x04test\x00\x00\x10\x00\x01\x00\x00\x02X\x00\v\ntxt3=three"),
 		},
 		{
-			Type:  dnsmessage.TypeSRV,
+			Type:  dns.TypeSRV,
 			Name:  "srv.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x03srv\x04test\x00\x00!\x00\x01\x03srv\x04test\x00\x00!\x00\x01\x00\x00\x02X\x00\x0f\x00\x01\x00\x02\x00\x03\x03foo\x03com\x00\x03srv\x04test\x00\x00!\x00\x01\x00\x00\x02X\x00\x0f\x00\x04\x00\x05\x00\x06\x03bar\x03com\x00"),
 		},
 		{
-			Type:  dnsmessage.TypeNS,
+			Type:  dns.TypeNS,
 			Name:  "ns.test.",
 			Check: matchPacked("\x00{\x84\x00\x00\x01\x00\x02\x00\x00\x00\x00\x02ns\x04test\x00\x00\x02\x00\x01\x02ns\x04test\x00\x00\x02\x00\x01\x00\x00\x02X\x00\t\x03ns1\x03foo\x00\x02ns\x04test\x00\x00\x02\x00\x01\x00\x00\x02X\x00\t\x03ns2\x03bar\x00"),
 		},
@@ -1232,15 +1231,15 @@ func TestHandleExitNodeDNSQueryWithNetPkg(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%v_%v", tt.Type, strings.Trim(tt.Name, ".")), func(t *testing.T) {
 			got, err := handleExitNodeDNSQueryWithNetPkg(context.Background(), t.Logf, backResolver, &response{
-				Header: dnsmessage.Header{
+				Header: dns.Header{
 					ID:       123,
 					Response: true,
 					OpCode:   0, // query
 				},
-				Question: dnsmessage.Question{
-					Name:  dnsmessage.MustNewName(tt.Name),
+				Question: dns.Question{
+					Name:  dns.MustNewName(tt.Name),
 					Type:  tt.Type,
-					Class: dnsmessage.ClassINET,
+					Class: dns.ClassINET,
 				},
 			})
 			if err != nil {
