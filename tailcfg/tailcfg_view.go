@@ -802,6 +802,7 @@ func (v DERPNodeView) STUNOnly() bool         { return v.ж.STUNOnly }
 func (v DERPNodeView) DERPPort() int          { return v.ж.DERPPort }
 func (v DERPNodeView) InsecureForTests() bool { return v.ж.InsecureForTests }
 func (v DERPNodeView) STUNTestIP() string     { return v.ж.STUNTestIP }
+func (v DERPNodeView) CanPort80() bool        { return v.ж.CanPort80 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
@@ -816,6 +817,7 @@ var _DERPNodeViewNeedsRegeneration = DERPNode(struct {
 	DERPPort         int
 	InsecureForTests bool
 	STUNTestIP       string
+	CanPort80        bool
 }{})
 
 // View returns a readonly view of SSHRule.
