@@ -154,6 +154,15 @@ main() {
 					APT_KEY_TYPE="keyring"
 				fi
 				;;
+			Deepin)  # https://github.com/tailscale/tailscale/issues/7862
+				OS="debian"
+				PACKAGETYPE="apt"
+				if [ "$VERSION_ID" -lt 20 ]; then
+					APT_KEY_TYPE="legacy"
+				else
+					APT_KEY_TYPE="keyring"
+				fi
+				;;
 			centos)
 				OS="$ID"
 				VERSION="$VERSION_ID"
@@ -183,7 +192,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux|nobara|openmandriva|sangoma)
+			rocky|almalinux|nobara|openmandriva|sangoma|risios)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
