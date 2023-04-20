@@ -399,6 +399,10 @@ func (src *SSHAction) Clone() *SSHAction {
 	dst := new(SSHAction)
 	*dst = *src
 	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
+	if dst.OnRecordingFailure != nil {
+		dst.OnRecordingFailure = new(SSHRecorderFailureAction)
+		*dst.OnRecordingFailure = *src.OnRecordingFailure
+	}
 	return dst
 }
 
@@ -412,6 +416,7 @@ var _SSHActionCloneNeedsRegeneration = SSHAction(struct {
 	HoldAndDelegate          string
 	AllowLocalPortForwarding bool
 	Recorders                []netip.AddrPort
+	OnRecordingFailure       *SSHRecorderFailureAction
 }{})
 
 // Clone makes a deep copy of SSHPrincipal.
