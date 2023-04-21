@@ -4921,6 +4921,28 @@ func betterAddr(a, b addrLatency) bool {
 			return false
 		}
 	}
+
+	// If we get here, then both addresses are the same IP type (i.e. both
+	// IPv4 or both IPv6). All decisions below are made solely on latency.
+	//
+	// Determine how much the latencies differ; we ensure the larger
+	// latency is the denominator, so this fraction will always be <= 1.0.
+	var latencyFraction float64
+	if a.latency >= b.latency {
+		latencyFraction = float64(b.latency) / float64(a.latency)
+	} else {
+		latencyFraction = float64(a.latency) / float64(b.latency)
+	}
+
+	// Don't change anything if the latency improvement is less than 1%; we
+	// want a bit of "stickiness" (a.k.a. hysteresis) to avoid flapping if
+	// there's two roughly-equivalent endpoints.
+	if latencyFraction >= 0.99 {
+		return false
+	}
+
+	// The total difference is >1%, so a is better than b if it's
+	// lower-latency.
 	return a.latency < b.latency
 }
 
