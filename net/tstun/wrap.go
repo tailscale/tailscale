@@ -93,6 +93,9 @@ type Wrapper struct {
 	destMACAtomic  syncs.AtomicValue[[6]byte]
 	discoKey       syncs.AtomicValue[key.DiscoPublic]
 
+	// timeNow, if non-nil, will be used to obtain the current time.
+	timeNow func() time.Time
+
 	// natV4Config stores the current NAT configuration.
 	natV4Config atomic.Pointer[natV4Config]
 
@@ -256,6 +259,15 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 	}
 
 	return w
+}
+
+// now returns the current time, either by calling t.timeNow if set or time.Now
+// if not.
+func (t *Wrapper) now() time.Time {
+	if t.timeNow != nil {
+		return t.timeNow()
+	}
+	return time.Now()
 }
 
 // SetDestIPActivityFuncs sets a map of funcs to run per packet
@@ -724,7 +736,7 @@ func (t *Wrapper) Read(buffs [][]byte, sizes []int, offset int) (int, error) {
 			}
 		}
 		if captHook != nil {
-			captHook(capture.FromLocal, time.Now(), p.Buffer(), p.CaptureMeta)
+			captHook(capture.FromLocal, t.now(), p.Buffer(), p.CaptureMeta)
 		}
 		if !t.disableFilter {
 			response := t.filterPacketOutboundToWireGuard(p)
@@ -791,7 +803,7 @@ func (t *Wrapper) injectedRead(res tunInjectedRead, buf []byte, offset int) (int
 
 func (t *Wrapper) filterPacketInboundFromWireGuard(p *packet.Parsed, captHook capture.Callback) filter.Response {
 	if captHook != nil {
-		captHook(capture.FromPeer, time.Now(), p.Buffer(), p.CaptureMeta)
+		captHook(capture.FromPeer, t.now(), p.Buffer(), p.CaptureMeta)
 	}
 
 	if p.IPProto == ipproto.TSMP {
@@ -959,7 +971,7 @@ func (t *Wrapper) InjectInboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	p.Decode(buf[PacketStartOffset:])
 	captHook := t.captureHook.Load()
 	if captHook != nil {
-		captHook(capture.SynthesizedToLocal, time.Now(), p.Buffer(), p.CaptureMeta)
+		captHook(capture.SynthesizedToLocal, t.now(), p.Buffer(), p.CaptureMeta)
 	}
 	t.dnatV4(p)
 
@@ -1037,14 +1049,14 @@ func (t *Wrapper) injectOutboundPong(pp *packet.Parsed, req packet.TSMPPingReque
 // It does not block, but takes ownership of the packet.
 // The injected packet will not pass through outbound filters.
 // Injecting an empty packet is a no-op.
-func (t *Wrapper) InjectOutbound(packet []byte) error {
-	if len(packet) > MaxPacketSize {
+func (t *Wrapper) InjectOutbound(pkt []byte) error {
+	if len(pkt) > MaxPacketSize {
 		return errPacketTooBig
 	}
-	if len(packet) == 0 {
+	if len(pkt) == 0 {
 		return nil
 	}
-	t.injectOutbound(tunInjectedRead{data: packet})
+	t.injectOutbound(tunInjectedRead{data: pkt})
 	return nil
 }
 
@@ -1063,7 +1075,7 @@ func (t *Wrapper) InjectOutboundPacketBuffer(pkt stack.PacketBufferPtr) error {
 	}
 	if capt := t.captureHook.Load(); capt != nil {
 		b := pkt.ToBuffer()
-		capt(capture.SynthesizedToPeer, time.Now(), b.Flatten(), packet.CaptureMeta{})
+		capt(capture.SynthesizedToPeer, t.now(), b.Flatten(), packet.CaptureMeta{})
 	}
 
 	t.injectOutbound(tunInjectedRead{packet: pkt})
