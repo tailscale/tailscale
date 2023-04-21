@@ -31,19 +31,19 @@ import (
 var zaddr netip.Addr
 
 var single = &Resolver{
-	Forward: &net.Resolver{PreferGo: preferGoResolver()},
+	Forward: &net.Resolver{PreferGo: preferGoResolver(runtime.GOOS)},
 }
 
-func preferGoResolver() bool {
+func preferGoResolver(goos string) bool {
 	// There does not appear to be a local resolver running
 	// on iOS, and NetworkExtension is good at isolating DNS.
 	// So do not use the Go resolver on macOS/iOS.
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	if goos == "darwin" || goos == "ios" {
 		return false
 	}
 
 	// The local resolver is not available on Android.
-	if runtime.GOOS == "android" {
+	if goos == "android" {
 		return false
 	}
 
@@ -140,12 +140,7 @@ func (r *Resolver) dlogf(format string, args ...any) {
 // cloudHostResolver returns a Resolver for the current cloud hosting environment.
 // It currently only supports Google Cloud.
 func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
-	switch runtime.GOOS {
-	case "android", "ios", "darwin":
-		return nil, false
-	case "windows":
-		// TODO(bradfitz): remove this restriction once we're using Go 1.19
-		// which supports net.Resolver.PreferGo on Windows.
+	if !preferGoResolver(runtime.GOOS) {
 		return nil, false
 	}
 	ip := cloudenv.Get().ResolverIP()

@@ -37,6 +37,78 @@ func TestDialer(t *testing.T) {
 	c.Close()
 }
 
+func TestPreferGoResolver(t *testing.T) {
+	// List of all known GOOS values as of Go 1.20.
+	//
+	// https://github.com/golang/go/blob/go1.20.3/src/go/build/syslist.go#L14-L33
+	testCases := []struct {
+		goos      string
+		preferred bool
+	}{{
+		goos:      "aix",
+		preferred: true,
+	}, {
+		goos:      "android",
+		preferred: false,
+	}, {
+		goos:      "darwin",
+		preferred: false,
+	}, {
+		goos:      "dragonfly",
+		preferred: true,
+	}, {
+		goos:      "freebsd",
+		preferred: true,
+	}, {
+		goos:      "hurd",
+		preferred: true,
+	}, {
+		goos:      "illumos",
+		preferred: true,
+	}, {
+		goos:      "ios",
+		preferred: false,
+	}, {
+		goos:      "js",
+		preferred: true,
+	}, {
+		goos:      "linux",
+		preferred: true,
+	}, {
+		goos:      "nacl",
+		preferred: true,
+	}, {
+		goos:      "netbsd",
+		preferred: true,
+	}, {
+		goos:      "openbsd",
+		preferred: true,
+	}, {
+		goos:      "plan9",
+		preferred: true,
+	}, {
+		goos:      "solaris",
+		preferred: true,
+	}, {
+		goos:      "wasip1",
+		preferred: true,
+	}, {
+		goos:      "windows",
+		preferred: true,
+	}, {
+		goos:      "zos",
+		preferred: true,
+	}}
+	for _, tc := range testCases {
+		t.Run(tc.goos, func(t *testing.T) {
+			preferred := preferGoResolver(tc.goos)
+			if preferred != tc.preferred {
+				t.Fatalf("%s: got %t, want %t", tc.goos, preferred, tc.preferred)
+			}
+		})
+	}
+}
+
 func TestDialCall_DNSWasTrustworthy(t *testing.T) {
 	type step struct {
 		ip  netip.Addr // IP we pretended to dial
