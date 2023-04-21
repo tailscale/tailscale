@@ -1633,8 +1633,12 @@ func TestBetterAddr(t *testing.T) {
 		{a: zero, b: zero, want: false},
 		{a: al("10.0.0.2:123", 5*ms), b: zero, want: true},
 		{a: zero, b: al("10.0.0.2:123", 5*ms), want: false},
-		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 6*ms), want: true},
+		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 10*ms), want: true},
 		{a: al("10.0.0.2:123", 5*ms), b: al("10.0.0.2:123", 10*ms), want: false}, // same IPPort
+
+		// Don't prefer b to a if it's not substantially better.
+		{a: al("10.0.0.2:123", 100*ms), b: al("1.2.3.4:555", 101*ms), want: false},
+		{a: al("10.0.0.2:123", 100*ms), b: al("1.2.3.4:555", 103*ms), want: true},
 
 		// Prefer IPv6 if roughly equivalent:
 		{
