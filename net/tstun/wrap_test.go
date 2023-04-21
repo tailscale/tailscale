@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unsafe"
 
@@ -21,6 +23,8 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
+	"gvisor.dev/gvisor/pkg/bufferv2"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
@@ -33,6 +37,7 @@ import (
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
+	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -764,5 +769,95 @@ func TestNATCfg(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCaptureHook verifies that the Wrapper.captureHook callback is called
+// with the correct parameters when various packet operations are performed.
+func TestCaptureHook(t *testing.T) {
+	type captureRecord struct {
+		path capture.Path
+		now  time.Time
+		pkt  []byte
+		meta packet.CaptureMeta
+	}
+
+	var captured []captureRecord
+	hook := func(path capture.Path, now time.Time, pkt []byte, meta packet.CaptureMeta) {
+		captured = append(captured, captureRecord{
+			path: path,
+			now:  now,
+			pkt:  pkt,
+			meta: meta,
+		})
+	}
+
+	now := time.Unix(1682085856, 0)
+
+	_, w := newFakeTUN(t.Logf, true)
+	w.timeNow = func() time.Time {
+		return now
+	}
+	w.InstallCaptureHook(hook)
+	defer w.Close()
+
+	// Loop reading and discarding packets; this ensures that we don't have
+	// packets stuck in vectorOutbound
+	go func() {
+		var (
+			buf   [MaxPacketSize]byte
+			sizes = make([]int, 1)
+		)
+		for {
+			_, err := w.Read([][]byte{buf[:]}, sizes, 0)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Do operations that should result in a packet being captured.
+	w.Write([][]byte{
+		[]byte("Write1"),
+		[]byte("Write2"),
+	}, 0)
+	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: bufferv2.MakeWithData([]byte("InjectInboundPacketBuffer")),
+	})
+	w.InjectInboundPacketBuffer(packetBuf)
+
+	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: bufferv2.MakeWithData([]byte("InjectOutboundPacketBuffer")),
+	})
+	w.InjectOutboundPacketBuffer(packetBuf)
+
+	// TODO: test Read
+	// TODO: determine if we want InjectOutbound to log
+
+	// Assert that the right packets are captured.
+	want := []captureRecord{
+		{
+			path: capture.FromPeer,
+			pkt:  []byte("Write1"),
+		},
+		{
+			path: capture.FromPeer,
+			pkt:  []byte("Write2"),
+		},
+		{
+			path: capture.SynthesizedToLocal,
+			pkt:  []byte("InjectInboundPacketBuffer"),
+		},
+		{
+			path: capture.SynthesizedToPeer,
+			pkt:  []byte("InjectOutboundPacketBuffer"),
+		},
+	}
+	for i := 0; i < len(want); i++ {
+		want[i].now = now
+	}
+	if !reflect.DeepEqual(captured, want) {
+		t.Errorf("mismatch between captured and expected packets\ngot: %+v\nwant: %+v",
+			captured, want)
 	}
 }
