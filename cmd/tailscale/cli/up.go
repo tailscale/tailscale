@@ -97,7 +97,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf := newFlagSet(cmd)
 
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
-	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
+	upf.StringVar(&upArgs.authKeyOrFile, "authkey", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
 	upf.StringVar(&upArgs.server, "login-server", ipn.DefaultControlURL, "base URL of control server")
 	upf.BoolVar(&upArgs.acceptRoutes, "accept-routes", acceptRouteDefault(goos), "accept routes advertised by other Tailscale nodes")
@@ -799,7 +799,7 @@ func addPrefFlagMapping(flagName string, prefNames ...string) {
 // correspond to an ipn.Pref.
 func preflessFlag(flagName string) bool {
 	switch flagName {
-	case "auth-key", "force-reauth", "reset", "qr", "json", "timeout", "accept-risk":
+	case "authkey", "force-reauth", "reset", "qr", "json", "timeout", "accept-risk":
 		return true
 	}
 	return false

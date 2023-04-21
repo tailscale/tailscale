@@ -57,19 +57,19 @@ func newFlagSet(name string) *flag.FlagSet {
 }
 
 // CleanUpArgs rewrites command line arguments for simplicity and backwards compatibility.
-// In particular, it rewrites --authkey to --auth-key.
+// In particular, it rewrites --auth-key to --authkey.
 func CleanUpArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
-		// Rewrite --authkey to --auth-key, and --authkey=x to --auth-key=x,
-		// and the same for the -authkey variant.
+		// Rewrite --auth-key to --authkey, and --auth-key=x to --authkey=x,
+		// and the same for the -auth-key variant.
 		switch {
-		case arg == "--authkey", arg == "-authkey":
-			arg = "--auth-key"
-		case strings.HasPrefix(arg, "--authkey="), strings.HasPrefix(arg, "-authkey="):
+		case arg == "--auth-key", arg == "-auth-key":
+			arg = "--authkey"
+		case strings.HasPrefix(arg, "--auth-key="), strings.HasPrefix(arg, "-auth-key="):
 			arg = strings.TrimLeft(arg, "-")
-			arg = strings.TrimPrefix(arg, "authkey=")
-			arg = "--auth-key=" + arg
+			arg = strings.TrimPrefix(arg, "auth-key=")
+			arg = "--authkey=" + arg
 		}
 		out = append(out, arg)
 	}

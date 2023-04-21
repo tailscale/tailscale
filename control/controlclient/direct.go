@@ -1739,24 +1739,24 @@ func decodeWrappedAuthkey(key string, logf logger.Logf) (authKey string, isWrapp
 	}
 	sigBytes, privBytes, found := strings.Cut(suffix, "-")
 	if !found {
-		logf("decoding wrapped auth-key: did not find delimiter")
+		logf("decoding wrapped authkey: did not find delimiter")
 		return key, false, nil, nil
 	}
 
 	rawSig, err := base64.RawStdEncoding.DecodeString(sigBytes)
 	if err != nil {
-		logf("decoding wrapped auth-key: signature decode: %v", err)
+		logf("decoding wrapped authkey: signature decode: %v", err)
 		return key, false, nil, nil
 	}
 	rawPriv, err := base64.RawStdEncoding.DecodeString(privBytes)
 	if err != nil {
-		logf("decoding wrapped auth-key: priv decode: %v", err)
+		logf("decoding wrapped authkey: priv decode: %v", err)
 		return key, false, nil, nil
 	}
 
 	sig = new(tka.NodeKeySignature)
 	if err := sig.Unserialize([]byte(rawSig)); err != nil {
-		logf("decoding wrapped auth-key: signature: %v", err)
+		logf("decoding wrapped authkey: signature: %v", err)
 		return key, false, nil, nil
 	}
 	priv = ed25519.PrivateKey(rawPriv)
