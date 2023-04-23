@@ -40,6 +40,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 )
@@ -942,6 +943,16 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 				rs.pc6 = u6
 				go c.readPackets(ctx, u6)
 			}
+		}
+
+		// If our interfaces.State suggested we have IPv6 support but then we
+		// failed to get an IPv6 sending socket (as in
+		// https://github.com/tailscale/tailscale/issues/7949), then change
+		// ifState.HaveV6 before we make a probe plan that involves sending IPv6
+		// packets and thus assuming rs.pc6 is non-nil.
+		if rs.pc6 == nil {
+			ifState = ptr.To(*ifState) // shallow clone
+			ifState.HaveV6 = false
 		}
 	}
 
