@@ -313,6 +313,12 @@ jobs:
           # AIX
           - goos: aix
             goarch: ppc64
+          # Solaris
+          - goos: solaris
+            goarch: amd64
+          # illumos
+          - goos: illumos
+            goarch: amd64
 
     runs-on: ubuntu-22.04
     steps:

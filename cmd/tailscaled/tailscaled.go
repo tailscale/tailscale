@@ -81,7 +81,7 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
-	case "plan9", "aix":
+	case "plan9", "aix", "solaris", "illumos":
 		return "userspace-networking"
 	case "linux":
 		switch distro.Get() {
@@ -665,7 +665,7 @@ func handleSubnetsInNetstack() bool {
 		return true
 	}
 	switch runtime.GOOS {
-	case "windows", "darwin", "freebsd", "openbsd":
+	case "windows", "darwin", "freebsd", "openbsd", "solaris", "illumos":
 		// Enable on Windows and tailscaled-on-macOS (this doesn't
 		// affect the GUI clients), and on FreeBSD.
 		return true
