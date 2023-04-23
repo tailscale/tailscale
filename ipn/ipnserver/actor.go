@@ -96,7 +96,7 @@ func (a *actor) Username() (string, error) {
 		}
 		defer tok.Close()
 		return tok.Username()
-	case "darwin", "linux":
+	case "darwin", "linux", "illumos", "solaris":
 		uid, ok := a.ci.Creds().UserID()
 		if !ok {
 			return "", errors.New("missing user ID")
