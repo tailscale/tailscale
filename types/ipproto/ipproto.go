@@ -25,6 +25,8 @@ const (
 	ICMPv6 Proto = 0x3a
 	TCP    Proto = 0x06
 	UDP    Proto = 0x11
+	DCCP   Proto = 0x21
+	GRE    Proto = 0x2f
 	SCTP   Proto = 0x84
 
 	// TSMP is the Tailscale Message Protocol (our ICMP-ish
@@ -67,6 +69,10 @@ func (p Proto) String() string {
 		return "SCTP"
 	case TSMP:
 		return "TSMP"
+	case GRE:
+		return "GRE"
+	case DCCP:
+		return "DCCP"
 	default:
 		return fmt.Sprintf("IPProto-%d", int(p))
 	}
