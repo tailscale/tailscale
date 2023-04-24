@@ -558,19 +558,42 @@ func withPort(ap netip.AddrPort, port uint16) netip.AddrPort {
 // Currently (2023-03-01) only TCP/UDP/ICMP over IPv4 is supported.
 // p is modified in place.
 // If p.IPProto is unknown, only the IP header checksum is updated.
-// TODO(maisem): more protocols (sctp, gre, dccp)
 func updateV4PacketChecksums(p *Parsed, old, new netip.Addr) {
-	o4, n4 := old.As4(), new.As4()
-	updateV4Checksum(p.Buffer()[10:12], o4[:], n4[:]) // header
-	switch p.IPProto {
-	case ipproto.UDP:
-		updateV4Checksum(p.Transport()[6:8], o4[:], n4[:])
-	case ipproto.TCP:
-		updateV4Checksum(p.Transport()[16:18], o4[:], n4[:])
-	case ipproto.ICMPv4:
-		// Nothing to do.
+	if len(p.Buffer()) < 12 {
+		// Not enough space for an IPv4 header.
+		return
 	}
-	// TODO(maisem): more protocols (sctp, gre, dccp)
+	o4, n4 := old.As4(), new.As4()
+
+	// First update the checksum in the IP header.
+	updateV4Checksum(p.Buffer()[10:12], o4[:], n4[:])
+
+	// Now update the transport layer checksums, where applicable.
+	tr := p.Transport()
+	switch p.IPProto {
+	case ipproto.UDP, ipproto.DCCP:
+		if len(tr) < 8 {
+			// Not enough space for a UDP header.
+			return
+		}
+		updateV4Checksum(tr[6:8], o4[:], n4[:])
+	case ipproto.TCP:
+		if len(tr) < 18 {
+			// Not enough space for a TCP header.
+			return
+		}
+		updateV4Checksum(tr[16:18], o4[:], n4[:])
+	case ipproto.GRE:
+		if len(tr) < 6 {
+			// Not enough space for a GRE header.
+			return
+		}
+		if tr[0] == 1 { // checksum present
+			updateV4Checksum(tr[4:6], o4[:], n4[:])
+		}
+	case ipproto.SCTP, ipproto.ICMPv4:
+		// No transport layer update required.
+	}
 }
 
 // updateV4Checksum calculates and updates the checksum in the packet buffer for
