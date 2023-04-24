@@ -51,6 +51,12 @@ type awsStore struct {
 
 // New returns a new ipn.StateStore using the AWS SSM storage
 // location given by ssmARN.
+//
+// Note that we store the entire store in a single parameter
+// key, therefore if the state is above 8kb, it can cause
+// Tailscaled to only only store new state in-memory and
+// restarting Tailscaled can fail until you delete your state
+// from the AWS Parameter Store.
 func New(_ logger.Logf, ssmARN string) (ipn.StateStore, error) {
 	return newStore(ssmARN, nil)
 }
@@ -160,14 +166,19 @@ func (s *awsStore) persistState() error {
 		return err
 	}
 
-	// Store in AWS SSM parameter store
+	// Store in AWS SSM parameter store.
+	//
+	// We use intelligent tiering so that when the state is below 4kb, it uses Standard tiering
+	// which is free. However, if it exceeds 4kb it switches the parameter to advanced tiering
+	// doubling the capacity to 8kb per the following docs:
+	// https://aws.amazon.com/about-aws/whats-new/2019/08/aws-systems-manager-parameter-store-announces-intelligent-tiering-to-enable-automatic-parameter-tier-selection/
 	_, err = s.ssmClient.PutParameter(
 		context.TODO(),
 		&ssm.PutParameterInput{
 			Name:      aws.String(s.ParameterName()),
 			Value:     aws.String(string(bs)),
 			Overwrite: aws.Bool(true),
-			Tier:      ssmTypes.ParameterTierStandard,
+			Tier:      ssmTypes.ParameterTierIntelligentTiering,
 			Type:      ssmTypes.ParameterTypeSecureString,
 		},
 	)
