@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -412,6 +413,7 @@ func cleanMountPoint(mount string) (string, error) {
 	if mount == "" {
 		return "", errors.New("mount point cannot be empty")
 	}
+	mount = cleanMinGWPathConversionIfNeeded(mount)
 	if !strings.HasPrefix(mount, "/") {
 		mount = "/" + mount
 	}
@@ -420,6 +422,26 @@ func cleanMountPoint(mount string) (string, error) {
 		return mount, nil
 	}
 	return "", fmt.Errorf("invalid mount point %q", mount)
+}
+
+// cleanMinGWPathConversionIfNeeded strips the EXEPATH prefix from the given
+// path if the path is a MinGW(ish) (Windows) shell arg.
+//
+// MinGW(ish) (Windows) shells perform POSIX-to-Windows path conversion
+// converting the leading "/" of any shell arg to the EXEPATH, which mangles the
+// mount point. Strip the EXEPATH prefix if it exists. #7963
+//
+// "/C:/Program Files/Git/foo" -> "/foo"
+func cleanMinGWPathConversionIfNeeded(path string) string {
+	// Only do this on Windows.
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	if _, ok := os.LookupEnv("MSYSTEM"); ok {
+		exepath := filepath.ToSlash(os.Getenv("EXEPATH"))
+		path = strings.TrimPrefix(path, exepath)
+	}
+	return path
 }
 
 func expandProxyTarget(source string) (string, error) {
