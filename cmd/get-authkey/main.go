@@ -67,7 +67,7 @@ func main() {
 		},
 	}
 
-	authkey, _, err := tsClient.CreateKey(ctx, caps)
+	authkey, _, err := tsClient.CreateKey(ctx, caps, 0)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
