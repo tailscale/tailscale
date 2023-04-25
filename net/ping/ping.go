@@ -11,16 +11,25 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
-	"tailscale.com/net/netmon"
-	"tailscale.com/net/netns"
+	"golang.org/x/net/ipv6"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/mak"
+	"tailscale.com/util/multierr"
+)
+
+const (
+	v4Type = "ip4:icmp"
+	v6Type = "ip6:icmp"
 )
 
 type response struct {
@@ -33,12 +42,21 @@ type outstanding struct {
 	data []byte
 }
 
+// PacketListener defines the interface required to listen to packages
+// on an address.
+type ListenPacketer interface {
+	ListenPacket(ctx context.Context, typ string, addr string) (net.PacketConn, error)
+}
+
 // Pinger represents a set of ICMP echo requests to be sent at a single time.
 //
 // A new instance should be created for each concurrent set of ping requests;
 // this type should not be reused.
 type Pinger struct {
-	c       net.PacketConn
+	lp ListenPacketer
+
+	// closed guards against send incrementing the waitgroup concurrently with close.
+	closed  atomic.Bool
 	Logf    logger.Logf
 	Verbose bool
 	timeNow func() time.Time
@@ -46,16 +64,37 @@ type Pinger struct {
 	wg      sync.WaitGroup
 
 	// Following fields protected by mu
-	mu    sync.Mutex
+	mu sync.Mutex
+	// conns is a map of "type" to net.PacketConn, type is either
+	// "ip4:icmp" or "ip6:icmp"
+	conns map[string]net.PacketConn
 	seq   uint16 // uint16 per RFC 792
 	pings map[uint16]outstanding
 }
 
 // New creates a new Pinger. The Context provided will be used to create
 // network listeners, and to set an absolute deadline (if any) on the net.Conn
-// The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func New(ctx context.Context, logf logger.Logf, netMon *netmon.Monitor) (*Pinger, error) {
-	p, err := newUnstarted(ctx, logf, netMon)
+func New(ctx context.Context, logf logger.Logf, lp ListenPacketer) *Pinger {
+	var id [2]byte
+	if _, err := io.ReadFull(rand.Reader, id[:]); err != nil {
+		panic("net/ping: New:" + err.Error())
+	}
+
+	return &Pinger{
+		lp:      lp,
+		Logf:    logf,
+		timeNow: time.Now,
+		id:      binary.LittleEndian.Uint16(id[:]),
+		pings:   make(map[uint16]outstanding),
+	}
+}
+
+func (p *Pinger) mkconn(ctx context.Context, typ, addr string) (net.PacketConn, error) {
+	if p.closed.Load() {
+		return nil, net.ErrClosed
+	}
+
+	c, err := p.lp.ListenPacket(ctx, typ, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -64,35 +103,36 @@ func New(ctx context.Context, logf logger.Logf, netMon *netmon.Monitor) (*Pinger
 	// applies to all future I/O, so we only need to do it once.
 	deadline, ok := ctx.Deadline()
 	if ok {
-		if err := p.c.SetReadDeadline(deadline); err != nil {
+		if err := c.SetReadDeadline(deadline); err != nil {
 			return nil, err
 		}
 	}
 
 	p.wg.Add(1)
-	go p.run(ctx)
-	return p, nil
+	go p.run(ctx, c, typ)
+
+	return c, err
 }
 
-func newUnstarted(ctx context.Context, logf logger.Logf, netMon *netmon.Monitor) (*Pinger, error) {
-	var id [2]byte
-	_, err := rand.Read(id[:])
+// getConn creates or returns a conn matching typ which is ip4:icmp
+// or ip6:icmp.
+func (p *Pinger) getConn(ctx context.Context, typ string) (net.PacketConn, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if c, ok := p.conns[typ]; ok {
+		return c, nil
+	}
+
+	var addr = "0.0.0.0"
+	if typ == v6Type {
+		addr = "::"
+	}
+	c, err := p.mkconn(ctx, typ, addr)
 	if err != nil {
 		return nil, err
 	}
-
-	conn, err := netns.Listener(logf, netMon).ListenPacket(ctx, "ip4:icmp", "0.0.0.0")
-	if err != nil {
-		return nil, err
-	}
-
-	return &Pinger{
-		c:       conn,
-		Logf:    logf,
-		timeNow: time.Now,
-		id:      binary.LittleEndian.Uint16(id[:]),
-		pings:   make(map[uint16]outstanding),
-	}, nil
+	mak.Set(&p.conns, typ, c)
+	return c, nil
 }
 
 func (p *Pinger) logf(format string, a ...any) {
@@ -110,13 +150,34 @@ func (p *Pinger) vlogf(format string, a ...any) {
 }
 
 func (p *Pinger) Close() error {
-	err := p.c.Close()
+	p.closed.Store(true)
+
+	p.mu.Lock()
+	conns := p.conns
+	p.conns = nil
+	p.mu.Unlock()
+
+	var errors []error
+	for _, c := range conns {
+		if err := c.Close(); err != nil {
+			errors = append(errors, err)
+		}
+	}
+
 	p.wg.Wait()
-	return err
+	p.cleanupOutstanding()
+
+	return multierr.New(errors...)
 }
 
-func (p *Pinger) run(ctx context.Context) {
+func (p *Pinger) run(ctx context.Context, conn net.PacketConn, typ string) {
 	defer p.wg.Done()
+	defer func() {
+		conn.Close()
+		p.mu.Lock()
+		delete(p.conns, typ)
+		p.mu.Unlock()
+	}()
 	buf := make([]byte, 1500)
 
 loop:
@@ -127,7 +188,7 @@ loop:
 		default:
 		}
 
-		n, addr, err := p.c.ReadFrom(buf)
+		n, _, err := conn.ReadFrom(buf)
 		if err != nil {
 			// Ignore temporary errors; everything else is fatal
 			if netErr, ok := err.(net.Error); !ok || !netErr.Temporary() {
@@ -136,10 +197,8 @@ loop:
 			continue
 		}
 
-		p.handleResponse(buf[:n], addr, p.timeNow())
+		p.handleResponse(buf[:n], p.timeNow(), typ)
 	}
-
-	p.cleanupOutstanding()
 }
 
 func (p *Pinger) cleanupOutstanding() {
@@ -151,16 +210,28 @@ func (p *Pinger) cleanupOutstanding() {
 	}
 }
 
-func (p *Pinger) handleResponse(buf []byte, addr net.Addr, now time.Time) {
-	const ProtocolICMP = 1
-	m, err := icmp.ParseMessage(ProtocolICMP, buf)
+func (p *Pinger) handleResponse(buf []byte, now time.Time, typ string) {
+	// We need to handle responding to both IPv4
+	// and IPv6.
+	var icmpType icmp.Type
+	switch typ {
+	case v4Type:
+		icmpType = ipv4.ICMPTypeEchoReply
+	case v6Type:
+		icmpType = ipv6.ICMPTypeEchoReply
+	default:
+		p.vlogf("handleResponse: unknown icmp.Type")
+		return
+	}
+
+	m, err := icmp.ParseMessage(icmpType.Protocol(), buf)
 	if err != nil {
 		p.vlogf("handleResponse: invalid packet: %v", err)
 		return
 	}
 
-	if m.Type != ipv4.ICMPTypeEchoReply {
-		p.vlogf("handleResponse: wanted m.Type=%d; got %d", ipv4.ICMPTypeEchoReply, m.Type)
+	if m.Type != icmpType {
+		p.vlogf("handleResponse: wanted m.Type=%d; got %d", icmpType, m.Type)
 		return
 	}
 
@@ -212,9 +283,27 @@ func (p *Pinger) Send(ctx context.Context, dest net.Addr, data []byte) (time.Dur
 	seq := p.seq
 	p.mu.Unlock()
 
+	// Check whether the address is IPv4 or IPv6 to
+	// determine the icmp.Type and conn to use.
+	var conn net.PacketConn
+	var icmpType icmp.Type = ipv4.ICMPTypeEcho
+	ap, err := netip.ParseAddr(dest.String())
+	if err != nil {
+		return 0, err
+	}
+	if ap.Is6() {
+		icmpType = ipv6.ICMPTypeEchoRequest
+		conn, err = p.getConn(ctx, v6Type)
+	} else {
+		conn, err = p.getConn(ctx, v4Type)
+	}
+	if err != nil {
+		return 0, err
+	}
+
 	m := icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
-		Code: 0,
+		Type: icmpType,
+		Code: icmpType.Protocol(),
 		Body: &icmp.Echo{
 			ID:   int(p.id),
 			Seq:  int(seq),
@@ -234,7 +323,7 @@ func (p *Pinger) Send(ctx context.Context, dest net.Addr, data []byte) (time.Dur
 	p.mu.Unlock()
 
 	start := p.timeNow()
-	n, err := p.c.WriteTo(b, dest)
+	n, err := conn.WriteTo(b, dest)
 	if err != nil {
 		return 0, err
 	} else if n != len(b) {
