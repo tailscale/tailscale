@@ -2479,7 +2479,7 @@ func (b *LocalBackend) parseWgStatusLocked(s *wgengine.Status) (ret ipn.EngineSt
 	// [GRINDER STATS LINES] - please don't remove (used for log parsing)
 	if peerStats.Len() > 0 {
 		b.keyLogf("[v1] peer keys: %s", strings.TrimSpace(peerKeys.String()))
-		b.statsLogf("[v1] v%v peers: %v", version.Long, strings.TrimSpace(peerStats.String()))
+		b.statsLogf("[v1] v%v peers: %v", version.Long(), strings.TrimSpace(peerStats.String()))
 	}
 	return ret
 }
