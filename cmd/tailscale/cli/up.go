@@ -1118,33 +1118,31 @@ func init() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 }
 
-// resolveAuthKey either returns v unchanged (in the common case)
-// or, if it starts with "oauth:" parses it as one of:
+// resolveAuthKey either returns v unchanged (in the common case) or, if it
+// starts with "tskey-client-" (as Tailscale OAuth secrets do) parses it like
 //
-//	oauth2:CLIENT_ID:CLIENT_SECRET?ephemeral=false&tags=foo,bar&preauthorized=BOOL
-//	oauth2:CLIENT_ID:CLIENT_SECRET:BASE_URL?...
+//	tskey-client-xxxx[?ephemeral=false&tags=foo,bar&preauthorized=BOOL&baseURL=...]
 //
-// and does the OAuth2 dance to get and return an authkey. The "ephemeral" property
-// defaults to true if unspecified. The "preauthorized" defaults to false.
-//
-// If the BASE_URL argument is not provided, it defaults to https://api.tailscale.com.
+// and does the OAuth2 dance to get and return an authkey. The "ephemeral"
+// property defaults to true if unspecified. The "preauthorized" defaults to
+// false. The "baseURL" defaults to
+// https://api.tailscale.com.
 func resolveAuthKey(ctx context.Context, v string) (string, error) {
-	suff, ok := strings.CutPrefix(v, "oauth:")
-	if !ok {
+	if !strings.HasPrefix(v, "tskey-client-") {
 		return v, nil
 	}
 	if !envknob.Bool("TS_EXPERIMENT_OAUTH_AUTHKEY") {
 		return "", errors.New("oauth authkeys are in experimental status")
 	}
 
-	pos, named, _ := strings.Cut(suff, "?")
+	clientSecret, named, _ := strings.Cut(v, "?")
 	attrs, err := url.ParseQuery(named)
 	if err != nil {
 		return "", err
 	}
 	for k := range attrs {
 		switch k {
-		case "ephemeral", "preauthorized", "tags":
+		case "ephemeral", "preauthorized", "tags", "baseURL":
 		default:
 			return "", fmt.Errorf("unknown attribute %q", k)
 		}
@@ -1173,18 +1171,13 @@ func resolveAuthKey(ctx context.Context, v string) (string, error) {
 		tags = strings.Split(v, ",")
 	}
 
-	f := strings.SplitN(pos, ":", 3)
-	if len(f) < 2 || len(f) > 3 {
-		return "", errors.New("invalid auth key format; want oauth2:CLIENT_ID:CLIENT_SECRET[:BASE_URL]")
-	}
-	clientID, clientSecret := f[0], f[1]
 	baseURL := "https://api.tailscale.com"
-	if len(f) == 3 {
-		baseURL = f[2]
+	if v := attrs.Get("baseURL"); v != "" {
+		baseURL = v
 	}
 
 	credentials := clientcredentials.Config{
-		ClientID:     clientID,
+		ClientID:     "some-client-id", // ignored
 		ClientSecret: clientSecret,
 		TokenURL:     baseURL + "/api/v2/oauth/token",
 		Scopes:       []string{"device"},
