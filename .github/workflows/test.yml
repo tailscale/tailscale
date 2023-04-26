@@ -89,7 +89,11 @@ jobs:
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      run: ./tool/go test ${{matrix.buildflags}} -exec=/tmp/testwrapper -bench=. -benchtime=1x ./...
+      run: ./tool/go test ${{matrix.buildflags}} -exec=/tmp/testwrapper
+      env:
+        GOARCH: ${{ matrix.goarch }}
+    - name: bench all
+      run: ./tool/go test ${{matrix.buildflags}} -exec=/tmp/testwrapper -test.bench=. -test.benchtime=1x -test.run=^$
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
