@@ -6,18 +6,20 @@ package ping
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"tailscale.com/tstest"
+	"tailscale.com/util/mak"
 )
 
 var (
-	localhost    = &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)}
-	localhostUDP = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+	localhost = &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)}
 )
 
 func TestPinger(t *testing.T) {
@@ -35,7 +37,7 @@ func TestPinger(t *testing.T) {
 	// Start a ping in the background
 	r := make(chan time.Duration, 1)
 	go func() {
-		dur, err := p.Send(ctx, localhostUDP, bodyData)
+		dur, err := p.Send(ctx, localhost, bodyData)
 		if err != nil {
 			t.Errorf("p.Send: %v", err)
 			r <- 0
@@ -49,7 +51,7 @@ func TestPinger(t *testing.T) {
 	// Fake a response from ourself
 	fakeResponse := mustMarshal(t, &icmp.Message{
 		Type: ipv4.ICMPTypeEchoReply,
-		Code: 0,
+		Code: ipv4.ICMPTypeEchoReply.Protocol(),
 		Body: &icmp.Echo{
 			ID:   1234,
 			Seq:  1,
@@ -58,7 +60,65 @@ func TestPinger(t *testing.T) {
 	})
 
 	const fakeDuration = 100 * time.Millisecond
-	p.handleResponse(fakeResponse, localhost, clock.Now().Add(fakeDuration))
+	p.handleResponse(fakeResponse, clock.Now().Add(fakeDuration), v4Type)
+
+	select {
+	case dur := <-r:
+		want := fakeDuration
+		if dur != want {
+			t.Errorf("wanted ping response time = %d; got %d", want, dur)
+		}
+	case <-ctx.Done():
+		t.Fatal("did not get response by timeout")
+	}
+}
+
+func TestV6Pinger(t *testing.T) {
+	if c, err := net.ListenPacket("udp6", "::1"); err != nil {
+		// skip test if we can't use IPv6.
+		t.Skipf("IPv6 not supported: %s", err)
+	} else {
+		c.Close()
+	}
+
+	clock := &tstest.Clock{}
+
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	p, closeP := mockPinger(t, clock)
+	defer closeP()
+
+	bodyData := []byte("data goes here")
+
+	// Start a ping in the background
+	r := make(chan time.Duration, 1)
+	go func() {
+		dur, err := p.Send(ctx, &net.IPAddr{IP: net.ParseIP("::")}, bodyData)
+		if err != nil {
+			t.Errorf("p.Send: %v", err)
+			r <- 0
+		} else {
+			r <- dur
+		}
+	}()
+
+	p.waitOutstanding(t, ctx, 1)
+
+	// Fake a response from ourself
+	fakeResponse := mustMarshal(t, &icmp.Message{
+		Type: ipv6.ICMPTypeEchoReply,
+		Code: ipv6.ICMPTypeEchoReply.Protocol(),
+		Body: &icmp.Echo{
+			ID:   1234,
+			Seq:  1,
+			Data: bodyData,
+		},
+	})
+
+	const fakeDuration = 100 * time.Millisecond
+	p.handleResponse(fakeResponse, clock.Now().Add(fakeDuration), v6Type)
 
 	select {
 	case dur := <-r:
@@ -83,7 +143,7 @@ func TestPingerTimeout(t *testing.T) {
 	// Send a ping in the background
 	r := make(chan error, 1)
 	go func() {
-		_, err := p.Send(ctx, localhostUDP, []byte("data goes here"))
+		_, err := p.Send(ctx, localhost, []byte("data goes here"))
 		r <- err
 	}()
 
@@ -115,7 +175,7 @@ func TestPingerMismatch(t *testing.T) {
 	// Start a ping in the background
 	r := make(chan time.Duration, 1)
 	go func() {
-		dur, err := p.Send(ctx, localhostUDP, bodyData)
+		dur, err := p.Send(ctx, localhost, bodyData)
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("p.Send: %v", err)
 			r <- 0
@@ -185,11 +245,11 @@ func TestPingerMismatch(t *testing.T) {
 
 	for _, tt := range badPackets {
 		fakeResponse := mustMarshal(t, tt.pkt)
-		p.handleResponse(fakeResponse, localhost, tm)
+		p.handleResponse(fakeResponse, tm, v4Type)
 	}
 
 	// Also "receive" a packet that does not unmarshal as an ICMP packet
-	p.handleResponse([]byte("foo"), localhost, tm)
+	p.handleResponse([]byte("foo"), tm, v4Type)
 
 	select {
 	case <-r:
@@ -199,23 +259,59 @@ func TestPingerMismatch(t *testing.T) {
 	}
 }
 
+// udpingPacketConn will convert potentially ICMP destination addrs to UDP
+// destination addrs in WriteTo so that a test that is intending to send ICMP
+// traffic will instead send UDP traffic, without the higher level Pinger being
+// aware of this difference.
+type udpingPacketConn struct {
+	net.PacketConn
+	// destPort will be configured by the test to be the peer expected to respond to a ping.
+	destPort uint16
+}
+
+func (u *udpingPacketConn) WriteTo(body []byte, dest net.Addr) (int, error) {
+	switch d := dest.(type) {
+	case *net.IPAddr:
+		udpAddr := &net.UDPAddr{
+			IP:   d.IP,
+			Port: int(u.destPort),
+			Zone: d.Zone,
+		}
+		return u.PacketConn.WriteTo(body, udpAddr)
+	}
+	return 0, fmt.Errorf("unimplemented udpingPacketConn for %T", dest)
+}
+
 func mockPinger(t *testing.T, clock *tstest.Clock) (*Pinger, func()) {
+	p := New(context.Background(), t.Logf, nil)
+	p.timeNow = clock.Now
+	p.Verbose = true
+	p.id = 1234
+
 	// In tests, we use UDP so that we can test without being root; this
 	// doesn't matter because we mock out the ICMP reply below to be a real
 	// ICMP echo reply packet.
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	conn4, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.ListenPacket: %v", err)
 	}
 
-	p := &Pinger{
-		c:       conn,
-		Logf:    t.Logf,
-		Verbose: true,
-		timeNow: clock.Now,
-		id:      1234,
-		pings:   make(map[uint16]outstanding),
+	conn6, err := net.ListenPacket("udp6", "[::]:0")
+	if err != nil {
+		t.Fatalf("net.ListenPacket: %v", err)
 	}
+
+	conn4 = &udpingPacketConn{
+		destPort:   12345,
+		PacketConn: conn4,
+	}
+	conn6 = &udpingPacketConn{
+		PacketConn: conn6,
+		destPort:   12345,
+	}
+
+	mak.Set(&p.conns, v4Type, conn4)
+	mak.Set(&p.conns, v6Type, conn6)
 	done := func() {
 		if err := p.Close(); err != nil {
 			t.Errorf("error on close: %v", err)
