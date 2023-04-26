@@ -65,8 +65,9 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
+        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build all
       run: ./tool/go build ${{matrix.buildflags}} ./...
@@ -135,8 +136,9 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
+        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
+          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
     - name: test
       # Don't use -bench=. -benchtime=1x.
@@ -210,8 +212,9 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
+        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-2-
     - name: build all
       run: ./tool/go build ./cmd/...
@@ -275,8 +278,9 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
+        key: ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
+          ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
     - name: build tsconnect client
       run: ./tool/go build ./cmd/tsconnect/wasm ./cmd/tailscale/cli
