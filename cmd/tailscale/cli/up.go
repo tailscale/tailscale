@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,9 @@ import (
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	qrcode "github.com/skip2/go-qrcode"
+	"golang.org/x/oauth2/clientcredentials"
+	"tailscale.com/client/tailscale"
+	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -663,6 +668,10 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 		if err != nil {
 			return err
 		}
+		authKey, err = resolveAuthKey(ctx, authKey)
+		if err != nil {
+			return err
+		}
 		if err := localClient.Start(ctx, ipn.Options{
 			AuthKey:     authKey,
 			UpdatePrefs: prefs,
@@ -1101,4 +1110,104 @@ func anyPeerAdvertisingRoutes(st *ipnstate.Status) bool {
 		}
 	}
 	return false
+}
+
+func init() {
+	// Required to use our client API. We're fine with the instability since the
+	// client lives in the same repo as this code.
+	tailscale.I_Acknowledge_This_API_Is_Unstable = true
+}
+
+// resolveAuthKey either returns v unchanged (in the common case)
+// or, if it starts with "oauth:" parses it as one of:
+//
+//	oauth2:CLIENT_ID:CLIENT_SECRET?ephemeral=false&tags=foo,bar&preauthorized=BOOL
+//	oauth2:CLIENT_ID:CLIENT_SECRET:BASE_URL?...
+//
+// and does the OAuth2 dance to get and return an authkey. The "ephemeral" property
+// defaults to true if unspecified. The "preauthorized" defaults to false.
+//
+// If the BASE_URL argument is not provided, it defaults to https://api.tailscale.com.
+func resolveAuthKey(ctx context.Context, v string) (string, error) {
+	suff, ok := strings.CutPrefix(v, "oauth:")
+	if !ok {
+		return v, nil
+	}
+	if !envknob.Bool("TS_EXPERIMENT_OAUTH_AUTHKEY") {
+		return "", errors.New("oauth authkeys are in experimental status")
+	}
+
+	pos, named, _ := strings.Cut(suff, "?")
+	attrs, err := url.ParseQuery(named)
+	if err != nil {
+		return "", err
+	}
+	for k := range attrs {
+		switch k {
+		case "ephemeral", "preauthorized", "tags":
+		default:
+			return "", fmt.Errorf("unknown attribute %q", k)
+		}
+	}
+	getBool := func(name string, def bool) (bool, error) {
+		v := attrs.Get(name)
+		if v == "" {
+			return def, nil
+		}
+		ret, err := strconv.ParseBool(v)
+		if err != nil {
+			return false, fmt.Errorf("invalid attribute boolean attribute %s value %q", name, v)
+		}
+		return ret, nil
+	}
+	ephemeral, err := getBool("ephemeral", true)
+	if err != nil {
+		return "", err
+	}
+	preauth, err := getBool("preauthorized", false)
+	if err != nil {
+		return "", err
+	}
+	var tags []string
+	if v := attrs.Get("tags"); v != "" {
+		tags = strings.Split(v, ",")
+	}
+
+	f := strings.SplitN(pos, ":", 3)
+	if len(f) < 2 || len(f) > 3 {
+		return "", errors.New("invalid auth key format; want oauth2:CLIENT_ID:CLIENT_SECRET[:BASE_URL]")
+	}
+	clientID, clientSecret := f[0], f[1]
+	baseURL := "https://api.tailscale.com"
+	if len(f) == 3 {
+		baseURL = f[2]
+	}
+
+	credentials := clientcredentials.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		TokenURL:     baseURL + "/api/v2/oauth/token",
+		Scopes:       []string{"device"},
+	}
+
+	tsClient := tailscale.NewClient("-", nil)
+	tsClient.HTTPClient = credentials.Client(ctx)
+	tsClient.BaseURL = baseURL
+
+	caps := tailscale.KeyCapabilities{
+		Devices: tailscale.KeyDeviceCapabilities{
+			Create: tailscale.KeyDeviceCreateCapabilities{
+				Reusable:      false,
+				Ephemeral:     ephemeral,
+				Preauthorized: preauth,
+				Tags:          tags,
+			},
+		},
+	}
+
+	authkey, _, err := tsClient.CreateKey(ctx, caps)
+	if err != nil {
+		return "", err
+	}
+	return authkey, nil
 }

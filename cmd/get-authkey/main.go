@@ -29,9 +29,9 @@ func main() {
 	tags := flag.String("tags", "", "comma-separated list of tags to apply to the authkey")
 	flag.Parse()
 
-	clientId := os.Getenv("TS_API_CLIENT_ID")
+	clientID := os.Getenv("TS_API_CLIENT_ID")
 	clientSecret := os.Getenv("TS_API_CLIENT_SECRET")
-	if clientId == "" || clientSecret == "" {
+	if clientID == "" || clientSecret == "" {
 		log.Fatal("TS_API_CLIENT_ID and TS_API_CLIENT_SECRET must be set")
 	}
 
@@ -39,22 +39,22 @@ func main() {
 		log.Fatal("at least one tag must be specified")
 	}
 
-	baseUrl := os.Getenv("TS_BASE_URL")
-	if baseUrl == "" {
-		baseUrl = "https://api.tailscale.com"
+	baseURL := os.Getenv("TS_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.tailscale.com"
 	}
 
 	credentials := clientcredentials.Config{
-		ClientID:     clientId,
+		ClientID:     clientID,
 		ClientSecret: clientSecret,
-		TokenURL:     baseUrl + "/api/v2/oauth/token",
+		TokenURL:     baseURL + "/api/v2/oauth/token",
 		Scopes:       []string{"device"},
 	}
 
 	ctx := context.Background()
 	tsClient := tailscale.NewClient("-", nil)
 	tsClient.HTTPClient = credentials.Client(ctx)
-	tsClient.BaseURL = baseUrl
+	tsClient.BaseURL = baseURL
 
 	caps := tailscale.KeyCapabilities{
 		Devices: tailscale.KeyDeviceCapabilities{
