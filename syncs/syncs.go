@@ -208,6 +208,8 @@ func (m *Map[K, V]) Delete(key K) {
 	delete(m.m, key)
 }
 
+// Range iterates over the map in undefined order calling f for each entry.
+// Iteration stops if f returns false. Map changes are blocked during iteration.
 func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
