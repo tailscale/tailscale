@@ -379,7 +379,6 @@ cusimanse
 polecat
 degu
 coatimundi
-stringray
 diplodocus
 stegosaurus
 zuul
