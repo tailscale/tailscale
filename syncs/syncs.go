@@ -220,6 +220,13 @@ func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 	}
 }
 
+// Len returns the length of the map.
+func (m *Map[K, V]) Len() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.m)
+}
+
 // WaitGroup is identical to [sync.WaitGroup],
 // but provides a Go method to start a goroutine.
 type WaitGroup struct{ sync.WaitGroup }
