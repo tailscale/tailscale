@@ -321,6 +321,17 @@ main() {
 		exit 1
 	fi
 
+	TEST_URL="https://pkgs.tailscale.com/"
+	RC=0
+	TEST_OUT=$($CURL "$TEST_URL" 2>&1) || RC=$?
+	if [ $RC != 0 ]; then
+		echo "The installer cannot reach $TEST_URL"
+		echo "Please make sure that your machine has internet access."
+		echo "Test output:"
+		echo $TEST_OUT
+		exit 1
+	fi
+
 	# Step 2: having detected an OS we support, is it one of the
 	# versions we support?
 	OS_UNSUPPORTED=
