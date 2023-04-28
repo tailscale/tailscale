@@ -430,7 +430,9 @@ main() {
 
 
 	# Step 4: run the installation.
-	echo "Installing Tailscale for $OS $VERSION, using method $PACKAGETYPE"
+	OSVERSION="$OS"
+	[ "$VERSION" != "" ] && OSVERSION="$OSVERSION $VERSION"
+	echo "Installing Tailscale for $OSVERSION, using method $PACKAGETYPE"
 	case "$PACKAGETYPE" in
 		apt)
 			export DEBIAN_FRONTEND=noninteractive
@@ -469,6 +471,7 @@ main() {
 		;;
 		dnf)
 			set -x
+			$SUDO dnf install -y 'dnf-command(config-manager)'
 			$SUDO dnf config-manager --add-repo "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
 			$SUDO dnf install -y tailscale
 			$SUDO systemctl enable --now tailscaled
@@ -483,14 +486,15 @@ main() {
 		;;
 		zypper)
 			set -x
-			$SUDO zypper ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
-			$SUDO zypper ref
-			$SUDO zypper in tailscale
+			$SUDO zypper --non-interactive ar -g -r "https://pkgs.tailscale.com/$TRACK/$OS/$VERSION/tailscale.repo"
+			$SUDO zypper --non-interactive --gpg-auto-import-keys refresh
+			$SUDO zypper --non-interactive install tailscale
 			$SUDO systemctl enable --now tailscaled
 			set +x
 			;;
 		pacman)
 			set -x
+			$SUDO pacman -Sy
 			$SUDO pacman -S tailscale --noconfirm
 			$SUDO systemctl enable --now tailscaled
 			set +x
@@ -510,7 +514,7 @@ main() {
 			;;
 		xbps)
 			set -x
-			$SUDO xbps-install tailscale -y 
+			$SUDO xbps-install tailscale -y
 			set +x
 			;;
 		emerge)
