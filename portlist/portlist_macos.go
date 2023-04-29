@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -170,6 +171,7 @@ func (im *macOSImpl) addProcesses() error {
 	im.br.Reset(outPipe)
 
 	var cmd, proto string
+	var pid int
 	for {
 		line, err := im.br.ReadBytes('\n')
 		if err != nil {
@@ -184,6 +186,10 @@ func (im *macOSImpl) addProcesses() error {
 			// starting a new process
 			cmd = ""
 			proto = ""
+			pid = 0
+			if p, err := strconv.Atoi(string(val)); err == nil {
+				pid = p
+			}
 		case 'c':
 			cmd = string(val) // TODO(bradfitz): avoid garbage; cache process names between runs?
 		case 'P':
@@ -202,6 +208,7 @@ func (im *macOSImpl) addProcesses() error {
 			switch {
 			case m != nil:
 				m.port.Process = cmd
+				m.port.Pid = pid
 			default:
 				// ignore: processes and ports come and go
 			}
