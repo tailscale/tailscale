@@ -18,6 +18,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 	"inet.af/tcpproxy"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/nettype"
@@ -35,6 +36,8 @@ func main() {
 	if *ports == "" {
 		log.Fatal("no ports")
 	}
+
+	hostinfo.SetApp("sniproxy")
 
 	var s server
 	defer s.ts.Close()
