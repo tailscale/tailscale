@@ -67,6 +67,11 @@ type Dialer struct {
 	// If not specified, this defaults to net.Dialer.DialContext.
 	Dialer dnscache.DialContextFunc
 
+	// DNSCache is the caching Resolver used by this Dialer.
+	//
+	// If not specified, a new Resolver is created per attempt.
+	DNSCache *dnscache.Resolver
+
 	// Logf, if set, is a logging function to use; if unset, logs are
 	// dropped.
 	Logf logger.Logf
