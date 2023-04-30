@@ -19,6 +19,7 @@ import (
 	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp"
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
@@ -158,6 +159,7 @@ type NoiseClient struct {
 	sfDial singleflight.Group[struct{}, *noiseConn]
 
 	dialer       *tsdial.Dialer
+	dnsCache     *dnscache.Resolver
 	privKey      key.MachinePrivate
 	serverPubKey key.MachinePublic
 	host         string // the host part of serverURL
@@ -179,13 +181,39 @@ type NoiseClient struct {
 	connPool map[int]*noiseConn // active connections not yet closed; see noiseConn.Close
 }
 
+// NoiseOpts contains options for the NewNoiseClient function. All fields are
+// required unless otherwise specified.
+type NoiseOpts struct {
+	// PrivKey is this node's private key.
+	PrivKey key.MachinePrivate
+	// ServerPubKey is the public key of the server.
+	ServerPubKey key.MachinePublic
+	// ServerURL is the URL of the server to connect to.
+	ServerURL string
+	// Dialer's SystemDial function is used to connect to the server.
+	Dialer *tsdial.Dialer
+	// DNSCache is the caching Resolver to use to connect to the server.
+	//
+	// This field can be nil.
+	DNSCache *dnscache.Resolver
+	// Logf is the log function to use. This field can be nil.
+	Logf logger.Logf
+	// NetMon is the network monitor that, if set, will be used to get the
+	// network interface state. This field can be nil; if so, the current
+	// state will be looked up dynamically.
+	NetMon *netmon.Monitor
+	// DialPlan, if set, is a function that should return an explicit plan
+	// on how to connect to the server.
+	DialPlan func() *tailcfg.ControlDialPlan
+}
+
 // NewNoiseClient returns a new noiseClient for the provided server and machine key.
 // serverURL is of the form https://<host>:<port> (no trailing slash).
 //
 // netMon may be nil, if non-nil it's used to do faster interface lookups.
 // dialPlan may be nil
-func NewNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, logf logger.Logf, netMon *netmon.Monitor, dialPlan func() *tailcfg.ControlDialPlan) (*NoiseClient, error) {
-	u, err := url.Parse(serverURL)
+func NewNoiseClient(opts NoiseOpts) (*NoiseClient, error) {
+	u, err := url.Parse(opts.ServerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -205,16 +233,18 @@ func NewNoiseClient(privKey key.MachinePrivate, serverPubKey key.MachinePublic, 
 		httpPort = "80"
 		httpsPort = "443"
 	}
+
 	np := &NoiseClient{
-		serverPubKey: serverPubKey,
-		privKey:      privKey,
+		serverPubKey: opts.ServerPubKey,
+		privKey:      opts.PrivKey,
 		host:         u.Hostname(),
 		httpPort:     httpPort,
 		httpsPort:    httpsPort,
-		dialer:       dialer,
-		dialPlan:     dialPlan,
-		logf:         logf,
-		netMon:       netMon,
+		dialer:       opts.Dialer,
+		dnsCache:     opts.DNSCache,
+		dialPlan:     opts.DialPlan,
+		logf:         opts.Logf,
+		netMon:       opts.NetMon,
 	}
 
 	// Create the HTTP/2 Transport using a net/http.Transport
@@ -373,6 +403,7 @@ func (nc *NoiseClient) dial() (*noiseConn, error) {
 		ControlKey:      nc.serverPubKey,
 		ProtocolVersion: uint16(tailcfg.CurrentCapabilityVersion),
 		Dialer:          nc.dialer.SystemDial,
+		DNSCache:        nc.dnsCache,
 		DialPlan:        dialPlan,
 		Logf:            nc.logf,
 		NetMon:          nc.netMon,

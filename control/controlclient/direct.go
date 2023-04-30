@@ -61,6 +61,7 @@ import (
 type Direct struct {
 	httpc                  *http.Client // HTTP client used to talk to tailcontrol
 	dialer                 *tsdial.Dialer
+	dnsCache               *dnscache.Resolver
 	serverURL              string // URL of the tailcontrol server
 	timeNow                func() time.Time
 	lastPrintMap           time.Time
@@ -199,6 +200,14 @@ func NewDirect(opts Options) (*Direct, error) {
 		opts.Logf = log.Printf
 	}
 
+	dnsCache := &dnscache.Resolver{
+		Forward:          dnscache.Get().Forward, // use default cache's forwarder
+		UseLastGood:      true,
+		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon),
+		Logf:             opts.Logf,
+		NetMon:           opts.NetMon,
+	}
+
 	httpc := opts.HTTPTestClient
 	if httpc == nil && runtime.GOOS == "js" {
 		// In js/wasm, net/http.Transport (as of Go 1.18) will
@@ -208,13 +217,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		httpc = http.DefaultClient
 	}
 	if httpc == nil {
-		dnsCache := &dnscache.Resolver{
-			Forward:          dnscache.Get().Forward, // use default cache's forwarder
-			UseLastGood:      true,
-			LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, opts.NetMon),
-			Logf:             opts.Logf,
-			NetMon:           opts.NetMon,
-		}
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = tshttpproxy.ProxyFromEnvironment
 		tshttpproxy.SetTransportGetProxyConnectHeader(tr)
@@ -250,6 +252,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		onControlTime:          opts.OnControlTime,
 		c2nHandler:             opts.C2NHandler,
 		dialer:                 opts.Dialer,
+		dnsCache:               dnsCache,
 		dialPlan:               opts.DialPlan,
 	}
 	if opts.Hostinfo == nil {
@@ -1509,7 +1512,16 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 			return nil, err
 		}
 		c.logf("creating new noise client")
-		nc, err := NewNoiseClient(k, serverNoiseKey, c.serverURL, c.dialer, c.logf, c.netMon, dp)
+		nc, err := NewNoiseClient(NoiseOpts{
+			PrivKey:      k,
+			ServerPubKey: serverNoiseKey,
+			ServerURL:    c.serverURL,
+			Dialer:       c.dialer,
+			DNSCache:     c.dnsCache,
+			Logf:         c.logf,
+			NetMon:       c.netMon,
+			DialPlan:     dp,
+		})
 		if err != nil {
 			return nil, err
 		}
