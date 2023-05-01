@@ -236,6 +236,12 @@ func (c *conn) logf(format string, args ...any) {
 	c.srv.logf(format, args...)
 }
 
+func (c *conn) vlogf(format string, args ...any) {
+	if sshVerboseLogging() {
+		c.logf(format, args...)
+	}
+}
+
 // isAuthorized walks through the action chain and returns nil if the connection
 // is authorized. If the connection is not authorized, it returns
 // gossh.ErrDenied. If the action chain resolution fails, it returns the
@@ -841,6 +847,7 @@ func (c *conn) newSSHSession(s ssh.Session) *sshSession {
 // isStillValid reports whether the conn is still valid.
 func (c *conn) isStillValid() bool {
 	a, localUser, err := c.evaluatePolicy(c.pubKey)
+	c.vlogf("stillValid: %+v %v %v", a, localUser, err)
 	if err != nil {
 		return false
 	}
@@ -1211,6 +1218,10 @@ var (
 )
 
 func (c *conn) matchRule(r *tailcfg.SSHRule, pubKey gossh.PublicKey) (a *tailcfg.SSHAction, localUser string, err error) {
+	defer func() {
+		c.vlogf("matchRule(%+v): %v", r, err)
+	}()
+
 	if c == nil {
 		return nil, "", errInvalidConn
 	}
