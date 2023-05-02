@@ -712,6 +712,9 @@ func (testFwd) ForwardPacket(key.NodePublic, key.NodePublic, []byte) error {
 func (testFwd) String() string {
 	panic("not called in tests")
 }
+func (testFwd) ServerPublicKey() key.NodePublic {
+	panic("not called in tests")
+}
 
 func pubAll(b byte) (ret key.NodePublic) {
 	var bs [32]byte
@@ -843,6 +846,9 @@ func (f channelFwd) String() string { return "" }
 func (f channelFwd) ForwardPacket(_ key.NodePublic, _ key.NodePublic, packet []byte) error {
 	f.c <- packet
 	return nil
+}
+func (f channelFwd) ServerPublicKey() key.NodePublic {
+	panic("not called in tests")
 }
 
 func TestMultiForwarder(t *testing.T) {
