@@ -36,7 +36,7 @@ require (
 	github.com/goreleaser/nfpm v1.10.3
 	github.com/hdevalence/ed25519consensus v0.0.0-20220222234857-c00d1f31bab3
 	github.com/iancoleman/strcase v0.2.0
-	github.com/illarion/gonotify v1.0.1
+	github.com/illarion/gonotify/v2 v2.0.0
 	github.com/insomniacslk/dhcp v0.0.0-20221215072855-de60144f33f8
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86
 	github.com/jsimonetti/rtnetlink v1.1.2-0.20220408201609-d380b505068b
