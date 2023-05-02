@@ -20,6 +20,7 @@ import (
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/mem"
+	"golang.org/x/exp/slices"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
@@ -590,16 +591,33 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 		dstMasqAddrs map[key.NodePublic]netip.Addr
 		listenAddrs  map[netip.Addr]struct{}
 	)
+
+	// When using an exit node that requires masquerading, we need to
+	// fill out the routing table with all peers not just the ones that
+	// require masquerading.
+	exitNodeRequiresMasq := false // true if using an exit node and it requires masquerading
+	for _, p := range wcfg.Peers {
+		isExitNode := slices.Contains(p.AllowedIPs, tsaddr.AllIPv4()) || slices.Contains(p.AllowedIPs, tsaddr.AllIPv6())
+		if isExitNode && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+			exitNodeRequiresMasq = true
+			break
+		}
+	}
 	for i := range wcfg.Peers {
 		p := &wcfg.Peers[i]
-		if p.V4MasqAddr == nil || !p.V4MasqAddr.IsValid() {
+		var addrToUse netip.Addr
+		if p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+			addrToUse = *p.V4MasqAddr
+			mak.Set(&listenAddrs, addrToUse, struct{}{})
+		} else if exitNodeRequiresMasq {
+			addrToUse = nativeAddr
+		} else {
 			continue
 		}
 		rt.InsertOrReplace(p.PublicKey, p.AllowedIPs...)
-		mak.Set(&dstMasqAddrs, p.PublicKey, *p.V4MasqAddr)
-		mak.Set(&listenAddrs, *p.V4MasqAddr, struct{}{})
+		mak.Set(&dstMasqAddrs, p.PublicKey, addrToUse)
 	}
-	if len(listenAddrs) == 0 || len(dstMasqAddrs) == 0 {
+	if len(listenAddrs) == 0 && len(dstMasqAddrs) == 0 {
 		return nil
 	}
 	return &natV4Config{
