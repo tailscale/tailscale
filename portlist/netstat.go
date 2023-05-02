@@ -99,10 +99,6 @@ func appendParsePortsNetstat(base []Port, br *bufio.Reader) ([]Port, error) {
 				// not interested in non-listener sockets
 				continue
 			}
-			if isLoopbackAddr(laddr) {
-				// not interested in loopback-bound listeners
-				continue
-			}
 		} else if mem.HasPrefixFold(protos, mem.S("udp")) {
 			if len(cols) < 3 {
 				continue
