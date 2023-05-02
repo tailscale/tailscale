@@ -67,6 +67,7 @@ type ipnLocalBackend interface {
 	WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool)
 	DoNoiseRequest(req *http.Request) (*http.Response, error)
 	Dialer() *tsdial.Dialer
+	TailscaleVarRoot() string
 }
 
 type server struct {
@@ -1154,6 +1155,11 @@ func (ss *sshSession) run() {
 	return
 }
 
+// recordSSHToLocalDisk is a deprecated dev knob to allow recording SSH sessions
+// to local storage. It is only used if there is no recording configured by the
+// coordination server. This will be removed in the future.
+var recordSSHToLocalDisk = envknob.RegisterBool("TS_DEBUG_LOG_SSH")
+
 // recorders returns the list of recorders to use for this session.
 // If the final action has a non-empty list of recorders, that list is
 // returned. Otherwise, the list of recorders from the initial action
@@ -1167,7 +1173,7 @@ func (ss *sshSession) recorders() ([]netip.AddrPort, *tailcfg.SSHRecorderFailure
 
 func (ss *sshSession) shouldRecord() bool {
 	recs, _ := ss.recorders()
-	return len(recs) > 0
+	return len(recs) > 0 || recordSSHToLocalDisk()
 }
 
 type sshConnInfo struct {
@@ -1510,12 +1516,33 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 	return nil, nil, multierr.New(errs...)
 }
 
+func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err error) {
+	varRoot := ss.conn.srv.lb.TailscaleVarRoot()
+	if varRoot == "" {
+		return nil, errors.New("no var root for recording storage")
+	}
+	dir := filepath.Join(varRoot, "ssh-sessions")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(dir, fmt.Sprintf("ssh-session-%v-*.cast", now.UnixNano()))
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // startNewRecording starts a new SSH session recording.
 // It may return a nil recording if recording is not available.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	recorders, onFailure := ss.recorders()
+	var localRecording bool
 	if len(recorders) == 0 {
-		return nil, errors.New("no recorders configured")
+		if recordSSHToLocalDisk() {
+			localRecording = true
+		} else {
+			return nil, errors.New("no recorders configured")
+		}
 	}
 
 	var w ssh.Window
@@ -1539,39 +1566,44 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	// ss.ctx is closed when the session closes, but we don't want to break the upload at that time.
 	// Instead we want to wait for the session to close the writer when it finishes.
 	ctx := context.Background()
-	wc, errChan, err := ss.connectToRecorder(ctx, recorders)
-	if err != nil {
-		// TODO(catzkorn): notify control here.
-		if onFailure != nil && onFailure.RejectSessionWithMessage != "" {
-			ss.logf("recording: error starting recording (rejecting session): %v", err)
-			return nil, userVisibleError{
-				error: err,
-				msg:   onFailure.RejectSessionWithMessage,
+	if localRecording {
+		rec.out, err = ss.openFileForRecording(now)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var errChan <-chan error
+		rec.out, errChan, err = ss.connectToRecorder(ctx, recorders)
+		if err != nil {
+			// TODO(catzkorn): notify control here.
+			if onFailure != nil && onFailure.RejectSessionWithMessage != "" {
+				ss.logf("recording: error starting recording (rejecting session): %v", err)
+				return nil, userVisibleError{
+					error: err,
+					msg:   onFailure.RejectSessionWithMessage,
+				}
 			}
+			ss.logf("recording: error starting recording (failing open): %v", err)
+			return nil, nil
 		}
-		ss.logf("recording: error starting recording (failing open): %v", err)
-		return nil, nil
+		go func() {
+			err := <-errChan
+			if err == nil {
+				// Success.
+				return
+			}
+			// TODO(catzkorn): notify control here.
+			if onFailure != nil && onFailure.TerminateSessionWithMessage != "" {
+				ss.logf("recording: error uploading recording (closing session): %v", err)
+				ss.cancelCtx(userVisibleError{
+					error: err,
+					msg:   onFailure.TerminateSessionWithMessage,
+				})
+				return
+			}
+			ss.logf("recording: error uploading recording (failing open): %v", err)
+		}()
 	}
-
-	go func() {
-		err := <-errChan
-		if err == nil {
-			// Success.
-			return
-		}
-		// TODO(catzkorn): notify control here.
-		if onFailure != nil && onFailure.TerminateSessionWithMessage != "" {
-			ss.logf("recording: error uploading recording (closing session): %v", err)
-			ss.cancelCtx(userVisibleError{
-				error: err,
-				msg:   onFailure.TerminateSessionWithMessage,
-			})
-			return
-		}
-		ss.logf("recording: error uploading recording (failing open): %v", err)
-	}()
-
-	rec.out = wc
 
 	ch := CastHeader{
 		Version:   2,
