@@ -66,7 +66,7 @@ func isSystemdSystem() bool {
 		return false
 	}
 	switch distro.Get() {
-	case distro.QNAP, distro.Gokrazy, distro.Synology:
+	case distro.QNAP, distro.Gokrazy, distro.Synology, distro.Unraid:
 		return false
 	}
 	_, err := exec.LookPath("systemctl")
