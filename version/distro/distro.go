@@ -29,6 +29,7 @@ const (
 	TrueNAS   = Distro("truenas")
 	Gokrazy   = Distro("gokrazy")
 	WDMyCloud = Distro("wdmycloud")
+	Unraid    = Distro("unraid")
 )
 
 var distro lazy.SyncValue[Distro]
@@ -90,6 +91,8 @@ func linuxDistro() Distro {
 		return WDMyCloud
 	case have("/usr/sbin/wd_crontab.sh"): // Western Digital MyCloud OS5
 		return WDMyCloud
+	case have("/etc/unraid-version"):
+		return Unraid
 	}
 	return ""
 }

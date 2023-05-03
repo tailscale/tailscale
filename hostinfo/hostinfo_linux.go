@@ -95,6 +95,8 @@ func linuxVersionMeta() (meta versionMeta) {
 		propFile = "/etc.defaults/VERSION"
 	case distro.OpenWrt:
 		propFile = "/etc/openwrt_release"
+	case distro.Unraid:
+		propFile = "/etc/unraid-version"
 	case distro.WDMyCloud:
 		slurp, _ := os.ReadFile("/etc/version")
 		meta.DistroVersion = string(bytes.TrimSpace(slurp))
@@ -153,6 +155,8 @@ func linuxVersionMeta() (meta versionMeta) {
 		meta.DistroVersion = m["productversion"]
 	case distro.OpenWrt:
 		meta.DistroVersion = m["DISTRIB_RELEASE"]
+	case distro.Unraid:
+		meta.DistroVersion = m["version"]
 	}
 	return
 }

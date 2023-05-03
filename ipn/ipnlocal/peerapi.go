@@ -49,6 +49,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
+	"tailscale.com/version/distro"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
@@ -1088,6 +1089,10 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.ps.rootDir == "" {
 		http.Error(w, errNoTaildrop.Error(), http.StatusInternalServerError)
+		return
+	}
+	if distro.Get() == distro.Unraid && !h.ps.directFileMode {
+		http.Error(w, "Taildrop folder not configured or accessible", http.StatusInternalServerError)
 		return
 	}
 	rawPath := r.URL.EscapedPath()

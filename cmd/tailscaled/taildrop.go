@@ -18,7 +18,7 @@ import (
 func configureTaildrop(logf logger.Logf, lb *ipnlocal.LocalBackend) {
 	dg := distro.Get()
 	switch dg {
-	case distro.Synology, distro.TrueNAS, distro.QNAP:
+	case distro.Synology, distro.TrueNAS, distro.QNAP, distro.Unraid:
 		// See if they have a "Taildrop" share.
 		// See https://github.com/tailscale/tailscale/issues/2179#issuecomment-982821319
 		path, err := findTaildropDir(dg)
@@ -42,6 +42,8 @@ func findTaildropDir(dg distro.Distro) (string, error) {
 		return findTrueNASTaildropDir(name)
 	case distro.QNAP:
 		return findQnapTaildropDir(name)
+	case distro.Unraid:
+		return findUnraidTaildropDir(name)
 	}
 	return "", fmt.Errorf("%s is an unsupported distro for Taildrop dir", dg)
 }
@@ -100,6 +102,28 @@ func findQnapTaildropDir(name string) (string, error) {
 	}
 	if fi, err = os.Stat(fullpath); err == nil && fi.IsDir() {
 		return dir, nil // return the symlink, how QNAP set it up
+	}
+	return "", fmt.Errorf("shared folder %q not found", name)
+}
+
+// findUnraidTaildropDir looks for a directory linked at
+// /var/lib/tailscale/Taildrop. This is a symlink to the
+// path specified by the user in the Unraid Web UI
+func findUnraidTaildropDir(name string) (string, error) {
+	dir := fmt.Sprintf("/var/lib/tailscale/%s", name)
+	_, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("symlink %q not found", name)
+	}
+
+	fullpath, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("symlink %q to shared folder not valid", name)
+	}
+
+	fi, err := os.Stat(fullpath)
+	if err == nil && fi.IsDir() {
+		return dir, nil // return the symlink
 	}
 	return "", fmt.Errorf("shared folder %q not found", name)
 }
