@@ -44,6 +44,7 @@ import (
 	_ "tailscale.com/smallzstd"
 	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"
+	_ "tailscale.com/tsd"
 	_ "tailscale.com/tsweb/varz"
 	_ "tailscale.com/types/flagtype"
 	_ "tailscale.com/types/key"

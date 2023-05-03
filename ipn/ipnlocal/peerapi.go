@@ -50,7 +50,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
-	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -469,7 +468,7 @@ func (s *peerAPIServer) listen(ip netip.Addr, ifState *interfaces.State) (ln net
 		}
 	}
 
-	if wgengine.IsNetstack(s.b.e) {
+	if s.b.sys.IsNetstack() {
 		ipStr = ""
 	}
 
@@ -1239,12 +1238,9 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
-	eng := h.ps.b.e
-	if ig, ok := eng.(wgengine.InternalsGetter); ok {
-		if _, mc, _, ok := ig.GetInternals(); ok {
-			mc.ServeHTTPDebug(w, r)
-			return
-		}
+	if mc, ok := h.ps.b.sys.MagicSock.GetOK(); ok {
+		mc.ServeHTTPDebug(w, r)
+		return
 	}
 	http.Error(w, "miswired", 500)
 }

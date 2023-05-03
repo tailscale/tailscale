@@ -47,6 +47,7 @@ import (
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/winutil"
@@ -292,13 +293,15 @@ func beWindowsSubprocess() bool {
 		}
 	}()
 
+	sys := new(tsd.System)
 	netMon, err := netmon.New(log.Printf)
 	if err != nil {
-		log.Printf("Could not create netMon: %v", err)
-		netMon = nil
+		log.Fatalf("Could not create netMon: %v", err)
 	}
+	sys.Set(netMon)
+
 	publicLogID, _ := logid.ParsePublicID(logID)
-	err = startIPNServer(ctx, log.Printf, publicLogID, netMon)
+	err = startIPNServer(ctx, log.Printf, publicLogID, sys)
 	if err != nil {
 		log.Fatalf("ipnserver: %v", err)
 	}

@@ -10,7 +10,6 @@ import (
 
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
@@ -91,9 +90,6 @@ type Engine interface {
 	// SetStatusCallback sets the function to call when the
 	// WireGuard status changes.
 	SetStatusCallback(StatusCallback)
-
-	// GetNetMon returns the network monitor.
-	GetNetMon() *netmon.Monitor
 
 	// RequestStatus requests a WireGuard status update right
 	// away, sent to the callback registered via SetStatusCallback.

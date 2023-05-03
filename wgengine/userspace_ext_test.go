@@ -8,6 +8,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
@@ -15,21 +16,23 @@ import (
 )
 
 func TestIsNetstack(t *testing.T) {
-	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{})
+	sys := new(tsd.System)
+	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	if !wgengine.IsNetstack(e) {
+	if !sys.IsNetstack() {
 		t.Errorf("IsNetstack = false; want true")
 	}
 }
 
 func TestIsNetstackRouter(t *testing.T) {
 	tests := []struct {
-		name string
-		conf wgengine.Config
-		want bool
+		name              string
+		conf              wgengine.Config
+		setNetstackRouter bool
+		want              bool
 	}{
 		{
 			name: "no_netstack",
@@ -50,22 +53,25 @@ func TestIsNetstackRouter(t *testing.T) {
 				Tun:    newFakeOSTUN(),
 				Router: netstack.NewSubnetRouterWrapper(newFakeOSRouter()),
 			},
-			want: true,
+			setNetstackRouter: true,
+			want:              true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e, err := wgengine.NewUserspaceEngine(logger.Discard, tt.conf)
+			sys := &tsd.System{}
+			if tt.setNetstackRouter {
+				sys.NetstackRouter.Set(true)
+			}
+			conf := tt.conf
+			conf.SetSubsystem = sys.Set
+			e, err := wgengine.NewUserspaceEngine(logger.Discard, conf)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer e.Close()
-			if got := wgengine.IsNetstackRouter(e); got != tt.want {
+			if got := sys.IsNetstackRouter(); got != tt.want {
 				t.Errorf("IsNetstackRouter = %v; want %v", got, tt.want)
-			}
-
-			if got := wgengine.IsNetstackRouter(wgengine.NewWatchdog(e)); got != tt.want {
-				t.Errorf("IsNetstackRouter(watchdog-wrapped) = %v; want %v", got, tt.want)
 			}
 		})
 	}

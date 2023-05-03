@@ -60,6 +60,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tsd"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -137,10 +138,11 @@ type LocalBackend struct {
 	logf                  logger.Logf        // general logging
 	keyLogf               logger.Logf        // for printing list of peers on change
 	statsLogf             logger.Logf        // for printing peers stats on change
-	e                     wgengine.Engine
+	sys                   *tsd.System
+	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
 	pm                    *profileManager
-	store                 ipn.StateStore
-	dialer                *tsdial.Dialer // non-nil
+	store                 ipn.StateStore // non-nil; TODO(bradfitz): remove; use sys
+	dialer                *tsdial.Dialer // non-nil; TODO(bradfitz): remove; use sys
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
@@ -267,10 +269,10 @@ type clientGen func(controlclient.Options) (controlclient.Client, error)
 // but is not actually running.
 //
 // If dialer is nil, a new one is made.
-func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStore, dialer *tsdial.Dialer, e wgengine.Engine, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
-	if e == nil {
-		panic("ipn.NewLocalBackend: engine must not be nil")
-	}
+func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, loginFlags controlclient.LoginFlags) (*LocalBackend, error) {
+	e := sys.Engine.Get()
+	store := sys.StateStore.Get()
+	dialer := sys.Dialer.Get()
 
 	pm, err := newProfileManager(store, logf)
 	if err != nil {
@@ -301,10 +303,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 		logf:           logf,
 		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, time.Now),
 		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
+		sys:            sys,
 		e:              e,
-		pm:             pm,
-		store:          store,
 		dialer:         dialer,
+		store:          store,
+		pm:             pm,
 		backendLogID:   logID,
 		state:          ipn.NoState,
 		portpoll:       portpoll,
@@ -313,7 +316,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 		loginFlags:     loginFlags,
 	}
 
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, e.GetNetMon())
+	netMon := sys.NetMon.Get()
+	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon)
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}
@@ -330,7 +334,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 	b.statusChanged = sync.NewCond(&b.statusLock)
 	b.e.SetStatusCallback(b.setWgengineStatus)
 
-	netMon := e.GetNetMon()
 	b.prevIfState = netMon.InterfaceState()
 	// Call our linkChange code once with the current state, and
 	// then also whenever it changes:
@@ -339,14 +342,9 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, store ipn.StateStor
 
 	b.unregisterHealthWatch = health.RegisterWatcher(b.onHealthChange)
 
-	wiredPeerAPIPort := false
-	if ig, ok := e.(wgengine.InternalsGetter); ok {
-		if tunWrap, _, _, ok := ig.GetInternals(); ok {
-			tunWrap.PeerAPIPort = b.GetPeerAPIPort
-			wiredPeerAPIPort = true
-		}
-	}
-	if !wiredPeerAPIPort {
+	if tunWrap, ok := b.sys.Tun.GetOK(); ok {
+		tunWrap.PeerAPIPort = b.GetPeerAPIPort
+	} else {
 		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
 	}
 
@@ -464,6 +462,7 @@ func (b *LocalBackend) GetComponentDebugLogging(component string) time.Time {
 }
 
 // Dialer returns the backend's dialer.
+// It is always non-nil.
 func (b *LocalBackend) Dialer() *tsdial.Dialer {
 	return b.dialer
 }
@@ -644,7 +643,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	defer b.mu.Unlock()
 	sb.MutateStatus(func(s *ipnstate.Status) {
 		s.Version = version.Long()
-		s.TUN = !wgengine.IsNetstack(b.e)
+		s.TUN = !b.sys.IsNetstack()
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
 		if err := health.OverallError(); err != nil {
@@ -1315,8 +1314,8 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo := hostinfo.New()
 	hostinfo.BackendLogID = b.backendLogID.String()
 	hostinfo.FrontendLogID = opts.FrontendLogID
-	hostinfo.Userspace.Set(wgengine.IsNetstack(b.e))
-	hostinfo.UserspaceRouter.Set(wgengine.IsNetstackRouter(b.e))
+	hostinfo.Userspace.Set(b.sys.IsNetstack())
+	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
 
 	if b.cc != nil {
 		// TODO(apenwarr): avoid the need to reinit controlclient.
@@ -1401,7 +1400,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	var err error
 
-	isNetstack := wgengine.IsNetstackRouter(b.e)
+	isNetstack := b.sys.IsNetstackRouter()
 	debugFlags := controlDebugFlags
 	if isNetstack {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
@@ -1423,7 +1422,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           debugFlags,
-		NetMon:               b.e.GetNetMon(),
+		NetMon:               b.sys.NetMon.Get(),
 		Pinger:               b,
 		PopBrowserURL:        b.tellClientToBrowseToURL,
 		OnClientVersion:      b.onClientVersion,
@@ -3317,14 +3316,12 @@ func (b *LocalBackend) initPeerAPIListener() {
 		directFileMode:          b.directFileRoot != "",
 		directFileDoFinalRename: b.directFileDoFinalRename,
 	}
-	if re, ok := b.e.(wgengine.ResolvingEngine); ok {
-		if r, ok := re.GetResolver(); ok {
-			ps.resolver = r
-		}
+	if dm, ok := b.sys.DNSManager.GetOK(); ok {
+		ps.resolver = dm.Resolver()
 	}
 	b.peerAPIServer = ps
 
-	isNetstack := wgengine.IsNetstack(b.e)
+	isNetstack := b.sys.IsNetstack()
 	for i, a := range b.netMap.Addresses {
 		var ln net.Listener
 		var err error
@@ -4040,7 +4037,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 		b.setServeProxyHandlersLocked()
 
 		// don't listen on netmap addresses if we're in userspace mode
-		if !wgengine.IsNetstack(b.e) {
+		if !b.sys.IsNetstack() {
 			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
 		}
 	}
@@ -4391,7 +4388,7 @@ func nodeIP(n *tailcfg.Node, pred func(netip.Addr) bool) netip.Addr {
 }
 
 func (b *LocalBackend) CheckIPForwarding() error {
-	if wgengine.IsNetstackRouter(b.e) {
+	if b.sys.IsNetstackRouter() {
 		return nil
 	}
 
@@ -4537,13 +4534,9 @@ func (b *LocalBackend) DebugReSTUN() error {
 }
 
 func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
-	ig, ok := b.e.(wgengine.InternalsGetter)
+	mc, ok := b.sys.MagicSock.GetOK()
 	if !ok {
-		return nil, errors.New("engine isn't InternalsGetter")
-	}
-	_, mc, _, ok := ig.GetInternals()
-	if !ok {
-		return nil, errors.New("failed to get internals")
+		return nil, errors.New("failed to get magicsock from sys")
 	}
 	return mc, nil
 }

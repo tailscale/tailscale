@@ -12,6 +12,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -47,14 +48,17 @@ func TestLocalLogLines(t *testing.T) {
 	idA := logid(0xaa)
 
 	// set up a LocalBackend, super bare bones. No functional data.
+	sys := new(tsd.System)
 	store := new(mem.Store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys.Set(store)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
+	sys.Set(e)
 
-	lb, err := NewLocalBackend(logf, idA, store, nil, e, 0)
+	lb, err := NewLocalBackend(logf, idA, sys, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
