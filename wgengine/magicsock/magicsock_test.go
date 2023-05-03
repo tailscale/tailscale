@@ -2422,6 +2422,8 @@ func applyNetworkMap(t *testing.T, m *magicStack, nm *netmap.NetworkMap) {
 }
 
 func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
+	t.Skip("This test is flaky; see https://github.com/tailscale/tailscale/issues/8037")
+
 	clock := &tstest.Clock{}
 	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
 	defer cleanup()
