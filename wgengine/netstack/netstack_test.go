@@ -16,6 +16,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logid"
@@ -33,29 +34,26 @@ func TestInjectInboundLeak(t *testing.T) {
 			t.Logf(format, args...)
 		}
 	}
+	sys := new(tsd.System)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		Tun:    tunDev,
-		Dialer: dialer,
+		Tun:          tunDev,
+		Dialer:       dialer,
+		SetSubsystem: sys.Set,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	ig, ok := eng.(wgengine.InternalsGetter)
-	if !ok {
-		t.Fatal("not an InternalsGetter")
-	}
-	tunWrap, magicSock, dns, ok := ig.GetInternals()
-	if !ok {
-		t.Fatal("failed to get internals")
-	}
+	sys.Set(eng)
+	sys.Set(new(mem.Store))
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), dialer, eng, 0)
+	tunWrap := sys.Tun.Get()
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	ns, err := Create(logf, tunWrap, eng, magicSock, dialer, dns)
+	ns, err := Create(logf, tunWrap, eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,32 +87,28 @@ func getMemStats() (ms runtime.MemStats) {
 
 func makeNetstack(t *testing.T, config func(*Impl)) *Impl {
 	tunDev := tstun.NewFake()
+	sys := &tsd.System{}
+	sys.Set(new(mem.Store))
 	dialer := new(tsdial.Dialer)
 	logf := tstest.WhileTestRunningLogger(t)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		Tun:    tunDev,
-		Dialer: dialer,
+		Tun:          tunDev,
+		Dialer:       dialer,
+		SetSubsystem: sys.Set,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close() })
-	ig, ok := eng.(wgengine.InternalsGetter)
-	if !ok {
-		t.Fatal("not an InternalsGetter")
-	}
-	tunWrap, magicSock, dns, ok := ig.GetInternals()
-	if !ok {
-		t.Fatal("failed to get internals")
-	}
+	sys.Set(eng)
 
-	ns, err := Create(logf, tunWrap, eng, magicSock, dialer, dns)
+	ns, err := Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ns.Close() })
 
-	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), dialer, eng, 0)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}

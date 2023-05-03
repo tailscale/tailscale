@@ -37,7 +37,7 @@ import (
 type Server struct {
 	lb           atomic.Pointer[ipnlocal.LocalBackend]
 	logf         logger.Logf
-	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
+	netMon       *netmon.Monitor // must be non-nil
 	backendLogID logid.PublicID
 	// resetOnZero is whether to call bs.Reset on transition from
 	// 1->0 active HTTP requests. That is, this is whether the backend is
@@ -410,14 +410,15 @@ func (s *Server) addActiveHTTPRequest(req *http.Request, ci *ipnauth.ConnIdentit
 }
 
 // New returns a new Server.
-// The netMon parameter is optional; if non-nil it's used to do faster interface
-// lookups.
 //
 // To start it, use the Server.Run method.
 //
 // At some point, either before or after Run, the Server's SetLocalBackend
 // method must also be called before Server can do anything useful.
 func New(logf logger.Logf, logID logid.PublicID, netMon *netmon.Monitor) *Server {
+	if netMon == nil {
+		panic("nil netMon")
+	}
 	return &Server{
 		backendLogID: logID,
 		logf:         logf,

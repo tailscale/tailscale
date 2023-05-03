@@ -17,6 +17,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -297,14 +298,17 @@ func TestStateMachine(t *testing.T) {
 	c := qt.New(t)
 
 	logf := tstest.WhileTestRunningLogger(t)
+	sys := new(tsd.System)
 	store := new(testStateStorage)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys.Set(store)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
 	t.Cleanup(e.Close)
+	sys.Set(e)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, store, nil, e, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -941,13 +945,16 @@ func TestStateMachine(t *testing.T) {
 
 func TestEditPrefsHasNoKeys(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys := new(tsd.System)
+	sys.Set(new(mem.Store))
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
 	t.Cleanup(e.Close)
+	sys.Set(e)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), nil, e, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -1023,10 +1030,14 @@ func TestWGEngineStatusRace(t *testing.T) {
 	t.Skip("test fails")
 	c := qt.New(t)
 	logf := tstest.WhileTestRunningLogger(t)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys := new(tsd.System)
+	sys.Set(new(mem.Store))
+
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	c.Assert(err, qt.IsNil)
 	t.Cleanup(eng.Close)
-	b, err := NewLocalBackend(logf, logid.PublicID{}, new(mem.Store), nil, eng, 0)
+	sys.Set(eng)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	c.Assert(err, qt.IsNil)
 
 	var cc *mockControl

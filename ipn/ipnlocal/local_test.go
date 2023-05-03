@@ -20,6 +20,7 @@ import (
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -501,13 +502,16 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
 
 	var logf logger.Logf = logger.Discard
+	sys := new(tsd.System)
 	store := new(mem.Store)
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys.Set(store)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
 	t.Cleanup(eng.Close)
-	lb, err := NewLocalBackend(logf, logid.PublicID{}, store, nil, eng, 0)
+	sys.Set(eng)
+	lb, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
@@ -765,13 +769,16 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 func TestStatusWithoutPeers(t *testing.T) {
 	logf := tstest.WhileTestRunningLogger(t)
 	store := new(testStateStorage)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys := new(tsd.System)
+	sys.Set(store)
+	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatalf("NewFakeUserspaceEngine: %v", err)
 	}
+	sys.Set(e)
 	t.Cleanup(e.Close)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, store, nil, e, 0)
+	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}

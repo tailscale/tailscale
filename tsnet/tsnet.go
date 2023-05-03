@@ -47,6 +47,7 @@ import (
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -482,23 +483,21 @@ func (s *Server) start() (reterr error) {
 	}
 	closePool.add(s.netMon)
 
+	sys := new(tsd.System)
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		ListenPort: 0,
-		NetMon:     s.netMon,
-		Dialer:     s.dialer,
+		ListenPort:   0,
+		NetMon:       s.netMon,
+		Dialer:       s.dialer,
+		SetSubsystem: sys.Set,
 	})
 	if err != nil {
 		return err
 	}
 	closePool.add(s.dialer)
+	sys.Set(eng)
 
-	tunDev, magicConn, dns, ok := eng.(wgengine.InternalsGetter).GetInternals()
-	if !ok {
-		return fmt.Errorf("%T is not a wgengine.InternalsGetter", eng)
-	}
-
-	ns, err := netstack.Create(logf, tunDev, eng, magicConn, s.dialer, dns)
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get())
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
@@ -522,12 +521,13 @@ func (s *Server) start() (reterr error) {
 			return err
 		}
 	}
+	sys.Set(s.Store)
 
 	loginFlags := controlclient.LoginDefault
 	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, s.Store, s.dialer, eng, loginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, sys, loginFlags)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}

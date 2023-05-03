@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -25,7 +25,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
@@ -150,29 +149,6 @@ type userspaceEngine struct {
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
 }
 
-// InternalsGetter is implemented by Engines that can export their internals.
-type InternalsGetter interface {
-	GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, _ *dns.Manager, ok bool)
-}
-
-func (e *userspaceEngine) GetInternals() (_ *tstun.Wrapper, _ *magicsock.Conn, _ *dns.Manager, ok bool) {
-	return e.tundev, e.magicConn, e.dns, true
-}
-
-// ResolvingEngine is implemented by Engines that have DNS resolvers.
-type ResolvingEngine interface {
-	GetResolver() (_ *resolver.Resolver, ok bool)
-}
-
-var (
-	_ ResolvingEngine = (*userspaceEngine)(nil)
-	_ ResolvingEngine = (*watchdogEngine)(nil)
-)
-
-func (e *userspaceEngine) GetResolver() (r *resolver.Resolver, ok bool) {
-	return e.dns.Resolver(), true
-}
-
 // BIRDClient handles communication with the BIRD Internet Routing Daemon.
 type BIRDClient interface {
 	EnableProtocol(proto string) error
@@ -219,47 +195,37 @@ type Config struct {
 	// BIRDClient, if non-nil, will be used to configure BIRD whenever
 	// this node is a primary subnet router.
 	BIRDClient BIRDClient
+
+	// SetSubsystem, if non-nil, is called for each new subsystem created, just before a successful return.
+	SetSubsystem func(any)
 }
 
-func NewFakeUserspaceEngine(logf logger.Logf, listenPort uint16) (Engine, error) {
-	logf("Starting userspace WireGuard engine (with fake TUN device)")
-	return NewUserspaceEngine(logf, Config{
-		ListenPort:    listenPort,
+// NewFakeUserspaceEngine returns a new userspace engine for testing.
+//
+// The opts may contain the following types:
+//
+//   - int or uint16: to set the ListenPort.
+func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
+	conf := Config{
 		RespondToPing: true,
-	})
-}
-
-// NetstackRouterType is a gross cross-package init-time registration
-// from netstack to here, informing this package of netstack's router
-// type.
-var NetstackRouterType reflect.Type
-
-// IsNetstackRouter reports whether e is either fully netstack based
-// (without TUN) or is at least using netstack for routing.
-func IsNetstackRouter(e Engine) bool {
-	switch e := e.(type) {
-	case *userspaceEngine:
-		if reflect.TypeOf(e.router) == NetstackRouterType {
-			return true
+	}
+	for _, o := range opts {
+		switch v := o.(type) {
+		case uint16:
+			conf.ListenPort = v
+		case int:
+			if v < 0 || v > math.MaxUint16 {
+				return nil, fmt.Errorf("invalid ListenPort: %d", v)
+			}
+			conf.ListenPort = uint16(v)
+		case func(any):
+			conf.SetSubsystem = v
+		default:
+			return nil, fmt.Errorf("unknown option type %T", v)
 		}
-	case *watchdogEngine:
-		return IsNetstackRouter(e.wrap)
 	}
-	return IsNetstack(e)
-}
-
-// IsNetstack reports whether e is a netstack-based TUN-free engine.
-func IsNetstack(e Engine) bool {
-	ig, ok := e.(InternalsGetter)
-	if !ok {
-		return false
-	}
-	tw, _, _, ok := ig.GetInternals()
-	if !ok {
-		return false
-	}
-	name, err := tw.Name()
-	return err == nil && name == "FakeTUN"
+	logf("Starting userspace WireGuard engine (with fake TUN device)")
+	return NewUserspaceEngine(logf, conf)
 }
 
 // NewUserspaceEngine creates the named tun device and returns a
@@ -457,6 +423,15 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 	}
 	e.logf("Starting network monitor...")
 	e.netMon.Start()
+
+	if conf.SetSubsystem != nil {
+		conf.SetSubsystem(e.tundev)
+		conf.SetSubsystem(e.magicConn)
+		conf.SetSubsystem(e.dns)
+		conf.SetSubsystem(conf.Router)
+		conf.SetSubsystem(conf.Dialer)
+		conf.SetSubsystem(e.netMon)
+	}
 
 	e.logf("Engine created.")
 	return e, nil
@@ -1117,10 +1092,6 @@ func (e *userspaceEngine) Close() {
 
 func (e *userspaceEngine) Wait() {
 	<-e.waitCh
-}
-
-func (e *userspaceEngine) GetNetMon() *netmon.Monitor {
-	return e.netMon
 }
 
 // LinkChange signals a network change event. It's currently

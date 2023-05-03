@@ -17,15 +17,11 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/dns/resolver"
-	"tailscale.com/net/netmon"
-	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -126,9 +122,6 @@ func (e *watchdogEngine) watchdog(name string, fn func()) {
 func (e *watchdogEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config, debug *tailcfg.Debug) error {
 	return e.watchdogErr("Reconfig", func() error { return e.wrap.Reconfig(cfg, routerCfg, dnsCfg, debug) })
 }
-func (e *watchdogEngine) GetNetMon() *netmon.Monitor {
-	return e.wrap.GetNetMon()
-}
 func (e *watchdogEngine) GetFilter() *filter.Filter {
 	return e.wrap.GetFilter()
 }
@@ -180,18 +173,6 @@ func (e *watchdogEngine) WhoIsIPPort(ipp netip.AddrPort) (tsIP netip.Addr, ok bo
 }
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
-}
-func (e *watchdogEngine) GetInternals() (tw *tstun.Wrapper, c *magicsock.Conn, d *dns.Manager, ok bool) {
-	if ig, ok := e.wrap.(InternalsGetter); ok {
-		return ig.GetInternals()
-	}
-	return
-}
-func (e *watchdogEngine) GetResolver() (r *resolver.Resolver, ok bool) {
-	if re, ok := e.wrap.(ResolvingEngine); ok {
-		return re.GetResolver()
-	}
-	return nil, false
 }
 func (e *watchdogEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	e.watchdog("PeerForIP", func() { ret, ok = e.wrap.PeerForIP(ip) })

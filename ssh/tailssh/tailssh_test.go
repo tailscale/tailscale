@@ -38,6 +38,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
+	"tailscale.com/tsd"
 	"tailscale.com/tstest"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -815,14 +816,14 @@ func TestSSHAuthFlow(t *testing.T) {
 
 func TestSSH(t *testing.T) {
 	var logf logger.Logf = t.Logf
-	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0)
+	sys := &tsd.System{}
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{},
-		new(mem.Store),
-		new(tsdial.Dialer),
-		eng, 0)
+	sys.Set(eng)
+	sys.Set(new(mem.Store))
+	lb, err := ipnlocal.NewLocalBackend(logf, logid.PublicID{}, sys, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
