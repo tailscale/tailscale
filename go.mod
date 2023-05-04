@@ -85,7 +85,7 @@ require (
 	golang.org/x/tools v0.8.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
-	gvisor.dev/gvisor v0.0.0-20230328175328-162ed5ef888d
+	gvisor.dev/gvisor v0.0.0-20230504175454-7b0a1988a28f
 	honnef.co/go/tools v0.4.3
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/tcpproxy v0.0.0-20221017015627-91f861402626
