@@ -33,7 +33,7 @@ require (
 	github.com/google/go-containerregistry v0.14.0
 	github.com/google/nftables v0.1.1-0.20230115205135-9aa6fdf5a28c
 	github.com/google/uuid v1.3.0
-	github.com/goreleaser/nfpm v1.10.3
+	github.com/goreleaser/nfpm/v2 v2.28.0
 	github.com/hdevalence/ed25519consensus v0.1.0
 	github.com/iancoleman/strcase v0.2.0
 	github.com/illarion/gonotify v1.0.1
@@ -104,6 +104,7 @@ require (
 	4d63.com/gochecknoglobals v0.2.1 // indirect
 	filippo.io/edwards25519 v1.0.0 // indirect
 	github.com/Abirdcfly/dupword v0.0.11 // indirect
+	github.com/AlekSi/pointer v1.2.0 // indirect
 	github.com/Antonboom/errname v0.1.9 // indirect
 	github.com/Antonboom/nilnil v0.1.4 // indirect
 	github.com/BurntSushi/toml v1.2.1 // indirect
@@ -201,10 +202,9 @@ require (
 	github.com/google/gnostic v0.6.9 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/goterm v0.0.0-20200907032337-555d40f16ae2 // indirect
-	github.com/google/rpmpack v0.0.0-20221120200012-98b63d62fd77 // indirect
 	github.com/gordonklaus/ineffassign v0.0.0-20230107090616-13ace0543b28 // indirect
 	github.com/goreleaser/chglog v0.4.2 // indirect
-	github.com/goreleaser/fileglob v0.3.1 // indirect
+	github.com/goreleaser/fileglob v1.3.0 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.4.2 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.1.0 // indirect
@@ -287,7 +287,6 @@ require (
 	github.com/sanposhiho/wastedassign/v2 v2.0.7 // indirect
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
 	github.com/sashamelentyev/usestdlibvars v1.23.0 // indirect
-	github.com/sassoftware/go-rpmutils v0.2.0 // indirect
 	github.com/securego/gosec/v2 v2.15.0 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
 	github.com/shazow/go-diff v0.0.0-20160112020656-b6b7b6733b8c // indirect

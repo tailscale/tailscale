@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goreleaser/nfpm"
+	"github.com/goreleaser/nfpm/v2"
+	"github.com/goreleaser/nfpm/v2/files"
 	"tailscale.com/release/dist"
 )
 
@@ -203,13 +204,11 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		Section:     "net",
 		Priority:    "extra",
 		Overridables: nfpm.Overridables{
-			Files: map[string]string{
-				ts:  "/usr/bin/tailscale",
-				tsd: "/usr/sbin/tailscaled",
-				filepath.Join(tailscaledDir, "tailscaled.service"): "/lib/systemd/system/tailscaled.service",
-			},
-			ConfigFiles: map[string]string{
-				filepath.Join(tailscaledDir, "tailscaled.defaults"): "/etc/default/tailscaled",
+			Contents: files.Contents{
+				{Source: ts, Destination: "/usr/bin/tailscale", Type: files.TypeFile},
+				{Source: tsd, Destination: "/usr/sbin/tailscaled", Type: files.TypeFile},
+				{Source: filepath.Join(tailscaledDir, "tailscaled.service"), Destination: "/lib/systemd/system/tailscaled.service", Type: files.TypeFile},
+				{Source: filepath.Join(tailscaledDir, "tailscaled.defaults"), Destination: "/etc/default/tailscaled", Type: files.TypeConfig},
 			},
 			Scripts: nfpm.Scripts{
 				PostInstall: filepath.Join(repoDir, "release/deb/debian.postinst.sh"),
@@ -294,17 +293,15 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
 		Overridables: nfpm.Overridables{
-			Files: map[string]string{
-				ts:  "/usr/bin/tailscale",
-				tsd: "/usr/sbin/tailscaled",
-				filepath.Join(tailscaledDir, "tailscaled.service"): "/lib/systemd/system/tailscaled.service",
+			Contents: files.Contents{
+				{Source: ts, Destination: "/usr/bin/tailscale", Type: files.TypeFile},
+				{Source: tsd, Destination: "/usr/sbin/tailscaled", Type: files.TypeFile},
+				{Source: filepath.Join(tailscaledDir, "tailscaled.service"), Destination: "/lib/systemd/system/tailscaled.service", Type: files.TypeFile},
+				{Source: filepath.Join(tailscaledDir, "tailscaled.defaults"), Destination: "/etc/default/tailscaled", Type: files.TypeConfig},
+				// SELinux policy on e.g. CentOS 8 forbids writing to /var/cache.
+				// Creating an empty directory at install time resolves this issue.
+				{Destination: "/var/cache/tailscale", Type: files.TypeDir},
 			},
-			ConfigFiles: map[string]string{
-				filepath.Join(tailscaledDir, "tailscaled.defaults"): "/etc/default/tailscaled",
-			},
-			// SELinux policy on e.g. CentOS 8 forbids writing to /var/cache.
-			// Creating an empty directory at install time resolves this issue.
-			EmptyFolders: []string{"/var/cache/tailscale"},
 			Scripts: nfpm.Scripts{
 				PostInstall: filepath.Join(repoDir, "release/rpm/rpm.postinst.sh"),
 				PreRemove:   filepath.Join(repoDir, "release/rpm/rpm.prerm.sh"),

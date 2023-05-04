@@ -11,9 +11,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/goreleaser/nfpm"
-	_ "github.com/goreleaser/nfpm/deb"
-	_ "github.com/goreleaser/nfpm/rpm"
+	"github.com/goreleaser/nfpm/v2"
+	_ "github.com/goreleaser/nfpm/v2/deb"
+	"github.com/goreleaser/nfpm/v2/files"
+	_ "github.com/goreleaser/nfpm/v2/rpm"
 )
 
 // parseFiles parses a comma-separated list of colon-separated pairs
@@ -48,7 +49,7 @@ func main() {
 	description := flag.String("description", "The easiest, most secure, cross platform way to use WireGuard + oauth2 + 2FA/SSO", "package description")
 	goarch := flag.String("arch", "amd64", "GOARCH this package is for")
 	pkgType := flag.String("type", "deb", "type of package to build (deb or rpm)")
-	files := flag.String("files", "", "comma-separated list of files in src:dst form")
+	filesFlag := flag.String("files", "", "comma-separated list of files in src:dst form")
 	configFiles := flag.String("configs", "", "like --files, but for files marked as user-editable config files")
 	emptyDirs := flag.String("emptydirs", "", "comma-separated list of empty directories")
 	version := flag.String("version", "0.0.0", "version of the package")
@@ -60,7 +61,7 @@ func main() {
 	recommends := flag.String("recommends", "", "comma-separated list of packages this package recommends")
 	flag.Parse()
 
-	filesMap, err := parseFiles(*files)
+	filesMap, err := parseFiles(*filesFlag)
 	if err != nil {
 		log.Fatalf("Parsing --files: %v", err)
 	}
@@ -69,6 +70,29 @@ func main() {
 		log.Fatalf("Parsing --configs: %v", err)
 	}
 	emptyDirList := parseEmptyDirs(*emptyDirs)
+
+	contents := files.Contents{}
+	for src, dst := range filesMap {
+		contents = append(contents, &files.Content{
+			Source:      src,
+			Destination: dst,
+			Type:        files.TypeFile,
+		})
+	}
+	for src, dst := range configsMap {
+		contents = append(contents, &files.Content{
+			Source:      src,
+			Destination: dst,
+			Type:        files.TypeConfig,
+		})
+	}
+	for _, dir := range emptyDirList {
+		contents = append(contents, &files.Content{
+			Destination: dir,
+			Type:        files.TypeDir,
+		})
+	}
+
 	info := nfpm.WithDefaults(&nfpm.Info{
 		Name:        *name,
 		Arch:        *goarch,
@@ -79,9 +103,7 @@ func main() {
 		Homepage:    "https://www.tailscale.com",
 		License:     "MIT",
 		Overridables: nfpm.Overridables{
-			EmptyFolders: emptyDirList,
-			Files:        filesMap,
-			ConfigFiles:  configsMap,
+			Contents: contents,
 			Scripts: nfpm.Scripts{
 				PostInstall: *postinst,
 				PreRemove:   *prerm,
