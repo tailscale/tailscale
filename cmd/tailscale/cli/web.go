@@ -61,6 +61,8 @@ type tmplData struct {
 	TUNMode           bool
 	IsSynology        bool
 	DSMVersion        int // 6 or 7, if IsSynology=true
+	IsUnraid          bool
+	UnraidToken       string
 	IPNVersion        string
 }
 
@@ -441,6 +443,8 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		TUNMode:      st.TUN,
 		IsSynology:   distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
 		DSMVersion:   distro.DSMVersion(),
+		IsUnraid:     distro.Get() == distro.Unraid,
+		UnraidToken:  os.Getenv("UNRAID_CSRF_TOKEN"),
 		IPNVersion:   versionShort,
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
