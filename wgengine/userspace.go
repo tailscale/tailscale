@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/wireguard-go/device"
@@ -125,10 +126,10 @@ type userspaceEngine struct {
 	destIPActivityFuncs map[netip.Addr]func()
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 	lastStatusPollTime  mono.Time     // last time we polled the engine status
+	closing             atomic.Bool   // Close was called (even if we're still closing)
 
 	mu                  sync.Mutex         // guards following; see lock order comment below
 	netMap              *netmap.NetworkMap // or nil
-	closing             bool               // Close was called (even if we're still closing)
 	statusCallback      StatusCallback
 	peerSequence        []key.NodePublic
 	endpoints           []tailcfg.Endpoint
@@ -1022,8 +1023,8 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	// (See comment in userspaceEngine's declaration.)
 	derpConns := e.magicConn.DERPs()
 
+	closing := e.closing.Load()
 	e.mu.Lock()
-	closing := e.closing
 	peerKeys := make([]key.NodePublic, len(e.peerSequence))
 	copy(peerKeys, e.peerSequence)
 	localAddrs := append([]tailcfg.Endpoint(nil), e.endpoints...)
@@ -1083,13 +1084,9 @@ func (e *userspaceEngine) RequestStatus() {
 }
 
 func (e *userspaceEngine) Close() {
-	e.mu.Lock()
-	if e.closing {
-		e.mu.Unlock()
+	if e.closing.Swap(true) {
 		return
 	}
-	e.closing = true
-	e.mu.Unlock()
 
 	r := bufio.NewReader(strings.NewReader(""))
 	e.wgdev.IpcSetOperation(r)
