@@ -38,8 +38,8 @@ jobs:
         uses: peter-evans/create-pull-request@5b4a9f6a9e2af26e5f02351490b90d01eb8ec1e5 #v5.0.0
         with:
           token: ${{ steps.generate-token.outputs.token }}
-          author: Flakes Updater <noreply@tailscale.com>
-          committer: Flakes Updater <noreply@tailscale.com>
+          author: Flakes Updater <noreply+flakes-updater@tailscale.com>
+          committer: Flakes Updater <noreply+flakes-updater@tailscale.com>
           branch: flakes
           commit-message: "go.mod.sri: update SRI hash for go.mod changes"
           title: "go.mod.sri: update SRI hash for go.mod changes"
