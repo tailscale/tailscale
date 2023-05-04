@@ -78,8 +78,8 @@ require (
 	golang.org/x/mod v0.10.0
 	golang.org/x/net v0.9.0
 	golang.org/x/oauth2 v0.7.0
-	golang.org/x/sync v0.1.0
-	golang.org/x/sys v0.7.0
+	golang.org/x/sync v0.2.0
+	golang.org/x/sys v0.8.0
 	golang.org/x/term v0.7.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.8.0
@@ -203,7 +203,7 @@ require (
 	github.com/google/goterm v0.0.0-20200907032337-555d40f16ae2 // indirect
 	github.com/google/rpmpack v0.0.0-20221120200012-98b63d62fd77 // indirect
 	github.com/gordonklaus/ineffassign v0.0.0-20230107090616-13ace0543b28 // indirect
-	github.com/goreleaser/chglog v0.1.2 // indirect
+	github.com/goreleaser/chglog v0.4.2 // indirect
 	github.com/goreleaser/fileglob v0.3.1 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.4.2 // indirect
@@ -328,6 +328,7 @@ require (
 	github.com/yagipy/maintidx v1.0.0 // indirect
 	github.com/yeya24/promlinter v0.2.0 // indirect
 	gitlab.com/bosi/decorder v0.2.3 // indirect
+	gitlab.com/digitalxero/go-conventional-commit v1.0.7 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20230425010034-47ecfdc1ba53 // indirect
