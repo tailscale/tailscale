@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -71,7 +72,7 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 				},
 			},
 		},
-		JSXMode: esbuild.JSXModeAutomatic,
+		JSX: esbuild.JSXAutomatic,
 	}, nil
 }
 
@@ -137,16 +138,30 @@ func runEsbuildServe(buildOptions esbuild.BuildOptions) {
 	if err != nil {
 		log.Fatalf("Cannot parse port: %v", err)
 	}
-	result, err := esbuild.Serve(esbuild.ServeOptions{
+	buildCtx, buildCtxErr := esbuild.Context(buildOptions)
+	if buildCtxErr != nil {
+		log.Fatalf("Could not create BuildContext: %v", buildCtxErr)
+	}
+	result, err := buildCtx.Serve(esbuild.ServeOptions{
 		Port:     uint16(port),
 		Host:     host,
 		Servedir: "./",
-	}, buildOptions)
+	})
 	if err != nil {
 		log.Fatalf("Cannot start esbuild server: %v", err)
 	}
+	if err := buildCtx.Watch(esbuild.WatchOptions{}); err != nil {
+		log.Fatalf("Cannot start esbuild watcher: %v", err)
+	}
 	log.Printf("Listening on http://%s:%d\n", result.Host, result.Port)
-	result.Wait()
+
+	// Wait for Ctrl-C
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	<-sigCh
+	log.Printf("Shutting down due to signal")
+
+	buildCtx.Dispose()
 }
 
 func runEsbuild(buildOptions esbuild.BuildOptions) esbuild.BuildResult {
