@@ -457,13 +457,24 @@ var applyDiskConfigErr error
 // ApplyDiskConfigError returns the most recent result of ApplyDiskConfig.
 func ApplyDiskConfigError() error { return applyDiskConfigErr }
 
-// ApplyDiskConfig returns a platform-specific config file of environment keys/values and
-// applies them. On Linux and Unix operating systems, it's a no-op and always returns nil.
-// If no platform-specific config file is found, it also returns nil.
+// ApplyDiskConfig returns a platform-specific config file of environment
+// keys/values and applies them. On Linux and Unix operating systems, it's a
+// no-op and always returns nil. If no platform-specific config file is found,
+// it also returns nil.
 //
-// It exists primarily for Windows to make it easy to apply environment variables to
-// a running service in a way similar to modifying /etc/default/tailscaled on Linux.
+// It exists primarily for Windows and macOS to make it easy to apply
+// environment variables to a running service in a way similar to modifying
+// /etc/default/tailscaled on Linux.
+//
 // On Windows, you use %ProgramData%\Tailscale\tailscaled-env.txt instead.
+//
+// On macOS, use one of:
+//
+//   - ~/Library/Containers/io.tailscale.ipn.macsys/Data/tailscaled-env.txt
+//     for standalone macOS GUI builds
+//   - ~/Library/Containers/io.tailscale.ipn.macos.network-extension/Data/tailscaled-env.txt
+//     for App Store builds
+//   - /etc/tailscale/tailscaled-env.txt for tailscaled-on-macOS (homebrew, etc)
 func ApplyDiskConfig() (err error) {
 	var f *os.File
 	defer func() {
@@ -512,9 +523,15 @@ func getPlatformEnvFile() string {
 			return "/etc/tailscale/tailscaled-env.txt"
 		}
 	case "darwin":
-		// TODO(bradfitz): figure this out. There are three ways to run
-		// Tailscale on macOS (tailscaled, GUI App Store, GUI System Extension)
-		// and we should deal with all three.
+		if version.IsSandboxedMacOS() { // the two GUI variants (App Store or separate download)
+			// This will be user-visible as ~/Library/Containers/$VARIANT/Data/tailscaled-env.txt
+			// where $VARIANT is "io.tailscale.ipn.macsys" for macsys (downloadable mac GUI builds)
+			// or "io.tailscale.ipn.macos.network-extension" for App Store builds.
+			return filepath.Join(os.Getenv("HOME"), "tailscaled-env.txt")
+		} else {
+			// Open source / homebrew variable, running tailscaled-on-macOS.
+			return "/etc/tailscale/tailscaled-env.txt"
+		}
 	}
 	return ""
 }
