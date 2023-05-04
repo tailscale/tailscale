@@ -117,6 +117,8 @@
 </footer>
 <script>(function () {
 const advertiseExitNode = {{.AdvertiseExitNode}};
+const isUnraid = {{.IsUnraid}};
+const unraidCsrfToken = "{{.UnraidToken}}";
 let fetchingUrl = false;
 var data = {
 	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
@@ -143,13 +145,25 @@ function postData(e) {
 	nextUrl.search = nextParams.toString()
 	const url = nextUrl.toString();
 
+	if (isUnraid) {
+		var formBody = [];
+		formBody.push(encodeURIComponent("csrf_token") + "=" + encodeURIComponent(unraidCsrfToken));
+		formBody.push(encodeURIComponent("ts_data") + "=" + encodeURIComponent(JSON.stringify(data)));
+
+		var body = formBody.join("&");
+		var contentType = "application/x-www-form-urlencoded;charset=UTF-8";
+	} else {
+		var body = JSON.stringify(data);
+		var contentType = "application/json";
+	}
+
 	fetch(url, {
 		method: "POST",
 		headers: {
 			"Accept": "application/json",
-			"Content-Type": "application/json",
+			"Content-Type": contentType,
 		},
-		body: JSON.stringify(data)
+		body: body
 	}).then(res => res.json()).then(res => {
 		fetchingUrl = false;
 		const err = res["error"];
@@ -158,7 +172,11 @@ function postData(e) {
 		}
 		const url = res["url"];
 		if (url) {
-			document.location.href = url;
+			if(isUnraid) {
+				window.open(url, "_blank");
+			} else {
+				document.location.href = url;
+			}
 		} else {
 			location.reload();
 		}
