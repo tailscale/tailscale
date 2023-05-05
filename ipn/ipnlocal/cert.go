@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/acme"
+	"golang.org/x/exp/slices"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
@@ -361,17 +362,16 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 				}
 				key := "_acme-challenge." + domain
 
+				// Do a best-effort lookup to see if we've already created this DNS name
+				// in a previous attempt. Don't burn too much time on it, though. Worst
+				// case we ask the server to create something that already exists.
 				var resolver net.Resolver
-				var ok bool
-				txts, _ := resolver.LookupTXT(ctx, key)
-				for _, txt := range txts {
-					if txt == rec {
-						ok = true
-						logf("TXT record already existed")
-						break
-					}
-				}
-				if !ok {
+				lookupCtx, lookupCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+				txts, _ := resolver.LookupTXT(lookupCtx, key)
+				lookupCancel()
+				if slices.Contains(txts, rec) {
+					logf("TXT record already existed")
+				} else {
 					logf("starting SetDNS call...")
 					err = b.SetDNS(ctx, key, rec)
 					if err != nil {
