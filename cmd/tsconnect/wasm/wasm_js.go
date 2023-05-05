@@ -40,6 +40,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/words"
