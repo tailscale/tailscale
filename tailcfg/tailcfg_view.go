@@ -402,6 +402,7 @@ func (v NetInfoView) LinkType() string                { return v.ж.LinkType }
 
 func (v NetInfoView) DERPLatency() views.Map[string, float64] { return views.MapOf(v.ж.DERPLatency) }
 func (v NetInfoView) String() string                          { return v.ж.String() }
+func (v NetInfoView) Equal(v2 NetInfoView) bool               { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _NetInfoViewNeedsRegeneration = NetInfo(struct {

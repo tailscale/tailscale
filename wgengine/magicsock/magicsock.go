@@ -951,7 +951,7 @@ func (c *Conn) pickDERPFallback() int {
 func (c *Conn) callNetInfoCallback(ni *tailcfg.NetInfo) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if ni.BasicallyEqual(c.netInfoLast) {
+	if ni.Equal(c.netInfoLast) {
 		return
 	}
 	c.callNetInfoCallbackLocked(ni)

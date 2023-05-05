@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strings"
 
+	"golang.org/x/exp/slices"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
 	"tailscale.com/util/mak"
@@ -47,12 +48,13 @@ func LoadTypes(buildTags string, pkgName string) (*packages.Package, map[string]
 // HasNoClone reports whether the provided tag has `codegen:noclone`.
 func HasNoClone(structTag string) bool {
 	val := reflect.StructTag(structTag).Get("codegen")
-	for _, v := range strings.Split(val, ",") {
-		if v == "noclone" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(val, ","), "noclone")
+}
+
+// HasNoEqual reports whether the provided tag has `codegen:noequal`.
+func HasNoEqual(structTag string) bool {
+	val := reflect.StructTag(structTag).Get("codegen")
+	return slices.Contains(strings.Split(val, ","), "noequal")
 }
 
 const copyrightHeader = `// Copyright (c) Tailscale Inc & AUTHORS

@@ -5,8 +5,9 @@ package tailcfg
 
 //go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan --clonefunc
 
+//go:generage go run tailscale.com/cmd/equaler  --type Node,Hostinfo,NetInfo,Service
+
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -497,7 +498,7 @@ const (
 
 // Service represents a service running on a node.
 type Service struct {
-	_ structs.Incomparable
+	_ structs.Incomparable `codegen:"noequal"`
 
 	// Proto is the type of service. It's usually the constant TCP
 	// or UDP ("tcp" or "udp"), but it can also be one of the
@@ -582,9 +583,6 @@ type Hostinfo struct {
 	Cloud           string         `json:",omitempty"`
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
-
-	// NOTE: any new fields containing pointers in this type
-	//       require changes to Hostinfo.Equal.
 }
 
 // TailscaleSSHEnabled reports whether or not this node is acting as a
@@ -664,9 +662,7 @@ type NetInfo struct {
 	// This should only be updated rarely, or when there's a
 	// material change, as any change here also gets uploaded to
 	// the control plane.
-	DERPLatency map[string]float64 `json:",omitempty"`
-
-	// Update BasicallyEqual when adding fields.
+	DERPLatency map[string]float64 `json:",omitempty" codegen:"noequal"`
 }
 
 func (ni *NetInfo) String() string {
@@ -702,40 +698,6 @@ func conciseOptBool(b opt.Bool, trueVal string) string {
 		return trueVal
 	}
 	return ""
-}
-
-// BasicallyEqual reports whether ni and ni2 are basically equal, ignoring
-// changes in DERP ServerLatency & RegionLatency.
-func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
-	if (ni == nil) != (ni2 == nil) {
-		return false
-	}
-	if ni == nil {
-		return true
-	}
-	return ni.MappingVariesByDestIP == ni2.MappingVariesByDestIP &&
-		ni.HairPinning == ni2.HairPinning &&
-		ni.WorkingIPv6 == ni2.WorkingIPv6 &&
-		ni.OSHasIPv6 == ni2.OSHasIPv6 &&
-		ni.WorkingUDP == ni2.WorkingUDP &&
-		ni.WorkingICMPv4 == ni2.WorkingICMPv4 &&
-		ni.HavePortMap == ni2.HavePortMap &&
-		ni.UPnP == ni2.UPnP &&
-		ni.PMP == ni2.PMP &&
-		ni.PCP == ni2.PCP &&
-		ni.PreferredDERP == ni2.PreferredDERP &&
-		ni.LinkType == ni2.LinkType
-}
-
-// Equal reports whether h and h2 are equal.
-func (h *Hostinfo) Equal(h2 *Hostinfo) bool {
-	if h == nil && h2 == nil {
-		return true
-	}
-	if (h == nil) != (h2 == nil) {
-		return false
-	}
-	return reflect.DeepEqual(h, h2)
 }
 
 // HowUnequal returns a list of paths through Hostinfo where h and h2 differ.
@@ -1688,82 +1650,6 @@ func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }
 func (id UserID) String() string  { return fmt.Sprintf("userid:%x", int64(id)) }
 func (id LoginID) String() string { return fmt.Sprintf("loginid:%x", int64(id)) }
 func (id NodeID) String() string  { return fmt.Sprintf("nodeid:%x", int64(id)) }
-
-// Equal reports whether n and n2 are equal.
-func (n *Node) Equal(n2 *Node) bool {
-	if n == nil && n2 == nil {
-		return true
-	}
-	return n != nil && n2 != nil &&
-		n.ID == n2.ID &&
-		n.StableID == n2.StableID &&
-		n.Name == n2.Name &&
-		n.User == n2.User &&
-		n.Sharer == n2.Sharer &&
-		n.UnsignedPeerAPIOnly == n2.UnsignedPeerAPIOnly &&
-		n.Key == n2.Key &&
-		n.KeyExpiry.Equal(n2.KeyExpiry) &&
-		bytes.Equal(n.KeySignature, n2.KeySignature) &&
-		n.Machine == n2.Machine &&
-		n.DiscoKey == n2.DiscoKey &&
-		eqPtr(n.Online, n2.Online) &&
-		eqCIDRs(n.Addresses, n2.Addresses) &&
-		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
-		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
-		eqStrings(n.Endpoints, n2.Endpoints) &&
-		n.DERP == n2.DERP &&
-		n.Cap == n2.Cap &&
-		n.Hostinfo.Equal(n2.Hostinfo) &&
-		n.Created.Equal(n2.Created) &&
-		eqTimePtr(n.LastSeen, n2.LastSeen) &&
-		n.MachineAuthorized == n2.MachineAuthorized &&
-		eqStrings(n.Capabilities, n2.Capabilities) &&
-		n.ComputedName == n2.ComputedName &&
-		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
-		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags) &&
-		n.Expired == n2.Expired &&
-		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
-		n.IsWireGuardOnly == n2.IsWireGuardOnly
-}
-
-func eqPtr[T comparable](a, b *T) bool {
-	if a == b { // covers nil
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
-}
-
-func eqStrings(a, b []string) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqCIDRs(a, b []netip.Prefix) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqTimePtr(a, b *time.Time) bool {
-	return ((a == nil) == (b == nil)) && (a == nil || a.Equal(*b))
-}
 
 // Oauth2Token is a copy of golang.org/x/oauth2.Token, to avoid the
 // go.mod dependency on App Engine and grpc, which was causing problems.

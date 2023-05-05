@@ -572,7 +572,7 @@ func TestNetInfoFields(t *testing.T) {
 		"DERPLatency",
 	}
 	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
-		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",
+		t.Errorf("NetInfo.Clone/Equal check might be out of sync\nfields: %q\nhandled: %q\n",
 			have, handled)
 	}
 }
