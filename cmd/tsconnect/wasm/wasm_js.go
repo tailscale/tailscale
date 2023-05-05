@@ -104,6 +104,8 @@ func newIPN(jsConfig js.Value) map[string]any {
 	logtail := logtail.NewLogger(c, log.Printf)
 	logf := logtail.Logf
 
+	sys := new(tsd.System)
+	sys.Set(store)
 	dialer := &tsdial.Dialer{Logf: logf}
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Dialer: dialer,
@@ -111,12 +113,9 @@ func newIPN(jsConfig js.Value) map[string]any {
 	if err != nil {
 		log.Fatal(err)
 	}
+	sys.Set(eng)
 
-	tunDev, magicConn, dnsManager, ok := eng.(wgengine.InternalsGetter).GetInternals()
-	if !ok {
-		log.Fatalf("%T is not a wgengine.InternalsGetter", eng)
-	}
-	ns, err := netstack.Create(logf, tunDev, eng, magicConn, dialer, dnsManager)
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get())
 	if err != nil {
 		log.Fatalf("netstack.Create: %v", err)
 	}
@@ -129,10 +128,11 @@ func newIPN(jsConfig js.Value) map[string]any {
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
 	}
+	sys.NetstackRouter.Set(true)
 
 	logid := lpc.PublicID
 	srv := ipnserver.New(logf, logid, nil /* no netMon */)
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng, controlclient.LoginEphemeral)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, sys, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
 	}
