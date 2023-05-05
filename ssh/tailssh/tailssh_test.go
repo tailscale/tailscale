@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -311,6 +312,10 @@ func (ts *localState) DoNoiseRequest(req *http.Request) (*http.Response, error) 
 
 func (ts *localState) TailscaleVarRoot() string {
 	return ""
+}
+
+func (ts *localState) NodeKey() key.NodePublic {
+	return key.NewNode().Public()
 }
 
 func newSSHRule(action *tailcfg.SSHAction) *tailcfg.SSHRule {
