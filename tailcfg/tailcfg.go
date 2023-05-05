@@ -2080,6 +2080,12 @@ type SSHRecorderFailureAction struct {
 type SSHEventNotifyRequest struct {
 	// EventType is the type of notify request being sent.
 	EventType SSHEventType
+
+	// ConnectionID uniquely identifies a connection made to the SSH server.
+	// It may be shared across multiple sessions over the same connection in
+	// case a single connection creates multiple sessions.
+	ConnectionID string
+
 	// CapVersion is the client's current CapabilityVersion.
 	CapVersion CapabilityVersion
 
