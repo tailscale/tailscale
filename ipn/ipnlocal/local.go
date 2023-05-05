@@ -3627,6 +3627,19 @@ func (b *LocalBackend) hasNodeKey() bool {
 	return p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero()
 }
 
+// NodeKey returns the public node key.
+func (b *LocalBackend) NodeKey() key.NodePublic {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	p := b.pm.CurrentPrefs()
+	if !p.Valid() || !p.Persist().Valid() || p.Persist().PrivateNodeKey().IsZero() {
+		return key.NodePublic{}
+	}
+
+	return p.Persist().PublicNodeKey()
+}
+
 // nextState returns the state the backend seems to be in, based on
 // its internal state.
 func (b *LocalBackend) nextState() ipn.State {
