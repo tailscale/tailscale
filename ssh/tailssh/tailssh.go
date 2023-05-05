@@ -1410,6 +1410,11 @@ type CastHeader struct {
 
 	// LocalUser is the effective username on the server.
 	LocalUser string `json:"localUser"`
+
+	// ConnectionID uniquely identifies a connection made to the SSH server.
+	// It may be shared across multiple sessions over the same connection in
+	// case of SSH multiplexing.
+	ConnectionID string `json:"connectionID"`
 }
 
 // sessionRecordingClient returns an http.Client that uses srv.lb.Dialer() to
@@ -1458,7 +1463,6 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 	if len(recs) == 0 {
 		return nil, nil, nil, errors.New("no recorders configured")
 	}
-	var attempts []*tailcfg.SSHRecordingAttempt
 	// We use a special context for dialing the recorder, so that we can
 	// limit the time we spend dialing to 30 seconds and still have an
 	// unbounded context for the upload.
@@ -1466,12 +1470,11 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 	defer dialCancel()
 	hc, err := ss.sessionRecordingClient(dialCtx)
 	if err != nil {
-		attempts = append(attempts, &tailcfg.SSHRecordingAttempt{
-			FailureMessage: err.Error(),
-		})
-		return nil, attempts, nil, err
+		return nil, nil, nil, err
 	}
+
 	var errs []error
+	var attempts []*tailcfg.SSHRecordingAttempt
 	for _, ap := range recs {
 		attempt := &tailcfg.SSHRecordingAttempt{
 			Recorder: ap,
@@ -1557,11 +1560,9 @@ func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 	// We store the node key as soon as possible when creating
 	// a new recording incase of FUS.
-	var nodeKey key.NodePublic
-	if nk := ss.conn.srv.lb.NodeKey(); nk.IsZero() {
+	nodeKey := ss.conn.srv.lb.NodeKey()
+	if nodeKey.IsZero() {
 		return nil, errors.New("ssh server is unavailable: no node key")
-	} else {
-		nodeKey = nk
 	}
 
 	recorders, onFailure := ss.recorders()
@@ -1660,10 +1661,11 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 			// it. Then we can (1) make the cmd, (2) start the
 			// recording, (3) start the process.
 		},
-		SSHUser:   ss.conn.info.sshUser,
-		LocalUser: ss.conn.localUser.Username,
-		SrcNode:   strings.TrimSuffix(ss.conn.info.node.Name, "."),
-		SrcNodeID: ss.conn.info.node.StableID,
+		SSHUser:      ss.conn.info.sshUser,
+		LocalUser:    ss.conn.localUser.Username,
+		SrcNode:      strings.TrimSuffix(ss.conn.info.node.Name, "."),
+		SrcNodeID:    ss.conn.info.node.StableID,
+		ConnectionID: ss.conn.connID,
 	}
 	if !ss.conn.info.node.IsTagged() {
 		ch.SrcNodeUser = ss.conn.info.uprof.LoginName
@@ -1694,6 +1696,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic, notifyType tailcfg.SSHEventType, attempts []*tailcfg.SSHRecordingAttempt, url string) {
 	re := tailcfg.SSHEventNotifyRequest{
 		EventType:         notifyType,
+		ConnectionID:      ss.conn.connID,
 		CapVersion:        tailcfg.CurrentCapabilityVersion,
 		NodeKey:           nodeKey,
 		SrcNode:           ss.conn.info.node.ID,
