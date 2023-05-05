@@ -98,7 +98,8 @@ type CapabilityVersion int
 //   - 59: 2023-03-16: Client understands Peers[].SelfNodeV4MasqAddrForThisPeer
 //   - 60: 2023-04-06: Client understands IsWireGuardOnly
 //   - 61: 2023-04-18: Client understand SSHAction.SSHRecorderFailureAction
-const CurrentCapabilityVersion CapabilityVersion = 61
+//   - 62: 2023-05-05: Client can notify control over noise for SSHEventNotificationRequest recording failure events
+const CurrentCapabilityVersion CapabilityVersion = 62
 
 type StableID string
 
