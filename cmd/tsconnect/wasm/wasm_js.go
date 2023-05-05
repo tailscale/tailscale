@@ -14,12 +14,15 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"syscall/js"
 	"time"
@@ -37,7 +40,6 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tsd"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/words"
@@ -86,6 +88,11 @@ func newIPN(jsConfig js.Value) map[string]any {
 		hostname = generateHostname()
 	}
 
+	routeAll := false
+	if jsRouteAll := jsConfig.Get("routeAll"); jsRouteAll.Type() == js.TypeBoolean {
+		routeAll = jsRouteAll.Bool()
+	}
+
 	lpc := getOrCreateLogPolicyConfig(store)
 	c := logtail.Config{
 		Collection: lpc.Collection,
@@ -97,8 +104,6 @@ func newIPN(jsConfig js.Value) map[string]any {
 	logtail := logtail.NewLogger(c, log.Printf)
 	logf := logtail.Logf
 
-	sys := new(tsd.System)
-	sys.Set(store)
 	dialer := &tsdial.Dialer{Logf: logf}
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
 		Dialer: dialer,
@@ -106,9 +111,12 @@ func newIPN(jsConfig js.Value) map[string]any {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sys.Set(eng)
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get())
+	tunDev, magicConn, dnsManager, ok := eng.(wgengine.InternalsGetter).GetInternals()
+	if !ok {
+		log.Fatalf("%T is not a wgengine.InternalsGetter", eng)
+	}
+	ns, err := netstack.Create(logf, tunDev, eng, magicConn, dialer, dnsManager)
 	if err != nil {
 		log.Fatalf("netstack.Create: %v", err)
 	}
@@ -121,11 +129,10 @@ func newIPN(jsConfig js.Value) map[string]any {
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
 		return ns.DialContextTCP(ctx, dst)
 	}
-	sys.NetstackRouter.Set(true)
 
 	logid := lpc.PublicID
 	srv := ipnserver.New(logf, logid, nil /* no netMon */)
-	lb, err := ipnlocal.NewLocalBackend(logf, logid, sys, controlclient.LoginEphemeral)
+	lb, err := ipnlocal.NewLocalBackend(logf, logid, store, dialer, eng, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
 	}
@@ -144,6 +151,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 		controlURL: controlURL,
 		authKey:    authKey,
 		hostname:   hostname,
+		routeAll:   routeAll,
 	}
 
 	return map[string]any{
@@ -195,6 +203,22 @@ func newIPN(jsConfig js.Value) map[string]any {
 			url := args[0].String()
 			return jsIPN.fetch(url)
 		}),
+		"tcp": js.FuncOf(func(this js.Value, args []js.Value) any {
+			if len(args) != 3 || len(args) != 4 {
+				log.Printf("Usage: tcp(hostname, port, readCallback, connectTimeoutSeconds)")
+				return nil
+			}
+			connectTimeoutSeconds := 0
+			if len(args) == 4 && args[3].Type() == js.TypeNumber {
+				connectTimeoutSeconds = args[3].Int()
+			}
+
+			return jsIPN.tcp(
+				args[0].String(),
+				args[1].Int(),
+				args[2],
+				connectTimeoutSeconds)
+		}),
 	}
 }
 
@@ -205,6 +229,7 @@ type jsIPN struct {
 	controlURL string
 	authKey    string
 	hostname   string
+	routeAll   bool
 }
 
 var jsIPNState = map[ipn.State]string{
@@ -290,7 +315,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 		err := i.lb.Start(ipn.Options{
 			UpdatePrefs: &ipn.Prefs{
 				ControlURL:       i.controlURL,
-				RouteAll:         false,
+				RouteAll:         i.routeAll,
 				AllowSingleHosts: true,
 				WantRunning:      true,
 				Hostname:         i.hostname,
@@ -322,6 +347,117 @@ func (i *jsIPN) logout() {
 		log.Printf("Backend not running")
 	}
 	go i.lb.Logout()
+}
+
+func (i *jsIPN) tcp(host string, port int, readCallback js.Value, connectTimeoutSeconds int) any {
+	portInt := strconv.Itoa(port)
+	addr := net.JoinHostPort(host, portInt)
+
+	return makePromise(func() (any, error) {
+		if readCallback.Type() != js.TypeFunction {
+			return nil, errors.New("Invalid readCallback received")
+		}
+
+		connectTimeout := time.Duration(connectTimeoutSeconds) * time.Second
+		jsTCPSession, err := i.NewJSTCPSession(addr, readCallback, connectTimeout)
+		if err != nil {
+			return nil, err
+		}
+
+		jsObjectWrapper := jsTCPSession.jsWrapper()
+		return jsObjectWrapper, nil
+	})
+
+}
+
+type jsTCPSession struct {
+	jsIPN       *jsIPN
+	conn        net.Conn
+	writeBuffer []byte
+	readBuffer  []byte
+}
+
+const defaultTCPConnectTimeout time.Duration = 5 * time.Second
+
+func (i *jsIPN) NewJSTCPSession(addr string, readCallback js.Value, connectTimeout time.Duration) (*jsTCPSession, error) {
+	if connectTimeout == 0 {
+		connectTimeout = defaultTCPConnectTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
+	conn, err := i.dialer.UserDial(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &jsTCPSession{
+		jsIPN:       i,
+		conn:        conn,
+		writeBuffer: make([]byte, 1024),
+		readBuffer:  make([]byte, 4*1024*1024),
+	}
+
+	go s.readLoop(readCallback)
+
+	return s, nil
+}
+
+func (s *jsTCPSession) readLoop(readCallback js.Value) {
+	defer s.conn.Close()
+	dst := js.Global().Get("Uint8Array").New(len(s.readBuffer))
+
+	// we always reuse the same dst but make use of subarrays
+	subarray := dst.Call("subarray", 0, len(s.readBuffer))
+	subarrayLength := len(s.readBuffer)
+	for {
+		n, err := s.conn.Read(s.readBuffer[:])
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			log.Printf("read error: %v", err)
+			return
+		}
+		// if subarray is not already the correct length,
+		// create a new one from dst with correct len
+		if subarrayLength != n {
+			subarrayLength = n
+			subarray = dst.Call("subarray", 0, n)
+		}
+
+		js.CopyBytesToJS(subarray, s.readBuffer[:n])
+
+		readCallback.Invoke(subarray)
+	}
+}
+
+func (s *jsTCPSession) jsWrapper() any {
+	return map[string]any{
+		"close": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			return makePromise(func() (any, error) {
+				err := s.conn.Close()
+				return nil, err
+			})
+		}),
+		"write": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+			return makePromise(func() (any, error) {
+				dst := args[0]
+				if byteLength := dst.Get("byteLength"); byteLength.Type() == js.TypeNumber {
+					return s.write(dst, byteLength.Int())
+				}
+				return nil, errors.New("Invalid type has no byteLength")
+			})
+		}),
+	}
+}
+
+func (s *jsTCPSession) write(dst js.Value, length int) (int, error) {
+	if len(s.writeBuffer) < length {
+		s.writeBuffer = make([]byte, length)
+	}
+	js.CopyBytesToGo(s.writeBuffer, dst)
+	return s.conn.Write(s.writeBuffer[:length])
 }
 
 func (i *jsIPN) ssh(host, username string, termConfig js.Value) map[string]any {
