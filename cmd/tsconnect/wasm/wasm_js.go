@@ -205,7 +205,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 			return jsIPN.fetch(url)
 		}),
 		"tcp": js.FuncOf(func(this js.Value, args []js.Value) any {
-			if len(args) != 3 || len(args) != 4 {
+			if len(args) != 3 && len(args) != 4 {
 				log.Printf("Usage: tcp(hostname, port, readCallback, connectTimeoutSeconds)")
 				return nil
 			}
