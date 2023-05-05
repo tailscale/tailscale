@@ -2075,9 +2075,11 @@ type SSHRecorderFailureAction struct {
 	NotifyURL string `json:",omitempty"`
 }
 
-// SSHRecordingFailureNotifyRequest is the JSON payload sent to the NotifyURL
-// when a recording fails.
-type SSHRecordingFailureNotifyRequest struct {
+// SSHEventNotifyRequest is the JSON payload sent to the NotifyURL
+// for an SSH event.
+type SSHEventNotifyRequest struct {
+	// EventType is the type of notify request being sent.
+	EventType SSHEventType
 	// CapVersion is the client's current CapabilityVersion.
 	CapVersion CapabilityVersion
 
@@ -2093,9 +2095,18 @@ type SSHRecordingFailureNotifyRequest struct {
 	// LocalUser is the user that was resolved from the SSHUser for the local machine.
 	LocalUser string
 
-	// Attempts is the list of recorders that were attempted, in order.
-	Attempts []SSHRecordingAttempt
+	// RecordingAttempts is the list of recorders that were attempted, in order.
+	RecordingAttempts []*SSHRecordingAttempt
 }
+
+// SSHEventType defines the event type linked to a SSH action or state.
+type SSHEventType int
+
+const (
+	UnspecifiedSSHEventType       SSHEventType = 0
+	SSHSessionRecordingRejected   SSHEventType = 1
+	SSHSessionRecordingTerminated SSHEventType = 2
+)
 
 // SSHRecordingAttempt is a single attempt to start a recording.
 type SSHRecordingAttempt struct {
