@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
+	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/clientmetric"
@@ -68,6 +69,7 @@ type ipnLocalBackend interface {
 	DoNoiseRequest(req *http.Request) (*http.Response, error)
 	Dialer() *tsdial.Dialer
 	TailscaleVarRoot() string
+	NodeKey() key.NodePublic
 }
 
 type server struct {
@@ -105,6 +107,7 @@ func init() {
 			logf:           logf,
 			tailscaledPath: tsd,
 		}
+
 		return srv, nil
 	})
 }
@@ -1445,11 +1448,17 @@ func (ss *sshSession) sessionRecordingClient(dialCtx context.Context) (*http.Cli
 // On success, it returns a WriteCloser that can be used to upload the
 // recording, and a channel that will be sent an error (or nil) when the upload
 // fails or completes.
-func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPort) (io.WriteCloser, <-chan error, error) {
+//
+// In both cases, a slice of SSHRecordingAttempts is returned which detail the
+// attempted recorder IP and the error message, if the attempt failed. The
+// attempts are in order the recorder(s) was attempted. If successful a
+// successful connection is made, the last attempt in the slice is the
+// attempt for connected recorder.
+func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPort) (io.WriteCloser, []*tailcfg.SSHRecordingAttempt, <-chan error, error) {
 	if len(recs) == 0 {
-		return nil, nil, errors.New("no recorders configured")
+		return nil, nil, nil, errors.New("no recorders configured")
 	}
-
+	var attempts []*tailcfg.SSHRecordingAttempt
 	// We use a special context for dialing the recorder, so that we can
 	// limit the time we spend dialing to 30 seconds and still have an
 	// unbounded context for the upload.
@@ -1457,10 +1466,18 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 	defer dialCancel()
 	hc, err := ss.sessionRecordingClient(dialCtx)
 	if err != nil {
-		return nil, nil, err
+		attempts = append(attempts, &tailcfg.SSHRecordingAttempt{
+			FailureMessage: err.Error(),
+		})
+		return nil, attempts, nil, err
 	}
 	var errs []error
 	for _, ap := range recs {
+		attempt := &tailcfg.SSHRecordingAttempt{
+			Recorder: ap,
+		}
+		attempts = append(attempts, attempt)
+
 		// We dial the recorder and wait for it to send a 100-continue
 		// response before returning from this function. This ensures that
 		// the recorder is ready to accept the recording.
@@ -1476,7 +1493,9 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 		pr, pw := io.Pipe()
 		req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s:%d/record", ap.Addr(), ap.Port()), pr)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("recording: error starting recording: %w", err))
+			err = fmt.Errorf("recording: error starting recording: %w", err)
+			attempt.FailureMessage = err.Error()
+			errs = append(errs, err)
 			continue
 		}
 		// We set the Expect header to 100-continue, so that the recorder
@@ -1508,12 +1527,13 @@ func (ss *sshSession) connectToRecorder(ctx context.Context, recs []netip.AddrPo
 				// is unexpected as we haven't sent any data yet.
 				err = errors.New("recording: unexpected EOF")
 			}
+			attempt.FailureMessage = err.Error()
 			errs = append(errs, err)
 			continue
 		}
-		return pw, errChan, nil
+		return pw, attempts, errChan, nil
 	}
-	return nil, nil, multierr.New(errs...)
+	return nil, attempts, nil, multierr.New(errs...)
 }
 
 func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err error) {
@@ -1535,6 +1555,15 @@ func (ss *sshSession) openFileForRecording(now time.Time) (_ io.WriteCloser, err
 // startNewRecording starts a new SSH session recording.
 // It may return a nil recording if recording is not available.
 func (ss *sshSession) startNewRecording() (_ *recording, err error) {
+	// We store the node key as soon as possible when creating
+	// a new recording incase of FUS.
+	var nodeKey key.NodePublic
+	if nk := ss.conn.srv.lb.NodeKey(); nk.IsZero() {
+		return nil, errors.New("ssh server is unavailable: no node key")
+	} else {
+		nodeKey = nk
+	}
+
 	recorders, onFailure := ss.recorders()
 	var localRecording bool
 	if len(recorders) == 0 {
@@ -1573,9 +1602,13 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		}
 	} else {
 		var errChan <-chan error
-		rec.out, errChan, err = ss.connectToRecorder(ctx, recorders)
+		var attempts []*tailcfg.SSHRecordingAttempt
+		rec.out, attempts, errChan, err = ss.connectToRecorder(ctx, recorders)
 		if err != nil {
-			// TODO(catzkorn): notify control here.
+			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
+				ss.notifyControl(ctx, nodeKey, tailcfg.SSHSessionRecordingRejected, attempts, onFailure.NotifyURL)
+			}
+
 			if onFailure != nil && onFailure.RejectSessionWithMessage != "" {
 				ss.logf("recording: error starting recording (rejecting session): %v", err)
 				return nil, userVisibleError{
@@ -1592,7 +1625,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 				// Success.
 				return
 			}
-			// TODO(catzkorn): notify control here.
+			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
+				lastAttempt := attempts[len(attempts)-1]
+				lastAttempt.FailureMessage = err.Error()
+
+				ss.notifyControl(ctx, nodeKey, tailcfg.SSHSessionRecordingTerminated, attempts, onFailure.NotifyURL)
+			}
 			if onFailure != nil && onFailure.TerminateSessionWithMessage != "" {
 				ss.logf("recording: error uploading recording (closing session): %v", err)
 				ss.cancelCtx(userVisibleError{
@@ -1648,6 +1686,44 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		return nil, err
 	}
 	return rec, nil
+}
+
+// notifyControl sends a SSHEventNotifyRequest to control over noise.
+// A SSHEventNotifyRequest is sent when an action or state reached during
+// an SSH session is a defined EventType.
+func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic, notifyType tailcfg.SSHEventType, attempts []*tailcfg.SSHRecordingAttempt, url string) {
+	re := tailcfg.SSHEventNotifyRequest{
+		EventType:         notifyType,
+		CapVersion:        tailcfg.CurrentCapabilityVersion,
+		NodeKey:           nodeKey,
+		SrcNode:           ss.conn.info.node.ID,
+		SSHUser:           ss.conn.info.sshUser,
+		LocalUser:         ss.conn.localUser.Username,
+		RecordingAttempts: attempts,
+	}
+
+	body, err := json.Marshal(re)
+	if err != nil {
+		ss.logf("notifyControl: unable to marshal SSHNotifyRequest:", err)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		ss.logf("notifyControl: unable to create request:", err)
+		return
+	}
+
+	resp, err := ss.conn.srv.lb.DoNoiseRequest(req)
+	if err != nil {
+		ss.logf("notifyControl: unable to send noise request:", err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		ss.logf("notifyControl: noise request returned status code %v", resp.StatusCode)
+		return
+	}
 }
 
 // recording is the state for an SSH session recording.
