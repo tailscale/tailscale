@@ -1607,7 +1607,11 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		rec.out, attempts, errChan, err = ss.connectToRecorder(ctx, recorders)
 		if err != nil {
 			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
-				ss.notifyControl(ctx, nodeKey, tailcfg.SSHSessionRecordingRejected, attempts, onFailure.NotifyURL)
+				eventType := tailcfg.SSHSessionRecordingFailed
+				if onFailure.RejectSessionWithMessage != "" {
+					eventType = tailcfg.SSHSessionRecordingRejected
+				}
+				ss.notifyControl(ctx, nodeKey, eventType, attempts, onFailure.NotifyURL)
 			}
 
 			if onFailure != nil && onFailure.RejectSessionWithMessage != "" {
@@ -1630,7 +1634,12 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 				lastAttempt := attempts[len(attempts)-1]
 				lastAttempt.FailureMessage = err.Error()
 
-				ss.notifyControl(ctx, nodeKey, tailcfg.SSHSessionRecordingTerminated, attempts, onFailure.NotifyURL)
+				eventType := tailcfg.SSHSessionRecordingFailed
+				if onFailure.TerminateSessionWithMessage != "" {
+					eventType = tailcfg.SSHSessionRecordingTerminated
+				}
+
+				ss.notifyControl(ctx, nodeKey, eventType, attempts, onFailure.NotifyURL)
 			}
 			if onFailure != nil && onFailure.TerminateSessionWithMessage != "" {
 				ss.logf("recording: error uploading recording (closing session): %v", err)
