@@ -649,7 +649,6 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			dev.Close()
 			return false, fmt.Errorf("creating router: %w", err)
 		}
-		sys.Set(r)
 
 		d, err := dns.NewOSConfigurator(logf, devName)
 		if err != nil {
@@ -663,6 +662,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 			conf.Router = netstack.NewSubnetRouterWrapper(conf.Router)
 			netstackSubnetRouter = true
 		}
+		sys.Set(conf.Router)
 	}
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
