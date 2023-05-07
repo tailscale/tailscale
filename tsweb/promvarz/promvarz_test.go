@@ -14,11 +14,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
+var (
+	testVar1 = expvar.NewInt("gauge_promvarz_test_expvar")
+	testVar2 = promauto.NewGauge(prometheus.GaugeOpts{Name: "promvarz_test_native"})
+)
+
 func TestHandler(t *testing.T) {
-	test1 := expvar.NewInt("gauge_promvarz_test_expvar")
-	test1.Set(42)
-	test2 := promauto.NewGauge(prometheus.GaugeOpts{Name: "promvarz_test_native"})
-	test2.Set(4242)
+	testVar1.Set(42)
+	testVar2.Set(4242)
 
 	svr := httptest.NewServer(http.HandlerFunc(Handler))
 	defer svr.Close()

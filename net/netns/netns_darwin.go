@@ -111,7 +111,7 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 	// Verify that we didn't just choose the Tailscale interface;
 	// if so, we fall back to binding from the default.
 	_, tsif, err2 := interfaces.Tailscale()
-	if err2 == nil && tsif.Index == idx {
+	if err2 == nil && tsif != nil && tsif.Index == idx {
 		logf("[unexpected] netns: interfaceIndexFor returned Tailscale interface")
 		return defaultIdx()
 	}
