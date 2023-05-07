@@ -209,9 +209,9 @@ func newIPN(jsConfig js.Value) map[string]any {
 				log.Printf("Usage: tcp(hostname, port, readCallback, connectTimeoutSeconds)")
 				return nil
 			}
-			connectTimeoutSeconds := 0
+			connectTimeoutSeconds := defaultTCPConnectTimeout
 			if len(args) == 4 && args[3].Type() == js.TypeNumber {
-				connectTimeoutSeconds = args[3].Int()
+				connectTimeoutSeconds = args[3].Float()
 			}
 
 			return jsIPN.tcp(
@@ -222,6 +222,9 @@ func newIPN(jsConfig js.Value) map[string]any {
 		}),
 	}
 }
+
+
+const defaultTCPConnectTimeout float64 = 5
 
 type jsIPN struct {
 	dialer     *tsdial.Dialer
@@ -350,7 +353,7 @@ func (i *jsIPN) logout() {
 	go i.lb.Logout()
 }
 
-func (i *jsIPN) tcp(host string, port int, readCallback js.Value, connectTimeoutSeconds int) any {
+func (i *jsIPN) tcp(host string, port int, readCallback js.Value, connectTimeoutSeconds float64) any {
 	portInt := strconv.Itoa(port)
 	addr := net.JoinHostPort(host, portInt)
 
@@ -359,7 +362,7 @@ func (i *jsIPN) tcp(host string, port int, readCallback js.Value, connectTimeout
 			return nil, errors.New("Invalid readCallback received")
 		}
 
-		connectTimeout := time.Duration(connectTimeoutSeconds) * time.Second
+		connectTimeout := time.Duration(connectTimeoutSeconds * float64(time.Second))
 		jsTCPSession, err := i.NewJSTCPSession(addr, readCallback, connectTimeout)
 		if err != nil {
 			return nil, err
@@ -378,12 +381,7 @@ type jsTCPSession struct {
 	readBuffer  []byte
 }
 
-const defaultTCPConnectTimeout time.Duration = 5 * time.Second
-
 func (i *jsIPN) NewJSTCPSession(addr string, readCallback js.Value, connectTimeout time.Duration) (*jsTCPSession, error) {
-	if connectTimeout == 0 {
-		connectTimeout = defaultTCPConnectTimeout
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 
@@ -435,13 +433,13 @@ func (s *jsTCPSession) readLoop(readCallback js.Value) {
 
 func (s *jsTCPSession) jsWrapper() any {
 	return map[string]any{
-		"close": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		"close": js.FuncOf(func(this js.Value, args []js.Value) any {
 			return makePromise(func() (any, error) {
 				err := s.conn.Close()
 				return nil, err
 			})
 		}),
-		"write": js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		"write": js.FuncOf(func(this js.Value, args []js.Value) any {
 			return makePromise(func() (any, error) {
 				dst := args[0]
 				if byteLength := dst.Get("byteLength"); byteLength.Type() == js.TypeNumber {
