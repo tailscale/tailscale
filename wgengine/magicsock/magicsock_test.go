@@ -1631,52 +1631,101 @@ func TestBetterAddr(t *testing.T) {
 		return addrLatency{netip.MustParseAddrPort(ipps), d}
 	}
 	zero := addrLatency{}
+
+	const (
+		publicV4   = "1.2.3.4:555"
+		publicV4_2 = "5.6.7.8:999"
+		publicV6   = "[2001::5]:123"
+
+		privateV4 = "10.0.0.2:123"
+	)
+
 	tests := []struct {
 		a, b addrLatency
-		want bool
+		want bool // whether a is better than b
 	}{
 		{a: zero, b: zero, want: false},
-		{a: al("10.0.0.2:123", 5*ms), b: zero, want: true},
-		{a: zero, b: al("10.0.0.2:123", 5*ms), want: false},
-		{a: al("10.0.0.2:123", 5*ms), b: al("1.2.3.4:555", 10*ms), want: true},
-		{a: al("10.0.0.2:123", 5*ms), b: al("10.0.0.2:123", 10*ms), want: false}, // same IPPort
+		{a: al(publicV4, 5*ms), b: zero, want: true},
+		{a: zero, b: al(publicV4, 5*ms), want: false},
+		{a: al(publicV4, 5*ms), b: al(publicV4_2, 10*ms), want: true},
+		{a: al(publicV4, 5*ms), b: al(publicV4, 10*ms), want: false}, // same IPPort
 
 		// Don't prefer b to a if it's not substantially better.
-		{a: al("10.0.0.2:123", 100*ms), b: al("1.2.3.4:555", 101*ms), want: false},
-		{a: al("10.0.0.2:123", 100*ms), b: al("1.2.3.4:555", 103*ms), want: true},
+		{a: al(publicV4, 100*ms), b: al(publicV4_2, 100*ms), want: false},
+		{a: al(publicV4, 100*ms), b: al(publicV4_2, 101*ms), want: false},
+		{a: al(publicV4, 100*ms), b: al(publicV4_2, 103*ms), want: true},
 
-		// Prefer IPv6 if roughly equivalent:
+		// Latencies of zero don't result in a divide-by-zero
+		{a: al(publicV4, 0), b: al(publicV4_2, 0), want: false},
+
+		// Prefer private IPs to public IPs if roughly equivalent...
 		{
-			a:    al("[2001::5]:123", 100*ms),
-			b:    al("1.2.3.4:555", 91*ms),
+			a:    al(privateV4, 100*ms),
+			b:    al(publicV4, 91*ms),
 			want: true,
 		},
 		{
-			a:    al("1.2.3.4:555", 91*ms),
-			b:    al("[2001::5]:123", 100*ms),
+			a:    al(publicV4, 91*ms),
+			b:    al(privateV4, 100*ms),
+			want: false,
+		},
+		// ... but not if the private IP is slower.
+		{
+			a:    al(privateV4, 100*ms),
+			b:    al(publicV4, 30*ms),
+			want: false,
+		},
+		{
+			a:    al(publicV4, 30*ms),
+			b:    al(privateV4, 100*ms),
+			want: true,
+		},
+
+		// Prefer IPv6 if roughly equivalent:
+		{
+			a:    al(publicV6, 100*ms),
+			b:    al(publicV4, 91*ms),
+			want: true,
+		},
+		{
+			a:    al(publicV4, 91*ms),
+			b:    al(publicV6, 100*ms),
 			want: false,
 		},
 		// But not if IPv4 is much faster:
 		{
-			a:    al("[2001::5]:123", 100*ms),
-			b:    al("1.2.3.4:555", 30*ms),
+			a:    al(publicV6, 100*ms),
+			b:    al(publicV4, 30*ms),
 			want: false,
 		},
 		{
-			a:    al("1.2.3.4:555", 30*ms),
-			b:    al("[2001::5]:123", 100*ms),
+			a:    al(publicV4, 30*ms),
+			b:    al(publicV6, 100*ms),
 			want: true,
 		},
+
+		// Private IPs are preferred over public IPs even if the public
+		// IP is IPv6.
+		{
+			a:    al("192.168.0.1:555", 100*ms),
+			b:    al("[2001::5]:123", 101*ms),
+			want: true,
+		},
+		{
+			a:    al("[2001::5]:123", 101*ms),
+			b:    al("192.168.0.1:555", 100*ms),
+			want: false,
+		},
 	}
-	for _, tt := range tests {
+	for i, tt := range tests {
 		got := betterAddr(tt.a, tt.b)
 		if got != tt.want {
-			t.Errorf("betterAddr(%+v, %+v) = %v; want %v", tt.a, tt.b, got, tt.want)
+			t.Errorf("[%d] betterAddr(%+v, %+v) = %v; want %v", i, tt.a, tt.b, got, tt.want)
 			continue
 		}
 		gotBack := betterAddr(tt.b, tt.a)
 		if got && gotBack {
-			t.Errorf("betterAddr(%+v, %+v) and betterAddr(%+v, %+v) both unexpectedly true", tt.a, tt.b, tt.b, tt.a)
+			t.Errorf("[%d] betterAddr(%+v, %+v) and betterAddr(%+v, %+v) both unexpectedly true", i, tt.a, tt.b, tt.b, tt.a)
 		}
 	}
 
