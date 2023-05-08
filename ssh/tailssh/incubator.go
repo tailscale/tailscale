@@ -688,18 +688,14 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	return nil
 }
 
-func loginShell(u *user.User) string {
+func loginShell(u *userMeta) string {
+	if u.LoginShell != "" {
+		// This field should be populated on Linux, at least, because
+		// func userLookup on Linux uses "getent" to look up the user
+		// and that populates it.
+		return u.LoginShell
+	}
 	switch runtime.GOOS {
-	case "linux":
-		if distro.Get() == distro.Gokrazy {
-			return "/tmp/serial-busybox/ash"
-		}
-		out, _ := exec.Command("getent", "passwd", u.Uid).Output()
-		// out is "root:x:0:0:root:/root:/bin/bash"
-		f := strings.SplitN(string(out), ":", 10)
-		if len(f) > 6 {
-			return strings.TrimSpace(f[6]) // shell
-		}
 	case "darwin":
 		// Note: /Users/username is key, and not the same as u.HomeDir.
 		out, _ := exec.Command("dscl", ".", "-read", filepath.Join("/Users", u.Username), "UserShell").Output()
@@ -715,12 +711,12 @@ func loginShell(u *user.User) string {
 	return "/bin/sh"
 }
 
-func envForUser(u *user.User) []string {
+func envForUser(u *userMeta) []string {
 	return []string{
 		fmt.Sprintf("SHELL=" + loginShell(u)),
 		fmt.Sprintf("USER=" + u.Username),
 		fmt.Sprintf("HOME=" + u.HomeDir),
-		fmt.Sprintf("PATH=" + defaultPathForUser(u)),
+		fmt.Sprintf("PATH=" + defaultPathForUser(&u.User)),
 	}
 }
 

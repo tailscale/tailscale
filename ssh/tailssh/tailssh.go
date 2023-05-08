@@ -22,7 +22,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -45,7 +44,6 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
-	"tailscale.com/version/distro"
 )
 
 var (
@@ -222,7 +220,7 @@ type conn struct {
 	finalActionErr error              // set by doPolicyAuth or resolveNextAction
 
 	info         *sshConnInfo    // set by setInfo
-	localUser    *user.User      // set by doPolicyAuth
+	localUser    *userMeta       // set by doPolicyAuth
 	userGroupIDs []string        // set by doPolicyAuth
 	pubKey       gossh.PublicKey // set by doPolicyAuth
 
@@ -379,16 +377,7 @@ func (c *conn) doPolicyAuth(ctx ssh.Context, pubKey ssh.PublicKey) error {
 		if a.Accept {
 			c.finalAction = a
 		}
-		if runtime.GOOS == "linux" && distro.Get() == distro.Gokrazy {
-			// Gokrazy is a single-user appliance with ~no userspace.
-			// There aren't users to look up (no /etc/passwd, etc)
-			// so rather than fail below, just hardcode root.
-			// TODO(bradfitz): fix os/user upstream instead?
-			c.userGroupIDs = []string{"0"}
-			c.localUser = &user.User{Uid: "0", Gid: "0", Username: "root"}
-			return nil
-		}
-		lu, err := user.Lookup(localUser)
+		lu, err := userLookup(localUser)
 		if err != nil {
 			c.logf("failed to look up %v: %v", localUser, err)
 			ctx.SendAuthBanner(fmt.Sprintf("failed to look up %v\r\n", localUser))
@@ -970,7 +959,7 @@ var errSessionDone = errors.New("session is done")
 // handleSSHAgentForwarding starts a Unix socket listener and in the background
 // forwards agent connections between the listener and the ssh.Session.
 // On success, it assigns ss.agentListener.
-func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *user.User) error {
+func (ss *sshSession) handleSSHAgentForwarding(s ssh.Session, lu *userMeta) error {
 	if !ssh.AgentRequested(ss) || !ss.conn.finalAction.AllowAgentForwarding {
 		return nil
 	}
