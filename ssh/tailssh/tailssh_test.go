@@ -845,7 +845,11 @@ func TestSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc.localUser = u
+	um, err := userLookup(u.Uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.localUser = um
 	sc.info = &sshConnInfo{
 		sshUser: "test",
 		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
@@ -1128,4 +1132,11 @@ func TestPathFromPAMEnvLineOnNixOS(t *testing.T) {
 		t.Fatalf("no result. file was: err=%v, contents=%s", err, x)
 	}
 	t.Logf("success; got=%q", got)
+}
+
+func TestStdOsUserUserAssumptions(t *testing.T) {
+	v := reflect.TypeOf(user.User{})
+	if got, want := v.NumField(), 5; got != want {
+		t.Errorf("os/user.User has %v fields; this package assumes %v", got, want)
+	}
 }
