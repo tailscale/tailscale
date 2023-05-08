@@ -8,14 +8,22 @@ package tailssh
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
+	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"go4.org/mem"
+	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
+	"tailscale.com/util/lineread"
 	"tailscale.com/version/distro"
 )
 
@@ -23,8 +31,9 @@ import (
 type userMeta struct {
 	user.User
 
-	// LoginShell is the user's login shell.
-	LoginShell string
+	// loginShellCached is the user's login shell, if known
+	// at the time of userLookup.
+	loginShellCached string
 }
 
 // GroupIds returns the list of group IDs that the user is a member of.
@@ -50,7 +59,7 @@ func userLookup(uid string) (*userMeta, error) {
 	if distro.Get() == distro.Gokrazy {
 		um, err := userLookupStd(uid)
 		if err == nil {
-			um.LoginShell = "/tmp/serial-busybox/ash"
+			um.loginShellCached = "/tmp/serial-busybox/ash"
 		}
 		return um, err
 	}
@@ -102,7 +111,7 @@ func userLookupGetent(uid string) (*userMeta, error) {
 			Name:     f[4],
 			HomeDir:  f[5],
 		},
-		LoginShell: f[6],
+		loginShellCached: f[6],
 	}
 	return um, nil
 }
@@ -113,4 +122,102 @@ func userLookupStd(uid string) (*userMeta, error) {
 		return nil, err
 	}
 	return &userMeta{User: *u}, nil
+}
+
+func (u *userMeta) LoginShell() string {
+	if u.loginShellCached != "" {
+		// This field should be populated on Linux, at least, because
+		// func userLookup on Linux uses "getent" to look up the user
+		// and that populates it.
+		return u.loginShellCached
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		// Note: /Users/username is key, and not the same as u.HomeDir.
+		out, _ := exec.Command("dscl", ".", "-read", filepath.Join("/Users", u.Username), "UserShell").Output()
+		// out is "UserShell: /bin/bash"
+		s, ok := strings.CutPrefix(string(out), "UserShell: ")
+		if ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	if e := os.Getenv("SHELL"); e != "" {
+		return e
+	}
+	return "/bin/sh"
+}
+
+// defaultPathTmpl specifies the default PATH template to use for new sessions.
+//
+// If empty, a default value is used based on the OS & distro to match OpenSSH's
+// usually-hardcoded behavior. (see
+// https://github.com/tailscale/tailscale/issues/5285 for background).
+//
+// The template may contain @{HOME} or @{PAM_USER} which expand to the user's
+// home directory and username, respectively. (PAM is not used, despite the
+// name)
+var defaultPathTmpl = envknob.RegisterString("TAILSCALE_SSH_DEFAULT_PATH")
+
+func defaultPathForUser(u *user.User) string {
+	if s := defaultPathTmpl(); s != "" {
+		return expandDefaultPathTmpl(s, u)
+	}
+	isRoot := u.Uid == "0"
+	switch distro.Get() {
+	case distro.Debian:
+		hi := hostinfo.New()
+		if hi.Distro == "ubuntu" {
+			// distro.Get's Debian includes Ubuntu. But see if it's actually Ubuntu.
+			// Ubuntu doesn't empirically seem to distinguish between root and non-root for the default.
+			// And it includes /snap/bin.
+			return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+		}
+		if isRoot {
+			return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		}
+		return "/usr/local/bin:/usr/bin:/bin:/usr/bn/games"
+	case distro.NixOS:
+		return defaultPathForUserOnNixOS(u)
+	}
+	if isRoot {
+		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	return "/usr/local/bin:/usr/bin:/bin"
+}
+
+func defaultPathForUserOnNixOS(u *user.User) string {
+	var path string
+	lineread.File("/etc/pam/environment", func(lineb []byte) error {
+		if v := pathFromPAMEnvLine(lineb, u); v != "" {
+			path = v
+			return io.EOF // stop iteration
+		}
+		return nil
+	})
+	return path
+}
+
+func pathFromPAMEnvLine(line []byte, u *user.User) (path string) {
+	if !mem.HasPrefix(mem.B(line), mem.S("PATH")) {
+		return ""
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(string(line), "PATH"))
+	if quoted, ok := strings.CutPrefix(rest, "DEFAULT="); ok {
+		if path, err := strconv.Unquote(quoted); err == nil {
+			return expandDefaultPathTmpl(path, u)
+		}
+	}
+	return ""
+}
+
+func expandDefaultPathTmpl(t string, u *user.User) string {
+	p := strings.NewReplacer(
+		"@{HOME}", u.HomeDir,
+		"@{PAM_USER}", u.Username,
+	).Replace(t)
+	if strings.Contains(p, "@{") {
+		// If there are unknown expansions, conservatively fail closed.
+		return ""
+	}
+	return p
 }
