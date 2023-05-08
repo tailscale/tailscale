@@ -5090,40 +5090,58 @@ func betterAddr(a, b addrLatency) bool {
 	if !a.IsValid() {
 		return false
 	}
-	if a.Addr().Is6() && b.Addr().Is4() {
-		// Prefer IPv6 for being a bit more robust, as long as
-		// the latencies are roughly equivalent.
-		if a.latency/10*9 < b.latency {
-			return true
-		}
-	} else if a.Addr().Is4() && b.Addr().Is6() {
-		if betterAddr(b, a) {
-			return false
-		}
+
+	// Each address starts with a set of points (from 0 to 100) that
+	// represents how much faster they are than the highest-latency
+	// endpoint. For example, if a has latency 200ms and b has latency
+	// 190ms, then a starts with 0 points and b starts with 5 points since
+	// it's 5% faster.
+	var aPoints, bPoints int
+	if a.latency > b.latency && a.latency > 0 {
+		bPoints = int(100 - ((b.latency * 100) / a.latency))
+	} else if b.latency > 0 {
+		aPoints = int(100 - ((a.latency * 100) / b.latency))
 	}
 
-	// If we get here, then both addresses are the same IP type (i.e. both
-	// IPv4 or both IPv6). All decisions below are made solely on latency.
+	// Prefer private IPs over public IPs as long as the latencies are
+	// roughly equivalent, since it's less likely that a user will have to
+	// pay for the bandwidth in a cloud environment.
 	//
-	// Determine how much the latencies differ; we ensure the larger
-	// latency is the denominator, so this fraction will always be <= 1.0.
-	var latencyFraction float64
-	if a.latency >= b.latency {
-		latencyFraction = float64(b.latency) / float64(a.latency)
-	} else {
-		latencyFraction = float64(a.latency) / float64(b.latency)
+	// Additionally, prefer any loopback address strongly over non-loopback
+	// addresses.
+	if a.Addr().IsLoopback() {
+		aPoints += 50
+	} else if a.Addr().IsPrivate() {
+		aPoints += 20
+	}
+	if b.Addr().IsLoopback() {
+		bPoints += 50
+	} else if b.Addr().IsPrivate() {
+		bPoints += 20
+	}
+
+	// Prefer IPv6 for being a bit more robust, as long as
+	// the latencies are roughly equivalent.
+	if a.Addr().Is6() {
+		aPoints += 10
+	}
+	if b.Addr().Is6() {
+		bPoints += 10
 	}
 
 	// Don't change anything if the latency improvement is less than 1%; we
 	// want a bit of "stickiness" (a.k.a. hysteresis) to avoid flapping if
 	// there's two roughly-equivalent endpoints.
-	if latencyFraction >= 0.99 {
+	//
+	// Points are essentially the percentage improvement of latency vs. the
+	// slower endpoint; absent any boosts from private IPs, IPv6, etc., a
+	// will be a better address than b by a fraction of 1% or less if
+	// aPoints <= 1 and bPoints == 0.
+	if aPoints <= 1 && bPoints == 0 {
 		return false
 	}
 
-	// The total difference is >1%, so a is better than b if it's
-	// lower-latency.
-	return a.latency < b.latency
+	return aPoints > bPoints
 }
 
 // endpoint.mu must be held.
