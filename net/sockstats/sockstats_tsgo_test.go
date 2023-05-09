@@ -34,6 +34,14 @@ func TestRadioMonitor(t *testing.T) {
 			0,
 		},
 		{
+			"active less than init stall period",
+			func(tt *testTime, rm *radioMonitor) {
+				rm.active()
+				tt.Add(1 * time.Second)
+			},
+			0, // radio on, but not long enough to report data
+		},
+		{
 			"active, 10 sec idle",
 			func(tt *testTime, rm *radioMonitor) {
 				rm.active()
@@ -42,13 +50,13 @@ func TestRadioMonitor(t *testing.T) {
 			50, // radio on 5 seconds of 10 seconds
 		},
 		{
-			"active, spanning two seconds",
+			"active, spanning three seconds",
 			func(tt *testTime, rm *radioMonitor) {
 				rm.active()
-				tt.Add(1100 * time.Millisecond)
+				tt.Add(2100 * time.Millisecond)
 				rm.active()
 			},
-			100, // radio on for 2 seconds
+			100, // radio on for 3 seconds
 		},
 		{
 			"400 iterations: 2 sec active, 1 min idle",
@@ -66,12 +74,16 @@ func TestRadioMonitor(t *testing.T) {
 		{
 			"activity at end of time window",
 			func(tt *testTime, rm *radioMonitor) {
-				tt.Add(1 * time.Second)
+				tt.Add(3 * time.Second)
 				rm.active()
 			},
-			50,
+			25,
 		},
 	}
+
+	oldStallPeriod := initStallPeriod
+	initStallPeriod = 3
+	t.Cleanup(func() { initStallPeriod = oldStallPeriod })
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
