@@ -82,17 +82,15 @@ var (
 	}
 
 	debs = map[string]bool{
-		"linux/386":     true,
-		"linux/amd64":   true,
-		"linux/arm":     true,
-		"linux/arm64":   true,
-		"linux/riscv64": true,
-		"linux/mips":    true,
-		"linux/mips64":  true,
-		// TODO: enable and verify that mips architecture is passed correctly to
-		// debian. mipsle == mipsel (https://www.debian.org/ports/mips/)
-		// "linux/mipsle":   true,
-		// "linux/mips64le": true,
+		"linux/386":      true,
+		"linux/amd64":    true,
+		"linux/arm":      true,
+		"linux/arm64":    true,
+		"linux/riscv64":  true,
+		"linux/mips":     true,
+		"linux/mips64":   true,
+		"linux/mipsle":   true,
+		"linux/mips64le": true,
 	}
 
 	rpms = map[string]bool{
