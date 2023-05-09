@@ -82,31 +82,31 @@ var (
 	}
 
 	debs = map[string]bool{
-		"linux/386":     true,
-		"linux/amd64":   true,
-		"linux/arm":     true,
-		"linux/arm64":   true,
-		"linux/riscv64": true,
-		// TODO: maybe mipses, we accidentally started building them at some
-		// point even though they probably don't work right.
-		// "linux/mips":     true,
-		// "linux/mipsle":   true,
+		"linux/386":      true,
+		"linux/amd64":    true,
+		"linux/arm":      true,
+		"linux/arm64":    true,
+		"linux/riscv64":  true,
+		"linux/mipsle":   true,
+		"linux/mips64le": true,
+		"linux/mips":     true,
+		// Debian does not support big endian mips64. Leave that out until we know
+		// we need it.
 		// "linux/mips64":   true,
-		// "linux/mips64le": true,
 	}
 
 	rpms = map[string]bool{
-		"linux/386":     true,
-		"linux/amd64":   true,
-		"linux/arm":     true,
-		"linux/arm64":   true,
-		"linux/riscv64": true,
-		// TODO: maybe mipses, we accidentally started building them at some
-		// point even though they probably don't work right.
+		"linux/386":      true,
+		"linux/amd64":    true,
+		"linux/arm":      true,
+		"linux/arm64":    true,
+		"linux/riscv64":  true,
+		"linux/mipsle":   true,
+		"linux/mips64le": true,
+		// Fedora only supports little endian mipses. Maybe some other distribution
+		// supports big-endian? Leave them out for now.
 		// "linux/mips":     true,
-		// "linux/mipsle":   true,
 		// "linux/mips64":   true,
-		// "linux/mips64le": true,
 	}
 )
 
