@@ -325,6 +325,10 @@ type radioMonitor struct {
 // Usage is measured once per second, so this is the number of seconds of history to track.
 const radioSampleSize = 3600 // 1 hour
 
+// initStallPeriod is the minimum amount of time in seconds to collect data before reporting.
+// Otherwise, all clients will report 100% radio usage on startup.
+var initStallPeriod int64 = 120 // 2 minutes
+
 var radio = &radioMonitor{
 	now:       time.Now,
 	startTime: time.Now().Unix(),
@@ -375,7 +379,7 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 		}
 	})
 
-	if periodLength == 0 {
+	if periodLength < initStallPeriod {
 		return 0
 	}
 
@@ -386,7 +390,7 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 }
 
 // forEachSample calls f for each sample in the past hour (or less if less time
-// has passed -- the evaluated period is returned)
+// has passed -- the evaluated period is returned, measured in seconds)
 func (rm *radioMonitor) forEachSample(f func(c int, isActive bool)) (periodLength int64) {
 	now := rm.now().Unix()
 	periodLength = radioSampleSize
