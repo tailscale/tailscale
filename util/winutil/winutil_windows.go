@@ -4,8 +4,11 @@
 package winutil
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os/exec"
 	"os/user"
@@ -13,10 +16,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"tailscale.com/types/logger"
 )
 
 const (
@@ -550,4 +555,167 @@ func findHomeDirInRegistry(uid string) (dir string, err error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+const (
+	maxBinaryValueLen  = 128   // we'll truncate any binary values longer than this
+	maxRegValueNameLen = 16384 // maximum length supported by Windows + 1
+	initialValueBufLen = 80    // large enough to contain a stringified GUID encoded as UTF-16
+)
+
+const (
+	supportInfoKeyRegistry = "Registry"
+)
+
+// LogSupportInfo obtains information useful for troubleshooting and support,
+// and writes it to the log as a JSON-encoded object.
+func LogSupportInfo(logf logger.Logf) {
+	var b strings.Builder
+	if err := getSupportInfo(&b); err != nil {
+		log.Printf("error encoding support info: %v", err)
+		return
+	}
+	logf("Support Info: %s", b.String())
+}
+
+func getSupportInfo(w io.Writer) error {
+	output := make(map[string]any)
+
+	regInfo, err := getRegistrySupportInfo(registry.LOCAL_MACHINE, []string{regPolicyBase, regBase})
+	if err == nil {
+		output[supportInfoKeyRegistry] = regInfo
+	} else {
+		output[supportInfoKeyRegistry] = err
+	}
+
+	enc := json.NewEncoder(w)
+	return enc.Encode(output)
+}
+
+type getRegistrySupportInfoBufs struct {
+	nameBuf  []uint16
+	valueBuf []byte
+}
+
+func getRegistrySupportInfo(root registry.Key, subKeys []string) (map[string]any, error) {
+	bufs := getRegistrySupportInfoBufs{
+		nameBuf:  make([]uint16, maxRegValueNameLen),
+		valueBuf: make([]byte, initialValueBufLen),
+	}
+
+	output := make(map[string]any)
+
+	for _, subKey := range subKeys {
+		if err := getRegSubKey(root, subKey, 5, &bufs, output); err != nil && !errors.Is(err, registry.ErrNotExist) {
+			return nil, fmt.Errorf("getRegistrySupportInfo: %w", err)
+		}
+	}
+
+	return output, nil
+}
+
+func keyString(key registry.Key, subKey string) string {
+	var keyStr string
+	switch key {
+	case registry.CLASSES_ROOT:
+		keyStr = `HKCR\`
+	case registry.CURRENT_USER:
+		keyStr = `HKCU\`
+	case registry.LOCAL_MACHINE:
+		keyStr = `HKLM\`
+	case registry.USERS:
+		keyStr = `HKU\`
+	case registry.CURRENT_CONFIG:
+		keyStr = `HKCC\`
+	case registry.PERFORMANCE_DATA:
+		keyStr = `HKPD\`
+	default:
+	}
+
+	return keyStr + subKey
+}
+
+func getRegSubKey(key registry.Key, subKey string, recursionLimit int, bufs *getRegistrySupportInfoBufs, output map[string]any) error {
+	keyStr := keyString(key, subKey)
+	k, err := registry.OpenKey(key, subKey, registry.READ)
+	if err != nil {
+		return fmt.Errorf("opening %q: %w", keyStr, err)
+	}
+	defer k.Close()
+
+	kv := make(map[string]any)
+	index := uint32(0)
+
+loopValues:
+	for {
+		nbuf := bufs.nameBuf
+		nameLen := uint32(len(nbuf))
+		valueType := uint32(0)
+		vbuf := bufs.valueBuf
+		valueLen := uint32(len(vbuf))
+
+		err := regEnumValue(k, index, &nbuf[0], &nameLen, nil, &valueType, &vbuf[0], &valueLen)
+		switch err {
+		case windows.ERROR_NO_MORE_ITEMS:
+			break loopValues
+		case windows.ERROR_MORE_DATA:
+			bufs.valueBuf = make([]byte, valueLen)
+			continue
+		case nil:
+		default:
+			return fmt.Errorf("regEnumValue: %w", err)
+		}
+
+		var value any
+
+		switch valueType {
+		case registry.SZ, registry.EXPAND_SZ:
+			value = windows.UTF16PtrToString((*uint16)(unsafe.Pointer(&vbuf[0])))
+		case registry.BINARY:
+			if valueLen > maxBinaryValueLen {
+				valueLen = maxBinaryValueLen
+			}
+			value = append([]byte{}, vbuf[:valueLen]...)
+		case registry.DWORD:
+			value = binary.LittleEndian.Uint32(vbuf[:4])
+		case registry.MULTI_SZ:
+			// Adapted from x/sys/windows/registry/(Key).GetStringsValue
+			p := (*[1 << 29]uint16)(unsafe.Pointer(&vbuf[0]))[: valueLen/2 : valueLen/2]
+			var strs []string
+			if len(p) > 0 {
+				if p[len(p)-1] == 0 {
+					p = p[:len(p)-1]
+				}
+				strs = make([]string, 0, 5)
+				from := 0
+				for i, c := range p {
+					if c == 0 {
+						strs = append(strs, string(utf16.Decode(p[from:i])))
+						from = i + 1
+					}
+				}
+			}
+			value = strs
+		case registry.QWORD:
+			value = binary.LittleEndian.Uint64(vbuf[:8])
+		default:
+			value = fmt.Sprintf("<unsupported value type %d>", valueType)
+		}
+
+		kv[windows.UTF16PtrToString(&nbuf[0])] = value
+		index++
+	}
+
+	if recursionLimit > 0 {
+		if sks, err := k.ReadSubKeyNames(0); err == nil {
+			for _, sk := range sks {
+				if err := getRegSubKey(k, sk, recursionLimit-1, bufs, kv); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	output[keyStr] = kv
+	return nil
 }

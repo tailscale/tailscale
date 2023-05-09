@@ -126,6 +126,10 @@ var syslogf logger.Logf = logger.Discard
 // At this point we're still the parent process that
 // Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
+	go func() {
+		winutil.LogSupportInfo(log.Printf)
+	}()
+
 	if winutil.GetPolicyInteger("LogSCMInteractions", 0) != 0 {
 		syslog, err := eventlog.Open(serviceName)
 		if err == nil {
