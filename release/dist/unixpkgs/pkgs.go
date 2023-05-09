@@ -354,6 +354,10 @@ func debArch(arch string) string {
 		// can ship more than 1 ARM deb, so for now match redo's behavior of
 		// shipping armv5 binaries in an armv7 trenchcoat.
 		return "armhf"
+	case "mipsle":
+		return "mipsel"
+	case "mips64le":
+		return "mips64el"
 	default:
 		return arch
 	}
@@ -372,6 +376,10 @@ func rpmArch(arch string) string {
 		return "armv7hl"
 	case "arm64":
 		return "aarch64"
+	case "mipsle":
+		return "mipsel"
+	case "mips64le":
+		return "mips64el"
 	default:
 		return arch
 	}
