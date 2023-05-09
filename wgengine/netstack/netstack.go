@@ -178,6 +178,11 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
 	}
+	congestionOpt := tcpip.CongestionControlOption("cubic") // Reno is used by default
+	tcpipErr = ipstack.SetTransportProtocolOption(tcp.ProtocolNumber, &congestionOpt)
+	if tcpipErr != nil {
+		return nil, fmt.Errorf("could not set TCP congestion control: %v", tcpipErr)
+	}
 	linkEP := channel.New(512, tstun.DefaultMTU(), "")
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
