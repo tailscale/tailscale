@@ -87,11 +87,11 @@ var (
 		"linux/arm":     true,
 		"linux/arm64":   true,
 		"linux/riscv64": true,
-		// TODO: maybe mipses, we accidentally started building them at some
-		// point even though they probably don't work right.
-		// "linux/mips":     true,
+		"linux/mips":    true,
+		"linux/mips64":  true,
+		// TODO: enable and verify that mips architecture is passed correctly to
+		// debian. mipsle == mipsel (https://www.debian.org/ports/mips/)
 		// "linux/mipsle":   true,
-		// "linux/mips64":   true,
 		// "linux/mips64le": true,
 	}
 
