@@ -211,3 +211,22 @@ func (src *OnlyGetClone) Clone() *OnlyGetClone {
 var _OnlyGetCloneCloneNeedsRegeneration = OnlyGetClone(struct {
 	SinViewerPorFavor bool
 }{})
+
+// Clone makes a deep copy of StructWithEmbedded.
+// The result aliases no memory with the original.
+func (src *StructWithEmbedded) Clone() *StructWithEmbedded {
+	if src == nil {
+		return nil
+	}
+	dst := new(StructWithEmbedded)
+	*dst = *src
+	dst.A = src.A.Clone()
+	dst.StructWithSlices = *src.StructWithSlices.Clone()
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithEmbeddedCloneNeedsRegeneration = StructWithEmbedded(struct {
+	A *StructWithPtrs
+	StructWithSlices
+}{})

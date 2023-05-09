@@ -202,13 +202,18 @@ func AssertStructUnchanged(t *types.Struct, tname, ctx string, it *ImportTracker
 	w("var _%s%sNeedsRegeneration = %s(struct {", tname, ctx, tname)
 
 	for i := 0; i < t.NumFields(); i++ {
-		fname := t.Field(i).Name()
+		st := t.Field(i)
+		fname := st.Name()
 		ft := t.Field(i).Type()
 		if IsInvalid(ft) {
 			continue
 		}
 		qname := it.QualifiedName(ft)
-		w("\t%s %s", fname, qname)
+		if st.Anonymous() {
+			w("\t%s ", fname)
+		} else {
+			w("\t%s %s", fname, qname)
+		}
 	}
 
 	w("}{})\n")

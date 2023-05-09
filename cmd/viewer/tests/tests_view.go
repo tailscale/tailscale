@@ -14,7 +14,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=false -type=StructWithPtrs,StructWithoutPtrs,Map,StructWithSlices,OnlyGetClone,StructWithEmbedded
 
 // View returns a readonly view of StructWithPtrs.
 func (p *StructWithPtrs) View() StructWithPtrsView {
@@ -324,4 +324,60 @@ var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
 	Slice          []string
 	Prefixes       []netip.Prefix
 	Data           []byte
+}{})
+
+// View returns a readonly view of StructWithEmbedded.
+func (p *StructWithEmbedded) View() StructWithEmbeddedView {
+	return StructWithEmbeddedView{ж: p}
+}
+
+// StructWithEmbeddedView provides a read-only view over StructWithEmbedded.
+//
+// Its methods should only be called if `Valid()` returns true.
+type StructWithEmbeddedView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *StructWithEmbedded
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v StructWithEmbeddedView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v StructWithEmbeddedView) AsStruct() *StructWithEmbedded {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v StructWithEmbeddedView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *StructWithEmbeddedView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x StructWithEmbedded
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v StructWithEmbeddedView) A() StructWithPtrsView { return v.ж.A.View() }
+func (v StructWithEmbeddedView) StructWithSlices() StructWithSlicesView {
+	return v.ж.StructWithSlices.View()
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _StructWithEmbeddedViewNeedsRegeneration = StructWithEmbedded(struct {
+	A *StructWithPtrs
+	StructWithSlices
 }{})
