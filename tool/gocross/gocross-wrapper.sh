@@ -31,7 +31,7 @@ toolchain="$HOME/.cache/tailscale-go"
 if [ -d "$toolchain" ]; then
     # A toolchain exists, but is it recent enough to compile gocross? If not,
     # wipe it out so that the next if block fetches a usable one.
-    want_go_minor=$(grep -E '^go ' "$repo_root/go.mod" | cut -f2 -d'.')
+    want_go_minor=$(grep -E '^go ' "go.mod" | cut -f2 -d'.')
     have_go_minor=$(cut -f2 -d'.' <$toolchain/VERSION)
     if [ -z "$have_go_minor" -o "$have_go_minor" -lt "$want_go_minor" ]; then
         rm -rf "$toolchain" "$toolchain.extracted"
@@ -45,7 +45,7 @@ if [ ! -d "$toolchain" ]; then
     # build with Go N-1. So, if we have no cached tailscale toolchain at all,
     # fetch the initial one in shell. Once gocross is built, it'll manage
     # updates.
-    read -r REV <$repo_root/go.toolchain.rev
+    read -r REV <go.toolchain.rev
 
     case "$REV" in
     /*)
@@ -80,7 +80,7 @@ fi
 # case, cmd/cloner invokes go with GO111MODULE=off at some stage.
 #
 # Anyway, build gocross in a stripped down universe.
-gocross_path="$repo_root/gocross"
+gocross_path="gocross"
 gocross_ok=0
 wantver="$(git rev-parse HEAD)"
 if [ -x "$gocross_path" ]; then
