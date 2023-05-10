@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -156,9 +155,6 @@ func TestHairpinWait(t *testing.T) {
 }
 
 func TestBasic(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("TODO(#7876): test regressed on windows while CI was broken")
-	}
 	stunAddr, cleanup := stuntest.Serve(t)
 	defer cleanup()
 
