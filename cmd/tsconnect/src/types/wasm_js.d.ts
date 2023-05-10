@@ -34,7 +34,14 @@ declare global {
       statusText: string
       text: () => Promise<string>
     }>
-    tcp(hostname: string, port: number, readCallback: (data: Uint8Array) => void, connectTimeoutSeconds?: number): Promise<IPNTCPSession>;
+    tcp(config: {
+      hostname: string
+      port: number
+      readCallback: (data: Uint8Array) => void,
+      connectTimeoutSeconds?: number
+      writeBufferSizeInBytes?: number
+      readBufferSizeInBytes?: number
+    }): Promise<IPNTCPSession>;
   }
 
   interface IPNSSHSession {
