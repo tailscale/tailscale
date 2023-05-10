@@ -3,7 +3,9 @@
 
 package tstest
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestReplace(t *testing.T) {
 	before := "before"
@@ -20,5 +22,12 @@ func TestReplace(t *testing.T) {
 	}
 	if before != "before" {
 		t.Errorf("before = %q; want %q", before, "before")
+	}
+}
+
+func TestGetSeed(t *testing.T) {
+	t.Setenv("TS_TEST_SEED", "1234")
+	if got, want := GetSeed(t), int64(1234); got != want {
+		t.Errorf("GetSeed = %v; want %v", got, want)
 	}
 }
