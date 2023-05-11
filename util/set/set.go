@@ -4,6 +4,21 @@
 // Package set contains set types.
 package set
 
+// Set is a set of T.
+type Set[T comparable] map[T]struct{}
+
+// Add adds e to the set.
+func (s Set[T]) Add(e T) { s[e] = struct{}{} }
+
+// Contains reports whether s contains e.
+func (s Set[T]) Contains(e T) bool {
+	_, ok := s[e]
+	return ok
+}
+
+// Len reports the number of items in s.
+func (s Set[T]) Len() int { return len(s) }
+
 // HandleSet is a set of T.
 //
 // It is not safe for concurrent use.
