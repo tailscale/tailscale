@@ -1198,7 +1198,8 @@ func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 		},
 	}
 
-	authkey, _, err := tsClient.CreateKey(ctx, caps)
+	const defaultExpiry = 0
+	authkey, _, err := tsClient.CreateKey(ctx, caps, defaultExpiry)
 	if err != nil {
 		return "", err
 	}
