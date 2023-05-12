@@ -567,6 +567,9 @@ func (a *ServiceReconciler) getDeviceInfo(ctx context.Context, svc *corev1.Servi
 	if err != nil {
 		return "", "", err
 	}
+	if sec == nil {
+		return "", "", nil
+	}
 	id = string(sec.Data["device_id"])
 	if id == "" {
 		return "", "", nil
