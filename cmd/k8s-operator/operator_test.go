@@ -807,14 +807,13 @@ type fakeTSClient struct {
 	deleted     []string
 }
 
-func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities, expiry time.Duration) (string, *tailscale.Key, error) {
+func (c *fakeTSClient) CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error) {
 	c.Lock()
 	defer c.Unlock()
 	c.keyRequests = append(c.keyRequests, caps)
 	k := &tailscale.Key{
 		ID:           "key",
 		Created:      time.Now(),
-		Expires:      time.Now().Add(expiry),
 		Capabilities: caps,
 	}
 	return "secret-authkey", k, nil
