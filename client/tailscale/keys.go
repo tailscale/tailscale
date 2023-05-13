@@ -68,14 +68,26 @@ func (c *Client) Keys(ctx context.Context) ([]string, error) {
 }
 
 // CreateKey creates a new key for the current user. Currently, only auth keys
-// can be created. Returns the key itself, which cannot be retrieved again
+// can be created. It returns the secret key itself, which cannot be retrieved again
 // later, and the key metadata.
-func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities, expiry time.Duration) (string, *Key, error) {
+//
+// To create a key with a specific expiry, use CreateKeyWithExpiry.
+func (c *Client) CreateKey(ctx context.Context, caps KeyCapabilities) (keySecret string, keyMeta *Key, _ error) {
+	return c.CreateKeyWithExpiry(ctx, caps, 0)
+}
+
+// CreateKeyWithExpiry is like CreateKey, but allows specifying a expiration time.
+//
+// The time is truncated to a whole number of seconds. If zero, that means no expiration.
+func (c *Client) CreateKeyWithExpiry(ctx context.Context, caps KeyCapabilities, expiry time.Duration) (keySecret string, keyMeta *Key, _ error) {
 
 	// convert expirySeconds to an int64 (seconds)
 	expirySeconds := int64(expiry.Seconds())
 	if expirySeconds < 0 {
 		return "", nil, fmt.Errorf("expiry must be positive")
+	}
+	if expirySeconds == 0 && expiry != 0 {
+		return "", nil, fmt.Errorf("non-zero expiry must be at least one second")
 	}
 
 	keyRequest := struct {
