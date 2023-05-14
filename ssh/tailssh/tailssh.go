@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	gossh "github.com/tailscale/golang-x-crypto/ssh"
@@ -1072,7 +1073,7 @@ func (ss *sshSession) run() {
 		}
 	}
 
-	err := ss.launchProcess()
+	tty, err := ss.launchProcess()
 	if err != nil {
 		logf("start failed: %v", err.Error())
 		if errors.Is(err, context.Canceled) {
@@ -1086,6 +1087,9 @@ func (ss *sshSession) run() {
 		return
 	}
 	go ss.killProcessOnContextDone()
+
+	closed := false
+	var mu sync.Mutex
 
 	go func() {
 		defer ss.stdin.Close()
@@ -1103,7 +1107,9 @@ func (ss *sshSession) run() {
 	go func() {
 		defer ss.stdout.Close()
 		_, err := io.Copy(rec.writer("o", ss), ss.stdout)
-		if err != nil && !errors.Is(err, io.EOF) {
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil && !errors.Is(err, io.EOF) && !(closed && errors.Is(err, syscall.EIO)) {
 			logf("stdout copy: %v", err)
 			ss.cancelCtx(err)
 		}
@@ -1121,6 +1127,15 @@ func (ss *sshSession) run() {
 			if openOutputStreams.Add(-1) == 0 {
 				ss.CloseWrite()
 			}
+		}()
+	}
+
+	if tty != nil {
+		defer func() {
+			mu.Lock()
+			defer mu.Unlock()
+			tty.Close()
+			closed = true
 		}()
 	}
 

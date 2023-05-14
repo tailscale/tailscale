@@ -415,7 +415,7 @@ func dropPrivileges(logf logger.Logf, wantUid, wantGid int, supplementaryGroups 
 // The caller can wait for the process to exit by calling cmd.Wait().
 //
 // It sets ss.cmd, stdin, stdout, and stderr.
-func (ss *sshSession) launchProcess() error {
+func (ss *sshSession) launchProcess() (tty *os.File, err error) {
 	ss.cmd = ss.newIncubatorCommand()
 
 	cmd := ss.cmd
@@ -427,7 +427,7 @@ func (ss *sshSession) launchProcess() error {
 		// Instead, we'll chdir to the root directory.
 		cmd.Dir = "/"
 	} else {
-		return err
+		return nil, err
 	}
 	cmd.Env = envForUser(ss.conn.localUser)
 	for _, kv := range ss.Environ() {
@@ -449,19 +449,24 @@ func (ss *sshSession) launchProcess() error {
 	ptyReq, winCh, isPty := ss.Pty()
 	if !isPty {
 		ss.logf("starting non-pty command: %+v", cmd.Args)
-		return ss.startWithStdPipes()
+		return nil, ss.startWithStdPipes()
 	}
 	ss.ptyReq = &ptyReq
-	pty, err := ss.startWithPTY()
+	pty, tty, err := ss.startWithPTY()
+	defer func() {
+		if err != nil {
+			tty.Close()
+		}
+	}()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// We need to be able to close stdin and stdout separately later so make a
 	// dup.
 	ptyDup, err := syscall.Dup(int(pty.Fd()))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	go resizeWindow(ptyDup /* arbitrary fd */, winCh)
 
@@ -469,7 +474,7 @@ func (ss *sshSession) launchProcess() error {
 	ss.stdout = os.NewFile(uintptr(ptyDup), pty.Name())
 	ss.stderr = nil // not available for pty
 
-	return nil
+	return tty, nil
 }
 
 func resizeWindow(fd int, winCh <-chan ssh.Window) {
@@ -544,14 +549,14 @@ var opcodeShortName = map[uint8]string{
 }
 
 // startWithPTY starts cmd with a pseudo-terminal attached to Stdin, Stdout and Stderr.
-func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
+func (ss *sshSession) startWithPTY() (ptyFile, ttyFile *os.File, err error) {
 	ptyReq := ss.ptyReq
 	cmd := ss.cmd
 	if cmd == nil {
-		return nil, errors.New("nil ss.cmd")
+		return nil, nil, errors.New("nil ss.cmd")
 	}
 	if ptyReq == nil {
-		return nil, errors.New("nil ss.ptyReq")
+		return nil, nil, errors.New("nil ss.ptyReq")
 	}
 
 	var tty *os.File
@@ -568,7 +573,7 @@ func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 	}()
 	ptyRawConn, err := tty.SyscallConn()
 	if err != nil {
-		return nil, fmt.Errorf("SyscallConn: %w", err)
+		return nil, nil, fmt.Errorf("SyscallConn: %w", err)
 	}
 	var ctlErr error
 	if err := ptyRawConn.Control(func(fd uintptr) {
@@ -615,10 +620,10 @@ func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 			return
 		}
 	}); err != nil {
-		return nil, fmt.Errorf("ptyRawConn.Control: %w", err)
+		return nil, nil, fmt.Errorf("ptyRawConn.Control: %w", err)
 	}
 	if ctlErr != nil {
-		return nil, fmt.Errorf("ptyRawConn.Control func: %w", ctlErr)
+		return nil, nil, fmt.Errorf("ptyRawConn.Control func: %w", ctlErr)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setctty: true,
@@ -642,7 +647,7 @@ func (ss *sshSession) startWithPTY() (ptyFile *os.File, err error) {
 	if err = cmd.Start(); err != nil {
 		return
 	}
-	return ptyFile, nil
+	return ptyFile, tty, nil
 }
 
 // startWithStdPipes starts cmd with os.Pipe for Stdin, Stdout and Stderr.
