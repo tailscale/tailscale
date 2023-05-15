@@ -503,7 +503,8 @@ Returns the enabled and advertised subnet routes for a device.
 POST /api/v2/device/{deviceID}/authorized
 ```
 
-Authorize a device. This call marks a device as authorized for tailnets where device authorization is required.
+Authorize a device.
+This call marks a device as authorized or revokes its authorization for tailnets where device authorization is required, according to the `authorized` field in the payload.
 
 This returns a successful 2xx response with an empty JSON object in the response body.
 
@@ -515,7 +516,7 @@ The ID of the device.
 
 #### `authorized` (required in `POST` body)
 
-Specify whether the device is authorized. Only 'true' is currently supported.
+Specify whether the device is authorized.
 
 ``` jsonc
 {
