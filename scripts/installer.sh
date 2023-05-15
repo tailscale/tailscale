@@ -217,7 +217,7 @@ main() {
 				VERSION="tumbleweed"
 				PACKAGETYPE="zypper"
 				;;
-			arch|archarm|endeavouros)
+			arch|archarm|endeavouros|blendos)
 				OS="arch"
 				VERSION="" # rolling release
 				PACKAGETYPE="pacman"
