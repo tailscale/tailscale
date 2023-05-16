@@ -224,7 +224,10 @@ func TestServeConfigMutations(t *testing.T) {
 		command: cmd("https:443 bar https://127.0.0.1:8443"),
 		want:    nil, // nothing to save
 	})
-	add(step{reset: true})
+	add(step{ // try resetting using reset command
+		command: cmd("reset"),
+		want:    &ipn.ServeConfig{},
+	})
 	add(step{
 		command: cmd("https:443 / https+insecure://127.0.0.1:3001"),
 		want: &ipn.ServeConfig{

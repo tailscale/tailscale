@@ -40,6 +40,7 @@ serve https:<port> <mount-point> <source> [off]
   serve tcp:<port> tcp://localhost:<local-port> [off]
   serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]
   serve status [--json]
+  serve reset
 `),
 		LongHelp: strings.TrimSpace(`
 *** BETA; all of this is subject to change ***
@@ -85,6 +86,13 @@ EXAMPLES
 				FlagSet: e.newFlags("serve-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
 				}),
+				UsageFunc: usageFunc,
+			},
+			{
+				Name:      "reset",
+				Exec:      e.runServeReset,
+				ShortHelp: "reset current serve/funnel config",
+				FlagSet:   e.newFlags("serve-reset", nil),
 				UsageFunc: usageFunc,
 			},
 		},
@@ -704,4 +712,16 @@ func elipticallyTruncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+// runServeReset clears out the current serve config.
+//
+// Usage:
+//   - tailscale serve reset
+func (e *serveEnv) runServeReset(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return flag.ErrHelp
+	}
+	sc := new(ipn.ServeConfig)
+	return e.lc.SetServeConfig(ctx, sc)
 }
