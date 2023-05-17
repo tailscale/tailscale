@@ -116,10 +116,12 @@
 	<a class="text-xs text-gray-500 hover:text-gray-600" href="{{ .LicensesURL }}">Open Source Licenses</a>
 </footer>
 <script>(function () {
-const advertiseExitNode = {{.AdvertiseExitNode}};
+const advertiseExitNode = {{ .AdvertiseExitNode }};
+const isUnraid = {{ .IsUnraid }};
+const unraidCsrfToken = "{{ .UnraidToken }}";
 let fetchingUrl = false;
 var data = {
-	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
+	AdvertiseRoutes: "{{ .AdvertiseRoutes }}",
 	AdvertiseExitNode: advertiseExitNode,
 	Reauthenticate: false,
 	ForceLogout: false
@@ -141,15 +143,27 @@ function postData(e) {
 	}
 	const nextUrl = new URL(window.location);
 	nextUrl.search = nextParams.toString()
-	const url = nextUrl.toString();
 
+	let body = JSON.stringify(data);
+	let contentType = "application/json";
+
+	if (isUnraid) {
+		const params = new URLSearchParams();
+		params.append("csrf_token", unraidCsrfToken);
+		params.append("ts_data", JSON.stringify(data));
+
+		body = params.toString();
+		contentType = "application/x-www-form-urlencoded;charset=UTF-8";
+	}
+
+	const url = nextUrl.toString();
 	fetch(url, {
 		method: "POST",
 		headers: {
 			"Accept": "application/json",
-			"Content-Type": "application/json",
+			"Content-Type": contentType,
 		},
-		body: JSON.stringify(data)
+		body: body
 	}).then(res => res.json()).then(res => {
 		fetchingUrl = false;
 		const err = res["error"];
@@ -158,7 +172,11 @@ function postData(e) {
 		}
 		const url = res["url"];
 		if (url) {
-			document.location.href = url;
+			if(isUnraid) {
+				window.open(url, "_blank");
+			} else {
+				document.location.href = url;
+			}
 		} else {
 			location.reload();
 		}
