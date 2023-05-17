@@ -116,12 +116,12 @@
 	<a class="text-xs text-gray-500 hover:text-gray-600" href="{{ .LicensesURL }}">Open Source Licenses</a>
 </footer>
 <script>(function () {
-const advertiseExitNode = {{.AdvertiseExitNode}};
-const isUnraid = {{.IsUnraid}};
-const unraidCsrfToken = "{{.UnraidToken}}";
+const advertiseExitNode = {{ .AdvertiseExitNode }};
+const isUnraid = {{ .IsUnraid }};
+const unraidCsrfToken = "{{ .UnraidToken }}";
 let fetchingUrl = false;
 var data = {
-	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
+	AdvertiseRoutes: "{{ .AdvertiseRoutes }}",
 	AdvertiseExitNode: advertiseExitNode,
 	Reauthenticate: false,
 	ForceLogout: false
@@ -143,20 +143,18 @@ function postData(e) {
 	}
 	const nextUrl = new URL(window.location);
 	nextUrl.search = nextParams.toString()
-	const url = nextUrl.toString();
 
+	let contentType = "application/json";
+	let body = JSON.stringify(data);
 	if (isUnraid) {
-		var formBody = [];
-		formBody.push(encodeURIComponent("csrf_token") + "=" + encodeURIComponent(unraidCsrfToken));
-		formBody.push(encodeURIComponent("ts_data") + "=" + encodeURIComponent(JSON.stringify(data)));
-
-		var body = formBody.join("&");
-		var contentType = "application/x-www-form-urlencoded;charset=UTF-8";
-	} else {
-		var body = JSON.stringify(data);
-		var contentType = "application/json";
+		const params = new URLSearchParams();
+		params.append("csrf_token", unraidCsrfToken);
+		params.append("ts_data", JSON.stringify(data));
+		body = params.toString();
+		contentType = "application/x-www-form-urlencoded;charset=UTF-8";
 	}
 
+	const url = nextUrl.toString();
 	fetch(url, {
 		method: "POST",
 		headers: {
