@@ -65,6 +65,7 @@ func main() {
 		clientIDPath       = defaultEnv("CLIENT_ID_FILE", "")
 		clientSecretPath   = defaultEnv("CLIENT_SECRET_FILE", "")
 		image              = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		priorityClassName  = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
 		shouldRunAuthProxy = defaultBool("AUTH_PROXY", false)
 	)
@@ -201,12 +202,13 @@ waitOnline:
 	}
 
 	sr := &ServiceReconciler{
-		Client:            mgr.GetClient(),
-		tsClient:          tsClient,
-		defaultTags:       strings.Split(tags, ","),
-		operatorNamespace: tsNamespace,
-		proxyImage:        image,
-		logger:            zlog.Named("service-reconciler"),
+		Client:                 mgr.GetClient(),
+		tsClient:               tsClient,
+		defaultTags:            strings.Split(tags, ","),
+		operatorNamespace:      tsNamespace,
+		proxyImage:             image,
+		proxyPriorityClassName: priorityClassName,
+		logger:                 zlog.Named("service-reconciler"),
 	}
 
 	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
@@ -279,11 +281,12 @@ const (
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
 type ServiceReconciler struct {
 	client.Client
-	tsClient          tsClient
-	defaultTags       []string
-	operatorNamespace string
-	proxyImage        string
-	logger            *zap.SugaredLogger
+	tsClient               tsClient
+	defaultTags            []string
+	operatorNamespace      string
+	proxyImage             string
+	proxyPriorityClassName string
+	logger                 *zap.SugaredLogger
 }
 
 type tsClient interface {
@@ -638,6 +641,7 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 	ss.Spec.Template.ObjectMeta.Labels = map[string]string{
 		"app": string(parentSvc.UID),
 	}
+	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
 }
