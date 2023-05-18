@@ -42,3 +42,63 @@ func Shuffle[S ~[]T, T any](s S) {
 		s[i], s[j] = s[j], s[i]
 	}
 }
+
+// Deduplicate removes duplicate elements from the provided slice, compared as
+// if using the == operator. The slice is modified and returned, similar to the
+// append function.
+func Deduplicate[S ~[]T, T comparable](s S) S {
+	// Avoid allocs on empty slices
+	if s == nil {
+		return nil
+	}
+
+	var (
+		ret  = s[:0]
+		seen = make(map[T]bool)
+	)
+	for _, elem := range s {
+		if seen[elem] {
+			continue
+		}
+		seen[elem] = true
+		ret = append(ret, elem)
+	}
+
+	// Zero out elements remaining at end of existing slice.
+	var zero T
+	for i := len(ret); i < len(s); i++ {
+		s[i] = zero
+	}
+
+	return ret
+}
+
+// DeduplicateFunc is the same as Deduplicate, but uses the provided function
+// to provide a key that is used for deduplication.
+func DeduplicateFunc[S ~[]T, T any, K comparable](s S, fn func(T) K) S {
+	// Avoid allocs on empty slices
+	if s == nil {
+		return nil
+	}
+
+	var (
+		ret  = s[:0]
+		seen = make(map[K]bool)
+	)
+	for _, elem := range s {
+		key := fn(elem)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ret = append(ret, elem)
+	}
+
+	// Zero out elements remaining at end of existing slice.
+	var zero T
+	for i := len(ret); i < len(s); i++ {
+		s[i] = zero
+	}
+
+	return ret
+}

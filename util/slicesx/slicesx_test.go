@@ -44,6 +44,7 @@ func BenchmarkInterleave(b *testing.B) {
 		)
 	}
 }
+
 func TestShuffle(t *testing.T) {
 	var sl []int
 	for i := 0; i < 100; i++ {
@@ -62,5 +63,66 @@ func TestShuffle(t *testing.T) {
 
 	if !wasShuffled {
 		t.Errorf("expected shuffle after 10 tries")
+	}
+}
+
+func TestDeduplicate(t *testing.T) {
+	testCases := []struct {
+		name string
+		ss   []int
+		want []int
+	}{
+		{name: "no_dupes", ss: []int{1, 2, 3, 4}, want: []int{1, 2, 3, 4}},
+		{name: "ordered_dupes", ss: []int{1, 1, 2, 2, 3, 1}, want: []int{1, 2, 3}},
+		{name: "unordered_dupes", ss: []int{1, 2, 3, 1, 2, 3}, want: []int{1, 2, 3}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Deduplicate(tc.ss)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeduplicateFunc(t *testing.T) {
+	type uncomparable struct {
+		_   [0]map[string]int
+		key string
+	}
+
+	testCases := []struct {
+		name string
+		ss   []uncomparable
+		want []uncomparable
+	}{
+		{
+			name: "no_dupes",
+			ss:   []uncomparable{{key: "one"}, {key: "two"}},
+			want: []uncomparable{{key: "one"}, {key: "two"}},
+		},
+		{
+			name: "ordered_dupes",
+			ss:   []uncomparable{{key: "one"}, {key: "one"}, {key: "two"}, {key: "two"}, {key: "two"}},
+			want: []uncomparable{{key: "one"}, {key: "two"}},
+		},
+		{
+			name: "unordered_dupes",
+			ss:   []uncomparable{{key: "one"}, {key: "two"}, {key: "one"}, {key: "two"}, {key: "one"}},
+			want: []uncomparable{{key: "one"}, {key: "two"}},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DeduplicateFunc(tc.ss, func(uu uncomparable) string {
+				return uu.key
+			})
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
