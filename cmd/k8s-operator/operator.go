@@ -25,7 +25,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/transport"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -38,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/hostinfo"
@@ -185,17 +183,17 @@ waitOnline:
 	// the cache that sits a few layers below the builder stuff, which will
 	// implicitly filter what parts of the world the builder code gets to see at
 	// all.
-	nsFilter := cache.ObjectSelector{
-		Field: fields.SelectorFromSet(fields.Set{"metadata.namespace": tsNamespace}),
+	nsFilter := cache.ByObject{
+		Field: client.InNamespace(tsNamespace).AsSelector(),
 	}
 	restConfig := config.GetConfigOrDie()
 	mgr, err := manager.New(restConfig, manager.Options{
-		NewCache: cache.BuilderWithOptions(cache.Options{
-			SelectorsByObject: map[client.Object]cache.ObjectSelector{
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}:      nsFilter,
 				&appsv1.StatefulSet{}: nsFilter,
 			},
-		}),
+		},
 	})
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
@@ -211,7 +209,7 @@ waitOnline:
 		logger:                 zlog.Named("service-reconciler"),
 	}
 
-	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(o client.Object) []reconcile.Request {
+	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 		ls := o.GetLabels()
 		if ls[LabelManaged] != "true" {
 			return nil
@@ -231,8 +229,8 @@ waitOnline:
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
-		Watches(&source.Kind{Type: &appsv1.StatefulSet{}}, reconcileFilter).
-		Watches(&source.Kind{Type: &corev1.Secret{}}, reconcileFilter).
+		Watches(&appsv1.StatefulSet{}, reconcileFilter).
+		Watches(&corev1.Secret{}, reconcileFilter).
 		Complete(sr)
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)
