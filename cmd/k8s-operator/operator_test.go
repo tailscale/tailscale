@@ -110,6 +110,8 @@ func TestLoadBalancerClass(t *testing.T) {
 	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
 		s.Spec.Type = corev1.ServiceTypeClusterIP
 		s.Spec.LoadBalancerClass = nil
+	})
+	mustUpdateStatus(t, fc, "default", "test", func(s *corev1.Service) {
 		// Fake client doesn't automatically delete the LoadBalancer status when
 		// changing away from the LoadBalancer type, we have to do
 		// controller-manager's work by hand.
@@ -447,6 +449,8 @@ func TestLBIntoAnnotation(t *testing.T) {
 		}
 		s.Spec.Type = corev1.ServiceTypeClusterIP
 		s.Spec.LoadBalancerClass = nil
+	})
+	mustUpdateStatus(t, fc, "default", "test", func(s *corev1.Service) {
 		// Fake client doesn't automatically delete the LoadBalancer status when
 		// changing away from the LoadBalancer type, we have to do
 		// controller-manager's work by hand.
@@ -773,6 +777,21 @@ func mustUpdate[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, n
 	}
 	update(obj)
 	if err := client.Update(context.Background(), obj); err != nil {
+		t.Fatalf("updating %q: %v", name, err)
+	}
+}
+
+func mustUpdateStatus[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string, update func(O)) {
+	t.Helper()
+	obj := O(new(T))
+	if err := client.Get(context.Background(), types.NamespacedName{
+		Name:      name,
+		Namespace: ns,
+	}, obj); err != nil {
+		t.Fatalf("getting %q: %v", name, err)
+	}
+	update(obj)
+	if err := client.Status().Update(context.Background(), obj); err != nil {
 		t.Fatalf("updating %q: %v", name, err)
 	}
 }
