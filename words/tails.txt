@@ -541,3 +541,6 @@ vimba
 wahoo
 coelacanth
 llama
+shrimp
+prawn
+lobster
