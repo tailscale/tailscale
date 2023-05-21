@@ -48,19 +48,26 @@ func (u *userMeta) GroupIds() ([]string, error) {
 	return u.User.GroupIds()
 }
 
-// userLookup is like os/user.LookupId but it returns a *userMeta wrapper
+// userLookup is like os/user.Lookup but it returns a *userMeta wrapper
 // around a *user.User with extra fields.
-func userLookup(uid string) (*userMeta, error) {
+func userLookup(username string) (*userMeta, error) {
 	if runtime.GOOS != "linux" {
-		return userLookupStd(uid)
+		return userLookupStd(username)
 	}
 
 	// No getent on Gokrazy. So hard-code the login shell.
 	if distro.Get() == distro.Gokrazy {
-		um, err := userLookupStd(uid)
-		if err == nil {
-			um.loginShellCached = "/tmp/serial-busybox/ash"
+		um, err := userLookupStd(username)
+		if err != nil {
+			um.User = user.User{
+				Uid:      "0",
+				Gid:      "0",
+				Username: "root",
+				Name:     "Gokrazy",
+				HomeDir:  "/",
+			}
 		}
+		um.loginShellCached = "/tmp/serial-busybox/ash"
 		return um, err
 	}
 
@@ -70,7 +77,7 @@ func userLookup(uid string) (*userMeta, error) {
 	// os/user without cgo won't get (because of no libc hooks).
 	// But if "getent" fails, userLookupGetent falls back to the standard
 	// library anyway.
-	return userLookupGetent(uid)
+	return userLookupGetent(username)
 }
 
 func validUsername(uid string) bool {
@@ -85,18 +92,18 @@ func validUsername(uid string) bool {
 	return true
 }
 
-func userLookupGetent(uid string) (*userMeta, error) {
+func userLookupGetent(username string) (*userMeta, error) {
 	// Do some basic validation before passing this string to "getent", even though
 	// getent should do its own validation.
-	if !validUsername(uid) {
+	if !validUsername(username) {
 		return nil, errors.New("invalid username")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "getent", "passwd", uid).Output()
+	out, err := exec.CommandContext(ctx, "getent", "passwd", username).Output()
 	if err != nil {
-		log.Printf("error calling getent for user %q: %v", uid, err)
-		return userLookupStd(uid)
+		log.Printf("error calling getent for user %q: %v", username, err)
+		return userLookupStd(username)
 	}
 	// output is "alice:x:1001:1001:Alice Smith,,,:/home/alice:/bin/bash"
 	f := strings.SplitN(strings.TrimSpace(string(out)), ":", 10)
@@ -116,8 +123,8 @@ func userLookupGetent(uid string) (*userMeta, error) {
 	return um, nil
 }
 
-func userLookupStd(uid string) (*userMeta, error) {
-	u, err := user.LookupId(uid)
+func userLookupStd(username string) (*userMeta, error) {
+	u, err := user.Lookup(username)
 	if err != nil {
 		return nil, err
 	}
