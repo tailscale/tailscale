@@ -851,7 +851,7 @@ func TestSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	um, err := userLookup(u.Uid)
+	um, err := userLookup(u.Username)
 	if err != nil {
 		t.Fatal(err)
 	}
