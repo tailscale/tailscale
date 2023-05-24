@@ -82,6 +82,13 @@ func isProblematicInterface(nif *net.Interface) bool {
 	return false
 }
 
+func isThunderboltBridgeInterface(nif *net.Interface) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return strings.HasPrefix(nif.Name, "bridge")
+}
+
 // LocalAddresses returns the machine's IP addresses, separated by
 // whether they're loopback addresses. If there are no regular addresses
 // it will return any IPv4 linklocal or IPv6 unique local addresses because we
@@ -125,7 +132,7 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 				}
 				if ip.IsLoopback() || ifcIsLoopback {
 					loopback = append(loopback, ip)
-				} else if ip.IsLinkLocalUnicast() {
+				} else if ip.IsLinkLocalUnicast() && !isThunderboltBridgeInterface(stdIf) {
 					if ip.Is4() {
 						linklocal4 = append(linklocal4, ip)
 					}
