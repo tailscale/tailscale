@@ -24,11 +24,6 @@ var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 // Poller scans the systems for listening ports periodically and sends
 // the results to C.
 type Poller struct {
-	// IncludeLocalhost controls whether services bound to localhost are included.
-	//
-	// This field should only be changed before calling Run.
-	IncludeLocalhost bool
-
 	c chan List // unbuffered
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
@@ -50,6 +45,10 @@ type Poller struct {
 	scratch []Port
 
 	prev List // most recent data, not aliasing scratch
+
+	// caller options fields
+	includeLocalhost bool
+	pollInterval     time.Duration
 }
 
 // osImpl is the OS-specific implementation of getting the open listening ports.
@@ -71,15 +70,34 @@ var newOSImpl func(includeLocalhost bool) osImpl
 
 var errUnimplemented = errors.New("portlist poller not implemented on " + runtime.GOOS)
 
+// PollerOptions for customizing the behavior
+// of the Poller. The zero value uses each
+// of the options' defaults.
+type PollerOptions struct {
+	// IncludeLocalhost controls whether services bound to localhost are included.
+	//
+	// This field should only be changed before calling Run.
+	IncludeLocalhost bool
+
+	// PollInterval sets the interval for checking the underlying OS
+	// for port updates.
+	PollInterval time.Duration
+}
+
 // NewPoller returns a new portlist Poller. It returns an error
 // if the portlist couldn't be obtained.
-func NewPoller() (*Poller, error) {
+func NewPoller(opts PollerOptions) (*Poller, error) {
 	if debugDisablePortlist() {
 		return nil, errors.New("portlist disabled by envknob")
 	}
+	if opts.PollInterval == 0 {
+		opts.PollInterval = pollInterval
+	}
 	p := &Poller{
-		c:       make(chan List),
-		runDone: make(chan struct{}),
+		c:                make(chan List),
+		runDone:          make(chan struct{}),
+		includeLocalhost: opts.IncludeLocalhost,
+		pollInterval:     opts.PollInterval,
 	}
 	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
 	p.osOnce.Do(p.initOSField)
@@ -105,7 +123,7 @@ func (p *Poller) setPrev(pl List) {
 
 func (p *Poller) initOSField() {
 	if newOSImpl != nil {
-		p.os = newOSImpl(p.IncludeLocalhost)
+		p.os = newOSImpl(p.includeLocalhost)
 	}
 }
 
@@ -142,7 +160,7 @@ func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
 //
 // Run may only be called once.
 func (p *Poller) Run(ctx context.Context) error {
-	tick := time.NewTicker(pollInterval)
+	tick := time.NewTicker(p.pollInterval)
 	defer tick.Stop()
 	return p.runWithTickChan(ctx, tick.C)
 }

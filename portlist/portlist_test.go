@@ -51,7 +51,7 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 
 func TestChangesOverTime(t *testing.T) {
 	var p Poller
-	p.IncludeLocalhost = true
+	p.includeLocalhost = true
 	get := func(t *testing.T) []Port {
 		t.Helper()
 		s, err := p.getList()
@@ -176,7 +176,7 @@ func TestEqualLessThan(t *testing.T) {
 }
 
 func TestPoller(t *testing.T) {
-	p, err := NewPoller()
+	p, err := NewPoller(PollerOptions{})
 	if err != nil {
 		t.Skipf("not running test: %v", err)
 	}
