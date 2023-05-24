@@ -449,6 +449,8 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		filtered[i] = b.tka.filtered[i].Clone()
 	}
 
+	stateID1, _ := b.tka.authority.StateIDs()
+
 	return &ipnstate.NetworkLockStatus{
 		Enabled:       true,
 		Head:          &head,
@@ -457,6 +459,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 		NodeKeySigned: selfAuthorized,
 		TrustedKeys:   outKeys,
 		FilteredPeers: filtered,
+		StateID:       stateID1,
 	}
 }
 
