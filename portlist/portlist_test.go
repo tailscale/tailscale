@@ -17,6 +17,7 @@ func TestGetList(t *testing.T) {
 	tstest.ResourceCheck(t)
 
 	var p Poller
+	p.os = newOSImpl(false)
 	pl, err := p.getList()
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +39,7 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 	ta := ln.Addr().(*net.TCPAddr)
 	port := ta.Port
 	var p Poller
+	p.os = newOSImpl(false)
 	pl, err := p.getList()
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +53,7 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 
 func TestChangesOverTime(t *testing.T) {
 	var p Poller
-	p.IncludeLocalhost = true
+	p.os = newOSImpl(true)
 	get := func(t *testing.T) []Port {
 		t.Helper()
 		s, err := p.getList()
@@ -177,7 +179,7 @@ func TestEqualLessThan(t *testing.T) {
 
 func TestPoller(t *testing.T) {
 	var p Poller
-	err := p.Check()
+	err := p.Init()
 	if err != nil {
 		t.Skipf("not running test: %v", err)
 	}
@@ -190,10 +192,14 @@ func TestPoller(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for pl := range p.Updates() {
+		for update := range p.c {
+			if update.Error != nil {
+				t.Errorf("error polling ports: %v", err)
+				return
+			}
 			// Look at all the pl slice memory to maximize
 			// chance of race detector seeing violations.
-			for _, v := range pl {
+			for _, v := range update.List {
 				if v == (Port{}) {
 					// Force use
 					panic("empty port")
@@ -209,9 +215,7 @@ func TestPoller(t *testing.T) {
 	tick := make(chan time.Time, 16)
 	go func() {
 		defer wg.Done()
-		if err := p.runWithTickChan(context.Background(), tick); err != nil {
-			t.Error("runWithTickChan:", err)
-		}
+		p.runWithTickChan(context.Background(), tick)
 	}()
 	for i := 0; i < 10; i++ {
 		ln, err := net.Listen("tcp", ":0")

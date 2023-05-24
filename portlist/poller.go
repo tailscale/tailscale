@@ -9,6 +9,7 @@ package portlist
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -29,9 +30,14 @@ type Poller struct {
 	// This field should only be changed before calling Run.
 	IncludeLocalhost bool
 
-	c chan List // unbuffered
+	// Interval sets the polling interval for probing the underlying
+	// os for port updates.
+	Interval time.Duration
+
+	c chan Update // unbuffered
 
 	initOnce sync.Once // guards init of private fields
+	initErr  error
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
 	// code. When non-nil, it's responsible for getting the complete list of
@@ -51,6 +57,19 @@ type Poller struct {
 	scratch []Port
 
 	prev List // most recent data, not aliasing scratch
+}
+
+// Update is a container for a portlist update event.
+// When Poller polls the underlying OS for an update,
+// it either returns a new list of open ports,
+// or an error that happened in the process.
+//
+// Note that it is up to the caller to act upon the error,
+// such as closing the Poller. Otherwise, the Poller will continue
+// to try and get a list for every interval.
+type Update struct {
+	List  List
+	Error error
 }
 
 // osImpl is the OS-specific implementation of getting the open listening ports.
@@ -78,37 +97,54 @@ func (p *Poller) setPrev(pl List) {
 	p.prev = slices.Clone(pl)
 }
 
-// init sets the os implementation if exists. It also sets
-// all private fields. All exported methods must call this in a
-// Once, otherwise they may panic.
-func (p *Poller) init() {
-	if debugDisablePortlist() {
-		return
-	}
-	if newOSImpl != nil {
-		p.os = newOSImpl(p.IncludeLocalhost)
-	}
-	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
-	p.c = make(chan List)
-	p.runDone = make(chan struct{})
+// Init is an optional method that makes sure the Poller is enabled
+// and the undelrying OS implementation is working properly.
+//
+// An error returned from Init is non-fatal and means
+// that it's been administratively disabled or the underlying
+// OS is not implemented.
+func (p *Poller) Init() error {
+	p.initOnce.Do(func() {
+		p.initErr = p.init()
+	})
+	return p.initErr
 }
 
-// Updates return the channel that receives port list updates.
-//
-// The channel is closed when the Poller is closed.
-func (p *Poller) Updates() <-chan List {
-	p.initOnce.Do(p.init)
-	return p.c
+func (p *Poller) init() error {
+	if debugDisablePortlist() {
+		return errors.New("portlist disabled by envknob")
+	}
+	if newOSImpl == nil {
+		return errUnimplemented
+	}
+	p.os = newOSImpl(p.IncludeLocalhost)
+
+	// Do one initial poll synchronously so we can return an error
+	// early.
+	if pl, err := p.getList(); err != nil {
+		return err
+	} else {
+		p.setPrev(pl)
+	}
+
+	if p.Interval == 0 {
+		p.Interval = pollInterval
+	}
+
+	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
+	p.c = make(chan Update)
+	p.runDone = make(chan struct{})
+
+	return nil
 }
 
 // Close closes the Poller.
 // Run will return with a nil error.
 func (p *Poller) Close() error {
-	p.initOnce.Do(p.init)
-	p.closeCtxCancel()
 	if p.os == nil {
 		return nil
 	}
+	p.closeCtxCancel()
 	<-p.runDone // if caller of Close never called Run, this can hang.
 	if p.os != nil {
 		p.os.Close()
@@ -117,14 +153,14 @@ func (p *Poller) Close() error {
 }
 
 // send sends pl to p.c and returns whether it was successfully sent.
-func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
+func (p *Poller) send(ctx context.Context, pl List, plErr error) (sent bool) {
 	select {
-	case p.c <- pl:
-		return true, nil
+	case p.c <- Update{pl, plErr}:
+		return true
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return false
 	case <-p.closeCtx.Done():
-		return false, nil
+		return false
 	}
 }
 
@@ -132,45 +168,26 @@ func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
 // is done, or the Close is called.
 //
 // Run may only be called once.
-func (p *Poller) Run(ctx context.Context) error {
-	tick := time.NewTicker(pollInterval)
+func (p *Poller) Run(ctx context.Context) (chan Update, error) {
+	if p.os == nil {
+		err := p.Init()
+		if err != nil {
+			return nil, fmt.Errorf("error initializing poller: %w", err)
+		}
+	}
+	tick := time.NewTicker(p.Interval)
 	defer tick.Stop()
-	return p.runWithTickChan(ctx, tick.C)
+	go p.runWithTickChan(ctx, tick.C)
+	return p.c, nil
 }
 
-// Check makes sure that the Poller is enabled and
-// the undelrying OS implementation is working properly.
-//
-// An error returned from Check is non-fatal and means
-// that it's been administratively disabled or the underlying
-// OS is not implemented.
-func (p *Poller) Check() error {
-	p.initOnce.Do(p.init)
-	if p.os == nil {
-		return errUnimplemented
-	}
-	// Do one initial poll synchronously so we can return an error
-	// early.
-	if pl, err := p.getList(); err != nil {
-		return err
-	} else {
-		p.setPrev(pl)
-	}
-	return nil
-}
-
-func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) error {
-	p.initOnce.Do(p.init)
-	if p.os == nil {
-		return errUnimplemented
-	}
-
+func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) {
 	defer close(p.runDone)
 	defer close(p.c)
 
 	// Send out the pre-generated initial value.
-	if sent, err := p.send(ctx, p.prev); !sent {
-		return err
+	if sent := p.send(ctx, p.prev, nil); !sent {
+		return
 	}
 
 	for {
@@ -178,28 +195,27 @@ func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time)
 		case <-tickChan:
 			pl, err := p.getList()
 			if err != nil {
-				return err
+				if !p.send(ctx, nil, err) {
+					return
+				}
+				continue
 			}
 			if pl.equal(p.prev) {
 				continue
 			}
 			p.setPrev(pl)
-			if sent, err := p.send(ctx, p.prev); !sent {
-				return err
+			if !p.send(ctx, p.prev, nil) {
+				return
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case <-p.closeCtx.Done():
-			return nil
+			return
 		}
 	}
 }
 
 func (p *Poller) getList() (List, error) {
-	if debugDisablePortlist() {
-		return nil, nil
-	}
-	p.initOnce.Do(p.init)
 	var err error
 	p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
 	return p.scratch, err

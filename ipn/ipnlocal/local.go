@@ -293,7 +293,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll := new(portlist.Poller)
-	err = portpoll.Check()
+	err = portpoll.Init()
 	if err != nil {
 		logf("skipping portlist: %s", err)
 		portpoll = nil
@@ -1379,8 +1379,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
-			go b.portpoll.Run(b.ctx)
-			go b.readPoller()
+			updates, err := b.portpoll.Run(b.ctx)
+			if err != nil {
+				b.logf("error running port poller: %v", err)
+				return
+			}
+			go b.readPoller(updates)
 
 			// Give the poller a second to get results to
 			// prevent it from restarting our map poll
@@ -1813,15 +1817,20 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 
 // readPoller is a goroutine that receives service lists from
 // b.portpoll and propagates them into the controlclient's HostInfo.
-func (b *LocalBackend) readPoller() {
+func (b *LocalBackend) readPoller(updates chan portlist.Update) {
+	defer b.portpoll.Close()
 	n := 0
 	for {
-		ports, ok := <-b.portpoll.Updates()
+		update, ok := <-updates
 		if !ok {
 			return
 		}
+		if update.Error != nil {
+			b.logf("error polling os ports: %v", update.Error)
+			return // preserve all behavior, though we can just continue
+		}
 		sl := []tailcfg.Service{}
-		for _, p := range ports {
+		for _, p := range update.List {
 			s := tailcfg.Service{
 				Proto:       tailcfg.ServiceProto(p.Proto),
 				Port:        p.Port,
