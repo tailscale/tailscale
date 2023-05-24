@@ -292,9 +292,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	portpoll, err := portlist.NewPoller()
+	portpoll := new(portlist.Poller)
+	err = portpoll.Check()
 	if err != nil {
 		logf("skipping portlist: %s", err)
+		portpoll = nil
 	}
 
 	b := &LocalBackend{
