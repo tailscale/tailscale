@@ -146,9 +146,9 @@ type LocalBackend struct {
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
-	portpoll              *portlist.Poller // may be nil
-	portpollOnce          sync.Once        // guards starting readPoller
-	gotPortPollRes        chan struct{}    // closed upon first readPoller result
+	portpoll              chan portlist.Update // may be nil
+	portpollOnce          sync.Once            // guards starting readPoller
+	gotPortPollRes        chan struct{}        // closed upon first readPoller result
 	newDecompressor       func() (controlclient.Decompressor, error)
 	varRoot               string         // or empty if SetVarRoot never called
 	logFlushFunc          func()         // or nil if SetLogFlusher wasn't called
@@ -292,7 +292,8 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	portpoll, err := portlist.NewPoller()
+	var p portlist.Poller
+	portUpdates, err := p.Run(ctx)
 	if err != nil {
 		logf("skipping portlist: %s", err)
 	}
@@ -310,7 +311,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		pm:             pm,
 		backendLogID:   logID,
 		state:          ipn.NoState,
-		portpoll:       portpoll,
+		portpoll:       portUpdates,
 		em:             newExpiryManager(logf),
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
@@ -1377,7 +1378,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
-			go b.portpoll.Run(b.ctx)
 			go b.readPoller()
 
 			// Give the poller a second to get results to
@@ -1814,12 +1814,17 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 func (b *LocalBackend) readPoller() {
 	n := 0
 	for {
-		ports, ok := <-b.portpoll.Updates()
+		update, ok := <-b.portpoll
 		if !ok {
 			return
 		}
+		if update.Err() != nil {
+			// TODO(marwan-at-work): do we need to log this?
+			// TODO(marwan-at-work): should we return or keep trying?
+			return
+		}
 		sl := []tailcfg.Service{}
-		for _, p := range ports {
+		for _, p := range update.List() {
 			s := tailcfg.Service{
 				Proto:       tailcfg.ServiceProto(p.Proto),
 				Port:        p.Port,

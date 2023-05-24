@@ -29,7 +29,7 @@ type Poller struct {
 	// This field should only be changed before calling Run.
 	IncludeLocalhost bool
 
-	c chan List // unbuffered
+	c chan Update // unbuffered
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
 	// code. When non-nil, it's responsible for getting the complete list of
@@ -52,6 +52,23 @@ type Poller struct {
 	prev List // most recent data, not aliasing scratch
 }
 
+// Update is sent by Poller to indicate
+// an update has been made to the machine's
+// open ports. Receiver of this struct must
+// check the Err() method before calling List().
+type Update struct {
+	list List
+	err  error
+}
+
+func (u *Update) Err() error {
+	return u.err
+}
+
+func (u *Update) List() List {
+	return u.list
+}
+
 // osImpl is the OS-specific implementation of getting the open listening ports.
 type osImpl interface {
 	Close() error
@@ -71,32 +88,6 @@ var newOSImpl func(includeLocalhost bool) osImpl
 
 var errUnimplemented = errors.New("portlist poller not implemented on " + runtime.GOOS)
 
-// NewPoller returns a new portlist Poller. It returns an error
-// if the portlist couldn't be obtained.
-func NewPoller() (*Poller, error) {
-	if debugDisablePortlist() {
-		return nil, errors.New("portlist disabled by envknob")
-	}
-	p := &Poller{
-		c:       make(chan List),
-		runDone: make(chan struct{}),
-	}
-	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
-	p.osOnce.Do(p.initOSField)
-	if p.os == nil {
-		return nil, errUnimplemented
-	}
-
-	// Do one initial poll synchronously so we can return an error
-	// early.
-	if pl, err := p.getList(); err != nil {
-		return nil, err
-	} else {
-		p.setPrev(pl)
-	}
-	return p, nil
-}
-
 func (p *Poller) setPrev(pl List) {
 	// Make a copy, as the pass in pl slice aliases pl.scratch and we don't want
 	// that to except to the caller.
@@ -112,11 +103,15 @@ func (p *Poller) initOSField() {
 // Updates return the channel that receives port list updates.
 //
 // The channel is closed when the Poller is closed.
-func (p *Poller) Updates() <-chan List { return p.c }
+func (p *Poller) Updates() <-chan Update { return p.c }
 
 // Close closes the Poller.
 // Run will return with a nil error.
 func (p *Poller) Close() error {
+	// Skip if uninitialized.
+	if p.os == nil {
+		return nil
+	}
 	p.closeCtxCancel()
 	<-p.runDone
 	if p.os != nil {
@@ -126,14 +121,14 @@ func (p *Poller) Close() error {
 }
 
 // send sends pl to p.c and returns whether it was successfully sent.
-func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
+func (p *Poller) send(ctx context.Context, pl List, listErr error) (sent bool) {
 	select {
-	case p.c <- pl:
-		return true, nil
+	case p.c <- Update{list: pl, err: listErr}:
+		return true
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return false
 	case <-p.closeCtx.Done():
-		return false, nil
+		return false
 	}
 }
 
@@ -141,48 +136,82 @@ func (p *Poller) send(ctx context.Context, pl List) (sent bool, err error) {
 // is done, or the Close is called.
 //
 // Run may only be called once.
-func (p *Poller) Run(ctx context.Context) error {
+func (p *Poller) Run(ctx context.Context) (chan Update, error) {
+	if debugDisablePortlist() {
+		return nil, errors.New("portlist disabled by envknob")
+	}
+	if p.os != nil {
+		return nil, errors.New("method called more than once")
+	}
+	p.initOSField()
+	if p.os == nil {
+		return nil, errUnimplemented
+	}
+
+	p.c = make(chan Update)
+	p.runDone = make(chan struct{})
+	p.closeCtx, p.closeCtxCancel = context.WithCancel(context.Background())
+
+	// Do one initial poll synchronously so we can return an error
+	// early.
+	if pl, err := p.getList(); err != nil {
+		return nil, err
+	} else {
+		p.setPrev(pl)
+	}
+
 	tick := time.NewTicker(pollInterval)
 	defer tick.Stop()
-	return p.runWithTickChan(ctx, tick.C)
+	go p.runWithTickChan(ctx, tick.C)
+	return p.c, nil
 }
 
-func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) error {
+func (p *Poller) runWithTickChan(ctx context.Context, tickChan <-chan time.Time) {
 	defer close(p.runDone)
 	defer close(p.c)
 
 	// Send out the pre-generated initial value.
-	if sent, err := p.send(ctx, p.prev); !sent {
-		return err
+	if sent := p.send(ctx, p.prev, nil); !sent {
+		return
 	}
 
+	// Order of events:
+	// 1. If the context is done, exit
+	// 2. If the user called p.Close(), exit.
+	// 3. If we received a tick, then get the list
+	// 3B. If that error'd, send an error to the user.
+	// 3C. If the context or p.Close where called in the meantime, exit.
+	// 3D. If getList succeeded, skip if there are no updates.
+	// 3E. If there are indeed updates, send them, or exit if 1/2 are true.
+	// We check 1 & 2 in 3 places: top of the for-loop,
+	// whenever we send (which is two places: sending an error, or sending a list).
 	for {
 		select {
+		case <-ctx.Done():
+			return
+		case <-p.closeCtx.Done():
+			return
 		case <-tickChan:
 			pl, err := p.getList()
 			if err != nil {
-				return err
+				sent := p.send(ctx, nil, err)
+				if !sent {
+					return
+				}
+				continue
 			}
 			if pl.equal(p.prev) {
 				continue
 			}
 			p.setPrev(pl)
-			if sent, err := p.send(ctx, p.prev); !sent {
-				return err
+			if sent := p.send(ctx, p.prev, nil); !sent {
+				return
 			}
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-p.closeCtx.Done():
-			return nil
 		}
 	}
 }
 
 func (p *Poller) getList() (List, error) {
-	if debugDisablePortlist() {
-		return nil, nil
-	}
-	p.osOnce.Do(p.initOSField)
 	var err error
 	p.scratch, err = p.os.AppendListeningPorts(p.scratch[:0])
 	return p.scratch, err

@@ -192,7 +192,7 @@ func TestPoller(t *testing.T) {
 		for pl := range p.Updates() {
 			// Look at all the pl slice memory to maximize
 			// chance of race detector seeing violations.
-			for _, v := range pl {
+			for _, v := range pl.List() {
 				if v == (Port{}) {
 					// Force use
 					panic("empty port")
