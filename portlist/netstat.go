@@ -67,7 +67,7 @@ type nothing struct{}
 // Unfortunately, options to filter by proto or state are non-portable,
 // so we'll filter for ourselves.
 // Nowadays, though, we only use it for macOS as of 2022-11-04.
-func appendParsePortsNetstat(base []Port, br *bufio.Reader) ([]Port, error) {
+func appendParsePortsNetstat(base []Port, br *bufio.Reader, includeLocalhost bool) ([]Port, error) {
 	ret := base
 	var fieldBuf [10]mem.RO
 	for {
@@ -99,7 +99,7 @@ func appendParsePortsNetstat(base []Port, br *bufio.Reader) ([]Port, error) {
 				// not interested in non-listener sockets
 				continue
 			}
-			if isLoopbackAddr(laddr) {
+			if !includeLocalhost && isLoopbackAddr(laddr) {
 				// not interested in loopback-bound listeners
 				continue
 			}
@@ -110,7 +110,7 @@ func appendParsePortsNetstat(base []Port, br *bufio.Reader) ([]Port, error) {
 			proto = "udp"
 			laddr = cols[len(cols)-2]
 			raddr = cols[len(cols)-1]
-			if isLoopbackAddr(laddr) {
+			if !includeLocalhost && isLoopbackAddr(laddr) {
 				// not interested in loopback-bound listeners
 				continue
 			}
