@@ -5,9 +5,7 @@ package portlist
 
 import (
 	"context"
-	"flag"
 	"net"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -51,16 +49,9 @@ func TestIgnoreLocallyBoundPorts(t *testing.T) {
 	}
 }
 
-var flagRunUnspecTests = flag.Bool("run-unspec-tests",
-	runtime.GOOS == "linux", // other OSes have annoying firewall GUI confirmation dialogs
-	"run tests that require listening on the the unspecified address")
-
 func TestChangesOverTime(t *testing.T) {
-	if !*flagRunUnspecTests {
-		t.Skip("skipping test without --run-unspec-tests")
-	}
-
 	var p Poller
+	p.IncludeLocalhost = true
 	get := func(t *testing.T) []Port {
 		t.Helper()
 		s, err := p.getList()
@@ -71,7 +62,7 @@ func TestChangesOverTime(t *testing.T) {
 	}
 
 	p1 := get(t)
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("failed to bind: %v", err)
 	}

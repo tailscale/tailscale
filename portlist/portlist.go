@@ -18,6 +18,7 @@ type Port struct {
 	Proto   string // "tcp" or "udp"
 	Port    uint16 // port number
 	Process string // optional process name, if found
+	Pid     int    // process id, if known
 }
 
 // List is a list of Ports.
@@ -69,12 +70,11 @@ func sortAndDedup(ps List) List {
 	out := ps[:0]
 	var last Port
 	for _, p := range ps {
-		protoPort := Port{Proto: p.Proto, Port: p.Port}
-		if last == protoPort {
+		if last.Proto == p.Proto && last.Port == p.Port {
 			continue
 		}
 		out = append(out, p)
-		last = protoPort
+		last = p
 	}
 	return out
 }

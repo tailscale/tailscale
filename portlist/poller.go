@@ -24,6 +24,11 @@ var debugDisablePortlist = envknob.RegisterBool("TS_DEBUG_DISABLE_PORTLIST")
 // Poller scans the systems for listening ports periodically and sends
 // the results to C.
 type Poller struct {
+	// IncludeLocalhost controls whether services bound to localhost are included.
+	//
+	// This field should only be changed before calling Run.
+	IncludeLocalhost bool
+
 	c chan List // unbuffered
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
@@ -62,7 +67,7 @@ type osImpl interface {
 }
 
 // newOSImpl, if non-nil, constructs a new osImpl.
-var newOSImpl func() osImpl
+var newOSImpl func(includeLocalhost bool) osImpl
 
 var errUnimplemented = errors.New("portlist poller not implemented on " + runtime.GOOS)
 
@@ -100,7 +105,7 @@ func (p *Poller) setPrev(pl List) {
 
 func (p *Poller) initOSField() {
 	if newOSImpl != nil {
-		p.os = newOSImpl()
+		p.os = newOSImpl(p.IncludeLocalhost)
 	}
 }
 

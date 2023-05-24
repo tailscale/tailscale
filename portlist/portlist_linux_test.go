@@ -89,7 +89,7 @@ func TestParsePorts(t *testing.T) {
 			if tt.file != "" {
 				file = tt.file
 			}
-			li := newLinuxImplBase()
+			li := newLinuxImplBase(false)
 			err := li.parseProcNetFile(r, file)
 			if err != nil {
 				t.Fatal(err)
@@ -118,7 +118,7 @@ func BenchmarkParsePorts(b *testing.B) {
 		contents.WriteString("   3: 69050120005716BC64906EBE009ECD4D:D506 0047062600000000000000006E171268:01BB 01 00000000:00000000 02:0000009E 00000000  1000        0 151042856 2 0000000000000000 21 4 28 10 -1\n")
 	}
 
-	li := newLinuxImplBase()
+	li := newLinuxImplBase(false)
 
 	r := bytes.NewReader(contents.Bytes())
 	br := bufio.NewReader(&contents)

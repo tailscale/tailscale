@@ -8,6 +8,7 @@ package portlist
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -52,30 +53,40 @@ udp46      0      0  *.146                 *.*
 `
 
 func TestParsePortsNetstat(t *testing.T) {
-	want := List{
-		Port{"tcp", 23, ""},
-		Port{"tcp", 24, ""},
-		Port{"udp", 104, ""},
-		Port{"udp", 106, ""},
-		Port{"udp", 146, ""},
-		Port{"tcp", 8185, ""}, // but not 8186, 8187, 8188 on localhost
-	}
-
-	pl, err := appendParsePortsNetstat(nil, bufio.NewReader(strings.NewReader(netstatOutput)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pl = sortAndDedup(pl)
-	jgot, _ := json.MarshalIndent(pl, "", "\t")
-	jwant, _ := json.MarshalIndent(want, "", "\t")
-	if len(pl) != len(want) {
-		t.Fatalf("Got:\n%s\n\nWant:\n%s\n", jgot, jwant)
-	}
-	for i := range pl {
-		if pl[i] != want[i] {
-			t.Errorf("row#%d\n got: %+v\n\nwant: %+v\n",
-				i, pl[i], want[i])
-			t.Fatalf("Got:\n%s\n\nWant:\n%s\n", jgot, jwant)
-		}
+	for _, loopBack := range [...]bool{false, true} {
+		t.Run(fmt.Sprintf("loopback_%v", loopBack), func(t *testing.T) {
+			want := List{
+				{"tcp", 23, "", 0},
+				{"tcp", 24, "", 0},
+				{"udp", 104, "", 0},
+				{"udp", 106, "", 0},
+				{"udp", 146, "", 0},
+				{"tcp", 8185, "", 0}, // but not 8186, 8187, 8188 on localhost, when loopback is false
+			}
+			if loopBack {
+				want = append(want,
+					Port{"tcp", 8186, "", 0},
+					Port{"tcp", 8187, "", 0},
+					Port{"tcp", 8188, "", 0},
+				)
+			}
+			pl, err := appendParsePortsNetstat(nil, bufio.NewReader(strings.NewReader(netstatOutput)), loopBack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pl = sortAndDedup(pl)
+			jgot, _ := json.MarshalIndent(pl, "", "\t")
+			jwant, _ := json.MarshalIndent(want, "", "\t")
+			if len(pl) != len(want) {
+				t.Fatalf("Got:\n%s\n\nWant:\n%s\n", jgot, jwant)
+			}
+			for i := range pl {
+				if pl[i] != want[i] {
+					t.Errorf("row#%d\n got: %+v\n\nwant: %+v\n",
+						i, pl[i], want[i])
+					t.Fatalf("Got:\n%s\n\nWant:\n%s\n", jgot, jwant)
+				}
+			}
+		})
 	}
 }
