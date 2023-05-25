@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -620,6 +621,14 @@ func (c *compactingChonkFake) PurgeAUMs(hashes []AUMHash) error {
 	return nil
 }
 
+// Avoid go vet complaining about copying a lock value
+func cloneMem(src, dst *Mem) {
+	dst.l = sync.RWMutex{}
+	dst.aums = src.aums
+	dst.parentIndex = src.parentIndex
+	dst.lastActiveAncestor = src.lastActiveAncestor
+}
+
 func TestCompact(t *testing.T) {
 	fakeState := &State{
 		Keys:               []Key{{Kind: Key25519, Votes: 1}},
@@ -661,11 +670,12 @@ func TestCompact(t *testing.T) {
     `, optTemplate("checkpoint", AUM{MessageKind: AUMCheckpoint, State: fakeState}))
 
 	storage := &compactingChonkFake{
-		Mem:        (*c.Chonk().(*Mem)),
 		aumAge:     map[AUMHash]time.Time{(c.AUMHashes["F1"]): time.Now()},
 		t:          t,
 		wantDelete: []AUMHash{c.AUMHashes["A"], c.AUMHashes["B"], c.AUMHashes["OLD"]},
 	}
+
+	cloneMem(c.Chonk().(*Mem), &storage.Mem)
 
 	lastActiveAncestor, err := Compact(storage, c.AUMHashes["H"], CompactionOptions{MinChain: 2, MinAge: time.Hour})
 	if err != nil {
