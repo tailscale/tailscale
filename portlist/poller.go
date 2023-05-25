@@ -97,20 +97,20 @@ func (p *Poller) setPrev(pl List) {
 	p.prev = slices.Clone(pl)
 }
 
-// Init is an optional method that makes sure the Poller is enabled
+// init makes sure the Poller is enabled
 // and the undelrying OS implementation is working properly.
 //
-// An error returned from Init is non-fatal and means
+// An error returned from init is non-fatal and means
 // that it's been administratively disabled or the underlying
 // OS is not implemented.
-func (p *Poller) Init() error {
+func (p *Poller) init() error {
 	p.initOnce.Do(func() {
-		p.initErr = p.init()
+		p.initErr = p.initWithErr()
 	})
 	return p.initErr
 }
 
-func (p *Poller) init() error {
+func (p *Poller) initWithErr() error {
 	if debugDisablePortlist() {
 		return errors.New("portlist disabled by envknob")
 	}
@@ -170,7 +170,7 @@ func (p *Poller) send(ctx context.Context, pl List, plErr error) (sent bool) {
 // Run may only be called once.
 func (p *Poller) Run(ctx context.Context) (chan Update, error) {
 	if p.os == nil {
-		err := p.Init()
+		err := p.init()
 		if err != nil {
 			return nil, fmt.Errorf("error initializing poller: %w", err)
 		}

@@ -179,7 +179,7 @@ func TestEqualLessThan(t *testing.T) {
 
 func TestPoller(t *testing.T) {
 	var p Poller
-	err := p.Init()
+	err := p.init()
 	if err != nil {
 		t.Skipf("not running test: %v", err)
 	}
