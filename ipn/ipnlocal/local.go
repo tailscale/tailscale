@@ -296,6 +296,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	err = portpoll.Check()
 	if err != nil {
 		logf("skipping portlist: %s", err)
+		portpoll.Close()
 		portpoll = nil
 	}
 

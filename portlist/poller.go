@@ -29,9 +29,8 @@ type Poller struct {
 	// This field should only be changed before calling Run.
 	IncludeLocalhost bool
 
-	c chan List // unbuffered
-
 	initOnce sync.Once // guards init of private fields
+	c        chan List // unbuffered
 
 	// os, if non-nil, is an OS-specific implementation of the portlist getting
 	// code. When non-nil, it's responsible for getting the complete list of
