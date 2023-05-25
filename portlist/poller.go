@@ -104,13 +104,6 @@ func (p *Poller) setPrev(pl List) {
 // that it's been administratively disabled or the underlying
 // OS is not implemented.
 func (p *Poller) init() error {
-	p.initOnce.Do(func() {
-		p.initErr = p.initWithErr()
-	})
-	return p.initErr
-}
-
-func (p *Poller) initWithErr() error {
 	if debugDisablePortlist() {
 		return errors.New("portlist disabled by envknob")
 	}
@@ -169,11 +162,11 @@ func (p *Poller) send(ctx context.Context, pl List, plErr error) (sent bool) {
 //
 // Run may only be called once.
 func (p *Poller) Run(ctx context.Context) (chan Update, error) {
-	if p.os == nil {
-		err := p.init()
-		if err != nil {
-			return nil, fmt.Errorf("error initializing poller: %w", err)
-		}
+	p.initOnce.Do(func() {
+		p.initErr = p.init()
+	})
+	if p.initErr != nil {
+		return nil, fmt.Errorf("error initializing poller: %w", p.initErr)
 	}
 	tick := time.NewTicker(p.Interval)
 	defer tick.Stop()
