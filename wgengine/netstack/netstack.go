@@ -246,6 +246,15 @@ func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, stack.PacketB
 	}
 }
 
+var tcpMaxInFlightConnectionAttemptsVar = envknob.RegisterInt("TS_TCP_MAX_IN_FLIGHT_CONNETION_ATTEMPTS")
+func () tcpMaxInFlightConnectionAttempts int {
+	if x := tcpMaxInFlightConnectionAttemptsVar(); x != 0 {
+		return x
+	}
+	return 16
+}
+
+
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
 func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
@@ -256,7 +265,8 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 	ns.e.AddNetworkMapCallback(ns.updateIPs)
 	// size = 0 means use default buffer size
 	const tcpReceiveBufferSize = 0
-	const maxInFlightConnectionAttempts = 16
+
+	const maxInFlightConnectionAttempts = tcpMaxInFlightConnectionAttempts()
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpReceiveBufferSize, maxInFlightConnectionAttempts, ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDP)
 	ns.ipstack.SetTransportProtocolHandler(tcp.ProtocolNumber, ns.wrapProtoHandler(tcpFwd.HandlePacket))
