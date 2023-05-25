@@ -169,8 +169,10 @@ func (p *Poller) Run(ctx context.Context) (chan Update, error) {
 		return nil, fmt.Errorf("error initializing poller: %w", p.initErr)
 	}
 	tick := time.NewTicker(p.Interval)
-	defer tick.Stop()
-	go p.runWithTickChan(ctx, tick.C)
+	go func() {
+		defer tick.Stop()
+		p.runWithTickChan(ctx, tick.C)
+	}()
 	return p.c, nil
 }
 
