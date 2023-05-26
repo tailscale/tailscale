@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/goreleaser/nfpm"
 	"tailscale.com/release/dist"
@@ -71,7 +70,6 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
 
-	buildTime := time.Now()
 	addFile := func(src, dst string, mode int64) error {
 		f, err := os.Open(src)
 		if err != nil {
@@ -86,7 +84,7 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 			Name:    dst,
 			Size:    fi.Size(),
 			Mode:    mode,
-			ModTime: buildTime,
+			ModTime: b.Time,
 			Uid:     0,
 			Gid:     0,
 			Uname:   "root",
@@ -104,7 +102,7 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		hdr := &tar.Header{
 			Name:    name + "/",
 			Mode:    0755,
-			ModTime: buildTime,
+			ModTime: b.Time,
 			Uid:     0,
 			Gid:     0,
 			Uname:   "root",

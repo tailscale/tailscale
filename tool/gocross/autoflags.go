@@ -153,7 +153,9 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 
 	env.Set("GOOS", targetOS)
 	env.Set("GOARCH", targetArch)
-	env.Set("GOARM", "5") // TODO: fix, see go/internal-bug/3092
+	if !env.IsSet("GOARM") {
+		env.Set("GOARM", "5") // TODO: fix, see go/internal-bug/3092
+	}
 	env.Set("GOMIPS", "softfloat")
 	env.Set("CGO_ENABLED", boolStr(cgo))
 	env.Set("CGO_CFLAGS", strings.Join(cgoCflags, " "))
