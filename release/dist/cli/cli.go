@@ -124,10 +124,11 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 		if err != nil {
 			return fmt.Errorf("getting absolute path of manifest: %w", err)
 		}
-		fmt.Println(manifest)
-		fmt.Println(filepath.Join(b.Out, out[0]))
 		for i := range out {
-			rel, err := filepath.Rel(filepath.Dir(manifest), filepath.Join(b.Out, out[i]))
+			if !filepath.IsAbs(out[i]) {
+				out[i] = filepath.Join(b.Out, out[i])
+			}
+			rel, err := filepath.Rel(filepath.Dir(manifest), out[i])
 			if err != nil {
 				return fmt.Errorf("making path relative: %w", err)
 			}
