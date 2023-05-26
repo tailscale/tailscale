@@ -48,11 +48,10 @@ staticcheck: ## Run staticcheck.io checks
 	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go list ./... | grep -v tempfork)
 
 spk: ## Build synology package for ${SYNO_ARCH} architecture and ${SYNO_DSM} DSM version
-	PATH="${PWD}/tool:${PATH}" ./tool/go run github.com/tailscale/tailscale-synology@main -o tailscale.spk --source=. --goarch=${SYNO_ARCH} --dsm-version=${SYNO_DSM}
+	./tool/go run ./cmd/dist build synology/dsm${SYNO_DSM}/${SYNO_ARCH}
 
 spkall: ## Build synology packages for all architectures and DSM versions
-	mkdir -p spks
-	PATH="${PWD}/tool:${PATH}" ./tool/go run github.com/tailscale/tailscale-synology@main -o spks --source=. --goarch=all --dsm-version=all
+	./tool/go run ./cmd/dist build synology
 
 pushspk: spk ## Push and install synology package on ${SYNO_HOST} host
 	echo "Pushing SPK to root@${SYNO_HOST} (env var SYNO_HOST) ..."

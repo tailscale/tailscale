@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/mkversion"
@@ -44,6 +45,8 @@ type Build struct {
 	Go string
 	// Version is the version info of the build.
 	Version mkversion.VersionInfo
+	// Time is the timestamp of the build.
+	Time time.Time
 
 	// once is a cache of function invocations that should run once per process
 	// (for example building a helper docker container)
@@ -86,6 +89,7 @@ func NewBuild(repo, out string) (*Build, error) {
 		Out:          out,
 		Go:           goTool,
 		Version:      mkversion.Info(),
+		Time:         time.Now().UTC(),
 		extra:        map[any]any{},
 		goBuildLimit: make(chan struct{}, runtime.NumCPU()),
 	}
@@ -114,6 +118,9 @@ func (b *Build) Build(targets []Target) (files []string, err error) {
 		go func(i int, t Target) {
 			var err error
 			defer func() {
+				if err != nil {
+					err = fmt.Errorf("%s: %w", t, err)
+				}
 				errs[i] = err
 				wg.Done()
 			}()
