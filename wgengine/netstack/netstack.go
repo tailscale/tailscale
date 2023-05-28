@@ -622,11 +622,21 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 	switch runtime.GOOS {
 	case "windows":
 		err = exec.Command("ping", "-n", "1", "-w", "3000", dstIP.String()).Run()
-	case "darwin":
+	case "darwin", "freebsd":
 		// Note: 2000 ms is actually 1 second + 2,000
 		// milliseconds extra for 3 seconds total.
 		// See https://github.com/tailscale/tailscale/pull/3753 for details.
-		err = exec.Command("ping", "-c", "1", "-W", "2000", dstIP.String()).Run()
+		ping := "ping"
+		if dstIP.Is6() {
+			ping = "ping6"
+		}
+		err = exec.Command(ping, "-c", "1", "-W", "2000", dstIP.String()).Run()
+	case "openbsd":
+		ping := "ping"
+		if dstIP.Is6() {
+			ping = "ping6"
+		}
+		err = exec.Command(ping, "-c", "1", "-w", "3", dstIP.String()).Run()
 	case "android":
 		ping := "/system/bin/ping"
 		if dstIP.Is6() {
