@@ -24,6 +24,9 @@ import (
 
 var errAlreadyMigrated = errors.New("profile migration already completed")
 
+// var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
+var debug = func() bool { return true }
+
 // profileManager is a wrapper around a StateStore that manages
 // multiple profiles and the current profile.
 type profileManager struct {
@@ -40,6 +43,13 @@ type profileManager struct {
 	// It is reset to false after a call to SetPrefs with a filled
 	// in LoginName.
 	isNewProfile bool
+}
+
+func (pm *profileManager) dlogf(format string, args ...any) {
+	if !debug() {
+		return
+	}
+	pm.logf(format, args...)
 }
 
 // CurrentUserID returns the current user ID. It is only non-empty on
@@ -66,8 +76,10 @@ func (pm *profileManager) SetCurrentUserID(uid ipn.WindowsUserID) error {
 	// Read the CurrentProfileKey from the store which stores
 	// the selected profile for the current user.
 	b, err := pm.store.ReadState(ipn.CurrentProfileKey(string(uid)))
+	pm.dlogf("profileManager.store.ReadState(%q) = %v, %v", string(uid), len(b), err)
 	if err == ipn.ErrStateNotExist || len(b) == 0 {
 		if runtime.GOOS == "windows" {
+			pm.dlogf("windows: migrating from legacy preferences")
 			if err := pm.migrateFromLegacyPrefs(); err != nil && !errors.Is(err, errAlreadyMigrated) {
 				return err
 			}
@@ -555,6 +567,7 @@ func newProfileManagerWithGOOS(store ipn.StateStore, logf logger.Logf, goos stri
 		// and runtime must be valid Windows security identifier structures.
 	} else if len(knownProfiles) == 0 && goos != "windows" && runtime.GOOS != "windows" {
 		// No known profiles, try a migration.
+		pm.dlogf("no known profiles; trying to migrate from legacy prefs")
 		if err := pm.migrateFromLegacyPrefs(); err != nil {
 			return nil, err
 		}
@@ -573,11 +586,13 @@ func (pm *profileManager) migrateFromLegacyPrefs() error {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("load legacy prefs: %w", err)
 	}
+	pm.dlogf("loaded legacy preferences; sentinel=%q", sentinel)
 	if err := pm.SetPrefs(prefs); err != nil {
 		metricMigrationError.Add(1)
 		return fmt.Errorf("migrating _daemon profile: %w", err)
 	}
 	pm.completeMigration(sentinel)
+	pm.dlogf("completed legacy preferences migration with sentinel=%q", sentinel)
 	metricMigrationSuccess.Add(1)
 	return nil
 }
