@@ -5,6 +5,27 @@ package synology
 
 import "tailscale.com/release/dist"
 
+var v5Models = []string{
+	"armv5",
+	"88f6281",
+	"88f6282",
+	// hi3535 is actually an armv7 under the hood, but with no
+	// hardware floating point. To the Go compiler, that means it's an
+	// armv5.
+	"hi3535",
+}
+
+var v7Models = []string{
+	"armv7",
+	"alpine",
+	"armada370",
+	"armada375",
+	"armada38x",
+	"armadaxp",
+	"comcerto2k",
+	"monaco",
+}
+
 func Targets(forPackageCenter bool) []dist.Target {
 	var ret []dist.Target
 	for _, dsmVersion := range []int{6, 7} {
@@ -40,7 +61,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 		// On older ARMv5 and ARMv7 platforms, synology used a whole
 		// mess of SoC-specific target names, even though the packages
 		// built for each are identical apart from metadata.
-		for _, v5Arch := range []string{"armv5", "88f6281", "88f6282"} {
+		for _, v5Arch := range v5Models {
 			ret = append(ret, &target{
 				filenameArch:    v5Arch,
 				dsmMajorVersion: dsmVersion,
@@ -52,7 +73,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 				packageCenter: forPackageCenter,
 			})
 		}
-		for _, v7Arch := range []string{"armv7", "alpine", "armada370", "armada375", "armada38x", "armadaxp", "comcerto2k", "monaco", "hi3535"} {
+		for _, v7Arch := range v7Models {
 			ret = append(ret, &target{
 				filenameArch:    v7Arch,
 				dsmMajorVersion: dsmVersion,
