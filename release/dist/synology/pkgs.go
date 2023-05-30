@@ -176,7 +176,7 @@ func (m *synologyBuilds) buildInnerPackage(b *dist.Build, dsmVersion int, goenv 
 			static(fmt.Sprintf("logrotate-dsm%d", dsmVersion), "conf/logrotate.conf", 0644),
 			dir("ui"),
 			static("PACKAGE_ICON_256.PNG", "ui/PACKAGE_ICON_256.PNG", 0644),
-			static("config", "ui/config", 0644), // TODO: this has "1.8.3" hard-coded in it; why? what is it? bug?
+			static("config", "ui/config", 0644),
 			static("index.cgi", "ui/index.cgi", 0755))
 		if err != nil {
 			return nil, err
