@@ -80,7 +80,7 @@ type Server struct {
 	// If nil, a new FileStore is initialized at `Dir/tailscaled.state`.
 	// See tailscale.com/ipn/store for supported stores.
 	//
-	// Logs will automatically be uploaded to uploaded to log.tailscale.io,
+	// Logs will automatically be uploaded to log.tailscale.io,
 	// where the configuration file for logging will be saved at
 	// `Dir/tailscaled.log.conf`.
 	Store ipn.StateStore
