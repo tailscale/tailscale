@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"tailscale.com/types/opt"
 )
@@ -213,8 +212,20 @@ func (c *Client) DeleteDevice(ctx context.Context, deviceID string) (err error) 
 
 // AuthorizeDevice marks a device as authorized.
 func (c *Client) AuthorizeDevice(ctx context.Context, deviceID string) error {
+	return c.SetAuthorized(ctx, deviceID, true)
+}
+
+// SetAuthorized marks a device as authorized or not.
+func (c *Client) SetAuthorized(ctx context.Context, deviceID string, authorized bool) error {
+	params := &struct {
+		Authorized bool `json:"authorized"`
+	}{Authorized: authorized}
+	data, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
 	path := fmt.Sprintf("%s/api/v2/device/%s/authorized", c.baseURL(), url.PathEscape(deviceID))
-	req, err := http.NewRequestWithContext(ctx, "POST", path, strings.NewReader(`{"authorized":true}`))
+	req, err := http.NewRequestWithContext(ctx, "POST", path, bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
