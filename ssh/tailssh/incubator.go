@@ -34,6 +34,7 @@ import (
 	"golang.org/x/exp/slices"
 	"golang.org/x/sys/unix"
 	"tailscale.com/cmd/tailscaled/childproc"
+	"tailscale.com/hostinfo"
 	"tailscale.com/tempfork/gliderlabs/ssh"
 	"tailscale.com/types/logger"
 	"tailscale.com/version/distro"
@@ -120,10 +121,18 @@ func (ss *sshSession) newIncubatorCommand() (cmd *exec.Cmd) {
 		if isShell {
 			incubatorArgs = append(incubatorArgs, "--shell")
 		}
-		if isShell || runtime.GOOS == "darwin" {
-			// Only the macOS version of the login command supports executing a
-			// command, all other versions only support launching a shell
-			// without taking any arguments.
+		// Only the macOS version of the login command supports executing a
+		// command, all other versions only support launching a shell
+		// without taking any arguments.
+		shouldUseLoginCmd := isShell || runtime.GOOS == "darwin"
+		if hostinfo.IsSELinuxEnforcing() {
+			// If we're running on a SELinux-enabled system, the login
+			// command will be unable to set the correct context for the
+			// shell. Fall back to using the incubator to launch the shell.
+			// See http://github.com/tailscale/tailscale/issues/4908.
+			shouldUseLoginCmd = false
+		}
+		if shouldUseLoginCmd {
 			if lp, err := exec.LookPath("login"); err == nil {
 				incubatorArgs = append(incubatorArgs, "--login-cmd="+lp)
 			}
