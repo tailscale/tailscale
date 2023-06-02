@@ -34,11 +34,8 @@ import (
 	"golang.org/x/exp/slices"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
-	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/ipn/store"
-	"tailscale.com/ipn/store/mem"
 	"tailscale.com/types/logger"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -154,22 +151,9 @@ type certStore interface {
 var errCertExpired = errors.New("cert expired")
 
 func (b *LocalBackend) getCertStore() (certStore, error) {
-	switch b.store.(type) {
-	case *store.FileStore:
-	case *mem.Store:
-	default:
-		if hostinfo.GetEnvType() == hostinfo.Kubernetes {
-			// We're running in Kubernetes with a custom StateStore,
-			// use that instead of the cert directory.
-			// TODO(maisem): expand this to other environments?
-			return certStateStore{StateStore: b.store}, nil
-		}
-	}
-	dir, err := b.certDir()
-	if err != nil {
-		return nil, err
-	}
-	return certFileStore{dir: dir}, nil
+	return certStateStore{
+		StateStore: b.sys.StateStore.Get(),
+	}, nil
 }
 
 // certFileStore implements certStore by storing the cert & key files in the named directory.
