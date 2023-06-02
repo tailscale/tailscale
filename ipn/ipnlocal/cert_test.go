@@ -6,12 +6,19 @@
 package ipnlocal
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"embed"
+	"encoding/pem"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"golang.org/x/exp/maps"
 	"tailscale.com/ipn/store/mem"
 )
 
@@ -96,6 +103,97 @@ func TestCertStoreRoundTrip(t *testing.T) {
 			}
 			if diff := cmp.Diff(kp.KeyPEM, testKey); diff != "" {
 				t.Errorf("Key (-got, +want):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestShouldStartDomainRenewal(t *testing.T) {
+	reset := func() {
+		renewMu.Lock()
+		defer renewMu.Unlock()
+		maps.Clear(lastRenewCheck)
+	}
+
+	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+
+		b, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+		if err != nil {
+			panic(err)
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: b,
+		})
+
+		return &TLSCertKeyPair{
+			Cached:  false,
+			CertPEM: certPEM,
+			KeyPEM:  []byte("unused"),
+		}
+	}
+
+	now := time.Unix(1685714838, 0)
+	subject := pkix.Name{
+		Organization:  []string{"Tailscale, Inc."},
+		Country:       []string{"CA"},
+		Province:      []string{"ON"},
+		Locality:      []string{"Toronto"},
+		StreetAddress: []string{"290 Bremner Blvd"},
+		PostalCode:    []string{"M5V 3L9"},
+	}
+
+	testCases := []struct {
+		name      string
+		notBefore time.Time
+		lifetime  time.Duration
+		want      bool
+		wantErr   string
+	}{
+		{
+			name:      "should renew",
+			notBefore: now.AddDate(0, 0, -89),
+			lifetime:  90 * 24 * time.Hour,
+			want:      true,
+		},
+		{
+			name:      "short-lived renewal",
+			notBefore: now.AddDate(0, 0, -7),
+			lifetime:  10 * 24 * time.Hour,
+			want:      true,
+		},
+		{
+			name:      "no renew",
+			notBefore: now.AddDate(0, 0, -59), // 59 days ago == not 2/3rds of the way through 90 days yet
+			lifetime:  90 * 24 * time.Hour,
+			want:      false,
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			reset()
+
+			ret, err := shouldStartDomainRenewal("example.com", now, mustMakePair(&x509.Certificate{
+				SerialNumber: big.NewInt(2019),
+				Subject:      subject,
+				NotBefore:    tt.notBefore,
+				NotAfter:     tt.notBefore.Add(tt.lifetime),
+			}))
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Errorf("wanted error, got nil")
+				} else if err.Error() != tt.wantErr {
+					t.Errorf("got err=%q, want %q", err.Error(), tt.wantErr)
+				}
+			} else {
+				if ret != tt.want {
+					t.Errorf("got ret=%v, want %v", ret, tt.want)
+				}
 			}
 		})
 	}
