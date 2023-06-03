@@ -143,10 +143,6 @@ func (r *Resolver) cloudHostResolver() (v *net.Resolver, ok bool) {
 	switch runtime.GOOS {
 	case "android", "ios", "darwin":
 		return nil, false
-	case "windows":
-		// TODO(bradfitz): remove this restriction once we're using Go 1.19
-		// which supports net.Resolver.PreferGo on Windows.
-		return nil, false
 	}
 	ip := cloudenv.Get().ResolverIP()
 	if ip == "" {
