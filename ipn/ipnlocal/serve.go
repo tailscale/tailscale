@@ -447,6 +447,8 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(u)
 			r.Out.Host = r.In.Host
+			r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
+			r.Out.Header.Set("X-Forwarded-Proto", "https")
 			if c, ok := r.Out.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext); ok {
 				r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
 			}
