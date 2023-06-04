@@ -390,7 +390,6 @@ minmi
 triceratops
 troodon
 trex
-tyrannosarus
 shetland
 pinto
 appaloosa
