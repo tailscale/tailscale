@@ -292,10 +292,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	osshare.SetFileSharingEnabled(false, logf)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	portpoll, err := portlist.NewPoller()
-	if err != nil {
-		logf("skipping portlist: %s", err)
-	}
+	portpoll := new(portlist.Poller)
 
 	b := &LocalBackend{
 		ctx:            ctx,
@@ -1377,7 +1374,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 
 	if b.portpoll != nil {
 		b.portpollOnce.Do(func() {
-			go b.portpoll.Run(b.ctx)
 			go b.readPoller()
 
 			// Give the poller a second to get results to
@@ -1812,11 +1808,30 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 // readPoller is a goroutine that receives service lists from
 // b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
-	n := 0
+	isFirst := true
+	ticker := time.NewTicker(portlist.PollInterval())
+	defer ticker.Stop()
+	initChan := make(chan struct{})
+	close(initChan)
 	for {
-		ports, ok := <-b.portpoll.Updates()
-		if !ok {
+		select {
+		case <-ticker.C:
+		case <-b.ctx.Done():
 			return
+		case <-initChan:
+			// Preserving old behavior: readPoller should
+			// immediately poll the first time, then wait
+			// for a tick after.
+			initChan = nil
+		}
+
+		ports, changed, err := b.portpoll.Poll()
+		if err != nil {
+			b.logf("error polling for open ports: %v", err)
+			return
+		}
+		if !changed {
+			continue
 		}
 		sl := []tailcfg.Service{}
 		for _, p := range ports {
@@ -1840,8 +1855,8 @@ func (b *LocalBackend) readPoller() {
 
 		b.doSetHostinfoFilterServices(hi)
 
-		n++
-		if n == 1 {
+		if isFirst {
+			isFirst = false
 			close(b.gotPortPollRes)
 		}
 	}

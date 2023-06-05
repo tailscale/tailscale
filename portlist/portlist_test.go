@@ -175,12 +175,33 @@ func TestEqualLessThan(t *testing.T) {
 	}
 }
 
+func TestClose(t *testing.T) {
+	var p Poller
+	err := p.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = Poller{}
+	_, _, err = p.Poll()
+	if err != nil {
+		t.Skipf("skipping due to poll error: %v", err)
+	}
+	err = p.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPoller(t *testing.T) {
 	p, err := NewPoller()
 	if err != nil {
 		t.Skipf("not running test: %v", err)
 	}
-	defer p.Close()
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Errorf("error closing poller in test: %v", err)
+		}
+	})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
