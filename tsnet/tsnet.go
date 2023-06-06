@@ -66,6 +66,12 @@ type Server struct {
 	// state. If empty, a directory is selected automatically
 	// under os.UserConfigDir (https://golang.org/pkg/os/#UserConfigDir).
 	// based on the name of the binary.
+	//
+	// If you want to use multiple tsnet services in the same
+	// binary, you will need to make sure that Dir is set uniquely
+	// for each service. A good pattern for this is to have a
+	// "base" directory (such as your mutable storage folder) and
+	// then append the hostname on the end of it.
 	Dir string
 
 	// Store specifies the state store to use.
