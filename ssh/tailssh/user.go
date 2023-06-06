@@ -81,7 +81,11 @@ func userLookup(username string) (*userMeta, error) {
 }
 
 func validUsername(uid string) bool {
-	if len(uid) > 32 || len(uid) == 0 {
+	maxUid := 32
+	if runtime.GOOS == "linux" {
+		maxUid = 256
+	}
+	if len(uid) > maxUid || len(uid) == 0 {
 		return false
 	}
 	for _, r := range uid {
