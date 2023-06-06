@@ -240,8 +240,8 @@ github.com/dave/jennifer v1.6.1/go.mod h1:nXbxhEmQfOZhWml3D1cDK5M1FLnMSozpbFN/m3
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/dblohm7/wingoes v0.0.0-20230426155039-111c8c3b57c8 h1:vtIE3GO4hKplR58aTRx3yLPqAbfWyoyYrE8PXUv0Prw=
-github.com/dblohm7/wingoes v0.0.0-20230426155039-111c8c3b57c8/go.mod h1:6NCrWM5jRefaG7iN0iMShPalLsljHWBh9v1zxM2f8Xs=
+github.com/dblohm7/wingoes v0.0.0-20230801195049-ed8077baf0cd h1:zYVpYS5d3Uf04vVCJuzqpOCwQQIzJibtOx8ivt7zt2Q=
+github.com/dblohm7/wingoes v0.0.0-20230801195049-ed8077baf0cd/go.mod h1:6NCrWM5jRefaG7iN0iMShPalLsljHWBh9v1zxM2f8Xs=
 github.com/denis-tingaikin/go-header v0.4.3 h1:tEaZKAlqql6SKCY++utLmkPLd6K8IBM20Ha7UVm+mtU=
 github.com/denis-tingaikin/go-header v0.4.3/go.mod h1:0wOCWuN71D5qIgE2nz9KrKmuYBAC2Mra5RassOIQ2/c=
 github.com/denis-tingajkin/go-header v0.3.1/go.mod h1:sq/2IxMhaZX+RRcgHfCRx/m0M5na0fBt4/CRe7Lrji0=
