@@ -12,15 +12,19 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"math"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +37,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/version"
 )
 
 var (
@@ -55,6 +60,8 @@ var (
 
 	acceptConnLimit = flag.Float64("accept-connection-limit", math.Inf(+1), "rate limit for accepting new connection")
 	acceptConnBurst = flag.Int("accept-connection-burst", math.MaxInt, "burst limit for accepting new connection")
+
+	debugAddr = flag.String("debug_addr", "", "listening address for debug server")
 )
 
 var (
@@ -136,6 +143,7 @@ func main() {
 
 	if *dev {
 		*addr = ":3340" // above the keys DERP
+		*debugAddr = "localhost:8383"
 		log.Printf("Running in dev mode.")
 		tsweb.DevMode = true
 	}
@@ -220,6 +228,11 @@ func main() {
 
 	if *runSTUN {
 		go serveSTUN(listenHost, *stunPort)
+	}
+
+	if *debugAddr != "" {
+		log.Printf("running debug server on %s", *debugAddr)
+		go runDebugServer(*debugAddr, s)
 	}
 
 	quietLogger := log.New(logFilter{}, "", 0)
@@ -512,4 +525,80 @@ func (logFilter) Write(p []byte) (int, error) {
 
 	log.Printf("%s", p)
 	return len(p), nil
+}
+
+func runDebugServer(addr string, s *derp.Server) {
+	mux := http.NewServeMux()
+	mux.Handle("/debug/vars", http.DefaultServeMux)  // serve out expvar
+	mux.HandleFunc("/debug/varz", tsweb.VarzHandler) // expvar but in prometheus format
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	mux.Handle("/debug/pprofrate", http.HandlerFunc(handlePprofRate))
+
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(200)
+		fmt.Fprintf(w, `<html><body>
+<h1>DERP</h1>
+<p>
+  This is a Tailscale DERP debug server.
+</p>
+<ul>
+  <li>Version: <pre style="display: inline">%s</pre>
+  <li><a href="/debug/vars">/debug/vars</a> (JSON)</li>
+  <li><a href="/debug/varz">/debug/varz</a> (Prometheus)</li>
+  <li><a href="/debug/pprof">/debug/pprof</a></li>
+  <li><a href="/debug/pprof/goroutine?debug=1">/debug/pprof/goroutine?debug=1</a> (goroutine summary)</li>
+</ul>
+`, html.EscapeString(version.Long()))
+	}))
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		if err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}
+}
+
+// handlePprofRate adjusts the pprof rate.
+//
+//	$ curl -d block=0 http://localhost:8383/debug/pprofrate
+//	$ curl -d mutex=0 http://localhost:8383/debug/pprofrate
+//
+// See:
+//
+//   - https://pkg.go.dev/runtime#SetMutexProfileFraction
+//   - https://pkg.go.dev/runtime#SetBlockProfileRate
+//
+// And corp#5277.
+func handlePprofRate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed; want POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if s := r.FormValue("block"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "bad block value", http.StatusBadRequest)
+			return
+		}
+		runtime.SetBlockProfileRate(v)
+		fmt.Fprintf(w, "block set to %v\n", v)
+	}
+	if s := r.FormValue("mutex"); s != "" {
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "bad mutex value", http.StatusBadRequest)
+			return
+		}
+		old := runtime.SetMutexProfileFraction(v)
+		fmt.Fprintf(w, "mutex changed from %v to %v\n", old, v)
+	}
 }
