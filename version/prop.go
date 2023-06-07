@@ -28,6 +28,9 @@ func OS() string {
 	// differentiate them. Then a later Go release added GOOS=ios as a separate
 	// platform, but by then the "iOS" and "macOS" values we'd picked, with that
 	// exact capitalization, were already baked into databases.
+	if IsAppleTV() {
+		return "tvOS"
+	}
 	if runtime.GOOS == "ios" {
 		return "iOS"
 	}
@@ -73,6 +76,19 @@ func IsMacSysExt() bool {
 			return false
 		}
 		return filepath.Base(exe) == "io.tailscale.ipn.macsys.network-extension"
+	})
+}
+
+var isAppleTV lazy.SyncValue[bool]
+
+// IsAppleTV reports whether this binary is part of the Tailscale network extension for tvOS.
+// Needed because runtime.GOOS returns "ios" otherwise.
+func IsAppleTV() bool {
+	if runtime.GOOS != "ios" {
+		return false
+	}
+	return isAppleTV.Get(func() bool {
+		return strings.EqualFold(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.tvos.network-extension")
 	})
 }
 
