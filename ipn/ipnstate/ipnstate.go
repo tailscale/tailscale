@@ -588,6 +588,8 @@ func osEmoji(os string) string {
 		return "🖥️"
 	case "iOS":
 		return "📱"
+	case "tvOS":
+		return "🍎📺"
 	case "android":
 		return "🤖"
 	case "freebsd":
