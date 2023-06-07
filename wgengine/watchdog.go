@@ -60,6 +60,11 @@ type watchdogEngine struct {
 	inFlightCtr uint64
 }
 
+// inDebugger returns true if the process has $TS_DEBUGGER set. This should be
+// used to avoid terminating the process when operations take an unusual amount
+// of time, as would be caused by a debugger breakpoint.
+var inDebugger = envknob.RegisterBool("TS_DEBUGGER")
+
 func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 	// Track all in-flight operations so we can print more useful error
 	// messages on watchdog failure
@@ -88,6 +93,11 @@ func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 		t.Stop()
 		return err
 	case <-t.C:
+		if inDebugger() {
+			e.logf("wgengine: watchdog timeout on %s (in debugger, maybe process was frozen?)", name)
+			return nil
+		}
+
 		buf := new(strings.Builder)
 		pprof.Lookup("goroutine").WriteTo(buf, 1)
 		e.logf("wgengine watchdog stacks:\n%s", buf.String())
