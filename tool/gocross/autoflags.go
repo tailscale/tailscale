@@ -114,6 +114,8 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 				xcodeFlags = append(xcodeFlags, "-miphoneos-version-min="+env.Get("IPHONEOS_DEPLOYMENT_TARGET", ""))
 			case env.IsSet("MACOSX_DEPLOYMENT_TARGET"):
 				xcodeFlags = append(xcodeFlags, "-mmacosx-version-min="+env.Get("MACOSX_DEPLOYMENT_TARGET", ""))
+			case env.IsSet("TVOS_DEPLOYMENT_TARGET"):
+				xcodeFlags = append(xcodeFlags, "-mtvos-version-min="+env.Get("TVOS_DEPLOYMENT_TARGET", ""))
 			default:
 				return nil, nil, fmt.Errorf("invoked by Xcode but couldn't figure out deployment target. Did Xcode change its envvars again?")
 			}
