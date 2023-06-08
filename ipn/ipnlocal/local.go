@@ -32,6 +32,7 @@ import (
 	"go4.org/mem"
 	"go4.org/netipx"
 	"golang.org/x/exp/slices"
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/doctor"
@@ -2828,14 +2829,14 @@ func (b *LocalBackend) GetPeerAPIPort(ip netip.Addr) (port uint16, ok bool) {
 	return 0, false
 }
 
-// ServePeerAPIConnection serves an already-accepted connection c.
+// handlePeerAPIConn serves an already-accepted connection c.
 //
 // The remote parameter is the remote address.
 // The local parameter is the local address (either a Tailscale IPv4
 // or IPv6 IP and the peerapi port for that address).
 //
-// The connection will be closed by ServePeerAPIConnection.
-func (b *LocalBackend) ServePeerAPIConnection(remote, local netip.AddrPort, c net.Conn) {
+// The connection will be closed by handlePeerAPIConn.
+func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, pln := range b.peerAPIListeners {
@@ -2847,6 +2848,48 @@ func (b *LocalBackend) ServePeerAPIConnection(remote, local netip.AddrPort, c ne
 	b.logf("[unexpected] no peerAPI listener found for %v", local)
 	c.Close()
 	return
+}
+
+func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
+	nm := b.NetMap()
+	return nm != nil && slices.Contains(nm.Addresses, netip.PrefixFrom(ip, ip.BitLen()))
+}
+
+var (
+	magicDNSIP   = tsaddr.TailscaleServiceIP()
+	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
+)
+
+// TCPHandlerForDst returns a TCP handler for connections to dst, or nil if
+// no handler is needed. It also returns a list of TCP socket options to
+// apply to the socket before calling the handler.
+func (b *LocalBackend) TCPHandlerForDst(src, dst netip.AddrPort) (handler func(c net.Conn) error, opts []tcpip.SettableSocketOption) {
+	if dst.Port() == 80 && (dst.Addr() == magicDNSIP || dst.Addr() == magicDNSIPv6) {
+		return b.HandleQuad100Port80Conn, opts
+	}
+	if !b.isLocalIP(dst.Addr()) {
+		return nil, nil
+	}
+	if dst.Port() == 22 && b.ShouldRunSSH() {
+		// Use a higher keepalive idle time for SSH connections, as they are
+		// typically long lived and idle connections are more likely to be
+		// intentional. Ideally we would turn this off entirely, but we can't
+		// tell the difference between a long lived connection that is idle
+		// vs a connection that is dead because the peer has gone away.
+		// We pick 72h as that is typically sufficient for a long weekend.
+		opts = append(opts, ptr.To(tcpip.KeepaliveIdleOption(72*time.Hour)))
+		return b.handleSSHConn, opts
+	}
+	if port, ok := b.GetPeerAPIPort(dst.Addr()); ok && dst.Port() == port {
+		return func(c net.Conn) error {
+			b.handlePeerAPIConn(src, dst, c)
+			return nil
+		}, opts
+	}
+	if handler := b.tcpHandlerForServe(dst.Port(), src); handler != nil {
+		return handler, opts
+	}
+	return nil, nil
 }
 
 func (b *LocalBackend) peerAPIServicesLocked() (ret []tailcfg.Service) {
@@ -4674,7 +4717,7 @@ func checkSELinux() {
 	}
 }
 
-func (b *LocalBackend) HandleSSHConn(c net.Conn) (err error) {
+func (b *LocalBackend) handleSSHConn(c net.Conn) (err error) {
 	s, err := b.sshServerOrInit()
 	if err != nil {
 		return err
@@ -4685,10 +4728,10 @@ func (b *LocalBackend) HandleSSHConn(c net.Conn) (err error) {
 
 // HandleQuad100Port80Conn serves http://100.100.100.100/ on port 80 (and
 // the equivalent tsaddr.TailscaleServiceIPv6 address).
-func (b *LocalBackend) HandleQuad100Port80Conn(c net.Conn) {
+func (b *LocalBackend) HandleQuad100Port80Conn(c net.Conn) error {
 	var s http.Server
 	s.Handler = http.HandlerFunc(b.handleQuad100Port80Conn)
-	s.Serve(netutil.NewOneConnListener(c, nil))
+	return s.Serve(netutil.NewOneConnListener(c, nil))
 }
 
 func validQuad100Host(h string) bool {

@@ -780,7 +780,7 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	getConn := func() (net.Conn, bool) {
+	getConnOrReset := func() (net.Conn, bool) {
 		conn, _, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			h.logf("ingress: failed hijacking conn")
@@ -798,7 +798,7 @@ func (h *peerAPIHandler) handleServeIngress(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "denied", http.StatusForbidden)
 	}
 
-	h.ps.b.HandleIngressTCPConn(h.peerNode, target, srcAddr, getConn, sendRST)
+	h.ps.b.HandleIngressTCPConn(h.peerNode, target, srcAddr, getConnOrReset, sendRST)
 }
 
 func (h *peerAPIHandler) handleServeInterfaces(w http.ResponseWriter, r *http.Request) {
