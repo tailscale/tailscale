@@ -44,6 +44,7 @@ func BenchmarkInterleave(b *testing.B) {
 		)
 	}
 }
+
 func TestShuffle(t *testing.T) {
 	var sl []int
 	for i := 0; i < 100; i++ {
@@ -62,5 +63,25 @@ func TestShuffle(t *testing.T) {
 
 	if !wasShuffled {
 		t.Errorf("expected shuffle after 10 tries")
+	}
+}
+
+func TestPartition(t *testing.T) {
+	var sl []int
+	for i := 1; i <= 10; i++ {
+		sl = append(sl, i)
+	}
+
+	evens, odds := Partition(sl, func(elem int) bool {
+		return elem%2 == 0
+	})
+
+	wantEvens := []int{2, 4, 6, 8, 10}
+	wantOdds := []int{1, 3, 5, 7, 9}
+	if !reflect.DeepEqual(evens, wantEvens) {
+		t.Errorf("evens: got %v, want %v", evens, wantEvens)
+	}
+	if !reflect.DeepEqual(odds, wantOdds) {
+		t.Errorf("odds: got %v, want %v", odds, wantOdds)
 	}
 }
