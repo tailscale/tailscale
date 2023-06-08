@@ -42,3 +42,18 @@ func Shuffle[S ~[]T, T any](s S) {
 		s[i], s[j] = s[j], s[i]
 	}
 }
+
+// Partition returns two slices, the first containing the elements of the input
+// slice for which the callback evaluates to true, the second containing the rest.
+//
+// This function does not mutate s.
+func Partition[S ~[]T, T any](s S, cb func(T) bool) (trues, falses S) {
+	for _, elem := range s {
+		if cb(elem) {
+			trues = append(trues, elem)
+		} else {
+			falses = append(falses, elem)
+		}
+	}
+	return
+}
