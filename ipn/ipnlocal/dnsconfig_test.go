@@ -16,6 +16,7 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cloudenv"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 )
 
@@ -308,10 +309,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			verOS := tt.os
-			if verOS == "" {
-				verOS = "linux"
-			}
+			verOS := cmpx.Or(tt.os, "linux")
 			var log tstest.MemLogger
 			got := dnsConfigForNetmap(tt.nm, tt.prefs.View(), log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {

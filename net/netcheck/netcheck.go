@@ -42,6 +42,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/mak"
 )
 
@@ -450,10 +451,9 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 				do6 = false
 			}
 			n := reg.Nodes[try%len(reg.Nodes)]
-			prevLatency := last.RegionLatency[reg.RegionID] * 120 / 100
-			if prevLatency == 0 {
-				prevLatency = defaultActiveRetransmitTime
-			}
+			prevLatency := cmpx.Or(
+				last.RegionLatency[reg.RegionID]*120/100,
+				defaultActiveRetransmitTime)
 			delay := time.Duration(try) * prevLatency
 			if try > 1 {
 				delay += time.Duration(try) * 50 * time.Millisecond
@@ -1589,10 +1589,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 // proto is 4 or 6
 // If it returns nil, the node is skipped.
 func (c *Client) nodeAddr(ctx context.Context, n *tailcfg.DERPNode, proto probeProto) (ap netip.AddrPort) {
-	port := n.STUNPort
-	if port == 0 {
-		port = 3478
-	}
+	port := cmpx.Or(n.STUNPort, 3478)
 	if port < 0 || port > 1<<16-1 {
 		return
 	}

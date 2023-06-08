@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/version/distro"
 )
 
@@ -719,10 +720,7 @@ func TestPrefsFromUpArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var warnBuf tstest.MemLogger
-			goos := tt.goos
-			if goos == "" {
-				goos = "linux"
-			}
+			goos := cmpx.Or(tt.goos, "linux")
 			st := tt.st
 			if st == nil {
 				st = new(ipnstate.Status)

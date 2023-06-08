@@ -33,6 +33,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
+	"tailscale.com/util/cmpx"
 )
 
 var (
@@ -436,11 +437,7 @@ func defaultMeshPSKFile() string {
 }
 
 func rateLimitedListenAndServeTLS(srv *http.Server) error {
-	addr := srv.Addr
-	if addr == "" {
-		addr = ":https"
-	}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", cmpx.Or(srv.Addr, ":https"))
 	if err != nil {
 		return err
 	}

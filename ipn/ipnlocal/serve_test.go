@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"tailscale.com/ipn"
+	"tailscale.com/util/cmpx"
 )
 
 func TestExpandProxyArg(t *testing.T) {
@@ -140,10 +141,7 @@ func TestGetServeHandler(t *testing.T) {
 				},
 				TLS: &tls.ConnectionState{ServerName: serverName},
 			}
-			port := tt.port
-			if port == 0 {
-				port = 443
-			}
+			port := cmpx.Or(tt.port, 443)
 			req = req.WithContext(context.WithValue(req.Context(), serveHTTPContextKey{}, &serveHTTPContext{
 				DestPort: port,
 			}))

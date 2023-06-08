@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/metrics"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/version"
 )
 
@@ -96,16 +97,10 @@ func writePromExpVar(w io.Writer, prefix string, kv expvar.KeyValue) {
 
 	switch v := kv.Value.(type) {
 	case *expvar.Int:
-		if typ == "" {
-			typ = "counter"
-		}
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "counter"), name, v.Value())
 		return
 	case *expvar.Float:
-		if typ == "" {
-			typ = "gauge"
-		}
-		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, typ, name, v.Value())
+		fmt.Fprintf(w, "# TYPE %s %s\n%s %v\n", name, cmpx.Or(typ, "gauge"), name, v.Value())
 		return
 	case *metrics.Set:
 		v.Do(func(kv expvar.KeyValue) {
