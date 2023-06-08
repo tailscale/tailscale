@@ -29,6 +29,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/version/distro"
 )
@@ -155,10 +156,7 @@ func runWeb(ctx context.Context, args []string) error {
 // urlOfListenAddr parses a given listen address into a formatted URL
 func urlOfListenAddr(addr string) string {
 	host, port, _ := net.SplitHostPort(addr)
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	return fmt.Sprintf("http://%s", net.JoinHostPort(host, port))
+	return fmt.Sprintf("http://%s", net.JoinHostPort(cmpx.Or(host, "127.0.0.1"), port))
 }
 
 // authorize returns the name of the user accessing the web UI after verifying

@@ -40,6 +40,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/cmpx"
 )
 
 // Client is a DERP-over-HTTP client.
@@ -654,10 +655,7 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 					// Start v4 dial
 				}
 			}
-			dst := dstPrimary
-			if dst == "" {
-				dst = n.HostName
-			}
+			dst := cmpx.Or(dstPrimary, n.HostName)
 			port := "443"
 			if n.DERPPort != 0 {
 				port = fmt.Sprint(n.DERPPort)
