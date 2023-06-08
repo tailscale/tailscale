@@ -162,12 +162,13 @@ func (s *serveListener) handleServeListenersAccept(ln net.Listener) error {
 			return err
 		}
 		srcAddr := conn.RemoteAddr().(*net.TCPAddr).AddrPort()
-		getConn := func() (net.Conn, bool) { return conn, true }
-		sendRST := func() {
+		handler := s.b.tcpHandlerForServe(s.ap.Port(), srcAddr)
+		if handler == nil {
 			s.b.logf("serve RST for %v", srcAddr)
 			conn.Close()
+			continue
 		}
-		go s.b.HandleInterceptedTCPConn(s.ap.Port(), srcAddr, getConn, sendRST)
+		go handler(conn)
 	}
 }
 
@@ -256,7 +257,7 @@ func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
 	return b.serveConfig
 }
 
-func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ipn.HostPort, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
+func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ipn.HostPort, srcAddr netip.AddrPort, getConnOrReset func() (net.Conn, bool), sendRST func()) {
 	b.mu.Lock()
 	sc := b.serveConfig
 	b.mu.Unlock()
@@ -289,7 +290,7 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 	if b.getTCPHandlerForFunnelFlow != nil {
 		handler := b.getTCPHandlerForFunnelFlow(srcAddr, dport)
 		if handler != nil {
-			c, ok := getConn()
+			c, ok := getConnOrReset()
 			if !ok {
 				b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
 				return
@@ -298,35 +299,40 @@ func (b *LocalBackend) HandleIngressTCPConn(ingressPeer *tailcfg.Node, target ip
 			return
 		}
 	}
-	// TODO(bradfitz): pass ingressPeer etc in context to HandleInterceptedTCPConn,
+	// TODO(bradfitz): pass ingressPeer etc in context to tcpHandlerForServe,
 	// extend serveHTTPContext or similar.
-	b.HandleInterceptedTCPConn(dport, srcAddr, getConn, sendRST)
+	handler := b.tcpHandlerForServe(dport, srcAddr)
+	if handler == nil {
+		sendRST()
+		return
+	}
+	c, ok := getConnOrReset()
+	if !ok {
+		b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
+		return
+	}
+	handler(c)
 }
 
-func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.AddrPort, getConn func() (net.Conn, bool), sendRST func()) {
+// tcpHandlerForServe returns a handler for a TCP connection to be served via
+// the ipn.ServeConfig.
+func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) (handler func(net.Conn) error) {
 	b.mu.Lock()
 	sc := b.serveConfig
 	b.mu.Unlock()
 
 	if !sc.Valid() {
 		b.logf("[unexpected] localbackend: got TCP conn w/o serveConfig; from %v to port %v", srcAddr, dport)
-		sendRST()
-		return
+		return nil
 	}
 
 	tcph, ok := sc.TCP().GetOk(dport)
 	if !ok {
 		b.logf("[unexpected] localbackend: got TCP conn without TCP config for port %v; from %v", dport, srcAddr)
-		sendRST()
-		return
+		return nil
 	}
 
 	if tcph.HTTPS() {
-		conn, ok := getConn()
-		if !ok {
-			b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
-			return
-		}
 		hs := &http.Server{
 			TLSConfig: &tls.Config{
 				GetCertificate: b.getTLSServeCertForPort(dport),
@@ -339,64 +345,57 @@ func (b *LocalBackend) HandleInterceptedTCPConn(dport uint16, srcAddr netip.Addr
 				})
 			},
 		}
-		hs.ServeTLS(netutil.NewOneConnListener(conn, nil), "", "")
-		return
+		return func(c net.Conn) error {
+			return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+		}
 	}
 
 	if backDst := tcph.TCPForward(); backDst != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
-		cancel()
-		if err != nil {
-			b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
-			sendRST()
-			return
-		}
-		conn, ok := getConn()
-		if !ok {
-			b.logf("localbackend: getConn didn't complete from %v to port %v", srcAddr, dport)
-			backConn.Close()
-			return
-		}
-		defer conn.Close()
-		defer backConn.Close()
+		return func(conn net.Conn) error {
+			defer conn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
+			cancel()
+			if err != nil {
+				b.logf("localbackend: failed to TCP proxy port %v (from %v) to %s: %v", dport, srcAddr, backDst, err)
+				return nil
+			}
+			defer backConn.Close()
+			if sni := tcph.TerminateTLS(); sni != "" {
+				conn = tls.Server(conn, &tls.Config{
+					GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+						defer cancel()
+						pair, err := b.GetCertPEM(ctx, sni)
+						if err != nil {
+							return nil, err
+						}
+						cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
+						if err != nil {
+							return nil, err
+						}
+						return &cert, nil
+					},
+				})
+			}
 
-		if sni := tcph.TerminateTLS(); sni != "" {
-			conn = tls.Server(conn, &tls.Config{
-				GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-					defer cancel()
-					pair, err := b.GetCertPEM(ctx, sni)
-					if err != nil {
-						return nil, err
-					}
-					cert, err := tls.X509KeyPair(pair.CertPEM, pair.KeyPEM)
-					if err != nil {
-						return nil, err
-					}
-					return &cert, nil
-				},
-			})
+			// TODO(bradfitz): do the RegisterIPPortIdentity and
+			// UnregisterIPPortIdentity stuff that netstack does
+			errc := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(backConn, conn)
+				errc <- err
+			}()
+			go func() {
+				_, err := io.Copy(conn, backConn)
+				errc <- err
+			}()
+			return <-errc
 		}
-
-		// TODO(bradfitz): do the RegisterIPPortIdentity and
-		// UnregisterIPPortIdentity stuff that netstack does
-
-		errc := make(chan error, 1)
-		go func() {
-			_, err := io.Copy(backConn, conn)
-			errc <- err
-		}()
-		go func() {
-			_, err := io.Copy(conn, backConn)
-			errc <- err
-		}()
-		<-errc
-		return
 	}
 
 	b.logf("closing TCP conn to port %v (from %v) with actionless TCPPortHandler", dport, srcAddr)
-	sendRST()
+	return nil
 }
 
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {

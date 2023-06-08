@@ -537,10 +537,6 @@ func (ns *Impl) isLocalIP(ip netip.Addr) bool {
 	return ns.atomicIsLocalIPFunc.Load()(ip)
 }
 
-func (ns *Impl) processSSH() bool {
-	return ns.lb != nil && ns.lb.ShouldRunSSH()
-}
-
 func (ns *Impl) peerAPIPortAtomic(ip netip.Addr) *atomic.Uint32 {
 	if ip.Is4() {
 		return &ns.peerapiPort4Atomic
@@ -840,7 +836,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	// request until we're sure that the connection can be handled by this
 	// endpoint. This function sets up the TCP connection and should be
 	// called immediately before a connection is handled.
-	createConn := func(opts ...tcpip.SettableSocketOption) *gonet.TCPConn {
+	getConnOrReset := func(opts ...tcpip.SettableSocketOption) *gonet.TCPConn {
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
 			ns.logf("CreateEndpoint error for %s: %v", stringifyTEI(reqDetails), err)
@@ -879,7 +875,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 
 	// DNS
 	if reqDetails.LocalPort == 53 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
-		c := createConn()
+		c := getConnOrReset()
 		if c == nil {
 			return
 		}
@@ -888,53 +884,13 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	if ns.lb != nil {
-		if reqDetails.LocalPort == 22 && ns.processSSH() && ns.isLocalIP(dialIP) {
-			// Use a higher keepalive idle time for SSH connections, as they are
-			// typically long lived and idle connections are more likely to be
-			// intentional. Ideally we would turn this off entirely, but we can't
-			// tell the difference between a long lived connection that is idle
-			// vs a connection that is dead because the peer has gone away.
-			// We pick 72h as that is typically sufficient for a long weekend.
-			idle := tcpip.KeepaliveIdleOption(72 * time.Hour)
-			c := createConn(&idle)
+		handler, opts := ns.lb.TCPHandlerForDst(clientRemoteAddrPort, dstAddrPort)
+		if handler != nil {
+			c := getConnOrReset(opts...) // will send a RST if it fails
 			if c == nil {
 				return
 			}
-			if err := ns.lb.HandleSSHConn(c); err != nil {
-				ns.logf("ssh error: %v", err)
-			}
-			return
-		}
-		if port, ok := ns.lb.GetPeerAPIPort(dialIP); ok {
-			if reqDetails.LocalPort == port && ns.isLocalIP(dialIP) {
-				c := createConn()
-				if c == nil {
-					return
-				}
-
-				src := netip.AddrPortFrom(clientRemoteIP, reqDetails.RemotePort)
-				dst := netip.AddrPortFrom(dialIP, port)
-				ns.lb.ServePeerAPIConnection(src, dst, c)
-				return
-			}
-		}
-		if reqDetails.LocalPort == 80 && (dialIP == magicDNSIP || dialIP == magicDNSIPv6) {
-			c := createConn()
-			if c == nil {
-				return
-			}
-			ns.lb.HandleQuad100Port80Conn(c)
-			return
-		}
-		if ns.lb.ShouldInterceptTCPPort(reqDetails.LocalPort) && ns.isLocalIP(dialIP) {
-			getTCPConn := func() (_ net.Conn, ok bool) {
-				c := createConn()
-				return c, c != nil
-			}
-			sendRST := func() {
-				r.Complete(true)
-			}
-			ns.lb.HandleInterceptedTCPConn(reqDetails.LocalPort, clientRemoteAddrPort, getTCPConn, sendRST)
+			handler(c)
 			return
 		}
 	}
@@ -946,7 +902,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 				r.Complete(true)
 				return
 			}
-			c := createConn() // will send a RST if it fails
+			c := getConnOrReset() // will send a RST if it fails
 			if c == nil {
 				return
 			}
@@ -959,7 +915,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 	dialAddr := netip.AddrPortFrom(dialIP, uint16(reqDetails.LocalPort))
 
-	if !ns.forwardTCP(createConn, clientRemoteIP, &wq, dialAddr) {
+	if !ns.forwardTCP(getConnOrReset, clientRemoteIP, &wq, dialAddr) {
 		r.Complete(true) // sends a RST
 	}
 }
