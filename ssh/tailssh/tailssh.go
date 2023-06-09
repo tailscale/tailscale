@@ -422,6 +422,7 @@ func (srv *server) newConn() (*conn, error) {
 	c := &conn{srv: srv}
 	now := srv.now()
 	c.connID = fmt.Sprintf("ssh-conn-%s-%02x", now.UTC().Format("20060102T150405"), randBytes(5))
+	fwdHandler := &ssh.ForwardedTCPHandler{}
 	c.Server = &ssh.Server{
 		Version:              "Tailscale",
 		ServerConfigCallback: c.ServerConfig,
@@ -430,8 +431,9 @@ func (srv *server) newConn() (*conn, error) {
 		PublicKeyHandler:    c.PublicKeyHandler,
 		PasswordHandler:     c.fakePasswordHandler,
 
-		Handler:                     c.handleSessionPostSSHAuth,
-		LocalPortForwardingCallback: c.mayForwardLocalPortTo,
+		Handler:                       c.handleSessionPostSSHAuth,
+		LocalPortForwardingCallback:   c.mayForwardLocalPortTo,
+		ReversePortForwardingCallback: c.mayReversePortForwardTo,
 		SubsystemHandlers: map[string]ssh.SubsystemHandler{
 			"sftp": c.handleSessionPostSSHAuth,
 		},
@@ -441,7 +443,10 @@ func (srv *server) newConn() (*conn, error) {
 		ChannelHandlers: map[string]ssh.ChannelHandler{
 			"direct-tcpip": ssh.DirectTCPIPHandler,
 		},
-		RequestHandlers: map[string]ssh.RequestHandler{},
+		RequestHandlers: map[string]ssh.RequestHandler{
+			"tcpip-forward":        fwdHandler.HandleSSHRequest,
+			"cancel-tcpip-forward": fwdHandler.HandleSSHRequest,
+		},
 	}
 	ss := c.Server
 	for k, v := range ssh.DefaultRequestHandlers {
@@ -461,6 +466,17 @@ func (srv *server) newConn() (*conn, error) {
 		ss.AddHostKey(signer)
 	}
 	return c, nil
+}
+
+// mayReversePortPortForwardTo reports whether the ctx should be allowed to port forward
+// to the specified host and port.
+// TODO(bradfitz/maisem): should we have more checks on host/port?
+func (c *conn) mayReversePortForwardTo(ctx ssh.Context, destinationHost string, destinationPort uint32) bool {
+	if c.finalAction != nil && c.finalAction.AllowRemotePortForwarding {
+		metricRemotePortForward.Add(1)
+		return true
+	}
+	return false
 }
 
 // mayForwardLocalPortTo reports whether the ctx should be allowed to port forward
@@ -1860,6 +1876,7 @@ var (
 	metricPolicyChangeKick     = clientmetric.NewCounter("ssh_policy_change_kick")
 	metricSFTP                 = clientmetric.NewCounter("ssh_sftp_requests")
 	metricLocalPortForward     = clientmetric.NewCounter("ssh_local_port_forward_requests")
+	metricRemotePortForward    = clientmetric.NewCounter("ssh_remote_port_forward_requests")
 )
 
 // userVisibleError is a wrapper around an error that implements
