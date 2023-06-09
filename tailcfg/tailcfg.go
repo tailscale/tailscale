@@ -99,7 +99,8 @@ type CapabilityVersion int
 //   - 60: 2023-04-06: Client understands IsWireGuardOnly
 //   - 61: 2023-04-18: Client understand SSHAction.SSHRecorderFailureAction
 //   - 62: 2023-05-05: Client can notify control over noise for SSHEventNotificationRequest recording failure events
-const CurrentCapabilityVersion CapabilityVersion = 62
+//   - 63: 2023-06-08: Client understands SSHAction.AllowRemotePortForwarding.
+const CurrentCapabilityVersion CapabilityVersion = 63
 
 type StableID string
 
@@ -2047,6 +2048,10 @@ type SSHAction struct {
 	// AllowLocalPortForwarding, if true, allows accepted connections
 	// to use local port forwarding if requested.
 	AllowLocalPortForwarding bool `json:"allowLocalPortForwarding,omitempty"`
+
+	// AllowRemotePortForwarding, if true, allows accepted connections
+	// to use remote port forwarding if requested.
+	AllowRemotePortForwarding bool `json:"allowRemotePortForwarding,omitempty"`
 
 	// Recorders defines the destinations of the SSH session recorders.
 	// The recording will be uploaded to http://addr:port/record.

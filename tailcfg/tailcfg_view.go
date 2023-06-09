@@ -940,6 +940,7 @@ func (v SSHActionView) SessionDuration() time.Duration         { return v.ж.Ses
 func (v SSHActionView) AllowAgentForwarding() bool             { return v.ж.AllowAgentForwarding }
 func (v SSHActionView) HoldAndDelegate() string                { return v.ж.HoldAndDelegate }
 func (v SSHActionView) AllowLocalPortForwarding() bool         { return v.ж.AllowLocalPortForwarding }
+func (v SSHActionView) AllowRemotePortForwarding() bool        { return v.ж.AllowRemotePortForwarding }
 func (v SSHActionView) Recorders() views.Slice[netip.AddrPort] { return views.SliceOf(v.ж.Recorders) }
 func (v SSHActionView) OnRecordingFailure() *SSHRecorderFailureAction {
 	if v.ж.OnRecordingFailure == nil {
@@ -951,15 +952,16 @@ func (v SSHActionView) OnRecordingFailure() *SSHRecorderFailureAction {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHActionViewNeedsRegeneration = SSHAction(struct {
-	Message                  string
-	Reject                   bool
-	Accept                   bool
-	SessionDuration          time.Duration
-	AllowAgentForwarding     bool
-	HoldAndDelegate          string
-	AllowLocalPortForwarding bool
-	Recorders                []netip.AddrPort
-	OnRecordingFailure       *SSHRecorderFailureAction
+	Message                   string
+	Reject                    bool
+	Accept                    bool
+	SessionDuration           time.Duration
+	AllowAgentForwarding      bool
+	HoldAndDelegate           string
+	AllowLocalPortForwarding  bool
+	AllowRemotePortForwarding bool
+	Recorders                 []netip.AddrPort
+	OnRecordingFailure        *SSHRecorderFailureAction
 }{})
 
 // View returns a readonly view of SSHPrincipal.

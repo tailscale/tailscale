@@ -408,15 +408,16 @@ func (src *SSHAction) Clone() *SSHAction {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _SSHActionCloneNeedsRegeneration = SSHAction(struct {
-	Message                  string
-	Reject                   bool
-	Accept                   bool
-	SessionDuration          time.Duration
-	AllowAgentForwarding     bool
-	HoldAndDelegate          string
-	AllowLocalPortForwarding bool
-	Recorders                []netip.AddrPort
-	OnRecordingFailure       *SSHRecorderFailureAction
+	Message                   string
+	Reject                    bool
+	Accept                    bool
+	SessionDuration           time.Duration
+	AllowAgentForwarding      bool
+	HoldAndDelegate           string
+	AllowLocalPortForwarding  bool
+	AllowRemotePortForwarding bool
+	Recorders                 []netip.AddrPort
+	OnRecordingFailure        *SSHRecorderFailureAction
 }{})
 
 // Clone makes a deep copy of SSHPrincipal.
