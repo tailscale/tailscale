@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -441,7 +442,16 @@ func (s *Server) start() (reterr error) {
 
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		switch runtime.GOOS {
+		case "js", "wasip1":
+			// These platforms don't implement os.Executable (at least as of Go
+			// 1.21), but we don't really care much: it's only used as a default
+			// directory and hostname when they're not supplied. But we can fall
+			// back to "tsnet" as well.
+			exe = "tsnet"
+		default:
+			return err
+		}
 	}
 	prog := strings.TrimSuffix(strings.ToLower(filepath.Base(exe)), ".exe")
 
