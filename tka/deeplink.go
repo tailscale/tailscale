@@ -20,7 +20,7 @@ const (
 
 type DeeplinkValidationResult struct {
 	IsValid      bool
-	Error        error
+	Error        string
 	Version      uint8
 	NodeKey      string
 	TLPub        string
@@ -58,37 +58,37 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if err != nil {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   err,
+			Error:   err.Error(),
 		}
 	}
 
 	if parsedUrl.Scheme != DeeplinkTailscaleURLScheme {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("unhandled scheme %s, expected %s", parsedUrl.Scheme, DeeplinkTailscaleURLScheme),
+			Error:   fmt.Sprintf("unhandled scheme %s, expected %s", parsedUrl.Scheme, DeeplinkTailscaleURLScheme),
 		}
 	}
 
 	if parsedUrl.Host != DeeplinkCommandSign {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("unhandled host %s, expected %s", parsedUrl.Host, DeeplinkCommandSign),
+			Error:   fmt.Sprintf("unhandled host %s, expected %s", parsedUrl.Host, DeeplinkCommandSign),
 		}
 	}
 
 	path := parsedUrl.EscapedPath()
 	pathComponents := strings.Split(path, "/")
-	if len(pathComponents) == 0 {
+	if len(pathComponents) != 3 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("no path components found"),
+			Error:   "invalid path components number found",
 		}
 	}
 
-	if pathComponents[0] != "v1" {
+	if pathComponents[1] != "v1" {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("expected v1 deeplink version, found something else"),
+			Error:   fmt.Sprintf("expected v1 deeplink version, found something else: %s", pathComponents[1]),
 		}
 	}
 
@@ -96,7 +96,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(nodeKey) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing nk (NodeKey) query parameter"),
+			Error:   "missing nk (NodeKey) query parameter",
 		}
 	}
 
@@ -104,7 +104,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(tlPub) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing tp (TLPub) query parameter"),
+			Error:   "missing tp (TLPub) query parameter",
 		}
 	}
 
@@ -112,7 +112,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(deviceName) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing dn (DeviceName) query parameter"),
+			Error:   "missing dn (DeviceName) query parameter",
 		}
 	}
 
@@ -120,7 +120,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(deviceName) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing os (OSName) query parameter"),
+			Error:   "missing os (OSName) query parameter",
 		}
 	}
 
@@ -128,7 +128,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(emailAddress) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing em (EmailAddress) query parameter"),
+			Error:   "missing em (EmailAddress) query parameter",
 		}
 	}
 
@@ -136,7 +136,7 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 	if len(hmacString) == 0 {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("missing hm (HMAC) query parameter"),
+			Error:   "missing hm (HMAC) query parameter",
 		}
 	}
 
@@ -146,12 +146,13 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 
 	hmacHexBytes, err := hex.DecodeString(hmacString)
 	if err != nil {
-		return DeeplinkValidationResult{IsValid: false, Error: fmt.Errorf("could not hex-decode hmac")}
+		return DeeplinkValidationResult{IsValid: false, Error: "could not hex-decode hmac"}
 	}
-	if hmac.Equal(computedHMAC, hmacHexBytes) {
+
+	if !hmac.Equal(computedHMAC, hmacHexBytes) {
 		return DeeplinkValidationResult{
 			IsValid: false,
-			Error:   fmt.Errorf("hmac authentication failed"),
+			Error:   "hmac authentication failed",
 		}
 	}
 

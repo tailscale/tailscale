@@ -893,7 +893,7 @@ func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.Deeplink
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.tka == nil {
-		return tka.DeeplinkValidationResult{IsValid: false, Error: errNetworkLockNotActive}
+		return tka.DeeplinkValidationResult{IsValid: false, Error: errNetworkLockNotActive.Error()}
 	}
 
 	return b.tka.authority.ValidateDeeplink(url)
