@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -209,47 +210,44 @@ func derpProbeUDP(ctx context.Context, ipStr string, port int) (latency time.Dur
 	defer pc.Close()
 	uc := pc.(*net.UDPConn)
 
-	tx := stun.NewTxID()
-	req := stun.Request(tx)
-
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return 0, err
+	}
 	if port == 0 {
 		port = 3478
 	}
-	for {
-		ip := net.ParseIP(ipStr)
-		_, err := uc.WriteToUDP(req, &net.UDPAddr{IP: ip, Port: port})
-		if err != nil {
-			return 0, err
+	addr := netip.AddrPortFrom(ip, uint16(port))
+
+	// Binding requests and responses are fairly small (~40 bytes),
+	// but in practice a STUN response can be up to the size of the
+	// path MTU, so we use a jumbo frame size buffer here.
+	buf := make([]byte, 9000)
+
+	tx := stun.NewTxID()
+	req := stun.Request(tx)
+	_, err = uc.WriteToUDPAddrPort(req, addr)
+	if err != nil {
+		return 0, err
+	}
+	t0 := time.Now()
+	n, _, err := uc.ReadFromUDP(buf)
+	d := time.Since(t0)
+	if err != nil {
+		if ctx.Err() != nil || err == context.DeadlineExceeded || d > time.Second {
+			return 0, fmt.Errorf("timeout reading from %s: (%s) %w", addr, d, err)
 		}
-		// Binding requests and responses are fairly small (~40 bytes),
-		// but in practice a STUN response can be up to the size of the
-		// path MTU, so we use a jumbo frame size buffer here.
-		buf := make([]byte, 9000)
-		uc.SetReadDeadline(time.Now().Add(2 * time.Second))
-		t0 := time.Now()
-		n, _, err := uc.ReadFromUDP(buf)
-		d := time.Since(t0)
-		if err != nil {
-			if ctx.Err() != nil {
-				return 0, fmt.Errorf("timeout reading from %v: %v", ip, err)
-			}
-			if d < time.Second {
-				return 0, fmt.Errorf("error reading from %v: %v", ip, err)
-			}
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		txBack, _, err := stun.ParseResponse(buf[:n])
-		if err != nil {
-			return 0, fmt.Errorf("parsing STUN response from %v: %v", ip, err)
-		}
-		if txBack != tx {
-			return 0, fmt.Errorf("read wrong tx back from %v", ip)
-		}
-		if latency == 0 || d < latency {
-			latency = d
-		}
-		break
+		return 0, fmt.Errorf("error reading from %s: (%s) %w", addr, d, err)
+	}
+	txBack, _, err := stun.ParseResponse(buf[:n])
+	if err != nil {
+		return 0, fmt.Errorf("parsing STUN response from %s: %v", addr, err)
+	}
+	if txBack != tx {
+		return 0, fmt.Errorf("read wrong tx back from %s", addr)
+	}
+	if latency == 0 || d < latency {
+		latency = d
 	}
 	return latency, nil
 }
