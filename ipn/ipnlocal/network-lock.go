@@ -887,6 +887,18 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString(sig.Serialize()), tkaSuffixEncoder.EncodeToString(priv)), nil
 }
 
+// NetworkLockVerifySigningDeeplink asks the authority to verify the given deeplink
+// URL. See the comment for ValidateDeeplink for details.
+func (b *LocalBackend) NetworkLockVerifySigningDeeplink(url string) tka.DeeplinkValidationResult {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return tka.DeeplinkValidationResult{IsValid: false, Error: errNetworkLockNotActive.Error()}
+	}
+
+	return b.tka.authority.ValidateDeeplink(url)
+}
+
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
 	p, err := nodeInfo.NodePublic.MarshalBinary()
 	if err != nil {

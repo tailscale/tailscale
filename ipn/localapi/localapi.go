@@ -104,6 +104,7 @@ var handler = map[string]localAPIHandler{
 	"tka/force-local-disable":     (*Handler).serveTKALocalDisable,
 	"tka/affected-sigs":           (*Handler).serveTKAAffectedSigs,
 	"tka/wrap-preauth-key":        (*Handler).serveTKAWrapPreauthKey,
+	"tka/verify-deeplink":         (*Handler).serveTKAVerifySigningDeeplink,
 	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
@@ -1608,6 +1609,35 @@ func (h *Handler) serveTKAWrapPreauthKey(w http.ResponseWriter, r *http.Request)
 	}
 	w.WriteHeader(200)
 	w.Write([]byte(wrappedKey))
+}
+
+func (h *Handler) serveTKAVerifySigningDeeplink(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitRead {
+		http.Error(w, "signing deeplink verification access denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != httpm.POST {
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type verifyRequest struct {
+		URL string
+	}
+	var req verifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON for verifyRequest body", 400)
+		return
+	}
+
+	res := h.b.NetworkLockVerifySigningDeeplink(req.URL)
+	j, err := json.MarshalIndent(res, "", "\t")
+	if err != nil {
+		http.Error(w, "JSON encoding error", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
 
 func (h *Handler) serveTKADisable(w http.ResponseWriter, r *http.Request) {
