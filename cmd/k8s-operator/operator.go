@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -274,6 +275,8 @@ const (
 	AnnotationExpose   = "tailscale.com/expose"
 	AnnotationTags     = "tailscale.com/tags"
 	AnnotationHostname = "tailscale.com/hostname"
+
+	AnnotationTarget = "tailscale.com/target"
 )
 
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
@@ -321,12 +324,16 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) {
+	if !svc.DeletionTimestamp.IsZero() || (!a.shouldExpose(svc) && !a.hasTargetAnnotation(svc)) {
 		logger.Debugf("service is being deleted or should not be exposed, cleaning up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
-	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
+	if a.hasTargetAnnotation(svc) {
+		return reconcile.Result{}, a.maybeProvisionEgress(ctx, logger, svc)
+	}
+
+	return reconcile.Result{}, a.maybeProvisionIngress(ctx, logger, svc)
 }
 
 // maybeCleanup removes any existing resources related to serving svc over tailscale.
@@ -402,12 +409,16 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	return nil
 }
 
-// maybeProvision ensures that svc is exposed over tailscale, taking any actions
+func (a *ServiceReconciler) maybeProvisionEgress(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+	return errors.New("unimplemented")
+}
+
+// maybeProvisionIngress ensures that svc is exposed over tailscale, taking any actions
 // necessary to reach that state.
 //
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
-func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+func (a *ServiceReconciler) maybeProvisionIngress(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
 	hostname, err := nameForService(svc)
 	if err != nil {
 		return err
@@ -482,7 +493,7 @@ func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 		return false
 	}
 
-	return a.hasLoadBalancerClass(svc) || a.hasAnnotation(svc)
+	return a.hasLoadBalancerClass(svc) || a.hasExposeAnnotation(svc)
 }
 
 func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
@@ -492,9 +503,12 @@ func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
 		*svc.Spec.LoadBalancerClass == "tailscale"
 }
 
-func (a *ServiceReconciler) hasAnnotation(svc *corev1.Service) bool {
-	return svc != nil &&
-		svc.Annotations[AnnotationExpose] == "true"
+func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
+	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
+}
+
+func (a *ServiceReconciler) hasTargetAnnotation(svc *corev1.Service) bool {
+	return svc != nil && svc.Annotations[AnnotationTarget] != ""
 }
 
 func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (*corev1.Service, error) {

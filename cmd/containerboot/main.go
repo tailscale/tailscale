@@ -16,6 +16,8 @@
 //   - TS_ROUTES: subnet routes to advertise.
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
+//   - TS_EGRESS_IP: proxy all incoming non-Tailscale traffic to the given
+//     destination.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
 //   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
 //   - TS_USERSPACE: run with userspace networking (the default)
@@ -76,7 +78,8 @@ func main() {
 		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
 		Hostname:        defaultEnv("TS_HOSTNAME", ""),
 		Routes:          defaultEnv("TS_ROUTES", ""),
-		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
+		IngressProxyTo:  defaultEnv("TS_DEST_IP", ""),
+		EgressProxyTo:   defaultEnv("TS_EGRESS_IP", ""),
 		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
 		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
@@ -91,7 +94,7 @@ func main() {
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
-	if cfg.ProxyTo != "" && cfg.UserspaceMode {
+	if cfg.IngressProxyTo != "" && cfg.UserspaceMode {
 		log.Fatal("TS_DEST_IP is not supported with TS_USERSPACE")
 	}
 
@@ -99,8 +102,8 @@ func main() {
 		if err := ensureTunFile(cfg.Root); err != nil {
 			log.Fatalf("Unable to create tuntap device file: %v", err)
 		}
-		if cfg.ProxyTo != "" || cfg.Routes != "" {
-			if err := ensureIPForwarding(cfg.Root, cfg.ProxyTo, cfg.Routes); err != nil {
+		if cfg.IngressProxyTo != "" || cfg.Routes != "" {
+			if err := ensureIPForwarding(cfg.Root, cfg.IngressProxyTo, cfg.Routes); err != nil {
 				log.Printf("Failed to enable IP forwarding: %v", err)
 				log.Printf("To run tailscale as a proxy or router container, IP forwarding must be enabled.")
 				if cfg.InKubernetes {
@@ -240,11 +243,13 @@ authLoop:
 	}
 
 	var (
-		wantProxy         = cfg.ProxyTo != ""
+		wantProxy         = cfg.IngressProxyTo != "" || cfg.EgressProxyTo != ""
 		wantDeviceInfo    = cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
+
+		installedEgressProxy = false
 	)
 	for {
 		n, err := w.Next()
@@ -261,10 +266,16 @@ authLoop:
 			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 		}
 		if n.NetMap != nil {
-			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
-				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
+			if cfg.IngressProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
+				if err := installIngressForwardingRule(ctx, cfg.IngressProxyTo, n.NetMap.Addresses); err != nil {
 					log.Fatalf("installing proxy rules: %v", err)
 				}
+			}
+			if cfg.EgressProxyTo != "" && !installedEgressProxy {
+				if err := installEgressForwardingRule(ctx, cfg.EgressProxyTo); err != nil {
+					log.Fatalf("installing proxy rules: %v", err)
+				}
+				installedEgressProxy = true
 			}
 			deviceInfo := []any{n.NetMap.SelfNode.StableID, n.NetMap.SelfNode.Name}
 			if cfg.InKubernetes && cfg.KubernetesCanPatch && cfg.KubeSecret != "" && deephash.Update(&currentDeviceInfo, &deviceInfo) {
@@ -492,7 +503,28 @@ func ensureIPForwarding(root, proxyTo, routes string) error {
 	return nil
 }
 
-func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+func installEgressForwardingRule(ctx context.Context, dstStr string) error {
+	dst, err := netip.ParseAddr(dstStr)
+	if err != nil {
+		return err
+	}
+	argv0 := "iptables"
+	if dst.Is6() {
+		argv0 = "ip6tables"
+	}
+	// Technically, if the control server ever changes the IPs assigned to this
+	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
+	// for now we'll live with it.
+	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-i", "!tailscale0", "-j", "DNAT", "--to-destination", dstStr)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("executing iptables failed: %w", err)
+	}
+	return nil
+}
+
+func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
@@ -529,10 +561,20 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefi
 
 // settings is all the configuration for containerboot.
 type settings struct {
-	AuthKey            string
-	Hostname           string
-	Routes             string
-	ProxyTo            string
+	AuthKey  string
+	Hostname string
+	Routes   string
+
+	// IngressProxyTo is the destination IP to which all incoming
+	// Tailscale traffic should be proxied. If empty, no proxying
+	// is done. This is typically a locally reachable IP.
+	IngressProxyTo string
+
+	// EgressProxyTo is the destination IP to which all incoming
+	// non-Tailscale traffic should be proxied. If empty, no
+	// proxying is done. This is typically a Tailscale IP.
+	EgressProxyTo string
+
 	DaemonExtraArgs    string
 	ExtraArgs          string
 	InKubernetes       bool
