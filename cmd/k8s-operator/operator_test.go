@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -152,6 +153,111 @@ func TestLoadBalancerClass(t *testing.T) {
 		},
 	}
 	expectEqual(t, fc, want)
+}
+func TestTailnetTargetIPAnnotation(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tailnetTargetIP := "100.66.66.66"
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetIP: tailnetTargetIP,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{
+				"foo": "bar",
+			},
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test")
+
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedEgressSTS(shortName, fullName, tailnetTargetIP, "default-test", ""))
+	want := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test",
+			Namespace:  "default",
+			Finalizers: []string{"tailscale.com/finalizer"},
+			UID:        types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetIP: tailnetTargetIP,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: fmt.Sprintf("%s.operator-ns.svc", shortName),
+			Type:         corev1.ServiceTypeExternalName,
+			Selector:     nil,
+		},
+	}
+	expectEqual(t, fc, want)
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedEgressSTS(shortName, fullName, tailnetTargetIP, "default-test", ""))
+
+	// Change the tailscale-target-ip annotation which should update the
+	// StatefulSet
+	tailnetTargetIP = "100.77.77.77"
+	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		s.ObjectMeta.Annotations = map[string]string{
+			AnnotationTailnetTargetIP: tailnetTargetIP,
+		}
+	})
+
+	// Remove the tailscale-target-ip annotation which should make the
+	// operator clean up
+	mustUpdate(t, fc, "default", "test", func(s *corev1.Service) {
+		s.ObjectMeta.Annotations = map[string]string{}
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	// // synchronous StatefulSet deletion triggers a requeue. But, the StatefulSet
+	// // didn't create any child resources since this is all faked, so the
+	// // deletion goes through immediately.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	// // The deletion triggers another reconcile, to finish the cleanup.
+	expectReconciled(t, sr, "default", "test")
+	expectMissing[appsv1.StatefulSet](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Service](t, fc, "operator-ns", shortName)
+	expectMissing[corev1.Secret](t, fc, "operator-ns", fullName)
+
+	// At the moment we don't revert changes to the user created Service -
+	// we don't have a reliable way how to tell what it was before and also
+	// we don't really expect it to be re-used
 }
 
 func TestAnnotations(t *testing.T) {
@@ -781,8 +887,8 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						"tailscale.com/operator-last-set-hostname": hostname,
-						"tailscale.com/operator-last-set-ip":       "10.20.30.40",
+						"tailscale.com/operator-last-set-hostname":   hostname,
+						"tailscale.com/operator-last-set-cluster-ip": "10.20.30.40",
 					},
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
 					Labels:                     map[string]string{"app": "1234-UID"},
@@ -811,6 +917,75 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 								{Name: "TS_KUBE_SECRET", Value: secretName},
 								{Name: "TS_HOSTNAME", Value: hostname},
 								{Name: "TS_DEST_IP", Value: "10.20.30.40"},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								Capabilities: &corev1.Capabilities{
+									Add: []corev1.Capability{"NET_ADMIN"},
+								},
+							},
+							ImagePullPolicy: "Always",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+func expectedEgressSTS(stsName, secretName, tailnetTargetIP, hostname, priorityClassName string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "StatefulSet",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      stsName,
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				"tailscale.com/managed":              "true",
+				"tailscale.com/parent-resource":      "test",
+				"tailscale.com/parent-resource-ns":   "default",
+				"tailscale.com/parent-resource-type": "svc",
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr.To[int32](1),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "1234-UID"},
+			},
+			ServiceName: stsName,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"tailscale.com/operator-last-set-hostname":             hostname,
+						"tailscale.com/operator-last-set-ts-tailnet-target-ip": tailnetTargetIP,
+					},
+					DeletionGracePeriodSeconds: ptr.To[int64](10),
+					Labels:                     map[string]string{"app": "1234-UID"},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "proxies",
+					PriorityClassName:  priorityClassName,
+					InitContainers: []corev1.Container{
+						{
+							Name:    "sysctler",
+							Image:   "busybox",
+							Command: []string{"/bin/sh"},
+							Args:    []string{"-c", "sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1"},
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: ptr.To(true),
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "tailscale",
+							Image: "tailscale/tailscale",
+							Env: []corev1.EnvVar{
+								{Name: "TS_USERSPACE", Value: "false"},
+								{Name: "TS_AUTH_ONCE", Value: "true"},
+								{Name: "TS_KUBE_SECRET", Value: secretName},
+								{Name: "TS_HOSTNAME", Value: hostname},
+								{Name: "TS_TAILNET_TARGET_IP", Value: tailnetTargetIP},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
