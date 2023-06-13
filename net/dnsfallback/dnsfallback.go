@@ -22,22 +22,85 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/atomicfile"
+	"tailscale.com/envknob"
+	"tailscale.com/net/dns/recursive"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/slicesx"
 )
+
+var disableRecursiveResolver = envknob.RegisterBool("TS_DNSFALLBACK_DISABLE_RECURSIVE_RESOLVER")
 
 // MakeLookupFunc creates a function that can be used to resolve hostnames
 // (e.g. as a LookupIPFallback from dnscache.Resolver).
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
 func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor) func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return func(ctx context.Context, host string) ([]netip.Addr, error) {
-		return lookup(ctx, host, logf, netMon)
+		if disableRecursiveResolver() {
+			return lookup(ctx, host, logf, netMon)
+		}
+
+		addrsCh := make(chan []netip.Addr, 1)
+
+		// Run the recursive resolver in the background so we can
+		// compare the results.
+		go func() {
+			logf := logger.WithPrefix(logf, "recursive: ")
+
+			// Ensure that we catch panics while we're testing this
+			// code path; this should never panic, but we don't
+			// want to take down the process by having the panic
+			// propagate to the top of the goroutine's stack and
+			// then terminate.
+			defer func() {
+				if r := recover(); r != nil {
+					logf("bootstrap DNS: recovered panic: %v", r)
+					metricRecursiveErrors.Add(1)
+				}
+			}()
+
+			resolver := recursive.Resolver{
+				Dialer: netns.NewDialer(logf, netMon),
+				Logf:   logf,
+			}
+			addrs, minTTL, err := resolver.Resolve(ctx, host)
+			if err != nil {
+				logf("error using recursive resolver: %v", err)
+				metricRecursiveErrors.Add(1)
+				return
+			}
+			slices.SortFunc(addrs, func(a, b netip.Addr) bool { return a.Less(b) })
+
+			// Wait for a response from the main function
+			oldAddrs := <-addrsCh
+			slices.SortFunc(oldAddrs, func(a, b netip.Addr) bool { return a.Less(b) })
+
+			matches := slices.Equal(addrs, oldAddrs)
+
+			logf("bootstrap DNS comparison: matches=%v oldAddrs=%v addrs=%v minTTL=%v", matches, oldAddrs, addrs, minTTL)
+
+			if matches {
+				metricRecursiveMatches.Add(1)
+			} else {
+				metricRecursiveMismatches.Add(1)
+			}
+		}()
+
+		addrs, err := lookup(ctx, host, logf, netMon)
+		if err != nil {
+			addrsCh <- nil
+			return nil, err
+		}
+
+		addrsCh <- slices.Clone(addrs)
+		return addrs, nil
 	}
 }
 
@@ -254,3 +317,9 @@ func SetCachePath(path string, logf logger.Logf) {
 	cachedDERPMap.Store(dm)
 	logf("[v2] dnsfallback: SetCachePath loaded cached DERP map")
 }
+
+var (
+	metricRecursiveMatches    = clientmetric.NewCounter("dnsfallback_recursive_matches")
+	metricRecursiveMismatches = clientmetric.NewCounter("dnsfallback_recursive_mismatches")
+	metricRecursiveErrors     = clientmetric.NewCounter("dnsfallback_recursive_errors")
+)
