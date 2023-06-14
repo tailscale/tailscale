@@ -4441,7 +4441,10 @@ func (de *endpoint) heartbeat() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.heartBeatTimer = nil
+	if de.heartBeatTimer != nil {
+		de.heartBeatTimer.Stop()
+		de.heartBeatTimer = nil
+	}
 
 	if de.heartbeatDisabled {
 		// If control override to disable heartBeatTimer set, return early.
