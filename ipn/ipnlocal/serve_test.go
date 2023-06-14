@@ -253,6 +253,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.152"},
 				{"Tailscale-User-Login", "someone@example.com"},
 				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 			},
 		},
 		{
@@ -263,6 +264,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.153"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-Headers-Info", ""},
 			},
 		},
 		{
@@ -273,6 +275,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.160.161.162"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-Headers-Info", ""},
 			},
 		},
 	}
