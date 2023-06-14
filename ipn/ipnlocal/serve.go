@@ -398,6 +398,11 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 	return nil
 }
 
+func getServeHTTPContext(r *http.Request) (c *serveHTTPContext, ok bool) {
+	c, ok = r.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext)
+	return c, ok
+}
+
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
 	var z ipn.HTTPHandlerView // zero value
 
@@ -405,7 +410,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		return z, "", false
 	}
 
-	sctx, ok := r.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext)
+	sctx, ok := getServeHTTPContext(r)
 	if !ok {
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
 		return z, "", false
@@ -446,11 +451,8 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(u)
 			r.Out.Host = r.In.Host
-			r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
-			r.Out.Header.Set("X-Forwarded-Proto", "https")
-			if c, ok := r.Out.Context().Value(serveHTTPContextKey{}).(*serveHTTPContext); ok {
-				r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
-			}
+			addProxyForwardedHeaders(r)
+			b.addTailscaleIdentityHeaders(r)
 		},
 		Transport: &http.Transport{
 			DialContext: b.dialer.SystemDial,
@@ -466,6 +468,36 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 		},
 	}
 	return rp, nil
+}
+
+func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
+	r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
+	r.Out.Header.Set("X-Forwarded-Proto", "https")
+	if c, ok := getServeHTTPContext(r.Out); ok {
+		r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
+	}
+}
+
+func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
+	// Clear any incoming values squatting in the headers.
+	r.Out.Header.Del("Tailscale-User-Login")
+	r.Out.Header.Del("Tailscale-User-Name")
+
+	c, ok := getServeHTTPContext(r.Out)
+	if !ok {
+		return
+	}
+	node, user, ok := b.WhoIs(c.SrcAddr)
+	if !ok {
+		return // traffic from outside of Tailnet (funneled)
+	}
+	if node.IsTagged() {
+		// 2023-06-14: Not setting identity headers for tagged nodes.
+		// Only currently set for nodes with user identities.
+		return
+	}
+	r.Out.Header.Set("Tailscale-User-Login", user.LoginName)
+	r.Out.Header.Set("Tailscale-User-Name", user.DisplayName)
 }
 
 func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
