@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/tls"
 	_ "embed"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -276,7 +275,7 @@ const (
 	AnnotationTags     = "tailscale.com/tags"
 	AnnotationHostname = "tailscale.com/hostname"
 
-	AnnotationTarget = "tailscale.com/target"
+	AnnotationTargetIP = "tailscale.com/target-ip"
 )
 
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
@@ -329,11 +328,7 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
 
-	if a.hasTargetAnnotation(svc) {
-		return reconcile.Result{}, a.maybeProvisionEgress(ctx, logger, svc)
-	}
-
-	return reconcile.Result{}, a.maybeProvisionIngress(ctx, logger, svc)
+	return reconcile.Result{}, a.maybeProvision(ctx, logger, svc)
 }
 
 // maybeCleanup removes any existing resources related to serving svc over tailscale.
@@ -409,16 +404,13 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	return nil
 }
 
-func (a *ServiceReconciler) maybeProvisionEgress(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
-	return errors.New("unimplemented")
-}
-
-// maybeProvisionIngress ensures that svc is exposed over tailscale, taking any actions
+// TODO(maisem): XXXXXXXXXXXXXXXXXXX update docs
+// maybeProvision ensures that svc is exposed over tailscale, taking any actions
 // necessary to reach that state.
 //
 // This function adds a finalizer to svc, ensuring that we can handle orderly
 // deprovisioning later.
-func (a *ServiceReconciler) maybeProvisionIngress(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
+func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) error {
 	hostname, err := nameForService(svc)
 	if err != nil {
 		return err
@@ -453,6 +445,19 @@ func (a *ServiceReconciler) maybeProvisionIngress(ctx context.Context, logger *z
 	_, err = a.reconcileSTS(ctx, logger, svc, hsvc, secretName, hostname)
 	if err != nil {
 		return fmt.Errorf("failed to reconcile statefulset: %w", err)
+	}
+
+	if a.hasTargetAnnotation(svc) {
+		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc"
+		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
+			svc.Spec.ExternalName = headlessSvcName
+			svc.Spec.Selector = nil
+			svc.Spec.Type = corev1.ServiceTypeExternalName
+			if err := a.Update(ctx, svc); err != nil {
+				return fmt.Errorf("failed to update service: %w", err)
+			}
+		}
+		return nil
 	}
 
 	if !a.hasLoadBalancerClass(svc) {
@@ -508,7 +513,7 @@ func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
 }
 
 func (a *ServiceReconciler) hasTargetAnnotation(svc *corev1.Service) bool {
-	return svc != nil && svc.Annotations[AnnotationTarget] != ""
+	return svc != nil && svc.Annotations[AnnotationTargetIP] != ""
 }
 
 func (a *ServiceReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, svc *corev1.Service) (*corev1.Service, error) {
@@ -626,11 +631,22 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 	}
 	container := &ss.Spec.Template.Spec.Containers[0]
 	container.Image = a.proxyImage
+	if ip := parentSvc.Annotations[AnnotationTargetIP]; ip != "" {
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "TS_EGRESS_IP",
+				Value: ip,
+			},
+		)
+	} else {
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "TS_DEST_IP",
+				Value: parentSvc.Spec.ClusterIP,
+			},
+		)
+	}
 	container.Env = append(container.Env,
-		corev1.EnvVar{
-			Name:  "TS_DEST_IP",
-			Value: parentSvc.Spec.ClusterIP,
-		},
 		corev1.EnvVar{
 			Name:  "TS_KUBE_SECRET",
 			Value: authKeySecret,
