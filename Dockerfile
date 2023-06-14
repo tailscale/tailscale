@@ -47,8 +47,7 @@ RUN go install \
     golang.org/x/crypto/ssh \
     golang.org/x/crypto/acme \
     nhooyr.io/websocket \
-    github.com/mdlayher/netlink \
-    golang.zx2c4.com/wireguard/device
+    github.com/mdlayher/netlink
 
 COPY . .
 
