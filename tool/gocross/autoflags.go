@@ -111,7 +111,11 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 			// e.g. -mmacosx-version-min=11.3, -miphoneos-version-min=15.0
 			switch {
 			case env.IsSet("IPHONEOS_DEPLOYMENT_TARGET"):
-				xcodeFlags = append(xcodeFlags, "-miphoneos-version-min="+env.Get("IPHONEOS_DEPLOYMENT_TARGET", ""))
+				if env.Get("TARGET_DEVICE_PLATFORM_NAME", "") == "iphonesimulator" {
+					xcodeFlags = append(xcodeFlags, "-miphonesimulator-version-min="+env.Get("IPHONEOS_DEPLOYMENT_TARGET", ""))
+				} else {
+					xcodeFlags = append(xcodeFlags, "-miphoneos-version-min="+env.Get("IPHONEOS_DEPLOYMENT_TARGET", ""))
+				}
 			case env.IsSet("MACOSX_DEPLOYMENT_TARGET"):
 				xcodeFlags = append(xcodeFlags, "-mmacosx-version-min="+env.Get("MACOSX_DEPLOYMENT_TARGET", ""))
 			case env.IsSet("TVOS_DEPLOYMENT_TARGET"):
