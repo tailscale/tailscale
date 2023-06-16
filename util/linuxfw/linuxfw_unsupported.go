@@ -9,8 +9,14 @@
 package linuxfw
 
 import (
+	"errors"
+
 	"tailscale.com/types/logger"
 )
+
+// ErrUnsupported is the error returned from all functions on non-Linux
+// platforms.
+var ErrUnsupported = errors.New("linuxfw:unsupported")
 
 // DebugNetfilter is not supported on non-Linux platforms.
 func DebugNetfilter(logf logger.Logf) error {
