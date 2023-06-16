@@ -91,6 +91,59 @@ func TestServeConfigMutations(t *testing.T) {
 
 	// https
 	add(step{reset: true})
+	add(step{ // allow omitting port (default to 80)
+		command: cmd("http / http://localhost:3000"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{ // support non Funnel port
+		command: cmd("http:9999 /abc http://localhost:3001"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 9999: {HTTP: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+				"foo.test.ts.net:9999": {Handlers: map[string]*ipn.HTTPHandler{
+					"/abc": {Proxy: "http://127.0.0.1:3001"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("http:9999 /abc off"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+			},
+		},
+	})
+	add(step{
+		command: cmd("http:8080 /abc http://127.0.0.1:3001"),
+		want: &ipn.ServeConfig{
+			TCP: map[uint16]*ipn.TCPPortHandler{80: {HTTP: true}, 8080: {HTTP: true}},
+			Web: map[ipn.HostPort]*ipn.WebServerConfig{
+				"foo.test.ts.net:80": {Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: "http://127.0.0.1:3000"},
+				}},
+				"foo.test.ts.net:8080": {Handlers: map[string]*ipn.HTTPHandler{
+					"/abc": {Proxy: "http://127.0.0.1:3001"},
+				}},
+			},
+		},
+	})
+
+	// https
+	add(step{reset: true})
 	add(step{
 		command: cmd("https:443 / http://localhost:0"), // invalid port, too low
 		wantErr: anyErr(),

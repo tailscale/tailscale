@@ -35,13 +35,14 @@ func newServeCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "serve",
 		ShortHelp: "Serve content and local servers",
-		ShortUsage: strings.TrimSpace(`
-serve https:<port> <mount-point> <source> [off]
-  serve tcp:<port> tcp://localhost:<local-port> [off]
-  serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]
-  serve status [--json]
-  serve reset
-`),
+		ShortUsage: strings.Join([]string{
+			"serve http:<port> <mount-point> <source> [off]",
+			"serve https:<port> <mount-point> <source> [off]",
+			"serve tcp:<port> tcp://localhost:<local-port> [off]",
+			"serve tls-terminated-tcp:<port> tcp://localhost:<local-port> [off]",
+			"serve status [--json]",
+			"serve reset",
+		}, "\n  "),
 		LongHelp: strings.TrimSpace(`
 *** BETA; all of this is subject to change ***
 
@@ -58,8 +59,8 @@ EXAMPLES
   - To proxy requests to a web server at 127.0.0.1:3000:
     $ tailscale serve https:443 / http://127.0.0.1:3000
 
-	Or, using the default port:
-	$ tailscale serve https / http://127.0.0.1:3000
+    Or, using the default port (443):
+    $ tailscale serve https / http://127.0.0.1:3000
 
   - To serve a single file or a directory of files:
     $ tailscale serve https / /home/alice/blog/index.html
@@ -67,6 +68,12 @@ EXAMPLES
 
   - To serve simple static text:
     $ tailscale serve https:8080 / text:"Hello, world!"
+
+  - To serve over HTTP (tailnet only):
+    $ tailscale serve http:80 / http://127.0.0.1:3000
+
+    Or, using the default port (80):
+    $ tailscale serve http / http://127.0.0.1:3000
 
   - To forward incoming TCP connections on port 2222 to a local TCP server on
     port 22 (e.g. to run OpenSSH in parallel with Tailscale SSH):
@@ -175,6 +182,7 @@ func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, 
 // serve config types like proxy, path, and text.
 //
 // Examples:
+// - tailscale serve http / http://localhost:3000
 // - tailscale serve https / http://localhost:3000
 // - tailscale serve https /images/ /var/www/images/
 // - tailscale serve https:10000 /motd.txt text:"Hello, world!"
@@ -199,19 +207,14 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		return e.lc.SetServeConfig(ctx, sc)
 	}
 
-	parsePort := func(portStr string) (uint16, error) {
-		port64, err := strconv.ParseUint(portStr, 10, 16)
-		if err != nil {
-			return 0, err
-		}
-		return uint16(port64), nil
-	}
-
 	srcType, srcPortStr, found := strings.Cut(args[0], ":")
 	if !found {
 		if srcType == "https" && srcPortStr == "" {
 			// Default https port to 443.
 			srcPortStr = "443"
+		} else if srcType == "http" && srcPortStr == "" {
+			// Default http port to 80.
+			srcPortStr = "80"
 		} else {
 			return flag.ErrHelp
 		}
@@ -219,18 +222,18 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 
 	turnOff := "off" == args[len(args)-1]
 
-	if len(args) < 2 || (srcType == "https" && !turnOff && len(args) < 3) {
+	if len(args) < 2 || ((srcType == "https" || srcType == "http") && !turnOff && len(args) < 3) {
 		fmt.Fprintf(os.Stderr, "error: invalid number of arguments\n\n")
 		return flag.ErrHelp
 	}
 
-	srcPort, err := parsePort(srcPortStr)
+	srcPort, err := parseServePort(srcPortStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid port %q: %w", srcPortStr, err)
 	}
 
 	switch srcType {
-	case "https":
+	case "https", "http":
 		mount, err := cleanMountPoint(args[1])
 		if err != nil {
 			return err
@@ -238,7 +241,8 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		if turnOff {
 			return e.handleWebServeRemove(ctx, srcPort, mount)
 		}
-		return e.handleWebServe(ctx, srcPort, mount, args[2])
+		useTLS := srcType == "https"
+		return e.handleWebServe(ctx, srcPort, useTLS, mount, args[2])
 	case "tcp", "tls-terminated-tcp":
 		if turnOff {
 			return e.handleTCPServeRemove(ctx, srcPort)
@@ -246,20 +250,20 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		return e.handleTCPServe(ctx, srcType, srcPort, args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "error: invalid serve type %q\n", srcType)
-		fmt.Fprint(os.Stderr, "must be one of: https:<port>, tcp:<port> or tls-terminated-tcp:<port>\n\n", srcType)
+		fmt.Fprint(os.Stderr, "must be one of: http:<port>, https:<port>, tcp:<port> or tls-terminated-tcp:<port>\n\n", srcType)
 		return flag.ErrHelp
 	}
 }
 
-// handleWebServe handles the "tailscale serve https:..." subcommand.
-// It configures the serve config to forward HTTPS connections to the
-// given source.
+// handleWebServe handles the "tailscale serve (http/https):..." subcommand. It
+// configures the serve config to forward HTTPS connections to the given source.
 //
 // Examples:
+//   - tailscale serve http / http://localhost:3000
 //   - tailscale serve https / http://localhost:3000
 //   - tailscale serve https:8443 /files/ /home/alice/shared-files/
 //   - tailscale serve https:10000 /motd.txt text:"Hello, world!"
-func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, mount, source string) error {
+func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bool, mount, source string) error {
 	h := new(ipn.HTTPHandler)
 
 	ts, _, _ := strings.Cut(source, ":")
@@ -318,7 +322,7 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, mount, so
 		return flag.ErrHelp
 	}
 
-	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{HTTPS: true})
+	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
 
 	if _, ok := sc.Web[hp]; !ok {
 		mak.Set(&sc.Web, hp, new(ipn.WebServerConfig))
@@ -626,7 +630,10 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 		printf("\n")
 	}
 	for hp := range sc.Web {
-		printWebStatusTree(sc, hp)
+		err := e.printWebStatusTree(sc, hp)
+		if err != nil {
+			return err
+		}
 		printf("\n")
 	}
 	printFunnelWarning(sc)
@@ -665,20 +672,37 @@ func printTCPStatusTree(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.S
 	return nil
 }
 
-func printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) {
+func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) error {
+	// No-op if no serve config
 	if sc == nil {
-		return
+		return nil
 	}
 	fStatus := "tailnet only"
 	if sc.AllowFunnel[hp] {
 		fStatus = "Funnel on"
 	}
 	host, portStr, _ := net.SplitHostPort(string(hp))
-	if portStr == "443" {
-		printf("https://%s (%s)\n", host, fStatus)
-	} else {
-		printf("https://%s:%s (%s)\n", host, portStr, fStatus)
+
+	port, err := parseServePort(portStr)
+	if err != nil {
+		return fmt.Errorf("invalid port %q: %w", portStr, err)
 	}
+
+	scheme := "https"
+	if sc.IsServingHTTP(port) {
+		scheme = "http"
+	}
+
+	portPart := ":" + portStr
+	if scheme == "http" && portStr == "80" ||
+		scheme == "https" && portStr == "443" {
+		portPart = ""
+	}
+	if scheme == "http" {
+		hostname, _, _ := strings.Cut("host", ".")
+		printf("%s://%s%s (%s)\n", scheme, hostname, portPart, fStatus)
+	}
+	printf("%s://%s%s (%s)\n", scheme, host, portPart, fStatus)
 	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
 		switch {
 		case h.Path != "":
@@ -705,6 +729,8 @@ func printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) {
 		t, d := srvTypeAndDesc(h)
 		printf("%s %s%s %-5s %s\n", "|--", m, strings.Repeat(" ", maxLen-len(m)), t, d)
 	}
+
+	return nil
 }
 
 func elipticallyTruncate(s string, max int) string {
@@ -724,4 +750,17 @@ func (e *serveEnv) runServeReset(ctx context.Context, args []string) error {
 	}
 	sc := new(ipn.ServeConfig)
 	return e.lc.SetServeConfig(ctx, sc)
+}
+
+// parseServePort parses a port number from a string and returns it as a
+// uint16. It returns an error if the port number is invalid or zero.
+func parseServePort(s string) (uint16, error) {
+	p, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, err
+	}
+	if p == 0 {
+		return 0, errors.New("port number must be non-zero")
+	}
+	return uint16(p), nil
 }

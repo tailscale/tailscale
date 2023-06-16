@@ -30,10 +30,10 @@ func newFunnelCommand(e *serveEnv) *ffcli.Command {
 	return &ffcli.Command{
 		Name:      "funnel",
 		ShortHelp: "Turn on/off Funnel service",
-		ShortUsage: strings.TrimSpace(`
-funnel <serve-port> {on|off}
-  funnel status [--json]
-`),
+		ShortUsage: strings.Join([]string{
+			"funnel <serve-port> {on|off}",
+			"funnel status [--json]",
+		}, "\n  "),
 		LongHelp: strings.Join([]string{
 			"Funnel allows you to publish a 'tailscale serve'",
 			"server publicly, open to the entire internet.",

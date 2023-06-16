@@ -76,6 +76,12 @@ type TCPPortHandler struct {
 	// It is mutually exclusive with TCPForward.
 	HTTPS bool `json:",omitempty"`
 
+	// HTTP, if true, means that tailscaled should handle this connection as an
+	// HTTP request as configured by ServeConfig.Web.
+	//
+	// It is mutually exclusive with TCPForward.
+	HTTP bool `json:",omitempty"`
+
 	// TCPForward is the IP:port to forward TCP connections to.
 	// Whether or not TLS is terminated by tailscaled depends on
 	// TerminateTLS.
@@ -103,7 +109,7 @@ type HTTPHandler struct {
 	// temporary ones? Error codes? Redirects?
 }
 
-// WebHandlerExists checks if the ServeConfig Web handler exists for
+// WebHandlerExists reports whether if the ServeConfig Web handler exists for
 // the given host:port and mount point.
 func (sc *ServeConfig) WebHandlerExists(hp HostPort, mount string) bool {
 	h := sc.GetWebHandler(hp, mount)
@@ -128,9 +134,8 @@ func (sc *ServeConfig) GetTCPPortHandler(port uint16) *TCPPortHandler {
 	return sc.TCP[port]
 }
 
-// IsTCPForwardingAny checks if ServeConfig is currently forwarding
-// in TCPForward mode on any port.
-// This is exclusive of Web/HTTPS serving.
+// IsTCPForwardingAny reports whether ServeConfig is currently forwarding in
+// TCPForward mode on any port. This is exclusive of Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingAny() bool {
 	if sc == nil || len(sc.TCP) == 0 {
 		return false
@@ -143,34 +148,47 @@ func (sc *ServeConfig) IsTCPForwardingAny() bool {
 	return false
 }
 
-// IsTCPForwardingOnPort checks if ServeConfig is currently forwarding
-// in TCPForward mode on the given port.
-// This is exclusive of Web/HTTPS serving.
+// IsTCPForwardingOnPort reports whether if ServeConfig is currently forwarding
+// in TCPForward mode on the given port. This is exclusive of Web/HTTPS serving.
 func (sc *ServeConfig) IsTCPForwardingOnPort(port uint16) bool {
 	if sc == nil || sc.TCP[port] == nil {
 		return false
 	}
-	return !sc.TCP[port].HTTPS
+	return !sc.IsServingWeb(port)
 }
 
-// IsServingWeb checks if ServeConfig is currently serving
-// Web/HTTPS on the given port.
-// This is exclusive of TCPForwarding.
+// IsServingWeb reports whether if ServeConfig is currently serving Web
+// (HTTP/HTTPS) on the given port. This is exclusive of TCPForwarding.
 func (sc *ServeConfig) IsServingWeb(port uint16) bool {
+	return sc.IsServingHTTP(port) || sc.IsServingHTTPS(port)
+}
+
+// IsServingHTTPS reports whether if ServeConfig is currently serving HTTPS on
+// the given port. This is exclusive of HTTP and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTPS(port uint16) bool {
 	if sc == nil || sc.TCP[port] == nil {
 		return false
 	}
 	return sc.TCP[port].HTTPS
 }
 
-// IsFunnelOn checks if ServeConfig is currently allowing
-// funnel traffic for any host:port.
+// IsServingHTTP reports whether if ServeConfig is currently serving HTTP on the
+// given port. This is exclusive of HTTPS and TCPForwarding.
+func (sc *ServeConfig) IsServingHTTP(port uint16) bool {
+	if sc == nil || sc.TCP[port] == nil {
+		return false
+	}
+	return sc.TCP[port].HTTP
+}
+
+// IsFunnelOn reports whether if ServeConfig is currently allowing funnel
+// traffic for any host:port.
 //
 // View version of ServeConfig.IsFunnelOn.
 func (v ServeConfigView) IsFunnelOn() bool { return v.ж.IsFunnelOn() }
 
-// IsFunnelOn checks if ServeConfig is currently allowing
-// funnel traffic for any host:port.
+// IsFunnelOn reports whether if ServeConfig is currently allowing funnel
+// traffic for any host:port.
 func (sc *ServeConfig) IsFunnelOn() bool {
 	if sc == nil {
 		return false
