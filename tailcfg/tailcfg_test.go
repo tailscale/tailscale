@@ -65,6 +65,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"Cloud",
 		"Userspace",
 		"UserspaceRouter",
+		"Location",
 	}
 	if have := fieldsOf(reflect.TypeOf(Hostinfo{})); !reflect.DeepEqual(have, hiHandles) {
 		t.Errorf("Hostinfo.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
