@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -303,7 +303,15 @@ func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(
 func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
 func (v HostinfoView) Userspace() opt.Bool               { return v.ж.Userspace }
 func (v HostinfoView) UserspaceRouter() opt.Bool         { return v.ж.UserspaceRouter }
-func (v HostinfoView) Equal(v2 HostinfoView) bool        { return v.ж.Equal(v2.ж) }
+func (v HostinfoView) Location() *Location {
+	if v.ж.Location == nil {
+		return nil
+	}
+	x := *v.ж.Location
+	return &x
+}
+
+func (v HostinfoView) Equal(v2 HostinfoView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
@@ -340,6 +348,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	Cloud           string
 	Userspace       opt.Bool
 	UserspaceRouter opt.Bool
+	Location        *Location
 }{})
 
 // View returns a readonly view of NetInfo.
@@ -1076,4 +1085,64 @@ func (v ControlDialPlanView) Candidates() views.Slice[ControlIPCandidate] {
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ControlDialPlanViewNeedsRegeneration = ControlDialPlan(struct {
 	Candidates []ControlIPCandidate
+}{})
+
+// View returns a readonly view of Location.
+func (p *Location) View() LocationView {
+	return LocationView{ж: p}
+}
+
+// LocationView provides a read-only view over Location.
+//
+// Its methods should only be called if `Valid()` returns true.
+type LocationView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *Location
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v LocationView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v LocationView) AsStruct() *Location {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v LocationView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *LocationView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x Location
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v LocationView) Country() string     { return v.ж.Country }
+func (v LocationView) CountryCode() string { return v.ж.CountryCode }
+func (v LocationView) City() string        { return v.ж.City }
+func (v LocationView) CityCode() string    { return v.ж.CityCode }
+func (v LocationView) Priority() int       { return v.ж.Priority }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _LocationViewNeedsRegeneration = Location(struct {
+	Country     string
+	CountryCode string
+	City        string
+	CityCode    string
+	Priority    int
 }{})
