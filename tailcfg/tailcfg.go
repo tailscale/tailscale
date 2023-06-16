@@ -3,7 +3,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location --clonefunc
 
 import (
 	"bytes"
@@ -531,6 +531,24 @@ type Service struct {
 	// TODO(apenwarr): add "tags" here for each service?
 }
 
+// Location represents geographical location data about a
+// Tailscale host. Location is optional and only set if
+// explicitly declared by a node.
+type Location struct {
+	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization, e.g "Canada"
+	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in lower case, e.g "ca"
+	City        string `json:",omitempty"` // User friendly city name, with proper capitalization, e.g. "Squamish"
+	CityCode    string `json:",omitempty"`
+
+	// Priority determines the priority an exit node is given when the
+	// location data between two or more nodes is tied.
+	// A higher value indicates that the exit node is more preferable
+	// for use.
+	// A value of 0 means the exit node does not have a priority
+	// preference. A negative int is not allowed.
+	Priority int `json:",omitempty"`
+}
+
 // Hostinfo contains a summary of a Tailscale host.
 //
 // Because it contains pointers (slices), this type should not be used
@@ -584,6 +602,11 @@ type Hostinfo struct {
 	Cloud           string         `json:",omitempty"`
 	Userspace       opt.Bool       `json:",omitempty"` // if the client is running in userspace (netstack) mode
 	UserspaceRouter opt.Bool       `json:",omitempty"` // if the client's subnet router is running in userspace (netstack) mode
+
+	// Location represents geographical location data about a
+	// Tailscale host. Location is optional and only set if
+	// explicitly declared by a node.
+	Location *Location `json:",omitempty"`
 
 	// NOTE: any new fields containing pointers in this type
 	//       require changes to Hostinfo.Equal.
