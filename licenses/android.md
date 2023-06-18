@@ -69,7 +69,7 @@ Client][].  See also the dependencies in the [Tailscale CLI][].
  - [go4.org/mem](https://pkg.go.dev/go4.org/mem) ([Apache-2.0](https://github.com/go4org/mem/blob/4f986261bf13/LICENSE))
  - [go4.org/netipx](https://pkg.go.dev/go4.org/netipx) ([BSD-3-Clause](https://github.com/go4org/netipx/blob/f1b76eb4bb35/LICENSE))
  - [go4.org/unsafe/assume-no-moving-gc](https://pkg.go.dev/go4.org/unsafe/assume-no-moving-gc) ([BSD-3-Clause](https://github.com/go4org/unsafe-assume-no-moving-gc/blob/ee73d164e760/LICENSE))
- - [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) ([BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/v0.8.0:LICENSE))
+ - [golang.org/x/crypto](https://pkg.go.dev/golang.org/x/crypto) ([BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/v0.9.0:LICENSE))
  - [golang.org/x/exp](https://pkg.go.dev/golang.org/x/exp) ([BSD-3-Clause](https://cs.opensource.google/go/x/exp/+/47ecfdc1:LICENSE))
  - [golang.org/x/exp/shiny](https://pkg.go.dev/golang.org/x/exp/shiny) ([BSD-3-Clause](https://cs.opensource.google/go/x/exp/+/334a2380:shiny/LICENSE))
  - [golang.org/x/image](https://pkg.go.dev/golang.org/x/image) ([BSD-3-Clause](https://cs.opensource.google/go/x/image/+/v0.7.0:LICENSE))
