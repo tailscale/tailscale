@@ -582,12 +582,8 @@ func (r *Resolver) queryNameserverProto(
 		}
 
 		// Send the DNS request to the current nameserver.
-		//
-		// TODO(andrew): use ExchangeWithConnContext after this upstream PR is
-		// merged:
-		//    https://github.com/miekg/dns/pull/1459
 		r.depthlogf(depth, "asking %s over %s about %q (type: %v)", nameserverStr, protocol, name, qtype)
-		resp, _, err = c.ExchangeWithConn(m, conn)
+		resp, _, err = c.ExchangeWithConnContext(ctx, m, conn)
 	}
 	if err != nil {
 		return nil, err
