@@ -8,6 +8,7 @@ package linuxfw
 import (
 	"fmt"
 	"net/netip"
+	"os/exec"
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -36,6 +37,14 @@ type iptablesRunner struct {
 	v6NATAvailable bool
 }
 
+func checkIP6TablesExists() error {
+	// Some distros ship ip6tables separately from iptables.
+	if _, err := exec.LookPath("ip6tables"); err != nil {
+		return fmt.Errorf("path not found: %w", err)
+	}
+	return nil
+}
+
 // NewIPTablesRunner constructs a NetfilterRunner that programs iptables rules.
 // If the underlying iptables library fails to initialize, that error is
 // returned. The runner probes for IPv6 support once at initialization time and
@@ -48,9 +57,13 @@ func NewIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 
 	supportsV6, supportsV6NAT := false, false
 	v6err := checkIPv6(logf)
-	if v6err != nil {
+	ip6terr := checkIP6TablesExists()
+	switch {
+	case v6err != nil:
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
-	} else {
+	case ip6terr != nil:
+		logf("disabling tunneled IPv6 due to missing ip6tables: %v", ip6terr)
+	default:
 		supportsV6 = true
 		supportsV6NAT = supportsV6 && checkSupportsV6NAT()
 		logf("v6nat = %v", supportsV6NAT)

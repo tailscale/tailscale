@@ -20,6 +20,15 @@ import (
 	"tailscale.com/types/logger"
 )
 
+// MatchDecision is the decision made by the firewall for a packet matched by a rule.
+// It is used to decide whether to accept or masquerade a packet in addMatchSubnetRouteMarkRule.
+type MatchDecision int
+
+const (
+	Accept MatchDecision = iota
+	Masq
+)
+
 // The following bits are added to packet marks for Tailscale use.
 //
 // We tried to pick bits sufficiently out of the way that it's
@@ -44,22 +53,33 @@ const (
 	// We claim bits 16:23 entirely. For now we only use the lower four
 	// bits, leaving the higher 4 bits for future use.
 	TailscaleFwmarkMask    = "0xff0000"
-	TailscaleFwmarkMaskNeg = "0xff00ffff"
 	TailscaleFwmarkMaskNum = 0xff0000
 
 	// Packet is from Tailscale and to a subnet route destination, so
 	// is allowed to be routed through this machine.
 	TailscaleSubnetRouteMark    = "0x40000"
 	TailscaleSubnetRouteMarkNum = 0x40000
-	// This one is same value but padded to even number of digit, so
-	// hex decoding can work correctly.
-	TailscaleSubnetRouteMarkHexStr = "0x040000"
 
 	// Packet was originated by tailscaled itself, and must not be
 	// routed over the Tailscale network.
 	TailscaleBypassMark    = "0x80000"
 	TailscaleBypassMarkNum = 0x80000
 )
+
+// getTailscaleFwmarkMaskNeg returns the negation of TailscaleFwmarkMask in bytes.
+func getTailscaleFwmarkMaskNeg() []byte {
+	return []byte{0xff, 0x00, 0xff, 0xff}
+}
+
+// getTailscaleFwmarkMask returns the TailscaleFwmarkMask in bytes.
+func getTailscaleFwmarkMask() []byte {
+	return []byte{0x00, 0xff, 0x00, 0x00}
+}
+
+// getTailscaleSubnetRouteMark returns the TailscaleSubnetRouteMark in bytes.
+func getTailscaleSubnetRouteMark() []byte {
+	return []byte{0x00, 0x04, 0x00, 0x00}
+}
 
 // errCode extracts and returns the process exit code from err, or
 // zero if err is nil.
@@ -120,11 +140,6 @@ func checkIPv6(logf logger.Logf) error {
 
 	if err := CheckIPRuleSupportsV6(logf); err != nil {
 		return fmt.Errorf("kernel doesn't support IPv6 policy routing: %w", err)
-	}
-
-	// Some distros ship ip6tables separately from iptables.
-	if _, err := exec.LookPath("ip6tables"); err != nil {
-		return err
 	}
 
 	return nil

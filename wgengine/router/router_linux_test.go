@@ -453,18 +453,18 @@ func (n *fakeIPTablesRunner) AddLoopbackRule(addr netip.Addr) error {
 }
 
 func (n *fakeIPTablesRunner) AddBase(tunname string) error {
-	if err := n.AddBase4(tunname); err != nil {
+	if err := n.addBase4(tunname); err != nil {
 		return err
 	}
 	if n.HasIPV6() {
-		if err := n.AddBase6(tunname); err != nil {
+		if err := n.addBase6(tunname); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (n *fakeIPTablesRunner) AddBase4(tunname string) error {
+func (n *fakeIPTablesRunner) addBase4(tunname string) error {
 	curIPT := n.ipt4
 	newRules := []struct{ chain, rule string }{
 		{"filter/ts-input", fmt.Sprintf("! -i %s -s %s -j RETURN", tunname, tsaddr.ChromeOSVMRange().String())},
@@ -482,7 +482,7 @@ func (n *fakeIPTablesRunner) AddBase4(tunname string) error {
 	return nil
 }
 
-func (n *fakeIPTablesRunner) AddBase6(tunname string) error {
+func (n *fakeIPTablesRunner) addBase6(tunname string) error {
 	curIPT := n.ipt6
 	newRules := []struct{ chain, rule string }{
 		{"filter/ts-forward", fmt.Sprintf("-i %s -j MARK --set-mark %s/%s", tunname, linuxfw.TailscaleSubnetRouteMark, linuxfw.TailscaleFwmarkMask)},
