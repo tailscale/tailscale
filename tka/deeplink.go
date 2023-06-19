@@ -18,6 +18,68 @@ const (
 	DeeplinkCommandSign        = "sign-device"
 )
 
+// generateHMAC computes a SHA-256 HMAC for the concatenation of components,
+// using the Authority stateID as secret.
+func (a *Authority) generateHMAC(params NewDeeplinkParams) []byte {
+	stateID, _ := a.StateIDs()
+
+	key := make([]byte, 8)
+	binary.LittleEndian.PutUint64(key, stateID)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(params.NodeKey))
+	mac.Write([]byte(params.TLPub))
+	mac.Write([]byte(params.DeviceName))
+	mac.Write([]byte(params.OSName))
+	mac.Write([]byte(params.LoginName))
+	return mac.Sum(nil)
+}
+
+type NewDeeplinkParams struct {
+	NodeKey    string
+	TLPub      string
+	DeviceName string
+	OSName     string
+	LoginName  string
+}
+
+// NewDeeplink creates a signed deeplink using the authority's stateID as a
+// secret. This deeplink can then be validated by ValidateDeeplink.
+func (a *Authority) NewDeeplink(params NewDeeplinkParams) (string, error) {
+	if params.NodeKey == "" || !strings.HasPrefix(params.NodeKey, "nodekey:") {
+		return "", fmt.Errorf("invalid node key %q", params.NodeKey)
+	}
+	if params.TLPub == "" || !strings.HasPrefix(params.TLPub, "tlpub:") {
+		return "", fmt.Errorf("invalid tlpub %q", params.TLPub)
+	}
+	if params.DeviceName == "" {
+		return "", fmt.Errorf("invalid device name %q", params.DeviceName)
+	}
+	if params.OSName == "" {
+		return "", fmt.Errorf("invalid os name %q", params.OSName)
+	}
+	if params.LoginName == "" {
+		return "", fmt.Errorf("invalid login name %q", params.LoginName)
+	}
+
+	u := url.URL{
+		Scheme: DeeplinkTailscaleURLScheme,
+		Host:   DeeplinkCommandSign,
+		Path:   "/v1/",
+	}
+	v := url.Values{}
+	v.Set("nk", params.NodeKey)
+	v.Set("tp", params.TLPub)
+	v.Set("dn", params.DeviceName)
+	v.Set("os", params.OSName)
+	v.Set("em", params.LoginName)
+
+	hmac := a.generateHMAC(params)
+	v.Set("hm", hex.EncodeToString(hmac))
+
+	u.RawQuery = v.Encode()
+	return u.String(), nil
+}
+
 type DeeplinkValidationResult struct {
 	IsValid      bool
 	Error        string
@@ -27,18 +89,6 @@ type DeeplinkValidationResult struct {
 	DeviceName   string
 	OSName       string
 	EmailAddress string
-}
-
-// GenerateHMAC computes a SHA-256 HMAC for the concatenation of components, using
-// stateID as secret.
-func generateHMAC(stateID uint64, components []string) []byte {
-	key := make([]byte, 8)
-	binary.LittleEndian.PutUint64(key, stateID)
-	mac := hmac.New(sha256.New, key)
-	for _, component := range components {
-		mac.Write([]byte(component))
-	}
-	return mac.Sum(nil)
 }
 
 // ValidateDeeplink validates a device signing deeplink using the authority's stateID.
@@ -140,9 +190,13 @@ func (a *Authority) ValidateDeeplink(urlString string) DeeplinkValidationResult 
 		}
 	}
 
-	components := []string{nodeKey, tlPub, deviceName, osName, emailAddress}
-	stateID1, _ := a.StateIDs()
-	computedHMAC := generateHMAC(stateID1, components)
+	computedHMAC := a.generateHMAC(NewDeeplinkParams{
+		NodeKey:    nodeKey,
+		TLPub:      tlPub,
+		DeviceName: deviceName,
+		OSName:     osName,
+		LoginName:  emailAddress,
+	})
 
 	hmacHexBytes, err := hex.DecodeString(hmacString)
 	if err != nil {
