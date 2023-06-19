@@ -36,9 +36,8 @@ const (
 	netfilterOn       = preftype.NetfilterOn
 )
 
-// netfilterRunner abstracts helpers to run netfilter commands. It
-// exists purely to swap out go-iptables for a fake implementation in
-// tests.
+// netfilterRunner abstracts helpers to run netfilter commands. It is
+// implemented by linuxfw.IPTablesRunner and linuxfw.NfTablesRunner.
 type netfilterRunner interface {
 	AddLoopbackRule(addr netip.Addr) error
 	DelLoopbackRule(addr netip.Addr) error
@@ -55,14 +54,24 @@ type netfilterRunner interface {
 	HasIPV6NAT() bool
 }
 
+// newNetfilterRunner creates a netfilterRunner using either nftables or iptables.
+// As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
 	var nfr netfilterRunner
 	var err error
-	nfr, err = linuxfw.NewIPTablesRunner(logf)
-	if err != nil {
-		return nil, err
+	if envknob.Bool("TS_DEBUG_USE_NETLINK_NFTABLES") {
+		logf("router: using nftables")
+		nfr, err = linuxfw.NewNfTablesRunner(logf)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		logf("router: using iptables")
+		nfr, err = linuxfw.NewIPTablesRunner(logf)
+		if err != nil {
+			return nil, err
+		}
 	}
-
 	return nfr, nil
 }
 
@@ -489,9 +498,11 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 			if err := r.nfr.DelBase(); err != nil {
 				return err
 			}
+			// AddHooks adds the ts loopback rule.
 			if err := r.nfr.AddHooks(); err != nil {
 				return err
 			}
+			// AddBase adds base ts rules
 			if err := r.nfr.AddBase(r.tunname); err != nil {
 				return err
 			}
@@ -1278,9 +1289,13 @@ func normalizeCIDR(cidr netip.Prefix) string {
 	return cidr.Masked().String()
 }
 
+// cleanup removes all the rules and routes that were added by the linux router.
+// The function calls cleanup for both iptables and nftables since which ever
+// netfilter runner is used, the cleanup function for the other one doesn't do anything.
 func cleanup(logf logger.Logf, interfaceName string) {
 	if interfaceName != "userspace-networking" {
 		linuxfw.IPTablesCleanup(logf)
+		linuxfw.NfTablesCleanUp(logf)
 	}
 }
 
