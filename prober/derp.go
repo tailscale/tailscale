@@ -348,6 +348,8 @@ func newConn(ctx context.Context, dm *tailcfg.DERPMap, n *tailcfg.DERPNode) (*de
 	priv := key.NewNode()
 	dc := derphttp.NewRegionClient(priv, l, nil /* no netMon */, func() *tailcfg.DERPRegion {
 		rid := n.RegionID
+		// Allow the prober to monitor nodes marked as STUN only in the default map
+		n.STUNOnly = false
 		return &tailcfg.DERPRegion{
 			RegionID:   rid,
 			RegionCode: fmt.Sprintf("%s-%s", dm.Regions[rid].RegionCode, n.Name),
