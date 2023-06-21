@@ -25,6 +25,7 @@ import (
 	"os/user"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -945,6 +946,19 @@ func TestSSH(t *testing.T) {
 		t.Logf("Got: %q and %q", outBuf.Bytes(), errBuf.Bytes())
 		// TODO: figure out why these aren't right. should be
 		// "foo\n" and "bar\n", not "\n" and "bar\n".
+	})
+
+	t.Run("large_file", func(t *testing.T) {
+		const wantSize = 1e6
+		var outBuf bytes.Buffer
+		cmd := execSSH("head", "-c", strconv.Itoa(wantSize), "/dev/zero")
+		cmd.Stdout = &outBuf
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		if gotSize := outBuf.Len(); gotSize != wantSize {
+			t.Fatalf("got %d, want %d", gotSize, int(wantSize))
+		}
 	})
 
 	t.Run("stdin", func(t *testing.T) {
