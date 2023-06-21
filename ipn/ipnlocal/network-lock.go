@@ -158,7 +158,9 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 		return nil
 	}
 
-	b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+	if b.tka != nil || nm.TKAEnabled {
+		b.logf("tkaSyncIfNeeded: enabled=%v, head=%v", nm.TKAEnabled, nm.TKAHead)
+	}
 
 	ourNodeKey := prefs.Persist().PublicNodeKey()
 
@@ -197,7 +199,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 				health.SetTKAHealth(nil)
 			}
 		} else {
-			return fmt.Errorf("[bug] unreachable invariant of wantEnabled /w isEnabled")
+			return fmt.Errorf("[bug] unreachable invariant of wantEnabled w/ isEnabled")
 		}
 	}
 
