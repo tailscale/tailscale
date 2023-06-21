@@ -75,6 +75,15 @@ func (v SliceView[T, V]) Len() int { return len(v.ж) }
 // At returns a View of the element at index `i` of the slice.
 func (v SliceView[T, V]) At(i int) V { return v.ж[i].View() }
 
+// SliceFrom returns v[i:].
+func (v SliceView[T, V]) SliceFrom(i int) SliceView[T, V] { return SliceView[T, V]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v SliceView[T, V]) SliceTo(i int) SliceView[T, V] { return SliceView[T, V]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v SliceView[T, V]) Slice(i, j int) SliceView[T, V] { return SliceView[T, V]{v.ж[i:j]} }
+
 // AppendTo appends the underlying slice values to dst.
 func (v SliceView[T, V]) AppendTo(dst []V) []V {
 	for _, x := range v.ж {
@@ -121,6 +130,15 @@ func (v Slice[T]) Len() int { return len(v.ж) }
 
 // At returns the element at index `i` of the slice.
 func (v Slice[T]) At(i int) T { return v.ж[i] }
+
+// SliceFrom returns v[i:].
+func (v Slice[T]) SliceFrom(i int) Slice[T] { return Slice[T]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v Slice[T]) SliceTo(i int) Slice[T] { return Slice[T]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v Slice[T]) Slice(i, j int) Slice[T] { return Slice[T]{v.ж[i:j]} }
 
 // AppendTo appends the underlying slice values to dst.
 func (v Slice[T]) AppendTo(dst []T) []T {

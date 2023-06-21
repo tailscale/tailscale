@@ -128,4 +128,13 @@ func TestViewUtils(t *testing.T) {
 	c.Check(SliceEqualAnyOrder(v, SliceOf([]string{"bar", "foo"})), qt.Equals, true)
 	c.Check(SliceEqualAnyOrder(v, SliceOf([]string{"foo"})), qt.Equals, false)
 	c.Check(SliceEqualAnyOrder(SliceOf([]string{"a", "a", "b"}), SliceOf([]string{"a", "b", "b"})), qt.Equals, false)
+
+	c.Check(SliceEqualAnyOrder(
+		SliceOf([]string{"a", "b", "c"}).SliceFrom(1),
+		SliceOf([]string{"b", "c"})),
+		qt.Equals, true)
+	c.Check(SliceEqualAnyOrder(
+		SliceOf([]string{"a", "b", "c"}).Slice(1, 2),
+		SliceOf([]string{"b", "c"}).SliceTo(1)),
+		qt.Equals, true)
 }
