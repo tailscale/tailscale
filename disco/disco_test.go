@@ -4,6 +4,7 @@
 package disco
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -65,6 +66,20 @@ func TestMarshalAndParse(t *testing.T) {
 				},
 			},
 			want: "03 00 00 00 00 00 00 00 00 00 00 00 ff ff 01 02 03 04 02 37 20 01 00 00 00 00 00 00 00 00 00 00 00 00 34 56 03 15",
+		},
+		{
+			name: "knock",
+			m: &Knock{
+				SealedNonce: [16 + 32 + 8]byte(bytes.Repeat([]byte{1, 2}, 28)),
+			},
+			want: "04 00 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02 01 02",
+		},
+		{
+			name: "knock_reply",
+			m: &KnockReply{
+				Nonce: [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
+			},
+			want: "05 00 01 02 03 04 05 06 07 08",
 		},
 	}
 	for _, tt := range tests {

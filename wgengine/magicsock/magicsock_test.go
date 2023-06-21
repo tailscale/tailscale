@@ -2908,3 +2908,64 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoKnock(t *testing.T) {
+	mstun := &natlab.Machine{Name: "stun"}
+	m1 := &natlab.Machine{Name: "m1"}
+	m2 := &natlab.Machine{Name: "m2"}
+	inet := natlab.NewInternet()
+	sif := mstun.Attach("eth0", inet)
+	m1if := m1.Attach("eth0", inet)
+	m2if := m2.Attach("eth0", inet)
+
+	d := &devices{
+		m1:     m1,
+		m1IP:   m1if.V4(),
+		m2:     m2,
+		m2IP:   m2if.V4(),
+		stun:   mstun,
+		stunIP: sif.V4(),
+	}
+
+	logf, closeLogf := logger.LogfCloser(t.Logf)
+	defer closeLogf()
+
+	derpMap, cleanup := runDERPAndStun(t, logf, d.stun, d.stunIP)
+	defer cleanup()
+
+	ms1 := newMagicStack(t, logger.WithPrefix(logf, "conn1: "), d.m1, derpMap)
+	defer ms1.Close()
+	ms2 := newMagicStack(t, logger.WithPrefix(logf, "conn2: "), d.m2, derpMap)
+	defer ms2.Close()
+
+	cleanup = meshStacks(t.Logf, nil, ms1, ms2)
+	defer cleanup()
+
+	// Wait for both peers to know about each other.
+	for {
+		if s1 := ms1.Status(); len(s1.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		if s2 := ms2.Status(); len(s2.Peer) != 1 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		break
+	}
+
+	cbErr := make(chan error, 1)
+	ms1.conn.Knock(netip.AddrPortFrom(m2if.V4(), ms2.conn.pconn4.LocalAddr().AddrPort().Port()), &tailcfg.Node{Key: ms2.privateKey.Public()}, func(err error) {
+		cbErr <- err
+	})
+
+	select {
+	case err := <-cbErr:
+		if err != nil {
+			t.Errorf("Knock failed: %v", err)
+		}
+
+	case <-time.After(2 * time.Second):
+		t.Error("timeout waiting for knock callback")
+	}
+}

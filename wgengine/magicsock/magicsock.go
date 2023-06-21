@@ -2306,6 +2306,25 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 			ep.publicKey.ShortString(), derpStr(src.String()),
 			len(dm.MyNumber))
 		go ep.handleCallMeMaybe(dm)
+	case *disco.Knock:
+		metricRecvDiscoKnock.Add(1)
+		if isDERP {
+			metricRecvDiscoKnockBadDisco.Add(1)
+			c.logf("[unexpected] Knock packets should only come via LAN")
+			return
+		}
+		c.handleKnockLocked(dm, src, di)
+	case *disco.KnockReply:
+		metricRecvDiscoKnockReply.Add(1)
+		if isDERP {
+			metricRecvDiscoKnockReplyBadDisco.Add(1)
+			c.logf("[unexpected] Knock reply packets should only come via LAN")
+			return
+		}
+		c.logf("magicsock: disco: got knock reply %v from %v", dm, src)
+		c.peerMap.forEachEndpointWithDiscoKey(sender, func(ep *endpoint) (keepGoing bool) {
+			return !ep.handleKnockReplyLocked(dm, src, di)
+		})
 	}
 	return
 }
@@ -2346,6 +2365,114 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	}
 
 	return nk, false
+}
+
+// handleKnockReplyLocked handles a DISCO Knock Reply message. If the nonce is
+// correct, the callback for the pending knock is invoked.
+//
+// True is returned if this endpoint handled the nonce.
+//
+// di is the discoInfo of the source of the knock packet.
+func (de *endpoint) handleKnockReplyLocked(dm *disco.KnockReply, src netip.AddrPort, di *discoInfo) bool {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if de.pendingKnock == nil || !bytes.Equal(dm.Nonce[:], de.pendingKnock.nonce[:]) {
+		return false
+	}
+
+	// From this point on, nonce is correct
+	cb := de.pendingKnock.cb
+	de.pendingKnock = nil
+	go cb(nil)
+	return true
+}
+
+// handleKnockLocked handles a DISCO Knock message. If the recieved packet
+// is in order, a response is sent containing the unwrapped nonce.
+//
+// di is the discoInfo of the source of the knock packet.
+func (c *Conn) handleKnockLocked(dm *disco.Knock, src netip.AddrPort, di *discoInfo) {
+	// TODO(tom): Filter to LAN-only sources
+
+	nonceBytes, ok := c.privateKey.OpenAnonymous(dm.SealedNonce[:])
+	if !ok {
+		metricRecvDiscoKnockBadSeal.Add(1)
+		c.logf("magicsock: disco: dropping bad knock from %v", src)
+		return
+	}
+
+	var nonce [8]byte
+	copy(nonce[:], nonceBytes)
+
+	c.peerMap.forEachEndpointWithDiscoKey(di.discoKey, func(ep *endpoint) (keepGoing bool) {
+		go c.sendDiscoMessage(src, ep.publicKey, di.discoKey, &disco.KnockReply{
+			Nonce: nonce,
+		}, discoVerboseLog)
+		return true
+	})
+}
+
+// Knock handles a request to knock a specific peer.
+func (c *Conn) Knock(addr netip.AddrPort, peer *tailcfg.Node, cb func(error)) {
+	if runtime.GOOS == "js" {
+		cb(errors.New("no direct over tsconnect"))
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.privateKey.IsZero() {
+		cb(errNetworkDown)
+		return
+	}
+
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	if !ok {
+		cb(errors.New("unknown peer"))
+		return
+	}
+	ep.knock(addr, cb)
+}
+
+func (de *endpoint) knock(addr netip.AddrPort, cb func(error)) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	if de.expired {
+		cb(errExpired)
+		return
+	}
+	epDisco := de.disco.Load()
+	if epDisco == nil {
+		cb(errors.New("no disco key"))
+		return
+	}
+
+	var nonce [8]byte
+	if _, err := crand.Read(nonce[:]); err != nil {
+		panic(err) // worth dying for
+	}
+	sealed, err := de.publicKey.SealAnonymous(nonce[:])
+	if err != nil {
+		cb(err)
+		return
+	}
+
+	if de.pendingKnock != nil {
+		de.pendingKnock.cb(errors.New("superceded"))
+	}
+	de.pendingKnock = &pendingKnock{addr, cb, nonce}
+
+	go func() {
+		knock := disco.Knock{}
+		copy(knock.SealedNonce[:], sealed)
+		sent, _ := de.c.sendDiscoMessage(addr, de.publicKey, epDisco.key, &knock, discoVerboseLog)
+		if !sent {
+			panic("not sent")
+		}
+	}()
+	de.noteActiveLocked()
 }
 
 // di is the discoInfo of the source of the ping.
@@ -4141,6 +4268,8 @@ type endpoint struct {
 
 	pendingCLIPings []pendingCLIPing // any outstanding "tailscale ping" commands running
 
+	pendingKnock *pendingKnock // any outstanding knock challenge, if any
+
 	// The following fields are related to the new "silent disco"
 	// implementation that's a WIP as of 2022-10-20.
 	// See #540 for background.
@@ -4154,6 +4283,12 @@ type endpoint struct {
 type pendingCLIPing struct {
 	res *ipnstate.PingResult
 	cb  func(*ipnstate.PingResult)
+}
+
+type pendingKnock struct {
+	addr  netip.AddrPort
+	cb    func(error)
+	nonce [8]byte
 }
 
 const (
@@ -5269,6 +5404,7 @@ func (de *endpoint) stopAndReset() {
 		de.heartBeatTimer = nil
 	}
 	de.pendingCLIPings = nil
+	de.pendingKnock = nil
 }
 
 // resetLocked clears all the endpoint's p2p state, reverting it to a
@@ -5468,6 +5604,11 @@ var (
 	metricRecvDiscoCallMeMaybe         = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe")
 	metricRecvDiscoCallMeMaybeBadNode  = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_node")
 	metricRecvDiscoCallMeMaybeBadDisco = clientmetric.NewCounter("magicsock_disco_recv_callmemaybe_bad_disco")
+	metricRecvDiscoKnock               = clientmetric.NewCounter("magicsock_disco_recv_knock")
+	metricRecvDiscoKnockBadDisco       = clientmetric.NewCounter("magicsock_disco_recv_knock_bad_disco")
+	metricRecvDiscoKnockBadSeal        = clientmetric.NewCounter("magicsock_disco_recv_knock_bad_seal")
+	metricRecvDiscoKnockReply          = clientmetric.NewCounter("magicsock_disco_recv_knock_reply")
+	metricRecvDiscoKnockReplyBadDisco  = clientmetric.NewCounter("magicsock_disco_recv_knock_reply_bad_disco")
 	metricRecvDiscoDERPPeerNotHere     = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_not_here")
 	metricRecvDiscoDERPPeerGoneUnknown = clientmetric.NewCounter("magicsock_disco_recv_derp_peer_gone_unknown")
 	// metricDERPHomeChange is how many times our DERP home region DI has

@@ -27,6 +27,7 @@ import (
 	"net/netip"
 
 	"go4.org/mem"
+	"golang.org/x/crypto/nacl/box"
 	"tailscale.com/types/key"
 )
 
@@ -44,6 +45,8 @@ const (
 	TypePing        = MessageType(0x01)
 	TypePong        = MessageType(0x02)
 	TypeCallMeMaybe = MessageType(0x03)
+	TypeKnock       = MessageType(0x04)
+	TypeKnockReply  = MessageType(0x05)
 )
 
 const v0 = byte(0)
@@ -83,6 +86,10 @@ func Parse(p []byte) (Message, error) {
 		return parsePong(ver, p)
 	case TypeCallMeMaybe:
 		return parseCallMeMaybe(ver, p)
+	case TypeKnock:
+		return parseKnock(ver, p)
+	case TypeKnockReply:
+		return parseKnockReply(ver, p)
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -240,6 +247,54 @@ func parsePong(ver uint8, p []byte) (m *Pong, err error) {
 	return m, nil
 }
 
+type Knock struct {
+	// SealedNonce is the random client-generated per-knock nonce,
+	// which is NaCL-box sealed to the node key of the destination.
+	// The unencrypted nonce is 8 bytes.
+	SealedNonce [box.AnonymousOverhead + 8]byte
+}
+
+func (m *Knock) AppendMarshal(b []byte) []byte {
+	dataLen := box.AnonymousOverhead + 8
+	ret, d := appendMsgHeader(b, TypeKnock, v0, dataLen)
+	copy(d, m.SealedNonce[:])
+	return ret
+}
+
+func parseKnock(ver uint8, p []byte) (m *Knock, err error) {
+	if len(p) < (box.AnonymousOverhead + 8) {
+		return nil, errShort
+	}
+	m = new(Knock)
+	p = p[copy(m.SealedNonce[:], p):]
+	// Deliberately lax on longer-than-expected messages, for future
+	// compatibility.
+	return m, nil
+}
+
+type KnockReply struct {
+	// Nonce is the nonce value from the Knock request.
+	Nonce [8]byte
+}
+
+func (m *KnockReply) AppendMarshal(b []byte) []byte {
+	dataLen := 8
+	ret, d := appendMsgHeader(b, TypeKnockReply, v0, dataLen)
+	copy(d, m.Nonce[:])
+	return ret
+}
+
+func parseKnockReply(ver uint8, p []byte) (m *KnockReply, err error) {
+	if len(p) < 8 {
+		return nil, errShort
+	}
+	m = new(KnockReply)
+	p = p[copy(m.Nonce[:], p):]
+	// Deliberately lax on longer-than-expected messages, for future
+	// compatibility.
+	return m, nil
+}
+
 // MessageSummary returns a short summary of m for logging purposes.
 func MessageSummary(m Message) string {
 	switch m := m.(type) {
@@ -249,6 +304,10 @@ func MessageSummary(m Message) string {
 		return fmt.Sprintf("pong tx=%x", m.TxID[:6])
 	case *CallMeMaybe:
 		return "call-me-maybe"
+	case *Knock:
+		return fmt.Sprintf("knock")
+	case *KnockReply:
+		return fmt.Sprintf("knock reply nonce=%x", m.Nonce[:])
 	default:
 		return fmt.Sprintf("%#v", m)
 	}

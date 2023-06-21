@@ -142,6 +142,26 @@ func (k NodePrivate) OpenFrom(p NodePublic, ciphertext []byte) (cleartext []byte
 	return box.Open(nil, ciphertext[len(nonce):], nonce, &p.k, &k.k)
 }
 
+// SealAnonymous seals the cleartext to the node key k.
+func (k NodePublic) SealAnonymous(cleartext []byte) (ciphertext []byte, err error) {
+	if k.IsZero() {
+		panic("can't seal with zero keys")
+	}
+	return box.SealAnonymous(nil, cleartext, &k.k, nil)
+}
+
+// OpenAnonymous opens the anonymous NaCl box ciphertext, which must be a value
+// created by SealAnonymous, and returns the inner cleartext if ciphertext is
+// a valid box to k.
+func (k NodePrivate) OpenAnonymous(ciphertext []byte) (cleartext []byte, ok bool) {
+	if k.IsZero() {
+		panic("can't open with zero keys")
+	}
+
+	p := k.Public()
+	return box.OpenAnonymous(nil, ciphertext, &p.k, &k.k)
+}
+
 func (k NodePrivate) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
 }
