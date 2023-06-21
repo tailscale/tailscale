@@ -476,7 +476,7 @@ func (ss *sshSession) launchProcess() error {
 	}
 	go resizeWindow(ptyDup /* arbitrary fd */, winCh)
 
-	ss.tty = tty
+	ss.childPipes = []io.Closer{tty}
 	ss.stdin = pty
 	ss.stdout = os.NewFile(uintptr(ptyDup), pty.Name())
 	ss.stderr = nil // not available for pty
@@ -658,11 +658,16 @@ func (ss *sshSession) startWithPTY() (ptyFile, tty *os.File, err error) {
 
 // startWithStdPipes starts cmd with os.Pipe for Stdin, Stdout and Stderr.
 func (ss *sshSession) startWithStdPipes() (err error) {
-	var stdin io.WriteCloser
-	var stdout, stderr io.ReadCloser
+	var (
+		stdin          io.WriteCloser
+		stdout, stderr io.ReadCloser
+
+		cStdin           io.ReadCloser
+		cStdout, cStderr io.WriteCloser
+	)
 	defer func() {
 		if err != nil {
-			for _, c := range []io.Closer{stdin, stdout, stderr} {
+			for _, c := range []io.Closer{stdin, stdout, stderr, cStdin, cStdout, cStderr} {
 				if c != nil {
 					c.Close()
 				}
@@ -673,24 +678,28 @@ func (ss *sshSession) startWithStdPipes() (err error) {
 	if cmd == nil {
 		return errors.New("nil cmd")
 	}
-	stdin, err = cmd.StdinPipe()
+	ss.stdin, cStdin, err = os.Pipe()
 	if err != nil {
 		return err
 	}
-	stdout, err = cmd.StdoutPipe()
+	ss.stdout, cStdout, err = os.Pipe()
 	if err != nil {
+		cStdin.Close()
 		return err
 	}
-	stderr, err = cmd.StderrPipe()
+	ss.stderr, cStderr, err = os.Pipe()
 	if err != nil {
+		cStdin.Close()
+		cStdout.Close()
 		return err
 	}
+	cmd.Stdin = cStdin
+	cmd.Stdout = cStdout
+	cmd.Stderr = cStderr
+	ss.childPipes = []io.Closer{cStdin, cStdout, cStderr}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	ss.stdin = stdin
-	ss.stdout = stdout
-	ss.stderr = stderr
 	return nil
 }
 

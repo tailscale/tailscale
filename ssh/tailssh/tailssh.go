@@ -826,9 +826,14 @@ type sshSession struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
-	stderr io.Reader // nil for pty sessions
-	ptyReq *ssh.Pty  // non-nil for pty sessions
-	tty    *os.File  // non-nil for pty sessions, must be closed after process exits
+	stderr io.ReadCloser // nil for pty sessions
+	ptyReq *ssh.Pty      // non-nil for pty sessions
+
+	// childPipes is a list of pipes that need to be closed when the
+	// process exits.
+	// For pty sessions, this is the tty fd.
+	// For non-pty sessions, this is the stdin,stdout,stderr fds.
+	childPipes []io.Closer
 
 	// We use this sync.Once to ensure that we only terminate the process once,
 	// either it exits itself or is terminated
@@ -1146,10 +1151,13 @@ func (ss *sshSession) run() {
 		}()
 	}
 
-	if ss.tty != nil {
-		// If running a tty session, close the tty when the session is done.
-		defer ss.tty.Close()
-	}
+	defer func() {
+		// It is our responsibility to close the FDs that were passed down to
+		// the child process.
+		for _, c := range ss.childPipes {
+			c.Close()
+		}
+	}()
 	err = ss.cmd.Wait()
 	processDone.Store(true)
 	// This will either make the SSH Termination goroutine be a no-op,
