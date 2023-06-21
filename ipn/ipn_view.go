@@ -228,12 +228,14 @@ func (v *TCPPortHandlerView) UnmarshalJSON(b []byte) error {
 }
 
 func (v TCPPortHandlerView) HTTPS() bool          { return v.ж.HTTPS }
+func (v TCPPortHandlerView) HTTP() bool           { return v.ж.HTTP }
 func (v TCPPortHandlerView) TCPForward() string   { return v.ж.TCPForward }
 func (v TCPPortHandlerView) TerminateTLS() string { return v.ж.TerminateTLS }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _TCPPortHandlerViewNeedsRegeneration = TCPPortHandler(struct {
 	HTTPS        bool
+	HTTP         bool
 	TCPForward   string
 	TerminateTLS string
 }{})

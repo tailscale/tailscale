@@ -4129,6 +4129,10 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 	b.serveConfig.Web().Range(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
 		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
 			backend := h.Proxy()
+			if backend == "" {
+				// Only create proxy handlers for servers with a proxy backend.
+				return true
+			}
 			mak.Set(&backends, backend, true)
 			if _, ok := b.serveProxyHandlers.Load(backend); ok {
 				return true

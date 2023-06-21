@@ -332,11 +332,8 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 		return nil
 	}
 
-	if tcph.HTTPS() {
+	if tcph.HTTPS() || tcph.HTTP() {
 		hs := &http.Server{
-			TLSConfig: &tls.Config{
-				GetCertificate: b.getTLSServeCertForPort(dport),
-			},
 			Handler: http.HandlerFunc(b.serveWebHandler),
 			BaseContext: func(_ net.Listener) context.Context {
 				return context.WithValue(context.Background(), serveHTTPContextKey{}, &serveHTTPContext{
@@ -345,8 +342,17 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 				})
 			},
 		}
+		if tcph.HTTPS() {
+			hs.TLSConfig = &tls.Config{
+				GetCertificate: b.getTLSServeCertForPort(dport),
+			}
+			return func(c net.Conn) error {
+				return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+			}
+		}
+
 		return func(c net.Conn) error {
-			return hs.ServeTLS(netutil.NewOneConnListener(c, nil), "", "")
+			return hs.Serve(netutil.NewOneConnListener(c, nil))
 		}
 	}
 
@@ -406,8 +412,14 @@ func getServeHTTPContext(r *http.Request) (c *serveHTTPContext, ok bool) {
 func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, at string, ok bool) {
 	var z ipn.HTTPHandlerView // zero value
 
+	hostname := r.Host
 	if r.TLS == nil {
-		return z, "", false
+		tcd := "." + b.Status().CurrentTailnet.MagicDNSSuffix
+		if !strings.HasSuffix(hostname, tcd) {
+			hostname += tcd
+		}
+	} else {
+		hostname = r.TLS.ServerName
 	}
 
 	sctx, ok := getServeHTTPContext(r)
@@ -415,7 +427,7 @@ func (b *LocalBackend) getServeHandler(r *http.Request) (_ ipn.HTTPHandlerView, 
 		b.logf("[unexpected] localbackend: no serveHTTPContext in request")
 		return z, "", false
 	}
-	wsc, ok := b.webServerConfig(r.TLS.ServerName, sctx.DestPort)
+	wsc, ok := b.webServerConfig(hostname, sctx.DestPort)
 	if !ok {
 		return z, "", false
 	}
@@ -472,7 +484,9 @@ func (b *LocalBackend) proxyHandlerForBackend(backend string) (*httputil.Reverse
 
 func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
 	r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
-	r.Out.Header.Set("X-Forwarded-Proto", "https")
+	if r.In.TLS != nil {
+		r.Out.Header.Set("X-Forwarded-Proto", "https")
+	}
 	if c, ok := getServeHTTPContext(r.Out); ok {
 		r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
 	}
@@ -634,8 +648,8 @@ func allNumeric(s string) bool {
 	return s != ""
 }
 
-func (b *LocalBackend) webServerConfig(sniName string, port uint16) (c ipn.WebServerConfigView, ok bool) {
-	key := ipn.HostPort(fmt.Sprintf("%s:%v", sniName, port))
+func (b *LocalBackend) webServerConfig(hostname string, port uint16) (c ipn.WebServerConfigView, ok bool) {
+	key := ipn.HostPort(fmt.Sprintf("%s:%v", hostname, port))
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
