@@ -598,7 +598,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	exitNodeRequiresMasq := false // true if using an exit node and it requires masquerading
 	for _, p := range wcfg.Peers {
 		isExitNode := slices.Contains(p.AllowedIPs, tsaddr.AllIPv4()) || slices.Contains(p.AllowedIPs, tsaddr.AllIPv6())
-		if isExitNode && p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() {
+		if isExitNode && (p.V4MasqAddr != nil && p.V4MasqAddr.IsValid() || p.V6MasqAddr != nil && p.V6MasqAddr.IsValid()) {
 			exitNodeRequiresMasq = true
 			break
 		}

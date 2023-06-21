@@ -67,6 +67,10 @@ func (src *Node) Clone() *Node {
 		dst.SelfNodeV4MasqAddrForThisPeer = new(netip.Addr)
 		*dst.SelfNodeV4MasqAddrForThisPeer = *src.SelfNodeV4MasqAddrForThisPeer
 	}
+	if dst.SelfNodeV6MasqAddrForThisPeer != nil {
+		dst.SelfNodeV6MasqAddrForThisPeer = new(netip.Addr)
+		*dst.SelfNodeV6MasqAddrForThisPeer = *src.SelfNodeV6MasqAddrForThisPeer
+	}
 	return dst
 }
 
@@ -103,6 +107,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 }{})
 

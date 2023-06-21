@@ -58,6 +58,10 @@ func (src *Peer) Clone() *Peer {
 		dst.V4MasqAddr = new(netip.Addr)
 		*dst.V4MasqAddr = *src.V4MasqAddr
 	}
+	if dst.V6MasqAddr != nil {
+		dst.V6MasqAddr = new(netip.Addr)
+		*dst.V6MasqAddr = *src.V6MasqAddr
+	}
 	return dst
 }
 
@@ -67,6 +71,7 @@ var _PeerCloneNeedsRegeneration = Peer(struct {
 	DiscoKey            key.DiscoPublic
 	AllowedIPs          []netip.Prefix
 	V4MasqAddr          *netip.Addr
+	V6MasqAddr          *netip.Addr
 	PersistentKeepalive uint16
 	WGEndpoint          key.NodePublic
 }{})

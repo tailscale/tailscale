@@ -65,7 +65,7 @@ type Server struct {
 	// MapResponses sent to clients. It is keyed by the requesting nodes
 	// public key, and then the peer node's public key. The value is the
 	// masquerade address to use for that peer.
-	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV4MasqAddrForThisPeer IP
+	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV{4,6}MasqAddrForThisPeer IP
 
 	noisePubKey  key.MachinePublic
 	noisePrivKey key.ControlPrivate // not strictly needed vs. MachinePrivate, but handy to test type interactions.
@@ -844,7 +844,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			continue
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
-			p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			if masqIP.Is4() {
+				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			} else {
+				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+			}
 		}
 
 		s.mu.Lock()

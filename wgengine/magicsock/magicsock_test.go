@@ -2271,74 +2271,93 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 }
 
 func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
-	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
-	defer cleanup()
+	check := func(t *testing.T, tsaip, wgaip, masqip netip.Prefix) {
+		tskey := key.NewNode()
+		wgkey := key.NewNode()
 
-	tskey := key.NewNode()
-	tsaip := netip.MustParsePrefix("100.111.222.111/32")
+		derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
+		defer cleanup()
 
-	wgkey := key.NewNode()
-	wgaip := netip.MustParsePrefix("10.64.0.1/32")
+		uapi := fmt.Sprintf("private_key=%s\npublic_key=%s\nallowed_ip=%s\n\n",
+			wgkey.UntypedHexString(), tskey.Public().UntypedHexString(), masqip.String())
+		wgdev, wgtun, port := newWireguard(t, uapi, []netip.Prefix{wgaip})
+		defer wgdev.Close()
+		wgEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)
 
-	// the ip that the wireguard peer has in allowed ips and expects as a masq source
-	masqip := netip.MustParsePrefix("10.64.0.2/32")
+		m := newMagicStackWithKey(t, t.Logf, localhostListener{}, derpMap, tskey)
+		defer m.Close()
 
-	uapi := fmt.Sprintf("private_key=%s\npublic_key=%s\nallowed_ip=%s\n\n",
-		wgkey.UntypedHexString(), tskey.Public().UntypedHexString(), masqip.String())
-	wgdev, wgtun, port := newWireguard(t, uapi, []netip.Prefix{wgaip})
-	defer wgdev.Close()
-	wgEp := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)
-
-	m := newMagicStackWithKey(t, t.Logf, localhostListener{}, derpMap, tskey)
-	defer m.Close()
-
-	nm := &netmap.NetworkMap{
-		Name:       "ts",
-		PrivateKey: m.privateKey,
-		NodeKey:    m.privateKey.Public(),
-		Addresses:  []netip.Prefix{tsaip},
-		Peers: []*tailcfg.Node{
-			{
-				Key:                           wgkey.Public(),
-				Endpoints:                     []string{wgEp.String()},
-				IsWireGuardOnly:               true,
-				Addresses:                     []netip.Prefix{wgaip},
-				AllowedIPs:                    []netip.Prefix{wgaip},
-				SelfNodeV4MasqAddrForThisPeer: ptr.To(masqip.Addr()),
+		nm := &netmap.NetworkMap{
+			Name:       "ts",
+			PrivateKey: m.privateKey,
+			NodeKey:    m.privateKey.Public(),
+			Addresses:  []netip.Prefix{tsaip},
+			Peers: []*tailcfg.Node{
+				{
+					Key:             wgkey.Public(),
+					Endpoints:       []string{wgEp.String()},
+					IsWireGuardOnly: true,
+					Addresses:       []netip.Prefix{wgaip},
+					AllowedIPs:      []netip.Prefix{wgaip},
+				},
 			},
-		},
-	}
-	m.conn.SetNetworkMap(nm)
-
-	cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSingleHosts|netmap.AllowSubnetRoutes, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.Reconfig(cfg)
-
-	pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
-	m.tun.Outbound <- pbuf
-
-	select {
-	case p := <-wgtun.Inbound:
-
-		// TODO(raggi): move to a bytes.Equal based test later, once
-		// tuntest.Ping produces correct checksums!
-
-		var pkt packet.Parsed
-		pkt.Decode(p)
-		if pkt.ICMP4Header().Type != packet.ICMP4EchoRequest {
-			t.Fatalf("unexpected packet: %x", p)
 		}
-		if pkt.Src.Addr() != masqip.Addr() {
-			t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+		if masqip.Addr().Is4() {
+			nm.Peers[0].SelfNodeV4MasqAddrForThisPeer = ptr.To(masqip.Addr())
+		} else {
+			nm.Peers[0].SelfNodeV6MasqAddrForThisPeer = ptr.To(masqip.Addr())
 		}
-		if pkt.Dst.Addr() != wgaip.Addr() {
-			t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+		m.conn.SetNetworkMap(nm)
+
+		cfg, err := nmcfg.WGCfg(nm, t.Logf, netmap.AllowSingleHosts|netmap.AllowSubnetRoutes, "")
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("no packet after 1s")
+		m.Reconfig(cfg)
+
+		pbuf := tuntest.Ping(wgaip.Addr(), tsaip.Addr())
+		m.tun.Outbound <- pbuf
+
+		select {
+		case p := <-wgtun.Inbound:
+			// TODO(raggi): move to a bytes.Equal based test later, once
+			// tuntest.Ping produces correct checksums!
+
+			var pkt packet.Parsed
+			pkt.Decode(p)
+			if masqip.Addr().Is4() {
+				if pkt.ICMP4Header().Type != packet.ICMP4EchoRequest {
+					t.Fatalf("unexpected packet: %x", p)
+				}
+			} else {
+				if pkt.ICMP6Header().Type != packet.ICMP6EchoRequest {
+					t.Fatalf("unexpected packet: %x", p)
+				}
+			}
+			if pkt.Src.Addr() != masqip.Addr() {
+				t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+			}
+			if pkt.Dst.Addr() != wgaip.Addr() {
+				t.Fatalf("bad source IP, got %s, want %s", pkt.Src.Addr(), masqip.Addr())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("no packet after 1s")
+		}
 	}
+
+	t.Run("IPv4", func(t *testing.T) {
+		tailscaleIP := netip.MustParsePrefix("100.111.222.111/32")
+		wireguardIP := netip.MustParsePrefix("10.64.0.1/32")
+		masqueradeIP := netip.MustParsePrefix("10.64.0.2/32")
+		check(t, tailscaleIP, wireguardIP, masqueradeIP)
+	})
+
+	t.Run("IPv6", func(t *testing.T) {
+		tailscaleIP := netip.MustParsePrefix("100::111/128")
+		wireguardIP := netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4848:cd2a:3a2c:baa1/128")
+		masqueradeIP := netip.MustParsePrefix("fd7a:115c:a1e0:ab12:4848:cd2a:3a2c:baa2/128")
+		check(t, tailscaleIP, wireguardIP, masqueradeIP)
+	})
 }
 
 func TestEndpointTracker(t *testing.T) {

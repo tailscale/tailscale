@@ -602,6 +602,7 @@ func TestFilterDiscoLoop(t *testing.T) {
 }
 
 func TestNATCfg(t *testing.T) {
+	t.Error("Missing case for IPv6")
 	node := func(ip, masqIP netip.Addr, otherAllowedIPs ...netip.Prefix) wgcfg.Peer {
 		p := wgcfg.Peer{
 			PublicKey: key.NewNode().Public(),
