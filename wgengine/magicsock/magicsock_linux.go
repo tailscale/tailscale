@@ -303,11 +303,11 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 			rc.Control(func(fd uintptr) {
 				errRcv = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUFFORCE, socketBufferSize)
 				if errRcv != nil {
-					logf("magicsock: failed to force-set UDP read buffer size to %d: %v", socketBufferSize, errRcv)
+					logf("magicsock: [warning] failed to force-set UDP read buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errRcv)
 				}
 				errSnd = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, socketBufferSize)
 				if errSnd != nil {
-					logf("magicsock: failed to force-set UDP write buffer size to %d: %v", socketBufferSize, errSnd)
+					logf("magicsock: [warning] failed to force-set UDP write buffer size to %d: %v; using kernel default values (impacts throughput only)", socketBufferSize, errSnd)
 				}
 			})
 		}
