@@ -11,15 +11,16 @@ import (
 	"strconv"
 )
 
-// ScrubbedGoroutineDump returns the list of all current goroutines, but with the actual
-// values of arguments scrubbed out, lest it contain some private key material.
-func ScrubbedGoroutineDump() []byte {
+// ScrubbedGoroutineDump returns either the current goroutine's stack or all
+// goroutines' stacks, but with the actual values of arguments scrubbed out,
+// lest it contain some private key material.
+func ScrubbedGoroutineDump(all bool) []byte {
 	var buf []byte
 	// Grab stacks multiple times into increasingly larger buffer sizes
 	// to minimize the risk that we blow past our iOS memory limit.
 	for size := 1 << 10; size <= 1<<20; size += 1 << 10 {
 		buf = make([]byte, size)
-		buf = buf[:runtime.Stack(buf, true)]
+		buf = buf[:runtime.Stack(buf, all)]
 		if len(buf) < size {
 			// It fit.
 			break

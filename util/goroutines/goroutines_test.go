@@ -6,7 +6,7 @@ package goroutines
 import "testing"
 
 func TestScrubbedGoroutineDump(t *testing.T) {
-	t.Logf("Got:\n%s\n", ScrubbedGoroutineDump())
+	t.Logf("Got:\n%s\n", ScrubbedGoroutineDump(true))
 }
 
 func TestScrubHex(t *testing.T) {

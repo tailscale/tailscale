@@ -20,7 +20,7 @@ func dumpGoroutinesToURL(c *http.Client, targetURL string) {
 
 	zbuf := new(bytes.Buffer)
 	zw := gzip.NewWriter(zbuf)
-	zw.Write(goroutines.ScrubbedGoroutineDump())
+	zw.Write(goroutines.ScrubbedGoroutineDump(true))
 	zw.Close()
 
 	req, err := http.NewRequestWithContext(ctx, "PUT", targetURL, zbuf)
