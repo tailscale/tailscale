@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # Copyright (c) Tailscale Inc & AUTHORS
 # SPDX-License-Identifier: BSD-3-Clause
 #
@@ -6,9 +6,9 @@
 # transparently builds gocross using a "bootstrap" Go toolchain, and
 # then invokes gocross.
 
-set -eu
+set -euo pipefail
 
-if [ "${CI:-}" = "true" ]; then
+if [[ "${CI:-}" == "true" ]]; then
     set -x
 fi
 
@@ -17,7 +17,7 @@ fi
 # accidentally mutate the input environment that will get passed to gocross at
 # the bottom of this script.
 (
-repo_root="$(dirname $0)/../.."
+repo_root="${BASH_SOURCE%/*}/../.."
 
 # Figuring out if gocross needs a rebuild, as well as the rebuild itself, need
 # to happen with CWD inside this repo. Since we're in a subshell entirely
@@ -28,16 +28,21 @@ cd "$repo_root"
 
 toolchain="$HOME/.cache/tailscale-go"
 
-if [ -d "$toolchain" ]; then
+if [[ -d "$toolchain" ]]; then
     # A toolchain exists, but is it recent enough to compile gocross? If not,
     # wipe it out so that the next if block fetches a usable one.
     want_go_minor=$(grep -E '^go ' "go.mod" | cut -f2 -d'.')
-    have_go_minor=$(cut -f2 -d'.' <$toolchain/VERSION)
-    if [ -z "$have_go_minor" -o "$have_go_minor" -lt "$want_go_minor" ]; then
+    have_go_minor=$(head -1 "$toolchain/VERSION" | cut -f2 -d'.')
+    # Shortly before stable releases, we run release candidate
+    # toolchains, which have a non-numeric suffix on the version
+    # number. Remove the rc qualifier, we just care about the minor
+    # version.
+    have_go_minor="${have_go_minor%rc*}"
+    if [[ -z "$have_go_minor" || "$have_go_minor" -lt "$want_go_minor" ]]; then
         rm -rf "$toolchain" "$toolchain.extracted"
     fi
 fi
-if [ ! -d "$toolchain" ]; then
+if [[ ! -d "$toolchain" ]]; then
     mkdir -p "$HOME/.cache"
 
     # We need any Go toolchain to build gocross, but the toolchain also has to
@@ -56,10 +61,10 @@ if [ ! -d "$toolchain" ]; then
         # (we do not build tailscale-go for other targets).
         HOST_OS=$(uname -s | tr A-Z a-z)
         HOST_ARCH="$(uname -m)"
-        if [ "$HOST_ARCH" = "aarch64" ]; then
+        if [[ "$HOST_ARCH" == "aarch64" ]]; then
             # Go uses the name "arm64".
             HOST_ARCH="arm64"
-        elif [ "$HOST_ARCH" = "x86_64" ]; then
+        elif [[ "$HOST_ARCH" == "x86_64" ]]; then
             # Go uses the name "amd64".
             HOST_ARCH="amd64"
         fi
@@ -83,13 +88,13 @@ fi
 gocross_path="gocross"
 gocross_ok=0
 wantver="$(git rev-parse HEAD)"
-if [ -x "$gocross_path" ]; then
+if [[ -x "$gocross_path" ]]; then
 	gotver="$($gocross_path gocross-version 2>/dev/null || echo '')"
-	if [ "$gotver" = "$wantver" ]; then
+	if [[ "$gotver" == "$wantver" ]]; then
 		gocross_ok=1
 	fi
 fi
-if [ "$gocross_ok" = "0" ]; then
+if [[ "$gocross_ok" == "0" ]]; then
     unset GOOS
     unset GOARCH
     unset GO111MODULE
@@ -99,4 +104,4 @@ if [ "$gocross_ok" = "0" ]; then
 fi
 ) # End of the subshell execution.
 
-exec "$(dirname $0)/../../gocross" "$@"
+exec "${BASH_SOURCE%/*}/../../gocross" "$@"
