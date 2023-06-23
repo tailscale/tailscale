@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/dns/publicdns"
 	"tailscale.com/net/dnscache"
+	"tailscale.com/net/interfaces"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -200,6 +202,12 @@ type forwarder struct {
 	// /etc/resolv.conf is missing/corrupt, and the peerapi ExitDNS stub
 	// resolver lookup.
 	cloudHostFallback []resolverAndDelay
+
+	// Control D specific fields. These allow the admin to destinguish between
+	// different clients using the same DoH resolver URL
+	dohClientHostname string // Hostname to send in Control D DoH requests
+	dohClientMac      string // MAC address to send in Control D DoH requests
+	dohClientIP       string // IP address to send in Control D DoH requests
 }
 
 func init() {
@@ -207,11 +215,32 @@ func init() {
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
+	hostname, _ := os.Hostname()
+	tailscaleIP := ""
+	clientMac := ""
+
+	// TODO: is this the best way to determine the tailscale IP of this node?
+	if tsIPs, _, err := interfaces.Tailscale(); err == nil && len(tsIPs) > 0 {
+		tailscaleIP = tsIPs[0].String()
+	}
+
+	// TODO: is this the best way to determine the MAC address of this node?
+	if idx, err := interfaces.DefaultRouteInterfaceIndex(); err == nil {
+		iface, err := net.InterfaceByIndex(idx)
+		if err == nil {
+			clientMac = iface.HardwareAddr.String()
+		}
+	}
+
 	f := &forwarder{
 		logf:    logger.WithPrefix(logf, "forward: "),
 		netMon:  netMon,
 		linkSel: linkSel,
 		dialer:  dialer,
+		// Control D specific DoH fields
+		dohClientHostname: hostname,
+		dohClientIP:       tailscaleIP,
+		dohClientMac:      clientMac,
 	}
 	f.ctx, f.ctxCancel = context.WithCancel(context.Background())
 	return f
@@ -418,6 +447,20 @@ func (f *forwarder) sendDoH(ctx context.Context, urlBase string, c *http.Client,
 	req.Header.Set("Content-Type", dohType)
 	req.Header.Set("Accept", dohType)
 	req.Header.Set("User-Agent", "tailscaled/"+version.Long())
+
+	// If this is a Control D request, attach the hostname, mac address and IP address
+	// this allows for additional DNS analytics and client specific DNS policies
+	if strings.HasPrefix(urlBase, publicdns.ControlDBase) {
+		if f.dohClientHostname != "" {
+			req.Header.Set("X-Cd-Host", f.dohClientHostname)
+		}
+		if f.dohClientMac != "" {
+			req.Header.Set("X-Cd-Mac", f.dohClientMac)
+		}
+		if f.dohClientIP != "" {
+			req.Header.Set("X-Cd-IP", f.dohClientIP)
+		}
+	}
 
 	hres, err := c.Do(req)
 	if err != nil {
