@@ -101,6 +101,16 @@ func TestResolversWithDelays(t *testing.T) {
 			in:   q("https://dns.nextdns.io/c3a884"),
 			want: o("https://dns.nextdns.io/c3a884"),
 		},
+		{
+			name: "controld-ipv6-expand",
+			in:   q("2606:1a40:0:6:7b5b:5949:35ad:0"),
+			want: o("https://dns.controld.com/hyq3ipr2ct"),
+		},
+		{
+			name: "controld-doh-input",
+			in:   q("https://dns.controld.com/hyq3ipr2ct"),
+			want: o("https://dns.controld.com/hyq3ipr2ct"),
+		},
 	}
 
 	for _, tt := range tests {

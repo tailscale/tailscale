@@ -7,10 +7,13 @@ package publicdns
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -22,6 +25,11 @@ var dohOfIP = map[netip.Addr]string{} // 8.8.8.8 => "https://..."
 
 var dohIPsOfBase = map[string][]netip.Addr{}
 var populateOnce sync.Once
+
+const (
+	nextDNSBase  = "https://dns.nextdns.io/"
+	controlDBase = "https://dns.controld.com/"
+)
 
 // DoHEndpointFromIP returns the DNS-over-HTTPS base URL for a given IP
 // and whether it's DoH-only (not speaking DNS on port 53).
@@ -39,14 +47,21 @@ func DoHEndpointFromIP(ip netip.Addr) (dohBase string, dohOnly bool, ok bool) {
 	if nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) {
 		a := ip.As16()
 		var sb strings.Builder
-		const base = "https://dns.nextdns.io/"
-		sb.Grow(len(base) + 12)
-		sb.WriteString(base)
+		sb.Grow(len(nextDNSBase) + 12)
+		sb.WriteString(nextDNSBase)
 		for _, b := range bytes.TrimLeft(a[4:], "\x00") {
 			fmt.Fprintf(&sb, "%02x", b)
 		}
 		return sb.String(), true, true
 	}
+
+	// Control D DoH URLs are of the form "https://dns.controld.com/8yezwenugs"
+	// where the path component is represented by 8 bytes (7-14) of the IPv6 address in base36
+	if controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) {
+		path := big.NewInt(0).SetBytes(ip.AsSlice()[6:14]).Text(36)
+		return controlDBase + path, true, true
+	}
+
 	return "", false, false
 }
 
@@ -80,7 +95,7 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 	if s := dohIPsOfBase[dohBase]; len(s) > 0 {
 		return s
 	}
-	if hexStr, ok := strings.CutPrefix(dohBase, "https://dns.nextdns.io/"); ok {
+	if hexStr, ok := strings.CutPrefix(dohBase, nextDNSBase); ok {
 		// The path is of the form /<profile-hex>[/<hostname>/<model>/<device id>...]
 		// or /<profile-hex>?<query params>
 		// but only the <profile-hex> is required. Ignore the rest:
@@ -104,6 +119,14 @@ func DoHIPsOfBase(dohBase string) []netip.Addr {
 				nextDNSv6Gen(nextDNSv6RangeA.Addr(), b),
 				nextDNSv6Gen(nextDNSv6RangeB.Addr(), b),
 			}
+		}
+	}
+	if pathStr, ok := strings.CutPrefix(dohBase, controlDBase); ok {
+		return []netip.Addr{
+			controlDv4One,
+			controlDv4Two,
+			controlDv6Gen(nextDNSv6RangeA.Addr(), pathStr),
+			controlDv6Gen(nextDNSv6RangeB.Addr(), pathStr),
 		}
 	}
 	return nil
@@ -213,6 +236,36 @@ func populate() {
 	// Wikimedia
 	addDoH(wikimediaDNSv4, "https://wikimedia-dns.org/dns-query")
 	addDoH(wikimediaDNSv6, "https://wikimedia-dns.org/dns-query")
+
+	// Control D
+	addDoH("76.76.2.0", "https://freedns.controld.com/p0")
+	addDoH("76.76.10.0", "https://freedns.controld.com/p0")
+	addDoH("2606:1a40::", "https://freedns.controld.com/p0")
+	addDoH("2606:1a40:1::", "https://freedns.controld.com/p0")
+
+	// Control D -Malware
+	addDoH("76.76.2.1", "https://freedns.controld.com/p1")
+	addDoH("76.76.10.1", "https://freedns.controld.com/p1")
+	addDoH("2606:1a40::1", "https://freedns.controld.com/p1")
+	addDoH("2606:1a40:1::1", "https://freedns.controld.com/p1")
+
+	// Control D -Malware + Ads
+	addDoH("76.76.2.2", "https://freedns.controld.com/p2")
+	addDoH("76.76.10.2", "https://freedns.controld.com/p2")
+	addDoH("2606:1a40::2", "https://freedns.controld.com/p2")
+	addDoH("2606:1a40:1::2", "https://freedns.controld.com/p2")
+
+	// Control D -Malware + Ads + Social
+	addDoH("76.76.2.3", "https://freedns.controld.com/p3")
+	addDoH("76.76.10.3", "https://freedns.controld.com/p3")
+	addDoH("2606:1a40::3", "https://freedns.controld.com/p3")
+	addDoH("2606:1a40:1::3", "https://freedns.controld.com/p3")
+
+	// Control D -Malware + Ads + Adult
+	addDoH("76.76.2.4", "https://freedns.controld.com/family")
+	addDoH("76.76.10.4", "https://freedns.controld.com/family")
+	addDoH("2606:1a40::4", "https://freedns.controld.com/family")
+	addDoH("2606:1a40:1::4", "https://freedns.controld.com/family")
 }
 
 var (
@@ -239,6 +292,13 @@ var (
 	// Wikimedia DNS server IPs (anycast)
 	wikimediaDNSv4Addr = netip.MustParseAddr(wikimediaDNSv4)
 	wikimediaDNSv6Addr = netip.MustParseAddr(wikimediaDNSv6)
+
+	// The Control D IPv6 ranges (primary and secondary). The customer ID is
+	// encoded in the ipv6 address is used (in base 36 form) as the DoH query
+	controlDv6RangeA = netip.MustParsePrefix("2606:1a40::/48")
+	controlDv6RangeB = netip.MustParsePrefix("2606:1a40:1::/48")
+	controlDv4One    = netip.MustParseAddr("76.76.2.22")
+	controlDv4Two    = netip.MustParseAddr("76.76.10.22")
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -252,10 +312,26 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 	return netip.AddrFrom16(a)
 }
 
+// controlDv6Gen generates a Control D IPv6 address from provided ip and id.
+//
+// The id is taken from the DoH query path component and represents a unique resolver configuration.
+// e.g. https://dns.controld.com/hyq3ipr2ct
+func controlDv6Gen(ip netip.Addr, id string) netip.Addr {
+	b := make([]byte, 8)
+	decoded, _ := strconv.ParseUint(id, 36, 64)
+	binary.BigEndian.PutUint64(b, decoded)
+	a := ip.AsSlice()
+	copy(a[6:14], b)
+	addr, _ := netip.AddrFromSlice(a)
+	return addr
+}
+
 // IPIsDoHOnlyServer reports whether ip is a DNS server that should only use
 // DNS-over-HTTPS (not regular port 53 DNS).
 func IPIsDoHOnlyServer(ip netip.Addr) bool {
 	return nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) ||
 		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip) ||
-		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr
+		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr ||
+		controlDv6RangeA.Contains(ip) || controlDv6RangeB.Contains(ip) ||
+		ip == controlDv4One || ip == controlDv4Two
 }
