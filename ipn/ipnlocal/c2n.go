@@ -49,7 +49,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/debug/goroutines":
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write(goroutines.ScrubbedGoroutineDump())
+		w.Write(goroutines.ScrubbedGoroutineDump(true))
 	case "/debug/prefs":
 		writeJSON(b.Prefs())
 	case "/debug/metrics":
