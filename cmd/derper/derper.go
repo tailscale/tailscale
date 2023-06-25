@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -146,6 +147,17 @@ func main() {
 		log.Fatalf("invalid server address: %v", err)
 	}
 
+	if *runSTUN {
+		go serveSTUN(listenHost, *stunPort)
+
+		// Keep derper in original process in dev mode.
+		// This is easier for SIGQUIT and debuggers.
+		if !*dev {
+			runNiceDERPChild()
+			return
+		}
+	}
+
 	cfg := loadConfig()
 
 	serveTLS := tsweb.IsProd443(*addr) || *certMode == "manual"
@@ -219,10 +231,6 @@ func main() {
 	}))
 	debug.Handle("traffic", "Traffic check", http.HandlerFunc(s.ServeDebugTraffic))
 
-	if *runSTUN {
-		go serveSTUN(listenHost, *stunPort)
-	}
-
 	quietLogger := log.New(logFilter{}, "", 0)
 	httpsrv := &http.Server{
 		Addr:     *addr,
@@ -241,7 +249,7 @@ func main() {
 	}
 
 	if serveTLS {
-		log.Printf("derper: serving on %s with TLS", *addr)
+		log.Printf("derper: serving on %s with TLS (pid %d)", *addr, os.Getpid())
 		var certManager certProvider
 		certManager, err = certProviderByCertMode(*certMode, *certDir, *hostname)
 		if err != nil {
@@ -317,11 +325,42 @@ func main() {
 		}
 		err = rateLimitedListenAndServeTLS(httpsrv)
 	} else {
-		log.Printf("derper: serving on %s", *addr)
+		log.Printf("derper: serving on %s (pid %d)", *addr, os.Getpid())
 		err = httpsrv.ListenAndServe()
 	}
 	if err != nil && err != http.ErrServerClosed {
 		log.Fatalf("derper: %v", err)
+	}
+}
+
+// runNiceDERPChild starts a child process at a slightly lower priority that
+// does everything except run the STUN server.
+//
+// This means that STUN packets get answered by a separate, higher-priority
+// process.
+func runNiceDERPChild() {
+	// Build an arg list, filtering out the --stun flag.
+	var args []string
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "stun" {
+			return
+		}
+		args = append(args, "-"+f.Name, f.Value.String())
+	})
+	args = append(args, "-stun=false")
+	bin, err := os.Executable()
+	if err != nil {
+		log.Fatalf("cannot find self: %v", err)
+	}
+	args = append([]string{"-n", "1", bin}, args...)
+	cmd := exec.Command("nice", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, _ := err.(*exec.ExitError); exitErr != nil {
+			os.Exit(exitErr.ExitCode())
+		}
+		os.Exit(1)
 	}
 }
 
@@ -366,7 +405,7 @@ func serveSTUN(host string, port int) {
 	if err != nil {
 		log.Fatalf("failed to open STUN listener: %v", err)
 	}
-	log.Printf("running STUN server on %v", pc.LocalAddr())
+	log.Printf("running STUN server on %v (pid %d)", pc.LocalAddr(), os.Getpid())
 	serverSTUNListener(context.Background(), pc.(*net.UDPConn))
 }
 

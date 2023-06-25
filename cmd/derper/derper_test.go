@@ -8,8 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"tailscale.com/net/stun"
 )
@@ -127,4 +133,90 @@ func TestNoContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSTUNChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping subprocess test on windows")
+	}
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "derper")
+	// TODO(crawshaw): most of this test is spent here building the binary.
+	// If we break out the derper main function into its own function
+	// (in the style of cmd/tailscale/cli) then we can call main directly
+	// from this process and save this time.
+	if err := exec.Command("go", "build", "-o", bin, "tailscale.com/cmd/derper").Run(); err != nil {
+		t.Fatalf("building cmd/derper: %v", err)
+	}
+
+	b := &iobuf{
+		runningSTUN: make(chan string, 1),
+		runningDERP: make(chan string, 1),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-stun", "-c", filepath.Join(tmp, "derper.cfg"), "-a", ":18421", "-stun-port", "18422")
+	cmd.Stderr = b
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var stunPID, derpPID string
+	select {
+	case stunPID = <-b.runningSTUN:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for STUN to start")
+	}
+	select {
+	case derpPID = <-b.runningDERP:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for DERP to start")
+	}
+	if stunPID == derpPID {
+		t.Errorf("STUN and DERP running in same process: %s", stunPID)
+	}
+	cmd.Process.Kill()
+	if t.Failed() {
+		t.Logf("output: %s", b)
+	}
+	cmd.Wait()
+}
+
+type iobuf struct {
+	runningSTUN chan string // sent STUN pid
+	runningDERP chan string // sent DERP pid
+
+	mu       sync.Mutex
+	b        []byte
+	seenSTUN bool
+	seenDERP bool
+}
+
+func (b *iobuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.b)
+}
+
+var stunRE = regexp.MustCompile(`running STUN server on .* \(pid (\d+)\)`)
+var derpRE = regexp.MustCompile(`derper: serving on .* \(pid (\d+)\)`)
+
+func (b *iobuf) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.b = append(b.b, p...)
+	if !b.seenSTUN {
+		if m := stunRE.FindSubmatch(b.b); len(m) == 2 {
+			b.seenSTUN = true
+			b.runningSTUN <- string(m[1])
+		}
+	}
+	if !b.seenDERP {
+		if m := derpRE.FindSubmatch(b.b); len(m) == 2 {
+			b.seenDERP = true
+			b.runningDERP <- string(m[1])
+		}
+	}
+	return len(p), nil
 }
