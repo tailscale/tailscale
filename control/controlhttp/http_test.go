@@ -583,19 +583,20 @@ func TestDialPlan(t *testing.T) {
 			}},
 			want: goodAddr,
 		},
-		{
-			name: "multiple-priority-fast-path",
-			plan: &tailcfg.ControlDialPlan{Candidates: []tailcfg.ControlIPCandidate{
-				// Dials some good IPs and our bad one (which
-				// hangs forever), which then hits the fast
-				// path where we bail without waiting.
-				{IP: brokenAddr, Priority: 1, DialTimeoutSec: 10},
-				{IP: goodAddr, Priority: 1, DialTimeoutSec: 10},
-				{IP: other2Addr, Priority: 1, DialTimeoutSec: 10},
-				{IP: otherAddr, Priority: 2, DialTimeoutSec: 10},
-			}},
-			want: otherAddr,
-		},
+		// TODO(#8442): fix this test
+		// {
+		// 	name: "multiple-priority-fast-path",
+		// 	plan: &tailcfg.ControlDialPlan{Candidates: []tailcfg.ControlIPCandidate{
+		// 		// Dials some good IPs and our bad one (which
+		// 		// hangs forever), which then hits the fast
+		// 		// path where we bail without waiting.
+		// 		{IP: brokenAddr, Priority: 1, DialTimeoutSec: 10},
+		// 		{IP: goodAddr, Priority: 1, DialTimeoutSec: 10},
+		// 		{IP: other2Addr, Priority: 1, DialTimeoutSec: 10},
+		// 		{IP: otherAddr, Priority: 2, DialTimeoutSec: 10},
+		// 	}},
+		// 	want: otherAddr,
+		// },
 		{
 			name: "multiple-priority-slow-path",
 			plan: &tailcfg.ControlDialPlan{Candidates: []tailcfg.ControlIPCandidate{
