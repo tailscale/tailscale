@@ -535,10 +535,10 @@ type Service struct {
 // Tailscale host. Location is optional and only set if
 // explicitly declared by a node.
 type Location struct {
-	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization, e.g "Canada"
-	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in lower case, e.g "ca"
-	City        string `json:",omitempty"` // User friendly city name, with proper capitalization, e.g. "Squamish"
-	CityCode    string `json:",omitempty"`
+	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization ("Canada")
+	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in upper case ("CA")
+	City        string `json:",omitempty"` // User friendly city name, with proper capitalization ("Squamish")
+	CityCode    string `json:",omitempty"` // TODO(charlotte): document
 
 	// Priority determines the priority an exit node is given when the
 	// location data between two or more nodes is tied.
