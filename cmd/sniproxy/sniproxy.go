@@ -26,6 +26,7 @@ import (
 
 var (
 	ports        = flag.String("ports", "443", "comma-separated list of ports to proxy")
+	wgPort       = flag.Int("wg-listen-port", 0, "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 	promoteHTTPS = flag.Bool("promote-https", true, "promote HTTP to HTTPS")
 )
 
@@ -40,6 +41,7 @@ func main() {
 	hostinfo.SetApp("sniproxy")
 
 	var s server
+	s.ts.Port = uint16(*wgPort)
 	defer s.ts.Close()
 
 	lc, err := s.ts.LocalClient()
