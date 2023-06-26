@@ -157,3 +157,26 @@ func TestChallenge(t *testing.T) {
 		t.Errorf("didn't round trip: %v != %v", back, pub)
 	}
 }
+
+// Test that NodePublic.Shard is uniformly distributed.
+func TestShard(t *testing.T) {
+	const N = 1_000
+	var shardCount [256]int
+	for i := 0; i < N; i++ {
+		shardCount[NewNode().Public().Shard()]++
+	}
+	e := float64(N) / 256 // expected
+	var x2 float64        // chi-squared
+	for _, c := range shardCount {
+		r := float64(c) - e // residual
+		x2 += r * r / e
+	}
+	t.Logf("x^2 = %v", x2)
+	if x2 > 512 { // really want x^2 =~ (256 - 1), but leave slop
+		t.Errorf("too much variation in shard distribution")
+		for i, c := range shardCount {
+			rj := float64(c) - e
+			t.Logf("shard[%v] = %v (off by %v)", i, c, rj)
+		}
+	}
+}
