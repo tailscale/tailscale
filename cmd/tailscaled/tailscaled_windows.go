@@ -50,6 +50,7 @@ import (
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
+	"tailscale.com/util/osdiag"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/wf"
@@ -127,7 +128,7 @@ var syslogf logger.Logf = logger.Discard
 // Windows started.
 func runWindowsService(pol *logpolicy.Policy) error {
 	go func() {
-		winutil.LogSupportInfo(log.Printf)
+		osdiag.LogSupportInfo(logger.WithPrefix(log.Printf, "Support Info: "), osdiag.LogSupportInfoReasonStartup)
 	}()
 
 	if winutil.GetPolicyInteger("LogSCMInteractions", 0) != 0 {
