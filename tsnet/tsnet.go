@@ -61,7 +61,7 @@ func inTest() bool { return flag.Lookup("test.v") != nil }
 
 // Server is an embedded Tailscale server.
 //
-// Its exported fields may be changed until the first call to Listen.
+// Its exported fields may be changed until the first method call.
 type Server struct {
 	// Dir specifies the name of the directory to use for
 	// state. If empty, a directory is selected automatically
@@ -107,6 +107,11 @@ type Server struct {
 	// ControlURL optionally specifies the coordination server URL.
 	// If empty, the Tailscale default is used.
 	ControlURL string
+
+	// Port is the UDP port to listen on for WireGuard and peer-to-peer
+	// traffic. If zero, a port is automatically selected. Leave this
+	// field at zero unless you know what you are doing.
+	Port uint16
 
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
@@ -502,7 +507,7 @@ func (s *Server) start() (reterr error) {
 	sys := new(tsd.System)
 	s.dialer = &tsdial.Dialer{Logf: logf} // mutated below (before used)
 	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
-		ListenPort:   0,
+		ListenPort:   s.Port,
 		NetMon:       s.netMon,
 		Dialer:       s.dialer,
 		SetSubsystem: sys.Set,
