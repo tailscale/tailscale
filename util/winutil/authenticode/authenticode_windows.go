@@ -260,6 +260,9 @@ func extractCertBlob(hfile windows.Handle) ([]byte, error) {
 
 	certsAny, err := pef.DataDirectoryEntry(pe.IMAGE_DIRECTORY_ENTRY_SECURITY)
 	if err != nil {
+		if errors.Is(err, pe.ErrNotPresent) {
+			err = ErrSigNotFound
+		}
 		return nil, err
 	}
 
