@@ -212,9 +212,16 @@ func ipForwardingEnabledLinux(p protocol, iface string) (bool, error) {
 		}
 		return false, err
 	}
-	on, err := strconv.ParseBool(string(bytes.TrimSpace(bs)))
+
+	val, err := strconv.ParseInt(string(bytes.TrimSpace(bs)), 10, 32)
 	if err != nil {
 		return false, fmt.Errorf("couldn't parse %s: %w", k, err)
 	}
+	// 0 = disabled, 1 = enabled, 2 = enabled (but uncommon)
+	// https://github.com/tailscale/tailscale/issues/8375
+	if val < 0 || val > 2 {
+		return false, fmt.Errorf("unexpected value %d for %s", val, k)
+	}
+	on := val == 1 || val == 2
 	return on, nil
 }
