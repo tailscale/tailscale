@@ -100,7 +100,7 @@ func (c *nlConn) Receive() (message, error) {
 				typ = "RTM_DELADDR"
 			}
 
-			// label attributes are seemingly only populated for ipv4 addresses in the wild.
+			// label attributes are seemingly only populated for IPv4 addresses in the wild.
 			label := rmsg.Attributes.Label
 			if label == "" {
 				itf, err := net.InterfaceByIndex(int(rmsg.Index))
