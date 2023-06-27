@@ -1331,7 +1331,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pingTypeStr := r.FormValue("type")
-	if ipStr == "" {
+	if pingTypeStr == "" {
 		http.Error(w, "missing 'type' parameter", 400)
 		return
 	}
