@@ -1647,7 +1647,7 @@ func checkIPv6(logf logger.Logf) error {
 	}
 	bs, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
 	if err != nil {
-		// Be conservative if we can't find the ipv6 configuration knob.
+		// Be conservative if we can't find the IPv6 configuration knob.
 		return err
 	}
 	disabled, err := strconv.ParseBool(strings.TrimSpace(string(bs)))
