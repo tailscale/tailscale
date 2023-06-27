@@ -1262,7 +1262,14 @@ func (r *linuxRouter) addNetfilterChains() error {
 
 	for _, ipt := range r.netfilterFamilies() {
 		if err := create(ipt, "filter", "ts-input"); err != nil {
-			return err
+			if ipt == r.ipt6 {
+				r.v6Available = false
+				r.v6NATAvailable = false
+				r.logf("addNetfilterChains ipt6 failed, disabling IPv6 and continuing. Error was: %v", err)
+				continue
+			} else {
+				return err
+			}
 		}
 		if err := create(ipt, "filter", "ts-forward"); err != nil {
 			return err
@@ -1287,7 +1294,8 @@ func (r *linuxRouter) addNetfilterBase() error {
 	}
 	if r.v6Available {
 		if err := r.addNetfilterBase6(); err != nil {
-			return err
+			r.v6Available = false
+			r.logf("addNetfilterBase6 failed, disabling IPv6 and continuing. Error was: %v", err)
 		}
 	}
 	return nil
