@@ -465,7 +465,16 @@ func runNetworkLockSign(ctx context.Context, args []string) error {
 		}
 	}
 
-	return localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey.Verifier()))
+	err := localClient.NetworkLockSign(ctx, nodeKey, []byte(rotationKey.Verifier()))
+	// Provide a better help message for when someone clicks through the signing flow
+	// on the wrong device.
+	if err != nil && strings.Contains(err.Error(), "this node is not trusted by network lock") {
+		fmt.Fprintln(os.Stderr, "Error: Signing is not available on this device because it does not have a trusted tailnet lock key.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Try again on a signing device instead. Tailnet admins can see signing devices on the admin panel.")
+		fmt.Fprintln(os.Stderr)
+	}
+	return err
 }
 
 var nlDisableCmd = &ffcli.Command{
