@@ -45,7 +45,8 @@ func (t ICMP4Type) String() string {
 type ICMP4Code uint8
 
 const (
-	ICMP4NoCode ICMP4Code = 0
+	ICMP4NoCode              ICMP4Code = 0x00
+	ICMP4FragmentationNeeded           = 0x04
 )
 
 // ICMP4Header is an IPv4+ICMPv4 header.

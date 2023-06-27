@@ -56,6 +56,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/stun"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -2090,14 +2091,14 @@ var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DEL
 // 3. Send a single ping with ./tool/go run ./cmd/tailscale ping --mtu=1000 <host>
 
 var usefulMtus = [...]int{
-	0,
-	//576,  // Smallest MTU for IPv4, probably useless?
-	//1124, // An observed max mtu in the wild, maybe 1100 instead?
-	//1280, // Smallest MTU for IPv6, current default
-	//1400, // A little less, for tunnels or such
-	//1500, // Most common real world MTU
-	//8000, // Some jumbo frames are this size
-	//9000, // Most jumbo frames are this size or slightly larger
+	//0,
+	576,  // Smallest MTU for IPv4, probably useless?
+	1124, // An observed max mtu in the wild, maybe 1100 instead?
+	1280, // Smallest MTU for IPv6, current default
+	1400, // A little less, for tunnels or such
+	1500, // Most common real world MTU
+	8000, // Some jumbo frames are this size
+	9000, // Most jumbo frames are this size or slightly larger
 }
 
 // sendDiscoMessage sends discovery message m to dstDisco at dst.
@@ -3319,6 +3320,39 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 		}
 	}
 	return true
+}
+
+// PathMTU returns the path MTU to the peer at dst (tailscale address)
+func (c *Conn) PathMTU(dst netip.Addr) int {
+	// TODO(s): this is method is pretty expensive. Reduce lookups before
+	// removing the envknob guard.
+	if !debugPMTUD() {
+		return int(tstun.DefaultMTU())
+	}
+
+	peer, ok := c.netMap.PeerByTailscaleIP(dst)
+	if !ok {
+		return int(tstun.DefaultMTU())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return int(tstun.DefaultMTU())
+	}
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	if !ok {
+		return int(tstun.DefaultMTU())
+	}
+
+	now := mono.Now()
+	if !ep.bestAddr.AddrPort.IsValid() || now.After(ep.trustBestAddrUntil) {
+		// We have not done the disco pings yet. ep.send() will kick that off
+		// down the line.
+		return int(tstun.DefaultMTU())
+	}
+
+	return ep.bestAddr.mtu
 }
 
 func (c *Conn) onPortMapChanged() { c.ReSTUN("portmap-changed") }
