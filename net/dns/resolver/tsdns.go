@@ -724,7 +724,7 @@ func (r *Resolver) parseViaDomain(domain dnsname.FQDN, typ dns.Type) (netip.Addr
 		return netip.Addr{}, false // badly formed, don't respond
 	}
 
-	// MapVia will never error when given an ipv4 netip.Prefix.
+	// MapVia will never error when given an IPv4 netip.Prefix.
 	out, _ := tsaddr.MapVia(uint32(prefix), netip.PrefixFrom(ip4, ip4.BitLen()))
 	return out.Addr(), true
 }

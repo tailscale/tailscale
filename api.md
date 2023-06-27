@@ -101,8 +101,8 @@ You can also [list all devices in the tailnet](#list-tailnet-devices) to get the
 ``` jsonc
 {
   // addresses (array of strings) is a list of Tailscale IP
-  // addresses for the device, including both ipv4 (formatted as 100.x.y.z)
-  // and ipv6 (formatted as fd7a:115c:a1e0:a:b:c:d:e) addresses.
+  // addresses for the device, including both IPv4 (formatted as 100.x.y.z)
+  // and IPv6 (formatted as fd7a:115c:a1e0:a:b:c:d:e) addresses.
   "addresses": [
     "100.87.74.78",
     "fd7a:115c:a1e0:ac82:4843:ca90:697d:c36e"
