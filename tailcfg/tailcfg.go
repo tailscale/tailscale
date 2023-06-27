@@ -535,15 +535,22 @@ type Service struct {
 // Tailscale host. Location is optional and only set if
 // explicitly declared by a node.
 type Location struct {
-	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization, e.g "Canada"
-	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in lower case, e.g "ca"
-	City        string `json:",omitempty"` // User friendly city name, with proper capitalization, e.g. "Squamish"
-	CityCode    string `json:",omitempty"`
+	Country     string `json:",omitempty"` // User friendly country name, with proper capitalization ("Canada")
+	CountryCode string `json:",omitempty"` // ISO 3166-1 alpha-2 in upper case ("CA")
+	City        string `json:",omitempty"` // User friendly city name, with proper capitalization ("Squamish")
 
-	// Priority determines the priority an exit node is given when the
-	// location data between two or more nodes is tied.
-	// A higher value indicates that the exit node is more preferable
-	// for use.
+	// CityCode is a short code representing the city in upper case.
+	// CityCode is used to disambiguate a city from another location
+	// with the same city name. It uniquely identifies a particular
+	// geographical location, within the tailnet.
+	// IATA, ICAO or ISO 3166-2 codes are recommended ("YSE")
+	CityCode string `json:",omitempty"`
+
+	// Priority determines the order of use of an exit node when a
+	// location based preference matches more than one exit node,
+	// the node with the highest priority wins. Nodes of equal
+	// probability may be selected arbitrarily.
+	//
 	// A value of 0 means the exit node does not have a priority
 	// preference. A negative int is not allowed.
 	Priority int `json:",omitempty"`
