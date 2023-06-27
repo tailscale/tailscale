@@ -970,6 +970,39 @@ func updateMTUMetricsLocked(sp sentPing, logf logger.Logf) {
 	}
 }
 
+// PathMTU returns the path MTU to the peer at dst (tailscale address)
+func (c *Conn) PathMTU(dst netip.Addr) int {
+	// TODO(s): this is method is pretty expensive. Reduce lookups before
+	// removing the envknob guard.
+	if !debugPMTUD() {
+		return int(tstun.DefaultMTU())
+	}
+
+	peer, ok := c.netMap.PeerByTailscaleIP(dst)
+	if !ok {
+		return int(tstun.DefaultMTU())
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return int(tstun.DefaultMTU())
+	}
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	if !ok {
+		return int(tstun.DefaultMTU())
+	}
+
+	now := mono.Now()
+	if !ep.bestAddr.AddrPort.IsValid() || now.After(ep.trustBestAddrUntil) {
+		// We have not done the disco pings yet. ep.send() will kick that off
+		// down the line.
+		return int(tstun.DefaultMTU())
+	}
+
+	return ep.bestAddr.mtu
+}
+
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
 //

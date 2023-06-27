@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -455,6 +456,60 @@ func echoRespondToAll(p *packet.Parsed, t *tstun.Wrapper) filter.Response {
 	return filter.Accept
 }
 
+var debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+
+func (e *userspaceEngine) injectICMPPTB(p *packet.Parsed, mtu int) {
+	var icmph packet.Header
+	var payload []byte
+	if p.Src.Addr().Is4() {
+		// From https://www.ietf.org/rfc/rfc1191.html#section-4
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |     Type      |     Code      |          Checksum             |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |           unused = 0          |             MTU               |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |      Internet Header + 64 bits of Original Datagram Data      |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		icmph = packet.ICMP4Header{
+			IP4Header: packet.IP4Header{
+				IPProto: ipproto.ICMPv4,
+				Src:     p.Dst.Addr(),
+				Dst:     p.Src.Addr(),
+			},
+			Type: packet.ICMP4Unreachable,
+			Code: packet.ICMP4FragmentationNeeded,
+		}
+		payload = make([]byte, 4+20+8)
+		binary.BigEndian.PutUint32(payload, uint32(mtu))
+		copy(payload[4:], p.Buffer()[:len(payload)-4])
+	} else {
+		// https://www.ietf.org/rfc/rfc4443.html#section-3.2
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |     Type      |     Code      |          Checksum             |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |                             MTU                               |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		// |                    As much of invoking packet                 |
+		// +               as possible without the ICMPv6 packet           +
+		// |               exceeding the minimum IPv6 MTU [IPv6]           |
+		// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		icmph = packet.ICMP6Header{
+			IP6Header: packet.IP6Header{
+				IPProto: ipproto.ICMPv6,
+				Src:     p.Dst.Addr(),
+				Dst:     p.Src.Addr(),
+			},
+			Type: packet.ICMP6PacketTooBig,
+			Code: packet.ICMP6NoCode,
+		}
+		// RFC says add as much of invoking packet, but headers should be enough.
+		payload = make([]byte, 4+40+8)
+		binary.BigEndian.PutUint32(payload, uint32(mtu))
+		copy(payload[4:], p.Buffer()[:len(payload)-4])
+	}
+	e.tundev.InjectInboundCopy(packet.Generate(icmph, payload))
+}
+
 // handleLocalPackets inspects packets coming from the local network
 // stack, and intercepts any packets that should be handled by
 // tailscaled directly. Other packets are allowed to proceed into the
@@ -472,6 +527,20 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 			// ourselves, and loop it back into macOS.
 			t.InjectInboundCopy(p.Buffer())
 			metricReflectToOS.Add(1)
+			return filter.Drop
+		}
+	}
+
+	if debugPMTUD() {
+		var tailscaleOverhead = 20 + 8 + 32 // IP + UDP + WireGuard
+		if p.IPVersion == 6 {
+			tailscaleOverhead += 20
+		}
+		// TODO what if it is not an IP packet? That is, p.IPVersion == 0
+		// TODO consts to avoid numbers.
+		pmtu := e.magicConn.PathMTU(p.Dst.Addr())
+		if len(p.Buffer())+tailscaleOverhead > pmtu {
+			e.injectICMPPTB(p, pmtu)
 			return filter.Drop
 		}
 	}
