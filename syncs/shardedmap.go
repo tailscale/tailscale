@@ -59,9 +59,36 @@ func (m *ShardedMap[K, V]) Get(key K) (value V) {
 	return
 }
 
+// Mutate atomically mutates m[k] by calling mutator.
+//
+// The mutator function is called with the old value (or its zero value) and
+// whether it existed in the map and it returns the new value and whether it
+// should be set in the map (true) or deleted from the map (false).
+//
+// It returns the change in size of the map as a result of the mutation, one of
+// -1 (delete), 0 (change), or 1 (addition).
+func (m *ShardedMap[K, V]) Mutate(key K, mutator func(oldValue V, oldValueExisted bool) (newValue V, keep bool)) (sizeDelta int) {
+	shard := m.shard(key)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	oldV, oldOK := shard.m[key]
+	newV, newOK := mutator(oldV, oldOK)
+	if newOK {
+		shard.m[key] = newV
+		if oldOK {
+			return 0
+		}
+		return 1
+	}
+	delete(shard.m, key)
+	if oldOK {
+		return -1
+	}
+	return 0
+}
+
 // Set sets m[key] = value.
 //
-// It reports whether the map grew in size (that is, whether key was not already
 // present in m).
 func (m *ShardedMap[K, V]) Set(key K, value V) (grew bool) {
 	shard := m.shard(key)
