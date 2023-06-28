@@ -42,7 +42,7 @@ func (panicLogWriter) Write(b []byte) (int, error) {
 	// interfaces.GetState & tshttpproxy code to allow pushing
 	// down a Logger yet. TODO(bradfitz): do that refactoring once
 	// 1.2.0 is out.
-	if bytes.Contains(b, []byte("tshttpproxy: ")) {
+	if bytes.Contains(b, []byte("tshttpproxy: ")) || bytes.Contains(b, []byte("runtime/panic.go:")) {
 		os.Stderr.Write(b)
 		return len(b), nil
 	}
