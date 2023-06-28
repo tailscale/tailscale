@@ -45,7 +45,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/policy"
 	"tailscale.com/log/sockstatlog"
-	"tailscale.com/logpolicy"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -314,7 +313,12 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	}
 
 	netMon := sys.NetMon.Get()
-	b.sockstatLogger, err = sockstatlog.NewLogger(logpolicy.LogsDir(logf), logf, logID, netMon)
+	// Get the stored logdir here if it exists
+	logDir := ""
+	if v, err := store.ReadState(ipn.LogDirStateKey); err == nil {
+		logDir = string(v)
+	}
+	b.sockstatLogger, err = sockstatlog.NewLogger(logDir, logf, logID, netMon)
 	if err != nil {
 		log.Printf("error setting up sockstat logger: %v", err)
 	}

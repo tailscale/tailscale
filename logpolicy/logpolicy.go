@@ -216,9 +216,9 @@ func LogsDir(logf logger.Logf) string {
 			// as a regular user (perhaps in userspace-networking/SOCK5 mode) and we should
 			// just use the %LocalAppData% instead. In a user context, %LocalAppData% isn't
 			// subject to random deletions from Windows system updates.
-			dir := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
-			if winProgramDataAccessible(dir) {
-				logf("logpolicy: using dir %v", dir)
+			d := filepath.Join(os.Getenv("ProgramData"), "Tailscale")
+			if dir, err := os.MkdirTemp(d, "tailscale-log-*"); err == nil {
+				logf("logpolicy: using directory in Program Data dir %v", dir)
 				return dir
 			}
 		}
@@ -230,8 +230,11 @@ func LogsDir(logf logger.Logf) string {
 		// systems-d. For example, Ubuntu 18.04 (Bionic Beaver) is 237.
 		systemdStateDir := os.Getenv("STATE_DIRECTORY")
 		if systemdStateDir != "" {
-			logf("logpolicy: using $STATE_DIRECTORY, %q", systemdStateDir)
-			return systemdStateDir
+			dir, err := os.MkdirTemp(systemdStateDir, "tailscale-log-*")
+			if err == nil {
+				logf("logpolicy: using directory in $STATE_DIRECTORY, %q", dir)
+				return dir
+			}
 		}
 	}
 
@@ -239,24 +242,30 @@ func LogsDir(logf logger.Logf) string {
 	if d := paths.DefaultTailscaledStateFile(); d != "" {
 		d = filepath.Dir(d) // directory of e.g. "/var/lib/tailscale/tailscaled.state"
 		if err := os.MkdirAll(d, 0700); err == nil {
-			logf("logpolicy: using system state directory %q", d)
-			return d
+			if dir, err := os.MkdirTemp(d, "tailscale-log-*"); err == nil {
+				logf("logpolicy: using directory in system state directory %q", dir)
+				return dir
+			}
 		}
 	}
 
 	cacheDir, err := os.UserCacheDir()
 	if err == nil {
 		d := filepath.Join(cacheDir, "Tailscale")
-		logf("logpolicy: using UserCacheDir, %q", d)
-		return d
+		if dir, err := os.MkdirTemp(d, "tailscale-log-*"); err == nil {
+			logf("logpolicy: using directory in UserCacheDir, %q", dir)
+			return dir
+		}
 	}
 
 	// Use the current working directory, unless we're being run by a
 	// service manager that sets it to /.
 	wd, err := os.Getwd()
 	if err == nil && wd != "/" {
-		logf("logpolicy: using current directory, %q", wd)
-		return wd
+		if dir, err := os.MkdirTemp(wd, "tailscale-log-*"); err == nil {
+			logf("logpolicy: using directory in current directory, %q", dir)
+			return dir
+		}
 	}
 
 	// No idea where to put stuff. Try to create a temp dir. It'll

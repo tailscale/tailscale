@@ -32,6 +32,7 @@ import (
 	"tailscale.com/cmd/tailscaled/childproc"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ipn/ipnserver"
 	"tailscale.com/ipn/store"
@@ -342,7 +343,38 @@ func run() error {
 	}
 	sys.Set(netMon)
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon)
+	// Load the config from state before starting the logger
+	if args.statepath == "" && args.statedir == "" {
+		log.Fatalf("--statedir (or at least --state) is required")
+	}
+	// We have some in-memory thing that remembers where the
+	// statedir is. We should use it to read the name of the log
+	// file out of the state store. If it doesn't exist, we should
+	// make it.
+
+	// Pull the path out here and use newwithconfig
+	store, err := store.New(logf, statePathOrDefault())
+	if err != nil {
+		return fmt.Errorf("store.New: %w", err)
+	}
+	sys.Set(store)
+
+	// At this point we have read the state off of the disk and
+	// can look up the log file directory.
+
+	logDir := ""
+	if v, err := store.ReadState(ipn.LogDirStateKey); err == nil {
+		logDir = string(v)
+	}
+	// XXX ignore other errors?
+	if logDir == "" {
+		// Then we need to set the log dir and store it to the config
+		logDir = logpolicy.LogsDir(logf)
+		if err := store.WriteState(ipn.LogDirStateKey, []byte(logDir)); err != nil {
+			return fmt.Errorf("store.New: %w", err)
+		}
+	}
+	pol := logpolicy.NewWithConfigPath(logtail.CollectionNode, logDir, "", netMon)
 	pol.SetVerbosityLevel(args.verbose)
 	logPol = pol
 	defer func() {
@@ -380,9 +412,6 @@ func run() error {
 		return nil
 	}
 
-	if args.statepath == "" && args.statedir == "" {
-		log.Fatalf("--statedir (or at least --state) is required")
-	}
 	if err := trySynologyMigration(statePathOrDefault()); err != nil {
 		log.Printf("error in synology migration: %v", err)
 	}
@@ -523,12 +552,6 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	}
 
 	opts := ipnServerOpts()
-
-	store, err := store.New(logf, statePathOrDefault())
-	if err != nil {
-		return nil, fmt.Errorf("store.New: %w", err)
-	}
-	sys.Set(store)
 
 	lb, err := ipnlocal.NewLocalBackend(logf, logID, sys, opts.LoginFlags)
 	if err != nil {

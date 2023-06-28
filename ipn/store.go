@@ -52,6 +52,9 @@ const (
 	// CurrentProfileStateKey is the key under which we store the current
 	// profile.
 	CurrentProfileStateKey = StateKey("_current-profile")
+
+	// Log directory is the path of the directory where we store logs.
+	LogDirStateKey = StateKey("logdir")
 )
 
 // CurrentProfileID returns the StateKey that stores the
