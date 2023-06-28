@@ -725,7 +725,8 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 // the health check, rather than just a string.
 func upWorthyWarning(s string) bool {
 	return strings.Contains(s, healthmsg.TailscaleSSHOnBut) ||
-		strings.Contains(s, healthmsg.WarnAcceptRoutesOff)
+		strings.Contains(s, healthmsg.WarnAcceptRoutesOff) ||
+		strings.Contains(s, healthmsg.LockedOut)
 }
 
 func checkUpWarnings(ctx context.Context) {
