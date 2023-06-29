@@ -113,6 +113,9 @@ type Server struct {
 	// field at zero unless you know what you are doing.
 	Port uint16
 
+	// Additional tags to advertise to Tailnet.
+	AdvertiseTags []string
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -567,6 +570,7 @@ func (s *Server) start() (reterr error) {
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
 	prefs.ControlURL = s.ControlURL
+	prefs.AdvertiseTags = s.AdvertiseTags
 	authKey := s.getAuthKey()
 	err = lb.Start(ipn.Options{
 		UpdatePrefs: prefs,
