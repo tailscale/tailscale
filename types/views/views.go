@@ -10,11 +10,12 @@ import (
 	"errors"
 	"net/netip"
 
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 	"tailscale.com/net/tsaddr"
 )
 
-func unmarshalJSON[T any](b []byte, x *[]T) error {
+func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
 	if *x != nil {
 		return errors.New("already initialized")
 	}
@@ -64,7 +65,7 @@ type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
 func (v SliceView[T, V]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (v *SliceView[T, V]) UnmarshalJSON(b []byte) error { return unmarshalJSON(b, &v.ж) }
+func (v *SliceView[T, V]) UnmarshalJSON(b []byte) error { return unmarshalSliceFromJSON(b, &v.ж) }
 
 // IsNil reports whether the underlying slice is nil.
 func (v SliceView[T, V]) IsNil() bool { return v.ж == nil }
@@ -119,7 +120,7 @@ func (v Slice[T]) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (v *Slice[T]) UnmarshalJSON(b []byte) error {
-	return unmarshalJSON(b, &v.ж)
+	return unmarshalSliceFromJSON(b, &v.ж)
 }
 
 // IsNil reports whether the underlying slice is nil.
@@ -330,6 +331,30 @@ func (m Map[K, V]) Get(k K) V {
 func (m Map[K, V]) GetOk(k K) (V, bool) {
 	v, ok := m.ж[k]
 	return v, ok
+}
+
+// MarshalJSON implements json.Marshaler.
+func (m Map[K, V]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.ж)
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// It should only be called on an uninitialized Map.
+func (m *Map[K, V]) UnmarshalJSON(b []byte) error {
+	if m.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &m.ж)
+}
+
+// AsMap returns a shallow-clone of the underlying map.
+// If V is a pointer type, it is the caller's responsibility to make sure
+// the values are immutable.
+func (m *Map[K, V]) AsMap() map[K]V {
+	if m == nil {
+		return nil
+	}
+	return maps.Clone(m.ж)
 }
 
 // MapRangeFn is the func called from a Map.Range call.
