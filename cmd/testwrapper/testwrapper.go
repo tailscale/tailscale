@@ -239,6 +239,11 @@ func main() {
 
 		failed := false
 		toRetry := make(map[string][]string) // pkg -> tests to retry
+		f, err := os.Create("test_attempts.json")
+		if err != nil {
+			log.Printf("error creating test attempt json file: %v", err)
+		}
+		defer f.Close()
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
 			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
