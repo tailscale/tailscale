@@ -166,6 +166,16 @@ func TestVarzHandler(t *testing.T) {
 			"control_save_config{reason=\"fun\"} 1\ncontrol_save_config{reason=\"new\"} 1\ncontrol_save_config{reason=\"updated\"} 1\n",
 		},
 		{
+			"metrics_label_map_unlabeled",
+			"foo",
+			(func() *metrics.LabelMap {
+				m := &metrics.LabelMap{Label: ""}
+				m.Add("a", 1)
+				return m
+			})(),
+			"foo{label=\"a\"} 1\n",
+		},
+		{
 			"expvar_label_map",
 			"counter_labelmap_keyname_m",
 			func() *expvar.Map {
