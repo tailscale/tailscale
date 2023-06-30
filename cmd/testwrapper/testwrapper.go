@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 	"tailscale.com/cmd/testwrapper/flakytest"
 )
 
@@ -34,6 +33,8 @@ type testAttempt struct {
 	outcome       string // "pass", "fail", "skip"
 	logs          bytes.Buffer
 	isMarkedFlaky bool // set if the test is marked as flaky
+
+	pkgFinished bool
 }
 
 type testName struct {
@@ -60,7 +61,12 @@ type goTestOutput struct {
 
 var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 
-func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string) []*testAttempt {
+// runTests runs the tests in pt and sends the results on ch. It sends a
+// testAttempt for each test and a final testAttempt per pkg with pkgFinished
+// set to true.
+// It calls close(ch) when it's done.
+func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) {
+	defer close(ch)
 	args := []string{"test", "-json", pt.pattern}
 	args = append(args, otherArgs...)
 	if len(pt.tests) > 0 {
@@ -92,7 +98,6 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 
 	jd := json.NewDecoder(r)
 	resultMap := make(map[testName]*testAttempt)
-	var out []*testAttempt
 	for {
 		var goOutput goTestOutput
 		if err := jd.Decode(&goOutput); err != nil {
@@ -102,6 +107,16 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			panic(err)
 		}
 		if goOutput.Test == "" {
+			switch goOutput.Action {
+			case "fail", "pass", "skip":
+				ch <- &testAttempt{
+					name: testName{
+						pkg: goOutput.Package,
+					},
+					outcome:     goOutput.Action,
+					pkgFinished: true,
+				}
+			}
 			continue
 		}
 		name := testName{
@@ -124,7 +139,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			}
 		case "skip", "pass", "fail":
 			resultMap[name].outcome = goOutput.Action
-			out = append(out, resultMap[name])
+			ch <- resultMap[name]
 		case "output":
 			if strings.TrimSpace(goOutput.Output) == flakytest.FlakyTestLogMessage {
 				resultMap[name].isMarkedFlaky = true
@@ -134,7 +149,6 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		}
 	}
 	<-done
-	return out
 }
 
 func main() {
@@ -186,13 +200,22 @@ func main() {
 			attempt: 1,
 		},
 	}
-
-	printPkgStatus := func(pkgName string, failed bool) {
-		if failed {
-			fmt.Println("FAIL\t", pkgName)
-		} else {
-			fmt.Println("ok\t", pkgName)
+	printPkgOutcome := func(pkg, outcome string, attempt int) {
+		if outcome == "skip" {
+			fmt.Printf("?\t%s [skipped/no tests] \n", pkg)
+			return
 		}
+		if outcome == "pass" {
+			outcome = "ok"
+		}
+		if outcome == "fail" {
+			outcome = "FAIL"
+		}
+		if attempt > 1 {
+			fmt.Printf("%s\t%s [attempt=%d]\n", outcome, pkg, attempt)
+			return
+		}
+		fmt.Printf("%s\t%s\n", outcome, pkg)
 	}
 
 	for len(toRun) > 0 {
@@ -210,25 +233,12 @@ func main() {
 		failed := false
 		toRetry := make(map[string][]string) // pkg -> tests to retry
 		for _, pt := range thisRun.tests {
-			output := runTests(ctx, thisRun.attempt, pt, otherArgs)
-			slices.SortFunc(output, func(i, j *testAttempt) bool {
-				if c := strings.Compare(i.name.pkg, j.name.pkg); c < 0 {
-					return true
-				} else if c > 0 {
-					return false
-				}
-				return strings.Compare(i.name.name, j.name.name) <= 0
-			})
-
-			lastPkg := ""
-			lastPkgFailed := false
-			for _, tr := range output {
-				if lastPkg == "" {
-					lastPkg = tr.name.pkg
-				} else if lastPkg != tr.name.pkg {
-					printPkgStatus(lastPkg, lastPkgFailed)
-					lastPkg = tr.name.pkg
-					lastPkgFailed = false
+			ch := make(chan *testAttempt)
+			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
+			for tr := range ch {
+				if tr.pkgFinished {
+					printPkgOutcome(tr.name.pkg, tr.outcome, thisRun.attempt)
+					continue
 				}
 				if *v || tr.outcome == "fail" {
 					io.Copy(os.Stdout, &tr.logs)
@@ -236,14 +246,12 @@ func main() {
 				if tr.outcome != "fail" {
 					continue
 				}
-				lastPkgFailed = true
 				if tr.isMarkedFlaky {
 					toRetry[tr.name.pkg] = append(toRetry[tr.name.pkg], tr.name.name)
 				} else {
 					failed = true
 				}
 			}
-			printPkgStatus(lastPkg, lastPkgFailed)
 		}
 		if failed {
 			fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
