@@ -1,10 +1,11 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// NOTE: linux_{386,loong64,arm,armbe} are currently unsupported due to missing
+// NOTE: linux_{arm64, x86} are the only two currently supported archs due to missing
 // support in upstream dependencies.
 
-//go:build !linux || (linux && (386 || loong64 || arm || armbe))
+// TODO(#8502): add support for more architectures
+//go:build !linux || (linux && !(arm64 || amd64))
 
 package linuxfw
 
