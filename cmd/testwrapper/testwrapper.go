@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slices"
 	"tailscale.com/cmd/testwrapper/flakytest"
 )
 
@@ -174,58 +175,96 @@ func main() {
 	}
 	pattern, otherArgs := args[0], args[1:]
 
-	toRun := []*packageTests{ // packages still to test
-		{pattern: pattern},
+	type nextRun struct {
+		tests   []*packageTests
+		attempt int
 	}
 
-	pkgAttempts := make(map[string]int) // tracks how many times we've tried a package
+	toRun := []*nextRun{
+		{
+			tests:   []*packageTests{{pattern: pattern}},
+			attempt: 1,
+		},
+	}
 
-	attempt := 0
+	printPkgStatus := func(pkgName string, failed bool) {
+		if failed {
+			fmt.Println("FAIL\t", pkgName)
+		} else {
+			fmt.Println("ok\t", pkgName)
+		}
+	}
+
 	for len(toRun) > 0 {
-		attempt++
-		var pt *packageTests
-		pt, toRun = toRun[0], toRun[1:]
+		var thisRun *nextRun
+		thisRun, toRun = toRun[0], toRun[1:]
 
-		toRetry := make(map[string][]string) // pkg -> tests to retry
+		if thisRun.attempt >= maxAttempts {
+			fmt.Println("max attempts reached")
+			os.Exit(1)
+		}
+		if thisRun.attempt > 1 {
+			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\n", thisRun.attempt)
+		}
 
 		failed := false
-		for _, tr := range runTests(ctx, attempt, pt, otherArgs) {
-			if *v || tr.outcome == "fail" {
-				io.Copy(os.Stderr, &tr.logs)
+		toRetry := make(map[string][]string) // pkg -> tests to retry
+		for _, pt := range thisRun.tests {
+			output := runTests(ctx, thisRun.attempt, pt, otherArgs)
+			slices.SortFunc(output, func(i, j *testAttempt) bool {
+				if c := strings.Compare(i.name.pkg, j.name.pkg); c < 0 {
+					return true
+				} else if c > 0 {
+					return false
+				}
+				return strings.Compare(i.name.name, j.name.name) <= 0
+			})
+
+			lastPkg := ""
+			lastPkgFailed := false
+			for _, tr := range output {
+				if lastPkg == "" {
+					lastPkg = tr.name.pkg
+				} else if lastPkg != tr.name.pkg {
+					printPkgStatus(lastPkg, lastPkgFailed)
+					lastPkg = tr.name.pkg
+					lastPkgFailed = false
+				}
+				if *v || tr.outcome == "fail" {
+					io.Copy(os.Stdout, &tr.logs)
+				}
+				if tr.outcome != "fail" {
+					continue
+				}
+				lastPkgFailed = true
+				if tr.isMarkedFlaky {
+					toRetry[tr.name.pkg] = append(toRetry[tr.name.pkg], tr.name.name)
+				} else {
+					failed = true
+				}
 			}
-			if tr.outcome != "fail" {
-				continue
-			}
-			if tr.isMarkedFlaky {
-				toRetry[tr.name.pkg] = append(toRetry[tr.name.pkg], tr.name.name)
-			} else {
-				failed = true
-			}
+			printPkgStatus(lastPkg, lastPkgFailed)
 		}
 		if failed {
+			fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
 			os.Exit(1)
+		}
+		if len(toRetry) == 0 {
+			continue
 		}
 		pkgs := maps.Keys(toRetry)
 		sort.Strings(pkgs)
+		nextRun := &nextRun{
+			attempt: thisRun.attempt + 1,
+		}
 		for _, pkg := range pkgs {
 			tests := toRetry[pkg]
 			sort.Strings(tests)
-			pkgAttempts[pkg]++
-			if pkgAttempts[pkg] >= maxAttempts {
-				fmt.Println("Too many attempts for flaky tests:", pkg, tests)
-				continue
-			}
-			fmt.Println("\nRetrying flaky tests:", pkg, tests)
-			toRun = append(toRun, &packageTests{
+			nextRun.tests = append(nextRun.tests, &packageTests{
 				pattern: pkg,
 				tests:   tests,
 			})
 		}
+		toRun = append(toRun, nextRun)
 	}
-	for _, a := range pkgAttempts {
-		if a >= maxAttempts {
-			os.Exit(1)
-		}
-	}
-	fmt.Println("PASS")
 }
