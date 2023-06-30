@@ -28,18 +28,21 @@ import (
 
 const maxAttempts = 3
 
+// testAttempt keeps track of the test name, outcome, logs, and if the test is flakey.
+// After running the tests, each testAttempt is written to a json file.
 type testAttempt struct {
-	name          testName
-	outcome       string // "pass", "fail", "skip"
+	name          testName `json:"testName,omitempty"`
+	outcome       string   `json:"outcome,omitempty"` // "pass", "fail", "skip"
 	logs          bytes.Buffer
 	isMarkedFlaky bool // set if the test is marked as flaky
 
 	pkgFinished bool
 }
 
+// testName keeps track of the test name and its package.
 type testName struct {
-	pkg  string // "tailscale.com/types/key"
-	name string // "TestFoo"
+	Pkg  string `json:"pkg,omitempty"`  // "tailscale.com/types/key"
+	Name string `json:"name,omitempty"` // "TestFoo"
 }
 
 type packageTests struct {
@@ -120,11 +123,11 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			continue
 		}
 		name := testName{
-			pkg:  goOutput.Package,
-			name: goOutput.Test,
+			Pkg:  goOutput.Package,
+			Name: goOutput.Test,
 		}
 		if test, _, isSubtest := strings.Cut(goOutput.Test, "/"); isSubtest {
-			name.name = test
+			name.Name = test
 			if goOutput.Action == "output" {
 				resultMap[name].logs.WriteString(goOutput.Output)
 			}
@@ -135,18 +138,22 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			// ignore
 		case "run":
 			resultMap[name] = &testAttempt{
-				name: name,
+				Name: name,
 			}
 		case "skip", "pass", "fail":
 			resultMap[name].outcome = goOutput.Action
 			ch <- resultMap[name]
 		case "output":
 			if strings.TrimSpace(goOutput.Output) == flakytest.FlakyTestLogMessage {
-				resultMap[name].isMarkedFlaky = true
+				resultMap[name].IsMarkedFlaky = true
 			} else {
 				resultMap[name].logs.WriteString(goOutput.Output)
 			}
 		}
+	}
+	for _, result := range resultMap {
+		testAttemptJson, _ := json.Marshal(result)
+		f.Write(testAttemptJson)
 	}
 	<-done
 }

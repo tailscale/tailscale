@@ -93,6 +93,13 @@ jobs:
       run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
+    - name: upload test output
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-test-attempts.json 
+        path: test_attempts.json
+    - name: remove upload test output 
+      run: rm test_attempts.json
     - name: bench all
       run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ 
       env:
