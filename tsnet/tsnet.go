@@ -113,7 +113,11 @@ type Server struct {
 	// field at zero unless you know what you are doing.
 	Port uint16
 
-	// Additional tags to advertise to Tailnet.
+	// AdvertiseTags specifies groups that this embedded server wants to join, for
+	// purposes of ACL enforcement. These can be referenced from the ACL
+	// security policy. Note that advertising a tag doesn't guarantee that
+	// the control server will allow you to take on the rights for that
+	// tag.
 	AdvertiseTags []string
 
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
