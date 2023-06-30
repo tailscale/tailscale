@@ -515,7 +515,7 @@ func installEgressForwardingRule(ctx context.Context, dstStr string) error {
 	// Technically, if the control server ever changes the IPs assigned to this
 	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
 	// for now we'll live with it.
-	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-i", "!tailscale0", "-j", "DNAT", "--to-destination", dstStr)
+	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "!", "-i", "tailscale0", "-j", "DNAT", "--to-destination", dstStr)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
