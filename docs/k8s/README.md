@@ -26,7 +26,7 @@ There are quite a few ways of running Tailscale inside a Kubernetes Cluster, som
    ```bash
    export SA_NAME=tailscale
    export TS_KUBE_SECRET=tailscale-auth
-   make rbac
+   make rbac | kubectl apply -f-
    ```
 
 ### Sample Sidecar
@@ -36,7 +36,7 @@ Running as a sidecar allows you to directly expose a Kubernetes pod over Tailsca
 1. Create and login to the sample nginx pod with a Tailscale sidecar
 
    ```bash
-   make sidecar
+   make sidecar | kubectl apply -f-
    # If not using an auth key, authenticate by grabbing the Login URL here:
    kubectl logs nginx ts-sidecar
    ```
@@ -60,7 +60,7 @@ You can also run the sidecar in userspace mode. The obvious benefit is reducing 
 1. Create and login to the sample nginx pod with a Tailscale sidecar
 
    ```bash
-   make userspace-sidecar
+   make userspace-sidecar | kubectl apply -f-
    # If not using an auth key, authenticate by grabbing the Login URL here:
    kubectl logs nginx ts-sidecar
    ```
@@ -100,7 +100,7 @@ Running a Tailscale proxy allows you to provide inbound connectivity to a Kubern
 1. Deploy the proxy pod
 
    ```bash
-   make proxy
+   make proxy | kubectl apply -f-
    # If not using an auth key, authenticate by grabbing the Login URL here:
    kubectl logs proxy
    ```
@@ -133,7 +133,7 @@ the entire Kubernetes cluster network (assuming NetworkPolicies allow) over Tail
 1. Deploy the subnet-router pod.
 
    ```bash
-   make subnet-router
+   make subnet-router | kubectl apply -f-
    # If not using an auth key, authenticate by grabbing the Login URL here:
    kubectl logs subnet-router
    ```
