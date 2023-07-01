@@ -11,6 +11,18 @@ import (
 	"tailscale.com/tstest"
 )
 
+func TestLabelMap(t *testing.T) {
+	var m LabelMap
+	m.GetIncrFunc("foo")(1)
+	m.GetIncrFunc("bar")(2)
+	if g, w := m.Get("foo").Value(), int64(1); g != w {
+		t.Errorf("foo = %v; want %v", g, w)
+	}
+	if g, w := m.Get("bar").Value(), int64(2); g != w {
+		t.Errorf("bar = %v; want %v", g, w)
+	}
+}
+
 func TestCurrentFileDescriptors(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("skipping on %v", runtime.GOOS)
