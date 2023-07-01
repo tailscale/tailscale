@@ -45,6 +45,14 @@ func (m *LabelMap) Get(key string) *expvar.Int {
 	return m.Map.Get(key).(*expvar.Int)
 }
 
+// GetIncrFunc returns a function that increments the expvar.Int named by key.
+//
+// Most callers should not need this; it exists to satisfy an
+// interface elsewhere.
+func (m *LabelMap) GetIncrFunc(key string) func(delta int64) {
+	return m.Get(key).Add
+}
+
 // GetFloat returns a direct pointer to the expvar.Float for key, creating it
 // if necessary.
 func (m *LabelMap) GetFloat(key string) *expvar.Float {
