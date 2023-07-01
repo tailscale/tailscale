@@ -31,12 +31,12 @@ const maxAttempts = 3
 // testAttempt keeps track of the test name, outcome, logs, and if the test is flakey.
 // After running the tests, each testAttempt is written to a json file.
 type testAttempt struct {
-	name          testName `json:"testName,omitempty"`
-	outcome       string   `json:"outcome,omitempty"` // "pass", "fail", "skip"
+	Name          testName `json:"name,omitempty,inline"`
+	Outcome       string   `json:"outcome,omitempty"` // "pass", "fail", "skip"
 	logs          bytes.Buffer
-	isMarkedFlaky bool // set if the test is marked as flaky
-
-	pkgFinished bool
+	IsMarkedFlaky bool `json:"is_marked_flaky,omitempty"` // set if the test is marked as flaky
+	AttemptCount  int  `json:"attempt_count,omitempty"`
+	PkgFinished   bool `json:"pkg_finished,omitempty"`
 }
 
 // testName keeps track of the test name and its package.
@@ -62,13 +62,17 @@ type goTestOutput struct {
 	Output  string
 }
 
+type options struct {
+	w io.Writer // optional writer if the -w flag is set.
+}
+
 var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 
 // runTests runs the tests in pt and sends the results on ch. It sends a
-// testAttempt for each test and a final testAttempt per pkg with pkgFinished
+// testAttempt for each test and a final testAttempt per pkg with PkgFinished
 // set to true.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) {
+func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt, opt options) {
 	defer close(ch)
 	args := []string{"test", "-json", pt.pattern}
 	args = append(args, otherArgs...)
@@ -113,11 +117,11 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			switch goOutput.Action {
 			case "fail", "pass", "skip":
 				ch <- &testAttempt{
-					name: testName{
-						pkg: goOutput.Package,
+					Name: testName{
+						Pkg: goOutput.Package,
 					},
-					outcome:     goOutput.Action,
-					pkgFinished: true,
+					Outcome:     goOutput.Action,
+					PkgFinished: true,
 				}
 			}
 			continue
@@ -138,10 +142,11 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			// ignore
 		case "run":
 			resultMap[name] = &testAttempt{
-				Name: name,
+				Name:         name,
+				AttemptCount: attempt,
 			}
 		case "skip", "pass", "fail":
-			resultMap[name].outcome = goOutput.Action
+			resultMap[name].Outcome = goOutput.Action
 			ch <- resultMap[name]
 		case "output":
 			if strings.TrimSpace(goOutput.Output) == flakytest.FlakyTestLogMessage {
@@ -151,9 +156,14 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			}
 		}
 	}
-	for _, result := range resultMap {
-		testAttemptJson, _ := json.Marshal(result)
-		f.Write(testAttemptJson)
+	if opt.w != nil {
+		for _, result := range resultMap {
+			testAttemptJson, _ := json.Marshal(result)
+			_, err = opt.w.Write(testAttemptJson)
+			if err != nil {
+				log.Printf("error appending to test attempt json file: %v", err)
+			}
+		}
 	}
 	<-done
 }
@@ -161,14 +171,14 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 func main() {
 	ctx := context.Background()
 
-	// We only need to parse the -v flag to figure out whether to print the logs
-	// for a test. We don't need to parse any other flags, so we just use the
-	// flag package to parse the -v flag and then pass the rest of the args
-	// through to 'go test'.
+	// We need to parse the -v flag to figure out whether to print the logs
+	// for a test.
+	// The -w flag is to indicate whether we want to write the json test results to a file.
 	// We run `go test -json` which returns the same information as `go test -v`,
 	// but in a machine-readable format. So this flag is only for testwrapper's
 	// output.
 	v := flag.Bool("v", false, "verbose")
+	w := flag.Bool("w", false, "write")
 
 	flag.Usage = func() {
 		fmt.Println("usage: testwrapper [testwrapper-flags] [pattern] [build/test flags & test binary flags]")
@@ -179,6 +189,7 @@ func main() {
 		fmt.Println("examples:")
 		fmt.Println("\ttestwrapper -v ./... -count=1")
 		fmt.Println("\ttestwrapper ./pkg/foo -run TestBar -count=1")
+		fmt.Println("\ttestwrapper -w ./pkg/foo -run TestBar -count=1")
 		fmt.Println()
 		fmt.Println("Unlike 'go test', testwrapper requires a package pattern as the first positional argument and only supports a single pattern.")
 	}
@@ -224,7 +235,15 @@ func main() {
 		}
 		fmt.Printf("%s\t%s\n", outcome, pkg)
 	}
-
+	opts := &options{}
+	if *w {
+		f, err := os.Create("test_attempts.json")
+		if err != nil {
+			log.Printf("error creating test attempt json file: %v", err)
+		}
+		defer f.Close()
+		opts.w = f
+	}
 	for len(toRun) > 0 {
 		var thisRun *nextRun
 		thisRun, toRun = toRun[0], toRun[1:]
@@ -239,27 +258,22 @@ func main() {
 
 		failed := false
 		toRetry := make(map[string][]string) // pkg -> tests to retry
-		f, err := os.Create("test_attempts.json")
-		if err != nil {
-			log.Printf("error creating test attempt json file: %v", err)
-		}
-		defer f.Close()
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
-			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
+			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch, *opts)
 			for tr := range ch {
-				if tr.pkgFinished {
-					printPkgOutcome(tr.name.pkg, tr.outcome, thisRun.attempt)
+				if tr.PkgFinished {
+					printPkgOutcome(tr.Name.Pkg, tr.Outcome, thisRun.attempt)
 					continue
 				}
-				if *v || tr.outcome == "fail" {
+				if *v || tr.Outcome == "fail" {
 					io.Copy(os.Stdout, &tr.logs)
 				}
-				if tr.outcome != "fail" {
+				if tr.Outcome != "fail" {
 					continue
 				}
-				if tr.isMarkedFlaky {
-					toRetry[tr.name.pkg] = append(toRetry[tr.name.pkg], tr.name.name)
+				if tr.IsMarkedFlaky {
+					toRetry[tr.Name.Pkg] = append(toRetry[tr.Name.Pkg], tr.Name.Name)
 				} else {
 					failed = true
 				}
