@@ -45,6 +45,14 @@ func (m *LabelMap) Get(key string) *expvar.Int {
 	return m.Map.Get(key).(*expvar.Int)
 }
 
+// GetSetFunc returns a function that sets the expvar.Int named by key.
+//
+// Most callers should not need this; it exists to satisfy an
+// interface elsewhere.
+func (m *LabelMap) GetSetFunc(key string) func(delta int64) {
+	return m.Get(key).Set
+}
+
 // GetIncrFunc returns a function that increments the expvar.Int named by key.
 //
 // Most callers should not need this; it exists to satisfy an
