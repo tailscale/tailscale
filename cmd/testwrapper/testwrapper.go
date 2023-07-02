@@ -81,6 +81,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 	if err != nil {
 		log.Printf("error creating stdout pipe: %v", err)
 	}
+	defer r.Close()
 	cmd.Stderr = os.Stderr
 
 	cmd.Env = os.Environ()
@@ -103,6 +104,15 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		if err := jd.Decode(&goOutput); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
 				break
+			}
+
+			// `go test -json` outputs invalid JSON when a build fails.
+			// In that case, discard the the output and start reading again.
+			// The build error will be printed to stderr.
+			// See: https://github.com/golang/go/issues/35169
+			if _, ok := err.(*json.SyntaxError); ok {
+				jd = json.NewDecoder(r)
+				continue
 			}
 			panic(err)
 		}
