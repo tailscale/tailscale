@@ -89,6 +89,7 @@ func main() {
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		LoginServer:     defaultEnv("TS_LOGIN_SERVER", ""),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -405,6 +406,9 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.ExtraArgs != "" {
 		args = append(args, strings.Fields(cfg.ExtraArgs)...)
 	}
+	if cfg.LoginServer != "" {
+		args = append(args, "--login-server="+cfg.LoginServer)
+	}
 	log.Printf("Running 'tailscale up'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
@@ -546,6 +550,7 @@ type settings struct {
 	AuthOnce           bool
 	Root               string
 	KubernetesCanPatch bool
+	LoginServer        string
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
