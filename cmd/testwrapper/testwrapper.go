@@ -31,18 +31,18 @@ const maxAttempts = 3
 // testAttempt keeps track of the test name, outcome, logs, and if the test is flakey.
 // After running the tests, each testAttempt is written to a json file.
 type testAttempt struct {
-	Name          testName `json:"name,omitempty,inline"`
-	Outcome       string   `json:"outcome,omitempty"` // "pass", "fail", "skip"
+	Name          testName `json:",inline"`
+	Outcome       string   `json:",omitempty"` // "pass", "fail", "skip"
 	logs          bytes.Buffer
-	IsMarkedFlaky bool `json:"is_marked_flaky,omitempty"` // set if the test is marked as flaky
-	AttemptCount  int  `json:"attempt_count,omitempty"`
-	PkgFinished   bool `json:"pkg_finished,omitempty"`
+	IsMarkedFlaky bool `json:",omitempty"` // set if the test is marked as flaky
+	AttemptCount  int  `json:",omitempty"`
+	PkgFinished   bool `json:",omitempty"`
 }
 
 // testName keeps track of the test name and its package.
 type testName struct {
-	Pkg  string `json:"pkg,omitempty"`  // "tailscale.com/types/key"
-	Name string `json:"name,omitempty"` // "TestFoo"
+	Pkg  string `json:",omitempty"` // "tailscale.com/types/key"
+	Name string `json:",omitempty"` // "TestFoo"
 }
 
 type packageTests struct {
@@ -173,12 +173,12 @@ func main() {
 
 	// We need to parse the -v flag to figure out whether to print the logs
 	// for a test.
-	// The -w flag is to indicate whether we want to write the json test results to a file.
+	// The -json flag is to indicate whether we want to write the json test results to a provided file.
 	// We run `go test -json` which returns the same information as `go test -v`,
 	// but in a machine-readable format. So this flag is only for testwrapper's
 	// output.
 	v := flag.Bool("v", false, "verbose")
-	w := flag.Bool("w", false, "write")
+	jsonFile := flag.String("json", "", "if set, the file to store all test results in")
 
 	flag.Usage = func() {
 		fmt.Println("usage: testwrapper [testwrapper-flags] [pattern] [build/test flags & test binary flags]")
@@ -189,7 +189,7 @@ func main() {
 		fmt.Println("examples:")
 		fmt.Println("\ttestwrapper -v ./... -count=1")
 		fmt.Println("\ttestwrapper ./pkg/foo -run TestBar -count=1")
-		fmt.Println("\ttestwrapper -w ./pkg/foo -run TestBar -count=1")
+		fmt.Println("\ttestwrapper -json=test_attempts.json ./pkg/foo -run TestBar -count=1")
 		fmt.Println()
 		fmt.Println("Unlike 'go test', testwrapper requires a package pattern as the first positional argument and only supports a single pattern.")
 	}
@@ -236,8 +236,8 @@ func main() {
 		fmt.Printf("%s\t%s\n", outcome, pkg)
 	}
 	opts := &options{}
-	if *w {
-		f, err := os.Create("test_attempts.json")
+	if *jsonFile != "" {
+		f, err := os.Create(*jsonFile)
 		if err != nil {
 			log.Printf("error creating test attempt json file: %v", err)
 		}

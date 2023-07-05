@@ -90,7 +90,7 @@ jobs:
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -w ./... ${{matrix.buildflags}}
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper -json test_attempts.json ./... ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: upload test output
