@@ -30,6 +30,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/conn"
 	"go4.org/mem"
+	"golang.org/x/exp/maps"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/control/controlclient"
@@ -4409,16 +4410,12 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 		return udpAddr, false
 	}
 
-	candidates := make([]netip.AddrPort, 0, len(de.endpointState))
-	for ipp := range de.endpointState {
-		if ipp.Addr().Is4() && de.c.noV4.Load() {
-			continue
-		}
-		if ipp.Addr().Is6() && de.c.noV6.Load() {
-			continue
-		}
-		candidates = append(candidates, ipp)
+	candidates := maps.Keys(de.endpointState)
+	if len(candidates) == 0 {
+		de.c.logf("magicsock: addrForSendWireguardLocked: [unexpected] no candidates available for endpoint")
+		return udpAddr, false
 	}
+
 	// Randomly select an address to use until we retrieve latency information
 	// and give it a short trustBestAddrUntil time so we avoid flapping between
 	// addresses while waiting on latency information to be populated.
