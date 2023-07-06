@@ -36,9 +36,9 @@ func init() {
 }
 
 func newResolver(tb testing.TB) *Resolver {
-	clock := &tstest.Clock{
+	clock := tstest.NewClock(tstest.ClockOpts{
 		Step: 50 * time.Millisecond,
-	}
+	})
 	return &Resolver{
 		Logf:    tb.Logf,
 		timeNow: clock.Now,
