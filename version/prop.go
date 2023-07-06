@@ -88,7 +88,7 @@ func IsAppleTV() bool {
 		return false
 	}
 	return isAppleTV.Get(func() bool {
-		return strings.EqualFold(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.tvos.network-extension")
+		return strings.EqualFold(os.Getenv("XPC_SERVICE_NAME"), "io.tailscale.ipn.ios.network-extension-tvos")
 	})
 }
 
