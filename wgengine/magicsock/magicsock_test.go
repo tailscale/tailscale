@@ -2810,36 +2810,6 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222"),
 		},
 		{
-			name:       "choose IPv4 when IPv6 is not useable",
-			sendWGPing: false,
-			noV6:       true,
-			ep: []endpointDetails{
-				{
-					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
-					latency:  100 * time.Millisecond,
-				},
-				{
-					addrPort: netip.MustParseAddrPort("[1::1]:567"),
-				},
-			},
-			want: netip.MustParseAddrPort("1.1.1.1:111"),
-		},
-		{
-			name:       "choose IPv6 when IPv4 is not useable",
-			sendWGPing: false,
-			noV4:       true,
-			ep: []endpointDetails{
-				{
-					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
-				},
-				{
-					addrPort: netip.MustParseAddrPort("[1::1]:567"),
-					latency:  100 * time.Millisecond,
-				},
-			},
-			want: netip.MustParseAddrPort("[1::1]:567"),
-		},
-		{
 			name:       "choose IPv6 address when latency is the same for v4 and v6",
 			sendWGPing: true,
 			ep: []endpointDetails{
@@ -2865,8 +2835,6 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 				noV6: atomic.Bool{},
 			},
 		}
-		endpoint.c.noV4.Store(test.noV4)
-		endpoint.c.noV6.Store(test.noV6)
 
 		for _, epd := range test.ep {
 			endpoint.endpointState[epd.addrPort] = &endpointState{}
