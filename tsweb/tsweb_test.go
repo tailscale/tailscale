@@ -65,10 +65,7 @@ func TestStdHandler(t *testing.T) {
 		testErr = errors.New("test error")
 		bgCtx   = context.Background()
 		// canceledCtx, cancel = context.WithCancel(bgCtx)
-		clock = tstest.Clock{
-			Start: time.Now(),
-			Step:  time.Second,
-		}
+		startTime = time.Unix(1687870000, 1234)
 	)
 	// cancel()
 
@@ -86,7 +83,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -103,7 +100,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -119,7 +116,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -136,7 +133,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 404,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -153,7 +150,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -170,7 +167,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -187,7 +184,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 500,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -204,7 +201,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -221,7 +218,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -238,7 +235,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				Host:       "example.com",
@@ -260,7 +257,7 @@ func TestStdHandler(t *testing.T) {
 			r:        req(bgCtx, "http://example.com/foo"),
 			wantCode: 200,
 			wantLog: AccessLogRecord{
-				When:    clock.Start,
+				When:    startTime,
 				Seconds: 1.0,
 
 				Proto:      "HTTP/1.1",
@@ -279,7 +276,7 @@ func TestStdHandler(t *testing.T) {
 				http.Error(w, e.Msg, 200)
 			},
 			wantLog: AccessLogRecord{
-				When:       clock.Start,
+				When:       startTime,
 				Seconds:    1.0,
 				Proto:      "HTTP/1.1",
 				TLS:        false,
@@ -302,7 +299,10 @@ func TestStdHandler(t *testing.T) {
 				t.Logf(fmt, args...)
 			}
 
-			clock.Reset()
+			clock := tstest.NewClock(tstest.ClockOpts{
+				Start: startTime,
+				Step:  time.Second,
+			})
 
 			rec := noopHijacker{httptest.NewRecorder(), false}
 			h := StdHandler(test.rh, HandlerOptions{Logf: logf, Now: clock.Now, OnError: test.errHandler})
