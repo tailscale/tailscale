@@ -946,6 +946,21 @@ func (lc *LocalClient) NetworkLockForceLocalDisable(ctx context.Context) error {
 	return nil
 }
 
+// NetworkLockVerifySigningDeeplink verifies the network lock deeplink contained
+// in url and returns information extracted from it.
+func (lc *LocalClient) NetworkLockVerifySigningDeeplink(ctx context.Context, url string) (*tka.DeeplinkValidationResult, error) {
+	vr := struct {
+		URL string
+	}{url}
+
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/verify-deeplink", 200, jsonBody(vr))
+	if err != nil {
+		return nil, fmt.Errorf("sending verify-deeplink: %w", err)
+	}
+
+	return decodeJSON[*tka.DeeplinkValidationResult](body)
+}
+
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
