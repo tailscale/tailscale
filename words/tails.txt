@@ -544,3 +544,4 @@ shrimp
 prawn
 lobster
 chipmunk
+tails
