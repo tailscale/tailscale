@@ -100,7 +100,8 @@ type CapabilityVersion int
 //   - 61: 2023-04-18: Client understand SSHAction.SSHRecorderFailureAction
 //   - 62: 2023-05-05: Client can notify control over noise for SSHEventNotificationRequest recording failure events
 //   - 63: 2023-06-08: Client understands SSHAction.AllowRemotePortForwarding.
-const CurrentCapabilityVersion CapabilityVersion = 63
+//   - 64: 2023-07-11: Client understands s/CapabilityTailnetLockAlpha/CapabilityTailnetLock
+const CurrentCapabilityVersion CapabilityVersion = 64
 
 type StableID string
 
@@ -1850,11 +1851,8 @@ const (
 	// of connections to the default network interface on Darwin nodes.
 	CapabilityDebugDisableBindConnToInterface = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
 
-	// CapabilityTailnetLockAlpha indicates the node is in the tailnet lock alpha,
-	// and initialization of tailnet lock may proceed.
-	//
-	// TODO(tom): Remove this for 1.35 and later.
-	CapabilityTailnetLockAlpha = "https://tailscale.com/cap/tailnet-lock-alpha"
+	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
+	CapabilityTailnetLock = "https://tailscale.com/cap/tailnet-lock"
 
 	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
 

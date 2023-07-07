@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -53,20 +52,12 @@ type tkaState struct {
 	filtered  []ipnstate.TKAFilteredPeer
 }
 
-// permitTKAInitLocked returns true if tailnet lock initialization may
-// occur.
-// b.mu must be held.
-func (b *LocalBackend) permitTKAInitLocked() bool {
-	return envknob.UseWIPCode() || b.capTailnetLock
-}
-
 // tkaFilterNetmapLocked checks the signatures on each node key, dropping
 // nodes from the netmap whose signature does not verify.
 //
 // b.mu must be held.
 func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if b.tka == nil && !b.permitTKAInitLocked() {
+	if b.tka == nil && !b.capTailnetLock {
 		health.SetTKAHealth(nil)
 		return
 	}
@@ -153,8 +144,7 @@ func (b *LocalBackend) tkaSyncIfNeeded(nm *netmap.NetworkMap, prefs ipn.PrefsVie
 	b.mu.Lock() // take mu to protect access to synchronized fields.
 	defer b.mu.Unlock()
 
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if b.tka == nil && !b.permitTKAInitLocked() {
+	if b.tka == nil && !b.capTailnetLock {
 		return nil
 	}
 
@@ -483,10 +473,9 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key, disablementValues [][]byt
 	var nlPriv key.NLPrivate
 	b.mu.Lock()
 
-	// TODO(tom): Remove this guard for 1.35 and later.
-	if !b.permitTKAInitLocked() {
+	if !b.capTailnetLock {
 		b.mu.Unlock()
-		return errors.New("this feature is not yet complete, a later release may support this functionality")
+		return errors.New("not permitted to enable tailnet lock")
 	}
 
 	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
