@@ -1013,7 +1013,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	// Perform all reconfiguration based on the netmap here.
 	if st.NetMap != nil {
-		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLockAlpha)
+		b.capTailnetLock = hasCapability(st.NetMap, tailcfg.CapabilityTailnetLock)
 
 		b.mu.Unlock() // respect locking rules for tkaSyncIfNeeded
 		if err := b.tkaSyncIfNeeded(st.NetMap, prefs.View()); err != nil {
