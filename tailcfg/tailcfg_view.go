@@ -168,7 +168,6 @@ func (v NodeView) Online() *bool {
 	return &x
 }
 
-func (v NodeView) KeepAlive() bool                   { return v.ж.KeepAlive }
 func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthorized }
 func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
 func (v NodeView) UnsignedPeerAPIOnly() bool         { return v.ж.UnsignedPeerAPIOnly }
@@ -210,7 +209,6 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	PrimaryRoutes                 []netip.Prefix
 	LastSeen                      *time.Time
 	Online                        *bool
-	KeepAlive                     bool
 	MachineAuthorized             bool
 	Capabilities                  []string
 	UnsignedPeerAPIOnly           bool

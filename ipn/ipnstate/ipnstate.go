@@ -223,9 +223,8 @@ type PeerStatus struct {
 	LastSeen       time.Time // last seen to tailcontrol; only present if offline
 	LastHandshake  time.Time // with local wireguard
 	Online         bool      // whether node is connected to the control plane
-	KeepAlive      bool
-	ExitNode       bool // true if this is the currently selected exit node.
-	ExitNodeOption bool // true if this node can be an exit node (offered && approved)
+	ExitNode       bool      // true if this is the currently selected exit node.
+	ExitNodeOption bool      // true if this node can be an exit node (offered && approved)
 
 	// Active is whether the node was recently active. The
 	// definition is somewhat undefined but has historically and
@@ -436,9 +435,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if st.InEngine {
 		e.InEngine = true
-	}
-	if st.KeepAlive {
-		e.KeepAlive = true
 	}
 	if st.ExitNode {
 		e.ExitNode = true

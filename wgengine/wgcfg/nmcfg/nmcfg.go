@@ -96,9 +96,6 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 			DiscoKey:  peer.DiscoKey,
 		})
 		cpeer := &cfg.Peers[len(cfg.Peers)-1]
-		if peer.KeepAlive {
-			cpeer.PersistentKeepalive = 25 // seconds
-		}
 
 		didExitNodeWarn := false
 		cpeer.V4MasqAddr = peer.SelfNodeV4MasqAddrForThisPeer

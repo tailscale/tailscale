@@ -742,7 +742,6 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			HostName:     p.Hostinfo.Hostname(),
 			DNSName:      p.Name,
 			OS:           p.Hostinfo.OS(),
-			KeepAlive:    p.KeepAlive,
 			LastSeen:     lastSeen,
 			Online:       p.Online != nil && *p.Online,
 			ShareeNode:   p.Hostinfo.ShareeNode(),

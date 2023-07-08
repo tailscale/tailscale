@@ -93,7 +93,6 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	PrimaryRoutes                 []netip.Prefix
 	LastSeen                      *time.Time
 	Online                        *bool
-	KeepAlive                     bool
 	MachineAuthorized             bool
 	Capabilities                  []string
 	UnsignedPeerAPIOnly           bool
