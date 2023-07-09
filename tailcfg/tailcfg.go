@@ -1282,7 +1282,7 @@ type DNSConfig struct {
 	// match.
 	//
 	// Matches are case insensitive.
-	ExitNodeFilteredSet []string
+	ExitNodeFilteredSet []string `json:",omitempty"`
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.
