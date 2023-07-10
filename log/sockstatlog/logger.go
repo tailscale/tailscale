@@ -114,7 +114,7 @@ func NewLogger(logdir string, logf logger.Logf, logID logid.PublicID, netMon *ne
 	logger := &Logger{
 		logf:  logf,
 		filch: filch,
-		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon),
+		tr:    logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, logf),
 	}
 	logger.logger = logtail.NewLogger(logtail.Config{
 		BaseURL:    logpolicy.LogURL(),

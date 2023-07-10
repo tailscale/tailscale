@@ -101,7 +101,7 @@ func (nl *Logger) Startup(nodeID tailcfg.StableNodeID, nodeLogID, domainLogID lo
 	}
 
 	// Startup a log stream to Tailscale's logging service.
-	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon)}
+	httpc := &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, netMon, nl.logger.Logf)}
 	if testClient != nil {
 		httpc = testClient
 	}

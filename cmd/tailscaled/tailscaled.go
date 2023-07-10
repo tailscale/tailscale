@@ -342,7 +342,7 @@ func run() error {
 	}
 	sys.Set(netMon)
 
-	pol := logpolicy.New(logtail.CollectionNode, netMon)
+	pol := logpolicy.New(logtail.CollectionNode, netMon, nil /* use log.Printf */)
 	pol.SetVerbosityLevel(args.verbose)
 	logPol = pol
 	defer func() {
