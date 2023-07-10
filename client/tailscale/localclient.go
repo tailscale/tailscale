@@ -809,10 +809,12 @@ func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn str
 
 // Ping sends a ping of the provided type to the provided IP and waits
 // for its response.
-func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType) (*ipnstate.PingResult, error) {
+func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType, mtu int) (*ipnstate.PingResult, error) {
 	v := url.Values{}
 	v.Set("ip", ip.String())
+	v.Set("mtu", strconv.Itoa(mtu))
 	v.Set("type", string(pingtype))
+	// XXX new api or whatnot
 	body, err := lc.send(ctx, "POST", "/localapi/v0/ping?"+v.Encode(), 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)

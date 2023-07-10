@@ -1211,7 +1211,7 @@ func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.magicConn.UpdateStatus(sb)
 }
 
-func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult)) {
+func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult), mtu int) {
 	res := &ipnstate.PingResult{IP: ip.String()}
 	pip, ok := e.PeerForIP(ip)
 	if !ok {
@@ -1227,11 +1227,10 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, cb func
 		return
 	}
 	peer := pip.Node
-
-	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
+	e.logf("ping(%v): sending %v ping mtu %v to %v %v...", ip, pingType, mtu, peer.Key.ShortString(), peer.ComputedName)
 	switch pingType {
 	case "disco":
-		e.magicConn.Ping(peer, res, cb)
+		e.magicConn.Ping(peer, res, cb, mtu)
 	case "TSMP":
 		e.sendTSMPPing(ip, peer, res, cb)
 	case "ICMP":

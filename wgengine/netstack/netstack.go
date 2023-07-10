@@ -150,6 +150,7 @@ const nicID = 1
 // maxUDPPacketSize is the maximum size of a UDP packet we copy in startPacketCopy
 // when relaying UDP packets. We don't use the 'mtu' const in anticipation of
 // one day making the MTU more dynamic.
+// TODO: make this bigger
 const maxUDPPacketSize = 1500
 
 // Create creates and populates a new Impl.

@@ -1627,10 +1627,13 @@ func TestEndpointSetsEqual(t *testing.T) {
 
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
-	al := func(ipps string, d time.Duration) addrLatency {
-		return addrLatency{netip.MustParseAddrPort(ipps), d}
+	al := func(ipps string, d time.Duration) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d, mtu: 0}
 	}
-	zero := addrLatency{}
+	almtu := func(ipps string, d time.Duration, mtu int) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d, mtu: mtu}
+	}
+	zero := addrQuality{}
 
 	const (
 		publicV4   = "1.2.3.4:555"
@@ -1641,7 +1644,7 @@ func TestBetterAddr(t *testing.T) {
 	)
 
 	tests := []struct {
-		a, b addrLatency
+		a, b addrQuality
 		want bool // whether a is better than b
 	}{
 		{a: zero, b: zero, want: false},
@@ -1703,7 +1706,12 @@ func TestBetterAddr(t *testing.T) {
 			b:    al(publicV6, 100*ms),
 			want: true,
 		},
-
+		// If addresses are equal, prefer larger MTU
+		{
+			a:    almtu(publicV4, 30*ms, 1500),
+			b:    almtu(publicV4, 30*ms, 0),
+			want: true,
+		},
 		// Private IPs are preferred over public IPs even if the public
 		// IP is IPv6.
 		{

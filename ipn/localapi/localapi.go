@@ -1335,7 +1335,17 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'type' parameter", 400)
 		return
 	}
-	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr))
+	mtuStr := r.FormValue("mtu")
+	if mtuStr == "" {
+		// XXX old api didn't include this arg
+		mtuStr = "0"
+	}
+	mtu, err := strconv.Atoi(mtuStr)
+	if err != nil {
+		http.Error(w, "invalid 'mtu' parameter", 400)
+		return
+	}
+	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr), mtu)
 	if err != nil {
 		writeErrorJSON(w, err)
 		return

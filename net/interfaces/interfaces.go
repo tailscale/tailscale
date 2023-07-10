@@ -289,6 +289,9 @@ type State struct {
 
 	// PAC is the URL to the Proxy Autoconfig URL, if applicable.
 	PAC string
+
+	// MaxMTU is the largest MTU of the available usable interfaces
+	MaxMTU int
 }
 
 func (s *State) String() string {
@@ -524,6 +527,9 @@ func GetState() (*State, error) {
 			}
 			s.HaveV6 = s.HaveV6 || isUsableV6(pfx.Addr())
 			s.HaveV4 = s.HaveV4 || isUsableV4(pfx.Addr())
+			if ni.MTU > s.MaxMTU {
+				s.MaxMTU = ni.MTU
+			}
 		}
 	}); err != nil {
 		return nil, err
