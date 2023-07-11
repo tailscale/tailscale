@@ -185,6 +185,23 @@ func main() {
 	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Set HTTP headers to appease automated security scanners.
+		//
+		// Security automation gets cranky when HTTPS sites don't
+		// set HSTS, and when they don't specify a content
+		// security policy for XSS mitigation.
+		//
+		// DERP's HTTP interface is only ever used for debug
+		// access (for which trivial safe policies work just
+		// fine), and by DERP clients which don't obey any of
+		// these browser-centric headers anyway.
+		//
+		// Note: if we ever add a real UI component to DERP, these headers
+		// should move to a middleware wrapper that applies to more request
+		// paths.
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(200)
 		io.WriteString(w, `<html><body>
 <h1>DERP</h1>
@@ -277,19 +294,6 @@ func main() {
 				defer tlsActiveVersion.Add(label, -1)
 			}
 
-			// Set HTTP headers to appease automated security scanners.
-			//
-			// Security automation gets cranky when HTTPS sites don't
-			// set HSTS, and when they don't specify a content
-			// security policy for XSS mitigation.
-			//
-			// DERP's HTTP interface is only ever used for debug
-			// access (for which trivial safe policies work just
-			// fine), and by DERP clients which don't obey any of
-			// these browser-centric headers anyway.
-			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
 			mux.ServeHTTP(w, r)
 		})
 		if *httpPort > -1 {
