@@ -23,11 +23,13 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/paths"
+	"tailscale.com/tstime"
 	"tailscale.com/version/distro"
 )
 
 var Stderr io.Writer = os.Stderr
 var Stdout io.Writer = os.Stdout
+var clock tstime.Clock = &tstime.StdClock{} // global tstime.clock variable for tailscale cli package.
 
 func errf(format string, a ...any) {
 	fmt.Fprintf(Stderr, format, a...)

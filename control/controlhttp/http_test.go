@@ -25,6 +25,7 @@ import (
 	"tailscale.com/net/socks5"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -204,6 +205,7 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		Logf:                 t.Logf,
 		omitCertErrorLogging: true,
 		testFallbackDelay:    50 * time.Millisecond,
+		Clock:                &tstest.Clock{},
 	}
 
 	if proxy != nil {
@@ -660,6 +662,7 @@ func TestDialPlan(t *testing.T) {
 				drainFinished:        drained,
 				omitCertErrorLogging: true,
 				testFallbackDelay:    50 * time.Millisecond,
+				Clock:                &tstest.Clock{},
 			}
 
 			conn, err := a.dial(ctx)

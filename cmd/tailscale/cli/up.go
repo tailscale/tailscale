@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/dnsname"
@@ -692,9 +693,9 @@ func runUp(ctx context.Context, cmd string, args []string, upArgs upArgsT) (retE
 	// shuts down. (Issue 2333)
 	var timeoutCh <-chan time.Time
 	if upArgs.timeout > 0 {
-		timeoutTimer := time.NewTimer(upArgs.timeout)
+		var timeoutTimer tstime.TimerController
+		timeoutTimer, timeoutCh = clock.NewTimer(upArgs.timeout)
 		defer timeoutTimer.Stop()
-		timeoutCh = timeoutTimer.C
 	}
 	select {
 	case <-running:

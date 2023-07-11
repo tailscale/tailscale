@@ -18,6 +18,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
@@ -40,6 +41,7 @@ func NewWatchdog(e Engine) Engine {
 		fatalf:   log.Fatalf,
 		maxWait:  45 * time.Second,
 		inFlight: make(map[inFlightKey]time.Time),
+		clock:    &tstime.StdClock{},
 	}
 }
 
@@ -58,6 +60,8 @@ type watchdogEngine struct {
 	inFlightMu  sync.Mutex
 	inFlight    map[inFlightKey]time.Time
 	inFlightCtr uint64
+
+	clock tstime.Clock
 }
 
 func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
@@ -82,12 +86,12 @@ func (e *watchdogEngine) watchdogErr(name string, fn func() error) error {
 	go func() {
 		errCh <- fn()
 	}()
-	t := time.NewTimer(e.maxWait)
+	t, tChannel := e.clock.NewTimer(e.maxWait)
 	select {
 	case err := <-errCh:
 		t.Stop()
 		return err
-	case <-t.C:
+	case <-tChannel:
 		buf := new(strings.Builder)
 		pprof.Lookup("goroutine").WriteTo(buf, 1)
 		e.logf("wgengine watchdog stacks:\n%s", buf.String())

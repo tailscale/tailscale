@@ -22,6 +22,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
@@ -397,6 +398,7 @@ func (d *dialer) DialContext(ctx context.Context, network, address string) (retC
 		address: address,
 		host:    host,
 		port:    port,
+		clock:   &tstime.StdClock{},
 	}
 	defer func() {
 		// On failure, consider that our DNS might be wrong and ask the DNS fallback mechanism for
@@ -471,6 +473,7 @@ type dialCall struct {
 
 	mu    sync.Mutex           // lock ordering: dialer.mu, then dialCall.mu
 	fails map[netip.Addr]error // set of IPs that failed to dial thus far
+	clock tstime.Clock
 }
 
 // dnsWasTrustworthy reports whether we think the IP address(es) we
@@ -585,9 +588,9 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 	go func() {
 		for i, ip := range ips {
 			if i != 0 {
-				timer := time.NewTimer(fallbackDelay)
+				timer, timerChannel := dc.clock.NewTimer(fallbackDelay)
 				select {
-				case <-timer.C:
+				case <-timerChannel:
 				case <-failBoost:
 					timer.Stop()
 				case <-ctx.Done():

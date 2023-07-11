@@ -161,6 +161,7 @@ func TestBasic(t *testing.T) {
 	c := &Client{
 		Logf:        t.Logf,
 		UDPBindAddr: "127.0.0.1:0",
+		Clock:       &tstest.Clock{},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -200,7 +201,8 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	dm.Regions[1].Nodes[0].STUNOnly = true
 
 	c := &Client{
-		Logf: t.Logf,
+		Logf:  t.Logf,
+		Clock: &tstest.Clock{},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
@@ -340,10 +342,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTime := time.Unix(123, 0)
 			c := &Client{
-				TimeNow: func() time.Time { return fakeTime },
+				Clock: tstest.NewClock(tstest.ClockOpts{Start: fakeTime}),
 			}
 			for _, s := range tt.steps {
-				fakeTime = fakeTime.Add(s.after)
+				c.Clock.(*tstest.Clock).Advance(s.after)
 				c.addReportHistoryAndSetPreferredDERP(s.r)
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
@@ -800,6 +802,7 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 		// Set the delay long enough that we have time to cancel it
 		// when our STUN probe succeeds.
 		testCaptivePortalDelay: 10 * time.Second,
+		Clock:                  &tstest.Clock{},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)

@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tsd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -1029,7 +1030,8 @@ func (s *Server) listen(network, addr string, lnOn listenOn) (net.Listener, erro
 		keys: keys,
 		addr: addr,
 
-		conn: make(chan net.Conn),
+		conn:  make(chan net.Conn),
+		clock: &tstime.StdClock{},
 	}
 	s.mu.Lock()
 	for _, key := range keys {
@@ -1061,6 +1063,7 @@ type listener struct {
 	addr   string
 	conn   chan net.Conn
 	closed bool // guarded by s.mu
+	clock  tstime.Clock
 }
 
 func (ln *listener) Accept() (net.Conn, error) {
@@ -1096,11 +1099,11 @@ func (ln *listener) closeLocked() error {
 }
 
 func (ln *listener) handle(c net.Conn) {
-	t := time.NewTimer(time.Second)
+	t, tChannel := ln.clock.NewTimer(time.Second)
 	defer t.Stop()
 	select {
 	case ln.conn <- c:
-	case <-t.C:
+	case <-tChannel:
 		// TODO(bradfitz): this isn't ideal. Think about how
 		// we how we want to do pushback.
 		c.Close()

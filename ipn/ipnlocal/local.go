@@ -60,6 +60,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -259,6 +260,7 @@ type LocalBackend struct {
 	// tkaSyncLock MUST be taken before mu (or inversely, mu must not be held
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock sync.Mutex
+	clock       tstime.Clock
 }
 
 // clientGen is a func that creates a control plane client.
@@ -311,6 +313,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		em:             newExpiryManager(logf),
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
+		clock:          &tstime.StdClock{},
 	}
 
 	netMon := sys.NetMon.Get()
@@ -1380,12 +1383,12 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			// HTTP request (via doSetHostinfoFilterServices >
 			// cli.SetHostinfo). In practice this is very quick.
 			t0 := time.Now()
-			timer := time.NewTimer(time.Second)
+			timer, timerChannel := b.clock.NewTimer(time.Second)
 			select {
 			case <-b.gotPortPollRes:
 				b.logf("[v1] got initial portlist info in %v", time.Since(t0).Round(time.Millisecond))
 				timer.Stop()
-			case <-timer.C:
+			case <-timerChannel:
 				b.logf("timeout waiting for initial portlist")
 			}
 		})

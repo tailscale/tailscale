@@ -673,6 +673,7 @@ func NewConn(opts Options) (*Conn, error) {
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
+		Clock:               &tstime.StdClock{},
 	}
 
 	c.ignoreSTUNPackets()

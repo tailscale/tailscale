@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
@@ -166,8 +167,7 @@ type Client struct {
 	// If nil, the interface will be looked up dynamically.
 	NetMon *netmon.Monitor
 
-	// TimeNow, if non-nil, is used instead of time.Now.
-	TimeNow func() time.Time
+	Clock tstime.Clock // use tstime.Clock.Now() instead of time.Now
 
 	// GetSTUNConn4 optionally provides a func to return the
 	// connection to use for sending & receiving IPv4 packets. If
@@ -1013,11 +1013,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		}(probeSet)
 	}
 
-	stunTimer := time.NewTimer(stunProbeTimeout)
+	stunTimer, stunTimerChannel := c.Clock.NewTimer(stunProbeTimeout)
 	defer stunTimer.Stop()
 
 	select {
-	case <-stunTimer.C:
+	case <-stunTimerChannel:
 	case <-ctx.Done():
 	case <-wg.DoneChan():
 		// All of our probes finished, so if we have >0 responses, we
@@ -1436,8 +1436,8 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 }
 
 func (c *Client) timeNow() time.Time {
-	if c.TimeNow != nil {
-		return c.TimeNow()
+	if c.Clock != nil {
+		return c.Clock.Now()
 	}
 	return time.Now()
 }
@@ -1531,9 +1531,9 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	}
 
 	if probe.delay > 0 {
-		delayTimer := time.NewTimer(probe.delay)
+		delayTimer, delayTimerChannel := c.Clock.NewTimer(probe.delay)
 		select {
-		case <-delayTimer.C:
+		case <-delayTimerChannel:
 		case <-ctx.Done():
 			delayTimer.Stop()
 			return

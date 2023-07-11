@@ -37,6 +37,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
@@ -678,6 +679,7 @@ func runTS2021(ctx context.Context, args []string) error {
 		ProtocolVersion: uint16(ts2021Args.version),
 		Dialer:          dialFunc,
 		Logf:            logf,
+		Clock:           &tstime.StdClock{},
 	}).Dial(ctx)
 	log.Printf("controlhttp.Dial = %p, %v", conn, err)
 	if err != nil {

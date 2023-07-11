@@ -91,11 +91,11 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	sleep := func(d time.Duration) {
-		t := time.NewTimer(d)
+		t, tChannel := c.clock.NewTimer(d)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-		case <-t.C:
+		case <-tChannel:
 		}
 	}
 

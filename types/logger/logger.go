@@ -21,6 +21,7 @@ import (
 	"context"
 
 	"tailscale.com/envknob"
+	"tailscale.com/tstime"
 )
 
 // Logf is the basic Tailscale logger type: a printf-like func.
@@ -46,6 +47,8 @@ var jencPool = &sync.Pool{New: func() any {
 	je.enc = json.NewEncoder(&je.buf)
 	return je
 }}
+
+var clock tstime.Clock = &tstime.StdClock{}
 
 // JSON marshals v as JSON and writes it to logf formatted with the annotation to make logtail
 // treat it as a structured log.
@@ -259,10 +262,10 @@ func SlowLoggerWithClock(ctx context.Context, logf Logf, f time.Duration, burst 
 
 		// Otherwise, sleep for 2x the duration so that we don't
 		// immediately sleep again on the next call.
-		tmr := time.NewTimer(2 * f)
+		tmr, tmrChannel := clock.NewTimer(2 * f)
 		defer tmr.Stop()
 		select {
-		case curr := <-tmr.C:
+		case curr := <-tmrChannel:
 			tb.AdvanceTo(curr)
 		case <-ctx.Done():
 			return

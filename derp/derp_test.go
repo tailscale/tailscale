@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
 	"tailscale.com/net/memnet"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -267,6 +268,7 @@ func TestSendRecv(t *testing.T) {
 }
 
 func TestSendFreeze(t *testing.T) {
+	clock := &tstest.Clock{}
 	serverPrivateKey := key.NewNode()
 	s := NewServer(serverPrivateKey, t.Logf)
 	defer s.Close()
@@ -398,14 +400,14 @@ func TestSendFreeze(t *testing.T) {
 	}
 	drain := func(t *testing.T, name string) bool {
 		t.Helper()
-		timer := time.NewTimer(1 * time.Second)
+		timer, timerChannel := clock.NewTimer(1 * time.Second)
 		defer timer.Stop()
 
 		// Ensure ch has at least one element.
 		ch := chs(name)
 		select {
 		case <-ch:
-		case <-timer.C:
+		case <-timerChannel:
 			t.Errorf("no packet received by %s", name)
 			return false
 		}
