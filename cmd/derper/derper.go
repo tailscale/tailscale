@@ -182,8 +182,9 @@ func main() {
 	}
 	mux.HandleFunc("/derp/probe", probeHandler)
 	go refreshBootstrapDNSLoop()
-	mux.HandleFunc("/bootstrap-dns", handleBootstrapDNS)
+	mux.HandleFunc("/bootstrap-dns", tsweb.BrowserHeaderHandlerFunc(handleBootstrapDNS))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tsweb.AddBrowserHeaders(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
 		io.WriteString(w, `<html><body>
@@ -203,6 +204,7 @@ func main() {
 		}
 	}))
 	mux.Handle("/robots.txt", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tsweb.AddBrowserHeaders(w)
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
 	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
@@ -277,18 +279,6 @@ func main() {
 				defer tlsActiveVersion.Add(label, -1)
 			}
 
-			// Set HTTP headers to appease automated security scanners.
-			//
-			// Security automation gets cranky when HTTPS sites don't
-			// set HSTS, and when they don't specify a content
-			// security policy for XSS mitigation.
-			//
-			// DERP's HTTP interface is only ever used for debug
-			// access (for which trivial safe policies work just
-			// fine), and by DERP clients which don't obey any of
-			// these browser-centric headers anyway.
-			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
 			mux.ServeHTTP(w, r)
 		})
 		if *httpPort > -1 {

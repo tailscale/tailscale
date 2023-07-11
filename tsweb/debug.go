@@ -51,7 +51,7 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	// Register this one directly on mux, rather than using
 	// ret.URL/etc, as we don't need another line of output on the
 	// index page. The /pprof/ index already covers it.
-	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	mux.Handle("/debug/pprof/profile", BrowserHeaderHandler(http.HandlerFunc(pprof.Profile)))
 
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
@@ -80,6 +80,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	AddBrowserHeaders(w)
 	f := func(format string, args ...any) { fmt.Fprintf(w, format, args...) }
 	f("<html><body><h1>%s debug</h1><ul>", version.CmdName())
 	for _, kv := range d.kvs {
@@ -97,7 +98,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // entry in /debug/ for it.
 func (d *DebugHandler) Handle(slug, desc string, handler http.Handler) {
 	href := "/debug/" + slug
-	d.mux.Handle(href, Protected(handler))
+	d.mux.Handle(href, Protected(BrowserHeaderHandler(handler)))
 	d.URL(href, desc)
 }
 
