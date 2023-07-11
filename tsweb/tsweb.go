@@ -423,3 +423,37 @@ func Error(code int, msg string, err error) HTTPError {
 func VarzHandler(w http.ResponseWriter, r *http.Request) {
 	varz.Handler(w, r)
 }
+
+// AddBrowserHeaders sets various HTTP security headers for browser-facing endpoints.
+//
+// The specific headers:
+//   - require HTTPS access (HSTS)
+//   - disallow iframe embedding
+//   - mitigate MIME confusion attacks
+//
+// These headers are based on
+// https://infosec.mozilla.org/guidelines/web_security
+func AddBrowserHeaders(w http.ResponseWriter) {
+	w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+// BrowserHeaderHandler wraps the provided http.Handler with a call to
+// AddBrowserHeaders.
+func BrowserHeaderHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		AddBrowserHeaders(w)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// BrowserHeaderHandlerFunc wraps the provided http.HandlerFunc with a call to
+// AddBrowserHeaders.
+func BrowserHeaderHandlerFunc(h http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		AddBrowserHeaders(w)
+		h.ServeHTTP(w, r)
+	})
+}
