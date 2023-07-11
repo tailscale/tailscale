@@ -289,6 +289,7 @@ func main() {
 			// these browser-centric headers anyway.
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
 			mux.ServeHTTP(w, r)
 		})
 		if *httpPort > -1 {
