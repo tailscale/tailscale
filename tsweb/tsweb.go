@@ -427,9 +427,9 @@ func VarzHandler(w http.ResponseWriter, r *http.Request) {
 // AddBrowserHeaders sets various HTTP security headers for browser-facing endpoints.
 //
 // The specific headers:
-// - require HTTPS access (HSTS)
-// - disallow iframe embedding
-// - mitigate MIME confusion attacks
+//   - require HTTPS access (HSTS)
+//   - disallow iframe embedding
+//   - mitigate MIME confusion attacks
 //
 // These headers are based on
 // https://infosec.mozilla.org/guidelines/web_security
