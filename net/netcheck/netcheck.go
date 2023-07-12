@@ -41,6 +41,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/mak"
@@ -1110,7 +1111,7 @@ func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Rep
 	report := rs.report.Clone()
 	rs.mu.Unlock()
 
-	c.addReportHistoryAndSetPreferredDERP(report)
+	c.addReportHistoryAndSetPreferredDERP(report, dm.View())
 	c.logConciseReport(report, dm)
 
 	return report
@@ -1444,7 +1445,7 @@ func (c *Client) timeNow() time.Time {
 
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
 // and mutates r.PreferredDERP to contain the best recent one.
-func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
+func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPMapView) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1476,11 +1477,33 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 		}
 	}
 
+	// Scale each region's best latency by any provided scores from the
+	// DERPMap, for use in comparison below.
+	var scores views.Map[int, float64]
+	if hp := dm.HomeParams(); hp.Valid() {
+		scores = hp.RegionScore()
+	}
+	for regionID, d := range bestRecent {
+		if score := scores.Get(regionID); score > 0 {
+			bestRecent[regionID] = time.Duration(float64(d) * score)
+		}
+	}
+
 	// Then, pick which currently-alive DERP server from the
 	// current report has the best latency over the past maxAge.
-	var bestAny time.Duration
-	var oldRegionCurLatency time.Duration
+	var (
+		bestAny             time.Duration // global minimum
+		oldRegionCurLatency time.Duration // latency of old PreferredDERP
+	)
 	for regionID, d := range r.RegionLatency {
+		// Scale this report's latency by any scores provided by the
+		// server; we did this for the bestRecent map above, but we
+		// don't mutate the actual reports in-place (in case scores
+		// change), so we need to do it here as well.
+		if score := scores.Get(regionID); score > 0 {
+			d = time.Duration(float64(d) * score)
+		}
+
 		if regionID == prevDERP {
 			oldRegionCurLatency = d
 		}
@@ -1491,13 +1514,11 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report) {
 		}
 	}
 
-	// If we're changing our preferred DERP but the old one's still
-	// accessible and the new one's not much better, just stick with
-	// where we are.
-	if prevDERP != 0 &&
-		r.PreferredDERP != prevDERP &&
-		oldRegionCurLatency != 0 &&
-		bestAny > oldRegionCurLatency/3*2 {
+	// If we're changing our preferred DERP, the old one's still
+	// accessible, and the new one's not much better, just stick
+	// with where we are.
+	changingPreferred := prevDERP != 0 && r.PreferredDERP != prevDERP
+	if changingPreferred && oldRegionCurLatency != 0 && bestAny > oldRegionCurLatency/3*2 {
 		r.PreferredDERP = prevDERP
 	}
 }

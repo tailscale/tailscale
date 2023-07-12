@@ -264,6 +264,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	tests := []struct {
 		name        string
 		steps       []step
+		homeParams  *tailcfg.DERPHomeParams
 		wantDERP    int // want PreferredDERP on final step
 		wantPrevLen int // wanted len(c.prev)
 	}{
@@ -335,6 +336,52 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantPrevLen: 2,
 			wantDERP:    2, // 2 got fast enough
 		},
+		{
+			name: "derp_home_params",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 2.0 / 3, // 66%
+				},
+			},
+			steps: []step{
+				// We only use a single step here to avoid
+				// conflating DERP selection as a result of
+				// weight hints with the "stickiness" check
+				// that tries to not change the home DERP
+				// between steps.
+				{1 * time.Second, report("d1", 10, "d2", 8)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    1, // 2 was faster, but not by 50%+
+		},
+		{
+			name: "derp_home_params_high_latency",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 2.0 / 3, // 66%
+				},
+			},
+			steps: []step{
+				// See derp_home_params for why this is a single step.
+				{1 * time.Second, report("d1", 100, "d2", 10)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    2, // 2 was faster by more than 50%
+		},
+		{
+			name: "derp_home_params_invalid",
+			homeParams: &tailcfg.DERPHomeParams{
+				RegionScore: map[int]float64{
+					1: 0.0,
+					2: -1.0,
+				},
+			},
+			steps: []step{
+				{1 * time.Second, report("d1", 4, "d2", 5)},
+			},
+			wantPrevLen: 1,
+			wantDERP:    1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -342,9 +389,10 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			c := &Client{
 				TimeNow: func() time.Time { return fakeTime },
 			}
+			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			for _, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
-				c.addReportHistoryAndSetPreferredDERP(s.r)
+				c.addReportHistoryAndSetPreferredDERP(s.r, dm.View())
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
 			if got, want := len(c.prev), tt.wantPrevLen; got != want {
