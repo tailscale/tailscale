@@ -457,6 +457,7 @@ func TestHandlePeerAPI(t *testing.T) {
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
 				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
+				clock:          &tstest.Clock{},
 			}
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
@@ -506,6 +507,7 @@ func TestFileDeleteRace(t *testing.T) {
 		b: &LocalBackend{
 			logf:           t.Logf,
 			capFileSharing: true,
+			clock:          &tstest.Clock{},
 		},
 		rootDir: dir,
 	}
