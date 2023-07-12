@@ -286,6 +286,28 @@ var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	Error             string
 }{})
 
+// Clone makes a deep copy of DERPHomeParams.
+// The result aliases no memory with the original.
+func (src *DERPHomeParams) Clone() *DERPHomeParams {
+	if src == nil {
+		return nil
+	}
+	dst := new(DERPHomeParams)
+	*dst = *src
+	if dst.RegionScore != nil {
+		dst.RegionScore = map[int]float64{}
+		for k, v := range src.RegionScore {
+			dst.RegionScore[k] = v
+		}
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _DERPHomeParamsCloneNeedsRegeneration = DERPHomeParams(struct {
+	RegionScore map[int]float64
+}{})
+
 // Clone makes a deep copy of DERPRegion.
 // The result aliases no memory with the original.
 func (src *DERPRegion) Clone() *DERPRegion {
@@ -318,6 +340,7 @@ func (src *DERPMap) Clone() *DERPMap {
 	}
 	dst := new(DERPMap)
 	*dst = *src
+	dst.HomeParams = src.HomeParams.Clone()
 	if dst.Regions != nil {
 		dst.Regions = map[int]*DERPRegion{}
 		for k, v := range src.Regions {
@@ -329,6 +352,7 @@ func (src *DERPMap) Clone() *DERPMap {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _DERPMapCloneNeedsRegeneration = DERPMap(struct {
+	HomeParams         *DERPHomeParams
 	Regions            map[int]*DERPRegion
 	OmitDefaultRegions bool
 }{})
@@ -484,7 +508,7 @@ var _LocationCloneNeedsRegeneration = Location(struct {
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -547,6 +571,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **RegisterResponse:
+			*dst = src.Clone()
+			return true
+		}
+	case *DERPHomeParams:
+		switch dst := dst.(type) {
+		case *DERPHomeParams:
+			*dst = *src.Clone()
+			return true
+		case **DERPHomeParams:
 			*dst = src.Clone()
 			return true
 		}

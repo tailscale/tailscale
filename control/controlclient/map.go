@@ -90,9 +90,28 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastUserProfile[up.ID] = up
 	}
 
-	if resp.DERPMap != nil {
+	if dm := resp.DERPMap; dm != nil {
 		ms.vlogf("netmap: new map contains DERP map")
-		ms.lastDERPMap = resp.DERPMap
+
+		// Zero-valued fields in a DERPMap mean that we're not changing
+		// anything and are using the previous value(s).
+		if ldm := ms.lastDERPMap; ldm != nil {
+			if dm.Regions == nil {
+				dm.Regions = ldm.Regions
+				dm.OmitDefaultRegions = ldm.OmitDefaultRegions
+			}
+			if dm.HomeParams == nil {
+				dm.HomeParams = ldm.HomeParams
+			} else if oldhh := ldm.HomeParams; oldhh != nil {
+				// Propagate sub-fields of HomeParams
+				hh := dm.HomeParams
+				if hh.RegionScore == nil {
+					hh.RegionScore = oldhh.RegionScore
+				}
+			}
+		}
+
+		ms.lastDERPMap = dm
 	}
 
 	if pf := resp.PacketFilter; pf != nil {

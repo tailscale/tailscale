@@ -3,7 +3,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location --clonefunc
 
 import (
 	"bytes"
@@ -101,7 +101,8 @@ type CapabilityVersion int
 //   - 62: 2023-05-05: Client can notify control over noise for SSHEventNotificationRequest recording failure events
 //   - 63: 2023-06-08: Client understands SSHAction.AllowRemotePortForwarding.
 //   - 64: 2023-07-11: Client understands s/CapabilityTailnetLockAlpha/CapabilityTailnetLock
-const CurrentCapabilityVersion CapabilityVersion = 64
+//   - 65: 2023-07-12: Client understands DERPMap.HomeParams + incremental DERPMap updates with params
+const CurrentCapabilityVersion CapabilityVersion = 65
 
 type StableID string
 
