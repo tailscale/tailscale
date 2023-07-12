@@ -619,3 +619,108 @@ func TestCopyDebugOptBools(t *testing.T) {
 		}
 	}
 }
+
+func TestDeltaDERPMap(t *testing.T) {
+	regions1 := map[int]*tailcfg.DERPRegion{
+		1: {
+			RegionID: 1,
+			Nodes: []*tailcfg.DERPNode{{
+				Name:     "derp1a",
+				RegionID: 1,
+				HostName: "derp1a" + tailcfg.DotInvalid,
+				IPv4:     "169.254.169.254",
+				IPv6:     "none",
+			}},
+		},
+	}
+
+	// As above, but with a changed IPv4 addr
+	regions2 := map[int]*tailcfg.DERPRegion{1: regions1[1].Clone()}
+	regions2[1].Nodes[0].IPv4 = "127.0.0.1"
+
+	type step struct {
+		got  *tailcfg.DERPMap
+		want *tailcfg.DERPMap
+	}
+	tests := []struct {
+		name  string
+		steps []step
+	}{
+		{
+			name: "nothing-to-nothing",
+			steps: []step{
+				{nil, nil},
+				{nil, nil},
+			},
+		},
+		{
+			name: "regions-sticky",
+			steps: []step{
+				{&tailcfg.DERPMap{Regions: regions1}, &tailcfg.DERPMap{Regions: regions1}},
+				{&tailcfg.DERPMap{}, &tailcfg.DERPMap{Regions: regions1}},
+			},
+		},
+		{
+			name: "regions-change",
+			steps: []step{
+				{&tailcfg.DERPMap{Regions: regions1}, &tailcfg.DERPMap{Regions: regions1}},
+				{&tailcfg.DERPMap{Regions: regions2}, &tailcfg.DERPMap{Regions: regions2}},
+			},
+		},
+		{
+			name: "home-params",
+			steps: []step{
+				// Send a DERP map
+				{&tailcfg.DERPMap{Regions: regions1}, &tailcfg.DERPMap{Regions: regions1}},
+				// Send home params, want to still have the same regions
+				{
+					&tailcfg.DERPMap{HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{1: 0.5},
+					}},
+					&tailcfg.DERPMap{Regions: regions1, HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{1: 0.5},
+					}},
+				},
+			},
+		},
+		{
+			name: "home-params-sub-fields",
+			steps: []step{
+				// Send a DERP map with home params
+				{
+					&tailcfg.DERPMap{Regions: regions1, HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{1: 0.5},
+					}},
+					&tailcfg.DERPMap{Regions: regions1, HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{1: 0.5},
+					}},
+				},
+				// Sending a struct with a 'HomeParams' field but nil RegionScore doesn't change home params...
+				{
+					&tailcfg.DERPMap{HomeParams: &tailcfg.DERPHomeParams{RegionScore: nil}},
+					&tailcfg.DERPMap{Regions: regions1, HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{1: 0.5},
+					}},
+				},
+				// ... but sending one with a non-nil and empty RegionScore field zeroes that out.
+				{
+					&tailcfg.DERPMap{HomeParams: &tailcfg.DERPHomeParams{RegionScore: map[int]float64{}}},
+					&tailcfg.DERPMap{Regions: regions1, HomeParams: &tailcfg.DERPHomeParams{
+						RegionScore: map[int]float64{},
+					}},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ms := newTestMapSession(t)
+			for stepi, s := range tt.steps {
+				nm := ms.netmapForResponse(&tailcfg.MapResponse{DERPMap: s.got})
+				if !reflect.DeepEqual(nm.DERPMap, s.want) {
+					t.Errorf("unexpected result at step index %v; got: %s", stepi, must.Get(json.Marshal(nm.DERPMap)))
+				}
+			}
+		})
+	}
+}
