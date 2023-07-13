@@ -227,7 +227,7 @@ func (t *strideTable[T]) treeDebugString() string {
 func (t *strideTable[T]) treeDebugStringRec(w io.Writer, idx, indent int) {
 	addr, len := inversePrefixIndex(idx)
 	if t.entries[idx].prefixIndex != 0 && t.entries[idx].prefixIndex == idx {
-		fmt.Fprintf(w, "%s%d/%d (%d/%d) = %v\n", strings.Repeat(" ", indent), addr, len, addr, len, *t.entries[idx].value)
+		fmt.Fprintf(w, "%s%d/%d (%02x/%d) = %v\n", strings.Repeat(" ", indent), addr, len, addr, len, *t.entries[idx].value)
 		indent += 2
 	}
 	if idx >= firstHostIndex {
