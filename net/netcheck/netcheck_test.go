@@ -166,7 +166,7 @@ func TestBasic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
+	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestWorksWhenUDPBlocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
-	r, err := c.GetReport(ctx, dm)
+	r, err := c.GetReport(ctx, dm, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			for _, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
-				c.addReportHistoryAndSetPreferredDERP(s.r, dm.View())
+				c.addReportHistoryAndSetPreferredDERP(s.r, dm.View(), nil)
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r
 			if got, want := len(c.prev), tt.wantPrevLen; got != want {
@@ -862,7 +862,7 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
+	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

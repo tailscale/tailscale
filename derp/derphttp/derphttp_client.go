@@ -851,7 +851,7 @@ func (c *Client) SendPing(data [8]byte) error {
 		return ErrClientClosed
 	}
 	if client == nil {
-		return errors.New("client not connected")
+		return ErrClientNotConnected
 	}
 	return client.SendPing(data)
 }
@@ -866,9 +866,24 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 		return netip.AddrPort{}, ErrClientClosed
 	}
 	if client == nil {
-		return netip.AddrPort{}, errors.New("client not connected")
+		return netip.AddrPort{}, ErrClientNotConnected
 	}
 	return client.LocalAddr()
+}
+
+// RTT reports the TCP RTT for the currently-active DERP connection, without
+// any implicit connect or reconnect.
+func (c *Client) RTT() (time.Duration, error) {
+	c.mu.Lock()
+	closed, client := c.closed, c.client
+	c.mu.Unlock()
+	if closed {
+		return 0, ErrClientClosed
+	}
+	if client == nil {
+		return 0, ErrClientNotConnected
+	}
+	return client.RTT()
 }
 
 func (c *Client) ForwardPacket(from, to key.NodePublic, b []byte) error {
@@ -1045,6 +1060,7 @@ func (c *Client) closeForReconnect(brokenClient *derp.Client) {
 }
 
 var ErrClientClosed = errors.New("derphttp.Client closed")
+var ErrClientNotConnected = errors.New("client not connected")
 
 func parseMetaCert(certs []*x509.Certificate) (serverPub key.NodePublic, serverProtoVersion int) {
 	for _, cert := range certs {

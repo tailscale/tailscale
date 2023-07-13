@@ -841,10 +841,29 @@ func (c *Conn) setNetInfoHavePortMap() {
 func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.mu.Lock()
 	dm := c.derpMap
+
+	// We want to get the active RTTs for all open DERP connections, since
+	// we can use this to bound the latency to a given DERP region.
+	// However, we don't want to hold the mutex while making a bunch of
+	// syscalls; grab all clients here, and then actually fetch them below.
+	openDERPs := make(map[int]*derphttp.Client, len(c.activeDerp))
+	for regionID, ad := range c.activeDerp {
+		openDERPs[regionID] = ad.c
+	}
+
 	c.mu.Unlock()
 
 	if dm == nil || c.networkDown() {
 		return new(netcheck.Report), nil
+	}
+
+	derpBounds := make(map[int]time.Duration, len(openDERPs))
+	for regionID, dclient := range openDERPs {
+		if dur, err := dclient.RTT(); err == nil {
+			derpBounds[regionID] = dur
+		} else {
+			c.dlogf("[v1] magicsock: error fetching RTT for region %d: %v", regionID, err)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -853,7 +872,9 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	c.stunReceiveFunc.Store(c.netChecker.ReceiveSTUNPacket)
 	defer c.ignoreSTUNPackets()
 
-	report, err := c.netChecker.GetReport(ctx, dm)
+	report, err := c.netChecker.GetReport(ctx, dm, &netcheck.GetReportOptions{
+		DERPRegionLatencyBounds: derpBounds,
+	})
 	if err != nil {
 		return nil, err
 	}
