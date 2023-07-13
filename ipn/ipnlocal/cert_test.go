@@ -173,11 +173,12 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 			want:      false,
 		},
 	}
+	b := new(LocalBackend)
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
 			reset()
 
-			ret, err := shouldStartDomainRenewal("example.com", now, mustMakePair(&x509.Certificate{
+			ret, err := b.shouldStartDomainRenewalByExpiry(now, mustMakePair(&x509.Certificate{
 				SerialNumber: big.NewInt(2019),
 				Subject:      subject,
 				NotBefore:    tt.notBefore,
