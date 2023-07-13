@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	insecurerand "math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/acme"
+	"github.com/tailscale/golang-x-crypto/acme"
 	"golang.org/x/exp/slices"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
@@ -101,7 +102,7 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 	}
 
 	if pair, err := getCertPEMCached(cs, domain, now); err == nil {
-		shouldRenew, err := shouldStartDomainRenewal(domain, now, pair)
+		shouldRenew, err := b.shouldStartDomainRenewal(cs, domain, now, pair)
 		if err != nil {
 			logf("error checking for certificate renewal: %v", err)
 		} else if shouldRenew {
@@ -120,7 +121,7 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertK
 	return pair, nil
 }
 
-func shouldStartDomainRenewal(domain string, now time.Time, pair *TLSCertKeyPair) (bool, error) {
+func (b *LocalBackend) shouldStartDomainRenewal(cs certStore, domain string, now time.Time, pair *TLSCertKeyPair) (bool, error) {
 	renewMu.Lock()
 	defer renewMu.Unlock()
 	if last, ok := lastRenewCheck[domain]; ok && now.Sub(last) < time.Minute {
@@ -130,6 +131,18 @@ func shouldStartDomainRenewal(domain string, now time.Time, pair *TLSCertKeyPair
 	}
 	lastRenewCheck[domain] = now
 
+	renew, err := b.shouldStartDomainRenewalByARI(cs, now, pair)
+	if err != nil {
+		// Log any ARI failure and fall back to checking for renewal by expiry.
+		b.logf("acme: ARI check failed: %v; falling back to expiry-based check", err)
+	} else {
+		return renew, nil
+	}
+
+	return b.shouldStartDomainRenewalByExpiry(now, pair)
+}
+
+func (b *LocalBackend) shouldStartDomainRenewalByExpiry(now time.Time, pair *TLSCertKeyPair) (bool, error) {
 	block, _ := pem.Decode(pair.CertPEM)
 	if block == nil {
 		return false, fmt.Errorf("parsing certificate PEM")
@@ -155,6 +168,42 @@ func shouldStartDomainRenewal(domain string, now time.Time, pair *TLSCertKeyPair
 		return true, nil
 	}
 	return false, nil
+}
+
+func (b *LocalBackend) shouldStartDomainRenewalByARI(cs certStore, now time.Time, pair *TLSCertKeyPair) (bool, error) {
+	var blocks []*pem.Block
+	rest := pair.CertPEM
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return false, fmt.Errorf("parsing certificate PEM")
+		}
+		blocks = append(blocks, block)
+	}
+	if len(blocks) < 2 {
+		return false, fmt.Errorf("could not parse certificate chain from certStore, got %d PEM block(s)", len(blocks))
+	}
+	ac, err := acmeClient(cs)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
+	defer cancel()
+	ri, err := ac.FetchRenewalInfo(ctx, blocks[0].Bytes, blocks[1].Bytes)
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch renewal info from ACME server: %w", err)
+	}
+	if acmeDebug() {
+		b.logf("acme: ARI response: %+v", ri)
+	}
+
+	// Select a random time in the suggested window and renew if that time has
+	// passed. Time is randomized per recommendation in
+	// https://datatracker.ietf.org/doc/draft-ietf-acme-ari/
+	start, end := ri.SuggestedWindow.Start, ri.SuggestedWindow.End
+	renewTime := start.Add(time.Duration(insecurerand.Int63n(int64(end.Sub(start)))))
+	return now.After(renewTime), nil
 }
 
 // certStore provides a way to perist and retrieve TLS certificates.
@@ -328,13 +377,9 @@ func (b *LocalBackend) getCertPEM(ctx context.Context, cs certStore, logf logger
 		return nil, err
 	}
 
-	key, err := acmeKey(cs)
+	ac, err := acmeClient(cs)
 	if err != nil {
-		return nil, fmt.Errorf("acmeKey: %w", err)
-	}
-	ac := &acme.Client{
-		Key:       key,
-		UserAgent: "tailscaled/" + version.Long(),
+		return nil, err
 	}
 
 	a, err := ac.GetReg(ctx, "" /* pre-RFC param */)
@@ -538,6 +583,20 @@ func acmeKey(cs certStore) (crypto.Signer, error) {
 		return nil, err
 	}
 	return privKey, nil
+}
+
+func acmeClient(cs certStore) (*acme.Client, error) {
+	key, err := acmeKey(cs)
+	if err != nil {
+		return nil, fmt.Errorf("acmeKey: %w", err)
+	}
+	// Note: if we add support for additional ACME providers (other than
+	// LetsEncrypt), we should make sure that they support ARI extension (see
+	// shouldStartDomainRenewalARI).
+	return &acme.Client{
+		Key:       key,
+		UserAgent: "tailscaled/" + version.Long(),
+	}, nil
 }
 
 // validCertPEM reports whether the given certificate is valid for domain at now.
