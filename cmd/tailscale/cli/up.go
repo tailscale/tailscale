@@ -30,7 +30,6 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/oauth2/clientcredentials"
 	"tailscale.com/client/tailscale"
-	"tailscale.com/envknob"
 	"tailscale.com/health/healthmsg"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -1131,9 +1130,6 @@ func init() {
 func resolveAuthKey(ctx context.Context, v, tags string) (string, error) {
 	if !strings.HasPrefix(v, "tskey-client-") {
 		return v, nil
-	}
-	if !envknob.Bool("TS_EXPERIMENT_OAUTH_AUTHKEY") {
-		return "", errors.New("oauth authkeys are in experimental status")
 	}
 	if tags == "" {
 		return "", errors.New("oauth authkeys require --advertise-tags")
