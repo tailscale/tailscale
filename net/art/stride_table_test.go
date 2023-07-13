@@ -52,11 +52,15 @@ func TestStrideTableInsert(t *testing.T) {
 	slow := slowTable[int]{pfxs}
 	fast := strideTable[int]{}
 
-	t.Logf("slow table:\n%s", slow.String())
+	if debugStrideInsert {
+		t.Logf("slow table:\n%s", slow.String())
+	}
 
 	for _, pfx := range pfxs {
 		fast.insert(pfx.addr, pfx.len, pfx.val)
-		t.Logf("after insert %d/%d:\n%s", pfx.addr, pfx.len, fast.tableDebugString())
+		if debugStrideInsert {
+			t.Logf("after insert %d/%d:\n%s", pfx.addr, pfx.len, fast.tableDebugString())
+		}
 	}
 
 	for i := 0; i < 256; i++ {
@@ -122,11 +126,15 @@ func TestStrideTableDelete(t *testing.T) {
 	slow := slowTable[int]{pfxs}
 	fast := strideTable[int]{}
 
-	t.Logf("slow table:\n%s", slow.String())
+	if debugStrideDelete {
+		t.Logf("slow table:\n%s", slow.String())
+	}
 
 	for _, pfx := range pfxs {
 		fast.insert(pfx.addr, pfx.len, pfx.val)
-		t.Logf("after insert %d/%d:\n%s", pfx.addr, pfx.len, fast.tableDebugString())
+		if debugStrideDelete {
+			t.Logf("after insert %d/%d:\n%s", pfx.addr, pfx.len, fast.tableDebugString())
+		}
 	}
 
 	toDelete := pfxs[:50]
