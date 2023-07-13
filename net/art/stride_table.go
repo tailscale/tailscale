@@ -13,6 +13,11 @@ import (
 	"strings"
 )
 
+const (
+	debugStrideInsert = false
+	debugStrideDelete = false
+)
+
 // strideEntry is a strideTable entry.
 type strideEntry[T any] struct {
 	// prefixIndex is the prefixIndex(...) value that caused this stride entry's
