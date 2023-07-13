@@ -48,10 +48,10 @@ type strideTable[T any] struct {
 	// memory trickery to store the refcount, but this is Go, where we don't
 	// store random bits in pointers lest we confuse the GC)
 	entries [lastHostIndex + 1]strideEntry[T]
-	// refs is the number of route entries and child strideTables referenced by
-	// this table. It is used in the multi-layered logic to determine when this
-	// table is empty and can be deleted.
-	refs int
+	// routeRefs is the number of route entries in this table.
+	routeRefs uint16
+	// childRefs is the number of child strideTables referenced by this table.
+	childRefs uint16
 }
 
 const (
@@ -72,25 +72,58 @@ func (t *strideTable[T]) getChild(addr uint8) (child *strideTable[T], idx int) {
 // obtained via a call to getChild.
 func (t *strideTable[T]) deleteChild(idx int) {
 	t.entries[idx].child = nil
-	t.refs--
+	t.childRefs--
+}
+
+// setChild replaces the child strideTable for addr (if any) with child.
+func (t *strideTable[T]) setChild(addr uint8, child *strideTable[T]) {
+	idx := hostIndex(addr)
+	if t.entries[idx].child == nil {
+		t.childRefs++
+	}
+	t.entries[idx].child = child
+}
+
+// setChildByIdx replaces the child strideTable at idx (if any) with
+// child. idx should be obtained via a call to getChild.
+func (t *strideTable[T]) setChildByIdx(idx int, child *strideTable[T]) {
+	if t.entries[idx].child == nil {
+		t.childRefs++
+	}
+	t.entries[idx].child = child
 }
 
 // getOrCreateChild returns the child strideTable for addr, creating it if
 // necessary.
-func (t *strideTable[T]) getOrCreateChild(addr uint8) *strideTable[T] {
+func (t *strideTable[T]) getOrCreateChild(addr uint8) (child *strideTable[T], created bool) {
 	idx := hostIndex(addr)
 	if t.entries[idx].child == nil {
 		t.entries[idx].child = &strideTable[T]{
 			prefix: childPrefixOf(t.prefix, addr),
 		}
-		t.refs++
+		t.childRefs++
+		return t.entries[idx].child, true
 	}
-	return t.entries[idx].child
+	return t.entries[idx].child, false
 }
 
+// getValAndChild returns both the prefix and child strideTable for
+// addr. Both returned values can be nil if no entry of that type
+// exists for addr.
 func (t *strideTable[T]) getValAndChild(addr uint8) (*T, *strideTable[T]) {
 	idx := hostIndex(addr)
 	return t.entries[idx].value, t.entries[idx].child
+}
+
+// findFirstChild returns the first non-nil child strideTable in t, or
+// nil if t has no children.
+func (t *strideTable[T]) findFirstChild() *strideTable[T] {
+	for i := firstHostIndex; i <= lastHostIndex; i++ {
+		if child := t.entries[i].child; child != nil {
+			return child
+		}
+	}
+	return nil
 }
 
 // allot updates entries whose stored prefixIndex matches oldPrefixIndex, in the
@@ -133,7 +166,7 @@ func (t *strideTable[T]) insert(addr uint8, prefixLen int, val *T) {
 	if oldIdx != idx {
 		// This route entry was freshly created (not just updated), that's a new
 		// reference.
-		t.refs++
+		t.routeRefs++
 	}
 	return
 }
@@ -150,7 +183,7 @@ func (t *strideTable[T]) delete(addr uint8, prefixLen int) *T {
 
 	parentIdx := idx >> 1
 	t.allot(idx, idx, t.entries[parentIdx].prefixIndex, t.entries[parentIdx].value)
-	t.refs--
+	t.routeRefs--
 	return val
 }
 
