@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 	"tailscale.com/disco"
 	"tailscale.com/net/memnet"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -990,9 +991,10 @@ func TestClientRecv(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
-				nc:   dummyNetConn{},
-				br:   bufio.NewReader(bytes.NewReader(tt.input)),
-				logf: t.Logf,
+				nc:    dummyNetConn{},
+				br:    bufio.NewReader(bytes.NewReader(tt.input)),
+				logf:  t.Logf,
+				clock: &tstest.Clock{},
 			}
 			got, err := c.Recv()
 			if err != nil {
@@ -1435,7 +1437,8 @@ func (w *countWriter) ResetStats() {
 func TestClientSendRateLimiting(t *testing.T) {
 	cw := new(countWriter)
 	c := &Client{
-		bw: bufio.NewWriter(cw),
+		bw:    bufio.NewWriter(cw),
+		clock: &tstest.Clock{},
 	}
 	c.setSendRateLimiter(ServerInfoMessage{})
 
