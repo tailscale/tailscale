@@ -303,6 +303,11 @@ func (c *Clock) AfterFunc(d time.Duration, f func()) tstime.TimerController {
 	return t
 }
 
+// Since subtracts specified duration from Now().
+func (c *Clock) Since(t time.Time) time.Duration {
+	return c.Now().Sub(t)
+}
+
 // eventHandler offers a common interface for Timer and Ticker events to avoid
 // code duplication in eventManager.
 type eventHandler interface {
