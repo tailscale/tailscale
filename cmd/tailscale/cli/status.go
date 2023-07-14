@@ -200,11 +200,19 @@ func runStatus(ctx context.Context, args []string) error {
 	if statusArgs.self && st.Self != nil {
 		printPS(st.Self)
 	}
+
+	locBasedExitNode := false
 	if statusArgs.peers {
 		var peers []*ipnstate.PeerStatus
 		for _, peer := range st.Peers() {
 			ps := st.Peer[peer]
 			if ps.ShareeNode {
+				continue
+			}
+			if ps.Location != nil && ps.ExitNodeOption && !ps.ExitNode {
+				// Location based exit nodes are only shown with the
+				// `exit-node list` command.
+				locBasedExitNode = true
 				continue
 			}
 			peers = append(peers, ps)
@@ -218,6 +226,10 @@ func runStatus(ctx context.Context, args []string) error {
 		}
 	}
 	Stdout.Write(buf.Bytes())
+	if locBasedExitNode {
+		println()
+		println("# To see the full list of exit nodes, including location-based exit nodes, run `tailscale exit-node list`  \n")
+	}
 	if len(st.Health) > 0 {
 		outln()
 		printHealth()

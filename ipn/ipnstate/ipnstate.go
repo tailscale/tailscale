@@ -273,6 +273,8 @@ type PeerStatus struct {
 	// KeyExpiry, if present, is the time at which the node key expired or
 	// will expire.
 	KeyExpiry *time.Time `json:",omitempty"`
+
+	Location *tailcfg.Location `json:",omitempty"`
 }
 
 type StatusBuilder struct {
@@ -457,6 +459,7 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	if t := st.KeyExpiry; t != nil {
 		e.KeyExpiry = ptr.To(*t)
 	}
+	e.Location = st.Location
 }
 
 type StatusUpdater interface {
