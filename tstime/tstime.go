@@ -84,6 +84,9 @@ type Clock interface {
 	// by this Clock. When the ticker expires, it will call the provided func.
 	// It follows the semantics of time.AfterFunc.
 	AfterFunc(d time.Duration, f func()) TimerController
+	// Since returns the time elapsed since t.
+	// It follows the semantics of time.Since.
+	Since(t time.Time) time.Duration
 }
 
 // TickerController offers the receivers of a time.Ticker to ensure
@@ -134,4 +137,9 @@ func (StdClock) NewTicker(d time.Duration) (TickerController, <-chan time.Time) 
 // AfterFunc calls time.AfterFunc.
 func (StdClock) AfterFunc(d time.Duration, f func()) TimerController {
 	return time.AfterFunc(d, f)
+}
+
+// Since calls time.Since.
+func (StdClock) Since(t time.Time) time.Duration {
+	return time.Since(t)
 }

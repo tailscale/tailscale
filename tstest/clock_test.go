@@ -2437,3 +2437,47 @@ func TestAfterFunc(t *testing.T) {
 		})
 	}
 }
+
+func TestSince(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		start time.Time
+		since time.Time
+		want  time.Duration
+	}{
+		{
+			name:  "positive",
+			start: time.Unix(12345, 1000),
+			since: time.Unix(11111, 1000),
+			want:  1234 * time.Second,
+		},
+		{
+			name:  "negative",
+			start: time.Unix(12345, 1000),
+			since: time.Unix(15436, 1000),
+			want:  -3091 * time.Second,
+		},
+		{
+			name:  "zero",
+			start: time.Unix(12345, 1000),
+			since: time.Unix(12345, 1000),
+			want:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			clock := NewClock(ClockOpts{
+				Start: tt.start,
+			})
+			got := clock.Since(tt.since)
+			if got != tt.want {
+				t.Errorf("Since duration %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
