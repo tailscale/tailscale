@@ -694,9 +694,18 @@ func (c *Auto) StartLogout() {
 func (c *Auto) Logout(ctx context.Context) error {
 	c.logf("client.Logout()")
 
+	c.mu.Lock()
+	// This happens if a user logs out when tailscale client is already logged
+	// out either because the user logged out previously or hasn't yet logged
+	// in.
+	if !c.loggedIn {
+		c.logf("client.Logout(): no action taken, client is already logged out.")
+		c.mu.Unlock()
+		return nil
+	}
+
 	errc := make(chan error, 1)
 
-	c.mu.Lock()
 	c.loginGoal = &LoginGoal{
 		wantLoggedIn:    false,
 		loggedOutResult: errc,
