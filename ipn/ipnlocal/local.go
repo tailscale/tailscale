@@ -747,6 +747,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 			ShareeNode:   p.Hostinfo.ShareeNode(),
 			ExitNode:     p.StableID != "" && p.StableID == exitNodeID,
 			SSH_HostKeys: p.Hostinfo.SSH_HostKeys().AsSlice(),
+			Location:     p.Hostinfo.Location(),
 		}
 		peerStatusFromNode(ps, p)
 

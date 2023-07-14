@@ -129,6 +129,7 @@ change in the future.
 			certCmd,
 			netlockCmd,
 			licensesCmd,
+			exitNodeCmd,
 		},
 		FlagSet:   rootfs,
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
