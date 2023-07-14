@@ -770,6 +770,8 @@ func (c *Direct) SetEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 
 // PollNetMap makes a /map request to download the network map, calling cb with
 // each new netmap.
+// It always returns a non-nil error describing the reason for the failure
+// or why the request ended.
 func (c *Direct) PollNetMap(ctx context.Context, cb func(*netmap.NetworkMap)) error {
 	return c.sendMapRequest(ctx, -1, false, cb)
 }
@@ -798,7 +800,12 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 // every minute.
 const pollTimeout = 120 * time.Second
 
-// cb nil means to omit peers.
+// sendMapRequest makes a /map request to download the network map, calling cb with
+// each new netmap. If maxPolls is -1, it will poll forever and only returns if
+// the context expires or the server returns an error/closes the connection and as
+// such always returns a non-nil error.
+//
+// If cb is nil, OmitPeers will be set to true.
 func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool, cb func(*netmap.NetworkMap)) error {
 	metricMapRequests.Add(1)
 	metricMapRequestsActive.Add(1)
