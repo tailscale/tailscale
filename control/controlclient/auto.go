@@ -551,6 +551,8 @@ func (c *Auto) mapRoutine() {
 				if stillAuthed {
 					c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
 				}
+				// Reset the backoff timer if we got a netmap.
+				bo.BackOff(ctx, nil)
 			})
 
 			health.SetInPollNetMap(false)
