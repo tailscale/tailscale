@@ -357,11 +357,16 @@ func (up *updater) updateMacAppStore() error {
 	}
 
 	newTailscaleVer := strings.TrimPrefix(newTailscale, "Tailscale-")
+	if up.currentOrDryRun(newTailscaleVer) {
+		return nil
+	}
 	if err := up.confirm(newTailscaleVer); err != nil {
 		return err
 	}
 
 	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
 	}
