@@ -699,7 +699,7 @@ func (e *serveEnv) printWebStatusTree(sc *ipn.ServeConfig, hp ipn.HostPort) erro
 		portPart = ""
 	}
 	if scheme == "http" {
-		hostname, _, _ := strings.Cut("host", ".")
+		hostname, _, _ := strings.Cut(host, ".")
 		printf("%s://%s%s (%s)\n", scheme, hostname, portPart, fStatus)
 	}
 	printf("%s://%s%s (%s)\n", scheme, host, portPart, fStatus)
