@@ -1115,6 +1115,7 @@ type slowPrefixEntry[T any] struct {
 }
 
 func (t *slowPrefixTable[T]) delete(pfx netip.Prefix) {
+	pfx = pfx.Masked()
 	ret := make([]slowPrefixEntry[T], 0, len(t.prefixes))
 	for _, ent := range t.prefixes {
 		if ent.pfx == pfx {
@@ -1126,9 +1127,10 @@ func (t *slowPrefixTable[T]) delete(pfx netip.Prefix) {
 }
 
 func (t *slowPrefixTable[T]) insert(pfx netip.Prefix, val *T) {
-	for _, ent := range t.prefixes {
+	pfx = pfx.Masked()
+	for i, ent := range t.prefixes {
 		if ent.pfx == pfx {
-			ent.val = val
+			t.prefixes[i].val = val
 			return
 		}
 	}
