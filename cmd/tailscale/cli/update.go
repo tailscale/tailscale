@@ -356,20 +356,14 @@ func (up *updater) updateMacAppStore() error {
 		return nil
 	}
 
-	// parseSoftwareupdateList guarantees the format of the version string, but
-	// check and document it here, too. A case could be made for `!= 2`, not just
-	// `< 2`, as well.
-	newTailscaleParts := strings.Split(newTailscale, "-")
-	if len(newTailscaleParts) < 2 {
-		return fmt.Errorf(`Tailscale version from the App Store has unexpected format: %q, expect "Tailscale-x.y.z"`, newTailscale)
-	}
-	if err := up.confirm(newTailscaleParts[1]); err != nil {
+	newTailscaleVer := strings.TrimPrefix(newTailscale, "Tailscale-")
+	if err := up.confirm(newTailscaleVer); err != nil {
 		return err
 	}
 
 	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("can't install App Store update for Tailscale: %v", err)
+		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
 	}
 	return nil
 }
