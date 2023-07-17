@@ -826,6 +826,35 @@ func TestDeleteShuffled(t *testing.T) {
 	}
 }
 
+func TestDeleteIsReverseOfInsert(t *testing.T) {
+	// Insert N prefixes, then delete those same prefixes in reverse
+	// order. Each deletion should exactly undo the internal structure
+	// changes that each insert did.
+	const N = 100
+
+	var tab Table[int]
+	prefixes := randomPrefixes(N)
+
+	defer func() {
+		if t.Failed() {
+			fmt.Printf("the prefixes that fail the test: %v\n", prefixes)
+		}
+	}()
+
+	want := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		want = append(want, tab.debugSummary())
+		tab.Insert(p.pfx, p.val)
+	}
+
+	for i := len(prefixes) - 1; i >= 0; i-- {
+		tab.Delete(prefixes[i].pfx)
+		if got := tab.debugSummary(); got != want[i] {
+			t.Fatalf("after delete %d, mismatch:\n\n got: %s\n\nwant: %s", i, got, want[i])
+		}
+	}
+}
+
 type tableTest struct {
 	// addr is an IP address string to look up in a route table.
 	addr string
