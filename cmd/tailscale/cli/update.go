@@ -336,11 +336,6 @@ func (up *updater) updateMacSys() error {
 }
 
 func (up *updater) updateMacAppStore() error {
-	// It turns out that `--schedule` only prints "Automatic checking for updates
-	// is turned on" if *checking* is turned on — even if *installing* updates is
-	// turned off. So a result of "on" isn't as good as we might hope.
-	//
-	// That said, a result of "off" is note-worthy.
 	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
