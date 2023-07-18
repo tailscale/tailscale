@@ -328,6 +328,15 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 			wantDERP:    1, // 2 didn't get fast enough
 		},
 		{
+			name: "preferred_derp_hysteresis_no_switch_absolute",
+			steps: []step{
+				{0 * time.Second, report("d1", 4*time.Millisecond, "d2", 5*time.Millisecond)},
+				{1 * time.Second, report("d1", 4*time.Millisecond, "d2", 1*time.Millisecond)},
+			},
+			wantPrevLen: 2,
+			wantDERP:    1, // 2 is 50%+ faster, but the absolute diff is <10ms
+		},
+		{
 			name: "preferred_derp_hysteresis_do_switch",
 			steps: []step{
 				{0 * time.Second, report("d1", 4, "d2", 5)},
