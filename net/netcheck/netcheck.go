@@ -83,6 +83,7 @@ const (
 	defaultInitialRetransmitTime = 100 * time.Millisecond
 )
 
+// Report contains the result of a single netcheck.
 type Report struct {
 	UDP         bool // a UDP STUN round trip completed
 	IPv6        bool // an IPv6 STUN round trip completed
@@ -209,7 +210,7 @@ type Client struct {
 	prev     map[time.Time]*Report // some previous reports
 	last     *Report               // most recent report
 	lastFull time.Time             // time of last full (non-incremental) report
-	curState *reportState          // non-nil if we're in a call to GetReportn
+	curState *reportState          // non-nil if we're in a call to GetReport
 	resolver *dnscache.Resolver    // only set if UseDNSCache is true
 }
 
@@ -1443,6 +1444,17 @@ func (c *Client) timeNow() time.Time {
 	return time.Now()
 }
 
+const (
+	// preferredDERPAbsoluteDiff specifies the minimum absolute difference
+	// in latencies between two DERP regions that would cause a node to
+	// switch its PreferredDERP ("home DERP"). This ensures that if a node
+	// is 5ms from two different DERP regions, it doesn't flip-flop back
+	// and forth between them if one region gets slightly slower (e.g. if a
+	// node is near region 1 @ 4ms and region 2 @ 5ms, region 1 getting
+	// 5ms slower would cause a flap).
+	preferredDERPAbsoluteDiff = 10 * time.Millisecond
+)
+
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
 // and mutates r.PreferredDERP to contain the best recent one.
 func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPMapView) {
@@ -1514,11 +1526,27 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPM
 		}
 	}
 
-	// If we're changing our preferred DERP, the old one's still
-	// accessible, and the new one's not much better, just stick
-	// with where we are.
+	// If we're changing our preferred DERP, we want to add some stickiness
+	// to the current DERP region. We avoid changing if the old region is
+	// still accessible and one of the conditions below is true.
+	keepOld := false
 	changingPreferred := prevDERP != 0 && r.PreferredDERP != prevDERP
-	if changingPreferred && oldRegionCurLatency != 0 && bestAny > oldRegionCurLatency/3*2 {
+	oldRegionIsAccessible := oldRegionCurLatency != 0
+	if changingPreferred && oldRegionIsAccessible {
+		// bestAny < any other value, so oldRegionCurLatency - bestAny >= 0
+		if oldRegionCurLatency-bestAny < preferredDERPAbsoluteDiff {
+			// The absolute value of latency difference is below
+			// our minimum threshold.
+			keepOld = true
+		}
+		if bestAny > oldRegionCurLatency/3*2 {
+			// Old region is about the same on a percentage basis
+			keepOld = true
+		}
+	}
+	if keepOld {
+		// Reset the report's PreferredDERP to be the previous value,
+		// which undoes any region change we made above.
 		r.PreferredDERP = prevDERP
 	}
 }
