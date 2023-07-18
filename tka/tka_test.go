@@ -524,3 +524,131 @@ func TestAuthorityCompact(t *testing.T) {
 		t.Errorf("ancestor = %v, want %v", anc, c.AUMHashes["C"])
 	}
 }
+
+func TestFindParentForRewrite(t *testing.T) {
+	pub, _ := testingKey25519(t, 1)
+	k1 := Key{Kind: Key25519, Public: pub, Votes: 1}
+
+	pub2, _ := testingKey25519(t, 2)
+	k2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
+	k2ID, _ := k2.ID()
+	pub3, _ := testingKey25519(t, 3)
+	k3 := Key{Kind: Key25519, Public: pub3, Votes: 1}
+
+	c := newTestchain(t, `
+        A -> B -> C -> D -> E
+        A.template = genesis
+        B.template = add2
+        C.template = add3
+        D.template = remove2
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{k1},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		}}),
+		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
+		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}),
+		optTemplate("remove2", AUM{MessageKind: AUMRemoveKey, KeyID: k2ID}))
+
+	a, err := Open(c.Chonk())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// k1 was trusted at genesis, so there's no better rewrite parent
+	// than the genesis.
+	k1ID, _ := k1.ID()
+	k1P, err := a.findParentForRewrite(c.Chonk(), []tkatype.KeyID{k1ID}, k1ID)
+	if err != nil {
+		t.Fatalf("FindParentForRewrite(k1) failed: %v", err)
+	}
+	if k1P != a.oldestAncestor.Hash() {
+		t.Errorf("FindParentForRewrite(k1) = %v, want %v", k1P, a.oldestAncestor.Hash())
+	}
+
+	// k3 was trusted at C, so B would be an ideal rewrite point.
+	k3ID, _ := k3.ID()
+	k3P, err := a.findParentForRewrite(c.Chonk(), []tkatype.KeyID{k3ID}, k1ID)
+	if err != nil {
+		t.Fatalf("FindParentForRewrite(k3) failed: %v", err)
+	}
+	if k3P != c.AUMHashes["B"] {
+		t.Errorf("FindParentForRewrite(k3) = %v, want %v", k3P, c.AUMHashes["B"])
+	}
+
+	// k2 was added but then removed, so HEAD is an appropriate rewrite point.
+	k2P, err := a.findParentForRewrite(c.Chonk(), []tkatype.KeyID{k2ID}, k1ID)
+	if err != nil {
+		t.Fatalf("FindParentForRewrite(k2) failed: %v", err)
+	}
+	if k3P != c.AUMHashes["B"] {
+		t.Errorf("FindParentForRewrite(k2) = %v, want %v", k2P, a.Head())
+	}
+
+	// There's no appropriate point where both k2 and k3 are simultaneously not trusted,
+	// so the best rewrite point is the genesis AUM.
+	doubleP, err := a.findParentForRewrite(c.Chonk(), []tkatype.KeyID{k2ID, k3ID}, k1ID)
+	if err != nil {
+		t.Fatalf("FindParentForRewrite({k2, k3}) failed: %v", err)
+	}
+	if doubleP != a.oldestAncestor.Hash() {
+		t.Errorf("FindParentForRewrite({k2, k3}) = %v, want %v", doubleP, a.oldestAncestor.Hash())
+	}
+}
+
+func TestMakeRetroactiveRevocation(t *testing.T) {
+	pub, _ := testingKey25519(t, 1)
+	k1 := Key{Kind: Key25519, Public: pub, Votes: 1}
+
+	pub2, _ := testingKey25519(t, 2)
+	k2 := Key{Kind: Key25519, Public: pub2, Votes: 1}
+	pub3, _ := testingKey25519(t, 3)
+	k3 := Key{Kind: Key25519, Public: pub3, Votes: 1}
+
+	c := newTestchain(t, `
+        A -> B -> C -> D
+        A.template = genesis
+        C.template = add2
+        D.template = add3
+    `,
+		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
+			Keys:               []Key{k1},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
+		}}),
+		optTemplate("add2", AUM{MessageKind: AUMAddKey, Key: &k2}),
+		optTemplate("add3", AUM{MessageKind: AUMAddKey, Key: &k3}))
+
+	a, err := Open(c.Chonk())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// k2 was added by C, so a forking revocation should:
+	// - have B as a parent
+	// - trust the remaining keys at the time, k1 & k3.
+	k1ID, _ := k1.ID()
+	k2ID, _ := k2.ID()
+	k3ID, _ := k3.ID()
+	forkingAUM, err := a.MakeRetroactiveRevocation(c.Chonk(), []tkatype.KeyID{k2ID}, k1ID, AUMHash{})
+	if err != nil {
+		t.Fatalf("MakeRetroactiveRevocation(k2) failed: %v", err)
+	}
+	if bHash := c.AUMHashes["B"]; !bytes.Equal(forkingAUM.PrevAUMHash, bHash[:]) {
+		t.Errorf("forking AUM has parent %v, want %v", forkingAUM.PrevAUMHash, bHash[:])
+	}
+	if _, err := forkingAUM.State.GetKey(k1ID); err != nil {
+		t.Error("Forked state did not trust k1")
+	}
+	if _, err := forkingAUM.State.GetKey(k3ID); err != nil {
+		t.Error("Forked state did not trust k3")
+	}
+	if _, err := forkingAUM.State.GetKey(k2ID); err == nil {
+		t.Error("Forked state trusted removed-key k2")
+	}
+
+	// Test that removing all trusted keys results in an error.
+	_, err = a.MakeRetroactiveRevocation(c.Chonk(), []tkatype.KeyID{k1ID, k2ID, k3ID}, k1ID, AUMHash{})
+	if wantErr := "cannot revoke all trusted keys"; err == nil || err.Error() != wantErr {
+		t.Fatalf("MakeRetroactiveRevocation({k1, k2, k3}) returned %v, expected %q", err, wantErr)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
+	"tailscale.com/types/tkatype"
 )
 
 var netlockCmd = &ffcli.Command{
@@ -40,6 +41,7 @@ var netlockCmd = &ffcli.Command{
 		nlDisablementKDFCmd,
 		nlLogCmd,
 		nlLocalDisableCmd,
+		nlRevokeKeysCmd,
 	},
 	Exec: runNetworkLockNoSubcommand,
 }
@@ -709,5 +711,116 @@ func wrapAuthKey(ctx context.Context, keyStr string, status *ipnstate.Status) er
 	}
 
 	fmt.Println(wrapped)
+	return nil
+}
+
+var nlRevokeKeysArgs struct {
+	cosign   bool
+	finish   bool
+	forkFrom string
+}
+
+var nlRevokeKeysCmd = &ffcli.Command{
+	Name:       "revoke-keys",
+	ShortUsage: "revoke-keys <tailnet-lock-key>...\n  revoke-keys [--cosign] [--finish] <recovery-blob>",
+	ShortHelp:  "Revoke compromised tailnet-lock keys",
+	LongHelp: `Retroactively revoke the specified tailnet lock keys (tlpub:abc).
+
+Revoked keys are prevented from being used in the future. Any nodes previously signed
+by revoked keys lose their authorization and must be signed again.
+
+Revocation is a multi-step process that requires several signing nodes to ` + "`--cosign`" + ` the revocation. Use ` + "`tailscale lock remove`" + ` instead if the key has not been compromised.
+
+1. To start, run ` + "`tailscale revoke-keys <tlpub-keys>`" + ` with the tailnet lock keys to revoke.
+2. Re-run the ` + "`--cosign`" + ` command output by ` + "`revoke-keys`" + ` on other signing nodes. Use the
+   most recent command output on the next signing node in sequence.
+3. Once the number of ` + "`--cosign`" + `s is greater than the number of keys being revoked,
+   run the command one final time with ` + "`--finish`" + ` instead of ` + "`--cosign`" + `.`,
+	Exec: runNetworkLockRevokeKeys,
+	FlagSet: (func() *flag.FlagSet {
+		fs := newFlagSet("lock revoke-keys")
+		fs.BoolVar(&nlRevokeKeysArgs.cosign, "cosign", false, "continue generating the recovery using the tailnet lock key on this device and the provided recovery blob")
+		fs.BoolVar(&nlRevokeKeysArgs.finish, "finish", false, "finish the recovery process by transmitting the revocation")
+		fs.StringVar(&nlRevokeKeysArgs.forkFrom, "fork-from", "", "parent AUM hash to rewrite from (advanced users only)")
+		return fs
+	})(),
+}
+
+func runNetworkLockRevokeKeys(ctx context.Context, args []string) error {
+	// First step in the process
+	if !nlRevokeKeysArgs.cosign && !nlRevokeKeysArgs.finish {
+		removeKeys, _, err := parseNLArgs(args, true, false)
+		if err != nil {
+			return err
+		}
+
+		keyIDs := make([]tkatype.KeyID, len(removeKeys))
+		for i, k := range removeKeys {
+			keyIDs[i], err = k.ID()
+			if err != nil {
+				return fmt.Errorf("generating keyID: %v", err)
+			}
+		}
+
+		var forkFrom tka.AUMHash
+		if nlRevokeKeysArgs.forkFrom != "" {
+			if len(nlRevokeKeysArgs.forkFrom) == (len(forkFrom) * 2) {
+				// Hex-encoded: like the output of the lock log command.
+				b, err := hex.DecodeString(nlRevokeKeysArgs.forkFrom)
+				if err != nil {
+					return fmt.Errorf("invalid fork-from hash: %v", err)
+				}
+				copy(forkFrom[:], b)
+			} else {
+				if err := forkFrom.UnmarshalText([]byte(nlRevokeKeysArgs.forkFrom)); err != nil {
+					return fmt.Errorf("invalid fork-from hash: %v", err)
+				}
+			}
+		}
+
+		aumBytes, err := localClient.NetworkLockGenRecoveryAUM(ctx, keyIDs, forkFrom)
+		if err != nil {
+			return fmt.Errorf("generation of recovery AUM failed: %w", err)
+		}
+
+		fmt.Printf(`Run the following command on another machine with a trusted tailnet lock key:
+	%s lock recover-compromised-key --cosign %X
+`, os.Args[0], aumBytes)
+		return nil
+	}
+
+	// If we got this far, we need to co-sign the AUM and/or transmit it for distribution.
+	b, err := hex.DecodeString(args[0])
+	if err != nil {
+		return fmt.Errorf("parsing hex: %v", err)
+	}
+	var recoveryAUM tka.AUM
+	if err := recoveryAUM.Unserialize(b); err != nil {
+		return fmt.Errorf("decoding recovery AUM: %v", err)
+	}
+
+	if nlRevokeKeysArgs.cosign {
+		aumBytes, err := localClient.NetworkLockCosignRecoveryAUM(ctx, recoveryAUM)
+		if err != nil {
+			return fmt.Errorf("co-signing recovery AUM failed: %w", err)
+		}
+
+		fmt.Printf(`Co-signing completed successfully.
+
+To accumulate an additional signature, run the following command on another machine with a trusted tailnet lock key:
+	%s lock recover-compromised-key --cosign %X
+
+Alternatively if you are done with co-signing, complete recovery by running the following command:
+	%s lock recover-compromised-key --finish %X
+`, os.Args[0], aumBytes, os.Args[0], aumBytes)
+	}
+
+	if nlRevokeKeysArgs.finish {
+		if err := localClient.NetworkLockSubmitRecoveryAUM(ctx, recoveryAUM); err != nil {
+			return fmt.Errorf("submitting recovery AUM failed: %w", err)
+		}
+		fmt.Println("Recovery completed.")
+	}
+
 	return nil
 }
