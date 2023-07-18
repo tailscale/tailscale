@@ -67,6 +67,11 @@ type Config struct {
 	// routing rules apply.
 	LocalRoutes []netip.Prefix
 
+	// NewMTU is currently only used by the MacOS network extension
+	// app to set the MTU of the tun in the router configuration
+	// callback. If zero, the MTU is unchanged.
+	NewMTU int
+
 	// Linux-only things below, ignored on other platforms.
 	SubnetRoutes     []netip.Prefix         // subnets being advertised to other Tailscale nodes
 	SNATSubnetRoutes bool                   // SNAT traffic to local subnets
