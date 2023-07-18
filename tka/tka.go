@@ -28,6 +28,9 @@ var cborDecOpts = cbor.DecOptions{
 	MaxMapPairs:      1024,
 }
 
+// Arbitrarily chosen limit on scanning AUM trees.
+const maxScanIterations = 2000
+
 // Authority is a Tailnet Key Authority. This type is the main coupling
 // point to the rest of the tailscale client.
 //
@@ -471,7 +474,7 @@ func Open(storage Chonk) (*Authority, error) {
 		return nil, fmt.Errorf("reading last ancestor: %v", err)
 	}
 
-	c, err := computeActiveChain(storage, a, 2000)
+	c, err := computeActiveChain(storage, a, maxScanIterations)
 	if err != nil {
 		return nil, fmt.Errorf("active chain: %v", err)
 	}
@@ -604,7 +607,7 @@ func (a *Authority) InformIdempotent(storage Chonk, updates []AUM) (Authority, e
 		state, hasState := stateAt[parent]
 		var err error
 		if !hasState {
-			if state, err = computeStateAt(storage, 2000, parent); err != nil {
+			if state, err = computeStateAt(storage, maxScanIterations, parent); err != nil {
 				return Authority{}, fmt.Errorf("update %d computing state: %v", i, err)
 			}
 			stateAt[parent] = state
@@ -639,7 +642,7 @@ func (a *Authority) InformIdempotent(storage Chonk, updates []AUM) (Authority, e
 	}
 
 	oldestAncestor := a.oldestAncestor.Hash()
-	c, err := computeActiveChain(storage, &oldestAncestor, 2000)
+	c, err := computeActiveChain(storage, &oldestAncestor, maxScanIterations)
 	if err != nil {
 		return Authority{}, fmt.Errorf("recomputing active chain: %v", err)
 	}
@@ -720,4 +723,116 @@ func (a *Authority) Compact(storage CompactableChonk, o CompactionOptions) error
 	}
 	a.oldestAncestor = ancestor
 	return nil
+}
+
+// findParentForRewrite finds the parent AUM to use when rewriting state to
+// retroactively remove trust in the specified keys.
+func (a *Authority) findParentForRewrite(storage Chonk, removeKeys []tkatype.KeyID, ourKey tkatype.KeyID) (AUMHash, error) {
+	cursor := a.Head()
+
+	for {
+		if cursor == a.oldestAncestor.Hash() {
+			// We've reached as far back in our history as we can,
+			// so we have to rewrite from here.
+			break
+		}
+
+		aum, err := storage.AUM(cursor)
+		if err != nil {
+			return AUMHash{}, fmt.Errorf("reading AUM %v: %w", cursor, err)
+		}
+
+		// An ideal rewrite parent trusts none of the keys to be removed.
+		state, err := computeStateAt(storage, maxScanIterations, cursor)
+		if err != nil {
+			return AUMHash{}, fmt.Errorf("computing state for %v: %w", cursor, err)
+		}
+		keyTrusted := false
+		for _, key := range removeKeys {
+			if _, err := state.GetKey(key); err == nil {
+				keyTrusted = true
+			}
+		}
+		if !keyTrusted {
+			// Success: the revoked keys are not trusted!
+			// Lets check that our key was trusted to ensure
+			// we can sign a fork from here.
+			if _, err := state.GetKey(ourKey); err == nil {
+				break
+			}
+		}
+
+		parent, hasParent := aum.Parent()
+		if !hasParent {
+			// This is the genesis AUM, so we have to rewrite from here.
+			break
+		}
+		cursor = parent
+	}
+
+	return cursor, nil
+}
+
+// MakeRetroactiveRevocation generates a forking update which revokes the specified keys, in
+// such a manner that any malicious use of those keys is erased.
+//
+// If forkFrom is specified, it is used as the parent AUM to fork from. If the zero value,
+// the parent AUM is determined automatically.
+//
+// The generated AUM must be signed with more signatures than the sum of key votes that
+// were compromised, before being consumed by tka.Authority methods.
+func (a *Authority) MakeRetroactiveRevocation(storage Chonk, removeKeys []tkatype.KeyID, ourKey tkatype.KeyID, forkFrom AUMHash) (*AUM, error) {
+	var parent AUMHash
+	if forkFrom == (AUMHash{}) {
+		// Make sure at least one of the recovery keys is currently trusted.
+		foundKey := false
+		for _, k := range removeKeys {
+			if _, err := a.state.GetKey(k); err == nil {
+				foundKey = true
+				break
+			}
+		}
+		if !foundKey {
+			return nil, errors.New("no provided key is currently trusted")
+		}
+
+		p, err := a.findParentForRewrite(storage, removeKeys, ourKey)
+		if err != nil {
+			return nil, fmt.Errorf("finding parent: %v", err)
+		}
+		parent = p
+	} else {
+		parent = forkFrom
+	}
+
+	// Construct the new state where the revoked keys are no longer trusted.
+	state := a.state.Clone()
+	for _, keyToRevoke := range removeKeys {
+		idx := -1
+		for i := range state.Keys {
+			keyID, err := state.Keys[i].ID()
+			if err != nil {
+				return nil, fmt.Errorf("computing keyID: %v", err)
+			}
+			if bytes.Equal(keyToRevoke, keyID) {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			state.Keys = append(state.Keys[:idx], state.Keys[idx+1:]...)
+		}
+	}
+	if len(state.Keys) == 0 {
+		return nil, errors.New("cannot revoke all trusted keys")
+	}
+	state.LastAUMHash = nil // checkpoints can't specify a LastAUMHash
+
+	forkingAUM := &AUM{
+		MessageKind: AUMCheckpoint,
+		State:       &state,
+		PrevAUMHash: parent[:],
+	}
+
+	return forkingAUM, forkingAUM.StaticValidate()
 }

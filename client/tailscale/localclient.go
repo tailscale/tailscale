@@ -961,6 +961,42 @@ func (lc *LocalClient) NetworkLockVerifySigningDeeplink(ctx context.Context, url
 	return decodeJSON[*tka.DeeplinkValidationResult](body)
 }
 
+// NetworkLockGenRecoveryAUM generates an AUM for recovering from a tailnet-lock key compromise.
+func (lc *LocalClient) NetworkLockGenRecoveryAUM(ctx context.Context, removeKeys []tkatype.KeyID, forkFrom tka.AUMHash) ([]byte, error) {
+	vr := struct {
+		Keys     []tkatype.KeyID
+		ForkFrom string
+	}{removeKeys, forkFrom.String()}
+
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/generate-recovery-aum", 200, jsonBody(vr))
+	if err != nil {
+		return nil, fmt.Errorf("sending generate-recovery-aum: %w", err)
+	}
+
+	return body, nil
+}
+
+// NetworkLockCosignRecoveryAUM co-signs a recovery AUM using the node's tailnet lock key.
+func (lc *LocalClient) NetworkLockCosignRecoveryAUM(ctx context.Context, aum tka.AUM) ([]byte, error) {
+	r := bytes.NewReader(aum.Serialize())
+	body, err := lc.send(ctx, "POST", "/localapi/v0/tka/cosign-recovery-aum", 200, r)
+	if err != nil {
+		return nil, fmt.Errorf("sending cosign-recovery-aum: %w", err)
+	}
+
+	return body, nil
+}
+
+// NetworkLockSubmitRecoveryAUM submits a recovery AUM to the control plane.
+func (lc *LocalClient) NetworkLockSubmitRecoveryAUM(ctx context.Context, aum tka.AUM) error {
+	r := bytes.NewReader(aum.Serialize())
+	_, err := lc.send(ctx, "POST", "/localapi/v0/tka/submit-recovery-aum", 200, r)
+	if err != nil {
+		return fmt.Errorf("sending cosign-recovery-aum: %w", err)
+	}
+	return nil
+}
+
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {

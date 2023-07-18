@@ -845,6 +845,93 @@ func (b *LocalBackend) NetworkLockAffectedSigs(keyID tkatype.KeyID) ([]tkatype.M
 	return resp.Signatures, nil
 }
 
+// NetworkLockGenerateRecoveryAUM generates an AUM which retroactively removes trust in the
+// specified keys. This AUM is signed by the current node and returned.
+//
+// If forkFrom is specified, it is used as the parent AUM to fork from. If the zero value,
+// the parent AUM is determined automatically.
+func (b *LocalBackend) NetworkLockGenerateRecoveryAUM(removeKeys []tkatype.KeyID, forkFrom tka.AUMHash) (*tka.AUM, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return nil, errNetworkLockNotActive
+	}
+	var nlPriv key.NLPrivate
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
+		nlPriv = p.Persist().NetworkLockKey()
+	}
+	if nlPriv.IsZero() {
+		return nil, errMissingNetmap
+	}
+
+	aum, err := b.tka.authority.MakeRetroactiveRevocation(b.tka.storage, removeKeys, nlPriv.KeyID(), forkFrom)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sign it ourselves.
+	aum.Signatures, err = nlPriv.SignAUM(aum.SigHash())
+	if err != nil {
+		return nil, fmt.Errorf("signing failed: %w", err)
+	}
+
+	return aum, nil
+}
+
+// NetworkLockCosignRecoveryAUM co-signs the provided recovery AUM and returns
+// the updated structure.
+//
+// The recovery AUM provided should be the output from a previous call to
+// NetworkLockGenerateRecoveryAUM or NetworkLockCosignRecoveryAUM.
+func (b *LocalBackend) NetworkLockCosignRecoveryAUM(aum *tka.AUM) (*tka.AUM, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return nil, errNetworkLockNotActive
+	}
+	var nlPriv key.NLPrivate
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() {
+		nlPriv = p.Persist().NetworkLockKey()
+	}
+	if nlPriv.IsZero() {
+		return nil, errMissingNetmap
+	}
+	for _, sig := range aum.Signatures {
+		if bytes.Equal(sig.KeyID, nlPriv.KeyID()) {
+			return nil, errors.New("this node has already signed this recovery AUM")
+		}
+	}
+
+	// Sign it ourselves.
+	sigs, err := nlPriv.SignAUM(aum.SigHash())
+	if err != nil {
+		return nil, fmt.Errorf("signing failed: %w", err)
+	}
+	aum.Signatures = append(aum.Signatures, sigs...)
+
+	return aum, nil
+}
+
+func (b *LocalBackend) NetworkLockSubmitRecoveryAUM(aum *tka.AUM) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tka == nil {
+		return errNetworkLockNotActive
+	}
+	var ourNodeKey key.NodePublic
+	if p := b.pm.CurrentPrefs(); p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero() {
+		ourNodeKey = p.Persist().PublicNodeKey()
+	}
+	if ourNodeKey.IsZero() {
+		return errors.New("no node-key: is tailscale logged in?")
+	}
+
+	b.mu.Unlock()
+	_, err := b.tkaDoSyncSend(ourNodeKey, aum.Hash(), []tka.AUM{*aum}, false)
+	b.mu.Lock()
+	return err
+}
+
 var tkaSuffixEncoder = base64.RawStdEncoding
 
 // NetworkLockWrapPreauthKey wraps a pre-auth key with information to
