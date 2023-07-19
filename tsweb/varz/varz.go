@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"tailscale.com/metrics"
+	"tailscale.com/tstime"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/version"
 )
@@ -39,9 +40,11 @@ const (
 // prefixesToTrim contains key prefixes to remove when exporting and sorting metrics.
 var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix}
 
-var timeStart = time.Now()
+var clock = tstime.StdClock{}
 
-func Uptime() time.Duration { return time.Since(timeStart).Round(time.Second) }
+var timeStart = clock.Now()
+
+func Uptime() time.Duration { return clock.Since(timeStart).Round(time.Second) }
 
 // WritePrometheusExpvar writes kv to w in Prometheus metrics format.
 //

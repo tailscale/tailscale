@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/tstime"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/mkversion"
 )
@@ -66,6 +67,8 @@ type Build struct {
 	goBuildLimit chan struct{}
 }
 
+var clock = tstime.StdClock{}
+
 // NewBuild creates a new Build rooted at repo, and writing artifacts to out.
 func NewBuild(repo, out string) (*Build, error) {
 	if err := os.MkdirAll(out, 0750); err != nil {
@@ -89,7 +92,7 @@ func NewBuild(repo, out string) (*Build, error) {
 		Out:          out,
 		Go:           goTool,
 		Version:      mkversion.Info(),
-		Time:         time.Now().UTC(),
+		Time:         clock.Now().UTC(),
 		extra:        map[any]any{},
 		goBuildLimit: make(chan struct{}, runtime.NumCPU()),
 	}

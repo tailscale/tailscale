@@ -10,6 +10,8 @@ import (
 	"net"
 	"runtime"
 	"time"
+
+	"tailscale.com/tstime"
 )
 
 type closeable interface {
@@ -29,14 +31,15 @@ func ConnCloseWrite(c net.Conn) error {
 	return c.(closeable).CloseWrite()
 }
 
-var processStartTime = time.Now()
+var clock = tstime.StdClock{}
+var processStartTime = clock.Now()
 var tailscaledProcExists = func() bool { return false } // set by safesocket_ps.go
 
 // tailscaledStillStarting reports whether tailscaled is probably
 // still starting up. That is, it reports whether the caller should
 // keep retrying to connect.
 func tailscaledStillStarting() bool {
-	d := time.Since(processStartTime)
+	d := clock.Since(processStartTime)
 	if d < 2*time.Second {
 		// Without even checking the process table, assume
 		// that for the first two seconds that tailscaled is

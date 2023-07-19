@@ -285,7 +285,7 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 		closeCanceler: cancel,
 	}
 	if srv.MaxTimeout > 0 {
-		conn.maxDeadline = time.Now().Add(srv.MaxTimeout)
+		conn.maxDeadline = clock.Now().Add(srv.MaxTimeout)
 	}
 	defer conn.Close()
 	sshConn, chans, reqs, err := gossh.NewServerConn(conn, srv.config(ctx))

@@ -11,12 +11,16 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"tailscale.com/tstime"
 )
 
 const (
 	// Maximum amount of time we should wait when reading a response from BIRD.
 	responseTimeout = 10 * time.Second
 )
+
+var clock = tstime.StdClock{}
 
 // New creates a BIRDClient.
 func New(socket string) (*BIRDClient, error) {
@@ -38,7 +42,7 @@ func newWithTimeout(socket string, timeout time.Duration) (_ *BIRDClient, err er
 		socket:  socket,
 		conn:    conn,
 		scanner: bufio.NewScanner(conn),
-		timeNow: time.Now,
+		timeNow: clock.Now,
 		timeout: timeout,
 	}
 	// Read and discard the first line as that is the welcome message.

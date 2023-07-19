@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tempfork/gliderlabs/ssh"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -76,9 +77,8 @@ type server struct {
 	logf           logger.Logf
 	tailscaledPath string
 
-	pubKeyHTTPClient *http.Client     // or nil for http.DefaultClient
-	timeNow          func() time.Time // or nil for time.Now
-
+	pubKeyHTTPClient *http.Client // or nil for http.DefaultClient
+	clock            tstime.Clock
 	sessionWaitGroup sync.WaitGroup
 
 	// mu protects the following
@@ -88,11 +88,13 @@ type server struct {
 	shutdownCalled       bool
 }
 
+var clock = tstime.StdClock{}
+
 func (srv *server) now() time.Time {
-	if srv != nil && srv.timeNow != nil {
-		return srv.timeNow()
+	if srv != nil && srv.clock != nil {
+		return srv.clock.Now()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 func init() {
@@ -1615,7 +1617,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		term = "xterm-256color" // something non-empty
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	rec := &recording{
 		ss:       ss,
 		start:    now,
@@ -1827,7 +1829,7 @@ type loggingWriter struct {
 func (w *loggingWriter) Write(p []byte) (n int, err error) {
 	if !w.recordingFailedOpen {
 		j, err := json.Marshal([]any{
-			time.Since(w.r.start).Seconds(),
+			clock.Since(w.r.start).Seconds(),
 			w.dir,
 			string(p),
 		})

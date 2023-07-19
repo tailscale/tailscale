@@ -25,6 +25,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tstime"
 	"tailscale.com/tsweb/varz"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpx"
@@ -33,6 +34,8 @@ import (
 
 // DevMode controls whether extra output in shown, for when the binary is being run in dev mode.
 var DevMode bool
+
+var clock = tstime.StdClock{}
 
 func DefaultCertDir(leafDir string) string {
 	cacheDir, err := os.UserCacheDir()
@@ -169,7 +172,7 @@ type ReturnHandler interface {
 type HandlerOptions struct {
 	QuietLoggingIfSuccessful bool // if set, do not log successfully handled HTTP requests (200 and 304 status codes)
 	Logf                     logger.Logf
-	Now                      func() time.Time // if nil, defaults to time.Now
+	Now                      func() time.Time // if nil, defaults to tstime.Clock.Now
 
 	// If non-nil, StatusCodeCounters maintains counters
 	// of status codes for handled responses.
@@ -205,7 +208,7 @@ func (f ReturnHandlerFunc) ServeHTTPReturn(w http.ResponseWriter, r *http.Reques
 // Errors are handled as specified by the Handler interface.
 func StdHandler(h ReturnHandler, opts HandlerOptions) http.Handler {
 	if opts.Now == nil {
-		opts.Now = time.Now
+		opts.Now = clock.Now
 	}
 	if opts.Logf == nil {
 		opts.Logf = logger.Discard

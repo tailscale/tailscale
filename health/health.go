@@ -17,6 +17,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/set"
 )
@@ -28,7 +29,7 @@ var (
 	sysErr    = map[Subsystem]error{}                   // error key => err (or nil for no error)
 	watchers  = set.HandleSet[func(Subsystem, error)]{} // opt func to run if error state changes
 	warnables = map[*Warnable]struct{}{}                // set of warnables
-	timer     *time.Timer
+	timer     tstime.TimerController
 
 	debugHandler = map[string]http.Handler{}
 
@@ -49,6 +50,7 @@ var (
 	lastLoginErr            error
 	localLogConfigErr       error
 	tlsConnectionErrors     = map[string]error{} // map[ServerName]error
+	clock                   = tstime.StdClock{}
 )
 
 // Subsystem is the name of a subsystem whose health can be monitored.
@@ -162,7 +164,7 @@ func RegisterWatcher(cb func(key Subsystem, err error)) (unregister func()) {
 	defer mu.Unlock()
 	handle := watchers.Add(cb)
 	if timer == nil {
-		timer = time.AfterFunc(time.Minute, timerSelfCheck)
+		timer = clock.AfterFunc(time.Minute, timerSelfCheck)
 	}
 	return func() {
 		mu.Lock()
@@ -282,7 +284,7 @@ func SetControlHealth(problems []string) {
 func GotStreamedMapResponse() {
 	mu.Lock()
 	defer mu.Unlock()
-	lastStreamedMapResponse = time.Now()
+	lastStreamedMapResponse = clock.Now()
 	selfCheckLocked()
 }
 
@@ -296,9 +298,9 @@ func SetInPollNetMap(v bool) {
 	}
 	inMapPoll = v
 	if v {
-		inMapPollSince = time.Now()
+		inMapPollSince = clock.Now()
 	} else {
-		lastMapPollEndedAt = time.Now()
+		lastMapPollEndedAt = clock.Now()
 	}
 }
 
@@ -327,7 +329,7 @@ func NoteMapRequestHeard(mr *tailcfg.MapRequest) {
 	// against SetMagicSockDERPHome and
 	// SetDERPRegionConnectedState
 
-	lastMapRequestHeard = time.Now()
+	lastMapRequestHeard = clock.Now()
 	selfCheckLocked()
 }
 
@@ -354,7 +356,7 @@ func SetDERPRegionHealth(region int, problem string) {
 func NoteDERPRegionReceivedFrame(region int) {
 	mu.Lock()
 	defer mu.Unlock()
-	derpRegionLastFrame[region] = time.Now()
+	derpRegionLastFrame[region] = clock.Now()
 	selfCheckLocked()
 }
 
@@ -435,7 +437,7 @@ func overallErrorLocked() error {
 	if lastLoginErr != nil {
 		return fmt.Errorf("not logged in, last login error=%v", lastLoginErr)
 	}
-	now := time.Now()
+	now := clock.Now()
 	if !inMapPoll && (lastMapPollEndedAt.IsZero() || now.Sub(lastMapPollEndedAt) > 10*time.Second) {
 		return errors.New("not in map poll")
 	}

@@ -7,7 +7,11 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"tailscale.com/tstime"
 )
+
+var clock = tstime.StdClock{}
 
 // Watch monitors mu for contention.
 // On first call, and at every tick, Watch locks and unlocks mu.
@@ -49,10 +53,10 @@ func Watch(ctx context.Context, mu sync.Locker, tick, max time.Duration) chan ti
 		var sendonce sync.Once
 		done := make(chan bool)
 		go func() {
-			start := time.Now()
+			start := clock.Now()
 			mu.Lock()
 			mu.Unlock()
-			elapsed := time.Since(start)
+			elapsed := clock.Since(start)
 			if elapsed > max {
 				elapsed = max
 			}

@@ -438,6 +438,8 @@ const (
 // ErrKeyWaitTimeout is returned by OpenKeyWait when calls timeout.
 var ErrKeyWaitTimeout = errors.New("timeout waiting for registry key")
 
+var clock = tstime.StdClock{}
+
 // OpenKeyWait opens a registry key, waiting for it to appear if necessary. It
 // returns the opened key, or ErrKeyWaitTimeout if the key does not appear
 // within 20s. The caller must call Close on the returned key.
@@ -445,7 +447,7 @@ func OpenKeyWait(k registry.Key, path RegistryPath, access uint32) (registry.Key
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	deadline := time.Now().Add(keyOpenTimeout)
+	deadline := clock.Now().Add(keyOpenTimeout)
 	pathSpl := strings.Split(string(path), "\\")
 	for i := 0; ; i++ {
 		keyName := pathSpl[i]

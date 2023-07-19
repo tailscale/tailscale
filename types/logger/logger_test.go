@@ -15,6 +15,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 )
 
 func TestFuncWriter(t *testing.T) {
@@ -98,7 +99,8 @@ func TestRateLimiter(t *testing.T) {
 }
 
 func testTimer(d time.Duration) func() time.Time {
-	timeNow := time.Now()
+	testClock := tstime.StdClock{}
+	timeNow := testClock.Now()
 	return func() time.Time {
 		timeNow = timeNow.Add(d)
 		return timeNow

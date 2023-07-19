@@ -49,6 +49,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/smallzstd"
 	"tailscale.com/tsd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
@@ -58,6 +59,8 @@ import (
 )
 
 func inTest() bool { return flag.Lookup("test.v") != nil }
+
+var clock = tstime.StdClock{}
 
 // Server is an embedded Tailscale server.
 //
@@ -1096,11 +1099,11 @@ func (ln *listener) closeLocked() error {
 }
 
 func (ln *listener) handle(c net.Conn) {
-	t := time.NewTimer(time.Second)
+	t, tChannel := clock.NewTimer(time.Second)
 	defer t.Stop()
 	select {
 	case ln.conn <- c:
-	case <-t.C:
+	case <-tChannel:
 		// TODO(bradfitz): this isn't ideal. Think about how
 		// we how we want to do pushback.
 		c.Close()

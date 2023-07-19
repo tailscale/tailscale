@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"time"
+
+	"tailscale.com/tstime"
 )
 
 type serverConn struct {
@@ -13,6 +15,8 @@ type serverConn struct {
 	maxDeadline   time.Time
 	closeCanceler context.CancelFunc
 }
+
+var clock = tstime.StdClock{}
 
 func (c *serverConn) Write(p []byte) (n int, err error) {
 	c.updateDeadline()
@@ -43,7 +47,7 @@ func (c *serverConn) Close() (err error) {
 func (c *serverConn) updateDeadline() {
 	switch {
 	case c.idleTimeout > 0:
-		idleDeadline := time.Now().Add(c.idleTimeout)
+		idleDeadline := clock.Now().Add(c.idleTimeout)
 		if idleDeadline.Unix() < c.maxDeadline.Unix() || c.maxDeadline.IsZero() {
 			c.Conn.SetDeadline(idleDeadline)
 			return

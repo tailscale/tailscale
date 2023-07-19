@@ -50,7 +50,7 @@ type AccessLogRecord struct {
 // String returns m as a JSON string.
 func (m AccessLogRecord) String() string {
 	if m.When.IsZero() {
-		m.When = time.Now()
+		m.When = clock.Now()
 	}
 	var buf strings.Builder
 	json.NewEncoder(&buf).Encode(m)

@@ -12,11 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/release/dist"
+	"tailscale.com/tstime"
 )
+
+var clock = tstime.StdClock{}
 
 // CLI returns a CLI root command to build release packages.
 //
@@ -101,7 +103,7 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 		return errors.New("no targets matched (did you mean 'dist build all'?)")
 	}
 
-	st := time.Now()
+	st := clock.Now()
 	wd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
@@ -139,6 +141,6 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 		}
 	}
 
-	fmt.Println("Done! Took", time.Since(st))
+	fmt.Println("Done! Took", clock.Since(st))
 	return nil
 }

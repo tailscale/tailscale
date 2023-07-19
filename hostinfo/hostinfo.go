@@ -21,6 +21,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cloudenv"
@@ -29,7 +30,8 @@ import (
 	"tailscale.com/version"
 )
 
-var started = time.Now()
+var clock = tstime.StdClock{}
+var started = clock.Now()
 
 // New returns a partially populated Hostinfo for the current host.
 func New() *tailcfg.Hostinfo {
@@ -221,7 +223,7 @@ func desktop() (ret opt.Bool) {
 	ret.Set(seenDesktop)
 
 	// Only cache after a minute - compositors might not have started yet.
-	if time.Since(started) > time.Minute {
+	if clock.Since(started) > time.Minute {
 		desktopAtomic.Store(ret)
 	}
 	return ret

@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
+	"tailscale.com/tstime"
 )
+
+var clock = tstime.StdClock{}
 
 func setQuarantineAttr(f *os.File) error {
 	sc, err := f.SyscallConn()
@@ -19,7 +21,7 @@ func setQuarantineAttr(f *os.File) error {
 		return err
 	}
 
-	now := time.Now()
+	now := clock.Now()
 
 	// We uppercase the UUID to match what other applications on macOS do
 	id := strings.ToUpper(uuid.New().String())

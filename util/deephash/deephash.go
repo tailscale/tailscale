@@ -25,8 +25,8 @@ import (
 	"encoding/hex"
 	"reflect"
 	"sync"
-	"time"
 
+	"tailscale.com/tstime"
 	"tailscale.com/util/hashx"
 )
 
@@ -124,8 +124,10 @@ var (
 	seed     uint64
 )
 
+var clock = tstime.StdClock{}
+
 func initSeed() {
-	seed = uint64(time.Now().UnixNano())
+	seed = uint64(clock.Now().UnixNano())
 }
 
 // Hash returns the hash of v.

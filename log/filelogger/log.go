@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
 
@@ -23,6 +24,8 @@ const (
 	maxSize  = 100 << 20
 	maxFiles = 50
 )
+
+var clock = tstime.StdClock{}
 
 // New returns a logf wrapper that appends to local disk log
 // files on Windows, rotating old log files as needed to stay under
@@ -99,7 +102,7 @@ func (w *logFileWriter) Logf(format string, a ...any) {
 // out should end in a newline.
 // w.mu must be held.
 func (w *logFileWriter) appendToFileLocked(out []byte) {
-	now := time.Now()
+	now := clock.Now()
 	day := dayOf(now)
 	if w.fday != day {
 		w.startNewFileLocked()
@@ -155,7 +158,7 @@ func (w *logFileWriter) startNewFileLocked() {
 	}
 	w.cleanLocked()
 
-	now := time.Now()
+	now := clock.Now()
 	day := dayOf(now)
 	name := filepath.Join(w.dir, fmt.Sprintf("%s-%04d%02d%02dT%02d%02d%02d-%d.txt",
 		w.fileBasePrefix,

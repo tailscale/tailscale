@@ -44,6 +44,7 @@ import (
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/clientmetric"
@@ -658,6 +659,8 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 // in the happy path, thus generating more logs.
 var dialLog = log.New(io.Discard, "logtail: ", log.LstdFlags|log.Lmsgprefix)
 
+var clock = tstime.StdClock{}
+
 // SetVerbosityLevel controls the verbosity level that should be
 // written to stderr. 0 is the default (not verbose). Levels 1 or higher
 // are increasingly verbose.
@@ -706,9 +709,9 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 		Timeout:   30 * time.Second,
 		KeepAlive: netknob.PlatformTCPKeepAlive(),
 	})
-	t0 := time.Now()
+	t0 := clock.Now()
 	c, err := nd.DialContext(ctx, netw, addr)
-	d := time.Since(t0).Round(time.Millisecond)
+	d := clock.Since(t0).Round(time.Millisecond)
 	if err == nil {
 		dialLog.Printf("dialed %q in %v", addr, d)
 		return c, nil

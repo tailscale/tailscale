@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"tailscale.com/tstime"
 )
 
 var (
@@ -75,6 +77,8 @@ type Metric struct {
 	// written on the wire.
 	lastNamed time.Time
 }
+
+var clock = tstime.StdClock{}
 
 func (m *Metric) Name() string { return m.name }
 
@@ -271,7 +275,7 @@ func EncodeLogTailMetricsDelta() string {
 	mu.Lock()
 	defer mu.Unlock()
 
-	now := time.Now()
+	now := clock.Now()
 	if !lastDelta.IsZero() && now.Sub(lastDelta) < minMetricEncodeInterval {
 		return ""
 	}

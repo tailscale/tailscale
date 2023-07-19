@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/tstime"
 	"tailscale.com/util/multierr"
 )
 
@@ -34,6 +35,8 @@ const (
 // rootPathForTests is set by tests to override the root path to the
 // service account directory.
 var rootPathForTests string
+
+var clock = tstime.StdClock{}
 
 // SetRootPathForTesting sets the path to the service account directory.
 func SetRootPathForTesting(p string) {
@@ -100,14 +103,14 @@ func (c *Client) SetDialer(dialer func(ctx context.Context, network, addr string
 func (c *Client) expireToken() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tokenExpiry = time.Now()
+	c.tokenExpiry = clock.Now()
 }
 
 func (c *Client) getOrRenewToken() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tk, te := c.token, c.tokenExpiry
-	if time.Now().Before(te) {
+	if clock.Now().Before(te) {
 		return tk, nil
 	}
 
@@ -116,7 +119,7 @@ func (c *Client) getOrRenewToken() (string, error) {
 		return "", err
 	}
 	c.token = string(tkb)
-	c.tokenExpiry = time.Now().Add(30 * time.Minute)
+	c.tokenExpiry = clock.Now().Add(30 * time.Minute)
 	return c.token, nil
 }
 

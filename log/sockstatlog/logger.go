@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/smallzstd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/util/mak"
@@ -80,6 +81,8 @@ type event struct {
 	// Stats records the stats for each Label during the time period.
 	Stats map[sockstats.Label]deltaStat `json:"s"`
 }
+
+var clock = tstime.StdClock{}
 
 // SockstatLogID reproducibly derives a new logid.PrivateID for sockstat logging from a node's public backend log ID.
 // The returned PrivateID is the sha256 sum of logID + "sockstat".
@@ -175,13 +178,13 @@ func (l *Logger) poll() {
 	var lastStats *sockstats.SockStats
 	var lastTime time.Time
 
-	ticker := time.NewTicker(pollInterval)
+	ticker, tickerChannel := clock.NewTicker(pollInterval)
 	for {
 		select {
 		case <-l.ctx.Done():
 			ticker.Stop()
 			return
-		case t := <-ticker.C:
+		case t := <-tickerChannel:
 			stats := sockstats.Get()
 			if lastStats != nil {
 				diffstats := delta(lastStats, stats)
@@ -219,13 +222,13 @@ func (l *Logger) logEvents() {
 			}
 		}
 	}
-	ticker := time.NewTicker(logInterval)
+	ticker, tickerChannel := clock.NewTicker(logInterval)
 	for {
 		select {
 		case <-l.ctx.Done():
 			ticker.Stop()
 			return
-		case <-ticker.C:
+		case <-tickerChannel:
 			flush()
 		}
 	}
