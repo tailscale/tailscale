@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"sort"
 
 	"github.com/fxamacker/cbor/v2"
@@ -182,17 +181,6 @@ func advanceByPrimary(state State, candidates []AUM) (next *AUM, out State, err 
 
 	aum := pickNextAUM(state, candidates)
 
-	// TODO(tom): Remove this before GA, this is just a correctness check during implementation.
-	// Post-GA, we want clients to not error if they dont recognize additional fields in State.
-	if aum.MessageKind == AUMCheckpoint {
-		dupe := state
-		dupe.LastAUMHash = nil
-		// aum.State is non-nil (see aum.StaticValidate).
-		if !reflect.DeepEqual(dupe, *aum.State) {
-			return nil, State{}, errors.New("checkpoint includes changes not represented in earlier AUMs")
-		}
-	}
-
 	if state, err = state.applyVerifiedAUM(aum); err != nil {
 		return nil, State{}, fmt.Errorf("advancing state: %v", err)
 	}
@@ -334,8 +322,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 	// as we've already iterated through them above so they must exist,
 	// but we check anyway to be super duper sure.
 	if err == nil && *state.LastAUMHash != wantHash {
-		// TODO(tom): Error instead of panic before GA.
-		panic("unexpected fastForward outcome")
+		return State{}, errors.New("unexpected fastForward outcome")
 	}
 	return state, err
 }
