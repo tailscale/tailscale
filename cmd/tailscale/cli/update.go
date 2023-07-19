@@ -45,8 +45,12 @@ var updateCmd = &ffcli.Command{
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
 		fs.BoolVar(&updateArgs.appStore, "app-store", false, "check the App Store for updates, even if this is not an App Store install (for testing only!)")
-		fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
-		fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
+		// These flags are not supported on Arch-based installs. Arch only
+		// offers one variant of tailscale and it's always the latest version.
+		if distro.Get() != distro.Arch {
+			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
+			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
+		}
 		return fs
 	})(),
 }
@@ -139,6 +143,8 @@ func newUpdater() (*updater, error) {
 			up.update = up.updateSynology
 		case distro.Debian: // includes Ubuntu
 			up.update = up.updateDebLike
+		case distro.Arch:
+			up.update = up.updateArch
 		}
 	case "darwin":
 		switch {
@@ -173,6 +179,8 @@ func (up *updater) currentOrDryRun(ver string) bool {
 	return false
 }
 
+var errUserAborted = errors.New("aborting update")
+
 func (up *updater) confirm(ver string) error {
 	if updateArgs.yes {
 		log.Printf("Updating Tailscale from %v to %v; --yes given, continuing without prompts.\n", version.Short(), ver)
@@ -187,7 +195,7 @@ func (up *updater) confirm(ver string) error {
 	case "y", "yes", "sure":
 		return nil
 	}
-	return errors.New("aborting update")
+	return errUserAborted
 }
 
 func (up *updater) updateSynology() error {
@@ -324,6 +332,63 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 		return nil, fmt.Errorf("unexpected/unsupported %s contents", aptSourcesFile)
 	}
 	return buf.Bytes(), nil
+}
+
+func (up *updater) updateArch() (err error) {
+	if os.Geteuid() != 0 {
+		return errors.New("must be root; use sudo")
+	}
+
+	defer func() {
+		if err != nil && !errors.Is(err, errUserAborted) {
+			err = fmt.Errorf(`%w; you can try updating using "pacman --sync --refresh tailscale"`, err)
+		}
+	}()
+
+	out, err := exec.Command("pacman", "--sync", "--refresh", "--info", "tailscale").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed checking pacman for latest tailscale version: %w, output: %q", err, out)
+	}
+	ver, err := parsePacmanVersion(out)
+	if err != nil {
+		return err
+	}
+	if up.currentOrDryRun(ver) {
+		return nil
+	}
+	if err := up.confirm(ver); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("pacman", "--sync", "--noconfirm", "tailscale")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale update using pacman: %w", err)
+	}
+	return nil
+}
+
+func parsePacmanVersion(out []byte) (string, error) {
+	for _, line := range strings.Split(string(out), "\n") {
+		// The line we're looking for looks like this:
+		// Version         : 1.44.2-1
+		if !strings.HasPrefix(line, "Version") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
+		}
+		ver := strings.TrimSpace(parts[1])
+		// Trim the Arch patch version.
+		ver = strings.Split(ver, "-")[0]
+		if ver == "" {
+			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
+		}
+		return ver, nil
+	}
+	return "", fmt.Errorf("could not find latest version of tailscale via pacman")
 }
 
 func (up *updater) updateMacSys() error {
