@@ -98,7 +98,7 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // entry in /debug/ for it.
 func (d *DebugHandler) Handle(slug, desc string, handler http.Handler) {
 	href := "/debug/" + slug
-	d.mux.Handle(href, Protected(BrowserHeaderHandler(handler)))
+	d.mux.Handle(href, Protected(debugBrowserHeaderHandler(handler)))
 	d.URL(href, desc)
 }
 
@@ -140,4 +140,18 @@ func gcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	runtime.GC()
 	w.Write([]byte("Done.\n"))
+}
+
+// debugBrowserHeaderHandler is a wrapper around BrowserHeaderHandler with a
+// more relaxed Content-Security-Policy that's acceptable for internal debug
+// pages. It should not be used on any public-facing handlers!
+func debugBrowserHeaderHandler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		AddBrowserHeaders(w)
+		// The only difference from AddBrowserHeaders is that this policy
+		// allows inline CSS styles. They make debug pages much easier to
+		// prototype, while the risk of user-injected CSS is relatively low.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'; style-src 'self' 'unsafe-inline'")
+		h.ServeHTTP(w, r)
+	})
 }
