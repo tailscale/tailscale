@@ -145,6 +145,9 @@ func signatureVerify(s *tkatype.Signature, aumDigest tkatype.AUMSigHash, key Key
 	//            so we should use the public contained in the state machine.
 	switch key.Kind {
 	case Key25519:
+		if len(key.Public) != ed25519.PublicKeySize {
+			return fmt.Errorf("ed25519 key has wrong length: %d", len(key.Public))
+		}
 		if ed25519consensus.Verify(ed25519.PublicKey(key.Public), aumDigest[:], s.Signature) {
 			return nil
 		}

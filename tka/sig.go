@@ -225,6 +225,9 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 		if !ok {
 			return errors.New("missing rotation key")
 		}
+		if len(verifyPub) != ed25519.PublicKeySize {
+			return fmt.Errorf("bad rotation key length: %d", len(verifyPub))
+		}
 		if !ed25519.Verify(ed25519.PublicKey(verifyPub[:]), sigHash[:], s.Signature) {
 			return errors.New("invalid signature")
 		}
@@ -249,6 +252,9 @@ func (s *NodeKeySignature) verifySignature(nodeKey key.NodePublic, verificationK
 		}
 		switch verificationKey.Kind {
 		case Key25519:
+			if len(verificationKey.Public) != ed25519.PublicKeySize {
+				return fmt.Errorf("ed25519 key has wrong length: %d", len(verificationKey.Public))
+			}
 			if ed25519consensus.Verify(ed25519.PublicKey(verificationKey.Public), sigHash[:], s.Signature) {
 				return nil
 			}
