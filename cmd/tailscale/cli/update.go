@@ -44,6 +44,7 @@ var updateCmd = &ffcli.Command{
 		fs := newFlagSet("update")
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
+		fs.BoolVar(&updateArgs.appStore, "app-store", false, "check the App Store for updates, even if this is not an App Store install (for testing only!)")
 		fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
 		fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		return fs
@@ -51,10 +52,11 @@ var updateCmd = &ffcli.Command{
 }
 
 var updateArgs struct {
-	yes     bool
-	dryRun  bool
-	track   string // explicit track; empty means same as current
-	version string // explicit version; empty means auto
+	yes      bool
+	dryRun   bool
+	appStore bool
+	track    string // explicit track; empty means same as current
+	version  string // explicit version; empty means auto
 }
 
 // winMSIEnv is the environment variable that, if set, is the MSI file for the
@@ -140,12 +142,12 @@ func newUpdater() (*updater, error) {
 		}
 	case "darwin":
 		switch {
-		case !version.IsSandboxedMacOS():
+		case !updateArgs.appStore && !version.IsSandboxedMacOS():
 			return nil, errors.New("The 'update' command is not yet supported on this platform; see https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS/ for now")
-		case strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
+		case !updateArgs.appStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
 			up.update = up.updateMacSys
 		default:
-			return nil, errors.New("This is the macOS App Store version of Tailscale; update in the App Store, or see https://tailscale.com/s/unstable-clients to use TestFlight or to install the non-App Store version")
+			up.update = up.updateMacAppStore
 		}
 	}
 	if up.update == nil {
@@ -331,6 +333,59 @@ func (up *updater) updateMacSys() error {
 	//
 	// TODO(bradfitz,mihai): implement. But for now:
 	return errors.New("The 'update' command is not yet implemented on macOS.")
+}
+
+func (up *updater) updateMacAppStore() error {
+	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
+	}
+	const on = "1\n"
+	if string(out) != on {
+		fmt.Fprintln(os.Stderr, "NOTE: Automatic updating for App Store apps is turned off. You can change this setting in System Settings (search for ‘update’).")
+	}
+
+	out, err = exec.Command("softwareupdate", "--list").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("can't check App Store for available updates: %w, output: %q", err, string(out))
+	}
+
+	newTailscale := parseSoftwareupdateList(out)
+	if newTailscale == "" {
+		fmt.Println("no Tailscale update available")
+		return nil
+	}
+
+	newTailscaleVer := strings.TrimPrefix(newTailscale, "Tailscale-")
+	if up.currentOrDryRun(newTailscaleVer) {
+		return nil
+	}
+	if err := up.confirm(newTailscaleVer); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("sudo", "softwareupdate", "--install", newTailscale)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("can't install App Store update for Tailscale: %w", err)
+	}
+	return nil
+}
+
+var macOSAppStoreListPattern = regexp.MustCompile(`(?m)^\s+\*\s+Label:\s*(Tailscale-\d[\d\.]+)`)
+
+// parseSoftwareupdateList searches the output of `softwareupdate --list` on
+// Darwin and returns the matching Tailscale package label. If there is none,
+// returns the empty string.
+//
+// See TestParseSoftwareupdateList for example inputs.
+func parseSoftwareupdateList(stdout []byte) string {
+	matches := macOSAppStoreListPattern.FindSubmatch(stdout)
+	if len(matches) < 2 {
+		return ""
+	}
+	return string(matches[1])
 }
 
 var (
