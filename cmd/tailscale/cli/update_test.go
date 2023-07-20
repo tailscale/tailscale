@@ -84,7 +84,7 @@ func TestParseSoftwareupdateList(t *testing.T) {
 			name: "update-at-end-of-list",
 			input: []byte(`
 	 Software Update Tool
-	
+
 	 Finding available software
 	 Software Update found the following new or updated software:
 			* Label: MacBookAirEFIUpdate2.4-2.4
@@ -100,7 +100,7 @@ func TestParseSoftwareupdateList(t *testing.T) {
 			name: "update-in-middle-of-list",
 			input: []byte(`
 	 Software Update Tool
-	
+
 	 Finding available software
 	 Software Update found the following new or updated software:
 			* Label: MacBookAirEFIUpdate2.4-2.4
@@ -116,7 +116,7 @@ func TestParseSoftwareupdateList(t *testing.T) {
 			name: "update-not-in-list",
 			input: []byte(`
 	 Software Update Tool
-	
+
 	 Finding available software
 	 Software Update found the following new or updated software:
 			* Label: MacBookAirEFIUpdate2.4-2.4
@@ -130,7 +130,7 @@ func TestParseSoftwareupdateList(t *testing.T) {
 			name: "decoy-in-list",
 			input: []byte(`
 	 Software Update Tool
-	
+
 	 Finding available software
 	 Software Update found the following new or updated software:
 			* Label: MacBookAirEFIUpdate2.4-2.4
@@ -147,6 +147,108 @@ func TestParseSoftwareupdateList(t *testing.T) {
 			got := parseSoftwareupdateList(test.input)
 			if test.want != got {
 				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParsePacmanVersion(t *testing.T) {
+	tests := []struct {
+		desc    string
+		out     string
+		want    string
+		wantErr bool
+	}{
+		{
+			desc: "valid version",
+			out: `
+:: Synchronizing package databases...
+ endeavouros is up to date
+ core is up to date
+ extra is up to date
+ multilib is up to date
+Repository      : extra
+Name            : tailscale
+Version         : 1.44.2-1
+Description     : A mesh VPN that makes it easy to connect your devices, wherever they are.
+Architecture    : x86_64
+URL             : https://tailscale.com
+Licenses        : MIT
+Groups          : None
+Provides        : None
+Depends On      : glibc
+Optional Deps   : None
+Conflicts With  : None
+Replaces        : None
+Download Size   : 7.98 MiB
+Installed Size  : 32.47 MiB
+Packager        : Christian Heusel <gromit@archlinux.org>
+Build Date      : Tue 18 Jul 2023 12:28:37 PM PDT
+Validated By    : MD5 Sum  SHA-256 Sum  Signature
+`,
+			want: "1.44.2",
+		},
+		{
+			desc: "version without Arch patch number",
+			out: `
+... snip ...
+Name            : tailscale
+Version         : 1.44.2
+Description     : A mesh VPN that makes it easy to connect your devices, wherever they are.
+... snip ...
+`,
+			want: "1.44.2",
+		},
+		{
+			desc: "missing version",
+			out: `
+... snip ...
+Name            : tailscale
+Description     : A mesh VPN that makes it easy to connect your devices, wherever they are.
+... snip ...
+`,
+			wantErr: true,
+		},
+		{
+			desc: "empty version",
+			out: `
+... snip ...
+Name            : tailscale
+Version         :
+Description     : A mesh VPN that makes it easy to connect your devices, wherever they are.
+... snip ...
+`,
+			wantErr: true,
+		},
+		{
+			desc:    "empty input",
+			out:     "",
+			wantErr: true,
+		},
+		{
+			desc: "sneaky version in description",
+			out: `
+... snip ...
+Name            : tailscale
+Description     : A mesh VPN that makes it easy to connect your devices, wherever they are. Version : 1.2.3
+Version         : 1.44.2
+... snip ...
+`,
+			want: "1.44.2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got, err := parsePacmanVersion([]byte(tt.out))
+			if err == nil && tt.wantErr {
+				t.Fatalf("got nil error and version %q, want non-nil error", got)
+			}
+			if err != nil && !tt.wantErr {
+				t.Fatalf("got error: %q, want nil", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got version: %q, want %q", got, tt.want)
 			}
 		})
 	}
