@@ -5,21 +5,34 @@
 package distro
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
+	"go4.org/mem"
 	"tailscale.com/types/lazy"
 	"tailscale.com/util/lineread"
 )
 
 type Distro string
 
+// List of some common Distro names.
+//
+// This list is not exhaustive, Get may return other values based on
+// /etc/os-release on Linux.
+//
+// Distro values returned by Get represent the oldest Distro in the family of
+// Linux distributions. For example, Debian is returned for Ubuntu and any
+// other Debian-derived distributions. Please do not add constants for Ubuntu
+// or other derived distributions.
 const (
-	Debian    = Distro("debian")
-	Arch      = Distro("arch")
+	Debian    = Distro("debian") // includes Ubuntu, Linux Mint, etc.
+	Arch      = Distro("arch")   // includes EndeavourOS, SteamOS, etc.
+	Fedora    = Distro("fedora") // includes CentOS, RHEL, Oracle Linux, etc.
 	Synology  = Distro("synology")
 	OpenWrt   = Distro("openwrt")
 	NixOS     = Distro("nixos")
@@ -30,12 +43,20 @@ const (
 	Gokrazy   = Distro("gokrazy")
 	WDMyCloud = Distro("wdmycloud")
 	Unraid    = Distro("unraid")
+	Alpine    = Distro("alpine")
+	Void      = Distro("void")
+	Gentoo    = Distro("gentoo")
+	Unknown   = Distro("")
 )
 
 var distro lazy.SyncValue[Distro]
 var isWSL lazy.SyncValue[bool]
 
-// Get returns the current distro, or the empty string if unknown.
+// Get returns the current distro, or Unknown.
+//
+// Distro values returned by Get represent the oldest Distro in the family of
+// Linux distributions. For example, Debian is returned for Ubuntu and any
+// other Debian-derived distributions.
 func Get() Distro {
 	return distro.Get(func() Distro {
 		switch runtime.GOOS {
@@ -44,7 +65,7 @@ func Get() Distro {
 		case "freebsd":
 			return freebsdDistro()
 		default:
-			return Distro("")
+			return Unknown
 		}
 	})
 }
@@ -93,8 +114,60 @@ func linuxDistro() Distro {
 		return WDMyCloud
 	case have("/etc/unraid-version"):
 		return Unraid
+	default:
+		if d, err := parseLinuxOSRelease("/etc/os-release"); err == nil {
+			return d
+		}
+		return Unknown
 	}
-	return ""
+}
+
+// parseLinuxOSRelease parses an os-release file from path (usually
+// /etc/os-release) to extract the distro ID. If ID_LIKE is present, it is
+// prioritized over ID.
+//
+// See https://www.freedesktop.org/software/systemd/man/os-release.html
+func parseLinuxOSRelease(path string) (Distro, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Unknown, err
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	var id, idLike string
+	for s.Scan() {
+		line := mem.S(s.Text())
+		if mem.HasPrefix(line, mem.S("ID=")) {
+			id = mem.TrimPrefix(line, mem.S("ID=")).StringCopy()
+			id = strings.Trim(id, `"'`)
+		}
+		if mem.HasPrefix(line, mem.S("ID_LIKE=")) {
+			idLike = mem.TrimPrefix(line, mem.S("ID_LIKE=")).StringCopy()
+			idLike = strings.Trim(idLike, `"'`)
+			// ID_LIKE value can be a space-separated list of IDs. Take the
+			// last mentioned ID, which for most distros seems to be the oldest
+			// in the lineage.
+			idLikeItems := strings.Fields(idLike)
+			if len(idLikeItems) == 0 {
+				continue
+			}
+			idLike = idLikeItems[len(idLikeItems)-1]
+		}
+	}
+	if err := s.Err(); err != nil {
+		return Unknown, err
+	}
+	if idLike != "" {
+		id = idLike
+	}
+	switch id {
+	case "ubuntu", "centos", "rhel", "amzn", "ol", "manjaro", "endeavouros", "linuxmint":
+		// Explicitly filter out ID and ID_LIKE values that don't look like the
+		// oldest distro. For example, Ubuntu should always return Debian.
+		return Unknown, nil
+	default:
+		return Distro(id), nil
+	}
 }
 
 func freebsdDistro() Distro {
