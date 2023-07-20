@@ -1114,6 +1114,21 @@ Look at the response body to determine whether there was a problem within your A
   }
   ```
 
+If your tailnet has [user and group provisioning](https://tailscale.com/kb/1180/sso-okta-scim/) turned on, we will also warn you about
+any groups that are used in the policy file that are not being synced from SCIM. Explicitly defined groups will not trigger this warning.
+
+```jsonc
+{
+  "message":"warning(s) found",
+  "data":[
+          {
+            "user": "group:unknown@example.com",
+            "warnings":["group is not syncing from SCIM and will be ignored by rules in the policy file"]
+          }
+        ]
+}
+```
+
 <a href="tailnet-devices"></a>
 
 ## List tailnet devices
