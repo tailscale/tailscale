@@ -44,7 +44,7 @@ var updateCmd = &ffcli.Command{
 		fs := newFlagSet("update")
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
-		fs.BoolVar(&updateArgs.appStore, "app-store", false, "check the App Store for updates, even if this is not an App Store install (for testing only!)")
+		fs.BoolVar(&updateArgs.appStore, "app-store", false, "HIDDEN: check the App Store for updates, even if this is not an App Store install (for testing only)")
 		// These flags are not supported on Arch-based installs. Arch only
 		// offers one variant of tailscale and it's always the latest version.
 		if distro.Get() != distro.Arch {
