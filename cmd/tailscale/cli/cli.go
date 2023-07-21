@@ -134,11 +134,6 @@ change in the future.
 		Exec:      func(context.Context, []string) error { return flag.ErrHelp },
 		UsageFunc: usageFunc,
 	}
-	for _, c := range rootCmd.Subcommands {
-		if c.UsageFunc == nil {
-			c.UsageFunc = usageFunc
-		}
-	}
 	if envknob.UseWIPCode() {
 		rootCmd.Subcommands = append(rootCmd.Subcommands,
 			idTokenCmd,
@@ -154,6 +149,12 @@ change in the future.
 	}
 	if runtime.GOOS == "linux" && distro.Get() == distro.Synology {
 		rootCmd.Subcommands = append(rootCmd.Subcommands, configureHostCmd)
+	}
+
+	for _, c := range rootCmd.Subcommands {
+		if c.UsageFunc == nil {
+			c.UsageFunc = usageFunc
+		}
 	}
 
 	if err := rootCmd.Parse(args); err != nil {
