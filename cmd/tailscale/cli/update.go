@@ -144,7 +144,20 @@ func newUpdater() (*updater, error) {
 		case distro.Debian: // includes Ubuntu
 			up.update = up.updateDebLike
 		case distro.Arch:
-			up.update = up.updateArch
+			up.update = up.updateArchLike
+		}
+		// TODO(awly): add support for Alpine
+		switch {
+		case haveExecutable("pacman"):
+			up.update = up.updateArchLike
+		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
+			// The distro.Debian switch case above should catch most apt-based
+			// systems, but add this fallback just in case.
+			up.update = up.updateDebLike
+		case haveExecutable("dnf"):
+			up.update = up.updateFedoraLike("dnf")
+		case haveExecutable("yum"):
+			up.update = up.updateFedoraLike("yum")
 		}
 	case "darwin":
 		switch {
@@ -207,48 +220,22 @@ func (up *updater) updateSynology() error {
 }
 
 func (up *updater) updateDebLike() error {
-	ver := updateArgs.version
-	if ver == "" {
-		res, err := http.Get("https://pkgs.tailscale.com/" + up.track + "/?mode=json")
-		if err != nil {
-			return err
-		}
-		var latest struct {
-			Tarballs map[string]string // ~goarch (ignoring "geode") => "tailscale_1.34.2_mips.tgz"
-		}
-		err = json.NewDecoder(res.Body).Decode(&latest)
-		res.Body.Close()
-		if err != nil {
-			return fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
-		}
-		f, ok := latest.Tarballs[runtime.GOARCH]
-		if !ok {
-			return fmt.Errorf("can't update architecture %q", runtime.GOARCH)
-		}
-		ver, _, ok = strings.Cut(strings.TrimPrefix(f, "tailscale_"), "_")
-		if !ok {
-			return fmt.Errorf("can't parse version from %q", f)
-		}
+	ver, err := requestedTailscaleVersion(updateArgs.version, up.track)
+	if err != nil {
+		return err
 	}
 	if up.currentOrDryRun(ver) {
 		return nil
 	}
 
-	track := "unstable"
-	if stable, ok := versionIsStable(ver); !ok {
-		return fmt.Errorf("malformed version %q", ver)
-	} else if stable {
-		track = "stable"
+	if err := requireRoot(); err != nil {
+		return err
 	}
 
-	if os.Geteuid() != 0 {
-		return errors.New("must be root; use sudo")
-	}
-
-	if updated, err := updateDebianAptSourcesList(track); err != nil {
+	if updated, err := updateDebianAptSourcesList(up.track); err != nil {
 		return err
 	} else if updated {
-		fmt.Printf("Updated %s to use the %s track\n", aptSourcesFile, track)
+		fmt.Printf("Updated %s to use the %s track\n", aptSourcesFile, up.track)
 	}
 
 	cmd := exec.Command("apt-get", "update",
@@ -334,9 +321,9 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
-func (up *updater) updateArch() (err error) {
-	if os.Geteuid() != 0 {
-		return errors.New("must be root; use sudo")
+func (up *updater) updateArchLike() (err error) {
+	if err := requireRoot(); err != nil {
+		return err
 	}
 
 	defer func() {
@@ -389,6 +376,90 @@ func parsePacmanVersion(out []byte) (string, error) {
 		return ver, nil
 	}
 	return "", fmt.Errorf("could not find latest version of tailscale via pacman")
+}
+
+const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
+
+// updateFedoraLike updates tailscale on any distros in the Fedora family,
+// specifically anything that uses "dnf" or "yum" package managers. The actual
+// package manager is passed via packageManager.
+func (up *updater) updateFedoraLike(packageManager string) func() error {
+	return func() (err error) {
+		if err := requireRoot(); err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil && !errors.Is(err, errUserAborted) {
+				err = fmt.Errorf(`%w; you can try updating using "%s upgrade tailscale"`, err, packageManager)
+			}
+		}()
+
+		ver, err := requestedTailscaleVersion(updateArgs.version, up.track)
+		if err != nil {
+			return err
+		}
+		if up.currentOrDryRun(ver) {
+			return nil
+		}
+		if err := up.confirm(ver); err != nil {
+			return err
+		}
+
+		if updated, err := updateYUMRepoTrack(yumRepoConfigFile, up.track); err != nil {
+			return err
+		} else if updated {
+			fmt.Printf("Updated %s to use the %s track\n", yumRepoConfigFile, up.track)
+		}
+
+		cmd := exec.Command(packageManager, "install", "--assumeyes", fmt.Sprintf("tailscale-%s-1", ver))
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+// updateYUMRepoTrack updates the repoFile file to make sure it has the
+// provided track (stable or unstable) in it.
+func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
+	was, err := os.ReadFile(repoFile)
+	if err != nil {
+		return false, err
+	}
+
+	urlRe := regexp.MustCompile(`^(baseurl|gpgkey)=https://pkgs\.tailscale\.com/(un)?stable/`)
+	urlReplacement := fmt.Sprintf("$1=https://pkgs.tailscale.com/%s/", dstTrack)
+
+	s := bufio.NewScanner(bytes.NewReader(was))
+	newContent := bytes.NewBuffer(make([]byte, 0, len(was)))
+	for s.Scan() {
+		line := s.Text()
+		// Handle repo section name, like "[tailscale-stable]".
+		if len(line) > 0 && line[0] == '[' {
+			if !strings.HasPrefix(line, "[tailscale-") {
+				return false, fmt.Errorf("%q does not look like a tailscale repo file, it contains an unexpected %q section", repoFile, line)
+			}
+			fmt.Fprintf(newContent, "[tailscale-%s]\n", dstTrack)
+			continue
+		}
+		// Update the track mentioned in repo name.
+		if strings.HasPrefix(line, "name=") {
+			fmt.Fprintf(newContent, "name=Tailscale %s\n", dstTrack)
+			continue
+		}
+		// Update the actual repo URLs.
+		if strings.HasPrefix(line, "baseurl=") || strings.HasPrefix(line, "gpgkey=") {
+			fmt.Fprintln(newContent, urlRe.ReplaceAllString(line, urlReplacement))
+			continue
+		}
+		fmt.Fprintln(newContent, line)
+	}
+	if bytes.Equal(was, newContent.Bytes()) {
+		return false, nil
+	}
+	return true, os.WriteFile(repoFile, newContent.Bytes(), 0644)
 }
 
 func (up *updater) updateMacSys() error {
@@ -459,24 +530,9 @@ var (
 )
 
 func (up *updater) updateWindows() error {
-	ver := updateArgs.version
-	if ver == "" {
-		res, err := http.Get("https://pkgs.tailscale.com/" + up.track + "/?mode=json&os=windows")
-		if err != nil {
-			return err
-		}
-		var latest struct {
-			Version string
-		}
-		err = json.NewDecoder(res.Body).Decode(&latest)
-		res.Body.Close()
-		if err != nil {
-			return fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
-		}
-		ver = latest.Version
-		if ver == "" {
-			return errors.New("no version found")
-		}
+	ver, err := requestedTailscaleVersion(updateArgs.version, up.track)
+	if err != nil {
+		return err
 	}
 	arch := runtime.GOARCH
 	if arch == "386" {
@@ -704,4 +760,46 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 func (pw *progressWriter) print() {
 	pw.lastPrint = time.Now()
 	log.Printf("Downloaded %v/%v (%.1f%%)", pw.done, pw.total, float64(pw.done)/float64(pw.total)*100)
+}
+
+func haveExecutable(name string) bool {
+	path, err := exec.LookPath(name)
+	return err == nil && path != ""
+}
+
+func requestedTailscaleVersion(ver, track string) (string, error) {
+	if ver != "" {
+		return ver, nil
+	}
+	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/?mode=json&os=%s", track, runtime.GOOS)
+	res, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("fetching latest tailscale version: %w", err)
+	}
+	var latest struct {
+		Version string
+	}
+	err = json.NewDecoder(res.Body).Decode(&latest)
+	res.Body.Close()
+	if err != nil {
+		return "", fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
+	}
+	if latest.Version == "" {
+		return "", fmt.Errorf("no version found at %q", url)
+	}
+	return latest.Version, nil
+}
+
+func requireRoot() error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	switch runtime.GOOS {
+	case "linux":
+		return errors.New("must be root; use sudo")
+	case "freebsd", "openbsd":
+		return errors.New("must be root; use doas")
+	default:
+		return errors.New("must be root")
+	}
 }
