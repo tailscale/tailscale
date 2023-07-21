@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 )
 
 func TestFastShutdown(t *testing.T) {
@@ -212,7 +213,7 @@ func TestEncodeSpecialCases(t *testing.T) {
 var sink []byte
 
 func TestLoggerEncodeTextAllocs(t *testing.T) {
-	lg := &Logger{timeNow: time.Now}
+	lg := &Logger{clock: tstime.StdClock{}}
 	inBuf := []byte("some text to encode")
 	procID := uint32(0x24d32ee9)
 	procSequence := uint64(0x12346)
@@ -226,8 +227,8 @@ func TestLoggerEncodeTextAllocs(t *testing.T) {
 
 func TestLoggerWriteLength(t *testing.T) {
 	lg := &Logger{
-		timeNow: time.Now,
-		buffer:  NewMemoryBuffer(1024),
+		clock:  tstime.StdClock{},
+		buffer: NewMemoryBuffer(1024),
 	}
 	inBuf := []byte("some text to encode")
 	n, err := lg.Write(inBuf)
@@ -309,7 +310,7 @@ func unmarshalOne(t *testing.T, body []byte) map[string]any {
 }
 
 func TestEncodeTextTruncation(t *testing.T) {
-	lg := &Logger{timeNow: time.Now, lowMem: true}
+	lg := &Logger{clock: tstime.StdClock{}, lowMem: true}
 	in := bytes.Repeat([]byte("a"), 5120)
 	b := lg.encodeText(in, true, 0, 0, 0)
 	got := string(b)
@@ -363,7 +364,7 @@ func TestEncode(t *testing.T) {
 	for _, tt := range tests {
 		buf := new(simpleMemBuf)
 		lg := &Logger{
-			timeNow:      func() time.Time { return time.Unix(123, 456).UTC() },
+			clock:        tstest.NewClock(tstest.ClockOpts{Start: time.Unix(123, 456).UTC()}),
 			buffer:       buf,
 			procID:       7,
 			procSequence: 1,
