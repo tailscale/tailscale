@@ -3,10 +3,34 @@
 
 package main // import "tailscale.com/cmd/tailscaled"
 
-import "testing"
+import (
+	"testing"
+
+	"tailscale.com/tstest/deptest"
+)
 
 func TestNothing(t *testing.T) {
 	// This test does nothing on purpose, so we can run
 	// GODEBUG=memprofilerate=1 go test -v -run=Nothing -memprofile=prof.mem
 	// without any errors about no matching tests.
+}
+
+func TestDeps(t *testing.T) {
+	deptest.DepChecker{
+		GOOS:   "darwin",
+		GOARCH: "arm64",
+		BadDeps: map[string]string{
+			"gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes",
+		},
+	}.Check(t)
+
+	deptest.DepChecker{
+		GOOS:    "linux",
+		GOARCH:  "arm64",
+		BadDeps: map[string]string{
+			// TODO: per https://github.com/tailscale/tailscale/issues/8658,
+			// add this line too:
+			// "gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes",
+		},
+	}.Check(t)
 }
