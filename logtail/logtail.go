@@ -49,18 +49,18 @@ type Encoder interface {
 }
 
 type Config struct {
-	Collection     string           // collection name, a domain name
-	PrivateID      logid.PrivateID  // private ID for the primary log stream
-	CopyPrivateID  logid.PrivateID  // private ID for a log stream that is a superset of this log stream
-	BaseURL        string           // if empty defaults to "https://log.tailscale.io"
-	HTTPC          *http.Client     // if empty defaults to http.DefaultClient
-	SkipClientTime bool             // if true, client_time is not written to logs
-	LowMemory      bool             // if true, logtail minimizes memory use
-	TimeNow        func() time.Time // if set, substitutes uses of time.Now
-	Stderr         io.Writer        // if set, logs are sent here instead of os.Stderr
-	StderrLevel    int              // max verbosity level to write to stderr; 0 means the non-verbose messages only
-	Buffer         Buffer           // temp storage, if nil a MemoryBuffer
-	NewZstdEncoder func() Encoder   // if set, used to compress logs for transmission
+	Collection     string          // collection name, a domain name
+	PrivateID      logid.PrivateID // private ID for the primary log stream
+	CopyPrivateID  logid.PrivateID // private ID for a log stream that is a superset of this log stream
+	BaseURL        string          // if empty defaults to "https://log.tailscale.io"
+	HTTPC          *http.Client    // if empty defaults to http.DefaultClient
+	SkipClientTime bool            // if true, client_time is not written to logs
+	LowMemory      bool            // if true, logtail minimizes memory use
+	Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
+	Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
+	StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
+	Buffer         Buffer          // temp storage, if nil a MemoryBuffer
+	NewZstdEncoder func() Encoder  // if set, used to compress logs for transmission
 
 	// MetricsDelta, if non-nil, is a func that returns an encoding
 	// delta in clientmetrics to upload alongside existing logs.
@@ -94,8 +94,8 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 	if cfg.HTTPC == nil {
 		cfg.HTTPC = http.DefaultClient
 	}
-	if cfg.TimeNow == nil {
-		cfg.TimeNow = time.Now
+	if cfg.Clock == nil {
+		cfg.Clock = tstime.StdClock{}
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
@@ -144,7 +144,7 @@ func NewLogger(cfg Config, logf tslogger.Logf) *Logger {
 		drainWake:      make(chan struct{}, 1),
 		sentinel:       make(chan int32, 16),
 		flushDelayFn:   cfg.FlushDelayFn,
-		timeNow:        cfg.TimeNow,
+		clock:          cfg.Clock,
 		metricsDelta:   cfg.MetricsDelta,
 
 		procID:              procID,
@@ -181,7 +181,7 @@ type Logger struct {
 	flushDelayFn   func() time.Duration // negative or zero return value to upload aggressively, or >0 to batch at this delay
 	flushPending   atomic.Bool
 	sentinel       chan int32
-	timeNow        func() time.Time
+	clock          tstime.Clock
 	zstdEncoder    Encoder
 	uploadCancel   func()
 	explainedRaw   bool
@@ -195,7 +195,7 @@ type Logger struct {
 
 	writeLock    sync.Mutex // guards procSequence, flushTimer, buffer.Write calls
 	procSequence uint64
-	flushTimer   *time.Timer // used when flushDelay is >0
+	flushTimer   tstime.TimerController // used when flushDelay is >0
 
 	shutdownStartMu sync.Mutex    // guards the closing of shutdownStart
 	shutdownStart   chan struct{} // closed when shutdown begins
@@ -380,7 +380,7 @@ func (l *Logger) uploading(ctx context.Context) {
 			retryAfter, err := l.upload(ctx, body, origlen)
 			if err != nil {
 				numFailures++
-				firstFailure = time.Now()
+				firstFailure = l.clock.Now()
 
 				if !l.internetUp() {
 					fmt.Fprintf(l.stderr, "logtail: internet down; waiting\n")
@@ -403,7 +403,7 @@ func (l *Logger) uploading(ctx context.Context) {
 			} else {
 				// Only print a success message after recovery.
 				if numFailures > 0 {
-					fmt.Fprintf(l.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, time.Since(firstFailure).Round(time.Second))
+					fmt.Fprintf(l.stderr, "logtail: upload succeeded after %d failures and %s\n", numFailures, l.clock.Since(firstFailure).Round(time.Second))
 				}
 				break
 			}
@@ -545,7 +545,7 @@ func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 	if flushDelay > 0 {
 		if l.flushPending.CompareAndSwap(false, true) {
 			if l.flushTimer == nil {
-				l.flushTimer = time.AfterFunc(flushDelay, l.tryDrainWake)
+				l.flushTimer = l.clock.AfterFunc(flushDelay, l.tryDrainWake)
 			} else {
 				l.flushTimer.Reset(flushDelay)
 			}
@@ -559,7 +559,7 @@ func (l *Logger) sendLocked(jsonBlob []byte) (int, error) {
 // TODO: instead of allocating, this should probably just append
 // directly into the output log buffer.
 func (l *Logger) encodeText(buf []byte, skipClientTime bool, procID uint32, procSequence uint64, level int) []byte {
-	now := l.timeNow()
+	now := l.clock.Now()
 
 	// Factor in JSON encoding overhead to try to only do one alloc
 	// in the make below (so appends don't resize the buffer).
@@ -674,7 +674,7 @@ func (l *Logger) encodeLocked(buf []byte, level int) []byte {
 		return l.encodeText(buf, l.skipClientTime, l.procID, l.procSequence, level) // text fast-path
 	}
 
-	now := l.timeNow()
+	now := l.clock.Now()
 
 	obj := make(map[string]any)
 	if err := json.Unmarshal(buf, &obj); err != nil {
