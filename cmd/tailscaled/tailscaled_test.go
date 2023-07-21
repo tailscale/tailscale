@@ -20,17 +20,15 @@ func TestDeps(t *testing.T) {
 		GOOS:   "darwin",
 		GOARCH: "arm64",
 		BadDeps: map[string]string{
-			"gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes",
+			"gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes; see https://github.com/tailscale/tailscale/issues/8658",
 		},
 	}.Check(t)
 
 	deptest.DepChecker{
-		GOOS:    "linux",
-		GOARCH:  "arm64",
+		GOOS:   "linux",
+		GOARCH: "arm64",
 		BadDeps: map[string]string{
-			// TODO: per https://github.com/tailscale/tailscale/issues/8658,
-			// add this line too:
-			// "gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes",
+			"gvisor.dev/gvisor/pkg/hostarch": "will crash on non-4K page sizes; see https://github.com/tailscale/tailscale/issues/8658",
 		},
 	}.Check(t)
 }
