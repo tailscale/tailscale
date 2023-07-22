@@ -213,10 +213,20 @@ type Node struct {
 	Addresses    []netip.Prefix // IP addresses of this Node directly
 	AllowedIPs   []netip.Prefix // range of IP addresses to route to this node
 	Endpoints    []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
-	DERP         string         `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
-	Hostinfo     HostinfoView
-	Created      time.Time
-	Cap          CapabilityVersion `json:",omitempty"` // if non-zero, the node's capability version; old servers might not send
+
+	// DERP is this node's home DERP region ID integer, but shoved into an
+	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
+	// (a loopback address (127) followed by the digits over the letters DERP on
+	// a QWERTY keyboard (3.3.40)). The "port number" is the home DERP region ID
+	// integer.
+	//
+	// TODO(bradfitz): simplify this legacy mess; add a new HomeDERPRegionID int
+	// field behind a new capver bump.
+	DERP string `json:",omitempty"` // DERP-in-IP:port ("127.3.3.40:N") endpoint
+
+	Hostinfo HostinfoView
+	Created  time.Time
+	Cap      CapabilityVersion `json:",omitempty"` // if non-zero, the node's capability version; old servers might not send
 
 	// Tags are the list of ACL tags applied to this node.
 	// Tags take the form of `tag:<value>` where value starts
@@ -677,11 +687,12 @@ type NetInfo struct {
 	// Empty means not checked.
 	PCP opt.Bool
 
-	// PreferredDERP is this node's preferred DERP server
-	// for incoming traffic. The node might be be temporarily
-	// connected to multiple DERP servers (to send to other nodes)
-	// but PreferredDERP is the instance number that the node
-	// subscribes to traffic at.
+	// PreferredDERP is this node's preferred (home) DERP region ID.
+	// This is where the node expects to be contacted to begin a
+	// peer-to-peer connection. The node might be be temporarily
+	// connected to multiple DERP servers (to speak to other nodes
+	// that are located elsewhere) but PreferredDERP is the region ID
+	// that the node subscribes to traffic at.
 	// Zero means disconnected or unknown.
 	PreferredDERP int
 
@@ -1616,8 +1627,15 @@ type ControlIPCandidate struct {
 	Priority int `json:",omitempty"`
 }
 
-// Debug are instructions from the control server to the client
-// to adjust debug settings.
+// Debug are instructions from the control server to the client to adjust debug
+// settings.
+//
+// Deprecated: these should no longer be used. They're a weird mix of declartive
+// and imperative. The imperative ones should be c2n requests instead, and the
+// declarative ones (at least the bools) should generally be self
+// Node.Capabilities.
+//
+// TODO(bradfitz): start migrating the imperative ones to c2n requests.
 type Debug struct {
 	// LogHeapPprof controls whether the client should log
 	// its heap pprof data. Each true value sent from the server
