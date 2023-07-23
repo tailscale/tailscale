@@ -81,7 +81,7 @@ func (p *Persist) Equals(p2 *Persist) bool {
 		p.OldPrivateNodeKey.Equal(p2.OldPrivateNodeKey) &&
 		p.Provider == p2.Provider &&
 		p.LoginName == p2.LoginName &&
-		p.UserProfile == p2.UserProfile &&
+		p.UserProfile.Equal(&p2.UserProfile) &&
 		p.NetworkLockKey.Equal(p2.NetworkLockKey) &&
 		p.NodeID == p2.NodeID &&
 		reflect.DeepEqual(nilIfEmpty(p.DisallowedTKAStateIDs), nilIfEmpty(p2.DisallowedTKAStateIDs))

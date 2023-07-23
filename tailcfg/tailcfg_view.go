@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -1200,4 +1200,67 @@ var _LocationViewNeedsRegeneration = Location(struct {
 	City        string
 	CityCode    string
 	Priority    int
+}{})
+
+// View returns a readonly view of UserProfile.
+func (p *UserProfile) View() UserProfileView {
+	return UserProfileView{ж: p}
+}
+
+// UserProfileView provides a read-only view over UserProfile.
+//
+// Its methods should only be called if `Valid()` returns true.
+type UserProfileView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *UserProfile
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v UserProfileView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v UserProfileView) AsStruct() *UserProfile {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v UserProfileView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *UserProfileView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x UserProfile
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v UserProfileView) ID() UserID                    { return v.ж.ID }
+func (v UserProfileView) LoginName() string             { return v.ж.LoginName }
+func (v UserProfileView) DisplayName() string           { return v.ж.DisplayName }
+func (v UserProfileView) ProfilePicURL() string         { return v.ж.ProfilePicURL }
+func (v UserProfileView) Roles() emptyStructJSONSlice   { return v.ж.Roles }
+func (v UserProfileView) Groups() views.Slice[string]   { return views.SliceOf(v.ж.Groups) }
+func (v UserProfileView) Equal(v2 UserProfileView) bool { return v.ж.Equal(v2.ж) }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _UserProfileViewNeedsRegeneration = UserProfile(struct {
+	ID            UserID
+	LoginName     string
+	DisplayName   string
+	ProfilePicURL string
+	Roles         emptyStructJSONSlice
+	Groups        []string
 }{})
