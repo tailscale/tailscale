@@ -506,9 +506,31 @@ var _LocationCloneNeedsRegeneration = Location(struct {
 	Priority    int
 }{})
 
+// Clone makes a deep copy of UserProfile.
+// The result aliases no memory with the original.
+func (src *UserProfile) Clone() *UserProfile {
+	if src == nil {
+		return nil
+	}
+	dst := new(UserProfile)
+	*dst = *src
+	dst.Groups = append(src.Groups[:0:0], src.Groups...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
+	ID            UserID
+	LoginName     string
+	DisplayName   string
+	ProfilePicURL string
+	Roles         emptyStructJSONSlice
+	Groups        []string
+}{})
+
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -652,6 +674,15 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **Location:
+			*dst = src.Clone()
+			return true
+		}
+	case *UserProfile:
+		switch dst := dst.(type) {
+		case *UserProfile:
+			*dst = *src.Clone()
+			return true
+		case **UserProfile:
 			*dst = src.Clone()
 			return true
 		}
