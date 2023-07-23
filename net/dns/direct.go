@@ -27,11 +27,6 @@ import (
 	"tailscale.com/version/distro"
 )
 
-const (
-	backupConf = "/etc/resolv.pre-tailscale-backup.conf"
-	resolvConf = "/etc/resolv.conf"
-)
-
 // writeResolvConf writes DNS configuration in resolv.conf format to the given writer.
 func writeResolvConf(w io.Writer, servers []netip.Addr, domains []dnsname.FQDN) error {
 	c := &resolvconffile.Config{
