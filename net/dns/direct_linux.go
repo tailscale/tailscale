@@ -43,7 +43,7 @@ func (m *directManager) runFileWatcher() {
 		}
 		var match bool
 		for _, ev := range events {
-			if ev.Name == resolvConf {
+			if ev.Name == m.resolvConf {
 				match = true
 				break
 			}

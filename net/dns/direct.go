@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	backupConf = "/etc/resolv.pre-tailscale-backup.conf"
-	resolvConf = "/etc/resolv.conf"
+	defaultBackupConf = "/etc/resolv.pre-tailscale-backup.conf"
+	defaultResolvConf = "/etc/resolv.conf"
 )
 
 // writeResolvConf writes DNS configuration in resolv.conf format to the given writer.
@@ -132,6 +132,9 @@ type directManager struct {
 	// but is better than having non-functioning DNS.
 	renameBroken bool
 
+	resolvConf string // usually "/etc/resolv.conf"
+	backupConf string // usually "/etc/resolv.pre-tailscale-backup.conf"
+
 	ctx      context.Context    // valid until Close
 	ctxClose context.CancelFunc // closes ctx
 
@@ -147,10 +150,16 @@ func newDirectManager(logf logger.Logf) *directManager {
 func newDirectManagerOnFS(logf logger.Logf, fs wholeFileFS) *directManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &directManager{
-		logf:     logf,
-		fs:       fs,
-		ctx:      ctx,
-		ctxClose: cancel,
+		logf:       logf,
+		fs:         fs,
+		ctx:        ctx,
+		ctxClose:   cancel,
+		resolvConf: defaultResolvConf,
+		backupConf: defaultBackupConf,
+	}
+	if distro.Get() == distro.Gokrazy {
+		m.resolvConf = "/tmp/resolv.conf"
+		m.backupConf = "/tmp/resolv.pre-tailscale-backup.conf"
 	}
 	go m.runFileWatcher()
 	return m
@@ -167,7 +176,7 @@ func (m *directManager) readResolvFile(path string) (OSConfig, error) {
 // ownedByTailscale reports whether /etc/resolv.conf seems to be a
 // tailscale-managed file.
 func (m *directManager) ownedByTailscale() (bool, error) {
-	isRegular, err := m.fs.Stat(resolvConf)
+	isRegular, err := m.fs.Stat(m.resolvConf)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -177,7 +186,7 @@ func (m *directManager) ownedByTailscale() (bool, error) {
 	if !isRegular {
 		return false, nil
 	}
-	bs, err := m.fs.ReadFile(resolvConf)
+	bs, err := m.fs.ReadFile(m.resolvConf)
 	if err != nil {
 		return false, err
 	}
@@ -190,11 +199,11 @@ func (m *directManager) ownedByTailscale() (bool, error) {
 // backupConfig creates or updates a backup of /etc/resolv.conf, if
 // resolv.conf does not currently contain a Tailscale-managed config.
 func (m *directManager) backupConfig() error {
-	if _, err := m.fs.Stat(resolvConf); err != nil {
+	if _, err := m.fs.Stat(m.resolvConf); err != nil {
 		if os.IsNotExist(err) {
 			// No resolv.conf, nothing to back up. Also get rid of any
 			// existing backup file, to avoid restoring something old.
-			m.fs.Remove(backupConf)
+			m.fs.Remove(m.backupConf)
 			return nil
 		}
 		return err
@@ -208,11 +217,11 @@ func (m *directManager) backupConfig() error {
 		return nil
 	}
 
-	return m.rename(resolvConf, backupConf)
+	return m.rename(m.resolvConf, m.backupConf)
 }
 
 func (m *directManager) restoreBackup() (restored bool, err error) {
-	if _, err := m.fs.Stat(backupConf); err != nil {
+	if _, err := m.fs.Stat(m.backupConf); err != nil {
 		if os.IsNotExist(err) {
 			// No backup, nothing we can do.
 			return false, nil
@@ -223,7 +232,7 @@ func (m *directManager) restoreBackup() (restored bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = m.fs.Stat(resolvConf)
+	_, err = m.fs.Stat(m.resolvConf)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
@@ -232,12 +241,12 @@ func (m *directManager) restoreBackup() (restored bool, err error) {
 	if resolvConfExists && !owned {
 		// There's already a non-tailscale config in place, get rid of
 		// our backup.
-		m.fs.Remove(backupConf)
+		m.fs.Remove(m.backupConf)
 		return false, nil
 	}
 
 	// We own resolv.conf, and a backup exists.
-	if err := m.rename(backupConf, resolvConf); err != nil {
+	if err := m.rename(m.backupConf, m.resolvConf); err != nil {
 		return false, err
 	}
 
@@ -307,7 +316,7 @@ func (m *directManager) checkForFileTrample() {
 		return
 	}
 
-	cur, err := m.fs.ReadFile(resolvConf)
+	cur, err := m.fs.ReadFile(m.resolvConf)
 	if err != nil {
 		m.logf("trample: read error: %v", err)
 		return
@@ -365,7 +374,7 @@ func (m *directManager) SetDNS(config OSConfig) (err error) {
 
 		buf := new(bytes.Buffer)
 		writeResolvConf(buf, config.Nameservers, config.SearchDomains)
-		if err := m.atomicWriteFile(m.fs, resolvConf, buf.Bytes(), 0644); err != nil {
+		if err := m.atomicWriteFile(m.fs, m.resolvConf, buf.Bytes(), 0644); err != nil {
 			return err
 		}
 
@@ -414,9 +423,9 @@ func (m *directManager) GetBaseConfig() (OSConfig, error) {
 	if err != nil {
 		return OSConfig{}, err
 	}
-	fileToRead := resolvConf
+	fileToRead := m.resolvConf
 	if owned {
-		fileToRead = backupConf
+		fileToRead = m.backupConf
 	}
 
 	return m.readResolvFile(fileToRead)
@@ -429,7 +438,7 @@ func (m *directManager) Close() error {
 	// things. Clean it up if it's still there.
 	m.fs.Remove("/etc/resolv.tailscale.conf")
 
-	if _, err := m.fs.Stat(backupConf); err != nil {
+	if _, err := m.fs.Stat(m.backupConf); err != nil {
 		if os.IsNotExist(err) {
 			// No backup, nothing we can do.
 			return nil
@@ -440,7 +449,7 @@ func (m *directManager) Close() error {
 	if err != nil {
 		return err
 	}
-	_, err = m.fs.Stat(resolvConf)
+	_, err = m.fs.Stat(m.resolvConf)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -449,12 +458,12 @@ func (m *directManager) Close() error {
 	if resolvConfExists && !owned {
 		// There's already a non-tailscale config in place, get rid of
 		// our backup.
-		m.fs.Remove(backupConf)
+		m.fs.Remove(m.backupConf)
 		return nil
 	}
 
 	// We own resolv.conf, and a backup exists.
-	if err := m.rename(backupConf, resolvConf); err != nil {
+	if err := m.rename(m.backupConf, m.resolvConf); err != nil {
 		return err
 	}
 

@@ -121,7 +121,7 @@ func dnsMode(logf logger.Logf, env newOSConfigEnv) (ret string, err error) {
 		dbg("resolved-ping", "yes")
 	}
 
-	bs, err := env.fs.ReadFile(resolvConf)
+	bs, err := env.fs.ReadFile(defaultResolvConf)
 	if os.IsNotExist(err) {
 		dbg("rc", "missing")
 		return "direct", nil
