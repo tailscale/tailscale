@@ -368,3 +368,75 @@ skip_if_unavailable=False
 		})
 	}
 }
+
+func TestParseAlpinePackageVersion(t *testing.T) {
+	tests := []struct {
+		desc    string
+		out     string
+		want    string
+		wantErr bool
+	}{
+		{
+			desc: "valid version",
+			out: `
+tailscale-1.44.2-r0 description:
+The easiest, most secure way to use WireGuard and 2FA
+
+tailscale-1.44.2-r0 webpage:
+https://tailscale.com/
+
+tailscale-1.44.2-r0 installed size:
+32 MiB
+`,
+			want: "1.44.2",
+		},
+		{
+			desc: "wrong package output",
+			out: `
+busybox-1.36.1-r0 description:
+Size optimized toolbox of many common UNIX utilities
+
+busybox-1.36.1-r0 webpage:
+https://busybox.net/
+
+busybox-1.36.1-r0 installed size:
+924 KiB
+`,
+			wantErr: true,
+		},
+		{
+			desc: "missing version",
+			out: `
+tailscale description:
+The easiest, most secure way to use WireGuard and 2FA
+
+tailscale webpage:
+https://tailscale.com/
+
+tailscale installed size:
+32 MiB
+`,
+			wantErr: true,
+		},
+		{
+			desc:    "empty output",
+			out:     "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got, err := parseAlpinePackageVersion([]byte(tt.out))
+			if err == nil && tt.wantErr {
+				t.Fatalf("got nil error and version %q, want non-nil error", got)
+			}
+			if err != nil && !tt.wantErr {
+				t.Fatalf("got error: %q, want nil", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got version: %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
