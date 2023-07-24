@@ -175,7 +175,9 @@ func (t *strideTable[T]) insert(addr uint8, prefixLen int, val *T) {
 	return
 }
 
-// delete removes the route addr/prefixLen from t.
+// delete removes the route addr/prefixLen from t. Returns the value
+// that was associated with the deleted prefix, or nil if the prefix
+// wasn't in the strideTable.
 func (t *strideTable[T]) delete(addr uint8, prefixLen int) *T {
 	idx := prefixIndex(addr, prefixLen)
 	recordedIdx := t.entries[idx].prefixIndex
