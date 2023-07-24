@@ -85,16 +85,12 @@ func (t *strideTable[T]) deleteChild(idx int) {
 
 // setChild replaces the child strideTable for addr (if any) with child.
 func (t *strideTable[T]) setChild(addr uint8, child *strideTable[T]) {
-	idx := hostIndex(addr)
-	if t.entries[idx].child == nil {
-		t.childRefs++
-	}
-	t.entries[idx].child = child
+	t.setChildByIndex(hostIndex(addr), child)
 }
 
-// setChildByIdx replaces the child strideTable at idx (if any) with
+// setChildByIndex replaces the child strideTable at idx (if any) with
 // child. idx should be obtained via a call to getChild.
-func (t *strideTable[T]) setChildByIdx(idx int, child *strideTable[T]) {
+func (t *strideTable[T]) setChildByIndex(idx int, child *strideTable[T]) {
 	if t.entries[idx].child == nil {
 		t.childRefs++
 	}

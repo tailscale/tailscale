@@ -468,7 +468,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 			if debugDelete {
 				fmt.Printf("delete: compact parent.prefix=%s st.prefix=%s child.prefix=%s\n", parent.prefix, cur.prefix, child.prefix)
 			}
-			strideTables[strideIdx-1].setChildByIdx(strideIndexes[strideIdx-1], child)
+			strideTables[strideIdx-1].setChildByIndex(strideIndexes[strideIdx-1], child)
 			return
 		default:
 			// This table has two or more children, so it's acting as a "fork in
