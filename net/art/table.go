@@ -45,13 +45,25 @@ func (t *Table[T]) init() {
 // no route matched.
 func (t *Table[T]) Get(addr netip.Addr) *T {
 	t.init()
-	st := &t.v4
+
+	// Ideally we would use addr.AsSlice here, but AsSlice is just
+	// barely complex enough that it can't be inlined, and that in
+	// turn causes the slice to escape to the heap. Using As16 and
+	// manual slicing here helps the compiler keep Get alloc-free.
+	rawAddr := addr.As16()
+	var (
+		st *strideTable[T]
+		bs []byte
+	)
 	if addr.Is6() {
 		st = &t.v6
+		bs = rawAddr[:]
+	} else {
+		st = &t.v4
+		bs = rawAddr[12:]
 	}
 
 	i := 0
-	bs := addr.AsSlice()
 	// With path compression, we might skip over some address bits while walking
 	// to a strideTable leaf. This means the leaf answer we find might not be
 	// correct, because path compression took us down the wrong subtree. When
