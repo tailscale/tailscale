@@ -276,7 +276,7 @@ func (t *Table[T]) Insert(pfx netip.Prefix, val *T) {
 			} else {
 				// pfx lives in a different child subtree of
 				// intermediate. By definition this subtree doesn't
-				// exist at all, otherwise we'd never have entereed
+				// exist at all, otherwise we'd never have entered
 				// this entire "wrong turn" codepath in the first
 				// place.
 				//
