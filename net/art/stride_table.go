@@ -119,8 +119,8 @@ func (t *strideTable[T]) getValAndChild(addr uint8) (*T, *strideTable[T]) {
 	return t.entries[idx].value, t.entries[idx].child
 }
 
-// findFirstChild returns the first non-nil child strideTable in t, or
-// nil if t has no children.
+// findFirstChild returns the first child strideTable in t, or nil if
+// t has no children.
 func (t *strideTable[T]) findFirstChild() *strideTable[T] {
 	for i := firstHostIndex; i <= lastHostIndex; i++ {
 		if child := t.entries[i].child; child != nil {
