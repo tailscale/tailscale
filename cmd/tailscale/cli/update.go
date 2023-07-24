@@ -45,9 +45,10 @@ var updateCmd = &ffcli.Command{
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
 		fs.BoolVar(&updateArgs.appStore, "app-store", false, "HIDDEN: check the App Store for updates, even if this is not an App Store install (for testing only)")
-		// These flags are not supported on Arch-based installs. Arch only
-		// offers one variant of tailscale and it's always the latest version.
-		if distro.Get() != distro.Arch {
+		// These flags are not supported on Arch or Alpine-based installs.
+		// Package repos on these distros only offer one variant of tailscale
+		// and it's always the latest version.
+		if distro.Get() != distro.Arch && distro.Get() != distro.Alpine {
 			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
 			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		}
@@ -145,6 +146,8 @@ func newUpdater() (*updater, error) {
 			up.update = up.updateDebLike
 		case distro.Arch:
 			up.update = up.updateArchLike
+		case distro.Alpine:
+			up.update = up.updateAlpineLike
 		}
 		// TODO(awly): add support for Alpine
 		switch {
@@ -158,6 +161,8 @@ func newUpdater() (*updater, error) {
 			up.update = up.updateFedoraLike("dnf")
 		case haveExecutable("yum"):
 			up.update = up.updateFedoraLike("yum")
+		case haveExecutable("apk"):
+			up.update = up.updateAlpineLike
 		}
 	case "darwin":
 		switch {
@@ -460,6 +465,63 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 		return false, nil
 	}
 	return true, os.WriteFile(repoFile, newContent.Bytes(), 0644)
+}
+
+func (up *updater) updateAlpineLike() (err error) {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil && !errors.Is(err, errUserAborted) {
+			err = fmt.Errorf(`%w; you can try updating using "apk upgrade tailscale"`, err)
+		}
+	}()
+
+	out, err := exec.Command("apk", "update").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed refresh apk repository indexes: %w, output: %q", err, out)
+	}
+	out, err = exec.Command("apk", "info", "tailscale").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed checking apk for latest tailscale version: %w, output: %q", err, out)
+	}
+	ver, err := parseAlpinePackageVersion(out)
+	if err != nil {
+		return fmt.Errorf(`failed to parse latest version from "apk info tailscale": %w`, err)
+	}
+	if up.currentOrDryRun(ver) {
+		return nil
+	}
+	if err := up.confirm(ver); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("apk", "upgrade", "tailscale")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale update using apk: %w", err)
+	}
+	return nil
+}
+
+func parseAlpinePackageVersion(out []byte) (string, error) {
+	s := bufio.NewScanner(bytes.NewReader(out))
+	for s.Scan() {
+		// The line should look like this:
+		// tailscale-1.44.2-r0 description:
+		line := strings.TrimSpace(s.Text())
+		if !strings.HasPrefix(line, "tailscale-") {
+			continue
+		}
+		parts := strings.SplitN(line, "-", 3)
+		if len(parts) < 3 {
+			return "", fmt.Errorf("malformed info line: %q", line)
+		}
+		return parts[1], nil
+	}
+	return "", errors.New("tailscale version not found in output")
 }
 
 func (up *updater) updateMacSys() error {
