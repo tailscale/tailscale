@@ -41,6 +41,13 @@ func (t *Table[T]) init() {
 	})
 }
 
+func (t *Table[T]) tableForAddr(addr netip.Addr) *strideTable[T] {
+	if addr.Is6() {
+		return &t.v6
+	}
+	return &t.v4
+}
+
 // Get does a route lookup for addr and returns the associated value, or nil if
 // no route matched.
 func (t *Table[T]) Get(addr netip.Addr) *T {
@@ -50,17 +57,11 @@ func (t *Table[T]) Get(addr netip.Addr) *T {
 	// barely complex enough that it can't be inlined, and that in
 	// turn causes the slice to escape to the heap. Using As16 and
 	// manual slicing here helps the compiler keep Get alloc-free.
+	st := t.tableForAddr(addr)
 	rawAddr := addr.As16()
-	var (
-		st *strideTable[T]
-		bs []byte
-	)
-	if addr.Is6() {
-		st = &t.v6
-		bs = rawAddr[:]
-	} else {
-		st = &t.v4
-		bs = rawAddr[12:]
+	bs := rawAddr[:]
+	if addr.Is4() {
+		bs = bs[12:]
 	}
 
 	i := 0
@@ -144,10 +145,7 @@ func (t *Table[T]) Insert(pfx netip.Prefix, val *T) {
 		fmt.Printf("\ninsert: start pfx=%s\n", pfx)
 	}
 
-	st := &t.v4
-	if pfx.Addr().Is6() {
-		st = &t.v6
-	}
+	st := t.tableForAddr(pfx.Addr())
 
 	// This algorithm is full of off-by-one headaches that boil down
 	// to the fact that pfx.Bits() has (2^n)+1 values, rather than
@@ -335,10 +333,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 		fmt.Printf("\ndelete: start pfx=%s table:\n%s", pfx, t.debugSummary())
 	}
 
-	st := &t.v4
-	if pfx.Addr().Is6() {
-		st = &t.v6
-	}
+	st := t.tableForAddr(pfx.Addr())
 
 	// This algorithm is full of off-by-one headaches, just like
 	// Insert. See the comment in Insert for more details. Bottom
