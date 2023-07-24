@@ -3,7 +3,11 @@
 
 package cli
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestUpdateDebianAptSourcesListBytes(t *testing.T) {
 	tests := []struct {
@@ -249,6 +253,117 @@ Version         : 1.44.2
 			}
 			if got != tt.want {
 				t.Fatalf("got version: %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateYUMRepoTrack(t *testing.T) {
+	tests := []struct {
+		desc    string
+		before  string
+		track   string
+		after   string
+		rewrote bool
+		wantErr bool
+	}{
+		{
+			desc: "same track",
+			before: `
+[tailscale-stable]
+name=Tailscale stable
+baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
+`,
+			track: "stable",
+			after: `
+[tailscale-stable]
+name=Tailscale stable
+baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
+`,
+		},
+		{
+			desc: "change track",
+			before: `
+[tailscale-stable]
+name=Tailscale stable
+baseurl=https://pkgs.tailscale.com/stable/fedora/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
+`,
+			track: "unstable",
+			after: `
+[tailscale-unstable]
+name=Tailscale unstable
+baseurl=https://pkgs.tailscale.com/unstable/fedora/$basearch
+enabled=1
+type=rpm
+repo_gpgcheck=1
+gpgcheck=0
+gpgkey=https://pkgs.tailscale.com/unstable/fedora/repo.gpg
+`,
+			rewrote: true,
+		},
+		{
+			desc: "non-tailscale repo file",
+			before: `
+[fedora]
+name=Fedora $releasever - $basearch
+#baseurl=http://download.example/pub/fedora/linux/releases/$releasever/Everything/$basearch/os/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-$releasever&arch=$basearch
+enabled=1
+countme=1
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
+skip_if_unavailable=False
+`,
+			track:   "stable",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "tailscale.repo")
+			if err := os.WriteFile(path, []byte(tt.before), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			rewrote, err := updateYUMRepoTrack(path, tt.track)
+			if err == nil && tt.wantErr {
+				t.Fatal("got nil error, want non-nil")
+			}
+			if err != nil && !tt.wantErr {
+				t.Fatalf("got error %q, want nil", err)
+			}
+			if err != nil {
+				return
+			}
+			if rewrote != tt.rewrote {
+				t.Errorf("got rewrote flag %v, want %v", rewrote, tt.rewrote)
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != tt.after {
+				t.Errorf("got repo file after update:\n%swant:\n%s", after, tt.after)
 			}
 		})
 	}
