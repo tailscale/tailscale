@@ -81,18 +81,19 @@ func (t *Table[T]) Get(addr netip.Addr) *T {
 	// the number of strideTables in the path), rather than only paying M prefix
 	// comparisons in the edge case (where M is the number of strideTables in
 	// the path with a non-nil route of their own).
-	strideIdx := 0
-	stridePrefixes := [16]netip.Prefix{}
-	strideRoutes := [16]*T{}
+	const maxDepth = 16
+	type prefixAndRoute struct {
+		prefix netip.Prefix
+		route  *T
+	}
+	strideMatch := make([]prefixAndRoute, 0, maxDepth)
 findLeaf:
 	for {
 		rt, child := st.getValAndChild(bs[i])
 		if rt != nil {
 			// This strideTable contains a route that may be relevant to our
 			// search, remember it.
-			stridePrefixes[strideIdx] = st.prefix
-			strideRoutes[strideIdx] = rt
-			strideIdx++
+			strideMatch = append(strideMatch, prefixAndRoute{st.prefix, rt})
 		}
 		if child == nil {
 			// No sub-routes further down, the last thing we recorded
@@ -112,10 +113,9 @@ findLeaf:
 	// In the common case where path compression did not mislead us, we'll
 	// return on the first loop iteration because the last route we recorded was
 	// the correct most-specific route.
-	for strideIdx > 0 {
-		strideIdx--
-		if stridePrefixes[strideIdx].Contains(addr) {
-			return strideRoutes[strideIdx]
+	for i := len(strideMatch) - 1; i >= 0; i-- {
+		if m := strideMatch[i]; m.prefix.Contains(addr) {
+			return m.route
 		}
 	}
 
