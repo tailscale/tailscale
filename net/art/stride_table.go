@@ -38,8 +38,11 @@ type strideEntry[T any] struct {
 // The leaves of the binary tree are host routes (/8s). Each parent is a
 // successively larger prefix that encompasses its children (/7 through /0).
 type strideTable[T any] struct {
-	// prefix is the prefix represented by the 0/0 route of this strideTable. It
-	// is used in multi-level tables to support path compression.
+	// prefix is the prefix represented by the 0/0 route of this
+	// strideTable. It is used in multi-level tables to support path
+	// compression. All strideTables must have a valid prefix
+	// (non-zero value, passes IsValid()) whose length is a multiple
+	// of 8 (e.g. /8, /16, but not /15).
 	prefix netip.Prefix
 	// entries is the nodes of the binary tree, laid out in a flattened array.
 	//
