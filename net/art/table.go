@@ -14,6 +14,7 @@ package art
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math/bits"
@@ -633,13 +634,11 @@ func commonBits(a, b netip.Addr, maxBits int) int {
 // ipv4AsUint returns ip as a uint32.
 func ipv4AsUint(ip netip.Addr) uint32 {
 	bs := ip.As4()
-	return uint32(bs[0])<<24 | uint32(bs[1])<<16 | uint32(bs[2])<<8 | uint32(bs[3])
+	return binary.BigEndian.Uint32(bs[:])
 }
 
 // ipv6AsUint returns ip as a pair of uint64s.
 func ipv6AsUint(ip netip.Addr) (uint64, uint64) {
 	bs := ip.As16()
-	hi := uint64(bs[0])<<56 | uint64(bs[1])<<48 | uint64(bs[2])<<40 | uint64(bs[3])<<32 | uint64(bs[4])<<24 | uint64(bs[5])<<16 | uint64(bs[6])<<8 | uint64(bs[7])
-	lo := uint64(bs[8])<<56 | uint64(bs[9])<<48 | uint64(bs[10])<<40 | uint64(bs[11])<<32 | uint64(bs[12])<<24 | uint64(bs[13])<<16 | uint64(bs[14])<<8 | uint64(bs[15])
-	return hi, lo
+	return binary.BigEndian.Uint64(bs[:8]), binary.BigEndian.Uint64(bs[8:])
 }
