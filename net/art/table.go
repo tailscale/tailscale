@@ -166,13 +166,11 @@ func (t *Table[T]) Insert(pfx netip.Prefix, val *T) {
 		return
 	}
 
-	bs := pfx.Addr().AsSlice()
-
 	// No matter what we do as we traverse strideTables, our final
 	// action will be to insert the last 1-8 bits of pfx into a
 	// strideTable somewhere.
 	//
-	// We calculate upfront the byte position in bs of the end of the
+	// We calculate upfront the byte position of the end of the
 	// prefix; the number of bits within that byte that contain prefix
 	// data; and the prefix of the strideTable into which we'll
 	// eventually insert.
@@ -205,6 +203,7 @@ func (t *Table[T]) Insert(pfx netip.Prefix, val *T) {
 	// currently examining to choose our next step, and numBits is the
 	// number of bits that remain in pfx, starting with the byte at
 	// byteIdx inclusive.
+	bs := pfx.Addr().AsSlice()
 	byteIdx := 0
 	numBits := pfx.Bits()
 	for {
