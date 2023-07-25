@@ -2238,6 +2238,14 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			continue
 		}
 		trySetSocketBuffer(pconn, c.logf)
+
+		if debugPMTUD() {
+			err = setDontFragment(pconn, network)
+			if err != nil {
+				c.logf("magicsock: unable to do path mtu discovery: %v", err)
+			}
+		}
+
 		// Success.
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
