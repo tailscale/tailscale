@@ -261,11 +261,6 @@ func (r *Resolver) Close() {
 	r.forwarder.Close()
 }
 
-// dnsQueryTimeout is not intended to be user-visible (the users
-// DNS resolver will retry well before that), just put an upper
-// bound on per-query resource usage.
-const dnsQueryTimeout = 10 * time.Second
-
 func (r *Resolver) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
 	metricDNSQueryLocal.Add(1)
 	select {
@@ -277,26 +272,35 @@ func (r *Resolver) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([
 
 	out, err := r.respond(bs)
 	if err == errNotOurName {
-		responses := make(chan packet, 1)
-		ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
-		defer close(responses)
-		defer cancel()
-		err = r.forwarder.forwardWithDestChan(ctx, packet{bs, from}, responses)
-		if err != nil {
-			select {
-			// Best effort: use any error response sent by forwardWithDestChan.
-			// This is present in some errors paths, such as when all upstream
-			// DNS servers replied with an error.
-			case resp := <-responses:
-				return resp.bs, err
-			default:
-				return nil, err
-			}
-		}
-		return (<-responses).bs, nil
+		return r.QueryUpstream(ctx, bs, from)
 	}
 
 	return out, err
+}
+
+// dnsQueryTimeout is not intended to be user-visible (the users
+// DNS resolver will retry well before that), just put an upper
+// bound on per-query resource usage.
+const dnsQueryTimeout = 10 * time.Second
+
+func (r *Resolver) QueryUpstream(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
+	responses := make(chan packet, 1)
+	ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
+	defer close(responses)
+	defer cancel()
+	err := r.forwarder.forwardWithDestChan(ctx, packet{bs, from}, responses)
+	if err != nil {
+		select {
+		// Best effort: use any error response sent by forwardWithDestChan.
+		// This is present in some errors paths, such as when all upstream
+		// DNS servers replied with an error.
+		case resp := <-responses:
+			return resp.bs, err
+		default:
+			return nil, err
+		}
+	}
+	return (<-responses).bs, nil
 }
 
 // parseExitNodeQuery parses a DNS request packet.

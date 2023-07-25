@@ -8,14 +8,19 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/exp/slices"
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
@@ -33,6 +38,31 @@ var (
 // maxActiveQueries returns the maximal number of DNS requests that can
 // be running.
 const maxActiveQueries = 256
+
+const healthcheckName = "ipv4only.arpa."
+
+var (
+	healthcheckQuery     []byte
+	healthcheckQueryOnce sync.Once
+)
+
+func getHealthcheckQuery() []byte {
+	healthcheckQueryOnce.Do(func() {
+		builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{})
+		builder.StartQuestions()
+		builder.Question(dnsmessage.Question{
+			Name:  dnsmessage.MustNewName(healthcheckName),
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+		})
+		msg, err := builder.Finish()
+		if err != nil {
+			panic(err)
+		}
+		healthcheckQuery = msg
+	})
+	return healthcheckQuery
+}
 
 // We use file-ignore below instead of ignore because on some platforms,
 // the lint exception is necessary and on others it is not,
@@ -52,7 +82,12 @@ type response struct {
 
 // Manager manages system DNS settings.
 type Manager struct {
-	logf logger.Logf
+	logf    logger.Logf
+	timeNow func() time.Time
+
+	skipHealthcheck bool
+	hcmu            sync.Mutex
+	lastHealthcheck time.Time
 
 	activeQueriesAtomic int32
 
@@ -74,6 +109,7 @@ func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, 
 		logf:     logf,
 		resolver: resolver.New(logf, netMon, linkSel, dialer),
 		os:       oscfg,
+		timeNow:  time.Now,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
 	m.logf("using %T", m.os)
@@ -149,6 +185,92 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 		return a.Hosts[0] < b.Hosts[0]
 	})
 	return hosts
+}
+
+var healthcheckSrc = netip.MustParseAddrPort("127.0.0.1:12345")
+
+func (m *Manager) forwarderHealthcheck(ctx context.Context) error {
+	// Regardless of the response, update the healthcheck time when this
+	// function returns.
+	defer func() {
+		m.hcmu.Lock()
+		defer m.hcmu.Unlock()
+		m.lastHealthcheck = m.timeNow()
+	}()
+
+	// TODO(andrew): is this timeout correct?
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// fake DNS query
+	q := getHealthcheckQuery()
+	resp, err := m.resolver.QueryUpstream(ctx, q, healthcheckSrc)
+	if err != nil {
+		return err
+	}
+
+	has, err := hasAnswerFor(resp, healthcheckName, dnsmessage.TypeA)
+	if err != nil {
+		return err
+	}
+
+	// We expect at least one answer from a valid DNS server
+	if !has {
+		return fmt.Errorf("expected valid response to healthcheck DNS query")
+	}
+	return nil
+}
+
+func hasAnswerFor(msg []byte, name string, ty dnsmessage.Type) (bool, error) {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil {
+		return false, err
+	}
+
+	if err := p.SkipAllQuestions(); err != nil {
+		return false, err
+	}
+
+	var answers int
+	for {
+		h, err := p.AnswerHeader()
+		if err == dnsmessage.ErrSectionDone {
+			break
+		}
+		if err != nil {
+			return false, err
+		}
+
+		// Compare the type, class, and name in the response
+		if h.Type != ty || h.Class != dnsmessage.ClassINET ||
+			!strings.EqualFold(h.Name.String(), name) {
+			// Must skip to move to next answer in the response
+			if err := p.SkipAnswer(); err != nil {
+				return false, err
+			}
+			continue
+		}
+
+		// Verify that the answer actually parses
+		switch ty {
+		case dnsmessage.TypeA:
+			_, err = p.AResource()
+		case dnsmessage.TypeAAAA:
+			_, err = p.AAAAResource()
+		default:
+			// Don't know how to handle this type; just handle it
+			// as an "unknown" type for now.
+			_, err = p.UnknownResource()
+		}
+
+		if err != nil {
+			return false, err
+		}
+		answers++
+	}
+
+	// We want at least one answer of the right type.
+	return answers > 0, nil
 }
 
 // compileConfig converts cfg into a quad-100 resolver configuration
@@ -305,7 +427,40 @@ func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, from)
+	resp, err := m.resolver.Query(ctx, bs, from)
+	if err != nil {
+		// If this looks like a timeout, then healthcheck the upstream
+		// DNS servers to see if they have a problem. If this fails,
+		// it's very likely that the DNS settings for the system are
+		// broken.
+		// TODO(andrew): should we handle other errors here?
+		// TODO(andrew): should we do this asynchronously?
+		if m.shouldHealthcheck() && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)) {
+			if ferr := m.forwarderHealthcheck(context.Background()); ferr != nil {
+				m.logf("healthcheck: err=%v", err) // TODO(andrew): remove before merge
+				health.SetDNSForwarderHealth(err)
+			} else {
+				m.logf("healthcheck: success") // TODO(andrew): remove before merge
+			}
+		}
+	}
+	return resp, err
+}
+
+const healthcheckInterval = 10 * time.Second
+
+// shouldHealthcheck returns whether a DNS healthcheck should occur.
+func (m *Manager) shouldHealthcheck() bool {
+	if m.skipHealthcheck {
+		return false
+	}
+
+	now := m.timeNow()
+
+	m.hcmu.Lock()
+	defer m.hcmu.Unlock()
+	t := m.lastHealthcheck
+	return now.Sub(t) > healthcheckInterval
 }
 
 const (
