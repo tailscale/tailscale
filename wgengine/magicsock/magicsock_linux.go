@@ -318,6 +318,23 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	}
 }
 
+func trySetDontFragment(pconn nettype.PacketConn, network string) (err error) {
+	if c, ok := pconn.(*net.UDPConn); ok {
+		rc, err := c.SyscallConn()
+		if err == nil {
+			rc.Control(func(fd uintptr) {
+				if network == "udp4" {
+					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
+				}
+				if network == "udp6" {
+					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
+				}
+			})
+		}
+	}
+	return err
+}
+
 const (
 	// TODO(jwhited): upstream to unix?
 	socketOptionLevelUDP   = 17

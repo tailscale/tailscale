@@ -1101,6 +1101,7 @@ func (e *userspaceEngine) LinkChange(_ bool) {
 	e.netMon.InjectEvent()
 }
 
+// Add MTU monitoring and update here
 func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
 	up := cur.AnyInterfaceUp()
 	if !up {

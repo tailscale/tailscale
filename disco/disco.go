@@ -119,6 +119,8 @@ type Ping struct {
 	NodeKey key.NodePublic
 }
 
+const PingLen = 12 + key.NodePublicRawLen
+
 func (m *Ping) AppendMarshal(b []byte) []byte {
 	dataLen := 12
 	hasKey := !m.NodeKey.IsZero()
@@ -214,10 +216,10 @@ type Pong struct {
 	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
 }
 
-const pongLen = 12 + 16 + 2
+const PongLen = 12 + 16 + 2
 
 func (m *Pong) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
+	ret, d := appendMsgHeader(b, TypePong, v0, PongLen)
 	d = d[copy(d, m.TxID[:]):]
 	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
@@ -226,7 +228,7 @@ func (m *Pong) AppendMarshal(b []byte) []byte {
 }
 
 func parsePong(ver uint8, p []byte) (m *Pong, err error) {
-	if len(p) < pongLen {
+	if len(p) < PongLen {
 		return nil, errShort
 	}
 	m = new(Pong)

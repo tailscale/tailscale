@@ -88,7 +88,25 @@ const (
 	// is the max supported by a default configuration of macOS. Some platforms
 	// will silently clamp the value.
 	socketBufferSize = 7 << 20
+
+	// Various things needed to calculate the effective MTU
+	udpHeaderLen = 8 // Not defined anywhere unlike IP header length
+	// Disco header
+	discoHeaderLen = len(disco.Magic) + key.DiscoPublicRawLen
+	boxHeaderLen   = 40 // Header added by encrypting the naclbox
 )
+
+// Pad the content of the message to get the requested on-the-wire
+// packet size.  We have to include the padding as part of the
+// encrypted message or it gets truncated. So calculate the total
+// message size and subtract all the various headers.
+//
+// Parts of a packet:
+// IP header
+// UDP header
+// disco header
+// encryption overhead
+// message contents
 
 // useDerpRoute reports whether magicsock should enable the DERP
 // return path optimization (Issue 150).
@@ -2056,36 +2074,30 @@ const (
 // speeds.
 var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DELAY")
 
-// Peer MTU notes:
-//
-// The general concept is to send ~5 different sizes of ping/pong
-// packets between clients. The largest one that comes back defines
-// our MTU for communicating with this peer via this endpoint. This is
-// accomplished by teaching betterAddr() about pong packet length and
-// having it prefer the larger mtu for the same addr/port
-// endpoint. This prototype adds a wantMTU parameter to the relevant
-// disco routines because it was easy.
-//
-// TODO: Actually use the MTU when sending packets to our peer via
-// this endpoint.
-//
-// TODO: Do the math to convert MTU <-> the wantMTU parameter, if
-// necessary. I think it is necessary?
-
 // usefulMtus are the set of likely on-the-wire MTUs (including all the
 // layers of protocal headers above link layer)
 //
 // Each ping is kicked off with a separate go routine and they seem to
 // be run in approximately LIFO order, so if we want the biggest ping
 // to arrive first put it last?
+//
+// Debugging tips:
+//
+// To get exactly ONE ping of the desired MTU, do the following:
+//
+// 1. Set the below array to a single 0.
+// 2. Disable disco heartbeat with TS_DEBUG_ENABLE_SILENT_DISCO=1
+// 3. Send a single ping with ./tool/go run ./cmd/tailscale ping --mtu=1000 <host>
+
 var usefulMtus = [...]int{
-	//	576,  // Smallest MTU for IPv4, probably useless?
-	//	1124, // An observed max mtu in the wild, maybe 1100 instead?
-	1280, // Smallest MTU for IPv6, current default
-	1400, // A little less, for tunnels or such
-	1500, // Most common real world MTU
-	//      8000, // Some jumbo frames are this size
-	9000, // Most jumbo frames are this size or slightly larger
+	0,
+	//576,  // Smallest MTU for IPv4, probably useless?
+	//1124, // An observed max mtu in the wild, maybe 1100 instead?
+	//1280, // Smallest MTU for IPv6, current default
+	//1400, // A little less, for tunnels or such
+	//1500, // Most common real world MTU
+	//8000, // Some jumbo frames are this size
+	//9000, // Most jumbo frames are this size or slightly larger
 }
 
 // sendDiscoMessage sends discovery message m to dstDisco at dst.
@@ -2117,6 +2129,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	pkt := make([]byte, 0, bufSize)
 	pkt = append(pkt, disco.Magic...)
 	pkt = c.discoPublic.AppendTo(pkt)
+	c.logf("disco header %v", len(pkt))
 	di := c.discoInfoLocked(dstDisco)
 	c.mu.Unlock()
 
@@ -2129,21 +2142,38 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	// pm needs to be padded out to hit our mtu goal
 	//
 	// IP adds 20/40 bytes to the packet
-	//
-	// Disco header adds ??? bytes
+	// UDP adds 8 bytes
+	// Disco header is len(pkt) = 6
+	// Disco ping part of the messsage is len(pm)
 	//
 	// Seal adds 40 bytes to the input
+
 	pm := m.AppendMarshal(nil)
-	// Now extend it to the mtu minus all the headers
-	var pad int
+	c.logf("marshaled message %v", len(pm))
+
 	if mtu != 0 {
-		pad = mtu - 40 - 40 - len(pkt) - len(pm)
+		ipHeaderLen := ipv4.HeaderLen
+		if dst.Addr().Is4() {
+			ipHeaderLen = ipv6.HeaderLen
+		}
+		headerLen := ipHeaderLen + udpHeaderLen + boxHeaderLen
+		c.logf("IP/UDP/box headers %v", headerLen)
+		pad := mtu - headerLen - len(pkt) - len(pm)
+		c.logf("pad %v", pad)
+		// XXX This is where we add 20 bytes to hit our MTU
+		// goal. This means that we left out 20 bytes of
+		// header or message in our calculation above.
+		pad += 20
+		c.logf("corrected pad %v", pad)
+		// Extend our buffer to the padded size
 		pm = append(pm, make([]byte, pad, pad)...)
+		c.logf("padded message %v", len(pm))
 	}
+	// Seal adds 40 bytes to the message (accounted for above)
 	box := di.sharedKey.Seal(pm)
-	//c.logf("pkt %v mtu %v pad %v pm %v box %v", len(pkt), mtu, pad, len(pm), len(box))
+	c.logf("box %v (should be 40 more than %v)", len(box), len(pm))
 	pkt = append(pkt, box...)
-	//c.logf("pkt %v", len(pkt))
+	c.logf("pkt %v", len(pkt))
 	sent, err = c.sendAddr(dst, dstKey, pkt)
 	if sent {
 		if logLevel == discoLog || (logLevel == discoVerboseLog && debugDisco()) {
@@ -2228,9 +2258,8 @@ const (
 // it was received from at the DERP layer. derpNodeSrc is zero when received
 // over UDP.
 func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc key.NodePublic, via discoRXPath) (isDiscoMsg bool) {
-	const headerLen = len(disco.Magic) + key.DiscoPublicRawLen
 	msgLen := len(msg)
-	if msgLen < headerLen || string(msg[:len(disco.Magic)]) != disco.Magic {
+	if msgLen < discoHeaderLen || string(msg[:len(disco.Magic)]) != disco.Magic {
 		return false
 	}
 	// If the first four parts are the prefix of disco.Magic
@@ -2239,7 +2268,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	// Use naked returns for all following paths.
 	isDiscoMsg = true
 
-	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic):headerLen]))
+	sender := key.DiscoPublicFromRaw32(mem.B(msg[len(disco.Magic):discoHeaderLen]))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2271,7 +2300,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 
 	di := c.discoInfoLocked(sender)
 
-	sealedBox := msg[headerLen:]
+	sealedBox := msg[discoHeaderLen:]
 	payload, ok := di.sharedKey.Open(sealedBox)
 	if !ok {
 		// This might be have been intended for a previous
@@ -2435,14 +2464,25 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	// Remember this route if not present.
 	var numNodes int
 	var dup bool
-	// adjust mtu for ip header
-	// XXX assuming ipv6
-	var mtu int
-	// If the msgLen is the size of the bare pong packet, ignore it
-	// XXX make this much less terrible
-	if msgLen > 124 {
-		c.logf("adding 40 bytes to msgLen %v", msgLen)
-		mtu = msgLen + 40
+	// Find the on-the-wire MTU. In this case, msgLen is the
+	// length of the entire disco packet, so everything except the
+	// IP and UDP headers.
+	mtu := 0
+	// msgLen for an ordinary ping is 124
+	// IPv4: 20
+	// UDP: 8
+	// Disco header: 38
+	// boxHeaderLen: 40
+	// PingLen: 44
+	// ???: 2
+	if msgLen > discoHeaderLen+boxHeaderLen+disco.PingLen+2 {
+		pad := ipv4.HeaderLen
+		if src.Addr().Is6() {
+			pad = ipv6.HeaderLen
+		}
+		pad += udpHeaderLen
+		mtu = msgLen + pad
+		c.logf("adding %v bytes to msgLen %v for mtu %v", pad, msgLen, mtu)
 	}
 	if isDerp {
 		if ep, ok := c.peerMap.endpointForNodeKey(derpNodeSrc); ok {
@@ -5097,18 +5137,29 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		return false
 	}
 	knownTxID = true // for naked returns below
-	// adjust mtu for ip header
-	// XXX assuming ipv6
-	var mtu int
-	// If the msgLen is the size of the bare pong packet, ignore it
-	// XXX make this much less terrible
-	if msgLen > 124 {
-		de.c.logf("adding 40 bytes to msgLen %v", msgLen)
-		mtu = msgLen + 40
+
+	// Find the on-the-wire MTU. In this case, msgLen is the
+	// length of the entire disco packet, so everything except the
+	// IP and UDP headers.
+	mtu := 0
+	// XXX Why is the msgLen 2 bytes longer than the headers plus pong?
+	if msgLen > discoHeaderLen+boxHeaderLen+disco.PongLen+2 {
+		pad := ipv4.HeaderLen
+		if src.Addr().Is6() {
+			pad = ipv6.HeaderLen
+		}
+		pad += udpHeaderLen
+		// XXX Why do we have to add an additional 20 bytes as
+		// well as the IP header and UDP header length to get
+		// the on-the-wire MTU? What is this 20 bytes if it is
+		// not IP header, UDP header, or contents of the disco
+		// message?
+		mtu = msgLen + pad
+		de.c.logf("adding %v bytes to msgLen %v for mtu %v", pad, msgLen, mtu)
 	}
 	// The mtu of the returned pong should be the same as the sent ping
 	if sp.mtu != mtu {
-		de.c.logf("error! pong mtu %v does not match ping mtu %v", mtu, sp.mtu)
+		de.c.logf("error! pong mtu %v does not match sent ping mtu %v", mtu, sp.mtu)
 	}
 	de.removeSentDiscoPingLocked(m.TxID, sp)
 
