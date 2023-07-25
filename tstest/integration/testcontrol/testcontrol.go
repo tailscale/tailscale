@@ -796,7 +796,7 @@ func packetFilterWithIngressCaps() []tailcfg.FilterRule {
 		CapGrant: []tailcfg.CapGrant{
 			{
 				Dsts: []netip.Prefix{tsaddr.AllIPv4(), tsaddr.AllIPv6()},
-				Caps: []string{tailcfg.CapabilityIngress},
+				Caps: []tailcfg.PeerCapability{tailcfg.PeerCapabilityIngress},
 			},
 		},
 	})
