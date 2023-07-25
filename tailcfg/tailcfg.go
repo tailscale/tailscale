@@ -8,6 +8,7 @@ package tailcfg
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -103,7 +104,8 @@ type CapabilityVersion int
 //   - 64: 2023-07-11: Client understands s/CapabilityTailnetLockAlpha/CapabilityTailnetLock
 //   - 65: 2023-07-12: Client understands DERPMap.HomeParams + incremental DERPMap updates with params
 //   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs)
-const CurrentCapabilityVersion CapabilityVersion = 66
+//   - 67: 2023-07-25: Client understands PeerCapMap
+const CurrentCapabilityVersion CapabilityVersion = 67
 
 type StableID string
 
@@ -1182,7 +1184,51 @@ type CapGrant struct {
 	// Caps are the capabilities the source IP matched by
 	// FilterRule.SrcIPs are granted to the destination IP,
 	// matched by Dsts.
-	Caps []string `json:",omitempty"`
+	// Deprecated: use CapMap instead.
+	Caps []PeerCapability `json:",omitempty"`
+
+	// CapMap is a map of capabilities to their values.
+	// The key is the capability name, and the value is a list of
+	// values for that capability.
+	CapMap PeerCapMap `json:",omitempty"`
+}
+
+// PeerCapability is a capability granted to a node by a FilterRule.
+// It's a string, but its meaning is application-defined.
+// It must be a URL, like "https://tailscale.com/cap/file-sharing-target" or
+// "https://example.com/cap/read-access".
+type PeerCapability string
+
+const (
+	// PeerCapabilityFileSharingTarget grants the current node the ability to send
+	// files to the peer which has this capability.
+	PeerCapabilityFileSharingTarget PeerCapability = "https://tailscale.com/cap/file-sharing-target"
+	// PeerCapabilityFileSharingSend grants the ability to receive files from a
+	// node that's owned by a different user.
+	PeerCapabilityFileSharingSend PeerCapability = "https://tailscale.com/cap/file-send"
+	// PeerCapabilityDebugPeer grants the ability for a peer to read this node's
+	// goroutines, metrics, magicsock internal state, etc.
+	PeerCapabilityDebugPeer PeerCapability = "https://tailscale.com/cap/debug-peer"
+	// PeerCapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
+	PeerCapabilityWakeOnLAN PeerCapability = "https://tailscale.com/cap/wake-on-lan"
+	// PeerCapabilityIngress grants the ability for a peer to send ingress traffic.
+	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
+)
+
+// PeerCapMap is a map of capabilities to their optional values. It is valid for
+// a capability to have no values (nil slice); such capabilities can be tested
+// for by using the HasCapability method.
+//
+// The values are opaque to Tailscale, but are passed through from the ACLs to
+// the application via the WhoIs API.
+type PeerCapMap map[PeerCapability][]json.RawMessage
+
+// HasCapability reports whether c has the capability cap.
+// This is used to test for the existence of a capability, especially
+// when the capability has no values.
+func (c PeerCapMap) HasCapability(cap PeerCapability) bool {
+	_, ok := c[cap]
+	return ok
 }
 
 // FilterRule represents one rule in a packet filter.
@@ -1894,25 +1940,6 @@ const (
 
 	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
 	CapabilityTailnetLock = "https://tailscale.com/cap/tailnet-lock"
-
-	// Inter-node capabilities as specified in the MapResponse.PacketFilter[].CapGrants.
-
-	// CapabilityFileSharingTarget grants the current node the ability to send
-	// files to the peer which has this capability.
-	CapabilityFileSharingTarget = "https://tailscale.com/cap/file-sharing-target"
-	// CapabilityFileSharingSend grants the ability to receive files from a
-	// node that's owned by a different user.
-	CapabilityFileSharingSend = "https://tailscale.com/cap/file-send"
-	// CapabilityDebugPeer grants the ability for a peer to read this node's
-	// goroutines, metrics, magicsock internal state, etc.
-	CapabilityDebugPeer = "https://tailscale.com/cap/debug-peer"
-	// CapabilityWakeOnLAN grants the ability to send a Wake-On-LAN packet.
-	CapabilityWakeOnLAN = "https://tailscale.com/cap/wake-on-lan"
-	// CapabilityIngress grants the ability for a peer to send ingress traffic.
-	CapabilityIngress = "https://tailscale.com/cap/ingress"
-	// CapabilitySSHSessionHaul grants the ability to receive SSH session logs
-	// from a peer.
-	CapabilitySSHSessionHaul = "https://tailscale.com/cap/ssh-session-haul"
 
 	// Funnel warning capabilities used for reporting errors to the user.
 
