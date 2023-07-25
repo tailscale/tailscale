@@ -44,6 +44,8 @@ var (
 	// debugSendCallMeUnknownPeer sends a CallMeMaybe to a non-existent destination every
 	// time we send a real CallMeMaybe to test the PeerGoneNotHere logic.
 	debugSendCallMeUnknownPeer = envknob.RegisterBool("TS_DEBUG_SEND_CALLME_UNKNOWN_PEER")
+	// debugPMTUD enables path MTU discovery. Currently only sets the Don't Fragment sockopt.
+	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
 	// Hey you! Adding a new debugknob? Make sure to stub it out in the debugknob_stubs.go
 	// file too.
 )
