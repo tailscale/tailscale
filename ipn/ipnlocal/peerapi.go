@@ -1028,7 +1028,7 @@ func (h *peerAPIHandler) canPutFile() bool {
 		// Unsigned peers can't send files.
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityFileSharingSend)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityFileSharingSend)
 }
 
 // canDebug reports whether h can debug this node (goroutines, metrics,
@@ -1042,7 +1042,7 @@ func (h *peerAPIHandler) canDebug() bool {
 		// Unsigned peers can't debug.
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityDebugPeer)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityDebugPeer)
 }
 
 // canWakeOnLAN reports whether h can send a Wake-on-LAN packet from this node.
@@ -1050,23 +1050,18 @@ func (h *peerAPIHandler) canWakeOnLAN() bool {
 	if h.peerNode.UnsignedPeerAPIOnly {
 		return false
 	}
-	return h.isSelf || h.peerHasCap(tailcfg.CapabilityWakeOnLAN)
+	return h.isSelf || h.peerHasCap(tailcfg.PeerCapabilityWakeOnLAN)
 }
 
 var allowSelfIngress = envknob.RegisterBool("TS_ALLOW_SELF_INGRESS")
 
 // canIngress reports whether h can send ingress requests to this node.
 func (h *peerAPIHandler) canIngress() bool {
-	return h.peerHasCap(tailcfg.CapabilityIngress) || (allowSelfIngress() && h.isSelf)
+	return h.peerHasCap(tailcfg.PeerCapabilityIngress) || (allowSelfIngress() && h.isSelf)
 }
 
-func (h *peerAPIHandler) peerHasCap(wantCap string) bool {
-	for _, hasCap := range h.ps.b.PeerCaps(h.remoteAddr.Addr()) {
-		if hasCap == wantCap {
-			return true
-		}
-	}
-	return false
+func (h *peerAPIHandler) peerHasCap(wantCap tailcfg.PeerCapability) bool {
+	return h.ps.b.PeerCaps(h.remoteAddr.Addr()).HasCapability(wantCap)
 }
 
 func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {

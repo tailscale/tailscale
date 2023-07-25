@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"go4.org/netipx"
+	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slices"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -880,7 +881,7 @@ func TestCaps(t *testing.T) {
 				Dsts: []netip.Prefix{
 					netip.MustParsePrefix("0.0.0.0/0"),
 				},
-				Caps: []string{"is_ipv4"},
+				Caps: []tailcfg.PeerCapability{"is_ipv4"},
 			}},
 		},
 		{
@@ -889,7 +890,7 @@ func TestCaps(t *testing.T) {
 				Dsts: []netip.Prefix{
 					netip.MustParsePrefix("::/0"),
 				},
-				Caps: []string{"is_ipv6"},
+				Caps: []tailcfg.PeerCapability{"is_ipv6"},
 			}},
 		},
 		{
@@ -898,7 +899,7 @@ func TestCaps(t *testing.T) {
 				Dsts: []netip.Prefix{
 					netip.MustParsePrefix("100.200.0.0/16"),
 				},
-				Caps: []string{"some_super_admin"},
+				Caps: []tailcfg.PeerCapability{"some_super_admin"},
 			}},
 		},
 	})
@@ -909,43 +910,45 @@ func TestCaps(t *testing.T) {
 	tests := []struct {
 		name     string
 		src, dst string // IP
-		want     []string
+		want     []tailcfg.PeerCapability
 	}{
 		{
 			name: "v4",
 			src:  "1.2.3.4",
 			dst:  "2.4.5.5",
-			want: []string{"is_ipv4"},
+			want: []tailcfg.PeerCapability{"is_ipv4"},
 		},
 		{
 			name: "v6",
 			src:  "1::1",
 			dst:  "2::2",
-			want: []string{"is_ipv6"},
+			want: []tailcfg.PeerCapability{"is_ipv6"},
 		},
 		{
 			name: "admin",
 			src:  "100.199.1.2",
 			dst:  "100.200.3.4",
-			want: []string{"is_ipv4", "some_super_admin"},
+			want: []tailcfg.PeerCapability{"is_ipv4", "some_super_admin"},
 		},
 		{
 			name: "not_admin_bad_src",
 			src:  "100.198.1.2", // 198, not 199
 			dst:  "100.200.3.4",
-			want: []string{"is_ipv4"},
+			want: []tailcfg.PeerCapability{"is_ipv4"},
 		},
 		{
 			name: "not_admin_bad_dst",
 			src:  "100.199.1.2",
 			dst:  "100.201.3.4", // 201, not 200
-			want: []string{"is_ipv4"},
+			want: []tailcfg.PeerCapability{"is_ipv4"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := filt.AppendCaps(nil, netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst))
-			if !reflect.DeepEqual(got, tt.want) {
+			got := maps.Keys(filt.CapsWithValues(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst)))
+			slices.Sort(got)
+			slices.Sort(tt.want)
+			if !slices.Equal(got, tt.want) {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
 		})

@@ -768,7 +768,7 @@ var filterRules = []tailcfg.FilterRule{
 		IPProto: []int{1, 2, 3, 4},
 		CapGrant: []tailcfg.CapGrant{{
 			Dsts: []netip.Prefix{netip.MustParsePrefix("1.2.3.4/32")},
-			Caps: []string{"foo"},
+			Caps: []tailcfg.PeerCapability{"foo"},
 		}},
 	},
 	{

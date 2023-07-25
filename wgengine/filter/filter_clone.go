@@ -6,8 +6,10 @@
 package filter
 
 import (
+	"encoding/json"
 	"net/netip"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
 
@@ -22,7 +24,10 @@ func (src *Match) Clone() *Match {
 	dst.IPProto = append(src.IPProto[:0:0], src.IPProto...)
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
 	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
-	dst.Caps = append(src.Caps[:0:0], src.Caps...)
+	dst.Caps = make([]CapMatch, len(src.Caps))
+	for i := range dst.Caps {
+		dst.Caps[i] = *src.Caps[i].Clone()
+	}
 	return dst
 }
 
@@ -32,4 +37,26 @@ var _MatchCloneNeedsRegeneration = Match(struct {
 	Srcs    []netip.Prefix
 	Dsts    []NetPortRange
 	Caps    []CapMatch
+}{})
+
+// Clone makes a deep copy of CapMatch.
+// The result aliases no memory with the original.
+func (src *CapMatch) Clone() *CapMatch {
+	if src == nil {
+		return nil
+	}
+	dst := new(CapMatch)
+	*dst = *src
+	dst.Values = make([]json.RawMessage, len(src.Values))
+	for i := range dst.Values {
+		dst.Values[i] = append(src.Values[i][:0:0], src.Values[i]...)
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _CapMatchCloneNeedsRegeneration = CapMatch(struct {
+	Dst    netip.Prefix
+	Cap    tailcfg.PeerCapability
+	Values []json.RawMessage
 }{})

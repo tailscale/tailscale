@@ -4,15 +4,17 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"strings"
 
 	"tailscale.com/net/packet"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 )
 
-//go:generate go run tailscale.com/cmd/cloner --type=Match
+//go:generate go run tailscale.com/cmd/cloner --type=Match,CapMatch
 
 // PortRange is a range of TCP and UDP ports.
 type PortRange struct {
@@ -54,7 +56,11 @@ type CapMatch struct {
 
 	// Cap is the capability that's granted if the destination IP addresses
 	// matches Dst.
-	Cap string
+	Cap tailcfg.PeerCapability
+
+	// Values are the raw JSON values of the capability.
+	// See tailcfg.PeerCapability and tailcfg.PeerCapMap for details.
+	Values []json.RawMessage
 }
 
 // Match matches packets from any IP address in Srcs to any ip:port in

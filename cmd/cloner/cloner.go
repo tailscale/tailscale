@@ -131,6 +131,8 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 					} else {
 						writef("\tdst.%s[i] = src.%s[i].Clone()", fname, fname)
 					}
+				} else if ft.Elem().String() == "encoding/json.RawMessage" {
+					writef("\tdst.%s[i] = append(src.%s[i][:0:0], src.%s[i]...)", fname, fname, fname)
 				} else {
 					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
 				}
