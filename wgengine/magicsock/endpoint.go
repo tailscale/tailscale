@@ -858,7 +858,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	isDerp := src.Addr() == derpMagicIPAddr
+	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
 
 	sp, ok := de.sentPing[m.TxID]
 	if !ok {
