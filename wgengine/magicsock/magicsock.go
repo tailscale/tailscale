@@ -7,10 +7,8 @@ package magicsock
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	crand "crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -356,8 +354,6 @@ func (c *Conn) addDerpPeerRoute(peer key.NodePublic, derpID int, dc *derphttp.Cl
 	defer c.mu.Unlock()
 	mak.Set(&c.derpRoute, peer, derpRoute{derpID, dc})
 }
-
-var derpMagicIPAddr = netip.MustParseAddr(tailcfg.DerpMagicIP)
 
 // activeDerp contains fields for an active DERP connection.
 type activeDerp struct {
@@ -860,7 +856,7 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 // c.mu must be held
 func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netip.AddrPort) {
 	res.LatencySeconds = latency.Seconds()
-	if ep.Addr() != derpMagicIPAddr {
+	if ep.Addr() != tailcfg.DerpMagicIPAddr {
 		res.Endpoint = ep.String()
 		return
 	}
@@ -958,7 +954,7 @@ func (c *Conn) goDerpConnect(node int) {
 	if node == 0 {
 		return
 	}
-	go c.derpWriteChanOfAddr(netip.AddrPortFrom(derpMagicIPAddr, uint16(node)), key.NodePublic{})
+	go c.derpWriteChanOfAddr(netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(node)), key.NodePublic{})
 }
 
 // determineEndpoints returns the machine's endpoint addresses. It
@@ -1232,7 +1228,7 @@ func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) 
 // IPv6 address when the local machine doesn't have IPv6 support
 // returns (false, nil); it's not an error, but nothing was sent.
 func (c *Conn) sendAddr(addr netip.AddrPort, pubKey key.NodePublic, b []byte) (sent bool, err error) {
-	if addr.Addr() != derpMagicIPAddr {
+	if addr.Addr() != tailcfg.DerpMagicIPAddr {
 		return c.sendUDP(addr, b)
 	}
 
@@ -1325,7 +1321,7 @@ func bufferedDerpWritesBeforeDrop() int {
 // If peer is non-zero, it can be used to find an active reverse
 // path, without using addr.
 func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) chan<- derpWriteRequest {
-	if addr.Addr() != derpMagicIPAddr {
+	if addr.Addr() != tailcfg.DerpMagicIPAddr {
 		return nil
 	}
 	regionID := int(addr.Port())
@@ -1839,7 +1835,7 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
-	ipp := netip.AddrPortFrom(derpMagicIPAddr, uint16(regionID))
+	ipp := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))
 	if c.handleDiscoMessage(b[:n], ipp, dm.src, discoRXPathDERP) {
 		return 0, nil
 	}
@@ -1886,7 +1882,7 @@ var debugIPv4DiscoPingPenalty = envknob.RegisterDuration("TS_DISCO_PONG_IPV4_DEL
 // The dstKey should only be non-zero if the dstDisco key
 // unambiguously maps to exactly one peer.
 func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDisco key.DiscoPublic, m disco.Message, logLevel discoLogLevel) (sent bool, err error) {
-	isDERP := dst.Addr() == derpMagicIPAddr
+	isDERP := dst.Addr() == tailcfg.DerpMagicIPAddr
 	if _, isPong := m.(*disco.Pong); isPong && !isDERP && dst.Addr().Is4() {
 		time.Sleep(debugIPv4DiscoPingPenalty())
 	}
@@ -1944,34 +1940,6 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 		}
 	}
 	return sent, err
-}
-
-// discoPcapFrame marshals the bytes for a pcap record that describe a
-// disco frame.
-//
-// Warning: Alloc garbage. Acceptable while capturing.
-func discoPcapFrame(src netip.AddrPort, derpNodeSrc key.NodePublic, payload []byte) []byte {
-	var (
-		b    bytes.Buffer
-		flag uint8
-	)
-	b.Grow(128) // Most disco frames will probably be smaller than this.
-
-	if src.Addr() == derpMagicIPAddr {
-		flag |= 0x01
-	}
-	b.WriteByte(flag) // 1b: flag
-
-	derpSrc := derpNodeSrc.Raw32()
-	b.Write(derpSrc[:])                                       // 32b: derp public key
-	binary.Write(&b, binary.LittleEndian, uint16(src.Port())) // 2b: port
-	addr, _ := src.Addr().MarshalBinary()
-	binary.Write(&b, binary.LittleEndian, uint16(len(addr)))    // 2b: len(addr)
-	b.Write(addr)                                               // Xb: addr
-	binary.Write(&b, binary.LittleEndian, uint16(len(payload))) // 2b: len(payload)
-	b.Write(payload)                                            // Xb: payload
-
-	return b.Bytes()
 }
 
 type discoRXPath string
@@ -2063,7 +2031,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	// Emit information about the disco frame into the pcap stream
 	// if a capture hook is installed.
 	if cb := c.captureHook.Load(); cb != nil {
-		cb(capture.PathDisco, time.Now(), discoPcapFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
+		cb(capture.PathDisco, time.Now(), disco.ToPCAPFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
 	}
 
 	dm, err := disco.Parse(payload)
@@ -2080,7 +2048,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		return
 	}
 
-	isDERP := src.Addr() == derpMagicIPAddr
+	isDERP := src.Addr() == tailcfg.DerpMagicIPAddr
 	if isDERP {
 		metricRecvDiscoDERP.Add(1)
 	} else {
@@ -2178,7 +2146,7 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
 	di.lastPingTime = time.Now()
-	isDerp := src.Addr() == derpMagicIPAddr
+	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
 
 	// If we can figure out with certainty which node key this disco
 	// message is for, eagerly update our IP<>node and disco<>node

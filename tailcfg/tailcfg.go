@@ -2351,6 +2351,8 @@ type PeerChange struct {
 // Mnemonic: 3.3.40 are numbers above the keys D, E, R, P.
 const DerpMagicIP = "127.3.3.40"
 
+var DerpMagicIPAddr = netip.MustParseAddr(DerpMagicIP)
+
 // EarlyNoise is the early payload that's sent over Noise but before the HTTP/2
 // handshake when connecting to the coordination server.
 //
