@@ -59,6 +59,10 @@ const (
 	// the system, rather than one particular subsystem.
 	SysOverall = Subsystem("overall")
 
+	// SysConfig is the name of the subsystem that tracks health of the
+	// Tailscale state file and configuration.
+	SysConfig = Subsystem("config")
+
 	// SysRouter is the name of the wgengine/router subsystem.
 	SysRouter = Subsystem("router")
 
@@ -202,6 +206,12 @@ func SetTKAHealth(err error) { setErr(SysTKA, err) }
 
 // TKAHealth returns the tailnet key authority error state.
 func TKAHealth() error { return get(SysTKA) }
+
+// SetConfigHealth sets the health of the configuration.
+func SetConfigHealth(err error) { setErr(SysConfig, err) }
+
+// ConfigHealth returns the configuration error state.
+func ConfigHealth() error { return get(SysConfig) }
 
 // SetLocalLogConfigHealth sets the error state of this client's local log configuration.
 func SetLocalLogConfigHealth(err error) {

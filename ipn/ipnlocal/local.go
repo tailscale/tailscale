@@ -3667,6 +3667,27 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 			addrs = append(addrs, addr.Addr().String())
 		}
 		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrs, " "))
+
+		var configErrs []error
+		if prefs.Valid() && prefs.Persist().Valid() {
+			pprefs := prefs.Persist()
+			if pprefs.PublicNodeKey().IsZero() {
+				configErrs = append(configErrs, fmt.Errorf("public node key is zero"))
+			}
+			if pprefs.PrivateNodeKey().IsZero() {
+				configErrs = append(configErrs, fmt.Errorf("private node key is zero"))
+			}
+		}
+		b.mu.Lock()
+		if b.machinePrivKey.IsZero() {
+			configErrs = append(configErrs, fmt.Errorf("private machine key is zero"))
+		}
+		b.mu.Unlock()
+
+		if len(configErrs) > 0 {
+			health.SetConfigHealth(multierr.New(configErrs...))
+		}
+
 	case ipn.NoState:
 		// Do nothing.
 	default:
@@ -4920,6 +4941,7 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	b.serveConfig = ipn.ServeConfigView{}
 	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
 	health.SetLocalLogConfigHealth(nil)
+	health.SetConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
 
