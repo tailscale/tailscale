@@ -1952,6 +1952,8 @@ type connBind struct {
 	closed bool
 }
 
+// This is a compile-time assertion that connBind implements the wireguard-go
+// conn.Bind interface.
 var _ conn.Bind = (*connBind)(nil)
 
 // BatchSize returns the number of buffers expected to be passed to
