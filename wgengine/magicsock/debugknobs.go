@@ -9,8 +9,6 @@ import (
 	"tailscale.com/envknob"
 )
 
-const linkDebug = true
-
 // Various debugging and experimental tweakables, set by environment
 // variable.
 var (

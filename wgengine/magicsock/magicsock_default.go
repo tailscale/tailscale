@@ -31,10 +31,6 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 
 func setGSOSizeInControl(control *[]byte, gso uint16) {}
 
-func errShouldDisableOffload(err error) bool {
-	return false
-}
-
 const (
 	controlMessageSize = 0
 )

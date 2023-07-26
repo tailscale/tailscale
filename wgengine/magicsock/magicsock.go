@@ -3983,30 +3983,6 @@ func simpleDur(d time.Duration) time.Duration {
 	return d.Round(time.Minute)
 }
 
-func sbPrintAddr(sb *strings.Builder, a netip.AddrPort) {
-	is6 := a.Addr().Is6()
-	if is6 {
-		sb.WriteByte('[')
-	}
-	fmt.Fprintf(sb, "%s", a.Addr())
-	if is6 {
-		sb.WriteByte(']')
-	}
-	fmt.Fprintf(sb, ":%d", a.Port())
-}
-
-func (c *Conn) derpRegionCodeOfAddrLocked(ipPort string) string {
-	_, portStr, err := net.SplitHostPort(ipPort)
-	if err != nil {
-		return ""
-	}
-	regionID, err := strconv.Atoi(portStr)
-	if err != nil {
-		return ""
-	}
-	return c.derpRegionCodeOfIDLocked(regionID)
-}
-
 func (c *Conn) derpRegionCodeOfIDLocked(regionID int) string {
 	if c.derpMap == nil {
 		return ""
@@ -4074,13 +4050,6 @@ func (c *Conn) SetStatistics(stats *connstats.Statistics) {
 	c.stats.Store(stats)
 }
 
-func ippDebugString(ua netip.AddrPort) string {
-	if ua.Addr() == derpMagicIPAddr {
-		return fmt.Sprintf("derp-%d", ua.Port())
-	}
-	return ua.String()
-}
-
 // endpointSendFunc is a func that writes encrypted Wireguard payloads from
 // WireGuard to a peer. It might write via UDP, DERP, both, or neither.
 //
@@ -4113,7 +4082,6 @@ type endpoint struct {
 	// atomically accessed; declared first for alignment reasons
 	lastRecv              mono.Time
 	numStopAndResetAtomic int64
-	sendFunc              syncs.AtomicValue[endpointSendFunc] // nil or unset means unused
 	debugUpdates          *ringbuffer.RingBuffer[EndpointChange]
 
 	// These fields are initialized once and never modified.
@@ -4146,7 +4114,6 @@ type endpoint struct {
 	// implementation that's a WIP as of 2022-10-20.
 	// See #540 for background.
 	heartbeatDisabled bool
-	pathFinderRunning bool
 
 	expired         bool // whether the node has expired
 	isWireguardOnly bool // whether the endpoint is WireGuard only
@@ -4539,21 +4506,10 @@ var (
 )
 
 func (de *endpoint) send(buffs [][]byte) error {
-	if fn := de.sendFunc.Load(); fn != nil {
-		return fn(buffs)
-	}
-
 	de.mu.Lock()
 	if de.expired {
 		de.mu.Unlock()
 		return errExpired
-	}
-
-	// if heartbeat disabled, kick off pathfinder
-	if de.heartbeatDisabled {
-		if !de.pathFinderRunning {
-			de.startPathFinder()
-		}
 	}
 
 	now := mono.Now()
@@ -4912,9 +4868,6 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 			de.deleteEndpointLocked("updateFromNode", ep)
 		}
 	}
-
-	// Node changed. Invalidate its sending fast path, if any.
-	de.sendFunc.Store(nil)
 }
 
 // addCandidateEndpoint adds ep as an endpoint to which we should send
