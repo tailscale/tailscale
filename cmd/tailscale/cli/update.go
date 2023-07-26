@@ -45,10 +45,13 @@ var updateCmd = &ffcli.Command{
 		fs.BoolVar(&updateArgs.yes, "yes", false, "update without interactive prompts")
 		fs.BoolVar(&updateArgs.dryRun, "dry-run", false, "print what update would do without doing it, or prompts")
 		fs.BoolVar(&updateArgs.appStore, "app-store", false, "HIDDEN: check the App Store for updates, even if this is not an App Store install (for testing only)")
-		// These flags are not supported on Arch or Alpine-based installs.
-		// Package repos on these distros only offer one variant of tailscale
-		// and it's always the latest version.
-		if distro.Get() != distro.Arch && distro.Get() != distro.Alpine {
+		// These flags are not supported on several systems that only provide
+		// the latest version of Tailscale:
+		//
+		//  - Arch (and other pacman-based distros)
+		//  - Alpine (and other apk-based distros)
+		//  - FreeBSD (and other pkg-based distros)
+		if distro.Get() != distro.Arch && distro.Get() != distro.Alpine && runtime.GOOS != "freebsd" {
 			fs.StringVar(&updateArgs.track, "track", "", `which track to check for updates: "stable" or "unstable" (dev); empty means same as current`)
 			fs.StringVar(&updateArgs.version, "version", "", `explicit version to update/downgrade to`)
 		}
@@ -173,6 +176,8 @@ func newUpdater() (*updater, error) {
 		default:
 			up.update = up.updateMacAppStore
 		}
+	case "freebsd":
+		up.update = up.updateFreeBSD
 	}
 	if up.update == nil {
 		return nil, errors.New("The 'update' command is not supported on this platform; see https://tailscale.com/s/client-updates")
@@ -822,6 +827,42 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 func (pw *progressWriter) print() {
 	pw.lastPrint = time.Now()
 	log.Printf("Downloaded %v/%v (%.1f%%)", pw.done, pw.total, float64(pw.done)/float64(pw.total)*100)
+}
+
+func (up *updater) updateFreeBSD() (err error) {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil && !errors.Is(err, errUserAborted) {
+			err = fmt.Errorf(`%w; you can try updating using "pkg upgrade tailscale"`, err)
+		}
+	}()
+
+	out, err := exec.Command("pkg", "update").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed refresh pkg repository indexes: %w, output: %q", err, out)
+	}
+	out, err = exec.Command("pkg", "rquery", "%v", "tailscale").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed checking pkg for latest tailscale version: %w, output: %q", err, out)
+	}
+	ver := string(bytes.TrimSpace(out))
+	if up.currentOrDryRun(ver) {
+		return nil
+	}
+	if err := up.confirm(ver); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("pkg", "upgrade", "tailscale")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed tailscale update using pkg: %w", err)
+	}
+	return nil
 }
 
 func haveExecutable(name string) bool {
