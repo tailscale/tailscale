@@ -38,6 +38,7 @@ import (
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cmpx"
@@ -83,6 +84,7 @@ type Client struct {
 	serverPubKey key.NodePublic
 	tlsState     *tls.ConnectionState
 	pingOut      map[derp.PingMessage]chan<- bool // chan to send to on pong
+	clock        tstime.Clock
 }
 
 func (c *Client) String() string {
@@ -101,6 +103,7 @@ func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmo
 		getRegion:  getRegion,
 		ctx:        ctx,
 		cancelCtx:  cancel,
+		clock:      tstime.StdClock{},
 	}
 	return c
 }
@@ -108,7 +111,7 @@ func NewRegionClient(privateKey key.NodePrivate, logf logger.Logf, netMon *netmo
 // NewNetcheckClient returns a Client that's only able to have its DialRegionTLS method called.
 // It's used by the netcheck package.
 func NewNetcheckClient(logf logger.Logf) *Client {
-	return &Client{logf: logf}
+	return &Client{logf: logf, clock: tstime.StdClock{}}
 }
 
 // NewClient returns a new DERP-over-HTTP client. It connects lazily.
@@ -129,6 +132,7 @@ func NewClient(privateKey key.NodePrivate, serverURL string, logf logger.Logf) (
 		url:        u,
 		ctx:        ctx,
 		cancelCtx:  cancel,
+		clock:      tstime.StdClock{},
 	}
 	return c, nil
 }
@@ -644,14 +648,14 @@ func (c *Client) dialNode(ctx context.Context, n *tailcfg.DERPNode) (net.Conn, e
 		nwait++
 		go func() {
 			if proto == "tcp4" && c.preferIPv6() {
-				t := time.NewTimer(200 * time.Millisecond)
+				t, tChannel := c.clock.NewTimer(200 * time.Millisecond)
 				select {
 				case <-ctx.Done():
 					// Either user canceled original context,
 					// it timed out, or the v6 dial succeeded.
 					t.Stop()
 					return
-				case <-t.C:
+				case <-tChannel:
 					// Start v4 dial
 				}
 			}

@@ -51,7 +51,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 		present = map[key.NodePublic]bool{}
 	}
 	lastConnGen := 0
-	lastStatus := time.Now()
+	lastStatus := c.clock.Now()
 	logConnectedLocked := func() {
 		if loggedConnected {
 			return
@@ -61,7 +61,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	const logConnectedDelay = 200 * time.Millisecond
-	timer := time.AfterFunc(2*time.Second, func() {
+	timer := c.clock.AfterFunc(2*time.Second, func() {
 		mu.Lock()
 		defer mu.Unlock()
 		logConnectedLocked()
@@ -91,11 +91,11 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 	}
 
 	sleep := func(d time.Duration) {
-		t := time.NewTimer(d)
+		t, tChannel := c.clock.NewTimer(d)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-		case <-t.C:
+		case <-tChannel:
 		}
 	}
 
@@ -142,7 +142,7 @@ func (c *Client) RunWatchConnectionLoop(ctx context.Context, ignoreServerKey key
 			default:
 				continue
 			}
-			if now := time.Now(); now.Sub(lastStatus) > statusInterval {
+			if now := c.clock.Now(); now.Sub(lastStatus) > statusInterval {
 				lastStatus = now
 				infoLogf("%d peers", len(present))
 			}
