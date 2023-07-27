@@ -112,7 +112,7 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 	reset := func() {
 		renewMu.Lock()
 		defer renewMu.Unlock()
-		maps.Clear(lastRenewCheck)
+		maps.Clear(renewCertAt)
 	}
 
 	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {
@@ -178,7 +178,7 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reset()
 
-			ret, err := b.shouldStartDomainRenewalByExpiry(now, mustMakePair(&x509.Certificate{
+			ret, err := b.domainRenewalTimeByExpiry(mustMakePair(&x509.Certificate{
 				SerialNumber: big.NewInt(2019),
 				Subject:      subject,
 				NotBefore:    tt.notBefore,
@@ -192,8 +192,9 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 					t.Errorf("got err=%q, want %q", err.Error(), tt.wantErr)
 				}
 			} else {
-				if ret != tt.want {
-					t.Errorf("got ret=%v, want %v", ret, tt.want)
+				renew := now.After(ret)
+				if renew != tt.want {
+					t.Errorf("got renew=%v (ret=%v), want renew %v", renew, ret, tt.want)
 				}
 			}
 		})
