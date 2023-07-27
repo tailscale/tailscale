@@ -27,7 +27,6 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/interfaces"
-	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -40,7 +39,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
-	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
@@ -154,7 +152,12 @@ func cloneDurationMap(m map[int]time.Duration) map[int]time.Duration {
 	return m2
 }
 
-// Client generates a netcheck Report.
+// Client generates Reports describing the result of both passive and active
+// network configuration probing. It provides two different modes of report, a
+// full report (see MakeNextReportFull) and a more lightweight incremental
+// report. The client must be provided with SendPacket in order to perform
+// active probes, and must receive STUN packet replies via ReceiveSTUNPacket.
+// Client can be used in a standalone fashion via the Standalone method.
 type Client struct {
 	// Verbose enables verbose logging.
 	Verbose bool
@@ -173,22 +176,14 @@ type Client struct {
 	// TimeNow, if non-nil, is used instead of time.Now.
 	TimeNow func() time.Time
 
-	// GetSTUNConn4 optionally provides a func to return the
-	// connection to use for sending & receiving IPv4 packets. If
-	// nil, an ephemeral one is created as needed.
-	GetSTUNConn4 func() STUNConn
-
-	// GetSTUNConn6 is like GetSTUNConn4, but for IPv6.
-	GetSTUNConn6 func() STUNConn
+	// SendPacket is required to send a packet to the specified address. For
+	// convenience it shares a signature with WriteToUDPAddrPort.
+	SendPacket func([]byte, netip.AddrPort) (int, error)
 
 	// SkipExternalNetwork controls whether the client should not try
 	// to reach things other than localhost. This is set to true
 	// in tests to avoid probing the local LAN's router, etc.
 	SkipExternalNetwork bool
-
-	// UDPBindAddr, if non-empty, is the address to listen on for UDP.
-	// It defaults to ":0".
-	UDPBindAddr string
 
 	// PortMapper, if non-nil, is used for portmap queries.
 	// If nil, portmap discovery is not done.
@@ -214,13 +209,6 @@ type Client struct {
 	lastFull time.Time             // time of last full (non-incremental) report
 	curState *reportState          // non-nil if we're in a call to GetReport
 	resolver *dnscache.Resolver    // only set if UseDNSCache is true
-}
-
-// STUNConn is the interface required by the netcheck Client when
-// reusing an existing UDP connection.
-type STUNConn interface {
-	WriteToUDPAddrPort([]byte, netip.AddrPort) (int, error)
-	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
 }
 
 func (c *Client) enoughRegions() int {
@@ -282,6 +270,10 @@ func (c *Client) MakeNextReportFull() {
 	c.nextFull = true
 }
 
+// ReceiveSTUNPacket must be called when a STUN packet is received as a reply to
+// packet the client sent using SendPacket. In Standalone this is performed by
+// the loop started by Standalone, in normal operation in tailscaled incoming
+// STUN replies are routed to this method.
 func (c *Client) ReceiveSTUNPacket(pkt []byte, src netip.AddrPort) {
 	c.vlogf("received STUN packet from %s", src)
 
@@ -528,53 +520,12 @@ func nodeMight4(n *tailcfg.DERPNode) bool {
 	return ip.Is4()
 }
 
-type packetReaderFromCloser interface {
-	ReadFromUDPAddrPort([]byte) (int, netip.AddrPort, error)
-	io.Closer
-}
-
-// readPackets reads STUN packets from pc until there's an error or ctx is done.
-// In either case, it closes pc.
-func (c *Client) readPackets(ctx context.Context, pc packetReaderFromCloser) {
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-done:
-		}
-		pc.Close()
-	}()
-
-	var buf [64 << 10]byte
-	for {
-		n, addr, err := pc.ReadFromUDPAddrPort(buf[:])
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			c.logf("ReadFrom: %v", err)
-			return
-		}
-		pkt := buf[:n]
-		if !stun.Is(pkt) {
-			continue
-		}
-		if ap := netaddr.Unmap(addr); ap.IsValid() {
-			c.ReceiveSTUNPacket(pkt, ap)
-		}
-	}
-}
-
 // reportState holds the state for a single invocation of Client.GetReport.
 type reportState struct {
 	c           *Client
 	hairTX      stun.TxID
 	gotHairSTUN chan netip.AddrPort
 	hairTimeout chan struct{} // closed on timeout
-	pc4         STUNConn
-	pc6         STUNConn
 	pc4Hair     nettype.PacketConn
 	incremental bool // doing a lite, follow-up netcheck
 	stopProbeCh chan struct{}
@@ -785,13 +736,6 @@ func newReport() *Report {
 	}
 }
 
-func (c *Client) udpBindAddr() string {
-	if v := c.UDPBindAddr; v != "" {
-		return v
-	}
-	return ":0"
-}
-
 // GetReport gets a report.
 //
 // It may not be called concurrently with itself.
@@ -923,42 +867,6 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	rs.pc4Hair.WriteToUDPAddrPort(
 		[]byte("tailscale netcheck; see https://github.com/tailscale/tailscale/issues/188"),
 		netip.AddrPortFrom(netip.MustParseAddr(documentationIP), 12345))
-
-	if f := c.GetSTUNConn4; f != nil {
-		rs.pc4 = f()
-	} else {
-		u4, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp4", c.udpBindAddr())
-		if err != nil {
-			c.logf("udp4: %v", err)
-			return nil, err
-		}
-		rs.pc4 = u4
-		go c.readPackets(ctx, u4)
-	}
-
-	if ifState.HaveV6 {
-		if f := c.GetSTUNConn6; f != nil {
-			rs.pc6 = f()
-		} else {
-			u6, err := nettype.MakePacketListenerWithNetIP(netns.Listener(c.logf, nil)).ListenPacket(ctx, "udp6", c.udpBindAddr())
-			if err != nil {
-				c.logf("udp6: %v", err)
-			} else {
-				rs.pc6 = u6
-				go c.readPackets(ctx, u6)
-			}
-		}
-
-		// If our interfaces.State suggested we have IPv6 support but then we
-		// failed to get an IPv6 sending socket (as in
-		// https://github.com/tailscale/tailscale/issues/7949), then change
-		// ifState.HaveV6 before we make a probe plan that involves sending IPv6
-		// packets and thus assuming rs.pc6 is non-nil.
-		if rs.pc6 == nil {
-			ifState = ptr.To(*ifState) // shallow clone
-			ifState.HaveV6 = false
-		}
-	}
 
 	plan := makeProbePlan(dm, ifState, last)
 
@@ -1614,26 +1522,35 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	}
 	rs.mu.Unlock()
 
+	if rs.c.SendPacket == nil {
+		rs.mu.Lock()
+		rs.report.IPv4CanSend = false
+		rs.report.IPv6CanSend = false
+		rs.mu.Unlock()
+		return
+	}
+
 	switch probe.proto {
 	case probeIPv4:
 		metricSTUNSend4.Add(1)
-		n, err := rs.pc4.WriteToUDPAddrPort(req, addr)
-		if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
-			rs.mu.Lock()
-			rs.report.IPv4CanSend = true
-			rs.mu.Unlock()
-		}
 	case probeIPv6:
 		metricSTUNSend6.Add(1)
-		n, err := rs.pc6.WriteToUDPAddrPort(req, addr)
-		if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
-			rs.mu.Lock()
-			rs.report.IPv6CanSend = true
-			rs.mu.Unlock()
-		}
 	default:
 		panic("bad probe proto " + fmt.Sprint(probe.proto))
 	}
+
+	n, err := rs.c.SendPacket(req, addr)
+	if n == len(req) && err == nil || neterror.TreatAsLostUDP(err) {
+		rs.mu.Lock()
+		switch probe.proto {
+		case probeIPv4:
+			rs.report.IPv4CanSend = true
+		case probeIPv6:
+			rs.report.IPv6CanSend = true
+		}
+		rs.mu.Unlock()
+	}
+
 	c.vlogf("sent to %v", addr)
 }
 

@@ -118,10 +118,6 @@ type Conn struct {
 	// port mappings from NAT devices.
 	portMapper *portmapper.Client
 
-	// stunReceiveFunc holds the current STUN packet processing func.
-	// Its Loaded value is always non-nil.
-	stunReceiveFunc syncs.AtomicValue[func(p []byte, fromAddr netip.AddrPort)]
-
 	// derpRecvCh is used by receiveDERP to read DERP messages.
 	// It must have buffer size > 0; see issue 3736.
 	derpRecvCh chan derpReadResult
@@ -422,16 +418,19 @@ func NewConn(opts Options) (*Conn, error) {
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
 	c.donec = c.connCtx.Done()
 	c.netChecker = &netcheck.Client{
-		Logf:                logger.WithPrefix(c.logf, "netcheck: "),
-		NetMon:              c.netMon,
-		GetSTUNConn4:        func() netcheck.STUNConn { return &c.pconn4 },
-		GetSTUNConn6:        func() netcheck.STUNConn { return &c.pconn6 },
+		Logf:   logger.WithPrefix(c.logf, "netcheck: "),
+		NetMon: c.netMon,
+		SendPacket: func(b []byte, ap netip.AddrPort) (int, error) {
+			ok, err := c.sendUDP(ap, b)
+			if !ok {
+				return 0, err
+			}
+			return len(b), err
+		},
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
 	}
-
-	c.ignoreSTUNPackets()
 
 	if d4, err := c.listenRawDisco("ip4"); err == nil {
 		c.logf("[v1] using BPF disco receiver for IPv4")
@@ -456,11 +455,6 @@ func NewConn(opts Options) (*Conn, error) {
 // hook.
 func (c *Conn) InstallCaptureHook(cb capture.Callback) {
 	c.captureHook.Store(cb)
-}
-
-// ignoreSTUNPackets sets a STUN packet processing func that does nothing.
-func (c *Conn) ignoreSTUNPackets() {
-	c.stunReceiveFunc.Store(func([]byte, netip.AddrPort) {})
 }
 
 // doPeriodicSTUN is called (in a new goroutine) by
@@ -607,9 +601,6 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-
-	c.stunReceiveFunc.Store(c.netChecker.ReceiveSTUNPacket)
-	defer c.ignoreSTUNPackets()
 
 	report, err := c.netChecker.GetReport(ctx, dm)
 	if err != nil {
@@ -855,8 +846,6 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	if nr.GlobalV6 != "" {
 		addAddr(ipp(nr.GlobalV6), tailcfg.EndpointSTUN)
 	}
-
-	c.ignoreSTUNPackets()
 
 	// Update our set of endpoints by adding any endpoints that we
 	// previously found but haven't expired yet. This also updates the
@@ -1173,7 +1162,7 @@ func (c *Conn) mkReceiveFunc(ruc *RebindingUDPConn, healthItem *health.ReceiveFu
 // caller).
 func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) (ep *endpoint, ok bool) {
 	if stun.Is(b) {
-		c.stunReceiveFunc.Load()(b, ipp)
+		c.netChecker.ReceiveSTUNPacket(b, ipp)
 		return nil, false
 	}
 	if c.handleDiscoMessage(b, ipp, key.NodePublic{}, discoRXPathUDP) {

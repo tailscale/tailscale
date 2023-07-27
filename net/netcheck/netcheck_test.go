@@ -159,12 +159,15 @@ func TestBasic(t *testing.T) {
 	defer cleanup()
 
 	c := &Client{
-		Logf:        t.Logf,
-		UDPBindAddr: "127.0.0.1:0",
+		Logf: t.Logf,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
 	if err != nil {
@@ -851,7 +854,6 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 
 	c := &Client{
 		Logf:              t.Logf,
-		UDPBindAddr:       "127.0.0.1:0",
 		testEnoughRegions: 1,
 
 		// Set the delay long enough that we have time to cancel it
@@ -861,6 +863,10 @@ func TestNoCaptivePortalWhenUDP(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
+
+	if err := c.Standalone(ctx, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := c.GetReport(ctx, stuntest.DERPMapOf(stunAddr.String()))
 	if err != nil {
@@ -885,7 +891,6 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestNodeAddrResolve(t *testing.T) {
 	c := &Client{
 		Logf:        t.Logf,
-		UDPBindAddr: "127.0.0.1:0",
 		UseDNSCache: true,
 	}
 
