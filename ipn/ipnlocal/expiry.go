@@ -8,6 +8,7 @@ import (
 
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -37,22 +38,22 @@ type expiryManager struct {
 	//    time.Now().Add(clockDelta) == MapResponse.ControlTime
 	clockDelta syncs.AtomicValue[time.Duration]
 
-	logf    logger.Logf
-	timeNow func() time.Time
+	logf  logger.Logf
+	clock tstime.Clock
 }
 
 func newExpiryManager(logf logger.Logf) *expiryManager {
 	return &expiryManager{
 		previouslyExpired: map[tailcfg.StableNodeID]bool{},
 		logf:              logf,
-		timeNow:           time.Now,
+		clock:             tstime.StdClock{},
 	}
 }
 
 // onControlTime is called whenever we receive a new timestamp from the control
 // server to store the delta.
 func (em *expiryManager) onControlTime(t time.Time) {
-	localNow := em.timeNow()
+	localNow := em.clock.Now()
 	delta := t.Sub(localNow)
 	if delta.Abs() > minClockDelta {
 		em.logf("[v1] netmap: flagExpiredPeers: setting clock delta to %v", delta)

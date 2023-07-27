@@ -304,7 +304,7 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 	}
 	var bo *backoff.Backoff
 	logf := s.b.logf
-	t0 := time.Now()
+	t0 := s.b.clock.Now()
 	for {
 		err := os.Remove(path)
 		if err != nil && !os.IsNotExist(err) {
@@ -323,7 +323,7 @@ func (s *peerAPIServer) DeleteFile(baseName string) error {
 				if bo == nil {
 					bo = backoff.NewBackoff("delete-retry", logf, 1*time.Second)
 				}
-				if time.Since(t0) < 5*time.Second {
+				if s.b.clock.Since(t0) < 5*time.Second {
 					bo.BackOff(context.Background(), err)
 					continue
 				}
@@ -1000,7 +1000,7 @@ func (f *incomingFile) Write(p []byte) (n int, err error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.copied += int64(n)
-		now := time.Now()
+		now := b.clock.Now()
 		if f.lastNotify.IsZero() || now.Sub(f.lastNotify) > time.Second {
 			f.lastNotify = now
 			needNotify = true
@@ -1113,7 +1113,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad filename", 400)
 		return
 	}
-	t0 := time.Now()
+	t0 := h.ps.b.clock.Now()
 	// TODO(bradfitz): prevent same filename being sent by two peers at once
 	partialFile := dstFile + partialSuffix
 	f, err := os.Create(partialFile)
@@ -1133,7 +1133,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 {
 		inFile = &incomingFile{
 			name:    baseName,
-			started: time.Now(),
+			started: h.ps.b.clock.Now(),
 			size:    r.ContentLength,
 			w:       f,
 			ph:      h,
@@ -1171,7 +1171,7 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	d := time.Since(t0).Round(time.Second / 10)
+	d := h.ps.b.clock.Since(t0).Round(time.Second / 10)
 	h.logf("got put of %s in %v from %v/%v", approxSize(finalSize), d, h.remoteAddr.Addr(), h.peerNode.ComputedName)
 
 	// TODO: set modtime

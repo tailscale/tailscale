@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 )
@@ -110,8 +111,7 @@ func TestFlagExpiredPeers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			em := newExpiryManager(t.Logf)
-			em.timeNow = func() time.Time { return now }
-
+			em.clock = tstest.NewClock(tstest.ClockOpts{Start: now})
 			if tt.controlTime != nil {
 				em.onControlTime(*tt.controlTime)
 			}
@@ -241,7 +241,7 @@ func TestNextPeerExpiry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			em := newExpiryManager(t.Logf)
-			em.timeNow = func() time.Time { return now }
+			em.clock = tstest.NewClock(tstest.ClockOpts{Start: now})
 			got := em.nextPeerExpiry(tt.netmap, now)
 			if !got.Equal(tt.want) {
 				t.Errorf("got %q, want %q", got.Format(time.RFC3339), tt.want.Format(time.RFC3339))
@@ -254,7 +254,7 @@ func TestNextPeerExpiry(t *testing.T) {
 	t.Run("ClockSkew", func(t *testing.T) {
 		t.Logf("local time:  %q", now.Format(time.RFC3339))
 		em := newExpiryManager(t.Logf)
-		em.timeNow = func() time.Time { return now }
+		em.clock = tstest.NewClock(tstest.ClockOpts{Start: now})
 
 		// The local clock is "running fast"; our clock skew is -2h
 		em.clockDelta.Store(-2 * time.Hour)
