@@ -52,7 +52,6 @@ func runNetcheck(ctx context.Context, args []string) error {
 		return err
 	}
 	c := &netcheck.Client{
-		UDPBindAddr: envknob.String("TS_DEBUG_NETCHECK_UDP_BIND"),
 		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil),
 		UseDNSCache: false, // always resolve, don't cache
 	}
@@ -65,6 +64,10 @@ func runNetcheck(ctx context.Context, args []string) error {
 
 	if strings.HasPrefix(netcheckArgs.format, "json") {
 		fmt.Fprintln(Stderr, "# Warning: this JSON format is not yet considered a stable interface")
+	}
+
+	if err := c.Standalone(ctx, envknob.String("TS_DEBUG_NETCHECK_UDP_BIND")); err != nil {
+		fmt.Fprintln(Stderr, "netcheck: UDP test failure:", err)
 	}
 
 	dm, err := localClient.CurrentDERPMap(ctx)
