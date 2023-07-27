@@ -27,13 +27,13 @@ func (c *sclient) statsLoop(ctx context.Context) error {
 
 	const statsInterval = 10 * time.Second
 
-	ticker := time.NewTicker(statsInterval)
+	ticker, tickerChannel := c.s.clock.NewTicker(statsInterval)
 	defer ticker.Stop()
 
 statsLoop:
 	for {
 		select {
-		case <-ticker.C:
+		case <-tickerChannel:
 			rtt, err := tcpinfo.RTT(conn)
 			if err != nil {
 				continue statsLoop

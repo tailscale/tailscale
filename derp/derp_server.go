@@ -39,6 +39,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/metrics"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/tstime/rate"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -164,6 +165,8 @@ type Server struct {
 
 	// maps from netip.AddrPort to a client's public key
 	keyOfAddr map[netip.AddrPort]key.NodePublic
+
+	clock tstime.Clock
 }
 
 // clientSet represents 1 or more *sclients.
@@ -318,6 +321,7 @@ func NewServer(privateKey key.NodePrivate, logf logger.Logf) *Server {
 		avgQueueDuration:     new(uint64),
 		tcpRtt:               metrics.LabelMap{Label: "le"},
 		keyOfAddr:            map[netip.AddrPort]key.NodePublic{},
+		clock:                tstime.StdClock{},
 	}
 	s.initMetacert()
 	s.packetsRecvDisco = s.packetsRecvByKind.Get("disco")
@@ -467,8 +471,8 @@ func (s *Server) initMetacert() {
 			CommonName: fmt.Sprintf("derpkey%s", s.publicKey.UntypedHexString()),
 		},
 		// Windows requires NotAfter and NotBefore set:
-		NotAfter:  time.Now().Add(30 * 24 * time.Hour),
-		NotBefore: time.Now().Add(-30 * 24 * time.Hour),
+		NotAfter:  s.clock.Now().Add(30 * 24 * time.Hour),
+		NotBefore: s.clock.Now().Add(-30 * 24 * time.Hour),
 		// Per https://github.com/golang/go/issues/51759#issuecomment-1071147836,
 		// macOS requires BasicConstraints when subject == issuer:
 		BasicConstraintsValid: true,
@@ -697,7 +701,7 @@ func (s *Server) accept(ctx context.Context, nc Conn, brw *bufio.ReadWriter, rem
 		done:           ctx.Done(),
 		remoteAddr:     remoteAddr,
 		remoteIPPort:   remoteIPPort,
-		connectedAt:    time.Now(),
+		connectedAt:    s.clock.Now(),
 		sendQueue:      make(chan pkt, perClientSendQueueDepth),
 		discoSendQueue: make(chan pkt, perClientSendQueueDepth),
 		sendPongCh:     make(chan [8]byte, 1),
@@ -927,7 +931,7 @@ func (c *sclient) handleFrameForwardPacket(ft frameType, fl uint32) error {
 
 	return c.sendPkt(dst, pkt{
 		bs:         contents,
-		enqueuedAt: time.Now(),
+		enqueuedAt: c.s.clock.Now(),
 		src:        srcKey,
 	})
 }
@@ -994,7 +998,7 @@ func (c *sclient) handleFrameSendPacket(ft frameType, fl uint32) error {
 
 	p := pkt{
 		bs:         contents,
-		enqueuedAt: time.Now(),
+		enqueuedAt: c.s.clock.Now(),
 		src:        c.key,
 	}
 	return c.sendPkt(dst, p)
@@ -1387,7 +1391,7 @@ func (c *sclient) setPreferred(v bool) {
 	// graphs, so not important to miss a move. But it shouldn't:
 	// the netcheck/re-STUNs in magicsock only happen about every
 	// 30 seconds.
-	if time.Since(c.connectedAt) > 5*time.Second {
+	if c.s.clock.Since(c.connectedAt) > 5*time.Second {
 		homeMove.Add(1)
 	}
 }
@@ -1401,7 +1405,7 @@ func expMovingAverage(prev, newValue, alpha float64) float64 {
 
 // recordQueueTime updates the average queue duration metric after a packet has been sent.
 func (c *sclient) recordQueueTime(enqueuedAt time.Time) {
-	elapsed := float64(time.Since(enqueuedAt).Milliseconds())
+	elapsed := float64(c.s.clock.Since(enqueuedAt).Milliseconds())
 	for {
 		old := atomic.LoadUint64(c.s.avgQueueDuration)
 		newAvg := expMovingAverage(math.Float64frombits(old), elapsed, 0.1)
@@ -1431,7 +1435,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 	}()
 
 	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
-	keepAliveTick := time.NewTicker(keepAlive + jitter)
+	keepAliveTick, keepAliveTickChannel := c.s.clock.NewTicker(keepAlive + jitter)
 	defer keepAliveTick.Stop()
 
 	var werr error // last write error
@@ -1461,7 +1465,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 			continue
-		case <-keepAliveTick.C:
+		case <-keepAliveTickChannel:
 			werr = c.sendKeepAlive()
 			continue
 		default:
@@ -1490,7 +1494,7 @@ func (c *sclient) sendLoop(ctx context.Context) error {
 		case msg := <-c.sendPongCh:
 			werr = c.sendPong(msg)
 			continue
-		case <-keepAliveTick.C:
+		case <-keepAliveTickChannel:
 			werr = c.sendKeepAlive()
 		}
 	}

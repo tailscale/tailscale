@@ -17,6 +17,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/time/rate"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -40,6 +41,8 @@ type Client struct {
 	// Owned by Recv:
 	peeked  int                      // bytes to discard on next Recv
 	readErr syncs.AtomicValue[error] // sticky (set by Recv)
+
+	clock tstime.Clock
 }
 
 // ClientOpt is an option passed to NewClient.
@@ -103,6 +106,7 @@ func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 		meshKey:     opt.MeshKey,
 		canAckPings: opt.CanAckPings,
 		isProber:    opt.IsProber,
+		clock:       tstime.StdClock{},
 	}
 	if opt.ServerPub.IsZero() {
 		if err := c.recvServerKey(); err != nil {
@@ -214,7 +218,7 @@ func (c *Client) send(dstKey key.NodePublic, pkt []byte) (ret error) {
 	defer c.wmu.Unlock()
 	if c.rate != nil {
 		pktLen := frameHeaderLen + key.NodePublicRawLen + len(pkt)
-		if !c.rate.AllowN(time.Now(), pktLen) {
+		if !c.rate.AllowN(c.clock.Now(), pktLen) {
 			return nil // drop
 		}
 	}
@@ -244,7 +248,7 @@ func (c *Client) ForwardPacket(srcKey, dstKey key.NodePublic, pkt []byte) (err e
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 
-	timer := time.AfterFunc(5*time.Second, c.writeTimeoutFired)
+	timer := c.clock.AfterFunc(5*time.Second, c.writeTimeoutFired)
 	defer timer.Stop()
 
 	if err := writeFrameHeader(c.bw, frameForwardPacket, uint32(keyLen*2+len(pkt))); err != nil {
@@ -457,7 +461,6 @@ func (c *Client) recvTimeout(timeout time.Duration) (m ReceivedMessage, err erro
 			c.readErr.Store(err)
 		}
 	}()
-
 	for {
 		c.nc.SetReadDeadline(time.Now().Add(timeout))
 
