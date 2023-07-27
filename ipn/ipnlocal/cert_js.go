@@ -12,6 +12,6 @@ type TLSCertKeyPair struct {
 	CertPEM, KeyPEM []byte
 }
 
-func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string) (*TLSCertKeyPair, error) {
+func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string, syncRenewal bool) (*TLSCertKeyPair, error) {
 	return nil, errors.New("not implemented for js/wasm")
 }
