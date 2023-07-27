@@ -30,6 +30,7 @@ import (
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/metrics"
+	"tailscale.com/net/netcheck/captiveportal"
 	"tailscale.com/net/stun"
 	"tailscale.com/tsweb"
 	"tailscale.com/types/key"
@@ -208,6 +209,7 @@ func main() {
 		io.WriteString(w, "User-agent: *\nDisallow: /\n")
 	}))
 	mux.Handle("/generate_204", http.HandlerFunc(serveNoContent))
+	mux.Handle("/captive.txt", http.HandlerFunc(serveCaptiveTxt))
 	debug := tsweb.Debugger(mux)
 	debug.KV("TLS hostname", *hostname)
 	debug.KV("Mesh key", s.HasMeshKey())
@@ -285,6 +287,7 @@ func main() {
 			go func() {
 				port80mux := http.NewServeMux()
 				port80mux.HandleFunc("/generate_204", serveNoContent)
+				port80mux.HandleFunc("/captive.txt", serveCaptiveTxt)
 				port80mux.Handle("/", certManager.HTTPHandler(tsweb.Port80Handler{Main: mux}))
 				port80srv := &http.Server{
 					Addr:        net.JoinHostPort(listenHost, fmt.Sprintf("%d", *httpPort)),
@@ -331,6 +334,11 @@ func serveNoContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func serveCaptiveTxt(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(captiveportal.CaptiveTxtContent))
 }
 
 func isChallengeChar(c rune) bool {
