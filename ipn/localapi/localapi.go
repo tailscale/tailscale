@@ -39,6 +39,7 @@ import (
 	"tailscale.com/net/portmapper"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -129,7 +130,7 @@ var (
 // NewHandler creates a new LocalAPI HTTP handler. All parameters except netMon
 // are required (if non-nil it's used to do faster interface lookups).
 func NewHandler(b *ipnlocal.LocalBackend, logf logger.Logf, netMon *netmon.Monitor, logID logid.PublicID) *Handler {
-	return &Handler{b: b, logf: logf, netMon: netMon, backendLogID: logID}
+	return &Handler{b: b, logf: logf, netMon: netMon, backendLogID: logID, clock: tstime.StdClock{}}
 }
 
 type Handler struct {
@@ -155,6 +156,7 @@ type Handler struct {
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
 	backendLogID logid.PublicID
+	clock        tstime.Clock
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +311,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 	defer h.b.TryFlushLogs() // kick off upload after bugreport's done logging
 
 	logMarker := func() string {
-		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, time.Now().UTC().Format("20060102150405Z"), randHex(8))
+		return fmt.Sprintf("BUG-%v-%v-%v", h.backendLogID, h.clock.Now().UTC().Format("20060102150405Z"), randHex(8))
 	}
 	if envknob.NoLogsNoSupport() {
 		logMarker = func() string { return "BUG-NO-LOGS-NO-SUPPORT-this-node-has-had-its-logging-disabled" }
@@ -355,7 +357,7 @@ func (h *Handler) serveBugReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	until := time.Now().Add(12 * time.Hour)
+	until := h.clock.Now().Add(12 * time.Hour)
 
 	var changed map[string]bool
 	for _, component := range []string{"magicsock"} {
@@ -766,7 +768,7 @@ func (h *Handler) serveComponentDebugLogging(w http.ResponseWriter, r *http.Requ
 	}
 	component := r.FormValue("component")
 	secs, _ := strconv.Atoi(r.FormValue("secs"))
-	err := h.b.SetComponentDebugLogging(component, time.Now().Add(time.Duration(secs)*time.Second))
+	err := h.b.SetComponentDebugLogging(component, h.clock.Now().Add(time.Duration(secs)*time.Second))
 	var res struct {
 		Error string
 	}
@@ -1887,7 +1889,7 @@ func (h *Handler) serveDebugLog(w http.ResponseWriter, r *http.Request) {
 	// opting-out of rate limits. Limit ourselves to at most one message
 	// per 20ms and a burst of 60 log lines, which should be fast enough to
 	// not block for too long but slow enough that we can upload all lines.
-	logf = logger.SlowLoggerWithClock(r.Context(), logf, 20*time.Millisecond, 60, time.Now)
+	logf = logger.SlowLoggerWithClock(r.Context(), logf, 20*time.Millisecond, 60, h.clock.Now)
 
 	for _, line := range logRequest.Lines {
 		logf("%s", line)

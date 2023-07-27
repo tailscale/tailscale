@@ -93,7 +93,7 @@ func (b *LocalBackend) GetCertPEM(ctx context.Context, domain string, syncRenewa
 		return nil, errors.New("invalid domain")
 	}
 	logf := logger.WithPrefix(b.logf, fmt.Sprintf("cert(%q): ", domain))
-	now := time.Now()
+	now := b.clock.Now()
 	traceACME := func(v any) {
 		if !acmeDebug() {
 			return

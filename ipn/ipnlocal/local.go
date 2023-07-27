@@ -60,6 +60,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tsd"
+	"tailscale.com/tstime"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
@@ -201,7 +202,7 @@ type LocalBackend struct {
 	hostinfo *tailcfg.Hostinfo
 	// netMap is not mutated in-place once set.
 	netMap           *netmap.NetworkMap
-	nmExpiryTimer    *time.Timer // for updating netMap on node expiry; can be nil
+	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil
 	nodeByAddr       map[netip.Addr]*tailcfg.Node
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
@@ -259,6 +260,7 @@ type LocalBackend struct {
 	// tkaSyncLock MUST be taken before mu (or inversely, mu must not be held
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock sync.Mutex
+	clock       tstime.Clock
 }
 
 // clientGen is a func that creates a control plane client.
@@ -293,13 +295,14 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 	ctx, cancel := context.WithCancel(context.Background())
 	portpoll := new(portlist.Poller)
+	clock := tstime.StdClock{}
 
 	b := &LocalBackend{
 		ctx:            ctx,
 		ctxCancel:      cancel,
 		logf:           logf,
-		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, time.Now),
-		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, time.Now),
+		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, clock.Now),
 		sys:            sys,
 		e:              e,
 		dialer:         dialer,
@@ -311,6 +314,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		em:             newExpiryManager(logf),
 		gotPortPollRes: make(chan struct{}),
 		loginFlags:     loginFlags,
+		clock:          clock,
 	}
 
 	netMon := sys.NetMon.Get()
@@ -348,7 +352,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	for _, component := range debuggableComponents {
 		key := componentStateKey(component)
 		if ut, err := ipn.ReadStoreInt(pm.Store(), key); err == nil {
-			if until := time.Unix(ut, 0); until.After(time.Now()) {
+			if until := time.Unix(ut, 0); until.After(b.clock.Now()) {
 				// conditional to avoid log spam at start when off
 				b.SetComponentDebugLogging(component, until)
 			}
@@ -360,7 +364,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 
 type componentLogState struct {
 	until time.Time
-	timer *time.Timer // if non-nil, the AfterFunc to disable it
+	timer tstime.TimerController // if non-nil, the AfterFunc to disable it
 }
 
 var debuggableComponents = []string{
@@ -413,7 +417,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 		return t.Unix()
 	}
 	ipn.PutStoreInt(b.store, componentStateKey(component), timeUnixOrZero(until))
-	now := time.Now()
+	now := b.clock.Now()
 	on := now.Before(until)
 	setEnabled(on)
 	var onFor time.Duration
@@ -428,7 +432,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	}
 	newSt := componentLogState{until: until}
 	if on {
-		newSt.timer = time.AfterFunc(onFor, func() {
+		newSt.timer = b.clock.AfterFunc(onFor, func() {
 			// Turn off logging after the timer fires, as long as the state is
 			// unchanged when the timer actually fires.
 			b.mu.Lock()
@@ -450,7 +454,7 @@ func (b *LocalBackend) GetComponentDebugLogging(component string) time.Time {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	now := time.Now()
+	now := b.clock.Now()
 	ls := b.componentLogUntil[component]
 	if ls.until.IsZero() || ls.until.Before(now) {
 		return time.Time{}
@@ -877,7 +881,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 
 	// Handle node expiry in the netmap
 	if st.NetMap != nil {
-		now := time.Now()
+		now := b.clock.Now()
 		b.em.flagExpiredPeers(st.NetMap, now)
 
 		// Always stop the existing netmap timer if we have a netmap;
@@ -897,7 +901,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		nextExpiry := b.em.nextPeerExpiry(st.NetMap, now)
 		if !nextExpiry.IsZero() {
 			tmrDuration := nextExpiry.Sub(now) + 10*time.Second
-			b.nmExpiryTimer = time.AfterFunc(tmrDuration, func() {
+			b.nmExpiryTimer = b.clock.AfterFunc(tmrDuration, func() {
 				// Skip if the world has moved on past the
 				// saved call (e.g. if we race stopping this
 				// timer).
@@ -919,7 +923,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	keyExpiryExtended := false
 	if st.NetMap != nil {
 		wasExpired := b.keyExpired
-		isExpired := !st.NetMap.Expiry.IsZero() && st.NetMap.Expiry.Before(time.Now())
+		isExpired := !st.NetMap.Expiry.IsZero() && st.NetMap.Expiry.Before(b.clock.Now())
 		if wasExpired && !isExpired {
 			keyExpiryExtended = true
 		}
@@ -1380,13 +1384,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 			// prevent it from restarting our map poll
 			// HTTP request (via doSetHostinfoFilterServices >
 			// cli.SetHostinfo). In practice this is very quick.
-			t0 := time.Now()
-			timer := time.NewTimer(time.Second)
+			t0 := b.clock.Now()
+			timer, timerChannel := b.clock.NewTimer(time.Second)
 			select {
 			case <-b.gotPortPollRes:
-				b.logf("[v1] got initial portlist info in %v", time.Since(t0).Round(time.Millisecond))
+				b.logf("[v1] got initial portlist info in %v", b.clock.Since(t0).Round(time.Millisecond))
 				timer.Stop()
-			case <-timer.C:
+			case <-timerChannel:
 				b.logf("timeout waiting for initial portlist")
 			}
 		})
@@ -1809,13 +1813,13 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 // b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
 	isFirst := true
-	ticker := time.NewTicker(portlist.PollInterval())
+	ticker, tickerChannel := b.clock.NewTicker(portlist.PollInterval())
 	defer ticker.Stop()
 	initChan := make(chan struct{})
 	close(initChan)
 	for {
 		select {
-		case <-ticker.C:
+		case <-tickerChannel:
 		case <-b.ctx.Done():
 			return
 		case <-initChan:
@@ -1984,11 +1988,11 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 // pollRequestEngineStatus calls b.RequestEngineStatus every 2 seconds until ctx
 // is done.
 func (b *LocalBackend) pollRequestEngineStatus(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker, tickerChannel := b.clock.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ticker.C:
+		case <-tickerChannel:
 			b.RequestEngineStatus()
 		case <-ctx.Done():
 			return
@@ -2398,12 +2402,12 @@ func (b *LocalBackend) StartLoginInteractive() {
 
 func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
 	if pingType == tailcfg.PingPeerAPI {
-		t0 := time.Now()
+		t0 := b.clock.Now()
 		node, base, err := b.pingPeerAPI(ctx, ip)
 		if err != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		d := time.Since(t0)
+		d := b.clock.Since(t0)
 		pr := &ipnstate.PingResult{
 			IP:             ip.String(),
 			NodeIP:         ip.String(),
@@ -4774,7 +4778,7 @@ func (b *LocalBackend) Doctor(ctx context.Context, logf logger.Logf) {
 	// opting-out of rate limits. Limit ourselves to at most one message
 	// per 20ms and a burst of 60 log lines, which should be fast enough to
 	// not block for too long but slow enough that we can upload all lines.
-	logf = logger.SlowLoggerWithClock(ctx, logf, 20*time.Millisecond, 60, time.Now)
+	logf = logger.SlowLoggerWithClock(ctx, logf, 20*time.Millisecond, 60, b.clock.Now)
 
 	var checks []doctor.Check
 	checks = append(checks,
