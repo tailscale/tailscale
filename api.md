@@ -516,7 +516,8 @@ The ID of the device.
 
 #### `authorized` (required in `POST` body)
 
-Specify whether the device is authorized.
+Specify whether the device is authorized. False to deauthorize an authorized device, and true to authorize a new device or to re-authorize a previously deauthorized device.
+
 
 ``` jsonc
 {
