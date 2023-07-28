@@ -197,7 +197,7 @@ type PeerStatus struct {
 	// It has the form "host.<MagicDNSSuffix>."
 	DNSName string
 	OS      string // HostInfo.OS
-	UserID  tailcfg.UserID
+	UserID  tailcfg.UserID `json:",string"`
 
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
