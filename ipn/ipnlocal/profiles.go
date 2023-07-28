@@ -298,8 +298,8 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 // Profiles returns the list of known profiles.
 func (pm *profileManager) Profiles() []ipn.LoginProfile {
 	profiles := pm.matchingProfiles(func(*ipn.LoginProfile) bool { return true })
-	slices.SortFunc(profiles, func(a, b *ipn.LoginProfile) bool {
-		return a.Name < b.Name
+	slices.SortFunc(profiles, func(a, b *ipn.LoginProfile) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 	out := make([]ipn.LoginProfile, 0, len(profiles))
 	for _, p := range profiles {
