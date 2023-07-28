@@ -902,8 +902,8 @@ func (h *peerAPIHandler) handleServeSockStats(w http.ResponseWriter, r *http.Req
 	for label := range stats.Stats {
 		labels = append(labels, label)
 	}
-	slices.SortFunc(labels, func(a, b sockstats.Label) bool {
-		return a.String() < b.String()
+	slices.SortFunc(labels, func(a, b sockstats.Label) int {
+		return strings.Compare(a.String(), b.String())
 	})
 
 	txTotal := uint64(0)

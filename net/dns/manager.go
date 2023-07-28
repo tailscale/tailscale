@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -139,14 +140,15 @@ func compileHostEntries(cfg Config) (hosts []*HostEntry) {
 			}
 		}
 	}
-	slices.SortFunc(hosts, func(a, b *HostEntry) bool {
-		if len(a.Hosts) == 0 {
-			return false
+	slices.SortFunc(hosts, func(a, b *HostEntry) int {
+		if len(a.Hosts) == 0 && len(b.Hosts) == 0 {
+			return 0
+		} else if len(a.Hosts) == 0 {
+			return -1
+		} else if len(b.Hosts) == 0 {
+			return 1
 		}
-		if len(b.Hosts) == 0 {
-			return true
-		}
-		return a.Hosts[0] < b.Hosts[0]
+		return strings.Compare(a.Hosts[0], b.Hosts[0])
 	})
 	return hosts
 }
