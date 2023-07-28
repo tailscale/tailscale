@@ -18,6 +18,7 @@ import (
 	"golang.org/x/exp/slices"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/cmpx"
 )
 
 var exitNodeCmd = &ffcli.Command{
@@ -227,19 +228,21 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 // sortPeersByPriority sorts a slice of PeerStatus
 // by location.Priority, in order of highest priority.
 func sortPeersByPriority(peers []*ipnstate.PeerStatus) {
-	slices.SortFunc(peers, func(a, b *ipnstate.PeerStatus) bool { return a.Location.Priority > b.Location.Priority })
+	slices.SortStableFunc(peers, func(a, b *ipnstate.PeerStatus) int {
+		return cmpx.Compare(b.Location.Priority, a.Location.Priority)
+	})
 }
 
 // sortByCityName sorts a slice of filteredCity alphabetically
 // by name. The '-' used to indicate no location data will always
 // be sorted to the front of the slice.
 func sortByCityName(cities []*filteredCity) {
-	slices.SortFunc(cities, func(a, b *filteredCity) bool { return a.Name < b.Name })
+	slices.SortStableFunc(cities, func(a, b *filteredCity) int { return strings.Compare(a.Name, b.Name) })
 }
 
 // sortByCountryName sorts a slice of filteredCountry alphabetically
 // by name. The '-' used to indicate no location data will always
 // be sorted to the front of the slice.
 func sortByCountryName(countries []*filteredCountry) {
-	slices.SortFunc(countries, func(a, b *filteredCountry) bool { return a.Name < b.Name })
+	slices.SortStableFunc(countries, func(a, b *filteredCountry) int { return strings.Compare(a.Name, b.Name) })
 }

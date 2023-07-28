@@ -366,8 +366,8 @@ func TestBasicRecursion(t *testing.T) {
 		netip.MustParseAddr("2600:9000:a602:b1e6:86d:8165:5e8c:295b"),
 		netip.MustParseAddr("2600:9000:a51d:27c1:1530:b9ef:2a6:b9e5"),
 	}
-	slices.SortFunc(addrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
-	slices.SortFunc(wantAddrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
+	slices.SortFunc(addrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
+	slices.SortFunc(wantAddrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
 
 	if !reflect.DeepEqual(addrs, wantAddrs) {
 		t.Errorf("got addrs=%+v; want %+v", addrs, wantAddrs)
@@ -485,8 +485,8 @@ func TestRecursionCNAME(t *testing.T) {
 		netip.MustParseAddr("13.248.141.131"),
 		netip.MustParseAddr("2600:9000:a602:b1e6:86d:8165:5e8c:295b"),
 	}
-	slices.SortFunc(addrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
-	slices.SortFunc(wantAddrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
+	slices.SortFunc(addrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
+	slices.SortFunc(wantAddrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
 
 	if !reflect.DeepEqual(addrs, wantAddrs) {
 		t.Errorf("got addrs=%+v; want %+v", addrs, wantAddrs)
@@ -590,8 +590,8 @@ func TestRecursionNoGlue(t *testing.T) {
 		netip.MustParseAddr("13.248.141.131"),
 		netip.MustParseAddr("2600:9000:a602:b1e6:86d:8165:5e8c:295b"),
 	}
-	slices.SortFunc(addrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
-	slices.SortFunc(wantAddrs, func(x, y netip.Addr) bool { return x.String() < y.String() })
+	slices.SortFunc(addrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
+	slices.SortFunc(wantAddrs, func(x, y netip.Addr) int { return strings.Compare(x.String(), y.String()) })
 
 	if !reflect.DeepEqual(addrs, wantAddrs) {
 		t.Errorf("got addrs=%+v; want %+v", addrs, wantAddrs)

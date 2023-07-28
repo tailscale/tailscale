@@ -45,6 +45,7 @@ import (
 	"golang.org/x/exp/slices"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/must"
 )
 
@@ -151,10 +152,10 @@ func printMessage(msg message) {
 		if len(traffic) == 0 {
 			return
 		}
-		slices.SortFunc(traffic, func(x, y netlogtype.ConnectionCounts) bool {
+		slices.SortFunc(traffic, func(x, y netlogtype.ConnectionCounts) int {
 			nx := x.TxPackets + x.TxBytes + x.RxPackets + x.RxBytes
 			ny := y.TxPackets + y.TxBytes + y.RxPackets + y.RxBytes
-			return nx > ny
+			return cmpx.Compare(ny, nx)
 		})
 		var sum netlogtype.Counts
 		for _, cc := range traffic {

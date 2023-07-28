@@ -2438,11 +2438,11 @@ func TestEndpointTracker(t *testing.T) {
 		got := et.update(tt.now, tt.eps)
 
 		// Sort both arrays for comparison
-		slices.SortFunc(got, func(a, b tailcfg.Endpoint) bool {
-			return a.Addr.String() < b.Addr.String()
+		slices.SortFunc(got, func(a, b tailcfg.Endpoint) int {
+			return strings.Compare(a.Addr.String(), b.Addr.String())
 		})
-		slices.SortFunc(tt.want, func(a, b tailcfg.Endpoint) bool {
-			return a.Addr.String() < b.Addr.String()
+		slices.SortFunc(tt.want, func(a, b tailcfg.Endpoint) int {
+			return strings.Compare(a.Addr.String(), b.Addr.String())
 		})
 
 		if !reflect.DeepEqual(got, tt.want) {

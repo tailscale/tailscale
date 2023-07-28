@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/tailscale/wireguard-go/tun"
 	"github.com/vishvananda/netlink"
+	"go4.org/netipx"
 	"golang.org/x/exp/slices"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
@@ -1022,8 +1023,8 @@ func TestCIDRDiff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		slices.SortFunc(added, func(a, b netip.Prefix) bool { return a.Addr().Less(b.Addr()) })
-		slices.SortFunc(deleted, func(a, b netip.Prefix) bool { return a.Addr().Less(b.Addr()) })
+		slices.SortFunc(added, netipx.ComparePrefix)
+		slices.SortFunc(deleted, netipx.ComparePrefix)
 		if !reflect.DeepEqual(added, tc.wantAdd) {
 			t.Errorf("added = %v, want %v", added, tc.wantAdd)
 		}

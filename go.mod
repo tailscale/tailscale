@@ -73,10 +73,10 @@ require (
 	github.com/vishvananda/netns v0.0.4
 	go.uber.org/zap v1.24.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
-	go4.org/netipx v0.0.0-20230303233057-f1b76eb4bb35
+	go4.org/netipx v0.0.0-20230728180743-ad4cb58a6516
 	golang.org/x/crypto v0.11.0
-	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
-	golang.org/x/mod v0.10.0
+	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
+	golang.org/x/mod v0.11.0
 	golang.org/x/net v0.10.0
 	golang.org/x/oauth2 v0.7.0
 	golang.org/x/sync v0.2.0

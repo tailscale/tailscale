@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"sync"
 
+	"go4.org/netipx"
 	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 )
@@ -252,12 +253,7 @@ func ExitRoutes() []netip.Prefix { return []netip.Prefix{allIPv4, allIPv6} }
 
 // SortPrefixes sorts the prefixes in place.
 func SortPrefixes(p []netip.Prefix) {
-	slices.SortFunc(p, func(ri, rj netip.Prefix) bool {
-		if ri.Addr() == rj.Addr() {
-			return ri.Bits() < rj.Bits()
-		}
-		return ri.Addr().Less(rj.Addr())
-	})
+	slices.SortFunc(p, netipx.ComparePrefix)
 }
 
 // FilterPrefixes returns a new slice, not aliasing in, containing elements of

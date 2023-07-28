@@ -396,7 +396,7 @@ func configureInterface(cfg *Config, tun *tun.NativeTun) (retErr error) {
 		return fmt.Errorf("syncAddresses: %w", err)
 	}
 
-	slices.SortFunc(routes, routeDataLess)
+	slices.SortFunc(routes, routeDataCompare)
 
 	deduplicatedRoutes := []*winipcfg.RouteData{}
 	for i := 0; i < len(routes); i++ {
@@ -652,8 +652,8 @@ func routeDataCompare(a, b *winipcfg.RouteData) int {
 func deltaRouteData(a, b []*winipcfg.RouteData) (add, del []*winipcfg.RouteData) {
 	add = make([]*winipcfg.RouteData, 0, len(b))
 	del = make([]*winipcfg.RouteData, 0, len(a))
-	slices.SortFunc(a, routeDataLess)
-	slices.SortFunc(b, routeDataLess)
+	slices.SortFunc(a, routeDataCompare)
+	slices.SortFunc(b, routeDataCompare)
 
 	i := 0
 	j := 0
