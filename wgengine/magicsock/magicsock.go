@@ -721,7 +721,7 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 }
 
 // Ping handles a "tailscale ping" CLI query.
-func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.privateKey.IsZero() {
@@ -745,12 +745,13 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnst
 		cb(res)
 		return
 	}
-	ep.cliPing(res, cb)
+	ep.cliPing(res, size, cb)
 }
 
 // c.mu must be held
-func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netip.AddrPort) {
+func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency time.Duration, ep netip.AddrPort, size int) {
 	res.LatencySeconds = latency.Seconds()
+	res.Size = size
 	if ep.Addr() != tailcfg.DerpMagicIPAddr {
 		res.Endpoint = ep.String()
 		return
@@ -1257,7 +1258,6 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	} else {
 		metricSendDiscoUDP.Add(1)
 	}
-
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
 	sent, err = c.sendAddr(dst, dstKey, pkt)
@@ -1267,7 +1267,7 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 			if !dstKey.IsZero() {
 				node = dstKey.ShortString()
 			}
-			c.dlogf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v", c.discoShort, dstDisco.ShortString(), node, derpStr(dst.String()), disco.MessageSummary(m))
+			c.dlogf("[v1] magicsock: disco: %v->%v (%v, %v) sent %v len %v\n", c.discoShort, dstDisco.ShortString(), node, derpStr(dst.String()), disco.MessageSummary(m), len(pkt))
 		}
 		if isDERP {
 			metricSentDiscoDERP.Add(1)
@@ -1335,7 +1335,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 		return
 	}
 	if debugDisco() {
-		c.logf("magicsock: disco: got disco-looking frame from %v via %s", sender.ShortString(), via)
+		c.logf("magicsock: disco: got disco-looking frame from %v via %s len %v", sender.ShortString(), via, len(msg))
 	}
 	if c.privateKey.IsZero() {
 		// Ignore disco messages when we're stopped.
@@ -1566,8 +1566,9 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	ipDst := src
 	discoDest := di.discoKey
 	go c.sendDiscoMessage(ipDst, dstKey, discoDest, &disco.Pong{
-		TxID: dm.TxID,
-		Src:  src,
+		TxID:    dm.TxID,
+		Src:     src,
+		Padding: dm.Padding + discoPingSize - discoPongSize,
 	}, discoVerboseLog)
 }
 

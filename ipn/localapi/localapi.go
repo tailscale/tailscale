@@ -1337,7 +1337,16 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'type' parameter", 400)
 		return
 	}
-	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr))
+	size := 0
+	sizeStr := r.FormValue("size")
+	if sizeStr != "" {
+		size, err = strconv.Atoi(sizeStr)
+		if err != nil {
+			http.Error(w, "invalid 'size' parameter", 400)
+			return
+		}
+	}
+	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr), size)
 	if err != nil {
 		writeErrorJSON(w, err)
 		return

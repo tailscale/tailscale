@@ -639,6 +639,9 @@ type PingResult struct {
 	// a ping to the local node.
 	IsLocalIP bool `json:",omitempty"`
 
+	// Size is the size of the pong message.
+	Size int `json:",omitempty"`
+
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)
 }
 
@@ -655,6 +658,7 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 		DERPRegionCode: pr.DERPRegionCode,
 		PeerAPIPort:    pr.PeerAPIPort,
 		IsLocalIP:      pr.IsLocalIP,
+		Size:           pr.Size,
 	}
 }
 

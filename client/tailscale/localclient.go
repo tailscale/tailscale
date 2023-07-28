@@ -807,11 +807,16 @@ func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn str
 	return "", false
 }
 
-// Ping sends a ping of the provided type to the provided IP and waits
+// Ping sends a ping of the provided type and size to the provided IP and waits
 // for its response.
-func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType) (*ipnstate.PingResult, error) {
+//
+// For disco pings, the size argument specifies the length of the packet's payload, that
+// is, including the disco headers and message, but not including the IP and UDP headers.
+// If size is smaller than the minimum message size it's ignored.
+func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType, size int) (*ipnstate.PingResult, error) {
 	v := url.Values{}
 	v.Set("ip", ip.String())
+	v.Set("size", strconv.Itoa(size))
 	v.Set("type", string(pingtype))
 	body, err := lc.send(ctx, "POST", "/localapi/v0/ping?"+v.Encode(), 200, nil)
 	if err != nil {

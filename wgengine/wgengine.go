@@ -152,7 +152,7 @@ type Engine interface {
 
 	// Ping is a request to start a ping with the peer handling the given IP and
 	// then call cb with its ping latency & method.
-	Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
+	Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult))
 
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.

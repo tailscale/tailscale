@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/crypto/poly1305"
 	"golang.org/x/exp/maps"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
@@ -361,7 +362,7 @@ func (de *endpoint) heartbeat() {
 	udpAddr, _, _ := de.addrForSendLocked(now)
 	if udpAddr.IsValid() {
 		// We have a preferred path. Ping that every 2 seconds.
-		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat)
+		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0)
 	}
 
 	if de.wantFullPingLocked(now) {
@@ -403,7 +404,7 @@ func (de *endpoint) noteActiveLocked() {
 
 // cliPing starts a ping for the "tailscale ping" command. res is value to call cb with,
 // already partially filled.
-func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -418,17 +419,17 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, cb func(*ipnstate.PingResu
 	now := mono.Now()
 	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
 	if derpAddr.IsValid() {
-		de.startDiscoPingLocked(derpAddr, now, pingCLI)
+		de.startDiscoPingLocked(derpAddr, now, pingCLI, size)
 	}
 	if udpAddr.IsValid() && now.Before(de.trustBestAddrUntil) {
 		// Already have an active session, so just ping the address we're using.
 		// Otherwise "tailscale ping" results to a node on the local network
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
 		// IPv6 address, both 1ms away, and it's random who replies first.
-		de.startDiscoPingLocked(udpAddr, now, pingCLI)
+		de.startDiscoPingLocked(udpAddr, now, pingCLI, size)
 	} else {
 		for ep := range de.endpointState {
-			de.startDiscoPingLocked(ep, now, pingCLI)
+			de.startDiscoPingLocked(ep, now, pingCLI, size)
 		}
 	}
 	de.noteActiveLocked()
@@ -522,17 +523,32 @@ func (de *endpoint) removeSentDiscoPingLocked(txid stun.TxID, sp sentPing) {
 	delete(de.sentPing, txid)
 }
 
-// sendDiscoPing sends a ping with the provided txid to ep using de's discoKey.
+const (
+	// discoPingSize is the size of a complete disco ping packet, without any padding.
+	discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen +
+		poly1305.TagSize + disco.MessageHeaderLen + disco.PingLen
+	// discoPongSize is the size of a complete disco pong packet, without any padding.
+	discoPongSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen +
+		poly1305.TagSize + disco.MessageHeaderLen + disco.PongLen
+)
+
+// sendDiscoPing sends a ping with the provided txid to ep using de's discoKey. size
+// is the desired packet size,
 //
 // The caller (startPingLocked) should've already recorded the ping in
 // sentPing and set up the timer.
 //
 // The caller should use de.discoKey as the discoKey argument.
 // It is passed in so that sendDiscoPing doesn't need to lock de.mu.
-func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, txid stun.TxID, logLevel discoLogLevel) {
+func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, txid stun.TxID, size int, logLevel discoLogLevel) {
+	padding := 0
+	if size-discoPingSize > 0 {
+		padding = size - discoPingSize
+	}
 	sent, _ := de.c.sendDiscoMessage(ep, de.publicKey, discoKey, &disco.Ping{
 		TxID:    [12]byte(txid),
 		NodeKey: de.c.publicKeyAtomic.Load(),
+		Padding: padding,
 	}, logLevel)
 	if !sent {
 		de.forgetDiscoPing(txid)
@@ -557,7 +573,8 @@ const (
 	pingCLI
 )
 
-func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose) {
+// startDiscoPingLocked sends a disco ping to ep in a separate goroutine.
+func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose, size int) {
 	if runtime.GOOS == "js" {
 		return
 	}
@@ -587,9 +604,10 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
 	}
-	go de.sendDiscoPing(ep, epDisco.key, txid, logLevel)
+	go de.sendDiscoPing(ep, epDisco.key, txid, size, logLevel)
 }
 
+// sendDiscoPingsLocked starts pinging all of ep's endpoints.
 func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 	de.lastFullPing = now
 	var sentAny bool
@@ -612,7 +630,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 			de.c.dlogf("[v1] magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort())
 		}
 
-		de.startDiscoPingLocked(ep, now, pingDiscovery)
+		de.startDiscoPingLocked(ep, now, pingDiscovery, 0)
 	}
 	derpAddr := de.derpAddr
 	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
@@ -897,7 +915,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	for _, pp := range de.pendingCLIPings {
-		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to)
+		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to, m.Padding+discoPongSize)
 		go pp.cb(pp.res)
 	}
 	de.pendingCLIPings = nil

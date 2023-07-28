@@ -1484,6 +1484,9 @@ type PingResponse struct {
 	// IsLocalIP is whether the ping request error is due to it being
 	// a ping to the local node.
 	IsLocalIP bool `json:",omitempty"`
+
+	// Size is the size of the pong message.
+	Size int `json:",omitempty"`
 }
 
 type MapResponse struct {

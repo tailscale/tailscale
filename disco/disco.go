@@ -94,6 +94,9 @@ type Message interface {
 	AppendMarshal([]byte) []byte
 }
 
+// MessageHeaderLen is the length of a message header, 2 bytes for type and version.
+const MessageHeaderLen = 2
+
 // appendMsgHeader appends two bytes (for t and ver) and then also
 // dataLen bytes to b, returning the appended slice in all. The
 // returned data slice is a subslice of all with just dataLen bytes of
@@ -117,7 +120,15 @@ type Ping struct {
 	// netmap data to reduce the discokey:nodekey relation from 1:N to
 	// 1:1.
 	NodeKey key.NodePublic
+
+	// Padding is the number of 0 bytes at the end of the
+	// message. (It's used to probe path MTU.)
+	Padding int
 }
+
+// PingLen is the length of a marshalled ping message, without the message
+// header or padding.
+const PingLen = 12 + key.NodePublicRawLen
 
 func (m *Ping) AppendMarshal(b []byte) []byte {
 	dataLen := 12
@@ -125,7 +136,8 @@ func (m *Ping) AppendMarshal(b []byte) []byte {
 	if hasKey {
 		dataLen += key.NodePublicRawLen
 	}
-	ret, d := appendMsgHeader(b, TypePing, v0, dataLen)
+
+	ret, d := appendMsgHeader(b, TypePing, v0, dataLen+m.Padding)
 	n := copy(d, m.TxID[:])
 	if hasKey {
 		m.NodeKey.AppendTo(d[:n])
@@ -138,11 +150,14 @@ func parsePing(ver uint8, p []byte) (m *Ping, err error) {
 		return nil, errShort
 	}
 	m = new(Ping)
+	m.Padding = len(p)
 	p = p[copy(m.TxID[:], p):]
+	m.Padding -= 12
 	// Deliberately lax on longer-than-expected messages, for future
 	// compatibility.
 	if len(p) >= key.NodePublicRawLen {
 		m.NodeKey = key.NodePublicFromRaw32(mem.B(p[:key.NodePublicRawLen]))
+		m.Padding -= key.NodePublicRawLen
 	}
 	return m, nil
 }
@@ -210,14 +225,17 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 // It includes the sender's source IP + port, so it's effectively a
 // STUN response.
 type Pong struct {
-	TxID [12]byte
-	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
+	TxID    [12]byte
+	Src     netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
+	Padding int
 }
 
-const pongLen = 12 + 16 + 2
+// PongLen is the length of a marshalled pong message, without the message
+// header or padding.
+const PongLen = 12 + 16 + 2
 
 func (m *Pong) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
+	ret, d := appendMsgHeader(b, TypePong, v0, PongLen+m.Padding)
 	d = d[copy(d, m.TxID[:]):]
 	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
@@ -226,17 +244,21 @@ func (m *Pong) AppendMarshal(b []byte) []byte {
 }
 
 func parsePong(ver uint8, p []byte) (m *Pong, err error) {
-	if len(p) < pongLen {
+	if len(p) < PongLen {
 		return nil, errShort
 	}
 	m = new(Pong)
+	m.Padding = len(p)
 	copy(m.TxID[:], p)
 	p = p[12:]
+	m.Padding -= 12
 
 	srcIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
 	p = p[16:]
+	m.Padding -= 16
 	port := binary.BigEndian.Uint16(p)
 	m.Src = netip.AddrPortFrom(srcIP.Unmap(), port)
+	m.Padding -= 2
 	return m, nil
 }
 

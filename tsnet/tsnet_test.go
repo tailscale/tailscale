@@ -239,7 +239,7 @@ func TestConn(t *testing.T) {
 	}
 
 	// ping to make sure the connection is up.
-	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP)
+	res, err := lc2.Ping(ctx, s1ip, tailcfg.PingICMP, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

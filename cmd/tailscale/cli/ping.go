@@ -53,12 +53,14 @@ relay node.
 		fs.BoolVar(&pingArgs.peerAPI, "peerapi", false, "try hitting the peer's peerapi HTTP server")
 		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send. 0 for infinity.")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
+		fs.IntVar(&pingArgs.size, "size", 0, "send a packet with this many bytes in the payload (disco pings only). 0 for minimum size.")
 		return fs
 	})(),
 }
 
 var pingArgs struct {
 	num         int
+	size        int
 	untilDirect bool
 	verbose     bool
 	tsmp        bool
@@ -115,7 +117,7 @@ func runPing(ctx context.Context, args []string) error {
 	for {
 		n++
 		ctx, cancel := context.WithTimeout(ctx, pingArgs.timeout)
-		pr, err := localClient.Ping(ctx, netip.MustParseAddr(ip), pingType())
+		pr, err := localClient.Ping(ctx, netip.MustParseAddr(ip), pingType(), pingArgs.size)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -155,6 +157,9 @@ func runPing(ctx context.Context, args []string) error {
 		extra := ""
 		if pr.PeerAPIPort != 0 {
 			extra = fmt.Sprintf(", %d", pr.PeerAPIPort)
+		}
+		if pr.Size != 0 {
+			extra = fmt.Sprintf(", %d bytes", pr.Size)
 		}
 		printf("pong from %s (%s%s) via %v in %v\n", pr.NodeName, pr.NodeIP, extra, via, latency)
 		if pingArgs.tsmp || pingArgs.icmp {
