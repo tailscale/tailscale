@@ -8,7 +8,6 @@ package magicsock
 import (
 	"bufio"
 	"context"
-	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -1241,10 +1240,6 @@ func (c *Conn) sendDiscoMessage(dst netip.AddrPort, dstKey key.NodePublic, dstDi
 	if c.closed {
 		c.mu.Unlock()
 		return false, errConnClosed
-	}
-	var nonce [disco.NonceLen]byte
-	if _, err := crand.Read(nonce[:]); err != nil {
-		panic(err) // worth dying for
 	}
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
 	pkt = append(pkt, disco.Magic...)
