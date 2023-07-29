@@ -22,6 +22,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 )
 
 var (
@@ -31,6 +32,14 @@ var (
 )
 
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
+
+var (
+	numSessions    = clientmetric.NewCounter("sniproxy_sessions")
+	numBadAddrPort = clientmetric.NewCounter("sniproxy_bad_addrport")
+	dnsResponses   = clientmetric.NewCounter("sniproxy_dns_responses")
+	dnsFailures    = clientmetric.NewCounter("sniproxy_dns_failed")
+	httpPromoted   = clientmetric.NewCounter("sniproxy_http_promoted")
+)
 
 func main() {
 	flag.Parse()
@@ -109,6 +118,7 @@ func (s *server) serveDNSConn(c nettype.ConnPacketConn) {
 	n, err := c.Read(buf)
 	if err != nil {
 		log.Printf("c.Read failed: %v\n ", err)
+		dnsFailures.Add(1)
 		return
 	}
 
@@ -116,20 +126,25 @@ func (s *server) serveDNSConn(c nettype.ConnPacketConn) {
 	err = msg.Unpack(buf[:n])
 	if err != nil {
 		log.Printf("dnsmessage unpack failed: %v\n ", err)
+		dnsFailures.Add(1)
 		return
 	}
 
 	buf, err = s.dnsResponse(&msg)
 	if err != nil {
 		log.Printf("s.dnsResponse failed: %v\n", err)
+		dnsFailures.Add(1)
 		return
 	}
 
 	_, err = c.Write(buf)
 	if err != nil {
 		log.Printf("c.Write failed: %v\n", err)
+		dnsFailures.Add(1)
 		return
 	}
+
+	dnsResponses.Add(1)
 }
 
 func (s *server) serveConn(c net.Conn) {
@@ -137,6 +152,7 @@ func (s *server) serveConn(c net.Conn) {
 	_, port, err := net.SplitHostPort(addrPortStr)
 	if err != nil {
 		log.Printf("bogus addrPort %q", addrPortStr)
+		numBadAddrPort.Add(1)
 		c.Close()
 		return
 	}
@@ -149,6 +165,7 @@ func (s *server) serveConn(c net.Conn) {
 		return netutil.NewOneConnListener(c, nil), nil
 	}
 	p.AddSNIRouteFunc(addrPortStr, func(ctx context.Context, sniName string) (t tcpproxy.Target, ok bool) {
+		numSessions.Add(1)
 		return &tcpproxy.DialProxy{
 			Addr:        net.JoinHostPort(sniName, port),
 			DialContext: dialer.DialContext,
@@ -218,6 +235,7 @@ func (s *server) dnsResponse(req *dnsmessage.Message) (buf []byte, err error) {
 
 func (s *server) promoteHTTPS(ln net.Listener) {
 	err := http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpPromoted.Add(1)
 		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusFound)
 	}))
 	log.Fatalf("promoteHTTPS http.Serve: %v", err)
