@@ -1566,9 +1566,8 @@ func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInf
 	ipDst := src
 	discoDest := di.discoKey
 	go c.sendDiscoMessage(ipDst, dstKey, discoDest, &disco.Pong{
-		TxID:    dm.TxID,
-		Src:     src,
-		Padding: dm.Padding + discoPingSize - discoPongSize,
+		TxID: dm.TxID,
+		Src:  src,
 	}, discoVerboseLog)
 }
 

@@ -98,6 +98,7 @@ type sentPing struct {
 	at      mono.Time
 	timer   *time.Timer // timeout timer
 	purpose discoPingPurpose
+	size    int
 }
 
 // endpointState is some state and history for a specific endpoint of
@@ -527,9 +528,6 @@ const (
 	// discoPingSize is the size of a complete disco ping packet, without any padding.
 	discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen +
 		poly1305.TagSize + disco.MessageHeaderLen + disco.PingLen
-	// discoPongSize is the size of a complete disco pong packet, without any padding.
-	discoPongSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen +
-		poly1305.TagSize + disco.MessageHeaderLen + disco.PongLen
 )
 
 // sendDiscoPing sends a ping with the provided txid to ep using de's discoKey. size
@@ -599,6 +597,7 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		at:      now,
 		timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
 		purpose: purpose,
+		size:    size,
 	}
 	logLevel := discoLog
 	if purpose == pingHeartbeat {
@@ -915,7 +914,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	for _, pp := range de.pendingCLIPings {
-		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to, m.Padding+discoPongSize)
+		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to, sp.size)
 		go pp.cb(pp.res)
 	}
 	de.pendingCLIPings = nil

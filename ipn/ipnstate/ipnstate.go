@@ -639,7 +639,7 @@ type PingResult struct {
 	// a ping to the local node.
 	IsLocalIP bool `json:",omitempty"`
 
-	// Size is the size of the pong message.
+	// Size is the size of the ping message.
 	Size int `json:",omitempty"`
 
 	// TODO(bradfitz): details like whether port mapping was used on either side? (Once supported)

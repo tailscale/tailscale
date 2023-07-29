@@ -225,17 +225,16 @@ func parseCallMeMaybe(ver uint8, p []byte) (m *CallMeMaybe, err error) {
 // It includes the sender's source IP + port, so it's effectively a
 // STUN response.
 type Pong struct {
-	TxID    [12]byte
-	Src     netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
-	Padding int
+	TxID [12]byte
+	Src  netip.AddrPort // 18 bytes (16+2) on the wire; v4-mapped ipv6 for IPv4
 }
 
-// PongLen is the length of a marshalled pong message, without the message
-// header or padding.
-const PongLen = 12 + 16 + 2
+// pongLen is the length of a marshalled pong message, without the message
+// header.
+const pongLen = 12 + 16 + 2
 
 func (m *Pong) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypePong, v0, PongLen+m.Padding)
+	ret, d := appendMsgHeader(b, TypePong, v0, pongLen)
 	d = d[copy(d, m.TxID[:]):]
 	ip16 := m.Src.Addr().As16()
 	d = d[copy(d, ip16[:]):]
@@ -244,21 +243,17 @@ func (m *Pong) AppendMarshal(b []byte) []byte {
 }
 
 func parsePong(ver uint8, p []byte) (m *Pong, err error) {
-	if len(p) < PongLen {
+	if len(p) < pongLen {
 		return nil, errShort
 	}
 	m = new(Pong)
-	m.Padding = len(p)
 	copy(m.TxID[:], p)
 	p = p[12:]
-	m.Padding -= 12
 
 	srcIP, _ := netip.AddrFromSlice(net.IP(p[:16]))
 	p = p[16:]
-	m.Padding -= 16
 	port := binary.BigEndian.Uint16(p)
 	m.Src = netip.AddrPortFrom(srcIP.Unmap(), port)
-	m.Padding -= 2
 	return m, nil
 }
 
