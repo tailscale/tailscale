@@ -42,6 +42,8 @@ spec:
       value: "{{TS_DEST_IP}}"
     - name: TS_AUTH_ONCE
       value: "true"
+    - name: TS_TEST_USENFT
+      value: "false"
     securityContext:
       capabilities:
         add:

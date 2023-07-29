@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/util/deephash"
@@ -89,6 +90,7 @@ func main() {
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		UseNFT:          defaultBool("TS_TEST_USENFT", false),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -312,6 +314,9 @@ func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient
 	// tailscaled runs without context, since it needs to persist
 	// beyond the startup timeout in ctx.
 	cmd := exec.Command("tailscaled", args...)
+	if cfg.UseNFT {
+		cmd.Env = []string{"TS_DEBUG_USE_NETLINK_NFTABLES=true"}
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -546,6 +551,7 @@ type settings struct {
 	AuthOnce           bool
 	Root               string
 	KubernetesCanPatch bool
+	UseNFT             bool
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if
