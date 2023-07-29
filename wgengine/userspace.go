@@ -1228,7 +1228,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 	}
 	peer := pip.Node
 
-	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
+	e.logf("ping(%v): sending %v ping payload size %v to %v %v ...", ip, pingType, size, peer.Key.ShortString(), peer.ComputedName)
 	switch pingType {
 	case "disco":
 		e.magicConn.Ping(peer, res, size, cb)
