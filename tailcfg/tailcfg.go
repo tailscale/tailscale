@@ -1223,6 +1223,25 @@ const (
 // the application via the WhoIs API.
 type PeerCapMap map[PeerCapability][]json.RawMessage
 
+// UnmarshalCapJSON unmarshals each JSON value in cm[cap] as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
+	vals, ok := cm[cap]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]T, 0, len(vals))
+	for _, v := range vals {
+		var t T
+		if err := json.Unmarshal(v, &t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
 // HasCapability reports whether c has the capability cap.
 // This is used to test for the existence of a capability, especially
 // when the capability has no values.
