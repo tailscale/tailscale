@@ -7,6 +7,9 @@ package unixpkgs
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto"
+	"crypto/rand"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +25,7 @@ import (
 type tgzTarget struct {
 	filenameArch string // arch to use in filename instead of deriving from goenv["GOARCH"]
 	goenv        map[string]string
+	signer       crypto.Signer
 }
 
 func (t *tgzTarget) arch() string {
@@ -65,7 +69,11 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	gw := gzip.NewWriter(f)
+	// Hash the final output we're writing to the file, after tar and gzip
+	// writers did their thing.
+	h := sha512.New()
+	hw := io.MultiWriter(f, h)
+	gw := gzip.NewWriter(hw)
 	defer gw.Close()
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
@@ -146,7 +154,21 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, err
 	}
 
-	return []string{filename}, nil
+	files := []string{filename}
+
+	if t.signer != nil {
+		sig, err := t.signer.Sign(rand.Reader, h.Sum(nil), crypto.SHA512)
+		if err != nil {
+			return nil, err
+		}
+		sigFilename := out + ".sig"
+		if err := os.WriteFile(sigFilename, sig, 0644); err != nil {
+			return nil, err
+		}
+		files = append(files, filename+".sig")
+	}
+
+	return files, nil
 }
 
 type debTarget struct {

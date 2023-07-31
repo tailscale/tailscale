@@ -4,6 +4,7 @@
 package unixpkgs
 
 import (
+	"crypto"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,7 +15,7 @@ import (
 	_ "github.com/goreleaser/nfpm/rpm"
 )
 
-func Targets() []dist.Target {
+func Targets(signer crypto.Signer) []dist.Target {
 	var ret []dist.Target
 	for goosgoarch := range tarballs {
 		goos, goarch := splitGoosGoarch(goosgoarch)
@@ -23,6 +24,7 @@ func Targets() []dist.Target {
 				"GOOS":   goos,
 				"GOARCH": goarch,
 			},
+			signer: signer,
 		})
 	}
 	for goosgoarch := range debs {
@@ -53,6 +55,7 @@ func Targets() []dist.Target {
 			"GOARCH": "386",
 			"GO386":  "softfloat",
 		},
+		signer: signer,
 	})
 
 	sort.Slice(ret, func(i, j int) bool {
