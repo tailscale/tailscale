@@ -221,9 +221,12 @@ type Node struct {
 	// e.g. "host.tail-scale.ts.net."
 	Name string
 
-	// User is the user who created the node. If ACL tags are in
-	// use for the node then it doesn't reflect the ACL identity
-	// that the node is running as.
+	// User represents the owner of an untagged node. This field should be
+	// ignored for tagged nodes, as the value is undefined and may change in the
+	// future.
+	//
+	// To support old clients, the value is used to group all tagged nodes
+	// together for UI purposes and to circumvent isSelf checks for the PeerAPI.
 	User UserID
 
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
