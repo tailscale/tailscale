@@ -3881,6 +3881,14 @@ func (b *LocalBackend) Logout() {
 	b.logout(context.Background(), false)
 }
 
+// Logout tells the controlclient that we want to log out, and transitions the
+// local engine to the logged-out state. It also waits for one auth routine
+// attempt to log out from control plane.
+// After local engine has been transitioned and control client successfully logged out (auth routine):
+// - local backend state should be NeedsLogin
+// - auth routine should be sleeping and waiting for a login/logout attempt
+// - client login goal should be set to nil
+// - node key should be removed from control server and local state
 func (b *LocalBackend) LogoutSync(ctx context.Context) error {
 	return b.logout(ctx, true)
 }

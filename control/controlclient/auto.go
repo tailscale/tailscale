@@ -237,6 +237,9 @@ func (c *Auto) sendNewMapRequest() {
 	}()
 }
 
+// cancelAuth ensures that the auth routine, that might be currently sleeping,
+// wakes up and checks for a new login/logout request that needs to be
+// fulfilled.
 func (c *Auto) cancelAuth() {
 	c.mu.Lock()
 	if c.authCancel != nil {

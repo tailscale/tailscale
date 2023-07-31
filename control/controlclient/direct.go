@@ -446,6 +446,17 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	regen := opt.Regen
 	if opt.Logout {
 		c.logf("logging out...")
+		// check if logout from control server is a no-op early so that we don't
+		// call control server unnecessarily
+		if persist.PrivateNodeKey.IsZero() {
+			// This must is an attempt to log out a node that is not currently
+			// logged in. We are not erroring out here to ensure that a user who
+			// hits logout twice will not be faced with errors as well as so
+			// that logout command can be used to cancel failed login attempts
+			// (that would otherwise be retried in a loop)
+			c.logf("no nodeky found, skipping logging out from control server")
+			return false, "", nil, nil
+		}
 	} else {
 		if expired {
 			c.logf("Old key expired -> regen=true")
@@ -504,9 +515,6 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	nlPub := persist.NetworkLockKey.Public()
 
 	if tryingNewKey.IsZero() {
-		if opt.Logout {
-			return false, "", nil, errors.New("no nodekey to log out")
-		}
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 
