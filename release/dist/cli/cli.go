@@ -6,6 +6,9 @@ package cli
 
 import (
 	"context"
+	"crypto"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,7 +26,7 @@ import (
 // getTargets is a function that gets run in the Exec function of commands that
 // need to know the target list. Its execution is deferred in this way to allow
 // customization of command FlagSets with flags that influence the target list.
-func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
+func CLI(getTargets func(tgzSigner crypto.Signer) ([]dist.Target, error)) *ffcli.Command {
 	return &ffcli.Command{
 		Name:       "dist",
 		ShortUsage: "dist [flags] <command> [command flags]",
@@ -33,7 +36,7 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 			{
 				Name: "list",
 				Exec: func(ctx context.Context, args []string) error {
-					targets, err := getTargets()
+					targets, err := getTargets(nil)
 					if err != nil {
 						return err
 					}
@@ -49,7 +52,11 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 			{
 				Name: "build",
 				Exec: func(ctx context.Context, args []string) error {
-					targets, err := getTargets()
+					tgzSigner, err := parseSigningKey(buildArgs.tgzSigningKey)
+					if err != nil {
+						return err
+					}
+					targets, err := getTargets(tgzSigner)
 					if err != nil {
 						return err
 					}
@@ -61,6 +68,7 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 					fs := flag.NewFlagSet("build", flag.ExitOnError)
 					fs.StringVar(&buildArgs.manifest, "manifest", "", "manifest file to write")
 					fs.BoolVar(&buildArgs.verbose, "verbose", false, "verbose logging")
+					fs.StringVar(&buildArgs.tgzSigningKey, "tgz-signing-key", "", "path to private signing key for release tarballs")
 					return fs
 				})(),
 				LongHelp: strings.TrimSpace(`
@@ -88,8 +96,9 @@ func runList(ctx context.Context, filters []string, targets []dist.Target) error
 }
 
 var buildArgs struct {
-	manifest string
-	verbose  bool
+	manifest      string
+	verbose       bool
+	tgzSigningKey string
 }
 
 func runBuild(ctx context.Context, filters []string, targets []dist.Target) error {
@@ -141,4 +150,22 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 
 	fmt.Println("Done! Took", time.Since(st))
 	return nil
+}
+
+func parseSigningKey(path string) (crypto.Signer, error) {
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	b, rest := pem.Decode(raw)
+	if b == nil {
+		return nil, fmt.Errorf("failed to decode PEM data in %q", path)
+	}
+	if len(rest) > 0 {
+		return nil, fmt.Errorf("trailing data in %q, please check that the key file was not corrupted", path)
+	}
+	return x509.ParseECPrivateKey(b.Bytes)
 }
