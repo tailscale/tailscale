@@ -427,8 +427,8 @@ func (h *Handler) serveWhoIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := &apitype.WhoIsResponse{
-		Node:        n,
-		UserProfile: &u,
+		Node:        n,  // always non-nil per WhoIsResponse contract
+		UserProfile: &u, // always non-nil per WhoIsResponse contract
 		CapMap:      b.PeerCaps(ipp.Addr()),
 	}
 	j, err := json.MarshalIndent(res, "", "\t")

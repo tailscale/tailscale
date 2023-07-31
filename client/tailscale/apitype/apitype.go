@@ -10,6 +10,7 @@ import "tailscale.com/tailcfg"
 const LocalAPIHost = "local-tailscaled.sock"
 
 // WhoIsResponse is the JSON type returned by tailscaled debug server's /whois?ip=$IP handler.
+// In successful whois responses, Node and UserProfile are never nil.
 type WhoIsResponse struct {
 	Node        *tailcfg.Node
 	UserProfile *tailcfg.UserProfile
