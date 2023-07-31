@@ -15,12 +15,15 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/poly1305"
 	"golang.org/x/exp/maps"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun"
@@ -63,7 +66,7 @@ type endpoint struct {
 	lastFullPing   mono.Time      // last time we pinged all disco endpoints
 	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           addrLatency // best non-DERP path; zero if none
+	bestAddr           addrQuality // best non-DERP path; zero if none
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
@@ -203,7 +206,7 @@ func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 			What: "deleteEndpointLocked-bestAddr-" + why,
 			From: de.bestAddr,
 		})
-		de.bestAddr = addrLatency{}
+		de.bestAddr = addrQuality{}
 	}
 }
 
@@ -867,6 +870,21 @@ func (de *endpoint) noteConnectivityChange() {
 	de.trustBestAddrUntil = 0
 }
 
+// pingSizeToMTU calculates the minimum path MTU that would permit a
+// disco ping message of sp.size to reach this endpoint. sp.size is
+// the length of the entire disco message.
+func pingSizeToMTU(sp sentPing) int {
+	if sp.size == 0 {
+		return 0
+	}
+	headerLen := ipv4.HeaderLen
+	if sp.to.Addr().Is6() {
+		headerLen = ipv6.HeaderLen
+	}
+	headerLen += 8 // UDP header length
+	return sp.size + headerLen
+}
+
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
 //
@@ -906,7 +924,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v mtu=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToMTU(sp), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -922,9 +940,9 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrLatency{sp.to, latency}
+		thisPong := addrQuality{sp.to, latency, pingSizeToMTU(sp)}
 		if betterAddr(thisPong, de.bestAddr) {
-			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort(), sp.to)
+			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.mtu)
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
 				What: "handlePingLocked-bestAddr-update",
@@ -948,19 +966,23 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	return
 }
 
-// addrLatency is an IPPort with an associated latency.
-type addrLatency struct {
+// addrQuality is an IPPort with an associated latency and path mtu.
+type addrQuality struct {
 	netip.AddrPort
 	latency time.Duration
+	mtu     int
 }
 
-func (a addrLatency) String() string {
-	return a.AddrPort.String() + "@" + a.latency.String()
+func (a addrQuality) String() string {
+	return a.AddrPort.String() + "@" + a.latency.String() + "+" + strconv.Itoa(a.mtu)
 }
 
 // betterAddr reports whether a is a better addr to use than b.
-func betterAddr(a, b addrLatency) bool {
+func betterAddr(a, b addrQuality) bool {
 	if a.AddrPort == b.AddrPort {
+		if a.mtu > b.mtu {
+			return true
+		}
 		return false
 	}
 	if !b.IsValid() {
@@ -1141,7 +1163,7 @@ func (de *endpoint) stopAndReset() {
 func (de *endpoint) resetLocked() {
 	de.lastSend = 0
 	de.lastFullPing = 0
-	de.bestAddr = addrLatency{}
+	de.bestAddr = addrQuality{}
 	de.bestAddrAt = 0
 	de.trustBestAddrUntil = 0
 	for _, es := range de.endpointState {
