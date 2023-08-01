@@ -670,6 +670,37 @@ func TestLogoutRemovesAllPeers(t *testing.T) {
 	wantNode0PeerCount(expectedPeers) // all existing peers and the new node
 }
 
+func TestLogout(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n := newTestNode(t, env)
+	d := n.StartDaemon()
+	n.MustLogin()
+	n.AwaitRunning()
+
+	// 1. a user hits logout twice - should not error
+	n.MustLogOut()
+	n.AwaitNeedsLogin()
+	n.MustLogOut() // a second logout should not error out
+	n.AwaitNeedsLogin()
+
+	// 2. a user tries to log out after failed login attempt- should not error
+	// and should bring client and backend to a logged out state
+	n.MustLogin()
+	n.AwaitRunning()
+	cmd := n.Tailscale("login", "--login-server=fakecontrol.io", "--timeout=2s")
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("wanted login to fakecontrol.io to fail, but it did not: %v", cmd.Stdout)
+	}
+	n.AwaitNeedsLogin()
+	n.MustLogOut()
+	n.AwaitNeedsLogin()
+	// TODO (irbekrm): figure out some way how to test that local backend and
+	// client have actually logged out, maybe look at the statefile..
+
+	d.MustCleanShutdown(t)
+}
+
 // testEnv contains the test environment (set of servers) used by one
 // or more nodes.
 type testEnv struct {
@@ -959,6 +990,22 @@ func (n *testNode) MustUp(extraArgs ...string) {
 	}
 }
 
+func (n *testNode) MustLogin(extraArgs ...string) {
+	t := n.env.t
+	args := []string{
+		"login",
+		"--login-server=" + n.env.ControlServer.URL,
+	}
+	args = append(args, extraArgs...)
+	cmd := n.Tailscale(args...)
+	t.Logf("Running %v ...", cmd)
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("up: %v, %v", string(b), err)
+	}
+}
+
 func (n *testNode) MustDown() {
 	t := n.env.t
 	t.Logf("Running down ...")
@@ -1058,6 +1105,10 @@ func (n *testNode) AwaitRunning() {
 	}
 }
 
+// TODO (irbekrm): for this and other funcs that wait for state we should
+// actually test that the backend remains in the desired state for some period
+// of time (i.e 5s) - some operations involve a sequence of state changes and we
+// really want to check the final state, not to catch some intermediate one
 // AwaitNeedsLogin waits for n to reach the IPN state "NeedsLogin".
 func (n *testNode) AwaitNeedsLogin() {
 	t := n.env.t
