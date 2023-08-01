@@ -35,7 +35,7 @@ Some packages may only be included on certain architectures or operating systems
  - [github.com/aws/smithy-go/internal/sync/singleflight](https://pkg.go.dev/github.com/aws/smithy-go/internal/sync/singleflight) ([BSD-3-Clause](https://github.com/aws/smithy-go/blob/v1.13.5/internal/sync/singleflight/LICENSE))
  - [github.com/coreos/go-iptables/iptables](https://pkg.go.dev/github.com/coreos/go-iptables/iptables) ([Apache-2.0](https://github.com/coreos/go-iptables/blob/v0.6.0/LICENSE))
  - [github.com/creack/pty](https://pkg.go.dev/github.com/creack/pty) ([MIT](https://github.com/creack/pty/blob/v1.1.18/LICENSE))
- - [github.com/dblohm7/wingoes](https://pkg.go.dev/github.com/dblohm7/wingoes) ([BSD-3-Clause](https://github.com/dblohm7/wingoes/blob/111c8c3b57c8/LICENSE))
+ - [github.com/dblohm7/wingoes](https://pkg.go.dev/github.com/dblohm7/wingoes) ([BSD-3-Clause](https://github.com/dblohm7/wingoes/blob/ed8077baf0cd/LICENSE))
  - [github.com/fxamacker/cbor/v2](https://pkg.go.dev/github.com/fxamacker/cbor/v2) ([MIT](https://github.com/fxamacker/cbor/blob/v2.4.0/LICENSE))
  - [github.com/go-ole/go-ole](https://pkg.go.dev/github.com/go-ole/go-ole) ([MIT](https://github.com/go-ole/go-ole/blob/v1.2.6/LICENSE))
  - [github.com/godbus/dbus/v5](https://pkg.go.dev/github.com/godbus/dbus/v5) ([BSD-2-Clause](https://github.com/godbus/dbus/blob/v5.1.0/LICENSE))
