@@ -54,24 +54,95 @@ type netfilterRunner interface {
 	HasIPV6NAT() bool
 }
 
+// tableDetector abstracts helpers to detect the firewall mode.
+// It is implemented for testing purposes.
+type tableDetector interface {
+	iptDetect() (int, error)
+	nftDetect() (int, error)
+}
+
+type linuxFWDetector struct{}
+
+// iptDetect returns the number of iptables rules in the current namespace.
+func (l *linuxFWDetector) iptDetect() (int, error) {
+	return linuxfw.DetectIptables()
+}
+
+// nftDetect returns the number of nftables rules in the current namespace.
+func (l *linuxFWDetector) nftDetect() (int, error) {
+	return linuxfw.DetectNetfilter()
+}
+
+// chooseFireWallMode returns the firewall mode to use based on the
+// environment and the system's capabilities.
+func chooseFireWallMode(logf logger.Logf, det tableDetector) (linuxfw.FirewallMode, error) {
+	iptAva, nftAva := true, true
+	iptRuleCount, err := det.iptDetect()
+	if err != nil {
+		logf("router: detect iptables rule: %v", err)
+		iptAva = false
+	}
+	nftRuleCount, err := det.nftDetect()
+	if err != nil {
+		logf("router: detect nftables rule: %v", err)
+		nftAva = false
+	}
+	logf("router: nftables rule count: %d, iptables rule count: %d", nftRuleCount, iptRuleCount)
+	switch {
+	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
+		// TODO(KevinLiang10): Updates to a flag
+		logf("router: envknob TS_DEBUG_FIREWALL_MODE=nftables set")
+		return linuxfw.FirewallModeNfTables, nil
+	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
+		logf("router: envknob TS_DEBUG_FIREWALL_MODE=iptables set")
+		return linuxfw.FirewallModeIPTables, nil
+	case nftRuleCount > 0 && iptRuleCount == 0:
+		logf("router: nftables is currently in use")
+		return linuxfw.FirewallModeNfTables, nil
+	case iptRuleCount > 0 && nftRuleCount == 0:
+		logf("router: iptables is currently in use")
+		return linuxfw.FirewallModeIPTables, nil
+	case nftAva:
+		// if both iptables and nftables are available but
+		// neither/both are currently used, use nftables.
+		logf("router: nftables is available")
+		return linuxfw.FirewallModeNfTables, nil
+	case iptAva:
+		logf("router: iptables is available")
+		return linuxfw.FirewallModeIPTables, nil
+	default:
+		// if neither iptables nor nftables are available,
+		// this is an error that shouldn't happen.
+		return "", errors.New("router: neither iptables nor nftables are available")
+	}
+}
+
 // newNetfilterRunner creates a netfilterRunner using either nftables or iptables.
 // As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
+	tableDetector := &linuxFWDetector{}
+	mode, err := chooseFireWallMode(logf, tableDetector)
+	if err != nil {
+		return nil, fmt.Errorf("choosing firewall mode: %w", err)
+	}
 	var nfr netfilterRunner
-	var err error
-	if envknob.Bool("TS_DEBUG_USE_NETLINK_NFTABLES") {
-		logf("router: using nftables")
-		nfr, err = linuxfw.NewNfTablesRunner(logf)
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	switch mode {
+	case linuxfw.FirewallModeIPTables:
 		logf("router: using iptables")
 		nfr, err = linuxfw.NewIPTablesRunner(logf)
 		if err != nil {
 			return nil, err
 		}
+	case linuxfw.FirewallModeNfTables:
+		logf("router: using nftables")
+		nfr, err = linuxfw.NewNfTablesRunner(logf)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unknown firewall mode: %v", mode)
 	}
+
 	return nfr, nil
 }
 
