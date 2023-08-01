@@ -885,6 +885,40 @@ func pingSizeToMTU(sp sentPing) int {
 	return sp.size + headerLen
 }
 
+// pingSizeToExternalMTU calculates the path MTU as perceived by the
+// layer above Tailscale - that is, how much room for data there is
+// after accounting for WireGuard overhead.
+//
+// - 20-byte IPv4 header or 40 byte IPv6 header
+// - 8-byte UDP header
+// - 4-byte type
+// - 4-byte key index
+// - 8-byte nonce
+// - 16-byte authentication tag
+
+const wgHeaderLen = 4 + 4 + 8 + 16
+
+func pingSizeToExternalMTU(sp sentPing) int {
+	if sp.size == 0 {
+		return 0
+	}
+	// The size stored in the sentPing already has the IP/UDP
+	// headers removed.  Now remove the Wireguard overhead.
+	return sp.size - wgHeaderLen
+}
+
+// Update MTU-related metrics. Should be called with Conn.mu held.
+func updateMTUMetricsLocked(sp sentPing, logf logger.Logf) {
+	if sp.size == 0 {
+		return
+	}
+	mtu := pingSizeToExternalMTU(sp)
+	if metricHighestPeerMTU.Value() < int64(mtu) {
+		metricHighestPeerMTU.Set(int64(mtu))
+		logf("\n\n\nhighest MTU %v\n\n\n", mtu)
+	}
+}
+
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
 //
@@ -950,6 +984,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 				To:   thisPong,
 			})
 			de.bestAddr = thisPong
+			updateMTUMetricsLocked(sp, de.c.logf)
 		}
 		if de.bestAddr.AddrPort == thisPong.AddrPort {
 			de.debugUpdates.Add(EndpointChange{

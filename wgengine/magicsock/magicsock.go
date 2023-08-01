@@ -2771,8 +2771,9 @@ func (et *endpointTracker) removeExpiredLocked(now time.Time) {
 }
 
 var (
-	metricNumPeers     = clientmetric.NewGauge("magicsock_netmap_num_peers")
-	metricNumDERPConns = clientmetric.NewGauge("magicsock_num_derp_conns")
+	metricNumPeers       = clientmetric.NewGauge("magicsock_netmap_num_peers")
+	metricNumDERPConns   = clientmetric.NewGauge("magicsock_num_derp_conns")
+	metricHighestPeerMTU = clientmetric.NewGauge("magicsock_highest_peer_mtu")
 
 	metricRebindCalls     = clientmetric.NewCounter("magicsock_rebind_calls")
 	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")
