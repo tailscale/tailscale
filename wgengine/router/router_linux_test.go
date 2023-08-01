@@ -1063,3 +1063,63 @@ func adjustFwmask(t *testing.T, s string) string {
 
 	return fwmaskAdjustRe.ReplaceAllString(s, "$1")
 }
+
+type testFWDetector struct {
+	iptRuleCount, nftRuleCount int
+	iptErr, nftErr             error
+}
+
+func (t *testFWDetector) iptDetect() (int, error) {
+	return t.iptRuleCount, t.iptErr
+}
+
+func (t *testFWDetector) nftDetect() (int, error) {
+	return t.nftRuleCount, t.nftErr
+}
+
+func TestChooseFireWallMode(t *testing.T) {
+	tests := []struct {
+		name string
+		det  *testFWDetector
+		want linuxfw.FirewallMode
+	}{
+		{
+			name: "using iptables legacy",
+			det:  &testFWDetector{iptRuleCount: 1},
+			want: linuxfw.FirewallModeIPTables,
+		},
+		{
+			name: "using nftables",
+			det:  &testFWDetector{nftRuleCount: 1},
+			want: linuxfw.FirewallModeNfTables,
+		},
+		{
+			name: "using both iptables and nftables",
+			det:  &testFWDetector{iptRuleCount: 2, nftRuleCount: 2},
+			want: linuxfw.FirewallModeNfTables,
+		},
+		{
+			name: "not using any firewall, both available",
+			det:  &testFWDetector{},
+			want: linuxfw.FirewallModeNfTables,
+		},
+		{
+			name: "not using any firewall, iptables available only",
+			det:  &testFWDetector{iptRuleCount: 1, nftErr: errors.New("nft error")},
+			want: linuxfw.FirewallModeIPTables,
+		},
+		{
+			name: "not using any firewall, nftables available only",
+			det:  &testFWDetector{iptErr: errors.New("iptables error"), nftRuleCount: 1},
+			want: linuxfw.FirewallModeNfTables,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := chooseFireWallMode(t.Logf, tt.det)
+			if got != tt.want {
+				t.Errorf("chooseFireWallMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
