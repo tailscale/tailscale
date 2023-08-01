@@ -166,6 +166,8 @@ type Client struct {
 	// NetMon optionally provides a netmon.Monitor to use to get the current
 	// (cached) network interface.
 	// If nil, the interface will be looked up dynamically.
+	// TODO(bradfitz): make NetMon required. As of 2023-08-01, it basically always is
+	// present anyway.
 	NetMon *netmon.Monitor
 
 	// TimeNow, if non-nil, is used instead of time.Now.

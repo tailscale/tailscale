@@ -51,7 +51,7 @@ func protocolsRequiredForForwarding(routes []netip.Prefix, state *interfaces.Sta
 
 // CheckIPForwarding reports whether IP forwarding is enabled correctly
 // for subnet routing and exit node functionality on any interface.
-// The state param can be nil, in which case interfaces.GetState is used.
+// The state param must not be nil.
 // The routes should only be advertised routes, and should not contain the
 // nodes Tailscale IPs.
 // It returns an error if it is unable to determine if IP forwarding is enabled.
@@ -65,14 +65,10 @@ func CheckIPForwarding(routes []netip.Prefix, state *interfaces.State) (warn, er
 		}
 		return nil, nil
 	}
-	const kbLink = "\nSee https://tailscale.com/s/ip-forwarding"
 	if state == nil {
-		var err error
-		state, err = interfaces.GetState()
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("Couldn't check system's IP forwarding configuration; no link state")
 	}
+	const kbLink = "\nSee https://tailscale.com/s/ip-forwarding"
 	wantV4, wantV6 := protocolsRequiredForForwarding(routes, state)
 	if !wantV4 && !wantV6 {
 		return nil, nil
