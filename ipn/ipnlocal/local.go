@@ -4463,7 +4463,7 @@ func (b *LocalBackend) CheckIPForwarding() error {
 	}
 
 	// TODO: let the caller pass in the ranges.
-	warn, err := netutil.CheckIPForwarding(tsaddr.ExitRoutes(), nil)
+	warn, err := netutil.CheckIPForwarding(tsaddr.ExitRoutes(), b.sys.NetMon.Get().InterfaceState())
 	if err != nil {
 		return err
 	}

@@ -506,6 +506,8 @@ var getPAC func() string
 // GetState returns the state of all the current machine's network interfaces.
 //
 // It does not set the returned State.IsExpensive. The caller can populate that.
+//
+// Deprecated: use netmon.Monitor.InterfaceState instead.
 func GetState() (*State, error) {
 	s := &State{
 		InterfaceIPs: make(map[string][]netip.Prefix),
