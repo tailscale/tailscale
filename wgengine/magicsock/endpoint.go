@@ -27,6 +27,7 @@ import (
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
@@ -143,6 +144,19 @@ type pongReply struct {
 	pongAt  mono.Time      // when we received the pong
 	from    netip.AddrPort // the pong's src (usually same as endpoint map key)
 	pongSrc netip.AddrPort // what they reported they heard
+}
+
+// mtusToProbe are likely MTUs we might see in the wild. They are used
+// by the peer MTU probing code. Set this to a single zero to disable
+// path MTU probing.
+var mtusToProbe = [...]int{
+	576,  // Smallest MTU for IPv4, probably useless?
+	1124, // An observed max mtu in the wild, maybe 1100 instead?
+	1280, // Smallest MTU for IPv6, current default
+	1480, // A little less, for tunnels or such
+	1500, // Most common real world MTU
+	8000, // Some jumbo frames are this size
+	9000, // Most jumbo frames are this size
 }
 
 // EndpointChange is a structure containing information about changes made to a
@@ -594,6 +608,15 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		st.lastPing = now
 	}
 
+	if purpose != pingDiscovery {
+		de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, size)
+	} else {
+		for _, mtu := range mtusToProbe {
+			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, mtuToPingSize(ep, mtu))
+		}
+	}
+}
+func (de *endpoint) recordAndSendDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose, key key.DiscoPublic, size int) {
 	txid := stun.NewTxID()
 	de.sentPing[txid] = sentPing{
 		to:      ep,
@@ -606,7 +629,7 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
 	}
-	go de.sendDiscoPing(ep, epDisco.key, txid, size, logLevel)
+	go de.sendDiscoPing(ep, key, txid, size, logLevel)
 }
 
 // sendDiscoPingsLocked starts pinging all of ep's endpoints.
@@ -870,19 +893,42 @@ func (de *endpoint) noteConnectivityChange() {
 	de.trustBestAddrUntil = 0
 }
 
+// mtuToPingSize takes a desired on-the-wire MTU and calculates the
+// disco ping message size that would produce a packet that is exactly MTU
+// bytes in length.
+//
+// If mtu is zero, return zero which means don't pad the ping packet at all.
+func mtuToPingSize(ep netip.AddrPort, mtu int) int {
+	if mtu == 0 {
+		return 0
+	}
+	size := mtu
+	headerLen := ipv4.HeaderLen
+	if ep.Addr().Is6() {
+		headerLen = ipv6.HeaderLen
+	}
+	headerLen += 8 // UDP header length
+	size -= headerLen
+	if size < 0 {
+		return 0
+	}
+	return size
+}
+
 // pingSizeToMTU calculates the minimum path MTU that would permit a
 // disco ping message of sp.size to reach this endpoint. sp.size is
 // the length of the entire disco message.
 func pingSizeToMTU(sp sentPing) int {
-	if sp.size == 0 {
-		return 0
+	mtu := sp.size
+	if mtu == 0 {
+		return int(tstun.DefaultMTU())
 	}
 	headerLen := ipv4.HeaderLen
 	if sp.to.Addr().Is6() {
 		headerLen = ipv6.HeaderLen
 	}
 	headerLen += 8 // UDP header length
-	return sp.size + headerLen
+	return mtu + headerLen
 }
 
 // pingSizeToExternalMTU calculates the path MTU as perceived by the
@@ -899,12 +945,17 @@ func pingSizeToMTU(sp sentPing) int {
 const wgHeaderLen = 4 + 4 + 8 + 16
 
 func pingSizeToExternalMTU(sp sentPing) int {
-	if sp.size == 0 {
-		return 0
+	mtu := sp.size
+	if mtu == 0 {
+		mtu = int(tstun.DefaultMTU())
 	}
 	// The size stored in the sentPing already has the IP/UDP
 	// headers removed.  Now remove the Wireguard overhead.
-	return sp.size - wgHeaderLen
+	mtu -= wgHeaderLen
+	if mtu < 0 {
+		mtu = 0
+	}
+	return mtu
 }
 
 // Update MTU-related metrics. Should be called with Conn.mu held.
