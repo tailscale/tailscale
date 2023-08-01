@@ -1282,8 +1282,8 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var password []byte // TODO(bradfitz): support?
-	st, err := interfaces.GetState()
-	if err != nil {
+	st := h.ps.b.sys.NetMon.Get().InterfaceState()
+	if st == nil {
 		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)
 		return
 	}
