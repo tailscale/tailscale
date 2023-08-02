@@ -1940,6 +1940,7 @@ const (
 	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
 	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
 	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+	CapabilityHTTPS              = "https"                                           // https cert provisioning enabled on tailnet
 
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
