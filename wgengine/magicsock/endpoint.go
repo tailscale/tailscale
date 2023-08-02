@@ -612,6 +612,7 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, size)
 	} else {
 		for _, mtu := range mtusToProbe {
+			de.c.logf("probing mtu %v", mtuToPingSize(ep, mtu))
 			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, mtuToPingSize(ep, mtu))
 		}
 	}
@@ -1060,6 +1061,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	if !isDerp {
 		thisPong := addrQuality{sp.to, latency, pingSizeToMTU(sp)}
 		if betterAddr(thisPong, de.bestAddr) {
+			de.c.logf("\n\n\nSETTING BEST MTU %v\n\n\n", thisPong.mtu)
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.mtu)
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),

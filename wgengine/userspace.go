@@ -540,6 +540,7 @@ func (e *userspaceEngine) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper)
 		// TODO consts to avoid numbers.
 		pmtu := e.magicConn.PathMTU(p.Dst.Addr())
 		if len(p.Buffer())+tailscaleOverhead > pmtu {
+			e.logf("\n\n\n PACKET TOO BIG should be %v\n\n\n", pmtu)
 			e.injectICMPPTB(p, pmtu)
 			return filter.Drop
 		}
