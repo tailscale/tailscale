@@ -807,17 +807,37 @@ func (lc *LocalClient) ExpandSNIName(ctx context.Context, name string) (fqdn str
 	return "", false
 }
 
+// PingOpts contains options for the ping request.
+//
+// The zero value is valid, which means to use defaults.
+type PingOpts struct {
+	// Size is the length of the ping message in bytes. It's ignored if it's
+	// smaller than the minimum message size.
+	//
+	// For disco pings, it specifies the length of the packet's payload. That
+	// is, it includes the disco headers and message, but not the IP and UDP
+	// headers.
+	Size int
+}
+
 // Ping sends a ping of the provided type to the provided IP and waits
-// for its response.
-func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType) (*ipnstate.PingResult, error) {
+// for its response. The opts type specifies additional options.
+func (lc *LocalClient) PingWithOpts(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType, opts PingOpts) (*ipnstate.PingResult, error) {
 	v := url.Values{}
 	v.Set("ip", ip.String())
+	v.Set("size", strconv.Itoa(opts.Size))
 	v.Set("type", string(pingtype))
 	body, err := lc.send(ctx, "POST", "/localapi/v0/ping?"+v.Encode(), 200, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error %w: %s", err, body)
 	}
 	return decodeJSON[*ipnstate.PingResult](body)
+}
+
+// Ping sends a ping of the provided type to the provided IP and waits
+// for its response.
+func (lc *LocalClient) Ping(ctx context.Context, ip netip.Addr, pingtype tailcfg.PingType) (*ipnstate.PingResult, error) {
+	return lc.PingWithOpts(ctx, ip, pingtype, PingOpts{})
 }
 
 // NetworkLockStatus fetches information about the tailnet key authority, if one is configured.

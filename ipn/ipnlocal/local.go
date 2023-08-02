@@ -2400,7 +2400,7 @@ func (b *LocalBackend) StartLoginInteractive() {
 	}
 }
 
-func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error) {
+func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error) {
 	if pingType == tailcfg.PingPeerAPI {
 		t0 := b.clock.Now()
 		node, base, err := b.pingPeerAPI(ctx, ip)
@@ -2423,7 +2423,7 @@ func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg
 		return pr, nil
 	}
 	ch := make(chan *ipnstate.PingResult, 1)
-	b.e.Ping(ip, pingType, func(pr *ipnstate.PingResult) {
+	b.e.Ping(ip, pingType, size, func(pr *ipnstate.PingResult) {
 		select {
 		case ch <- pr:
 		default:
