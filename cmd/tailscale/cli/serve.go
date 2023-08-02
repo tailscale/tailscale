@@ -24,6 +24,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
@@ -128,6 +129,7 @@ type localServeClient interface {
 	Status(context.Context) (*ipnstate.Status, error)
 	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
+	QueryFeature(context.Context, string) (*tailcfg.QueryFeatureResponse, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be

@@ -782,6 +782,10 @@ func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.
 	return nil
 }
 
+func (lc *fakeLocalServeClient) QueryFeature(context.Context, string) (*tailcfg.QueryFeatureResponse, error) {
+	return nil, nil
+}
+
 // exactError returns an error checker that wants exactly the provided want error.
 // If optName is non-empty, it's used in the error message.
 func exactErr(want error, optName ...string) func(error) string {
