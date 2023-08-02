@@ -23,14 +23,16 @@ var versionCmd = &ffcli.Command{
 		fs := newFlagSet("version")
 		fs.BoolVar(&versionArgs.daemon, "daemon", false, "also print local node's daemon version")
 		fs.BoolVar(&versionArgs.json, "json", false, "output in JSON format")
+		fs.BoolVar(&versionArgs.upstream, "upstream", false, "fetch and print the latest upstream release version from pkgs.tailscale.com")
 		return fs
 	})(),
 	Exec: runVersion,
 }
 
 var versionArgs struct {
-	daemon bool // also check local node's daemon version
-	json   bool
+	daemon   bool // also check local node's daemon version
+	json     bool
+	upstream bool
 }
 
 func runVersion(ctx context.Context, args []string) error {
@@ -47,21 +49,46 @@ func runVersion(ctx context.Context, args []string) error {
 		}
 	}
 
+	var upstreamVer string
+	if versionArgs.upstream {
+		track := "stable"
+		if version.IsUnstableBuild() {
+			track = "unstable"
+		}
+		upstreamVer, err = latestTailscaleVersion(track)
+		if err != nil {
+			return err
+		}
+	}
+
 	if versionArgs.json {
 		m := version.GetMeta()
 		if st != nil {
 			m.DaemonLong = st.Version
 		}
+		out := struct {
+			version.Meta
+			Upstream string `json:"upstream,omitempty"`
+		}{
+			Meta:     m,
+			Upstream: upstreamVer,
+		}
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "\t")
-		return e.Encode(m)
+		return e.Encode(out)
 	}
 
 	if st == nil {
 		outln(version.String())
+		if versionArgs.upstream {
+			printf("  upstream: %s\n", upstreamVer)
+		}
 		return nil
 	}
 	printf("Client: %s\n", version.String())
 	printf("Daemon: %s\n", st.Version)
+	if versionArgs.upstream {
+		printf("Upstream: %s\n", upstreamVer)
+	}
 	return nil
 }

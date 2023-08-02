@@ -874,6 +874,10 @@ func requestedTailscaleVersion(ver, track string) (string, error) {
 	if ver != "" {
 		return ver, nil
 	}
+	return latestTailscaleVersion(track)
+}
+
+func latestTailscaleVersion(track string) (string, error) {
 	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/?mode=json&os=%s", track, runtime.GOOS)
 	res, err := http.Get(url)
 	if err != nil {
