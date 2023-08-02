@@ -1124,6 +1124,27 @@ func (lc *LocalClient) DeleteProfile(ctx context.Context, profile ipn.ProfileID)
 	return err
 }
 
+// QueryFeature makes a request for instructions on how to enable a
+// feature, such as Funnel, for the node's tailnet.
+//
+// This request itself does not directly enable the feature on behalf
+// of the node, but rather returns information that can be presented
+// to the acting user about where/how to enable the feature.
+//
+// If relevant, this includes a control URL the user can visit to
+// explicitly consent to using the feature. LocalClient.WatchIPNBus
+// can be used to block on the feature being enabled.
+//
+// 2023-08-02: Valid feature values are "serve" and "funnel".
+func (lc *LocalClient) QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error) {
+	v := url.Values{"feature": {feature}}
+	body, err := lc.send(ctx, "POST", "/localapi/v0/query-feature?"+v.Encode(), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	return decodeJSON[*tailcfg.QueryFeatureResponse](body)
+}
+
 func (lc *LocalClient) DebugDERPRegion(ctx context.Context, regionIDOrCode string) (*ipnstate.DebugDERPRegionReport, error) {
 	v := url.Values{"region": {regionIDOrCode}}
 	body, err := lc.send(ctx, "POST", "/localapi/v0/debug-derp-region?"+v.Encode(), 200, nil)

@@ -113,6 +113,7 @@ var handler = map[string]localAPIHandler{
 	"upload-client-metrics":       (*Handler).serveUploadClientMetrics,
 	"watch-ipn-bus":               (*Handler).serveWatchIPNBus,
 	"whois":                       (*Handler).serveWhoIs,
+	"query-feature":               (*Handler).serveQueryFeature,
 }
 
 func randHex(n int) string {
@@ -1929,6 +1930,66 @@ func (h *Handler) serveProfiles(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "use POST or DELETE", http.StatusMethodNotAllowed)
+	}
+}
+
+// serveQueryFeature makes a request to the "/machine/feature/query"
+// Noise endpoint to get instructions on how to enable a feature, such as
+// Funnel, for the node's tailnet.
+//
+// This request itself does not directly enable the feature on behalf of
+// the node, but rather returns information that can be presented to the
+// acting user about where/how to enable the feature. If relevant, this
+// includes a control URL the user can visit to explicitly consent to
+// using the feature.
+//
+// See tailcfg.QueryFeatureResponse for full response structure.
+func (h *Handler) serveQueryFeature(w http.ResponseWriter, r *http.Request) {
+	feature := r.FormValue("feature")
+	switch {
+	case !h.PermitRead:
+		http.Error(w, "access denied", http.StatusForbidden)
+		return
+	case r.Method != httpm.POST:
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	case feature == "":
+		http.Error(w, "missing feature", http.StatusInternalServerError)
+		return
+	}
+	nm := h.b.NetMap()
+	if nm == nil {
+		http.Error(w, "no netmap", http.StatusServiceUnavailable)
+		return
+	}
+
+	b, err := json.Marshal(&tailcfg.QueryFeatureRequest{
+		NodeKey: nm.NodeKey,
+		Feature: feature,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(),
+		"POST", "https://unused/machine/feature/query", bytes.NewReader(b))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := h.b.DoNoiseRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
 

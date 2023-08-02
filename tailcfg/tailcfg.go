@@ -2257,6 +2257,46 @@ type SSHRecordingAttempt struct {
 	FailureMessage string
 }
 
+// QueryFeatureRequest is a request sent to "/machine/feature/query"
+// to get instructions on how to enable a feature, such as Funnel,
+// for the node's tailnet.
+//
+// See QueryFeatureResponse for response structure.
+type QueryFeatureRequest struct {
+	// Feature is the string identifier for a feature.
+	Feature string `json:",omitempty"`
+	// NodeKey is the client's current node key.
+	NodeKey key.NodePublic `json:",omitempty"`
+}
+
+// QueryFeatureResponse is the response to an QueryFeatureRequest.
+type QueryFeatureResponse struct {
+	// Complete is true when the feature is already enabled.
+	Complete bool `json:",omitempty"`
+
+	// Text holds lines to display in the CLI with information
+	// about the feature and how to enable it.
+	//
+	// Lines are separated by newline characters. The final
+	// newline may be omitted.
+	Text string `json:",omitempty"`
+
+	// URL is the link for the user to visit to take action on
+	// enabling the feature.
+	//
+	// When empty, there is no action for this user to take.
+	URL string `json:",omitempty"`
+
+	// WaitOn specifies the self node capability required to use
+	// the feature. The CLI can watch for changes to the presence,
+	// of this capability, and once included, can proceed with
+	// using the feature.
+	//
+	// If WaitOn is empty, the user does not have an action that
+	// the CLI should block on.
+	WaitOn string `json:",omitempty"`
+}
+
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>
 // over HTTPS (regular TLS) to the Tailscale control plane server,
 // where the 'v' argument is the client's current capability version
