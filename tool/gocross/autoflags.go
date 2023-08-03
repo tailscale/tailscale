@@ -169,6 +169,9 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	env.Set("CC", "cc")
 	env.Set("TS_LINK_FAIL_REFLECT", boolStr(failReflect))
 	env.Set("GOROOT", goroot)
+	// Ensure that we use the gocross toolchain, rather than switching part way
+	// through a build. See https://go.dev/doc/toolchain.
+	env.Set("GOTOOLCHAIN", "local")
 
 	if subcommand == "env" {
 		return argv, env, nil
