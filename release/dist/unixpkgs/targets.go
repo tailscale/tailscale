@@ -11,8 +11,8 @@ import (
 
 	"tailscale.com/release/dist"
 
-	_ "github.com/goreleaser/nfpm/deb"
-	_ "github.com/goreleaser/nfpm/rpm"
+	_ "github.com/goreleaser/nfpm/v2/deb"
+	_ "github.com/goreleaser/nfpm/v2/rpm"
 )
 
 func Targets(signer crypto.Signer) []dist.Target {
