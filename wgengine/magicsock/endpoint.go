@@ -150,12 +150,12 @@ type pongReply struct {
 // by the peer MTU probing code. Set this to a single zero to disable
 // path MTU probing.
 var mtusToProbe = [...]int{
-	576,  // Smallest MTU for IPv4, probably useless?
-	1124, // An observed max mtu in the wild, maybe 1100 instead?
-	1280, // Smallest MTU for IPv6, current default
+	//576,  // Smallest MTU for IPv4, probably useless?
+	//1124, // An observed max mtu in the wild, maybe 1100 instead?
+	//1280, // Smallest MTU for IPv6, current default
 	1480, // A little less, for tunnels or such
 	1500, // Most common real world MTU
-	8000, // Some jumbo frames are this size
+	//8000, // Some jumbo frames are this size
 	9000, // Most jumbo frames are this size
 }
 
