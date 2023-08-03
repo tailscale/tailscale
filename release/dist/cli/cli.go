@@ -19,6 +19,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/release/dist"
+	"tailscale.com/release/dist/unixpkgs"
 )
 
 // CLI returns a CLI root command to build release packages.
@@ -26,7 +27,7 @@ import (
 // getTargets is a function that gets run in the Exec function of commands that
 // need to know the target list. Its execution is deferred in this way to allow
 // customization of command FlagSets with flags that influence the target list.
-func CLI(getTargets func(tgzSigner crypto.Signer) ([]dist.Target, error)) *ffcli.Command {
+func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Command {
 	return &ffcli.Command{
 		Name:       "dist",
 		ShortUsage: "dist [flags] <command> [command flags]",
@@ -36,7 +37,7 @@ func CLI(getTargets func(tgzSigner crypto.Signer) ([]dist.Target, error)) *ffcli
 			{
 				Name: "list",
 				Exec: func(ctx context.Context, args []string) error {
-					targets, err := getTargets(nil)
+					targets, err := getTargets(unixpkgs.Signers{})
 					if err != nil {
 						return err
 					}
@@ -56,7 +57,7 @@ func CLI(getTargets func(tgzSigner crypto.Signer) ([]dist.Target, error)) *ffcli
 					if err != nil {
 						return err
 					}
-					targets, err := getTargets(tgzSigner)
+					targets, err := getTargets(unixpkgs.Signers{Tarball: tgzSigner})
 					if err != nil {
 						return err
 					}

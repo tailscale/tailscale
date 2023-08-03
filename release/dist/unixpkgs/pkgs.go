@@ -24,8 +24,8 @@ import (
 )
 
 type tgzTarget struct {
-	filenameArch string // arch to use in filename instead of deriving from goenv["GOARCH"]
-	goenv        map[string]string
+	filenameArch string // arch to use in filename instead of deriving from goEnv["GOARCH"]
+	goEnv        map[string]string
 	signer       crypto.Signer
 }
 
@@ -33,11 +33,11 @@ func (t *tgzTarget) arch() string {
 	if t.filenameArch != "" {
 		return t.filenameArch
 	}
-	return t.goenv["GOARCH"]
+	return t.goEnv["GOARCH"]
 }
 
 func (t *tgzTarget) os() string {
-	return t.goenv["GOOS"]
+	return t.goEnv["GOOS"]
 }
 
 func (t *tgzTarget) String() string {
@@ -46,18 +46,18 @@ func (t *tgzTarget) String() string {
 
 func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	var filename string
-	if t.goenv["GOOS"] == "linux" {
+	if t.goEnv["GOOS"] == "linux" {
 		// Linux used to be the only tgz architecture, so we didn't put the OS
 		// name in the filename.
 		filename = fmt.Sprintf("tailscale_%s_%s.tgz", b.Version.Short, t.arch())
 	} else {
 		filename = fmt.Sprintf("tailscale_%s_%s_%s.tgz", b.Version.Short, t.os(), t.arch())
 	}
-	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goenv)
+	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
-	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goenv)
+	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -173,19 +173,19 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 }
 
 type debTarget struct {
-	goenv map[string]string
+	goEnv map[string]string
 }
 
 func (t *debTarget) os() string {
-	return t.goenv["GOOS"]
+	return t.goEnv["GOOS"]
 }
 
 func (t *debTarget) arch() string {
-	return t.goenv["GOARCH"]
+	return t.goEnv["GOARCH"]
 }
 
 func (t *debTarget) String() string {
-	return fmt.Sprintf("linux/%s/deb", t.goenv["GOARCH"])
+	return fmt.Sprintf("linux/%s/deb", t.goEnv["GOARCH"])
 }
 
 func (t *debTarget) Build(b *dist.Build) ([]string, error) {
@@ -193,11 +193,11 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("deb only supported on linux")
 	}
 
-	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goenv)
+	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
-	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goenv)
+	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -284,15 +284,16 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 }
 
 type rpmTarget struct {
-	goenv map[string]string
+	goEnv  map[string]string
+	signFn func(io.Reader) ([]byte, error)
 }
 
 func (t *rpmTarget) os() string {
-	return t.goenv["GOOS"]
+	return t.goEnv["GOOS"]
 }
 
 func (t *rpmTarget) arch() string {
-	return t.goenv["GOARCH"]
+	return t.goEnv["GOARCH"]
 }
 
 func (t *rpmTarget) String() string {
@@ -304,11 +305,11 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("rpm only supported on linux")
 	}
 
-	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goenv)
+	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
-	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goenv)
+	tsd, err := b.BuildGoBinary("tailscale.com/cmd/tailscaled", t.goEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -375,6 +376,11 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 			Conflicts: []string{"tailscale-relay"},
 			RPM: nfpm.RPM{
 				Group: "Network",
+				Signature: nfpm.RPMSignature{
+					PackageSignature: nfpm.PackageSignature{
+						SignFn: t.signFn,
+					},
+				},
 			},
 		},
 	})
