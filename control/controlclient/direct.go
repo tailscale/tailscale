@@ -45,6 +45,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -63,7 +64,7 @@ type Direct struct {
 	dialer                 *tsdial.Dialer
 	dnsCache               *dnscache.Resolver
 	serverURL              string // URL of the tailcontrol server
-	timeNow                func() time.Time
+	clock                  tstime.Clock
 	lastPrintMap           time.Time
 	newDecompressor        func() (Decompressor, error)
 	keepAlive              bool
@@ -105,8 +106,8 @@ type Options struct {
 	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
 	ServerURL            string                             // URL of the tailcontrol server
 	AuthKey              string                             // optional node auth key for auto registration
-	TimeNow              func() time.Time                   // time.Now implementation used by Client
-	Hostinfo             *tailcfg.Hostinfo                  // non-nil passes ownership, nil means to use default using os.Hostname, etc
+	Clock                tstime.Clock
+	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
 	NewDecompressor      func() (Decompressor, error)
 	KeepAlive            bool
@@ -191,8 +192,8 @@ func NewDirect(opts Options) (*Direct, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opts.TimeNow == nil {
-		opts.TimeNow = time.Now
+	if opts.Clock == nil {
+		opts.Clock = tstime.StdClock{}
 	}
 	if opts.Logf == nil {
 		// TODO(apenwarr): remove this default and fail instead.
@@ -235,7 +236,7 @@ func NewDirect(opts Options) (*Direct, error) {
 		httpc:                  httpc,
 		getMachinePrivKey:      opts.GetMachinePrivateKey,
 		serverURL:              opts.ServerURL,
-		timeNow:                opts.TimeNow,
+		clock:                  opts.Clock,
 		logf:                   opts.Logf,
 		newDecompressor:        opts.NewDecompressor,
 		keepAlive:              opts.KeepAlive,
@@ -432,7 +433,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
-	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.timeNow())
+	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
 	c.mu.Unlock()
 
 	machinePrivKey, err := c.getMachinePrivKey()
@@ -537,7 +538,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		err = errors.New("hostinfo: BackendLogID missing")
 		return regen, opt.URL, nil, err
 	}
-	now := time.Now().Round(time.Second)
+	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
 		Version:          1,
 		OldNodeKey:       oldNodeKey,
@@ -911,7 +912,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	defer cancel()
 
 	machinePubKey := machinePrivKey.Public()
-	t0 := time.Now()
+	t0 := c.clock.Now()
 
 	// Url and httpc are protocol specific.
 	var url string
@@ -954,7 +955,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		return nil
 	}
 
-	timeout := time.NewTimer(pollTimeout)
+	timeout, timeoutChannel := c.clock.NewTimer(pollTimeout)
 	timeoutReset := make(chan struct{})
 	pollDone := make(chan struct{})
 	defer close(pollDone)
@@ -964,14 +965,14 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			case <-pollDone:
 				vlogf("netmap: ending timeout goroutine")
 				return
-			case <-timeout.C:
+			case <-timeoutChannel:
 				c.logf("map response long-poll timed out!")
 				cancel()
 				return
 			case <-timeoutReset:
 				if !timeout.Stop() {
 					select {
-					case <-timeout.C:
+					case <-timeoutChannel:
 					case <-pollDone:
 						vlogf("netmap: ending timeout goroutine")
 						return
@@ -1096,7 +1097,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
 			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
-				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep); err != nil {
+				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep, c.clock); err != nil {
 					return err
 				}
 			}
@@ -1126,7 +1127,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		// This is handy for debugging, and our logs processing
 		// pipeline depends on it. (TODO: Remove this dependency.)
 		// Code elsewhere prints netmap diffs every time they are received.
-		now := c.timeNow()
+		now := c.clock.Now()
 		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
 			c.lastPrintMap = now
 			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
@@ -1304,7 +1305,7 @@ func initDevKnob() devKnobs {
 	}
 }
 
-var clockNow = time.Now
+var clock tstime.Clock = tstime.StdClock{}
 
 // opt.Bool configs from control.
 var (
@@ -1408,9 +1409,9 @@ func answerHeadPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest) {
 	if pr.Log {
 		logf("answerHeadPing: sending HEAD ping to %v ...", pr.URL)
 	}
-	t0 := time.Now()
+	t0 := clock.Now()
 	_, err = c.Do(req)
-	d := time.Since(t0).Round(time.Millisecond)
+	d := clock.Since(t0).Round(time.Millisecond)
 	if err != nil {
 		logf("answerHeadPing error: %v to %v (after %v)", err, pr.URL, d)
 	} else if pr.Log {
@@ -1456,7 +1457,7 @@ func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr
 	if pr.Log {
 		logf("answerC2NPing: sending POST ping to %v ...", pr.URL)
 	}
-	t0 := time.Now()
+	t0 := clock.Now()
 	_, err = c.Do(req)
 	d := time.Since(t0).Round(time.Millisecond)
 	if err != nil {
@@ -1466,7 +1467,7 @@ func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr
 	}
 }
 
-func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<- struct{}, d time.Duration) error {
+func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<- struct{}, d time.Duration, clock tstime.Clock) error {
 	const maxSleep = 5 * time.Minute
 	if d > maxSleep {
 		logf("sleeping for %v, capped from server-requested %v ...", maxSleep, d)
@@ -1475,20 +1476,20 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 		logf("sleeping for server-requested %v ...", d)
 	}
 
-	ticker := time.NewTicker(pollTimeout / 2)
+	ticker, tickerChannel := clock.NewTicker(pollTimeout / 2)
 	defer ticker.Stop()
-	timer := time.NewTimer(d)
+	timer, timerChannel := clock.NewTimer(d)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-timer.C:
+		case <-timerChannel:
 			return nil
-		case <-ticker.C:
+		case <-tickerChannel:
 			select {
 			case timeoutReset <- struct{}{}:
-			case <-timer.C:
+			case <-timerChannel:
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1665,7 +1666,7 @@ func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pin
 		logf("invalid ping request: missing url, ip or pinger")
 		return
 	}
-	start := time.Now()
+	start := clock.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1703,7 +1704,7 @@ func postPingResult(start time.Time, logf logger.Logf, c *http.Client, pr *tailc
 	if pr.Log {
 		logf("postPingResult: sending ping results to %v ...", pr.URL)
 	}
-	t0 := time.Now()
+	t0 := clock.Now()
 	_, err = c.Do(req)
 	d := time.Since(t0).Round(time.Millisecond)
 	if err != nil {
