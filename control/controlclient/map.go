@@ -307,7 +307,7 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 		for _, n := range newFull {
 			peerByID[n.ID] = n
 		}
-		now := clockNow()
+		now := clock.Now()
 		for nodeID, seen := range mapRes.PeerSeenChange {
 			if n, ok := peerByID[nodeID]; ok {
 				if seen {

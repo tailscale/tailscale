@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
@@ -450,6 +451,7 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseConn, error) {
 		DialPlan:        dialPlan,
 		Logf:            nc.logf,
 		NetMon:          nc.netMon,
+		Clock:           tstime.StdClock{},
 	}).Dial(ctx)
 	if err != nil {
 		return nil, err

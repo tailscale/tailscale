@@ -14,6 +14,7 @@ import (
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
@@ -23,9 +24,6 @@ import (
 
 func TestUndeltaPeers(t *testing.T) {
 	var curTime time.Time
-	tstest.Replace(t, &clockNow, func() time.Time {
-		return curTime
-	})
 
 	online := func(v bool) func(*tailcfg.Node) {
 		return func(n *tailcfg.Node) {
@@ -298,6 +296,7 @@ func TestUndeltaPeers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.curTime.IsZero() {
 				curTime = tt.curTime
+				tstest.Replace(t, &clock, tstime.Clock(tstest.NewClock(tstest.ClockOpts{Start: curTime})))
 			}
 			undeltaPeers(tt.mapRes, tt.prev)
 			if !reflect.DeepEqual(tt.mapRes.Peers, tt.want) {

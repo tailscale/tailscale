@@ -15,6 +15,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -48,7 +49,7 @@ var _ Client = (*Auto)(nil)
 // It's a concrete implementation of the Client interface.
 type Auto struct {
 	direct     *Direct // our interface to the server APIs
-	timeNow    func() time.Time
+	clock      tstime.Clock
 	logf       logger.Logf
 	expiry     *time.Time
 	closed     bool
@@ -107,12 +108,12 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...any) {}
 	}
-	if opts.TimeNow == nil {
-		opts.TimeNow = time.Now
+	if opts.Clock == nil {
+		opts.Clock = tstime.StdClock{}
 	}
 	c := &Auto{
 		direct:     direct,
-		timeNow:    opts.TimeNow,
+		clock:      opts.Clock,
 		logf:       opts.Logf,
 		newMapCh:   make(chan struct{}, 1),
 		quit:       make(chan struct{}),
@@ -208,7 +209,7 @@ func (c *Auto) sendNewMapRequest() {
 	c.liteMapUpdateCancel = cancel
 	go func() {
 		defer cancel()
-		t0 := time.Now()
+		t0 := c.clock.Now()
 		err := c.direct.SendLiteMapUpdate(ctx)
 		d := time.Since(t0).Round(time.Millisecond)
 
@@ -704,14 +705,14 @@ func (c *Auto) Logout(ctx context.Context) error {
 	c.mu.Unlock()
 	c.cancelAuth()
 
-	timer := time.NewTimer(10 * time.Second)
+	timer, timerChannel := c.clock.NewTimer(10 * time.Second)
 	defer timer.Stop()
 	select {
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-timer.C:
+	case <-timerChannel:
 		return context.DeadlineExceeded
 	}
 }
@@ -772,7 +773,7 @@ func (c *Auto) TestOnlySetAuthKey(authkey string) {
 }
 
 func (c *Auto) TestOnlyTimeNow() time.Time {
-	return c.timeNow()
+	return c.clock.Now()
 }
 
 // SetDNS sends the SetDNSRequest request to the control plane server,

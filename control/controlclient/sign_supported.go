@@ -127,7 +127,7 @@ func findIdentity(subject string, st certstore.Store) (certstore.Identity, []*x5
 		return nil, nil, err
 	}
 
-	selected, chain := selectIdentityFromSlice(subject, ids, time.Now())
+	selected, chain := selectIdentityFromSlice(subject, ids, clock.Now())
 
 	for _, id := range ids {
 		if id != selected {
