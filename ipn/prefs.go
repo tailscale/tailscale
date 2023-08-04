@@ -651,18 +651,11 @@ func PrefsFromBytes(b []byte) (*Prefs, error) {
 	if len(b) == 0 {
 		return p, nil
 	}
-	persist := &persist.Persist{}
-	err := json.Unmarshal(b, persist)
-	if err == nil && (persist.Provider != "" || persist.LoginName != "") {
-		// old-style relaynode config; import it
-		p.Persist = persist
-	} else {
-		err = json.Unmarshal(b, &p)
-		if err != nil {
-			log.Printf("Prefs parse: %v: %v\n", err, b)
-		}
+
+	if err := json.Unmarshal(b, p); err != nil {
+		return nil, err
 	}
-	return p, err
+	return p, nil
 }
 
 var jsonEscapedZero = []byte(`\u0000`)

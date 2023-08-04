@@ -32,7 +32,6 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
-			LoginName:      loginName,
 			PrivateNodeKey: key.NewNode(),
 			UserProfile: tailcfg.UserProfile{
 				ID:        tailcfg.UserID(id),
@@ -88,7 +87,6 @@ func TestProfileList(t *testing.T) {
 		p := pm.CurrentPrefs().AsStruct()
 		p.Persist = &persist.Persist{
 			NodeID:         tailcfg.StableNodeID(fmt.Sprint(id)),
-			LoginName:      loginName,
 			PrivateNodeKey: key.NewNode(),
 			UserProfile: tailcfg.UserProfile{
 				ID:        tailcfg.UserID(id),
@@ -211,7 +209,6 @@ func TestProfileManagement(t *testing.T) {
 			nodeIDs[loginName] = nid
 		}
 		p.Persist = &persist.Persist{
-			LoginName:      loginName,
 			PrivateNodeKey: key.NewNode(),
 			UserProfile: tailcfg.UserProfile{
 				ID:        uid,
@@ -340,7 +337,6 @@ func TestProfileManagementWindows(t *testing.T) {
 		p := pm.CurrentPrefs().AsStruct()
 		p.ForceDaemon = forceDaemon
 		p.Persist = &persist.Persist{
-			LoginName: loginName,
 			UserProfile: tailcfg.UserProfile{
 				ID:        id,
 				LoginName: loginName,
