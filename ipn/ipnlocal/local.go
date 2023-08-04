@@ -1009,13 +1009,8 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	}
 
 	// Perform all mutations of prefs based on the netmap here.
-	if st.NetMap != nil {
-		if b.updatePersistFromNetMapLocked(st.NetMap, prefs) {
-			prefsChanged = true
-		}
-	}
-	// Prefs will be written out if stale; this is not safe unless locked or cloned.
 	if prefsChanged {
+		// Prefs will be written out if stale; this is not safe unless locked or cloned.
 		if err := b.pm.SetPrefs(prefs.View()); err != nil {
 			b.logf("Failed to save new controlclient state: %v", err)
 		}
@@ -3962,28 +3957,9 @@ func hasCapability(nm *netmap.NetworkMap, cap string) bool {
 	return false
 }
 
-func (b *LocalBackend) updatePersistFromNetMapLocked(nm *netmap.NetworkMap, prefs *ipn.Prefs) (changed bool) {
-	if nm == nil || nm.SelfNode == nil {
-		return
-	}
-	up := nm.UserProfiles[nm.User]
-	if prefs.Persist.UserProfile.ID != up.ID {
-		// If the current profile doesn't match the
-		// network map's user profile, then we need to
-		// update the persisted UserProfile to match.
-		prefs.Persist.UserProfile = up
-		changed = true
-	}
-	if prefs.Persist.NodeID == "" {
-		// If the current profile doesn't have a NodeID,
-		// then we need to update the persisted NodeID to
-		// match.
-		prefs.Persist.NodeID = nm.SelfNode.StableID
-		changed = true
-	}
-	return changed
-}
-
+// setNetMapLocked updates the LocalBackend state to reflect the newly
+// received nm. If nm is nil, it resets all configuration as though
+// Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.dialer.SetNetMap(nm)
 	var login string
