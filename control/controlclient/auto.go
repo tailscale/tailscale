@@ -21,6 +21,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/structs"
 )
 
@@ -644,8 +645,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		logoutFin = new(empty.Message)
 	}
 	if nm != nil && loggedIn && synced {
-		pp := c.direct.GetPersist()
-		p = &pp
+		p = ptr.To(c.direct.GetPersist())
 	} else {
 		// don't send netmap status, as it's misleading when we're
 		// not logged in.
