@@ -339,11 +339,11 @@ func (s certStateStore) Read(domain string, now time.Time) (*TLSCertKeyPair, err
 }
 
 func (s certStateStore) WriteCert(domain string, cert []byte) error {
-	return s.WriteState(ipn.StateKey(domain+".crt"), cert)
+	return ipn.WriteState(s.StateStore, ipn.StateKey(domain+".crt"), cert)
 }
 
 func (s certStateStore) WriteKey(domain string, key []byte) error {
-	return s.WriteState(ipn.StateKey(domain+".key"), key)
+	return ipn.WriteState(s.StateStore, ipn.StateKey(domain+".key"), key)
 }
 
 func (s certStateStore) ACMEKey() ([]byte, error) {
@@ -351,7 +351,7 @@ func (s certStateStore) ACMEKey() ([]byte, error) {
 }
 
 func (s certStateStore) WriteACMEKey(key []byte) error {
-	return s.WriteState(ipn.StateKey(acmePEMName), key)
+	return ipn.WriteState(s.StateStore, ipn.StateKey(acmePEMName), key)
 }
 
 // TLSCertKeyPair is a TLS public and private key, and whether they were obtained

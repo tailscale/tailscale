@@ -51,6 +51,10 @@ func (pm *profileManager) dlogf(format string, args ...any) {
 	pm.logf(format, args...)
 }
 
+func (pm *profileManager) WriteState(id ipn.StateKey, val []byte) error {
+	return ipn.WriteState(pm.store, id, val)
+}
+
 // CurrentUserID returns the current user ID. It is only non-empty on
 // Windows where we have a multi-user system.
 func (pm *profileManager) CurrentUserID() ipn.WindowsUserID {
@@ -182,9 +186,9 @@ func (pm *profileManager) setUnattendedModeAsConfigured() error {
 	}
 
 	if pm.prefs.ForceDaemon() {
-		return pm.store.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key))
+		return pm.WriteState(ipn.ServerModeStartKey, []byte(pm.currentProfile.Key))
 	} else {
-		return pm.store.WriteState(ipn.ServerModeStartKey, nil)
+		return pm.WriteState(ipn.ServerModeStartKey, nil)
 	}
 }
 
@@ -288,7 +292,7 @@ func (pm *profileManager) writePrefsToStore(key ipn.StateKey, prefs ipn.PrefsVie
 	if key == "" {
 		return nil
 	}
-	if err := pm.store.WriteState(key, prefs.ToBytes()); err != nil {
+	if err := pm.WriteState(key, prefs.ToBytes()); err != nil {
 		pm.logf("WriteState(%q): %v", key, err)
 		return err
 	}
@@ -336,7 +340,7 @@ func (pm *profileManager) SwitchProfile(id ipn.ProfileID) error {
 
 func (pm *profileManager) setAsUserSelectedProfileLocked() error {
 	k := ipn.CurrentProfileKey(string(pm.currentUserID))
-	return pm.store.WriteState(k, []byte(pm.currentProfile.Key))
+	return pm.WriteState(k, []byte(pm.currentProfile.Key))
 }
 
 func (pm *profileManager) loadSavedPrefs(key ipn.StateKey) (ipn.PrefsView, error) {
@@ -394,7 +398,7 @@ func (pm *profileManager) DeleteProfile(id ipn.ProfileID) error {
 	if kp.ID == pm.currentProfile.ID {
 		pm.NewProfile()
 	}
-	if err := pm.store.WriteState(kp.Key, nil); err != nil {
+	if err := pm.WriteState(kp.Key, nil); err != nil {
 		return err
 	}
 	delete(pm.knownProfiles, id)
@@ -407,7 +411,7 @@ func (pm *profileManager) DeleteAllProfiles() error {
 	metricDeleteAllProfile.Add(1)
 
 	for _, kp := range pm.knownProfiles {
-		if err := pm.store.WriteState(kp.Key, nil); err != nil {
+		if err := pm.WriteState(kp.Key, nil); err != nil {
 			// Write to remove references to profiles we've already deleted, but
 			// return the original error.
 			pm.writeKnownProfiles()
@@ -424,7 +428,7 @@ func (pm *profileManager) writeKnownProfiles() error {
 	if err != nil {
 		return err
 	}
-	return pm.store.WriteState(ipn.KnownProfilesStateKey, b)
+	return pm.WriteState(ipn.KnownProfilesStateKey, b)
 }
 
 // NewProfile creates and switches to a new unnamed profile. The new profile is
