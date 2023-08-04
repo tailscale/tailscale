@@ -424,7 +424,7 @@ func updatePrefs(prefs, curPrefs *ipn.Prefs, env upCheckEnv) (simpleUp bool, jus
 
 	simpleUp = env.flagSet.NFlag() == 0 &&
 		curPrefs.Persist != nil &&
-		curPrefs.Persist.LoginName != "" &&
+		curPrefs.Persist.UserProfile.LoginName != "" &&
 		env.backendState != ipn.NeedsLogin.String()
 
 	justEdit := env.backendState == ipn.Running.String() &&

@@ -957,7 +957,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	b.mu.Lock()
 
 	if st.LogoutFinished != nil {
-		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().LoginName() == "" {
+		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().UserProfile().LoginName() == "" {
 			b.mu.Unlock()
 			return
 		}
@@ -2784,16 +2784,16 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		}
 	}
 	if netMap != nil {
-		up := netMap.UserProfiles[netMap.User]
-		if login := up.LoginName; login != "" {
-			if newp.Persist == nil {
-				b.logf("active login: %s", login)
+		newProfile := netMap.UserProfiles[netMap.User]
+		if newLoginName := newProfile.LoginName; newLoginName != "" {
+			if !oldp.Persist().Valid() {
+				b.logf("active login: %s", newLoginName)
 			} else {
-				if newp.Persist.LoginName != login {
-					b.logf("active login: %q (changed from %q)", login, newp.Persist.LoginName)
-					newp.Persist.LoginName = login
+				oldLoginName := oldp.Persist().UserProfile().LoginName()
+				if oldLoginName != newLoginName {
+					b.logf("active login: %q (changed from %q)", newLoginName, oldLoginName)
 				}
-				newp.Persist.UserProfile = up
+				newp.Persist.UserProfile = newProfile
 			}
 		}
 	}

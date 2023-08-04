@@ -264,12 +264,18 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{Persist: &persist.Persist{}},
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
 			false,
 		},
 		{
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
-			&Prefs{Persist: &persist.Persist{LoginName: "dave"}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
+			&Prefs{Persist: &persist.Persist{
+				UserProfile: tailcfg.UserProfile{LoginName: "dave"},
+			}},
 			true,
 		},
 		{
@@ -345,7 +351,9 @@ func TestPrefsPersist(t *testing.T) {
 	tstest.PanicOnLog()
 
 	c := persist.Persist{
-		LoginName: "test@example.com",
+		UserProfile: tailcfg.UserProfile{
+			LoginName: "test@example.com",
+		},
 	}
 	p := Prefs{
 		ControlURL: "https://controlplane.tailscale.com",
