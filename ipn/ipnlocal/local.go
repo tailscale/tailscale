@@ -491,8 +491,12 @@ func (b *LocalBackend) SetDirectFileDoFinalRename(v bool) {
 	b.directFileDoFinalRename = v
 }
 
+// pauseOrResumeControlClientLocked pauses b.cc if there is no network available
+// or if the LocalBackend is in Stopped state with a valid NetMap. In all other
+// cases, it unpauses it. It is a no-op if b.cc is nil.
+//
 // b.mu must be held.
-func (b *LocalBackend) maybePauseControlClientLocked() {
+func (b *LocalBackend) pauseOrResumeControlClientLocked() {
 	if b.cc == nil {
 		return
 	}
@@ -508,7 +512,7 @@ func (b *LocalBackend) linkChange(major bool, ifst *interfaces.State) {
 
 	hadPAC := b.prevIfState.HasPAC()
 	b.prevIfState = ifst
-	b.maybePauseControlClientLocked()
+	b.pauseOrResumeControlClientLocked()
 
 	// If the PAC-ness of the network changed, reconfig wireguard+route to
 	// add/remove subnets.
@@ -995,7 +999,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 		prefs.WantRunning = true
 		prefs.LoggedOut = false
 	}
-	if findExitNodeIDLocked(prefs, st.NetMap) {
+	if setExitNodeID(prefs, st.NetMap) {
 		prefsChanged = true
 	}
 
@@ -1089,9 +1093,9 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 	b.authReconfig()
 }
 
-// findExitNodeIDLocked updates prefs to reference an exit node by ID, rather
+// setExitNodeID updates prefs to reference an exit node by ID, rather
 // than by IP. It returns whether prefs was mutated.
-func findExitNodeIDLocked(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
+func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) {
 	if nm == nil {
 		// No netmap, can't resolve anything.
 		return false
@@ -2747,7 +2751,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 	// findExitNodeIDLocked returns whether it updated b.prefs, but
 	// everything in this function treats b.prefs as completely new
 	// anyway. No-op if no exit node resolution is needed.
-	findExitNodeIDLocked(newp, netMap)
+	setExitNodeID(newp, netMap)
 	// We do this to avoid holding the lock while doing everything else.
 
 	oldHi := b.hostinfo
@@ -3631,7 +3635,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 		// Transitioning away from running.
 		b.closePeerAPIListenersLocked()
 	}
-	b.maybePauseControlClientLocked()
+	b.pauseOrResumeControlClientLocked()
 	b.mu.Unlock()
 
 	// prefs may change irrespective of state; WantRunning should be explicitly
@@ -3962,7 +3966,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
 	}
-	b.maybePauseControlClientLocked()
+	b.pauseOrResumeControlClientLocked()
 
 	if nm != nil {
 		health.SetControlHealth(nm.ControlHealth)
