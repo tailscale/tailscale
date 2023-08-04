@@ -208,16 +208,10 @@ func init() {
 func (pm *profileManager) SetPrefs(prefsIn ipn.PrefsView) error {
 	prefs := prefsIn.AsStruct().View()
 	newPersist := prefs.Persist().AsStruct()
-	if newPersist == nil || newPersist.NodeID == "" {
+	if newPersist == nil || newPersist.NodeID == "" || newPersist.UserProfile.LoginName == "" {
 		return pm.setPrefsLocked(prefs)
 	}
 	up := newPersist.UserProfile
-	if up.LoginName == "" {
-		// Backwards compatibility with old prefs files.
-		up.LoginName = newPersist.LoginName
-	} else {
-		newPersist.LoginName = up.LoginName
-	}
 	if up.DisplayName == "" {
 		up.DisplayName = up.LoginName
 	}
