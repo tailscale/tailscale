@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -611,8 +612,9 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 	if purpose != pingDiscovery {
 		de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, size)
 	} else {
+		debug.PrintStack()
 		for _, mtu := range mtusToProbe {
-			de.c.logf("probing mtu %v", mtuToPingSize(ep, mtu))
+			de.c.logf("probing mtu %v with disco message size %v", mtu, mtuToPingSize(ep, mtu))
 			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, mtuToPingSize(ep, mtu))
 		}
 	}
