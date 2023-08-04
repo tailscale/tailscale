@@ -203,11 +203,8 @@ func TestProfileDupe(t *testing.T) {
 				{reauth, user1Node1},
 			},
 			profs: []*persist.Persist{
-				// BUG: This is incorrect, and should be:
-				// user1Node1,
-				// user2Node2,
 				user1Node1,
-				user1Node1,
+				user2Node2,
 			},
 		},
 		{
@@ -218,11 +215,8 @@ func TestProfileDupe(t *testing.T) {
 				{reauth, user2Node1},
 			},
 			profs: []*persist.Persist{
-				// BUG: This is incorrect, and should be:
-				// user2Node1,
-				// user3Node3,
-				user1Node1,
 				user2Node1,
+				user3Node3,
 			},
 		},
 		{
@@ -233,11 +227,8 @@ func TestProfileDupe(t *testing.T) {
 				{reauth, user1Node2},
 			},
 			profs: []*persist.Persist{
-				// BUG: This is incorrect, and should be:
-				// user1Node2,
-				// user3Node3,
-				user1Node1,
 				user1Node2,
+				user3Node3,
 			},
 		},
 		{
