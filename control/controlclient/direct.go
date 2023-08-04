@@ -1129,8 +1129,17 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 			c.lastPrintMap = now
 			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
 		}
+		newPersist := persist.AsStruct()
+		newPersist.NodeID = nm.SelfNode.StableID
+		newPersist.UserProfile = nm.UserProfiles[nm.User]
 
 		c.mu.Lock()
+		// If we are the ones who last updated persist, then we can update it
+		// again. Otherwise, we should not touch it.
+		if persist == c.persist {
+			c.persist = newPersist.View()
+			persist = c.persist
+		}
 		c.expiry = &nm.Expiry
 		c.mu.Unlock()
 
