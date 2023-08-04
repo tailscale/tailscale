@@ -2209,7 +2209,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 	}
 
 	keyText, _ = b.machinePrivKey.MarshalText()
-	if err := b.store.WriteState(ipn.MachineKeyStateKey, keyText); err != nil {
+	if err := ipn.WriteState(b.store, ipn.MachineKeyStateKey, keyText); err != nil {
 		b.logf("error writing machine key to store: %v", err)
 		return err
 	}
@@ -2224,7 +2224,7 @@ func (b *LocalBackend) initMachineKeyLocked() (err error) {
 //
 // b.mu must be held.
 func (b *LocalBackend) clearMachineKeyLocked() error {
-	if err := b.store.WriteState(ipn.MachineKeyStateKey, nil); err != nil {
+	if err := ipn.WriteState(b.store, ipn.MachineKeyStateKey, nil); err != nil {
 		return err
 	}
 	b.machinePrivKey = key.MachinePrivate{}
@@ -4830,7 +4830,7 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 	if b.store == nil {
 		return errors.New("no state store")
 	}
-	err := b.store.WriteState(ipn.StateKey(key), []byte(value))
+	err := ipn.WriteState(b.store, ipn.StateKey(key), []byte(value))
 	b.logf("SetDevStateStore(%q, %q) = %v", key, value, err)
 
 	if err != nil {

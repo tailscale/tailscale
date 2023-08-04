@@ -4,6 +4,7 @@
 package ipn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -71,7 +72,20 @@ type StateStore interface {
 	// ErrStateNotExist) if the ID doesn't have associated state.
 	ReadState(id StateKey) ([]byte, error)
 	// WriteState saves bs as the state associated with ID.
+	//
+	// Callers should generally use the ipn.WriteState wrapper func
+	// instead, which only writes if the value is different from what's
+	// already in the store.
 	WriteState(id StateKey, bs []byte) error
+}
+
+// WriteState is a wrapper around store.WriteState that only writes if
+// the value is different from what's already in the store.
+func WriteState(store StateStore, id StateKey, v []byte) error {
+	if was, err := store.ReadState(id); err == nil && bytes.Equal(was, v) {
+		return nil
+	}
+	return store.WriteState(id, v)
 }
 
 // StateStoreDialerSetter is an optional interface that StateStores
@@ -91,5 +105,5 @@ func ReadStoreInt(store StateStore, id StateKey) (int64, error) {
 
 // PutStoreInt puts an integer into a StateStore.
 func PutStoreInt(store StateStore, id StateKey, val int64) error {
-	return store.WriteState(id, fmt.Appendf(nil, "%d", val))
+	return WriteState(store, id, fmt.Appendf(nil, "%d", val))
 }
