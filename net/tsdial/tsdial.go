@@ -203,6 +203,8 @@ func (d *Dialer) SetNetMap(nm *netmap.NetworkMap) {
 	d.dns = m
 }
 
+// userDialResolve resolves addr as if a user initiating the dial. (e.g. from a
+// SOCKS or HTTP outbound proxy)
 func (d *Dialer) userDialResolve(ctx context.Context, network, addr string) (netip.AddrPort, error) {
 	d.mu.Lock()
 	dns := d.dns
@@ -298,8 +300,8 @@ func (d *Dialer) SystemDial(ctx context.Context, network, addr string) (net.Conn
 	}, nil
 }
 
-// UserDial connects to the provided network address as if a user were initiating the dial.
-// (e.g. from a SOCKS or HTTP outbound proxy)
+// UserDial connects to the provided network address as if a user were
+// initiating the dial. (e.g. from a SOCKS or HTTP outbound proxy)
 func (d *Dialer) UserDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	ipp, err := d.userDialResolve(ctx, network, addr)
 	if err != nil {
