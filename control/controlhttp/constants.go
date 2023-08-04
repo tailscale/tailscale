@@ -11,6 +11,7 @@ import (
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
@@ -89,6 +90,10 @@ type Dialer struct {
 	drainFinished        chan struct{}
 	omitCertErrorLogging bool
 	testFallbackDelay    time.Duration
+
+	// tstime.Clock is used instead of time package for methods such as time.Now.
+	// If not specified, will default to tstime.StdClock{}.
+	Clock tstime.Clock
 }
 
 func strDef(v1, v2 string) string {
