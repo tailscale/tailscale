@@ -4,17 +4,21 @@
 package ipnlocal
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/user"
 	"strconv"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/persist"
+	"tailscale.com/util/must"
 )
 
 func TestProfileCurrentUserSwitch(t *testing.T) {
@@ -130,22 +134,195 @@ func TestProfileList(t *testing.T) {
 	if lp := pm.findProfileByName(carol.Name); lp != nil {
 		t.Fatalf("found profile for user2 in user1's profile list")
 	}
-	if lp := pm.findProfilesByNodeID(carol.ControlURL, carol.NodeID); lp != nil {
-		t.Fatalf("found profile for user2 in user1's profile list")
-	}
-	if lp := pm.findProfilesByUserID(carol.ControlURL, carol.UserProfile.ID); lp != nil {
-		t.Fatalf("found profile for user2 in user1's profile list")
-	}
 
 	pm.SetCurrentUserID("user2")
 	checkProfiles(t, "carol")
-	if lp := pm.findProfilesByNodeID(carol.ControlURL, carol.NodeID); lp == nil {
-		t.Fatalf("did not find profile for user2 in user2's profile list")
+}
+
+func TestProfileDupe(t *testing.T) {
+	newPersist := func(user, node int) *persist.Persist {
+		return &persist.Persist{
+			NodeID: tailcfg.StableNodeID(fmt.Sprintf("node%d", node)),
+			UserProfile: tailcfg.UserProfile{
+				ID:        tailcfg.UserID(user),
+				LoginName: fmt.Sprintf("user%d@example.com", user),
+			},
+		}
 	}
-	if lp := pm.findProfilesByUserID(carol.ControlURL, carol.UserProfile.ID); lp == nil {
-		t.Fatalf("did not find profile for user2 in user2's profile list")
+	user1Node1 := newPersist(1, 1)
+	user1Node2 := newPersist(1, 2)
+	user2Node1 := newPersist(2, 1)
+	user2Node2 := newPersist(2, 2)
+	user3Node3 := newPersist(3, 3)
+
+	reauth := func(pm *profileManager, p *persist.Persist) {
+		prefs := ipn.NewPrefs()
+		prefs.Persist = p
+		must.Do(pm.SetPrefs(prefs.View()))
+	}
+	login := func(pm *profileManager, p *persist.Persist) {
+		pm.NewProfile()
+		reauth(pm, p)
 	}
 
+	type step struct {
+		fn func(pm *profileManager, p *persist.Persist)
+		p  *persist.Persist
+	}
+
+	tests := []struct {
+		name  string
+		steps []step
+		profs []*persist.Persist
+	}{
+		{
+			name: "reauth-new-node",
+			steps: []step{
+				{login, user1Node1},
+				{reauth, user3Node3},
+			},
+			profs: []*persist.Persist{
+				user3Node3,
+			},
+		},
+		{
+			name: "reauth-same-node",
+			steps: []step{
+				{login, user1Node1},
+				{reauth, user1Node1},
+			},
+			profs: []*persist.Persist{
+				user1Node1,
+			},
+		},
+		{
+			name: "reauth-other-profile",
+			steps: []step{
+				{login, user1Node1},
+				{login, user2Node2},
+				{reauth, user1Node1},
+			},
+			profs: []*persist.Persist{
+				// BUG: This is incorrect, and should be:
+				// user1Node1,
+				// user2Node2,
+				user1Node1,
+				user1Node1,
+			},
+		},
+		{
+			name: "reauth-replace-user",
+			steps: []step{
+				{login, user1Node1},
+				{login, user3Node3},
+				{reauth, user2Node1},
+			},
+			profs: []*persist.Persist{
+				// BUG: This is incorrect, and should be:
+				// user2Node1,
+				// user3Node3,
+				user1Node1,
+				user2Node1,
+			},
+		},
+		{
+			name: "reauth-replace-node",
+			steps: []step{
+				{login, user1Node1},
+				{login, user3Node3},
+				{reauth, user1Node2},
+			},
+			profs: []*persist.Persist{
+				// BUG: This is incorrect, and should be:
+				// user1Node2,
+				// user3Node3,
+				user1Node1,
+				user1Node2,
+			},
+		},
+		{
+			name: "login-same-node",
+			steps: []step{
+				{login, user1Node1},
+				{login, user3Node3}, // random other profile
+				{login, user1Node1},
+			},
+			profs: []*persist.Persist{
+				user1Node1,
+				user3Node3,
+			},
+		},
+		{
+			name: "login-replace-user",
+			steps: []step{
+				{login, user1Node1},
+				{login, user3Node3}, // random other profile
+				{login, user2Node1},
+			},
+			profs: []*persist.Persist{
+				user2Node1,
+				user3Node3,
+			},
+		},
+		{
+			name: "login-replace-node",
+			steps: []step{
+				{login, user1Node1},
+				{login, user3Node3}, // random other profile
+				{login, user1Node2},
+			},
+			profs: []*persist.Persist{
+				user1Node2,
+				user3Node3,
+			},
+		},
+		{
+			name: "login-new-node",
+			steps: []step{
+				{login, user1Node1},
+				{login, user2Node2},
+			},
+			profs: []*persist.Persist{
+				user1Node1,
+				user2Node2,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := new(mem.Store)
+			pm, err := newProfileManagerWithGOOS(store, logger.Discard, "linux")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tc.steps {
+				s.fn(pm, s.p)
+			}
+			profs := pm.Profiles()
+			var got []*persist.Persist
+			for _, p := range profs {
+				prefs, err := pm.loadSavedPrefs(p.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, prefs.Persist().AsStruct())
+			}
+			d := cmp.Diff(tc.profs, got, cmpopts.SortSlices(func(a, b *persist.Persist) bool {
+				if a.NodeID != b.NodeID {
+					return a.NodeID < b.NodeID
+				}
+				return a.UserProfile.ID < b.UserProfile.ID
+			}))
+			if d != "" {
+				t.Fatal(d)
+			}
+		})
+	}
+}
+
+func asJSON(v any) []byte {
+	return must.Get(json.MarshalIndent(v, "", "  "))
 }
 
 // TestProfileManagement tests creating, loading, and switching profiles.
