@@ -82,8 +82,7 @@ func (c *Client) ACL(ctx context.Context) (acl *ACL, err error) {
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -183,8 +182,7 @@ func (c *Client) aclPOSTRequest(ctx context.Context, body []byte, avoidCollision
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
 		// check if test error
 		var ate ACLTestError
 		if err := json.Unmarshal(b, &ate); err != nil {
@@ -307,8 +305,7 @@ func (c *Client) previewACLPostRequest(ctx context.Context, body []byte, preview
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
 		return nil, handleErrorResponse(b, resp)
 	}
 	if err = json.Unmarshal(b, &res); err != nil {

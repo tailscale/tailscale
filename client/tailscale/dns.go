@@ -55,8 +55,7 @@ func (c *Client) dnsGETRequest(ctx context.Context, endpoint string) ([]byte, er
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
 		return nil, handleErrorResponse(b, resp)
 	}
 
@@ -82,8 +81,7 @@ func (c *Client) dnsPOSTRequest(ctx context.Context, endpoint string, postData a
 	}
 
 	// If status code was not successful, return the error.
-	// TODO: Change the check for the StatusCode to include other 2XX success codes.
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusIMUsed {
 		return nil, handleErrorResponse(b, resp)
 	}
 
