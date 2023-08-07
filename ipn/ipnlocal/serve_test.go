@@ -195,8 +195,9 @@ func TestServeHTTPProxy(t *testing.T) {
 		},
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
 			tailcfg.UserID(1): {
-				LoginName:   "someone@example.com",
-				DisplayName: "Some One",
+				LoginName:     "someone@example.com",
+				DisplayName:   "Some One",
+				ProfilePicURL: "https://example.com/photo.jpg",
 			},
 		},
 	}
@@ -253,6 +254,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.152"},
 				{"Tailscale-User-Login", "someone@example.com"},
 				{"Tailscale-User-Name", "Some One"},
+				{"Tailscale-User-Profile-Pic", "https://example.com/photo.jpg"},
 				{"Tailscale-Headers-Info", "https://tailscale.com/s/serve-headers"},
 			},
 		},
@@ -264,6 +266,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.150.151.153"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
 		},
@@ -275,6 +278,7 @@ func TestServeHTTPProxy(t *testing.T) {
 				{"X-Forwarded-For", "100.160.161.162"},
 				{"Tailscale-User-Login", ""},
 				{"Tailscale-User-Name", ""},
+				{"Tailscale-User-Profile-Pic", ""},
 				{"Tailscale-Headers-Info", ""},
 			},
 		},
