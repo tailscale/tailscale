@@ -15,7 +15,6 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -612,7 +611,6 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 	if purpose != pingDiscovery {
 		de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, size)
 	} else {
-		debug.PrintStack()
 		for _, mtu := range mtusToProbe {
 			de.c.logf("probing mtu %v with disco message size %v", mtu, mtuToPingSize(ep, mtu))
 			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, mtuToPingSize(ep, mtu))
@@ -667,6 +665,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 		// message to our peer via DERP informing them that we've
 		// sent so our firewall ports are probably open and now
 		// would be a good time for them to connect.
+		de.c.logf("\n\n\nSENDING DERP CALLMEMAYBE")
 		go de.c.enqueueCallMeMaybe(derpAddr, de)
 	}
 }
@@ -1177,6 +1176,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 		// Nothing to do on js/wasm if we can't send UDP packets anyway.
 		return
 	}
+	de.c.logf("\n\n\nDERP CALLMEMAYBE\n\n\n")
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
@@ -1223,6 +1223,7 @@ func (de *endpoint) handleCallMeMaybe(m *disco.CallMeMaybe) {
 	// in this message.
 	for ep, want := range de.isCallMeMaybeEP {
 		if !want {
+			de.c.logf("\n\n\nCLEARING ENDPOINT\n\n\n")
 			delete(de.isCallMeMaybeEP, ep)
 			de.deleteEndpointLocked("handleCallMeMaybe", ep)
 		}
