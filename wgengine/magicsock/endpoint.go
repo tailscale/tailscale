@@ -146,9 +146,10 @@ type pongReply struct {
 	pongSrc netip.AddrPort // what they reported they heard
 }
 
-// mtusToProbe are likely MTUs we might see in the wild. They are used
-// by the peer MTU probing code. Set this to a single zero to disable
-// path MTU probing.
+// mtusToProbe are likely on-the-wire MTUs we might see in the
+// wild. They are used by the peer MTU probing code.
+//
+// Set this array to a single zero to disable path MTU probing.
 var mtusToProbe = [...]int{
 	//576,  // Smallest MTU for IPv4, probably useless?
 	//1124, // An observed max mtu in the wild, maybe 1100 instead?
@@ -612,8 +613,8 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, size)
 	} else {
 		for _, mtu := range mtusToProbe {
-			de.c.logf("probing mtu %v with disco message size %v", mtu, mtuToPingSize(ep, mtu))
-			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, mtuToPingSize(ep, mtu))
+			de.c.logf("probing mtu %v with disco message size %v", mtu, wireMTUToPingSize(ep, mtu))
+			de.recordAndSendDiscoPingLocked(ep, now, purpose, epDisco.key, wireMTUToPingSize(ep, mtu))
 		}
 	}
 }
@@ -896,34 +897,40 @@ func (de *endpoint) noteConnectivityChange() {
 }
 
 // mtuToPingSize takes a desired on-the-wire MTU and calculates the
-// disco ping message size that would produce a packet that is exactly MTU
-// bytes in length.
+// disco ping message size that would produce a packet that is exactly
+// MTU bytes in length including all the headers above the link layer
+// (IP and UDP).
 //
-// If mtu is zero, return zero which means don't pad the ping packet at all.
-func mtuToPingSize(ep netip.AddrPort, mtu int) int {
+// Zero return value means don't pad the ping packet at all. An mtu
+// argument of zero or less than the necessary header length results
+// in a zero return value.
+func wireMTUToPingSize(ep netip.AddrPort, mtu int) int {
 	if mtu == 0 {
 		return 0
 	}
-	size := mtu
 	headerLen := ipv4.HeaderLen
 	if ep.Addr().Is6() {
 		headerLen = ipv6.HeaderLen
 	}
 	headerLen += 8 // UDP header length
-	size -= headerLen
-	if size < 0 {
+	if mtu < headerLen {
 		return 0
 	}
-	return size
+	return (mtu - headerLen)
 }
 
-// pingSizeToMTU calculates the minimum path MTU that would permit a
-// disco ping message of sp.size to reach this endpoint. sp.size is
-// the length of the entire disco message.
-func pingSizeToMTU(sp sentPing) int {
+// pingSizeToMTU calculates the minimum wire MTU that would permit the
+// specified disco ping message to reach this endpoint. The size
+// recorded in sp.size does not include the IP/UDP headers at the
+// beginning of the disco message.
+//
+// If sp.size is zero, that means the ping was not padded at all and
+// the MTU was not tested, in which case return the largest safe
+// on-the-wire MTU.
+func pingSizeToWireMTU(sp sentPing) int {
 	mtu := sp.size
 	if mtu == 0 {
-		return int(tstun.DefaultMTU())
+		return int(tstun.DefaultWireMTU)
 	}
 	headerLen := ipv4.HeaderLen
 	if sp.to.Addr().Is6() {
@@ -933,9 +940,9 @@ func pingSizeToMTU(sp sentPing) int {
 	return mtu + headerLen
 }
 
-// pingSizeToExternalMTU calculates the path MTU as perceived by the
-// layer above Tailscale - that is, how much room for data there is
-// after accounting for WireGuard overhead.
+// pingSizeToUserMTU calculates the minimum MTU on the tailscale
+// interface that would permit this ping to reach this endpoint. It is
+// the size of the on-the-wire MTU minus the Wireguard overhead:
 //
 // - 20-byte IPv4 header or 40 byte IPv6 header
 // - 8-byte UDP header
@@ -943,21 +950,23 @@ func pingSizeToMTU(sp sentPing) int {
 // - 4-byte key index
 // - 8-byte nonce
 // - 16-byte authentication tag
+//
+// We have to assume IPv6 because we give the same number to everyone
+// when we set the external interface MTU.
 
 const wgHeaderLen = 4 + 4 + 8 + 16
 
-func pingSizeToExternalMTU(sp sentPing) int {
-	mtu := sp.size
-	if mtu == 0 {
-		mtu = int(tstun.DefaultMTU())
+func pingSizeToUserMTU(sp sentPing) int {
+	size := sp.size
+	if size == 0 {
+		return int(tstun.DefaultUserMTU)
 	}
 	// The size stored in the sentPing already has the IP/UDP
 	// headers removed.  Now remove the Wireguard overhead.
-	mtu -= wgHeaderLen
-	if mtu < 0 {
-		mtu = 0
+	if size < wgHeaderLen {
+		return 0
 	}
-	return mtu
+	return size - wgHeaderLen
 }
 
 // Update MTU-related metrics. Should be called with Conn.mu held.
@@ -965,7 +974,7 @@ func updateMTUMetricsLocked(sp sentPing, logf logger.Logf) {
 	if sp.size == 0 {
 		return
 	}
-	mtu := pingSizeToExternalMTU(sp)
+	mtu := pingSizeToUserMTU(sp)
 	if metricHighestPeerMTU.Value() < int64(mtu) {
 		metricHighestPeerMTU.Set(int64(mtu))
 		logf("\n\n\nhighest MTU %v\n\n\n", mtu)
@@ -977,29 +986,29 @@ func (c *Conn) PathMTU(dst netip.Addr) int {
 	// TODO(s): this is method is pretty expensive. Reduce lookups before
 	// removing the envknob guard.
 	if !debugPMTUD() {
-		return int(tstun.DefaultMTU())
+		return int(tstun.TunMTU())
 	}
 
 	peer, ok := c.netMap.PeerByTailscaleIP(dst)
 	if !ok {
-		return int(tstun.DefaultMTU())
+		return int(tstun.TunMTU())
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return int(tstun.DefaultMTU())
+		return int(tstun.TunMTU())
 	}
 	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
 	if !ok {
-		return int(tstun.DefaultMTU())
+		return int(tstun.TunMTU())
 	}
 
 	now := mono.Now()
 	if !ep.bestAddr.AddrPort.IsValid() || now.After(ep.trustBestAddrUntil) {
 		// We have not done the disco pings yet. ep.send() will kick that off
 		// down the line.
-		return int(tstun.DefaultMTU())
+		return int(tstun.TunMTU())
 	}
 
 	return ep.bestAddr.mtu
@@ -1044,7 +1053,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v mtu=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToMTU(sp), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v mtu=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToWireMTU(sp), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -1060,7 +1069,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrQuality{sp.to, latency, pingSizeToMTU(sp)}
+		thisPong := addrQuality{sp.to, latency, pingSizeToWireMTU(sp)}
 		if betterAddr(thisPong, de.bestAddr) {
 			de.c.logf("\n\n\nSETTING BEST MTU %v\n\n\n", thisPong.mtu)
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.mtu)
