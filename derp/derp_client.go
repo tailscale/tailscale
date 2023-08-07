@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"sync"
 	"time"
 
 	"go4.org/mem"
 	"golang.org/x/time/rate"
+	"tailscale.com/net/tcpinfo"
 	"tailscale.com/syncs"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
@@ -623,4 +625,17 @@ func (c *Client) LocalAddr() (netip.AddrPort, error) {
 		return netip.AddrPort{}, errors.New("nil addr")
 	}
 	return netip.ParseAddrPort(a.String())
+}
+
+// RTT returns the current TCP round-trip time (RTT) between the current node
+// and the DERP server, or an error if this is unimplemented on the current
+// platform or the value cannot be retrieved.
+func (c *Client) RTT() (time.Duration, error) {
+	// If the underlying value isn't a net.Conn, it's something that we
+	// don't support; abort now.
+	nc, ok := c.nc.(net.Conn)
+	if !ok {
+		return 0, tcpinfo.ErrNotTCP
+	}
+	return tcpinfo.RTT(nc)
 }

@@ -792,10 +792,20 @@ func (c *Client) udpBindAddr() string {
 	return ":0"
 }
 
+// GetReportOptions contains options that can be passed to GetReport.
+type GetReportOptions struct {
+	// DERPRegionLatencyBounds contains upper bounds for the latency to a
+	// given DERP region, typically determined by having an existing open
+	// connection to that region. This is used to bound the latency
+	// determined for a region when selecting a PreferredDERP ("home DERP")
+	// region.
+	DERPRegionLatencyBounds map[int]time.Duration
+}
+
 // GetReport gets a report.
 //
 // It may not be called concurrently with itself.
-func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report, reterr error) {
+func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetReportOptions) (_ *Report, reterr error) {
 	defer func() {
 		if reterr != nil {
 			metricNumGetReportError.Add(1)
@@ -872,7 +882,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		if err := c.runHTTPOnlyChecks(ctx, last, rs, dm); err != nil {
 			return nil, err
 		}
-		return c.finishAndStoreReport(rs, dm), nil
+		return c.finishAndStoreReport(rs, dm, opts), nil
 	}
 
 	var ifState *interfaces.State
@@ -1106,15 +1116,15 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	// Wait for captive portal check before finishing the report.
 	<-captivePortalDone
 
-	return c.finishAndStoreReport(rs, dm), nil
+	return c.finishAndStoreReport(rs, dm, opts), nil
 }
 
-func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap) *Report {
+func (c *Client) finishAndStoreReport(rs *reportState, dm *tailcfg.DERPMap, opts *GetReportOptions) *Report {
 	rs.mu.Lock()
 	report := rs.report.Clone()
 	rs.mu.Unlock()
 
-	c.addReportHistoryAndSetPreferredDERP(report, dm.View())
+	c.addReportHistoryAndSetPreferredDERP(report, dm.View(), opts)
 	c.logConciseReport(report, dm)
 
 	return report
@@ -1459,7 +1469,7 @@ const (
 
 // addReportHistoryAndSetPreferredDERP adds r to the set of recent Reports
 // and mutates r.PreferredDERP to contain the best recent one.
-func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPMapView) {
+func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPMapView, opts *GetReportOptions) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1487,6 +1497,20 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPM
 		for regionID, d := range pr.RegionLatency {
 			if bd, ok := bestRecent[regionID]; !ok || d < bd {
 				bestRecent[regionID] = d
+			}
+		}
+	}
+
+	// Bound each region's latency by the TCP RTT, if we have that option.
+	if opts != nil {
+		for regionID, bound := range opts.DERPRegionLatencyBounds {
+			curr, ok := bestRecent[regionID]
+			if !ok {
+				continue
+			}
+
+			if curr > bound {
+				bestRecent[regionID] = bound
 			}
 		}
 	}
