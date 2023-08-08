@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -65,7 +64,6 @@ import (
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
-	"tailscale.com/types/lazy"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
@@ -81,6 +79,7 @@ import (
 	"tailscale.com/util/osshare"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
+	"tailscale.com/util/testenv"
 	"tailscale.com/util/uniq"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -92,14 +91,6 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 )
-
-var lazyInTest lazy.SyncValue[bool]
-
-func inTest() bool {
-	return lazyInTest.Get(func() bool {
-		return flag.Lookup("test.v") != nil
-	})
-}
 
 var controlDebugFlags = getControlDebugFlags()
 
@@ -506,7 +497,7 @@ func (b *LocalBackend) maybePauseControlClientLocked() {
 		return
 	}
 	networkUp := b.prevIfState.AnyInterfaceUp()
-	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !inTest()))
+	b.cc.SetPaused((b.state == ipn.Stopped && b.netMap != nil) || (!networkUp && !testenv.InTest()))
 }
 
 // linkChange is our network monitor callback, called whenever the network changes.
