@@ -122,7 +122,7 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 		return false, nil
 	}
 
-	id, _, err := a.DeviceInfo(ctx, labels)
+	id, _, _, err := a.DeviceInfo(ctx, labels)
 	if err != nil {
 		return false, fmt.Errorf("getting device info: %w", err)
 	}
@@ -232,25 +232,31 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 
 // DeviceInfo returns the device ID and hostname for the Tailscale device
 // associated with the given labels.
-func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string) (id tailcfg.StableNodeID, hostname string, err error) {
+func (a *tailscaleSTSReconciler) DeviceInfo(ctx context.Context, childLabels map[string]string) (id tailcfg.StableNodeID, hostname string, ips []string, err error) {
 	sec, err := getSingleObject[corev1.Secret](ctx, a.Client, a.operatorNamespace, childLabels)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	if sec == nil {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	id = tailcfg.StableNodeID(sec.Data["device_id"])
 	if id == "" {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	// Kubernetes chokes on well-formed FQDNs with the trailing dot, so we have
 	// to remove it.
 	hostname = strings.TrimSuffix(string(sec.Data["device_fqdn"]), ".")
 	if hostname == "" {
-		return "", "", nil
+		return "", "", nil, nil
 	}
-	return id, hostname, nil
+	if rawDeviceIPs, ok := sec.Data["device_ips"]; ok {
+		if err := json.Unmarshal(rawDeviceIPs, &ips); err != nil {
+			return "", "", nil, err
+		}
+	}
+
+	return id, hostname, ips, nil
 }
 
 func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) (string, error) {
