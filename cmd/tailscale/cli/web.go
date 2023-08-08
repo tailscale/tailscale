@@ -32,6 +32,7 @@ import (
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/groupmember"
 	"tailscale.com/version/distro"
+	"tailscale.com/webui"
 )
 
 //go:embed web.html
@@ -91,6 +92,7 @@ Tailscale, as opposed to a CLI or a native app.
 		webf := newFlagSet("web")
 		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
 		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
+		webf.BoolVar(&webArgs.dev, "dev", false, "run in dev mode")
 		return webf
 	})(),
 	Exec: runWeb,
@@ -99,6 +101,7 @@ Tailscale, as opposed to a CLI or a native app.
 var webArgs struct {
 	listen string
 	cgi    bool
+	dev    bool
 }
 
 func tlsConfigFromEnvironment() *tls.Config {
@@ -129,8 +132,13 @@ func runWeb(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
+	handler := webHandler
+	if webArgs.dev {
+		handler = webui.Handle
+	}
+
 	if webArgs.cgi {
-		if err := cgi.Serve(http.HandlerFunc(webHandler)); err != nil {
+		if err := cgi.Serve(http.HandlerFunc(handler)); err != nil {
 			log.Printf("tailscale.cgi: %v", err)
 			return err
 		}
@@ -142,14 +150,14 @@ func runWeb(ctx context.Context, args []string) error {
 		server := &http.Server{
 			Addr:      webArgs.listen,
 			TLSConfig: tlsConfig,
-			Handler:   http.HandlerFunc(webHandler),
+			Handler:   http.HandlerFunc(handler),
 		}
 
 		log.Printf("web server running on: https://%s", server.Addr)
 		return server.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("web server running on: %s", urlOfListenAddr(webArgs.listen))
-		return http.ListenAndServe(webArgs.listen, http.HandlerFunc(webHandler))
+		return http.ListenAndServe(webArgs.listen, http.HandlerFunc(handler))
 	}
 }
 
