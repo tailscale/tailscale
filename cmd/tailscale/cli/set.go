@@ -12,6 +12,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
 )
@@ -159,11 +160,11 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 // setArgs is the parsed command-line arguments.
 func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, curPrefs *ipn.Prefs, setArgs setArgsT) (routes []netip.Prefix, err error) {
 	if advertiseExitNodeSet && advertiseRoutesSet {
-		return calcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
+		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, setArgs.advertiseDefaultRoute)
 
 	}
 	if advertiseRoutesSet {
-		return calcAdvertiseRoutes(setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
+		return netutil.CalcAdvertiseRoutes(setArgs.advertiseRoutes, curPrefs.AdvertisesExitNode())
 	}
 	if advertiseExitNodeSet {
 		alreadyAdvertisesExitNode := curPrefs.AdvertisesExitNode()

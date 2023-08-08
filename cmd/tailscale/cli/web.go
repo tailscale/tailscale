@@ -28,6 +28,8 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/licenses"
+	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/groupmember"
@@ -385,7 +387,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		routes, err := calcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
+		routes, err := netutil.CalcAdvertiseRoutes(postData.AdvertiseRoutes, postData.AdvertiseExitNode)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})
@@ -437,7 +439,7 @@ func webHandler(w http.ResponseWriter, r *http.Request) {
 		Profile:      profile,
 		Status:       st.BackendState,
 		DeviceName:   deviceName,
-		LicensesURL:  licensesURL(),
+		LicensesURL:  licenses.LicensesURL(),
 		TUNMode:      st.TUN,
 		IsSynology:   distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
 		DSMVersion:   distro.DSMVersion(),
