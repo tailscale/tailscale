@@ -37,6 +37,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
+	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -1346,7 +1347,24 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing 'type' parameter", 400)
 		return
 	}
-	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr))
+	size := 0
+	sizeStr := r.FormValue("size")
+	if sizeStr != "" {
+		size, err = strconv.Atoi(sizeStr)
+		if err != nil {
+			http.Error(w, "invalid 'size' parameter", 400)
+			return
+		}
+		if size != 0 && tailcfg.PingType(pingTypeStr) != tailcfg.PingDisco {
+			http.Error(w, "'size' parameter is only supported with disco pings", 400)
+			return
+		}
+		if size > int(tstun.DefaultMTU()) {
+			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", tstun.DefaultMTU()), 400)
+			return
+		}
+	}
+	res, err := h.b.Ping(ctx, ip, tailcfg.PingType(pingTypeStr), size)
 	if err != nil {
 		writeErrorJSON(w, err)
 		return

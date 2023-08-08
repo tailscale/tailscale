@@ -171,7 +171,7 @@ type ControlDialPlanner interface {
 // Pinger is the LocalBackend.Ping method.
 type Pinger interface {
 	// Ping is a request to do a ping with the peer handling the given IP.
-	Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType) (*ipnstate.PingResult, error)
+	Ping(ctx context.Context, ip netip.Addr, pingType tailcfg.PingType, size int) (*ipnstate.PingResult, error)
 }
 
 type Decompressor interface {
@@ -1671,7 +1671,7 @@ func doPingerPing(logf logger.Logf, c *http.Client, pr *tailcfg.PingRequest, pin
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	res, err := pinger.Ping(ctx, pr.IP, pingType)
+	res, err := pinger.Ping(ctx, pr.IP, pingType, 0)
 	if err != nil {
 		d := time.Since(start).Round(time.Millisecond)
 		logf("doPingerPing: ping error of type %q to %v after %v: %v", pingType, pr.IP, d, err)
