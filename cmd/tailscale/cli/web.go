@@ -133,8 +133,13 @@ func runWeb(ctx context.Context, args []string) error {
 	}
 
 	handler := webHandler
-	if webArgs.dev {
-		handler = webui.Handle
+	if true {
+		newServer := &webui.Server{
+			DevMode: webArgs.dev,
+		}
+		cleanup := webui.RunJSDevServer()
+		defer cleanup()
+		handler = newServer.Handle
 	}
 
 	if webArgs.cgi {

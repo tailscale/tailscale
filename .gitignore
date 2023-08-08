@@ -35,5 +35,8 @@ cmd/tailscaled/tailscaled
 # Ignore direnv nix-shell environment cache
 .direnv/
 
+.vite/
+webui/node_modules
+
 /gocross
 /dist
