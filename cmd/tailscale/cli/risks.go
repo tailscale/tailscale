@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"tailscale.com/util/testenv"
 )
 
 var (
@@ -56,7 +58,7 @@ func presentRiskToUser(riskType, riskMessage, acceptedRisks string) error {
 	if isRiskAccepted(riskType, acceptedRisks) {
 		return nil
 	}
-	if inTest() {
+	if testenv.InTest() {
 		return errAborted
 	}
 	outln(riskMessage)
