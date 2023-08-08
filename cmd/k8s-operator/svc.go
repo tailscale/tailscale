@@ -139,7 +139,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	_, tsHost, err := a.ssr.DeviceInfo(ctx, crl)
+	_, tsHost, tsIPs, err := a.ssr.DeviceInfo(ctx, crl)
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}
@@ -153,12 +153,14 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return nil
 	}
 
-	logger.Debugf("setting ingress hostname to %q", tsHost)
-	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
-		{
-			Hostname: tsHost,
-		},
+	logger.Debugf("setting ingress to %q, %s", tsHost, strings.Join(tsIPs, ", "))
+	ingress := []corev1.LoadBalancerIngress{
+		{Hostname: tsHost},
 	}
+	for _, ip := range tsIPs {
+		ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
+	}
+	svc.Status.LoadBalancer.Ingress = ingress
 	if err := a.Status().Update(ctx, svc); err != nil {
 		return fmt.Errorf("failed to update service status: %w", err)
 	}
