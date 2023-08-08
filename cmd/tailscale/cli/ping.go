@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
@@ -53,12 +54,14 @@ relay node.
 		fs.BoolVar(&pingArgs.peerAPI, "peerapi", false, "try hitting the peer's peerapi HTTP server")
 		fs.IntVar(&pingArgs.num, "c", 10, "max number of pings to send. 0 for infinity.")
 		fs.DurationVar(&pingArgs.timeout, "timeout", 5*time.Second, "timeout before giving up on a ping")
+		fs.IntVar(&pingArgs.size, "size", 0, "size of the ping message (disco pings only). 0 for minimum size.")
 		return fs
 	})(),
 }
 
 var pingArgs struct {
 	num         int
+	size        int
 	untilDirect bool
 	verbose     bool
 	tsmp        bool
@@ -115,7 +118,7 @@ func runPing(ctx context.Context, args []string) error {
 	for {
 		n++
 		ctx, cancel := context.WithTimeout(ctx, pingArgs.timeout)
-		pr, err := localClient.Ping(ctx, netip.MustParseAddr(ip), pingType())
+		pr, err := localClient.PingWithOpts(ctx, netip.MustParseAddr(ip), pingType(), tailscale.PingOpts{Size: pingArgs.size})
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

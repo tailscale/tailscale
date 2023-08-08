@@ -150,9 +150,11 @@ type Engine interface {
 	// status builder.
 	UpdateStatus(*ipnstate.StatusBuilder)
 
-	// Ping is a request to start a ping with the peer handling the given IP and
-	// then call cb with its ping latency & method.
-	Ping(ip netip.Addr, pingType tailcfg.PingType, cb func(*ipnstate.PingResult))
+	// Ping is a request to start a ping of the given message size to the peer
+	// handling the given IP, then call cb with its ping latency & method.
+	//
+	// If size is zero too small, it is ignored. See tailscale.PingOpts for details.
+	Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult))
 
 	// RegisterIPPortIdentity registers a given node (identified by its
 	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
