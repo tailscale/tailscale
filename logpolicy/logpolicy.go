@@ -13,7 +13,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -49,12 +48,11 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/must"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/testenv"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
 )
-
-func inTest() bool { return flag.Lookup("test.v") != nil }
 
 var getLogTargetOnce struct {
 	sync.Once
@@ -576,7 +574,7 @@ func NewWithConfigPath(collection, dir, cmdName string, netMon *netmon.Monitor, 
 		conf.IncludeProcSequence = true
 	}
 
-	if envknob.NoLogsNoSupport() || inTest() {
+	if envknob.NoLogsNoSupport() || testenv.InTest() {
 		logf("You have disabled logging. Tailscale will not be able to provide support.")
 		conf.HTTPC = &http.Client{Transport: noopPretendSuccessTransport{}}
 	} else if val := getLogTarget(); val != "" {
@@ -756,7 +754,7 @@ func dialContext(ctx context.Context, netw, addr string, netMon *netmon.Monitor,
 // The logf parameter is optional; if non-nil, logs are printed using the
 // provided function; if nil, log.Printf will be used instead.
 func NewLogtailTransport(host string, netMon *netmon.Monitor, logf logger.Logf) http.RoundTripper {
-	if inTest() {
+	if testenv.InTest() {
 		return noopPretendSuccessTransport{}
 	}
 	// Start with a copy of http.DefaultTransport and tweak it a bit.

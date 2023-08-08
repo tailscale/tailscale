@@ -12,7 +12,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -53,11 +52,10 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 )
-
-func inTest() bool { return flag.Lookup("test.v") != nil }
 
 // Server is an embedded Tailscale server.
 //
@@ -605,7 +603,7 @@ func (s *Server) start() (reterr error) {
 }
 
 func (s *Server) startLogger(closePool *closeOnErrorPool) error {
-	if inTest() {
+	if testenv.InTest() {
 		return nil
 	}
 	cfgPath := filepath.Join(s.rootPath, "tailscaled.log.conf")

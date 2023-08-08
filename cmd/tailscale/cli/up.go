@@ -91,8 +91,6 @@ func acceptRouteDefault(goos string) bool {
 
 var upFlagSet = newUpFlagSet(effectiveGOOS(), &upArgsGlobal, "up")
 
-func inTest() bool { return flag.Lookup("test.v") != nil }
-
 // newUpFlagSet returns a new flag set for the "up" and "login" commands.
 func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	if cmd != "up" && cmd != "login" {

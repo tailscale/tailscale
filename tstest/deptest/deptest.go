@@ -15,8 +15,8 @@ import (
 )
 
 type DepChecker struct {
-	GOOS    string
-	GOARCH  string
+	GOOS    string            // optional
+	GOARCH  string            // optional
 	BadDeps map[string]string // package => why
 }
 
