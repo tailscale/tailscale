@@ -194,7 +194,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	_, tsHost, err := a.ssr.DeviceInfo(ctx, crl)
+	_, tsHost, _, err := a.ssr.DeviceInfo(ctx, crl)
 	if err != nil {
 		return fmt.Errorf("failed to get device ID: %w", err)
 	}

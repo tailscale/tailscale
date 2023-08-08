@@ -80,6 +80,7 @@ func TestLoadBalancerClass(t *testing.T) {
 		}
 		s.Data["device_id"] = []byte("ts-id-1234")
 		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
+		s.Data["device_ips"] = []byte(`["100.99.98.97", "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf"]`)
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
@@ -103,6 +104,12 @@ func TestLoadBalancerClass(t *testing.T) {
 				Ingress: []corev1.LoadBalancerIngress{
 					{
 						Hostname: "tailscale.device.name",
+					},
+					{
+						IP: "100.99.98.97",
+					},
+					{
+						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
 					},
 				},
 			},
@@ -306,6 +313,7 @@ func TestAnnotationIntoLB(t *testing.T) {
 		}
 		s.Data["device_id"] = []byte("ts-id-1234")
 		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
+		s.Data["device_ips"] = []byte(`["100.99.98.97", "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf"]`)
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
@@ -363,6 +371,12 @@ func TestAnnotationIntoLB(t *testing.T) {
 				Ingress: []corev1.LoadBalancerIngress{
 					{
 						Hostname: "tailscale.device.name",
+					},
+					{
+						IP: "100.99.98.97",
+					},
+					{
+						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
 					},
 				},
 			},
@@ -425,6 +439,7 @@ func TestLBIntoAnnotation(t *testing.T) {
 		}
 		s.Data["device_id"] = []byte("ts-id-1234")
 		s.Data["device_fqdn"] = []byte("tailscale.device.name.")
+		s.Data["device_ips"] = []byte(`["100.99.98.97", "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf"]`)
 	})
 	expectReconciled(t, sr, "default", "test")
 	want := &corev1.Service{
@@ -448,6 +463,12 @@ func TestLBIntoAnnotation(t *testing.T) {
 				Ingress: []corev1.LoadBalancerIngress{
 					{
 						Hostname: "tailscale.device.name",
+					},
+					{
+						IP: "100.99.98.97",
+					},
+					{
+						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
 					},
 				},
 			},
