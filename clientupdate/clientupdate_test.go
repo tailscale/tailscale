@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-package cli
+package clientupdate
 
 import (
 	"os"
@@ -19,38 +19,38 @@ func TestUpdateDebianAptSourcesListBytes(t *testing.T) {
 	}{
 		{
 			name:    "stable-to-unstable",
-			toTrack: "unstable",
+			toTrack: UnstableTrack,
 			in:      "# Tailscale packages for debian buster\ndeb https://pkgs.tailscale.com/stable/debian bullseye main\n",
 			want:    "# Tailscale packages for debian buster\ndeb https://pkgs.tailscale.com/unstable/debian bullseye main\n",
 		},
 		{
 			name:    "stable-unchanged",
-			toTrack: "stable",
+			toTrack: StableTrack,
 			in:      "# Tailscale packages for debian buster\ndeb https://pkgs.tailscale.com/stable/debian bullseye main\n",
 		},
 		{
 			name:    "if-both-stable-and-unstable-dont-change",
-			toTrack: "stable",
+			toTrack: StableTrack,
 			in: "# Tailscale packages for debian buster\n" +
 				"deb https://pkgs.tailscale.com/stable/debian bullseye main\n" +
 				"deb https://pkgs.tailscale.com/unstable/debian bullseye main\n",
 		},
 		{
 			name:    "if-both-stable-and-unstable-dont-change-unstable",
-			toTrack: "unstable",
+			toTrack: UnstableTrack,
 			in: "# Tailscale packages for debian buster\n" +
 				"deb https://pkgs.tailscale.com/stable/debian bullseye main\n" +
 				"deb https://pkgs.tailscale.com/unstable/debian bullseye main\n",
 		},
 		{
 			name:    "signed-by-form",
-			toTrack: "unstable",
+			toTrack: UnstableTrack,
 			in:      "# Tailscale packages for ubuntu jammy\ndeb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu jammy main\n",
 			want:    "# Tailscale packages for ubuntu jammy\ndeb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/unstable/ubuntu jammy main\n",
 		},
 		{
 			name:    "unsupported-lines",
-			toTrack: "unstable",
+			toTrack: UnstableTrack,
 			in:      "# Tailscale packages for ubuntu jammy\ndeb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/foobar/ubuntu jammy main\n",
 			wantErr: "unexpected/unsupported /etc/apt/sources.list.d/tailscale.list contents",
 		},
@@ -279,7 +279,7 @@ repo_gpgcheck=1
 gpgcheck=0
 gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
 `,
-			track: "stable",
+			track: StableTrack,
 			after: `
 [tailscale-stable]
 name=Tailscale stable
@@ -303,7 +303,7 @@ repo_gpgcheck=1
 gpgcheck=0
 gpgkey=https://pkgs.tailscale.com/stable/fedora/repo.gpg
 `,
-			track: "unstable",
+			track: UnstableTrack,
 			after: `
 [tailscale-unstable]
 name=Tailscale unstable
@@ -332,7 +332,7 @@ gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-$releasever-$basearch
 skip_if_unavailable=False
 `,
-			track:   "stable",
+			track:   StableTrack,
 			wantErr: true,
 		},
 	}
