@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"golang.org/x/exp/constraints"
 	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
@@ -482,13 +481,6 @@ func (r *Resolver) resolveRecursive(
 		return nil, 0, ErrMaxDepth
 	}
 	return nil, 0, ErrNoResponses
-}
-
-func min[T constraints.Ordered](a, b T) T {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // queryNameserver sends a query for "name" to the nameserver "nameserver" for
