@@ -44,7 +44,25 @@ var authenticationRedirectHTML string
 
 var tmpl *template.Template
 
-var localClient tailscale.LocalClient
+// Server is the backend server for a Tailscale web client.
+type Server struct {
+	devMode bool
+	lc      *tailscale.LocalClient
+}
+
+// NewServer constructs a new Tailscale web client server.
+//
+// lc is an optional parameter. When not filled, NewServer
+// initializes its own tailscale.LocalClient.
+func NewServer(devMode bool, lc *tailscale.LocalClient) *Server {
+	if lc == nil {
+		lc = &tailscale.LocalClient{}
+	}
+	return &Server{
+		devMode: devMode,
+		lc:      lc,
+	}
+}
 
 func init() {
 	tmpl = template.Must(template.New("web.html").Parse(webHTML))
@@ -264,8 +282,8 @@ req.send(null);
 </body></html>
 `
 
-// Handle processes all requests for the Tailscale web client.
-func Handle(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP processes all requests for the Tailscale web client.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if authRedirect(w, r) {
 		return
@@ -281,12 +299,12 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := localClient.StatusWithoutPeers(ctx)
+	st, err := s.lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	prefs, err := localClient.GetPrefs(ctx)
+	prefs, err := s.lc.GetPrefs(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -316,7 +334,7 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 		mp.Prefs.AdvertiseRoutes = routes
 		log.Printf("Doing edit: %v", mp.Pretty())
 
-		if _, err := localClient.EditPrefs(ctx, mp); err != nil {
+		if _, err := s.lc.EditPrefs(ctx, mp); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(mi{"error": err.Error()})
 			return
@@ -331,7 +349,7 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 			logout = true
 		}
 		log.Printf("tailscaleUp(reauth=%v, logout=%v) ...", reauth, logout)
-		url, err := tailscaleUp(r.Context(), st, postData)
+		url, err := s.tailscaleUp(r.Context(), st, postData)
 		log.Printf("tailscaleUp = (URL %v, %v)", url != "", err)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -386,9 +404,9 @@ func Handle(w http.ResponseWriter, r *http.Request) {
 	w.Write(buf.Bytes())
 }
 
-func tailscaleUp(ctx context.Context, st *ipnstate.Status, postData postedData) (authURL string, retErr error) {
+func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData postedData) (authURL string, retErr error) {
 	if postData.ForceLogout {
-		if err := localClient.Logout(ctx); err != nil {
+		if err := s.lc.Logout(ctx); err != nil {
 			return "", fmt.Errorf("Logout error: %w", err)
 		}
 		return "", nil
@@ -415,7 +433,7 @@ func tailscaleUp(ctx context.Context, st *ipnstate.Status, postData postedData) 
 
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
-	watcher, err := localClient.WatchIPNBus(watchCtx, 0)
+	watcher, err := s.lc.WatchIPNBus(watchCtx, 0)
 	if err != nil {
 		return "", err
 	}
@@ -423,10 +441,10 @@ func tailscaleUp(ctx context.Context, st *ipnstate.Status, postData postedData) 
 
 	go func() {
 		if !isRunning {
-			localClient.Start(ctx, ipn.Options{})
+			s.lc.Start(ctx, ipn.Options{})
 		}
 		if forceReauth {
-			localClient.StartLoginInteractive(ctx)
+			s.lc.StartLoginInteractive(ctx)
 		}
 	}()
 
