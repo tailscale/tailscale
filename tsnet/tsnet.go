@@ -928,6 +928,10 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	if err != nil {
 		return nil, err
 	}
+	// TODO(sonia,tailscale/corp#10577): We may want to use the interactive enable
+	// flow here instead of CheckFunnelAccess to allow the user to turn on Funnel
+	// if not already on. Specifically when running from a terminal.
+	// See cli.serveEnv.verifyFunnelEnabled.
 	if err := ipn.CheckFunnelAccess(uint16(port), st.Self.Capabilities); err != nil {
 		return nil, err
 	}

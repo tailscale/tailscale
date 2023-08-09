@@ -204,31 +204,27 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 // CheckFunnelAccess checks whether Funnel access is allowed for the given node
 // and port.
 // It checks:
-//  1. Funnel is enabled on the Tailnet
-//  2. HTTPS is enabled on the Tailnet
-//  3. the node has the "funnel" nodeAttr
-//  4. the port is allowed for Funnel
+//  1. HTTPS is enabled on the Tailnet
+//  2. the node has the "funnel" nodeAttr
+//  3. the port is allowed for Funnel
 //
 // The nodeAttrs arg should be the node's Self.Capabilities which should contain
 // the attribute we're checking for and possibly warning-capabilities for
 // Funnel.
 func CheckFunnelAccess(port uint16, nodeAttrs []string) error {
-	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoInvite) {
-		return errors.New("Funnel not enabled; See https://tailscale.com/s/no-funnel.")
-	}
-	if slices.Contains(nodeAttrs, tailcfg.CapabilityWarnFunnelNoHTTPS) {
+	if !slices.Contains(nodeAttrs, tailcfg.CapabilityHTTPS) {
 		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
 	}
 	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
 		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/s/no-funnel.")
 	}
-	return checkFunnelPort(port, nodeAttrs)
+	return CheckFunnelPort(port, nodeAttrs)
 }
 
-// checkFunnelPort checks whether the given port is allowed for Funnel.
+// CheckFunnelPort checks whether the given port is allowed for Funnel.
 // It uses the tailcfg.CapabilityFunnelPorts nodeAttr to determine the allowed
 // ports.
-func checkFunnelPort(wantedPort uint16, nodeAttrs []string) error {
+func CheckFunnelPort(wantedPort uint16, nodeAttrs []string) error {
 	deny := func(allowedPorts string) error {
 		if allowedPorts == "" {
 			return fmt.Errorf("port %d is not allowed for funnel", wantedPort)

@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -745,14 +747,105 @@ func TestServeConfigMutations(t *testing.T) {
 	}
 }
 
+func TestVerifyFunnelEnabled(t *testing.T) {
+	lc := &fakeLocalServeClient{}
+	var stdout bytes.Buffer
+	var flagOut bytes.Buffer
+	e := &serveEnv{
+		lc:          lc,
+		testFlagOut: &flagOut,
+		testStdout:  &stdout,
+	}
+
+	tests := []struct {
+		name string
+		// queryFeatureResponse is the mock response desired from the
+		// call made to lc.QueryFeature by verifyFunnelEnabled.
+		queryFeatureResponse mockQueryFeatureResponse
+		caps                 []string // optionally set at fakeStatus.Capabilities
+		wantErr              string
+		wantPanic            string
+	}{
+		{
+			name:                 "enabled",
+			queryFeatureResponse: mockQueryFeatureResponse{resp: &tailcfg.QueryFeatureResponse{Complete: true}, err: nil},
+			wantErr:              "", // no error, success
+		},
+		{
+			name:                 "fallback-to-non-interactive-flow",
+			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
+			wantErr:              "Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.",
+		},
+		{
+			name:                 "fallback-flow-missing-acl-rule",
+			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
+			caps:                 []string{tailcfg.CapabilityHTTPS},
+			wantErr:              `Funnel not available; "funnel" node attribute not set. See https://tailscale.com/s/no-funnel.`,
+		},
+		{
+			name:                 "fallback-flow-enabled",
+			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
+			caps:                 []string{tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel},
+			wantErr:              "", // no error, success
+		},
+		{
+			name: "not-allowed-to-enable",
+			queryFeatureResponse: mockQueryFeatureResponse{resp: &tailcfg.QueryFeatureResponse{
+				Complete:   false,
+				Text:       "You don't have permission to enable this feature.",
+				ShouldWait: false,
+			}, err: nil},
+			wantErr:   "",
+			wantPanic: "unexpected call to os.Exit(0) during test", // os.Exit(0) should be called to end process
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			lc.setQueryFeatureResponse(tt.queryFeatureResponse)
+
+			if tt.caps != nil {
+				oldCaps := fakeStatus.Self.Capabilities
+				defer func() { fakeStatus.Self.Capabilities = oldCaps }() // reset after test
+				fakeStatus.Self.Capabilities = tt.caps
+			}
+			st, err := e.getLocalClientStatus(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			defer func() {
+				r := recover()
+				var gotPanic string
+				if r != nil {
+					gotPanic = fmt.Sprint(r)
+				}
+				if gotPanic != tt.wantPanic {
+					t.Errorf("wrong panic; got=%s, want=%s", gotPanic, tt.wantPanic)
+				}
+			}()
+			gotErr := e.verifyFunnelEnabled(ctx, st, 443)
+			var got string
+			if gotErr != nil {
+				got = gotErr.Error()
+			}
+			if got != tt.wantErr {
+				t.Errorf("wrong error; got=%s, want=%s", gotErr, tt.wantErr)
+			}
+		})
+	}
+}
+
 // fakeLocalServeClient is a fake tailscale.LocalClient for tests.
 // It's not a full implementation, just enough to test the serve command.
 //
 // The fake client is stateful, and is used to test manipulating
 // ServeConfig state. This implementation cannot be used concurrently.
 type fakeLocalServeClient struct {
-	config   *ipn.ServeConfig
-	setCount int // counts calls to SetServeConfig
+	config               *ipn.ServeConfig
+	setCount             int                       // counts calls to SetServeConfig
+	queryFeatureResponse *mockQueryFeatureResponse // mock response to QueryFeature calls
 }
 
 // fakeStatus is a fake ipnstate.Status value for tests.
@@ -782,7 +875,24 @@ func (lc *fakeLocalServeClient) SetServeConfig(ctx context.Context, config *ipn.
 	return nil
 }
 
-func (lc *fakeLocalServeClient) QueryFeature(context.Context, string) (*tailcfg.QueryFeatureResponse, error) {
+type mockQueryFeatureResponse struct {
+	resp *tailcfg.QueryFeatureResponse
+	err  error
+}
+
+func (lc *fakeLocalServeClient) setQueryFeatureResponse(resp mockQueryFeatureResponse) {
+	lc.queryFeatureResponse = &resp
+}
+
+func (lc *fakeLocalServeClient) QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error) {
+	if resp := lc.queryFeatureResponse; resp != nil {
+		// If we're testing QueryFeature, use the response value set for the test.
+		return resp.resp, resp.err
+	}
+	return &tailcfg.QueryFeatureResponse{Complete: true}, nil // fallback to already enabled
+}
+
+func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error) {
 	return nil, nil
 }
 
