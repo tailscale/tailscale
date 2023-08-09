@@ -556,6 +556,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 		Hostinfo:          req.Hostinfo.View(),
 		Name:              req.Hostinfo.Hostname,
 		Capabilities: []string{
+			tailcfg.CapabilityHTTPS,
 			tailcfg.NodeAttrFunnel,
 			tailcfg.CapabilityFunnelPorts + "?ports=8080,443",
 		},

@@ -1964,10 +1964,11 @@ const (
 	// Funnel warning capabilities used for reporting errors to the user.
 
 	// CapabilityWarnFunnelNoInvite indicates whether Funnel is enabled for the tailnet.
-	// NOTE: In transition from Alpha to Beta, this capability is being reused as the enablement.
+	// This cap is no longer used 2023-08-09 onwards.
 	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
 
 	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
+	// This cap is no longer used 2023-08-09 onwards.
 	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
 
 	// Debug logging capabilities
@@ -2270,6 +2271,7 @@ type QueryFeatureRequest struct {
 }
 
 // QueryFeatureResponse is the response to an QueryFeatureRequest.
+// See cli.enableFeatureInteractive for usage.
 type QueryFeatureResponse struct {
 	// Complete is true when the feature is already enabled.
 	Complete bool `json:",omitempty"`
@@ -2287,14 +2289,18 @@ type QueryFeatureResponse struct {
 	// When empty, there is no action for this user to take.
 	URL string `json:",omitempty"`
 
-	// WaitOn specifies the self node capability required to use
-	// the feature. The CLI can watch for changes to the presence,
-	// of this capability, and once included, can proceed with
-	// using the feature.
+	// ShouldWait specifies whether the CLI should block and
+	// wait for the user to enable the feature.
 	//
-	// If WaitOn is empty, the user does not have an action that
-	// the CLI should block on.
-	WaitOn string `json:",omitempty"`
+	// If this is true, the enablement from the control server
+	// is expected to be a quick and uninterrupted process for
+	// the user, and blocking allows them to immediately start
+	// using the feature once enabled without rerunning the
+	// command (e.g. no need to re-run "funnel on").
+	//
+	// The CLI can watch the IPN notification bus for changes in
+	// required node capabilities to know when to continue.
+	ShouldWait bool `json:",omitempty"`
 }
 
 // OverTLSPublicKeyResponse is the JSON response to /key?v=<n>

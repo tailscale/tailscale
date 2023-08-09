@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -129,7 +131,8 @@ type localServeClient interface {
 	Status(context.Context) (*ipnstate.Status, error)
 	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
-	QueryFeature(context.Context, string) (*tailcfg.QueryFeatureResponse, error)
+	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
+	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be
@@ -765,4 +768,71 @@ func parseServePort(s string) (uint16, error) {
 		return 0, errors.New("port number must be non-zero")
 	}
 	return uint16(p), nil
+}
+
+// enableFeatureInteractive sends the node's user through an interactive
+// flow to enable a feature, such as Funnel, on their tailnet.
+//
+// hasRequiredCapabilities should be provided as a function that checks
+// whether a slice of node capabilities encloses the necessary values
+// needed to use the feature.
+//
+// If err is returned empty, the feature has been successfully enabled.
+//
+// If err is returned non-empty, the client failed to query the control
+// server for information about how to enable the feature.
+//
+// If the feature cannot be enabled, enableFeatureInteractive terminates
+// the CLI process.
+//
+// 2023-08-09: The only valid feature values are "serve" and "funnel".
+// This can be moved to some CLI lib when expanded past serve/funnel.
+func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, hasRequiredCapabilities func(caps []string) bool) (err error) {
+	info, err := e.lc.QueryFeature(ctx, feature)
+	if err != nil {
+		return err
+	}
+	if info.Complete {
+		return nil // already enabled
+	}
+	if info.Text != "" {
+		fmt.Fprintln(os.Stdout, info.Text)
+	}
+	if info.URL != "" {
+		fmt.Fprintln(os.Stdout, "\n         "+info.URL)
+	}
+	if !info.ShouldWait {
+		// The feature has not been enabled yet,
+		// but the CLI should not block on user action.
+		// Once info.Text is printed, exit the CLI.
+		os.Exit(0)
+	}
+	// Block until feature is enabled.
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	watcher, err := e.lc.WatchIPNBus(watchCtx, 0)
+	if err != nil {
+		// If we fail to connect to the IPN notification bus,
+		// don't block. We still present the URL in the CLI,
+		// then close the process. Swallow the error.
+		log.Fatalf("lost connection to tailscaled: %v", err)
+		return err
+	}
+	defer watcher.Close()
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			// Stop blocking if we error.
+			// Let the user finish enablement then rerun their
+			// command themselves.
+			log.Fatalf("lost connection to tailscaled: %v", err)
+			return err
+		}
+		if nm := n.NetMap; nm != nil && nm.SelfNode != nil {
+			if hasRequiredCapabilities(nm.SelfNode.Capabilities) {
+				fmt.Fprintln(os.Stdout, "\nSuccess.")
+				return nil
+			}
+		}
+	}
 }
