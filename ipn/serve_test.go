@@ -16,14 +16,13 @@ func TestCheckFunnelAccess(t *testing.T) {
 		wantErr bool
 	}{
 		{443, []string{portAttr}, true}, // No "funnel" attribute
-		{443, []string{portAttr, tailcfg.CapabilityWarnFunnelNoInvite}, true},
-		{443, []string{portAttr, tailcfg.CapabilityWarnFunnelNoHTTPS}, true},
-		{443, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
-		{8443, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
-		{8321, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
-		{8083, []string{portAttr, tailcfg.NodeAttrFunnel}, false},
-		{8091, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
-		{3000, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
+		{443, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
+		{443, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
+		{8443, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
+		{8321, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
+		{8083, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
+		{8091, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
+		{3000, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
 	}
 	for _, tt := range tests {
 		err := CheckFunnelAccess(tt.port, tt.caps)

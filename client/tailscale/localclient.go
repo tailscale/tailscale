@@ -1144,18 +1144,18 @@ func (lc *LocalClient) DeleteProfile(ctx context.Context, profile ipn.ProfileID)
 	return err
 }
 
-// QueryFeature makes a request for instructions on how to enable a
-// feature, such as Funnel, for the node's tailnet.
+// QueryFeature makes a request for instructions on how to enable
+// a feature, such as Funnel, for the node's tailnet. If relevant,
+// this includes a control server URL the user can visit to enable
+// the feature.
 //
-// This request itself does not directly enable the feature on behalf
-// of the node, but rather returns information that can be presented
-// to the acting user about where/how to enable the feature.
+// If you are looking to use QueryFeature, you'll likely want to
+// use cli.enableFeatureInteractive instead, which handles the logic
+// of wraping QueryFeature and translating its response into an
+// interactive flow for the user, including using the IPN notify bus
+// to block until the feature has been enabled.
 //
-// If relevant, this includes a control URL the user can visit to
-// explicitly consent to using the feature. LocalClient.WatchIPNBus
-// can be used to block on the feature being enabled.
-//
-// 2023-08-02: Valid feature values are "serve" and "funnel".
+// 2023-08-09: Valid feature values are "serve" and "funnel".
 func (lc *LocalClient) QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error) {
 	v := url.Values{"feature": {feature}}
 	body, err := lc.send(ctx, "POST", "/localapi/v0/query-feature?"+v.Encode(), 200, nil)
