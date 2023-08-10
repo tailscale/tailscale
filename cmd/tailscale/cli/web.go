@@ -38,7 +38,7 @@ Tailscale, as opposed to a CLI or a native app.
 		webf := newFlagSet("web")
 		webf.StringVar(&webArgs.listen, "listen", "localhost:8088", "listen address; use port 0 for automatic")
 		webf.BoolVar(&webArgs.cgi, "cgi", false, "run as CGI script")
-		webf.BoolVar(&webArgs.dev, "dev", false, "run web client in developer mode")
+		webf.BoolVar(&webArgs.dev, "dev", false, "run web client in developer mode [this flag is in development, use is unsupported]")
 		return webf
 	})(),
 	Exec: runWeb,
@@ -78,7 +78,8 @@ func runWeb(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
-	webServer := web.NewServer(webArgs.dev, nil)
+	webServer, cleanup := web.NewServer(webArgs.dev, nil)
+	defer cleanup()
 
 	if webArgs.cgi {
 		if err := cgi.Serve(webServer); err != nil {
