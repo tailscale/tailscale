@@ -1,0 +1,31 @@
+{
+  "name": "webui",
+  "version": "0.0.1",
+  "license": "BSD-3-Clause",
+  "engines": {
+    "node": "18.16.1",
+    "yarn": "1.22.19"
+  },
+  "private": true,
+  "dependencies": {},
+  "devDependencies": {
+    "tailwindcss": "^3.1.6",
+    "typescript": "^4.7.4",
+    "vite": "^4.3.9",
+    "@vitejs/plugin-react-swc": "^3.3.2",
+    "vite-tsconfig-paths": "^3.5.0",
+    "vite-plugin-svgr": "^3.2.0",
+    "vite-plugin-rewrite-all": "^1.0.1",
+    "vitest": "^0.32.0"
+  },
+  "scripts": {
+    "build": "vite build",
+    "start": "vite",
+    "lint": "tsc --noEmit",
+    "test": "vitest"
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 80
+  }
+}
