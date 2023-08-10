@@ -105,7 +105,8 @@ type CapabilityVersion int
 //   - 65: 2023-07-12: Client understands DERPMap.HomeParams + incremental DERPMap updates with params
 //   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs)
 //   - 67: 2023-07-25: Client understands PeerCapMap
-const CurrentCapabilityVersion CapabilityVersion = 67
+//   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
+const CurrentCapabilityVersion CapabilityVersion = 68
 
 type StableID string
 
@@ -1082,8 +1083,21 @@ type MapRequest struct {
 	NodeKey     key.NodePublic
 	DiscoKey    key.DiscoPublic
 	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
-	Stream      bool // if true, multiple MapResponse objects are returned
-	Hostinfo    *Hostinfo
+
+	// Stream is whether the client wants to receive multiple MapResponses over
+	// the same HTTP connection.
+	//
+	// If false, the server will send a single MapResponse and then close the
+	// connection.
+	//
+	// If true and Version >= 68, the server should treat this as a read-only
+	// request and ignore any Hostinfo or other fields that might be set.
+	Stream bool
+
+	// Hostinfo is the client's current Hostinfo. Although it is always included
+	// in the request, the server may choose to ignore it when Stream is true
+	// and Version >= 68.
+	Hostinfo *Hostinfo
 
 	// MapSessionHandle, if non-empty, is a request to reattach to a previous
 	// map session after a previous map session was interrupted for whatever
@@ -1105,6 +1119,7 @@ type MapRequest struct {
 	MapSessionSeq int64 `json:",omitempty"`
 
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
+	// These can be ignored if Stream is true and Version >= 68.
 	Endpoints []string
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
 	EndpointTypes []EndpointType `json:",omitempty"`
@@ -1114,13 +1129,12 @@ type MapRequest struct {
 	// It is encoded as tka.AUMHash.MarshalText.
 	TKAHead string `json:",omitempty"`
 
-	// ReadOnly is whether the client just wants to fetch the
-	// MapResponse, without updating their Endpoints. The
-	// Endpoints field will be ignored and LastSeen will not be
-	// updated and peers will not be notified of changes.
+	// ReadOnly was set when client just wanted to fetch the MapResponse,
+	// without updating their Endpoints. The intended use was for clients to
+	// discover the DERP map at start-up before their first real endpoint
+	// update.
 	//
-	// The intended use is for clients to discover the DERP map at
-	// start-up before their first real endpoint update.
+	// Deprecated: always false as of Version 68.
 	ReadOnly bool `json:",omitempty"`
 
 	// OmitPeers is whether the client is okay with the Peers list being omitted
