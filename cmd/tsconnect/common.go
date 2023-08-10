@@ -32,6 +32,9 @@ func commonSetup(dev bool) (*esbuild.BuildOptions, error) {
 	if err != nil {
 		return nil, err
 	}
+	if *yarnPath == "" {
+		*yarnPath = path.Join(root, "tool", "yarn")
+	}
 	tsConnectDir := filepath.Join(root, "cmd", "tsconnect")
 	if err := os.Chdir(tsConnectDir); err != nil {
 		return nil, fmt.Errorf("Cannot change cwd: %w", err)

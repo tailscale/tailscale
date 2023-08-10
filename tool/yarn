@@ -1,79 +1,43 @@
-#!/bin/sh
-#
-# This script acts like the "yarn" command, but uses Tailscale's
-# currently-desired version, downloading it (and node) first if necessary.
+#!/usr/bin/env bash
+# Run a command with our local yarn install, rather than any globally installed
+# instance.
 
-set -eu
+set -euo pipefail
 
-NODE_DIR="$HOME/.cache/tailscale-node"
-read -r YARN_REV < "$(dirname "$0")/yarn.rev"
-YARN_DIR="$HOME/.cache/tailscale-yarn"
-# This works for linux and darwin, which is sufficient
-# (we do not build for other targets).
-OS=$(uname -s | tr A-Z a-z)
-ARCH="$(uname -m)"
-if [ "$ARCH" = "aarch64" ]; then
-    # Node uses the name "arm64".
-    ARCH="arm64"
-elif [ "$ARCH" = "x86_64" ]; then
-    # Node uses the name "x64".
-    ARCH="x64"
+if [[ "${CI:-}" == "true" ]]; then
+    set -x
 fi
 
-install_node() {
-    read -r NODE_REV < "$(dirname "$0")/node.rev"
-    NODE_URL="https://nodejs.org/dist/v${NODE_REV}/node-v${NODE_REV}-${OS}-${ARCH}.tar.gz"
-    install_tool "node" $NODE_REV $NODE_DIR $NODE_URL
-}
-
-install_yarn() {
-    YARN_URL="https://github.com/yarnpkg/yarn/releases/download/v$YARN_REV/yarn-v$YARN_REV.tar.gz"
-    install_tool "yarn" $YARN_REV $YARN_DIR $YARN_URL
-}
-
-install_tool() {
-    TOOL=$1
-    REV=$2
-    TOOLCHAIN=$3
-    URL=$4
-
-    archive="$TOOLCHAIN-$REV.tar.gz"
-    mark="$TOOLCHAIN.extracted"
-    extracted=
-    [ ! -e "$mark" ] || read -r extracted junk <$mark
-
-    if [ "$extracted" = "$REV" ] && [ -e "$TOOLCHAIN/bin/$TOOL" ]; then
-        # Already extracted, continue silently
-        return 0
+(
+    if [[ "${CI:-}" == "true" ]]; then
+        set -x
     fi
 
-    rm -f "$archive.new" "$TOOLCHAIN.extracted"
-    if [ ! -e "$archive" ]; then
-            log "Need to download $TOOL '$REV' from $URL."
-            curl -f -L -o "$archive.new" $URL
-            rm -f "$archive"
-            mv "$archive.new" "$archive"
+    repo_root="${BASH_SOURCE%/*}/../"
+    cd "$repo_root"
+
+    ./tool/node --version >/dev/null # Ensure node is unpacked and ready
+
+    cachedir="$HOME/.cache/tailscale-yarn"
+    tarball="${cachedir}.tar.gz"
+
+    read -r want_rev < "$(dirname "$0")/yarn.rev"
+
+    got_rev=""
+    if [[ -x "${cachedir}/bin/yarn" ]]; then
+        got_rev=$(PATH="$HOME/.cache/tailscale-node/bin:$PATH" "${cachedir}/bin/yarn" --version)
     fi
 
-    log "Extracting $TOOL '$REV' into '$TOOLCHAIN'." >&2
-    rm -rf "$TOOLCHAIN"
-    mkdir -p "$TOOLCHAIN"
-    (cd "$TOOLCHAIN" && tar --strip-components=1 -xf "$archive")
-    echo "$REV" >$mark
-}
+    if [[ "$want_rev" != "$got_rev" ]]; then
+        rm -rf "$cachedir" "$tarball"
+        mkdir -p "$cachedir"
+        curl -f -L -o "$tarball" "https://github.com/yarnpkg/yarn/releases/download/v${want_rev}/yarn-v${want_rev}.tar.gz"
+        (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
+        rm -f "$tarball"
+    fi
+)
 
-log() {
-    echo "$@" >&2
-}
-
-if [ "${YARN_REV}" = "SKIP" ] ||
-   [ "${OS}" != "darwin" -a "${OS}" != "linux" ] ||
-   [ "${ARCH}" != "x64" -a "${ARCH}" != "arm64" ]; then
-    log "Using existing yarn (`which yarn`)."
-    exec yarn "$@"
-fi
-
-install_node
-install_yarn
-
-exec /usr/bin/env PATH="$NODE_DIR/bin:$PATH" "$YARN_DIR/bin/yarn" "$@"
+# Deliberately not using cachedir here, to keep the environment
+# completely pristine for execution of yarn.
+export PATH="$HOME/.cache/tailscale-node/bin:$HOME/.cache/tailscale-yarn/bin:$PATH"
+exec "$HOME/.cache/tailscale-yarn/bin/yarn" "$@"
