@@ -49,7 +49,7 @@ func DetectIptables() (int, error) {
 	case err != nil && ip6err == nil:
 		allLines = ip6lines
 	default:
-		return 0, ErrorFWModeNotSupported{
+		return 0, FWModeNotSupportedError{
 			Mode: FirewallModeIPTables,
 			Err:  fmt.Errorf("iptables command run fail: %w", multierr.New(err, ip6err)),
 		}
