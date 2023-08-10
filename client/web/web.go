@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
 	"net/url"
 	"os"
@@ -46,22 +47,30 @@ var tmpl *template.Template
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
-	devMode bool
-	lc      *tailscale.LocalClient
+	lc *tailscale.LocalClient
+
+	devMode  bool
+	devProxy *httputil.ReverseProxy // only filled when devMode is on
 }
 
 // NewServer constructs a new Tailscale web client server.
 //
 // lc is an optional parameter. When not filled, NewServer
 // initializes its own tailscale.LocalClient.
-func NewServer(devMode bool, lc *tailscale.LocalClient) *Server {
+func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func()) {
 	if lc == nil {
 		lc = &tailscale.LocalClient{}
 	}
-	return &Server{
+	s = &Server{
 		devMode: devMode,
 		lc:      lc,
 	}
+	cleanup = func() {}
+	if s.devMode {
+		cleanup = s.startDevServer()
+		s.addProxyToDevServer()
+	}
+	return s, cleanup
 }
 
 func init() {
@@ -284,6 +293,12 @@ req.send(null);
 
 // ServeHTTP processes all requests for the Tailscale web client.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.devMode {
+		// When in dev mode, proxy to the Vite dev server.
+		s.devProxy.ServeHTTP(w, r)
+		return
+	}
+
 	ctx := r.Context()
 	if authRedirect(w, r) {
 		return

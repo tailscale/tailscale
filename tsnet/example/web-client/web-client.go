@@ -35,7 +35,8 @@ func main() {
 	}
 
 	// Serve the Tailscale web client.
-	ws := web.NewServer(*devMode, lc)
+	ws, cleanup := web.NewServer(*devMode, lc)
+	defer cleanup()
 	if err := http.Serve(ln, ws); err != nil {
 		if err != http.ErrServerClosed {
 			log.Fatal(err)
