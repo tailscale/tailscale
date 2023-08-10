@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
@@ -259,10 +260,8 @@ func NewDirect(opts Options) (*Direct, error) {
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
 	} else {
-		ni := opts.Hostinfo.NetInfo
-		opts.Hostinfo.NetInfo = nil
 		c.SetHostinfo(opts.Hostinfo)
-		if ni != nil {
+		if ni := opts.Hostinfo.NetInfo; ni != nil {
 			c.SetNetInfo(ni)
 		}
 	}
@@ -294,6 +293,8 @@ func (c *Direct) SetHostinfo(hi *tailcfg.Hostinfo) bool {
 	if hi == nil {
 		panic("nil Hostinfo")
 	}
+	hi = ptr.To(*hi)
+	hi.NetInfo = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -771,13 +772,13 @@ func (c *Direct) SetEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 // It always returns a non-nil error describing the reason for the failure
 // or why the request ended.
 func (c *Direct) PollNetMap(ctx context.Context, cb func(*netmap.NetworkMap)) error {
-	return c.sendMapRequest(ctx, -1, false, cb)
+	return c.sendMapRequest(ctx, true, cb)
 }
 
-// FetchNetMap fetches the netmap once.
-func (c *Direct) FetchNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
+// FetchNetMapForTest fetches the netmap once.
+func (c *Direct) FetchNetMapForTest(ctx context.Context) (*netmap.NetworkMap, error) {
 	var ret *netmap.NetworkMap
-	err := c.sendMapRequest(ctx, 1, false, func(nm *netmap.NetworkMap) {
+	err := c.sendMapRequest(ctx, false, func(nm *netmap.NetworkMap) {
 		ret = nm
 	})
 	if err == nil && ret == nil {
@@ -786,11 +787,11 @@ func (c *Direct) FetchNetMap(ctx context.Context) (*netmap.NetworkMap, error) {
 	return ret, err
 }
 
-// SendLiteMapUpdate makes a /map request to update the server of our latest state,
-// but does not fetch anything. It returns an error if the server did not return a
+// SendUpdate makes a /map request to update the server of our latest state, but
+// does not fetch anything. It returns an error if the server did not return a
 // successful 200 OK response.
-func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
-	return c.sendMapRequest(ctx, 1, false, nil)
+func (c *Direct) SendUpdate(ctx context.Context) error {
+	return c.sendMapRequest(ctx, false, nil)
 }
 
 // If we go more than pollTimeout without hearing from the server,
@@ -798,17 +799,21 @@ func (c *Direct) SendLiteMapUpdate(ctx context.Context) error {
 // every minute.
 const pollTimeout = 120 * time.Second
 
-// sendMapRequest makes a /map request to download the network map, calling cb with
-// each new netmap. If maxPolls is -1, it will poll forever and only returns if
-// the context expires or the server returns an error/closes the connection and as
-// such always returns a non-nil error.
+// sendMapRequest makes a /map request to download the network map, calling cb
+// with each new netmap. If isStreaming, it will poll forever and only returns
+// if the context expires or the server returns an error/closes the connection
+// and as such always returns a non-nil error.
 //
 // If cb is nil, OmitPeers will be set to true.
-func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool, cb func(*netmap.NetworkMap)) error {
+func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, cb func(*netmap.NetworkMap)) error {
+	if isStreaming && cb == nil {
+		panic("cb must be non-nil if isStreaming is true")
+	}
+
 	metricMapRequests.Add(1)
 	metricMapRequestsActive.Add(1)
 	defer metricMapRequestsActive.Add(-1)
-	if maxPolls == -1 {
+	if isStreaming {
 		metricMapRequestsPoll.Add(1)
 	} else {
 		metricMapRequestsLite.Add(1)
@@ -844,8 +849,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		return errors.New("hostinfo: BackendLogID missing")
 	}
 
-	allowStream := maxPolls != 1
-	c.logf("[v1] PollNetMap: stream=%v ep=%v", allowStream, epStrs)
+	c.logf("[v1] PollNetMap: stream=%v ep=%v", isStreaming, epStrs)
 
 	vlogf := logger.Discard
 	if DevKnob.DumpNetMaps() {
@@ -861,23 +865,11 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
 		EndpointTypes: epTypes,
-		Stream:        allowStream,
+		Stream:        isStreaming,
 		Hostinfo:      hi,
 		DebugFlags:    c.debugFlags,
 		OmitPeers:     cb == nil,
 		TKAHead:       c.tkaHead,
-
-		// Previously we'd set ReadOnly to true if we didn't have any endpoints
-		// yet as we expected to learn them in a half second and restart the full
-		// streaming map poll, however as we are trying to reduce the number of
-		// times we restart the full streaming map poll we now just set ReadOnly
-		// false when we're doing a full streaming map poll.
-		//
-		// TODO(maisem/bradfitz): really ReadOnly should be set to true if for
-		// all streams and we should only do writes via lite map updates.
-		// However that requires an audit and a bunch of testing to make sure we
-		// don't break anything.
-		ReadOnly: readOnly && !allowStream,
 	}
 	var extraDebugFlags []string
 	if hi != nil && c.netMon != nil && !c.skipIPForwardingCheck &&
@@ -994,7 +986,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 	// the same format before just closing the connection.
 	// We can use this same read loop either way.
 	var msg []byte
-	for i := 0; i < maxPolls || maxPolls < 0; i++ {
+	for i := 0; i == 0 || isStreaming; i++ {
 		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
@@ -1018,7 +1010,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, maxPolls int, readOnly bool
 
 		metricMapResponseMessages.Add(1)
 
-		if allowStream {
+		if isStreaming {
 			health.GotStreamedMapResponse()
 		}
 
