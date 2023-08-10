@@ -42,7 +42,10 @@ func TestNewDirect(t *testing.T) {
 		t.Errorf("c.serverURL got %v want %v", c.serverURL, opts.ServerURL)
 	}
 
-	if !hi.Equal(c.hostinfo) {
+	// hi is stored without its NetInfo field.
+	hiWithoutNi := *hi
+	hiWithoutNi.NetInfo = nil
+	if !hiWithoutNi.Equal(c.hostinfo) {
 		t.Errorf("c.hostinfo got %v want %v", c.hostinfo, hi)
 	}
 
