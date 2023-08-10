@@ -107,7 +107,7 @@ func DebugNetfilter(logf logger.Logf) error {
 func DetectNetfilter() (int, error) {
 	conn, err := nftables.New()
 	if err != nil {
-		return 0, ErrorFWModeNotSupported{
+		return 0, FWModeNotSupportedError{
 			Mode: FirewallModeNfTables,
 			Err:  err,
 		}
@@ -115,7 +115,7 @@ func DetectNetfilter() (int, error) {
 
 	chains, err := conn.ListChains()
 	if err != nil {
-		return 0, ErrorFWModeNotSupported{
+		return 0, FWModeNotSupportedError{
 			Mode: FirewallModeNfTables,
 			Err:  fmt.Errorf("cannot list chains: %w", err),
 		}
