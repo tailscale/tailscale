@@ -29,21 +29,21 @@ const (
 	Masq
 )
 
-type ErrorFWModeNotSupported struct {
+type FWModeNotSupportedError struct {
 	Mode FirewallMode
 	Err  error
 }
 
-func (e ErrorFWModeNotSupported) Error() string {
+func (e FWModeNotSupportedError) Error() string {
 	return fmt.Sprintf("firewall mode %q not supported: %v", e.Mode, e.Err)
 }
 
-func (e ErrorFWModeNotSupported) Is(target error) bool {
-	_, ok := target.(ErrorFWModeNotSupported)
+func (e FWModeNotSupportedError) Is(target error) bool {
+	_, ok := target.(FWModeNotSupportedError)
 	return ok
 }
 
-func (e ErrorFWModeNotSupported) Unwrap() error {
+func (e FWModeNotSupportedError) Unwrap() error {
 	return e.Err
 }
 
