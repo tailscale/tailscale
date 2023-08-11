@@ -28,7 +28,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 	"tailscale.com/util/winutil"
@@ -186,11 +188,106 @@ func (up *updater) confirm(ver string) bool {
 }
 
 func (up *updater) updateSynology() error {
-	// TODO(bradfitz): detect, map GOARCH+CPU to the right Synology arch.
-	// TODO(bradfitz): add pkgs.tailscale.com endpoint to get release info
-	// TODO(bradfitz): require root/sudo
-	// TODO(bradfitz): run /usr/syno/bin/synopkg install tailscale.spk
-	return errors.ErrUnsupported
+	if up.Version != "" {
+		return errors.New("installing a specific version on Synology is not supported")
+	}
+
+	// Get the latest version and list of SPKs from pkgs.tailscale.com.
+	osName := fmt.Sprintf("dsm%d", distro.DSMVersion())
+	arch, err := synoArch(hostinfo.New())
+	if err != nil {
+		return err
+	}
+	latest, err := latestPackages(up.track)
+	if err != nil {
+		return err
+	}
+	if latest.Version == "" {
+		return fmt.Errorf("no latest version found for %q track", up.track)
+	}
+	spkName := latest.SPKs[osName][arch]
+	if spkName == "" {
+		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
+	}
+
+	if !up.confirm(latest.Version) {
+		return nil
+	}
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	// Download the SPK into a temporary directory.
+	spkDir, err := os.MkdirTemp("", "tailscale-update")
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/%s", up.track, spkName)
+	spkPath := filepath.Join(spkDir, path.Base(url))
+	// TODO(awly): we should sign SPKs and validate signatures here too.
+	if err := up.downloadURLToFile(url, spkPath); err != nil {
+		return err
+	}
+
+	// Install the SPK. Run via nohup to allow install to succeed when we're
+	// connected over tailscale ssh and this parent process dies. Otherwise, if
+	// you abort synopkg install mid-way, tailscaled is not restarted.
+	cmd := exec.Command("nohup", "synopkg", "install", spkPath)
+	// Don't attach cmd.Stdout to os.Stdout because nohup will redirect that
+	// into nohup.out file. synopkg doesn't have any progress output anyway, it
+	// just spits out a JSON result when done.
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("synopkg install failed: %w\noutput:\n%s", err, out)
+	}
+	return nil
+}
+
+// synoArch returns the Synology CPU architecture matching one of the SPK
+// architectures served from pkgs.tailscale.com.
+func synoArch(hinfo *tailcfg.Hostinfo) (string, error) {
+	// Most Synology boxes just use a different arch name from GOARCH.
+	arch := map[string]string{
+		"amd64": "x86_64",
+		"386":   "i686",
+		"arm64": "armv8",
+	}[hinfo.GoArch]
+	// Here's the fun part, some older ARM boxes require you to use SPKs
+	// specifically for their CPU.
+	//
+	// See https://github.com/SynoCommunity/spksrc/wiki/Synology-and-SynoCommunity-Package-Architectures
+	// for a complete list. Here, we override GOARCH for those older boxes that
+	// support at least DSM6.
+	//
+	// This is an artisanal hand-crafted list based on the wiki page. Some
+	// values may be wrong, since we don't have all those devices to actually
+	// test with.
+	switch hinfo.DeviceModel {
+	case "DS213air", "DS213", "DS413j",
+		"DS112", "DS112+", "DS212", "DS212+", "RS212", "RS812", "DS212j", "DS112j",
+		"DS111", "DS211", "DS211+", "DS411slim", "DS411", "RS411", "DS211j", "DS411j":
+		arch = "88f6281"
+	case "NVR1218", "NVR216", "VS960HD", "VS360HD":
+		arch = "hi3535"
+	case "DS1517", "DS1817", "DS416", "DS2015xs", "DS715", "DS1515", "DS215+":
+		arch = "alpine"
+	case "DS216se", "DS115j", "DS114", "DS214se", "DS414slim", "RS214", "DS14", "EDS14", "DS213j":
+		arch = "armada370"
+	case "DS115", "DS215j":
+		arch = "armada375"
+	case "DS419slim", "DS218j", "RS217", "DS116", "DS216j", "DS216", "DS416slim", "RS816", "DS416j":
+		arch = "armada38x"
+	case "RS815", "DS214", "DS214+", "DS414", "RS814":
+		arch = "armadaxp"
+	case "DS414j":
+		arch = "comcerto2k"
+	case "DS216play":
+		arch = "monaco"
+	}
+	if arch == "" {
+		return "", fmt.Errorf("cannot determine CPU architecture for Synology model %q (Go arch %q), please report a bug at https://github.com/tailscale/tailscale/issues/new/choose", hinfo.DeviceModel, hinfo.GoArch)
+	}
+	return arch, nil
 }
 
 func (up *updater) updateDebLike() error {
@@ -858,23 +955,37 @@ func LatestTailscaleVersion(track string) (string, error) {
 		}
 	}
 
+	latest, err := latestPackages(track)
+	if err != nil {
+		return "", err
+	}
+	if latest.Version == "" {
+		return "", fmt.Errorf("no latest version found for %q track", track)
+	}
+	return latest.Version, nil
+}
+
+type trackPackages struct {
+	Version  string
+	Tarballs map[string]string
+	Exes     []string
+	MSIs     map[string]string
+	MacZips  map[string]string
+	SPKs     map[string]map[string]string
+}
+
+func latestPackages(track string) (*trackPackages, error) {
 	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/?mode=json&os=%s", track, runtime.GOOS)
 	res, err := http.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("fetching latest tailscale version: %w", err)
+		return nil, fmt.Errorf("fetching latest tailscale version: %w", err)
 	}
-	var latest struct {
-		Version string
+	defer res.Body.Close()
+	var latest trackPackages
+	if err := json.NewDecoder(res.Body).Decode(&latest); err != nil {
+		return nil, fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
 	}
-	err = json.NewDecoder(res.Body).Decode(&latest)
-	res.Body.Close()
-	if err != nil {
-		return "", fmt.Errorf("decoding JSON: %v: %w", res.Status, err)
-	}
-	if latest.Version == "" {
-		return "", fmt.Errorf("no version found at %q", url)
-	}
-	return latest.Version, nil
+	return &latest, nil
 }
 
 func requireRoot() error {
