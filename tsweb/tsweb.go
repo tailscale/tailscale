@@ -169,7 +169,8 @@ type ReturnHandler interface {
 type HandlerOptions struct {
 	QuietLoggingIfSuccessful bool // if set, do not log successfully handled HTTP requests (200 and 304 status codes)
 	Logf                     logger.Logf
-	Now                      func() time.Time // if nil, defaults to time.Now
+	Now                      func() time.Time              // if nil, defaults to time.Now
+	GenerateRequestID        func(*http.Request) RequestID // if nil, no request IDs are generated
 
 	// If non-nil, StatusCodeCounters maintains counters
 	// of status codes for handled responses.
@@ -266,6 +267,11 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		msg.Code = 499 // nginx convention: Client Closed Request
 		msg.Err = context.Canceled.Error()
 	case hErrOK:
+		if hErr.RequestID == "" && h.opts.GenerateRequestID != nil {
+			hErr.RequestID = h.opts.GenerateRequestID(r)
+		}
+		msg.RequestID = hErr.RequestID
+
 		// Handler asked us to send an error. Do so, if we haven't
 		// already sent a response.
 		msg.Err = hErr.Msg
@@ -296,14 +302,24 @@ func (h retHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			lw.WriteHeader(msg.Code)
 			fmt.Fprintln(lw, hErr.Msg)
+			if hErr.RequestID != "" {
+				fmt.Fprintln(lw, hErr.RequestID)
+			}
 		}
 	case err != nil:
+		const internalServerError = "internal server error"
+
+		errorMessage := internalServerError
+		if h.opts.GenerateRequestID != nil {
+			msg.RequestID = h.opts.GenerateRequestID(r)
+			errorMessage = errorMessage + "\n" + string(msg.RequestID)
+		}
 		// Handler returned a generic error. Serve an internal server
 		// error, if necessary.
 		msg.Err = err.Error()
 		if lw.code == 0 {
 			msg.Code = http.StatusInternalServerError
-			http.Error(lw, "internal server error", msg.Code)
+			http.Error(lw, errorMessage, msg.Code)
 		}
 	}
 
@@ -398,18 +414,44 @@ func (l loggingResponseWriter) Flush() {
 	f.Flush()
 }
 
+// RequestID is an opaque identifier for a HTTP request, used to correlate
+// user-visible errors with backend server logs. If present in a HTTPError, the
+// RequestID will be printed alongside the message text and logged in the
+// AccessLogRecord. If an HTTPError has no RequestID (or a non-HTTPError error
+// is returned), but the StdHandler has a RequestID generator function, then a
+// RequestID will be generated before responding to the client and logging the
+// error.
+//
+// In the event that there is no ErrorHandlerFunc and a non-HTTPError is
+// returned to a StdHandler, the response body will be formatted like
+// "internal server error\n{RequestID}\n".
+//
+// There is no particular format required for a RequestID, but ideally it should
+// be obvious to an end-user that it is something to record for support
+// purposes. One possible example for a RequestID format is:
+// REQ-{server identifier}-{timestamp}-{random hex string}.
+type RequestID string
+
 // HTTPError is an error with embedded HTTP response information.
 //
 // It is the error type to be (optionally) used by Handler.ServeHTTPReturn.
 type HTTPError struct {
-	Code   int         // HTTP response code to send to client; 0 means 500
-	Msg    string      // Response body to send to client
-	Err    error       // Detailed error to log on the server
-	Header http.Header // Optional set of HTTP headers to set in the response
+	Code      int         // HTTP response code to send to client; 0 means 500
+	Msg       string      // Response body to send to client
+	Err       error       // Detailed error to log on the server
+	RequestID RequestID   // Optional identifier to connect client-visible errors with server logs
+	Header    http.Header // Optional set of HTTP headers to set in the response
 }
 
 // Error implements the error interface.
-func (e HTTPError) Error() string { return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err) }
+func (e HTTPError) Error() string {
+	if e.RequestID != "" {
+		return fmt.Sprintf("httperror{%d, %q, %v, RequestID=%q}", e.Code, e.Msg, e.Err, e.RequestID)
+	} else {
+		// Backwards compatibility
+		return fmt.Sprintf("httperror{%d, %q, %v}", e.Code, e.Msg, e.Err)
+	}
+}
 
 func (e HTTPError) Unwrap() error { return e.Err }
 
