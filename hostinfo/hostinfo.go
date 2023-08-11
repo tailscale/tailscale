@@ -141,15 +141,16 @@ func packageTypeCached() string {
 type EnvType string
 
 const (
-	KNative         = EnvType("kn")
-	AWSLambda       = EnvType("lm")
-	Heroku          = EnvType("hr")
-	AzureAppService = EnvType("az")
-	AWSFargate      = EnvType("fg")
-	FlyDotIo        = EnvType("fly")
-	Kubernetes      = EnvType("k8s")
-	DockerDesktop   = EnvType("dde")
-	Replit          = EnvType("repl")
+	KNative            = EnvType("kn")
+	AWSLambda          = EnvType("lm")
+	Heroku             = EnvType("hr")
+	AzureAppService    = EnvType("az")
+	AWSFargate         = EnvType("fg")
+	FlyDotIo           = EnvType("fly")
+	Kubernetes         = EnvType("k8s")
+	DockerDesktop      = EnvType("dde")
+	Replit             = EnvType("repl")
+	HomeAssistantAddOn = EnvType("haao")
 )
 
 var envType atomic.Value // of EnvType
@@ -255,6 +256,9 @@ func getEnvType() EnvType {
 	if inReplit() {
 		return Replit
 	}
+	if inHomeAssistantAddOn() {
+		return HomeAssistantAddOn
+	}
 	return ""
 }
 
@@ -359,6 +363,13 @@ func inKubernetes() bool {
 
 func inDockerDesktop() bool {
 	if os.Getenv("TS_HOST_ENV") == "dde" {
+		return true
+	}
+	return false
+}
+
+func inHomeAssistantAddOn() bool {
+	if os.Getenv("SUPERVISOR_TOKEN") != "" || os.Getenv("HASSIO_TOKEN") != "" {
 		return true
 	}
 	return false
