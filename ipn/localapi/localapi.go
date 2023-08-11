@@ -559,7 +559,10 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		h.b.DebugNotify(n)
-
+	case "break-tcp-conns":
+		err = h.b.DebugBreakTCPConns()
+	case "break-derp-conns":
+		err = h.b.DebugBreakDERPConns()
 	case "":
 		err = fmt.Errorf("missing parameter 'action'")
 	default:

@@ -128,6 +128,16 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "force a magicsock rebind",
 		},
 		{
+			Name:      "break-tcp-conns",
+			Exec:      localAPIAction("break-tcp-conns"),
+			ShortHelp: "break any open TCP connections from the daemon",
+		},
+		{
+			Name:      "break-derp-conns",
+			Exec:      localAPIAction("break-derp-conns"),
+			ShortHelp: "break any open DERP connections from the daemon",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
