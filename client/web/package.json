@@ -1,5 +1,5 @@
 {
-  "name": "webui",
+  "name": "webclient",
   "version": "0.0.1",
   "license": "BSD-3-Clause",
   "engines": {
@@ -7,7 +7,10 @@
     "yarn": "1.22.19"
   },
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
   "devDependencies": {
     "tailwindcss": "^3.1.6",
     "typescript": "^4.7.4",
