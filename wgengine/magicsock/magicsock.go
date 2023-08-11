@@ -84,8 +84,8 @@ type Conn struct {
 	derpActiveFunc         func()
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
-	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
-	netMon                 *netmon.Monitor      // or nil
+	noter                  *noter          // or nil, see Options.NoteRecvActivity
+	netMon                 *netmon.Monitor // or nil
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -408,7 +408,9 @@ func NewConn(opts Options) (*Conn, error) {
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
-	c.noteRecvActivity = opts.NoteRecvActivity
+	if opts.NoteRecvActivity != nil {
+		c.noter = newNoter(opts.NoteRecvActivity)
+	}
 	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, nil, c.onPortMapChanged)
 	if opts.NetMon != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
@@ -2037,6 +2039,9 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	c.closing.Store(true)
+	if c.noter != nil {
+		c.noter.close()
+	}
 	if c.derpCleanupTimerArmed {
 		c.derpCleanupTimer.Stop()
 	}
@@ -2072,6 +2077,9 @@ func (c *Conn) Close() error {
 
 func (c *Conn) goroutinesRunningLocked() bool {
 	if c.endpointsUpdateActive {
+		return true
+	}
+	if c.noter != nil && c.noter.goroutinesRunning() {
 		return true
 	}
 	// The goroutine running dc.Connect in derpWriteChanOfAddr may linger

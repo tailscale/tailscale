@@ -221,14 +221,14 @@ func (de *endpoint) initFakeUDPAddr() {
 // noteRecvActivity records receive activity on de, and invokes
 // Conn.noteRecvActivity no more than once every 10s.
 func (de *endpoint) noteRecvActivity() {
-	if de.c.noteRecvActivity == nil {
+	if de.c.noter == nil {
 		return
 	}
 	now := mono.Now()
 	elapsed := now.Sub(de.lastRecv.LoadAtomic())
 	if elapsed > 10*time.Second {
 		de.lastRecv.StoreAtomic(now)
-		de.c.noteRecvActivity(de.publicKey)
+		de.c.noter.note(de.publicKey)
 	}
 }
 
