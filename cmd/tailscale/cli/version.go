@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/clientupdate"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/version"
 )
@@ -51,11 +52,7 @@ func runVersion(ctx context.Context, args []string) error {
 
 	var upstreamVer string
 	if versionArgs.upstream {
-		track := "stable"
-		if version.IsUnstableBuild() {
-			track = "unstable"
-		}
-		upstreamVer, err = latestTailscaleVersion(track)
+		upstreamVer, err = clientupdate.LatestTailscaleVersion(clientupdate.CurrentTrack)
 		if err != nil {
 			return err
 		}
