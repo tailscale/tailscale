@@ -1,6 +1,6 @@
 import React from "react"
 import { createRoot } from "react-dom/client"
-import App from "./components/app"
+import App from "src/components/app"
 
 const rootEl = document.createElement("div")
 rootEl.id = "app-root"

@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2017",
+    "module": "ES2020",
+    "strict": true,
+    "sourceMap": true,
+    "isolatedModules": true,
+    "moduleResolution": "node",
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "jsx": "react",
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
