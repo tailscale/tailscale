@@ -5026,3 +5026,20 @@ func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr
 	}
 	return chs, nil
 }
+
+var breakTCPConns func() error
+
+func (b *LocalBackend) DebugBreakTCPConns() error {
+	if breakTCPConns == nil {
+		return errors.New("TCP connection breaking not available on this platform")
+	}
+	return breakTCPConns()
+}
+
+func (b *LocalBackend) DebugBreakDERPConns() error {
+	mc, err := b.magicConn()
+	if err != nil {
+		return err
+	}
+	return mc.DebugBreakDERPConns()
+}

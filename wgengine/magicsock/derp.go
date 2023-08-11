@@ -746,6 +746,19 @@ func (c *Conn) closeAllDerpLocked(why string) {
 	c.logActiveDerpLocked()
 }
 
+// DebugBreakDERPConns breaks all DERP connections for debug/testing reasons.
+func (c *Conn) DebugBreakDERPConns() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.activeDerp) == 0 {
+		c.logf("magicsock: DebugBreakDERPConns: no active DERP connections")
+		return nil
+	}
+	c.closeAllDerpLocked("debug-break-derp")
+	c.startDerpHomeConnectLocked()
+	return nil
+}
+
 // maybeCloseDERPsOnRebind, in response to a rebind, closes all
 // DERP connections that don't have a local address in okayLocalIPs
 // and pings all those that do.
