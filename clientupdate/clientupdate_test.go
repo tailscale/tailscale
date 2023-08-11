@@ -4,9 +4,12 @@
 package clientupdate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"tailscale.com/tailcfg"
 )
 
 func TestUpdateDebianAptSourcesListBytes(t *testing.T) {
@@ -436,6 +439,47 @@ tailscale installed size:
 			}
 			if got != tt.want {
 				t.Fatalf("got version: %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSynoArch(t *testing.T) {
+	tests := []struct {
+		goarch  string
+		model   string
+		want    string
+		wantErr bool
+	}{
+		{goarch: "amd64", model: "DS224+", want: "x86_64"},
+		{goarch: "arm64", model: "DS124", want: "armv8"},
+		{goarch: "386", model: "DS415play", want: "i686"},
+		{goarch: "arm", model: "DS213air", want: "88f6281"},
+		{goarch: "arm", model: "NVR1218", want: "hi3535"},
+		{goarch: "arm", model: "DS1517", want: "alpine"},
+		{goarch: "arm", model: "DS216se", want: "armada370"},
+		{goarch: "arm", model: "DS115", want: "armada375"},
+		{goarch: "arm", model: "DS419slim", want: "armada38x"},
+		{goarch: "arm", model: "RS815", want: "armadaxp"},
+		{goarch: "arm", model: "DS414j", want: "comcerto2k"},
+		{goarch: "arm", model: "DS216play", want: "monaco"},
+		{goarch: "riscv64", model: "DS999", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s-%s", tt.goarch, tt.model), func(t *testing.T) {
+			got, err := synoArch(&tailcfg.Hostinfo{GoArch: tt.goarch, DeviceModel: tt.model})
+			if err != nil {
+				if !tt.wantErr {
+					t.Fatalf("got unexpected error %v", err)
+				}
+				return
+			}
+			if tt.wantErr {
+				t.Fatalf("got %q, expected an error", got)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}
