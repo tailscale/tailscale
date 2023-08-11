@@ -2233,6 +2233,16 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			continue
 		}
 		trySetSocketBuffer(pconn, c.logf)
+
+		if CanPMTUD() {
+			err = setDontFragment(pconn, network)
+			if err != nil {
+				c.logf("magicsock: set dontfragment failed for %v port %d: %v", network, port, err)
+				// TODO disable PMTUD in this case. We don't expect the setsockopt to fail on
+				// supported platforms, but we might as well be paranoid.
+			}
+		}
+
 		// Success.
 		if debugBindSocket() {
 			c.logf("magicsock: bindSocket: successfully listened %v port %d", network, port)
