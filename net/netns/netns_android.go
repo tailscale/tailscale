@@ -44,10 +44,23 @@ func UseSocketMark() bool {
 // fwmark return errors on Android. The actual implementation of
 // VpnService.protect ends up doing an IPC to another process on
 // Android, asking for the fwmark to be set.
-func SetAndroidProtectFunc(f func(fd int) error) {
+//
+// When we start the android application we bind sockets before we
+// have access to the VpnService.protect() causes us to set a nil func.
+// When we activate the service we get access to the protect, but do
+// not retrospectively protect the sockets which are already opened.
+// This breaks connectivity until a rebind occurs.
+// As a temporary fix, we return a bool that indicates if we now have
+// access to the protect func which should be used to determine if
+// we require a rebind.
+// See https://github.com/tailscale/corp/issues/13814
+func SetAndroidProtectFunc(f func(fd int) error) bool {
 	androidProtectFuncMu.Lock()
 	defer androidProtectFuncMu.Unlock()
+	hasPrevProtectFunc := androidProtectFunc != nil
 	androidProtectFunc = f
+
+	return hasPrevProtectFunc
 }
 
 func control(logger.Logf, *netmon.Monitor) func(network, address string, c syscall.RawConn) error {
