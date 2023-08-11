@@ -144,7 +144,7 @@ jobs:
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
-      run: go test -bench . -benchtime 1x ./...
+      run: go run ./cmd/testwrapper ./... -bench . -benchtime 1x
 
   vm:
     runs-on: ["self-hosted", "linux", "vm"]
