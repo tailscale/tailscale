@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
-	_ "unsafe" // for go:linkname
 )
 
 // Time is the number of nanoseconds elapsed since an unspecified reference start time.
@@ -29,7 +28,7 @@ func Now() Time {
 	// The corresponding package time expression never does, if the wall clock is correct.
 	// Preserve this correspondence by increasing the "base" monotonic clock by a fair amount.
 	const baseOffset int64 = 1 << 55 // approximately 10,000 hours in nanoseconds
-	return Time(now() + baseOffset)
+	return Time(int64(time.Since(baseWall)) + baseOffset)
 }
 
 // Since returns the time elapsed since t.
@@ -71,9 +70,6 @@ func (t *Time) StoreAtomic(new Time) {
 func (t *Time) LoadAtomic() Time {
 	return Time(atomic.LoadInt64((*int64)(t)))
 }
-
-//go:linkname now runtime.nanotime1
-func now() int64
 
 // baseWall and baseMono are a pair of almost-identical times used to correlate a Time with a wall time.
 var (
