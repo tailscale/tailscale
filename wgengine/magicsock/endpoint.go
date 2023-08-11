@@ -83,6 +83,7 @@ type endpoint struct {
 }
 
 type pendingCLIPing struct {
+	tx  stun.TxID
 	res *ipnstate.PingResult
 	cb  func(*ipnstate.PingResult)
 }
@@ -363,7 +364,7 @@ func (de *endpoint) heartbeat() {
 	udpAddr, _, _ := de.addrForSendLocked(now)
 	if udpAddr.IsValid() {
 		// We have a preferred path. Ping that every 2 seconds.
-		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0)
+		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil, nil)
 	}
 
 	if de.wantFullPingLocked(now) {
@@ -415,22 +416,28 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstat
 		return
 	}
 
-	de.pendingCLIPings = append(de.pendingCLIPings, pendingCLIPing{res, cb})
-
 	now := mono.Now()
 	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
+	// XXX If we have established any connection via UDP, this
+	// results in a CLI ping with a specific size switching from
+	// derp + all UDP endpoints to a single UDP endpoint. If the
+	// size is too big for the UDP path, we get three successful
+	// derp pings and then no reply after that. Ideally, CLI ping
+	// with a specific size would behave exactly like CLI ping
+	// with no size: it would continue to ping DERP until it gets
+	// a successful pong via UDP.
 	if derpAddr.IsValid() {
-		de.startDiscoPingLocked(derpAddr, now, pingCLI, size)
+		de.startDiscoPingLocked(derpAddr, now, pingCLI, size, res, cb)
 	}
 	if udpAddr.IsValid() && now.Before(de.trustBestAddrUntil) {
 		// Already have an active session, so just ping the address we're using.
 		// Otherwise "tailscale ping" results to a node on the local network
 		// can look like they're bouncing between, say 10.0.0.0/9 and the peer's
 		// IPv6 address, both 1ms away, and it's random who replies first.
-		de.startDiscoPingLocked(udpAddr, now, pingCLI, size)
+		de.startDiscoPingLocked(udpAddr, now, pingCLI, size, res, cb)
 	} else {
 		for ep := range de.endpointState {
-			de.startDiscoPingLocked(ep, now, pingCLI, size)
+			de.startDiscoPingLocked(ep, now, pingCLI, size, res, cb)
 		}
 	}
 	de.noteActiveLocked()
@@ -574,23 +581,13 @@ const (
 )
 
 // startDiscoPingLocked sends a disco ping to ep in a separate goroutine.
-func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose, size int) {
+func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpose discoPingPurpose, size int, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	if runtime.GOOS == "js" {
 		return
 	}
 	epDisco := de.disco.Load()
 	if epDisco == nil {
 		return
-	}
-	if purpose != pingCLI {
-		st, ok := de.endpointState[ep]
-		if !ok {
-			// Shouldn't happen. But don't ping an endpoint that's
-			// not active for us.
-			de.c.logf("magicsock: disco: [unexpected] attempt to ping no longer live endpoint %v", ep)
-			return
-		}
-		st.lastPing = now
 	}
 
 	txid := stun.NewTxID()
@@ -600,6 +597,20 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
 		purpose: purpose,
 	}
+
+	if purpose != pingCLI {
+		st, ok := de.endpointState[ep]
+		if !ok {
+			// Shouldn't happen. But don't ping an endpoint that's
+			// not active for us.
+			de.c.logf("magicsock: disco: [unexpected] attempt to ping no longer live endpoint %v", ep)
+			return
+		}
+		st.lastPing = now
+	} else {
+		de.pendingCLIPings = append(de.pendingCLIPings, pendingCLIPing{txid, res, cb})
+	}
+
 	logLevel := discoLog
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
@@ -630,7 +641,7 @@ func (de *endpoint) sendDiscoPingsLocked(now mono.Time, sendCallMeMaybe bool) {
 			de.c.dlogf("[v1] magicsock: disco: send, starting discovery for %v (%v)", de.publicKey.ShortString(), de.discoShort())
 		}
 
-		de.startDiscoPingLocked(ep, now, pingDiscovery, 0)
+		de.startDiscoPingLocked(ep, now, pingDiscovery, 0, nil, nil)
 	}
 	derpAddr := de.derpAddr
 	if sentAny && sendCallMeMaybe && derpAddr.IsValid() {
@@ -914,9 +925,16 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 		}))
 	}
 
+	// XXX Previously this accepted any pong as a response to a
+	// CLI ping, including a rando heartbeat pong, but I added a
+	// tx ID and refactored the code a bit to get it set before we
+	// send the CLI ping.
 	for _, pp := range de.pendingCLIPings {
-		de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to)
-		go pp.cb(pp.res)
+		if m.TxID == pp.tx {
+			de.c.logf("\n\n\nGOT CLI PONG sent tx %v received tx %v\n\n\n", pp.tx, m.TxID)
+			de.c.populateCLIPingResponseLocked(pp.res, latency, sp.to)
+			go pp.cb(pp.res)
+		}
 	}
 	de.pendingCLIPings = nil
 
