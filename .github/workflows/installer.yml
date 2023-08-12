@@ -78,7 +78,7 @@ jobs:
         || contains(matrix.image, 'amazonlinux')
     - name: install dependencies (zypper)
       # tar and gzip are needed by the actions/checkout below.
-      run: zypper --non-interactive install tar gzip
+      run: zypper --non-interactive install tar gzip ${{ matrix.deps }}
       if: contains(matrix.image, 'opensuse')
     - name: install dependencies (apt-get)
       run: |

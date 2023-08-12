@@ -159,8 +159,10 @@ main() {
 				PACKAGETYPE="apt"
 				if [ "$VERSION_ID" -lt 20 ]; then
 					APT_KEY_TYPE="legacy"
+					VERSION="buster"
 				else
 					APT_KEY_TYPE="keyring"
+					VERSION="bullseye"
 				fi
 				;;
 			centos)
