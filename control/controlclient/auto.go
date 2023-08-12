@@ -313,9 +313,12 @@ func (c *Auto) cancelMap() {
 // restartMap cancels the existing mapPoll and liteUpdates, and then starts a
 // new one.
 func (c *Auto) restartMap() {
-	c.cancelMap()
+	c.mu.Lock()
+	c.cancelMapLocked()
+	synced := c.synced
+	c.mu.Unlock()
 
-	c.logf("[v1] restartMap: synced=%v", c.synced)
+	c.logf("[v1] restartMap: synced=%v", synced)
 
 	select {
 	case c.newMapCh <- struct{}{}:
