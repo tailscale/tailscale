@@ -480,11 +480,42 @@ func (c *Auto) unpausedChanLocked() <-chan struct{} {
 	return unpaused
 }
 
+// mapRoutineState is the state of Auto.mapRoutine while it's running.
+type mapRoutineState struct {
+	c  *Auto
+	bo *backoff.Backoff
+}
+
+func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
+	c := mrs.c
+	health.SetInPollNetMap(true)
+
+	c.mu.Lock()
+	ctx := c.mapCtx
+	c.synced = true
+	if c.loggedIn {
+		c.state = StateSynchronized
+	}
+	c.expiry = ptr.To(nm.Expiry)
+	stillAuthed := c.loggedIn
+	c.logf("[v1] mapRoutine: netmap received: %s", c.state)
+	c.mu.Unlock()
+
+	if stillAuthed {
+		c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
+	}
+	// Reset the backoff timer if we got a netmap.
+	mrs.bo.BackOff(ctx, nil)
+}
+
 // mapRoutine is responsible for keeping a read-only streaming connection to the
 // control server, and keeping the netmap up to date.
 func (c *Auto) mapRoutine() {
 	defer close(c.mapDone)
-	bo := backoff.NewBackoff("mapRoutine", c.logf, 30*time.Second)
+	mrs := &mapRoutineState{
+		c:  c,
+		bo: backoff.NewBackoff("mapRoutine", c.logf, 30*time.Second),
+	}
 
 	for {
 		if err := c.waitUnpause("mapRoutine"); err != nil {
@@ -531,25 +562,7 @@ func (c *Auto) mapRoutine() {
 		} else {
 			health.SetInPollNetMap(false)
 
-			err := c.direct.PollNetMap(ctx, func(nm *netmap.NetworkMap) {
-				health.SetInPollNetMap(true)
-
-				c.mu.Lock()
-				c.synced = true
-				if c.loggedIn {
-					c.state = StateSynchronized
-				}
-				c.expiry = ptr.To(nm.Expiry)
-				stillAuthed := c.loggedIn
-				c.logf("[v1] mapRoutine: netmap received: %s", c.state)
-				c.mu.Unlock()
-
-				if stillAuthed {
-					c.sendStatus("mapRoutine-got-netmap", nil, "", nm)
-				}
-				// Reset the backoff timer if we got a netmap.
-				bo.BackOff(ctx, nil)
-			})
+			err := c.direct.PollNetMap(ctx, mrs)
 
 			health.SetInPollNetMap(false)
 			c.mu.Lock()
@@ -561,16 +574,14 @@ func (c *Auto) mapRoutine() {
 			c.mu.Unlock()
 
 			if paused {
+				mrs.bo.BackOff(ctx, nil)
 				c.logf("mapRoutine: paused")
 				continue
 			}
 
-			if err != nil {
-				report(err, "PollNetMap")
-				bo.BackOff(ctx, err)
-				continue
-			}
-			bo.BackOff(ctx, nil)
+			report(err, "PollNetMap")
+			mrs.bo.BackOff(ctx, err)
+			continue
 		}
 	}
 }
