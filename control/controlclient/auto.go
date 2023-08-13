@@ -72,6 +72,11 @@ func (c *Auto) waitUnpause(routineLogName string) error {
 func (c *Auto) updateRoutine() {
 	defer close(c.updateDone)
 	bo := backoff.NewBackoff("updateRoutine", c.logf, 30*time.Second)
+
+	// lastUpdateGenInformed is the value of lastUpdateAt that we've successfully
+	// informed the server of.
+	var lastUpdateGenInformed updateGen
+
 	for {
 		if err := c.waitUnpause("updateRoutine"); err != nil {
 			c.logf("updateRoutine: exiting")
@@ -80,7 +85,7 @@ func (c *Auto) updateRoutine() {
 		c.mu.Lock()
 		gen := c.lastUpdateGen
 		ctx := c.mapCtx
-		needUpdate := gen > 0 && gen != c.lastUpdateGenInformed && c.loggedIn
+		needUpdate := gen > 0 && gen != lastUpdateGenInformed && c.loggedIn
 		c.mu.Unlock()
 
 		if needUpdate {
@@ -114,9 +119,7 @@ func (c *Auto) updateRoutine() {
 		bo.BackOff(ctx, nil)
 		c.direct.logf("[v1] successful lite map update in %v", d)
 
-		c.mu.Lock()
-		c.lastUpdateGenInformed = gen
-		c.mu.Unlock()
+		lastUpdateGenInformed = gen
 	}
 }
 
@@ -151,9 +154,6 @@ type Auto struct {
 	// lastUpdateGen is the gen of last update we had an update worth sending to
 	// the server.
 	lastUpdateGen updateGen
-	// lastUpdateGenInformed is the value of lastUpdateAt that we've successfully
-	// informed the server of.
-	lastUpdateGenInformed updateGen
 
 	paused         bool // whether we should stop making HTTP requests
 	unpauseWaiters []chan struct{}
