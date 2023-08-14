@@ -588,10 +588,7 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 }
 
 func (up *updater) updateMacSys() error {
-	// This is actually NOTREACHED, because code in Swift intercepted the
-	// `update` command before ever calling into this point. It invokes the
-	// Sparkle update GUI.
-	return nil
+	return errors.New("NOTREACHED: On MacSys builds, `tailscale update` is handled in Swift to launch the GUI updater")
 }
 
 func (up *updater) updateMacAppStore() error {
