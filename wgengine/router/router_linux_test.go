@@ -1116,7 +1116,7 @@ func TestChooseFireWallMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := chooseFireWallMode(t.Logf, tt.det)
+			got := chooseFireWallMode(t.Logf, tt.det)
 			if got != tt.want {
 				t.Errorf("chooseFireWallMode() = %v, want %v", got, tt.want)
 			}

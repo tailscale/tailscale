@@ -75,7 +75,7 @@ func (l *linuxFWDetector) nftDetect() (int, error) {
 
 // chooseFireWallMode returns the firewall mode to use based on the
 // environment and the system's capabilities.
-func chooseFireWallMode(logf logger.Logf, det tableDetector) (linuxfw.FirewallMode, error) {
+func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMode {
 	iptAva, nftAva := true, true
 	iptRuleCount, err := det.iptDetect()
 	if err != nil {
@@ -92,28 +92,30 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) (linuxfw.FirewallMo
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
 		// TODO(KevinLiang10): Updates to a flag
 		logf("router: envknob TS_DEBUG_FIREWALL_MODE=nftables set")
-		return linuxfw.FirewallModeNfTables, nil
+		return linuxfw.FirewallModeNfTables
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
 		logf("router: envknob TS_DEBUG_FIREWALL_MODE=iptables set")
-		return linuxfw.FirewallModeIPTables, nil
+		return linuxfw.FirewallModeIPTables
 	case nftRuleCount > 0 && iptRuleCount == 0:
 		logf("router: nftables is currently in use")
-		return linuxfw.FirewallModeNfTables, nil
+		return linuxfw.FirewallModeNfTables
 	case iptRuleCount > 0 && nftRuleCount == 0:
 		logf("router: iptables is currently in use")
-		return linuxfw.FirewallModeIPTables, nil
+		return linuxfw.FirewallModeIPTables
 	case nftAva:
 		// if both iptables and nftables are available but
 		// neither/both are currently used, use nftables.
 		logf("router: nftables is available")
-		return linuxfw.FirewallModeNfTables, nil
+		return linuxfw.FirewallModeNfTables
 	case iptAva:
 		logf("router: iptables is available")
-		return linuxfw.FirewallModeIPTables, nil
+		return linuxfw.FirewallModeIPTables
 	default:
-		// if neither iptables nor nftables are available,
-		// this is an error that shouldn't happen.
-		return "", errors.New("router: neither iptables nor nftables are available")
+		// if neither iptables nor nftables are available, use iptablesRunner as a dummy
+		// runner which exists but won't do anything. Creating iptablesRunner errors only
+		// if the iptables command is missing or doesn’t support "--version", as long as it
+		// can determine a version then it’ll carry on.
+		return linuxfw.FirewallModeIPTables
 	}
 }
 
@@ -121,11 +123,9 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) (linuxfw.FirewallMo
 // As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
 	tableDetector := &linuxFWDetector{}
-	mode, err := chooseFireWallMode(logf, tableDetector)
-	if err != nil {
-		return nil, fmt.Errorf("choosing firewall mode: %w", err)
-	}
+	mode := chooseFireWallMode(logf, tableDetector)
 	var nfr netfilterRunner
+	var err error
 	switch mode {
 	case linuxfw.FirewallModeIPTables:
 		logf("router: using iptables")
