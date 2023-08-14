@@ -1458,10 +1458,9 @@ func (h *Handler) serveUploadClientMetrics(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	type clientMetricJSON struct {
-		Name string `json:"name"`
-		// One of "counter" or "gauge"
-		Type  string `json:"type"`
-		Value int    `json:"value"`
+		Name  string `json:"name"`
+		Type  string `json:"type"`  // one of "counter" or "gauge"
+		Value int    `json:"value"` // amount to increment metric by
 	}
 
 	var clientMetrics []clientMetricJSON
