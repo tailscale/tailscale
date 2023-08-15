@@ -640,6 +640,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	if !c.setNearestDERP(ni.PreferredDERP) {
 		ni.PreferredDERP = 0
 	}
+	ni.FirewallMode = hostinfo.FirewallMode()
 
 	c.callNetInfoCallback(ni)
 	return report, nil

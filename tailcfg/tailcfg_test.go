@@ -571,6 +571,7 @@ func TestNetInfoFields(t *testing.T) {
 		"PreferredDERP",
 		"LinkType",
 		"DERPLatency",
+		"FirewallMode",
 	}
 	if have := fieldsOf(reflect.TypeOf(NetInfo{})); !reflect.DeepEqual(have, handled) {
 		t.Errorf("NetInfo.Clone/BasicallyEqually check might be out of sync\nfields: %q\nhandled: %q\n",

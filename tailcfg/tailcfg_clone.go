@@ -195,6 +195,7 @@ var _NetInfoCloneNeedsRegeneration = NetInfo(struct {
 	PreferredDERP         int
 	LinkType              string
 	DERPLatency           map[string]float64
+	FirewallMode          string
 }{})
 
 // Clone makes a deep copy of Login.
