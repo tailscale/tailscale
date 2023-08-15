@@ -59,12 +59,14 @@ func userLookup(username string) (*userMeta, error) {
 	if distro.Get() == distro.Gokrazy {
 		um, err := userLookupStd(username)
 		if err != nil {
-			um.User = user.User{
-				Uid:      "0",
-				Gid:      "0",
-				Username: "root",
-				Name:     "Gokrazy",
-				HomeDir:  "/",
+			um = &userMeta{
+				User: user.User{
+					Uid:      "0",
+					Gid:      "0",
+					Username: "root",
+					Name:     "Gokrazy",
+					HomeDir:  "/",
+				},
 			}
 		}
 		um.loginShellCached = "/tmp/serial-busybox/ash"
