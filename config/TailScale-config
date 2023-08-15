@@ -1,0 +1,22 @@
+{
+	"derpMap": {
+		"OmitDefaultRegions": true,
+		"Regions": {
+			"901": {
+				"RegionID":   901,
+				"RegionCode": "Ali",
+				"RegionName": "meihuaqi",
+				"Nodes": [
+					{
+						"Name":             "901a",
+						"RegionID":         901,
+						"DERPPort":         4433,
+						"HostName":         "connect.meihuaqi.com",
+						"IPv4":             "123.56.238.161",
+						"InsecureForTests": true,
+					},
+				],
+			},
+		},
+	},
+}
