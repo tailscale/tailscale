@@ -146,13 +146,15 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 		return
 	}
 	n := pip.Node
-	if n.DiscoKey.IsZero() {
-		e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key.ShortString())
-		return
-	}
-	if n.DERP == "" {
-		e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key.ShortString())
-		return
+	if !n.IsWireGuardOnly {
+		if n.DiscoKey.IsZero() {
+			e.logf("open-conn-track: timeout opening %v; peer node %v running pre-0.100", flow, n.Key.ShortString())
+			return
+		}
+		if n.DERP == "" {
+			e.logf("open-conn-track: timeout opening %v; peer node %v not connected to any DERP relay", flow, n.Key.ShortString())
+			return
+		}
 	}
 
 	ps, found := e.getPeerStatusLite(n.Key)
@@ -187,15 +189,19 @@ func (e *userspaceEngine) onOpenTimeout(flow flowtrack.Tuple) {
 	_ = ps.LastHandshake
 
 	online := "?"
-	if n.Online != nil {
-		if *n.Online {
-			online = "yes"
-		} else {
-			online = "no"
+	if n.IsWireGuardOnly {
+		online = "wg"
+	} else {
+		if n.Online != nil {
+			if *n.Online {
+				online = "yes"
+			} else {
+				online = "no"
+			}
 		}
-	}
-	if n.LastSeen != nil && online != "yes" {
-		online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen))
+		if n.LastSeen != nil && online != "yes" {
+			online += fmt.Sprintf(", lastseen=%v", durFmt(*n.LastSeen))
+		}
 	}
 	e.logf("open-conn-track: timeout opening %v to node %v; online=%v, lastRecv=%v",
 		flow, n.Key.ShortString(),
