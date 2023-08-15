@@ -7,12 +7,19 @@ export default function App() {
 
   return (
     <div className="py-14">
-      <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
-        <Header data={data} />
-        <IP data={data} />
-        <State data={data} />
-      </main>
-      <Footer data={data} />
+      {!data ? (
+        // TODO(sonia): add a loading view
+        <div className="text-center">Loading...</div>
+      ) : (
+        <>
+          <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
+            <Header data={data} />
+            <IP data={data} />
+            <State data={data} />
+          </main>
+          <Footer data={data} />
+        </>
+      )}
     </div>
   )
 }
