@@ -76,6 +76,11 @@ func (l *linuxFWDetector) nftDetect() (int, error) {
 // chooseFireWallMode returns the firewall mode to use based on the
 // environment and the system's capabilities.
 func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMode {
+	if distro.Get() == distro.Gokrazy {
+		// Reduce startup logging on gokrazy. There's no way to do iptables on
+		// gokrazy anyway.
+		return linuxfw.FirewallModeNfTables
+	}
 	iptAva, nftAva := true, true
 	iptRuleCount, err := det.iptDetect()
 	if err != nil {
