@@ -259,13 +259,12 @@ func (lc *LocalClient) DaemonMetrics(ctx context.Context) ([]byte, error) {
 	return lc.get200(ctx, "/localapi/v0/metrics")
 }
 
-// IncrementMetric increments the value of a Tailscale daemon's metric by
-// the given delta. If the metric has yet to exist, a new counter metric is
-// created and initialized to delta.
+// IncrementCounter increments the value of a Tailscale daemon's counter
+// metric by the given delta. If the metric has yet to exist, a new counter
+// metric is created and initialized to delta.
 //
-// IncrementMetric only supports counter metrics and non-negative delta values.
-// Gauge metrics are unsupported.
-func (lc *LocalClient) IncrementMetric(ctx context.Context, name string, delta int) error {
+// IncrementCounter does not support gauge metrics or negative delta values.
+func (lc *LocalClient) IncrementCounter(ctx context.Context, name string, delta int) error {
 	type metricUpdate struct {
 		Name  string `json:"name"`
 		Type  string `json:"type"`

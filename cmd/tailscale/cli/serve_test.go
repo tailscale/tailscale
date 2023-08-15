@@ -893,7 +893,11 @@ func (lc *fakeLocalServeClient) QueryFeature(ctx context.Context, feature string
 }
 
 func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error) {
-	return nil, nil
+	return nil, nil // unused in tests
+}
+
+func (lc *fakeLocalServeClient) IncrementCounter(ctx context.Context, name string, delta int) error {
+	return nil // unused in tests
 }
 
 // exactError returns an error checker that wants exactly the provided want error.

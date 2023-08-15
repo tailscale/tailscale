@@ -133,6 +133,7 @@ type localServeClient interface {
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
+	IncrementCounter(ctx context.Context, name string, delta int) error
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be
@@ -796,17 +797,19 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 		return nil // already enabled
 	}
 	if info.Text != "" {
-		fmt.Fprintln(os.Stdout, info.Text)
+		fmt.Fprintln(os.Stdout, "\n"+info.Text)
 	}
 	if info.URL != "" {
-		fmt.Fprintln(os.Stdout, "\n         "+info.URL)
+		fmt.Fprintln(os.Stdout, "\n         "+info.URL+"\n")
 	}
 	if !info.ShouldWait {
+		e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_not_awaiting_enablement", feature), 1)
 		// The feature has not been enabled yet,
 		// but the CLI should not block on user action.
 		// Once info.Text is printed, exit the CLI.
 		os.Exit(0)
 	}
+	e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_awaiting_enablement", feature), 1)
 	// Block until feature is enabled.
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	defer cancelWatch()
@@ -816,6 +819,7 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 		// don't block. We still present the URL in the CLI,
 		// then close the process. Swallow the error.
 		log.Fatalf("lost connection to tailscaled: %v", err)
+		e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enablement_lost_connection", feature), 1)
 		return err
 	}
 	defer watcher.Close()
@@ -826,11 +830,13 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 			// Let the user finish enablement then rerun their
 			// command themselves.
 			log.Fatalf("lost connection to tailscaled: %v", err)
+			e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enablement_lost_connection", feature), 1)
 			return err
 		}
 		if nm := n.NetMap; nm != nil && nm.SelfNode != nil {
 			if hasRequiredCapabilities(nm.SelfNode.Capabilities) {
-				fmt.Fprintln(os.Stdout, "\nSuccess.")
+				e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enabled", feature), 1)
+				fmt.Fprintln(os.Stdout, "Success.")
 				return nil
 			}
 		}
