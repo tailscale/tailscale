@@ -17,6 +17,8 @@
     "@vitejs/plugin-react-swc": "^3.3.2",
     "autoprefixer": "^10.4.15",
     "postcss": "^8.4.27",
+    "prettier": "^2.5.1",
+    "prettier-plugin-organize-imports": "^3.2.2",
     "tailwindcss": "^3.3.3",
     "typescript": "^4.7.4",
     "vite": "^4.3.9",
@@ -29,7 +31,9 @@
     "build": "vite build",
     "start": "vite",
     "lint": "tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest",
+    "format": "prettier --write 'src/**/*.{ts,tsx}'",
+    "format-check": "prettier --check 'src/**/*.{ts,tsx}'"
   },
   "prettier": {
     "semi": false,
