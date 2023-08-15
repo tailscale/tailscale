@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"golang.org/x/exp/slices"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -231,6 +232,21 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 	if len(args) < 2 || ((srcType == "https" || srcType == "http") && !turnOff && len(args) < 3) {
 		fmt.Fprintf(os.Stderr, "error: invalid number of arguments\n\n")
 		return flag.ErrHelp
+	}
+
+	if srcType == "https" && !turnOff {
+		// Running serve with https requires that the tailnet has enabled
+		// https cert provisioning. Send users through an interactive flow
+		// to enable this if not already done.
+		//
+		// TODO(sonia,tailscale/corp#10577): The interactive feature flow
+		// is behind a control flag. If the tailnet doesn't have the flag
+		// on, enableFeatureInteractive will error. For now, we hide that
+		// error and maintain the previous behavior (prior to 2023-08-15)
+		// of letting them edit the serve config before enabling certs.
+		e.enableFeatureInteractive(ctx, "serve", func(caps []string) bool {
+			return slices.Contains(caps, tailcfg.CapabilityHTTPS)
+		})
 	}
 
 	srcPort, err := parseServePort(srcPortStr)
