@@ -1,3 +1,130 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/**
+ * Non-Tailwind styles begin here.
+ */
+
+.bg-gray-0 {
+  --tw-bg-opacity: 1;
+  background-color: rgba(250, 249, 248, var(--tw-bg-opacity));
+}
+
+.bg-gray-50 {
+  --tw-bg-opacity: 1;
+  background-color: rgba(249, 247, 246, var(--tw-bg-opacity));
+}
+
+html {
+  letter-spacing: -0.015em;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.link {
+  --text-opacity: 1;
+  color: #4b70cc;
+  color: rgba(75, 112, 204, var(--text-opacity));
+}
+
+.link:hover,
+.link:active {
+  --text-opacity: 1;
+  color: #19224a;
+  color: rgba(25, 34, 74, var(--text-opacity));
+}
+
+.link-underline {
+  text-decoration: underline;
+}
+
+.link-underline:hover,
+.link-underline:active {
+  text-decoration: none;
+}
+
+.link-muted {
+  /* same as text-gray-500 */
+  --tw-text-opacity: 1;
+  color: rgba(112, 110, 109, var(--tw-text-opacity));
+}
+
+.link-muted:hover,
+.link-muted:active {
+  /* same as text-gray-500 */
+  --tw-text-opacity: 1;
+  color: rgba(68, 67, 66, var(--tw-text-opacity));
+}
+
+.button {
+  font-weight: 500;
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  border-radius: 0.375rem;
+  border-width: 1px;
+  border-color: transparent;
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: 120ms;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  min-width: 80px;
+}
+
+.button:focus {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.button-blue {
+  --bg-opacity: 1;
+  background-color: #4b70cc;
+  background-color: rgba(75, 112, 204, var(--bg-opacity));
+  --border-opacity: 1;
+  border-color: #4b70cc;
+  border-color: rgba(75, 112, 204, var(--border-opacity));
+  --text-opacity: 1;
+  color: #fff;
+  color: rgba(255, 255, 255, var(--text-opacity));
+}
+
+.button-blue:enabled:hover {
+  --bg-opacity: 1;
+  background-color: #3f5db3;
+  background-color: rgba(63, 93, 179, var(--bg-opacity));
+  --border-opacity: 1;
+  border-color: #3f5db3;
+  border-color: rgba(63, 93, 179, var(--border-opacity));
+}
+
+.button-blue:disabled {
+  --text-opacity: 1;
+  color: #cedefd;
+  color: rgba(206, 222, 253, var(--text-opacity));
+  --bg-opacity: 1;
+  background-color: #6c94ec;
+  background-color: rgba(108, 148, 236, var(--bg-opacity));
+  --border-opacity: 1;
+  border-color: #6c94ec;
+  border-color: rgba(108, 148, 236, var(--border-opacity));
+}
+
+.button-red {
+  background-color: #d04841;
+  border-color: #d04841;
+  color: #fff;
+}
+
+.button-red:enabled:hover {
+  background-color: #b22d30;
+  border-color: #b22d30;
+}
