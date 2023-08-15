@@ -1401,6 +1401,16 @@ postcss@^8.4.23, postcss@^8.4.27:
     picocolors "^1.0.0"
     source-map-js "^1.0.2"
 
+prettier-plugin-organize-imports@^3.2.2:
+  version "3.2.3"
+  resolved "https://registry.yarnpkg.com/prettier-plugin-organize-imports/-/prettier-plugin-organize-imports-3.2.3.tgz#6b0141ac71f7ee9a673ce83e95456319e3a7cf0d"
+  integrity sha512-KFvk8C/zGyvUaE3RvxN2MhCLwzV6OBbFSkwZ2OamCrs9ZY4i5L77jQ/w4UmUr+lqX8qbaqVq6bZZkApn+IgJSg==
+
+prettier@^2.5.1:
+  version "2.8.8"
+  resolved "https://registry.yarnpkg.com/prettier/-/prettier-2.8.8.tgz#e8c5d7e98a4305ffe3de2e1fc4aca1a71c28b1da"
+  integrity sha512-tdN8qQGvNjw4CHbY+XXk0JgCXn9QiF21a55rBe5LJAU+kDyC4WQn4+awm2Xfk2lQMk5fKup9XgzTZtGkjBdP9Q==
+
 pretty-format@^29.5.0:
   version "29.6.2"
   resolved "https://registry.yarnpkg.com/pretty-format/-/pretty-format-29.6.2.tgz#3d5829261a8a4d89d8b9769064b29c50ed486a47"
