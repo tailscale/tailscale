@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/time/rate"
 	"tailscale.com/envknob"
+	"tailscale.com/hostinfo"
 	"tailscale.com/net/netmon"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
@@ -97,29 +98,36 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
 		// TODO(KevinLiang10): Updates to a flag
 		logf("router: envknob TS_DEBUG_FIREWALL_MODE=nftables set")
+		hostinfo.SetFirewallMode("nft-forced")
 		return linuxfw.FirewallModeNfTables
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
 		logf("router: envknob TS_DEBUG_FIREWALL_MODE=iptables set")
+		hostinfo.SetFirewallMode("ipt-forced")
 		return linuxfw.FirewallModeIPTables
 	case nftRuleCount > 0 && iptRuleCount == 0:
 		logf("router: nftables is currently in use")
+		hostinfo.SetFirewallMode("nft-inuse")
 		return linuxfw.FirewallModeNfTables
 	case iptRuleCount > 0 && nftRuleCount == 0:
 		logf("router: iptables is currently in use")
+		hostinfo.SetFirewallMode("ipt-inuse")
 		return linuxfw.FirewallModeIPTables
 	case nftAva:
 		// if both iptables and nftables are available but
 		// neither/both are currently used, use nftables.
 		logf("router: nftables is available")
+		hostinfo.SetFirewallMode("nft")
 		return linuxfw.FirewallModeNfTables
 	case iptAva:
 		logf("router: iptables is available")
+		hostinfo.SetFirewallMode("ipt")
 		return linuxfw.FirewallModeIPTables
 	default:
 		// if neither iptables nor nftables are available, use iptablesRunner as a dummy
 		// runner which exists but won't do anything. Creating iptablesRunner errors only
 		// if the iptables command is missing or doesn’t support "--version", as long as it
 		// can determine a version then it’ll carry on.
+		hostinfo.SetFirewallMode("ipt-fb")
 		return linuxfw.FirewallModeIPTables
 	}
 }

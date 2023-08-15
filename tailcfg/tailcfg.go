@@ -734,6 +734,11 @@ type NetInfo struct {
 	// the control plane.
 	DERPLatency map[string]float64 `json:",omitempty"`
 
+	// FirewallMode is the current firewall utility in use by router (iptables, nftables).
+	// FirewallMode ipt means iptables, nft means nftables. When it's empty user is not using
+	// our netfilter runners to manage firewall rules.
+	FirewallMode string `json:",omitempty"`
+
 	// Update BasicallyEqual when adding fields.
 }
 
@@ -741,10 +746,10 @@ func (ni *NetInfo) String() string {
 	if ni == nil {
 		return "NetInfo(nil)"
 	}
-	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q}",
+	return fmt.Sprintf("NetInfo{varies=%v hairpin=%v ipv6=%v ipv6os=%v udp=%v icmpv4=%v derp=#%v portmap=%v link=%q firewallmode=%q}",
 		ni.MappingVariesByDestIP, ni.HairPinning, ni.WorkingIPv6,
 		ni.OSHasIPv6, ni.WorkingUDP, ni.WorkingICMPv4,
-		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType)
+		ni.PreferredDERP, ni.portMapSummary(), ni.LinkType, ni.FirewallMode)
 }
 
 func (ni *NetInfo) portMapSummary() string {
@@ -792,7 +797,8 @@ func (ni *NetInfo) BasicallyEqual(ni2 *NetInfo) bool {
 		ni.PMP == ni2.PMP &&
 		ni.PCP == ni2.PCP &&
 		ni.PreferredDERP == ni2.PreferredDERP &&
-		ni.LinkType == ni2.LinkType
+		ni.LinkType == ni2.LinkType &&
+		ni.FirewallMode == ni2.FirewallMode
 }
 
 // Equal reports whether h and h2 are equal.
