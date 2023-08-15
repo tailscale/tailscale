@@ -408,6 +408,7 @@ func (v NetInfoView) PreferredDERP() int              { return v.ж.PreferredDER
 func (v NetInfoView) LinkType() string                { return v.ж.LinkType }
 
 func (v NetInfoView) DERPLatency() views.Map[string, float64] { return views.MapOf(v.ж.DERPLatency) }
+func (v NetInfoView) FirewallMode() string                    { return v.ж.FirewallMode }
 func (v NetInfoView) String() string                          { return v.ж.String() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -425,6 +426,7 @@ var _NetInfoViewNeedsRegeneration = NetInfo(struct {
 	PreferredDERP         int
 	LinkType              string
 	DERPLatency           map[string]float64
+	FirewallMode          string
 }{})
 
 // View returns a readonly view of Login.

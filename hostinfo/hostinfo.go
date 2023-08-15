@@ -171,6 +171,7 @@ var (
 	desktopAtomic         atomic.Value // of opt.Bool
 	packagingType         atomic.Value // of string
 	appType               atomic.Value // of string
+	firewallMode          atomic.Value // of string
 )
 
 // SetPushDeviceToken sets the device token for use in Hostinfo updates.
@@ -181,6 +182,9 @@ func SetDeviceModel(model string) { deviceModelAtomic.Store(model) }
 
 // SetOSVersion sets the OS version.
 func SetOSVersion(v string) { osVersionAtomic.Store(v) }
+
+// SetFirewallMode sets the firewall mode for the app.
+func SetFirewallMode(v string) { firewallMode.Store(v) }
 
 // SetPackage sets the packaging type for the app.
 //
@@ -200,6 +204,13 @@ func deviceModel() string {
 
 func pushDeviceToken() string {
 	s, _ := pushDeviceTokenAtomic.Load().(string)
+	return s
+}
+
+// FirewallMode returns the firewall mode for the app.
+// It is empty if unset.
+func FirewallMode() string {
+	s, _ := firewallMode.Load().(string)
 	return s
 }
 
