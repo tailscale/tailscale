@@ -21,6 +21,8 @@ import (
 
 	"golang.org/x/crypto/poly1305"
 	"golang.org/x/exp/maps"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun"
@@ -64,7 +66,7 @@ type endpoint struct {
 	lastFullPing   mono.Time      // last time we pinged all disco endpoints
 	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           addrLatency // best non-DERP path; zero if none
+	bestAddr           addrQuality // best non-DERP path; zero if none
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
@@ -92,6 +94,7 @@ type sentPing struct {
 	at      mono.Time
 	timer   *time.Timer // timeout timer
 	purpose discoPingPurpose
+	size    int
 	res     *ipnstate.PingResult
 	cb      func(*ipnstate.PingResult)
 }
@@ -198,7 +201,7 @@ func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 			What: "deleteEndpointLocked-bestAddr-" + why,
 			From: de.bestAddr,
 		})
-		de.bestAddr = addrLatency{}
+		de.bestAddr = addrQuality{}
 	}
 }
 
@@ -251,9 +254,11 @@ func (de *endpoint) DstToBytes() []byte  { return packIPPort(de.fakeWGAddr) }
 
 // addrForSendLocked returns the address(es) that should be used for
 // sending the next packet. Zero, one, or both of UDP address and DERP
-// addr may be non-zero. If the endpoint is WireGuard only and does not have
-// latency information, a bool is returned to indiciate that the
-// WireGuard latency discovery pings should be sent.
+// addr may be non-zero. If the endpoint is WireGuard only and does
+// not have latency information, a bool is returned to indiciate that
+// the WireGuard latency discovery pings should be sent. If size is
+// non-zero, then it must return at least one addr with a large enough
+// path MTU to permit a ping payload of size bytes to be delivered.
 //
 // de.mu must be held.
 func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netip.AddrPort, sendWGPing bool) {
@@ -270,9 +275,39 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netip.Ad
 		return udpAddr, netip.AddrPort{}, shouldPing
 	}
 
-	// We had a bestAddr but it expired so send both to it
-	// and DERP.
+	// We had a bestAddr but it expired or it doesn't have a path
+	// MTU big enough for the packet, so keep trying to find a
+	// better path.
 	return udpAddr, de.derpAddr, false
+}
+
+// addrForPingLocked returns the address(es) that should be used for
+// sending the next packet. Zero, one, or both of UDP address and DERP
+// addr may be non-zero. If size is non-zero, then it must return at
+// least one addr with a large enough path MTU to permit a ping
+// payload of size bytes to be delivered.
+//
+// de.mu must be held.
+func (de *endpoint) addrForPingLocked(now mono.Time, size int) (udpAddr, derpAddr netip.AddrPort) {
+	udpAddr = de.bestAddr.AddrPort
+
+	mtuOk := true
+	if size != 0 {
+		pathMTU := de.bestAddr.wireMTU
+		requestedMTU := pingSizeToPktLen(size, udpAddr.Addr())
+		if requestedMTU > pathMTU {
+			mtuOk = false
+		}
+	}
+
+	if udpAddr.IsValid() && !now.After(de.trustBestAddrUntil) && mtuOk {
+		return udpAddr, netip.AddrPort{}
+	}
+
+	// We had a bestAddr but it expired or it doesn't have a path
+	// MTU big enough for the packet, so keep trying to find a
+	// better path.
+	return udpAddr, de.derpAddr
 }
 
 // addrForWireGuardSendLocked returns the address that should be used for
@@ -355,7 +390,7 @@ func (de *endpoint) heartbeat() {
 	}
 
 	now := mono.Now()
-	udpAddr, _, _ := de.addrForSendLocked(now)
+	udpAddr, _ := de.addrForPingLocked(now, 0)
 	if udpAddr.IsValid() {
 		// We have a preferred path. Ping that every 2 seconds.
 		de.startDiscoPingLocked(udpAddr, now, pingHeartbeat, 0, nil, nil)
@@ -421,7 +456,7 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstat
 	}
 
 	now := mono.Now()
-	udpAddr, derpAddr, _ := de.addrForSendLocked(now)
+	udpAddr, derpAddr := de.addrForPingLocked(now, size)
 
 	if derpAddr.IsValid() {
 		de.startDiscoPingLocked(derpAddr, now, pingCLI, size, res, cb)
@@ -876,6 +911,41 @@ func (de *endpoint) noteConnectivityChange() {
 	de.trustBestAddrUntil = 0
 }
 
+// pingSizeToPktLen calculates the minimum path MTU that would permit
+// a disco ping message of length size to reach its target at
+// addr. size is the length of the entire disco message including
+// disco headers. If size is zero, assume it is the default MTU.
+func pingSizeToPktLen(size int, addr netip.Addr) tstun.WireMTU {
+	if size == 0 {
+		return tstun.DefaultWireMTU()
+	}
+	headerLen := ipv4.HeaderLen
+	if addr.Is6() {
+		headerLen = ipv6.HeaderLen
+	}
+	headerLen += 8 // UDP header length
+	return tstun.WireMTU(size + headerLen)
+}
+
+// pktLenToPingSize calculates the ping payload size that would
+// create a disco ping message whose on-the-wire length is exactly mtu
+// bytes long. If mtu is zero or less than the minimum ping size, then
+// no MTU probe is desired and return zero for an unpadded ping.
+func pktLenToPingSize(mtu tstun.WireMTU, addr netip.Addr) int {
+	if mtu == 0 {
+		return 0
+	}
+	headerLen := ipv4.HeaderLen
+	if addr.Is6() {
+		headerLen = ipv6.HeaderLen
+	}
+	headerLen += 8 // UDP header length
+	if mtu < tstun.WireMTU(headerLen) {
+		return 0
+	}
+	return int(mtu) - headerLen
+}
+
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
 // It should be called with the Conn.mu held.
 //
@@ -915,7 +985,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToPktLen(sp.size, sp.to.Addr()), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -933,9 +1003,9 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrLatency{sp.to, latency}
+		thisPong := addrQuality{sp.to, latency, pingSizeToPktLen(sp.size, sp.to.Addr())}
 		if betterAddr(thisPong, de.bestAddr) {
-			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort(), sp.to)
+			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU)
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
 				What: "handlePingLocked-bestAddr-update",
@@ -959,19 +1029,23 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	return
 }
 
-// addrLatency is an IPPort with an associated latency.
-type addrLatency struct {
+// addrQuality is an IPPort with an associated latency and path mtu.
+type addrQuality struct {
 	netip.AddrPort
 	latency time.Duration
+	wireMTU tstun.WireMTU
 }
 
-func (a addrLatency) String() string {
-	return a.AddrPort.String() + "@" + a.latency.String()
+func (a addrQuality) String() string {
+	return fmt.Sprintf("%v@%v+%v", a.AddrPort, a.latency, a.wireMTU)
 }
 
 // betterAddr reports whether a is a better addr to use than b.
-func betterAddr(a, b addrLatency) bool {
+func betterAddr(a, b addrQuality) bool {
 	if a.AddrPort == b.AddrPort {
+		if a.wireMTU > b.wireMTU {
+			return true
+		}
 		return false
 	}
 	if !b.IsValid() {
@@ -1151,7 +1225,7 @@ func (de *endpoint) stopAndReset() {
 func (de *endpoint) resetLocked() {
 	de.lastSend = 0
 	de.lastFullPing = 0
-	de.bestAddr = addrLatency{}
+	de.bestAddr = addrQuality{}
 	de.bestAddrAt = 0
 	de.trustBestAddrUntil = 0
 	for _, es := range de.endpointState {

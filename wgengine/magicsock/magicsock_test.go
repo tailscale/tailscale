@@ -1627,10 +1627,13 @@ func TestEndpointSetsEqual(t *testing.T) {
 
 func TestBetterAddr(t *testing.T) {
 	const ms = time.Millisecond
-	al := func(ipps string, d time.Duration) addrLatency {
-		return addrLatency{netip.MustParseAddrPort(ipps), d}
+	al := func(ipps string, d time.Duration) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d}
 	}
-	zero := addrLatency{}
+	almtu := func(ipps string, d time.Duration, mtu tstun.WireMTU) addrQuality {
+		return addrQuality{AddrPort: netip.MustParseAddrPort(ipps), latency: d, wireMTU: mtu}
+	}
+	zero := addrQuality{}
 
 	const (
 		publicV4   = "1.2.3.4:555"
@@ -1641,7 +1644,7 @@ func TestBetterAddr(t *testing.T) {
 	)
 
 	tests := []struct {
-		a, b addrLatency
+		a, b addrQuality
 		want bool // whether a is better than b
 	}{
 		{a: zero, b: zero, want: false},
@@ -1703,7 +1706,12 @@ func TestBetterAddr(t *testing.T) {
 			b:    al(publicV6, 100*ms),
 			want: true,
 		},
-
+		// If addresses are equal, prefer larger MTU
+		{
+			a:    almtu(publicV4, 30*ms, 1500),
+			b:    almtu(publicV4, 30*ms, 0),
+			want: true,
+		},
 		// Private IPs are preferred over public IPs even if the public
 		// IP is IPv6.
 		{
@@ -2873,6 +2881,104 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 		}
 		if endpoint.bestAddr.AddrPort != test.want {
 			t.Errorf("bestAddr.AddrPort is not as expected: got %v, want %v", endpoint.bestAddr.AddrPort, test.want)
+		}
+	}
+}
+
+func TestAddrForPingLocked(t *testing.T) {
+	testTime := mono.Now()
+
+	validUdpAddr := netip.MustParseAddrPort("1.1.1.1:111")
+	validDerpAddr := netip.MustParseAddrPort("2.2.2.2:222")
+
+	pingTests := []struct {
+		name            string
+		size            int // size of ping payload
+		mtu             tstun.WireMTU
+		validUdpAddr    bool
+		bestAddrTrusted bool
+		wantUDP         bool
+		wantDERP        bool // Returning a derpAddr means to start discovery
+	}{
+		{
+			name:            "start discovery with ping size 0 and invalid UDP addr",
+			size:            0,
+			validUdpAddr:    false,
+			bestAddrTrusted: false,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			name:            "do not start discovery with ping size 0 and valid trusted addr",
+			size:            0,
+			validUdpAddr:    true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			name:            "start discovery with ping size 0 and untrusted addr",
+			size:            0,
+			validUdpAddr:    true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+		{
+			name:            "start discovery when ping size is too big for endpoint MTU",
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr()),
+			mtu:             1500,
+			validUdpAddr:    true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+		{
+			name:            "do not start discovery when endpoint MTU is big enough and trusted",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			mtu:             1500,
+			validUdpAddr:    true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			name:            "start discovery when endpoint MTU is big enough but expired",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			mtu:             1500,
+			validUdpAddr:    true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+	}
+
+	for _, test := range pingTests {
+		bestAddr := addrQuality{wireMTU: test.mtu}
+		if test.validUdpAddr {
+			bestAddr.AddrPort = validUdpAddr
+		}
+		ep := &endpoint{
+			derpAddr: validDerpAddr,
+			bestAddr: bestAddr,
+		}
+		if test.bestAddrTrusted {
+			ep.trustBestAddrUntil = testTime.Add(1 * time.Second)
+		}
+
+		udpAddr, derpAddr := ep.addrForPingLocked(testTime, test.size)
+
+		if test.wantUDP && !udpAddr.IsValid() {
+			t.Errorf("%s: udpAddr returned is not valid", test.name)
+		}
+		if !test.wantUDP && udpAddr.IsValid() {
+			t.Errorf("%s: udpAddr returned is valid", test.name)
+		}
+		if test.wantDERP && !derpAddr.IsValid() {
+			t.Errorf("%s: derpAddr returned is not valid, discovery will not start", test.name)
+		}
+		if !test.wantDERP && derpAddr.IsValid() {
+			t.Errorf("%s: derpAddr returned is valid, discovery will not start", test.name)
 		}
 	}
 }
