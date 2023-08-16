@@ -1110,6 +1110,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 
 		nm := sess.netmapForResponse(&resp)
+
+		// Occasionally print the netmap header.
+		// This is handy for debugging, and our logs processing
+		// pipeline depends on it. (TODO: Remove this dependency.)
+		// Code elsewhere prints netmap diffs every time they are received.
+		now := c.clock.Now()
+		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
+			c.lastPrintMap = now
+			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
+		}
 		if nm.SelfNode == nil {
 			c.logf("MapResponse lacked node")
 			return errors.New("MapResponse lacked node")
@@ -1129,15 +1139,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			nm.SelfNode.Capabilities = nil
 		}
 
-		// Occasionally print the netmap header.
-		// This is handy for debugging, and our logs processing
-		// pipeline depends on it. (TODO: Remove this dependency.)
-		// Code elsewhere prints netmap diffs every time they are received.
-		now := c.clock.Now()
-		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
-			c.lastPrintMap = now
-			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
-		}
 		newPersist := persist.AsStruct()
 		newPersist.NodeID = nm.SelfNode.StableID
 		newPersist.UserProfile = nm.UserProfiles[nm.User]

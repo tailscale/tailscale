@@ -19,6 +19,34 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
+type NetworkMapView struct {
+	nm *NetworkMap
+}
+
+type GUIPeerNode struct {
+	ID             tailcfg.StableNodeID
+	BaseOrFQDNName string         // no "." substring if in your tailnet, else FQDN
+	Owner          tailcfg.UserID // user or fake userid for tagged nodes
+	IPv4           netip.Addr     // may be be zero value (empty string in JSON)
+	IPv6           netip.Addr     // may be be zero value (empty string in JSON)
+	MachineStatus  tailcfg.MachineStatus
+	Hostinfo       GUIHostInfo
+
+	IsExitNode bool
+}
+
+type GUIHostInfo struct {
+	ShareeNode bool `json:",omitempty"` // indicates this node exists in netmap because it's owned by a shared-to user
+}
+
+type GUINetworkMap struct {
+	SelfNode     *tailcfg.Node // TODO: GUISelfNode ?
+	Peers        []*GUIPeerNode
+	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
+
+	TKAEnabled bool
+}
+
 // NetworkMap is the current state of the world.
 //
 // The fields should all be considered read-only. They might
@@ -69,8 +97,6 @@ type NetworkMap struct {
 	// TKAHead indicates the control plane's understanding of 'head' (the
 	// hash of the latest update message to tick through TKA).
 	TKAHead tka.AUMHash
-
-	// ACLs
 
 	User tailcfg.UserID
 
