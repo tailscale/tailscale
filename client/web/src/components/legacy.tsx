@@ -1,5 +1,6 @@
+import cx from "classnames"
 import React from "react"
-import { NodeData } from "src/hooks/node-data"
+import { NodeData, NodeUpdate } from "src/hooks/node-data"
 
 // TODO(tailscale/corp#13775): legacy.tsx contains a set of components
 // that (crudely) implement the pre-2023 web client. These are implemented
@@ -162,9 +163,13 @@ export function IP(props: { data: NodeData }) {
   )
 }
 
-export function State(props: { data: NodeData }) {
-  const { data } = props
-
+export function State({
+  data,
+  updateNode,
+}: {
+  data: NodeData
+  updateNode: (update: NodeUpdate) => void
+}) {
   switch (data.Status) {
     case "NeedsLogin":
     case "NoState":
@@ -232,25 +237,20 @@ export function State(props: { data: NodeData }) {
               device name or IP address above.
             </p>
           </div>
-          <div className="mb-4">
-            <a href="#" className="mb-4 js-advertiseExitNode">
-              {data.AdvertiseExitNode ? (
-                <button
-                  className="button button-red button-medium"
-                  id="enabled"
-                >
-                  Stop advertising Exit Node
-                </button>
-              ) : (
-                <button
-                  className="button button-blue button-medium"
-                  id="enabled"
-                >
-                  Advertise as Exit Node
-                </button>
-              )}
-            </a>
-          </div>
+          <button
+            className={cx("button button-medium mb-4", {
+              "button-red": data.AdvertiseExitNode,
+              "button-blue": !data.AdvertiseExitNode,
+            })}
+            id="enabled"
+            onClick={() =>
+              updateNode({ AdvertiseExitNode: !data.AdvertiseExitNode })
+            }
+          >
+            {data.AdvertiseExitNode
+              ? "Stop advertising Exit Node"
+              : "Advertise as Exit Node"}
+          </button>
         </>
       )
   }
