@@ -1403,8 +1403,11 @@ type DNSConfig struct {
 	//
 	// Matches are case insensitive.
 	ExitNodeFilteredSet []string `json:",omitempty"`
-	// DNSFilterURL contains a user inputed URL that should have a list of domains to be blocked
-	DNSFilterURL string `json:",omitempty"`
+
+	// TempCorpIssue13969 is a temporary (2023-08-16) field for an internal hack day prototype.
+	// It contains a user inputed URL that should have a list of domains to be blocked.
+	// See https://github.com/tailscale/corp/issues/13969.
+	TempCorpIssue13969 string `json:",omitempty"`
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.
