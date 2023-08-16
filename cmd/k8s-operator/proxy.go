@@ -16,11 +16,25 @@ import (
 
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/set"
 )
 
 type whoIsKey struct{}
+
+// whoIsFromRequest returns the WhoIsResponse previously stashed by a call to
+// addWhoIsToRequest.
+func whoIsFromRequest(r *http.Request) *apitype.WhoIsResponse {
+	return r.Context().Value(whoIsKey{}).(*apitype.WhoIsResponse)
+}
+
+// addWhoIsToRequest stashes who in r's context, retrievable by a call to
+// whoIsFromRequest.
+func addWhoIsToRequest(r *http.Request, who *apitype.WhoIsResponse) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), whoIsKey{}, who))
+}
 
 // authProxy is an http.Handler that authenticates requests using the Tailscale
 // LocalAPI and then proxies them to the Kubernetes API.
@@ -37,8 +51,7 @@ func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)
 		return
 	}
-	r = r.WithContext(context.WithValue(r.Context(), whoIsKey{}, who))
-	h.rp.ServeHTTP(w, r)
+	h.rp.ServeHTTP(w, addWhoIsToRequest(r, who))
 }
 
 // runAuthProxy runs an HTTP server that authenticates requests using the
@@ -67,6 +80,10 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 		lc:   lc,
 		rp: &httputil.ReverseProxy{
 			Director: func(r *http.Request) {
+				// Replace the URL with the Kubernetes APIServer.
+				r.URL.Scheme = u.Scheme
+				r.URL.Host = u.Host
+
 				// We want to proxy to the Kubernetes API, but we want to use
 				// the caller's identity to do so. We do this by impersonating
 				// the caller using the Kubernetes User Impersonation feature:
@@ -85,21 +102,9 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 				}
 
 				// Now add the impersonation headers that we want.
-				who := r.Context().Value(whoIsKey{}).(*apitype.WhoIsResponse)
-				if who.Node.IsTagged() {
-					// Use the nodes FQDN as the username, and the nodes tags as the groups.
-					// "Impersonate-Group" requires "Impersonate-User" to be set.
-					r.Header.Set("Impersonate-User", strings.TrimSuffix(who.Node.Name, "."))
-					for _, tag := range who.Node.Tags {
-						r.Header.Add("Impersonate-Group", tag)
-					}
-				} else {
-					r.Header.Set("Impersonate-User", who.UserProfile.LoginName)
+				if err := addImpersonationHeaders(r); err != nil {
+					panic("failed to add impersonation headers: " + err.Error())
 				}
-
-				// Replace the URL with the Kubernetes APIServer.
-				r.URL.Scheme = u.Scheme
-				r.URL.Host = u.Host
 			},
 			Transport: rt,
 		},
@@ -117,4 +122,59 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 	if err := hs.ServeTLS(ln, "", ""); err != nil {
 		log.Fatalf("runAuthProxy: failed to serve %v", err)
 	}
+}
+
+const capabilityName = "https://tailscale.com/cap/kubernetes"
+
+type capRule struct {
+	// Impersonate is a list of rules that specify how to impersonate the caller
+	// when proxying to the Kubernetes API.
+	Impersonate *impersonateRule `json:"impersonate,omitempty"`
+}
+
+// TODO(maisem): move this to some well-known location so that it can be shared
+// with control.
+type impersonateRule struct {
+	Groups []string `json:"groups,omitempty"`
+}
+
+// addImpersonationHeaders adds the appropriate headers to r to impersonate the
+// caller when proxying to the Kubernetes API. It uses the WhoIsResponse stashed
+// in the context by the authProxy.
+func addImpersonationHeaders(r *http.Request) error {
+	who := whoIsFromRequest(r)
+	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal capability: %v", err)
+	}
+
+	var groupsAdded set.Slice[string]
+	for _, rule := range rules {
+		if rule.Impersonate == nil {
+			continue
+		}
+		for _, group := range rule.Impersonate.Groups {
+			if groupsAdded.Contains(group) {
+				continue
+			}
+			r.Header.Add("Impersonate-Group", group)
+			groupsAdded.Add(group)
+		}
+	}
+
+	if !who.Node.IsTagged() {
+		r.Header.Set("Impersonate-User", who.UserProfile.LoginName)
+		return nil
+	}
+	// "Impersonate-Group" requires "Impersonate-User" to be set, so we set it
+	// to the node FQDN for tagged nodes.
+	r.Header.Set("Impersonate-User", strings.TrimSuffix(who.Node.Name, "."))
+
+	// For legacy behavior (before caps), set the groups to the nodes tags.
+	if groupsAdded.Slice().Len() == 0 {
+		for _, tag := range who.Node.Tags {
+			r.Header.Add("Impersonate-Group", tag)
+		}
+	}
+	return nil
 }
