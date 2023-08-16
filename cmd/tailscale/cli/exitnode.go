@@ -66,7 +66,7 @@ func runExitNodeList(ctx context.Context, args []string) error {
 	var peers []*ipnstate.PeerStatus
 	for _, ps := range st.Peer {
 		if !ps.ExitNodeOption {
-			// We only show location based exit nodes.
+			// We only show exit nodes under the exit-node subcommand.
 			continue
 		}
 
