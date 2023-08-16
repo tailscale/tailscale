@@ -10,6 +10,7 @@ type DNSConfig struct {
 	Domains           []string                 `json:"domains"`
 	Nameservers       []string                 `json:"nameservers"`
 	Proxied           bool                     `json:"proxied"`
+	DNSFilterURL      string                   `json:"DNSFilterURL"`
 }
 
 type DNSResolver struct {
