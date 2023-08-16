@@ -364,7 +364,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 	// write to strideTables[N] and strideIndexes[N-1].
 	strideIdx := 0
 	strideTables := [16]*strideTable[T]{st}
-	strideIndexes := [15]int{}
+	strideIndexes := [15]uint8{}
 
 	// Similar to Insert, navigate down the tree of strideTables,
 	// looking for the one that houses this prefix. This part is
@@ -384,7 +384,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 		if debugDelete {
 			fmt.Printf("delete: loop byteIdx=%d numBits=%d st.prefix=%s\n", byteIdx, numBits, st.prefix)
 		}
-		child, idx := st.getChild(bs[byteIdx])
+		child := st.getChild(bs[byteIdx])
 		if child == nil {
 			// Prefix can't exist in the table, because one of the
 			// necessary strideTables doesn't exist.
@@ -393,7 +393,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 			}
 			return
 		}
-		strideIndexes[strideIdx] = idx
+		strideIndexes[strideIdx] = bs[byteIdx]
 		strideTables[strideIdx+1] = child
 		strideIdx++
 
@@ -475,7 +475,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 			if debugDelete {
 				fmt.Printf("delete: compact parent.prefix=%s st.prefix=%s child.prefix=%s\n", parent.prefix, cur.prefix, child.prefix)
 			}
-			strideTables[strideIdx-1].setChildByIndex(strideIndexes[strideIdx-1], child)
+			strideTables[strideIdx-1].setChild(strideIndexes[strideIdx-1], child)
 			return
 		default:
 			// This table has two or more children, so it's acting as a "fork in
@@ -505,12 +505,12 @@ func strideSummary[T any](w io.Writer, st *strideTable[T], indent int) {
 	fmt.Fprintf(w, "%s: %d routes, %d children\n", st.prefix, st.routeRefs, st.childRefs)
 	indent += 4
 	st.treeDebugStringRec(w, 1, indent)
-	for i := firstHostIndex; i <= lastHostIndex; i++ {
-		if child := st.entries[i].child; child != nil {
-			addr, len := inversePrefixIndex(i)
-			fmt.Fprintf(w, "%s%d/%d (%02x/%d): ", strings.Repeat(" ", indent), addr, len, addr, len)
-			strideSummary(w, child, indent)
+	for addr, child := range st.children {
+		if child == nil {
+			continue
 		}
+		fmt.Fprintf(w, "%s%d/8 (%02x/8): ", strings.Repeat(" ", indent), addr, addr)
+		strideSummary(w, child, indent)
 	}
 }
 
