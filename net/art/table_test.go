@@ -607,7 +607,7 @@ func TestInsertCompare(t *testing.T) {
 			seenVals4[fastVal] = true
 		}
 		if slowVal != fastVal {
-			t.Errorf("get(%q) = %p, want %p", a, fastVal, slowVal)
+			t.Fatalf("get(%q) = %p, want %p", a, fastVal, slowVal)
 		}
 	}
 
@@ -1092,11 +1092,12 @@ func (t *Table[T]) numStridesRec(seen map[*strideTable[T]]bool, st *strideTable[
 	if st.childRefs == 0 {
 		return ret
 	}
-	for i := firstHostIndex; i <= lastHostIndex; i++ {
-		if c := st.entries[i].child; c != nil && !seen[c] {
-			seen[c] = true
-			ret += t.numStridesRec(seen, c)
+	for _, c := range st.children {
+		if c == nil || seen[c] {
+			continue
 		}
+		seen[c] = true
+		ret += t.numStridesRec(seen, c)
 	}
 	return ret
 }
