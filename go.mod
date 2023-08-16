@@ -100,6 +100,8 @@ require (
 	software.sslmate.com/src/go-pkcs12 v0.2.0
 )
 
+require github.com/gorilla/securecookie v1.1.1 // indirect
+
 require (
 	4d63.com/gocheckcompilerdirectives v1.2.1 // indirect
 	4d63.com/gochecknoglobals v0.2.1 // indirect
@@ -208,6 +210,7 @@ require (
 	github.com/gordonklaus/ineffassign v0.0.0-20230107090616-13ace0543b28 // indirect
 	github.com/goreleaser/chglog v0.5.0 // indirect
 	github.com/goreleaser/fileglob v1.3.0 // indirect
+	github.com/gorilla/csrf v1.7.1
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.4.2 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.1.0 // indirect

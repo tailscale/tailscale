@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { apiFetch } from "src/api"
 
 export type NodeData = {
   Profile: UserProfile
@@ -22,16 +23,104 @@ export type UserProfile = {
   ProfilePicURL: string
 }
 
+export type NodeUpdate = {
+  AdvertiseRoutes?: string
+  AdvertiseExitNode?: boolean
+  Reauthenticate?: boolean
+  ForceLogout?: boolean
+}
+
 // useNodeData returns basic data about the current node.
 export default function useNodeData() {
   const [data, setData] = useState<NodeData>()
+  const [isPosting, setIsPosting] = useState<boolean>(false)
 
-  useEffect(() => {
-    fetch("/api/data")
-      .then((response) => response.json())
-      .then((json) => setData(json))
+  const fetchNodeData = useCallback(() => {
+    apiFetch("/api/data")
+      .then((r) => r.json())
+      .then((data) => setData(data))
       .catch((error) => console.error(error))
-  }, [])
+  }, [setData])
 
-  return data
+  const updateNode = useCallback(
+    (update: NodeUpdate) => {
+      // The contents of this function are mostly copied over
+      // from the legacy client's web.html file.
+      // It makes all data updates through one API endpoint.
+      // As we build out the web client in React,
+      // this endpoint will eventually be deprecated.
+
+      if (isPosting || !data) {
+        return
+      }
+      setIsPosting(true)
+
+      update = {
+        // Default to current data value for any unset fields.
+        AdvertiseRoutes:
+          update.AdvertiseRoutes !== undefined
+            ? update.AdvertiseRoutes
+            : data.AdvertiseRoutes,
+        AdvertiseExitNode:
+          update.AdvertiseExitNode !== undefined
+            ? update.AdvertiseExitNode
+            : data.AdvertiseExitNode,
+      }
+
+      const urlParams = new URLSearchParams(window.location.search)
+      const nextParams = new URLSearchParams({ up: "true" })
+      const token = urlParams.get("SynoToken")
+      if (token) {
+        nextParams.set("SynoToken", token)
+      }
+      const search = nextParams.toString()
+      const url = `/api/data${search ? `?${search}` : ""}`
+
+      var body, contentType: string
+
+      if (data.IsUnraid) {
+        const params = new URLSearchParams()
+        params.append("csrf_token", data.UnraidToken)
+        params.append("ts_data", JSON.stringify(update))
+        body = params.toString()
+        contentType = "application/x-www-form-urlencoded;charset=UTF-8"
+      } else {
+        body = JSON.stringify(update)
+        contentType = "application/json"
+      }
+
+      apiFetch(url, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": contentType },
+        body: body,
+      })
+        .then((r) => r.json())
+        .then((r) => {
+          setIsPosting(false)
+          const err = r["error"]
+          if (err) {
+            throw new Error(err)
+          }
+          const url = r["url"]
+          if (url) {
+            if (data.IsUnraid) {
+              window.open(url, "_blank")
+            } else {
+              document.location.href = url
+            }
+          }
+          fetchNodeData()
+        })
+        .catch((err) => alert("Failed operation: " + err.message))
+    },
+    [data]
+  )
+
+  useEffect(
+    fetchNodeData,
+    // Initial data load.
+    []
+  )
+
+  return { data, updateNode, isPosting }
 }
