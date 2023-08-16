@@ -43,6 +43,8 @@ type Build struct {
 	Tmp string
 	// Go is the path to the Go binary to use for building.
 	Go string
+	// Yarn is the path to the yarn binary to use for building the web client assets.
+	Yarn string
 	// Version is the version info of the build.
 	Version mkversion.VersionInfo
 	// Time is the timestamp of the build.
@@ -79,15 +81,20 @@ func NewBuild(repo, out string) (*Build, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finding module root: %w", err)
 	}
-	goTool, err := findGo(repo)
+	goTool, err := findTool(repo, "go")
 	if err != nil {
 		return nil, fmt.Errorf("finding go binary: %w", err)
+	}
+	yarnTool, err := findTool(repo, "yarn")
+	if err != nil {
+		return nil, fmt.Errorf("finding yarn binary: %w", err)
 	}
 	b := &Build{
 		Repo:         repo,
 		Tmp:          tmp,
 		Out:          out,
 		Go:           goTool,
+		Yarn:         yarnTool,
 		Version:      mkversion.Info(),
 		Time:         time.Now().UTC(),
 		extra:        map[any]any{},
@@ -178,6 +185,24 @@ func (b *Build) TmpDir() string {
 		panic(fmt.Sprintf("creating temp dir: %v", err))
 	}
 	return ret
+}
+
+// BuildWebClientAssets builds the JS and CSS assets used by the web client.
+// Assets are built in the client/web/build directory and embedded in
+// the cmd/tailscale binary.
+func (b *Build) BuildWebClientAssets() error {
+	// Nothing in the web client assets is platform-specific,
+	// so we only need to build it once.
+	return b.Once("build-web-client-assets", func() error {
+		dir := filepath.Join(b.Repo, "client", "web")
+		if err := b.Command(dir, b.Yarn, "install").Run(); err != nil {
+			return err
+		}
+		if err := b.Command(dir, b.Yarn, "build").Run(); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // BuildGoBinary builds the Go binary at path and returns the path to the
@@ -303,16 +328,19 @@ func findModRoot(path string) (string, error) {
 	}
 }
 
-func findGo(path string) (string, error) {
-	toolGo := filepath.Join(path, "tool/go")
-	if _, err := os.Stat(toolGo); err == nil {
-		return toolGo, nil
+// findTool returns the path to the specified named tool.
+// It first looks in the "tool" directory in the provided path,
+// then in the $PATH environment variable.
+func findTool(path, name string) (string, error) {
+	tool := filepath.Join(path, "tool", name)
+	if _, err := os.Stat(tool); err == nil {
+		return tool, nil
 	}
-	toolGo, err := exec.LookPath("go")
+	tool, err := exec.LookPath(name)
 	if err != nil {
 		return "", err
 	}
-	return toolGo, nil
+	return tool, nil
 }
 
 // FilterTargets returns the subset of targets that match any of the filters.
