@@ -37,7 +37,6 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/portmapper"
-	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -51,6 +50,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/osdiag"
 	"tailscale.com/version"
+	"tailscale.com/wgengine/magicsock"
 )
 
 type localAPIHandler func(*Handler, http.ResponseWriter, *http.Request)
@@ -1362,8 +1362,8 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "'size' parameter is only supported with disco pings", 400)
 			return
 		}
-		if size > int(tstun.DefaultMTU()) {
-			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", tstun.DefaultMTU()), 400)
+		if size > magicsock.MaxDiscoPingSize {
+			http.Error(w, fmt.Sprintf("maximum value for 'size' is %v", magicsock.MaxDiscoPingSize), 400)
 			return
 		}
 	}

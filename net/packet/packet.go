@@ -34,6 +34,12 @@ const (
 	TCPECNBits TCPFlag = TCPECNEcho | TCPCWR
 )
 
+// Since we support arbitrarily large MTUs, export a constant for use
+// by any code that is handling IP packets of unknown size. See
+// https://pkg.go.dev/gvisor.dev/gvisor/pkg/tcpip/header#pkg-constants
+// for discussion of why this is 65536 and not some smaller value.
+const MaxIPPacketSize = 65536
+
 // CaptureMeta contains metadata that is used when debugging.
 type CaptureMeta struct {
 	DidSNAT     bool           // SNAT was performed & the address was updated.

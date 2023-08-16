@@ -398,6 +398,10 @@ func (de *endpoint) noteActiveLocked() {
 	}
 }
 
+// MaxDiscoPingSize is the largest useful ping message size that we
+// can send - the maximum packet size minus the IPv4 and UDP headers.
+var MaxDiscoPingSize = tstun.MaxPacketSize - 20 - 8
+
 // cliPing starts a ping for the "tailscale ping" command. res is value to call cb with,
 // already partially filled.
 func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
@@ -406,6 +410,12 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstat
 
 	if de.expired {
 		res.Err = errExpired.Error()
+		cb(res)
+		return
+	}
+
+	if size > MaxDiscoPingSize {
+		res.Err = errPingTooBig.Error()
 		cb(res)
 		return
 	}
@@ -433,6 +443,7 @@ func (de *endpoint) cliPing(res *ipnstate.PingResult, size int, cb func(*ipnstat
 var (
 	errExpired     = errors.New("peer's node key has expired")
 	errNoUDPOrDERP = errors.New("no UDP or DERP addr")
+	errPingTooBig  = errors.New("ping size too big")
 )
 
 func (de *endpoint) send(buffs [][]byte) error {
@@ -533,8 +544,8 @@ const discoPingSize = len(disco.Magic) + key.DiscoPublicRawLen + disco.NonceLen 
 // It is passed in so that sendDiscoPing doesn't need to lock de.mu.
 func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, txid stun.TxID, size int, logLevel discoLogLevel) {
 	padding := 0
-	if size > int(tstun.DefaultMTU()) {
-		size = int(tstun.DefaultMTU())
+	if size > MaxDiscoPingSize {
+		size = MaxDiscoPingSize
 	}
 	if size-discoPingSize > 0 {
 		padding = size - discoPingSize
