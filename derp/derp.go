@@ -85,7 +85,7 @@ const (
 
 	// framePeerPresent is like framePeerGone, but for other
 	// members of the DERP region when they're meshed up together.
-	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected
+	framePeerPresent = frameType(0x09) // 32B pub key of peer that's connected + optional 18B ip:port (16 byte IP + 2 byte BE uint16 port)
 
 	// frameWatchConns is how one DERP node in a regional mesh
 	// subscribes to the others in the region.
