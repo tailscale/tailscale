@@ -51,7 +51,7 @@ func (t *Table[T]) tableForAddr(addr netip.Addr) *strideTable[T] {
 
 // Get does a route lookup for addr and returns the associated value, or nil if
 // no route matched.
-func (t *Table[T]) Get(addr netip.Addr) *T {
+func (t *Table[T]) Get(addr netip.Addr) (ret T, ok bool) {
 	t.init()
 
 	// Ideally we would use addr.AsSlice here, but AsSlice is just
@@ -84,13 +84,13 @@ func (t *Table[T]) Get(addr netip.Addr) *T {
 	const maxDepth = 16
 	type prefixAndRoute struct {
 		prefix netip.Prefix
-		route  *T
+		route  T
 	}
 	strideMatch := make([]prefixAndRoute, 0, maxDepth)
 findLeaf:
 	for {
-		rt, child := st.getValAndChild(bs[i])
-		if rt != nil {
+		rt, rtOK, child := st.getValAndChild(bs[i])
+		if rtOK {
 			// This strideTable contains a route that may be relevant to our
 			// search, remember it.
 			strideMatch = append(strideMatch, prefixAndRoute{st.prefix, rt})
@@ -115,7 +115,7 @@ findLeaf:
 	// the correct most-specific route.
 	for i := len(strideMatch) - 1; i >= 0; i-- {
 		if m := strideMatch[i]; m.prefix.Contains(addr) {
-			return m.route
+			return m.route, true
 		}
 	}
 
@@ -123,16 +123,13 @@ findLeaf:
 	// immediately), or we went on a wild goose chase down a compressed path for
 	// the wrong prefix, and also found no usable routes on the way back up to
 	// the root. This is a miss.
-	return nil
+	return ret, false
 }
 
 // Insert adds pfx to the table, with value val.
 // If pfx is already present in the table, its value is set to val.
-func (t *Table[T]) Insert(pfx netip.Prefix, val *T) {
+func (t *Table[T]) Insert(pfx netip.Prefix, val T) {
 	t.init()
-	if val == nil {
-		panic("Table.Insert called with nil value")
-	}
 
 	// The standard library doesn't enforce normalized prefixes (where
 	// the non-prefix bits are all zero). These algorithms require
@@ -423,7 +420,7 @@ func (t *Table[T]) Delete(pfx netip.Prefix) {
 	if debugDelete {
 		fmt.Printf("delete: delete from st.prefix=%s addr=%d/%d\n", st.prefix, bs[byteIdx], numBits)
 	}
-	if st.delete(bs[byteIdx], numBits) == nil {
+	if routeExisted := st.delete(bs[byteIdx], numBits); !routeExisted {
 		// We're in the right strideTable, but pfx wasn't in
 		// it. Refcounts haven't changed, so we can skip cleanup.
 		if debugDelete {
