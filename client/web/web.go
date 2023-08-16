@@ -7,6 +7,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	_ "embed"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
@@ -31,7 +33,6 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/groupmember"
-	"tailscale.com/util/httpm"
 	"tailscale.com/version/distro"
 )
 
@@ -52,6 +53,8 @@ type Server struct {
 
 	devMode  bool
 	devProxy *httputil.ReverseProxy // only filled when devMode is on
+
+	apiHandler http.Handler // csrf-protected api handler
 }
 
 // NewServer constructs a new Tailscale web client server.
@@ -70,6 +73,11 @@ func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func
 	if s.devMode {
 		cleanup = s.startDevServer()
 		s.addProxyToDevServer()
+
+		// Create new handler for "/api" requests.
+		// And protect with gorilla csrf.
+		csrfProtect := csrf.Protect(csrfKey())
+		s.apiHandler = csrfProtect(&api{s: s})
 	}
 	return s, cleanup
 }
@@ -271,19 +279,9 @@ req.send(null);
 // ServeHTTP processes all requests for the Tailscale web client.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.devMode {
-		if r.URL.Path == "/api/data" {
-			user, err := authorize(w, r)
-			if err != nil {
-				return
-			}
-			switch r.Method {
-			case httpm.GET:
-				s.serveGetNodeDataJSON(w, r, user)
-			case httpm.POST:
-				s.servePostNodeUpdate(w, r)
-			default:
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			// Pass through to other handlers via CSRF protection.
+			s.apiHandler.ServeHTTP(w, r)
 			return
 		}
 		// When in dev mode, proxy to the Vite dev server.
@@ -526,4 +524,15 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 			return *url, nil
 		}
 	}
+}
+
+// csrfKey creates a new random csrf token.
+// If an error surfaces during key creation,
+// the error is logged and the active process terminated.
+func csrfKey() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		log.Fatal("error generating CSRF key: %w", err)
+	}
+	return key
 }
