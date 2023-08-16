@@ -588,12 +588,7 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 }
 
 func (up *updater) updateMacSys() error {
-	// use sparkle? do we have permissions from this context? does sudo help?
-	// We can at least fail with a command they can run to update from the shell.
-	// Like "tailscale update --macsys | sudo sh" or something.
-	//
-	// TODO(bradfitz,mihai): implement. But for now:
-	return errors.ErrUnsupported
+	return errors.New("NOTREACHED: On MacSys builds, `tailscale update` is handled in Swift to launch the GUI updater")
 }
 
 func (up *updater) updateMacAppStore() error {
