@@ -1403,6 +1403,8 @@ type DNSConfig struct {
 	//
 	// Matches are case insensitive.
 	ExitNodeFilteredSet []string `json:",omitempty"`
+	// DNSFilterURL contains a user inputed URL that should have a list of domains to be blocked
+	DNSFilterURL string `json:",omitempty"`
 }
 
 // DNSRecord is an extra DNS record to add to MagicDNS.

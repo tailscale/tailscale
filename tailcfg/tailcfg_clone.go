@@ -261,6 +261,7 @@ var _DNSConfigCloneNeedsRegeneration = DNSConfig(struct {
 	CertDomains         []string
 	ExtraRecords        []DNSRecord
 	ExitNodeFilteredSet []string
+	DNSFilterURL        string
 }{})
 
 // Clone makes a deep copy of RegisterResponse.
