@@ -71,9 +71,9 @@ func TestNetworkMapConcise(t *testing.T) {
 			name: "debug_values",
 			nm: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{SetForceBackgroundSTUN: "true"},
+				Debug:   &tailcfg.Debug{SleepSeconds: 1.5},
 			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"SetForceBackgroundSTUN\":true} []\n",
+			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"SleepSeconds\":1.5} []\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
