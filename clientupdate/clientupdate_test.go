@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"tailscale.com/tailcfg"
 )
 
 func TestUpdateDebianAptSourcesListBytes(t *testing.T) {
@@ -446,29 +444,151 @@ tailscale installed size:
 
 func TestSynoArch(t *testing.T) {
 	tests := []struct {
-		goarch  string
-		model   string
-		want    string
-		wantErr bool
+		goarch         string
+		synoinfoUnique string
+		want           string
+		wantErr        bool
 	}{
-		{goarch: "amd64", model: "DS224+", want: "x86_64"},
-		{goarch: "arm64", model: "DS124", want: "armv8"},
-		{goarch: "386", model: "DS415play", want: "i686"},
-		{goarch: "arm", model: "DS213air", want: "88f6281"},
-		{goarch: "arm", model: "NVR1218", want: "hi3535"},
-		{goarch: "arm", model: "DS1517", want: "alpine"},
-		{goarch: "arm", model: "DS216se", want: "armada370"},
-		{goarch: "arm", model: "DS115", want: "armada375"},
-		{goarch: "arm", model: "DS419slim", want: "armada38x"},
-		{goarch: "arm", model: "RS815", want: "armadaxp"},
-		{goarch: "arm", model: "DS414j", want: "comcerto2k"},
-		{goarch: "arm", model: "DS216play", want: "monaco"},
-		{goarch: "riscv64", model: "DS999", wantErr: true},
+		{goarch: "amd64", synoinfoUnique: "synology_x86_224", want: "x86_64"},
+		{goarch: "arm64", synoinfoUnique: "synology_armv8_124", want: "armv8"},
+		{goarch: "386", synoinfoUnique: "synology_i686_415play", want: "i686"},
+		{goarch: "arm", synoinfoUnique: "synology_88f6281_213air", want: "88f6281"},
+		{goarch: "arm", synoinfoUnique: "synology_88f6282_413j", want: "88f6282"},
+		{goarch: "arm", synoinfoUnique: "synology_hi3535_NVR1218", want: "hi3535"},
+		{goarch: "arm", synoinfoUnique: "synology_alpine_1517", want: "alpine"},
+		{goarch: "arm", synoinfoUnique: "synology_armada370_216se", want: "armada370"},
+		{goarch: "arm", synoinfoUnique: "synology_armada375_115", want: "armada375"},
+		{goarch: "arm", synoinfoUnique: "synology_armada38x_419slim", want: "armada38x"},
+		{goarch: "arm", synoinfoUnique: "synology_armadaxp_RS815", want: "armadaxp"},
+		{goarch: "arm", synoinfoUnique: "synology_comcerto2k_414j", want: "comcerto2k"},
+		{goarch: "arm", synoinfoUnique: "synology_monaco_216play", want: "monaco"},
+		{goarch: "ppc64", synoinfoUnique: "synology_qoriq_413", wantErr: true},
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%s-%s", tt.goarch, tt.model), func(t *testing.T) {
-			got, err := synoArch(&tailcfg.Hostinfo{GoArch: tt.goarch, DeviceModel: tt.model})
+		t.Run(fmt.Sprintf("%s-%s", tt.goarch, tt.synoinfoUnique), func(t *testing.T) {
+			synoinfoConfPath := filepath.Join(t.TempDir(), "synoinfo.conf")
+			if err := os.WriteFile(
+				synoinfoConfPath,
+				[]byte(fmt.Sprintf("unique=%q\n", tt.synoinfoUnique)),
+				0600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, err := synoArch(tt.goarch, synoinfoConfPath)
+			if err != nil {
+				if !tt.wantErr {
+					t.Fatalf("got unexpected error %v", err)
+				}
+				return
+			}
+			if tt.wantErr {
+				t.Fatalf("got %q, expected an error", got)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseSynoinfo(t *testing.T) {
+	tests := []struct {
+		desc    string
+		content string
+		want    string
+		wantErr bool
+	}{
+		{
+			desc: "double-quoted",
+			content: `
+company_title="Synology"
+unique="synology_88f6281_213air"
+`,
+			want: "88f6281",
+		},
+		{
+			desc: "single-quoted",
+			content: `
+company_title="Synology"
+unique='synology_88f6281_213air'
+`,
+			want: "88f6281",
+		},
+		{
+			desc: "unquoted",
+			content: `
+company_title="Synology"
+unique=synology_88f6281_213air
+`,
+			want: "88f6281",
+		},
+		{
+			desc: "missing unique",
+			content: `
+company_title="Synology"
+`,
+			wantErr: true,
+		},
+		{
+			desc: "empty unique",
+			content: `
+company_title="Synology"
+unique=
+`,
+			wantErr: true,
+		},
+		{
+			desc: "empty unique double-quoted",
+			content: `
+company_title="Synology"
+unique=""
+`,
+			wantErr: true,
+		},
+		{
+			desc: "empty unique single-quoted",
+			content: `
+company_title="Synology"
+unique=''
+`,
+			wantErr: true,
+		},
+		{
+			desc: "malformed unique",
+			content: `
+company_title="Synology"
+unique="synology_88f6281"
+`,
+			wantErr: true,
+		},
+		{
+			desc:    "empty file",
+			content: ``,
+			wantErr: true,
+		},
+		{
+			desc: "empty lines and comments",
+			content: `
+
+# In a file named synoinfo? Shocking!
+company_title="Synology"
+
+
+# unique= is_a_field_that_follows
+unique="synology_88f6281_213air"
+
+`,
+			want: "88f6281",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			synoinfoConfPath := filepath.Join(t.TempDir(), "synoinfo.conf")
+			if err := os.WriteFile(synoinfoConfPath, []byte(tt.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := parseSynoinfo(synoinfoConfPath)
 			if err != nil {
 				if !tt.wantErr {
 					t.Fatalf("got unexpected error %v", err)
