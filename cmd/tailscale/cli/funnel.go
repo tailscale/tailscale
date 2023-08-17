@@ -83,7 +83,7 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 	if sc == nil {
 		sc = new(ipn.ServeConfig)
 	}
-	st, err := e.getLocalClientStatus(ctx)
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
 	if err != nil {
 		return fmt.Errorf("getting client status: %w", err)
 	}
@@ -146,7 +146,7 @@ func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status,
 		return nil // already enabled
 	}
 	enableErr := e.enableFeatureInteractive(ctx, "funnel", hasFunnelAttrs)
-	st, statusErr := e.getLocalClientStatus(ctx) // get updated status; interactive flow may block
+	st, statusErr := e.getLocalClientStatusWithoutPeers(ctx) // get updated status; interactive flow may block
 	switch {
 	case statusErr != nil:
 		return fmt.Errorf("getting client status: %w", statusErr)

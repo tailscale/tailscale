@@ -810,7 +810,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 				defer func() { fakeStatus.Self.Capabilities = oldCaps }() // reset after test
 				fakeStatus.Self.Capabilities = tt.caps
 			}
-			st, err := e.getLocalClientStatus(ctx)
+			st, err := e.getLocalClientStatusWithoutPeers(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -861,7 +861,7 @@ var fakeStatus = &ipnstate.Status{
 	},
 }
 
-func (lc *fakeLocalServeClient) Status(ctx context.Context) (*ipnstate.Status, error) {
+func (lc *fakeLocalServeClient) StatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
 	return fakeStatus, nil
 }
 
