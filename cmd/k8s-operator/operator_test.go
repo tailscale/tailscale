@@ -650,6 +650,52 @@ func TestCustomPriorityClassName(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(shortName, fullName, "custom-priority-class-name", "tailscale-critical"))
 }
 
+func TestDefaultLoadBalancer(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger:                zl.Sugar(),
+		isDefaultLoadBalancer: true,
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeLoadBalancer,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test")
+
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test", ""))
+}
+
 func expectedSecret(name string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
@@ -779,6 +825,9 @@ func findGenName(t *testing.T, client client.Client, ns, name string) (full, noS
 	s, err := getSingleObject[corev1.Secret](context.Background(), client, "operator-ns", labels)
 	if err != nil {
 		t.Fatalf("finding secret for %q: %v", name, err)
+	}
+	if s == nil {
+		t.Fatalf("no secret found for %q", name)
 	}
 	return s.GetName(), strings.TrimSuffix(s.GetName(), "-0")
 }
