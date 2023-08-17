@@ -107,7 +107,8 @@ type CapabilityVersion int
 //   - 67: 2023-07-25: Client understands PeerCapMap
 //   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
 //   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
-const CurrentCapabilityVersion CapabilityVersion = 69
+//   - 70: 2023-08-16: removed most Debug fields; added NodeAttrDisable*, NodeAttrDebug* instead
+const CurrentCapabilityVersion CapabilityVersion = 70
 
 type StableID string
 
@@ -1750,35 +1751,6 @@ type ControlIPCandidate struct {
 //
 // TODO(bradfitz): start migrating the imperative ones to c2n requests.
 type Debug struct {
-	// ForceBackgroundSTUN controls whether magicsock should
-	// always do its background STUN queries (see magicsock's
-	// periodicReSTUN), regardless of inactivity.
-	ForceBackgroundSTUN bool `json:",omitempty"`
-
-	// SetForceBackgroundSTUN controls whether magicsock should always do its
-	// background STUN queries (see magicsock's periodicReSTUN), regardless of
-	// inactivity.
-	//
-	// As of capver 37, this field is the preferred field for control to set on
-	// the wire and ForceBackgroundSTUN is only used within the code as the
-	// current map session value. But ForceBackgroundSTUN can still be used too.
-	SetForceBackgroundSTUN opt.Bool `json:",omitempty"`
-
-	// DERPRoute controls whether the DERP reverse path
-	// optimization (see Issue 150) should be enabled or
-	// disabled. The environment variable in magicsock is the
-	// highest priority (if set), then this (if set), then the
-	// binary default value.
-	DERPRoute opt.Bool `json:",omitempty"`
-
-	// TrimWGConfig controls whether Tailscale does lazy, on-demand
-	// wireguard configuration of peers.
-	TrimWGConfig opt.Bool `json:",omitempty"`
-
-	// DisableSubnetsIfPAC controls whether subnet routers should be
-	// disabled if WPAD is present on the network.
-	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
-
 	// SleepSeconds requests that the client sleep for the
 	// provided number of seconds.
 	// The client can (and should) limit the value (such as 5
@@ -1788,34 +1760,17 @@ type Debug struct {
 	// RandomizeClientPort is whether magicsock should UDP bind to
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
-	RandomizeClientPort bool `json:",omitempty"`
-
-	// SetRandomizeClientPort is whether magicsock should UDP bind to :0 to get
-	// a random local port, ignoring any configured fixed port.
 	//
-	// As of capver 37, this field is the preferred field for control to set on
-	// the wire and RandomizeClientPort is only used within the code as the
-	// current map session value. But RandomizeClientPort can still be used too.
-	SetRandomizeClientPort opt.Bool `json:",omitempty"`
+	// Deprecated: use NodeAttrRandomizeClientPort instead.
+	RandomizeClientPort bool `json:",omitempty"`
 
 	// OneCGNATRoute controls whether the client should prefer to make one
 	// big CGNAT /10 route rather than a /32 per peer.
 	OneCGNATRoute opt.Bool `json:",omitempty"`
 
-	// DisableUPnP is whether the client will attempt to perform a UPnP portmapping.
-	// By default, we want to enable it to see if it works on more clients.
-	//
-	// If UPnP catastrophically fails for people, this should be set to True to kill
-	// new attempts at UPnP connections.
-	DisableUPnP opt.Bool `json:",omitempty"`
-
 	// DisableLogTail disables the logtail package. Once disabled it can't be
 	// re-enabled for the lifetime of the process.
 	DisableLogTail bool `json:",omitempty"`
-
-	// EnableSilentDisco disables the use of heartBeatTimer in magicsock and attempts to
-	// handle disco silently. See issue #540 for details.
-	EnableSilentDisco bool `json:",omitempty"`
 
 	// Exit optionally specifies that the client should os.Exit
 	// with this code.
@@ -2003,6 +1958,34 @@ const (
 	NodeAttrFunnel = "funnel"
 	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.
 	NodeAttrSSHAggregator = "ssh-aggregator"
+
+	// NodeAttrDebugForceBackgroundSTUN forces a node to always do background
+	// STUN queries regardless of inactivity.
+	NodeAttrDebugForceBackgroundSTUN = "debug-always-stun"
+
+	// NodeAttrDebugDisableWGTrim disables the lazy WireGuard configuration,
+	// always giving WireGuard the full netmap, even for idle peers.
+	NodeAttrDebugDisableWGTrim = "debug-no-wg-trim"
+
+	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
+	// See Issue 150.
+	NodeAttrDebugDisableDRPO = "debug-disable-drpo"
+
+	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
+	// disabled if WPAD is present on the network.
+	NodeAttrDisableSubnetsIfPAC = "debug-disable-subnets-if-pac"
+
+	// NodeAttrDisableUPnP makes the client not perform a UPnP portmapping.
+	// By default, we want to enable it to see if it works on more clients.
+	//
+	// If UPnP catastrophically fails for people, this should be set kill
+	// new attempts at UPnP connections.
+	NodeAttrDisableUPnP = "debug-disable-upnp"
+
+	// NodeAttrRandomizeClientPort makes magicsock UDP bind to
+	// :0 to get a random local port, ignoring any configured
+	// fixed port.
+	NodeAttrRandomizeClientPort = "randomize-client-port"
 )
 
 // SetDNSRequest is a request to add a DNS record.

@@ -35,15 +35,14 @@ import (
 
 // useDerpRoute reports whether magicsock should enable the DERP
 // return path optimization (Issue 150).
+//
+// By default it's enabled, unless an environment variable
+// or control says to disable it.
 func useDerpRoute() bool {
 	if b, ok := debugUseDerpRoute().Get(); ok {
 		return b
 	}
-	ob := controlclient.DERPRouteFlag()
-	if v, ok := ob.Get(); ok {
-		return v
-	}
-	return true // as of 1.21.x
+	return !controlclient.DisableDRPO()
 }
 
 // derpRoute is a route entry for a public key, saying that a certain

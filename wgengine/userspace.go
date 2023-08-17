@@ -497,10 +497,7 @@ func forceFullWireguardConfig(numPeers int) bool {
 	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
-	if opt := controlclient.TrimWGConfig(); opt != "" {
-		return !opt.EqualBool(true)
-	}
-	return false
+	return controlclient.KeepFullWGConfig()
 }
 
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
@@ -795,7 +792,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
-	if debug != nil && debug.RandomizeClientPort {
+	if controlclient.RandomizeClientPort() || // new way (capver 70)
+		debug != nil && debug.RandomizeClientPort { // old way which server might still send (as of 2023-08-16)
 		listenPort = 0
 	}
 
