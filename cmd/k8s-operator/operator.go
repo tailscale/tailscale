@@ -183,6 +183,9 @@ waitOnline:
 // startReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler.
 func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+	var (
+		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
+	)
 	startlog := zlog.Named("startReconcilers")
 	// For secrets and statefulsets, we only get permission to touch the objects
 	// in the controller's own namespace. This cannot be expressed by
@@ -234,9 +237,10 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 		Watches(&appsv1.StatefulSet{}, reconcileFilter).
 		Watches(&corev1.Secret{}, reconcileFilter).
 		Complete(&ServiceReconciler{
-			ssr:    ssr,
-			Client: mgr.GetClient(),
-			logger: zlog.Named("service-reconciler"),
+			ssr:                   ssr,
+			Client:                mgr.GetClient(),
+			logger:                zlog.Named("service-reconciler"),
+			isDefaultLoadBalancer: isDefaultLoadBalancer,
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)

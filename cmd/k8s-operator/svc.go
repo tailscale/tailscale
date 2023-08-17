@@ -20,8 +20,9 @@ import (
 
 type ServiceReconciler struct {
 	client.Client
-	ssr    *tailscaleSTSReconciler
-	logger *zap.SugaredLogger
+	ssr                   *tailscaleSTSReconciler
+	logger                *zap.SugaredLogger
+	isDefaultLoadBalancer bool
 }
 
 func childResourceLabels(name, ns, typ string) map[string]string {
@@ -177,8 +178,8 @@ func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
 func (a *ServiceReconciler) hasLoadBalancerClass(svc *corev1.Service) bool {
 	return svc != nil &&
 		svc.Spec.Type == corev1.ServiceTypeLoadBalancer &&
-		svc.Spec.LoadBalancerClass != nil &&
-		*svc.Spec.LoadBalancerClass == "tailscale"
+		(svc.Spec.LoadBalancerClass != nil && *svc.Spec.LoadBalancerClass == "tailscale" ||
+			svc.Spec.LoadBalancerClass == nil && a.isDefaultLoadBalancer)
 }
 
 func (a *ServiceReconciler) hasAnnotation(svc *corev1.Service) bool {
