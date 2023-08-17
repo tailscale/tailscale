@@ -25,6 +25,8 @@ import (
 	"tailscale.com/version/distro"
 )
 
+var c2nLogHeap func(http.ResponseWriter, *http.Request) // non-nil on most platforms (c2n_pprof.go)
+
 func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 	writeJSON := func(v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -70,6 +72,13 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			res.Error = err.Error()
 		}
 		writeJSON(res)
+	case "/debug/logheap":
+		if c2nLogHeap != nil {
+			c2nLogHeap(w, r)
+		} else {
+			http.Error(w, "not implemented", http.StatusNotImplemented)
+			return
+		}
 	case "/ssh/usernames":
 		var req tailcfg.C2NSSHUsernamesRequest
 		if r.Method == "POST" {

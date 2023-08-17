@@ -32,7 +32,6 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/log/logheap"
 	"tailscale.com/logtail"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/dnsfallback"
@@ -1095,12 +1094,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			if resp.Debug.DisableLogTail {
 				logtail.Disable()
 				envknob.SetNoLogsNoSupport()
-			}
-			if resp.Debug.LogHeapPprof {
-				go logheap.LogHeap(resp.Debug.LogHeapURL)
-			}
-			if resp.Debug.GoroutineDumpURL != "" {
-				go dumpGoroutinesToURL(c.httpc, resp.Debug.GoroutineDumpURL)
 			}
 			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep, c.clock); err != nil {
