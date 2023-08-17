@@ -42,7 +42,6 @@ import (
 	_ "tailscale.com/ipn"
 	_ "tailscale.com/ipn/ipnlocal"
 	_ "tailscale.com/ipn/localapi"
-	_ "tailscale.com/log/logheap"
 	_ "tailscale.com/logtail"
 	_ "tailscale.com/logtail/filch"
 	_ "tailscale.com/net/dns"
