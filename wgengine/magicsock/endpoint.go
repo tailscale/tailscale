@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/poly1305"
-	"golang.org/x/exp/maps"
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/disco"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/stun"
@@ -313,7 +313,7 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 		return udpAddr, false
 	}
 
-	candidates := maps.Keys(de.endpointState)
+	candidates := xmaps.Keys(de.endpointState)
 	if len(candidates) == 0 {
 		de.c.logf("magicsock: addrForSendWireguardLocked: [unexpected] no candidates available for endpoint")
 		return udpAddr, false

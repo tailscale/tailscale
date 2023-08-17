@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/exp/maps"
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/cmd/testwrapper/flakytest"
 )
 
@@ -270,7 +270,7 @@ func main() {
 		if len(toRetry) == 0 {
 			continue
 		}
-		pkgs := maps.Keys(toRetry)
+		pkgs := xmaps.Keys(toRetry)
 		sort.Strings(pkgs)
 		nextRun := &nextRun{
 			attempt: thisRun.attempt + 1,

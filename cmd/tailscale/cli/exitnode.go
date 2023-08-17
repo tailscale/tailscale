@@ -14,7 +14,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	"golang.org/x/exp/maps"
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/cmpx"
@@ -181,7 +181,7 @@ func filterFormatAndSortExitNodes(peers []*ipnstate.PeerStatus, filterBy string)
 	}
 
 	filteredExitNodes := filteredExitNodes{
-		Countries: maps.Values(countries),
+		Countries: xmaps.Values(countries),
 	}
 
 	for _, country := range filteredExitNodes.Countries {
