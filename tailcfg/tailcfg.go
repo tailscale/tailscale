@@ -108,7 +108,8 @@ type CapabilityVersion int
 //   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
 //   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
 //   - 70: 2023-08-16: removed most Debug fields; added NodeAttrDisable*, NodeAttrDebug* instead
-const CurrentCapabilityVersion CapabilityVersion = 70
+//   - 71: 2023-08-17: added NodeAttrOneCGNATEnable, NodeAttrOneCGNATDisable
+const CurrentCapabilityVersion CapabilityVersion = 71
 
 type StableID string
 
@@ -1741,10 +1742,10 @@ type ControlIPCandidate struct {
 	Priority int `json:",omitempty"`
 }
 
-// Debug are instructions from the control server to the client to adjust debug
+// Debug were instructions from the control server to the client to adjust debug
 // settings.
 //
-// Deprecated: these should no longer be used. They're a weird mix of declartive
+// Deprecated: these should no longer be used. Most have been deleted except for some They're a weird mix of declartive
 // and imperative. The imperative ones should be c2n requests instead, and the
 // declarative ones (at least the bools) should generally be self
 // Node.Capabilities.
@@ -1754,26 +1755,35 @@ type Debug struct {
 	// SleepSeconds requests that the client sleep for the
 	// provided number of seconds.
 	// The client can (and should) limit the value (such as 5
-	// minutes).
+	// minutes). This exists as a safety measure to slow down
+	// spinning clients, in case we introduce a bug in the
+	// state machine.
 	SleepSeconds float64 `json:",omitempty"`
 
-	// RandomizeClientPort is whether magicsock should UDP bind to
-	// :0 to get a random local port, ignoring any configured
-	// fixed port.
+	// RandomizeClientPort is whether magicsock should UDP bind to :0 to get a
+	// random local port, ignoring any configured fixed port.
 	//
-	// Deprecated: use NodeAttrRandomizeClientPort instead.
+	// Deprecated: use NodeAttrRandomizeClientPort instead. This is kept in code
+	// only so the control plane can use it to send to old clients.
 	RandomizeClientPort bool `json:",omitempty"`
 
-	// OneCGNATRoute controls whether the client should prefer to make one
-	// big CGNAT /10 route rather than a /32 per peer.
+	// OneCGNATRoute controls whether the client should prefer to make one big
+	// CGNAT /10 route rather than a /32 per peer.
+	//
+	// Deprecated: use NodeAttrOneCGNATEnable or NodeAttrOneCGNATDisable
+	// instead. This is kept in code only so the control plane can use it to
+	// send to old clients.
 	OneCGNATRoute opt.Bool `json:",omitempty"`
 
 	// DisableLogTail disables the logtail package. Once disabled it can't be
 	// re-enabled for the lifetime of the process.
+	//
+	// This is primarily used by Headscale.
 	DisableLogTail bool `json:",omitempty"`
 
 	// Exit optionally specifies that the client should os.Exit
-	// with this code.
+	// with this code. This is a safety measure in case a client is crash
+	// looping or in an unsafe state and we need to remotely shut it down.
 	Exit *int `json:",omitempty"`
 }
 
@@ -1986,6 +1996,16 @@ const (
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
 	NodeAttrRandomizeClientPort = "randomize-client-port"
+
+	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
+	// rather than a /32 per peer. At most one of this or
+	// NodeAttrOneCGNATDisable may be set; if neither are, it's automatic.
+	NodeAttrOneCGNATEnable = "one-cgnat?v=true"
+
+	// NodeAttrOneCGNATDisable makes the client prefer a /32 route per peer
+	// rather than one big /10 CGNAT route. At most one of this or
+	// NodeAttrOneCGNATEnable may be set; if neither are, it's automatic.
+	NodeAttrOneCGNATDisable = "one-cgnat?v=false"
 )
 
 // SetDNSRequest is a request to add a DNS record.
