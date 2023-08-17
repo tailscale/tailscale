@@ -75,3 +75,27 @@ func IsSIDValidPrincipal(uid string) bool {
 func LookupPseudoUser(uid string) (*user.User, error) {
 	return lookupPseudoUser(uid)
 }
+
+// RegisterForRestartOpts supplies options to RegisterForRestart.
+type RegisterForRestartOpts struct {
+	RestartOnCrash   bool     // When true, this program will be restarted after a crash.
+	RestartOnHang    bool     // When true, this program will be restarted after a hang.
+	RestartOnUpgrade bool     // When true, this program will be restarted after an upgrade.
+	RestartOnReboot  bool     // When true, this program will be restarted after a reboot.
+	UseCmdLineArgs   bool     // When true, CmdLineArgs will be used as the program's arguments upon restart. Otherwise no arguments will be provided.
+	CmdLineArgs      []string // When UseCmdLineArgs == true, contains the command line arguments, excluding the executable name itself. If nil or empty, the arguments from the current process will be re-used.
+}
+
+// RegisterForRestart registers the current process' restart preferences with
+// the Windows Restart Manager. This enables the OS to intelligently restart
+// the calling executable as requested via opts. This should be called by any
+// programs which need to be restarted by the installer post-update.
+//
+// This function may be called multiple times; the opts from the most recent
+// call will override those from any previous invocations.
+//
+// This function will only work on GOOS=windows. Trying to run it on any other
+// OS will always return nil.
+func RegisterForRestart(opts RegisterForRestartOpts) error {
+	return registerForRestart(opts)
+}
