@@ -4,7 +4,8 @@
 package set
 
 import (
-	"golang.org/x/exp/slices"
+	"slices"
+
 	"tailscale.com/types/views"
 )
 

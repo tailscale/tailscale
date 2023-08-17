@@ -9,10 +9,10 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/tailcfg"
 )
 

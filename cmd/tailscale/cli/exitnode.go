@@ -8,14 +8,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/cmpx"

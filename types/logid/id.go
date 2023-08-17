@@ -11,9 +11,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"unicode/utf8"
-
-	"golang.org/x/exp/slices"
 )
 
 // PrivateID represents a log steam for writing.

@@ -12,11 +12,11 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
-	"golang.org/x/exp/slices"
 )
 
 const (
