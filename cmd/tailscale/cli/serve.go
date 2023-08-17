@@ -135,6 +135,7 @@ type localServeClient interface {
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
 	IncrementCounter(ctx context.Context, name string, delta int) error
+	StreamServe(ctx context.Context, req ipn.ServeStreamRequest) (io.ReadCloser, error) // TODO: testing :)
 }
 
 // serveEnv is the environment the serve command runs within. All I/O should be

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -898,6 +899,11 @@ func (lc *fakeLocalServeClient) WatchIPNBus(ctx context.Context, mask ipn.Notify
 
 func (lc *fakeLocalServeClient) IncrementCounter(ctx context.Context, name string, delta int) error {
 	return nil // unused in tests
+}
+
+func (lc *fakeLocalServeClient) StreamServe(ctx context.Context, req ipn.ServeStreamRequest) (io.ReadCloser, error) {
+	// TODO: testing :)
+	return nil, nil
 }
 
 // exactError returns an error checker that wants exactly the provided want error.

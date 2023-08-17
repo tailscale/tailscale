@@ -1057,6 +1057,29 @@ func (lc *LocalClient) NetworkLockDisable(ctx context.Context, secret []byte) er
 	return nil
 }
 
+// StreamServe returns an io.ReadCloser that streams serve/Funnel
+// connections made to the provided HostPort.
+//
+// If Serve and Funnel were not already enabled for the HostPort in the ServeConfig,
+// the backend enables it for the duration of the context's lifespan and
+// then turns it back off once the context is closed. If either are already enabled,
+// then they remain that way but logs are still streamed
+func (lc *LocalClient) StreamServe(ctx context.Context, hp ipn.ServeStreamRequest) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+apitype.LocalAPIHost+"/localapi/v0/stream-serve", jsonBody(hp))
+	if err != nil {
+		return nil, err
+	}
+	res, err := lc.doLocalRequestNiceError(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		res.Body.Close()
+		return nil, errors.New(res.Status)
+	}
+	return res.Body, nil
+}
+
 // GetServeConfig return the current serve config.
 //
 // If the serve config is empty, it returns (nil, nil).
