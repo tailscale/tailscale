@@ -71,9 +71,9 @@ func TestNetworkMapConcise(t *testing.T) {
 			name: "debug_values",
 			nm: &NetworkMap{
 				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{LogHeapPprof: true},
+				Debug:   &tailcfg.Debug{SetForceBackgroundSTUN: "true"},
 			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"LogHeapPprof\":true} []\n",
+			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"SetForceBackgroundSTUN\":true} []\n",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

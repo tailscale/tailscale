@@ -106,7 +106,8 @@ type CapabilityVersion int
 //   - 66: 2023-07-23: UserProfile.Groups added (available via WhoIs)
 //   - 67: 2023-07-25: Client understands PeerCapMap
 //   - 68: 2023-08-09: Client has dedicated updateRoutine; MapRequest.Stream true means ignore Hostinfo+Endpoints
-const CurrentCapabilityVersion CapabilityVersion = 68
+//   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
+const CurrentCapabilityVersion CapabilityVersion = 69
 
 type StableID string
 
@@ -1749,15 +1750,6 @@ type ControlIPCandidate struct {
 //
 // TODO(bradfitz): start migrating the imperative ones to c2n requests.
 type Debug struct {
-	// LogHeapPprof controls whether the client should log
-	// its heap pprof data. Each true value sent from the server
-	// means that client should do one more log.
-	LogHeapPprof bool `json:",omitempty"`
-
-	// LogHeapURL is the URL to POST its heap pprof to.
-	// Empty means to not log.
-	LogHeapURL string `json:",omitempty"`
-
 	// ForceBackgroundSTUN controls whether magicsock should
 	// always do its background STUN queries (see magicsock's
 	// periodicReSTUN), regardless of inactivity.
@@ -1786,10 +1778,6 @@ type Debug struct {
 	// DisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
 	DisableSubnetsIfPAC opt.Bool `json:",omitempty"`
-
-	// GoroutineDumpURL, if non-empty, requests that the client do
-	// a one-time dump of its active goroutines to the given URL.
-	GoroutineDumpURL string `json:",omitempty"`
 
 	// SleepSeconds requests that the client sleep for the
 	// provided number of seconds.
