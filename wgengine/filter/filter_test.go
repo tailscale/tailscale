@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go4.org/netipx"
-	"golang.org/x/exp/maps"
+	xmaps "golang.org/x/exp/maps"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
@@ -945,7 +945,7 @@ func TestCaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := maps.Keys(filt.CapsWithValues(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst)))
+			got := xmaps.Keys(filt.CapsWithValues(netip.MustParseAddr(tt.src), netip.MustParseAddr(tt.dst)))
 			slices.Sort(got)
 			slices.Sort(tt.want)
 			if !slices.Equal(got, tt.want) {
