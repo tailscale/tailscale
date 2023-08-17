@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"golang.org/x/exp/maps"
 	"tailscale.com/util/mak"
 )
 
@@ -225,6 +226,13 @@ func (m *Map[K, V]) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.m)
+}
+
+// Clear removes all entries from the map.
+func (m *Map[K, V]) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	maps.Clear(m.m)
 }
 
 // WaitGroup is identical to [sync.WaitGroup],
