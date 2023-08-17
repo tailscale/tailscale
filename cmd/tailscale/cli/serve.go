@@ -129,7 +129,7 @@ func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.Fla
 //
 // The purpose of this interface is to allow tests to provide a mock.
 type localServeClient interface {
-	Status(context.Context) (*ipnstate.Status, error)
+	StatusWithoutPeers(context.Context) (*ipnstate.Status, error)
 	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
@@ -158,19 +158,21 @@ type serveEnv struct {
 // The trailing dot is removed.
 // Returns an error if local client status fails.
 func (e *serveEnv) getSelfDNSName(ctx context.Context) (string, error) {
-	st, err := e.getLocalClientStatus(ctx)
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
 	if err != nil {
 		return "", fmt.Errorf("getting client status: %w", err)
 	}
 	return strings.TrimSuffix(st.Self.DNSName, "."), nil
 }
 
-// getLocalClientStatus returns the Status of the local client.
+// getLocalClientStatusWithoutPeers returns the Status of the local client
+// without any peers in the response.
+//
 // Returns error if unable to reach tailscaled or if self node is nil.
 //
 // Exits if status is not running or starting.
-func (e *serveEnv) getLocalClientStatus(ctx context.Context) (*ipnstate.Status, error) {
-	st, err := e.lc.Status(ctx)
+func (e *serveEnv) getLocalClientStatusWithoutPeers(ctx context.Context) (*ipnstate.Status, error) {
+	st, err := e.lc.StatusWithoutPeers(ctx)
 	if err != nil {
 		return nil, fixTailscaledConnectError(err)
 	}
@@ -641,7 +643,7 @@ func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
 		printf("No serve config\n")
 		return nil
 	}
-	st, err := e.getLocalClientStatus(ctx)
+	st, err := e.getLocalClientStatusWithoutPeers(ctx)
 	if err != nil {
 		return err
 	}
