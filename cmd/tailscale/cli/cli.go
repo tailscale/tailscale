@@ -120,7 +120,7 @@ change in the future.
 			pingCmd,
 			ncCmd,
 			sshCmd,
-			funnelCmd,
+			funnelCmd(),
 			serveCmd,
 			versionCmd,
 			webCmd,
