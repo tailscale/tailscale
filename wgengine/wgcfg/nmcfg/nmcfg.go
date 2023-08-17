@@ -8,9 +8,9 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"

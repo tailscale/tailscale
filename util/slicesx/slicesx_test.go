@@ -5,9 +5,8 @@ package slicesx
 
 import (
 	"reflect"
+	"slices"
 	"testing"
-
-	"golang.org/x/exp/slices"
 )
 
 func TestInterleave(t *testing.T) {

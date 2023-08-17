@@ -35,14 +35,13 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dsnet/try"
 	jsonv2 "github.com/go-json-experiment/json"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/cmpx"
@@ -315,8 +314,8 @@ func mustMakeNamesByAddr() map[netip.Addr]string {
 	namesByAddr := make(map[netip.Addr]string)
 retry:
 	for i := 0; i < 10; i++ {
-		maps.Clear(seen)
-		maps.Clear(namesByAddr)
+		clear(seen)
+		clear(namesByAddr)
 		for _, d := range m.Devices {
 			name := fieldPrefix(d.Name, i)
 			if seen[name] {

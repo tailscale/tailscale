@@ -8,10 +8,10 @@ package views
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/netip"
+	"slices"
 
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 	"tailscale.com/net/tsaddr"
 )
 

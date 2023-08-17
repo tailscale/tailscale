@@ -15,8 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"slices"
+
 	"github.com/miekg/dns"
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/tstest"
 )

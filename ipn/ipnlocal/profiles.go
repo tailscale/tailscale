@@ -10,10 +10,10 @@ import (
 	"math/rand"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/types/logger"
