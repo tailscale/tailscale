@@ -814,6 +814,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		// node key rotated away (once test server supports that)
 		return nil, nil
 	}
+	node.Capabilities = append(node.Capabilities, tailcfg.NodeAttrDisableUPnP)
+
 	user, _ := s.getUser(nk)
 	t := time.Date(2020, 8, 3, 0, 0, 0, 1, time.UTC)
 	dns := s.DNSConfig
@@ -830,11 +832,8 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		Domain:          string(user.Domain),
 		CollectServices: "true",
 		PacketFilter:    packetFilterWithIngressCaps(),
-		Debug: &tailcfg.Debug{
-			DisableUPnP: "true",
-		},
-		DNSConfig:   dns,
-		ControlTime: &t,
+		DNSConfig:       dns,
+		ControlTime:     &t,
 	}
 
 	s.mu.Lock()

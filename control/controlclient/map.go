@@ -147,24 +147,12 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 
 	debug := resp.Debug
 	if debug != nil {
-		if debug.RandomizeClientPort {
-			debug.SetRandomizeClientPort.Set(true)
-		}
-		if debug.ForceBackgroundSTUN {
-			debug.SetForceBackgroundSTUN.Set(true)
-		}
 		copyDebugOptBools(&ms.stickyDebug, debug)
 	} else if ms.stickyDebug != (tailcfg.Debug{}) {
 		debug = new(tailcfg.Debug)
 	}
 	if debug != nil {
 		copyDebugOptBools(debug, &ms.stickyDebug)
-		if !debug.ForceBackgroundSTUN {
-			debug.ForceBackgroundSTUN, _ = ms.stickyDebug.SetForceBackgroundSTUN.Get()
-		}
-		if !debug.RandomizeClientPort {
-			debug.RandomizeClientPort, _ = ms.stickyDebug.SetRandomizeClientPort.Get()
-		}
 	}
 
 	nm := &netmap.NetworkMap{
@@ -420,11 +408,5 @@ func copyDebugOptBools(dst, src *tailcfg.Debug) {
 			*v = s
 		}
 	}
-	copy(&dst.DERPRoute, src.DERPRoute)
-	copy(&dst.DisableSubnetsIfPAC, src.DisableSubnetsIfPAC)
-	copy(&dst.DisableUPnP, src.DisableUPnP)
 	copy(&dst.OneCGNATRoute, src.OneCGNATRoute)
-	copy(&dst.SetForceBackgroundSTUN, src.SetForceBackgroundSTUN)
-	copy(&dst.SetRandomizeClientPort, src.SetRandomizeClientPort)
-	copy(&dst.TrimWGConfig, src.TrimWGConfig)
 }

@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1773,7 +1774,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
-	heartbeatDisabled := debugEnableSilentDisco() || (c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.EnableSilentDisco)
+	heartbeatDisabled := debugEnableSilentDisco()
 
 	// Set a maximum size for our set of endpoint ring buffers by assuming
 	// that a single large update is ~500 bytes, and that we want to not
@@ -2096,7 +2097,8 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
 		}
 		if idleFor > sessionActiveTimeout {
-			if c.netMap != nil && c.netMap.Debug != nil && c.netMap.Debug.ForceBackgroundSTUN {
+			if c.netMap != nil && c.netMap.SelfNode != nil &&
+				slices.Contains(c.netMap.SelfNode.Capabilities, tailcfg.NodeAttrDebugForceBackgroundSTUN) {
 				// Overridden by control.
 				return true
 			}

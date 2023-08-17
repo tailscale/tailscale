@@ -22,8 +22,10 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -41,14 +43,12 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
@@ -1084,8 +1084,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 
 		hasDebug := resp.Debug != nil
-		// being conservative here, if Debug not present set to False
-		controlknobs.SetDisableUPnP(hasDebug && resp.Debug.DisableUPnP.EqualBool(true))
 		if hasDebug {
 			if code := resp.Debug.Exit; code != nil {
 				c.logf("exiting process with status %v per controlplane", *code)
@@ -1102,15 +1100,19 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			}
 		}
 
+		// For responses that mutate the self node, check for updated nodeAttrs.
+		if resp.Node != nil {
+			caps := resp.Node.Capabilities
+			controlknobs.SetDisableUPnP(slices.Contains(caps, tailcfg.NodeAttrDisableUPnP))
+			controlDisableDRPO.Store(slices.Contains(caps, tailcfg.NodeAttrDebugDisableDRPO))
+			controlKeepFullWGConfig.Store(slices.Contains(caps, tailcfg.NodeAttrDebugDisableWGTrim))
+			controlRandomizeClientPort.Store(slices.Contains(caps, tailcfg.NodeAttrRandomizeClientPort))
+		}
+
 		nm := sess.netmapForResponse(&resp)
 		if nm.SelfNode == nil {
 			c.logf("MapResponse lacked node")
 			return errors.New("MapResponse lacked node")
-		}
-
-		if d := nm.Debug; d != nil {
-			controlUseDERPRoute.Store(d.DERPRoute)
-			controlTrimWGConfig.Store(d.TrimWGConfig)
 		}
 
 		if DevKnob.StripEndpoints() {
@@ -1315,22 +1317,29 @@ func initDevKnob() devKnobs {
 
 var clock tstime.Clock = tstime.StdClock{}
 
-// opt.Bool configs from control.
+// config from control.
 var (
-	controlUseDERPRoute syncs.AtomicValue[opt.Bool]
-	controlTrimWGConfig syncs.AtomicValue[opt.Bool]
+	controlDisableDRPO         atomic.Bool
+	controlKeepFullWGConfig    atomic.Bool
+	controlRandomizeClientPort atomic.Bool
 )
 
-// DERPRouteFlag reports the last reported value from control for whether
-// DERP route optimization (Issue 150) should be enabled.
-func DERPRouteFlag() opt.Bool {
-	return controlUseDERPRoute.Load()
+// DisableDRPO reports whether control says to disable the
+// DERP route optimization (Issue 150).
+func DisableDRPO() bool {
+	return controlDisableDRPO.Load()
 }
 
-// TrimWGConfig reports the last reported value from control for whether
-// we should do lazy wireguard configuration.
-func TrimWGConfig() opt.Bool {
-	return controlTrimWGConfig.Load()
+// KeepFullWGConfig reports whether control says we should disable the lazy
+// wireguard programming and instead give it the full netmap always.
+func KeepFullWGConfig() bool {
+	return controlKeepFullWGConfig.Load()
+}
+
+// RandomizeClientPort reports whether control says we should randomize
+// the client port.
+func RandomizeClientPort() bool {
+	return controlRandomizeClientPort.Load()
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled

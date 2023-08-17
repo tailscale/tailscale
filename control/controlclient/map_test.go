@@ -472,11 +472,10 @@ func TestNetmapForResponse(t *testing.T) {
 
 // TestDeltaDebug tests that tailcfg.Debug values can be omitted in MapResponses
 // entirely or have their opt.Bool values unspecified between MapResponses in a
-// session and that should mean no change. (as of capver 37). But two Debug
-// fields existed prior to capver 37 that weren't opt.Bool; we test that we both
+// session and that should mean no change. (as of capver 37). But one Debug
+// field existed prior to capver 37 that wasn't opt.Bool; we test that we both
 // still accept the non-opt.Bool form from control for RandomizeClientPort and
-// ForceBackgroundSTUN and also accept the new form, keeping the old form in
-// sync.
+// also accept the new form, keeping the old form in sync.
 func TestDeltaDebug(t *testing.T) {
 	type step struct {
 		got  *tailcfg.Debug
@@ -491,44 +490,6 @@ func TestDeltaDebug(t *testing.T) {
 			steps: []step{
 				{nil, nil},
 				{nil, nil},
-			},
-		},
-		{
-			name: "sticky-with-old-style-randomize-client-port",
-			steps: []step{
-				{
-					&tailcfg.Debug{RandomizeClientPort: true},
-					&tailcfg.Debug{
-						RandomizeClientPort:    true,
-						SetRandomizeClientPort: "true",
-					},
-				},
-				{
-					nil, // not sent by server
-					&tailcfg.Debug{
-						RandomizeClientPort:    true,
-						SetRandomizeClientPort: "true",
-					},
-				},
-			},
-		},
-		{
-			name: "sticky-with-new-style-randomize-client-port",
-			steps: []step{
-				{
-					&tailcfg.Debug{SetRandomizeClientPort: "true"},
-					&tailcfg.Debug{
-						RandomizeClientPort:    true,
-						SetRandomizeClientPort: "true",
-					},
-				},
-				{
-					nil, // not sent by server
-					&tailcfg.Debug{
-						RandomizeClientPort:    true,
-						SetRandomizeClientPort: "true",
-					},
-				},
 			},
 		},
 		{
@@ -551,37 +512,6 @@ func TestDeltaDebug(t *testing.T) {
 				{
 					nil,
 					&tailcfg.Debug{OneCGNATRoute: "false"},
-				},
-			},
-		},
-		{
-			name: "legacy-ForceBackgroundSTUN",
-			steps: []step{
-				{
-					&tailcfg.Debug{ForceBackgroundSTUN: true},
-					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
-				},
-			},
-		},
-		{
-			name: "opt-bool-SetForceBackgroundSTUN",
-			steps: []step{
-				{
-					&tailcfg.Debug{SetForceBackgroundSTUN: "true"},
-					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
-				},
-			},
-		},
-		{
-			name: "server-reset-to-default",
-			steps: []step{
-				{
-					&tailcfg.Debug{SetForceBackgroundSTUN: "true"},
-					&tailcfg.Debug{ForceBackgroundSTUN: true, SetForceBackgroundSTUN: "true"},
-				},
-				{
-					&tailcfg.Debug{SetForceBackgroundSTUN: "unset"},
-					&tailcfg.Debug{ForceBackgroundSTUN: false, SetForceBackgroundSTUN: "unset"},
 				},
 			},
 		},
