@@ -6,10 +6,10 @@ package osdiag
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
-	"golang.org/x/exp/maps"
 	"golang.org/x/sys/windows/registry"
 )
 
