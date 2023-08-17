@@ -3052,12 +3052,21 @@ func (b *LocalBackend) authReconfig() {
 // a runtime.GOOS.
 func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS string) bool {
 	// Explicit enabling or disabling always take precedence.
+
+	// Old way from control plane, pre capver 71:
+	// TODO(bradfitz): delete this path, once the control server starts
+	// sending it in nodeAttr.
 	if nm.Debug != nil {
 		if v, ok := nm.Debug.OneCGNATRoute.Get(); ok {
 			logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
 			return v
 		}
 	}
+	if v, ok := controlclient.ControlOneCGNATSetting().Get(); ok {
+		logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
+		return v
+	}
+
 	// Also prefer to do this on the Mac, so that we don't need to constantly
 	// update the network extension configuration (which is disruptive to
 	// Chrome, see https://github.com/tailscale/tailscale/issues/3102). Only
