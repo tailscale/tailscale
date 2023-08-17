@@ -4,11 +4,11 @@
 package tstest
 
 import (
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/tstime"
 )
 

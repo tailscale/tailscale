@@ -7,11 +7,11 @@ package filter
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/netaddr"

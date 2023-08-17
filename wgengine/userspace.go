@@ -19,7 +19,6 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"golang.org/x/exp/maps"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -619,7 +618,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	// Don't re-alloc the map; the Go compiler optimizes map clears as of
 	// Go 1.11, so we can re-use the existing + allocated map.
 	if e.trimmedNodes != nil {
-		maps.Clear(e.trimmedNodes)
+		clear(e.trimmedNodes)
 	} else {
 		e.trimmedNodes = make(map[key.NodePublic]bool)
 	}

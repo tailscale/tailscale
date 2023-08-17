@@ -19,11 +19,11 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/net/dns/recursive"

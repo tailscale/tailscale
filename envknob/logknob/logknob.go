@@ -6,9 +6,9 @@
 package logknob
 
 import (
+	"slices"
 	"sync/atomic"
 
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/types/logger"
 )

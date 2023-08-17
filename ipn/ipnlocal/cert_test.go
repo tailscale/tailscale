@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/exp/maps"
 	"tailscale.com/ipn/store/mem"
 )
 
@@ -112,7 +111,7 @@ func TestShouldStartDomainRenewal(t *testing.T) {
 	reset := func() {
 		renewMu.Lock()
 		defer renewMu.Unlock()
-		maps.Clear(renewCertAt)
+		clear(renewCertAt)
 	}
 
 	mustMakePair := func(template *x509.Certificate) *TLSCertKeyPair {

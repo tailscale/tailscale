@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
-	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"

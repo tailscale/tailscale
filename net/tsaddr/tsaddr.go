@@ -8,10 +8,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"slices"
 	"sync"
 
 	"go4.org/netipx"
-	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 )
 

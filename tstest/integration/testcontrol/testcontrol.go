@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,7 +27,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"go4.org/mem"
-	"golang.org/x/exp/slices"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/smallzstd"
