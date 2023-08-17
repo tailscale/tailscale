@@ -137,4 +137,22 @@ func TestMap(t *testing.T) {
 			t.Errorf("exactly one LoadOrStore should load")
 		}
 	})
+
+	t.Run("Clear", func(t *testing.T) {
+		var m Map[string, string]
+		_, _ = m.LoadOrStore("a", "1")
+		_, _ = m.LoadOrStore("b", "2")
+		_, _ = m.LoadOrStore("c", "3")
+		_, _ = m.LoadOrStore("d", "4")
+		_, _ = m.LoadOrStore("e", "5")
+
+		if m.Len() != 5 {
+			t.Errorf("Len after loading want=5 got=%d", m.Len())
+		}
+
+		m.Clear()
+		if m.Len() != 0 {
+			t.Errorf("Len after Clear want=0 got=%d", m.Len())
+		}
+	})
 }
