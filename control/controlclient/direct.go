@@ -22,7 +22,6 @@ import (
 	"os"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,12 +42,14 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
@@ -1102,11 +1103,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 		// For responses that mutate the self node, check for updated nodeAttrs.
 		if resp.Node != nil {
-			caps := resp.Node.Capabilities
-			controlknobs.SetDisableUPnP(slices.Contains(caps, tailcfg.NodeAttrDisableUPnP))
-			controlDisableDRPO.Store(slices.Contains(caps, tailcfg.NodeAttrDebugDisableDRPO))
-			controlKeepFullWGConfig.Store(slices.Contains(caps, tailcfg.NodeAttrDebugDisableWGTrim))
-			controlRandomizeClientPort.Store(slices.Contains(caps, tailcfg.NodeAttrRandomizeClientPort))
+			setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
 		}
 
 		nm := sess.netmapForResponse(&resp)
@@ -1322,6 +1319,7 @@ var (
 	controlDisableDRPO         atomic.Bool
 	controlKeepFullWGConfig    atomic.Bool
 	controlRandomizeClientPort atomic.Bool
+	controlOneCGNAT            syncs.AtomicValue[opt.Bool]
 )
 
 // DisableDRPO reports whether control says to disable the
@@ -1340,6 +1338,42 @@ func KeepFullWGConfig() bool {
 // the client port.
 func RandomizeClientPort() bool {
 	return controlRandomizeClientPort.Load()
+}
+
+// ControlOneCGNATSetting returns control's OneCGNAT setting, if any.
+func ControlOneCGNATSetting() opt.Bool {
+	return controlOneCGNAT.Load()
+}
+
+func setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
+	var (
+		keepFullWG          bool
+		disableDRPO         bool
+		disableUPnP         bool
+		randomizeClientPort bool
+		oneCGNAT            opt.Bool
+	)
+	for _, attr := range selfNodeAttrs {
+		switch attr {
+		case tailcfg.NodeAttrDebugDisableWGTrim:
+			keepFullWG = true
+		case tailcfg.NodeAttrDebugDisableDRPO:
+			disableDRPO = true
+		case tailcfg.NodeAttrDisableUPnP:
+			disableUPnP = true
+		case tailcfg.NodeAttrRandomizeClientPort:
+			randomizeClientPort = true
+		case tailcfg.NodeAttrOneCGNATEnable:
+			oneCGNAT.Set(true)
+		case tailcfg.NodeAttrOneCGNATDisable:
+			oneCGNAT.Set(false)
+		}
+	}
+	controlKeepFullWGConfig.Store(keepFullWG)
+	controlDisableDRPO.Store(disableDRPO)
+	controlknobs.SetDisableUPnP(disableUPnP)
+	controlRandomizeClientPort.Store(randomizeClientPort)
+	controlOneCGNAT.Store(oneCGNAT)
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled
