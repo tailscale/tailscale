@@ -20,7 +20,16 @@ import (
 	"tailscale.com/util/mak"
 )
 
-var funnelCmd = newFunnelCommand(&serveEnv{lc: &localClient})
+var funnelCmd = func() *ffcli.Command {
+	se := &serveEnv{lc: &localClient}
+	// This flag is used to switch to an in-development
+	// implementation of the tailscale funnel command.
+	// See https://github.com/tailscale/tailscale/issues/7844
+	if os.Getenv("TAILSCALE_FUNNEL_DEV") == "on" {
+		return newFunnelDevCommand(se)
+	}
+	return newFunnelCommand(se)
+}
 
 // newFunnelCommand returns a new "funnel" subcommand using e as its environment.
 // The funnel subcommand is used to turn on/off the Funnel service.

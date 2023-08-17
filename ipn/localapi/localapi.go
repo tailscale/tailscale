@@ -99,6 +99,7 @@ var handler = map[string]localAPIHandler{
 	"set-expiry-sooner":           (*Handler).serveSetExpirySooner,
 	"start":                       (*Handler).serveStart,
 	"status":                      (*Handler).serveStatus,
+	"stream-serve":                (*Handler).serveStreamServe,
 	"tka/init":                    (*Handler).serveTKAInit,
 	"tka/log":                     (*Handler).serveTKALog,
 	"tka/modify":                  (*Handler).serveTKAModify,
@@ -855,6 +856,31 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// serveStreamServe handles foreground serve and funnel streams. This is
+// currently in development per https://github.com/tailscale/tailscale/issues/8489
+func (h *Handler) serveStreamServe(w http.ResponseWriter, r *http.Request) {
+	if !h.PermitWrite {
+		// Write permission required because we modify the ServeConfig.
+		http.Error(w, "serve stream denied", http.StatusForbidden)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req ipn.ServeStreamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, fmt.Errorf("decoding HostPort: %w", err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := h.b.StreamServe(r.Context(), w, req); err != nil {
+		writeErrorJSON(w, fmt.Errorf("streaming serve: %w", err))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Handler) serveCheckIPForwarding(w http.ResponseWriter, r *http.Request) {
