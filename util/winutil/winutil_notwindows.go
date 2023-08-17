@@ -28,3 +28,5 @@ func lookupPseudoUser(uid string) (*user.User, error) {
 }
 
 func IsCurrentProcessElevated() bool { return false }
+
+func registerForRestart(opts RegisterForRestartOpts) error { return nil }
