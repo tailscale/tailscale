@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"strings"
 	"time"
 
@@ -52,9 +51,6 @@ type NetworkMap struct {
 	// DERPMap is the last DERP server map received. It's reused
 	// between updates and should not be modified.
 	DERPMap *tailcfg.DERPMap
-
-	// Debug knobs from control server for debug or feature gating.
-	Debug *tailcfg.Debug
 
 	// ControlHealth are the list of health check problems for this
 	// node from the perspective of the control plane.
@@ -182,10 +178,6 @@ func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(buf, " u=%s", login)
-	if nm.Debug != nil {
-		j, _ := json.Marshal(nm.Debug)
-		fmt.Fprintf(buf, " debug=%s", j)
-	}
 	fmt.Fprintf(buf, " %v", nm.Addresses)
 	buf.WriteByte('\n')
 }
@@ -204,7 +196,7 @@ func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 			return false
 		}
 	}
-	return (a.Debug == nil && b.Debug == nil) || reflect.DeepEqual(a.Debug, b.Debug)
+	return true
 }
 
 // printPeerConcise appends to buf a line representing the peer p.
