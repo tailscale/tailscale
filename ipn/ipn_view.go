@@ -79,8 +79,8 @@ func (v PrefsView) Hostname() string                   { return v.ж.Hostname }
 func (v PrefsView) NotepadURLs() bool                  { return v.ж.NotepadURLs }
 func (v PrefsView) ForceDaemon() bool                  { return v.ж.ForceDaemon }
 func (v PrefsView) Egg() bool                          { return v.ж.Egg }
-func (v PrefsView) AdvertiseRoutes() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.AdvertiseRoutes)
+func (v PrefsView) AdvertiseRoutes() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.AdvertiseRoutes)
 }
 func (v PrefsView) NoSNAT() bool                          { return v.ж.NoSNAT }
 func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.NetfilterMode }

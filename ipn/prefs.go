@@ -23,6 +23,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/preftype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/dnsname"
 )
 
@@ -506,7 +507,7 @@ func (p *Prefs) AdvertisesExitNode() bool {
 	if p == nil {
 		return false
 	}
-	return tsaddr.ContainsExitRoutes(p.AdvertiseRoutes)
+	return tsaddr.ContainsExitRoutes(views.SliceOf(p.AdvertiseRoutes))
 }
 
 // SetAdvertiseExitNode mutates p (if non-nil) to add or remove the two

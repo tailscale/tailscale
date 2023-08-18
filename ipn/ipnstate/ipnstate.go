@@ -209,7 +209,7 @@ type PeerStatus struct {
 	// PrimaryRoutes are the routes this node is currently the primary
 	// subnet router for, as determined by the control plane. It does
 	// not include the IPs in TailscaleIPs.
-	PrimaryRoutes *views.IPPrefixSlice `json:",omitempty"`
+	PrimaryRoutes *views.Slice[netip.Prefix] `json:",omitempty"`
 
 	// Endpoints:
 	Addrs   []string
