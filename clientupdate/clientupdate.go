@@ -28,9 +28,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"tailscale.com/hostinfo"
 	"tailscale.com/net/tshttpproxy"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"
 	"tailscale.com/util/winutil"
@@ -187,6 +185,8 @@ func (up *updater) confirm(ver string) bool {
 	return true
 }
 
+const synoinfoConfPath = "/etc/synoinfo.conf"
+
 func (up *updater) updateSynology() error {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Synology is not supported")
@@ -194,7 +194,7 @@ func (up *updater) updateSynology() error {
 
 	// Get the latest version and list of SPKs from pkgs.tailscale.com.
 	osName := fmt.Sprintf("dsm%d", distro.DSMVersion())
-	arch, err := synoArch(hostinfo.New())
+	arch, err := synoArch(runtime.GOARCH, synoinfoConfPath)
 	if err != nil {
 		return err
 	}
@@ -245,49 +245,60 @@ func (up *updater) updateSynology() error {
 
 // synoArch returns the Synology CPU architecture matching one of the SPK
 // architectures served from pkgs.tailscale.com.
-func synoArch(hinfo *tailcfg.Hostinfo) (string, error) {
+func synoArch(goArch, synoinfoPath string) (string, error) {
 	// Most Synology boxes just use a different arch name from GOARCH.
 	arch := map[string]string{
 		"amd64": "x86_64",
 		"386":   "i686",
 		"arm64": "armv8",
-	}[hinfo.GoArch]
-	// Here's the fun part, some older ARM boxes require you to use SPKs
-	// specifically for their CPU.
-	//
-	// See https://github.com/SynoCommunity/spksrc/wiki/Synology-and-SynoCommunity-Package-Architectures
-	// for a complete list. Here, we override GOARCH for those older boxes that
-	// support at least DSM6.
-	//
-	// This is an artisanal hand-crafted list based on the wiki page. Some
-	// values may be wrong, since we don't have all those devices to actually
-	// test with.
-	switch hinfo.DeviceModel {
-	case "DS213air", "DS213", "DS413j",
-		"DS112", "DS112+", "DS212", "DS212+", "RS212", "RS812", "DS212j", "DS112j",
-		"DS111", "DS211", "DS211+", "DS411slim", "DS411", "RS411", "DS211j", "DS411j":
-		arch = "88f6281"
-	case "NVR1218", "NVR216", "VS960HD", "VS360HD":
-		arch = "hi3535"
-	case "DS1517", "DS1817", "DS416", "DS2015xs", "DS715", "DS1515", "DS215+":
-		arch = "alpine"
-	case "DS216se", "DS115j", "DS114", "DS214se", "DS414slim", "RS214", "DS14", "EDS14", "DS213j":
-		arch = "armada370"
-	case "DS115", "DS215j":
-		arch = "armada375"
-	case "DS419slim", "DS218j", "RS217", "DS116", "DS216j", "DS216", "DS416slim", "RS816", "DS416j":
-		arch = "armada38x"
-	case "RS815", "DS214", "DS214+", "DS414", "RS814":
-		arch = "armadaxp"
-	case "DS414j":
-		arch = "comcerto2k"
-	case "DS216play":
-		arch = "monaco"
-	}
+	}[goArch]
+
 	if arch == "" {
-		return "", fmt.Errorf("cannot determine CPU architecture for Synology model %q (Go arch %q), please report a bug at https://github.com/tailscale/tailscale/issues/new/choose", hinfo.DeviceModel, hinfo.GoArch)
+		// Here's the fun part, some older ARM boxes require you to use SPKs
+		// specifically for their CPU. See
+		// https://github.com/SynoCommunity/spksrc/wiki/Synology-and-SynoCommunity-Package-Architectures
+		// for a complete list.
+		//
+		// Some CPUs will map to neither this list nor the goArch map above, and we
+		// don't have SPKs for them.
+		cpu, err := parseSynoinfo(synoinfoPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get CPU architecture: %w", err)
+		}
+		switch cpu {
+		case "88f6281", "88f6282", "hi3535", "alpine", "armada370",
+			"armada375", "armada38x", "armadaxp", "comcerto2k", "monaco":
+			arch = cpu
+		default:
+			return "", fmt.Errorf("unsupported Synology CPU architecture %q (Go arch %q), please report a bug at https://github.com/tailscale/tailscale/issues/new/choose", cpu, goArch)
+		}
 	}
 	return arch, nil
+}
+
+func parseSynoinfo(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	// Look for a line like:
+	// unique="synology_88f6282_413j"
+	// Extract the CPU in the middle (88f6282 in the above example).
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		l := s.Text()
+		if !strings.HasPrefix(l, "unique=") {
+			continue
+		}
+		parts := strings.SplitN(l, "_", 3)
+		if len(parts) != 3 {
+			return "", fmt.Errorf(`malformed %q: found %q, expected format like 'unique="synology_$cpu_$model'`, path, l)
+		}
+		return parts[1], nil
+	}
+	return "", fmt.Errorf(`missing "unique=" field in %q`, path)
 }
 
 func (up *updater) updateDebLike() error {
