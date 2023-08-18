@@ -138,3 +138,15 @@ func TestViewUtils(t *testing.T) {
 		SliceOf([]string{"b", "c"}).SliceTo(1)),
 		qt.Equals, true)
 }
+
+func TestLenIter(t *testing.T) {
+	orig := []string{"foo", "bar"}
+	var got []string
+	v := SliceOf(orig)
+	for i := range v.LenIter() {
+		got = append(got, v.At(i))
+	}
+	if !reflect.DeepEqual(orig, got) {
+		t.Errorf("got %q; want %q", got, orig)
+	}
+}
