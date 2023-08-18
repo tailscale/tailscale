@@ -34,7 +34,6 @@ var _UserCloneNeedsRegeneration = User(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 	Logins        []LoginID
 	Created       time.Time
 }{})
@@ -217,7 +216,6 @@ var _LoginCloneNeedsRegeneration = Login(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 }{})
 
 // Clone makes a deep copy of DNSConfig.

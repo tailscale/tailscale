@@ -155,7 +155,6 @@ type User struct {
 	LoginName     string `json:"-"` // not stored, filled from Login // TODO REMOVE
 	DisplayName   string // if non-empty overrides Login field
 	ProfilePicURL string // if non-empty overrides Login field
-	Domain        string
 	Logins        []LoginID
 	Created       time.Time
 }
@@ -167,7 +166,6 @@ type Login struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 }
 
 // A UserProfile is display-friendly data for a user.
