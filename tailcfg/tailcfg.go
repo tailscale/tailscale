@@ -388,6 +388,12 @@ func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
 }
 
+// IsTagged reports whether the node has any tags.
+func (n NodeView) IsTagged() bool { return n.ж.IsTagged() }
+
+// DisplayName wraps Node.DisplayName.
+func (n NodeView) DisplayName(forOwner bool) string { return n.ж.DisplayName(forOwner) }
+
 // InitDisplayNames computes and populates n's display name
 // fields: n.ComputedName, n.computedHostIfDifferent, and
 // n.ComputedNameWithHost.

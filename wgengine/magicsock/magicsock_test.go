@@ -284,7 +284,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				Endpoints:  epStrings(eps[i]),
 				DERP:       "127.3.3.40:1",
 			}
-			nm.Peers = append(nm.Peers, peer)
+			nm.Peers = append(nm.Peers, peer.View())
 		}
 
 		if mutateNetmap != nil {
@@ -304,7 +304,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 			m.conn.SetNetworkMap(nm)
 			peerSet := make(map[key.NodePublic]struct{}, len(nm.Peers))
 			for _, peer := range nm.Peers {
-				peerSet[peer.Key] = struct{}{}
+				peerSet[peer.Key()] = struct{}{}
 			}
 			m.conn.UpdatePeers(peerSet)
 			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts, "")
@@ -657,7 +657,9 @@ func TestDiscokeyChange(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		nm.Peers[0].DiscoKey = m1DiscoKey
+		mut := nm.Peers[0].AsStruct()
+		mut.DiscoKey = m1DiscoKey
+		nm.Peers[0] = mut.View()
 	}
 
 	cleanupMesh := meshStacks(t.Logf, setm1Key, m1, m2)
@@ -1248,13 +1250,13 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	discoKey := key.DiscoPublicFromRaw32(mem.B([]byte{31: 1}))
 	nodeKey := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 31: 0}))
 	conn.SetNetworkMap(&netmap.NetworkMap{
-		Peers: []*tailcfg.Node{
+		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:       nodeKey,
 				DiscoKey:  discoKey,
 				Endpoints: []string{sendConn.LocalAddr().String()},
 			},
-		},
+		}),
 	})
 	conn.SetPrivateKey(key.NodePrivateFromRaw32(mem.B([]byte{0: 1, 31: 0})))
 	_, err := conn.ParseEndpoint(nodeKey.UntypedHexString())
@@ -1427,6 +1429,14 @@ func BenchmarkReceiveFrom_Native(b *testing.B) {
 	}
 }
 
+func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
+	nv := make([]tailcfg.NodeView, len(v))
+	for i, n := range v {
+		nv[i] = n.View()
+	}
+	return nv
+}
+
 // Test that a netmap update where node changes its node key but
 // doesn't change its disco key doesn't result in a broken state.
 //
@@ -1444,13 +1454,13 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	nodeKey2 := key.NodePublicFromRaw32(mem.B([]byte{0: 'N', 1: 'K', 2: '2', 31: 0}))
 
 	conn.SetNetworkMap(&netmap.NetworkMap{
-		Peers: []*tailcfg.Node{
+		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:       nodeKey1,
 				DiscoKey:  discoKey,
 				Endpoints: []string{"192.168.1.2:345"},
 			},
-		},
+		}),
 	})
 	_, err := conn.ParseEndpoint(nodeKey1.UntypedHexString())
 	if err != nil {
@@ -1459,13 +1469,13 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		conn.SetNetworkMap(&netmap.NetworkMap{
-			Peers: []*tailcfg.Node{
+			Peers: nodeViews([]*tailcfg.Node{
 				{
 					Key:       nodeKey2,
 					DiscoKey:  discoKey,
 					Endpoints: []string{"192.168.1.2:345"},
 				},
-			},
+			}),
 		})
 	}
 
@@ -1792,7 +1802,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 		}
 		// Set the netmap.
 		conn.SetNetworkMap(&netmap.NetworkMap{
-			Peers: peers,
+			Peers: nodeViews(peers),
 		})
 		// Check invariants.
 		if err := conn.peerMap.validate(); err != nil {
@@ -2237,7 +2247,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
 		Addresses:  []netip.Prefix{tsaip},
-		Peers: []*tailcfg.Node{
+		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:             wgkey.Public(),
 				Endpoints:       []string{wgEp.String()},
@@ -2245,7 +2255,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
 			},
-		},
+		}),
 	}
 	m.conn.SetNetworkMap(nm)
 
@@ -2295,7 +2305,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
 		Addresses:  []netip.Prefix{tsaip},
-		Peers: []*tailcfg.Node{
+		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:                           wgkey.Public(),
 				Endpoints:                     []string{wgEp.String()},
@@ -2304,7 +2314,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 				AllowedIPs:                    []netip.Prefix{wgaip},
 				SelfNodeV4MasqAddrForThisPeer: ptr.To(masqip.Addr()),
 			},
-		},
+		}),
 	}
 	m.conn.SetNetworkMap(nm)
 
@@ -2421,7 +2431,7 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
 		Addresses:  []netip.Prefix{tsaip},
-		Peers: []*tailcfg.Node{
+		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:             wgkey.Public(),
 				Endpoints:       []string{wgEp.String(), wgEp2.String(), wgEpV6.String()},
@@ -2429,7 +2439,7 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
 			},
-		},
+		}),
 	}
 
 	applyNetworkMap(t, m, nm)

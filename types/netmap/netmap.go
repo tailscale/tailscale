@@ -34,7 +34,7 @@ type NetworkMap struct {
 	Addresses     []netip.Prefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
 	MachineStatus tailcfg.MachineStatus
 	MachineKey    key.MachinePublic
-	Peers         []*tailcfg.Node // sorted by Node.ID
+	Peers         []tailcfg.NodeView // sorted by Node.ID
 	DNS           tailcfg.DNSConfig
 	// TODO(maisem) : replace with View.
 	Hostinfo          tailcfg.Hostinfo
@@ -84,7 +84,7 @@ type NetworkMap struct {
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
 func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 	for _, p := range nm.Peers {
-		if len(p.PrimaryRoutes) > 0 {
+		if p.PrimaryRoutes().Len() > 0 {
 			return true
 		}
 	}
@@ -94,19 +94,21 @@ func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 // PeerByTailscaleIP returns a peer's Node based on its Tailscale IP.
 //
 // If nm is nil or no peer is found, ok is false.
-func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer *tailcfg.Node, ok bool) {
+func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer tailcfg.NodeView, ok bool) {
 	// TODO(bradfitz):
 	if nm == nil {
-		return nil, false
+		return tailcfg.NodeView{}, false
 	}
 	for _, n := range nm.Peers {
-		for _, a := range n.Addresses {
+		ad := n.Addresses()
+		for i := 0; i < ad.Len(); i++ {
+			a := ad.At(i)
 			if a.Addr() == ip {
 				return n, true
 			}
 		}
 	}
-	return nil, false
+	return tailcfg.NodeView{}, false
 }
 
 // MagicDNSSuffix returns the domain's MagicDNS suffix (even if
@@ -153,13 +155,13 @@ func (nm *NetworkMap) VeryConcise() string {
 }
 
 // PeerWithStableID finds and returns the peer associated to the inputted StableNodeID.
-func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ *tailcfg.Node, ok bool) {
+func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ tailcfg.NodeView, ok bool) {
 	for _, p := range nm.Peers {
-		if p.StableID == pid {
+		if p.StableID() == pid {
 			return p, true
 		}
 	}
-	return nil, false
+	return tailcfg.NodeView{}, false
 }
 
 // printConciseHeader prints a concise header line representing nm to buf.
@@ -203,15 +205,17 @@ func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 //
 // If this function is changed to access different fields of p, keep
 // in nodeConciseEqual in sync.
-func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
-	aip := make([]string, len(p.AllowedIPs))
-	for i, a := range p.AllowedIPs {
+func printPeerConcise(buf *strings.Builder, p tailcfg.NodeView) {
+	aip := make([]string, p.AllowedIPs().Len())
+	for i := range aip {
+		a := p.AllowedIPs().At(i)
 		s := strings.TrimSuffix(fmt.Sprint(a), "/32")
 		aip[i] = s
 	}
 
-	ep := make([]string, len(p.Endpoints))
-	for i, e := range p.Endpoints {
+	ep := make([]string, p.Endpoints().Len())
+	for i := range ep {
+		e := p.Endpoints().At(i)
 		// Align vertically on the ':' between IP and port
 		colon := strings.IndexByte(e, ':')
 		spaces := 0
@@ -222,21 +226,21 @@ func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
 		ep[i] = fmt.Sprintf("%21v", e+strings.Repeat(" ", spaces))
 	}
 
-	derp := p.DERP
+	derp := p.DERP()
 	const derpPrefix = "127.3.3.40:"
 	if strings.HasPrefix(derp, derpPrefix) {
 		derp = "D" + derp[len(derpPrefix):]
 	}
 	var discoShort string
-	if !p.DiscoKey.IsZero() {
-		discoShort = p.DiscoKey.ShortString() + " "
+	if !p.DiscoKey().IsZero() {
+		discoShort = p.DiscoKey().ShortString() + " "
 	}
 
 	// Most of the time, aip is just one element, so format the
 	// table to look good in that case. This will also make multi-
 	// subnet nodes stand out visually.
 	fmt.Fprintf(buf, " %v %s%-2v %-15v : %v\n",
-		p.Key.ShortString(),
+		p.Key().ShortString(),
 		discoShort,
 		derp,
 		strings.Join(aip, " "),
@@ -244,12 +248,12 @@ func printPeerConcise(buf *strings.Builder, p *tailcfg.Node) {
 }
 
 // nodeConciseEqual reports whether a and b are equal for the fields accessed by printPeerConcise.
-func nodeConciseEqual(a, b *tailcfg.Node) bool {
-	return a.Key == b.Key &&
-		a.DERP == b.DERP &&
-		a.DiscoKey == b.DiscoKey &&
-		eqCIDRsIgnoreNil(a.AllowedIPs, b.AllowedIPs) &&
-		eqStringsIgnoreNil(a.Endpoints, b.Endpoints)
+func nodeConciseEqual(a, b tailcfg.NodeView) bool {
+	return a.Key() == b.Key() &&
+		a.DERP() == b.DERP() &&
+		a.DiscoKey() == b.DiscoKey() &&
+		eqViewsIgnoreNil(a.AllowedIPs(), b.AllowedIPs()) &&
+		eqViewsIgnoreNil(a.Endpoints(), b.Endpoints())
 }
 
 func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
@@ -268,7 +272,7 @@ func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
 	for len(aps) > 0 && len(bps) > 0 {
 		pa, pb := aps[0], bps[0]
 		switch {
-		case pa.ID == pb.ID:
+		case pa.ID() == pb.ID():
 			if !nodeConciseEqual(pa, pb) {
 				diff.WriteByte('-')
 				printPeerConcise(&diff, pa)
@@ -276,12 +280,12 @@ func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
 				printPeerConcise(&diff, pb)
 			}
 			aps, bps = aps[1:], bps[1:]
-		case pa.ID > pb.ID:
+		case pa.ID() > pb.ID():
 			// New peer in b.
 			diff.WriteByte('+')
 			printPeerConcise(&diff, pb)
 			bps = bps[1:]
-		case pb.ID > pa.ID:
+		case pb.ID() > pa.ID():
 			// Deleted peer in b.
 			diff.WriteByte('-')
 			printPeerConcise(&diff, pa)
@@ -316,28 +320,18 @@ const (
 	AllowSubnetRoutes
 )
 
-// eqStringsIgnoreNil reports whether a and b have the same length and
-// contents, but ignore whether a or b are nil.
-func eqStringsIgnoreNil(a, b []string) bool {
-	if len(a) != len(b) {
+// eqViewsIgnoreNil reports whether a and b have the same length and comparably
+// equal values at each index. It's used for comparing views of slices and not
+// caring about whether the slices are nil or not.
+func eqViewsIgnoreNil[T comparable](a, b interface {
+	Len() int
+	At(int) T
+}) bool {
+	if a.Len() != b.Len() {
 		return false
 	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// eqCIDRsIgnoreNil reports whether a and b have the same length and
-// contents, but ignore whether a or b are nil.
-func eqCIDRsIgnoreNil(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
+	for i, n := 0, a.Len(); i < n; i++ {
+		if a.At(i) != b.At(i) {
 			return false
 		}
 	}

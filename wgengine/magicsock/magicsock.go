@@ -711,7 +711,7 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 }
 
 // Ping handles a "tailscale ping" CLI query.
-func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
+func (c *Conn) Ping(peer tailcfg.NodeView, res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.privateKey.IsZero() {
@@ -719,17 +719,17 @@ func (c *Conn) Ping(peer *tailcfg.Node, res *ipnstate.PingResult, size int, cb f
 		cb(res)
 		return
 	}
-	if len(peer.Addresses) > 0 {
-		res.NodeIP = peer.Addresses[0].Addr().String()
+	if peer.Addresses().Len() > 0 {
+		res.NodeIP = peer.Addresses().At(0).Addr().String()
 	}
-	res.NodeName = peer.Name // prefer DNS name
+	res.NodeName = peer.Name() // prefer DNS name
 	if res.NodeName == "" {
-		res.NodeName = peer.Hostinfo.Hostname() // else hostname
+		res.NodeName = peer.Hostinfo().Hostname() // else hostname
 	} else {
 		res.NodeName, _, _ = strings.Cut(res.NodeName, ".")
 	}
 
-	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key())
 	if !ok {
 		res.Err = "unknown peer"
 		cb(res)
@@ -753,13 +753,13 @@ func (c *Conn) populateCLIPingResponseLocked(res *ipnstate.PingResult, latency t
 // GetEndpointChanges returns the most recent changes for a particular
 // endpoint. The returned EndpointChange structs are for debug use only and
 // there are no guarantees about order, size, or content.
-func (c *Conn) GetEndpointChanges(peer *tailcfg.Node) ([]EndpointChange, error) {
+func (c *Conn) GetEndpointChanges(peer tailcfg.NodeView) ([]EndpointChange, error) {
 	c.mu.Lock()
 	if c.privateKey.IsZero() {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("tailscaled stopped")
 	}
-	ep, ok := c.peerMap.endpointForNodeKey(peer.Key)
+	ep, ok := c.peerMap.endpointForNodeKey(peer.Key())
 	c.mu.Unlock()
 
 	if !ok {
@@ -1729,7 +1729,7 @@ func (c *Conn) UpdatePeers(newPeers map[key.NodePublic]struct{}) {
 	}
 }
 
-func nodesEqual(x, y []*tailcfg.Node) bool {
+func nodesEqual(x, y []tailcfg.NodeView) bool {
 	if len(x) != len(y) {
 		return false
 	}
@@ -1800,8 +1800,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	// we'll fall through to the next pass, which allocates but can
 	// handle full set updates.
 	for _, n := range nm.Peers {
-		if ep, ok := c.peerMap.endpointForNodeKey(n.Key); ok {
-			if n.DiscoKey.IsZero() && !n.IsWireGuardOnly {
+		if ep, ok := c.peerMap.endpointForNodeKey(n.Key()); ok {
+			if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
 				// Discokey transitioned from non-zero to zero? This should not
 				// happen in the wild, however it could mean:
 				// 1. A node was downgraded from post 0.100 to pre 0.100.
@@ -1820,7 +1820,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
-		if n.DiscoKey.IsZero() && !n.IsWireGuardOnly {
+		if n.DiscoKey().IsZero() && !n.IsWireGuardOnly() {
 			// Ancient pre-0.100 node, which does not have a disco key, and will only be reachable via DERP.
 			continue
 		}
@@ -1828,30 +1828,30 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		ep := &endpoint{
 			c:                 c,
 			debugUpdates:      ringbuffer.New[EndpointChange](entriesPerBuffer),
-			publicKey:         n.Key,
-			publicKeyHex:      n.Key.UntypedHexString(),
+			publicKey:         n.Key(),
+			publicKeyHex:      n.Key().UntypedHexString(),
 			sentPing:          map[stun.TxID]sentPing{},
 			endpointState:     map[netip.AddrPort]*endpointState{},
 			heartbeatDisabled: heartbeatDisabled,
-			isWireguardOnly:   n.IsWireGuardOnly,
+			isWireguardOnly:   n.IsWireGuardOnly(),
 		}
-		if len(n.Addresses) > 0 {
-			ep.nodeAddr = n.Addresses[0].Addr()
+		if n.Addresses().Len() > 0 {
+			ep.nodeAddr = n.Addresses().At(0).Addr()
 		}
 		ep.initFakeUDPAddr()
-		if n.DiscoKey.IsZero() {
+		if n.DiscoKey().IsZero() {
 			ep.disco.Store(nil)
 		} else {
 			ep.disco.Store(&endpointDisco{
-				key:   n.DiscoKey,
-				short: n.DiscoKey.ShortString(),
+				key:   n.DiscoKey(),
+				short: n.DiscoKey().ShortString(),
 			})
 
 			if debugDisco() { // rather than making a new knob
-				c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key.ShortString(), n.DiscoKey.ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
+				c.logf("magicsock: created endpoint key=%s: disco=%s; %v", n.Key().ShortString(), n.DiscoKey().ShortString(), logger.ArgWriter(func(w *bufio.Writer) {
 					const derpPrefix = "127.3.3.40:"
-					if strings.HasPrefix(n.DERP, derpPrefix) {
-						ipp, _ := netip.ParseAddrPort(n.DERP)
+					if strings.HasPrefix(n.DERP(), derpPrefix) {
+						ipp, _ := netip.ParseAddrPort(n.DERP())
 						regionID := int(ipp.Port())
 						code := c.derpRegionCodeLocked(regionID)
 						if code != "" {
@@ -1860,14 +1860,16 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 						fmt.Fprintf(w, "derp=%v%s ", regionID, code)
 					}
 
-					for _, a := range n.AllowedIPs {
+					for i := range n.AllowedIPs().LenIter() {
+						a := n.AllowedIPs().At(i)
 						if a.IsSingleIP() {
 							fmt.Fprintf(w, "aip=%v ", a.Addr())
 						} else {
 							fmt.Fprintf(w, "aip=%v ", a)
 						}
 					}
-					for _, ep := range n.Endpoints {
+					for i := range n.Endpoints().LenIter() {
+						ep := n.Endpoints().At(i)
 						fmt.Fprintf(w, "ep=%v ", ep)
 					}
 				}))
@@ -1885,7 +1887,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	if c.peerMap.nodeCount() != len(nm.Peers) {
 		keep := make(map[key.NodePublic]bool, len(nm.Peers))
 		for _, n := range nm.Peers {
-			keep[n.Key] = true
+			keep[n.Key()] = true
 		}
 		c.peerMap.forEachEndpoint(func(ep *endpoint) {
 			if !keep[ep.publicKey] {

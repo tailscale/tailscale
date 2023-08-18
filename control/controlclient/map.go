@@ -144,11 +144,18 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastTKAInfo = resp.TKAInfo
 	}
 
+	// TODO(bradfitz): now that this is a view, remove some of the defensive
+	// cloning elsewhere in mapSession.
+	peerViews := make([]tailcfg.NodeView, len(resp.Peers))
+	for i, n := range resp.Peers {
+		peerViews[i] = n.View()
+	}
+
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.privateNodeKey.Public(),
 		PrivateKey:        ms.privateNodeKey,
 		MachineKey:        ms.machinePubKey,
-		Peers:             resp.Peers,
+		Peers:             peerViews,
 		UserProfiles:      make(map[tailcfg.UserID]tailcfg.UserProfile),
 		Domain:            ms.lastDomain,
 		DomainAuditLogID:  ms.lastDomainAuditLogID,

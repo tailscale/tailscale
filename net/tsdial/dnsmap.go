@@ -48,17 +48,18 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 		}
 	}
 	for _, p := range nm.Peers {
-		if p.Name == "" {
+		if p.Name() == "" {
 			continue
 		}
-		for _, a := range p.Addresses {
+		for i := range p.Addresses().LenIter() {
+			a := p.Addresses().At(i)
 			ip := a.Addr()
 			if ip.Is4() && !have4 {
 				continue
 			}
-			ret[canonMapKey(p.Name)] = ip
-			if dnsname.HasSuffix(p.Name, suffix) {
-				ret[canonMapKey(dnsname.TrimSuffix(p.Name, suffix))] = ip
+			ret[canonMapKey(p.Name())] = ip
+			if dnsname.HasSuffix(p.Name(), suffix) {
+				ret[canonMapKey(dnsname.TrimSuffix(p.Name(), suffix))] = ip
 			}
 			break
 		}

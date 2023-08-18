@@ -84,6 +84,14 @@ func TestNoteReceiveActivity(t *testing.T) {
 	}
 }
 
+func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
+	nv := make([]tailcfg.NodeView, len(v))
+	for i, n := range v {
+		nv[i] = n.View()
+	}
+	return nv
+}
+
 func TestUserspaceEngineReconfig(t *testing.T) {
 	e, err := NewFakeUserspaceEngine(t.Logf, 0)
 	if err != nil {
@@ -99,11 +107,11 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	} {
 		nm := &netmap.NetworkMap{
-			Peers: []*tailcfg.Node{
+			Peers: nodeViews([]*tailcfg.Node{
 				{
 					Key: nkFromHex(nodeHex),
 				},
-			},
+			}),
 		}
 		nk, err := key.ParseNodePublicUntyped(mem.S(nodeHex))
 		if err != nil {

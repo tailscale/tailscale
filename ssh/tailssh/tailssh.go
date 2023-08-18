@@ -64,7 +64,7 @@ type ipnLocalBackend interface {
 	GetSSH_HostKeys() ([]gossh.Signer, error)
 	ShouldRunSSH() bool
 	NetMap() *netmap.NetworkMap
-	WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool)
+	WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool)
 	DoNoiseRequest(req *http.Request) (*http.Response, error)
 	Dialer() *tsdial.Dialer
 	TailscaleVarRoot() string
@@ -791,7 +791,7 @@ func (c *conn) expandDelegateURLLocked(actionURL string) string {
 	}
 	return strings.NewReplacer(
 		"$SRC_NODE_IP", url.QueryEscape(ci.src.Addr().String()),
-		"$SRC_NODE_ID", fmt.Sprint(int64(ci.node.ID)),
+		"$SRC_NODE_ID", fmt.Sprint(int64(ci.node.ID())),
 		"$DST_NODE_IP", url.QueryEscape(ci.dst.Addr().String()),
 		"$DST_NODE_ID", dstNodeID,
 		"$SSH_USER", url.QueryEscape(ci.sshUser),
@@ -1220,7 +1220,7 @@ type sshConnInfo struct {
 	dst netip.AddrPort
 
 	// node is srcIP's node.
-	node *tailcfg.Node
+	node tailcfg.NodeView
 
 	// uprof is node's UserProfile.
 	uprof tailcfg.UserProfile
@@ -1334,7 +1334,7 @@ func (c *conn) principalMatchesTailscaleIdentity(p *tailcfg.SSHPrincipal) bool {
 	if p.Any {
 		return true
 	}
-	if !p.Node.IsZero() && ci.node != nil && p.Node == ci.node.StableID {
+	if !p.Node.IsZero() && ci.node.Valid() && p.Node == ci.node.StableID() {
 		return true
 	}
 	if p.NodeIP != "" {
@@ -1702,15 +1702,15 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 		},
 		SSHUser:      ss.conn.info.sshUser,
 		LocalUser:    ss.conn.localUser.Username,
-		SrcNode:      strings.TrimSuffix(ss.conn.info.node.Name, "."),
-		SrcNodeID:    ss.conn.info.node.StableID,
+		SrcNode:      strings.TrimSuffix(ss.conn.info.node.Name(), "."),
+		SrcNodeID:    ss.conn.info.node.StableID(),
 		ConnectionID: ss.conn.connID,
 	}
 	if !ss.conn.info.node.IsTagged() {
 		ch.SrcNodeUser = ss.conn.info.uprof.LoginName
-		ch.SrcNodeUserID = ss.conn.info.node.User
+		ch.SrcNodeUserID = ss.conn.info.node.User()
 	} else {
-		ch.SrcNodeTags = ss.conn.info.node.Tags
+		ch.SrcNodeTags = ss.conn.info.node.Tags().AsSlice()
 	}
 	j, err := json.Marshal(ch)
 	if err != nil {
@@ -1738,7 +1738,7 @@ func (ss *sshSession) notifyControl(ctx context.Context, nodeKey key.NodePublic,
 		ConnectionID:      ss.conn.connID,
 		CapVersion:        tailcfg.CurrentCapabilityVersion,
 		NodeKey:           nodeKey,
-		SrcNode:           ss.conn.info.node.ID,
+		SrcNode:           ss.conn.info.node.ID(),
 		SSHUser:           ss.conn.info.sshUser,
 		LocalUser:         ss.conn.localUser.Username,
 		RecordingAttempts: attempts,

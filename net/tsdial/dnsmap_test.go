@@ -12,6 +12,14 @@ import (
 	"tailscale.com/types/netmap"
 )
 
+func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
+	nv := make([]tailcfg.NodeView, len(v))
+	for i, n := range v {
+		nv[i] = n.View()
+	}
+	return nv
+}
+
 func TestDNSMapFromNetworkMap(t *testing.T) {
 	pfx := netip.MustParsePrefix
 	ip := netip.MustParseAddr
@@ -42,20 +50,20 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 					pfx("100.102.103.104/32"),
 					pfx("100::123/128"),
 				},
-				Peers: []*tailcfg.Node{
-					{
+				Peers: []tailcfg.NodeView{
+					(&tailcfg.Node{
 						Name: "a.tailnet",
 						Addresses: []netip.Prefix{
 							pfx("100.0.0.201/32"),
 							pfx("100::201/128"),
 						},
-					},
-					{
+					}).View(),
+					(&tailcfg.Node{
 						Name: "b.tailnet",
 						Addresses: []netip.Prefix{
 							pfx("100::202/128"),
 						},
-					},
+					}).View(),
 				},
 			},
 			want: dnsMap{
@@ -74,7 +82,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 				Addresses: []netip.Prefix{
 					pfx("100::123/128"),
 				},
-				Peers: []*tailcfg.Node{
+				Peers: nodeViews([]*tailcfg.Node{
 					{
 						Name: "a.tailnet",
 						Addresses: []netip.Prefix{
@@ -88,7 +96,7 @@ func TestDNSMapFromNetworkMap(t *testing.T) {
 							pfx("100::202/128"),
 						},
 					},
-				},
+				}),
 			},
 			want: dnsMap{
 				"foo":         ip("100::123"),

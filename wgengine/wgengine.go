@@ -52,9 +52,9 @@ var ErrNoChanges = errors.New("no changes made to Engine config")
 
 // PeerForIP is the type returned by Engine.PeerForIP.
 type PeerForIP struct {
-	// Node is the matched node. It's always non-nil when
+	// Node is the matched node. It's always a valid value when
 	// Engine.PeerForIP returns ok==true.
-	Node *tailcfg.Node
+	Node tailcfg.NodeView
 
 	// IsSelf is whether the Node is the local process.
 	IsSelf bool

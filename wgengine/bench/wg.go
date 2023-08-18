@@ -96,7 +96,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			eps = append(eps, ep.Addr.String())
 		}
 
-		n := tailcfg.Node{
+		n := &tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n1",
 			Addresses:  []netip.Prefix{a1},
@@ -106,7 +106,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		e2.SetNetworkMap(&netmap.NetworkMap{
 			NodeKey:    k2.Public(),
 			PrivateKey: k2,
-			Peers:      []*tailcfg.Node{&n},
+			Peers:      []tailcfg.NodeView{n.View()},
 		})
 
 		p := wgcfg.Peer{
@@ -133,7 +133,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			eps = append(eps, ep.Addr.String())
 		}
 
-		n := tailcfg.Node{
+		n := &tailcfg.Node{
 			ID:         tailcfg.NodeID(0),
 			Name:       "n2",
 			Addresses:  []netip.Prefix{a2},
@@ -143,7 +143,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		e1.SetNetworkMap(&netmap.NetworkMap{
 			NodeKey:    k1.Public(),
 			PrivateKey: k1,
-			Peers:      []*tailcfg.Node{&n},
+			Peers:      []tailcfg.NodeView{n.View()},
 		})
 
 		p := wgcfg.Peer{

@@ -69,15 +69,16 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 
 	var toDelete map[int]bool // peer index => true
 	for i, p := range nm.Peers {
-		if p.UnsignedPeerAPIOnly {
+		if p.UnsignedPeerAPIOnly() {
 			// Not subject to tailnet lock.
 			continue
 		}
-		if len(p.KeySignature) == 0 {
+		keySig := tkatype.MarshaledSignature(p.KeySignature().StringCopy()) // TODO(bradfitz,maisem): this is unfortunate. Change tkatype.MarshaledSignature to a string for viewer?
+		if len(keySig) == 0 {
 			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID, p.StableID)
 			mak.Set(&toDelete, i, true)
 		} else {
-			if err := b.tka.authority.NodeKeyAuthorized(p.Key, p.KeySignature); err != nil {
+			if err := b.tka.authority.NodeKeyAuthorized(p.Key(), keySig); err != nil {
 				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID, p.StableID, err)
 				mak.Set(&toDelete, i, true)
 			}
@@ -86,7 +87,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 {
-		peers := make([]*tailcfg.Node, 0, len(nm.Peers))
+		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
 		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete))
 		for i, p := range nm.Peers {
 			if !toDelete[i] {
@@ -94,13 +95,14 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			} else {
 				// Record information about the node we filtered out.
 				fp := ipnstate.TKAFilteredPeer{
-					Name:         p.Name,
-					ID:           p.ID,
-					StableID:     p.StableID,
-					TailscaleIPs: make([]netip.Addr, len(p.Addresses)),
-					NodeKey:      p.Key,
+					Name:         p.Name(),
+					ID:           p.ID(),
+					StableID:     p.StableID(),
+					TailscaleIPs: make([]netip.Addr, p.Addresses().Len()),
+					NodeKey:      p.Key(),
 				}
-				for i, addr := range p.Addresses {
+				for i := range p.Addresses().LenIter() {
+					addr := p.Addresses().At(i)
 					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
 						fp.TailscaleIPs[i] = addr.Addr()
 					}

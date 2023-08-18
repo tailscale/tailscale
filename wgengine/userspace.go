@@ -1226,7 +1226,7 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 	}
 	peer := pip.Node
 
-	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key.ShortString(), peer.ComputedName)
+	e.logf("ping(%v): sending %v ping to %v %v ...", ip, pingType, peer.Key().ShortString(), peer.ComputedName())
 	switch pingType {
 	case "disco":
 		e.magicConn.Ping(peer, res, size, cb)
@@ -1254,7 +1254,7 @@ func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr
 	return netip.Addr{}, errors.New("no self address in netmap matching address family")
 }
 
-func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	srcIP, err := e.mySelfIPMatchingFamily(destIP)
 	if err != nil {
 		res.Err = err.Error()
@@ -1295,7 +1295,7 @@ func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer *tailcfg.N
 		d := time.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = destIP.String()
-		res.NodeName = peer.ComputedName
+		res.NodeName = peer.ComputedName()
 		cb(res)
 	})
 
@@ -1303,7 +1303,7 @@ func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer *tailcfg.N
 	e.tundev.InjectOutbound(icmpPing)
 }
 
-func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer *tailcfg.Node, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
 	srcIP, err := e.mySelfIPMatchingFamily(ip)
 	if err != nil {
 		res.Err = err.Error()
@@ -1337,7 +1337,7 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer *tailcfg.Node, res *i
 		d := time.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = ip.String()
-		res.NodeName = peer.ComputedName
+		res.NodeName = peer.ComputedName()
 		res.PeerAPIPort = pong.PeerAPIPort
 		cb(res)
 	})
@@ -1436,7 +1436,8 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	// Check for exact matches before looking for subnet matches.
 	// TODO(bradfitz): add maps for these. on NetworkMap?
 	for _, p := range nm.Peers {
-		for _, a := range p.Addresses {
+		for i := range p.Addresses().LenIter() {
+			a := p.Addresses().At(i)
 			if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 				return PeerForIP{Node: p, Route: a}, true
 			}
@@ -1444,7 +1445,7 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	}
 	for _, a := range nm.Addresses {
 		if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
+			return PeerForIP{Node: nm.SelfNode.View(), IsSelf: true, Route: a}, true
 		}
 	}
 
@@ -1469,7 +1470,7 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	// call. But TODO(bradfitz): add a lookup map to netmap.NetworkMap.
 	if !bestKey.IsZero() {
 		for _, p := range nm.Peers {
-			if p.Key == bestKey {
+			if p.Key() == bestKey {
 				return PeerForIP{Node: p, Route: best}, true
 			}
 		}

@@ -204,7 +204,7 @@ type LocalBackend struct {
 	// netMap is not mutated in-place once set.
 	netMap           *netmap.NetworkMap
 	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil
-	nodeByAddr       map[netip.Addr]*tailcfg.Node
+	nodeByAddr       map[netip.Addr]tailcfg.NodeView
 	activeLogin      string // last logged LoginName from netMap
 	engineStatus     ipn.EngineStatus
 	endpoints        []tailcfg.Endpoint
@@ -684,13 +684,13 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 				if !prefs.ExitNodeID().IsZero() {
 					if exitPeer, ok := b.netMap.PeerWithStableID(prefs.ExitNodeID()); ok {
 						var online = false
-						if exitPeer.Online != nil {
-							online = *exitPeer.Online
+						if v := exitPeer.Online(); v != nil {
+							online = *v
 						}
 						s.ExitNodeStatus = &ipnstate.ExitNodeStatus{
 							ID:           prefs.ExitNodeID(),
 							Online:       online,
-							TailscaleIPs: exitPeer.Addresses,
+							TailscaleIPs: exitPeer.Addresses().AsSlice(),
 						}
 					}
 				}
@@ -705,7 +705,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			ss.DNSName = b.netMap.Name
 			ss.UserID = b.netMap.User
 			if sn := b.netMap.SelfNode; sn != nil {
-				peerStatusFromNode(ss, sn)
+				peerStatusFromNode(ss, sn.View())
 				if c := sn.Capabilities; len(c) > 0 {
 					ss.Capabilities = append([]string(nil), c...)
 				}
@@ -735,28 +735,30 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 	exitNodeID := b.pm.CurrentPrefs().ExitNodeID()
 	for _, p := range b.netMap.Peers {
 		var lastSeen time.Time
-		if p.LastSeen != nil {
-			lastSeen = *p.LastSeen
+		if p.LastSeen() != nil {
+			lastSeen = *p.LastSeen()
 		}
-		var tailscaleIPs = make([]netip.Addr, 0, len(p.Addresses))
-		for _, addr := range p.Addresses {
+		var tailscaleIPs = make([]netip.Addr, 0, p.Addresses().Len())
+		for i := range p.Addresses().LenIter() {
+			addr := p.Addresses().At(i)
 			if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
 		}
+		online := p.Online()
 		ps := &ipnstate.PeerStatus{
 			InNetworkMap: true,
-			UserID:       p.User,
+			UserID:       p.User(),
 			TailscaleIPs: tailscaleIPs,
-			HostName:     p.Hostinfo.Hostname(),
-			DNSName:      p.Name,
-			OS:           p.Hostinfo.OS(),
+			HostName:     p.Hostinfo().Hostname(),
+			DNSName:      p.Name(),
+			OS:           p.Hostinfo().OS(),
 			LastSeen:     lastSeen,
-			Online:       p.Online != nil && *p.Online,
-			ShareeNode:   p.Hostinfo.ShareeNode(),
-			ExitNode:     p.StableID != "" && p.StableID == exitNodeID,
-			SSH_HostKeys: p.Hostinfo.SSH_HostKeys().AsSlice(),
-			Location:     p.Hostinfo.Location(),
+			Online:       online != nil && *online,
+			ShareeNode:   p.Hostinfo().ShareeNode(),
+			ExitNode:     p.StableID() != "" && p.StableID() == exitNodeID,
+			SSH_HostKeys: p.Hostinfo().SSH_HostKeys().AsSlice(),
+			Location:     p.Hostinfo().Location(),
 		}
 		peerStatusFromNode(ps, p)
 
@@ -767,29 +769,29 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		if u := peerAPIURL(nodeIP(p, netip.Addr.Is6), p6); u != "" {
 			ps.PeerAPIURL = append(ps.PeerAPIURL, u)
 		}
-		sb.AddPeer(p.Key, ps)
+		sb.AddPeer(p.Key(), ps)
 	}
 }
 
 // peerStatusFromNode copies fields that exist in the Node struct for
 // current node and peers into the provided PeerStatus.
-func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
-	ps.ID = n.StableID
-	ps.Created = n.Created
-	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(views.SliceOf(n.AllowedIPs))
-	if n.Tags != nil {
-		v := views.SliceOf(n.Tags)
+func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
+	ps.ID = n.StableID()
+	ps.Created = n.Created()
+	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(n.AllowedIPs())
+	if n.Tags().Len() != 0 {
+		v := n.Tags()
 		ps.Tags = &v
 	}
-	if n.PrimaryRoutes != nil {
-		v := views.SliceOf(n.PrimaryRoutes)
+	if n.PrimaryRoutes().Len() != 0 {
+		v := n.PrimaryRoutes()
 		ps.PrimaryRoutes = &v
 	}
 
-	if n.Expired {
+	if n.Expired() {
 		ps.Expired = true
 	}
-	if t := n.KeyExpiry; !t.IsZero() {
+	if t := n.KeyExpiry(); !t.IsZero() {
 		t = t.Round(time.Second)
 		ps.KeyExpiry = &t
 	}
@@ -798,7 +800,8 @@ func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 // WhoIs reports the node and user who owns the node with the given IP:port.
 // If the IP address is a Tailscale IP, the provided port may be 0.
 // If ok == true, n and u are valid.
-func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
+func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	var zero tailcfg.NodeView
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	n, ok = b.nodeByAddr[ipp.Addr()]
@@ -808,16 +811,16 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.Use
 			ip, ok = b.e.WhoIsIPPort(ipp)
 		}
 		if !ok {
-			return nil, u, false
+			return zero, u, false
 		}
 		n, ok = b.nodeByAddr[ip]
 		if !ok {
-			return nil, u, false
+			return zero, u, false
 		}
 	}
-	u, ok = b.netMap.UserProfiles[n.User]
+	u, ok = b.netMap.UserProfiles[n.User()]
 	if !ok {
-		return nil, u, false
+		return zero, u, false
 	}
 	return n, u, true
 }
@@ -1114,13 +1117,14 @@ func setExitNodeID(prefs *ipn.Prefs, nm *netmap.NetworkMap) (prefsChanged bool) 
 	}
 
 	for _, peer := range nm.Peers {
-		for _, addr := range peer.Addresses {
+		for i := range peer.Addresses().LenIter() {
+			addr := peer.Addresses().At(i)
 			if !addr.IsSingleIP() || addr.Addr() != prefs.ExitNodeIP {
 				continue
 			}
 			// Found the node being referenced, upgrade prefs to
 			// reference it directly for next time.
-			prefs.ExitNodeID = peer.StableID
+			prefs.ExitNodeID = peer.StableID()
 			prefs.ExitNodeIP = netip.Addr{}
 			return true
 		}
@@ -1597,16 +1601,16 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 //
 // If this reports true, the packet filter is invalid (the server is either broken
 // or malicious) and should be ignored for safety.
-func packetFilterPermitsUnlockedNodes(peers []*tailcfg.Node, packetFilter []filter.Match) bool {
+func packetFilterPermitsUnlockedNodes(peers []tailcfg.NodeView, packetFilter []filter.Match) bool {
 	var b netipx.IPSetBuilder
 	var numUnlocked int
 	for _, p := range peers {
-		if !p.UnsignedPeerAPIOnly {
+		if !p.UnsignedPeerAPIOnly() {
 			continue
 		}
 		numUnlocked++
-		for _, a := range p.AllowedIPs { // not only addresses!
-			b.AddPrefix(a)
+		for i := range p.AllowedIPs().LenIter() { // not only addresses!
+			b.AddPrefix(p.AllowedIPs().At(i))
 		}
 	}
 	if numUnlocked == 0 {
@@ -1764,11 +1768,11 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 
 // dnsCIDRsEqual determines whether two CIDR lists are equal
 // for DNS map construction purposes (that is, only the first entry counts).
-func dnsCIDRsEqual(newAddr, oldAddr []netip.Prefix) bool {
-	if len(newAddr) != len(oldAddr) {
+func dnsCIDRsEqual(newAddr, oldAddr views.Slice[netip.Prefix]) bool {
+	if newAddr.Len() != oldAddr.Len() {
 		return false
 	}
-	if len(newAddr) == 0 || newAddr[0] == oldAddr[0] {
+	if newAddr.Len() == 0 || newAddr.At(0) == oldAddr.At(0) {
 		return true
 	}
 	return false
@@ -1792,16 +1796,16 @@ func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
 	if new.Name != old.Name {
 		return false
 	}
-	if !dnsCIDRsEqual(new.Addresses, old.Addresses) {
+	if !dnsCIDRsEqual(views.SliceOf(new.Addresses), views.SliceOf(old.Addresses)) {
 		return false
 	}
 
 	for i, newPeer := range new.Peers {
 		oldPeer := old.Peers[i]
-		if newPeer.Name != oldPeer.Name {
+		if newPeer.Name() != oldPeer.Name() {
 			return false
 		}
-		if !dnsCIDRsEqual(newPeer.Addresses, oldPeer.Addresses) {
+		if !dnsCIDRsEqual(newPeer.Addresses(), oldPeer.Addresses()) {
 			return false
 		}
 	}
@@ -2418,8 +2422,8 @@ func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg
 		if err != nil {
 			pr.Err = err.Error()
 		}
-		if node != nil {
-			pr.NodeName = node.Name
+		if node.Valid() {
+			pr.NodeName = node.Name()
 		}
 		return pr, nil
 	}
@@ -2438,36 +2442,37 @@ func (b *LocalBackend) Ping(ctx context.Context, ip netip.Addr, pingType tailcfg
 	}
 }
 
-func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer *tailcfg.Node, peerBase string, err error) {
+func (b *LocalBackend) pingPeerAPI(ctx context.Context, ip netip.Addr) (peer tailcfg.NodeView, peerBase string, err error) {
+	var zero tailcfg.NodeView
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	nm := b.NetMap()
 	if nm == nil {
-		return nil, "", errors.New("no netmap")
+		return zero, "", errors.New("no netmap")
 	}
 	peer, ok := nm.PeerByTailscaleIP(ip)
 	if !ok {
-		return nil, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
+		return zero, "", fmt.Errorf("no peer found with Tailscale IP %v", ip)
 	}
-	if peer.Expired {
-		return nil, "", errors.New("peer's node key has expired")
+	if peer.Expired() {
+		return zero, "", errors.New("peer's node key has expired")
 	}
 	base := peerAPIBase(nm, peer)
 	if base == "" {
-		return nil, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID, ip)
+		return zero, "", fmt.Errorf("no PeerAPI base found for peer %v (%v)", peer.ID(), ip)
 	}
 	outReq, err := http.NewRequestWithContext(ctx, "HEAD", base, nil)
 	if err != nil {
-		return nil, "", err
+		return zero, "", err
 	}
 	tr := b.Dialer().PeerAPITransport()
 	res, err := tr.RoundTrip(outReq)
 	if err != nil {
-		return nil, "", err
+		return zero, "", err
 	}
 	defer res.Body.Close() // but unnecessary on HEAD responses
 	if res.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("HTTP status %v", res.Status)
+		return zero, "", fmt.Errorf("HTTP status %v", res.Status)
 	}
 	return peer, base, nil
 }
@@ -3098,17 +3103,24 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 	// isn't configured to make MagicDNS resolution truly
 	// magic. Details in
 	// https://github.com/tailscale/tailscale/issues/1886.
-	set := func(name string, addrs []netip.Prefix) {
-		if len(addrs) == 0 || name == "" {
+	set := func(name string, addrs views.Slice[netip.Prefix]) {
+		if addrs.Len() == 0 || name == "" {
 			return
 		}
 		fqdn, err := dnsname.ToFQDN(name)
 		if err != nil {
 			return // TODO: propagate error?
 		}
-		have4 := slices.ContainsFunc(addrs, tsaddr.PrefixIs4)
+		var have4 bool
+		for i := range addrs.LenIter() {
+			if addrs.At(i).Addr().Is4() {
+				have4 = true
+				break
+			}
+		}
 		var ips []netip.Addr
-		for _, addr := range addrs {
+		for i := range addrs.LenIter() {
+			addr := addrs.At(i)
 			if selfV6Only {
 				if addr.Addr().Is6() {
 					ips = append(ips, addr.Addr())
@@ -3130,9 +3142,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, nm.Addresses)
+	set(nm.Name, views.SliceOf(nm.Addresses))
 	for _, peer := range nm.Peers {
-		set(peer.Name, peer.Addresses)
+		set(peer.Name(), peer.Addresses())
 	}
 	for _, rec := range nm.DNS.ExtraRecords {
 		switch rec.Type {
@@ -3995,28 +4007,28 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 
 	// Update the nodeByAddr index.
 	if b.nodeByAddr == nil {
-		b.nodeByAddr = map[netip.Addr]*tailcfg.Node{}
+		b.nodeByAddr = map[netip.Addr]tailcfg.NodeView{}
 	}
 	// First pass, mark everything unwanted.
 	for k := range b.nodeByAddr {
-		b.nodeByAddr[k] = nil
+		b.nodeByAddr[k] = tailcfg.NodeView{}
 	}
-	addNode := func(n *tailcfg.Node) {
-		for _, ipp := range n.Addresses {
-			if ipp.IsSingleIP() {
+	addNode := func(n tailcfg.NodeView) {
+		for i := range n.Addresses().LenIter() {
+			if ipp := n.Addresses().At(i); ipp.IsSingleIP() {
 				b.nodeByAddr[ipp.Addr()] = n
 			}
 		}
 	}
 	if nm.SelfNode != nil {
-		addNode(nm.SelfNode)
+		addNode(nm.SelfNode.View())
 	}
 	for _, p := range nm.Peers {
 		addNode(p)
 	}
 	// Third pass, actually delete the unwanted items.
 	for k, v := range b.nodeByAddr {
-		if v == nil {
+		if !v.Valid() {
 			delete(b.nodeByAddr, k)
 		}
 	}
@@ -4293,7 +4305,7 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 			continue
 		}
 		ret = append(ret, &apitype.FileTarget{
-			Node:       p,
+			Node:       p.AsStruct(),
 			PeerAPIURL: peerAPI,
 		})
 	}
@@ -4306,15 +4318,15 @@ func (b *LocalBackend) FileTargets() ([]*apitype.FileTarget, error) {
 // the netmap.
 //
 // b.mu must be locked.
-func (b *LocalBackend) peerIsTaildropTargetLocked(p *tailcfg.Node) bool {
-	if b.netMap == nil || p == nil {
+func (b *LocalBackend) peerIsTaildropTargetLocked(p tailcfg.NodeView) bool {
+	if b.netMap == nil || !p.Valid() {
 		return false
 	}
-	if b.netMap.User == p.User {
+	if b.netMap.User == p.User() {
 		return true
 	}
-	if len(p.Addresses) > 0 &&
-		b.peerHasCapLocked(p.Addresses[0].Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
+	if p.Addresses().Len() > 0 &&
+		b.peerHasCapLocked(p.Addresses().At(0).Addr(), tailcfg.PeerCapabilityFileSharingTarget) {
 		// Explicitly noted in the netmap ACL caps as a target.
 		return true
 	}
@@ -4374,9 +4386,9 @@ func (b *LocalBackend) registerIncomingFile(inf *incomingFile, active bool) {
 	}
 }
 
-func peerAPIPorts(peer *tailcfg.Node) (p4, p6 uint16) {
-	svcs := peer.Hostinfo.Services()
-	for i, n := 0, svcs.Len(); i < n; i++ {
+func peerAPIPorts(peer tailcfg.NodeView) (p4, p6 uint16) {
+	svcs := peer.Hostinfo().Services()
+	for i := range svcs.LenIter() {
 		s := svcs.At(i)
 		switch s.Proto {
 		case tailcfg.PeerAPI4:
@@ -4402,8 +4414,8 @@ func peerAPIURL(ip netip.Addr, port uint16) string {
 // peerAPIBase returns the "http://ip:port" URL base to reach peer's peerAPI.
 // It returns the empty string if the peer doesn't support the peerapi
 // or there's no matching address family based on the netmap's own addresses.
-func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
-	if nm == nil || peer == nil || !peer.Hostinfo.Valid() {
+func peerAPIBase(nm *netmap.NetworkMap, peer tailcfg.NodeView) string {
+	if nm == nil || !peer.Valid() || !peer.Hostinfo().Valid() {
 		return ""
 	}
 
@@ -4429,8 +4441,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer *tailcfg.Node) string {
 	return ""
 }
 
-func nodeIP(n *tailcfg.Node, pred func(netip.Addr) bool) netip.Addr {
-	for _, a := range n.Addresses {
+func nodeIP(n tailcfg.NodeView, pred func(netip.Addr) bool) netip.Addr {
+	for i := range n.Addresses().LenIter() {
+		a := n.Addresses().At(i)
 		if a.IsSingleIP() && pred(a.Addr()) {
 			return a.Addr()
 		}
@@ -4540,15 +4553,15 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		return "", false
 	}
 	for _, p := range nm.Peers {
-		if p.StableID == exitNodeID && peerCanProxyDNS(p) {
+		if p.StableID() == exitNodeID && peerCanProxyDNS(p) {
 			return peerAPIBase(nm, p) + "/dns-query", true
 		}
 	}
 	return "", false
 }
 
-func peerCanProxyDNS(p *tailcfg.Node) bool {
-	if p.Cap >= 26 {
+func peerCanProxyDNS(p tailcfg.NodeView) bool {
+	if p.Cap() >= 26 {
 		// Actually added at 25
 		// (https://github.com/tailscale/tailscale/blob/3ae6f898cfdb58fd0e30937147dd6ce28c6808dd/tailcfg/tailcfg.go#L51)
 		// so anything >= 26 can do it.
@@ -4556,10 +4569,9 @@ func peerCanProxyDNS(p *tailcfg.Node) bool {
 	}
 	// If p.Cap is not populated (e.g. older control server), then do the old
 	// thing of searching through services.
-	services := p.Hostinfo.Services()
-	for i, n := 0, services.Len(); i < n; i++ {
-		s := services.At(i)
-		if s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
+	services := p.Hostinfo().Services()
+	for i := range services.LenIter() {
+		if s := services.At(i); s.Proto == tailcfg.PeerAPIDNS && s.Port >= 1 {
 			return true
 		}
 	}
