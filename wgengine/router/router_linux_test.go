@@ -331,7 +331,8 @@ ip route add throw 192.168.0.0/24 table 52` + basic,
 	defer mon.Close()
 
 	fake := NewFakeOS(t)
-	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake.nfr, fake)
+	router, err := newUserspaceRouterAdvanced(t.Logf, "tailscale0", mon, fake)
+	router.(*linuxRouter).nfr = fake.nfr
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}

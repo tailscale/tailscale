@@ -60,8 +60,8 @@ type linuxRouter struct {
 	// ipPolicyPrefBase is the base priority at which ip rules are installed.
 	ipPolicyPrefBase int
 
-	nfr linuxfw.NetfilterRunner
 	cmd commandRunner
+	nfr linuxfw.NetfilterRunner
 }
 
 func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Monitor) (Router, error) {
@@ -70,26 +70,20 @@ func newUserspaceRouter(logf logger.Logf, tunDev tun.Device, netMon *netmon.Moni
 		return nil, err
 	}
 
-	nfr, err := linuxfw.New(logf)
-	if err != nil {
-		return nil, err
-	}
-
 	cmd := osCommandRunner{
 		ambientCapNetAdmin: useAmbientCaps(),
 	}
 
-	return newUserspaceRouterAdvanced(logf, tunname, netMon, nfr, cmd)
+	return newUserspaceRouterAdvanced(logf, tunname, netMon, cmd)
 }
 
-func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, nfr linuxfw.NetfilterRunner, cmd commandRunner) (Router, error) {
+func newUserspaceRouterAdvanced(logf logger.Logf, tunname string, netMon *netmon.Monitor, cmd commandRunner) (Router, error) {
 	r := &linuxRouter{
 		logf:          logf,
 		tunname:       tunname,
 		netfilterMode: netfilterOff,
 		netMon:        netMon,
 
-		nfr: nfr,
 		cmd: cmd,
 
 		ipRuleFixLimiter: rate.NewLimiter(rate.Every(5*time.Second), 10),
@@ -294,11 +288,11 @@ func (r *linuxRouter) Up() error {
 	if r.unregNetMon == nil && r.netMon != nil {
 		r.unregNetMon = r.netMon.RegisterRuleDeleteCallback(r.onIPRuleDeleted)
 	}
-	if err := r.addIPRules(); err != nil {
-		return fmt.Errorf("adding IP rules: %w", err)
-	}
 	if err := r.setNetfilterMode(netfilterOff); err != nil {
 		return fmt.Errorf("setting netfilter mode: %w", err)
+	}
+	if err := r.addIPRules(); err != nil {
+		return fmt.Errorf("adding IP rules: %w", err)
 	}
 	if err := r.upInterface(); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
@@ -386,6 +380,15 @@ func (r *linuxRouter) setNetfilterMode(mode preftype.NetfilterMode) error {
 	if distro.Get() == distro.Synology {
 		mode = netfilterOff
 	}
+
+	if r.nfr == nil {
+		var err error
+		r.nfr, err = linuxfw.New(r.logf)
+		if err != nil {
+			return err
+		}
+	}
+
 	if r.netfilterMode == mode {
 		return nil
 	}
