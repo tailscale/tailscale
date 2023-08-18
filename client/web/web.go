@@ -9,7 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -36,16 +36,19 @@ import (
 	"tailscale.com/version/distro"
 )
 
-//go:embed web.html
-var webHTML string
+// This contains all files needed to build the frontend assets.
+// Because we assign this to the blank identifier, it does not actually embed the files.
+// However, this does cause `go mod vendor` to include the files when vendoring the package.
+// External packages that use the web client can `go mod vendor`, run `yarn build` to
+// build the assets, then those asset bundles will be able to be embedded.
+//
+//go:embed yarn.lock index.html *.js *.json src/**/*
+var _ embed.FS
 
-//go:embed web.css
-var webCSS string
+//go:embed web.html web.css auth-redirect.html
+var embeddedFS embed.FS
 
-//go:embed auth-redirect.html
-var authenticationRedirectHTML string
-
-var tmpl *template.Template
+var tmpls *template.Template
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
@@ -84,8 +87,7 @@ func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func
 }
 
 func init() {
-	tmpl = template.Must(template.New("web.html").Parse(webHTML))
-	template.Must(tmpl.New("web.css").Parse(webCSS))
+	tmpls = template.Must(template.New("").ParseFS(embeddedFS, "*"))
 }
 
 // authorize returns the name of the user accessing the web UI after verifying
@@ -301,7 +303,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/redirect" || r.URL.Path == "/redirect/":
-		io.WriteString(w, authenticationRedirectHTML)
+		if err := tmpls.ExecuteTemplate(w, "auth-redirect.html", nil); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	case r.Method == "POST":
 		s.servePostNodeUpdate(w, r)
@@ -380,7 +384,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 	buf := new(bytes.Buffer)
-	if err := tmpl.Execute(buf, *data); err != nil {
+	if err := tmpls.ExecuteTemplate(buf, "web.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
