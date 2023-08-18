@@ -177,7 +177,7 @@ func TestMatchRule(t *testing.T) {
 				Principals: []*tailcfg.SSHPrincipal{{Node: "some-node-ID"}},
 				SSHUsers:   map[string]string{"*": "ubuntu"},
 			},
-			ci:       &sshConnInfo{node: &tailcfg.Node{StableID: "some-node-ID"}},
+			ci:       &sshConnInfo{node: (&tailcfg.Node{StableID: "some-node-ID"}).View()},
 			wantUser: "ubuntu",
 		},
 		{
@@ -283,11 +283,11 @@ func (ts *localState) NetMap() *netmap.NetworkMap {
 	}
 }
 
-func (ts *localState) WhoIs(ipp netip.AddrPort) (n *tailcfg.Node, u tailcfg.UserProfile, ok bool) {
-	return &tailcfg.Node{
+func (ts *localState) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
+	return (&tailcfg.Node{
 			ID:       2,
 			StableID: "peer-id",
-		}, tailcfg.UserProfile{
+		}).View(), tailcfg.UserProfile{
 			LoginName: "peer",
 		}, true
 
@@ -861,7 +861,7 @@ func TestSSH(t *testing.T) {
 		sshUser: "test",
 		src:     netip.MustParseAddrPort("1.2.3.4:32342"),
 		dst:     netip.MustParseAddrPort("1.2.3.5:22"),
-		node:    &tailcfg.Node{},
+		node:    (&tailcfg.Node{}).View(),
 		uprof:   tailcfg.UserProfile{},
 	}
 	sc.action0 = &tailcfg.SSHAction{Accept: true}

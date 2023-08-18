@@ -257,21 +257,25 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 					},
 					MachineStatus: jsMachineStatus[nm.MachineStatus],
 				},
-				Peers: mapSlice(nm.Peers, func(p *tailcfg.Node) jsNetMapPeerNode {
-					name := p.Name
+				Peers: mapSlice(nm.Peers, func(p tailcfg.NodeView) jsNetMapPeerNode {
+					name := p.Name()
 					if name == "" {
 						// In practice this should only happen for Hello.
-						name = p.Hostinfo.Hostname()
+						name = p.Hostinfo().Hostname()
+					}
+					addrs := make([]string, p.Addresses().Len())
+					for i := range p.Addresses().LenIter() {
+						addrs[i] = p.Addresses().At(i).Addr().String()
 					}
 					return jsNetMapPeerNode{
 						jsNetMapNode: jsNetMapNode{
 							Name:       name,
-							Addresses:  mapSlice(p.Addresses, func(a netip.Prefix) string { return a.Addr().String() }),
-							MachineKey: p.Machine.String(),
-							NodeKey:    p.Key.String(),
+							Addresses:  addrs,
+							MachineKey: p.Machine().String(),
+							NodeKey:    p.Key().String(),
 						},
-						Online:              p.Online,
-						TailscaleSSHEnabled: p.Hostinfo.TailscaleSSHEnabled(),
+						Online:              p.Online(),
+						TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
 					}
 				}),
 				LockedOut: nm.TKAEnabled && len(nm.SelfNode.KeySignature) == 0,

@@ -462,9 +462,9 @@ func TestHandlePeerAPI(t *testing.T) {
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
 				selfNode: selfNode,
-				peerNode: &tailcfg.Node{
+				peerNode: (&tailcfg.Node{
 					ComputedName: "some-peer-name",
-				},
+				}).View(),
 				ps: &peerAPIServer{
 					b: lb,
 				},
@@ -513,9 +513,9 @@ func TestFileDeleteRace(t *testing.T) {
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
-		peerNode: &tailcfg.Node{
+		peerNode: (&tailcfg.Node{
 			ComputedName: "some-peer-name",
-		},
+		}).View(),
 		selfNode: &tailcfg.Node{
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
 		},

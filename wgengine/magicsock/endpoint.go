@@ -725,15 +725,15 @@ func (de *endpoint) setLastPing(ipp netip.AddrPort, now mono.Time) {
 
 // updateFromNode updates the endpoint based on a tailcfg.Node from a NetMap
 // update.
-func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
-	if n == nil {
+func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool) {
+	if !n.Valid() {
 		panic("nil node when updating endpoint")
 	}
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
 	de.heartbeatDisabled = heartbeatDisabled
-	de.expired = n.Expired
+	de.expired = n.Expired()
 
 	epDisco := de.disco.Load()
 	var discoKey key.DiscoPublic
@@ -741,11 +741,11 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 		discoKey = epDisco.key
 	}
 
-	if discoKey != n.DiscoKey {
-		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey)
+	if discoKey != n.DiscoKey() {
+		de.c.logf("[v1] magicsock: disco: node %s changed from %s to %s", de.publicKey.ShortString(), discoKey, n.DiscoKey())
 		de.disco.Store(&endpointDisco{
-			key:   n.DiscoKey,
-			short: n.DiscoKey.ShortString(),
+			key:   n.DiscoKey(),
+			short: n.DiscoKey().ShortString(),
 		})
 		de.debugUpdates.Add(EndpointChange{
 			When: time.Now(),
@@ -753,7 +753,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 		})
 		de.resetLocked()
 	}
-	if n.DERP == "" {
+	if n.DERP() == "" {
 		if de.derpAddr.IsValid() {
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
@@ -763,7 +763,7 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 		}
 		de.derpAddr = netip.AddrPort{}
 	} else {
-		newDerp, _ := netip.ParseAddrPort(n.DERP)
+		newDerp, _ := netip.ParseAddrPort(n.DERP())
 		if de.derpAddr != newDerp {
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
@@ -780,7 +780,8 @@ func (de *endpoint) updateFromNode(n *tailcfg.Node, heartbeatDisabled bool) {
 	}
 
 	var newIpps []netip.AddrPort
-	for i, epStr := range n.Endpoints {
+	for i := range n.Endpoints().LenIter() {
+		epStr := n.Endpoints().At(i)
 		if i > math.MaxInt16 {
 			// Seems unlikely.
 			continue
