@@ -14,10 +14,12 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes/com"
 	"github.com/dblohm7/wingoes/pe"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/osdiag/internal/wsc"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/authenticode"
 )
@@ -44,6 +46,7 @@ func logSupportInfo(logf logger.Logf, reason LogSupportInfoReason) {
 const (
 	supportInfoKeyModules    = "modules"
 	supportInfoKeyRegistry   = "registry"
+	supportInfoKeySecurity   = "securitySoftware"
 	supportInfoKeyWinsockLSP = "winsockLSP"
 )
 
@@ -64,6 +67,8 @@ func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 		} else {
 			output[supportInfoKeyModules] = err
 		}
+
+		output[supportInfoKeySecurity] = getSecurityInfo()
 
 		lspInfo, err := getWinsockLSPInfo()
 		if err == nil {
@@ -481,4 +486,106 @@ func enumWinsockProtocols() ([]wsaProtocolInfo, error) {
 	}
 
 	return buf, nil
+}
+
+type providerKey struct {
+	provType wsc.WSC_SECURITY_PROVIDER
+	provKey  string
+}
+
+var providerKeys = []providerKey{
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_ANTIVIRUS,
+		"av",
+	},
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_ANTISPYWARE,
+		"antispy",
+	},
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_FIREWALL,
+		"firewall",
+	},
+}
+
+const (
+	maxProvCount = 100
+)
+
+type secProductInfo struct {
+	Name     string `json:"name,omitempty"`
+	NameErr  error  `json:"nameErr,omitempty"`
+	State    string `json:"state,omitempty"`
+	StateErr error  `json:"stateErr,omitempty"`
+}
+
+func getSecurityInfo() map[string]any {
+	result := make(map[string]any)
+
+	for _, prov := range providerKeys {
+		// Note that we need to obtain a new product list for each provider type;
+		// the docs clearly state that we cannot reuse objects.
+		productList, err := com.CreateInstance[wsc.WSCProductList](wsc.CLSID_WSCProductList)
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+
+		err = productList.Initialize(prov.provType)
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+
+		n, err := productList.GetCount()
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+		if n == 0 {
+			continue
+		}
+
+		n = min(n, maxProvCount)
+		values := make([]any, 0, n)
+
+		for i := int32(0); i < n; i++ {
+			product, err := productList.GetItem(uint32(i))
+			if err != nil {
+				values = append(values, err)
+				continue
+			}
+
+			var value secProductInfo
+
+			value.Name, err = product.GetProductName()
+			if err != nil {
+				value.NameErr = err
+			}
+
+			state, err := product.GetProductState()
+			if err == nil {
+				switch state {
+				case wsc.WSC_SECURITY_PRODUCT_STATE_ON:
+					value.State = "on"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_OFF:
+					value.State = "off"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_SNOOZED:
+					value.State = "snoozed"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_EXPIRED:
+					value.State = "expired"
+				default:
+					value.State = fmt.Sprintf("<unknown state value %d>", state)
+				}
+			} else {
+				value.StateErr = err
+			}
+
+			values = append(values, value)
+		}
+
+		result[prov.provKey] = values
+	}
+
+	return result
 }
