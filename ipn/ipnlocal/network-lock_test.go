@@ -558,26 +558,26 @@ func TestTKAFilterNetmap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nm := netmap.NetworkMap{
-		Peers: []*tailcfg.Node{
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
 			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 			{ID: 2, Key: n2.Public(), KeySignature: nil},                   // missing sig
 			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()}, // someone elses sig
 			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},     // messed-up signature
 			{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
-		},
+		}),
 	}
 
 	b := &LocalBackend{
 		logf: t.Logf,
 		tka:  &tkaState{authority: authority},
 	}
-	b.tkaFilterNetmapLocked(&nm)
+	b.tkaFilterNetmapLocked(nm)
 
-	want := []*tailcfg.Node{
+	want := nodeViews([]*tailcfg.Node{
 		{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
 		{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
-	}
+	})
 	nodePubComparer := cmp.Comparer(func(x, y key.NodePublic) bool {
 		return x.Raw32() == y.Raw32()
 	})

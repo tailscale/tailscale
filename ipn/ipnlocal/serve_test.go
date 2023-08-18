@@ -201,16 +201,16 @@ func TestServeHTTPProxy(t *testing.T) {
 			},
 		},
 	}
-	b.nodeByAddr = map[netip.Addr]*tailcfg.Node{
-		netip.MustParseAddr("100.150.151.152"): {
+	b.nodeByAddr = map[netip.Addr]tailcfg.NodeView{
+		netip.MustParseAddr("100.150.151.152"): (&tailcfg.Node{
 			ComputedName: "some-peer",
 			User:         tailcfg.UserID(1),
-		},
-		netip.MustParseAddr("100.150.151.153"): {
+		}).View(),
+		netip.MustParseAddr("100.150.151.153"): (&tailcfg.Node{
 			ComputedName: "some-tagged-peer",
 			Tags:         []string{"tag:server", "tag:test"},
 			User:         tailcfg.UserID(1),
-		},
+		}).View(),
 	}
 
 	// Start test serve endpoint.

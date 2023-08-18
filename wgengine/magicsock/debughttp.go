@@ -101,10 +101,10 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Slice(ent, func(i, j int) bool { return ent[i].pub.Less(ent[j].pub) })
 
-		peers := map[key.NodePublic]*tailcfg.Node{}
+		peers := map[key.NodePublic]tailcfg.NodeView{}
 		if c.netMap != nil {
 			for _, p := range c.netMap.Peers {
-				peers[p.Key] = p
+				peers[p.Key()] = p
 			}
 		}
 
@@ -187,15 +187,15 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 
 }
 
-func peerDebugName(p *tailcfg.Node) string {
-	if p == nil {
+func peerDebugName(p tailcfg.NodeView) string {
+	if !p.Valid() {
 		return ""
 	}
-	n := p.Name
+	n := p.Name()
 	if base, _, ok := strings.Cut(n, "."); ok {
 		return base
 	}
-	return p.Hostinfo.Hostname()
+	return p.Hostinfo().Hostname()
 }
 
 func ipPortLess(a, b netip.AddrPort) bool {
