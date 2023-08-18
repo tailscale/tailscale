@@ -114,7 +114,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			AllowedIPs: []netip.Prefix{a1},
 		}
 		c2.Peers = []wgcfg.Peer{p}
-		e2.Reconfig(&c2, &router.Config{}, new(dns.Config), nil)
+		e2.Reconfig(&c2, &router.Config{}, new(dns.Config))
 		e1waitDoneOnce.Do(wait.Done)
 	})
 
@@ -151,7 +151,7 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 			AllowedIPs: []netip.Prefix{a2},
 		}
 		c1.Peers = []wgcfg.Peer{p}
-		e1.Reconfig(&c1, &router.Config{}, new(dns.Config), nil)
+		e1.Reconfig(&c1, &router.Config{}, new(dns.Config))
 		e2waitDoneOnce.Do(wait.Done)
 	})
 

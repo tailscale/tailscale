@@ -1742,15 +1742,10 @@ type ControlIPCandidate struct {
 	Priority int `json:",omitempty"`
 }
 
-// Debug were instructions from the control server to the client to adjust debug
-// settings.
-//
-// Deprecated: these should no longer be used. Most have been deleted except for some They're a weird mix of declartive
-// and imperative. The imperative ones should be c2n requests instead, and the
-// declarative ones (at least the bools) should generally be self
-// Node.Capabilities.
-//
-// TODO(bradfitz): start migrating the imperative ones to c2n requests.
+// Debug used to be a miscellaneous set of declarative debug config changes and
+// imperative debug commands. They've since been mostly migrated to node
+// attributes (MapResponse.Node.Capabilities) for the declarative things and c2n
+// requests for the imperative things. Not much remains here. Don't add more.
 type Debug struct {
 	// SleepSeconds requests that the client sleep for the
 	// provided number of seconds.
@@ -1759,21 +1754,6 @@ type Debug struct {
 	// spinning clients, in case we introduce a bug in the
 	// state machine.
 	SleepSeconds float64 `json:",omitempty"`
-
-	// RandomizeClientPort is whether magicsock should UDP bind to :0 to get a
-	// random local port, ignoring any configured fixed port.
-	//
-	// Deprecated: use NodeAttrRandomizeClientPort instead. This is kept in code
-	// only so the control plane can use it to send to old clients.
-	RandomizeClientPort bool `json:",omitempty"`
-
-	// OneCGNATRoute controls whether the client should prefer to make one big
-	// CGNAT /10 route rather than a /32 per peer.
-	//
-	// Deprecated: use NodeAttrOneCGNATEnable or NodeAttrOneCGNATDisable
-	// instead. This is kept in code only so the control plane can use it to
-	// send to old clients.
-	OneCGNATRoute opt.Bool `json:",omitempty"`
 
 	// DisableLogTail disables the logtail package. Once disabled it can't be
 	// re-enabled for the lifetime of the process.

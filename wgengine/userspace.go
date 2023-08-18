@@ -766,7 +766,9 @@ func hasOverlap(aips, rips []netip.Prefix) bool {
 	return false
 }
 
-func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config, debug *tailcfg.Debug) error {
+var randomizeClientPort = controlclient.RandomizeClientPort
+
+func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
 	}
@@ -792,8 +794,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
-	if controlclient.RandomizeClientPort() || // new way (capver 70)
-		debug != nil && debug.RandomizeClientPort { // old way which server might still send (as of 2023-08-16)
+	if randomizeClientPort() {
 		listenPort = 0
 	}
 

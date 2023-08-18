@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1756,17 +1755,12 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	}
 
 	priorNetmap := c.netMap
-	var priorDebug *tailcfg.Debug
-	if priorNetmap != nil {
-		priorDebug = priorNetmap.Debug
-	}
-	debugChanged := !reflect.DeepEqual(priorDebug, nm.Debug)
 	metricNumPeers.Set(int64(len(nm.Peers)))
 
 	// Update c.netMap regardless, before the following early return.
 	c.netMap = nm
 
-	if priorNetmap != nil && nodesEqual(priorNetmap.Peers, nm.Peers) && !debugChanged {
+	if priorNetmap != nil && nodesEqual(priorNetmap.Peers, nm.Peers) {
 		// The rest of this function is all adjusting state for peers that have
 		// changed. But if the set of peers is equal and the debug flags (for
 		// silent disco) haven't changed, no need to do anything else.

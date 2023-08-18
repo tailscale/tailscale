@@ -14,7 +14,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/views"
 	"tailscale.com/wgengine/filter"
 )
@@ -145,16 +144,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastTKAInfo = resp.TKAInfo
 	}
 
-	debug := resp.Debug
-	if debug != nil {
-		copyDebugOptBools(&ms.stickyDebug, debug)
-	} else if ms.stickyDebug != (tailcfg.Debug{}) {
-		debug = new(tailcfg.Debug)
-	}
-	if debug != nil {
-		copyDebugOptBools(debug, &ms.stickyDebug)
-	}
-
 	nm := &netmap.NetworkMap{
 		NodeKey:           ms.privateNodeKey.Public(),
 		PrivateKey:        ms.privateNodeKey,
@@ -169,7 +158,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		SSHPolicy:         ms.lastSSHPolicy,
 		CollectServices:   ms.collectServices,
 		DERPMap:           ms.lastDERPMap,
-		Debug:             debug,
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
@@ -400,13 +388,4 @@ func filterSelfAddresses(in []netip.Prefix) (ret []netip.Prefix) {
 		}
 		return ret
 	}
-}
-
-func copyDebugOptBools(dst, src *tailcfg.Debug) {
-	copy := func(v *opt.Bool, s opt.Bool) {
-		if s != "" {
-			*v = s
-		}
-	}
-	copy(&dst.OneCGNATRoute, src.OneCGNATRoute)
 }
