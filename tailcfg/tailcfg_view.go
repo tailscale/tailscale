@@ -71,7 +71,6 @@ func (v UserView) ID() UserID                   { return v.ж.ID }
 func (v UserView) LoginName() string            { return v.ж.LoginName }
 func (v UserView) DisplayName() string          { return v.ж.DisplayName }
 func (v UserView) ProfilePicURL() string        { return v.ж.ProfilePicURL }
-func (v UserView) Domain() string               { return v.ж.Domain }
 func (v UserView) Logins() views.Slice[LoginID] { return views.SliceOf(v.ж.Logins) }
 func (v UserView) Created() time.Time           { return v.ж.Created }
 
@@ -81,7 +80,6 @@ var _UserViewNeedsRegeneration = User(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 	Logins        []LoginID
 	Created       time.Time
 }{})
@@ -475,7 +473,6 @@ func (v LoginView) Provider() string      { return v.ж.Provider }
 func (v LoginView) LoginName() string     { return v.ж.LoginName }
 func (v LoginView) DisplayName() string   { return v.ж.DisplayName }
 func (v LoginView) ProfilePicURL() string { return v.ж.ProfilePicURL }
-func (v LoginView) Domain() string        { return v.ж.Domain }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginViewNeedsRegeneration = Login(struct {
@@ -485,7 +482,6 @@ var _LoginViewNeedsRegeneration = Login(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 }{})
 
 // View returns a readonly view of DNSConfig.

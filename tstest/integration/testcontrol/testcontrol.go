@@ -400,6 +400,8 @@ func (s *Server) AllNodes() (nodes []*tailcfg.Node) {
 	return nodes
 }
 
+const domain = "fake-control.example.net"
+
 func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,7 +415,6 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 		return u, s.logins[nodeKey]
 	}
 	id := tailcfg.UserID(len(s.users) + 1)
-	domain := "fake-control.example.net"
 	loginName := fmt.Sprintf("user-%d@%s", id, domain)
 	displayName := fmt.Sprintf("User %d", id)
 	login := &tailcfg.Login{
@@ -422,13 +423,11 @@ func (s *Server) getUser(nodeKey key.NodePublic) (*tailcfg.User, *tailcfg.Login)
 		LoginName:     loginName,
 		DisplayName:   displayName,
 		ProfilePicURL: "https://tailscale.com/static/images/marketing/team-carney.jpg",
-		Domain:        domain,
 	}
 	user := &tailcfg.User{
 		ID:          id,
 		LoginName:   loginName,
 		DisplayName: displayName,
-		Domain:      domain,
 		Logins:      []tailcfg.LoginID{login.ID},
 	}
 	s.users[nodeKey] = user
@@ -829,7 +828,7 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 	res = &tailcfg.MapResponse{
 		Node:            node,
 		DERPMap:         s.DERPMap,
-		Domain:          string(user.Domain),
+		Domain:          domain,
 		CollectServices: "true",
 		PacketFilter:    packetFilterWithIngressCaps(),
 		DNSConfig:       dns,
