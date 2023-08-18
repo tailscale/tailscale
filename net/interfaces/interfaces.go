@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"tailscale.com/hostinfo"
+	"tailscale.com/internal/anet"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tshttpproxy"
@@ -181,7 +182,8 @@ func (i Interface) Addrs() ([]net.Addr, error) {
 	if i.AltAddrs != nil {
 		return i.AltAddrs, nil
 	}
-	return i.Interface.Addrs()
+
+	return anet.InterfaceAddrTable(i.Interface)
 }
 
 // ForeachInterfaceAddress is a wrapper for GetList, then
@@ -707,7 +709,7 @@ func netInterfaces() ([]Interface, error) {
 	if altNetInterfaces != nil {
 		return altNetInterfaces()
 	}
-	ifs, err := net.Interfaces()
+	ifs, err := anet.Interfaces()
 	if err != nil {
 		return nil, err
 	}
