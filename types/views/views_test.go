@@ -16,10 +16,10 @@ import (
 
 type viewStruct struct {
 	Int        int
-	Addrs      IPPrefixSlice
+	Addrs      Slice[netip.Prefix]
 	Strings    Slice[string]
-	AddrsPtr   *IPPrefixSlice `json:",omitempty"`
-	StringsPtr *Slice[string] `json:",omitempty"`
+	AddrsPtr   *Slice[netip.Prefix] `json:",omitempty"`
+	StringsPtr *Slice[string]       `json:",omitempty"`
 }
 
 func BenchmarkSliceIteration(b *testing.B) {
@@ -66,7 +66,7 @@ func TestViewsJSON(t *testing.T) {
 		}
 		return
 	}
-	ipp := IPPrefixSliceOf(mustCIDR("192.168.0.0/24"))
+	ipp := SliceOf(mustCIDR("192.168.0.0/24"))
 	ss := SliceOf([]string{"bar"})
 	tests := []struct {
 		name     string

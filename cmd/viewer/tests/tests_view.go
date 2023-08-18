@@ -309,8 +309,8 @@ func (v StructWithSlicesView) StructPointers() views.SliceView[*StructWithPtrs, 
 func (v StructWithSlicesView) Structs() StructWithPtrs    { panic("unsupported") }
 func (v StructWithSlicesView) Ints() *int                 { panic("unsupported") }
 func (v StructWithSlicesView) Slice() views.Slice[string] { return views.SliceOf(v.ж.Slice) }
-func (v StructWithSlicesView) Prefixes() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.Prefixes)
+func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
+	return views.SliceOf(v.ж.Prefixes)
 }
 func (v StructWithSlicesView) Data() mem.RO { return mem.B(v.ж.Data) }
 
