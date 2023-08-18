@@ -41,13 +41,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, flake-compat }: let
-    # Grab a helper func out of the Nix language libraries. Annoyingly
-    # these are only accessible through legacyPackages right now,
-    # which forces us to indirect through a platform-specific
-    # path. The x86_64-linux in here doesn't really matter, since all
-    # we're grabbing is a pure Nix string manipulation function that
-    # doesn't build any software.
-    fileContents = nixpkgs.legacyPackages.x86_64-linux.lib.fileContents;
+    inherit (nixpkgs.lib) fileContents;
 
     # tailscaleRev is the git commit at which this flake was imported,
     # or the empty string when building from a local checkout of the
