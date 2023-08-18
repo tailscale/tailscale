@@ -131,27 +131,25 @@ func (v *NodeView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v NodeView) ID() NodeID                      { return v.ж.ID }
-func (v NodeView) StableID() StableNodeID          { return v.ж.StableID }
-func (v NodeView) Name() string                    { return v.ж.Name }
-func (v NodeView) User() UserID                    { return v.ж.User }
-func (v NodeView) Sharer() UserID                  { return v.ж.Sharer }
-func (v NodeView) Key() key.NodePublic             { return v.ж.Key }
-func (v NodeView) KeyExpiry() time.Time            { return v.ж.KeyExpiry }
-func (v NodeView) KeySignature() mem.RO            { return mem.B(v.ж.KeySignature) }
-func (v NodeView) Machine() key.MachinePublic      { return v.ж.Machine }
-func (v NodeView) DiscoKey() key.DiscoPublic       { return v.ж.DiscoKey }
-func (v NodeView) Addresses() views.IPPrefixSlice  { return views.IPPrefixSliceOf(v.ж.Addresses) }
-func (v NodeView) AllowedIPs() views.IPPrefixSlice { return views.IPPrefixSliceOf(v.ж.AllowedIPs) }
-func (v NodeView) Endpoints() views.Slice[string]  { return views.SliceOf(v.ж.Endpoints) }
-func (v NodeView) DERP() string                    { return v.ж.DERP }
-func (v NodeView) Hostinfo() HostinfoView          { return v.ж.Hostinfo }
-func (v NodeView) Created() time.Time              { return v.ж.Created }
-func (v NodeView) Cap() CapabilityVersion          { return v.ж.Cap }
-func (v NodeView) Tags() views.Slice[string]       { return views.SliceOf(v.ж.Tags) }
-func (v NodeView) PrimaryRoutes() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.PrimaryRoutes)
-}
+func (v NodeView) ID() NodeID                               { return v.ж.ID }
+func (v NodeView) StableID() StableNodeID                   { return v.ж.StableID }
+func (v NodeView) Name() string                             { return v.ж.Name }
+func (v NodeView) User() UserID                             { return v.ж.User }
+func (v NodeView) Sharer() UserID                           { return v.ж.Sharer }
+func (v NodeView) Key() key.NodePublic                      { return v.ж.Key }
+func (v NodeView) KeyExpiry() time.Time                     { return v.ж.KeyExpiry }
+func (v NodeView) KeySignature() mem.RO                     { return mem.B(v.ж.KeySignature) }
+func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machine }
+func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
+func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
+func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
+func (v NodeView) Endpoints() views.Slice[string]           { return views.SliceOf(v.ж.Endpoints) }
+func (v NodeView) DERP() string                             { return v.ж.DERP }
+func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
+func (v NodeView) Created() time.Time                       { return v.ж.Created }
+func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
+func (v NodeView) Tags() views.Slice[string]                { return views.SliceOf(v.ж.Tags) }
+func (v NodeView) PrimaryRoutes() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.PrimaryRoutes) }
 func (v NodeView) LastSeen() *time.Time {
 	if v.ж.LastSeen == nil {
 		return nil
@@ -266,41 +264,39 @@ func (v *HostinfoView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v HostinfoView) IPNVersion() string      { return v.ж.IPNVersion }
-func (v HostinfoView) FrontendLogID() string   { return v.ж.FrontendLogID }
-func (v HostinfoView) BackendLogID() string    { return v.ж.BackendLogID }
-func (v HostinfoView) OS() string              { return v.ж.OS }
-func (v HostinfoView) OSVersion() string       { return v.ж.OSVersion }
-func (v HostinfoView) Container() opt.Bool     { return v.ж.Container }
-func (v HostinfoView) Env() string             { return v.ж.Env }
-func (v HostinfoView) Distro() string          { return v.ж.Distro }
-func (v HostinfoView) DistroVersion() string   { return v.ж.DistroVersion }
-func (v HostinfoView) DistroCodeName() string  { return v.ж.DistroCodeName }
-func (v HostinfoView) App() string             { return v.ж.App }
-func (v HostinfoView) Desktop() opt.Bool       { return v.ж.Desktop }
-func (v HostinfoView) Package() string         { return v.ж.Package }
-func (v HostinfoView) DeviceModel() string     { return v.ж.DeviceModel }
-func (v HostinfoView) PushDeviceToken() string { return v.ж.PushDeviceToken }
-func (v HostinfoView) Hostname() string        { return v.ж.Hostname }
-func (v HostinfoView) ShieldsUp() bool         { return v.ж.ShieldsUp }
-func (v HostinfoView) ShareeNode() bool        { return v.ж.ShareeNode }
-func (v HostinfoView) NoLogsNoSupport() bool   { return v.ж.NoLogsNoSupport }
-func (v HostinfoView) WireIngress() bool       { return v.ж.WireIngress }
-func (v HostinfoView) AllowsUpdate() bool      { return v.ж.AllowsUpdate }
-func (v HostinfoView) Machine() string         { return v.ж.Machine }
-func (v HostinfoView) GoArch() string          { return v.ж.GoArch }
-func (v HostinfoView) GoArchVar() string       { return v.ж.GoArchVar }
-func (v HostinfoView) GoVersion() string       { return v.ж.GoVersion }
-func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
-}
-func (v HostinfoView) RequestTags() views.Slice[string]  { return views.SliceOf(v.ж.RequestTags) }
-func (v HostinfoView) Services() views.Slice[Service]    { return views.SliceOf(v.ж.Services) }
-func (v HostinfoView) NetInfo() NetInfoView              { return v.ж.NetInfo.View() }
-func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(v.ж.SSH_HostKeys) }
-func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
-func (v HostinfoView) Userspace() opt.Bool               { return v.ж.Userspace }
-func (v HostinfoView) UserspaceRouter() opt.Bool         { return v.ж.UserspaceRouter }
+func (v HostinfoView) IPNVersion() string                     { return v.ж.IPNVersion }
+func (v HostinfoView) FrontendLogID() string                  { return v.ж.FrontendLogID }
+func (v HostinfoView) BackendLogID() string                   { return v.ж.BackendLogID }
+func (v HostinfoView) OS() string                             { return v.ж.OS }
+func (v HostinfoView) OSVersion() string                      { return v.ж.OSVersion }
+func (v HostinfoView) Container() opt.Bool                    { return v.ж.Container }
+func (v HostinfoView) Env() string                            { return v.ж.Env }
+func (v HostinfoView) Distro() string                         { return v.ж.Distro }
+func (v HostinfoView) DistroVersion() string                  { return v.ж.DistroVersion }
+func (v HostinfoView) DistroCodeName() string                 { return v.ж.DistroCodeName }
+func (v HostinfoView) App() string                            { return v.ж.App }
+func (v HostinfoView) Desktop() opt.Bool                      { return v.ж.Desktop }
+func (v HostinfoView) Package() string                        { return v.ж.Package }
+func (v HostinfoView) DeviceModel() string                    { return v.ж.DeviceModel }
+func (v HostinfoView) PushDeviceToken() string                { return v.ж.PushDeviceToken }
+func (v HostinfoView) Hostname() string                       { return v.ж.Hostname }
+func (v HostinfoView) ShieldsUp() bool                        { return v.ж.ShieldsUp }
+func (v HostinfoView) ShareeNode() bool                       { return v.ж.ShareeNode }
+func (v HostinfoView) NoLogsNoSupport() bool                  { return v.ж.NoLogsNoSupport }
+func (v HostinfoView) WireIngress() bool                      { return v.ж.WireIngress }
+func (v HostinfoView) AllowsUpdate() bool                     { return v.ж.AllowsUpdate }
+func (v HostinfoView) Machine() string                        { return v.ж.Machine }
+func (v HostinfoView) GoArch() string                         { return v.ж.GoArch }
+func (v HostinfoView) GoArchVar() string                      { return v.ж.GoArchVar }
+func (v HostinfoView) GoVersion() string                      { return v.ж.GoVersion }
+func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
+func (v HostinfoView) RequestTags() views.Slice[string]       { return views.SliceOf(v.ж.RequestTags) }
+func (v HostinfoView) Services() views.Slice[Service]         { return views.SliceOf(v.ж.Services) }
+func (v HostinfoView) NetInfo() NetInfoView                   { return v.ж.NetInfo.View() }
+func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.SliceOf(v.ж.SSH_HostKeys) }
+func (v HostinfoView) Cloud() string                          { return v.ж.Cloud }
+func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
+func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
 func (v HostinfoView) Location() *Location {
 	if v.ж.Location == nil {
 		return nil

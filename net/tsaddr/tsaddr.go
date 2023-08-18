@@ -13,6 +13,7 @@ import (
 
 	"go4.org/netipx"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/types/views"
 )
 
 // ChromeOSVMRange returns the subset of the CGNAT IPv4 range used by
@@ -225,9 +226,10 @@ func PrefixIs6(p netip.Prefix) bool { return p.Addr().Is6() }
 
 // ContainsExitRoutes reports whether rr contains both the IPv4 and
 // IPv6 /0 route.
-func ContainsExitRoutes(rr []netip.Prefix) bool {
+func ContainsExitRoutes(rr views.Slice[netip.Prefix]) bool {
 	var v4, v6 bool
-	for _, r := range rr {
+	for i := range rr.LenIter() {
+		r := rr.At(i)
 		if r == allIPv4 {
 			v4 = true
 		} else if r == allIPv6 {
@@ -235,6 +237,17 @@ func ContainsExitRoutes(rr []netip.Prefix) bool {
 		}
 	}
 	return v4 && v6
+}
+
+// ContainsNonExitSubnetRoutes reports whether v contains Subnet
+// Routes other than ExitNode Routes.
+func ContainsNonExitSubnetRoutes(rr views.Slice[netip.Prefix]) bool {
+	for i := range rr.LenIter() {
+		if rr.At(i).Bits() != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -258,10 +271,10 @@ func SortPrefixes(p []netip.Prefix) {
 
 // FilterPrefixes returns a new slice, not aliasing in, containing elements of
 // in that match f.
-func FilterPrefixesCopy(in []netip.Prefix, f func(netip.Prefix) bool) []netip.Prefix {
+func FilterPrefixesCopy(in views.Slice[netip.Prefix], f func(netip.Prefix) bool) []netip.Prefix {
 	var out []netip.Prefix
-	for _, v := range in {
-		if f(v) {
+	for i := range in.LenIter() {
+		if v := in.At(i); f(v) {
 			out = append(out, v)
 		}
 	}

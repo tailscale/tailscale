@@ -15,6 +15,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/types/views"
 )
 
 var setCmd = &ffcli.Command{
@@ -171,7 +172,7 @@ func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, cu
 		if alreadyAdvertisesExitNode == setArgs.advertiseDefaultRoute {
 			return curPrefs.AdvertiseRoutes, nil
 		}
-		routes = tsaddr.FilterPrefixesCopy(curPrefs.AdvertiseRoutes, func(p netip.Prefix) bool {
+		routes = tsaddr.FilterPrefixesCopy(views.SliceOf(curPrefs.AdvertiseRoutes), func(p netip.Prefix) bool {
 			return p.Bits() != 0
 		})
 		if setArgs.advertiseDefaultRoute {

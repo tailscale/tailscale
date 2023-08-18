@@ -776,13 +776,13 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 func peerStatusFromNode(ps *ipnstate.PeerStatus, n *tailcfg.Node) {
 	ps.ID = n.StableID
 	ps.Created = n.Created
-	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(n.AllowedIPs)
+	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(views.SliceOf(n.AllowedIPs))
 	if n.Tags != nil {
 		v := views.SliceOf(n.Tags)
 		ps.Tags = &v
 	}
 	if n.PrimaryRoutes != nil {
-		v := views.IPPrefixSliceOf(n.PrimaryRoutes)
+		v := views.SliceOf(n.PrimaryRoutes)
 		ps.PrimaryRoutes = &v
 	}
 
@@ -2301,7 +2301,8 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
-		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(p.AdvertiseRoutes().Filter(tsaddr.IsViaPrefix)))
+		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
+		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(filtered))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }

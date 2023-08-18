@@ -9,10 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"net/netip"
-	"slices"
-
-	"tailscale.com/net/tsaddr"
 )
 
 func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
@@ -227,84 +223,6 @@ func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
 		}
 	}
 	return true
-}
-
-// IPPrefixSlice is a read-only accessor for a slice of netip.Prefix.
-type IPPrefixSlice struct {
-	ж Slice[netip.Prefix]
-}
-
-// IPPrefixSliceOf returns a IPPrefixSlice for the provided slice.
-func IPPrefixSliceOf(x []netip.Prefix) IPPrefixSlice { return IPPrefixSlice{SliceOf(x)} }
-
-// IsNil reports whether the underlying slice is nil.
-func (v IPPrefixSlice) IsNil() bool { return v.ж.IsNil() }
-
-// Len returns the length of the slice.
-func (v IPPrefixSlice) Len() int { return v.ж.Len() }
-
-// LenIter returns a slice the same length as the v.Len().
-// The caller can then range over it to get the valid indexes.
-// It does not allocate.
-func (v IPPrefixSlice) LenIter() []struct{} { return make([]struct{}, v.ж.Len()) }
-
-// At returns the IPPrefix at index `i` of the slice.
-func (v IPPrefixSlice) At(i int) netip.Prefix { return v.ж.At(i) }
-
-// AppendTo appends the underlying slice values to dst.
-func (v IPPrefixSlice) AppendTo(dst []netip.Prefix) []netip.Prefix {
-	return v.ж.AppendTo(dst)
-}
-
-// Unwrap returns the underlying Slice[netip.Prefix].
-func (v IPPrefixSlice) Unwrap() Slice[netip.Prefix] {
-	return v.ж
-}
-
-// AsSlice returns a copy of underlying slice.
-func (v IPPrefixSlice) AsSlice() []netip.Prefix {
-	return v.ж.AsSlice()
-}
-
-// Filter returns a new slice, containing elements of v that match f.
-func (v IPPrefixSlice) Filter(f func(netip.Prefix) bool) []netip.Prefix {
-	return tsaddr.FilterPrefixesCopy(v.ж.ж, f)
-}
-
-// PrefixesContainsIP reports whether any IPPrefix contains IP.
-func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
-	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
-}
-
-// PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
-func (v IPPrefixSlice) ContainsFunc(f func(netip.Prefix) bool) bool {
-	return slices.ContainsFunc(v.ж.ж, f)
-}
-
-// ContainsExitRoutes reports whether v contains ExitNode Routes.
-func (v IPPrefixSlice) ContainsExitRoutes() bool {
-	return tsaddr.ContainsExitRoutes(v.ж.ж)
-}
-
-// ContainsNonExitSubnetRoutes reports whether v contains Subnet
-// Routes other than ExitNode Routes.
-func (v IPPrefixSlice) ContainsNonExitSubnetRoutes() bool {
-	for i := 0; i < v.Len(); i++ {
-		if v.At(i).Bits() != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// MarshalJSON implements json.Marshaler.
-func (v IPPrefixSlice) MarshalJSON() ([]byte, error) {
-	return v.ж.MarshalJSON()
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (v *IPPrefixSlice) UnmarshalJSON(b []byte) error {
-	return v.ж.UnmarshalJSON(b)
 }
 
 // MapOf returns a view over m. It is the caller's responsibility to make sure K

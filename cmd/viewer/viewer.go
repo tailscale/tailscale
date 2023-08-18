@@ -69,8 +69,6 @@ func (v *{{.ViewName}}) UnmarshalJSON(b []byte) error {
 {{end}}
 {{define "byteSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() mem.RO { return mem.B(v.ж.{{.FieldName}}) }
 {{end}}
-{{define "ipPrefixSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.IPPrefixSlice { return views.IPPrefixSliceOf(v.ж.{{.FieldName}}) }
-{{end}}
 {{define "sliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.Slice[{{.FieldType}}] { return views.SliceOf(v.ж.{{.FieldName}}) }
 {{end}}
 {{define "viewSliceField"}}func (v {{.ViewName}}) {{.FieldName}}() views.SliceView[{{.FieldType}},{{.FieldViewName}}] { return views.SliceOfViews[{{.FieldType}},{{.FieldViewName}}](v.ж.{{.FieldName}}) }
@@ -176,9 +174,6 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 			case "byte":
 				it.Import("go4.org/mem")
 				writeTemplate("byteSliceField")
-			case "inet.af/netip.Prefix", "net/netip.Prefix":
-				it.Import("tailscale.com/types/views")
-				writeTemplate("ipPrefixSliceField")
 			default:
 				it.Import("tailscale.com/types/views")
 				shallow, deep, base := requiresCloning(elem)
