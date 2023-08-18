@@ -101,6 +101,48 @@ func newTestConn(t *testing.T, want [][]byte) *nftables.Conn {
 	return conn
 }
 
+func TestInsertHookRule(t *testing.T) {
+	proto := nftables.TableFamilyIPv4
+	want := [][]byte{
+		// batch begin
+		[]byte("\x00\x00\x00\x0a"),
+		// nft add table ip ts-filter-test
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x08\x00\x02\x00\x00\x00\x00\x00"),
+		// nft add chain ip ts-filter-test ts-input-test { type filter hook input priority 0 \; }
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x03\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x14\x00\x04\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x0b\x00\x07\x00\x66\x69\x6c\x74\x65\x72\x00\x00"),
+		// nft add chain ip ts-filter-test ts-jumpto
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x0e\x00\x03\x00\x74\x73\x2d\x6a\x75\x6d\x70\x74\x6f\x00\x00\x00"),
+		// nft add rule ip ts-filter-test ts-input-test counter jump ts-jumptp
+		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x02\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x70\x00\x04\x80\x2c\x00\x01\x80\x0c\x00\x01\x00\x63\x6f\x75\x6e\x74\x65\x72\x00\x1c\x00\x02\x80\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x40\x00\x01\x80\x0e\x00\x01\x00\x69\x6d\x6d\x65\x64\x69\x61\x74\x65\x00\x00\x00\x2c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x00\x20\x00\x02\x80\x1c\x00\x02\x80\x08\x00\x01\x00\xff\xff\xff\xfd\x0e\x00\x02\x00\x74\x73\x2d\x6a\x75\x6d\x70\x74\x6f\x00\x00\x00"),
+		// batch end
+		[]byte("\x00\x00\x00\x0a"),
+	}
+	testConn := newTestConn(t, want)
+	table := testConn.AddTable(&nftables.Table{
+		Family: proto,
+		Name:   "ts-filter-test",
+	})
+
+	fromchain := testConn.AddChain(&nftables.Chain{
+		Name:     "ts-input-test",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookInput,
+		Priority: nftables.ChainPriorityFilter,
+	})
+
+	tochain := testConn.AddChain(&nftables.Chain{
+		Name:  "ts-jumpto",
+		Table: table,
+	})
+
+	err := addHookRule(testConn, table, fromchain, tochain.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+}
+
 func TestInsertLoopbackRule(t *testing.T) {
 	proto := nftables.TableFamilyIPv4
 	want := [][]byte{
@@ -461,8 +503,8 @@ func TestAddAndDelNetfilterChains(t *testing.T) {
 		t.Fatalf("list chains failed: %v", err)
 	}
 
-	if len(chainsV4) != 3 {
-		t.Fatalf("len(chainsV4) = %d, want 3", len(chainsV4))
+	if len(chainsV4) != 6 {
+		t.Fatalf("len(chainsV4) = %d, want 6", len(chainsV4))
 	}
 
 	chainsV6, err := conn.ListChainsOfTableFamily(nftables.TableFamilyIPv6)
@@ -470,8 +512,8 @@ func TestAddAndDelNetfilterChains(t *testing.T) {
 		t.Fatalf("list chains failed: %v", err)
 	}
 
-	if len(chainsV6) != 3 {
-		t.Fatalf("len(chainsV6) = %d, want 3", len(chainsV6))
+	if len(chainsV6) != 6 {
+		t.Fatalf("len(chainsV6) = %d, want 6", len(chainsV6))
 	}
 
 	runner.DelChains()
@@ -786,5 +828,89 @@ func TestNFTAddAndDelLoopbackRule(t *testing.T) {
 	}
 	if len(inputV4Rules) != 2 {
 		t.Fatalf("len(inputV4Rules) = %d, want 2", len(inputV4Rules))
+	}
+}
+
+func TestNFTAddAndDelHookRule(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip(t.Name(), " requires privileges to create a namespace in order to run")
+		return
+	}
+
+	conn := newSysConn(t)
+	runner := newFakeNftablesRunner(t, conn)
+	runner.AddChains()
+	defer runner.DelChains()
+	runner.AddHooks()
+
+	forwardChain, err := getChainFromTable(conn, runner.nft4.Filter, "FORWARD")
+	if err != nil {
+		t.Fatalf("failed to get forwardChain: %v", err)
+	}
+
+	forwardChainRules, err := conn.GetRules(forwardChain.Table, forwardChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(forwardChainRules) != 1 {
+		t.Fatalf("expected 1 rule in FORWARD chain, got %v", len(forwardChainRules))
+	}
+
+	inputChain, err := getChainFromTable(conn, runner.nft4.Filter, "INPUT")
+	if err != nil {
+		t.Fatalf("failed to get inputChain: %v", err)
+	}
+
+	inputChainRules, err := conn.GetRules(inputChain.Table, inputChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(inputChainRules) != 1 {
+		t.Fatalf("expected 1 rule in INPUT chain, got %v", len(inputChainRules))
+	}
+
+	postroutingChain, err := getChainFromTable(conn, runner.nft4.Nat, "POSTROUTING")
+	if err != nil {
+		t.Fatalf("failed to get postroutingChain: %v", err)
+	}
+
+	postroutingChainRules, err := conn.GetRules(postroutingChain.Table, postroutingChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(postroutingChainRules) != 1 {
+		t.Fatalf("expected 1 rule in POSTROUTING chain, got %v", len(postroutingChainRules))
+	}
+
+	runner.DelHooks(t.Logf)
+
+	forwardChainRules, err = conn.GetRules(forwardChain.Table, forwardChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(forwardChainRules) != 0 {
+		t.Fatalf("expected 0 rule in FORWARD chain, got %v", len(forwardChainRules))
+	}
+
+	inputChainRules, err = conn.GetRules(inputChain.Table, inputChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(inputChainRules) != 0 {
+		t.Fatalf("expected 0 rule in INPUT chain, got %v", len(inputChainRules))
+	}
+
+	postroutingChainRules, err = conn.GetRules(postroutingChain.Table, postroutingChain)
+	if err != nil {
+		t.Fatalf("failed to get rules: %v", err)
+	}
+
+	if len(postroutingChainRules) != 0 {
+		t.Fatalf("expected 0 rule in POSTROUTING chain, got %v", len(postroutingChainRules))
 	}
 }
