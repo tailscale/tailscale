@@ -59,22 +59,6 @@ func TestNetworkMapConcise(t *testing.T) {
 			},
 			want: "netmap: self: [AQEBA] auth=machine-unknown u=? []\n [AgICA] D2                 :    192.168.0.100:12     192.168.0.100:12354\n [AwMDA] D4                 :       10.2.0.100:12        10.1.0.100:12345\n",
 		},
-		{
-			name: "debug_non_nil",
-			nm: &NetworkMap{
-				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{},
-			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={} []\n",
-		},
-		{
-			name: "debug_values",
-			nm: &NetworkMap{
-				NodeKey: testNodeKey(1),
-				Debug:   &tailcfg.Debug{SleepSeconds: 1.5},
-			},
-			want: "netmap: self: [AQEBA] auth=machine-unknown u=? debug={\"SleepSeconds\":1.5} []\n",
-		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var got string

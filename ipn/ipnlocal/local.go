@@ -3036,7 +3036,7 @@ func (b *LocalBackend) authReconfig() {
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
-	err = b.e.Reconfig(cfg, rcfg, dcfg, nm.Debug)
+	err = b.e.Reconfig(cfg, rcfg, dcfg)
 	if err == wgengine.ErrNoChanges {
 		return
 	}
@@ -3052,16 +3052,6 @@ func (b *LocalBackend) authReconfig() {
 // a runtime.GOOS.
 func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS string) bool {
 	// Explicit enabling or disabling always take precedence.
-
-	// Old way from control plane, pre capver 71:
-	// TODO(bradfitz): delete this path, once the control server starts
-	// sending it in nodeAttr.
-	if nm.Debug != nil {
-		if v, ok := nm.Debug.OneCGNATRoute.Get(); ok {
-			logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
-			return v
-		}
-	}
 	if v, ok := controlclient.ControlOneCGNATSetting().Get(); ok {
 		logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
 		return v
@@ -3663,7 +3653,7 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 		b.blockEngineUpdates(true)
 		fallthrough
 	case ipn.Stopped:
-		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}, nil)
+		err := b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 		if err != nil {
 			b.logf("Reconfig(down): %v", err)
 		}
@@ -3805,7 +3795,7 @@ func (b *LocalBackend) stateMachine() {
 // a status update that predates the "I've shut down" update.
 func (b *LocalBackend) stopEngineAndWait() {
 	b.logf("stopEngineAndWait...")
-	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{}, nil)
+	b.e.Reconfig(&wgcfg.Config{}, &router.Config{}, &dns.Config{})
 	b.requestEngineStatusAndWait()
 	b.logf("stopEngineAndWait: done.")
 }
