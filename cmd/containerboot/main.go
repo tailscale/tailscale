@@ -53,6 +53,7 @@ import (
 	"io/fs"
 	"log"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -73,26 +74,33 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	cfg := &settings{
-		AuthKey:         defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
-		Hostname:        defaultEnv("TS_HOSTNAME", ""),
-		Routes:          defaultEnv("TS_ROUTES", ""),
-		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
-		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
-		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
-		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
-		UserspaceMode:   defaultBool("TS_USERSPACE", true),
-		StateDir:        defaultEnv("TS_STATE_DIR", ""),
-		AcceptDNS:       defaultBool("TS_ACCEPT_DNS", false),
-		KubeSecret:      defaultEnv("TS_KUBE_SECRET", "tailscale"),
-		SOCKSProxyAddr:  defaultEnv("TS_SOCKS5_SERVER", ""),
-		HTTPProxyAddr:   defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
-		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
-		AuthOnce:        defaultBool("TS_AUTH_ONCE", false),
-		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		AuthKey:          defaultEnvs([]string{"TS_AUTHKEY", "TS_AUTH_KEY"}, ""),
+		Hostname:         defaultEnv("TS_HOSTNAME", ""),
+		Routes:           defaultEnv("TS_ROUTES", ""),
+		ProxyTo:          defaultEnv("TS_DEST_IP", ""),
+		ServeEnabled:     defaultBool("TS_SERVE_ENABLED", false),
+		ServeTargetPort:  defaultEnv("TS_SERVE_TARGET_PORT", ""),
+		ServeTargetProto: defaultEnv("TS_SERVE_TARGET_PROTO", "http"),
+		DaemonExtraArgs:  defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
+		ExtraArgs:        defaultEnv("TS_EXTRA_ARGS", ""),
+		InKubernetes:     os.Getenv("KUBERNETES_SERVICE_HOST") != "",
+		UserspaceMode:    defaultBool("TS_USERSPACE", true),
+		StateDir:         defaultEnv("TS_STATE_DIR", ""),
+		AcceptDNS:        defaultBool("TS_ACCEPT_DNS", false),
+		KubeSecret:       defaultEnv("TS_KUBE_SECRET", "tailscale"),
+		SOCKSProxyAddr:   defaultEnv("TS_SOCKS5_SERVER", ""),
+		HTTPProxyAddr:    defaultEnv("TS_OUTBOUND_HTTP_PROXY_LISTEN", ""),
+		Socket:           defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
+		AuthOnce:         defaultBool("TS_AUTH_ONCE", false),
+		Root:             defaultEnv("TS_TEST_ONLY_ROOT", "/"),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
 		log.Fatal("TS_DEST_IP is not supported with TS_USERSPACE")
+	}
+
+	if cfg.ServeEnabled && cfg.UserspaceMode {
+		log.Fatal("TS_SERVE_ENABLED is not supported with TS_USERSPACE")
 	}
 
 	if !cfg.UserspaceMode {
@@ -261,6 +269,11 @@ authLoop:
 			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 		}
 		if n.NetMap != nil {
+			if cfg.ServeEnabled {
+				if err := setupServe(ctx, client, cfg); err != nil {
+					log.Fatalf("setting up serve: %v", err)
+				}
+			}
 			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
 				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
 					log.Fatalf("installing proxy rules: %v", err)
@@ -527,12 +540,76 @@ func installIPTablesRule(ctx context.Context, dstStr string, tsIPs []netip.Prefi
 	return nil
 }
 
+func setupServe(ctx context.Context, lc *tailscale.LocalClient, cfg *settings) error {
+	dstStr := cfg.ProxyTo
+	_, err := netip.ParseAddr(dstStr)
+	if err != nil {
+		return err
+	}
+	st, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if len(st.CertDomains) == 0 {
+		return errors.New("no cert domains, enable HTTPS")
+	}
+	domain := st.CertDomains[0]
+	hp := ipn.HostPort(domain + ":443")
+	proxyTarget, err := expandProxyTarget(cfg.ServeTargetProto + "://" + dstStr + ":" + cfg.ServeTargetPort)
+	if err != nil {
+		return fmt.Errorf("expanding proxy target: %w", err)
+	}
+	srvConfig := &ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{443: {HTTPS: true}},
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			hp: {
+				Handlers: map[string]*ipn.HTTPHandler{
+					"/": {Proxy: proxyTarget},
+				},
+			},
+		},
+	}
+	if err = lc.SetServeConfig(ctx, srvConfig); err != nil {
+		return fmt.Errorf("setting serve config: %w", err)
+	}
+	return nil
+}
+
+func expandProxyTarget(source string) (string, error) {
+	u, err := url.ParseRequestURI(source)
+	if err != nil {
+		return "", fmt.Errorf("parsing url: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https", "https+insecure":
+		// ok
+	default:
+		return "", fmt.Errorf("must be a URL starting with http://, https://, or https+insecure://")
+	}
+
+	port, err := strconv.ParseUint(u.Port(), 10, 16)
+	if port == 0 || err != nil {
+		return "", fmt.Errorf("invalid port %q: %w", u.Port(), err)
+	}
+
+	host := u.Hostname()
+	url := u.Scheme + "://" + host
+	if u.Port() != "" {
+		url += ":" + u.Port()
+	}
+	url += u.Path
+	return url, nil
+}
+
 // settings is all the configuration for containerboot.
 type settings struct {
 	AuthKey            string
 	Hostname           string
 	Routes             string
 	ProxyTo            string
+	ServeEnabled       bool
+	ServeTargetPort    string
+	ServeTargetProto   string
 	DaemonExtraArgs    string
 	ExtraArgs          string
 	InKubernetes       bool

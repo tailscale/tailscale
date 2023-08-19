@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,9 +272,11 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
-	AnnotationExpose   = "tailscale.com/expose"
-	AnnotationTags     = "tailscale.com/tags"
-	AnnotationHostname = "tailscale.com/hostname"
+	AnnotationExpose           = "tailscale.com/expose"
+	AnnotationTags             = "tailscale.com/tags"
+	AnnotationHostname         = "tailscale.com/hostname"
+	AnnotationServeEnabled     = "tailscale.com/serve-enabled"
+	AnnotationServeTargetProto = "tailscale.com/serve-target-proto"
 )
 
 // ServiceReconciler is a simple ControllerManagedBy example implementation.
@@ -625,6 +628,32 @@ func (a *ServiceReconciler) reconcileSTS(ctx context.Context, logger *zap.Sugare
 			Name:  "TS_HOSTNAME",
 			Value: hostname,
 		})
+	if e, ok := parentSvc.Annotations[AnnotationServeEnabled]; ok && e != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_SERVE_ENABLED",
+			Value: e,
+		})
+	}
+	// TODO(shayne): This is a bit of a hack which assumes that the first port
+	// is the one we want to target.
+	if len(parentSvc.Spec.Ports) > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_SERVE_TARGET_PORT",
+			Value: strconv.Itoa(int(parentSvc.Spec.Ports[0].Port)),
+		})
+	}
+	if p, ok := parentSvc.Annotations[AnnotationServeTargetProto]; ok {
+		p = strings.ToLower(p)
+		switch p {
+		case "http", "https", "https+insecure":
+		default:
+			return nil, fmt.Errorf("invalid annotation serve-target-proto: %q", p)
+		}
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_SERVE_TARGET_PROTO",
+			Value: p,
+		})
+	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
