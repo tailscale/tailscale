@@ -61,26 +61,25 @@ import (
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                  *http.Client // HTTP client used to talk to tailcontrol
-	dialer                 *tsdial.Dialer
-	dnsCache               *dnscache.Resolver
-	serverURL              string // URL of the tailcontrol server
-	clock                  tstime.Clock
-	lastPrintMap           time.Time
-	newDecompressor        func() (Decompressor, error)
-	keepAlive              bool
-	logf                   logger.Logf
-	netMon                 *netmon.Monitor // or nil
-	discoPubKey            key.DiscoPublic
-	getMachinePrivKey      func() (key.MachinePrivate, error)
-	debugFlags             []string
-	keepSharerAndUserSplit bool
-	skipIPForwardingCheck  bool
-	pinger                 Pinger
-	popBrowser             func(url string)             // or nil
-	c2nHandler             http.Handler                 // or nil
-	onClientVersion        func(*tailcfg.ClientVersion) // or nil
-	onControlTime          func(time.Time)              // or nil
+	httpc                 *http.Client // HTTP client used to talk to tailcontrol
+	dialer                *tsdial.Dialer
+	dnsCache              *dnscache.Resolver
+	serverURL             string // URL of the tailcontrol server
+	clock                 tstime.Clock
+	lastPrintMap          time.Time
+	newDecompressor       func() (Decompressor, error)
+	keepAlive             bool
+	logf                  logger.Logf
+	netMon                *netmon.Monitor // or nil
+	discoPubKey           key.DiscoPublic
+	getMachinePrivKey     func() (key.MachinePrivate, error)
+	debugFlags            []string
+	skipIPForwardingCheck bool
+	pinger                Pinger
+	popBrowser            func(url string)             // or nil
+	c2nHandler            http.Handler                 // or nil
+	onClientVersion       func(*tailcfg.ClientVersion) // or nil
+	onControlTime         func(time.Time)              // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -125,10 +124,6 @@ type Options struct {
 
 	// Status is called when there's a change in status.
 	Status func(Status)
-
-	// KeepSharerAndUserSplit controls whether the client
-	// understands Node.Sharer. If false, the Sharer is mapped to the User.
-	KeepSharerAndUserSplit bool
 
 	// SkipIPForwardingCheck declares that the host's IP
 	// forwarding works and should not be double-checked by the
@@ -244,28 +239,27 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:                  httpc,
-		getMachinePrivKey:      opts.GetMachinePrivateKey,
-		serverURL:              opts.ServerURL,
-		clock:                  opts.Clock,
-		logf:                   opts.Logf,
-		newDecompressor:        opts.NewDecompressor,
-		keepAlive:              opts.KeepAlive,
-		persist:                opts.Persist.View(),
-		authKey:                opts.AuthKey,
-		discoPubKey:            opts.DiscoPublicKey,
-		debugFlags:             opts.DebugFlags,
-		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
-		netMon:                 opts.NetMon,
-		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
-		pinger:                 opts.Pinger,
-		popBrowser:             opts.PopBrowserURL,
-		onClientVersion:        opts.OnClientVersion,
-		onControlTime:          opts.OnControlTime,
-		c2nHandler:             opts.C2NHandler,
-		dialer:                 opts.Dialer,
-		dnsCache:               dnsCache,
-		dialPlan:               opts.DialPlan,
+		httpc:                 httpc,
+		getMachinePrivKey:     opts.GetMachinePrivateKey,
+		serverURL:             opts.ServerURL,
+		clock:                 opts.Clock,
+		logf:                  opts.Logf,
+		newDecompressor:       opts.NewDecompressor,
+		keepAlive:             opts.KeepAlive,
+		persist:               opts.Persist.View(),
+		authKey:               opts.AuthKey,
+		discoPubKey:           opts.DiscoPublicKey,
+		debugFlags:            opts.DebugFlags,
+		netMon:                opts.NetMon,
+		skipIPForwardingCheck: opts.SkipIPForwardingCheck,
+		pinger:                opts.Pinger,
+		popBrowser:            opts.PopBrowserURL,
+		onClientVersion:       opts.OnClientVersion,
+		onControlTime:         opts.OnControlTime,
+		c2nHandler:            opts.C2NHandler,
+		dialer:                opts.Dialer,
+		dnsCache:              dnsCache,
+		dialPlan:              opts.DialPlan,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -994,7 +988,6 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	sess.logf = c.logf
 	sess.vlogf = vlogf
 	sess.machinePubKey = machinePubKey
-	sess.keepSharerAndUserSplit = c.keepSharerAndUserSplit
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
