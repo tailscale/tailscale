@@ -23,6 +23,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/interfaces"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 )
 
@@ -308,12 +309,20 @@ func dnsOrQuoteHostname(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
 }
 
 func ownerLogin(st *ipnstate.Status, ps *ipnstate.PeerStatus) string {
-	if ps.UserID.IsZero() {
+	// We prioritize showing the name of the sharer as the owner of a node if
+	// it's different from the node's user. This is less surprising: if user B
+	// from a company shares user's C node from the same company with user A who
+	// don't know user C, user A might be surprised to see user C listed in
+	// their netmap. We've historically (2021-01..2023-08) always shown the
+	// sharer's name in the UI. Perhaps we want to show both here? But the CLI's
+	// a bit space constrained.
+	uid := cmpx.Or(ps.AltSharerUserID, ps.UserID)
+	if uid.IsZero() {
 		return "-"
 	}
-	u, ok := st.User[ps.UserID]
+	u, ok := st.User[uid]
 	if !ok {
-		return fmt.Sprint(ps.UserID)
+		return fmt.Sprint(uid)
 	}
 	if i := strings.Index(u.LoginName, "@"); i != -1 {
 		return u.LoginName[:i+1]
