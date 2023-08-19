@@ -747,18 +747,19 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 		}
 		online := p.Online()
 		ps := &ipnstate.PeerStatus{
-			InNetworkMap: true,
-			UserID:       p.User(),
-			TailscaleIPs: tailscaleIPs,
-			HostName:     p.Hostinfo().Hostname(),
-			DNSName:      p.Name(),
-			OS:           p.Hostinfo().OS(),
-			LastSeen:     lastSeen,
-			Online:       online != nil && *online,
-			ShareeNode:   p.Hostinfo().ShareeNode(),
-			ExitNode:     p.StableID() != "" && p.StableID() == exitNodeID,
-			SSH_HostKeys: p.Hostinfo().SSH_HostKeys().AsSlice(),
-			Location:     p.Hostinfo().Location(),
+			InNetworkMap:    true,
+			UserID:          p.User(),
+			AltSharerUserID: p.Sharer(),
+			TailscaleIPs:    tailscaleIPs,
+			HostName:        p.Hostinfo().Hostname(),
+			DNSName:         p.Name(),
+			OS:              p.Hostinfo().OS(),
+			LastSeen:        lastSeen,
+			Online:          online != nil && *online,
+			ShareeNode:      p.Hostinfo().ShareeNode(),
+			ExitNode:        p.StableID() != "" && p.StableID() == exitNodeID,
+			SSH_HostKeys:    p.Hostinfo().SSH_HostKeys().AsSlice(),
+			Location:        p.Hostinfo().Location(),
 		}
 		peerStatusFromNode(ps, p)
 

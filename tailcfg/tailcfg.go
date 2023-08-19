@@ -21,6 +21,7 @@ import (
 	"tailscale.com/types/opt"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
 )
 
@@ -223,9 +224,9 @@ type Node struct {
 	// e.g. "host.tail-scale.ts.net."
 	Name string
 
-	// User is the user who created the node. If ACL tags are in
-	// use for the node then it doesn't reflect the ACL identity
-	// that the node is running as.
+	// User is the user who created the node. If ACL tags are in use for the
+	// node then it doesn't reflect the ACL identity that the node is running
+	// as.
 	User UserID
 
 	// Sharer, if non-zero, is the user who shared this node, if different than User.
@@ -386,11 +387,19 @@ func (n *Node) IsTagged() bool {
 	return len(n.Tags) > 0
 }
 
+// SharerOrUser Sharer if set, else User.
+func (n *Node) SharerOrUser() UserID {
+	return cmpx.Or(n.Sharer, n.User)
+}
+
 // IsTagged reports whether the node has any tags.
 func (n NodeView) IsTagged() bool { return n.ж.IsTagged() }
 
 // DisplayName wraps Node.DisplayName.
 func (n NodeView) DisplayName(forOwner bool) string { return n.ж.DisplayName(forOwner) }
+
+// SharerOrUser wraps Node.SharerOrUser.
+func (n NodeView) SharerOrUser() UserID { return n.ж.SharerOrUser() }
 
 // InitDisplayNames computes and populates n's display name
 // fields: n.ComputedName, n.computedHostIfDifferent, and

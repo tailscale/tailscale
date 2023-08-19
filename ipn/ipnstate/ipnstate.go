@@ -199,6 +199,10 @@ type PeerStatus struct {
 	OS      string // HostInfo.OS
 	UserID  tailcfg.UserID
 
+	// AltSharerUserID is the user who shared this node
+	// if it's different than UserID. Otherwise it's zero.
+	AltSharerUserID tailcfg.UserID `json:",omitempty"`
+
 	// TailscaleIPs are the IP addresses assigned to the node.
 	TailscaleIPs []netip.Addr
 
@@ -386,6 +390,9 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 	}
 	if v := st.UserID; v != 0 {
 		e.UserID = v
+	}
+	if v := st.AltSharerUserID; v != 0 {
+		e.AltSharerUserID = v
 	}
 	if v := st.TailscaleIPs; v != nil {
 		e.TailscaleIPs = v
