@@ -203,7 +203,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	for _, peer := range resp.Peers {
 		peer.InitDisplayNames(magicDNSSuffix)
 		if !peer.Sharer.IsZero() {
-			peer.User = peer.Sharer
+			ms.addUserProfile(peer.Sharer)
 		}
 		ms.addUserProfile(peer.User)
 	}
