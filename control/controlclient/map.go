@@ -28,11 +28,10 @@ import (
 // one MapRequest).
 type mapSession struct {
 	// Immutable fields.
-	privateNodeKey         key.NodePrivate
-	logf                   logger.Logf
-	vlogf                  logger.Logf
-	machinePubKey          key.MachinePublic
-	keepSharerAndUserSplit bool // see Options.KeepSharerAndUserSplit
+	privateNodeKey key.NodePrivate
+	logf           logger.Logf
+	vlogf          logger.Logf
+	machinePubKey  key.MachinePublic
 
 	// Fields storing state over the course of multiple MapResponses.
 	lastNode               *tailcfg.Node
@@ -204,11 +203,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	for _, peer := range resp.Peers {
 		peer.InitDisplayNames(magicDNSSuffix)
 		if !peer.Sharer.IsZero() {
-			if ms.keepSharerAndUserSplit {
-				ms.addUserProfile(peer.Sharer)
-			} else {
-				peer.User = peer.Sharer
-			}
+			peer.User = peer.Sharer
 		}
 		ms.addUserProfile(peer.User)
 	}
