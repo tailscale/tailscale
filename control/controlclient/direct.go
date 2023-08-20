@@ -54,6 +54,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/singleflight"
 	"tailscale.com/util/systemd"
@@ -1098,6 +1099,9 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
 		}
 
+		// Call Node.InitDisplayNames on any changed nodes.
+		initDisplayNames(cmpx.Or(resp.Node, sess.lastNode).View(), &resp)
+
 		nm := sess.netmapForResponse(&resp)
 		if nm.SelfNode == nil {
 			c.logf("MapResponse lacked node")
@@ -1122,14 +1126,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			c.lastPrintMap = now
 			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
 		}
-		newPersist := persist.AsStruct()
-		newPersist.NodeID = nm.SelfNode.StableID
-		newPersist.UserProfile = nm.UserProfiles[nm.User]
 
 		c.mu.Lock()
 		// If we are the ones who last updated persist, then we can update it
-		// again. Otherwise, we should not touch it.
-		if persist == c.persist {
+		// again. Otherwise, we should not touch it. Also, it's only worth
+		// change it if the Node info changed.
+		if persist == c.persist && resp.Node != nil {
+			newPersist := persist.AsStruct()
+			newPersist.NodeID = nm.SelfNode.StableID
+			newPersist.UserProfile = nm.UserProfiles[nm.User()]
+
 			c.persist = newPersist.View()
 			persist = c.persist
 		}
@@ -1142,6 +1148,28 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return ctx.Err()
 	}
 	return nil
+}
+
+// initDisplayNames mutates any tailcfg.Nodes in resp to populate their display names,
+// calling InitDisplayNames on each.
+//
+// The magicDNSSuffix used is based on selfNode.
+func initDisplayNames(selfNode tailcfg.NodeView, resp *tailcfg.MapResponse) {
+	if resp.Node == nil && len(resp.Peers) == 0 && len(resp.PeersChanged) == 0 {
+		// Fast path for a common case (delta updates). No need to compute
+		// magicDNSSuffix.
+		return
+	}
+	magicDNSSuffix := netmap.MagicDNSSuffixOfNodeName(selfNode.Name())
+	if resp.Node != nil {
+		resp.Node.InitDisplayNames(magicDNSSuffix)
+	}
+	for _, n := range resp.Peers {
+		n.InitDisplayNames(magicDNSSuffix)
+	}
+	for _, n := range resp.PeersChanged {
+		n.InitDisplayNames(magicDNSSuffix)
+	}
 }
 
 // decode JSON decodes the res.Body into v. If serverNoiseKey is not specified,
