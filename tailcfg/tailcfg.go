@@ -734,9 +734,12 @@ type NetInfo struct {
 	// the control plane.
 	DERPLatency map[string]float64 `json:",omitempty"`
 
-	// FirewallMode is the current firewall utility in use by router (iptables, nftables).
-	// FirewallMode ipt means iptables, nft means nftables. When it's empty user is not using
-	// our netfilter runners to manage firewall rules.
+	// FirewallMode encodes both which firewall mode was selected and why.
+	// It is Linux-specific (at least as of 2023-08-19) and is meant to help
+	// debug iptables-vs-nftables issues. The string is of the form
+	// "{nft,ift}-REASON", like "nft-forced" or "ipt-default". Empty means
+	// either not Linux or a configuration in which the host firewall rules
+	// are not managed by tailscaled.
 	FirewallMode string `json:",omitempty"`
 
 	// Update BasicallyEqual when adding fields.
