@@ -73,12 +73,11 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			// Not subject to tailnet lock.
 			continue
 		}
-		keySig := tkatype.MarshaledSignature(p.KeySignature().StringCopy()) // TODO(bradfitz,maisem): this is unfortunate. Change tkatype.MarshaledSignature to a string for viewer?
-		if len(keySig) == 0 {
+		if p.KeySignature().Len() == 0 {
 			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
 			mak.Set(&toDelete, i, true)
 		} else {
-			if err := b.tka.authority.NodeKeyAuthorized(p.Key(), keySig); err != nil {
+			if err := b.tka.authority.NodeKeyAuthorized(p.Key(), p.KeySignature().AsSlice()); err != nil {
 				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
 				mak.Set(&toDelete, i, true)
 			}
