@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"time"
 
-	"go4.org/mem"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -129,14 +128,16 @@ func (v *NodeView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v NodeView) ID() NodeID                               { return v.ж.ID }
-func (v NodeView) StableID() StableNodeID                   { return v.ж.StableID }
-func (v NodeView) Name() string                             { return v.ж.Name }
-func (v NodeView) User() UserID                             { return v.ж.User }
-func (v NodeView) Sharer() UserID                           { return v.ж.Sharer }
-func (v NodeView) Key() key.NodePublic                      { return v.ж.Key }
-func (v NodeView) KeyExpiry() time.Time                     { return v.ж.KeyExpiry }
-func (v NodeView) KeySignature() mem.RO                     { return mem.B(v.ж.KeySignature) }
+func (v NodeView) ID() NodeID             { return v.ж.ID }
+func (v NodeView) StableID() StableNodeID { return v.ж.StableID }
+func (v NodeView) Name() string           { return v.ж.Name }
+func (v NodeView) User() UserID           { return v.ж.User }
+func (v NodeView) Sharer() UserID         { return v.ж.Sharer }
+func (v NodeView) Key() key.NodePublic    { return v.ж.Key }
+func (v NodeView) KeyExpiry() time.Time   { return v.ж.KeyExpiry }
+func (v NodeView) KeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.KeySignature)
+}
 func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machine }
 func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
 func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
@@ -610,13 +611,15 @@ func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseView) User() UserView           { return v.ж.User.View() }
-func (v RegisterResponseView) Login() Login             { return v.ж.Login }
-func (v RegisterResponseView) NodeKeyExpired() bool     { return v.ж.NodeKeyExpired }
-func (v RegisterResponseView) MachineAuthorized() bool  { return v.ж.MachineAuthorized }
-func (v RegisterResponseView) AuthURL() string          { return v.ж.AuthURL }
-func (v RegisterResponseView) NodeKeySignature() mem.RO { return mem.B(v.ж.NodeKeySignature) }
-func (v RegisterResponseView) Error() string            { return v.ж.Error }
+func (v RegisterResponseView) User() UserView          { return v.ж.User.View() }
+func (v RegisterResponseView) Login() Login            { return v.ж.Login }
+func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
+func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
+func (v RegisterResponseView) AuthURL() string         { return v.ж.AuthURL }
+func (v RegisterResponseView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.NodeKeySignature)
+}
+func (v RegisterResponseView) Error() string { return v.ж.Error }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
@@ -749,8 +752,10 @@ func (v RegisterRequestView) Expiry() time.Time              { return v.ж.Expir
 func (v RegisterRequestView) Followup() string               { return v.ж.Followup }
 func (v RegisterRequestView) Hostinfo() HostinfoView         { return v.ж.Hostinfo.View() }
 func (v RegisterRequestView) Ephemeral() bool                { return v.ж.Ephemeral }
-func (v RegisterRequestView) NodeKeySignature() mem.RO       { return mem.B(v.ж.NodeKeySignature) }
-func (v RegisterRequestView) SignatureType() SignatureType   { return v.ж.SignatureType }
+func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.NodeKeySignature)
+}
+func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
 func (v RegisterRequestView) Timestamp() *time.Time {
 	if v.ж.Timestamp == nil {
 		return nil
@@ -759,8 +764,12 @@ func (v RegisterRequestView) Timestamp() *time.Time {
 	return &x
 }
 
-func (v RegisterRequestView) DeviceCert() mem.RO { return mem.B(v.ж.DeviceCert) }
-func (v RegisterRequestView) Signature() mem.RO  { return mem.B(v.ж.Signature) }
+func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
+	return views.ByteSliceOf(v.ж.DeviceCert)
+}
+func (v RegisterRequestView) Signature() views.ByteSlice[[]byte] {
+	return views.ByteSliceOf(v.ж.Signature)
+}
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {

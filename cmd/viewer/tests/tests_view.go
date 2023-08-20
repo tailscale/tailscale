@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/netip"
 
-	"go4.org/mem"
 	"tailscale.com/types/views"
 )
 
@@ -312,7 +311,7 @@ func (v StructWithSlicesView) Slice() views.Slice[string] { return views.SliceOf
 func (v StructWithSlicesView) Prefixes() views.Slice[netip.Prefix] {
 	return views.SliceOf(v.ж.Prefixes)
 }
-func (v StructWithSlicesView) Data() mem.RO { return mem.B(v.ж.Data) }
+func (v StructWithSlicesView) Data() views.ByteSlice[[]byte] { return views.ByteSliceOf(v.ж.Data) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _StructWithSlicesViewNeedsRegeneration = StructWithSlices(struct {
