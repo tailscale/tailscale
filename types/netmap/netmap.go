@@ -30,12 +30,22 @@ type NetworkMap struct {
 	PrivateKey key.NodePrivate
 	Expiry     time.Time
 	// Name is the DNS name assigned to this node.
-	Name          string
-	Addresses     []netip.Prefix // same as tailcfg.Node.Addresses (IP addresses of this Node directly)
+	// It is the MapResponse.Node.Name value and ends with a period.
+	Name string
+
+	// Addresses is SelfNode.Addresses. (IP addresses of this Node directly)
+	//
+	// TODO(bradfitz): remove this field and make this a method.
+	Addresses []netip.Prefix
+
+	// MachineStatus is either tailcfg.MachineAuthorized or tailcfg.MachineUnauthorized,
+	// depending on SelfNode.MachineAuthorized.
+	// TODO(bradfitz): remove this field and make it a method.
 	MachineStatus tailcfg.MachineStatus
-	MachineKey    key.MachinePublic
-	Peers         []tailcfg.NodeView // sorted by Node.ID
-	DNS           tailcfg.DNSConfig
+
+	MachineKey key.MachinePublic
+	Peers      []tailcfg.NodeView // sorted by Node.ID
+	DNS        tailcfg.DNSConfig
 	// TODO(maisem) : replace with View.
 	Hostinfo          tailcfg.Hostinfo
 	PacketFilter      []filter.Match
@@ -66,10 +76,6 @@ type NetworkMap struct {
 	// hash of the latest update message to tick through TKA).
 	TKAHead tka.AUMHash
 
-	// ACLs
-
-	User tailcfg.UserID
-
 	// Domain is the current Tailnet name.
 	Domain string
 
@@ -79,6 +85,15 @@ type NetworkMap struct {
 	DomainAuditLogID string
 
 	UserProfiles map[tailcfg.UserID]tailcfg.UserProfile
+}
+
+// User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns
+// 0.
+func (nm *NetworkMap) User() tailcfg.UserID {
+	if nm.SelfNode != nil {
+		return nm.SelfNode.User
+	}
+	return 0
 }
 
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.
@@ -111,16 +126,24 @@ func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer tailcfg.NodeView, o
 	return tailcfg.NodeView{}, false
 }
 
+// MagicDNSSuffix returns the domain's MagicDNS suffix (even if MagicDNS isn't
+// necessarily in use) of the provided Node.Name value.
+//
+// It will neither start nor end with a period.
+func MagicDNSSuffixOfNodeName(nodeName string) string {
+	name := strings.Trim(nodeName, ".")
+	if _, rest, ok := strings.Cut(name, "."); ok {
+		return rest
+	}
+	return name
+}
+
 // MagicDNSSuffix returns the domain's MagicDNS suffix (even if
 // MagicDNS isn't necessarily in use).
 //
 // It will neither start nor end with a period.
 func (nm *NetworkMap) MagicDNSSuffix() string {
-	name := strings.Trim(nm.Name, ".")
-	if _, rest, ok := strings.Cut(name, "."); ok {
-		return rest
-	}
-	return name
+	return MagicDNSSuffixOfNodeName(nm.Name)
 }
 
 // SelfCapabilities returns SelfNode.Capabilities if nm and nm.SelfNode are
@@ -171,12 +194,12 @@ func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ tailcfg.Node
 func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
 		nm.NodeKey.ShortString(), nm.MachineStatus)
-	login := nm.UserProfiles[nm.User].LoginName
+	login := nm.UserProfiles[nm.User()].LoginName
 	if login == "" {
-		if nm.User.IsZero() {
+		if nm.User().IsZero() {
 			login = "?"
 		} else {
-			login = fmt.Sprint(nm.User)
+			login = fmt.Sprint(nm.User())
 		}
 	}
 	fmt.Fprintf(buf, " u=%s", login)
@@ -189,7 +212,7 @@ func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 	if a.NodeKey != b.NodeKey ||
 		a.MachineStatus != b.MachineStatus ||
-		a.User != b.User ||
+		a.User() != b.User() ||
 		len(a.Addresses) != len(b.Addresses) {
 		return false
 	}
