@@ -20,7 +20,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -627,6 +627,158 @@ var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
 	AuthURL           string
 	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
+}{})
+
+// View returns a readonly view of RegisterResponseAuth.
+func (p *RegisterResponseAuth) View() RegisterResponseAuthView {
+	return RegisterResponseAuthView{ж: p}
+}
+
+// RegisterResponseAuthView provides a read-only view over RegisterResponseAuth.
+//
+// Its methods should only be called if `Valid()` returns true.
+type RegisterResponseAuthView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *RegisterResponseAuth
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v RegisterResponseAuthView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v RegisterResponseAuthView) AsStruct() *RegisterResponseAuth {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v RegisterResponseAuthView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x RegisterResponseAuth
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v RegisterResponseAuthView) Provider() string  { return v.ж.Provider }
+func (v RegisterResponseAuthView) LoginName() string { return v.ж.LoginName }
+func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
+	if v.ж.Oauth2Token == nil {
+		return nil
+	}
+	x := *v.ж.Oauth2Token
+	return &x
+}
+
+func (v RegisterResponseAuthView) AuthKey() string { return v.ж.AuthKey }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterResponseAuthViewNeedsRegeneration = RegisterResponseAuth(struct {
+	_           structs.Incomparable
+	Provider    string
+	LoginName   string
+	Oauth2Token *Oauth2Token
+	AuthKey     string
+}{})
+
+// View returns a readonly view of RegisterRequest.
+func (p *RegisterRequest) View() RegisterRequestView {
+	return RegisterRequestView{ж: p}
+}
+
+// RegisterRequestView provides a read-only view over RegisterRequest.
+//
+// Its methods should only be called if `Valid()` returns true.
+type RegisterRequestView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *RegisterRequest
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v RegisterRequestView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v RegisterRequestView) AsStruct() *RegisterRequest {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v RegisterRequestView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *RegisterRequestView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x RegisterRequest
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
+func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
+func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
+func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
+func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
+func (v RegisterRequestView) Expiry() time.Time              { return v.ж.Expiry }
+func (v RegisterRequestView) Followup() string               { return v.ж.Followup }
+func (v RegisterRequestView) Hostinfo() HostinfoView         { return v.ж.Hostinfo.View() }
+func (v RegisterRequestView) Ephemeral() bool                { return v.ж.Ephemeral }
+func (v RegisterRequestView) NodeKeySignature() mem.RO       { return mem.B(v.ж.NodeKeySignature) }
+func (v RegisterRequestView) SignatureType() SignatureType   { return v.ж.SignatureType }
+func (v RegisterRequestView) Timestamp() *time.Time {
+	if v.ж.Timestamp == nil {
+		return nil
+	}
+	x := *v.ж.Timestamp
+	return &x
+}
+
+func (v RegisterRequestView) DeviceCert() mem.RO { return mem.B(v.ж.DeviceCert) }
+func (v RegisterRequestView) Signature() mem.RO  { return mem.B(v.ж.Signature) }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
+	_                structs.Incomparable
+	Version          CapabilityVersion
+	NodeKey          key.NodePublic
+	OldNodeKey       key.NodePublic
+	NLKey            key.NLPublic
+	Auth             RegisterResponseAuth
+	Expiry           time.Time
+	Followup         string
+	Hostinfo         *Hostinfo
+	Ephemeral        bool
+	NodeKeySignature tkatype.MarshaledSignature
+	SignatureType    SignatureType
+	Timestamp        *time.Time
+	DeviceCert       []byte
+	Signature        []byte
 }{})
 
 // View returns a readonly view of DERPHomeParams.

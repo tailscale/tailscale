@@ -286,6 +286,69 @@ var _RegisterResponseCloneNeedsRegeneration = RegisterResponse(struct {
 	Error             string
 }{})
 
+// Clone makes a deep copy of RegisterResponseAuth.
+// The result aliases no memory with the original.
+func (src *RegisterResponseAuth) Clone() *RegisterResponseAuth {
+	if src == nil {
+		return nil
+	}
+	dst := new(RegisterResponseAuth)
+	*dst = *src
+	if dst.Oauth2Token != nil {
+		dst.Oauth2Token = new(Oauth2Token)
+		*dst.Oauth2Token = *src.Oauth2Token
+	}
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterResponseAuthCloneNeedsRegeneration = RegisterResponseAuth(struct {
+	_           structs.Incomparable
+	Provider    string
+	LoginName   string
+	Oauth2Token *Oauth2Token
+	AuthKey     string
+}{})
+
+// Clone makes a deep copy of RegisterRequest.
+// The result aliases no memory with the original.
+func (src *RegisterRequest) Clone() *RegisterRequest {
+	if src == nil {
+		return nil
+	}
+	dst := new(RegisterRequest)
+	*dst = *src
+	dst.Auth = *src.Auth.Clone()
+	dst.Hostinfo = src.Hostinfo.Clone()
+	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
+	if dst.Timestamp != nil {
+		dst.Timestamp = new(time.Time)
+		*dst.Timestamp = *src.Timestamp
+	}
+	dst.DeviceCert = append(src.DeviceCert[:0:0], src.DeviceCert...)
+	dst.Signature = append(src.Signature[:0:0], src.Signature...)
+	return dst
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterRequestCloneNeedsRegeneration = RegisterRequest(struct {
+	_                structs.Incomparable
+	Version          CapabilityVersion
+	NodeKey          key.NodePublic
+	OldNodeKey       key.NodePublic
+	NLKey            key.NLPublic
+	Auth             RegisterResponseAuth
+	Expiry           time.Time
+	Followup         string
+	Hostinfo         *Hostinfo
+	Ephemeral        bool
+	NodeKeySignature tkatype.MarshaledSignature
+	SignatureType    SignatureType
+	Timestamp        *time.Time
+	DeviceCert       []byte
+	Signature        []byte
+}{})
+
 // Clone makes a deep copy of DERPHomeParams.
 // The result aliases no memory with the original.
 func (src *DERPHomeParams) Clone() *DERPHomeParams {
@@ -530,7 +593,7 @@ var _UserProfileCloneNeedsRegeneration = UserProfile(struct {
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
+// where T is one of User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
 	case *User:
@@ -593,6 +656,24 @@ func Clone(dst, src any) bool {
 			*dst = *src.Clone()
 			return true
 		case **RegisterResponse:
+			*dst = src.Clone()
+			return true
+		}
+	case *RegisterResponseAuth:
+		switch dst := dst.(type) {
+		case *RegisterResponseAuth:
+			*dst = *src.Clone()
+			return true
+		case **RegisterResponseAuth:
+			*dst = src.Clone()
+			return true
+		}
+	case *RegisterRequest:
+		switch dst := dst.(type) {
+		case *RegisterRequest:
+			*dst = *src.Clone()
+			return true
+		case **RegisterRequest:
 			*dst = src.Clone()
 			return true
 		}
