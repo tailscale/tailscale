@@ -3,7 +3,7 @@
 
 package tailcfg
 
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
+//go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
 
 import (
 	"bytes"
@@ -949,6 +949,16 @@ func (st SignatureType) String() string {
 	}
 }
 
+// RegisterResponseAuth is the authentication information returned by the server
+// in response to a RegisterRequest.
+type RegisterResponseAuth struct {
+	_ structs.Incomparable
+	// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
+	Provider, LoginName string
+	Oauth2Token         *Oauth2Token
+	AuthKey             string
+}
+
 // RegisterRequest is sent by a client to register the key for a node.
 // It is encoded to JSON, encrypted with golang.org/x/crypto/nacl/box,
 // using the local machine key, and sent to:
@@ -967,13 +977,7 @@ type RegisterRequest struct {
 	NodeKey    key.NodePublic
 	OldNodeKey key.NodePublic
 	NLKey      key.NLPublic
-	Auth       struct {
-		_ structs.Incomparable
-		// One of Provider/LoginName, Oauth2Token, or AuthKey is set.
-		Provider, LoginName string
-		Oauth2Token         *Oauth2Token
-		AuthKey             string
-	}
+	Auth       RegisterResponseAuth
 	// Expiry optionally specifies the requested key expiry.
 	// The server policy may override.
 	// As a special case, if Expiry is in the past and NodeKey is
@@ -1000,29 +1004,6 @@ type RegisterRequest struct {
 	Timestamp     *time.Time    `json:",omitempty"` // creation time of request to prevent replay
 	DeviceCert    []byte        `json:",omitempty"` // X.509 certificate for client device
 	Signature     []byte        `json:",omitempty"` // as described by SignatureType
-}
-
-// Clone makes a deep copy of RegisterRequest.
-// The result aliases no memory with the original.
-//
-// TODO: extend cmd/cloner to generate this method.
-func (req *RegisterRequest) Clone() *RegisterRequest {
-	if req == nil {
-		return nil
-	}
-	res := new(RegisterRequest)
-	*res = *req
-	if res.Hostinfo != nil {
-		res.Hostinfo = res.Hostinfo.Clone()
-	}
-	if res.Auth.Oauth2Token != nil {
-		tok := *res.Auth.Oauth2Token
-		res.Auth.Oauth2Token = &tok
-	}
-	res.DeviceCert = append(res.DeviceCert[:0:0], res.DeviceCert...)
-	res.Signature = append(res.Signature[:0:0], res.Signature...)
-	res.NodeKeySignature = append(res.NodeKeySignature[:0:0], res.NodeKeySignature...)
-	return res
 }
 
 // RegisterResponse is returned by the server in response to a RegisterRequest.
