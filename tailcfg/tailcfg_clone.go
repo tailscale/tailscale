@@ -6,12 +6,14 @@
 package tailcfg
 
 import (
+	"maps"
 	"net/netip"
 	"time"
 
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/structs"
 	"tailscale.com/types/tkatype"
 )
@@ -54,17 +56,14 @@ func (src *Node) Clone() *Node {
 	dst.Tags = append(src.Tags[:0:0], src.Tags...)
 	dst.PrimaryRoutes = append(src.PrimaryRoutes[:0:0], src.PrimaryRoutes...)
 	if dst.LastSeen != nil {
-		dst.LastSeen = new(time.Time)
-		*dst.LastSeen = *src.LastSeen
+		dst.LastSeen = ptr.To(*src.LastSeen)
 	}
 	if dst.Online != nil {
-		dst.Online = new(bool)
-		*dst.Online = *src.Online
+		dst.Online = ptr.To(*src.Online)
 	}
 	dst.Capabilities = append(src.Capabilities[:0:0], src.Capabilities...)
 	if dst.SelfNodeV4MasqAddrForThisPeer != nil {
-		dst.SelfNodeV4MasqAddrForThisPeer = new(netip.Addr)
-		*dst.SelfNodeV4MasqAddrForThisPeer = *src.SelfNodeV4MasqAddrForThisPeer
+		dst.SelfNodeV4MasqAddrForThisPeer = ptr.To(*src.SelfNodeV4MasqAddrForThisPeer)
 	}
 	return dst
 }
@@ -118,8 +117,7 @@ func (src *Hostinfo) Clone() *Hostinfo {
 	dst.NetInfo = src.NetInfo.Clone()
 	dst.SSH_HostKeys = append(src.SSH_HostKeys[:0:0], src.SSH_HostKeys...)
 	if dst.Location != nil {
-		dst.Location = new(Location)
-		*dst.Location = *src.Location
+		dst.Location = ptr.To(*src.Location)
 	}
 	return dst
 }
@@ -170,12 +168,7 @@ func (src *NetInfo) Clone() *NetInfo {
 	}
 	dst := new(NetInfo)
 	*dst = *src
-	if dst.DERPLatency != nil {
-		dst.DERPLatency = map[string]float64{}
-		for k, v := range src.DERPLatency {
-			dst.DERPLatency[k] = v
-		}
-	}
+	dst.DERPLatency = maps.Clone(src.DERPLatency)
 	return dst
 }
 
@@ -295,8 +288,7 @@ func (src *RegisterResponseAuth) Clone() *RegisterResponseAuth {
 	dst := new(RegisterResponseAuth)
 	*dst = *src
 	if dst.Oauth2Token != nil {
-		dst.Oauth2Token = new(Oauth2Token)
-		*dst.Oauth2Token = *src.Oauth2Token
+		dst.Oauth2Token = ptr.To(*src.Oauth2Token)
 	}
 	return dst
 }
@@ -322,8 +314,7 @@ func (src *RegisterRequest) Clone() *RegisterRequest {
 	dst.Hostinfo = src.Hostinfo.Clone()
 	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	if dst.Timestamp != nil {
-		dst.Timestamp = new(time.Time)
-		*dst.Timestamp = *src.Timestamp
+		dst.Timestamp = ptr.To(*src.Timestamp)
 	}
 	dst.DeviceCert = append(src.DeviceCert[:0:0], src.DeviceCert...)
 	dst.Signature = append(src.Signature[:0:0], src.Signature...)
@@ -357,12 +348,7 @@ func (src *DERPHomeParams) Clone() *DERPHomeParams {
 	}
 	dst := new(DERPHomeParams)
 	*dst = *src
-	if dst.RegionScore != nil {
-		dst.RegionScore = map[int]float64{}
-		for k, v := range src.RegionScore {
-			dst.RegionScore[k] = v
-		}
-	}
+	dst.RegionScore = maps.Clone(src.RegionScore)
 	return dst
 }
 
@@ -456,19 +442,13 @@ func (src *SSHRule) Clone() *SSHRule {
 	dst := new(SSHRule)
 	*dst = *src
 	if dst.RuleExpires != nil {
-		dst.RuleExpires = new(time.Time)
-		*dst.RuleExpires = *src.RuleExpires
+		dst.RuleExpires = ptr.To(*src.RuleExpires)
 	}
 	dst.Principals = make([]*SSHPrincipal, len(src.Principals))
 	for i := range dst.Principals {
 		dst.Principals[i] = src.Principals[i].Clone()
 	}
-	if dst.SSHUsers != nil {
-		dst.SSHUsers = map[string]string{}
-		for k, v := range src.SSHUsers {
-			dst.SSHUsers[k] = v
-		}
-	}
+	dst.SSHUsers = maps.Clone(src.SSHUsers)
 	dst.Action = src.Action.Clone()
 	return dst
 }
@@ -491,8 +471,7 @@ func (src *SSHAction) Clone() *SSHAction {
 	*dst = *src
 	dst.Recorders = append(src.Recorders[:0:0], src.Recorders...)
 	if dst.OnRecordingFailure != nil {
-		dst.OnRecordingFailure = new(SSHRecorderFailureAction)
-		*dst.OnRecordingFailure = *src.OnRecordingFailure
+		dst.OnRecordingFailure = ptr.To(*src.OnRecordingFailure)
 	}
 	return dst
 }
