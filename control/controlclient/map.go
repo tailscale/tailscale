@@ -67,6 +67,9 @@ func newMapSession(privateNodeKey key.NodePrivate) *mapSession {
 }
 
 func (ms *mapSession) addUserProfile(userID tailcfg.UserID) {
+	if userID == 0 {
+		return
+	}
 	nm := ms.netMapBuilding
 	if _, dup := nm.UserProfiles[userID]; dup {
 		// Already populated it from a previous peer.
@@ -184,7 +187,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		nm.Expiry = node.KeyExpiry
 		nm.Name = node.Name
 		nm.Addresses = filterSelfAddresses(node.Addresses)
-		nm.User = node.User
 		if node.Hostinfo.Valid() {
 			nm.Hostinfo = *node.Hostinfo.AsStruct()
 		}
@@ -195,16 +197,9 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 	}
 
-	ms.addUserProfile(nm.User)
-	magicDNSSuffix := nm.MagicDNSSuffix()
-	if nm.SelfNode != nil {
-		nm.SelfNode.InitDisplayNames(magicDNSSuffix)
-	}
+	ms.addUserProfile(nm.User())
 	for _, peer := range resp.Peers {
-		peer.InitDisplayNames(magicDNSSuffix)
-		if !peer.Sharer.IsZero() {
-			ms.addUserProfile(peer.Sharer)
-		}
+		ms.addUserProfile(peer.Sharer)
 		ms.addUserProfile(peer.User)
 	}
 	if DevKnob.ForceProxyDNS() {

@@ -446,10 +446,11 @@ func TestNetmapForResponse(t *testing.T) {
 			ComputedNameWithHost: "foo",
 		}
 		ms := newTestMapSession(t)
-
-		nm1 := ms.netmapForResponse(&tailcfg.MapResponse{
+		mapRes := &tailcfg.MapResponse{
 			Node: someNode,
-		})
+		}
+		initDisplayNames(mapRes.Node.View(), mapRes)
+		nm1 := ms.netmapForResponse(mapRes)
 		if nm1.SelfNode == nil {
 			t.Fatal("nil Node in 1st netmap")
 		}

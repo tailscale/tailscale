@@ -703,7 +703,7 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			ss.InNetworkMap = true
 			ss.HostName = b.netMap.Hostinfo.Hostname
 			ss.DNSName = b.netMap.Name
-			ss.UserID = b.netMap.User
+			ss.UserID = b.netMap.User()
 			if sn := b.netMap.SelfNode; sn != nil {
 				peerStatusFromNode(ss, sn.View())
 				if c := sn.Capabilities; len(c) > 0 {
@@ -2781,7 +2781,7 @@ func (b *LocalBackend) setPrefsLockedOnEntry(caller string, newp *ipn.Prefs) ipn
 		}
 	}
 	if netMap != nil {
-		newProfile := netMap.UserProfiles[netMap.User]
+		newProfile := netMap.UserProfiles[netMap.User()]
 		if newLoginName := newProfile.LoginName; newLoginName != "" {
 			if !oldp.Persist().Valid() {
 				b.logf("active login: %s", newLoginName)
@@ -3972,7 +3972,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.dialer.SetNetMap(nm)
 	var login string
 	if nm != nil {
-		login = cmpx.Or(nm.UserProfiles[nm.User].LoginName, "<missing-profile>")
+		login = cmpx.Or(nm.UserProfiles[nm.User()].LoginName, "<missing-profile>")
 	}
 	b.netMap = nm
 	if login != b.activeLogin {
@@ -4323,7 +4323,7 @@ func (b *LocalBackend) peerIsTaildropTargetLocked(p tailcfg.NodeView) bool {
 	if b.netMap == nil || !p.Valid() {
 		return false
 	}
-	if b.netMap.User == p.User() {
+	if b.netMap.User() == p.User() {
 		return true
 	}
 	if p.Addresses().Len() > 0 &&
