@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
@@ -639,7 +640,8 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, s.logf)
 	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })
