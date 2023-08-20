@@ -11,6 +11,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logid"
+	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of Config.
@@ -55,8 +56,7 @@ func (src *Peer) Clone() *Peer {
 	*dst = *src
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	if dst.V4MasqAddr != nil {
-		dst.V4MasqAddr = new(netip.Addr)
-		*dst.V4MasqAddr = *src.V4MasqAddr
+		dst.V4MasqAddr = ptr.To(*src.V4MasqAddr)
 	}
 	return dst
 }
