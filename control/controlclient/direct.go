@@ -93,7 +93,7 @@ type Direct struct {
 	persist      persist.PersistView
 	authKey      string
 	tryingNewKey key.NodePrivate
-	expiry       *time.Time
+	expiry       time.Time         // or zero value if none/unknown
 	hostinfo     *tailcfg.Hostinfo // always non-nil
 	netinfo      *tailcfg.NetInfo
 	endpoints    []tailcfg.Endpoint
@@ -438,7 +438,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
-	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
+	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
 	c.mu.Unlock()
 
 	machinePrivKey, err := c.getMachinePrivKey()
@@ -1077,17 +1077,16 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			metricMapResponseMapDelta.Add(1)
 		}
 
-		hasDebug := resp.Debug != nil
-		if hasDebug {
-			if code := resp.Debug.Exit; code != nil {
+		if debug := resp.Debug; debug != nil {
+			if code := debug.Exit; code != nil {
 				c.logf("exiting process with status %v per controlplane", *code)
 				os.Exit(*code)
 			}
-			if resp.Debug.DisableLogTail {
+			if debug.DisableLogTail {
 				logtail.Disable()
 				envknob.SetNoLogsNoSupport()
 			}
-			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
+			if sleep := time.Duration(debug.SleepSeconds * float64(time.Second)); sleep > 0 {
 				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep, c.clock); err != nil {
 					return err
 				}
@@ -1134,7 +1133,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 			c.persist = newPersist.View()
 			persist = c.persist
 		}
-		c.expiry = &nm.Expiry
+		c.expiry = nm.Expiry
 		c.mu.Unlock()
 
 		nu.UpdateFullNetmap(nm)
