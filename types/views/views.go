@@ -6,9 +6,12 @@
 package views
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"maps"
+
+	"go4.org/mem"
 )
 
 func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
@@ -19,6 +22,83 @@ func unmarshalSliceFromJSON[T any](b []byte, x *[]T) error {
 		return nil
 	}
 	return json.Unmarshal(b, x)
+}
+
+// ByteSlice is a read-only accessor for types that are backed by a []byte.
+type ByteSlice[T ~[]byte] struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж T
+}
+
+// ByteSliceOf returns a ByteSlice for the provided slice.
+func ByteSliceOf[T ~[]byte](x T) ByteSlice[T] {
+	return ByteSlice[T]{x}
+}
+
+// Len returns the length of the slice.
+func (v ByteSlice[T]) Len() int {
+	return len(v.ж)
+}
+
+// IsNil reports whether the underlying slice is nil.
+func (v ByteSlice[T]) IsNil() bool {
+	return v.ж == nil
+}
+
+// Mem returns a read-only view of the underlying slice.
+func (v ByteSlice[T]) Mem() mem.RO {
+	return mem.B(v.ж)
+}
+
+// Equal reports whether the underlying slice is equal to b.
+func (v ByteSlice[T]) Equal(b T) bool {
+	return bytes.Equal(v.ж, b)
+}
+
+// EqualView reports whether the underlying slice is equal to b.
+func (v ByteSlice[T]) EqualView(b ByteSlice[T]) bool {
+	return bytes.Equal(v.ж, b.ж)
+}
+
+// AsSlice returns a copy of the underlying slice.
+func (v ByteSlice[T]) AsSlice() T {
+	return v.AppendTo(v.ж[:0:0])
+}
+
+// AppendTo appends the underlying slice values to dst.
+func (v ByteSlice[T]) AppendTo(dst T) T {
+	return append(dst, v.ж...)
+}
+
+// LenIter returns a slice the same length as the v.Len().
+// The caller can then range over it to get the valid indexes.
+// It does not allocate.
+func (v ByteSlice[T]) LenIter() []struct{} { return make([]struct{}, len(v.ж)) }
+
+// At returns the byte at index `i` of the slice.
+func (v ByteSlice[T]) At(i int) byte { return v.ж[i] }
+
+// SliceFrom returns v[i:].
+func (v ByteSlice[T]) SliceFrom(i int) ByteSlice[T] { return ByteSlice[T]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v ByteSlice[T]) SliceTo(i int) ByteSlice[T] { return ByteSlice[T]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v ByteSlice[T]) Slice(i, j int) ByteSlice[T] { return ByteSlice[T]{v.ж[i:j]} }
+
+// MarshalJSON implements json.Marshaler.
+func (v ByteSlice[T]) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *ByteSlice[T]) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	return json.Unmarshal(b, &v.ж)
 }
 
 // StructView represents the corresponding StructView of a Viewable. The concrete types are
@@ -47,8 +127,9 @@ func SliceOfViews[T ViewCloner[T, V], V StructView[T]](x []T) SliceView[T, V] {
 	return SliceView[T, V]{x}
 }
 
-// SliceView is a read-only wrapper around a struct which should only be exposed
-// as a View.
+// SliceView wraps []T to provide accessors which return an immutable view V of
+// T. It is used to provide the equivalent of SliceOf([]V) without having to
+// allocate []V from []T.
 type SliceView[T ViewCloner[T, V], V StructView[T]] struct {
 	// ж is the underlying mutable value, named with a hard-to-type
 	// character that looks pointy like a pointer.
