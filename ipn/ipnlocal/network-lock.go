@@ -73,8 +73,8 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			// Not subject to tailnet lock.
 			continue
 		}
-		keySig := tkatype.MarshaledSignature(p.KeySignature().StringCopy()) // TODO(bradfitz,maisem): this is unfortunate. Change tkatype.MarshaledSignature to a string for viewer?
-		if len(keySig) == 0 {
+		keySig := p.KeySignature()
+		if keySig == "" {
 			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
 			mak.Set(&toDelete, i, true)
 		} else {
@@ -965,7 +965,7 @@ func (b *LocalBackend) NetworkLockWrapPreauthKey(preauthKey string, tkaKey key.N
 	}
 
 	b.logf("Generated network-lock credential signature using %s", tkaKey.Public().CLIString())
-	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString(sig.Serialize()), tkaSuffixEncoder.EncodeToString(priv)), nil
+	return fmt.Sprintf("%s--TL%s-%s", preauthKey, tkaSuffixEncoder.EncodeToString([]byte(sig.Serialize())), tkaSuffixEncoder.EncodeToString(priv)), nil
 }
 
 // NetworkLockVerifySigningDeeplink asks the authority to verify the given deeplink

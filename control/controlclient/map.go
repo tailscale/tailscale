@@ -330,7 +330,7 @@ func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
 				if v := ec.Capabilities; v != nil {
 					n.Capabilities = *v
 				}
-				if v := ec.KeySignature; v != nil {
+				if v := ec.KeySignature; v != "" {
 					n.KeySignature = v
 				}
 			}

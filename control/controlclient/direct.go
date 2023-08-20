@@ -443,10 +443,10 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	machinePrivKey, err := c.getMachinePrivKey()
 	if err != nil {
-		return false, "", nil, fmt.Errorf("getMachinePrivKey: %w", err)
+		return false, "", "", fmt.Errorf("getMachinePrivKey: %w", err)
 	}
 	if machinePrivKey.IsZero() {
-		return false, "", nil, errors.New("getMachinePrivKey returned zero key")
+		return false, "", "", errors.New("getMachinePrivKey returned zero key")
 	}
 
 	regen := opt.Regen
@@ -468,7 +468,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	if serverKey.IsZero() {
 		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
 		if err != nil {
-			return regen, opt.URL, nil, err
+			return regen, opt.URL, "", err
 		}
 		c.logf("control server key from %s: ts2021=%s, legacy=%v", c.serverURL, keys.PublicKey.ShortString(), keys.LegacyPublicKey.ShortString())
 
@@ -511,13 +511,13 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	if tryingNewKey.IsZero() {
 		if opt.Logout {
-			return false, "", nil, errors.New("no nodekey to log out")
+			return false, "", "", errors.New("no nodekey to log out")
 		}
 		log.Fatalf("tryingNewKey is empty, give up")
 	}
 
 	var nodeKeySignature tkatype.MarshaledSignature
-	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != nil {
+	if !oldNodeKey.IsZero() && opt.OldNodeKeySignature != "" {
 		if nodeKeySignature, err = resignNKS(persist.NetworkLockKey, tryingNewKey.Public(), opt.OldNodeKeySignature); err != nil {
 			c.logf("Failed re-signing node-key signature: %v", err)
 		}
@@ -527,7 +527,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		// generate a tailnet-lock signature.
 		nk, err := tryingNewKey.Public().MarshalBinary()
 		if err != nil {
-			return false, "", nil, fmt.Errorf("marshalling node-key: %w", err)
+			return false, "", "", fmt.Errorf("marshalling node-key: %w", err)
 		}
 		sig := &tka.NodeKeySignature{
 			SigKind: tka.SigRotation,
@@ -541,7 +541,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	if backendLogID == "" {
 		err = errors.New("hostinfo: BackendLogID missing")
-		return regen, opt.URL, nil, err
+		return regen, opt.URL, "", err
 	}
 	now := c.clock.Now().Round(time.Second)
 	request := tailcfg.RegisterRequest{
@@ -596,33 +596,33 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		request.Version = tailcfg.CurrentCapabilityVersion
 		httpc, err = c.getNoiseClient()
 		if err != nil {
-			return regen, opt.URL, nil, fmt.Errorf("getNoiseClient: %w", err)
+			return regen, opt.URL, "", fmt.Errorf("getNoiseClient: %w", err)
 		}
 		url = fmt.Sprintf("%s/machine/register", c.serverURL)
 		url = strings.Replace(url, "http:", "https:", 1)
 	}
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
-		return regen, opt.URL, nil, err
+		return regen, opt.URL, "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyData))
 	if err != nil {
-		return regen, opt.URL, nil, err
+		return regen, opt.URL, "", err
 	}
 	res, err := httpc.Do(req)
 	if err != nil {
-		return regen, opt.URL, nil, fmt.Errorf("register request: %w", err)
+		return regen, opt.URL, "", fmt.Errorf("register request: %w", err)
 	}
 	if res.StatusCode != 200 {
 		msg, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		return regen, opt.URL, nil, fmt.Errorf("register request: http %d: %.200s",
+		return regen, opt.URL, "", fmt.Errorf("register request: http %d: %.200s",
 			res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	resp := tailcfg.RegisterResponse{}
 	if err := decode(res, &resp, serverKey, serverNoiseKey, machinePrivKey); err != nil {
 		c.logf("error decoding RegisterResponse with server key %s and machine key %s: %v", serverKey, machinePrivKey.Public(), err)
-		return regen, opt.URL, nil, fmt.Errorf("register request: %v", err)
+		return regen, opt.URL, "", fmt.Errorf("register request: %v", err)
 	}
 	if debugRegister() {
 		j, _ := json.MarshalIndent(resp, "", "\t")
@@ -634,7 +634,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 		resp.NodeKeyExpired, resp.MachineAuthorized, resp.AuthURL != "")
 
 	if resp.Error != "" {
-		return false, "", nil, UserVisibleError(resp.Error)
+		return false, "", "", UserVisibleError(resp.Error)
 	}
 	if len(resp.NodeKeySignature) > 0 {
 		return true, "", resp.NodeKeySignature, nil
@@ -642,11 +642,11 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 
 	if resp.NodeKeyExpired {
 		if regen {
-			return true, "", nil, fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
+			return true, "", "", fmt.Errorf("weird: regen=true but server says NodeKeyExpired: %v", request.NodeKey)
 		}
 		c.logf("server reports new node key %v has expired",
 			request.NodeKey.ShortString())
-		return true, "", nil, nil
+		return true, "", "", nil
 	}
 	if resp.Login.Provider != "" {
 		persist.Provider = resp.Login.Provider
@@ -682,12 +682,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	c.mu.Unlock()
 
 	if err != nil {
-		return regen, "", nil, err
+		return regen, "", "", err
 	}
 	if ctx.Err() != nil {
-		return regen, "", nil, ctx.Err()
+		return regen, "", "", ctx.Err()
 	}
-	return false, resp.AuthURL, nil, nil
+	return false, resp.AuthURL, "", nil
 }
 
 // resignNKS re-signs a node-key signature for a new node-key.
@@ -703,12 +703,12 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.MarshaledSignature) (tkatype.MarshaledSignature, error) {
 	var oldSig tka.NodeKeySignature
 	if err := oldSig.Unserialize(oldNKS); err != nil {
-		return nil, fmt.Errorf("decoding NKS: %w", err)
+		return "", fmt.Errorf("decoding NKS: %w", err)
 	}
 
 	nk, err := nodeKey.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("marshalling node-key: %w", err)
+		return "", fmt.Errorf("marshalling node-key: %w", err)
 	}
 
 	if bytes.Equal(nk, oldSig.Pubkey) {
@@ -723,7 +723,7 @@ func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 		Nested:  &oldSig,
 	}
 	if newSig.Signature, err = priv.SignNKS(newSig.SigHash()); err != nil {
-		return nil, fmt.Errorf("signing NKS: %w", err)
+		return "", fmt.Errorf("signing NKS: %w", err)
 	}
 
 	return newSig.Serialize(), nil
@@ -1819,7 +1819,7 @@ func decodeWrappedAuthkey(key string, logf logger.Logf) (authKey string, isWrapp
 	}
 
 	sig = new(tka.NodeKeySignature)
-	if err := sig.Unserialize([]byte(rawSig)); err != nil {
+	if err := sig.Unserialize(tkatype.MarshaledSignature(rawSig)); err != nil {
 		logf("decoding wrapped auth-key: signature: %v", err)
 		return key, false, nil, nil
 	}

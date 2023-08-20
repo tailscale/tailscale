@@ -561,7 +561,7 @@ func TestTKAFilterNetmap(t *testing.T) {
 	nm := &netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
 			{ID: 1, Key: n1.Public(), KeySignature: n1GoodSig.Serialize()},
-			{ID: 2, Key: n2.Public(), KeySignature: nil},                   // missing sig
+			{ID: 2, Key: n2.Public(), KeySignature: ""},                    // missing sig
 			{ID: 3, Key: n3.Public(), KeySignature: n1GoodSig.Serialize()}, // someone elses sig
 			{ID: 4, Key: n4.Public(), KeySignature: n4Sig.Serialize()},     // messed-up signature
 			{ID: 5, Key: n5.Public(), KeySignature: n5GoodSig.Serialize()},
@@ -987,7 +987,7 @@ func TestTKAAffectedSigs(t *testing.T) {
 				if len(sigs) != 1 {
 					t.Fatalf("len(sigs) = %d, want 1", len(sigs))
 				}
-				if !bytes.Equal(s.Serialize(), sigs[0]) {
+				if s.Serialize() != sigs[0] {
 					t.Errorf("unexpected signature: got %v, want %v", sigs[0], s.Serialize())
 				}
 			}

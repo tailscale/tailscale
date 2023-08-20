@@ -46,7 +46,6 @@ func (src *Node) Clone() *Node {
 	}
 	dst := new(Node)
 	*dst = *src
-	dst.KeySignature = append(src.KeySignature[:0:0], src.KeySignature...)
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.AllowedIPs = append(src.AllowedIPs[:0:0], src.AllowedIPs...)
 	dst.Endpoints = append(src.Endpoints[:0:0], src.Endpoints...)
@@ -271,7 +270,6 @@ func (src *RegisterResponse) Clone() *RegisterResponse {
 	dst := new(RegisterResponse)
 	*dst = *src
 	dst.User = *src.User.Clone()
-	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	return dst
 }
 
@@ -320,7 +318,6 @@ func (src *RegisterRequest) Clone() *RegisterRequest {
 	*dst = *src
 	dst.Auth = *src.Auth.Clone()
 	dst.Hostinfo = src.Hostinfo.Clone()
-	dst.NodeKeySignature = append(src.NodeKeySignature[:0:0], src.NodeKeySignature...)
 	if dst.Timestamp != nil {
 		dst.Timestamp = new(time.Time)
 		*dst.Timestamp = *src.Timestamp

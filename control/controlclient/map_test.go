@@ -212,12 +212,12 @@ func TestUndeltaPeers(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:       1,
-					KeySignature: []byte{3, 4},
+					KeySignature: "ab",
 				}},
 			}, want: peers(&tailcfg.Node{
 				ID:           1,
 				Name:         "foo",
-				KeySignature: []byte{3, 4},
+				KeySignature: "ab",
 			}),
 		},
 		{

@@ -6,7 +6,6 @@ package tailcfg
 //go:generate go run tailscale.com/cmd/viewer --type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile --clonefunc
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1786,7 +1785,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.UnsignedPeerAPIOnly == n2.UnsignedPeerAPIOnly &&
 		n.Key == n2.Key &&
 		n.KeyExpiry.Equal(n2.KeyExpiry) &&
-		bytes.Equal(n.KeySignature, n2.KeySignature) &&
+		n.KeySignature == n2.KeySignature &&
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqPtr(n.Online, n2.Online) &&

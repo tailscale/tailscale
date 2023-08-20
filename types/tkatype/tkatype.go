@@ -7,6 +7,8 @@
 // because this package encodes wire types that should be lightweight to use.
 package tkatype
 
+import "encoding/json"
+
 // KeyID references a verification key stored in the key authority. A keyID
 // uniquely identifies a key. KeyIDs are all 32 bytes.
 //
@@ -19,7 +21,26 @@ package tkatype
 type KeyID []byte
 
 // MarshaledSignature represents a marshaled tka.NodeKeySignature.
-type MarshaledSignature []byte
+//
+// While its underlying type is a string, it's just the raw signature bytes, not
+// hex or base64, etc.
+//
+// Think of it as []byte, which it used to be. It's a string only to make it
+// easier to use with cmd/viewer.
+type MarshaledSignature string
+
+func (a MarshaledSignature) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]byte(a))
+}
+
+func (a *MarshaledSignature) UnmarshalJSON(b []byte) error {
+	var bs []byte
+	if err := json.Unmarshal(b, &bs); err != nil {
+		return err
+	}
+	*a = MarshaledSignature(bs)
+	return nil
+}
 
 // MarshaledAUM represents a marshaled tka.AUM.
 type MarshaledAUM []byte
