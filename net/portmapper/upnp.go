@@ -12,12 +12,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/goupnp"
@@ -261,6 +263,9 @@ func (c *Client) upnpHTTPClientLocked() *http.Client {
 				IdleConnTimeout: 2 * time.Second, // LAN is cheap
 			},
 		}
+		if c.debug.LogHTTP {
+			c.uPnPHTTPClient = requestLogger(c.logf, c.uPnPHTTPClient)
+		}
 	}
 	return c.uPnPHTTPClient
 }
@@ -368,4 +373,61 @@ func parseUPnPDiscoResponse(body []byte) (uPnPDiscoResponse, error) {
 	r.Server = res.Header.Get("Server")
 	r.USN = res.Header.Get("Usn")
 	return r, nil
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (r roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return r(req)
+}
+
+func requestLogger(logf logger.Logf, client *http.Client) *http.Client {
+	// Clone the HTTP client, and override the Transport to log to the
+	// provided logger.
+	ret := *client
+	oldTransport := ret.Transport
+
+	var requestCounter atomic.Uint64
+	loggingTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		ctr := requestCounter.Add(1)
+
+		// Read the body and re-set it.
+		var (
+			body []byte
+			err  error
+		)
+		if req.Body != nil {
+			body, err = io.ReadAll(req.Body)
+			req.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		logf("request[%d]: %s %q body=%q", ctr, req.Method, req.URL, body)
+
+		resp, err := oldTransport.RoundTrip(req)
+		if err != nil {
+			logf("response[%d]: err=%v", err)
+			return nil, err
+		}
+
+		// Read the response body
+		if resp.Body != nil {
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				logf("response[%d]: %d bodyErr=%v", resp.StatusCode, err)
+				return nil, err
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		logf("response[%d]: %d body=%q", ctr, resp.StatusCode, body)
+		return resp, nil
+	})
+	ret.Transport = loggingTransport
+
+	return &ret
 }
