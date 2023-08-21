@@ -62,7 +62,7 @@ type mapSession struct {
 	onSelfNodeChanged func(*netmap.NetworkMap)
 
 	// Fields storing state over the course of multiple MapResponses.
-	lastNode               *tailcfg.Node
+	lastNode               tailcfg.NodeView
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
@@ -182,7 +182,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
-	initDisplayNames(cmpx.Or(resp.Node, ms.lastNode).View(), resp)
+	initDisplayNames(cmpx.Or(resp.Node.View(), ms.lastNode), resp)
 
 	nm := ms.netmapForResponse(resp)
 
@@ -312,17 +312,17 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	}
 
 	if resp.Node != nil {
-		ms.lastNode = resp.Node
+		ms.lastNode = resp.Node.View()
 	}
-	if node := ms.lastNode.Clone(); node != nil {
-		nm.SelfNode = node.View()
-		nm.Expiry = node.KeyExpiry
-		nm.Name = node.Name
-		nm.Addresses = filterSelfAddresses(node.Addresses)
-		if node.Hostinfo.Valid() {
-			nm.Hostinfo = *node.Hostinfo.AsStruct()
+	if node := ms.lastNode; node.Valid() {
+		nm.SelfNode = node
+		nm.Expiry = node.KeyExpiry()
+		nm.Name = node.Name()
+		nm.Addresses = filterSelfAddresses(node.Addresses().AsSlice())
+		if node.Hostinfo().Valid() {
+			nm.Hostinfo = *node.Hostinfo().AsStruct()
 		}
-		if node.MachineAuthorized {
+		if node.MachineAuthorized() {
 			nm.MachineStatus = tailcfg.MachineAuthorized
 		} else {
 			nm.MachineStatus = tailcfg.MachineUnauthorized
