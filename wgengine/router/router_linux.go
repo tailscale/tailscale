@@ -85,41 +85,32 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 	iptAva, nftAva := true, true
 	iptRuleCount, err := det.iptDetect()
 	if err != nil {
-		logf("router: detect iptables rule: %v", err)
+		logf("detect iptables rule: %v", err)
 		iptAva = false
 	}
 	nftRuleCount, err := det.nftDetect()
 	if err != nil {
-		logf("router: detect nftables rule: %v", err)
+		logf("detect nftables rule: %v", err)
 		nftAva = false
 	}
-	logf("router: nftables rule count: %d, iptables rule count: %d", nftRuleCount, iptRuleCount)
+	logf("nftables rule count: %d, iptables rule count: %d", nftRuleCount, iptRuleCount)
 	switch {
-	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
-		// TODO(KevinLiang10): Updates to a flag
-		logf("router: envknob TS_DEBUG_FIREWALL_MODE=nftables set")
-		hostinfo.SetFirewallMode("nft-forced")
-		return linuxfw.FirewallModeNfTables
-	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
-		logf("router: envknob TS_DEBUG_FIREWALL_MODE=iptables set")
-		hostinfo.SetFirewallMode("ipt-forced")
-		return linuxfw.FirewallModeIPTables
 	case nftRuleCount > 0 && iptRuleCount == 0:
-		logf("router: nftables is currently in use")
+		logf("nftables is currently in use")
 		hostinfo.SetFirewallMode("nft-inuse")
 		return linuxfw.FirewallModeNfTables
 	case iptRuleCount > 0 && nftRuleCount == 0:
-		logf("router: iptables is currently in use")
+		logf("iptables is currently in use")
 		hostinfo.SetFirewallMode("ipt-inuse")
 		return linuxfw.FirewallModeIPTables
 	case nftAva:
 		// if both iptables and nftables are available but
 		// neither/both are currently used, use nftables.
-		logf("router: nftables is available")
+		logf("nftables is available")
 		hostinfo.SetFirewallMode("nft")
 		return linuxfw.FirewallModeNfTables
 	case iptAva:
-		logf("router: iptables is available")
+		logf("iptables is available")
 		hostinfo.SetFirewallMode("ipt")
 		return linuxfw.FirewallModeIPTables
 	default:
@@ -136,18 +127,44 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 // As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
 	tableDetector := &linuxFWDetector{}
-	mode := chooseFireWallMode(logf, tableDetector)
+	var mode linuxfw.FirewallMode
+
+	// We now use iptables as default and have "auto" and "nftables" as
+	// options for people to test further.
+	switch {
+	case distro.Get() == distro.Gokrazy:
+		// Reduce startup logging on gokrazy. There's no way to do iptables on
+		// gokrazy anyway.
+		logf("GoKrazy should use nftables.")
+		hostinfo.SetFirewallMode("nft-gokrazy")
+		mode = linuxfw.FirewallModeNfTables
+	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "nftables":
+		logf("envknob TS_DEBUG_FIREWALL_MODE=nftables set")
+		hostinfo.SetFirewallMode("nft-forced")
+		mode = linuxfw.FirewallModeNfTables
+	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "auto":
+		mode = chooseFireWallMode(logf, tableDetector)
+	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
+		logf("envknob TS_DEBUG_FIREWALL_MODE=iptables set")
+		hostinfo.SetFirewallMode("ipt-forced")
+		mode = linuxfw.FirewallModeIPTables
+	default:
+		logf("default choosing iptables")
+		hostinfo.SetFirewallMode("ipt-default")
+		mode = linuxfw.FirewallModeIPTables
+	}
+
 	var nfr netfilterRunner
 	var err error
 	switch mode {
 	case linuxfw.FirewallModeIPTables:
-		logf("router: using iptables")
+		logf("using iptables")
 		nfr, err = linuxfw.NewIPTablesRunner(logf)
 		if err != nil {
 			return nil, err
 		}
 	case linuxfw.FirewallModeNfTables:
-		logf("router: using nftables")
+		logf("using nftables")
 		nfr, err = linuxfw.NewNfTablesRunner(logf)
 		if err != nil {
 			return nil, err
