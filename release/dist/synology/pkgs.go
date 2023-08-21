@@ -144,6 +144,9 @@ func getSynologyBuilds(b *dist.Build) *synologyBuilds {
 func (m *synologyBuilds) buildInnerPackage(b *dist.Build, dsmVersion int, goenv map[string]string) (*innerPkg, error) {
 	key := []any{dsmVersion, goenv}
 	return m.innerPkgs.Do(key, func() (*innerPkg, error) {
+		if err := b.BuildWebClientAssets(); err != nil {
+			return nil, err
+		}
 		ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", goenv)
 		if err != nil {
 			return nil, err

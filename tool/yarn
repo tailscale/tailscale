@@ -21,7 +21,7 @@ fi
     cachedir="$HOME/.cache/tailscale-yarn"
     tarball="${cachedir}.tar.gz"
 
-    read -r want_rev < "$(dirname "$0")/yarn.rev"
+    read -r want_rev < "./tool/yarn.rev"
 
     got_rev=""
     if [[ -x "${cachedir}/bin/yarn" ]]; then
