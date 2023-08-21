@@ -127,6 +127,14 @@ type endpointState struct {
 	index int16 // index in nodecfg.Node.Endpoints; meaningless if lastGotPing non-zero
 }
 
+// clear removes all derived / probed state from an endpointState.
+func (s *endpointState) clear() {
+	*s = endpointState{
+		index:       s.index,
+		lastGotPing: s.lastGotPing,
+	}
+}
+
 // pongHistoryCount is how many pongReply values we keep per endpointState
 const pongHistoryCount = 64
 
@@ -865,7 +873,12 @@ func (de *endpoint) noteConnectivityChange() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
+	de.bestAddr = addrLatency{}
 	de.trustBestAddrUntil = 0
+
+	for k := range de.endpointState {
+		de.endpointState[k].clear()
+	}
 }
 
 // handlePongConnLocked handles a Pong message (a reply to an earlier ping).
