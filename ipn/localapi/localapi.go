@@ -660,6 +660,10 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if defBool(r.FormValue("log_http"), false) {
+		debugKnobs.LogHTTP = true
+	}
+
 	var (
 		logLock     sync.Mutex
 		handlerDone bool

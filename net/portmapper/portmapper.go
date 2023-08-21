@@ -36,6 +36,11 @@ type DebugKnobs struct {
 	// to its logger.
 	VerboseLogs bool
 
+	// LogHTTP tells the Client to print the raw HTTP logs (from UPnP) to
+	// its logger. This is useful when debugging buggy UPnP
+	// implementations.
+	LogHTTP bool
+
 	// Disable* disables a specific service from mapping.
 	DisableUPnP bool
 	DisablePMP  bool
