@@ -444,18 +444,18 @@ func TestNetmapForResponse(t *testing.T) {
 		someNode := &tailcfg.Node{
 			Name: "foo",
 		}
-		wantNode := &tailcfg.Node{
+		wantNode := (&tailcfg.Node{
 			Name:                 "foo",
 			ComputedName:         "foo",
 			ComputedNameWithHost: "foo",
-		}
+		}).View()
 		ms := newTestMapSession(t, nil)
 		mapRes := &tailcfg.MapResponse{
 			Node: someNode,
 		}
 		initDisplayNames(mapRes.Node.View(), mapRes)
 		nm1 := ms.netmapForResponse(mapRes)
-		if nm1.SelfNode == nil {
+		if !nm1.SelfNode.Valid() {
 			t.Fatal("nil Node in 1st netmap")
 		}
 		if !reflect.DeepEqual(nm1.SelfNode, wantNode) {
@@ -464,7 +464,7 @@ func TestNetmapForResponse(t *testing.T) {
 		}
 
 		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{})
-		if nm2.SelfNode == nil {
+		if !nm2.SelfNode.Valid() {
 			t.Fatal("nil Node in 1st netmap")
 		}
 		if !reflect.DeepEqual(nm2.SelfNode, wantNode) {

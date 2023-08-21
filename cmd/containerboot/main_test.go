@@ -112,10 +112,10 @@ func TestContainerBoot(t *testing.T) {
 	runningNotify := &ipn.Notify{
 		State: ptr.To(ipn.Running),
 		NetMap: &netmap.NetworkMap{
-			SelfNode: &tailcfg.Node{
+			SelfNode: (&tailcfg.Node{
 				StableID: tailcfg.StableNodeID("myID"),
 				Name:     "test-node.test.ts.net",
-			},
+			}).View(),
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 		},
 	}
@@ -482,10 +482,10 @@ func TestContainerBoot(t *testing.T) {
 					Notify: &ipn.Notify{
 						State: ptr.To(ipn.Running),
 						NetMap: &netmap.NetworkMap{
-							SelfNode: &tailcfg.Node{
+							SelfNode: (&tailcfg.Node{
 								StableID: tailcfg.StableNodeID("newID"),
 								Name:     "new-name.test.ts.net",
-							},
+							}).View(),
 							Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
 						},
 					},

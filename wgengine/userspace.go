@@ -799,8 +799,8 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	}
 
 	isSubnetRouter := false
-	if e.birdClient != nil && nm != nil && nm.SelfNode != nil {
-		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes, nm.Hostinfo.RoutableIPs)
+	if e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
+		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes().AsSlice(), nm.Hostinfo.RoutableIPs)
 		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
 			nm.SelfNode.PrimaryRoutes, nm.Hostinfo.RoutableIPs,
 			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
@@ -1445,7 +1445,7 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 	}
 	for _, a := range nm.Addresses {
 		if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
-			return PeerForIP{Node: nm.SelfNode.View(), IsSelf: true, Route: a}, true
+			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
 		}
 	}
 

@@ -456,12 +456,12 @@ func TestHandlePeerAPI(t *testing.T) {
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
-				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
+				netMap:         &netmap.NetworkMap{SelfNode: selfNode.View()},
 				clock:          &tstest.Clock{},
 			}
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
-				selfNode: selfNode,
+				selfNode: selfNode.View(),
 				peerNode: (&tailcfg.Node{
 					ComputedName: "some-peer-name",
 				}).View(),
@@ -516,9 +516,9 @@ func TestFileDeleteRace(t *testing.T) {
 		peerNode: (&tailcfg.Node{
 			ComputedName: "some-peer-name",
 		}).View(),
-		selfNode: &tailcfg.Node{
+		selfNode: (&tailcfg.Node{
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
-		},
+		}).View(),
 		ps: ps,
 	}
 	buf := make([]byte, 2<<20)

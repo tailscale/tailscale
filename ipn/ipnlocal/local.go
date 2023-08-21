@@ -704,10 +704,10 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			ss.HostName = b.netMap.Hostinfo.Hostname
 			ss.DNSName = b.netMap.Name
 			ss.UserID = b.netMap.User()
-			if sn := b.netMap.SelfNode; sn != nil {
-				peerStatusFromNode(ss, sn.View())
-				if c := sn.Capabilities; len(c) > 0 {
-					ss.Capabilities = append([]string(nil), c...)
+			if sn := b.netMap.SelfNode; sn.Valid() {
+				peerStatusFromNode(ss, sn)
+				if c := sn.Capabilities(); c.Len() > 0 {
+					ss.Capabilities = c.AsSlice()
 				}
 			}
 		} else {
@@ -3375,11 +3375,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.closePeerAPIListenersLocked()
 
 	selfNode := b.netMap.SelfNode
-	if len(b.netMap.Addresses) == 0 || selfNode == nil {
+	if len(b.netMap.Addresses) == 0 || !selfNode.Valid() {
 		return
 	}
 
-	fileRoot := b.fileRootLocked(selfNode.User)
+	fileRoot := b.fileRootLocked(selfNode.User())
 	if fileRoot == "" {
 		b.logf("peerapi starting without Taildrop directory configured")
 	}
@@ -3955,12 +3955,8 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 }
 
 func hasCapability(nm *netmap.NetworkMap, cap string) bool {
-	if nm != nil && nm.SelfNode != nil {
-		for _, c := range nm.SelfNode.Capabilities {
-			if c == cap {
-				return true
-			}
-		}
+	if nm != nil && nm.SelfNode.Valid() {
+		return views.SliceContains(nm.SelfNode.Capabilities(), cap)
 	}
 	return false
 }
@@ -4021,8 +4017,8 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 			}
 		}
 	}
-	if nm.SelfNode != nil {
-		addNode(nm.SelfNode.View())
+	if nm.SelfNode.Valid() {
+		addNode(nm.SelfNode)
 	}
 	for _, p := range nm.Peers {
 		addNode(p)
@@ -4048,7 +4044,7 @@ func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 }
 
 func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
-	if b.netMap == nil || b.netMap.SelfNode == nil || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
+	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
 		// We're not logged in, so we don't have a profile.
 		// Don't try to load the serve config.
 		b.lastServeConfJSON = mem.B(nil)
