@@ -136,7 +136,8 @@ func getChainsFromTable(c *nftables.Conn, table *nftables.Table) ([]*nftables.Ch
 	return ret, nil
 }
 
-// isTSChain retruns true if the chain name starts with ts
+// isTSChain reports whether `name` begins with "ts-" (and is thus a
+// Tailscale-managed chain).
 func isTSChain(name string) bool {
 	return strings.HasPrefix(name, "ts-")
 }
