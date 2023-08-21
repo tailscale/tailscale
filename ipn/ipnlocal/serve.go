@@ -193,7 +193,7 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		b.logf("netMap is nil")
 		return
 	}
-	if nm.SelfNode == nil {
+	if !nm.SelfNode.Valid() {
 		b.logf("netMap SelfNode is nil")
 		return
 	}
@@ -227,7 +227,7 @@ func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 	if nm == nil {
 		return errors.New("netMap is nil")
 	}
-	if nm.SelfNode == nil {
+	if !nm.SelfNode.Valid() {
 		return errors.New("netMap SelfNode is nil")
 	}
 	profileID := b.pm.CurrentProfile().ID

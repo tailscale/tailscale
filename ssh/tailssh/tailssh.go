@@ -787,7 +787,7 @@ func (c *conn) expandDelegateURLLocked(actionURL string) string {
 	lu := c.localUser
 	var dstNodeID string
 	if nm != nil {
-		dstNodeID = fmt.Sprint(int64(nm.SelfNode.ID))
+		dstNodeID = fmt.Sprint(int64(nm.SelfNode.ID()))
 	}
 	return strings.NewReplacer(
 		"$SRC_NODE_IP", url.QueryEscape(ci.src.Addr().String()),

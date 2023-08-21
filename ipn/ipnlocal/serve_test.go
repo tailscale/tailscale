@@ -190,9 +190,9 @@ func TestServeHTTPProxy(t *testing.T) {
 	b.pm = pm
 
 	b.netMap = &netmap.NetworkMap{
-		SelfNode: &tailcfg.Node{
+		SelfNode: (&tailcfg.Node{
 			Name: "example.ts.net",
-		},
+		}).View(),
 		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
 			tailcfg.UserID(1): {
 				LoginName:     "someone@example.com",

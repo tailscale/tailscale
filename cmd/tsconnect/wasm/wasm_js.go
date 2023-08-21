@@ -278,7 +278,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 						TailscaleSSHEnabled: p.Hostinfo().TailscaleSSHEnabled(),
 					}
 				}),
-				LockedOut: nm.TKAEnabled && len(nm.SelfNode.KeySignature) == 0,
+				LockedOut: nm.TKAEnabled && nm.SelfNode.KeySignature().Len() == 0,
 			}
 			if jsonNetMap, err := json.Marshal(jsNetMap); err == nil {
 				jsCallbacks.Call("notifyNetMap", string(jsonNetMap))

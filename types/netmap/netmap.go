@@ -25,7 +25,7 @@ import (
 type NetworkMap struct {
 	// Core networking
 
-	SelfNode   *tailcfg.Node
+	SelfNode   tailcfg.NodeView
 	NodeKey    key.NodePublic
 	PrivateKey key.NodePrivate
 	Expiry     time.Time
@@ -90,8 +90,8 @@ type NetworkMap struct {
 // User returns nm.SelfNode.User if nm.SelfNode is non-nil, otherwise it returns
 // 0.
 func (nm *NetworkMap) User() tailcfg.UserID {
-	if nm.SelfNode != nil {
-		return nm.SelfNode.User
+	if nm.SelfNode.Valid() {
+		return nm.SelfNode.User()
 	}
 	return 0
 }
@@ -149,12 +149,13 @@ func (nm *NetworkMap) MagicDNSSuffix() string {
 // SelfCapabilities returns SelfNode.Capabilities if nm and nm.SelfNode are
 // non-nil. This is a method so we can use it in envknob/logknob without a
 // circular dependency.
-func (nm *NetworkMap) SelfCapabilities() []string {
-	if nm == nil || nm.SelfNode == nil {
-		return nil
+func (nm *NetworkMap) SelfCapabilities() views.Slice[string] {
+	var zero views.Slice[string]
+	if nm == nil || !nm.SelfNode.Valid() {
+		return zero
 	}
 
-	return nm.SelfNode.Capabilities
+	return nm.SelfNode.Capabilities()
 }
 
 func (nm *NetworkMap) String() string {

@@ -795,9 +795,9 @@ func TestStatusWithoutPeers(t *testing.T) {
 	cc.send(nil, "", false, &netmap.NetworkMap{
 		MachineStatus: tailcfg.MachineAuthorized,
 		Addresses:     ipps("100.101.101.101"),
-		SelfNode: &tailcfg.Node{
+		SelfNode: (&tailcfg.Node{
 			Addresses: ipps("100.101.101.101"),
-		},
+		}).View(),
 	})
 	got := b.StatusWithoutPeers()
 	if got.TailscaleIPs == nil {

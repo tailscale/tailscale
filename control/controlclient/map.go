@@ -315,7 +315,7 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ms.lastNode = resp.Node
 	}
 	if node := ms.lastNode.Clone(); node != nil {
-		nm.SelfNode = node
+		nm.SelfNode = node.View()
 		nm.Expiry = node.KeyExpiry
 		nm.Name = node.Name
 		nm.Addresses = filterSelfAddresses(node.Addresses)
