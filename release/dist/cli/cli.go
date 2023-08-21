@@ -70,6 +70,7 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 					fs.StringVar(&buildArgs.manifest, "manifest", "", "manifest file to write")
 					fs.BoolVar(&buildArgs.verbose, "verbose", false, "verbose logging")
 					fs.StringVar(&buildArgs.tgzSigningKey, "tgz-signing-key", "", "path to private signing key for release tarballs")
+					fs.StringVar(&buildArgs.webClientRoot, "web-client-root", "", "path to root of web client source to build")
 					return fs
 				})(),
 				LongHelp: strings.TrimSpace(`
@@ -100,6 +101,7 @@ var buildArgs struct {
 	manifest      string
 	verbose       bool
 	tgzSigningKey string
+	webClientRoot string
 }
 
 func runBuild(ctx context.Context, filters []string, targets []dist.Target) error {
@@ -122,6 +124,7 @@ func runBuild(ctx context.Context, filters []string, targets []dist.Target) erro
 	}
 	defer b.Close()
 	b.Verbose = buildArgs.verbose
+	b.WebClientSource = buildArgs.webClientRoot
 
 	out, err := b.Build(tgts)
 	if err != nil {

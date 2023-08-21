@@ -53,6 +53,9 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	} else {
 		filename = fmt.Sprintf("tailscale_%s_%s_%s.tgz", b.Version.Short, t.os(), t.arch())
 	}
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
@@ -193,6 +196,9 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("deb only supported on linux")
 	}
 
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
@@ -305,6 +311,9 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("rpm only supported on linux")
 	}
 
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
