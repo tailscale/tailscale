@@ -49,7 +49,12 @@ fi
                 ARCH="arm64"
             fi
             mkdir -p "$cachedir"
-            curl -f -L -o "$tarball" "https://nodejs.org/dist/v${want_rev}/node-v${want_rev}-${OS}-${ARCH}.tar.gz"
+	    # When running on GitHub in CI, the below curl sometimes fails with
+	    # INTERNAL_ERROR after finishing the download. The most common cause
+	    # of INTERNAL_ERROR is glitches in intermediate hosts handling of
+	    # HTTP/2 forwarding, so forcing HTTP 1.1 often fixes the issue. See
+	    # https://github.com/tailscale/tailscale/issues/8988
+            curl -f -L --http1.1 -o "$tarball" "https://nodejs.org/dist/v${want_rev}/node-v${want_rev}-${OS}-${ARCH}.tar.gz"
             (cd "$cachedir" && tar --strip-components=1 -xf "$tarball")
             rm -f "$tarball"
         fi
