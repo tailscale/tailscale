@@ -63,11 +63,11 @@ func TestLogKnob(t *testing.T) {
 		}
 
 		testKnob.UpdateFromNetMap(&netmap.NetworkMap{
-			SelfNode: &tailcfg.Node{
+			SelfNode: (&tailcfg.Node{
 				Capabilities: []string{
 					"https://tailscale.com/cap/testing",
 				},
-			},
+			}).View(),
 		})
 		if !testKnob.shouldLog() {
 			t.Errorf("expected shouldLog()=true")

@@ -328,12 +328,14 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
 	isAddr := map[netip.Prefix]bool{}
-	if nm.SelfNode != nil {
-		for _, ipp := range nm.SelfNode.Addresses {
+	if nm.SelfNode.Valid() {
+		for i := range nm.SelfNode.Addresses().LenIter() {
+			ipp := nm.SelfNode.Addresses().At(i)
 			isAddr[ipp] = true
 			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
-		for _, ipp := range nm.SelfNode.AllowedIPs {
+		for i := range nm.SelfNode.AllowedIPs().LenIter() {
+			ipp := nm.SelfNode.AllowedIPs().At(i)
 			if !isAddr[ipp] && ns.ProcessSubnets {
 				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 			}

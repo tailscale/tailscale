@@ -170,8 +170,8 @@ func (em *expiryManager) nextPeerExpiry(nm *netmap.NetworkMap, localNow time.Tim
 	}
 
 	// Ensure that we also fire this timer if our own node key expires.
-	if nm.SelfNode != nil {
-		selfExpiry := nm.SelfNode.KeyExpiry
+	if nm.SelfNode.Valid() {
+		selfExpiry := nm.SelfNode.KeyExpiry()
 
 		if selfExpiry.IsZero() {
 			// No expiry for self node

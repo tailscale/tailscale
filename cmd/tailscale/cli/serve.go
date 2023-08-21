@@ -851,8 +851,8 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 			e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enablement_lost_connection", feature), 1)
 			return err
 		}
-		if nm := n.NetMap; nm != nil && nm.SelfNode != nil {
-			if hasRequiredCapabilities(nm.SelfNode.Capabilities) {
+		if nm := n.NetMap; nm != nil && nm.SelfNode.Valid() {
+			if hasRequiredCapabilities(nm.SelfNode.Capabilities().AsSlice()) {
 				e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enabled", feature), 1)
 				fmt.Fprintln(os.Stdout, "Success.")
 				return nil

@@ -984,7 +984,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		// change it if the Node info changed.
 		if persist == c.persist {
 			newPersist := persist.AsStruct()
-			newPersist.NodeID = nm.SelfNode.StableID
+			newPersist.NodeID = nm.SelfNode.StableID()
 			newPersist.UserProfile = nm.UserProfiles[nm.User()]
 
 			c.persist = newPersist.View()

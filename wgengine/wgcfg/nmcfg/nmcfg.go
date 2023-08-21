@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
-	"slices"
 	"strings"
 
 	"tailscale.com/net/tsaddr"
@@ -16,6 +15,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -61,11 +61,11 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	}
 
 	// Setup log IDs for data plane audit logging.
-	if nm.SelfNode != nil {
-		cfg.NodeID = nm.SelfNode.StableID
-		canNetworkLog := slices.Contains(nm.SelfNode.Capabilities, tailcfg.CapabilityDataPlaneAuditLogs)
-		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID != "" && nm.DomainAuditLogID != "" {
-			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID)
+	if nm.SelfNode.Valid() {
+		cfg.NodeID = nm.SelfNode.StableID()
+		canNetworkLog := views.SliceContains(nm.SelfNode.Capabilities(), tailcfg.CapabilityDataPlaneAuditLogs)
+		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID() != "" && nm.DomainAuditLogID != "" {
+			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
 			if errNode != nil {
 				logf("[v1] wgcfg: unable to parse node audit log ID: %v", errNode)
 			}

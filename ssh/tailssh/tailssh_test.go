@@ -276,9 +276,9 @@ func (ts *localState) NetMap() *netmap.NetworkMap {
 	}
 
 	return &netmap.NetworkMap{
-		SelfNode: &tailcfg.Node{
+		SelfNode: (&tailcfg.Node{
 			ID: 1,
-		},
+		}).View(),
 		SSHPolicy: policy,
 	}
 }

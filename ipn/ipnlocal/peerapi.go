@@ -47,6 +47,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/multierr"
 	"tailscale.com/version/distro"
@@ -569,14 +570,14 @@ func (pln *peerAPIListener) ServeConn(src netip.AddrPort, c net.Conn) {
 		return
 	}
 	nm := pln.lb.NetMap()
-	if nm == nil || nm.SelfNode == nil {
+	if nm == nil || !nm.SelfNode.Valid() {
 		logf("peerapi: no netmap")
 		c.Close()
 		return
 	}
 	h := &peerAPIHandler{
 		ps:         pln.ps,
-		isSelf:     nm.SelfNode.User == peerNode.User(),
+		isSelf:     nm.SelfNode.User() == peerNode.User(),
 		remoteAddr: src,
 		selfNode:   nm.SelfNode,
 		peerNode:   peerNode,
@@ -596,7 +597,7 @@ type peerAPIHandler struct {
 	ps         *peerAPIServer
 	remoteAddr netip.AddrPort
 	isSelf     bool                // whether peerNode is owned by same user as this node
-	selfNode   *tailcfg.Node       // this node; always non-nil
+	selfNode   tailcfg.NodeView    // this node; always non-nil
 	peerNode   tailcfg.NodeView    // peerNode is who's making the request
 	peerUser   tailcfg.UserProfile // profile of peerNode
 }
@@ -612,7 +613,7 @@ func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
 		return *v == addr
 	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
-	return slices.Contains(h.selfNode.Addresses, pfx)
+	return views.SliceContains(h.selfNode.Addresses(), pfx)
 }
 
 func (h *peerAPIHandler) validateHost(r *http.Request) error {
@@ -1034,7 +1035,7 @@ func (h *peerAPIHandler) canPutFile() bool {
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
-	if !slices.Contains(h.selfNode.Capabilities, tailcfg.CapabilityDebug) {
+	if !views.SliceContains(h.selfNode.Capabilities(), tailcfg.CapabilityDebug) {
 		// This node does not expose debug info.
 		return false
 	}

@@ -116,7 +116,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	}
 
 	// Check that we ourselves are not locked out, report a health issue if so.
-	if nm.SelfNode != nil && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key, nm.SelfNode.KeySignature) != nil {
+	if nm.SelfNode.Valid() && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key(), nm.SelfNode.KeySignature().AsSlice()) != nil {
 		health.SetTKAHealth(errors.New(healthmsg.LockedOut))
 	} else {
 		health.SetTKAHealth(nil)
@@ -425,7 +425,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 
 	var selfAuthorized bool
 	if b.netMap != nil {
-		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key, b.netMap.SelfNode.KeySignature) == nil
+		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key(), b.netMap.SelfNode.KeySignature().AsSlice()) == nil
 	}
 
 	keys := b.tka.authority.Keys()
