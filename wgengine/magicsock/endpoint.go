@@ -469,6 +469,14 @@ func (de *endpoint) send(buffs [][]byte) error {
 	var err error
 	if udpAddr.IsValid() {
 		_, err = de.c.sendUDPBatch(udpAddr, buffs)
+
+		// If the error is known to indicate that the endpoint is no longer
+		// usable, clear the endpoint statistics so that the next send will
+		// re-evaluate the best endpoint.
+		if err != nil && isBadEndpointErr(err) {
+			de.noteBadEndpoint(udpAddr)
+		}
+
 		// TODO(raggi): needs updating for accuracy, as in error conditions we may have partial sends.
 		if stats := de.c.stats.Load(); err == nil && stats != nil {
 			var txBytes int
@@ -866,6 +874,30 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 	return false
 }
 
+// clearBestAddrLocked clears the bestAddr and related fields such that future
+// packets will re-evaluate the best address to send to next.
+//
+// de.mu must be held.
+func (de *endpoint) clearBestAddrLocked() {
+	de.bestAddr = addrLatency{}
+	de.bestAddrAt = 0
+	de.trustBestAddrUntil = 0
+}
+
+// noteBadEndpoint marks ipp as a bad endpoint that would need to be
+// re-evaluated before future use, this should be called for example if a send
+// to ipp fails due to a host unreachable error or similar.
+func (de *endpoint) noteBadEndpoint(ipp netip.AddrPort) {
+	de.mu.Lock()
+	defer de.mu.Unlock()
+
+	de.clearBestAddrLocked()
+
+	if st, ok := de.endpointState[ipp]; ok {
+		st.clear()
+	}
+}
+
 // noteConnectivityChange is called when connectivity changes enough
 // that we should question our earlier assumptions about which paths
 // work.
@@ -873,8 +905,7 @@ func (de *endpoint) noteConnectivityChange() {
 	de.mu.Lock()
 	defer de.mu.Unlock()
 
-	de.bestAddr = addrLatency{}
-	de.trustBestAddrUntil = 0
+	de.clearBestAddrLocked()
 
 	for k := range de.endpointState {
 		de.endpointState[k].clear()
@@ -1156,9 +1187,7 @@ func (de *endpoint) stopAndReset() {
 func (de *endpoint) resetLocked() {
 	de.lastSend = 0
 	de.lastFullPing = 0
-	de.bestAddr = addrLatency{}
-	de.bestAddrAt = 0
-	de.trustBestAddrUntil = 0
+	de.clearBestAddrLocked()
 	for _, es := range de.endpointState {
 		es.lastPing = 0
 	}
