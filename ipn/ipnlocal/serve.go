@@ -320,7 +320,6 @@ func (b *LocalBackend) StreamServe(ctx context.Context, w io.Writer, req ipn.Ser
 	// Clean up streamer when done.
 	defer func() {
 		b.mu.Lock()
-		mak.NonNilMapForJSON(&b.serveStreamers)
 		delete(b.serveStreamers[port], id)
 		b.mu.Unlock()
 	}()
@@ -400,7 +399,7 @@ func (b *LocalBackend) maybeLogServeConnection(destPort uint16, srcAddr netip.Ad
 
 	var log ipn.FunnelRequestLog
 	log.SrcAddr = srcAddr
-	log.Time = time.Now() // TODO: use a different clock somewhere?
+	log.Time = b.clock.Now()
 
 	if node, user, ok := b.WhoIs(srcAddr); ok {
 		log.NodeName = node.ComputedName()
