@@ -6,7 +6,6 @@ package controlclient
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/netip"
 	"sort"
 
@@ -16,6 +15,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/wgengine/filter"
@@ -33,6 +33,7 @@ type mapSession struct {
 	// Immutable fields.
 	nu             NetmapUpdater // called on changes (in addition to the optional hooks below)
 	privateNodeKey key.NodePrivate
+	publicNodeKey  key.NodePublic
 	logf           logger.Logf
 	vlogf          logger.Logf
 	machinePubKey  key.MachinePublic
@@ -63,6 +64,8 @@ type mapSession struct {
 
 	// Fields storing state over the course of multiple MapResponses.
 	lastNode               tailcfg.NodeView
+	peers                  map[tailcfg.NodeID]*tailcfg.NodeView // pointer to view (oddly). same pointers as sortedPeers.
+	sortedPeers            []*tailcfg.NodeView                  // same pointers as peers, but sorted by Node.ID
 	lastDNSConfig          *tailcfg.DNSConfig
 	lastDERPMap            *tailcfg.DERPMap
 	lastUserProfile        map[tailcfg.UserID]tailcfg.UserProfile
@@ -70,7 +73,6 @@ type mapSession struct {
 	lastParsedPacketFilter []filter.Match
 	lastSSHPolicy          *tailcfg.SSHPolicy
 	collectServices        bool
-	previousPeers          []*tailcfg.Node // for delta-purposes
 	lastDomain             string
 	lastDomainAuditLogID   string
 	lastHealth             []string
@@ -78,10 +80,6 @@ type mapSession struct {
 	stickyDebug            tailcfg.Debug // accumulated opt.Bool values
 	lastTKAInfo            *tailcfg.TKAInfo
 	lastNetmapSummary      string // from NetworkMap.VeryConcise
-
-	// netMapBuilding is non-nil during a netmapForResponse call,
-	// containing the value to be returned, once fully populated.
-	netMapBuilding *netmap.NetworkMap
 }
 
 // newMapSession returns a mostly unconfigured new mapSession.
@@ -93,6 +91,7 @@ func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater) *mapSession
 	ms := &mapSession{
 		nu:              nu,
 		privateNodeKey:  privateNodeKey,
+		publicNodeKey:   privateNodeKey.Public(),
 		lastDNSConfig:   new(tailcfg.DNSConfig),
 		lastUserProfile: map[tailcfg.UserID]tailcfg.UserProfile{},
 		watchdogReset:   make(chan struct{}),
@@ -184,7 +183,9 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	// Call Node.InitDisplayNames on any changed nodes.
 	initDisplayNames(cmpx.Or(resp.Node.View(), ms.lastNode), resp)
 
-	nm := ms.netmapForResponse(resp)
+	ms.updateStateFromResponse(resp)
+
+	nm := ms.netmap()
 
 	ms.lastNetmapSummary = nm.VeryConcise()
 	ms.onConciseNetMapSummary(ms.lastNetmapSummary)
@@ -198,30 +199,28 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	return nil
 }
 
-func (ms *mapSession) addUserProfile(userID tailcfg.UserID) {
-	if userID == 0 {
-		return
-	}
-	nm := ms.netMapBuilding
-	if _, dup := nm.UserProfiles[userID]; dup {
-		// Already populated it from a previous peer.
-		return
-	}
-	if up, ok := ms.lastUserProfile[userID]; ok {
-		nm.UserProfiles[userID] = up
-	}
+// updateStats are some stats from updateStateFromResponse, primarily for
+// testing. It's meant to be cheap enough to always compute, though. It doesn't
+// allocate.
+type updateStats struct {
+	allNew  bool
+	added   int
+	removed int
+	changed int
 }
 
-// netmapForResponse returns a fully populated NetworkMap from a full
-// or incremental MapResponse within the session, filling in omitted
-// information from prior MapResponse values.
-func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.NetworkMap {
-	undeltaPeers(resp, ms.previousPeers)
+// updateStateFromResponse updates ms from res. It takes ownership of res.
+func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
+	ms.updatePeersStateFromResponse(resp)
 
-	ms.previousPeers = cloneNodes(resp.Peers) // defensive/lazy clone, since this escapes to who knows where
+	if resp.Node != nil {
+		ms.lastNode = resp.Node.View()
+	}
+
 	for _, up := range resp.UserProfiles {
 		ms.lastUserProfile[up.ID] = up
 	}
+	// TODO(bradfitz): clean up old user profiles? maybe not worth it.
 
 	if dm := resp.DERPMap; dm != nil {
 		ms.vlogf("netmap: new map contains DERP map")
@@ -277,16 +276,169 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 	if resp.TKAInfo != nil {
 		ms.lastTKAInfo = resp.TKAInfo
 	}
+}
 
-	// TODO(bradfitz): now that this is a view, remove some of the defensive
-	// cloning elsewhere in mapSession.
-	peerViews := make([]tailcfg.NodeView, len(resp.Peers))
-	for i, n := range resp.Peers {
-		peerViews[i] = n.View()
+// updatePeersStateFromResponseres updates ms.peers and ms.sortedPeers from res. It takes ownership of res.
+func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (stats updateStats) {
+	defer func() {
+		if stats.removed > 0 || stats.added > 0 {
+			ms.rebuildSorted()
+		}
+	}()
+
+	if ms.peers == nil {
+		ms.peers = make(map[tailcfg.NodeID]*tailcfg.NodeView)
+	}
+
+	if len(resp.Peers) > 0 {
+		// Not delta encoded.
+		stats.allNew = true
+		keep := make(map[tailcfg.NodeID]bool, len(resp.Peers))
+		for _, n := range resp.Peers {
+			keep[n.ID] = true
+			if vp, ok := ms.peers[n.ID]; ok {
+				stats.changed++
+				*vp = n.View()
+			} else {
+				stats.added++
+				ms.peers[n.ID] = ptr.To(n.View())
+			}
+		}
+		for id := range ms.peers {
+			if !keep[id] {
+				stats.removed++
+				delete(ms.peers, id)
+			}
+		}
+		// Peers precludes all other delta operations so just return.
+		return
+	}
+
+	for _, id := range resp.PeersRemoved {
+		if _, ok := ms.peers[id]; ok {
+			delete(ms.peers, id)
+			stats.removed++
+		}
+	}
+
+	for _, n := range resp.PeersChanged {
+		if vp, ok := ms.peers[n.ID]; ok {
+			stats.changed++
+			*vp = n.View()
+		} else {
+			stats.added++
+			ms.peers[n.ID] = ptr.To(n.View())
+		}
+	}
+
+	for nodeID, seen := range resp.PeerSeenChange {
+		if vp, ok := ms.peers[nodeID]; ok {
+			mut := vp.AsStruct()
+			if seen {
+				mut.LastSeen = ptr.To(clock.Now())
+			} else {
+				mut.LastSeen = nil
+			}
+			*vp = mut.View()
+			stats.changed++
+		}
+	}
+
+	for nodeID, online := range resp.OnlineChange {
+		if vp, ok := ms.peers[nodeID]; ok {
+			mut := vp.AsStruct()
+			mut.Online = ptr.To(online)
+			*vp = mut.View()
+			stats.changed++
+		}
+	}
+
+	for _, pc := range resp.PeersChangedPatch {
+		vp, ok := ms.peers[pc.NodeID]
+		if !ok {
+			continue
+		}
+		stats.changed++
+		mut := vp.AsStruct()
+		if pc.DERPRegion != 0 {
+			mut.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, pc.DERPRegion)
+		}
+		if pc.Cap != 0 {
+			mut.Cap = pc.Cap
+		}
+		if pc.Endpoints != nil {
+			mut.Endpoints = pc.Endpoints
+		}
+		if pc.Key != nil {
+			mut.Key = *pc.Key
+		}
+		if pc.DiscoKey != nil {
+			mut.DiscoKey = *pc.DiscoKey
+		}
+		if v := pc.Online; v != nil {
+			mut.Online = ptr.To(*v)
+		}
+		if v := pc.LastSeen; v != nil {
+			mut.LastSeen = ptr.To(*v)
+		}
+		if v := pc.KeyExpiry; v != nil {
+			mut.KeyExpiry = *v
+		}
+		if v := pc.Capabilities; v != nil {
+			mut.Capabilities = *v
+		}
+		if v := pc.KeySignature; v != nil {
+			mut.KeySignature = v
+		}
+		*vp = mut.View()
+	}
+
+	return
+}
+
+// rebuildSorted rebuilds ms.sortedPeers from ms.peers. It should be called
+// after any additions or removals from peers.
+func (ms *mapSession) rebuildSorted() {
+	if ms.sortedPeers == nil {
+		ms.sortedPeers = make([]*tailcfg.NodeView, 0, len(ms.peers))
+	} else {
+		if len(ms.sortedPeers) > len(ms.peers) {
+			clear(ms.sortedPeers[len(ms.peers):])
+		}
+		ms.sortedPeers = ms.sortedPeers[:0]
+	}
+	for _, p := range ms.peers {
+		ms.sortedPeers = append(ms.sortedPeers, p)
+	}
+	sort.Slice(ms.sortedPeers, func(i, j int) bool {
+		return ms.sortedPeers[i].ID() < ms.sortedPeers[j].ID()
+	})
+}
+
+func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserID) {
+	if userID == 0 {
+		return
+	}
+	if _, dup := nm.UserProfiles[userID]; dup {
+		// Already populated it from a previous peer.
+		return
+	}
+	if up, ok := ms.lastUserProfile[userID]; ok {
+		nm.UserProfiles[userID] = up
+	}
+}
+
+// netmap returns a fully populated NetworkMap from the last state seen from
+// a call to updateStateFromResponse, filling in omitted
+// information from prior MapResponse values.
+func (ms *mapSession) netmap() *netmap.NetworkMap {
+	peerViews := make([]tailcfg.NodeView, len(ms.sortedPeers))
+	for i, vp := range ms.sortedPeers {
+		peerViews[i] = *vp
 	}
 
 	nm := &netmap.NetworkMap{
-		NodeKey:           ms.privateNodeKey.Public(),
+		NodeKey:           ms.publicNodeKey,
 		PrivateKey:        ms.privateNodeKey,
 		MachineKey:        ms.machinePubKey,
 		Peers:             peerViews,
@@ -302,7 +454,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		ControlHealth:     ms.lastHealth,
 		TKAEnabled:        ms.lastTKAInfo != nil && !ms.lastTKAInfo.Disabled,
 	}
-	ms.netMapBuilding = nm
 
 	if ms.lastTKAInfo != nil && ms.lastTKAInfo.Head != "" {
 		if err := nm.TKAHead.UnmarshalText([]byte(ms.lastTKAInfo.Head)); err != nil {
@@ -311,9 +462,6 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 	}
 
-	if resp.Node != nil {
-		ms.lastNode = resp.Node.View()
-	}
 	if node := ms.lastNode; node.Valid() {
 		nm.SelfNode = node
 		nm.Expiry = node.KeyExpiry()
@@ -329,154 +477,15 @@ func (ms *mapSession) netmapForResponse(resp *tailcfg.MapResponse) *netmap.Netwo
 		}
 	}
 
-	ms.addUserProfile(nm.User())
-	for _, peer := range resp.Peers {
-		ms.addUserProfile(peer.Sharer)
-		ms.addUserProfile(peer.User)
+	ms.addUserProfile(nm, nm.User())
+	for _, peer := range peerViews {
+		ms.addUserProfile(nm, peer.Sharer())
+		ms.addUserProfile(nm, peer.User())
 	}
 	if DevKnob.ForceProxyDNS() {
 		nm.DNS.Proxied = true
 	}
-	ms.netMapBuilding = nil
 	return nm
-}
-
-// undeltaPeers updates mapRes.Peers to be complete based on the
-// provided previous peer list and the PeersRemoved and PeersChanged
-// fields in mapRes, as well as the PeerSeenChange and OnlineChange
-// maps.
-//
-// It then also nils out the delta fields.
-func undeltaPeers(mapRes *tailcfg.MapResponse, prev []*tailcfg.Node) {
-	if len(mapRes.Peers) > 0 {
-		// Not delta encoded.
-		if !nodesSorted(mapRes.Peers) {
-			log.Printf("netmap: undeltaPeers: MapResponse.Peers not sorted; sorting")
-			sortNodes(mapRes.Peers)
-		}
-		return
-	}
-
-	var removed map[tailcfg.NodeID]bool
-	if pr := mapRes.PeersRemoved; len(pr) > 0 {
-		removed = make(map[tailcfg.NodeID]bool, len(pr))
-		for _, id := range pr {
-			removed[id] = true
-		}
-	}
-	changed := mapRes.PeersChanged
-
-	if !nodesSorted(changed) {
-		log.Printf("netmap: undeltaPeers: MapResponse.PeersChanged not sorted; sorting")
-		sortNodes(changed)
-	}
-	if !nodesSorted(prev) {
-		// Internal error (unrelated to the network) if we get here.
-		log.Printf("netmap: undeltaPeers: [unexpected] prev not sorted; sorting")
-		sortNodes(prev)
-	}
-
-	newFull := prev
-	if len(removed) > 0 || len(changed) > 0 {
-		newFull = make([]*tailcfg.Node, 0, len(prev)-len(removed))
-		for len(prev) > 0 && len(changed) > 0 {
-			pID := prev[0].ID
-			cID := changed[0].ID
-			if removed[pID] {
-				prev = prev[1:]
-				continue
-			}
-			switch {
-			case pID < cID:
-				newFull = append(newFull, prev[0])
-				prev = prev[1:]
-			case pID == cID:
-				newFull = append(newFull, changed[0])
-				prev, changed = prev[1:], changed[1:]
-			case cID < pID:
-				newFull = append(newFull, changed[0])
-				changed = changed[1:]
-			}
-		}
-		newFull = append(newFull, changed...)
-		for _, n := range prev {
-			if !removed[n.ID] {
-				newFull = append(newFull, n)
-			}
-		}
-		sortNodes(newFull)
-	}
-
-	if len(mapRes.PeerSeenChange) != 0 || len(mapRes.OnlineChange) != 0 || len(mapRes.PeersChangedPatch) != 0 {
-		peerByID := make(map[tailcfg.NodeID]*tailcfg.Node, len(newFull))
-		for _, n := range newFull {
-			peerByID[n.ID] = n
-		}
-		now := clock.Now()
-		for nodeID, seen := range mapRes.PeerSeenChange {
-			if n, ok := peerByID[nodeID]; ok {
-				if seen {
-					n.LastSeen = &now
-				} else {
-					n.LastSeen = nil
-				}
-			}
-		}
-		for nodeID, online := range mapRes.OnlineChange {
-			if n, ok := peerByID[nodeID]; ok {
-				online := online
-				n.Online = &online
-			}
-		}
-		for _, ec := range mapRes.PeersChangedPatch {
-			if n, ok := peerByID[ec.NodeID]; ok {
-				if ec.DERPRegion != 0 {
-					n.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, ec.DERPRegion)
-				}
-				if ec.Cap != 0 {
-					n.Cap = ec.Cap
-				}
-				if ec.Endpoints != nil {
-					n.Endpoints = ec.Endpoints
-				}
-				if ec.Key != nil {
-					n.Key = *ec.Key
-				}
-				if ec.DiscoKey != nil {
-					n.DiscoKey = *ec.DiscoKey
-				}
-				if v := ec.Online; v != nil {
-					n.Online = ptrCopy(v)
-				}
-				if v := ec.LastSeen; v != nil {
-					n.LastSeen = ptrCopy(v)
-				}
-				if v := ec.KeyExpiry; v != nil {
-					n.KeyExpiry = *v
-				}
-				if v := ec.Capabilities; v != nil {
-					n.Capabilities = *v
-				}
-				if v := ec.KeySignature; v != nil {
-					n.KeySignature = v
-				}
-			}
-		}
-	}
-
-	mapRes.Peers = newFull
-	mapRes.PeersChanged = nil
-	mapRes.PeersRemoved = nil
-}
-
-// ptrCopy returns a pointer to a newly allocated shallow copy of *v.
-func ptrCopy[T any](v *T) *T {
-	if v == nil {
-		return nil
-	}
-	ret := new(T)
-	*ret = *v
-	return ret
 }
 
 func nodesSorted(v []*tailcfg.Node) bool {
