@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/release/dist"
 	"tailscale.com/release/dist/unixpkgs"
 )
@@ -77,6 +78,20 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 			If filters are provided, only targets matching at least one filter are built.
 			Filters can use glob patterns (* and ?).
 			`),
+			},
+			{
+				Name: "gen-key",
+				Exec: func(ctx context.Context, args []string) error {
+					return runGenKey(ctx)
+				},
+				ShortUsage: "dist gen-key",
+				ShortHelp:  "Generate root or signing key pair",
+				FlagSet: (func() *flag.FlagSet {
+					fs := flag.NewFlagSet("gen-key", flag.ExitOnError)
+					fs.StringVar(&genKeyArgs.privPath, "priv-path", "private-key.pem", "output path for the private key")
+					fs.StringVar(&genKeyArgs.pubPath, "pub-path", "public-key.pem", "output path for the public key")
+					return fs
+				})(),
 			},
 		},
 		Exec: func(context.Context, []string) error { return flag.ErrHelp },
@@ -172,4 +187,25 @@ func parseSigningKey(path string) (crypto.Signer, error) {
 		return nil, fmt.Errorf("trailing data in %q, please check that the key file was not corrupted", path)
 	}
 	return x509.ParseECPrivateKey(b.Bytes)
+}
+
+var genKeyArgs struct {
+	privPath string
+	pubPath  string
+}
+
+func runGenKey(ctx context.Context) error {
+	priv, pub, err := distsign.GenerateKey()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(genKeyArgs.privPath, priv, 0400); err != nil {
+		return fmt.Errorf("failed writing private key: %w", err)
+	}
+	fmt.Println("wrote private key to", genKeyArgs.privPath)
+	if err := os.WriteFile(genKeyArgs.pubPath, pub, 0400); err != nil {
+		return fmt.Errorf("failed writing public key: %w", err)
+	}
+	fmt.Println("wrote public key to", genKeyArgs.pubPath)
+	return nil
 }
