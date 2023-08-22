@@ -223,14 +223,26 @@ func (de *endpoint) initFakeUDPAddr() {
 
 // noteRecvActivity records receive activity on de, and invokes
 // Conn.noteRecvActivity no more than once every 10s.
-func (de *endpoint) noteRecvActivity() {
-	if de.c.noteRecvActivity == nil {
-		return
-	}
+func (de *endpoint) noteRecvActivity(ipp netip.AddrPort) {
 	now := mono.Now()
+
+	// TODO(raggi): this probably applies relatively equally well to disco
+	// managed endpoints, but that would be a less conservative change.
+	if de.isWireguardOnly {
+		de.mu.Lock()
+		de.bestAddr.AddrPort = ipp
+		de.bestAddrAt = now
+		de.trustBestAddrUntil = now.Add(5 * time.Second)
+		de.mu.Unlock()
+	}
+
 	elapsed := now.Sub(de.lastRecv.LoadAtomic())
 	if elapsed > 10*time.Second {
 		de.lastRecv.StoreAtomic(now)
+
+		if de.c.noteRecvActivity == nil {
+			return
+		}
 		de.c.noteRecvActivity(de.publicKey)
 	}
 }
@@ -292,11 +304,23 @@ func (de *endpoint) addrForSendLocked(now mono.Time) (udpAddr, derpAddr netip.Ad
 //
 // de.mu must be held.
 func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.AddrPort, shouldPing bool) {
+	if len(de.endpointState) == 0 {
+		de.c.logf("magicsock: addrForSendWireguardLocked: [unexpected] no candidates available for endpoint")
+		return udpAddr, false
+	}
+
 	// lowestLatency is a high duration initially, so we
 	// can be sure we're going to have a duration lower than this
 	// for the first latency retrieved.
 	lowestLatency := time.Hour
+	var oldestPing mono.Time
 	for ipp, state := range de.endpointState {
+		if oldestPing.IsZero() {
+			oldestPing = state.lastPing
+		} else if state.lastPing.Before(oldestPing) {
+			oldestPing = state.lastPing
+		}
+
 		if latency, ok := state.latencyLocked(); ok {
 			if latency < lowestLatency || latency == lowestLatency && ipp.Addr().Is6() {
 				// If we have the same latency,IPv6 is prioritized.
@@ -307,35 +331,25 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 			}
 		}
 	}
+	needPing := len(de.endpointState) > 1 && now.Sub(oldestPing) > wireguardPingInterval
 
-	if udpAddr.IsValid() {
-		// Set trustBestAddrUntil to an hour, so we will
-		// continue to use this address for a long period of time.
-		de.bestAddr.AddrPort = udpAddr
-		de.trustBestAddrUntil = now.Add(1 * time.Hour)
-		return udpAddr, false
+	if !udpAddr.IsValid() {
+		candidates := xmaps.Keys(de.endpointState)
+
+		// Randomly select an address to use until we retrieve latency information
+		// and give it a short trustBestAddrUntil time so we avoid flapping between
+		// addresses while waiting on latency information to be populated.
+		udpAddr = candidates[rand.Intn(len(candidates))]
 	}
 
-	candidates := xmaps.Keys(de.endpointState)
-	if len(candidates) == 0 {
-		de.c.logf("magicsock: addrForSendWireguardLocked: [unexpected] no candidates available for endpoint")
-		return udpAddr, false
-	}
-
-	// Randomly select an address to use until we retrieve latency information
-	// and give it a short trustBestAddrUntil time so we avoid flapping between
-	// addresses while waiting on latency information to be populated.
-	udpAddr = candidates[rand.Intn(len(candidates))]
 	de.bestAddr.AddrPort = udpAddr
-	if len(candidates) == 1 {
-		// if we only have one address that we can send data too,
-		// we should trust it for a longer period of time.
-		de.trustBestAddrUntil = now.Add(1 * time.Hour)
-	} else {
-		de.trustBestAddrUntil = now.Add(15 * time.Second)
-	}
-
-	return udpAddr, len(candidates) > 1
+	// Only extend trustBestAddrUntil by one second to avoid packet
+	// reordering and/or CPU usage from random selection during the first
+	// second. We should receive a response due to a WireGuard handshake in
+	// less than one second in good cases, in which case this will be then
+	// extended to 15 seconds.
+	de.trustBestAddrUntil = now.Add(time.Second)
+	return udpAddr, needPing
 }
 
 // heartbeat is called every heartbeatInterval to keep the best UDP path alive,
