@@ -1210,11 +1210,11 @@ func Test32bitAlignment(t *testing.T) {
 		t.Fatalf("endpoint.lastRecv is not 8-byte aligned")
 	}
 
-	de.noteRecvActivity() // verify this doesn't panic on 32-bit
+	de.noteRecvActivity(netip.AddrPort{}) // verify this doesn't panic on 32-bit
 	if called != 1 {
 		t.Fatal("expected call to noteRecvActivity")
 	}
-	de.noteRecvActivity()
+	de.noteRecvActivity(netip.AddrPort{})
 	if called != 1 {
 		t.Error("expected no second call to noteRecvActivity")
 	}
@@ -2668,6 +2668,7 @@ func newPingResponder(t *testing.T) *pingResponder {
 
 func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 	testTime := mono.Now()
+	secondPingTime := testTime.Add(10 * time.Second)
 
 	type endpointDetails struct {
 		addrPort netip.AddrPort
@@ -2675,16 +2676,79 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 	}
 
 	wgTests := []struct {
-		name       string
-		noV4       bool
-		noV6       bool
-		sendWGPing bool
-		ep         []endpointDetails
-		want       netip.AddrPort
+		name             string
+		sendInitialPing  bool
+		validAddr        bool
+		sendFollowUpPing bool
+		pingTime         mono.Time
+		ep               []endpointDetails
+		want             netip.AddrPort
 	}{
 		{
-			name:       "choose lowest latency for useable IPv4 and IPv6",
-			sendWGPing: true,
+			name:             "no endpoints",
+			sendInitialPing:  false,
+			validAddr:        false,
+			sendFollowUpPing: false,
+			pingTime:         testTime,
+			ep:               []endpointDetails{},
+			want:             netip.AddrPort{},
+		},
+		{
+			name:             "singular endpoint does not request ping",
+			sendInitialPing:  false,
+			validAddr:        true,
+			sendFollowUpPing: false,
+			pingTime:         testTime,
+			ep: []endpointDetails{
+				{
+					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+					latency:  100 * time.Millisecond,
+				},
+			},
+			want: netip.MustParseAddrPort("1.1.1.1:111"),
+		},
+		{
+			name:             "ping sent within wireguardPingInterval should not request ping",
+			sendInitialPing:  true,
+			validAddr:        true,
+			sendFollowUpPing: false,
+			pingTime:         testTime.Add(7 * time.Second),
+			ep: []endpointDetails{
+				{
+					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+					latency:  100 * time.Millisecond,
+				},
+				{
+					addrPort: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222"),
+					latency:  2000 * time.Millisecond,
+				},
+			},
+			want: netip.MustParseAddrPort("1.1.1.1:111"),
+		},
+		{
+			name:             "ping sent outside of wireguardPingInterval should request ping",
+			sendInitialPing:  true,
+			validAddr:        true,
+			sendFollowUpPing: true,
+			pingTime:         testTime.Add(3 * time.Second),
+			ep: []endpointDetails{
+				{
+					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
+					latency:  100 * time.Millisecond,
+				},
+				{
+					addrPort: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222"),
+					latency:  150 * time.Millisecond,
+				},
+			},
+			want: netip.MustParseAddrPort("1.1.1.1:111"),
+		},
+		{
+			name:             "choose lowest latency for useable IPv4 and IPv6",
+			sendInitialPing:  true,
+			validAddr:        true,
+			sendFollowUpPing: false,
+			pingTime:         secondPingTime,
 			ep: []endpointDetails{
 				{
 					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
@@ -2698,8 +2762,11 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 			want: netip.MustParseAddrPort("[2345:0425:2CA1:0000:0000:0567:5673:23b5]:222"),
 		},
 		{
-			name:       "choose IPv6 address when latency is the same for v4 and v6",
-			sendWGPing: true,
+			name:             "choose IPv6 address when latency is the same for v4 and v6",
+			sendInitialPing:  true,
+			validAddr:        true,
+			sendFollowUpPing: false,
+			pingTime:         secondPingTime,
 			ep: []endpointDetails{
 				{
 					addrPort: netip.MustParseAddrPort("1.1.1.1:111"),
@@ -2715,52 +2782,57 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 	}
 
 	for _, test := range wgTests {
-		endpoint := &endpoint{
-			isWireguardOnly: true,
-			endpointState:   map[netip.AddrPort]*endpointState{},
-			c: &Conn{
-				noV4: atomic.Bool{},
-				noV6: atomic.Bool{},
-			},
-		}
-
-		for _, epd := range test.ep {
-			endpoint.endpointState[epd.addrPort] = &endpointState{}
-		}
-
-		udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime)
-		if !udpAddr.IsValid() {
-			t.Error("udpAddr returned is not valid")
-		}
-		if shouldPing != test.sendWGPing {
-			t.Errorf("addrForSendLocked did not indiciate correct ping state; got %v, want %v", shouldPing, test.sendWGPing)
-		}
-
-		for _, epd := range test.ep {
-			state, ok := endpoint.endpointState[epd.addrPort]
-			if !ok {
-				t.Errorf("addr does not exist in endpoint state map")
+		t.Run(test.name, func(t *testing.T) {
+			endpoint := &endpoint{
+				isWireguardOnly: true,
+				endpointState:   map[netip.AddrPort]*endpointState{},
+				c: &Conn{
+					logf: t.Logf,
+					noV4: atomic.Bool{},
+					noV6: atomic.Bool{},
+				},
 			}
 
-			latency, ok := state.latencyLocked()
-			if ok {
-				t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+			for _, epd := range test.ep {
+				endpoint.endpointState[epd.addrPort] = &endpointState{}
 			}
-			state.recentPongs = append(state.recentPongs, pongReply{
-				latency: epd.latency,
-			})
-			state.recentPong = 0
-		}
+			udpAddr, _, shouldPing := endpoint.addrForSendLocked(testTime)
+			if udpAddr.IsValid() != test.validAddr {
+				t.Errorf("udpAddr validity is incorrect; got %v, want %v", udpAddr.IsValid(), test.validAddr)
+			}
+			if shouldPing != test.sendInitialPing {
+				t.Errorf("addrForSendLocked did not indiciate correct ping state; got %v, want %v", shouldPing, test.sendInitialPing)
+			}
 
-		udpAddr, _, shouldPing = endpoint.addrForSendLocked(testTime.Add(2 * time.Minute))
-		if udpAddr != test.want {
-			t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, test.want)
-		}
-		if shouldPing {
-			t.Error("addrForSendLocked should not indicate ping is required")
-		}
-		if endpoint.bestAddr.AddrPort != test.want {
-			t.Errorf("bestAddr.AddrPort is not as expected: got %v, want %v", endpoint.bestAddr.AddrPort, test.want)
-		}
+			// Update the endpointState to simulate a ping having been
+			// sent and a pong received.
+			for _, epd := range test.ep {
+				state, ok := endpoint.endpointState[epd.addrPort]
+				if !ok {
+					t.Errorf("addr does not exist in endpoint state map")
+				}
+				state.lastPing = test.pingTime
+
+				latency, ok := state.latencyLocked()
+				if ok {
+					t.Errorf("latency was set for %v: %v", epd.addrPort, latency)
+				}
+				state.recentPongs = append(state.recentPongs, pongReply{
+					latency: epd.latency,
+				})
+				state.recentPong = 0
+			}
+
+			udpAddr, _, shouldPing = endpoint.addrForSendLocked(secondPingTime)
+			if udpAddr != test.want {
+				t.Errorf("udpAddr returned is not expected: got %v, want %v", udpAddr, test.want)
+			}
+			if shouldPing != test.sendFollowUpPing {
+				t.Errorf("addrForSendLocked did not indiciate correct ping state; got %v, want %v", shouldPing, test.sendFollowUpPing)
+			}
+			if endpoint.bestAddr.AddrPort != test.want {
+				t.Errorf("bestAddr.AddrPort is not as expected: got %v, want %v", endpoint.bestAddr.AddrPort, test.want)
+			}
+		})
 	}
 }
