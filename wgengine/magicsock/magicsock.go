@@ -1188,7 +1188,7 @@ func (c *Conn) receiveIP(b []byte, ipp netip.AddrPort, cache *ippEndpointCache) 
 		cache.gen = de.numStopAndReset()
 		ep = de
 	}
-	ep.noteRecvActivity()
+	ep.noteRecvActivity(ipp)
 	if stats := c.stats.Load(); stats != nil {
 		stats.UpdateRxPhysical(ep.nodeAddr, ipp, len(b))
 	}
@@ -2607,6 +2607,11 @@ var (
 	// resetting the counter, as the first pings likely didn't through
 	// the firewall)
 	discoPingInterval = 5 * time.Second
+
+	// wireguardPingInterval is the minimum time between pings to an endpoint.
+	// Pings are only sent if we have not observed bidirectional traffic with an
+	// endpoint in at least this duration.
+	wireguardPingInterval = 5 * time.Second
 )
 
 // indexSentinelDeleted is the temporary value that endpointState.index takes while
