@@ -21,10 +21,11 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 )
 
-func TestUndeltaPeers(t *testing.T) {
+func TestUpdatePeersStateFromResponse(t *testing.T) {
 	var curTime time.Time
 
 	online := func(v bool) func(*tailcfg.Node) {
@@ -56,11 +57,12 @@ func TestUndeltaPeers(t *testing.T) {
 	}
 	peers := func(nv ...*tailcfg.Node) []*tailcfg.Node { return nv }
 	tests := []struct {
-		name    string
-		mapRes  *tailcfg.MapResponse
-		curTime time.Time
-		prev    []*tailcfg.Node
-		want    []*tailcfg.Node
+		name      string
+		mapRes    *tailcfg.MapResponse
+		curTime   time.Time
+		prev      []*tailcfg.Node
+		want      []*tailcfg.Node
+		wantStats updateStats
 	}{
 		{
 			name: "full_peers",
@@ -68,6 +70,10 @@ func TestUndeltaPeers(t *testing.T) {
 				Peers: peers(n(1, "foo"), n(2, "bar")),
 			},
 			want: peers(n(1, "foo"), n(2, "bar")),
+			wantStats: updateStats{
+				allNew: true,
+				added:  2,
+			},
 		},
 		{
 			name: "full_peers_ignores_deltas",
@@ -76,6 +82,10 @@ func TestUndeltaPeers(t *testing.T) {
 				PeersRemoved: []tailcfg.NodeID{2},
 			},
 			want: peers(n(1, "foo"), n(2, "bar")),
+			wantStats: updateStats{
+				allNew: true,
+				added:  2,
+			},
 		},
 		{
 			name: "add_and_update",
@@ -84,14 +94,21 @@ func TestUndeltaPeers(t *testing.T) {
 				PeersChanged: peers(n(0, "zero"), n(2, "bar2"), n(3, "three")),
 			},
 			want: peers(n(0, "zero"), n(1, "foo"), n(2, "bar2"), n(3, "three")),
+			wantStats: updateStats{
+				added:   2, // added IDs 0 and 3
+				changed: 1, // changed ID 2
+			},
 		},
 		{
 			name: "remove",
 			prev: peers(n(1, "foo"), n(2, "bar")),
 			mapRes: &tailcfg.MapResponse{
-				PeersRemoved: []tailcfg.NodeID{1},
+				PeersRemoved: []tailcfg.NodeID{1, 3, 4},
 			},
 			want: peers(n(2, "bar")),
+			wantStats: updateStats{
+				removed: 1, // ID 1
+			},
 		},
 		{
 			name: "add_and_remove",
@@ -101,6 +118,10 @@ func TestUndeltaPeers(t *testing.T) {
 				PeersRemoved: []tailcfg.NodeID{2},
 			},
 			want: peers(n(1, "foo2")),
+			wantStats: updateStats{
+				changed: 1,
+				removed: 1,
+			},
 		},
 		{
 			name:   "unchanged",
@@ -113,13 +134,15 @@ func TestUndeltaPeers(t *testing.T) {
 			prev: peers(n(1, "foo"), n(2, "bar")),
 			mapRes: &tailcfg.MapResponse{
 				OnlineChange: map[tailcfg.NodeID]bool{
-					1: true,
+					1:   true,
+					404: true,
 				},
 			},
 			want: peers(
 				n(1, "foo", online(true)),
 				n(2, "bar"),
 			),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "online_change_offline",
@@ -134,6 +157,7 @@ func TestUndeltaPeers(t *testing.T) {
 				n(1, "foo", online(false)),
 				n(2, "bar", online(true)),
 			),
+			wantStats: updateStats{changed: 2},
 		},
 		{
 			name:    "peer_seen_at",
@@ -149,6 +173,7 @@ func TestUndeltaPeers(t *testing.T) {
 				n(1, "foo"),
 				n(2, "bar", seenAt(time.Unix(123, 0))),
 			),
+			wantStats: updateStats{changed: 2},
 		},
 		{
 			name: "ep_change_derp",
@@ -159,7 +184,8 @@ func TestUndeltaPeers(t *testing.T) {
 					DERPRegion: 4,
 				}},
 			},
-			want: peers(n(1, "foo", withDERP("127.3.3.40:4"))),
+			want:      peers(n(1, "foo", withDERP("127.3.3.40:4"))),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "ep_change_udp",
@@ -170,10 +196,11 @@ func TestUndeltaPeers(t *testing.T) {
 					Endpoints: []string{"1.2.3.4:56"},
 				}},
 			},
-			want: peers(n(1, "foo", withEP("1.2.3.4:56"))),
+			want:      peers(n(1, "foo", withEP("1.2.3.4:56"))),
+			wantStats: updateStats{changed: 1},
 		},
 		{
-			name: "ep_change_udp",
+			name: "ep_change_udp_2",
 			prev: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:111"))),
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
@@ -181,7 +208,8 @@ func TestUndeltaPeers(t *testing.T) {
 					Endpoints: []string{"1.2.3.4:56"},
 				}},
 			},
-			want: peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
+			want:      peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "ep_change_both",
@@ -193,7 +221,8 @@ func TestUndeltaPeers(t *testing.T) {
 					Endpoints:  []string{"1.2.3.4:56"},
 				}},
 			},
-			want: peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
+			want:      peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_key",
@@ -208,6 +237,7 @@ func TestUndeltaPeers(t *testing.T) {
 				Name: "foo",
 				Key:  key.NodePublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_key_signature",
@@ -217,11 +247,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID:       1,
 					KeySignature: []byte{3, 4},
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:           1,
 				Name:         "foo",
 				KeySignature: []byte{3, 4},
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_disco_key",
@@ -231,11 +263,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID:   1,
 					DiscoKey: ptr.To(key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A')))),
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:       1,
 				Name:     "foo",
 				DiscoKey: key.DiscoPublicFromRaw32(mem.B(append(make([]byte, 31), 'A'))),
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_online",
@@ -245,11 +279,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID: 1,
 					Online: ptr.To(true),
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:     1,
 				Name:   "foo",
 				Online: ptr.To(true),
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_last_seen",
@@ -259,11 +295,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID:   1,
 					LastSeen: ptr.To(time.Unix(123, 0).UTC()),
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:       1,
 				Name:     "foo",
 				LastSeen: ptr.To(time.Unix(123, 0).UTC()),
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_key_expiry",
@@ -273,11 +311,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID:    1,
 					KeyExpiry: ptr.To(time.Unix(123, 0).UTC()),
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:        1,
 				Name:      "foo",
 				KeyExpiry: time.Unix(123, 0).UTC(),
 			}),
+			wantStats: updateStats{changed: 1},
 		},
 		{
 			name: "change_capabilities",
@@ -287,11 +327,13 @@ func TestUndeltaPeers(t *testing.T) {
 					NodeID:       1,
 					Capabilities: ptr.To([]string{"foo"}),
 				}},
-			}, want: peers(&tailcfg.Node{
+			},
+			want: peers(&tailcfg.Node{
 				ID:           1,
 				Name:         "foo",
 				Capabilities: []string{"foo"},
 			}),
+			wantStats: updateStats{changed: 1},
 		}}
 
 	for _, tt := range tests {
@@ -300,9 +342,23 @@ func TestUndeltaPeers(t *testing.T) {
 				curTime = tt.curTime
 				tstest.Replace(t, &clock, tstime.Clock(tstest.NewClock(tstest.ClockOpts{Start: curTime})))
 			}
-			undeltaPeers(tt.mapRes, tt.prev)
-			if !reflect.DeepEqual(tt.mapRes.Peers, tt.want) {
-				t.Errorf("wrong results\n got: %s\nwant: %s", formatNodes(tt.mapRes.Peers), formatNodes(tt.want))
+			ms := newTestMapSession(t, nil)
+			for _, n := range tt.prev {
+				mak.Set(&ms.peers, n.ID, ptr.To(n.View()))
+			}
+			ms.rebuildSorted()
+
+			gotStats := ms.updatePeersStateFromResponse(tt.mapRes)
+
+			got := make([]*tailcfg.Node, len(ms.sortedPeers))
+			for i, vp := range ms.sortedPeers {
+				got[i] = vp.AsStruct()
+			}
+			if gotStats != tt.wantStats {
+				t.Errorf("got stats = %+v; want %+v", gotStats, tt.wantStats)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("wrong results\n got: %s\nwant: %s", formatNodes(got), formatNodes(tt.want))
 			}
 		})
 	}
@@ -338,6 +394,11 @@ func newTestMapSession(t testing.TB, nu NetmapUpdater) *mapSession {
 	t.Cleanup(ms.Close)
 	ms.logf = t.Logf
 	return ms
+}
+
+func (ms *mapSession) netmapForResponse(res *tailcfg.MapResponse) *netmap.NetworkMap {
+	ms.updateStateFromResponse(res)
+	return ms.netmap()
 }
 
 func TestNetmapForResponse(t *testing.T) {
@@ -454,7 +515,8 @@ func TestNetmapForResponse(t *testing.T) {
 			Node: someNode,
 		}
 		initDisplayNames(mapRes.Node.View(), mapRes)
-		nm1 := ms.netmapForResponse(mapRes)
+		ms.updateStateFromResponse(mapRes)
+		nm1 := ms.netmap()
 		if !nm1.SelfNode.Valid() {
 			t.Fatal("nil Node in 1st netmap")
 		}
@@ -463,7 +525,8 @@ func TestNetmapForResponse(t *testing.T) {
 			t.Errorf("Node mismatch in 1st netmap; got: %s", j)
 		}
 
-		nm2 := ms.netmapForResponse(&tailcfg.MapResponse{})
+		ms.updateStateFromResponse(&tailcfg.MapResponse{})
+		nm2 := ms.netmap()
 		if !nm2.SelfNode.Valid() {
 			t.Fatal("nil Node in 1st netmap")
 		}
