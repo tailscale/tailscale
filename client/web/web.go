@@ -79,6 +79,7 @@ func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func
 		csrfProtect := csrf.Protect(csrfKey())
 		s.apiHandler = csrfProtect(&api{s: s})
 	}
+	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
 }
 
@@ -306,6 +307,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.servePostNodeUpdate(w, r)
 		return
 	default:
+		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
 		s.serveGetNodeData(w, r, user)
 		return
 	}
