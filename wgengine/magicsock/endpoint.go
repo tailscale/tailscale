@@ -61,7 +61,7 @@ type endpoint struct {
 
 	heartBeatTimer *time.Timer    // nil when idle
 	lastSend       mono.Time      // last time there was outgoing packets sent to this peer (from wireguard-go)
-	lastFullPing   mono.Time      // last time we pinged all disco endpoints
+	lastFullPing   mono.Time      // last time we pinged all disco or wireguard only endpoints
 	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
 	bestAddr           addrLatency // best non-DERP path; zero if none
