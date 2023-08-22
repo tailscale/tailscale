@@ -41,6 +41,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
@@ -755,12 +756,11 @@ func (e *userspaceEngine) updateActivityMapsLocked(trackNodes []key.NodePublic, 
 
 // hasOverlap checks if there is a IPPrefix which is common amongst the two
 // provided slices.
-func hasOverlap(aips, rips []netip.Prefix) bool {
-	for _, aip := range aips {
-		for _, rip := range rips {
-			if aip == rip {
-				return true
-			}
+func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
+	for i := range aips.LenIter() {
+		aip := aips.At(i)
+		if views.SliceContains(rips, aip) {
+			return true
 		}
 	}
 	return false
@@ -800,9 +800,9 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 
 	isSubnetRouter := false
 	if e.birdClient != nil && nm != nil && nm.SelfNode.Valid() {
-		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes().AsSlice(), nm.Hostinfo.RoutableIPs)
+		isSubnetRouter = hasOverlap(nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs())
 		e.logf("[v1] Reconfig: hasOverlap(%v, %v) = %v; isSubnetRouter=%v lastIsSubnetRouter=%v",
-			nm.SelfNode.PrimaryRoutes, nm.Hostinfo.RoutableIPs,
+			nm.SelfNode.PrimaryRoutes(), nm.SelfNode.Hostinfo().RoutableIPs(),
 			isSubnetRouter, isSubnetRouter, e.lastIsSubnetRouter)
 	}
 	isSubnetRouterChanged := isSubnetRouter != e.lastIsSubnetRouter

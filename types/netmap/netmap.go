@@ -23,8 +23,6 @@ import (
 // The fields should all be considered read-only. They might
 // alias parts of previous NetworkMap values.
 type NetworkMap struct {
-	// Core networking
-
 	SelfNode   tailcfg.NodeView
 	NodeKey    key.NodePublic
 	PrivateKey key.NodePrivate
@@ -44,10 +42,10 @@ type NetworkMap struct {
 	MachineStatus tailcfg.MachineStatus
 
 	MachineKey key.MachinePublic
-	Peers      []tailcfg.NodeView // sorted by Node.ID
-	DNS        tailcfg.DNSConfig
-	// TODO(maisem) : replace with View.
-	Hostinfo          tailcfg.Hostinfo
+
+	Peers []tailcfg.NodeView // sorted by Node.ID
+	DNS   tailcfg.DNSConfig
+
 	PacketFilter      []filter.Match
 	PacketFilterRules views.Slice[tailcfg.FilterRule]
 	SSHPolicy         *tailcfg.SSHPolicy // or nil, if not enabled/allowed

@@ -704,7 +704,9 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		ss.Online = health.GetInPollNetMap()
 		if b.netMap != nil {
 			ss.InNetworkMap = true
-			ss.HostName = b.netMap.Hostinfo.Hostname
+			if hi := b.netMap.SelfNode.Hostinfo(); hi.Valid() {
+				ss.HostName = hi.Hostname()
+			}
 			ss.DNSName = b.netMap.Name
 			ss.UserID = b.netMap.User()
 			if sn := b.netMap.SelfNode; sn.Valid() {

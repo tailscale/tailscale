@@ -467,9 +467,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		nm.Expiry = node.KeyExpiry()
 		nm.Name = node.Name()
 		nm.Addresses = filterSelfAddresses(node.Addresses().AsSlice())
-		if node.Hostinfo().Valid() {
-			nm.Hostinfo = *node.Hostinfo().AsStruct()
-		}
 		if node.MachineAuthorized() {
 			nm.MachineStatus = tailcfg.MachineAuthorized
 		} else {
