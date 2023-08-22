@@ -14,11 +14,11 @@ func TestDeps(t *testing.T) {
 		GOOS:   "js",
 		GOARCH: "wasm",
 		BadDeps: map[string]string{
-			"runtime/pprof":               "bloat",
-			"golang.org/x/net/http2/h2c":  "bloat",
-			"net/http/pprof":              "bloat",
-			"golang.org/x/net/proxy":      "bloat",
-			"github.com/tailscale/goupnp": "bloat, which can't work anyway in wasm",
+			"runtime/pprof":              "bloat",
+			"golang.org/x/net/http2/h2c": "bloat",
+			"net/http/pprof":             "bloat",
+			"golang.org/x/net/proxy":     "bloat",
+			"github.com/huin/goupnp":     "bloat, which can't work anyway in wasm",
 		},
 	}.Check(t)
 }
