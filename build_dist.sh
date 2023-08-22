@@ -5,6 +5,9 @@
 # information into the binaries, so that we can track down user
 # issues.
 #
+# To include the embedded web client, build the web client assets
+# before running this script. See README.md for details.
+#
 # If you're packaging Tailscale for a distro, please consider using
 # this script, or executing equivalent commands in your
 # distro-specific build system.

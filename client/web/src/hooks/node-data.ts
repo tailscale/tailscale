@@ -36,7 +36,16 @@ export default function useNodeData() {
   const [isPosting, setIsPosting] = useState<boolean>(false)
 
   const fetchNodeData = useCallback(() => {
-    apiFetch("api/data")
+    const urlParams = new URLSearchParams(window.location.search)
+    const nextParams = new URLSearchParams()
+    const token = urlParams.get("SynoToken")
+    if (token) {
+      nextParams.set("SynoToken", token)
+    }
+    const search = nextParams.toString()
+    const url = `api/data${search ? `?${search}` : ""}`
+
+    apiFetch(url)
       .then((r) => r.json())
       .then((d) => setData(d))
       .catch((error) => console.error(error))
@@ -75,7 +84,7 @@ export default function useNodeData() {
         nextParams.set("SynoToken", token)
       }
       const search = nextParams.toString()
-      const url = `/api/data${search ? `?${search}` : ""}`
+      const url = `api/data${search ? `?${search}` : ""}`
 
       var body, contentType: string
 

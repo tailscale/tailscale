@@ -38,7 +38,7 @@ cmd/tailscaled/tailscaled
 # Ignore web client node modules
 .vite/
 client/web/node_modules
-client/web/build
+client/web/build/assets
 
 /gocross
 /dist

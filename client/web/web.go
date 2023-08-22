@@ -5,14 +5,13 @@
 package web
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -31,6 +30,7 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
+	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
 )
 
@@ -38,15 +38,16 @@ import (
 // Because we assign this to the blank identifier, it does not actually embed the files.
 // However, this does cause `go mod vendor` to include the files when vendoring the package.
 // External packages that use the web client can `go mod vendor`, run `yarn build` to
-// build the assets, then those asset bundles will be able to be embedded.
+// build the assets, then those asset bundles will be embedded.
 //
 //go:embed yarn.lock index.html *.js *.json src/*
 var _ embed.FS
 
-//go:embed web.html web.css
+//go:embed build/*
 var embeddedFS embed.FS
 
-var tmpls *template.Template
+// staticfiles serves static files from the build directory.
+var staticfiles http.Handler
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
@@ -103,14 +104,6 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	if s.devMode {
 		cleanup = s.startDevServer()
 		s.addProxyToDevServer()
-
-		// Create handler for "/api" requests with CSRF protection.
-		// We don't require secure cookies, since the web client is regularly used
-		// on network appliances that are served on local non-https URLs.
-		// The client is secured by limiting the interface it listens on,
-		// or by authenticating requests before they reach the web client.
-		csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
 	}
 
 	var wg sync.WaitGroup
@@ -121,12 +114,21 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 		go s.watchSelf(ctx)
 	}()
 
+	// Create handler for "/api" requests with CSRF protection.
+	// We don't require secure cookies, since the web client is regularly used
+	// on network appliances that are served on local non-https URLs.
+	// The client is secured by limiting the interface it listens on,
+	// or by authenticating requests before they reach the web client.
+	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+	s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+
 	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
 }
 
 func init() {
-	tmpls = template.Must(template.New("").ParseFS(embeddedFS, "*"))
+	buildFiles := must.Get(fs.Sub(embeddedFS, "build"))
+	staticfiles = http.FileServer(http.FS(buildFiles))
 }
 
 // watchSelf watches the IPN notification bus to refresh
@@ -222,30 +224,23 @@ func authorize(w http.ResponseWriter, r *http.Request) (handled bool) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	// Authenticate and authorize the request for platforms that support it.
-	// Return if the request was processed.
-	if authorize(w, r) {
+	switch {
+	case authorize(w, r):
+		// Authenticate and authorize the request for platforms that support it.
+		// Return if the request was processed.
 		return
-	}
-
-	if s.devMode {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			// Pass through to other handlers via CSRF protection.
-			s.apiHandler.ServeHTTP(w, r)
-			return
-		}
-		// When in dev mode, proxy to the Vite dev server.
+	case strings.HasPrefix(r.URL.Path, "/api/"):
+		// Pass API requests through to the API handler.
+		s.apiHandler.ServeHTTP(w, r)
+		return
+	case s.devMode:
+		// When in dev mode, proxy non-api requests to the Vite dev server.
 		s.devProxy.ServeHTTP(w, r)
 		return
-	}
-
-	switch {
-	case r.Method == "POST":
-		s.servePostNodeUpdate(w, r)
-		return
 	default:
+		// Otherwise, serve static files from the embedded filesystem.
 		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
-		s.serveGetNodeData(w, r)
+		staticfiles.ServeHTTP(w, r)
 		return
 	}
 }
@@ -329,20 +324,6 @@ func (s *Server) getNodeData(ctx context.Context) (*nodeData, error) {
 	return data, nil
 }
 
-func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
-	data, err := s.getNodeData(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	buf := new(bytes.Buffer)
-	if err := tmpls.ExecuteTemplate(buf, "web.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Write(buf.Bytes())
-}
-
 func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request) {
 	data, err := s.getNodeData(r.Context())
 	if err != nil {
@@ -354,7 +335,6 @@ func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	return
 }
 
 type nodeUpdate struct {
