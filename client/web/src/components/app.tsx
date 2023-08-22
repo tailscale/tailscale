@@ -15,7 +15,7 @@ export default function App() {
       ) : (
         <>
           <main className="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl">
-            <Header data={data} />
+            <Header data={data} updateNode={updateNode} />
             <IP data={data} />
             <State data={data} updateNode={updateNode} />
           </main>
