@@ -27,7 +27,7 @@ func (c *Conn) ServeHTTPDebug(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
+	now := clock.Now()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<h1>magicsock</h1>")
@@ -132,7 +132,7 @@ func printEndpointHTML(w io.Writer, ep *endpoint) {
 		return // no activity ever
 	}
 
-	now := time.Now()
+	now := clock.Now()
 	mnow := mono.Now()
 	fmtMono := func(m mono.Time) string {
 		if m == 0 {

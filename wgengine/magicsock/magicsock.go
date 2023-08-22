@@ -73,6 +73,8 @@ const (
 	socketBufferSize = 7 << 20
 )
 
+var clock = tstime.StdClock{}
+
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 type Conn struct {
 	// This block mirrors the contents and field order of the Options
@@ -189,7 +191,7 @@ type Conn struct {
 	// derpCleanupTimer is the timer that fires to occasionally clean
 	// up idle DERP connections. It's only used when there is a non-home
 	// DERP connection in use.
-	derpCleanupTimer *time.Timer
+	derpCleanupTimer tstime.TimerController
 
 	// derpCleanupTimerArmed is whether derpCleanupTimer is
 	// scheduled to fire within derpCleanStaleInterval.
@@ -197,7 +199,7 @@ type Conn struct {
 
 	// periodicReSTUNTimer, when non-nil, is an AfterFunc timer
 	// that will call Conn.doPeriodicSTUN.
-	periodicReSTUNTimer *time.Timer
+	periodicReSTUNTimer tstime.TimerController
 
 	// endpointsUpdateActive indicates that updateEndpoints is
 	// currently running. It's used to deduplicate concurrent endpoint
@@ -495,7 +497,7 @@ func (c *Conn) updateEndpoints(why string) {
 					if debugReSTUNStopOnIdle() {
 						c.logf("scheduling periodicSTUN to run in %v", d)
 					}
-					c.periodicReSTUNTimer = time.AfterFunc(d, c.doPeriodicSTUN)
+					c.periodicReSTUNTimer = clock.AfterFunc(d, c.doPeriodicSTUN)
 				}
 			} else {
 				if debugReSTUNStopOnIdle() {
@@ -559,7 +561,7 @@ func (c *Conn) setEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 		return false
 	}
 
-	c.lastEndpointsTime = time.Now()
+	c.lastEndpointsTime = clock.Now()
 	for de, fn := range c.onEndpointRefreshed {
 		go fn()
 		delete(c.onEndpointRefreshed, de)
@@ -861,7 +863,7 @@ func (c *Conn) determineEndpoints(ctx context.Context) ([]tailcfg.Endpoint, erro
 	// endpoints if they do actually time out without being rediscovered.
 	// For now, though, rely on a minor LinkChange event causing this to
 	// re-run.
-	eps = c.endpointTracker.update(time.Now(), eps)
+	eps = c.endpointTracker.update(clock.Now(), eps)
 
 	if localAddr := c.pconn4.LocalAddr(); localAddr.IP.IsUnspecified() {
 		ips, loopback, err := interfaces.LocalAddresses()
@@ -1365,7 +1367,7 @@ func (c *Conn) handleDiscoMessage(msg []byte, src netip.AddrPort, derpNodeSrc ke
 	// Emit information about the disco frame into the pcap stream
 	// if a capture hook is installed.
 	if cb := c.captureHook.Load(); cb != nil {
-		cb(capture.PathDisco, time.Now(), disco.ToPCAPFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
+		cb(capture.PathDisco, clock.Now(), disco.ToPCAPFrame(src, derpNodeSrc, payload), packet.CaptureMeta{})
 	}
 
 	dm, err := disco.Parse(payload)
@@ -1479,7 +1481,7 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 func (c *Conn) handlePingLocked(dm *disco.Ping, src netip.AddrPort, di *discoInfo, derpNodeSrc key.NodePublic) {
 	likelyHeartBeat := src == di.lastPingFrom && time.Since(di.lastPingTime) < 5*time.Second
 	di.lastPingFrom = src
-	di.lastPingTime = time.Now()
+	di.lastPingTime = clock.Now()
 	isDerp := src.Addr() == tailcfg.DerpMagicIPAddr
 
 	// If we can figure out with certainty which node key this disco
@@ -1571,7 +1573,7 @@ func (c *Conn) enqueueCallMeMaybe(derpAddr netip.AddrPort, de *endpoint) {
 		return
 	}
 
-	if !c.lastEndpointsTime.After(time.Now().Add(-endpointsFreshEnoughDuration)) {
+	if !c.lastEndpointsTime.After(clock.Now().Add(-endpointsFreshEnoughDuration)) {
 		c.dlogf("[v1] magicsock: want call-me-maybe but endpoints stale; restunning")
 
 		mak.Set(&c.onEndpointRefreshed, de, func() {

@@ -12,6 +12,7 @@ import (
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine/filter"
@@ -19,8 +20,10 @@ import (
 
 const tcpTimeoutBeforeDebug = 5 * time.Second
 
+var clock = tstime.StdClock{}
+
 type pendingOpenFlow struct {
-	timer *time.Timer // until giving up on the flow
+	timer tstime.TimerController // until giving up on the flow
 
 	// guarded by userspaceEngine.mu:
 
@@ -108,7 +111,7 @@ func (e *userspaceEngine) trackOpenPostFilterOut(pp *packet.Parsed, t *tstun.Wra
 		}
 	}
 
-	timer := time.AfterFunc(tcpTimeoutBeforeDebug, func() {
+	timer := e.clock.AfterFunc(tcpTimeoutBeforeDebug, func() {
 		e.onOpenTimeout(flow)
 	})
 
@@ -214,7 +217,7 @@ func durFmt(t time.Time) string {
 	if t.IsZero() {
 		return "never"
 	}
-	d := time.Since(t).Round(time.Second)
+	d := clock.Since(t).Round(time.Second)
 	if d < 10*time.Minute {
 		// node.LastSeen times are rounded very coarsely, and
 		// we compare times from different clocks (server vs

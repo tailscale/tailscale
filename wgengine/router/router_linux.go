@@ -24,6 +24,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
 	"tailscale.com/util/linuxfw"
@@ -36,6 +37,8 @@ const (
 	netfilterNoDivert = preftype.NetfilterNoDivert
 	netfilterOn       = preftype.NetfilterOn
 )
+
+var clock = tstime.StdClock{}
 
 // netfilterRunner abstracts helpers to run netfilter commands. It is
 // implemented by linuxfw.IPTablesRunner and linuxfw.NfTablesRunner.
@@ -422,7 +425,7 @@ func (r *linuxRouter) onIPRuleDeleted(table uint8, priority uint32) {
 		r.ruleRestorePending.Swap(false)
 		return
 	}
-	time.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
+	clock.AfterFunc(rr.Delay()+250*time.Millisecond, func() {
 		if r.ruleRestorePending.Swap(false) && !r.closed.Load() {
 			r.logf("somebody (likely systemd-networkd) deleted ip rules; restoring Tailscale's")
 			r.justAddIPRules()

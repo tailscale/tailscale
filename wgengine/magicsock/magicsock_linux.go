@@ -185,7 +185,7 @@ func (c *Conn) listenRawDisco(family string) (io.Closer, error) {
 		pc.Close()
 		return nil, fmt.Errorf("writing disco test packet: %w", err)
 	}
-	pc.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	pc.SetReadDeadline(clock.Now().Add(100 * time.Millisecond))
 	var buf [1500]byte
 	for {
 		n, _, err := pc.ReadFrom(buf[:])

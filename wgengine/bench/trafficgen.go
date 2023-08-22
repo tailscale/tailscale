@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ipproto"
 )
+
+var clock = tstime.StdClock{}
 
 type Snapshot struct {
 	WhenNsec int64 // current time
@@ -122,7 +125,7 @@ func (t *TrafficGen) Snap() Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.cur.WhenNsec = time.Now().UnixNano()
+	t.cur.WhenNsec = clock.Now().UnixNano()
 	return t.cur
 }
 
@@ -144,7 +147,7 @@ func (t *TrafficGen) Running() bool {
 func (t *TrafficGen) Generate(b []byte, ofs int) int {
 	t.mu.Lock()
 
-	now := time.Now().UnixNano()
+	now := clock.Now().UnixNano()
 	if t.nsPerPacket == 0 || t.cur.timeAcc == 0 {
 		t.cur.timeAcc = now - 1
 	}

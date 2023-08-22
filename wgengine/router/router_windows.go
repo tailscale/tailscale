@@ -23,6 +23,7 @@ import (
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
 
@@ -33,6 +34,8 @@ type winRouter struct {
 	routeChangeCallback *winipcfg.RouteChangeCallback
 	firewall            *firewallTweaker
 }
+
+var clock = tstime.StdClock{}
 
 func newUserspaceRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor) (Router, error) {
 	nativeTun := tundev.(*tun.NativeTun)
@@ -57,9 +60,9 @@ func (r *winRouter) Up() error {
 	r.firewall.clear()
 
 	var err error
-	t0 := time.Now()
+	t0 := clock.Now()
 	r.routeChangeCallback, err = monitorDefaultRoutes(r.nativeTun)
-	d := time.Since(t0).Round(time.Millisecond)
+	d := clock.Since(t0).Round(time.Millisecond)
 	if err != nil {
 		return fmt.Errorf("monitorDefaultRoutes, after %v: %v", d, err)
 	}
@@ -178,7 +181,7 @@ func (ft *firewallTweaker) set(cidrs []string, routes, localRoutes []netip.Prefi
 }
 
 func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
-	t0 := time.Now()
+	t0 := clock.Now()
 	args = append([]string{"advfirewall", "firewall"}, args...)
 	cmd := exec.Command("netsh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -186,7 +189,7 @@ func (ft *firewallTweaker) runFirewall(args ...string) (time.Duration, error) {
 	if err != nil {
 		err = fmt.Errorf("%w: %v", err, string(b))
 	}
-	return time.Since(t0).Round(time.Millisecond), err
+	return clock.Since(t0).Round(time.Millisecond), err
 }
 
 func (ft *firewallTweaker) doAsyncSet() {

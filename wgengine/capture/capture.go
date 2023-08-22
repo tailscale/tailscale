@@ -16,6 +16,7 @@ import (
 	_ "embed"
 
 	"tailscale.com/net/packet"
+	"tailscale.com/tstime"
 	"tailscale.com/util/set"
 )
 
@@ -36,6 +37,8 @@ var bufferPool = sync.Pool{
 }
 
 const flushPeriod = 100 * time.Millisecond
+
+var clock = tstime.StdClock{}
 
 func writePcapHeader(w io.Writer) {
 	binary.Write(w, binary.LittleEndian, uint32(0xA1B2C3D4)) // pcap magic number
@@ -96,7 +99,7 @@ type Sink struct {
 
 	mu         sync.Mutex
 	outputs    set.HandleSet[io.Writer]
-	flushTimer *time.Timer // or nil if none running
+	flushTimer tstime.TimerController // or nil if none running
 }
 
 // RegisterOutput connects an output to this sink, which
@@ -224,7 +227,7 @@ func (s *Sink) LogPacket(path Path, when time.Time, data []byte, meta packet.Cap
 	}
 
 	if s.flushTimer == nil {
-		s.flushTimer = time.AfterFunc(flushPeriod, func() {
+		s.flushTimer = clock.AfterFunc(flushPeriod, func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			for _, o := range s.outputs {

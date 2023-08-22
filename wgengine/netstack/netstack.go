@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -62,6 +63,8 @@ var (
 	magicDNSIP   = tsaddr.TailscaleServiceIP()
 	magicDNSIPv6 = tsaddr.TailscaleServiceIPv6()
 )
+
+var clock = tstime.StdClock{}
 
 func init() {
 	mode := envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
@@ -615,7 +618,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 	}
 	defer userPingSem.Release()
 
-	t0 := time.Now()
+	t0 := clock.Now()
 	var err error
 	switch runtime.GOOS {
 	case "windows":
@@ -654,7 +657,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 		}
 		err = cmd.Run()
 	}
-	d := time.Since(t0)
+	d := clock.Since(t0)
 	if err != nil {
 		if d < time.Second/2 {
 			// If it failed quicker than the 3 second
@@ -668,7 +671,7 @@ func (ns *Impl) userPing(dstIP netip.Addr, pingResPkt []byte) {
 		return
 	}
 	if debugNetstack() {
-		ns.logf("exec pinged %v in %v", dstIP, time.Since(t0))
+		ns.logf("exec pinged %v in %v", dstIP, clock.Since(t0))
 	}
 	if err := ns.tundev.InjectOutbound(pingResPkt); err != nil {
 		ns.logf("InjectOutbound ping response: %v", err)
@@ -1061,7 +1064,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 	//
 	// See: https://github.com/bminor/glibc/blob/f7fbb99652eceb1b6b55e4be931649df5946497c/resolv/res_send.c#L995
 	for {
-		c.SetReadDeadline(time.Now().Add(readDeadline))
+		c.SetReadDeadline(clock.Now().Add(readDeadline))
 		n, _, err := c.ReadFrom(q)
 		if err != nil {
 			if oe, ok := err.(*net.OpError); !(ok && oe.Timeout()) {
@@ -1138,7 +1141,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		// wait a few seconds (or zero, really)
 		idleTimeout = 30 * time.Second
 	}
-	timer := time.AfterFunc(idleTimeout, func() {
+	timer := clock.AfterFunc(idleTimeout, func() {
 		if isLocal {
 			ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
 		}

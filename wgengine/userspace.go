@@ -35,6 +35,7 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
@@ -147,6 +148,8 @@ type userspaceEngine struct {
 	networkLogger netlog.Logger
 
 	// Lock ordering: magicsock.Conn.mu, wgLock, then mu.
+
+	clock tstime.Clock
 }
 
 // BIRDClient handles communication with the BIRD Internet Routing Daemon.
@@ -271,6 +274,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		router:         conf.Router,
 		confListenPort: conf.ListenPort,
 		birdClient:     conf.BIRDClient,
+		clock:          tstime.StdClock{},
 	}
 
 	if e.birdClient != nil {
@@ -1014,7 +1018,7 @@ func (e *userspaceEngine) getStatus() (*Status, error) {
 	}
 
 	return &Status{
-		AsOf:       time.Now(),
+		AsOf:       e.clock.Now(),
 		LocalAddrs: localAddrs,
 		Peers:      peers,
 		DERPs:      derpConns,
@@ -1286,13 +1290,13 @@ func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.No
 
 	idSeq, payload := packet.ICMPEchoPayload(nil)
 
-	expireTimer := time.AfterFunc(10*time.Second, func() {
+	expireTimer := e.clock.AfterFunc(10*time.Second, func() {
 		e.setICMPEchoResponseCallback(idSeq, nil)
 	})
-	t0 := time.Now()
+	t0 := e.clock.Now()
 	e.setICMPEchoResponseCallback(idSeq, func() {
 		expireTimer.Stop()
-		d := time.Since(t0)
+		d := e.clock.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = destIP.String()
 		res.NodeName = peer.ComputedName()
@@ -1328,13 +1332,13 @@ func (e *userspaceEngine) sendTSMPPing(ip netip.Addr, peer tailcfg.NodeView, res
 	var data [8]byte
 	crand.Read(data[:])
 
-	expireTimer := time.AfterFunc(10*time.Second, func() {
+	expireTimer := e.clock.AfterFunc(10*time.Second, func() {
 		e.setTSMPPongCallback(data, nil)
 	})
-	t0 := time.Now()
+	t0 := e.clock.Now()
 	e.setTSMPPongCallback(data, func(pong packet.TSMPPongReply) {
 		expireTimer.Stop()
-		d := time.Since(t0)
+		d := e.clock.Since(t0)
 		res.LatencySeconds = d.Seconds()
 		res.NodeIP = ip.String()
 		res.NodeName = peer.ComputedName()
