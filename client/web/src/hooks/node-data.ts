@@ -56,6 +56,7 @@ export default function useNodeData() {
       setIsPosting(true)
 
       update = {
+        ...update,
         // Default to current data value for any unset fields.
         AdvertiseRoutes:
           update.AdvertiseRoutes !== undefined
