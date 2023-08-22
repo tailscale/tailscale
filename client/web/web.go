@@ -45,7 +45,7 @@ import (
 //go:embed yarn.lock index.html *.js *.json src/*
 var _ embed.FS
 
-//go:embed web.html web.css auth-redirect.html
+//go:embed web.html web.css
 var embeddedFS embed.FS
 
 var tmpls *template.Template
@@ -302,11 +302,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case r.URL.Path == "/redirect" || r.URL.Path == "/redirect/":
-		if err := tmpls.ExecuteTemplate(w, "auth-redirect.html", nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
 	case r.Method == "POST":
 		s.servePostNodeUpdate(w, r)
 		return
