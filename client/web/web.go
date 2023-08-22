@@ -42,7 +42,7 @@ import (
 // External packages that use the web client can `go mod vendor`, run `yarn build` to
 // build the assets, then those asset bundles will be able to be embedded.
 //
-//go:embed yarn.lock index.html *.js *.json src/**/*
+//go:embed yarn.lock index.html *.js *.json src/*
 var _ embed.FS
 
 //go:embed web.html web.css auth-redirect.html
