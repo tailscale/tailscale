@@ -4,6 +4,7 @@
 package controlclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go4.org/mem"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
@@ -642,12 +644,212 @@ func TestDeltaDERPMap(t *testing.T) {
 	}
 }
 
+func TestPeerChangeDiff(t *testing.T) {
+	tests := []struct {
+		name      string
+		a, b      *tailcfg.Node
+		want      *tailcfg.PeerChange // nil means want ok=false, unless wantEqual is set
+		wantEqual bool                // means test wants (nil, true)
+	}{
+		{
+			name:      "eq",
+			a:         &tailcfg.Node{ID: 1},
+			b:         &tailcfg.Node{ID: 1},
+			wantEqual: true,
+		},
+		{
+			name: "patch-derp",
+			a:    &tailcfg.Node{ID: 1, DERP: "127.3.3.40:1"},
+			b:    &tailcfg.Node{ID: 1, DERP: "127.3.3.40:2"},
+			want: &tailcfg.PeerChange{NodeID: 1, DERPRegion: 2},
+		},
+		{
+			name: "patch-endpoints",
+			a:    &tailcfg.Node{ID: 1, Endpoints: []string{"10.0.0.1:1"}},
+			b:    &tailcfg.Node{ID: 1, Endpoints: []string{"10.0.0.2:2"}},
+			want: &tailcfg.PeerChange{NodeID: 1, Endpoints: []string{"10.0.0.2:2"}},
+		},
+		{
+			name: "patch-cap",
+			a:    &tailcfg.Node{ID: 1, Cap: 1},
+			b:    &tailcfg.Node{ID: 1, Cap: 2},
+			want: &tailcfg.PeerChange{NodeID: 1, Cap: 2},
+		},
+		{
+			name: "patch-lastseen",
+			a:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(1, 0))},
+			b:    &tailcfg.Node{ID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
+			want: &tailcfg.PeerChange{NodeID: 1, LastSeen: ptr.To(time.Unix(2, 0))},
+		},
+		{
+			name: "patch-capabilities-to-nonempty",
+			a:    &tailcfg.Node{ID: 1, Capabilities: []string{"foo"}},
+			b:    &tailcfg.Node{ID: 1, Capabilities: []string{"bar"}},
+			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]string{"bar"})},
+		},
+		{
+			name: "patch-capabilities-to-empty",
+			a:    &tailcfg.Node{ID: 1, Capabilities: []string{"foo"}},
+			b:    &tailcfg.Node{ID: 1},
+			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]string(nil))},
+		},
+		{
+			name: "patch-online-to-true",
+			a:    &tailcfg.Node{ID: 1, Online: ptr.To(false)},
+			b:    &tailcfg.Node{ID: 1, Online: ptr.To(true)},
+			want: &tailcfg.PeerChange{NodeID: 1, Online: ptr.To(true)},
+		},
+		{
+			name: "patch-online-to-false",
+			a:    &tailcfg.Node{ID: 1, Online: ptr.To(true)},
+			b:    &tailcfg.Node{ID: 1, Online: ptr.To(false)},
+			want: &tailcfg.PeerChange{NodeID: 1, Online: ptr.To(false)},
+		},
+		{
+			name: "mix-patchable-and-not",
+			a:    &tailcfg.Node{ID: 1, Cap: 1},
+			b:    &tailcfg.Node{ID: 1, Cap: 2, StableID: "foo"},
+			want: nil,
+		},
+		{
+			name: "miss-change-stableid",
+			a:    &tailcfg.Node{ID: 1},
+			b:    &tailcfg.Node{ID: 1, StableID: "diff"},
+			want: nil,
+		},
+		{
+			name: "miss-change-id",
+			a:    &tailcfg.Node{ID: 1},
+			b:    &tailcfg.Node{ID: 2},
+			want: nil,
+		},
+		{
+			name: "miss-change-name",
+			a:    &tailcfg.Node{ID: 1, Name: "foo"},
+			b:    &tailcfg.Node{ID: 1, Name: "bar"},
+			want: nil,
+		},
+		{
+			name: "miss-change-user",
+			a:    &tailcfg.Node{ID: 1, User: 1},
+			b:    &tailcfg.Node{ID: 1, User: 2},
+			want: nil,
+		}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pc, ok := peerChangeDiff(tt.a.View(), tt.b)
+			if tt.wantEqual {
+				if !ok || pc != nil {
+					t.Errorf("got (%p, %v); want (nil, true); pc=%v", pc, ok, must.Get(json.Marshal(pc)))
+				}
+				return
+			}
+			if (pc != nil) != ok {
+				t.Fatalf("inconsistent ok=%v, pc=%p", ok, pc)
+			}
+			gotj := must.Get(json.Marshal(pc))
+			wantj := must.Get(json.Marshal(tt.want))
+			if !bytes.Equal(gotj, wantj) {
+				t.Errorf("mismatch\n got: %s\nwant: %s\n", gotj, wantj)
+			}
+		})
+	}
+}
+
+func TestPeerChangeDiffAllocs(t *testing.T) {
+	a := &tailcfg.Node{ID: 1}
+	b := &tailcfg.Node{ID: 1}
+	n := testing.AllocsPerRun(10000, func() {
+		diff, ok := peerChangeDiff(a.View(), b)
+		if !ok || diff != nil {
+			t.Fatalf("unexpected result: (%s, %v)", must.Get(json.Marshal(diff)), ok)
+		}
+	})
+	if n != 0 {
+		t.Errorf("allocs = %v; want 0", int(n))
+	}
+}
+
 type countingNetmapUpdater struct {
 	full atomic.Int64
 }
 
 func (nu *countingNetmapUpdater) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	nu.full.Add(1)
+}
+
+// tests (*mapSession).patchifyPeersChanged; smaller tests are in TestPeerChangeDiff
+func TestPatchifyPeersChanged(t *testing.T) {
+	hi := (&tailcfg.Hostinfo{}).View()
+	tests := []struct {
+		name string
+		mr0  *tailcfg.MapResponse // initial
+		mr1  *tailcfg.MapResponse // incremental
+		want *tailcfg.MapResponse // what the incremental one should've been mutated to
+	}{
+		{
+			name: "change_one_endpoint",
+			mr0: &tailcfg.MapResponse{
+				Node: &tailcfg.Node{Name: "foo.bar.ts.net."},
+				Peers: []*tailcfg.Node{
+					{ID: 1, Hostinfo: hi},
+				},
+			},
+			mr1: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 1, Endpoints: []string{"10.0.0.1:1111"}, Hostinfo: hi},
+				},
+			},
+			want: &tailcfg.MapResponse{
+				PeersChanged: nil,
+				PeersChangedPatch: []*tailcfg.PeerChange{
+					{NodeID: 1, Endpoints: []string{"10.0.0.1:1111"}},
+				},
+			},
+		},
+		{
+			name: "change_some",
+			mr0: &tailcfg.MapResponse{
+				Node: &tailcfg.Node{Name: "foo.bar.ts.net."},
+				Peers: []*tailcfg.Node{
+					{ID: 1, DERP: "127.3.3.40:1", Hostinfo: hi},
+					{ID: 2, DERP: "127.3.3.40:2", Hostinfo: hi},
+					{ID: 3, DERP: "127.3.3.40:3", Hostinfo: hi},
+				},
+			},
+			mr1: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 1, DERP: "127.3.3.40:11", Hostinfo: hi},
+					{ID: 2, StableID: "other-change", Hostinfo: hi},
+					{ID: 3, DERP: "127.3.3.40:33", Hostinfo: hi},
+					{ID: 4, DERP: "127.3.3.40:4", Hostinfo: hi},
+				},
+			},
+			want: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 2, StableID: "other-change", Hostinfo: hi},
+					{ID: 4, DERP: "127.3.3.40:4", Hostinfo: hi},
+				},
+				PeersChangedPatch: []*tailcfg.PeerChange{
+					{NodeID: 1, DERPRegion: 11},
+					{NodeID: 3, DERPRegion: 33},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nu := &countingNetmapUpdater{}
+			ms := newTestMapSession(t, nu)
+			ms.updateStateFromResponse(tt.mr0)
+			mr1 := new(tailcfg.MapResponse)
+			must.Do(json.Unmarshal(must.Get(json.Marshal(tt.mr1)), mr1))
+			ms.patchifyPeersChanged(mr1)
+			if diff := cmp.Diff(tt.want, mr1); diff != "" {
+				t.Errorf("wrong result (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func BenchmarkMapSessionDelta(b *testing.B) {
@@ -700,5 +902,4 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 			}
 		})
 	}
-
 }
