@@ -5,9 +5,15 @@ package controlclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
+	"reflect"
+	"slices"
 	"sort"
+	"strconv"
+	"sync"
 
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
@@ -17,6 +23,7 @@ import (
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/views"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/wgengine/filter"
 )
@@ -183,6 +190,8 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	// Call Node.InitDisplayNames on any changed nodes.
 	initDisplayNames(cmpx.Or(resp.Node.View(), ms.lastNode), resp)
 
+	ms.patchifyPeersChanged(resp)
+
 	ms.updateStateFromResponse(resp)
 
 	nm := ms.netmap()
@@ -278,6 +287,22 @@ func (ms *mapSession) updateStateFromResponse(resp *tailcfg.MapResponse) {
 	}
 }
 
+var (
+	patchDERPRegion   = clientmetric.NewCounter("controlclient_patch_derp")
+	patchEndpoints    = clientmetric.NewCounter("controlclient_patch_endpoints")
+	patchCap          = clientmetric.NewCounter("controlclient_patch_capver")
+	patchKey          = clientmetric.NewCounter("controlclient_patch_key")
+	patchDiscoKey     = clientmetric.NewCounter("controlclient_patch_discokey")
+	patchOnline       = clientmetric.NewCounter("controlclient_patch_online")
+	patchLastSeen     = clientmetric.NewCounter("controlclient_patch_lastseen")
+	patchKeyExpiry    = clientmetric.NewCounter("controlclient_patch_keyexpiry")
+	patchCapabilities = clientmetric.NewCounter("controlclient_patch_capabilities")
+	patchKeySignature = clientmetric.NewCounter("controlclient_patch_keysig")
+
+	patchifiedPeer      = clientmetric.NewCounter("controlclient_patchified_peer")
+	patchifiedPeerEqual = clientmetric.NewCounter("controlclient_patchified_peer_equal")
+)
+
 // updatePeersStateFromResponseres updates ms.peers and ms.sortedPeers from res. It takes ownership of res.
 func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (stats updateStats) {
 	defer func() {
@@ -362,33 +387,43 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 		mut := vp.AsStruct()
 		if pc.DERPRegion != 0 {
 			mut.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, pc.DERPRegion)
+			patchDERPRegion.Add(1)
 		}
 		if pc.Cap != 0 {
 			mut.Cap = pc.Cap
+			patchCap.Add(1)
 		}
 		if pc.Endpoints != nil {
 			mut.Endpoints = pc.Endpoints
+			patchEndpoints.Add(1)
 		}
 		if pc.Key != nil {
 			mut.Key = *pc.Key
+			patchKey.Add(1)
 		}
 		if pc.DiscoKey != nil {
 			mut.DiscoKey = *pc.DiscoKey
+			patchDiscoKey.Add(1)
 		}
 		if v := pc.Online; v != nil {
 			mut.Online = ptr.To(*v)
+			patchOnline.Add(1)
 		}
 		if v := pc.LastSeen; v != nil {
 			mut.LastSeen = ptr.To(*v)
+			patchLastSeen.Add(1)
 		}
 		if v := pc.KeyExpiry; v != nil {
 			mut.KeyExpiry = *v
+			patchKeyExpiry.Add(1)
 		}
 		if v := pc.Capabilities; v != nil {
 			mut.Capabilities = *v
+			patchCapabilities.Add(1)
 		}
 		if v := pc.KeySignature; v != nil {
 			mut.KeySignature = v
+			patchKeySignature.Add(1)
 		}
 		*vp = mut.View()
 	}
@@ -426,6 +461,217 @@ func (ms *mapSession) addUserProfile(nm *netmap.NetworkMap, userID tailcfg.UserI
 	if up, ok := ms.lastUserProfile[userID]; ok {
 		nm.UserProfiles[userID] = up
 	}
+}
+
+var debugPatchifyPeer = envknob.RegisterBool("TS_DEBUG_PATCHIFY_PEER")
+
+// patchifyPeersChanged mutates resp to promote PeersChanged entries to PeersChangedPatch
+// when possible.
+func (ms *mapSession) patchifyPeersChanged(resp *tailcfg.MapResponse) {
+	filtered := resp.PeersChanged[:0]
+	for _, n := range resp.PeersChanged {
+		if p, ok := ms.patchifyPeer(n); ok {
+			patchifiedPeer.Add(1)
+			if debugPatchifyPeer() {
+				patchj, _ := json.Marshal(p)
+				ms.logf("debug: patchifyPeer[ID=%v]: %s", n.ID, patchj)
+			}
+			if p != nil {
+				resp.PeersChangedPatch = append(resp.PeersChangedPatch, p)
+			} else {
+				patchifiedPeerEqual.Add(1)
+			}
+		} else {
+			filtered = append(filtered, n)
+		}
+	}
+	resp.PeersChanged = filtered
+	if len(resp.PeersChanged) == 0 {
+		resp.PeersChanged = nil
+	}
+}
+
+var nodeFields = sync.OnceValue(getNodeFields)
+
+// getNodeFields returns the fails of tailcfg.Node.
+func getNodeFields() []string {
+	rt := reflect.TypeOf((*tailcfg.Node)(nil)).Elem()
+	ret := make([]string, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		ret[i] = rt.Field(i).Name
+	}
+	return ret
+}
+
+// patchifyPeer returns a *tailcfg.PeerChange of the session's existing copy of
+// the n.ID Node to n.
+//
+// It returns ok=false if a patch can't be made, (V, ok) on a delta, or (nil,
+// true) if all the fields were identical (a zero change).
+func (ms *mapSession) patchifyPeer(n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+	was, ok := ms.peers[n.ID]
+	if !ok {
+		return nil, false
+	}
+	return peerChangeDiff(*was, n)
+}
+
+// peerChangeDiff returns the difference from 'was' to 'n', if possible.
+//
+// It returns (nil, true) if the fields were identical.
+func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChange, ok bool) {
+	var ret *tailcfg.PeerChange
+	pc := func() *tailcfg.PeerChange {
+		if ret == nil {
+			ret = new(tailcfg.PeerChange)
+		}
+		return ret
+	}
+	for _, field := range nodeFields() {
+		switch field {
+		default:
+			// The whole point of using reflect in this function is to panic
+			// here in tests if we forget to handle a new field.
+			panic("unhandled field: " + field)
+		case "computedHostIfDifferent", "ComputedName", "ComputedNameWithHost":
+			// Caller's responsibility to have populated these.
+			continue
+		case "DataPlaneAuditLogID":
+			//  Not sent for peers.
+		case "ID":
+			if was.ID() != n.ID {
+				return nil, false
+			}
+		case "StableID":
+			if was.StableID() != n.StableID {
+				return nil, false
+			}
+		case "Name":
+			if was.Name() != n.Name {
+				return nil, false
+			}
+		case "User":
+			if was.User() != n.User {
+				return nil, false
+			}
+		case "Sharer":
+			if was.Sharer() != n.Sharer {
+				return nil, false
+			}
+		case "Key":
+			if was.Key() != n.Key {
+				pc().Key = ptr.To(n.Key)
+			}
+		case "KeyExpiry":
+			if !was.KeyExpiry().Equal(n.KeyExpiry) {
+				pc().KeyExpiry = ptr.To(n.KeyExpiry)
+			}
+		case "KeySignature":
+			if !was.KeySignature().Equal(n.KeySignature) {
+				pc().KeySignature = slices.Clone(n.KeySignature)
+			}
+		case "Machine":
+			if was.Machine() != n.Machine {
+				return nil, false
+			}
+		case "DiscoKey":
+			if was.DiscoKey() != n.DiscoKey {
+				pc().DiscoKey = ptr.To(n.DiscoKey)
+			}
+		case "Addresses":
+			if !views.SliceEqual(was.Addresses(), views.SliceOf(n.Addresses)) {
+				return nil, false
+			}
+		case "AllowedIPs":
+			if !views.SliceEqual(was.AllowedIPs(), views.SliceOf(n.AllowedIPs)) {
+				return nil, false
+			}
+		case "Endpoints":
+			if !views.SliceEqual(was.Endpoints(), views.SliceOf(n.Endpoints)) {
+				pc().Endpoints = slices.Clone(n.Endpoints)
+			}
+		case "DERP":
+			if was.DERP() != n.DERP {
+				ip, portStr, err := net.SplitHostPort(n.DERP)
+				if err != nil || ip != "127.3.3.40" {
+					return nil, false
+				}
+				port, err := strconv.Atoi(portStr)
+				if err != nil || port < 1 || port > 65535 {
+					return nil, false
+				}
+				pc().DERPRegion = port
+			}
+		case "Hostinfo":
+			if !was.Hostinfo().Valid() && !n.Hostinfo.Valid() {
+				continue
+			}
+			if !was.Hostinfo().Valid() || !n.Hostinfo.Valid() {
+				return nil, false
+			}
+			if !was.Hostinfo().Equal(n.Hostinfo) {
+				return nil, false
+			}
+		case "Created":
+			if !was.Created().Equal(n.Created) {
+				return nil, false
+			}
+		case "Cap":
+			if was.Cap() != n.Cap {
+				pc().Cap = n.Cap
+			}
+		case "Tags":
+			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {
+				return nil, false
+			}
+		case "PrimaryRoutes":
+			if !views.SliceEqual(was.PrimaryRoutes(), views.SliceOf(n.PrimaryRoutes)) {
+				return nil, false
+			}
+		case "Online":
+			wasOnline := was.Online()
+			if n.Online != nil && wasOnline != nil && *n.Online != *wasOnline {
+				pc().Online = ptr.To(*n.Online)
+			}
+		case "LastSeen":
+			wasSeen := was.LastSeen()
+			if n.LastSeen != nil && wasSeen != nil && !wasSeen.Equal(*n.LastSeen) {
+				pc().LastSeen = ptr.To(*n.LastSeen)
+			}
+		case "MachineAuthorized":
+			if was.MachineAuthorized() != n.MachineAuthorized {
+				return nil, false
+			}
+		case "Capabilities":
+			if !views.SliceEqual(was.Capabilities(), views.SliceOf(n.Capabilities)) {
+				pc().Capabilities = ptr.To(n.Capabilities)
+			}
+		case "UnsignedPeerAPIOnly":
+			if was.UnsignedPeerAPIOnly() != n.UnsignedPeerAPIOnly {
+				return nil, false
+			}
+		case "IsWireGuardOnly":
+			if was.IsWireGuardOnly() != n.IsWireGuardOnly {
+				return nil, false
+			}
+		case "Expired":
+			if was.Expired() != n.Expired {
+				return nil, false
+			}
+		case "SelfNodeV4MasqAddrForThisPeer":
+			va, vb := was.SelfNodeV4MasqAddrForThisPeer(), n.SelfNodeV4MasqAddrForThisPeer
+			if va == nil && vb == nil {
+				continue
+			}
+			if va == nil || vb == nil || *va != *vb {
+				return nil, false
+			}
+		}
+	}
+	if ret != nil {
+		ret.NodeID = n.ID
+	}
+	return ret, true
 }
 
 // netmap returns a fully populated NetworkMap from the last state seen from
