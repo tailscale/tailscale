@@ -48,16 +48,19 @@ func Debugger(mux *http.ServeMux) *DebugHandler {
 	}
 	mux.Handle("/debug/", ret)
 
-	// Register this one directly on mux, rather than using
-	// ret.URL/etc, as we don't need another line of output on the
-	// index page. The /pprof/ index already covers it.
-	mux.Handle("/debug/pprof/profile", BrowserHeaderHandler(http.HandlerFunc(pprof.Profile)))
-
 	ret.KVFunc("Uptime", func() any { return varz.Uptime() })
 	ret.KV("Version", version.Long())
 	ret.Handle("vars", "Metrics (Go)", expvar.Handler())
 	ret.Handle("varz", "Metrics (Prometheus)", http.HandlerFunc(promvarz.Handler))
-	ret.Handle("pprof/", "pprof", http.HandlerFunc(pprof.Index))
+	ret.Handle("pprof/", "pprof (index)", http.HandlerFunc(pprof.Index))
+	// the CPU profile handler is special because it responds
+	// streamily, unlike every other pprof handler. This means it's
+	// not made available through pprof.Index the way all the other
+	// pprof types are, you have to register the CPU profile handler
+	// separately. Use HandleSilent for that to not pollute the human
+	// debug list with a link that produces streaming line noise if
+	// you click it.
+	ret.HandleSilent("pprof/profile", http.HandlerFunc(pprof.Profile))
 	ret.URL("/debug/pprof/goroutine?debug=1", "Goroutines (collapsed)")
 	ret.URL("/debug/pprof/goroutine?debug=2", "Goroutines (full)")
 	ret.Handle("gc", "force GC", http.HandlerFunc(gcHandler))
@@ -94,12 +97,25 @@ func (d *DebugHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (d *DebugHandler) handle(slug string, handler http.Handler) string {
+	href := "/debug/" + slug
+	d.mux.Handle(href, Protected(debugBrowserHeaderHandler(handler)))
+	return href
+}
+
 // Handle registers handler at /debug/<slug> and creates a descriptive
 // entry in /debug/ for it.
 func (d *DebugHandler) Handle(slug, desc string, handler http.Handler) {
-	href := "/debug/" + slug
-	d.mux.Handle(href, Protected(debugBrowserHeaderHandler(handler)))
+	href := d.handle(slug, handler)
 	d.URL(href, desc)
+}
+
+// HandleSilent registers handler at /debug/<slug>. It does not create
+// a descriptive entry in /debug/ for it. This should be used
+// sparingly, for things that need to be registered but would pollute
+// the list of debug links.
+func (d *DebugHandler) HandleSilent(slug string, handler http.Handler) {
+	d.handle(slug, handler)
 }
 
 // KV adds a key/value list item to /debug/.
