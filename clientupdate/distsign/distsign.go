@@ -38,7 +38,6 @@
 package distsign
 
 import (
-	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -56,49 +55,93 @@ import (
 )
 
 const (
-	pemTypePrivate = "PRIVATE KEY"
-	pemTypePublic  = "PUBLIC KEY"
+	pemTypeRootPrivate    = "ROOT PRIVATE KEY"
+	pemTypeRootPublic     = "ROOT PUBLIC KEY"
+	pemTypeSigningPrivate = "SIGNING PRIVATE KEY"
+	pemTypeSigningPublic  = "SIGNING PUBLIC KEY"
 
 	downloadSizeLimit    = 1 << 29 // 512MB
 	signingKeysSizeLimit = 1 << 20 // 1MB
 	signatureSizeLimit   = ed25519.SignatureSize
 )
 
-// GenerateKey generates a new key pair and encodes it as PEM.
-func GenerateKey() (priv, pub []byte, err error) {
+// RootKey is a root key used to sign signing keys.
+type RootKey struct {
+	k ed25519.PrivateKey
+}
+
+// GenerateRootKey generates a new root key pair and encodes it as PEM.
+func GenerateRootKey() (priv, pub []byte, err error) {
 	pub, priv, err = ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{
-			Type:  pemTypePrivate,
+			Type:  pemTypeRootPrivate,
 			Bytes: []byte(priv),
 		}), pem.EncodeToMemory(&pem.Block{
-			Type:  pemTypePublic,
+			Type:  pemTypeRootPublic,
 			Bytes: []byte(pub),
 		}), nil
 }
 
-// RootKey is a root key Signer used to sign signing keys.
-type RootKey Signer
+// ParseRootKey parses the PEM-encoded private root key. The key must be in the
+// same format as returned by GenerateRootKey.
+func ParseRootKey(privKey []byte) (*RootKey, error) {
+	k, err := parsePrivateKey(privKey, pemTypeRootPrivate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse root key: %w", err)
+	}
+	return &RootKey{k: k}, nil
+}
 
 // SignSigningKeys signs the bundle of public signing keys. The bundle must be
 // a sequence of PEM blocks joined with newlines.
-func (s *RootKey) SignSigningKeys(pubBundle []byte) ([]byte, error) {
-	return s.Sign(nil, pubBundle, crypto.Hash(0))
+func (r *RootKey) SignSigningKeys(pubBundle []byte) ([]byte, error) {
+	if _, err := parseSigningKeyBundle(pubBundle); err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(r.k, pubBundle), nil
 }
 
-// SigningKey is a signing key Signer used to sign packages.
-type SigningKey Signer
+// SigningKey is a signing key used to sign packages.
+type SigningKey struct {
+	k ed25519.PrivateKey
+}
+
+// GenerateSigningKey generates a new signing key pair and encodes it as PEM.
+func GenerateSigningKey() (priv, pub []byte, err error) {
+	pub, priv, err = ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{
+			Type:  pemTypeSigningPrivate,
+			Bytes: []byte(priv),
+		}), pem.EncodeToMemory(&pem.Block{
+			Type:  pemTypeSigningPublic,
+			Bytes: []byte(pub),
+		}), nil
+}
+
+// ParseSigningKey parses the PEM-encoded private signing key. The key must be
+// in the same format as returned by GenerateSigningKey.
+func ParseSigningKey(privKey []byte) (*SigningKey, error) {
+	k, err := parsePrivateKey(privKey, pemTypeSigningPrivate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse root key: %w", err)
+	}
+	return &SigningKey{k: k}, nil
+}
 
 // SignPackageHash signs the hash and the length of a package. Use PackageHash
 // to compute the inputs.
-func (s SigningKey) SignPackageHash(hash []byte, len int64) ([]byte, error) {
+func (s *SigningKey) SignPackageHash(hash []byte, len int64) ([]byte, error) {
 	if len <= 0 {
 		return nil, fmt.Errorf("package length must be positive, got %d", len)
 	}
 	msg := binary.LittleEndian.AppendUint64(hash, uint64(len))
-	return s.Sign(nil, msg, crypto.Hash(0))
+	return ed25519.Sign(s.k, msg), nil
 }
 
 // PackageHash is a hash.Hash that counts the number of bytes written. Use it
@@ -131,26 +174,6 @@ func (ph *PackageHash) Reset() {
 
 // Len returns the total number of bytes written.
 func (ph *PackageHash) Len() int64 { return ph.len }
-
-// Signer is crypto.Signer using a single key (root or signing).
-type Signer struct {
-	crypto.Signer
-}
-
-// NewSigner parses the PEM-encoded private key stored in the file named
-// privKeyPath and creates a Signer for it. The key is expected to be in the
-// same format as returned by GenerateKey.
-func NewSigner(privKeyPath string) (Signer, error) {
-	raw, err := os.ReadFile(privKeyPath)
-	if err != nil {
-		return Signer{}, err
-	}
-	k, err := parsePrivateKey(raw)
-	if err != nil {
-		return Signer{}, fmt.Errorf("failed to parse %q: %w", privKeyPath, err)
-	}
-	return Signer{Signer: k}, nil
-}
 
 // Client downloads and validates files from a distribution server.
 type Client struct {
@@ -229,18 +252,9 @@ func (c *Client) signingKeys() ([]ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("signature %q for key %q does not validate with any known root key; either you are under attack, or running a very old version of Tailscale with outdated root keys", sigURL, keyURL)
 	}
 
-	// Parse the bundle of public signing keys.
-	var keys []ed25519.PublicKey
-	for len(raw) > 0 {
-		pub, rest, err := parsePublicKey(raw)
-		if err != nil {
-			return nil, err
-		}
-		keys = append(keys, pub)
-		raw = rest
-	}
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no signing keys found at %q", keyURL)
+	keys, err := parseSigningKeyBundle(raw)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse signing key bundle from %q: %w", keyURL, err)
 	}
 	return keys, nil
 }
@@ -284,7 +298,7 @@ func download(url, dst string, limit int64) ([]byte, int64, error) {
 	return h.Sum(nil), h.Len(), nil
 }
 
-func parsePrivateKey(data []byte) (ed25519.PrivateKey, error) {
+func parsePrivateKey(data []byte, typeTag string) (ed25519.PrivateKey, error) {
 	b, rest := pem.Decode(data)
 	if b == nil {
 		return nil, errors.New("failed to decode PEM data")
@@ -292,8 +306,8 @@ func parsePrivateKey(data []byte) (ed25519.PrivateKey, error) {
 	if len(rest) > 0 {
 		return nil, errors.New("trailing PEM data")
 	}
-	if b.Type != pemTypePrivate {
-		return nil, fmt.Errorf("PEM type is %q, want %q", b.Type, pemTypePrivate)
+	if b.Type != typeTag {
+		return nil, fmt.Errorf("PEM type is %q, want %q", b.Type, typeTag)
 	}
 	if len(b.Bytes) != ed25519.PrivateKeySize {
 		return nil, errors.New("private key has incorrect length for an Ed25519 private key")
@@ -301,8 +315,24 @@ func parsePrivateKey(data []byte) (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(b.Bytes), nil
 }
 
-func parseSinglePublicKey(data []byte) (ed25519.PublicKey, error) {
-	pub, rest, err := parsePublicKey(data)
+func parseSigningKeyBundle(bundle []byte) ([]ed25519.PublicKey, error) {
+	var keys []ed25519.PublicKey
+	for len(bundle) > 0 {
+		pub, rest, err := parsePublicKey(bundle, pemTypeSigningPublic)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, pub)
+		bundle = rest
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("no signing keys found in the bundle")
+	}
+	return keys, nil
+}
+
+func parseSinglePublicKey(data []byte, typeTag string) (ed25519.PublicKey, error) {
+	pub, rest, err := parsePublicKey(data, typeTag)
 	if err != nil {
 		return nil, err
 	}
@@ -312,13 +342,13 @@ func parseSinglePublicKey(data []byte) (ed25519.PublicKey, error) {
 	return pub, err
 }
 
-func parsePublicKey(data []byte) (pub ed25519.PublicKey, rest []byte, retErr error) {
+func parsePublicKey(data []byte, typeTag string) (pub ed25519.PublicKey, rest []byte, retErr error) {
 	b, rest := pem.Decode(data)
 	if b == nil {
 		return nil, nil, errors.New("failed to decode PEM data")
 	}
-	if b.Type != pemTypePublic {
-		return nil, nil, fmt.Errorf("PEM type is %q, want %q", b.Type, pemTypePublic)
+	if b.Type != typeTag {
+		return nil, nil, fmt.Errorf("PEM type is %q, want %q", b.Type, typeTag)
 	}
 	if len(b.Bytes) != ed25519.PublicKeySize {
 		return nil, nil, errors.New("public key has incorrect length for an Ed25519 public key")

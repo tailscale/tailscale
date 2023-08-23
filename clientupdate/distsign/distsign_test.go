@@ -72,7 +72,7 @@ func TestDownload(t *testing.T) {
 			desc: "signed with root key",
 			before: func(t *testing.T) {
 				srv.add("hello", []byte("world"))
-				srv.add("hello.sig", srv.roots[0].sign([]byte("world")))
+				srv.add("hello.sig", ed25519.Sign(srv.roots[0].k, []byte("world")))
 			},
 			src:     "hello",
 			wantErr: true,
@@ -202,6 +202,122 @@ func TestRotateSigning(t *testing.T) {
 	}
 }
 
+func TestParseRootKey(t *testing.T) {
+	tests := []struct {
+		desc     string
+		generate func() ([]byte, []byte, error)
+		wantErr  bool
+	}{
+		{
+			desc:     "valid",
+			generate: GenerateRootKey,
+		},
+		{
+			desc:     "signing",
+			generate: GenerateSigningKey,
+			wantErr:  true,
+		},
+		{
+			desc:     "nil",
+			generate: func() ([]byte, []byte, error) { return nil, nil, nil },
+			wantErr:  true,
+		},
+		{
+			desc: "invalid PEM tag",
+			generate: func() ([]byte, []byte, error) {
+				priv, pub, err := GenerateRootKey()
+				priv = bytes.Replace(priv, []byte("ROOT "), nil, -1)
+				return priv, pub, err
+			},
+			wantErr: true,
+		},
+		{
+			desc:     "not PEM",
+			generate: func() ([]byte, []byte, error) { return []byte("s3cr3t"), nil, nil },
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			priv, _, err := tt.generate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := ParseRootKey(priv)
+			if err != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantErr {
+				t.Fatal("expected non-nil error")
+			}
+			if r == nil {
+				t.Errorf("got nil error and nil RootKey")
+			}
+		})
+	}
+}
+
+func TestParseSigningKey(t *testing.T) {
+	tests := []struct {
+		desc     string
+		generate func() ([]byte, []byte, error)
+		wantErr  bool
+	}{
+		{
+			desc:     "valid",
+			generate: GenerateSigningKey,
+		},
+		{
+			desc:     "root",
+			generate: GenerateRootKey,
+			wantErr:  true,
+		},
+		{
+			desc:     "nil",
+			generate: func() ([]byte, []byte, error) { return nil, nil, nil },
+			wantErr:  true,
+		},
+		{
+			desc: "invalid PEM tag",
+			generate: func() ([]byte, []byte, error) {
+				priv, pub, err := GenerateSigningKey()
+				priv = bytes.Replace(priv, []byte("SIGNING "), nil, -1)
+				return priv, pub, err
+			},
+			wantErr: true,
+		},
+		{
+			desc:     "not PEM",
+			generate: func() ([]byte, []byte, error) { return []byte("s3cr3t"), nil, nil },
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			priv, _, err := tt.generate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := ParseSigningKey(priv)
+			if err != nil {
+				if tt.wantErr {
+					return
+				}
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantErr {
+				t.Fatal("expected non-nil error")
+			}
+			if r == nil {
+				t.Errorf("got nil error and nil SigningKey")
+			}
+		})
+	}
+}
+
 type testServer struct {
 	roots []rootKeyPair
 	sign  []signingKeyPair
@@ -228,7 +344,7 @@ func newTestServer(t *testing.T) *testServer {
 func (s *testServer) client(t *testing.T) *Client {
 	roots := make([]ed25519.PublicKey, 0, len(s.roots))
 	for _, r := range s.roots {
-		pub, err := parseSinglePublicKey(r.pubRaw)
+		pub, err := parseSinglePublicKey(r.pubRaw, pemTypeRootPublic)
 		if err != nil {
 			t.Fatalf("parsePublicKey: %v", err)
 		}
@@ -285,13 +401,20 @@ type rootKeyPair struct {
 }
 
 func newRootKeyPair(t *testing.T) rootKeyPair {
-	kp := newKeyPair(t)
-	priv, err := parsePrivateKey(kp.privRaw)
+	privRaw, pubRaw, err := GenerateRootKey()
+	if err != nil {
+		t.Fatalf("GenerateRootKey: %v", err)
+	}
+	kp := keyPair{
+		privRaw: privRaw,
+		pubRaw:  pubRaw,
+	}
+	priv, err := parsePrivateKey(kp.privRaw, pemTypeRootPrivate)
 	if err != nil {
 		t.Fatalf("parsePrivateKey: %v", err)
 	}
 	return rootKeyPair{
-		RootKey: &RootKey{Signer: priv},
+		RootKey: &RootKey{k: priv},
 		keyPair: kp,
 	}
 }
@@ -310,13 +433,20 @@ type signingKeyPair struct {
 }
 
 func newSigningKeyPair(t *testing.T) signingKeyPair {
-	kp := newKeyPair(t)
-	priv, err := parsePrivateKey(kp.privRaw)
+	privRaw, pubRaw, err := GenerateSigningKey()
+	if err != nil {
+		t.Fatalf("GenerateSigningKey: %v", err)
+	}
+	kp := keyPair{
+		privRaw: privRaw,
+		pubRaw:  pubRaw,
+	}
+	priv, err := parsePrivateKey(kp.privRaw, pemTypeSigningPrivate)
 	if err != nil {
 		t.Fatalf("parsePrivateKey: %v", err)
 	}
 	return signingKeyPair{
-		SigningKey: &SigningKey{Signer: priv},
+		SigningKey: &SigningKey{k: priv},
 		keyPair:    kp,
 	}
 }
@@ -333,15 +463,4 @@ func (s signingKeyPair) sign(blob []byte) []byte {
 type keyPair struct {
 	privRaw []byte
 	pubRaw  []byte
-}
-
-func newKeyPair(t *testing.T) keyPair {
-	privRaw, pubRaw, err := GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	return keyPair{
-		privRaw: privRaw,
-		pubRaw:  pubRaw,
-	}
 }
