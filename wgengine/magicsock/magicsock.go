@@ -54,7 +54,6 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
 	"tailscale.com/util/uniq"
-	"tailscale.com/version"
 	"tailscale.com/wgengine/capture"
 )
 
@@ -2508,54 +2507,38 @@ func simpleDur(d time.Duration) time.Duration {
 	return d.Round(time.Minute)
 }
 
+// UpdateStatus implements the interface nede by ipnstate.StatusBuilder.
+//
+// This method adds in the magicsock-specific information only. Most
+// of the status is otherwise populated by LocalBackend.
 func (c *Conn) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var tailscaleIPs []netip.Addr
-	if c.netMap != nil {
-		tailscaleIPs = make([]netip.Addr, 0, len(c.netMap.Addresses))
-		for _, addr := range c.netMap.Addresses {
-			if !addr.IsSingleIP() {
-				continue
-			}
-			sb.AddTailscaleIP(addr.Addr())
-			tailscaleIPs = append(tailscaleIPs, addr.Addr())
-		}
-	}
-
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
-		if !c.privateKey.IsZero() {
-			ss.PublicKey = c.privateKey.Public()
-		} else {
-			ss.PublicKey = key.NodePublic{}
-		}
 		ss.Addrs = make([]string, 0, len(c.lastEndpoints))
 		for _, ep := range c.lastEndpoints {
 			ss.Addrs = append(ss.Addrs, ep.Addr.String())
 		}
-		ss.OS = version.OS()
 		if c.derpMap != nil {
-			derpRegion, ok := c.derpMap.Regions[c.myDerp]
-			if ok {
-				ss.Relay = derpRegion.RegionCode
+			if reg, ok := c.derpMap.Regions[c.myDerp]; ok {
+				ss.Relay = reg.RegionCode
 			}
 		}
-		ss.TailscaleIPs = tailscaleIPs
 	})
 
 	if sb.WantPeers {
 		c.peerMap.forEachEndpoint(func(ep *endpoint) {
 			ps := &ipnstate.PeerStatus{InMagicSock: true}
-			//ps.Addrs = append(ps.Addrs, n.Endpoints...)
 			ep.populatePeerStatus(ps)
 			sb.AddPeer(ep.publicKey, ps)
 		})
 	}
 
 	c.foreachActiveDerpSortedLocked(func(node int, ad activeDerp) {
-		// TODO(bradfitz): add to ipnstate.StatusBuilder
-		//f("<li><b>derp-%v</b>: cr%v,wr%v</li>", node, simpleDur(now.Sub(ad.createTime)), simpleDur(now.Sub(*ad.lastWrite)))
+		// TODO(bradfitz): add a method to ipnstate.StatusBuilder
+		// to include all the DERP connections we have open
+		// and add it here. See the other caller of foreachActiveDerpSortedLocked.
 	})
 }
 
