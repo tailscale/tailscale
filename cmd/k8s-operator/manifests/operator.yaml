@@ -150,6 +150,8 @@ spec:
               value: tag:k8s
             - name: AUTH_PROXY
               value: "false"
+            - name: OPERATOR_USENFT
+              value: "false"
           volumeMounts:
           - name: oauth
             mountPath: /oauth
