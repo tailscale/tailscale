@@ -651,6 +651,7 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	sb.MutateStatus(func(s *ipnstate.Status) {
 		s.Version = version.Long()
 		s.TUN = !b.sys.IsNetstack()
@@ -701,7 +702,19 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 			}
 		}
 	})
+
+	var tailscaleIPs []netip.Addr
+	if b.netMap != nil {
+		for _, addr := range b.netMap.Addresses {
+			if addr.IsSingleIP() {
+				sb.AddTailscaleIP(addr.Addr())
+				tailscaleIPs = append(tailscaleIPs, addr.Addr())
+			}
+		}
+	}
+
 	sb.MutateSelfStatus(func(ss *ipnstate.PeerStatus) {
+		ss.OS = version.OS()
 		ss.Online = health.GetInPollNetMap()
 		if b.netMap != nil {
 			ss.InNetworkMap = true
@@ -716,6 +729,10 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 					ss.Capabilities = c.AsSlice()
 				}
 			}
+			for _, addr := range tailscaleIPs {
+				ss.TailscaleIPs = append(ss.TailscaleIPs, addr)
+			}
+
 		} else {
 			ss.HostName, _ = os.Hostname()
 		}
@@ -783,6 +800,7 @@ func (b *LocalBackend) populatePeerStatusLocked(sb *ipnstate.StatusBuilder) {
 // peerStatusFromNode copies fields that exist in the Node struct for
 // current node and peers into the provided PeerStatus.
 func peerStatusFromNode(ps *ipnstate.PeerStatus, n tailcfg.NodeView) {
+	ps.PublicKey = n.Key()
 	ps.ID = n.StableID()
 	ps.Created = n.Created()
 	ps.ExitNodeOption = tsaddr.ContainsExitRoutes(n.AllowedIPs())
