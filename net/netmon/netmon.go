@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
 )
@@ -65,9 +66,10 @@ type Monitor struct {
 	started    bool
 	closed     bool
 	goroutines sync.WaitGroup
-	wallTimer  *time.Timer // nil until Started; re-armed AfterFunc per tick
+	wallTimer  tstime.TimerController // nil until Started; re-armed AfterFunc per tick
 	lastWall   time.Time
 	timeJumped bool // whether we need to send a changed=true after a big time jump
+	clock      tstime.Clock
 }
 
 // ChangeFunc is a callback function registered with Monitor that's called when the
@@ -81,11 +83,12 @@ type ChangeFunc func(changed bool, state *interfaces.State)
 func New(logf logger.Logf) (*Monitor, error) {
 	logf = logger.WithPrefix(logf, "monitor: ")
 	m := &Monitor{
-		logf:     logf,
-		change:   make(chan struct{}, 1),
-		stop:     make(chan struct{}),
-		lastWall: wallTime(),
+		logf:   logf,
+		change: make(chan struct{}, 1),
+		stop:   make(chan struct{}),
+		clock:  tstime.StdClock{},
 	}
+	m.lastWall = m.wallTime()
 	st, err := m.interfaceStateUncached()
 	if err != nil {
 		return nil, err
@@ -180,7 +183,7 @@ func (m *Monitor) Start() {
 	m.started = true
 
 	if shouldMonitorTimeJump {
-		m.wallTimer = time.AfterFunc(pollWallTimeInterval, m.pollWallTime)
+		m.wallTimer = m.clock.AfterFunc(pollWallTimeInterval, m.pollWallTime)
 	}
 
 	if m.om == nil {
@@ -342,10 +345,10 @@ func jsonSummary(x any) any {
 	return j
 }
 
-func wallTime() time.Time {
+func (m *Monitor) wallTime() time.Time {
 	// From time package's docs: "The canonical way to strip a
 	// monotonic clock reading is to use t = t.Round(0)."
-	return time.Now().Round(0)
+	return m.clock.Now().Round(0)
 }
 
 func (m *Monitor) pollWallTime() {
@@ -374,7 +377,7 @@ func (m *Monitor) checkWallTimeAdvanceLocked() bool {
 	if !shouldMonitorTimeJump {
 		panic("unreachable") // if callers are correct
 	}
-	now := wallTime()
+	now := m.wallTime()
 	if now.Sub(m.lastWall) > pollWallTimeInterval*3/2 {
 		m.timeJumped = true // it is reset by debounce.
 	}

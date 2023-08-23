@@ -41,8 +41,8 @@ func newResolver(tb testing.TB) *Resolver {
 		Step: 50 * time.Millisecond,
 	})
 	return &Resolver{
-		Logf:    tb.Logf,
-		timeNow: clock.Now,
+		Logf:  tb.Logf,
+		clock: clock,
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+	"tailscale.com/tstime"
 )
 
 // InvalidateCache invalidates the package-level cache for ProxyFromEnvironment.
@@ -37,6 +38,8 @@ var (
 	proxyFunc    func(*url.URL) (*url.URL, error)
 )
 
+var clock = tstime.StdClock{}
+
 func getProxyFunc() func(*url.URL) (*url.URL, error) {
 	// Create config/proxyFunc if it's not created
 	mu.Lock()
@@ -54,7 +57,7 @@ func getProxyFunc() func(*url.URL) (*url.URL, error) {
 func setNoProxyUntil(d time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
-	noProxyUntil = time.Now().Add(d)
+	noProxyUntil = clock.Now().Add(d)
 }
 
 var _ = setNoProxyUntil // quiet staticcheck; Windows uses the above, more might later
@@ -130,7 +133,7 @@ func ProxyFromEnvironment(req *http.Request) (*url.URL, error) {
 	mu.Lock()
 	noProxyTime := noProxyUntil
 	mu.Unlock()
-	if time.Now().Before(noProxyTime) {
+	if clock.Now().Before(noProxyTime) {
 		return nil, nil
 	}
 

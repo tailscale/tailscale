@@ -284,7 +284,7 @@ func (u *udpingPacketConn) WriteTo(body []byte, dest net.Addr) (int, error) {
 
 func mockPinger(t *testing.T, clock *tstest.Clock) (*Pinger, func()) {
 	p := New(context.Background(), t.Logf, nil)
-	p.timeNow = clock.Now
+	p.clock = clock
 	p.Verbose = true
 	p.id = 1234
 

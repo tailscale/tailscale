@@ -131,9 +131,9 @@ func proxyFromWinHTTP(ctx context.Context, urlStr string) (proxy *url.URL, err e
 	}
 	defer whi.Close()
 
-	t0 := time.Now()
+	t0 := clock.Now()
 	v, err := whi.GetProxyForURL(urlStr)
-	td := time.Since(t0).Round(time.Millisecond)
+	td := clock.Since(t0).Round(time.Millisecond)
 	if err := ctx.Err(); err != nil {
 		log.Printf("tshttpproxy: winhttp: context canceled, ignoring GetProxyForURL(%q) after %v", urlStr, td)
 		return nil, err

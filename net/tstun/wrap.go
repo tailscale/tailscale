@@ -28,6 +28,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun/table"
 	"tailscale.com/syncs"
+	"tailscale.com/tstime"
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -94,9 +95,7 @@ type Wrapper struct {
 	destMACAtomic  syncs.AtomicValue[[6]byte]
 	discoKey       syncs.AtomicValue[key.DiscoPublic]
 
-	// timeNow, if non-nil, will be used to obtain the current time.
-	timeNow func() time.Time
-
+	clock tstime.Clock
 	// natV4Config stores the current NAT configuration.
 	natV4Config atomic.Pointer[natV4Config]
 
@@ -262,13 +261,13 @@ func wrap(logf logger.Logf, tdev tun.Device, isTAP bool) *Wrapper {
 	return w
 }
 
-// now returns the current time, either by calling t.timeNow if set or time.Now
+// now returns the current time, either by calling t.clock.Now if set or clock.Now
 // if not.
 func (t *Wrapper) now() time.Time {
-	if t.timeNow != nil {
-		return t.timeNow()
+	if t.clock != nil {
+		return t.clock.Now()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 // SetDestIPActivityFuncs sets a map of funcs to run per packet

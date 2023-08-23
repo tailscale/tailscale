@@ -20,10 +20,10 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"tailscale.com/envknob"
 	"tailscale.com/health"
+	"tailscale.com/tstime"
 )
 
 var counterFallbackOK int32 // atomic
@@ -40,6 +40,8 @@ var debug = envknob.RegisterBool("TS_DEBUG_TLS_DIAL")
 // hostname already, to avoid log spam for users with custom DERP servers,
 // Headscale, etc.
 var tlsdialWarningPrinted sync.Map // map[string]bool
+
+var clock = tstime.StdClock{}
 
 // Config returns a tls.Config for connecting to a server.
 // If base is non-nil, it's cloned as the base config before
@@ -166,7 +168,7 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 			certs[i] = cert
 		}
 		opts := x509.VerifyOptions{
-			CurrentTime:   time.Now(),
+			CurrentTime:   clock.Now(),
 			DNSName:       certDNSName,
 			Intermediates: x509.NewCertPool(),
 		}

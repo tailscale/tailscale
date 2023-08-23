@@ -22,6 +22,7 @@ import (
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
@@ -59,7 +60,7 @@ type Pinger struct {
 	closed  atomic.Bool
 	Logf    logger.Logf
 	Verbose bool
-	timeNow func() time.Time
+	clock   tstime.Clock
 	id      uint16 // uint16 per RFC 792
 	wg      sync.WaitGroup
 
@@ -81,11 +82,11 @@ func New(ctx context.Context, logf logger.Logf, lp ListenPacketer) *Pinger {
 	}
 
 	return &Pinger{
-		lp:      lp,
-		Logf:    logf,
-		timeNow: time.Now,
-		id:      binary.LittleEndian.Uint16(id[:]),
-		pings:   make(map[uint16]outstanding),
+		lp:    lp,
+		Logf:  logf,
+		clock: tstime.StdClock{},
+		id:    binary.LittleEndian.Uint16(id[:]),
+		pings: make(map[uint16]outstanding),
 	}
 }
 
@@ -197,7 +198,7 @@ loop:
 			continue
 		}
 
-		p.handleResponse(buf[:n], p.timeNow(), typ)
+		p.handleResponse(buf[:n], p.clock.Now(), typ)
 	}
 }
 
@@ -322,7 +323,7 @@ func (p *Pinger) Send(ctx context.Context, dest net.Addr, data []byte) (time.Dur
 	p.pings[seq] = outstanding{ch: ch, data: data}
 	p.mu.Unlock()
 
-	start := p.timeNow()
+	start := p.clock.Now()
 	n, err := conn.WriteTo(b, dest)
 	if err != nil {
 		return 0, err

@@ -818,9 +818,7 @@ func TestCaptureHook(t *testing.T) {
 	now := time.Unix(1682085856, 0)
 
 	_, w := newFakeTUN(t.Logf, true)
-	w.timeNow = func() time.Time {
-		return now
-	}
+	w.clock = tstest.NewClock(tstest.ClockOpts{Start: now})
 	w.InstallCaptureHook(hook)
 	defer w.Close()
 

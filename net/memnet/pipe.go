@@ -13,6 +13,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"tailscale.com/tstime"
 )
 
 const debugPipe = false
@@ -31,6 +33,8 @@ type Pipe struct {
 	writeTimeout     time.Time
 	cancelReadTimer  func()
 	cancelWriteTimer func()
+
+	clock tstime.Clock
 }
 
 // NewPipe creates a Pipe with a buffer size fixed at maxBuf.
@@ -38,6 +42,7 @@ func NewPipe(name string, maxBuf int) *Pipe {
 	p := &Pipe{
 		name:   name,
 		maxBuf: maxBuf,
+		clock:  tstime.StdClock{},
 	}
 	p.cnd = sync.NewCond(&p.mu)
 	return p
@@ -48,7 +53,7 @@ func NewPipe(name string, maxBuf int) *Pipe {
 func (p *Pipe) readOrBlock(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.readTimeout.IsZero() && !time.Now().Before(p.readTimeout) {
+	if !p.readTimeout.IsZero() && !p.clock.Now().Before(p.readTimeout) {
 		return 0, os.ErrDeadlineExceeded
 	}
 	if p.blocked {
@@ -97,7 +102,7 @@ func (p *Pipe) writeOrBlock(b []byte) (int, error) {
 	if p.closed {
 		return 0, net.ErrClosed
 	}
-	if !p.writeTimeout.IsZero() && !time.Now().Before(p.writeTimeout) {
+	if !p.writeTimeout.IsZero() && !p.clock.Now().Before(p.writeTimeout) {
 		return 0, os.ErrDeadlineExceeded
 	}
 	if p.blocked {
@@ -164,7 +169,7 @@ func (p *Pipe) deadlineTimer(t time.Time) func() {
 	if t.IsZero() {
 		return nil
 	}
-	if t.Before(time.Now()) {
+	if t.Before(p.clock.Now()) {
 		p.cnd.Broadcast()
 		return nil
 	}

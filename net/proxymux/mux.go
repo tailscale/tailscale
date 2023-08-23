@@ -13,7 +13,11 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"tailscale.com/tstime"
 )
+
+var clock = tstime.StdClock{}
 
 // SplitSOCKSAndHTTP accepts connections on ln and passes connections
 // through to either socksListener or httpListener, depending the
@@ -48,7 +52,7 @@ func splitSOCKSAndHTTPListener(ln net.Listener, sl, hl *listener) {
 }
 
 func routeConn(c net.Conn, socksListener, httpListener *listener) {
-	if err := c.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+	if err := c.SetReadDeadline(clock.Now().Add(15 * time.Second)); err != nil {
 		c.Close()
 		return
 	}

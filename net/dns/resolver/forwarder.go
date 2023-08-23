@@ -29,6 +29,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/net/tsdial"
+	"tailscale.com/tstime"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
@@ -202,8 +203,10 @@ type forwarder struct {
 	cloudHostFallback []resolverAndDelay
 }
 
+var clock = tstime.StdClock{}
+
 func init() {
-	rand.Seed(time.Now().UnixNano())
+	rand.Seed(clock.Now().UnixNano())
 }
 
 func newForwarder(logf logger.Logf, netMon *netmon.Monitor, linkSel ForwardLinkSelector, dialer *tsdial.Dialer) *forwarder {
@@ -695,9 +698,9 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 	for i := range resolvers {
 		go func(rr *resolverAndDelay) {
 			if rr.startDelay > 0 {
-				timer := time.NewTimer(rr.startDelay)
+				timer, timerChannel := clock.NewTimer(rr.startDelay)
 				select {
-				case <-timer.C:
+				case <-timerChannel:
 				case <-ctx.Done():
 					timer.Stop()
 					return

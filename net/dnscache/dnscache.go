@@ -22,6 +22,7 @@ import (
 
 	"tailscale.com/envknob"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/singleflight"
@@ -33,6 +34,8 @@ var zaddr netip.Addr
 var single = &Resolver{
 	Forward: &net.Resolver{PreferGo: preferGoResolver()},
 }
+
+var clock = tstime.StdClock{}
 
 func preferGoResolver() bool {
 	// There does not appear to be a local resolver running
@@ -251,7 +254,7 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ip, v6 netip.Addr
 func (r *Resolver) lookupIPCache(host string) (ip, ip6 netip.Addr, allIPs []netip.Addr, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if ent, ok := r.ipCache[host]; ok && ent.expires.After(time.Now()) {
+	if ent, ok := r.ipCache[host]; ok && ent.expires.After(clock.Now()) {
 		return ent.ip, ent.ip6, ent.allIPs, true
 	}
 	return zaddr, zaddr, nil, false
@@ -359,7 +362,7 @@ func (r *Resolver) addIPCache(host string, ip, ip6 netip.Addr, allIPs []netip.Ad
 		ip:      ip,
 		ip6:     ip6,
 		allIPs:  allIPs,
-		expires: time.Now().Add(d),
+		expires: clock.Now().Add(d),
 	}
 }
 
@@ -510,7 +513,7 @@ func (dc *dialCall) noteDialResult(ip netip.Addr, err error) {
 		d := dc.d
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		d.pastConnect[ip] = time.Now()
+		d.pastConnect[ip] = clock.Now()
 		return
 	}
 	dc.mu.Lock()
@@ -585,9 +588,9 @@ func (dc *dialCall) raceDial(ctx context.Context, ips []netip.Addr) (net.Conn, e
 	go func() {
 		for i, ip := range ips {
 			if i != 0 {
-				timer := time.NewTimer(fallbackDelay)
+				timer, timerChannel := clock.NewTimer(fallbackDelay)
 				select {
-				case <-timer.C:
+				case <-timerChannel:
 				case <-failBoost:
 					timer.Stop()
 				case <-ctx.Done():

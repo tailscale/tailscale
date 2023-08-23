@@ -24,8 +24,11 @@ import (
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/netns"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
+
+var clock = tstime.StdClock{}
 
 // References:
 //
@@ -278,7 +281,7 @@ func (c *Client) getUPnPPortMapping(
 		return netip.AddrPort{}, false
 	}
 
-	now := time.Now()
+	now := c.clock.Now()
 	upnp := &upnpMapping{
 		gw:       gw,
 		internal: internal,

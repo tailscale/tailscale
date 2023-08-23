@@ -79,9 +79,9 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 	}
 	defer cb.Unregister()
 
-	t0 := time.Now()
+	t0 := clock.Now()
 	expires := t0.Add(timeout)
-	ticker := time.NewTicker(10 * time.Second)
+	ticker, tickerChannel := clock.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -89,19 +89,19 @@ func waitInterfaceUp(iface tun.Device, timeout time.Duration, logf logger.Logf) 
 
 		select {
 		case <-iw.sig:
-			iw.logf("TUN interface is up after %v", time.Since(t0))
+			iw.logf("TUN interface is up after %v", clock.Since(t0))
 			return nil
-		case <-ticker.C:
+		case <-tickerChannel:
 		}
 
 		if iw.isUp() {
 			// Very unlikely to happen - either NotifyIpInterfaceChange doesn't work
 			// or it came up in the same moment as tick. Indicate this in the log message.
-			iw.logf("TUN interface is up after %v (on poll, without notification)", time.Since(t0))
+			iw.logf("TUN interface is up after %v (on poll, without notification)", clock.Since(t0))
 			return nil
 		}
 
-		if expires.Before(time.Now()) {
+		if expires.Before(clock.Now()) {
 			iw.logf("timeout waiting %v for TUN interface to come up", timeout)
 			return fmt.Errorf("timeout waiting for TUN interface to come up")
 		}

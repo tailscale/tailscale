@@ -14,11 +14,14 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
 
 // createTAP is non-nil on Linux.
 var createTAP func(tapName, bridgeName string) (tun.Device, error)
+
+var clock = tstime.StdClock{}
 
 // New returns a tun.Device for the requested device name, along with
 // the OS-dependent name that was allocated to the device.

@@ -12,11 +12,13 @@ import (
 
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
 
 var (
 	errClosed = errors.New("closed")
+	clock     = tstime.StdClock{}
 )
 
 type eventMessage struct {
@@ -104,11 +106,11 @@ func (m *winMon) Receive() (message, error) {
 		return nil, errClosed
 	}
 
-	t0 := time.Now()
+	t0 := clock.Now()
 
 	select {
 	case msg := <-m.messagec:
-		now := time.Now()
+		now := clock.Now()
 		m.mu.Lock()
 		sinceLast := now.Sub(m.lastLog)
 		m.lastLog = now
@@ -120,7 +122,7 @@ func (m *winMon) Receive() (message, error) {
 		// route updates after connecting to a large tailnet
 		// and all the IPv4 /32 routes.
 		if sinceLast > 5*time.Second || !strings.HasPrefix(msg.eventType, "ts") {
-			m.logf("got windows change event after %v: evt=%s", time.Since(t0).Round(time.Millisecond), msg.eventType)
+			m.logf("got windows change event after %v: evt=%s", clock.Since(t0).Round(time.Millisecond), msg.eventType)
 		}
 		return msg, nil
 	case <-m.ctx.Done():

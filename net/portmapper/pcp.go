@@ -128,7 +128,7 @@ func parsePCPMapResponse(resp []byte) (*pcpMapping, error) {
 	external := netip.AddrPortFrom(externalIP, externalPort)
 
 	lifetime := time.Second * time.Duration(res.Lifetime)
-	now := time.Now()
+	now := clock.Now()
 	mapping := &pcpMapping{
 		external:   external,
 		renewAfter: now.Add(lifetime / 2),

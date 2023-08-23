@@ -355,7 +355,7 @@ func (s *dnsTCPSession) handleWrites() {
 			return // connection closed or timeout, teardown time
 
 		case resp := <-s.responses:
-			s.conn.SetWriteDeadline(time.Now().Add(idleTimeoutTCP))
+			s.conn.SetWriteDeadline(clock.Now().Add(idleTimeoutTCP))
 			if err := binary.Write(s.conn, binary.BigEndian, uint16(len(resp))); err != nil {
 				s.m.logf("tcp write (len): %v", err)
 				return
@@ -392,7 +392,7 @@ func (s *dnsTCPSession) handleReads() {
 			return
 
 		default:
-			s.conn.SetReadDeadline(time.Now().Add(idleTimeoutTCP))
+			s.conn.SetReadDeadline(clock.Now().Add(idleTimeoutTCP))
 			var reqLen uint16
 			if err := binary.Read(s.conn, binary.BigEndian, &reqLen); err != nil {
 				if err == io.EOF || err == io.ErrClosedPipe {

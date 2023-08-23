@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 )
+
+var clock = tstime.StdClock{}
 
 func newPollingMon(logf logger.Logf, m *Monitor) (osMon, error) {
 	return &pollingMon{
@@ -75,7 +78,7 @@ func (pm *pollingMon) Receive() (message, error) {
 		pm.logf("monitor polling: Cloud Run detected, reduce polling interval to 24h")
 		d = 24 * time.Hour
 	}
-	ticker := time.NewTicker(d)
+	ticker, tickerChannel := clock.NewTicker(d)
 	defer ticker.Stop()
 	base := pm.m.InterfaceState()
 	for {
@@ -83,7 +86,7 @@ func (pm *pollingMon) Receive() (message, error) {
 			return unspecifiedMessage{}, nil
 		}
 		select {
-		case <-ticker.C:
+		case <-tickerChannel:
 		case <-pm.stop:
 			return nil, errors.New("stopped")
 		}

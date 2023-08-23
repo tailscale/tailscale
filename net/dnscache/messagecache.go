@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang/groupcache/lru"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/tstime"
 	"tailscale.com/util/cmpx"
 )
 
@@ -26,8 +27,8 @@ import (
 // It's safe for concurrent use.
 type MessageCache struct {
 	// Clock is a clock, for testing.
-	// If nil, time.Now is used.
-	Clock func() time.Time
+	// If nil, clock.Now is used.
+	Clock tstime.Clock
 
 	mu           sync.Mutex
 	cacheSizeSet int       // 0 means default
@@ -36,9 +37,9 @@ type MessageCache struct {
 
 func (c *MessageCache) now() time.Time {
 	if c.Clock != nil {
-		return c.Clock()
+		return c.Clock.Now()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 // SetMaxCacheSize sets the maximum number of DNS cache entries that

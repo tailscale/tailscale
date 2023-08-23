@@ -54,7 +54,7 @@ func (fl *fwdLog) addName(name string) {
 	if len(fl.ent) == 0 {
 		return
 	}
-	fl.ent[fl.pos] = fwdLogEntry{Domain: name, Time: time.Now()}
+	fl.ent[fl.pos] = fwdLogEntry{Domain: name, Time: clock.Now()}
 	fl.pos++
 	if fl.pos == len(fl.ent) {
 		fl.pos = 0
@@ -66,7 +66,7 @@ func (fl *fwdLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer fl.mu.Unlock()
 
 	fmt.Fprintf(w, "<html><h1>DNS forwards</h1>")
-	now := time.Now()
+	now := clock.Now()
 	for i := 0; i < len(fl.ent); i++ {
 		ent := fl.ent[(i+fl.pos)%len(fl.ent)]
 		if ent.Domain == "" {

@@ -342,24 +342,24 @@ func (m *windowsManager) SetDNS(cfg OSConfig) error {
 	// any cached split-horizon queries that are no longer the correct
 	// answer.
 	go func() {
-		t0 := time.Now()
+		t0 := clock.Now()
 		m.logf("running ipconfig /registerdns ...")
 		cmd := exec.Command("ipconfig", "/registerdns")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		err := cmd.Run()
-		d := time.Since(t0).Round(time.Millisecond)
+		d := clock.Since(t0).Round(time.Millisecond)
 		if err != nil {
 			m.logf("error running ipconfig /registerdns after %v: %v", d, err)
 		} else {
 			m.logf("ran ipconfig /registerdns in %v", d)
 		}
 
-		t0 = time.Now()
+		t0 = clock.Now()
 		m.logf("running ipconfig /flushdns ...")
 		cmd = exec.Command("ipconfig", "/flushdns")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		err = cmd.Run()
-		d = time.Since(t0).Round(time.Millisecond)
+		d = clock.Since(t0).Round(time.Millisecond)
 		if err != nil {
 			m.logf("error running ipconfig /flushdns after %v: %v", d, err)
 		} else {

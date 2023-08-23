@@ -398,12 +398,14 @@ func TestAddReportHistoryAndSetPreferredDERP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTime := time.Unix(123, 0)
+			clock := tstest.NewClock(tstest.ClockOpts{Start: fakeTime})
 			c := &Client{
-				TimeNow: func() time.Time { return fakeTime },
+				Clock: clock,
 			}
 			dm := &tailcfg.DERPMap{HomeParams: tt.homeParams}
 			for _, s := range tt.steps {
 				fakeTime = fakeTime.Add(s.after)
+				clock.Advance(s.after)
 				c.addReportHistoryAndSetPreferredDERP(s.r, dm.View())
 			}
 			lastReport := tt.steps[len(tt.steps)-1].r

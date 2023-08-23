@@ -36,6 +36,7 @@ import (
 	"tailscale.com/net/stun"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/types/opt"
@@ -49,6 +50,8 @@ import (
 var (
 	debugNetcheck = envknob.RegisterBool("TS_DEBUG_NETCHECK")
 )
+
+var clock = tstime.StdClock{}
 
 // The various default timeouts for things.
 const (
@@ -173,8 +176,7 @@ type Client struct {
 	// present anyway.
 	NetMon *netmon.Monitor
 
-	// TimeNow, if non-nil, is used instead of time.Now.
-	TimeNow func() time.Time
+	Clock tstime.Clock
 
 	// SendPacket is required to send a packet to the specified address. For
 	// convenience it shares a signature with WriteToUDPAddrPort.
@@ -925,11 +927,11 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 		}(probeSet)
 	}
 
-	stunTimer := time.NewTimer(stunProbeTimeout)
+	stunTimer, stunTimerChannel := clock.NewTimer(stunProbeTimeout)
 	defer stunTimer.Stop()
 
 	select {
-	case <-stunTimer.C:
+	case <-stunTimerChannel:
 	case <-ctx.Done():
 	case <-wg.DoneChan():
 		// All of our probes finished, so if we have >0 responses, we
@@ -1348,10 +1350,10 @@ func (c *Client) logConciseReport(r *Report, dm *tailcfg.DERPMap) {
 }
 
 func (c *Client) timeNow() time.Time {
-	if c.TimeNow != nil {
-		return c.TimeNow()
+	if c.Clock != nil {
+		return c.Clock.Now()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 const (
@@ -1490,9 +1492,9 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	}
 
 	if probe.delay > 0 {
-		delayTimer := time.NewTimer(probe.delay)
+		delayTimer, delayTimerChannel := clock.NewTimer(probe.delay)
 		select {
-		case <-delayTimer.C:
+		case <-delayTimerChannel:
 		case <-ctx.Done():
 			delayTimer.Stop()
 			return
@@ -1513,11 +1515,11 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	txID := stun.NewTxID()
 	req := stun.Request(txID)
 
-	sent := time.Now() // after DNS lookup above
+	sent := clock.Now() // after DNS lookup above
 
 	rs.mu.Lock()
 	rs.inFlight[txID] = func(ipp netip.AddrPort) {
-		rs.addNodeLatency(node, ipp, time.Since(sent))
+		rs.addNodeLatency(node, ipp, clock.Since(sent))
 		cancelSet() // abort other nodes in this set
 	}
 	rs.mu.Unlock()

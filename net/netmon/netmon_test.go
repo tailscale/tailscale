@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"tailscale.com/net/interfaces"
+	"tailscale.com/tstest"
 )
 
 func TestMonitorStartClose(t *testing.T) {
 	mon, err := New(t.Logf)
+	mon.clock = &tstest.Clock{}
 	if err != nil {
 		t.Fatal(err)
 	}

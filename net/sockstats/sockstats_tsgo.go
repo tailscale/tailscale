@@ -13,10 +13,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 )
@@ -318,7 +318,7 @@ type radioMonitor struct {
 	// startTime is the time we started tracking radio usage.
 	startTime int64
 
-	now func() time.Time
+	clock tstime.Clock
 }
 
 // radioSampleSize is the number of samples to store and report for cellular radio usage.
@@ -329,14 +329,16 @@ const radioSampleSize = 3600 // 1 hour
 // Otherwise, all clients will report 100% radio usage on startup.
 var initStallPeriod int64 = 120 // 2 minutes
 
+var clock = tstime.StdClock{}
+
 var radio = &radioMonitor{
-	now:       time.Now,
-	startTime: time.Now().Unix(),
+	clock:     clock,
+	startTime: clock.Now().Unix(),
 }
 
 // radioActivity should be called whenever network activity occurs on a cellular network interface.
 func (rm *radioMonitor) active() {
-	t := rm.now().Unix()
+	t := rm.clock.Now().Unix()
 	rm.usage[t%radioSampleSize] = t
 }
 
@@ -392,7 +394,7 @@ func (rm *radioMonitor) radioHighPercent() int64 {
 // forEachSample calls f for each sample in the past hour (or less if less time
 // has passed -- the evaluated period is returned, measured in seconds)
 func (rm *radioMonitor) forEachSample(f func(c int, isActive bool)) (periodLength int64) {
-	now := rm.now().Unix()
+	now := rm.clock.Now().Unix()
 	periodLength = radioSampleSize
 	if t := now - rm.startTime; t < periodLength {
 		if t <= 0 {

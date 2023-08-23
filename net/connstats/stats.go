@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
+	"tailscale.com/tstime"
 	"tailscale.com/types/netlogtype"
 )
 
@@ -30,6 +31,7 @@ type Statistics struct {
 	shutdownCtx context.Context
 	shutdown    context.CancelFunc
 	group       errgroup.Group
+	clock       tstime.Clock
 }
 
 type connCnts struct {
@@ -45,7 +47,7 @@ type connCnts struct {
 // The dump function is called from a single goroutine.
 // Shutdown must be called to cleanup resources.
 func NewStatistics(maxPeriod time.Duration, maxConns int, dump func(start, end time.Time, virtual, physical map[netlogtype.Connection]netlogtype.Counts)) *Statistics {
-	s := &Statistics{maxConns: maxConns}
+	s := &Statistics{maxConns: maxConns, clock: tstime.StdClock{}}
 	s.connCntsCh = make(chan connCnts, 256)
 	s.shutdownCtx, s.shutdown = context.WithCancel(context.Background())
 	s.group.Go(func() error {
@@ -53,9 +55,10 @@ func NewStatistics(maxPeriod time.Duration, maxConns int, dump func(start, end t
 		// where waking up a process every maxPeriod when there is no activity
 		// is a drain on battery life. Switch this instead to instead use
 		// a time.Timer that is triggered upon network activity.
-		ticker := new(time.Ticker)
+		var ticker tstime.TickerController
+		var tickerChannel <-chan time.Time
 		if maxPeriod > 0 {
-			ticker = time.NewTicker(maxPeriod)
+			ticker, tickerChannel = s.clock.NewTicker(maxPeriod)
 			defer ticker.Stop()
 		}
 
@@ -63,7 +66,7 @@ func NewStatistics(maxPeriod time.Duration, maxConns int, dump func(start, end t
 			var cc connCnts
 			select {
 			case cc = <-s.connCntsCh:
-			case <-ticker.C:
+			case <-tickerChannel:
 				cc = s.extract()
 			case <-s.shutdownCtx.Done():
 				cc = s.extract()
@@ -182,7 +185,7 @@ func (s *Statistics) preInsertConn() bool {
 
 	// Initialize the maps if nil.
 	if s.virtual == nil && s.physical == nil {
-		s.start = time.Now().UTC()
+		s.start = s.clock.Now().UTC()
 		s.virtual = make(map[netlogtype.Connection]netlogtype.Counts)
 		s.physical = make(map[netlogtype.Connection]netlogtype.Counts)
 	}
@@ -200,7 +203,7 @@ func (s *Statistics) extractLocked() connCnts {
 	if len(s.virtual)+len(s.physical) == 0 {
 		return connCnts{}
 	}
-	s.end = time.Now().UTC()
+	s.end = s.clock.Now().UTC()
 	cc := s.connCnts
 	s.connCnts = connCnts{}
 	return cc

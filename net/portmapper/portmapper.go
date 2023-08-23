@@ -24,6 +24,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
@@ -93,6 +94,8 @@ type Client struct {
 	localPort uint16
 
 	mapping mapping // non-nil if we have a mapping
+
+	clock tstime.Clock
 }
 
 // mapping represents a created port-mapping over some protocol.  It specifies a lease duration,
@@ -117,7 +120,7 @@ type mapping interface {
 func (c *Client) HaveMapping() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.mapping != nil && c.mapping.GoodUntil().After(time.Now())
+	return c.mapping != nil && c.mapping.GoodUntil().After(c.clock.Now())
 }
 
 // pmpMapping is an already-created PMP mapping.
@@ -170,6 +173,7 @@ func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, onCh
 		netMon:       netMon,
 		ipAndGateway: interfaces.LikelyHomeRouterIP,
 		onChange:     onChange,
+		clock:        clock,
 	}
 	if debug != nil {
 		ret.debug = *debug
@@ -305,7 +309,7 @@ func (c *Client) sawPMPRecently() bool {
 }
 
 func (c *Client) sawPMPRecentlyLocked() bool {
-	return c.pmpPubIP.IsValid() && c.pmpPubIPTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
+	return c.pmpPubIP.IsValid() && c.pmpPubIPTime.After(c.clock.Now().Add(-trustServiceStillAvailableDuration))
 }
 
 func (c *Client) sawPCPRecently() bool {
@@ -315,13 +319,13 @@ func (c *Client) sawPCPRecently() bool {
 }
 
 func (c *Client) sawPCPRecentlyLocked() bool {
-	return c.pcpSawTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
+	return c.pcpSawTime.After(c.clock.Now().Add(-trustServiceStillAvailableDuration))
 }
 
 func (c *Client) sawUPnPRecently() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.uPnPSawTime.After(time.Now().Add(-trustServiceStillAvailableDuration))
+	return c.uPnPSawTime.After(c.clock.Now().Add(-trustServiceStillAvailableDuration))
 }
 
 // closeCloserOnContextDone starts a new goroutine to call c.Close
@@ -373,7 +377,7 @@ func (c *Client) GetCachedMappingOrStartCreatingOne() (external netip.AddrPort, 
 	defer c.mu.Unlock()
 
 	// Do we have an existing mapping that's valid?
-	now := time.Now()
+	now := c.clock.Now()
 	if m := c.mapping; m != nil {
 		if now.Before(m.GoodUntil()) {
 			if now.After(m.RenewAfter()) {
@@ -443,7 +447,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 	var prevPort uint16
 
 	// Do we have an existing mapping that's valid?
-	now := time.Now()
+	now := c.clock.Now()
 	if m := c.mapping; m != nil {
 		if now.Before(m.RenewAfter()) {
 			defer c.mu.Unlock()
@@ -497,7 +501,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 	}
 	defer uc.Close()
 
-	uc.SetReadDeadline(time.Now().Add(portMapServiceTimeout))
+	uc.SetReadDeadline(c.clock.Now().Add(portMapServiceTimeout))
 	defer closeCloserOnContextDone(ctx, uc)()
 
 	pxpAddr := netip.AddrPortFrom(gw, c.pxpPort())
@@ -570,7 +574,7 @@ func (c *Client) createOrGetMapping(ctx context.Context) (external netip.AddrPor
 				if pres.OpCode == pmpOpReply|pmpOpMapUDP {
 					m.external = netip.AddrPortFrom(m.external.Addr(), pres.ExternalPort)
 					d := time.Duration(pres.MappingValidSeconds) * time.Second
-					now := time.Now()
+					now := c.clock.Now()
 					m.goodUntil = now.Add(d)
 					m.renewAfter = now.Add(d / 2) // renew in half the time
 					m.epoch = pres.SecondsSinceEpoch
@@ -704,7 +708,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		if err == nil {
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			c.lastProbe = time.Now()
+			c.lastProbe = c.clock.Now()
 		}
 	}()
 
@@ -824,7 +828,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 			c.logf("[v1] UPnP reply %+v, %q", meta, buf[:n])
 			res.UPnP = true
 			c.mu.Lock()
-			c.uPnPSawTime = time.Now()
+			c.uPnPSawTime = c.clock.Now()
 			if c.uPnPMeta != meta {
 				c.logf("UPnP meta changed: %+v", meta)
 				c.uPnPMeta = meta
@@ -854,7 +858,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 				if pres.OpCode == pcpOpReply|pcpOpAnnounce {
 					pcpHeard = true
 					c.mu.Lock()
-					c.pcpSawTime = time.Now()
+					c.pcpSawTime = c.clock.Now()
 					c.mu.Unlock()
 					switch pres.ResultCode {
 					case pcpCodeOK:
@@ -893,7 +897,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 					res.PMP = true
 					c.mu.Lock()
 					c.pmpPubIP = pres.PublicAddr
-					c.pmpPubIPTime = time.Now()
+					c.pmpPubIPTime = c.clock.Now()
 					c.pmpLastEpoch = pres.SecondsSinceEpoch
 					c.mu.Unlock()
 					continue

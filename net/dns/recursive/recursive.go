@@ -17,6 +17,7 @@ import (
 	"github.com/miekg/dns"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
+	"tailscale.com/tstime"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -96,6 +97,8 @@ var rootServersV6 = []netip.Addr{
 
 var debug = envknob.RegisterBool("TS_DEBUG_RECURSIVE_DNS")
 
+var clock = tstime.StdClock{}
+
 // Resolver is a recursive DNS resolver that is designed for looking up A and AAAA records.
 type Resolver struct {
 	// Dialer is used to create outbound connections. If nil, a zero
@@ -114,7 +117,7 @@ type Resolver struct {
 	testQueryHook    func(name dnsname.FQDN, nameserver netip.Addr, protocol string, qtype dns.Type) (*dns.Msg, error)
 	testExchangeHook func(nameserver netip.Addr, network string, msg *dns.Msg) (*dns.Msg, error)
 	rootServers      []netip.Addr
-	timeNow          func() time.Time
+	clock            tstime.Clock
 
 	// Caching
 	// NOTE(andrew): if we make resolution parallel, this needs a mutex
@@ -150,10 +153,10 @@ type dnsMsgWithExpiry struct {
 }
 
 func (r *Resolver) now() time.Time {
-	if r.timeNow != nil {
-		return r.timeNow()
+	if r.clock != nil {
+		return r.clock.Now()
 	}
-	return time.Now()
+	return clock.Now()
 }
 
 func (r *Resolver) logf(format string, args ...any) {
