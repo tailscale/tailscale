@@ -71,9 +71,37 @@ type Monitor struct {
 }
 
 // ChangeFunc is a callback function registered with Monitor that's called when the
-// network changed. The changed parameter is whether the network changed
-// enough for State to have changed since the last callback.
-type ChangeFunc func(changed bool, state *interfaces.State)
+// network changed.
+type ChangeFunc func(*ChangeDelta)
+
+// ChangeDelta describes the difference between two network states.
+type ChangeDelta struct {
+	// Old is the old interface state, if known.
+	// It's nil if the old state is unknown.
+	// Do not mutate it.
+	Old *interfaces.State
+
+	// New is the new network state.
+	// It is always non-nil.
+	// Do not mutate it.
+	New *interfaces.State
+
+	// Major is our legacy boolean of whether the network changed in some major
+	// way.
+	//
+	// Deprecated: do not remove. As of 2023-08-23 we're in a renewed effort to
+	// remove it and ask specific qustions of ChangeDelta instead. Look at Old
+	// and New (or add methods to ChangeDelta) instead of using Major.
+	Major bool
+
+	// TimeJumped is whether there was a big jump in wall time since the last
+	// time we checked. This is a hint that a mobile sleeping device might have
+	// come out of sleep.
+	TimeJumped bool
+
+	// TODO(bradfitz): add some lazy cached fields here as needed with methods
+	// on *ChangeDelta to let callers ask specific questions
+}
 
 // New instantiates and starts a monitoring instance.
 // The returned monitor is inactive until it's started by the Start method.
@@ -299,29 +327,33 @@ func (m *Monitor) debounce() {
 		} else {
 			m.mu.Lock()
 
-			oldState := m.ifState
-			changed := !curState.EqualFiltered(oldState, m.isInterestingInterface, interfaces.UseInterestingIPs)
-			if changed {
+			delta := &ChangeDelta{
+				Old: m.ifState,
+				New: curState,
+			}
+			delta.Major = !delta.New.EqualFiltered(delta.Old, m.isInterestingInterface, interfaces.UseInterestingIPs)
+			if delta.Major {
 				m.gwValid = false
 				m.ifState = curState
 
-				if s1, s2 := oldState.String(), curState.String(); s1 == s2 {
+				if s1, s2 := delta.Old.String(), delta.New.String(); s1 == s2 {
 					m.logf("[unexpected] network state changed, but stringification didn't: %v", s1)
-					m.logf("[unexpected] old: %s", jsonSummary(oldState))
-					m.logf("[unexpected] new: %s", jsonSummary(curState))
+					m.logf("[unexpected] old: %s", jsonSummary(delta.Old))
+					m.logf("[unexpected] new: %s", jsonSummary(delta.New))
 				}
 			}
 			// See if we have a queued or new time jump signal.
 			if shouldMonitorTimeJump && m.checkWallTimeAdvanceLocked() {
 				m.resetTimeJumpedLocked()
-				if !changed {
+				delta.TimeJumped = true
+				if !delta.Major {
 					// Only log if it wasn't an interesting change.
 					m.logf("time jumped (probably wake from sleep); synthesizing major change event")
-					changed = true
+					delta.Major = true
 				}
 			}
 			for _, cb := range m.cbs {
-				go cb(changed, m.ifState)
+				go cb(delta)
 			}
 			m.mu.Unlock()
 		}

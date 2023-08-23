@@ -266,25 +266,29 @@ func setNetMon(netMon *netmon.Monitor) {
 		sockStats.usedInterfaces[ifIndex] = 1
 	}
 
-	netMon.RegisterChangeCallback(func(changed bool, state *interfaces.State) {
-		if changed {
-			if ifName := state.DefaultRouteInterface; ifName != "" {
-				ifIndex := state.Interface[ifName].Index
-				sockStats.mu.Lock()
-				defer sockStats.mu.Unlock()
-				// Ignore changes to unknown interfaces -- it would require
-				// updating the tx/rxBytesByInterface maps and thus
-				// additional locking for every read/write. Most of the time
-				// the set of interfaces is static.
-				if _, ok := sockStats.knownInterfaces[ifIndex]; ok {
-					sockStats.currentInterface.Store(uint32(ifIndex))
-					sockStats.usedInterfaces[ifIndex] = 1
-					sockStats.currentInterfaceCellular.Store(isLikelyCellularInterface(ifName))
-				} else {
-					sockStats.currentInterface.Store(0)
-					sockStats.currentInterfaceCellular.Store(false)
-				}
-			}
+	netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
+		if !delta.Major {
+			return
+		}
+		state := delta.New
+		ifName := state.DefaultRouteInterface
+		if ifName == "" {
+			return
+		}
+		ifIndex := state.Interface[ifName].Index
+		sockStats.mu.Lock()
+		defer sockStats.mu.Unlock()
+		// Ignore changes to unknown interfaces -- it would require
+		// updating the tx/rxBytesByInterface maps and thus
+		// additional locking for every read/write. Most of the time
+		// the set of interfaces is static.
+		if _, ok := sockStats.knownInterfaces[ifIndex]; ok {
+			sockStats.currentInterface.Store(uint32(ifIndex))
+			sockStats.usedInterfaces[ifIndex] = 1
+			sockStats.currentInterfaceCellular.Store(isLikelyCellularInterface(ifName))
+		} else {
+			sockStats.currentInterface.Store(0)
+			sockStats.currentInterfaceCellular.Store(false)
 		}
 	})
 }

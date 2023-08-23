@@ -25,7 +25,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/flowtrack"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/sockstats"
@@ -304,9 +303,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 
 	logf("link state: %+v", e.netMon.InterfaceState())
 
-	unregisterMonWatch := e.netMon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+	unregisterMonWatch := e.netMon.RegisterChangeCallback(func(delta *netmon.ChangeDelta) {
 		tshttpproxy.InvalidateCache()
-		e.linkChange(changed, st)
+		e.linkChange(delta)
 	})
 	closePool.addFunc(unregisterMonWatch)
 	e.netMonUnregister = unregisterMonWatch
@@ -1099,7 +1098,9 @@ func (e *userspaceEngine) LinkChange(_ bool) {
 	e.netMon.InjectEvent()
 }
 
-func (e *userspaceEngine) linkChange(changed bool, cur *interfaces.State) {
+func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
+	changed := delta.Major // TODO(bradfitz): ask more specific questions?
+	cur := delta.New
 	up := cur.AnyInterfaceUp()
 	if !up {
 		e.logf("LinkChange: all links down; pausing: %v", cur)
