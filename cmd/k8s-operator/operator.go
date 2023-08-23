@@ -65,6 +65,7 @@ func main() {
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 
 	s, tsClient := initTSNet(zlog)
+	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	if shouldRunAuthProxy {
 		launchAuthProxy(zlog, restConfig, s)
@@ -118,7 +119,6 @@ func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
 	if err := s.Start(); err != nil {
 		startlog.Fatalf("starting tailscale server: %v", err)
 	}
-	defer s.Close()
 	lc, err := s.LocalClient()
 	if err != nil {
 		startlog.Fatalf("getting local client: %v", err)
