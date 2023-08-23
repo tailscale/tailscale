@@ -98,7 +98,7 @@ func ParseRootKey(privKey []byte) (*RootKey, error) {
 // SignSigningKeys signs the bundle of public signing keys. The bundle must be
 // a sequence of PEM blocks joined with newlines.
 func (r *RootKey) SignSigningKeys(pubBundle []byte) ([]byte, error) {
-	if _, err := parseSigningKeyBundle(pubBundle); err != nil {
+	if _, err := ParseSigningKeyBundle(pubBundle); err != nil {
 		return nil, err
 	}
 	return ed25519.Sign(r.k, pubBundle), nil
@@ -221,7 +221,7 @@ func (c *Client) Download(srcPath, dstPath string) error {
 		return err
 	}
 	msg := binary.LittleEndian.AppendUint64(hash, uint64(len))
-	if !verifyAny(sigPub, msg, sig) {
+	if !VerifyAny(sigPub, msg, sig) {
 		// Best-effort clean up of downloaded package.
 		os.Remove(dstPathUnverified)
 		return fmt.Errorf("signature %q for key %q does not validate with the current release signing key; either you are under attack, or attempting to download an old version of Tailscale which was signed with an older signing key", sigURL, srcURL)
@@ -248,11 +248,11 @@ func (c *Client) signingKeys() ([]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !verifyAny(c.roots, raw, sig) {
+	if !VerifyAny(c.roots, raw, sig) {
 		return nil, fmt.Errorf("signature %q for key %q does not validate with any known root key; either you are under attack, or running a very old version of Tailscale with outdated root keys", sigURL, keyURL)
 	}
 
-	keys, err := parseSigningKeyBundle(raw)
+	keys, err := ParseSigningKeyBundle(raw)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse signing key bundle from %q: %w", keyURL, err)
 	}
@@ -315,10 +315,20 @@ func parsePrivateKey(data []byte, typeTag string) (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(b.Bytes), nil
 }
 
-func parseSigningKeyBundle(bundle []byte) ([]ed25519.PublicKey, error) {
+// ParseSigningKeyBundle parses the bundle of PEM-encoded public signing keys.
+func ParseSigningKeyBundle(bundle []byte) ([]ed25519.PublicKey, error) {
+	return parsePublicKeyBundle(bundle, pemTypeSigningPublic)
+}
+
+// ParseRootKeyBundle parses the bundle of PEM-encoded public root keys.
+func ParseRootKeyBundle(bundle []byte) ([]ed25519.PublicKey, error) {
+	return parsePublicKeyBundle(bundle, pemTypeRootPublic)
+}
+
+func parsePublicKeyBundle(bundle []byte, typeTag string) ([]ed25519.PublicKey, error) {
 	var keys []ed25519.PublicKey
 	for len(bundle) > 0 {
-		pub, rest, err := parsePublicKey(bundle, pemTypeSigningPublic)
+		pub, rest, err := parsePublicKey(bundle, typeTag)
 		if err != nil {
 			return nil, err
 		}
@@ -356,9 +366,9 @@ func parsePublicKey(data []byte, typeTag string) (pub ed25519.PublicKey, rest []
 	return ed25519.PublicKey(b.Bytes), rest, nil
 }
 
-// verifyAny verifies whether sig is valid for msg using any of the keys.
-// verifyAny will panic of any of the keys have the wrong size for Ed25519.
-func verifyAny(keys []ed25519.PublicKey, msg, sig []byte) bool {
+// VerifyAny verifies whether sig is valid for msg using any of the keys.
+// VerifyAny will panic if any of the keys have the wrong size for Ed25519.
+func VerifyAny(keys []ed25519.PublicKey, msg, sig []byte) bool {
 	for _, k := range keys {
 		if ed25519consensus.Verify(k, msg, sig) {
 			return true
