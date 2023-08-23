@@ -20,6 +20,7 @@ import (
 	"tailscale.com/envknob"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netmon"
+	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/logger"
 )
 
@@ -110,13 +111,41 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 
 	// Verify that we didn't just choose the Tailscale interface;
 	// if so, we fall back to binding from the default.
-	_, tsif, err2 := interfaces.Tailscale()
+	tsif, err2 := tailscaleInterface()
 	if err2 == nil && tsif != nil && tsif.Index == idx {
 		logf("[unexpected] netns: interfaceIndexFor returned Tailscale interface")
 		return defaultIdx()
 	}
 
 	return idx, err
+}
+
+// tailscaleInterface returns the current machine's Tailscale interface, if any.
+// If none is found, (nil, nil) is returned.
+// A non-nil error is only returned on a problem listing the system interfaces.
+func tailscaleInterface() (*net.Interface, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, iface := range ifs {
+		if !strings.HasPrefix(iface.Name, "utun") {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok {
+				nip, ok := netip.AddrFromSlice(ipnet.IP)
+				if ok && tsaddr.IsTailscaleIP(nip.Unmap()) {
+					return &iface, nil
+				}
+			}
+		}
+	}
+	return nil, nil
 }
 
 // interfaceIndexFor returns the interface index that we should bind to in

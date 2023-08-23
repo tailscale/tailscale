@@ -55,6 +55,10 @@ type Monitor struct {
 	change chan bool     // send false to wake poller, true to also force ChangeDeltas be sent
 	stop   chan struct{} // closed on Stop
 
+	// Things that must be set early, before use,
+	// and not change at runtime.
+	tsIfName string // tailscale interface name, if known/set ("tailscale0", "utun3", ...)
+
 	mu         sync.Mutex // guards all following fields
 	cbs        set.HandleSet[ChangeFunc]
 	ruleDelCB  set.HandleSet[RuleDeleteCallback]
@@ -76,6 +80,9 @@ type ChangeFunc func(*ChangeDelta)
 
 // ChangeDelta describes the difference between two network states.
 type ChangeDelta struct {
+	// Monitor is the network monitor that sent this delta.
+	Monitor *Monitor
+
 	// Old is the old interface state, if known.
 	// It's nil if the old state is unknown.
 	// Do not mutate it.
@@ -143,6 +150,15 @@ func (m *Monitor) InterfaceState() *interfaces.State {
 
 func (m *Monitor) interfaceStateUncached() (*interfaces.State, error) {
 	return interfaces.GetState()
+}
+
+// SetTailscaleInterfaceName sets the name of the Tailscale interface. For
+// example, "tailscale0", "tun0", "utun3", etc.
+//
+// This must be called only early in tailscaled startup before the monitor is
+// used.
+func (m *Monitor) SetTailscaleInterfaceName(ifName string) {
+	m.tsIfName = ifName
 }
 
 // GatewayAndSelfIP returns the current network's default gateway, and
@@ -320,7 +336,11 @@ func (m *Monitor) notifyRuleDeleted(rdm ipRuleDeletedMessage) {
 // considered when checking for network state changes.
 // The ips parameter should be the IPs of the provided interface.
 func (m *Monitor) isInterestingInterface(i interfaces.Interface, ips []netip.Prefix) bool {
-	return m.om.IsInterestingInterface(i.Name) && interfaces.UseInterestingInterfaces(i, ips)
+	if !m.om.IsInterestingInterface(i.Name) {
+		return false
+	}
+
+	return true
 }
 
 // debounce calls the callback function with a delay between events
@@ -358,18 +378,19 @@ func (m *Monitor) handlePotentialChange(newState *interfaces.State, forceCallbac
 	defer m.mu.Unlock()
 	oldState := m.ifState
 	timeJumped := shouldMonitorTimeJump && m.checkWallTimeAdvanceLocked()
-	if !timeJumped && !forceCallbacks && oldState.EqualFiltered(newState, interfaces.UseAllInterfaces, interfaces.UseAllIPs) {
+	if !timeJumped && !forceCallbacks && oldState.Equal(newState) {
 		// Exactly equal. Nothing to do.
 		return
 	}
 
 	delta := &ChangeDelta{
+		Monitor:    m,
 		Old:        oldState,
 		New:        newState,
 		TimeJumped: timeJumped,
 	}
 
-	delta.Major = !newState.EqualFiltered(oldState, m.isInterestingInterface, interfaces.UseInterestingIPs)
+	delta.Major = m.IsMajorChangeFrom(oldState, newState)
 	if delta.Major {
 		m.gwValid = false
 		m.ifState = newState
@@ -391,6 +412,79 @@ func (m *Monitor) handlePotentialChange(newState *interfaces.State, forceCallbac
 	}
 	for _, cb := range m.cbs {
 		go cb(delta)
+	}
+}
+
+// IsMajorChangeFrom reports whether the transition from s1 to s2 is
+// a "major" change, where major roughly means it's worth tearing down
+// a bunch of connections and rebinding.
+//
+// TODO(bradiftz): tigten this definition.
+func (m *Monitor) IsMajorChangeFrom(s1, s2 *interfaces.State) bool {
+	if s1 == nil && s2 == nil {
+		return false
+	}
+	if s1 == nil || s2 == nil {
+		return true
+	}
+	if s1.HaveV6 != s2.HaveV6 ||
+		s1.HaveV4 != s2.HaveV4 ||
+		s1.IsExpensive != s2.IsExpensive ||
+		s1.DefaultRouteInterface != s2.DefaultRouteInterface ||
+		s1.HTTPProxy != s2.HTTPProxy ||
+		s1.PAC != s2.PAC {
+		return true
+	}
+	for iname, i := range s1.Interface {
+		if iname == m.tsIfName {
+			// Ignore changes in the Tailscale interface itself.
+			continue
+		}
+		ips := s1.InterfaceIPs[iname]
+		if !m.isInterestingInterface(i, ips) {
+			continue
+		}
+		i2, ok := s2.Interface[iname]
+		if !ok {
+			return true
+		}
+		ips2, ok := s2.InterfaceIPs[iname]
+		if !ok {
+			return true
+		}
+		if !i.Equal(i2) || !prefixesMajorEqual(ips, ips2) {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixesMajorEqual reports whether a and b are equal after ignoring
+// boring things like link-local, loopback, and multicast addresses.
+func prefixesMajorEqual(a, b []netip.Prefix) bool {
+	// trim returns a subslice of p with link local unicast,
+	// loopback, and multicast prefixes removed from the front.
+	trim := func(p []netip.Prefix) []netip.Prefix {
+		for len(p) > 0 {
+			a := p[0].Addr()
+			if a.IsLinkLocalUnicast() || a.IsLoopback() || a.IsMulticast() {
+				p = p[1:]
+				continue
+			}
+			break
+		}
+		return p
+	}
+	for {
+		a = trim(a)
+		b = trim(b)
+		if len(a) == 0 || len(b) == 0 {
+			return len(a) == 0 && len(b) == 0
+		}
+		if a[0] != b[0] {
+			return false
+		}
+		a, b = a[1:], b[1:]
 	}
 }
 
