@@ -194,7 +194,7 @@ main() {
 				VERSION=""
 				PACKAGETYPE="dnf"
 				;;
-			rocky|almalinux|nobara|openmandriva|sangoma|risios)
+			rocky|almalinux|nobara|openmandriva|sangoma|risios|cloudlinux|alinux)
 				OS="fedora"
 				VERSION=""
 				PACKAGETYPE="dnf"
