@@ -77,9 +77,12 @@ func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func
 		cleanup = s.startDevServer()
 		s.addProxyToDevServer()
 
-		// Create new handler for "/api" requests.
-		// And protect with gorilla csrf.
-		csrfProtect := csrf.Protect(csrfKey())
+		// Create handler for "/api" requests with CSRF protection.
+		// We don't require secure cookies, since the web client is regularly used
+		// on network appliances that are served on local non-https URLs.
+		// The client is secured by limiting the interface it listens on,
+		// or by authenticating requests before they reach the web client.
+		csrfProtect := csrf.Protect(csrfKey(), csrf.Secure(false))
 		s.apiHandler = csrfProtect(&api{s: s})
 	}
 	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
