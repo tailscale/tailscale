@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -562,7 +561,7 @@ func TestSSHRecordingNonInteractive(t *testing.T) {
 	recordingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		var err error
-		recording, err = ioutil.ReadAll(r.Body)
+		recording, err = io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
