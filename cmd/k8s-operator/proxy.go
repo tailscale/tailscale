@@ -14,8 +14,12 @@ import (
 	"os"
 	"strings"
 
+	"go.uber.org/zap"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/transport"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/hostinfo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
@@ -34,6 +38,33 @@ func whoIsFromRequest(r *http.Request) *apitype.WhoIsResponse {
 // whoIsFromRequest.
 func addWhoIsToRequest(r *http.Request, who *apitype.WhoIsResponse) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), whoIsKey{}, who))
+}
+
+// launchAuthProxy launches the auth proxy, which is a small HTTP server that
+// authenticates requests using the Tailscale LocalAPI and then proxies them to
+// the kube-apiserver.
+func launchAuthProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server) {
+	hostinfo.SetApp("k8s-operator-proxy")
+	startlog := zlog.Named("launchAuthProxy")
+	cfg, err := restConfig.TransportConfig()
+	if err != nil {
+		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
+	}
+
+	// Kubernetes uses SPDY for exec and port-forward, however SPDY is
+	// incompatible with HTTP/2; so disable HTTP/2 in the proxy.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig, err = transport.TLSConfigFor(cfg)
+	if err != nil {
+		startlog.Fatalf("could not get transport.TLSConfigFor(): %v", err)
+	}
+	tr.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
+
+	rt, err := transport.HTTPWrappersForConfig(cfg, tr)
+	if err != nil {
+		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
+	}
+	go runAuthProxy(s, rt, zlog.Named("auth-proxy").Infof)
 }
 
 // authProxy is an http.Handler that authenticates requests using the Tailscale

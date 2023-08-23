@@ -32,12 +32,15 @@ func TestLoadBalancerClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:            fc,
-		tsClient:          ft,
-		defaultTags:       []string{"tag:k8s"},
-		operatorNamespace: "operator-ns",
-		proxyImage:        "tailscale/tailscale",
-		logger:            zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -153,12 +156,15 @@ func TestAnnotations(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:            fc,
-		tsClient:          ft,
-		defaultTags:       []string{"tag:k8s"},
-		operatorNamespace: "operator-ns",
-		proxyImage:        "tailscale/tailscale",
-		logger:            zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -250,12 +256,15 @@ func TestAnnotationIntoLB(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:            fc,
-		tsClient:          ft,
-		defaultTags:       []string{"tag:k8s"},
-		operatorNamespace: "operator-ns",
-		proxyImage:        "tailscale/tailscale",
-		logger:            zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -368,12 +377,15 @@ func TestLBIntoAnnotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:            fc,
-		tsClient:          ft,
-		defaultTags:       []string{"tag:k8s"},
-		operatorNamespace: "operator-ns",
-		proxyImage:        "tailscale/tailscale",
-		logger:            zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -491,12 +503,15 @@ func TestCustomHostname(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:            fc,
-		tsClient:          ft,
-		defaultTags:       []string{"tag:k8s"},
-		operatorNamespace: "operator-ns",
-		proxyImage:        "tailscale/tailscale",
-		logger:            zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
@@ -593,13 +608,16 @@ func TestCustomPriorityClassName(t *testing.T) {
 		t.Fatal(err)
 	}
 	sr := &ServiceReconciler{
-		Client:                 fc,
-		tsClient:               ft,
-		defaultTags:            []string{"tag:k8s"},
-		operatorNamespace:      "operator-ns",
-		proxyImage:             "tailscale/tailscale",
-		proxyPriorityClassName: "tailscale-critical",
-		logger:                 zl.Sugar(),
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:                 fc,
+			tsClient:               ft,
+			defaultTags:            []string{"tag:k8s"},
+			operatorNamespace:      "operator-ns",
+			proxyImage:             "tailscale/tailscale",
+			proxyPriorityClassName: "tailscale-critical",
+		},
+		logger: zl.Sugar(),
 	}
 
 	// Create a service that we should manage, and check that the initial round
