@@ -17,7 +17,8 @@
 //   - TS_DEST_IP: proxy all incoming Tailscale traffic to the given
 //     destination.
 //   - TS_TAILSCALED_EXTRA_ARGS: extra arguments to 'tailscaled'.
-//   - TS_EXTRA_ARGS: extra arguments to 'tailscale up'.
+//   - TS_EXTRA_ARGS: extra arguments to 'tailscale login', these are not
+//     reset on restart.
 //   - TS_USERSPACE: run with userspace networking (the default)
 //     instead of kernel networking.
 //   - TS_STATE_DIR: the directory in which to store tailscaled
@@ -177,7 +178,7 @@ func main() {
 		}
 		didLogin = true
 		w.Close()
-		if err := tailscaleUp(ctx, cfg); err != nil {
+		if err := tailscaleLogin(ctx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %v", err)
 		}
 		w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
@@ -209,6 +210,12 @@ authLoop:
 			case ipn.NeedsMachineAuth:
 				log.Printf("machine authorization required, please visit the admin panel")
 			case ipn.Running:
+				// Now that we are authenticated, we can set/reset any of the
+				// settings that we need to.
+				if err := tailscaleSet(ctx, cfg); err != nil {
+					log.Fatalf("failed to auth tailscale: %v", err)
+				}
+
 				// Technically, all we want is to keep monitoring the bus for
 				// netmap updates. However, in order to make the container crash
 				// if tailscale doesn't initially come up, the watch has a
@@ -385,16 +392,35 @@ func tailscaledArgs(cfg *settings) []string {
 	return args
 }
 
-// tailscaleUp uses cfg to run 'tailscale up'.
-func tailscaleUp(ctx context.Context, cfg *settings) error {
-	args := []string{"--socket=" + cfg.Socket, "up"}
+// tailscaleLogin uses cfg to run 'tailscale login' everytime containerboot
+// starts, or if TS_AUTH_ONCE is set, only the first time containerboot starts.
+func tailscaleLogin(ctx context.Context, cfg *settings) error {
+	args := []string{"--socket=" + cfg.Socket, "login"}
+	if cfg.AuthKey != "" {
+		args = append(args, "--authkey="+cfg.AuthKey)
+	}
+	if cfg.ExtraArgs != "" {
+		args = append(args, strings.Fields(cfg.ExtraArgs)...)
+	}
+	log.Printf("Running 'tailscale login'")
+	cmd := exec.CommandContext(ctx, "tailscale", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tailscale login failed: %v", err)
+	}
+	return nil
+}
+
+// tailscaleSet uses cfg to run 'tailscale set' to set any known configuration
+// options that are passed in via environment variables. This is run after the
+// node is in Running state.
+func tailscaleSet(ctx context.Context, cfg *settings) error {
+	args := []string{"--socket=" + cfg.Socket, "set"}
 	if cfg.AcceptDNS {
 		args = append(args, "--accept-dns=true")
 	} else {
 		args = append(args, "--accept-dns=false")
-	}
-	if cfg.AuthKey != "" {
-		args = append(args, "--authkey="+cfg.AuthKey)
 	}
 	if cfg.Routes != "" {
 		args = append(args, "--advertise-routes="+cfg.Routes)
@@ -402,15 +428,12 @@ func tailscaleUp(ctx context.Context, cfg *settings) error {
 	if cfg.Hostname != "" {
 		args = append(args, "--hostname="+cfg.Hostname)
 	}
-	if cfg.ExtraArgs != "" {
-		args = append(args, strings.Fields(cfg.ExtraArgs)...)
-	}
-	log.Printf("Running 'tailscale up'")
+	log.Printf("Running 'tailscale set'")
 	cmd := exec.CommandContext(ctx, "tailscale", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("tailscale up failed: %v", err)
+		return fmt.Errorf("tailscale set failed: %v", err)
 	}
 	return nil
 }
