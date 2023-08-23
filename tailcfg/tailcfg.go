@@ -110,7 +110,8 @@ type CapabilityVersion int
 //   - 69: 2023-08-16: removed Debug.LogHeap* + GoroutineDumpURL; added c2n /debug/logheap
 //   - 70: 2023-08-16: removed most Debug fields; added NodeAttrDisable*, NodeAttrDebug* instead
 //   - 71: 2023-08-17: added NodeAttrOneCGNATEnable, NodeAttrOneCGNATDisable
-const CurrentCapabilityVersion CapabilityVersion = 71
+//   - 72: 2023-08-23: TS-2023-006 UPnP issue fixed; UPnP can now be used again
+const CurrentCapabilityVersion CapabilityVersion = 72
 
 type StableID string
 
