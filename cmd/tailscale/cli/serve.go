@@ -131,6 +131,7 @@ func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.Fla
 type localServeClient interface {
 	StatusWithoutPeers(context.Context) (*ipnstate.Status, error)
 	GetServeConfig(context.Context) (*ipn.ServeConfig, error)
+	GetMemoryServeConfig(context.Context) (*ipn.ServeConfig, error)
 	SetServeConfig(context.Context, *ipn.ServeConfig) error
 	QueryFeature(ctx context.Context, feature string) (*tailcfg.QueryFeatureResponse, error)
 	WatchIPNBus(ctx context.Context, mask ipn.NotifyWatchOpt) (*tailscale.IPNBusWatcher, error)
@@ -146,7 +147,8 @@ type localServeClient interface {
 // It also contains the flags, as registered with newServeCommand.
 type serveEnv struct {
 	// flags
-	json bool // output JSON (status only for now)
+	json   bool // output JSON (status only for now)
+	memory bool // output memory (status only for now)
 
 	lc localServeClient // localClient interface, specific to serve
 
@@ -626,7 +628,13 @@ func (e *serveEnv) handleTCPServeRemove(ctx context.Context, src uint16) error {
 //   - tailscale status
 //   - tailscale status --json
 func (e *serveEnv) runServeStatus(ctx context.Context, args []string) error {
-	sc, err := e.lc.GetServeConfig(ctx)
+	var sc *ipn.ServeConfig
+	var err error
+	if e.memory {
+		sc, err = e.lc.GetMemoryServeConfig(ctx)
+	} else {
+		sc, err = e.lc.GetServeConfig(ctx)
+	}
 	if err != nil {
 		return err
 	}

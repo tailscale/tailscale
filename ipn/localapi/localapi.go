@@ -835,7 +835,7 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		config := h.b.ServeConfig()
+		config := h.b.ServeConfig(r.FormValue("memory") == "true")
 		json.NewEncoder(w).Encode(config)
 	case "POST":
 		if !h.PermitWrite {

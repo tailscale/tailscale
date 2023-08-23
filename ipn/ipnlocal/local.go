@@ -242,6 +242,7 @@ type LocalBackend struct {
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
 	serveConfig       ipn.ServeConfigView // or !Valid if none
+	memServeConfig    ipn.ServeConfigView // or !Valid if none
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
@@ -2329,6 +2330,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 		b.setTCPPortsIntercepted(nil)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		b.memServeConfig = ipn.ServeConfigView{}
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(filtered))
@@ -2686,7 +2688,7 @@ func (b *LocalBackend) checkExitNodePrefsLocked(p *ipn.Prefs) error {
 }
 
 func (b *LocalBackend) checkFunnelEnabledLocked(p *ipn.Prefs) error {
-	if p.ShieldsUp && b.serveConfig.IsFunnelOn() {
+	if p.ShieldsUp && (b.serveConfig.IsFunnelOn() || b.memServeConfig.IsFunnelOn()) {
 		return errors.New("Cannot enable shields-up when Funnel is enabled.")
 	}
 	return nil
@@ -2765,7 +2767,8 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 // doesn't affect security or correctness. And we also don't expect people to
 // modify their ServeConfig in raw mode.
 func (b *LocalBackend) wantIngressLocked() bool {
-	return b.serveConfig.Valid() && b.serveConfig.AllowFunnel().Len() > 0
+	return b.serveConfig.Valid() && (b.serveConfig.AllowFunnel().Len() > 0) ||
+		b.memServeConfig.Valid() && (b.memServeConfig.AllowFunnel().Len() > 0)
 }
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
@@ -4073,6 +4076,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 		// Don't try to load the serve config.
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		// b.memServeConfig = ipn.ServeConfigView{} should we do this?
 		return
 	}
 	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
@@ -4082,6 +4086,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err != nil {
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		// b.memServeConfig = ipn.ServeConfigView{} should we do this?
 		return
 	}
 	if b.lastServeConfJSON.Equal(mem.B(confj)) {
@@ -4092,6 +4097,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if err := json.Unmarshal(confj, &conf); err != nil {
 		b.logf("invalid ServeConfig %q in StateStore: %v", confKey, err)
 		b.serveConfig = ipn.ServeConfigView{}
+		// b.memServeConfig = ipn.ServeConfigView{} should we do this?
 		return
 	}
 	b.serveConfig = conf.View()
@@ -4109,9 +4115,13 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	}
 
 	b.reloadServeConfigLocked(prefs)
-	if b.serveConfig.Valid() {
+
+	setServeProxy := func(sc ipn.ServeConfigView) {
+		if !sc.Valid() {
+			return
+		}
 		servePorts := make([]uint16, 0, 3)
-		b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+		sc.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
 			if port > 0 {
 				servePorts = append(servePorts, uint16(port))
 			}
@@ -4126,6 +4136,9 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 			b.updateServeTCPPortNetMapAddrListenersLocked(servePorts)
 		}
 	}
+	setServeProxy(b.serveConfig)
+	setServeProxy(b.memServeConfig)
+
 	// Kick off a Hostinfo update to control if WireIngress changed.
 	if wire := b.wantIngressLocked(); b.hostinfo != nil && b.hostinfo.WireIngress != wire {
 		b.logf("Hostinfo.WireIngress changed to %v", wire)
@@ -4140,35 +4153,39 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 // backend specified in serveConfig. It expects serveConfig to be valid and
 // up-to-date, so should be called after reloadServeConfigLocked.
 func (b *LocalBackend) setServeProxyHandlersLocked() {
-	if !b.serveConfig.Valid() {
-		return
-	}
 	var backends map[string]bool
-	b.serveConfig.Web().Range(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
-		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
-			backend := h.Proxy()
-			if backend == "" {
-				// Only create proxy handlers for servers with a proxy backend.
-				return true
-			}
-			mak.Set(&backends, backend, true)
-			if _, ok := b.serveProxyHandlers.Load(backend); ok {
-				return true
-			}
+	f := func(sc ipn.ServeConfigView) {
+		if !sc.Valid() {
+			return
+		}
+		sc.Web().Range(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
+			conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
+				backend := h.Proxy()
+				if backend == "" {
+					// Only create proxy handlers for servers with a proxy backend.
+					return true
+				}
+				mak.Set(&backends, backend, true)
+				if _, ok := b.serveProxyHandlers.Load(backend); ok {
+					return true
+				}
 
-			b.logf("serve: creating a new proxy handler for %s", backend)
-			p, err := b.proxyHandlerForBackend(backend)
-			if err != nil {
-				// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
-				// in the CLI, so just log the error here.
-				b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
+				b.logf("serve: creating a new proxy handler for %s", backend)
+				p, err := b.proxyHandlerForBackend(backend)
+				if err != nil {
+					// The backend endpoint (h.Proxy) should have been validated by expandProxyTarget
+					// in the CLI, so just log the error here.
+					b.logf("[unexpected] could not create proxy for %v: %s", backend, err)
+					return true
+				}
+				b.serveProxyHandlers.Store(backend, p)
 				return true
-			}
-			b.serveProxyHandlers.Store(backend, p)
+			})
 			return true
 		})
-		return true
-	})
+	}
+	f(b.serveConfig)
+	f(b.memServeConfig)
 
 	// Clean up handlers for proxy backends that are no longer present
 	// in configuration.
@@ -4937,7 +4954,8 @@ func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
-	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
+	b.memServeConfig = ipn.ServeConfigView{} // is this needed?
+	b.enterStateLockedOnEntry(ipn.NoState)   // Reset state.
 	health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }

@@ -1091,6 +1091,17 @@ func (lc *LocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, er
 	return getServeConfigFromJSON(body)
 }
 
+// GetMemoryServeConfig return the current serve config.
+//
+// If the serve config is empty, it returns (nil, nil).
+func (lc *LocalClient) GetMemoryServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
+	body, err := lc.send(ctx, "GET", "/localapi/v0/serve-config?memory=true", 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting serve config: %w", err)
+	}
+	return getServeConfigFromJSON(body)
+}
+
 func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
 	if err := json.Unmarshal(body, &sc); err != nil {
 		return nil, err

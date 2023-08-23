@@ -26,6 +26,11 @@ func ServeConfigKey(profileID ProfileID) StateKey {
 // ServeConfig is the JSON type stored in the StateStore for
 // StateKey "_serve/$PROFILE_ID" as returned by ServeConfigKey.
 type ServeConfig struct {
+	// InMemory indicates whether this config
+	// is persisted in the local store or is
+	// an in memory config
+	InMemory bool
+
 	// TCP are the list of TCP port numbers that tailscaled should handle for
 	// the Tailscale IP addresses. (not subnet routers, etc)
 	TCP map[uint16]*TCPPortHandler `json:",omitempty"`

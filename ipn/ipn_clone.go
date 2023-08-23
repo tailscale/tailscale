@@ -80,6 +80,7 @@ func (src *ServeConfig) Clone() *ServeConfig {
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
+	InMemory    bool
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
 	AllowFunnel map[HostPort]bool

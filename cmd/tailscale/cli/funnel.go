@@ -44,7 +44,7 @@ func newFunnelCommand(e *serveEnv) *ffcli.Command {
 		ShortHelp: "Turn on/off Funnel service",
 		ShortUsage: strings.Join([]string{
 			"funnel <serve-port> {on|off}",
-			"funnel status [--json]",
+			"funnel status [--json] [--memory]",
 		}, "\n  "),
 		LongHelp: strings.Join([]string{
 			"Funnel allows you to publish a 'tailscale serve'",
@@ -62,6 +62,7 @@ func newFunnelCommand(e *serveEnv) *ffcli.Command {
 				ShortHelp: "show current serve/funnel status",
 				FlagSet: e.newFlags("funnel-status", func(fs *flag.FlagSet) {
 					fs.BoolVar(&e.json, "json", false, "output JSON")
+					fs.BoolVar(&e.memory, "memory", false, "in memory config")
 				}),
 				UsageFunc: usageFunc,
 			},
