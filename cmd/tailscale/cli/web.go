@@ -78,7 +78,7 @@ func runWeb(ctx context.Context, args []string) error {
 		return fmt.Errorf("too many non-flag arguments: %q", args)
 	}
 
-	webServer, cleanup := web.NewServer(webArgs.dev, nil)
+	webServer, cleanup := web.NewServer(webArgs.dev, &localClient)
 	defer cleanup()
 
 	if webArgs.cgi {
