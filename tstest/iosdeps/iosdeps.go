@@ -17,7 +17,6 @@ import (
 	_ "fmt"
 	_ "io"
 	_ "io/fs"
-	_ "io/ioutil"
 	_ "log"
 	_ "math"
 	_ "net"
