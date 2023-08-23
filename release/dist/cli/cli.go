@@ -88,6 +88,8 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 				ShortHelp:  "Generate root or signing key pair",
 				FlagSet: (func() *flag.FlagSet {
 					fs := flag.NewFlagSet("gen-key", flag.ExitOnError)
+					fs.BoolVar(&genKeyArgs.root, "root", false, "generate a root key")
+					fs.BoolVar(&genKeyArgs.signing, "signing", false, "generate a signing key")
 					fs.StringVar(&genKeyArgs.privPath, "priv-path", "private-key.pem", "output path for the private key")
 					fs.StringVar(&genKeyArgs.pubPath, "pub-path", "public-key.pem", "output path for the public key")
 					return fs
@@ -190,12 +192,25 @@ func parseSigningKey(path string) (crypto.Signer, error) {
 }
 
 var genKeyArgs struct {
+	root     bool
+	signing  bool
 	privPath string
 	pubPath  string
 }
 
 func runGenKey(ctx context.Context) error {
-	priv, pub, err := distsign.GenerateKey()
+	var pub, priv []byte
+	var err error
+	switch {
+	case genKeyArgs.root && genKeyArgs.signing:
+		return errors.New("only one of --root or --signing can be set")
+	case !genKeyArgs.root && !genKeyArgs.signing:
+		return errors.New("set either --root or --signing")
+	case genKeyArgs.root:
+		priv, pub, err = distsign.GenerateRootKey()
+	case genKeyArgs.signing:
+		priv, pub, err = distsign.GenerateSigningKey()
+	}
 	if err != nil {
 		return err
 	}
