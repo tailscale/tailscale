@@ -104,11 +104,7 @@ export default function useNodeData() {
           }
           const url = r["url"]
           if (url) {
-            if (data.IsUnraid) {
-              window.open(url, "_blank")
-            } else {
-              document.location.href = url
-            }
+            window.open(url, "_blank")
           }
           fetchNodeData()
         })
