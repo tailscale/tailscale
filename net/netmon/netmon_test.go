@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"tailscale.com/net/interfaces"
 )
 
 func TestMonitorStartClose(t *testing.T) {
@@ -40,7 +38,7 @@ func TestMonitorInjectEvent(t *testing.T) {
 	}
 	defer mon.Close()
 	got := make(chan bool, 1)
-	mon.RegisterChangeCallback(func(changed bool, state *interfaces.State) {
+	mon.RegisterChangeCallback(func(*ChangeDelta) {
 		select {
 		case got <- true:
 		default:
@@ -101,9 +99,9 @@ func TestMonitorMode(t *testing.T) {
 			done = t.C
 		}
 		n := 0
-		mon.RegisterChangeCallback(func(changed bool, st *interfaces.State) {
+		mon.RegisterChangeCallback(func(d *ChangeDelta) {
 			n++
-			t.Logf("cb: changed=%v, ifSt=%v", changed, st)
+			t.Logf("cb: changed=%v, ifSt=%v", d.Major, d.New)
 		})
 		mon.Start()
 		<-done

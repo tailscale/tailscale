@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"tailscale.com/net/dnscache"
-	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netknob"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/netns"
@@ -139,8 +138,8 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
 }
 
-func (d *Dialer) linkChanged(major bool, state *interfaces.State) {
-	if !major {
+func (d *Dialer) linkChanged(delta *netmon.ChangeDelta) {
+	if !delta.Major {
 		return
 	}
 	d.mu.Lock()
