@@ -226,6 +226,8 @@ func (s *magicStack) Public() key.NodePublic {
 	return s.privateKey.Public()
 }
 
+// Status returns a subset of the ipnstate.Status, only involving
+// the magicsock-specific parts.
 func (s *magicStack) Status() *ipnstate.Status {
 	var sb ipnstate.StatusBuilder
 	sb.WantPeers = true
@@ -240,9 +242,11 @@ func (s *magicStack) Status() *ipnstate.Status {
 // address. See meshStacks for one possible source of netmaps and IPs.
 func (s *magicStack) IP() netip.Addr {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		st := s.Status()
-		if len(st.TailscaleIPs) > 0 {
-			return st.TailscaleIPs[0]
+		s.conn.mu.Lock()
+		nm := s.conn.netMap
+		s.conn.mu.Unlock()
+		if nm != nil && len(nm.Addresses) > 0 {
+			return nm.Addresses[0].Addr()
 		}
 	}
 	panic("timed out waiting for magicstack to get an IP assigned")
