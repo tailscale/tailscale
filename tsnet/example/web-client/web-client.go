@@ -30,7 +30,10 @@ func main() {
 	}
 
 	// Serve the Tailscale web client.
-	ws, cleanup := web.NewServer(*devMode, lc)
+	ws, cleanup := web.NewServer(web.ServerOpts{
+		DevMode:     *devMode,
+		LocalClient: lc,
+	})
 	defer cleanup()
 	log.Printf("Serving Tailscale web client on http://%s", *addr)
 	if err := http.ListenAndServe(*addr, ws); err != nil {
