@@ -5,9 +5,14 @@ package netmon
 
 import (
 	"flag"
+	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"tailscale.com/net/interfaces"
+	"tailscale.com/util/mak"
 )
 
 func TestMonitorStartClose(t *testing.T) {
@@ -107,4 +112,131 @@ func TestMonitorMode(t *testing.T) {
 		<-done
 		t.Logf("%v callbacks", n)
 	}
+}
+
+// tests (*State).IsMajorChangeFrom
+func TestIsMajorChangeFrom(t *testing.T) {
+	type State = interfaces.State
+	type Interface = interfaces.Interface
+	tests := []struct {
+		name   string
+		s1, s2 *State
+		want   bool
+	}{
+		{
+			name: "eq_nil",
+			want: false,
+		},
+		{
+			name: "nil_mix",
+			s2:   new(State),
+			want: true,
+		},
+		{
+			name: "eq",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "default-route-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "bar",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "some-interesting-ip-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.3/16")},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "ipv6-ula-addressed-appeared",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {
+						netip.MustParsePrefix("10.0.1.2/16"),
+						// Brad saw this address coming & going on his home LAN, possibly
+						// via an Apple TV Thread routing advertisement? (Issue 9040)
+						netip.MustParsePrefix("fd15:bbfa:c583:4fce:f4fb:4ff:fe1a:4148/64"),
+					},
+				},
+			},
+			want: true, // TODO(bradfitz): want false (ignore the IPv6 ULA address on foo)
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Populate dummy interfaces where missing.
+			for _, s := range []*State{tt.s1, tt.s2} {
+				if s == nil {
+					continue
+				}
+				for name := range s.InterfaceIPs {
+					if _, ok := s.Interface[name]; !ok {
+						mak.Set(&s.Interface, name, Interface{Interface: &net.Interface{
+							Name: name,
+						}})
+					}
+				}
+			}
+
+			var m Monitor
+			m.om = &testOSMon{
+				Interesting: func(name string) bool { return true },
+			}
+			if got := m.IsMajorChangeFrom(tt.s1, tt.s2); got != tt.want {
+				t.Errorf("IsMajorChange = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+type testOSMon struct {
+	osMon
+	Interesting func(name string) bool
+}
+
+func (m *testOSMon) IsInterestingInterface(name string) bool {
+	if m.Interesting == nil {
+		return true
+	}
+	return m.Interesting(name)
 }
