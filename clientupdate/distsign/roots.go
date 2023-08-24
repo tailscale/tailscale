@@ -34,7 +34,7 @@ func parseRoots() ([]ed25519.PublicKey, error) {
 		if !f.Type().IsRegular() {
 			continue
 		}
-		if filepath.Ext(f.Name()) != ".pub" {
+		if filepath.Ext(f.Name()) != ".pem" {
 			continue
 		}
 		raw, err := rootsFS.ReadFile(path.Join("roots", f.Name()))
