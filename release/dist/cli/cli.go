@@ -95,6 +95,36 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 					return fs
 				})(),
 			},
+			{
+				Name: "sign-key",
+				Exec: func(ctx context.Context, args []string) error {
+					return runSignKey(ctx)
+				},
+				ShortUsage: "dist sign-key",
+				ShortHelp:  "Sign signing keys with a root key",
+				FlagSet: (func() *flag.FlagSet {
+					fs := flag.NewFlagSet("sign-key", flag.ExitOnError)
+					fs.StringVar(&signKeyArgs.rootPrivPath, "root-priv-path", "root-private-key.pem", "path to the root private key to sign with")
+					fs.StringVar(&signKeyArgs.signPubPath, "sign-pub-path", "signing-public-keys.pem", "path to the signing public key bundle to sign; the bundle should include all active signing keys")
+					fs.StringVar(&signKeyArgs.sigPath, "sig-path", "signature.bin", "oputput path for the signature")
+					return fs
+				})(),
+			},
+			{
+				Name: "verify-key-signature",
+				Exec: func(ctx context.Context, args []string) error {
+					return runVerifyKeySignature(ctx)
+				},
+				ShortUsage: "dist verify-key-signature",
+				ShortHelp:  "Verify a root signture of the signing keys' bundle",
+				FlagSet: (func() *flag.FlagSet {
+					fs := flag.NewFlagSet("verify-key-signature", flag.ExitOnError)
+					fs.StringVar(&verifyKeySignatureArgs.rootPubPath, "root-pub-path", "root-public-key.pem", "path to the root public key; this can be a bundle of multiple keys")
+					fs.StringVar(&verifyKeySignatureArgs.signPubPath, "sign-pub-path", "", "path to the signing public key bundle that was signed")
+					fs.StringVar(&verifyKeySignatureArgs.sigPath, "sig-path", "signature.bin", "path to the signature file")
+					return fs
+				})(),
+			},
 		},
 		Exec: func(context.Context, []string) error { return flag.ErrHelp },
 	}
@@ -222,5 +252,67 @@ func runGenKey(ctx context.Context) error {
 		return fmt.Errorf("failed writing public key: %w", err)
 	}
 	fmt.Println("wrote public key to", genKeyArgs.pubPath)
+	return nil
+}
+
+var signKeyArgs struct {
+	rootPrivPath string
+	signPubPath  string
+	sigPath      string
+}
+
+func runSignKey(ctx context.Context) error {
+	rkRaw, err := os.ReadFile(signKeyArgs.rootPrivPath)
+	if err != nil {
+		return err
+	}
+	rk, err := distsign.ParseRootKey(rkRaw)
+	if err != nil {
+		return err
+	}
+
+	bundle, err := os.ReadFile(signKeyArgs.signPubPath)
+	if err != nil {
+		return err
+	}
+	sig, err := rk.SignSigningKeys(bundle)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(signKeyArgs.sigPath, sig, 0400); err != nil {
+		return fmt.Errorf("failed writing signature file: %w", err)
+	}
+	fmt.Println("wrote signature to", signKeyArgs.sigPath)
+	return nil
+}
+
+var verifyKeySignatureArgs struct {
+	rootPubPath string
+	signPubPath string
+	sigPath     string
+}
+
+func runVerifyKeySignature(ctx context.Context) error {
+	rootPubBundle, err := os.ReadFile(verifyKeySignatureArgs.rootPubPath)
+	if err != nil {
+		return err
+	}
+	rootPubs, err := distsign.ParseRootKeyBundle(rootPubBundle)
+	if err != nil {
+		return fmt.Errorf("parsing %q: %w", verifyKeySignatureArgs.rootPubPath, err)
+	}
+	signPubBundle, err := os.ReadFile(verifyKeySignatureArgs.signPubPath)
+	if err != nil {
+		return err
+	}
+	sig, err := os.ReadFile(verifyKeySignatureArgs.sigPath)
+	if err != nil {
+		return err
+	}
+	if !distsign.VerifyAny(rootPubs, signPubBundle, sig) {
+		return errors.New("signature not valid")
+	}
+	fmt.Println("signature ok")
 	return nil
 }
