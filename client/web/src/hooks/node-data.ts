@@ -38,7 +38,7 @@ export default function useNodeData() {
   const fetchNodeData = useCallback(() => {
     apiFetch("/api/data")
       .then((r) => r.json())
-      .then((data) => setData(data))
+      .then((d) => setData(d))
       .catch((error) => console.error(error))
   }, [setData])
 
@@ -114,8 +114,21 @@ export default function useNodeData() {
   )
 
   useEffect(
-    fetchNodeData,
-    // Initial data load.
+    () => {
+      // Initial data load.
+      fetchNodeData()
+
+      // Refresh on browser tab focus.
+      const onVisibilityChange = () => {
+        document.visibilityState === "visible" && fetchNodeData()
+      }
+      window.addEventListener("visibilitychange", onVisibilityChange)
+      return () => {
+        // Cleanup browser tab listener.
+        window.removeEventListener("visibilitychange", onVisibilityChange)
+      }
+    },
+    // Run once.
     []
   )
 
