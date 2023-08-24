@@ -100,48 +100,25 @@ func init() {
 	tmpls = template.Must(template.New("").ParseFS(embeddedFS, "*"))
 }
 
-// authorize returns the name of the user accessing the web UI after verifying
-// whether the user has access to the web UI. The function will write the
-// error to the provided http.ResponseWriter.
-// Note: This is different from a tailscale user, and is typically the local
-// user on the node.
-func authorize(w http.ResponseWriter, r *http.Request) (string, error) {
-	switch distro.Get() {
-	case distro.Synology:
-		user, err := synoAuthn()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return "", err
-		}
-		if err := authorizeSynology(user); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return "", err
-		}
-		return user, nil
-	case distro.QNAP:
-		user, resp, err := qnapAuthn(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return "", err
-		}
-		if resp.IsAdmin == 0 {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return "", err
-		}
-		return user, nil
-	}
-	return "", nil
-}
-
-func authRedirect(w http.ResponseWriter, r *http.Request) bool {
-	if distro.Get() == distro.Synology {
-		return synoTokenRedirect(w, r)
-	}
-	return false
-}
-
 // ServeHTTP processes all requests for the Tailscale web client.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// some platforms where the client runs have their own authentication
+	// and authorization mechanisms we need to work with. Do those checks first.
+	switch distro.Get() {
+	case distro.Synology:
+		if authorizeSynology(w, r) {
+			return
+		}
+	case distro.QNAP:
+		if authorizeQNAP(w, r) {
+			return
+		}
+	}
+
+	s.serve(w, r)
+}
+
+func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if s.devMode {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			// Pass through to other handlers via CSRF protection.
@@ -153,29 +130,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if authRedirect(w, r) {
-		return
-	}
-
-	user, err := authorize(w, r)
-	if err != nil {
-		return
-	}
-
 	switch {
 	case r.Method == "POST":
 		s.servePostNodeUpdate(w, r)
 		return
 	default:
 		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
-		s.serveGetNodeData(w, r, user)
+		s.serveGetNodeData(w, r)
 		return
 	}
 }
 
 type nodeData struct {
 	Profile           tailcfg.UserProfile
-	SynologyUser      string
 	Status            string
 	DeviceName        string
 	IP                string
@@ -190,7 +157,7 @@ type nodeData struct {
 	IPNVersion        string
 }
 
-func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error) {
+func (s *Server) getNodeData(ctx context.Context) (*nodeData, error) {
 	st, err := s.lc.Status(ctx)
 	if err != nil {
 		return nil, err
@@ -203,17 +170,16 @@ func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error
 	deviceName := strings.Split(st.Self.DNSName, ".")[0]
 	versionShort := strings.Split(st.Version, "-")[0]
 	data := &nodeData{
-		SynologyUser: user,
-		Profile:      profile,
-		Status:       st.BackendState,
-		DeviceName:   deviceName,
-		LicensesURL:  licenses.LicensesURL(),
-		TUNMode:      st.TUN,
-		IsSynology:   distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
-		DSMVersion:   distro.DSMVersion(),
-		IsUnraid:     distro.Get() == distro.Unraid,
-		UnraidToken:  os.Getenv("UNRAID_CSRF_TOKEN"),
-		IPNVersion:   versionShort,
+		Profile:     profile,
+		Status:      st.BackendState,
+		DeviceName:  deviceName,
+		LicensesURL: licenses.LicensesURL(),
+		TUNMode:     st.TUN,
+		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
+		DSMVersion:  distro.DSMVersion(),
+		IsUnraid:    distro.Get() == distro.Unraid,
+		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
+		IPNVersion:  versionShort,
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
@@ -233,8 +199,8 @@ func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error
 	return data, nil
 }
 
-func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request, user string) {
-	data, err := s.getNodeData(r.Context(), user)
+func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
+	data, err := s.getNodeData(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -247,8 +213,8 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request, user s
 	w.Write(buf.Bytes())
 }
 
-func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request, user string) {
-	data, err := s.getNodeData(r.Context(), user)
+func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request) {
+	data, err := s.getNodeData(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

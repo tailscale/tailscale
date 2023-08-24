@@ -15,6 +15,37 @@ import (
 	"tailscale.com/util/groupmember"
 )
 
+// authorizeSynology authenticates the logged-in Synology user and verifies
+// that they are authorized to use the web client.  It returns true if the
+// request was handled and no further processing is required.
+func authorizeSynology(w http.ResponseWriter, r *http.Request) (handled bool) {
+	if synoTokenRedirect(w, r) {
+		return true
+	}
+
+	// authenticate the Synology user
+	cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("auth: %v: %s", err, out), http.StatusUnauthorized)
+		return true
+	}
+	user := strings.TrimSpace(string(out))
+
+	// check if the user is in the administrators group
+	isAdmin, err := groupmember.IsMemberOfGroup("administrators", user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return true
+	}
+	if !isAdmin {
+		http.Error(w, "not a member of administrators group", http.StatusForbidden)
+		return true
+	}
+
+	return false
+}
+
 func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("X-Syno-Token") != "" {
 		return false
@@ -31,41 +62,15 @@ func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-const synoTokenRedirectHTML = `<html><body>
+const synoTokenRedirectHTML = `<html>
 Redirecting with session token...
 <script>
-var serverURL = window.location.protocol + "//" + window.location.host;
-var req = new XMLHttpRequest();
-req.overrideMimeType("application/json");
-req.open("GET", serverURL + "/webman/login.cgi", true);
-req.onload = function() {
-	var jsonResponse = JSON.parse(req.responseText);
-	var token = jsonResponse["SynoToken"];
-	document.location.href = serverURL + "/webman/3rdparty/Tailscale/?SynoToken=" + token;
-};
-req.send(null);
+  fetch("/webman/login.cgi")
+    .then(r => r.json())
+    .then(data => {
+	u = new URL(window.location)
+	u.searchParams.set("SynoToken", data.SynoToken)
+	document.location = u
+    })
 </script>
-</body></html>
 `
-
-func synoAuthn() (string, error) {
-	cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("auth: %v: %s", err, out)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// authorizeSynology checks whether the provided user has access to the web UI
-// by consulting the membership of the "administrators" group.
-func authorizeSynology(name string) error {
-	yes, err := groupmember.IsMemberOfGroup("administrators", name)
-	if err != nil {
-		return err
-	}
-	if !yes {
-		return fmt.Errorf("not a member of administrators group")
-	}
-	return nil
-}
