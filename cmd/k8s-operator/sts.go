@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -21,9 +22,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/mak"
 )
 
 const (
@@ -39,6 +42,9 @@ const (
 	AnnotationTags     = "tailscale.com/tags"
 	AnnotationHostname = "tailscale.com/hostname"
 
+	// Annotations settable by users on ingresses.
+	AnnotationFunnel = "tailscale.com/funnel"
+
 	// Annotations set by the operator on pods to trigger restarts when the
 	// hostname or IP changes.
 	podAnnotationLastSetIP       = "tailscale.com/operator-last-set-ip"
@@ -50,7 +56,8 @@ type tailscaleSTSConfig struct {
 	ParentResourceUID   string
 	ChildResourceLabels map[string]string
 
-	TargetIP string
+	ServeConfig *ipn.ServeConfig
+	TargetIP    string
 
 	Hostname string
 	Tags     []string // if empty, use defaultTags
@@ -168,43 +175,57 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			Labels:    stsC.ChildResourceLabels,
 		},
 	}
+	alreadyExists := false
 	if err := a.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
 		logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
-		return secret.Name, nil
+		alreadyExists = true
 	} else if !apierrors.IsNotFound(err) {
 		return "", err
 	}
 
-	// Secret doesn't exist yet, create one. Initially it contains
-	// only the Tailscale authkey, but once Tailscale starts it'll
-	// also store the daemon state.
-	sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
-	if err != nil {
-		return "", err
-	}
-	if sts != nil {
-		// StatefulSet exists, so we have already created the secret.
-		// If the secret is missing, they should delete the StatefulSet.
-		logger.Errorf("Tailscale proxy secret doesn't exist, but the corresponding StatefulSet %s/%s already does. Something is wrong, please delete the StatefulSet.", sts.GetNamespace(), sts.GetName())
-		return "", nil
-	}
-	// Create API Key secret which is going to be used by the statefulset
-	// to authenticate with Tailscale.
-	logger.Debugf("creating authkey for new tailscale proxy")
-	tags := stsC.Tags
-	if len(tags) == 0 {
-		tags = a.defaultTags
-	}
-	authKey, err := a.newAuthKey(ctx, tags)
-	if err != nil {
-		return "", err
-	}
+	if !alreadyExists {
+		// Secret doesn't exist yet, create one. Initially it contains
+		// only the Tailscale authkey, but once Tailscale starts it'll
+		// also store the daemon state.
+		sts, err := getSingleObject[appsv1.StatefulSet](ctx, a.Client, a.operatorNamespace, stsC.ChildResourceLabels)
+		if err != nil {
+			return "", err
+		}
+		if sts != nil {
+			// StatefulSet exists, so we have already created the secret.
+			// If the secret is missing, they should delete the StatefulSet.
+			logger.Errorf("Tailscale proxy secret doesn't exist, but the corresponding StatefulSet %s/%s already does. Something is wrong, please delete the StatefulSet.", sts.GetNamespace(), sts.GetName())
+			return "", nil
+		}
+		// Create API Key secret which is going to be used by the statefulset
+		// to authenticate with Tailscale.
+		logger.Debugf("creating authkey for new tailscale proxy")
+		tags := stsC.Tags
+		if len(tags) == 0 {
+			tags = a.defaultTags
+		}
+		authKey, err := a.newAuthKey(ctx, tags)
+		if err != nil {
+			return "", err
+		}
 
-	secret.StringData = map[string]string{
-		"authkey": authKey,
+		mak.Set(&secret.StringData, "authkey", authKey)
 	}
-	if err := a.Create(ctx, secret); err != nil {
-		return "", err
+	if stsC.ServeConfig != nil {
+		j, err := json.Marshal(stsC.ServeConfig)
+		if err != nil {
+			return "", err
+		}
+		mak.Set(&secret.StringData, "serve-config", string(j))
+	}
+	if alreadyExists {
+		if err := a.Update(ctx, secret); err != nil {
+			return "", err
+		}
+	} else {
+		if err := a.Create(ctx, secret); err != nil {
+			return "", err
+		}
 	}
 	return secret.Name, nil
 }
@@ -253,18 +274,23 @@ func (a *tailscaleSTSReconciler) newAuthKey(ctx context.Context, tags []string) 
 //go:embed manifests/proxy.yaml
 var proxyYaml []byte
 
+//go:embed manifests/userspace-proxy.yaml
+var userspaceProxyYaml []byte
+
 func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig, headlessSvc *corev1.Service, authKeySecret string) (*appsv1.StatefulSet, error) {
 	var ss appsv1.StatefulSet
-	if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+	if sts.ServeConfig != nil {
+		if err := yaml.Unmarshal(userspaceProxyYaml, &ss); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+		}
+	} else {
+		if err := yaml.Unmarshal(proxyYaml, &ss); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal proxy spec: %w", err)
+		}
 	}
 	container := &ss.Spec.Template.Spec.Containers[0]
 	container.Image = a.proxyImage
 	container.Env = append(container.Env,
-		corev1.EnvVar{
-			Name:  "TS_DEST_IP",
-			Value: sts.TargetIP,
-		},
 		corev1.EnvVar{
 			Name:  "TS_KUBE_SECRET",
 			Value: authKeySecret,
@@ -273,6 +299,34 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
 		})
+	if sts.TargetIP != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEST_IP",
+			Value: sts.TargetIP,
+		})
+	} else if sts.ServeConfig != nil {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_SERVE_CONFIG",
+			Value: "/etc/tailscaled/serve-config",
+		})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "serve-config",
+			ReadOnly:  true,
+			MountPath: "/etc/tailscaled",
+		})
+		ss.Spec.Template.Spec.Volumes = append(ss.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "serve-config",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: authKeySecret,
+					Items: []corev1.KeyToPath{{
+						Key:  "serve-config",
+						Path: "serve-config",
+					}},
+				},
+			},
+		})
+	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
