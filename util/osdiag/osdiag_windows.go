@@ -45,6 +45,7 @@ func logSupportInfo(logf logger.Logf, reason LogSupportInfoReason) {
 
 const (
 	supportInfoKeyModules    = "modules"
+	supportInfoKeyPageFile   = "pageFile"
 	supportInfoKeyRegistry   = "registry"
 	supportInfoKeySecurity   = "securitySoftware"
 	supportInfoKeyWinsockLSP = "winsockLSP"
@@ -58,6 +59,13 @@ func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 		output[supportInfoKeyRegistry] = regInfo
 	} else {
 		output[supportInfoKeyRegistry] = err
+	}
+
+	pageFileInfo, err := getPageFileInfo()
+	if err == nil {
+		output[supportInfoKeyPageFile] = pageFileInfo
+	} else {
+		output[supportInfoKeyPageFile] = err
 	}
 
 	if reason == LogSupportInfoReasonBugReport {
@@ -588,4 +596,73 @@ func getSecurityInfo() map[string]any {
 	}
 
 	return result
+}
+
+type _MEMORYSTATUSEX struct {
+	Length               uint32
+	MemoryLoad           uint32
+	TotalPhys            uint64
+	AvailPhys            uint64
+	TotalPageFile        uint64
+	AvailPageFile        uint64
+	TotalVirtual         uint64
+	AvailVirtual         uint64
+	AvailExtendedVirtual uint64
+}
+
+func getPageFileInfo() (map[string]any, error) {
+	memStatus := _MEMORYSTATUSEX{
+		Length: uint32(unsafe.Sizeof(_MEMORYSTATUSEX{})),
+	}
+	if err := globalMemoryStatusEx(&memStatus); err != nil {
+		return nil, err
+	}
+
+	result := map[string]any{
+		"bytesAvailable": memStatus.AvailPageFile,
+		"bytesTotal":     memStatus.TotalPageFile,
+	}
+
+	if entries, err := getEffectivePageFileValue(); err == nil {
+		// autoManaged is set to true when there is at least one page file that
+		// is automatically managed.
+		autoManaged := false
+
+		// If there is only one entry that consists of only one part, then
+		// the page files are 100% managed by the system.
+		// If there are multiple entries, then each one must be checked.
+		// Each entry then consists of three components, deliminated by spaces.
+		// If the latter two components are both "0", then that entry is auto-managed.
+		for _, entry := range entries {
+			if parts := strings.Split(entry, " "); (len(parts) == 1 && len(entries) == 1) ||
+				(len(parts) == 3 && parts[1] == "0" && parts[2] == "0") {
+				autoManaged = true
+				break
+			}
+		}
+
+		result["autoManaged"] = autoManaged
+	}
+
+	return result, nil
+}
+
+func getEffectivePageFileValue() ([]string, error) {
+	const subKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management`
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.QUERY_VALUE)
+	if err != nil {
+		return nil, err
+	}
+	defer key.Close()
+
+	// Rare but possible case: the user has updated their page file config but
+	// they haven't yet rebooted for the change to take effect. This is the
+	// current setting that the machine is still operating with.
+	if entries, _, err := key.GetStringsValue("ExistingPageFiles"); err == nil {
+		return entries, nil
+	}
+
+	// Otherwise we use this value (yes, the above value uses "Page" and this one uses "Paging").
+	entries, _, err := key.GetStringsValue("PagingFiles")
+	return entries, err
 }

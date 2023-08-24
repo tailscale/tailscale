@@ -40,18 +40,28 @@ func errnoErr(e syscall.Errno) error {
 
 var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	modws2_32   = windows.NewLazySystemDLL("ws2_32.dll")
 
-	procRegEnumValueW      = modadvapi32.NewProc("RegEnumValueW")
-	procWSCEnumProtocols   = modws2_32.NewProc("WSCEnumProtocols")
-	procWSCGetProviderInfo = modws2_32.NewProc("WSCGetProviderInfo")
-	procWSCGetProviderPath = modws2_32.NewProc("WSCGetProviderPath")
+	procRegEnumValueW        = modadvapi32.NewProc("RegEnumValueW")
+	procGlobalMemoryStatusEx = modkernel32.NewProc("GlobalMemoryStatusEx")
+	procWSCEnumProtocols     = modws2_32.NewProc("WSCEnumProtocols")
+	procWSCGetProviderInfo   = modws2_32.NewProc("WSCGetProviderInfo")
+	procWSCGetProviderPath   = modws2_32.NewProc("WSCGetProviderPath")
 )
 
 func regEnumValue(key registry.Key, index uint32, valueName *uint16, valueNameLen *uint32, reserved *uint32, valueType *uint32, pData *byte, cbData *uint32) (ret error) {
 	r0, _, _ := syscall.Syscall9(procRegEnumValueW.Addr(), 8, uintptr(key), uintptr(index), uintptr(unsafe.Pointer(valueName)), uintptr(unsafe.Pointer(valueNameLen)), uintptr(unsafe.Pointer(reserved)), uintptr(unsafe.Pointer(valueType)), uintptr(unsafe.Pointer(pData)), uintptr(unsafe.Pointer(cbData)), 0)
 	if r0 != 0 {
 		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func globalMemoryStatusEx(memStatus *_MEMORYSTATUSEX) (err error) {
+	r1, _, e1 := syscall.Syscall(procGlobalMemoryStatusEx.Addr(), 1, uintptr(unsafe.Pointer(memStatus)), 0, 0)
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
 	}
 	return
 }
