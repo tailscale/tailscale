@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
@@ -56,6 +57,18 @@ type Server struct {
 	cgiMode    bool
 	cgiPath    string
 	apiHandler http.Handler // csrf-protected api handler
+
+	selfMu sync.Mutex // protects self field
+	// self is a cached NodeView of the active self node,
+	// refreshed by watching the IPN notification bus
+	// (see Server.watchSelf).
+	//
+	// self's hostname and Tailscale IP are used to verify
+	// that incoming requests to the web client api are coming
+	// from the web client frontend and not some other source.
+	// Particularly to protect against DNS rebinding attacks.
+	// self should not be used to fill data for frontend views.
+	self tailcfg.NodeView
 }
 
 // ServerOpts contains options for constructing a new Server.
@@ -74,7 +87,8 @@ type ServerOpts struct {
 }
 
 // NewServer constructs a new Tailscale web client server.
-func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
+// The provided context should live for the duration of the Server's lifetime.
+func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func()) {
 	if opts.LocalClient == nil {
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
@@ -97,12 +111,73 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
 		s.apiHandler = csrfProtect(&api{s: s})
 	}
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		go s.watchSelf(ctx)
+	}()
+
 	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
 }
 
 func init() {
 	tmpls = template.Must(template.New("").ParseFS(embeddedFS, "*"))
+}
+
+// watchSelf watches the IPN notification bus to refresh
+// the Server's self node cache.
+func (s *Server) watchSelf(ctx context.Context) {
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+
+	watcher, err := s.lc.WatchIPNBus(watchCtx, ipn.NotifyInitialNetMap|ipn.NotifyNoPrivateKeys)
+	if err != nil {
+		log.Fatalf("lost connection to tailscaled: %v", err)
+	}
+	defer watcher.Close()
+
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			log.Fatalf("lost connection to tailscaled: %v", err)
+		}
+		if state := n.State; state != nil && *state == ipn.NeedsLogin {
+			s.updateSelf(tailcfg.NodeView{})
+			continue
+		}
+		if n.NetMap == nil {
+			continue
+		}
+		s.updateSelf(n.NetMap.SelfNode)
+	}
+}
+
+// updateSelf grabs the lock and updates s.self.
+// Then logs if anything changed.
+func (s *Server) updateSelf(self tailcfg.NodeView) {
+	s.selfMu.Lock()
+	prev := s.self
+	s.self = self
+	s.selfMu.Unlock()
+
+	var old, new tailcfg.StableNodeID
+	if prev.Valid() {
+		old = prev.StableID()
+	}
+	if s.self.Valid() {
+		new = s.self.StableID()
+	}
+	if old != new {
+		if new.IsZero() {
+			log.Printf("self node logout")
+		} else {
+			log.Printf("self node login")
+		}
+	}
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.

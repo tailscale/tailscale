@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -20,6 +21,7 @@ var (
 
 func main() {
 	flag.Parse()
+	ctx := context.Background()
 
 	s := new(tsnet.Server)
 	defer s.Close()
@@ -30,7 +32,7 @@ func main() {
 	}
 
 	// Serve the Tailscale web client.
-	ws, cleanup := web.NewServer(web.ServerOpts{
+	ws, cleanup := web.NewServer(ctx, web.ServerOpts{
 		DevMode:     *devMode,
 		LocalClient: lc,
 	})
