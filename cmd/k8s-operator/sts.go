@@ -34,9 +34,15 @@ const (
 
 	FinalizerName = "tailscale.com/finalizer"
 
+	// Annotations settable by users on services.
 	AnnotationExpose   = "tailscale.com/expose"
 	AnnotationTags     = "tailscale.com/tags"
 	AnnotationHostname = "tailscale.com/hostname"
+
+	// Annotations set by the operator on pods to trigger restarts when the
+	// hostname or IP changes.
+	podAnnotationLastSetIP       = "tailscale.com/operator-last-set-ip"
+	podAnnotationLastSetHostname = "tailscale.com/operator-last-set-hostname"
 )
 
 type tailscaleSTSConfig struct {
@@ -278,7 +284,18 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			"app": sts.ParentResourceUID,
 		},
 	}
-	ss.Spec.Template.ObjectMeta.Labels = map[string]string{
+
+	// containerboot currently doesn't have a way to re-read the hostname/ip as
+	// it is passed via an environment variable. So we need to restart the
+	// container when the value changes. We do this by adding an annotation to
+	// the pod template that contains the last value we set.
+	ss.Spec.Template.Annotations = map[string]string{
+		"tailscale.com/operator-last-set-hostname": sts.Hostname,
+	}
+	if sts.TargetIP != "" {
+		ss.Spec.Template.Annotations["tailscale.com/operator-last-set-ip"] = sts.TargetIP
+	}
+	ss.Spec.Template.Labels = map[string]string{
 		"app": sts.ParentResourceUID,
 	}
 	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
