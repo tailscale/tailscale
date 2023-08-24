@@ -1,8 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build js || wasm
-// +build js wasm
+//go:build wasm || plan9
 
 package magicsock
 
