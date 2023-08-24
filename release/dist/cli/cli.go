@@ -20,7 +20,6 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/release/dist"
-	"tailscale.com/release/dist/unixpkgs"
 )
 
 // CLI returns a CLI root command to build release packages.
@@ -28,7 +27,7 @@ import (
 // getTargets is a function that gets run in the Exec function of commands that
 // need to know the target list. Its execution is deferred in this way to allow
 // customization of command FlagSets with flags that influence the target list.
-func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Command {
+func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 	return &ffcli.Command{
 		Name:       "dist",
 		ShortUsage: "dist [flags] <command> [command flags]",
@@ -38,7 +37,7 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 			{
 				Name: "list",
 				Exec: func(ctx context.Context, args []string) error {
-					targets, err := getTargets(unixpkgs.Signers{})
+					targets, err := getTargets()
 					if err != nil {
 						return err
 					}
@@ -54,11 +53,7 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 			{
 				Name: "build",
 				Exec: func(ctx context.Context, args []string) error {
-					tgzSigner, err := parseSigningKey(buildArgs.tgzSigningKey)
-					if err != nil {
-						return err
-					}
-					targets, err := getTargets(unixpkgs.Signers{Tarball: tgzSigner})
+					targets, err := getTargets()
 					if err != nil {
 						return err
 					}
@@ -70,7 +65,6 @@ func CLI(getTargets func(unixpkgs.Signers) ([]dist.Target, error)) *ffcli.Comman
 					fs := flag.NewFlagSet("build", flag.ExitOnError)
 					fs.StringVar(&buildArgs.manifest, "manifest", "", "manifest file to write")
 					fs.BoolVar(&buildArgs.verbose, "verbose", false, "verbose logging")
-					fs.StringVar(&buildArgs.tgzSigningKey, "tgz-signing-key", "", "path to private signing key for release tarballs")
 					fs.StringVar(&buildArgs.webClientRoot, "web-client-root", "", "path to root of web client source to build")
 					return fs
 				})(),
@@ -147,7 +141,6 @@ func runList(ctx context.Context, filters []string, targets []dist.Target) error
 var buildArgs struct {
 	manifest      string
 	verbose       bool
-	tgzSigningKey string
 	webClientRoot string
 }
 
