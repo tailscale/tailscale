@@ -194,6 +194,9 @@ jobs:
             goarch: amd64
           - goos: openbsd
             goarch: amd64
+          # Plan9
+          - goos: plan9
+            goarch: amd64
 
     runs-on: ubuntu-22.04
     steps:
