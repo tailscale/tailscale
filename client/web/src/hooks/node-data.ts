@@ -36,7 +36,7 @@ export default function useNodeData() {
   const [isPosting, setIsPosting] = useState<boolean>(false)
 
   const fetchNodeData = useCallback(() => {
-    apiFetch("/api/data")
+    apiFetch("api/data")
       .then((r) => r.json())
       .then((d) => setData(d))
       .catch((error) => console.error(error))
