@@ -25,6 +25,7 @@ type target struct {
 	dsmMajorVersion int
 	goenv           map[string]string
 	packageCenter   bool
+	signer          dist.Signer
 }
 
 func (t *target) String() string {
@@ -37,15 +38,10 @@ func (t *target) Build(b *dist.Build) ([]string, error) {
 		return nil, err
 	}
 
-	out, err := t.buildSPK(b, inner)
-	if err != nil {
-		return nil, err
-	}
-
-	return []string{out}, nil
+	return t.buildSPK(b, inner)
 }
 
-func (t *target) buildSPK(b *dist.Build, inner *innerPkg) (string, error) {
+func (t *target) buildSPK(b *dist.Build, inner *innerPkg) ([]string, error) {
 	filename := fmt.Sprintf("tailscale-%s-%s-%d-dsm%d.spk", t.filenameArch, b.Version.Short, b.Version.Synology[t.dsmMajorVersion], t.dsmMajorVersion)
 	out := filepath.Join(b.Out, filename)
 	log.Printf("Building %s", filename)
@@ -57,7 +53,7 @@ func (t *target) buildSPK(b *dist.Build, inner *innerPkg) (string, error) {
 
 	f, err := os.Create(out)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer f.Close()
 	tw := tar.NewWriter(f)
@@ -78,17 +74,27 @@ func (t *target) buildSPK(b *dist.Build, inner *innerPkg) (string, error) {
 		static("scripts/preupgrade", "scripts/preupgrade", 0644),
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if err := tw.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := f.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return out, nil
+	files := []string{out}
+
+	if t.signer != nil {
+		outSig := out + ".sig"
+		if err := t.signer.SignFile(out, outSig); err != nil {
+			return nil, err
+		}
+		files = append(files, outSig)
+	}
+
+	return files, nil
 }
 
 func (t *target) mkInfo(b *dist.Build, uncompressedSz int64) []byte {

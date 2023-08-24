@@ -26,7 +26,7 @@ var v7Models = []string{
 	"monaco",
 }
 
-func Targets(forPackageCenter bool) []dist.Target {
+func Targets(forPackageCenter bool, signer dist.Signer) []dist.Target {
 	var ret []dist.Target
 	for _, dsmVersion := range []int{6, 7} {
 		ret = append(ret,
@@ -38,6 +38,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 					"GOARCH": "amd64",
 				},
 				packageCenter: forPackageCenter,
+				signer:        signer,
 			},
 			&target{
 				filenameArch:    "i686",
@@ -47,6 +48,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 					"GOARCH": "386",
 				},
 				packageCenter: forPackageCenter,
+				signer:        signer,
 			},
 			&target{
 				filenameArch:    "armv8",
@@ -56,6 +58,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 					"GOARCH": "arm64",
 				},
 				packageCenter: forPackageCenter,
+				signer:        signer,
 			})
 
 		// On older ARMv5 and ARMv7 platforms, synology used a whole
@@ -71,6 +74,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 					"GOARM":  "5",
 				},
 				packageCenter: forPackageCenter,
+				signer:        signer,
 			})
 		}
 		for _, v7Arch := range v7Models {
@@ -83,6 +87,7 @@ func Targets(forPackageCenter bool) []dist.Target {
 					"GOARM":  "7",
 				},
 				packageCenter: forPackageCenter,
+				signer:        signer,
 			})
 		}
 	}

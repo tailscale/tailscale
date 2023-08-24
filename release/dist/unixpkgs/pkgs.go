@@ -7,9 +7,6 @@ package unixpkgs
 import (
 	"archive/tar"
 	"compress/gzip"
-	"crypto"
-	"crypto/rand"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -26,7 +23,7 @@ import (
 type tgzTarget struct {
 	filenameArch string // arch to use in filename instead of deriving from goEnv["GOARCH"]
 	goEnv        map[string]string
-	signer       crypto.Signer
+	signer       dist.Signer
 }
 
 func (t *tgzTarget) arch() string {
@@ -73,11 +70,7 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	// Hash the final output we're writing to the file, after tar and gzip
-	// writers did their thing.
-	h := sha512.New()
-	hw := io.MultiWriter(f, h)
-	gw := gzip.NewWriter(hw)
+	gw := gzip.NewWriter(f)
 	defer gw.Close()
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
@@ -161,15 +154,11 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	files := []string{filename}
 
 	if t.signer != nil {
-		sig, err := t.signer.Sign(rand.Reader, h.Sum(nil), crypto.SHA512)
-		if err != nil {
+		outSig := out + ".sig"
+		if err := t.signer.SignFile(out, outSig); err != nil {
 			return nil, err
 		}
-		sigFilename := out + ".sig"
-		if err := os.WriteFile(sigFilename, sig, 0644); err != nil {
-			return nil, err
-		}
-		files = append(files, filename+".sig")
+		files = append(files, filepath.Base(outSig))
 	}
 
 	return files, nil
@@ -291,7 +280,7 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 
 type rpmTarget struct {
 	goEnv  map[string]string
-	signFn func(io.Reader) ([]byte, error)
+	signer dist.Signer
 }
 
 func (t *rpmTarget) os() string {
@@ -387,7 +376,7 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 				Group: "Network",
 				Signature: nfpm.RPMSignature{
 					PackageSignature: nfpm.PackageSignature{
-						SignFn: t.signFn,
+						SignFn: t.signer,
 					},
 				},
 			},
