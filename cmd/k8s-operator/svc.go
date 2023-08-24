@@ -24,7 +24,7 @@ type ServiceReconciler struct {
 	logger *zap.SugaredLogger
 }
 
-func childResourceLabels(parent *corev1.Service) map[string]string {
+func childResourceLabels(name, ns, typ string) map[string]string {
 	// You might wonder why we're using owner references, since they seem to be
 	// built for exactly this. Unfortunately, Kubernetes does not support
 	// cross-namespace ownership, by design. This means we cannot make the
@@ -33,9 +33,9 @@ func childResourceLabels(parent *corev1.Service) map[string]string {
 	// labels.
 	return map[string]string{
 		LabelManaged:         "true",
-		LabelParentName:      parent.GetName(),
-		LabelParentNamespace: parent.GetNamespace(),
-		LabelParentType:      "svc",
+		LabelParentName:      name,
+		LabelParentNamespace: ns,
+		LabelParentType:      typ,
 	}
 }
 
@@ -72,7 +72,7 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc)); err != nil {
+	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc")); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
@@ -114,7 +114,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			return fmt.Errorf("failed to add finalizer: %w", err)
 		}
 	}
-	crl := childResourceLabels(svc)
+	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
 	var tags []string
 	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
 		tags = strings.Split(tstr, ",")
