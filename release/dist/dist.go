@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -27,6 +28,27 @@ import (
 type Target interface {
 	String() string
 	Build(build *Build) ([]string, error)
+}
+
+// Signer is pluggable signer for a Target.
+type Signer func(io.Reader) ([]byte, error)
+
+// SignFile signs the file at filePath with s and writes the signature to
+// sigPath.
+func (s Signer) SignFile(filePath, sigPath string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sig, err := s(f)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(sigPath, sig, 0644)
 }
 
 // A Build is a build context for Targets.

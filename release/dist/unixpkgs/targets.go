@@ -4,9 +4,7 @@
 package unixpkgs
 
 import (
-	"crypto"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -17,8 +15,8 @@ import (
 )
 
 type Signers struct {
-	Tarball crypto.Signer
-	RPM     func(io.Reader) ([]byte, error)
+	Tarball dist.Signer
+	RPM     dist.Signer
 }
 
 func Targets(signers Signers) []dist.Target {
@@ -49,7 +47,7 @@ func Targets(signers Signers) []dist.Target {
 				"GOOS":   goos,
 				"GOARCH": goarch,
 			},
-			signFn: signers.RPM,
+			signer: signers.RPM,
 		})
 	}
 
