@@ -232,7 +232,7 @@ func main() {
 		var thisRun *nextRun
 		thisRun, toRun = toRun[0], toRun[1:]
 
-		if thisRun.attempt >= maxAttempts {
+		if thisRun.attempt > maxAttempts {
 			fmt.Println("max attempts reached")
 			os.Exit(1)
 		}
