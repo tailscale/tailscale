@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 // The tsconnect command builds and serves the static site that is generated for
 // the Tailscale Connect JS/WASM client. Can be run in 3 modes:
 //   - dev: builds the site and serves it. JS and CSS changes can be picked up

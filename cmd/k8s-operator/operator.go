@@ -1,6 +1,8 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
+//go:build !plan9
+
 // tailscale-operator provides a way to expose services running in a Kubernetes
 // cluster to your Tailnet.
 package main
