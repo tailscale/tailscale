@@ -403,61 +403,12 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
-func (up *updater) updateArchLike() (err error) {
-	if up.Version != "" {
-		return errors.New("installing a specific version on Arch-based distros is not supported")
-	}
-	if err := requireRoot(); err != nil {
-		return err
-	}
-
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf(`%w; you can try updating using "pacman --sync --refresh tailscale"`, err)
-		}
-	}()
-
-	out, err := exec.Command("pacman", "--sync", "--refresh", "--info", "tailscale").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed checking pacman for latest tailscale version: %w, output: %q", err, out)
-	}
-	ver, err := parsePacmanVersion(out)
-	if err != nil {
-		return err
-	}
-	if !up.confirm(ver) {
-		return nil
-	}
-
-	cmd := exec.Command("pacman", "--sync", "--noconfirm", "tailscale")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed tailscale update using pacman: %w", err)
-	}
-	return nil
-}
-
-func parsePacmanVersion(out []byte) (string, error) {
-	for _, line := range strings.Split(string(out), "\n") {
-		// The line we're looking for looks like this:
-		// Version         : 1.44.2-1
-		if !strings.HasPrefix(line, "Version") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
-		}
-		ver := strings.TrimSpace(parts[1])
-		// Trim the Arch patch version.
-		ver = strings.Split(ver, "-")[0]
-		if ver == "" {
-			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
-		}
-		return ver, nil
-	}
-	return "", fmt.Errorf("could not find latest version of tailscale via pacman")
+func (up *updater) updateArchLike() error {
+	// Arch maintainer asked us not to implement "tailscale update" or
+	// auto-updates on Arch-based distros:
+	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
+	return errors.New(`individual package updates are not supported on Arch-based distros, only full-system updates are: https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported.
+you can use "pacman --sync --refresh --sysupgrade" or "pacman -Syu" to upgrade the system, including Tailscale.`)
 }
 
 const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
