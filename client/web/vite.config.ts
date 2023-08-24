@@ -20,7 +20,7 @@ filteringLogger.info = (...args) => {
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: "/",
+  base: "./",
   plugins: [
     paths(),
     svgr(),

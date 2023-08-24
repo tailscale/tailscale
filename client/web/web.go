@@ -54,6 +54,7 @@ type Server struct {
 	devProxy *httputil.ReverseProxy // only filled when devMode is on
 
 	cgiMode    bool
+	cgiPath    string
 	apiHandler http.Handler // csrf-protected api handler
 }
 
@@ -63,6 +64,9 @@ type ServerOpts struct {
 
 	// CGIMode indicates if the server is running as a CGI script.
 	CGIMode bool
+
+	// If running in CGIMode, CGIPath is the URL path prefix to the CGI script.
+	CGIPath string
 
 	// LocalClient is the tailscale.LocalClient to use for this web server.
 	// If nil, a new one will be created.
@@ -78,6 +82,7 @@ func NewServer(opts ServerOpts) (s *Server, cleanup func()) {
 		devMode: opts.DevMode,
 		lc:      opts.LocalClient,
 		cgiMode: opts.CGIMode,
+		cgiPath: opts.CGIPath,
 	}
 	cleanup = func() {}
 	if s.devMode {
@@ -115,7 +120,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.serve(w, r)
+	handler := s.serve
+
+	// if running in cgi mode, strip the cgi path prefix
+	if s.cgiMode {
+		prefix := s.cgiPath
+		if prefix == "" {
+			switch distro.Get() {
+			case distro.Synology:
+				prefix = synologyPrefix
+			case distro.QNAP:
+				prefix = qnapPrefix
+			}
+		}
+		if prefix != "" {
+			handler = enforcePrefix(prefix, handler)
+		}
+	}
+
+	handler(w, r)
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
@@ -392,4 +415,18 @@ func (s *Server) csrfKey() []byte {
 	}
 
 	return key
+}
+
+// enforcePrefix returns a HandlerFunc that enforces a given path prefix is used in requests,
+// then strips it before invoking h.
+// Unlike http.StripPrefix, it does not return a 404 if the prefix is not present.
+// Instead, it returns a redirect to the prefix path.
+func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			http.Redirect(w, r, prefix, http.StatusFound)
+			return
+		}
+		http.StripPrefix(prefix, h).ServeHTTP(w, r)
+	}
 }

@@ -16,6 +16,8 @@ import (
 	"net/url"
 )
 
+const qnapPrefix = "/cgi-bin/qpkg/Tailscale/index.cgi/"
+
 // authorizeQNAP authenticates the logged-in QNAP user and verifies
 // that they are authorized to use the web client.  It returns true if the
 // request was handled and no further processing is required.
