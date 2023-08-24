@@ -19,6 +19,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -209,9 +210,6 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 		if ls[LabelManaged] != "true" {
 			return nil
 		}
-		if ls[LabelParentType] != "svc" {
-			return nil
-		}
 		return []reconcile.Request{
 			{
 				NamespacedName: types.NamespacedName{
@@ -221,22 +219,38 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 			},
 		}
 	})
+	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
+	ssr := &tailscaleSTSReconciler{
+		Client:                 mgr.GetClient(),
+		tsClient:               tsClient,
+		defaultTags:            strings.Split(tags, ","),
+		operatorNamespace:      tsNamespace,
+		proxyImage:             image,
+		proxyPriorityClassName: priorityClassName,
+	}
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		Watches(&appsv1.StatefulSet{}, reconcileFilter).
 		Watches(&corev1.Secret{}, reconcileFilter).
 		Complete(&ServiceReconciler{
-			ssr: &tailscaleSTSReconciler{
-				Client:                 mgr.GetClient(),
-				tsClient:               tsClient,
-				defaultTags:            strings.Split(tags, ","),
-				operatorNamespace:      tsNamespace,
-				proxyImage:             image,
-				proxyPriorityClassName: priorityClassName,
-			},
+			ssr:    ssr,
 			Client: mgr.GetClient(),
 			logger: zlog.Named("service-reconciler"),
+		})
+	if err != nil {
+		startlog.Fatalf("could not create controller: %v", err)
+	}
+	err = builder.
+		ControllerManagedBy(mgr).
+		For(&networkingv1.Ingress{}).
+		Watches(&appsv1.StatefulSet{}, reconcileFilter).
+		Watches(&corev1.Secret{}, reconcileFilter).
+		Complete(&IngressReconciler{
+			ssr:      ssr,
+			recorder: eventRecorder,
+			Client:   mgr.GetClient(),
+			logger:   zlog.Named("ingress-reconciler"),
 		})
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)

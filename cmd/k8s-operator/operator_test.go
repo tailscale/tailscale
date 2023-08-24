@@ -750,9 +750,9 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 							Env: []corev1.EnvVar{
 								{Name: "TS_USERSPACE", Value: "false"},
 								{Name: "TS_AUTH_ONCE", Value: "true"},
-								{Name: "TS_DEST_IP", Value: "10.20.30.40"},
 								{Name: "TS_KUBE_SECRET", Value: secretName},
 								{Name: "TS_HOSTNAME", Value: hostname},
+								{Name: "TS_DEST_IP", Value: "10.20.30.40"},
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
