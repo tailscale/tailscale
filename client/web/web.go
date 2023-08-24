@@ -183,19 +183,6 @@ func (s *Server) updateSelf(self tailcfg.NodeView) {
 
 // ServeHTTP processes all requests for the Tailscale web client.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// some platforms where the client runs have their own authentication
-	// and authorization mechanisms we need to work with. Do those checks first.
-	switch distro.Get() {
-	case distro.Synology:
-		if authorizeSynology(w, r) {
-			return
-		}
-	case distro.QNAP:
-		if authorizeQNAP(w, r) {
-			return
-		}
-	}
-
 	handler := s.serve
 
 	// if running in cgi mode, strip the cgi path prefix
@@ -217,7 +204,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler(w, r)
 }
 
+// authorize checks if the request is authorized to access the web client for those platforms that support it.
+func authorize(w http.ResponseWriter, r *http.Request) (handled bool) {
+	if strings.HasPrefix(r.URL.Path, "/assets/") {
+		// don't require authorization for static assets
+		return false
+	}
+
+	switch distro.Get() {
+	case distro.Synology:
+		return authorizeSynology(w, r)
+	case distro.QNAP:
+		return authorizeQNAP(w, r)
+	}
+
+	return false
+}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	// Authenticate and authorize the request for platforms that support it.
+	// Return if the request was processed.
+	if authorize(w, r) {
+		return
+	}
+
 	if s.devMode {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			// Pass through to other handlers via CSRF protection.
@@ -524,6 +534,7 @@ func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, prefix, http.StatusFound)
 			return
 		}
+		prefix = strings.TrimSuffix(prefix, "/")
 		http.StripPrefix(prefix, h).ServeHTTP(w, r)
 	}
 }
