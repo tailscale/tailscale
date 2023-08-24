@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
@@ -76,7 +77,8 @@ func runNetcheck(ctx context.Context, args []string) error {
 		log.Printf("No DERP map from tailscaled; using default.")
 	}
 	if err != nil || noRegions {
-		dm, err = prodDERPMap(ctx, http.DefaultClient)
+		hc := &http.Client{Transport: tlsdial.NewTransport()}
+		dm, err = prodDERPMap(ctx, hc)
 		if err != nil {
 			return err
 		}
