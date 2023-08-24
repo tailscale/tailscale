@@ -722,6 +722,10 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 			ServiceName: stsName,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						"tailscale.com/operator-last-set-hostname": hostname,
+						"tailscale.com/operator-last-set-ip":       "10.20.30.40",
+					},
 					DeletionGracePeriodSeconds: ptr.To[int64](10),
 					Labels:                     map[string]string{"app": "1234-UID"},
 				},
