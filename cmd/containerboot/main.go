@@ -37,6 +37,10 @@
 //     logged in. If false (the default, for backwards
 //     compatibility), forcibly log in every time the
 //     container starts.
+//   - TS_SERVE_CONFIG: if specified, is the file path where the ipn.ServeConfig is located.
+//     It will be applied once tailscaled is up and running. If the file contains
+//     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
+//     It cannot be used in conjunction with TS_DEST_IP.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -48,7 +52,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -60,12 +66,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"golang.org/x/sys/unix"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/deephash"
 )
 
@@ -78,6 +87,7 @@ func main() {
 		Hostname:        defaultEnv("TS_HOSTNAME", ""),
 		Routes:          defaultEnv("TS_ROUTES", ""),
 		ProxyTo:         defaultEnv("TS_DEST_IP", ""),
+		ServeConfigPath: defaultEnv("TS_SERVE_CONFIG", ""),
 		DaemonExtraArgs: defaultEnv("TS_TAILSCALED_EXTRA_ARGS", ""),
 		ExtraArgs:       defaultEnv("TS_EXTRA_ARGS", ""),
 		InKubernetes:    os.Getenv("KUBERNETES_SERVICE_HOST") != "",
@@ -94,6 +104,9 @@ func main() {
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
 		log.Fatal("TS_DEST_IP is not supported with TS_USERSPACE")
+	}
+	if cfg.ProxyTo != "" && cfg.ServeConfigPath != "" {
+		log.Fatal("TS_DEST_IP is not supported with TS_SERVE_CONFIG")
 	}
 
 	if !cfg.UserspaceMode {
@@ -120,18 +133,18 @@ func main() {
 	// Context is used for all setup stuff until we're in steady
 	// state, so that if something is hanging we eventually time out
 	// and crashloop the container.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	bootCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	if cfg.InKubernetes && cfg.KubeSecret != "" {
-		canPatch, err := kc.CheckSecretPermissions(ctx, cfg.KubeSecret)
+		canPatch, err := kc.CheckSecretPermissions(bootCtx, cfg.KubeSecret)
 		if err != nil {
 			log.Fatalf("Some Kubernetes permissions are missing, please check your RBAC configuration: %v", err)
 		}
 		cfg.KubernetesCanPatch = canPatch
 
 		if cfg.AuthKey == "" {
-			key, err := findKeyInKubeSecret(ctx, cfg.KubeSecret)
+			key, err := findKeyInKubeSecret(bootCtx, cfg.KubeSecret)
 			if err != nil {
 				log.Fatalf("Getting authkey from kube secret: %v", err)
 			}
@@ -154,12 +167,12 @@ func main() {
 		}
 	}
 
-	client, daemonPid, err := startTailscaled(ctx, cfg)
+	client, daemonPid, err := startTailscaled(bootCtx, cfg)
 	if err != nil {
 		log.Fatalf("failed to bring up tailscale: %v", err)
 	}
 
-	w, err := client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
+	w, err := client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialPrefs|ipn.NotifyInitialState)
 	if err != nil {
 		log.Fatalf("failed to watch tailscaled for updates: %v", err)
 	}
@@ -178,10 +191,10 @@ func main() {
 		}
 		didLogin = true
 		w.Close()
-		if err := tailscaleLogin(ctx, cfg); err != nil {
+		if err := tailscaleLogin(bootCtx, cfg); err != nil {
 			return fmt.Errorf("failed to auth tailscale: %v", err)
 		}
-		w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+		w, err = client.WatchIPNBus(bootCtx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 		if err != nil {
 			return fmt.Errorf("rewatching tailscaled for updates after auth: %v", err)
 		}
@@ -210,12 +223,6 @@ authLoop:
 			case ipn.NeedsMachineAuth:
 				log.Printf("machine authorization required, please visit the admin panel")
 			case ipn.Running:
-				// Now that we are authenticated, we can set/reset any of the
-				// settings that we need to.
-				if err := tailscaleSet(ctx, cfg); err != nil {
-					log.Fatalf("failed to auth tailscale: %v", err)
-				}
-
 				// Technically, all we want is to keep monitoring the bus for
 				// netmap updates. However, in order to make the container crash
 				// if tailscale doesn't initially come up, the watch has a
@@ -231,6 +238,20 @@ authLoop:
 
 	w.Close()
 
+	ctx, cancel := context.WithCancel(context.Background()) // no deadline now that we're in steady state
+	defer cancel()
+
+	// Now that we are authenticated, we can set/reset any of the
+	// settings that we need to.
+	if err := tailscaleSet(ctx, cfg); err != nil {
+		log.Fatalf("failed to auth tailscale: %v", err)
+	}
+	// Remove any serve config that may have been set by a previous
+	// run of containerboot.
+	if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+		log.Fatalf("failed to unset serve config: %v", err)
+	}
+
 	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && cfg.AuthOnce {
 		// We were told to only auth once, so any secret-bound
 		// authkey is no longer needed. We don't strictly need to
@@ -241,7 +262,7 @@ authLoop:
 		}
 	}
 
-	w, err = client.WatchIPNBus(context.Background(), ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
+	w, err = client.WatchIPNBus(ctx, ipn.NotifyInitialNetMap|ipn.NotifyInitialState)
 	if err != nil {
 		log.Fatalf("rewatching tailscaled for updates after auth: %v", err)
 	}
@@ -252,7 +273,13 @@ authLoop:
 		startupTasksDone  = false
 		currentIPs        deephash.Sum // tailscale IPs assigned to device
 		currentDeviceInfo deephash.Sum // device ID and fqdn
+
+		certDomain        = new(atomic.Pointer[string])
+		certDomainChanged = make(chan bool, 1)
 	)
+	if cfg.ServeConfigPath != "" {
+		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
+	}
 	for {
 		n, err := w.Next()
 		if err != nil {
@@ -271,6 +298,16 @@ authLoop:
 			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
 				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
 					log.Fatalf("installing proxy rules: %v", err)
+				}
+			}
+			if cfg.ServeConfigPath != "" && len(n.NetMap.DNS.CertDomains) > 0 {
+				cd := n.NetMap.DNS.CertDomains[0]
+				prev := certDomain.Swap(ptr.To(cd))
+				if prev == nil || *prev != cd {
+					select {
+					case certDomainChanged <- true:
+					default:
+					}
 				}
 			}
 			deviceInfo := []any{n.NetMap.SelfNode.StableID(), n.NetMap.SelfNode.Name()}
@@ -310,6 +347,66 @@ authLoop:
 			}
 		}
 	}
+}
+
+// watchServeConfigChanges watches path for changes, and when it sees one, reads
+// the serve config from it, replacing ${TS_CERT_DOMAIN} with certDomain, and
+// applies it to lc. It exits when ctx is canceled. cdChanged is a channel that
+// is written to when the certDomain changes, causing the serve config to be
+// re-read and applied.
+func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan bool, certDomainAtomic *atomic.Pointer[string], lc *tailscale.LocalClient) {
+	if certDomainAtomic == nil {
+		panic("cd must not be nil")
+	}
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatalf("failed to create fsnotify watcher: %v", err)
+	}
+	defer w.Close()
+	if err := w.Add(filepath.Dir(path)); err != nil {
+		log.Fatalf("failed to add fsnotify watch: %v", err)
+	}
+	var certDomain string
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cdChanged:
+			certDomain = *certDomainAtomic.Load()
+		case e := <-w.Events:
+			if e.Name != path {
+				continue
+			}
+		}
+		if certDomain == "" {
+			continue
+		}
+		sc, err := readServeConfig(path, certDomain)
+		if err != nil {
+			log.Fatalf("failed to read serve config: %v", err)
+		}
+		if err := lc.SetServeConfig(ctx, sc); err != nil {
+			log.Fatalf("failed to set serve config: %v", err)
+		}
+	}
+}
+
+// readServeConfig reads the ipn.ServeConfig from path, replacing
+// ${TS_CERT_DOMAIN} with certDomain.
+func readServeConfig(path, certDomain string) (*ipn.ServeConfig, error) {
+	if path == "" {
+		return nil, nil
+	}
+	j, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	j = bytes.ReplaceAll(j, []byte("${TS_CERT_DOMAIN}"), []byte(certDomain))
+	var sc ipn.ServeConfig
+	if err := json.Unmarshal(j, &sc); err != nil {
+		return nil, err
+	}
+	return &sc, nil
 }
 
 func startTailscaled(ctx context.Context, cfg *settings) (*tailscale.LocalClient, int, error) {
@@ -556,6 +653,7 @@ type settings struct {
 	Hostname           string
 	Routes             string
 	ProxyTo            string
+	ServeConfigPath    string
 	DaemonExtraArgs    string
 	ExtraArgs          string
 	InKubernetes       bool
