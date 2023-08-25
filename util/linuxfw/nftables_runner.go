@@ -877,6 +877,38 @@ func addAcceptOutgoingPacketRule(conn *nftables.Conn, table *nftables.Table, cha
 	return nil
 }
 
+// createAcceptIncomingPacketRule creates a rule to accept incoming packets to
+// the given interface.
+func createAcceptIncomingPacketRule(table *nftables.Table, chain *nftables.Chain, tunname string) *nftables.Rule {
+	return &nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte(tunname),
+			},
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind: expr.VerdictAccept,
+			},
+		},
+	}
+}
+
+func addAcceptIncomingPacketRule(conn *nftables.Conn, table *nftables.Table, chain *nftables.Chain, tunname string) error {
+	rule := createAcceptIncomingPacketRule(table, chain, tunname)
+	_ = conn.AddRule(rule)
+
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush add rule: %w", err)
+	}
+
+	return nil
+}
+
 // AddBase adds some basic processing rules.
 func (n *nftablesRunner) AddBase(tunname string) error {
 	if err := n.addBase4(tunname); err != nil {
@@ -903,6 +935,9 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 	}
 	if err = addDropCGNATRangeRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
 		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
+	}
+	if err = addAcceptIncomingPacketRule(conn, n.nft4.Filter, inputChain, tunname); err != nil {
+		return fmt.Errorf("add accept incoming packet rule v4: %w", err)
 	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameForward)
@@ -936,6 +971,14 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 // addBase6 adds some basic IPv6 processing rules.
 func (n *nftablesRunner) addBase6(tunname string) error {
 	conn := n.conn
+
+	inputChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameInput)
+	if err != nil {
+		return fmt.Errorf("get input chain v4: %v", err)
+	}
+	if err = addAcceptIncomingPacketRule(conn, n.nft6.Filter, inputChain, tunname); err != nil {
+		return fmt.Errorf("add accept incoming packet rule v6: %w", err)
+	}
 
 	forwardChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameForward)
 	if err != nil {

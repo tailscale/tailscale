@@ -261,6 +261,7 @@ func TestAddAndDeleteBase(t *testing.T) {
 	}
 
 	tsRulesCommon := []fakeRule{ // table/chain/rule
+		{"filter", "ts-input", []string{"-i", tunname, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}},
 		{"filter", "ts-forward", []string{"-m", "mark", "--mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask, "-j", "ACCEPT"}},
 		{"filter", "ts-forward", []string{"-o", tunname, "-j", "ACCEPT"}},
