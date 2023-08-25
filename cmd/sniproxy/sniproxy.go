@@ -16,10 +16,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/peterbourgon/ff/v3"
 	"golang.org/x/net/dns/dnsmessage"
 	"inet.af/tcpproxy"
 	"tailscale.com/client/tailscale"
@@ -30,14 +32,6 @@ import (
 	"tailscale.com/tsweb"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
-)
-
-var (
-	ports        = flag.String("ports", "443", "comma-separated list of ports to proxy")
-	forwards     = flag.String("forwards", "", "comma-separated list of ports to transparently forward, protocol/number/destination. For example, --forwards=tcp/22/github.com,tcp/5432/sql.example.com")
-	wgPort       = flag.Int("wg-listen-port", 0, "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
-	promoteHTTPS = flag.Bool("promote-https", true, "promote HTTP to HTTPS")
-	debugPort    = flag.Int("debug-port", 8080, "Listening port for debug/metrics endpoint")
 )
 
 var tsMBox = dnsmessage.MustNewName("support.tailscale.com.")
@@ -74,7 +68,19 @@ func parseForward(value string) (*portForward, error) {
 }
 
 func main() {
-	flag.Parse()
+	fs := flag.NewFlagSet("sniproxy", flag.ContinueOnError)
+	var (
+		ports        = fs.String("ports", "443", "comma-separated list of ports to proxy")
+		forwards     = fs.String("forwards", "", "comma-separated list of ports to transparently forward, protocol/number/destination. For example, --forwards=tcp/22/github.com,tcp/5432/sql.example.com")
+		wgPort       = fs.Int("wg-listen-port", 0, "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
+		promoteHTTPS = fs.Bool("promote-https", true, "promote HTTP to HTTPS")
+		debugPort    = fs.Int("debug-port", 8080, "Listening port for debug/metrics endpoint")
+	)
+
+	err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_APPC"))
+	if err != nil {
+		log.Fatal("ff.Parse")
+	}
 	if *ports == "" {
 		log.Fatal("no ports")
 	}
@@ -126,7 +132,6 @@ func main() {
 		})
 
 		go s.forward(ln, forw)
-
 	}
 
 	ln, err := s.ts.Listen("udp", ":53")
