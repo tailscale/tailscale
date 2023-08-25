@@ -254,6 +254,12 @@ func (i *iptablesRunner) addBase4(tunname string) error {
 		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
 	}
 
+	// Explicitly allow all other inbound traffic to the tun interface
+	args = []string{"-i", tunname, "-j", "ACCEPT"}
+	if err := i.ipt4.Append("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("adding %v in v4/filter/ts-input: %w", args, err)
+	}
+
 	// Forward all traffic from the Tailscale interface, and drop
 	// traffic to the tailscale interface by default. We use packet
 	// marks here so both filter/FORWARD and nat/POSTROUTING can match
@@ -291,7 +297,13 @@ func (i *iptablesRunner) addBase6(tunname string) error {
 	// TODO: only allow traffic from Tailscale's ULA range to come
 	// from tailscale0.
 
-	args := []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}
+	// Explicitly allow all other inbound traffic to the tun interface
+	args := []string{"-i", tunname, "-j", "ACCEPT"}
+	if err := i.ipt6.Append("filter", "ts-input", args...); err != nil {
+		return fmt.Errorf("adding %v in v6/filter/ts-input: %w", args, err)
+	}
+
+	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", TailscaleSubnetRouteMark + "/" + TailscaleFwmarkMask}
 	if err := i.ipt6.Append("filter", "ts-forward", args...); err != nil {
 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
 	}
