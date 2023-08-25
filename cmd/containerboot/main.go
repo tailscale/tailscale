@@ -40,7 +40,8 @@
 //   - TS_SERVE_CONFIG: if specified, is the file path where the ipn.ServeConfig is located.
 //     It will be applied once tailscaled is up and running. If the file contains
 //     ${TS_CERT_DOMAIN}, it will be replaced with the value of the available FQDN.
-//     It cannot be used in conjunction with TS_DEST_IP.
+//     It cannot be used in conjunction with TS_DEST_IP. The file is watched for changes,
+//     and will be re-applied when it changes.
 //
 // When running on Kubernetes, containerboot defaults to storing state in the
 // "tailscale" kube secret. To store state on local disk instead, set
@@ -64,6 +65,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -358,25 +360,33 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 	if certDomainAtomic == nil {
 		panic("cd must not be nil")
 	}
+	var tickChan <-chan time.Time
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("failed to create fsnotify watcher: %v", err)
+		log.Printf("failed to create fsnotify watcher, timer-only mode: %v", err)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		tickChan = ticker.C
+	} else {
+		defer w.Close()
 	}
-	defer w.Close()
+
 	if err := w.Add(filepath.Dir(path)); err != nil {
 		log.Fatalf("failed to add fsnotify watch: %v", err)
 	}
 	var certDomain string
+	var prevServeConfig *ipn.ServeConfig
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-cdChanged:
 			certDomain = *certDomainAtomic.Load()
-		case e := <-w.Events:
-			if e.Name != path {
-				continue
-			}
+		case <-tickChan:
+		case <-w.Events:
+			// We can't do any reasonable filtering on the event because of how
+			// k8s handles these mounts. So just re-read the file and apply it
+			// if it's changed.
 		}
 		if certDomain == "" {
 			continue
@@ -385,9 +395,14 @@ func watchServeConfigChanges(ctx context.Context, path string, cdChanged <-chan 
 		if err != nil {
 			log.Fatalf("failed to read serve config: %v", err)
 		}
+		if prevServeConfig != nil && reflect.DeepEqual(sc, prevServeConfig) {
+			continue
+		}
+		log.Printf("Applying serve config")
 		if err := lc.SetServeConfig(ctx, sc); err != nil {
 			log.Fatalf("failed to set serve config: %v", err)
 		}
+		prevServeConfig = sc
 	}
 }
 
