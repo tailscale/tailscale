@@ -4,14 +4,16 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"os"
+	"net"
 	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/ipn"
 )
@@ -105,8 +107,56 @@ func (e *serveEnv) streamServe(ctx context.Context, req ipn.ServeStreamRequest) 
 	}
 	defer stream.Close()
 
-	fmt.Fprintf(os.Stderr, "Funnel started on \"https://%s\".\n", strings.TrimSuffix(string(req.HostPort), ":443"))
-	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop Funnel.\n\n")
-	_, err = io.Copy(os.Stdout, stream)
-	return err
+	printHeader(req.HostPort)
+
+	var logs []ipn.FunnelRequestLog
+	maxLogs := 25
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		var entry ipn.FunnelRequestLog
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			return err
+		}
+
+		logs = append([]ipn.FunnelRequestLog{entry}, logs...)
+		if len(logs) > maxLogs {
+			logs = logs[:maxLogs]
+		}
+
+		printHeader(req.HostPort)
+
+		for _, log := range logs {
+			printLog(log)
+		}
+	}
+
+	return nil
+}
+
+func printLog(log ipn.FunnelRequestLog) {
+	host, _, err := net.SplitHostPort(log.SrcAddr.String())
+	if err != nil {
+		host = log.SrcAddr.String()
+	}
+
+	firstColumn := fmt.Sprintf("%s %s", log.Method, log.Path)
+	secondColumn := host
+	if log.NodeName != "" {
+		secondColumn += " " + log.NodeName
+	}
+	if log.UserLoginName != "" {
+		secondColumn += " " + color.GreenString(log.UserDisplayName)
+	}
+
+	fmt.Printf("%-30s\t%s\n", firstColumn, secondColumn)
+}
+
+func printHeader(hostPort ipn.HostPort) {
+	fmt.Print("\033[H\033[2J") // Clear the screen
+
+	fmt.Printf(`
+Available at "https://%s"
+Press Ctrl-C to stop
+
+`, strings.TrimSuffix(string(hostPort), ":443"))
 }

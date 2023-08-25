@@ -102,6 +102,9 @@ type ServeStreamRequest struct {
 type FunnelRequestLog struct {
 	Time time.Time `json:",omitempty"` // time of request forwarding
 
+	Method string `json:",omitempty"` // HTTP method
+	Path   string `json:",omitempty"` // path of request
+
 	// SrcAddr is the address that initiated the Funnel request.
 	SrcAddr netip.AddrPort `json:",omitempty"`
 
