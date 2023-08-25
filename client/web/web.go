@@ -30,6 +30,7 @@ import (
 	"tailscale.com/licenses"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
+	"tailscale.com/util/httpm"
 	"tailscale.com/version/distro"
 )
 
@@ -109,7 +110,7 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 		// The client is secured by limiting the interface it listens on,
 		// or by authenticating requests before they reach the web client.
 		csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-		s.apiHandler = csrfProtect(&api{s: s})
+		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
 	}
 
 	var wg sync.WaitGroup
@@ -237,6 +238,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveGetNodeData(w, r)
 		return
 	}
+}
+
+// serveAPI serves requests for the web client api.
+// It should only be called by Server.ServeHTTP, via Server.apiHandler,
+// which protects the handler using gorilla csrf.
+func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-CSRF-Token", csrf.Token(r))
+	path := strings.TrimPrefix(r.URL.Path, "/api")
+	switch path {
+	case "/data":
+		switch r.Method {
+		case httpm.GET:
+			s.serveGetNodeDataJSON(w, r)
+		case httpm.POST:
+			s.servePostNodeUpdate(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	http.Error(w, "invalid endpoint", http.StatusNotFound)
 }
 
 type nodeData struct {
