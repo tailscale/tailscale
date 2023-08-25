@@ -45,9 +45,6 @@ func (s Signer) SignFile(filePath, sigPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
 	return os.WriteFile(sigPath, sig, 0644)
 }
 
