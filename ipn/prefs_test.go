@@ -253,12 +253,12 @@ func TestPrefsEqual(t *testing.T) {
 
 		{
 			&Prefs{NetfilterMode: preftype.NetfilterOff},
-			&Prefs{NetfilterMode: preftype.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterIPTablesOn},
 			false,
 		},
 		{
-			&Prefs{NetfilterMode: preftype.NetfilterOn},
-			&Prefs{NetfilterMode: preftype.NetfilterOn},
+			&Prefs{NetfilterMode: preftype.NetfilterIPTablesOn},
+			&Prefs{NetfilterMode: preftype.NetfilterIPTablesOn},
 			true,
 		},
 
@@ -639,7 +639,7 @@ func TestMaskedPrefsPretty(t *testing.T) {
 					RouteAll:         false,
 					ExitNodeID:       "foo",
 					AdvertiseTags:    []string{"tag:foo", "tag:bar"},
-					NetfilterMode:    preftype.NetfilterNoDivert,
+					NetfilterMode:    preftype.NetfilterIPTablesNoDivert,
 				},
 				RouteAllSet:      true,
 				HostnameSet:      true,
