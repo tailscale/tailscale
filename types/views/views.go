@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"slices"
 
 	"go4.org/mem"
 )
@@ -273,6 +274,11 @@ func SliceContains[T comparable](v Slice[T], e T) bool {
 		}
 	}
 	return false
+}
+
+// SliceEqual is like the standard library's slices.Equal, but for two views.
+func SliceEqual[T comparable](a, b Slice[T]) bool {
+	return slices.Equal(a.ж, b.ж)
 }
 
 // SliceEqualAnyOrder reports whether a and b contain the same elements, regardless of order.

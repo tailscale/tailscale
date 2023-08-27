@@ -150,3 +150,17 @@ func TestLenIter(t *testing.T) {
 		t.Errorf("got %q; want %q", got, orig)
 	}
 }
+
+func TestSliceEqual(t *testing.T) {
+	a := SliceOf([]string{"foo", "bar"})
+	b := SliceOf([]string{"foo", "bar"})
+	if !SliceEqual(a, b) {
+		t.Errorf("got a != b")
+	}
+	if !SliceEqual(a.SliceTo(0), b.SliceTo(0)) {
+		t.Errorf("got a[:0] != b[:0]")
+	}
+	if SliceEqual(a.SliceTo(2), a.SliceTo(1)) {
+		t.Error("got a[:2] == a[:1]")
+	}
+}
