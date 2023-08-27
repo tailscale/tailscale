@@ -70,7 +70,7 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscale = pkgs: pkgs.buildGo120Module rec {
+    tailscale = pkgs: pkgs.buildGo121Module rec {
       name = "tailscale";
 
       src = ./.;
