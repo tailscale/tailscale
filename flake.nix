@@ -107,7 +107,7 @@
           gotools
           graphviz
           perl
-          go_1_20
+          go_1_21
           yarn
         ];
       };
