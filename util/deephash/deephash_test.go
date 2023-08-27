@@ -1066,6 +1066,51 @@ func TestAppendTo(t *testing.T) {
 	}
 }
 
+func TestFilterFields(t *testing.T) {
+	type T struct {
+		A int
+		B int
+		C int
+	}
+
+	hashers := map[string]func(*T) Sum{
+		"all": HasherForType[T](),
+		"ac":  HasherForType[T](IncludeFields[T]("A", "C")),
+		"b":   HasherForType[T](ExcludeFields[T]("A", "C")),
+	}
+
+	tests := []struct {
+		hasher string
+		a, b   T
+		wantEq bool
+	}{
+		{"all", T{1, 2, 3}, T{1, 2, 3}, true},
+		{"all", T{1, 2, 3}, T{0, 2, 3}, false},
+		{"all", T{1, 2, 3}, T{1, 0, 3}, false},
+		{"all", T{1, 2, 3}, T{1, 2, 0}, false},
+
+		{"ac", T{0, 0, 0}, T{0, 0, 0}, true},
+		{"ac", T{1, 0, 1}, T{1, 1, 1}, true},
+		{"ac", T{1, 1, 1}, T{1, 1, 0}, false},
+
+		{"b", T{0, 0, 0}, T{0, 0, 0}, true},
+		{"b", T{1, 0, 1}, T{1, 1, 1}, false},
+		{"b", T{1, 1, 1}, T{0, 1, 0}, true},
+	}
+	for _, tt := range tests {
+		f, ok := hashers[tt.hasher]
+		if !ok {
+			t.Fatalf("bad test: unknown hasher %q", tt.hasher)
+		}
+		sum1 := f(&tt.a)
+		sum2 := f(&tt.b)
+		got := sum1 == sum2
+		if got != tt.wantEq {
+			t.Errorf("hasher %q, for %+v and %v, got equal = %v; want %v", tt.hasher, tt.a, tt.b, got, tt.wantEq)
+		}
+	}
+}
+
 func BenchmarkAppendTo(b *testing.B) {
 	b.ReportAllocs()
 	v := getVal()
