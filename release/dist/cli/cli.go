@@ -8,10 +8,12 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +118,21 @@ func CLI(getTargets func() ([]dist.Target, error)) *ffcli.Command {
 					fs.StringVar(&verifyKeySignatureArgs.rootPubPath, "root-pub-path", "root-public-key.pem", "path to the root public key; this can be a bundle of multiple keys")
 					fs.StringVar(&verifyKeySignatureArgs.signPubPath, "sign-pub-path", "", "path to the signing public key bundle that was signed")
 					fs.StringVar(&verifyKeySignatureArgs.sigPath, "sig-path", "signature.bin", "path to the signature file")
+					return fs
+				})(),
+			},
+			{
+				Name: "verify-package-signature",
+				Exec: func(ctx context.Context, args []string) error {
+					return runVerifyPackageSignature(ctx)
+				},
+				ShortUsage: "dist verify-package-signature",
+				ShortHelp:  "Verify a package signture using a signing key",
+				FlagSet: (func() *flag.FlagSet {
+					fs := flag.NewFlagSet("verify-package-signature", flag.ExitOnError)
+					fs.StringVar(&verifyPackageSignatureArgs.signPubPath, "sign-pub-path", "signing-public-key.pem", "path to the signing public key; this can be a bundle of multiple keys")
+					fs.StringVar(&verifyPackageSignatureArgs.packagePath, "package-path", "", "path to the package that was signed")
+					fs.StringVar(&verifyPackageSignatureArgs.sigPath, "sig-path", "signature.bin", "path to the signature file")
 					return fs
 				})(),
 			},
@@ -287,23 +304,61 @@ var verifyKeySignatureArgs struct {
 }
 
 func runVerifyKeySignature(ctx context.Context) error {
-	rootPubBundle, err := os.ReadFile(verifyKeySignatureArgs.rootPubPath)
+	args := verifyKeySignatureArgs
+	rootPubBundle, err := os.ReadFile(args.rootPubPath)
 	if err != nil {
 		return err
 	}
 	rootPubs, err := distsign.ParseRootKeyBundle(rootPubBundle)
 	if err != nil {
-		return fmt.Errorf("parsing %q: %w", verifyKeySignatureArgs.rootPubPath, err)
+		return fmt.Errorf("parsing %q: %w", args.rootPubPath, err)
 	}
-	signPubBundle, err := os.ReadFile(verifyKeySignatureArgs.signPubPath)
+	signPubBundle, err := os.ReadFile(args.signPubPath)
 	if err != nil {
 		return err
 	}
-	sig, err := os.ReadFile(verifyKeySignatureArgs.sigPath)
+	sig, err := os.ReadFile(args.sigPath)
 	if err != nil {
 		return err
 	}
 	if !distsign.VerifyAny(rootPubs, signPubBundle, sig) {
+		return errors.New("signature not valid")
+	}
+	fmt.Println("signature ok")
+	return nil
+}
+
+var verifyPackageSignatureArgs struct {
+	signPubPath string
+	packagePath string
+	sigPath     string
+}
+
+func runVerifyPackageSignature(ctx context.Context) error {
+	args := verifyPackageSignatureArgs
+	signPubBundle, err := os.ReadFile(args.signPubPath)
+	if err != nil {
+		return err
+	}
+	signPubs, err := distsign.ParseSigningKeyBundle(signPubBundle)
+	if err != nil {
+		return fmt.Errorf("parsing %q: %w", args.signPubPath, err)
+	}
+	pkg, err := os.Open(args.packagePath)
+	if err != nil {
+		return err
+	}
+	defer pkg.Close()
+	pkgHash := distsign.NewPackageHash()
+	if _, err := io.Copy(pkgHash, pkg); err != nil {
+		return fmt.Errorf("reading %q: %w", args.packagePath, err)
+	}
+	hash := binary.LittleEndian.AppendUint64(pkgHash.Sum(nil), uint64(pkgHash.Len()))
+	sig, err := os.ReadFile(args.sigPath)
+	if err != nil {
+		return err
+	}
+	if !distsign.VerifyAny(signPubs, hash, sig) {
 		return errors.New("signature not valid")
 	}
 	fmt.Println("signature ok")
