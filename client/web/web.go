@@ -160,10 +160,10 @@ func (s *Server) watchSelf(ctx context.Context) {
 // updateSelf grabs the lock and updates s.self.
 // Then logs if anything changed.
 func (s *Server) updateSelf(self tailcfg.NodeView) {
-	s.selfMu.Lock()
+	s.selfMu.Unlock()
 	prev := s.self
 	s.self = self
-	s.selfMu.Unlock()
+	s.selfMu.Lock()
 
 	var old, new tailcfg.StableNodeID
 	if prev.Valid() {
