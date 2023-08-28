@@ -18,11 +18,13 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -251,8 +253,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
-	switch path {
-	case "/data":
+	switch {
+	case path == "/data":
 		switch r.Method {
 		case httpm.GET:
 			s.serveGetNodeDataJSON(w, r)
@@ -261,6 +263,9 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+		return
+	case strings.HasPrefix(path, "/local/"):
+		s.proxyRequestToLocalAPI(w, r)
 		return
 	}
 	http.Error(w, "invalid endpoint", http.StatusNotFound)
@@ -462,6 +467,61 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 			return *url, nil
 		}
 	}
+}
+
+// proxyRequestToLocalAPI proxies the web API request to the localapi.
+//
+// The web API request path is expected to exactly match a localapi path,
+// with prefix /api/local/ rather than /localapi/.
+//
+// If the localapi path is not included in localapiAllowlist,
+// the request is rejected.
+func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/local")
+	if r.URL.Path == path { // missing prefix
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !slices.Contains(localapiAllowlist, path) {
+		http.Error(w, fmt.Sprintf("%s not allowed from localapi proxy", path), http.StatusForbidden)
+		return
+	}
+
+	localAPIURL := "http://" + apitype.LocalAPIHost + "/localapi" + path
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, localAPIURL, r.Body)
+	if err != nil {
+		http.Error(w, "failed to construct request", http.StatusInternalServerError)
+		return
+	}
+
+	// Make request to tailscaled localapi.
+	resp, err := s.lc.DoLocalRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), resp.StatusCode)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Send response back to web frontend.
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// localapiAllowlist is an allowlist of localapi endpoints the
+// web client is allowed to proxy to the client's localapi.
+//
+// Rather than exposing all localapi endpoints over the proxy,
+// this limits to just the ones actually used from the web
+// client frontend.
+//
+// TODO(sonia,will): Shouldn't expand this beyond the existing
+// localapi endpoints until the larger web client auth story
+// is worked out (tailscale/corp#14335).
+var localapiAllowlist = []string{
+	"/v0/logout",
 }
 
 // csrfKey returns a key that can be used for CSRF protection.
