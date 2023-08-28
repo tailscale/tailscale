@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+// NetworkName is the network name returned by [net.Addr.Network]
+// for [net.Conn.LocalAddr] and [net.Conn.RemoteAddr] from the [Conn] type.
+const NetworkName = "mem"
+
 // Conn is a net.Conn that can additionally have its reads and writes blocked and unblocked.
 type Conn interface {
 	net.Conn
@@ -45,7 +49,7 @@ func NewTCPConn(src, dst netip.AddrPort, maxBuf int) (local Conn, remote Conn) {
 
 type connAddr string
 
-func (a connAddr) Network() string { return "mem" }
+func (a connAddr) Network() string { return NetworkName }
 func (a connAddr) String() string  { return string(a) }
 
 type connHalf struct {
