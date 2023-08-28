@@ -138,14 +138,14 @@ type updateGen int64
 // Auto connects to a tailcontrol server for a node.
 // It's a concrete implementation of the Client interface.
 type Auto struct {
-	direct     *Direct // our interface to the server APIs
-	clock      tstime.Clock
-	logf       logger.Logf
-	expiry     *time.Time
-	closed     bool
-	updateCh   chan struct{} // readable when we should inform the server of a change
-	newMapCh   chan struct{} // readable when we must restart a map request
-	statusFunc func(Status)  // called to update Client status; always non-nil
+	direct   *Direct // our interface to the server APIs
+	clock    tstime.Clock
+	logf     logger.Logf
+	expiry   *time.Time
+	closed   bool
+	updateCh chan struct{} // readable when we should inform the server of a change
+	newMapCh chan struct{} // readable when we must restart a map request
+	observer Observer      // called to update Client status; always non-nil
 
 	unregisterHealthWatch func()
 
@@ -194,8 +194,8 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		}
 	}()
 
-	if opts.Status == nil {
-		return nil, errors.New("missing required Options.Status")
+	if opts.Observer == nil {
+		return nil, errors.New("missing required Options.Observer")
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(fmt string, args ...any) {}
@@ -213,7 +213,7 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 		authDone:   make(chan struct{}),
 		mapDone:    make(chan struct{}),
 		updateDone: make(chan struct{}),
-		statusFunc: opts.Status,
+		observer:   opts.Observer,
 	}
 	c.authCtx, c.authCancel = context.WithCancel(context.Background())
 	c.authCtx = sockstats.WithSockStats(c.authCtx, sockstats.LabelControlClientAuto, opts.Logf)
@@ -669,7 +669,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		State:          state,
 		Err:            err,
 	}
-	c.statusFunc(new)
+	c.observer.SetControlClientStatus(new)
 
 	c.mu.Lock()
 	c.inSendStatus--
