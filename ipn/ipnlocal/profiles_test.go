@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/user"
 	"strconv"
@@ -310,10 +309,6 @@ func TestProfileDupe(t *testing.T) {
 			}
 		})
 	}
-}
-
-func asJSON(v any) []byte {
-	return must.Get(json.MarshalIndent(v, "", "  "))
 }
 
 // TestProfileManagement tests creating, loading, and switching profiles.
