@@ -888,9 +888,9 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 	b.newDecompressor = fn
 }
 
-// setClientStatus is the callback invoked by the control client whenever it posts a new status.
+// SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
-func (b *LocalBackend) setClientStatus(st controlclient.Status) {
+func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 	// The following do not depend on any data for which we need to lock b.
 	if st.Err != nil {
 		// TODO(crawshaw): display in the UI.
@@ -947,7 +947,7 @@ func (b *LocalBackend) setClientStatus(st controlclient.Status) {
 				// Call ourselves with the current status again; the logic in
 				// setClientStatus will take care of updating the expired field
 				// of peers in the netmap.
-				b.setClientStatus(st)
+				b.SetControlClientStatus(st)
 			})
 		}
 	}
@@ -1457,7 +1457,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		OnClientVersion:      b.onClientVersion,
 		OnControlTime:        b.em.onControlTime,
 		Dialer:               b.Dialer(),
-		Status:               b.setClientStatus,
+		Observer:             b,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
 		DialPlan:             &b.dialPlan, // pointer because it can't be copied
 

@@ -162,7 +162,7 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 		cc.authBlocked = false
 		cc.mu.Unlock()
 	}
-	if cc.opts.Status != nil {
+	if cc.opts.Observer != nil {
 		pv := cc.persist.View()
 		s := controlclient.Status{
 			URL:     url,
@@ -175,7 +175,7 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 		} else if url == "" && err == nil && nm == nil {
 			s.LogoutFinished = &empty.Message{}
 		}
-		cc.opts.Status(s)
+		cc.opts.Observer.SetControlClientStatus(s)
 	}
 }
 

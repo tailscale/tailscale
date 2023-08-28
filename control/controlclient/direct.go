@@ -101,6 +101,12 @@ type Direct struct {
 	lastPingURL  string // last PingRequest.URL received, for dup suppression
 }
 
+// Observer is implemented by users of the control client (such as LocalBackend)
+// to get notified of changes in the control client's status.
+type Observer interface {
+	SetControlClientStatus(Status)
+}
+
 type Options struct {
 	Persist              persist.Persist                    // initial persistent data
 	GetMachinePrivateKey func() (key.MachinePrivate, error) // returns the machine key to use
@@ -122,8 +128,9 @@ type Options struct {
 	Dialer               *tsdial.Dialer               // non-nil
 	C2NHandler           http.Handler                 // or nil
 
-	// Status is called when there's a change in status.
-	Status func(Status)
+	// Observer is called when there's a change in status to report
+	// from the control client.
+	Observer Observer
 
 	// SkipIPForwardingCheck declares that the host's IP
 	// forwarding works and should not be double-checked by the
