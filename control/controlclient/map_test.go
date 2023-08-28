@@ -4,7 +4,6 @@
 package controlclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,6 +20,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/mak"
@@ -637,7 +637,7 @@ func TestDeltaDERPMap(t *testing.T) {
 			for stepi, s := range tt.steps {
 				nm := ms.netmapForResponse(&tailcfg.MapResponse{DERPMap: s.got})
 				if !reflect.DeepEqual(nm.DERPMap, s.want) {
-					t.Errorf("unexpected result at step index %v; got: %s", stepi, must.Get(json.Marshal(nm.DERPMap)))
+					t.Errorf("unexpected result at step index %v; got: %s", stepi, logger.AsJSON(nm.DERPMap))
 				}
 			}
 		})
@@ -740,17 +740,15 @@ func TestPeerChangeDiff(t *testing.T) {
 			pc, ok := peerChangeDiff(tt.a.View(), tt.b)
 			if tt.wantEqual {
 				if !ok || pc != nil {
-					t.Errorf("got (%p, %v); want (nil, true); pc=%v", pc, ok, must.Get(json.Marshal(pc)))
+					t.Errorf("got (%p, %v); want (nil, true); pc=%v", pc, ok, logger.AsJSON(pc))
 				}
 				return
 			}
 			if (pc != nil) != ok {
 				t.Fatalf("inconsistent ok=%v, pc=%p", ok, pc)
 			}
-			gotj := must.Get(json.Marshal(pc))
-			wantj := must.Get(json.Marshal(tt.want))
-			if !bytes.Equal(gotj, wantj) {
-				t.Errorf("mismatch\n got: %s\nwant: %s\n", gotj, wantj)
+			if !reflect.DeepEqual(pc, tt.want) {
+				t.Errorf("mismatch\n got: %v\nwant: %v\n", logger.AsJSON(pc), logger.AsJSON(tt.want))
 			}
 		})
 	}
@@ -762,7 +760,7 @@ func TestPeerChangeDiffAllocs(t *testing.T) {
 	n := testing.AllocsPerRun(10000, func() {
 		diff, ok := peerChangeDiff(a.View(), b)
 		if !ok || diff != nil {
-			t.Fatalf("unexpected result: (%s, %v)", must.Get(json.Marshal(diff)), ok)
+			t.Fatalf("unexpected result: (%s, %v)", logger.AsJSON(diff), ok)
 		}
 	})
 	if n != 0 {

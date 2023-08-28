@@ -22,6 +22,7 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/logger"
 )
 
 func TestCleanMountPoint(t *testing.T) {
@@ -737,8 +738,8 @@ func TestServeConfigMutations(t *testing.T) {
 			got = lc.config
 		}
 		if !reflect.DeepEqual(got, st.want) {
-			t.Fatalf("[%d] %v: bad state. got:\n%s\n\nwant:\n%s\n",
-				i, st.command, asJSON(got), asJSON(st.want))
+			t.Fatalf("[%d] %v: bad state. got:\n%v\n\nwant:\n%v\n",
+				i, st.command, logger.AsJSON(got), logger.AsJSON(st.want))
 			// NOTE: asJSON will omit empty fields, which might make
 			// result in bad state got/want diffs being the same, even
 			// though the actual state is different. Use below to debug:
