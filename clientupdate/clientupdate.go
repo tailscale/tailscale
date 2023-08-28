@@ -10,8 +10,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,12 +23,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
-	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/must"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -88,6 +84,9 @@ type UpdateArgs struct {
 	// if this new version should be installed. When Confirm returns false, the
 	// update is aborted.
 	Confirm func(newVer string) bool
+	// PkgsAddr is the address of the pkgs server to fetch updates from.
+	// Defaults to "https://pkgs.tailscale.com".
+	PkgsAddr string
 }
 
 func (args UpdateArgs) validate() error {
@@ -108,6 +107,9 @@ func (args UpdateArgs) validate() error {
 func Update(args UpdateArgs) error {
 	if err := args.validate(); err != nil {
 		return err
+	}
+	if args.PkgsAddr == "" {
+		args.PkgsAddr = "https://pkgs.tailscale.com"
 	}
 	up := &updater{
 		UpdateArgs: args,
@@ -222,10 +224,9 @@ func (up *updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/%s", up.track, spkName)
-	spkPath := filepath.Join(spkDir, path.Base(url))
-	// TODO(awly): we should sign SPKs and validate signatures here too.
-	if err := up.downloadURLToFile(url, spkPath); err != nil {
+	pkgsPath := fmt.Sprintf("%s/%s", up.track, spkName)
+	spkPath := filepath.Join(spkDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, spkPath); err != nil {
 		return err
 	}
 
@@ -650,9 +651,9 @@ func (up *updater) updateWindows() error {
 	if err := os.MkdirAll(msiDir, 0700); err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
-	msiTarget := filepath.Join(msiDir, path.Base(url))
-	if err := up.downloadURLToFile(url, msiTarget); err != nil {
+	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
+	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
 		return err
 	}
 
@@ -751,106 +752,12 @@ func makeSelfCopy() (tmpPathExe string, err error) {
 	return f2.Name(), f2.Close()
 }
 
-func (up *updater) downloadURLToFile(urlSrc, fileDst string) (ret error) {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = tshttpproxy.ProxyFromEnvironment
-	defer tr.CloseIdleConnections()
-	c := &http.Client{Transport: tr}
-
-	quickCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	headReq := must.Get(http.NewRequestWithContext(quickCtx, "HEAD", urlSrc, nil))
-
-	res, err := c.Do(headReq)
+func (up *updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
+	c, err := distsign.NewClient(up.Logf, up.PkgsAddr)
 	if err != nil {
 		return err
 	}
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("HEAD %s: %v", urlSrc, res.Status)
-	}
-	if res.ContentLength <= 0 {
-		return fmt.Errorf("HEAD %s: unexpected Content-Length %v", urlSrc, res.ContentLength)
-	}
-	up.Logf("Download size: %v", res.ContentLength)
-
-	hashReq := must.Get(http.NewRequestWithContext(quickCtx, "GET", urlSrc+".sha256", nil))
-	hashRes, err := c.Do(hashReq)
-	if err != nil {
-		return err
-	}
-	hashHex, err := io.ReadAll(io.LimitReader(hashRes.Body, 100))
-	hashRes.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s.sha256: %v", urlSrc, res.Status)
-	}
-	if err != nil {
-		return err
-	}
-	wantHash, err := hex.DecodeString(string(strings.TrimSpace(string(hashHex))))
-	if err != nil {
-		return err
-	}
-	hash := sha256.New()
-
-	dlReq := must.Get(http.NewRequestWithContext(context.Background(), "GET", urlSrc, nil))
-	dlRes, err := c.Do(dlReq)
-	if err != nil {
-		return err
-	}
-	// TODO(bradfitz): resume from existing partial file on disk
-	if dlRes.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %v", urlSrc, dlRes.Status)
-	}
-
-	of, err := os.Create(fileDst)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if ret != nil {
-			of.Close()
-			// TODO(bradfitz): os.Remove(fileDst) too? or keep it to resume from/debug later.
-		}
-	}()
-	pw := &progressWriter{total: res.ContentLength, logf: up.Logf}
-	n, err := io.Copy(io.MultiWriter(hash, of, pw), io.LimitReader(dlRes.Body, res.ContentLength))
-	if err != nil {
-		return err
-	}
-	if n != res.ContentLength {
-		return fmt.Errorf("downloaded %v; want %v", n, res.ContentLength)
-	}
-	if err := of.Close(); err != nil {
-		return err
-	}
-	pw.print()
-
-	if !bytes.Equal(hash.Sum(nil), wantHash) {
-		return fmt.Errorf("SHA-256 of downloaded MSI didn't match expected value")
-	}
-	up.Logf("hash matched")
-
-	return nil
-}
-
-type progressWriter struct {
-	done      int64
-	total     int64
-	lastPrint time.Time
-	logf      logger.Logf
-}
-
-func (pw *progressWriter) Write(p []byte) (n int, err error) {
-	pw.done += int64(len(p))
-	if time.Since(pw.lastPrint) > 2*time.Second {
-		pw.print()
-	}
-	return len(p), nil
-}
-
-func (pw *progressWriter) print() {
-	pw.lastPrint = time.Now()
-	pw.logf("Downloaded %v/%v (%.1f%%)", pw.done, pw.total, float64(pw.done)/float64(pw.total)*100)
+	return c.Download(context.Background(), pathSrc, fileDst)
 }
 
 func (up *updater) updateFreeBSD() (err error) {

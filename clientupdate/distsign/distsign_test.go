@@ -5,6 +5,7 @@ package distsign
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
@@ -97,7 +98,7 @@ func TestDownload(t *testing.T) {
 			t.Cleanup(func() {
 				os.Remove(dst)
 			})
-			err := c.Download(tt.src, dst)
+			err := c.Download(context.Background(), tt.src, dst)
 			if err != nil {
 				if tt.wantErr {
 					return
@@ -121,9 +122,10 @@ func TestDownload(t *testing.T) {
 func TestRotateRoot(t *testing.T) {
 	srv := newTestServer(t)
 	c1 := srv.client(t)
+	ctx := context.Background()
 
 	srv.addSigned("hello", []byte("world"))
-	if err := c1.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c1.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed on a fresh server: %v", err)
 	}
 
@@ -132,13 +134,13 @@ func TestRotateRoot(t *testing.T) {
 
 	// Old client can still download files because it still trusts the old
 	// root key.
-	if err := c1.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c1.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after root rotation on old client: %v", err)
 	}
 	// New client should fail download because current signing key is signed by
 	// the revoked root that new client doesn't trust.
 	c2 := srv.client(t)
-	if err := c2.Download("hello", filepath.Join(t.TempDir(), "hello")); err == nil {
+	if err := c2.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err == nil {
 		t.Fatalf("Download succeeded on new client, but signing key is signed with revoked root key")
 	}
 	// Re-sign signing key with another valid root that client still trusts.
@@ -147,10 +149,10 @@ func TestRotateRoot(t *testing.T) {
 	//
 	// Note: we don't need to re-sign the "hello" file because signing key
 	// didn't change (only signing key's signature).
-	if err := c1.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c1.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after root rotation on old client with re-signed signing key: %v", err)
 	}
-	if err := c2.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c2.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after root rotation on new client with re-signed signing key: %v", err)
 	}
 }
@@ -158,46 +160,47 @@ func TestRotateRoot(t *testing.T) {
 func TestRotateSigning(t *testing.T) {
 	srv := newTestServer(t)
 	c := srv.client(t)
+	ctx := context.Background()
 
 	srv.addSigned("hello", []byte("world"))
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed on a fresh server: %v", err)
 	}
 
 	// Replace signing key but don't publish it yet.
 	srv.sign = append(srv.sign, newSigningKeyPair(t))
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after new signing key added but before publishing it: %v", err)
 	}
 
 	// Publish new signing key bundle with both keys.
 	srv.resignSigningKeys()
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after new signing key was published: %v", err)
 	}
 
 	// Re-sign the "hello" file with new signing key.
 	srv.add("hello.sig", srv.sign[1].sign([]byte("world")))
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after re-signing with new signing key: %v", err)
 	}
 
 	// Drop the old signing key.
 	srv.sign = srv.sign[1:]
 	srv.resignSigningKeys()
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after removing old signing key: %v", err)
 	}
 
 	// Add another key and re-sign the file with it *before* publishing.
 	srv.sign = append(srv.sign, newSigningKeyPair(t))
 	srv.add("hello.sig", srv.sign[1].sign([]byte("world")))
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err == nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err == nil {
 		t.Fatalf("Download succeeded when signed with a not-yet-published signing key")
 	}
 	// Fix this by publishing the new key.
 	srv.resignSigningKeys()
-	if err := c.Download("hello", filepath.Join(t.TempDir(), "hello")); err != nil {
+	if err := c.Download(ctx, "hello", filepath.Join(t.TempDir(), "hello")); err != nil {
 		t.Fatalf("Download failed after publishing new signing key: %v", err)
 	}
 }
@@ -355,6 +358,7 @@ func (s *testServer) client(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 	return &Client{
+		logf:     t.Logf,
 		roots:    roots,
 		pkgsAddr: u,
 	}
