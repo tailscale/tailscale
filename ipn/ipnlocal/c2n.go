@@ -128,8 +128,8 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	// Note that we create the Updater solely to check for errors; we do not
 	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
 	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
-	res := tailcfg.C2NUpdateResponse {
-		Enabled: envknob.AllowsRemoteUpdate(),
+	res := tailcfg.C2NUpdateResponse{
+		Enabled:   envknob.AllowsRemoteUpdate(),
 		Supported: err == nil && !version.IsMacSysExt(),
 	}
 
