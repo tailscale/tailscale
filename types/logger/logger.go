@@ -353,3 +353,23 @@ func LogfCloser(logf Logf) (newLogf Logf, close func()) {
 	}
 	return newLogf, close
 }
+
+// AsJSON returns a formatter that formats v as JSON. The value is suitable to
+// passing to a regular %v printf argument. (%s is not required)
+//
+// If json.Marshal returns an error, the output is "%%!JSON-ERROR:" followed by
+// the error string.
+func AsJSON(v any) fmt.Formatter {
+	return asJSONResult{v}
+}
+
+type asJSONResult struct{ v any }
+
+func (a asJSONResult) Format(s fmt.State, verb rune) {
+	v, err := json.Marshal(a.v)
+	if err != nil {
+		fmt.Fprintf(s, "%%!JSON-ERROR:%v", err)
+		return
+	}
+	s.Write(v)
+}

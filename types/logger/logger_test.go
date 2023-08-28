@@ -221,3 +221,33 @@ func TestJSON(t *testing.T) {
 		t.Errorf("mismatch\n got: %q\nwant: %q\n", got, want)
 	}
 }
+
+func TestAsJSON(t *testing.T) {
+	got := fmt.Sprintf("got %v", AsJSON(struct {
+		Foo string
+		Bar int
+	}{"hi", 123}))
+	const want = `got {"Foo":"hi","Bar":123}`
+	if got != want {
+		t.Errorf("got %#q; want %#q", got, want)
+	}
+
+	got = fmt.Sprintf("got %v", AsJSON(func() {}))
+	const wantErr = `got %!JSON-ERROR:json: unsupported type: func()`
+	if got != wantErr {
+		t.Errorf("for marshal error, got %#q; want %#q", got, wantErr)
+	}
+
+	var buf bytes.Buffer
+	n := int(testing.AllocsPerRun(1000, func() {
+		buf.Reset()
+		fmt.Fprintf(&buf, "got %v", AsJSON("hi"))
+	}))
+	if n > 2 {
+		// the JSON AsMarshal itself + boxing
+		// the asJSONResult into an interface (which needs
+		// to happen at some point to get to fmt, so might
+		// as well return an interface from AsJSON))
+		t.Errorf("allocs = %v; want max 2", n)
+	}
+}
