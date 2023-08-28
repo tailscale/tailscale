@@ -224,7 +224,7 @@ func (c *Client) Download(srcPath, dstPath string) error {
 	if !VerifyAny(sigPub, msg, sig) {
 		// Best-effort clean up of downloaded package.
 		os.Remove(dstPathUnverified)
-		return fmt.Errorf("signature %q for key %q does not validate with the current release signing key; either you are under attack, or attempting to download an old version of Tailscale which was signed with an older signing key", sigURL, srcURL)
+		return fmt.Errorf("signature %q for file %q does not validate with the current release signing key; either you are under attack, or attempting to download an old version of Tailscale which was signed with an older signing key", sigURL, srcURL)
 	}
 
 	if err := os.Rename(dstPathUnverified, dstPath); err != nil {
