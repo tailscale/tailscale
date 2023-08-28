@@ -33,3 +33,22 @@ type C2NSSHUsernamesResponse struct {
 	// just a best effort set of hints.
 	Usernames []string
 }
+
+// C2NUpdateResponse is the response (from node to control) from the /update
+// handler. It tells control the status of its request for the node to update
+// its Tailscale installation.
+type C2NUpdateResponse struct {
+	// Err is the error message, if any.
+	Err string
+
+	// Enabled indicates whether the user has opted in to updates triggered from
+	// control.
+	Enabled bool
+
+	// Supported indicates whether remote updates are supported on this
+	// OS/platform.
+	Supported bool
+
+	// Started indicates whether the update has started.
+	Started bool
+}
