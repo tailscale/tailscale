@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"go.uber.org/zap"
@@ -121,6 +122,11 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		tags = strings.Split(tstr, ",")
 	}
 
+	clusterIPAddr, err := netip.ParseAddr(svc.Spec.ClusterIP)
+	if err != nil {
+		return fmt.Errorf("failed to parse cluster IP: %w", err)
+	}
+
 	sts := &tailscaleSTSConfig{
 		ParentResourceName:  svc.Name,
 		ParentResourceUID:   string(svc.UID),
@@ -158,7 +164,13 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		{Hostname: tsHost},
 	}
 	for _, ip := range tsIPs {
-		ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			continue
+		}
+		if addr.Is4() == clusterIPAddr.Is4() { // only add addresses of the same family
+			ingress = append(ingress, corev1.LoadBalancerIngress{IP: ip})
+		}
 	}
 	svc.Status.LoadBalancer.Ingress = ingress
 	if err := a.Status().Update(ctx, svc); err != nil {

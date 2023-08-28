@@ -108,9 +108,6 @@ func TestLoadBalancerClass(t *testing.T) {
 					{
 						IP: "100.99.98.97",
 					},
-					{
-						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
-					},
 				},
 			},
 		},
@@ -375,9 +372,6 @@ func TestAnnotationIntoLB(t *testing.T) {
 					{
 						IP: "100.99.98.97",
 					},
-					{
-						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
-					},
 				},
 			},
 		},
@@ -466,9 +460,6 @@ func TestLBIntoAnnotation(t *testing.T) {
 					},
 					{
 						IP: "100.99.98.97",
-					},
-					{
-						IP: "2c0a:8083:94d4:2012:3165:34a5:3616:5fdf",
 					},
 				},
 			},
