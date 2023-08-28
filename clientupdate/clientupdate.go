@@ -204,15 +204,12 @@ func (up *updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	if latest.Version == "" {
-		return fmt.Errorf("no latest version found for %q track", up.track)
-	}
 	spkName := latest.SPKs[osName][arch]
 	if spkName == "" {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if !up.confirm(latest.Version) {
+	if !up.confirm(latest.SPKsVersion) {
 		return nil
 	}
 	if err := requireRoot(); err != nil {
@@ -830,12 +827,17 @@ func LatestTailscaleVersion(track string) (string, error) {
 }
 
 type trackPackages struct {
-	Version  string
-	Tarballs map[string]string
-	Exes     []string
-	MSIs     map[string]string
-	MacZips  map[string]string
-	SPKs     map[string]map[string]string
+	Version         string
+	Tarballs        map[string]string
+	TarballsVersion string
+	Exes            []string
+	ExesVersion     string
+	MSIs            map[string]string
+	MSIsVersion     string
+	MacZips         map[string]string
+	MacZipsVersion  string
+	SPKs            map[string]map[string]string
+	SPKsVersion     string
 }
 
 func latestPackages(track string) (*trackPackages, error) {
