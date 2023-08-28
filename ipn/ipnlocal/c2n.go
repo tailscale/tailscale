@@ -115,14 +115,7 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	// TODO(bradfitz): add some sort of semaphore that prevents two concurrent
 	// updates, or if one happened in the past 5 minutes, or something.
 
-	// TODO(bradfitz): move this type to some leaf package
-	type updateResponse struct {
-		Err       string // error message, if any
-		Enabled   bool   // user has opted-in to remote updates
-		Supported bool   // Tailscale supports updating this OS/platform
-		Started   bool
-	}
-	var res updateResponse
+	var res tailcfg.C2NUpdateResponse
 	res.Enabled = envknob.AllowsRemoteUpdate()
 	res.Supported = runtime.GOOS == "windows" || (runtime.GOOS == "linux" && distro.Get() == distro.Debian)
 
