@@ -141,7 +141,6 @@ type Auto struct {
 	direct   *Direct // our interface to the server APIs
 	clock    tstime.Clock
 	logf     logger.Logf
-	expiry   *time.Time
 	closed   bool
 	updateCh chan struct{} // readable when we should inform the server of a change
 	newMapCh chan struct{} // readable when we must restart a map request
@@ -150,6 +149,8 @@ type Auto struct {
 	unregisterHealthWatch func()
 
 	mu sync.Mutex // mutex guards the following fields
+
+	expiry time.Time
 
 	// lastUpdateGen is the gen of last update we had an update worth sending to
 	// the server.
@@ -456,17 +457,17 @@ func (c *Auto) authRoutine() {
 	}
 }
 
-// Expiry returns the credential expiration time, or the zero time if
-// the expiration time isn't known. Used in tests only.
-func (c *Auto) Expiry() *time.Time {
+// ExpiryForTests returns the credential expiration time, or the zero value if
+// the expiration time isn't known. It's used in tests only.
+func (c *Auto) ExpiryForTests() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.expiry
 }
 
-// Direct returns the underlying direct client object. Used in tests
-// only.
-func (c *Auto) Direct() *Direct {
+// DirectForTest returns the underlying direct client object.
+// It's used in tests only.
+func (c *Auto) DirectForTest() *Direct {
 	return c.direct
 }
 
@@ -496,7 +497,7 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	if c.loggedIn {
 		c.state = StateSynchronized
 	}
-	c.expiry = ptr.To(nm.Expiry)
+	c.expiry = nm.Expiry
 	stillAuthed := c.loggedIn
 	c.logf("[v1] mapRoutine: netmap received: %s", c.state)
 	c.mu.Unlock()
