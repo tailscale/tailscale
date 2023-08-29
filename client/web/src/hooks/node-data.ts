@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { apiFetch } from "src/api"
+import { apiFetch, setUnraidCsrfToken } from "src/api"
 
 export type NodeData = {
   Profile: UserProfile
@@ -37,9 +37,12 @@ export default function useNodeData() {
 
   const refreshData = useCallback(
     () =>
-      apiFetch("/data")
+      apiFetch("/data", "GET")
         .then((r) => r.json())
-        .then((d) => setData(d))
+        .then((d: NodeData) => {
+          setData(d)
+          setUnraidCsrfToken(d.IsUnraid ? d.UnraidToken : undefined)
+        })
         .catch((error) => console.error(error)),
     [setData]
   )
@@ -70,27 +73,7 @@ export default function useNodeData() {
             : data.AdvertiseExitNode,
       }
 
-      var body, contentType: string
-      if (data.IsUnraid) {
-        const params = new URLSearchParams()
-        params.append("csrf_token", data.UnraidToken)
-        params.append("ts_data", JSON.stringify(update))
-        body = params.toString()
-        contentType = "application/x-www-form-urlencoded;charset=UTF-8"
-      } else {
-        body = JSON.stringify(update)
-        contentType = "application/json"
-      }
-
-      apiFetch(
-        "/data",
-        {
-          method: "POST",
-          headers: { Accept: "application/json", "Content-Type": contentType },
-          body: body,
-        },
-        { up: "true" }
-      )
+      apiFetch("/data", "POST", update, { up: "true" })
         .then((r) => r.json())
         .then((r) => {
           setIsPosting(false)
