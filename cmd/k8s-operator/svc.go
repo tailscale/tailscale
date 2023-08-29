@@ -24,6 +24,9 @@ type ServiceReconciler struct {
 	ssr                   *tailscaleSTSReconciler
 	logger                *zap.SugaredLogger
 	isDefaultLoadBalancer bool
+	hostsProvisioner      *hostsCMProvisioner
+	// whether egress Services should be referred to by ts.net DNS names
+	useDNS bool
 }
 
 func childResourceLabels(name, ns, typ string) map[string]string {
@@ -132,17 +135,37 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		TailnetTargetIP:     svc.Annotations[AnnotationTailnetTargetIP],
 	}
 
-	var hsvc *corev1.Service
-	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+	var proxySvc *corev1.Service
+	if proxySvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
+	// Only used for egress proxy. If operator has been configured to use
+	// DNS this will be the MagicDNS name of the egress service. If the
+	// operator has not been configured to use DNS, this will be the
+	// Kubernetes DNS name of the proxy Service.
+	inClusterFQDN := fmt.Sprintf("%s.%s.svc", proxySvc.Name, proxySvc.Namespace)
+
+	// ensure that ts.net nameserver has a record for the new egress service
+	if a.hasTailnetTargetAnnotation(svc) && a.useDNS {
+		// update hosts
+		hostsConfig := &hostsCMConfig{
+			targetIP:      svc.Annotations[AnnotationTailnetTargetIP],
+			serviceLabels: crl,
+		}
+		fqdn, err := a.hostsProvisioner.Provision(ctx, logger, hostsConfig)
+		if err != nil {
+			return fmt.Errorf("error provisioning ts.net config: %v", err)
+		}
+		inClusterFQDN = fqdn
+	}
+
 	if a.hasTailnetTargetAnnotation(svc) {
-		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc"
-		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
-			svc.Spec.ExternalName = headlessSvcName
+		if svc.Spec.ExternalName != inClusterFQDN || svc.Spec.Type != corev1.ServiceTypeExternalName {
+			svc.Spec.ExternalName = inClusterFQDN
 			svc.Spec.Selector = nil
 			svc.Spec.Type = corev1.ServiceTypeExternalName
+			logger.Infof("updating service to %+#v", svc)
 			if err := a.Update(ctx, svc); err != nil {
 				return fmt.Errorf("failed to update service: %w", err)
 			}

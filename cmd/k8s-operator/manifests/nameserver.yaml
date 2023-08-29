@@ -31,7 +31,7 @@ spec:
         ports:
         - name: udp
           protocol: UDP 
-          containerPort: 53
+          containerPort: 1053
         volumeMounts:
         - name: dnsconfig
           mountPath: /config
@@ -55,7 +55,7 @@ spec:
     app: nameserver
   ports:
   - name: udp 
-    targetPort: 53
+    targetPort: 1053
     port: 53
     protocol: UDP
 ---

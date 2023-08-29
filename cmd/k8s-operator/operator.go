@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -41,11 +43,30 @@ import (
 	"tailscale.com/version"
 )
 
+const (
+	dnsConfigMapName = "dnsconfig"
+
+	tsNetNSService = "nameserver"
+)
+
+type reconcilersConfig struct {
+	enableDNS              bool
+	logger                 *zap.SugaredLogger
+	tsNamespace            string
+	restConfig             *rest.Config
+	tsClient               *tailscale.Client
+	localAPIClient         *tailscale.LocalClient
+	proxyImage             string
+	proxyPriorityClassName string
+	tags                   string
+}
+
 func main() {
 	// Required to use our client API. We're fine with the instability since the
 	// client lives in the same repo as this code.
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
+	// TODO (irbekrm): make these into flags
 	var (
 		tsNamespace        = defaultEnv("OPERATOR_NAMESPACE", "")
 		tslogging          = defaultEnv("OPERATOR_LOGGING", "info")
@@ -53,7 +74,11 @@ func main() {
 		priorityClassName  = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
 		shouldRunAuthProxy = defaultBool("AUTH_PROXY", false)
+		tsEnableDNS        bool
 	)
+
+	flag.BoolVar(&tsEnableDNS, "enable-dns", false, "If set to true, egress proxying to Tailscale services will be configured in such a way that cluster workloads will be able to use Tailscale services' MagicDNS names. (Additional manual configuration may be required and ts.net nameserver must be deployed.)")
+	flag.Parse()
 
 	var opts []kzap.Opts
 	switch tslogging {
@@ -67,19 +92,33 @@ func main() {
 	zlog := kzap.NewRaw(opts...).Sugar()
 	logf.SetLogger(zapr.NewLogger(zlog.Desugar()))
 
-	s, tsClient := initTSNet(zlog)
+	zlog.Infof("enable DNS: %v", tsEnableDNS)
+	os.Exit(1)
+
+	s, tsClient, localAPIClient := initTSNet(zlog)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
 	if shouldRunAuthProxy {
 		launchAuthProxy(zlog, restConfig, s)
 	}
-	startReconcilers(zlog, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	rc := &reconcilersConfig{
+		enableDNS:              tsEnableDNS,
+		logger:                 zlog,
+		tsNamespace:            tsNamespace,
+		restConfig:             restConfig,
+		proxyImage:             image,
+		proxyPriorityClassName: priorityClassName,
+		tags:                   tags,
+		tsClient:               tsClient,
+		localAPIClient:         localAPIClient,
+	}
+	startReconcilers(rc)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
 // CLIENT_ID_FILE and CLIENT_SECRET_FILE environment variables to authenticate
 // with Tailscale.
-func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client) {
+func initTSNet(zlog *zap.SugaredLogger) (*tsnet.Server, *tailscale.Client, *tailscale.LocalClient) {
 	hostinfo.SetApp("k8s-operator")
 	var (
 		clientIDPath     = defaultEnv("CLIENT_ID_FILE", "")
@@ -177,16 +216,16 @@ waitOnline:
 		}
 		time.Sleep(time.Second)
 	}
-	return s, tsClient
+	return s, tsClient, lc
 }
 
 // startReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler.
-func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+func startReconcilers(config *reconcilersConfig) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
-	startlog := zlog.Named("startReconcilers")
+	startlog := config.logger.Named("startReconcilers")
 	// For secrets and statefulsets, we only get permission to touch the objects
 	// in the controller's own namespace. This cannot be expressed by
 	// .Watches(...) below, instead you have to add a per-type field selector to
@@ -194,16 +233,39 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 	// implicitly filter what parts of the world the builder code gets to see at
 	// all.
 	nsFilter := cache.ByObject{
-		Field: client.InNamespace(tsNamespace).AsSelector(),
+		Field: client.InNamespace(config.tsNamespace).AsSelector(),
 	}
-	mgr, err := manager.New(restConfig, manager.Options{
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}:      nsFilter,
-				&appsv1.StatefulSet{}: nsFilter,
-			},
+
+	cacheOpts := cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Secret{}:      nsFilter,
+			&appsv1.StatefulSet{}: nsFilter,
 		},
+	}
+	// we only need to watch ConfigMaps if ts.net DNS is enabled
+	if config.enableDNS {
+		startlog.Info("DNS enabled, will be watching configmaps")
+		tsNSCMName := cache.ByObject{
+			Field: fields.SelectorFromSet(fields.Set{"metadata.name": dnsConfigMapName}),
+		}
+
+		// build cache filter for ConfigMaps. We only want to watch the one that
+		// holds ts.net nameserver config + the ones that might hold cluster DNS
+		// config
+		cmFilter := cache.ByObject{
+			Namespaces: map[string]cache.Config{
+				config.tsNamespace: {
+					FieldSelector: tsNSCMName.Field,
+				},
+				defaultClusterDNSNamespace: {}, // it doesn't seem like we can OR a field selector so cache all configmaps in this namespace
+			},
+		}
+		cacheOpts.ByObject[&corev1.ConfigMap{}] = cmFilter
+	}
+	mgr, err := manager.New(config.restConfig, manager.Options{
+		Cache: cacheOpts,
 	})
+
 	if err != nil {
 		startlog.Fatalf("could not create manager: %v", err)
 	}
@@ -222,28 +284,50 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 			},
 		}
 	})
+
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
-		tsClient:               tsClient,
-		defaultTags:            strings.Split(tags, ","),
-		operatorNamespace:      tsNamespace,
-		proxyImage:             image,
-		proxyPriorityClassName: priorityClassName,
+		tsClient:               config.tsClient,
+		defaultTags:            strings.Split(config.tags, ","),
+		operatorNamespace:      config.tsNamespace,
+		proxyImage:             config.proxyImage,
+		proxyPriorityClassName: config.proxyPriorityClassName,
+		UseDNS:                 config.enableDNS,
 	}
-	err = builder.
+
+	hp := &hostsCMProvisioner{
+		Client:         mgr.GetClient(),
+		tsNamespace:    config.tsNamespace,
+		localAPIClient: config.localAPIClient,
+	}
+	b := builder.
 		ControllerManagedBy(mgr).
 		For(&corev1.Service{}).
 		Watches(&appsv1.StatefulSet{}, reconcileFilter).
-		Watches(&corev1.Secret{}, reconcileFilter).
-		Complete(&ServiceReconciler{
-			ssr:                   ssr,
-			Client:                mgr.GetClient(),
-			logger:                zlog.Named("service-reconciler"),
-			isDefaultLoadBalancer: isDefaultLoadBalancer,
+		Watches(&corev1.Secret{}, reconcileFilter)
+
+	if config.enableDNS {
+		cmEventHandler := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+			// currently we cache the hosts configmap, but do not trigger
+			// reconciles if it has changed so any manual modifications to
+			// it will not always be immediately overriden. Probably
+			// eventually we want to do that- but make sure our reconciles
+			// are not too expensive first
+			return nil
 		})
+		b = b.Watches(&corev1.ConfigMap{}, cmEventHandler)
+	}
+	err = b.Complete(&ServiceReconciler{
+		ssr:                   ssr,
+		Client:                mgr.GetClient(),
+		logger:                config.logger.Named("service-reconciler"),
+		isDefaultLoadBalancer: isDefaultLoadBalancer,
+		hostsProvisioner:      hp,
+		useDNS:                config.enableDNS,
+	})
 	if err != nil {
-		startlog.Fatalf("could not create controller: %v", err)
+		startlog.Fatalf("could not create service reconciler: %v", err)
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
@@ -254,10 +338,67 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 			ssr:      ssr,
 			recorder: eventRecorder,
 			Client:   mgr.GetClient(),
-			logger:   zlog.Named("ingress-reconciler"),
+			logger:   config.logger.Named("ingress-reconciler"),
 		})
 	if err != nil {
-		startlog.Fatalf("could not create controller: %v", err)
+		startlog.Fatalf("could not create ingress reconciler: %v", err)
+	}
+
+	if config.enableDNS {
+		startlog.Info("enabling ts.net DNS name resolution")
+		dnsR := &dnsReconciler{
+			Client:            mgr.GetClient(),
+			logger:            config.logger.Named("dns-reconciler"),
+			operatorNamespace: config.tsNamespace,
+		}
+
+		// the only Service that dnsReconciler is interested in is that of the
+		// ts.net nameserver
+		dnsReconcilerSvcFilter := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+			if o.GetName() != tsNetNSService || o.GetNamespace() != config.tsNamespace {
+				return nil
+			}
+			return []reconcile.Request{
+				{
+					NamespacedName: types.NamespacedName{
+						Namespace: config.tsNamespace,
+						Name:      tsNetNSService,
+					},
+				},
+			}
+		})
+
+		// the only configmaps that the dnsReconciler is interested in are those
+		// that hold kube-dns/CoreDNS configuration
+		dnsReconcilerCMFilter := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+			if o.GetNamespace() != defaultClusterDNSNamespace {
+				return nil
+			}
+
+			for _, name := range append(knownKubeDNSConfigMapNames, knownCoreDNSConfigMapNames...) {
+				if name == o.GetName() {
+					return []reconcile.Request{
+						{
+							NamespacedName: types.NamespacedName{
+								Namespace: config.tsNamespace,
+								Name:      tsNetNSService,
+							},
+						},
+					}
+				}
+			}
+			return nil
+		})
+
+		err = builder.
+			ControllerManagedBy(mgr).
+			Named("dnsreconciler").
+			Watches(&corev1.Service{}, dnsReconcilerSvcFilter).
+			Watches(&corev1.ConfigMap{}, dnsReconcilerCMFilter).
+			Complete(dnsR)
+		if err != nil {
+			startlog.Fatalf("could not create dns reconciler: %v", err)
+		}
 	}
 
 	startlog.Infof("Startup complete, operator running, version: %s", version.Long())

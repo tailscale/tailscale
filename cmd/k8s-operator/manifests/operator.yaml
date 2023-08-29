@@ -79,6 +79,56 @@ rules:
 - apiGroups: ["apps"]
   resources: ["statefulsets"]
   verbs: ["*"]
+- apiGroups:
+  - ""
+  resourceNames:
+  - dnsconfig
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - watch
+  - list
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tailscaledns
+  namespace: kube-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - list
+  - watch
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - update
+  resourceNames:
+  - kube-dns
+  - coredns
+  - coredns-coredns
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tailscaledns
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  name: operator
+  namespace: tailscale
+roleRef:
+  kind: Role
+  name: tailscaledns
+  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

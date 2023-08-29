@@ -76,13 +76,16 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	// whether ts.net DNS resolution has been enabled for this operator
+	// instance
+	UseDNS bool
 }
 
 // Provision ensures that the StatefulSet for the given service is running and
 // up to date.
 func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	// Do full reconcile.
-	hsvc, err := a.reconcileHeadlessService(ctx, logger, sts)
+	hsvc, err := a.reconcileProxyService(ctx, logger, sts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
@@ -152,22 +155,38 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 	return true, nil
 }
 
-func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
-	hsvc := &corev1.Service{
+func (a *tailscaleSTSReconciler) reconcileProxyService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
+	proxysvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "ts-" + sts.ParentResourceName + "-",
 			Namespace:    a.operatorNamespace,
 			Labels:       sts.ChildResourceLabels,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "None",
 			Selector: map[string]string{
 				"app": sts.ParentResourceUID,
 			},
 		},
 	}
+	// for ingress we create a headless Service
+	if sts.ClusterTargetIP != "" || (sts.TailnetTargetIP != "" && !a.UseDNS) {
+		proxysvc.Spec.ClusterIP = corev1.ClusterIPNone
+	} else if sts.TailnetTargetIP != "" {
+		proxysvc.Spec.Ports = []corev1.ServicePort{
+			{
+				Name:     "https",
+				Protocol: "TCP",
+				Port:     443,
+			},
+			{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     80,
+			},
+		}
+	}
 	logger.Debugf("reconciling headless service for StatefulSet")
-	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
+	return createOrUpdate(ctx, a.Client, a.operatorNamespace, proxysvc, func(svc *corev1.Service) { svc.Spec = proxysvc.Spec })
 }
 
 func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (string, error) {

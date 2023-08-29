@@ -20,45 +20,31 @@ import (
 )
 
 const (
-	defaultDNSConfigDir = "/config"
-	defaultDNSFile      = "dns.json"
+	defaultDNSConfigDir = "/tmp/dns"
+	defaultDNSFile      = "dnsconfig.json"
 )
 
-type nameserver struct {
-	// config file holds FQDN to IP address mappings
-	configFilePath string
-	res            resolver.Resolver
-	logf           logger.Logf
-}
-
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	logger := log.Printf
 
 	res := resolver.New(logger, nil, nil, &tsdial.Dialer{Logf: logger})
 
-	ns := &nameserver{
-		configFilePath: fmt.Sprintf("%s/%s", defaultDNSConfigDir, defaultDNSFile),
-		logf:           logger,
-		res:            *res, // TODO (irbekrm): linter error here
+	var configReader configReaderFunc = func() ([]byte, error) {
+		return os.ReadFile(fmt.Sprintf("%s/%s", defaultDNSConfigDir, defaultDNSFile))
 	}
 
-	// ensure resolver config is updated before starting to serve
-	err := ns.updateResolverConfig()
-	if err != nil {
-		logger("error updating resolver conf: %v", err)
-		panic(err)
-	}
-	logger("Hosts configured")
-
+	c := make(chan string)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		logger("error starting file watcher: %v", err)
+		panic(err)
 	}
 	defer watcher.Close()
 	go func() {
-		logger("starting DNS file watch")
+		logger("starting file watch for %s", defaultDNSConfigDir)
 		for {
-			logger("in DNS file watch...")
 			select {
 			// TODO (irbekrm): it appears like we get a whole bunch
 			// of different events (except for the WRITE one that
@@ -69,6 +55,7 @@ func main() {
 			case event, ok := <-watcher.Events:
 				if !ok {
 					logger("watcher finished")
+					cancel()
 					return
 				}
 				// it seems like an update to the file has a
@@ -79,32 +66,40 @@ func main() {
 				// other events too as we run in a container and
 				// there shouldn't be random changes to file
 				// metadata
-				logger("a %v event detected, updating DNS config...", event)
-				// resolver locks config on updates so this is safe
-				err := ns.updateResolverConfig()
-				if err != nil {
-					logger("error updating resolver conf: %v", err)
-					continue
-				}
-				logger("Hosts updated")
+				msg := fmt.Sprintf("new file event: %v", event)
+				c <- msg
+
 			case err, ok := <-watcher.Errors:
 				if !ok {
-					logger("watcher finished")
+					logger("errors watcher finished: %v", err)
+					cancel()
 					return
 				}
 				if err != nil {
-					logger("error watching DNS config: %v", err)
+					logger("error watching directory: %w", err)
+					cancel()
+					return
 				}
 			}
 		}
-
 	}()
 	err = watcher.Add(defaultDNSConfigDir)
 	if err != nil {
-		panic(fmt.Sprintf("error setting up DNS config watch: %v", err))
+		panic(err)
 	}
 
-	addr, err := net.ResolveUDPAddr("udp", ":53")
+	ns := &nameserver{
+		configReader:  configReader,
+		configWatcher: c,
+		logger:        logger,
+		res:           *res, // TODO (irbekrm): linter error here
+	}
+
+	if err := ns.run(ctx, cancel); err != nil {
+		panic(fmt.Errorf("error running nameserver: %w", err))
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", ":1053")
 	if err != nil {
 		panic("error resolving UDP address")
 	}
@@ -112,18 +107,22 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("error opening udp connection: %v", err))
 	}
-	defer conn.Close()
-	logger("nameserver listening on: %v", addr)
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
+	logger("k8s-nameserver listening on: %v", addr)
 
 	for {
 		payloadBuff := make([]byte, 10000)
 		metadataBuff := make([]byte, 512)
 		_, _, _, addr, err := conn.ReadMsgUDP(payloadBuff, metadataBuff)
 		if err != nil {
-			logger("error reading from UDP socket: %v", err)
-			continue
+			panic(err)
 		}
-		dnsAnswer, err := ns.res.Query(context.Background(), payloadBuff, addr.AddrPort())
+		logger("query is %#+v", string(payloadBuff))
+		dnsAnswer, err := ns.query(ctx, payloadBuff, addr.AddrPort())
 		if err != nil {
 			logger("error doing DNS query: %v", err)
 			// reply with the dnsAnswer anyway- in some cases
@@ -133,31 +132,69 @@ func main() {
 	}
 }
 
+type nameserver struct {
+	configReader  configReaderFunc
+	configWatcher <-chan string
+	res           resolver.Resolver
+	logger        logger.Logf
+}
+
+type configReaderFunc func() ([]byte, error)
+
+// run ensures that resolver configuration is up to date with regards to its
+// source. will update config once before returning and keep monitoring it in a
+// thread.
+func (n *nameserver) run(ctx context.Context, cancelF context.CancelFunc) error {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				n.logger("nameserver exiting")
+				return
+			case <-n.configWatcher:
+				n.logger("attempting to update resolver config...")
+				if err := n.updateResolverConfig(); err != nil {
+					n.logger("error updating resolver config: %w", err)
+					cancelF()
+				}
+				n.logger("successfully updated resolver config")
+			}
+		}
+	}()
+	if err := n.updateResolverConfig(); err != nil {
+		return fmt.Errorf("error updating resolver config: %w", err)
+	}
+	n.logger("successfully updated resolver config")
+	return nil
+}
+
+func (n *nameserver) query(ctx context.Context, payload []byte, add netip.AddrPort) ([]byte, error) {
+	return n.res.Query(ctx, payload, add)
+}
+
 func (n *nameserver) updateResolverConfig() error {
-	// file is mounted to pod from a configmap so it cannot not exist
-	dnsCfgBytes, err := os.ReadFile(n.configFilePath)
+	dnsCfgBytes, err := n.configReader()
 	if err != nil {
-		n.logf("error reading configFile: %v", err)
+		n.logger("error reading config: %v", err)
 		return err
 	}
 	dnsCfgM := make(map[string]string)
 	err = json.Unmarshal(dnsCfgBytes, &dnsCfgM)
 	if err != nil {
-		n.logf("error unmarshaling json: %v", err)
+		n.logger("error unmarshaling json: %v", err)
 		return err
 	}
 	c := resolver.Config{}
 	c.Hosts = make(map[dnsname.FQDN][]netip.Addr)
-	// TODO (irbekrm): ensure that it handles the case of empty configmap
 	for key, val := range dnsCfgM {
 		fqdn, err := dnsname.ToFQDN(key)
 		if err != nil {
-			n.logf("invalid DNS config: cannot convert %s to FQDN: %v", key, err)
+			n.logger("invalid DNS config: cannot convert %s to FQDN: %v", key, err)
 			return err
 		}
 		ip, err := netip.ParseAddr(val)
 		if err != nil {
-			n.logf("invalid DNS config: cannot convert %s to netip.Addr: %v", val, err)
+			n.logger("invalid DNS config: cannot convert %s to netip.Addr: %v", val, err)
 			return err
 		}
 		c.Hosts[fqdn] = []netip.Addr{ip}
