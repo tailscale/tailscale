@@ -158,6 +158,10 @@ func Update(args UpdateArgs) error {
 		case haveExecutable("apk"):
 			up.update = up.updateAlpineLike
 		}
+		// If nothing matched, fall back to tarball updates.
+		if up.update == nil {
+			up.update = up.updateLinuxBinary
+		}
 	case "darwin":
 		switch {
 		case !args.AppStore && !version.IsSandboxedMacOS():
@@ -300,16 +304,20 @@ func parseSynoinfo(path string) (string, error) {
 }
 
 func (up *updater) updateDebLike() error {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	if err := exec.Command("dpkg", "--status", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via apt, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
+	}
 	ver, err := requestedTailscaleVersion(up.Version, up.track)
 	if err != nil {
 		return err
 	}
 	if !up.confirm(ver) {
 		return nil
-	}
-
-	if err := requireRoot(); err != nil {
-		return err
 	}
 
 	if updated, err := updateDebianAptSourcesList(up.track); err != nil {
@@ -402,6 +410,11 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 }
 
 func (up *updater) updateArchLike() error {
+	if err := exec.Command("pacman", "--query", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via pacman, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
+	}
 	// Arch maintainer asked us not to implement "tailscale update" or
 	// auto-updates on Arch-based distros:
 	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
@@ -418,6 +431,11 @@ func (up *updater) updateFedoraLike(packageManager string) func() error {
 	return func() (err error) {
 		if err := requireRoot(); err != nil {
 			return err
+		}
+		if err := exec.Command(packageManager, "info", "--installed", "tailscale").Run(); err != nil && isExitError(err) {
+			// Tailscale was not installed via yum/dnf, update via tarball
+			// download instead.
+			return up.updateLinuxBinary()
 		}
 		defer func() {
 			if err != nil {
@@ -496,6 +514,11 @@ func (up *updater) updateAlpineLike() (err error) {
 	}
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if err := exec.Command("apk", "info", "--installed", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via apk, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
 	}
 
 	defer func() {
@@ -764,6 +787,11 @@ func (up *updater) updateFreeBSD() (err error) {
 	if err := requireRoot(); err != nil {
 		return err
 	}
+	if err := exec.Command("pkg", "query", "%n", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via pkg and we don't pre-compile
+		// binaries for it.
+		return errors.New("Tailscale was not installed via pkg, binary updates on FreeBSD are not supported; please reinstall Tailscale using pkg or update manually")
+	}
 
 	defer func() {
 		if err != nil {
@@ -791,6 +819,10 @@ func (up *updater) updateFreeBSD() (err error) {
 		return fmt.Errorf("failed tailscale update using pkg: %w", err)
 	}
 	return nil
+}
+
+func (up *updater) updateLinuxBinary() error {
+	return errors.New("Linux binary updates without a package manager are not supported yet")
 }
 
 func haveExecutable(name string) bool {
@@ -866,4 +898,9 @@ func requireRoot() error {
 	default:
 		return errors.New("must be root")
 	}
+}
+
+func isExitError(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
 }
