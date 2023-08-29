@@ -456,7 +456,8 @@ func UseInterestingInterfaces(i Interface, ips []netip.Prefix) bool {
 }
 
 // UseInterestingIPs is an IPFilter that reports whether ip is an interesting IP address.
-// An IP address is interesting if it is neither a loopback nor a link local unicast IP address.
+// An IP address is interesting if it is not a loopback, link local unicast IP address,
+// or non-Tailscale Unique Local Address.
 func UseInterestingIPs(ip netip.Addr) bool {
 	return isInterestingIP(ip)
 }
@@ -675,11 +676,22 @@ func anyInterestingIP(pfxs []netip.Prefix) bool {
 	return false
 }
 
+// ulaRange is the Unique Local IPv6 Unicast Address prefix.
+// See https://datatracker.ietf.org/doc/html/rfc4193.
+var ulaRange = netip.MustParsePrefix("fc00::/7")
+
 // isInterestingIP reports whether ip is an interesting IP that we
 // should log in interfaces.State logging. We don't need to show
-// localhost or link-local addresses.
+// loopback, link-local addresses, or non-Tailscale ULA addresses.
 func isInterestingIP(ip netip.Addr) bool {
-	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	// Ignore non-Tailscale ULA addresses.
+	if ip.Is6() && ulaRange.Contains(ip) && !tsaddr.TailscaleULARange().Contains(ip) {
+		return false
+	}
+	return true
 }
 
 var altNetInterfaces func() ([]Interface, error)

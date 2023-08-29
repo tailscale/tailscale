@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"tailscale.com/tstest"
+	"tailscale.com/util/mak"
 )
 
 func TestGetState(t *testing.T) {
@@ -250,6 +251,136 @@ func TestStateString(t *testing.T) {
 			got := tt.s.String()
 			if got != tt.want {
 				t.Errorf("wrong\n got: %s\nwant: %s\n", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsInterestingIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"fd7a:115c:a1e0:ab12:4843:cd96:624a:4603", true},
+		{"fd15:bbfa:c583:4fce:f4fb:4ff:fe1a:4148", false},
+		{"10.2.3.4", true},
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"2001::2", true},
+		{"169.254.1.2", false},
+		{"fe80::1", false},
+	}
+	for _, tt := range tests {
+		if got := isInterestingIP(netip.MustParseAddr(tt.ip)); got != tt.want {
+			t.Errorf("isInterestingIP(%q) = %v, want %v", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestEqualFiltered(t *testing.T) {
+	tests := []struct {
+		name   string
+		s1, s2 *State
+		want   bool
+	}{
+		{
+			name: "eq_nil",
+			want: true,
+		},
+		{
+			name: "nil_mix",
+			s2:   new(State),
+			want: false,
+		},
+		{
+			name: "eq",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "default-route-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "bar",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "some-interesting-ip-changed",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.3/16")},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "ipv6-ula-addressed-appeared",
+			s1: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {netip.MustParsePrefix("10.0.1.2/16")},
+				},
+			},
+			s2: &State{
+				DefaultRouteInterface: "foo",
+				InterfaceIPs: map[string][]netip.Prefix{
+					"foo": {
+						netip.MustParsePrefix("10.0.1.2/16"),
+						// Brad saw this address coming & going on his home LAN, possibly
+						// via an Apple TV Thread routing advertisement? (Issue 9040)
+						netip.MustParsePrefix("fd15:bbfa:c583:4fce:f4fb:4ff:fe1a:4148/64"),
+					},
+				},
+			},
+			want: true, // ignore the IPv6 ULA address on foo
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Populate dummy interfaces where missing.
+			for _, s := range []*State{tt.s1, tt.s2} {
+				if s == nil {
+					continue
+				}
+				for name := range s.InterfaceIPs {
+					if _, ok := s.Interface[name]; !ok {
+						mak.Set(&s.Interface, name, Interface{Interface: &net.Interface{
+							Name: name,
+						}})
+					}
+				}
+			}
+
+			got := tt.s1.EqualFiltered(tt.s2, UseInterestingInterfaces, UseInterestingIPs)
+			if got != tt.want {
+				t.Errorf("got %v; want %v", got, tt.want)
 			}
 		})
 	}
