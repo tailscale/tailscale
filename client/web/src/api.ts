@@ -1,4 +1,5 @@
 let csrfToken: string
+let unraidCsrfToken: string | undefined // required for unraid POST requests (#8062)
 
 // apiFetch wraps the standard JS fetch function with csrf header
 // management and param additions specific to the web client.
@@ -8,11 +9,12 @@ let csrfToken: string
 // (i.e. provide `/data` rather than `api/data`).
 export function apiFetch(
   endpoint: string,
-  init?: RequestInit | undefined,
-  addURLParams?: Record<string, string>
+  method: "GET" | "POST",
+  body?: any,
+  params?: Record<string, string>
 ): Promise<Response> {
   const urlParams = new URLSearchParams(window.location.search)
-  const nextParams = new URLSearchParams(addURLParams)
+  const nextParams = new URLSearchParams(params)
   const token = urlParams.get("SynoToken")
   if (token) {
     nextParams.set("SynoToken", token)
@@ -20,9 +22,28 @@ export function apiFetch(
   const search = nextParams.toString()
   const url = `api${endpoint}${search ? `?${search}` : ""}`
 
+  var contentType: string
+  if (unraidCsrfToken) {
+    const params = new URLSearchParams()
+    params.append("csrf_token", unraidCsrfToken)
+    if (body) {
+      params.append("ts_data", JSON.stringify(body))
+    }
+    body = params.toString()
+    contentType = "application/x-www-form-urlencoded;charset=UTF-8"
+  } else {
+    body = body ? JSON.stringify(body) : undefined
+    contentType = "application/json"
+  }
+
   return fetch(url, {
-    ...init,
-    headers: withCsrfToken(init?.headers),
+    method: method,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": contentType,
+      "X-CSRF-Token": csrfToken,
+    },
+    body,
   }).then((r) => {
     updateCsrfToken(r)
     if (!r.ok) {
@@ -34,13 +55,13 @@ export function apiFetch(
   })
 }
 
-function withCsrfToken(h?: HeadersInit): HeadersInit {
-  return { ...h, "X-CSRF-Token": csrfToken }
-}
-
 function updateCsrfToken(r: Response) {
   const tok = r.headers.get("X-CSRF-Token")
   if (tok) {
     csrfToken = tok
   }
+}
+
+export function setUnraidCsrfToken(token?: string) {
+  unraidCsrfToken = token
 }
