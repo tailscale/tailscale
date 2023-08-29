@@ -3063,7 +3063,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	oneCGNATRoute := shouldUseOneCGNATRoute(nm, b.logf, version.OS())
+	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
@@ -3081,7 +3081,7 @@ func (b *LocalBackend) authReconfig() {
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func shouldUseOneCGNATRoute(nm *netmap.NetworkMap, logf logger.Logf, versionOS string) bool {
+func shouldUseOneCGNATRoute(logf logger.Logf, versionOS string) bool {
 	// Explicit enabling or disabling always take precedence.
 	if v, ok := controlclient.ControlOneCGNATSetting().Get(); ok {
 		logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
