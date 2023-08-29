@@ -93,7 +93,7 @@ export function Header({
                   |{" "}
                   <button
                     onClick={() =>
-                      apiFetch("/local/v0/logout", { method: "POST" })
+                      apiFetch("/local/v0/logout", "POST")
                         .then(refreshData)
                         .catch((err) => alert("Logout failed: " + err.message))
                     }
