@@ -7,13 +7,16 @@
 package clientupdate
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -839,7 +842,162 @@ func (up *Updater) updateFreeBSD() (err error) {
 }
 
 func (up *Updater) updateLinuxBinary() error {
-	return errors.New("Linux binary updates without a package manager are not supported yet")
+	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	if err != nil {
+		return err
+	}
+	if !up.confirm(ver) {
+		return nil
+	}
+	// Root is needed to overwrite binaries and restart systemd unit.
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	dlPath, err := up.downloadLinuxTarball(ver)
+	if err != nil {
+		return err
+	}
+	up.Logf("Extracting %q", dlPath)
+	if err := up.unpackLinuxTarball(dlPath); err != nil {
+		return err
+	}
+	if err := os.Remove(dlPath); err != nil {
+		up.Logf("failed to clean up %q: %w", dlPath, err)
+	}
+	if err := restartSystemdUnit(context.Background()); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			up.Logf("Tailscale binaries updated successfully.\nPlease restart tailscaled to finish the update.")
+		} else {
+			up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+		}
+	} else {
+		up.Logf("Success")
+	}
+
+	return nil
+}
+
+func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
+	dlDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dlDir = filepath.Join(dlDir, "tailscale-update")
+	if err := os.MkdirAll(dlDir, 0700); err != nil {
+		return "", err
+	}
+	pkgsPath := fmt.Sprintf("%s/tailscale_%s_%s.tgz", up.track, ver, runtime.GOARCH)
+	dlPath := filepath.Join(dlDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, dlPath); err != nil {
+		return "", err
+	}
+	return dlPath, nil
+}
+
+func (up *Updater) unpackLinuxTarball(path string) error {
+	tailscale, tailscaled, err := binaryPaths()
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	files := make(map[string]int)
+	wantFiles := map[string]int{
+		"tailscale":  1,
+		"tailscaled": 1,
+	}
+	for {
+		th, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed extracting %q: %w", path, err)
+		}
+		// TODO(awly): try to also extract tailscaled.service. The tricky part
+		// is fixing up binary paths in that file if they differ from where
+		// local tailscale/tailscaled are installed. Also, this may not be a
+		// systemd distro.
+		switch filepath.Base(th.Name) {
+		case "tailscale":
+			files["tailscale"]++
+			if err := writeFile(tr, tailscale+".new", 0755); err != nil {
+				return fmt.Errorf("failed extracting the new tailscale binary from %q: %w", path, err)
+			}
+		case "tailscaled":
+			files["tailscaled"]++
+			if err := writeFile(tr, tailscaled+".new", 0755); err != nil {
+				return fmt.Errorf("failed extracting the new tailscaled binary from %q: %w", path, err)
+			}
+		}
+	}
+	if !maps.Equal(files, wantFiles) {
+		return fmt.Errorf("%q has missing or duplicate files: got %v, want %v", path, files, wantFiles)
+	}
+
+	// Only place the files in final locations after everything extracted correctly.
+	if err := os.Rename(tailscale+".new", tailscale); err != nil {
+		return err
+	}
+	up.Logf("Updated %s", tailscale)
+	if err := os.Rename(tailscaled+".new", tailscaled); err != nil {
+		return err
+	}
+	up.Logf("Updated %s", tailscaled)
+	return nil
+}
+
+func writeFile(r io.Reader, path string, perm os.FileMode) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove existing file at %q: %w", path, err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, r); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// Var allows overriding this in tests.
+var binaryPaths = func() (tailscale, tailscaled string, err error) {
+	// This can be either tailscale or tailscaled.
+	this, err := os.Executable()
+	if err != nil {
+		return "", "", err
+	}
+	otherName := "tailscaled"
+	if filepath.Base(this) == "tailscaled" {
+		otherName = "tailscale"
+	}
+	// Try to find the other binary in the same directory.
+	other := filepath.Join(filepath.Dir(this), otherName)
+	_, err = os.Stat(other)
+	if os.IsNotExist(err) {
+		// If it's not in the same directory, try to find it in $PATH.
+		other, err = exec.LookPath(otherName)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("cannot find %q in neither %q nor $PATH: %w", otherName, filepath.Dir(this), err)
+	}
+	if otherName == "tailscaled" {
+		return this, other, nil
+	} else {
+		return other, this, nil
+	}
 }
 
 func haveExecutable(name string) bool {
