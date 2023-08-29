@@ -119,3 +119,11 @@ func TestBoolEqualBool(t *testing.T) {
 		}
 	}
 }
+
+func TestUnmarshalAlloc(t *testing.T) {
+	b := json.Unmarshaler(new(Bool))
+	n := testing.AllocsPerRun(10, func() { b.UnmarshalJSON(trueBytes) })
+	if n > 0 {
+		t.Errorf("got %v allocs, want 0", n)
+	}
+}
