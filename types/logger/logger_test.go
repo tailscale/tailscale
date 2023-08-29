@@ -15,6 +15,7 @@ import (
 
 	qt "github.com/frankban/quicktest"
 	"tailscale.com/tailcfg"
+	"tailscale.com/version"
 )
 
 func TestFuncWriter(t *testing.T) {
@@ -236,6 +237,12 @@ func TestAsJSON(t *testing.T) {
 	const wantErr = `got %!JSON-ERROR:json: unsupported type: func()`
 	if got != wantErr {
 		t.Errorf("for marshal error, got %#q; want %#q", got, wantErr)
+	}
+
+	if version.IsRace() {
+		// skip the rest of the test in race mode;
+		// race mode causes more allocs which we don't care about.
+		return
 	}
 
 	var buf bytes.Buffer
