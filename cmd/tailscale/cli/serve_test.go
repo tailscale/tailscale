@@ -339,19 +339,19 @@ func TestServeConfigMutations(t *testing.T) {
 	add(step{reset: true})
 	add(step{ // must include scheme for tcp
 		command: cmd("tls-terminated-tcp:443 localhost:5432"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{ // !somehost, must be localhost or 127.0.0.1
 		command: cmd("tls-terminated-tcp:443 tcp://somehost:5432"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{ // bad target port, too low
 		command: cmd("tls-terminated-tcp:443 tcp://somehost:0"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{ // bad target port, too high
 		command: cmd("tls-terminated-tcp:443 tcp://somehost:65536"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{
 		command: cmd("tls-terminated-tcp:443 tcp://localhost:5432"),
@@ -472,7 +472,7 @@ func TestServeConfigMutations(t *testing.T) {
 	})
 	add(step{ // bad path
 		command: cmd("https:443 / bad/path"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{reset: true})
 	add(step{
@@ -666,7 +666,7 @@ func TestServeConfigMutations(t *testing.T) {
 	})
 	add(step{ // try to start a web handler on the same port
 		command: cmd("https:443 / localhost:3000"),
-		wantErr: exactErr(flag.ErrHelp, "flag.ErrHelp"),
+		wantErr: exactErr(errHelp, "errHelp"),
 	})
 	add(step{reset: true})
 	add(step{ // start a web handler on port 443

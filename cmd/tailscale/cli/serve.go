@@ -120,6 +120,10 @@ EXAMPLES
 	}
 }
 
+// errHelp is standard error text that prompts users to
+// run `serve --help` for information on how to use serve.
+var errHelp = errors.New("try `tailscale serve --help` for usage info")
+
 func (e *serveEnv) newFlags(name string, setup func(fs *flag.FlagSet)) *flag.FlagSet {
 	onError, out := flag.ExitOnError, Stderr
 	if e.testFlagOut != nil {
@@ -244,7 +248,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 
 	if len(args) < 2 || ((srcType == "https" || srcType == "http") && !turnOff && len(args) < 3) {
 		fmt.Fprintf(os.Stderr, "error: invalid number of arguments\n\n")
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	if srcType == "https" && !turnOff {
@@ -286,7 +290,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 	default:
 		fmt.Fprintf(os.Stderr, "error: invalid serve type %q\n", srcType)
 		fmt.Fprint(os.Stderr, "must be one of: http:<port>, https:<port>, tcp:<port> or tls-terminated-tcp:<port>\n\n", srcType)
-		return flag.ErrHelp
+		return errHelp
 	}
 }
 
@@ -322,13 +326,13 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 		}
 		if !filepath.IsAbs(source) {
 			fmt.Fprintf(os.Stderr, "error: path must be absolute\n\n")
-			return flag.ErrHelp
+			return errHelp
 		}
 		source = filepath.Clean(source)
 		fi, err := os.Stat(source)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: invalid path: %v\n\n", err)
-			return flag.ErrHelp
+			return errHelp
 		}
 		if fi.IsDir() && !strings.HasSuffix(mount, "/") {
 			// dir mount points must end in /
@@ -354,7 +358,7 @@ func (e *serveEnv) handleWebServe(ctx context.Context, srvPort uint16, useTLS bo
 
 	if sc.IsTCPForwardingOnPort(srvPort) {
 		fmt.Fprintf(os.Stderr, "error: cannot serve web; already serving TCP\n")
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	mak.Set(&sc.TCP, srvPort, &ipn.TCPPortHandler{HTTPS: useTLS, HTTP: !useTLS})
@@ -542,18 +546,18 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 		terminateTLS = true
 	default:
 		fmt.Fprintf(os.Stderr, "error: invalid TCP source %q\n\n", dest)
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	dstURL, err := url.Parse(dest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid TCP source %q: %v\n\n", dest, err)
-		return flag.ErrHelp
+		return errHelp
 	}
 	host, dstPortStr, err := net.SplitHostPort(dstURL.Host)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid TCP source %q: %v\n\n", dest, err)
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	switch host {
@@ -562,12 +566,12 @@ func (e *serveEnv) handleTCPServe(ctx context.Context, srcType string, srcPort u
 	default:
 		fmt.Fprintf(os.Stderr, "error: invalid TCP source %q\n", dest)
 		fmt.Fprint(os.Stderr, "must be one of: localhost or 127.0.0.1\n\n", dest)
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	if p, err := strconv.ParseUint(dstPortStr, 10, 16); p == 0 || err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid port %q\n\n", dstPortStr)
-		return flag.ErrHelp
+		return errHelp
 	}
 
 	cursc, err := e.lc.GetServeConfig(ctx)
