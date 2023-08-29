@@ -32,7 +32,16 @@ import (
 	"tailscale.com/version"
 )
 
-var serveCmd = newServeCommand(&serveEnv{lc: &localClient})
+var serveCmd = func() *ffcli.Command {
+	se := &serveEnv{lc: &localClient}
+	// This flag is used to switch to an in-development
+	// implementation of the tailscale funnel command.
+	// See https://github.com/tailscale/tailscale/issues/7844
+	if os.Getenv("TAILSCALE_FUNNEL_DEV") == "on" {
+		return newServeDevCommand(se)
+	}
+	return newServeCommand(se)
+}
 
 // newServeCommand returns a new "serve" subcommand using e as its environment.
 func newServeCommand(e *serveEnv) *ffcli.Command {
