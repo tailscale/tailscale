@@ -35,21 +35,14 @@ export default function useNodeData() {
   const [data, setData] = useState<NodeData>()
   const [isPosting, setIsPosting] = useState<boolean>(false)
 
-  const fetchNodeData = useCallback(() => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const nextParams = new URLSearchParams()
-    const token = urlParams.get("SynoToken")
-    if (token) {
-      nextParams.set("SynoToken", token)
-    }
-    const search = nextParams.toString()
-    const url = `api/data${search ? `?${search}` : ""}`
-
-    apiFetch(url)
-      .then((r) => r.json())
-      .then((d) => setData(d))
-      .catch((error) => console.error(error))
-  }, [setData])
+  const fetchNodeData = useCallback(
+    () =>
+      apiFetch("/data")
+        .then((r) => r.json())
+        .then((d) => setData(d))
+        .catch((error) => console.error(error)),
+    [setData]
+  )
 
   const updateNode = useCallback(
     (update: NodeUpdate) => {
@@ -77,17 +70,7 @@ export default function useNodeData() {
             : data.AdvertiseExitNode,
       }
 
-      const urlParams = new URLSearchParams(window.location.search)
-      const nextParams = new URLSearchParams({ up: "true" })
-      const token = urlParams.get("SynoToken")
-      if (token) {
-        nextParams.set("SynoToken", token)
-      }
-      const search = nextParams.toString()
-      const url = `api/data${search ? `?${search}` : ""}`
-
       var body, contentType: string
-
       if (data.IsUnraid) {
         const params = new URLSearchParams()
         params.append("csrf_token", data.UnraidToken)
@@ -99,11 +82,15 @@ export default function useNodeData() {
         contentType = "application/json"
       }
 
-      apiFetch(url, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": contentType },
-        body: body,
-      })
+      apiFetch(
+        "/data",
+        {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": contentType },
+          body: body,
+        },
+        { up: "true" }
+      )
         .then((r) => r.json())
         .then((r) => {
           setIsPosting(false)
