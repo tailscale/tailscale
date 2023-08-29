@@ -1,12 +1,26 @@
 let csrfToken: string
 
-// apiFetch wraps the standard JS fetch function
-// with csrf header management.
+// apiFetch wraps the standard JS fetch function with csrf header
+// management and param additions specific to the web client.
+//
+// apiFetch adds the `api` prefix to the request URL,
+// so endpoint should be provided without the `api` prefix
+// (i.e. provide `/data` rather than `api/data`).
 export function apiFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit | undefined
+  endpoint: string,
+  init?: RequestInit | undefined,
+  addURLParams?: Record<string, string>
 ): Promise<Response> {
-  return fetch(input, {
+  const urlParams = new URLSearchParams(window.location.search)
+  const nextParams = new URLSearchParams(addURLParams)
+  const token = urlParams.get("SynoToken")
+  if (token) {
+    nextParams.set("SynoToken", token)
+  }
+  const search = nextParams.toString()
+  const url = `api${endpoint}${search ? `?${search}` : ""}`
+
+  return fetch(url, {
     ...init,
     headers: withCsrfToken(init?.headers),
   }).then((r) => {
