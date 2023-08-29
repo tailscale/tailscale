@@ -21,6 +21,10 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// NetworkName is the network name returned by [net.Addr.Network]
+// for [net.Conn.LocalAddr] and [net.Conn.RemoteAddr] from the [Conn] type.
+const NetworkName = "websocket"
+
 // NetConn converts a *websocket.Conn into a net.Conn.
 //
 // It's for tunneling arbitrary protocols over WebSockets.
@@ -170,7 +174,7 @@ type websocketAddr struct {
 }
 
 func (a websocketAddr) Network() string {
-	return "websocket"
+	return NetworkName
 }
 
 func (a websocketAddr) String() string {
