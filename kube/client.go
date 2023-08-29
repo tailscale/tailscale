@@ -233,15 +233,16 @@ func (c *Client) UpdateSecret(ctx context.Context, s *Secret) error {
 //
 // https://tools.ietf.org/html/rfc6902
 type JSONPatch struct {
-	Op   string `json:"op"`
-	Path string `json:"path"`
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value,omitempty"`
 }
 
 // JSONPatchSecret updates a secret in the Kubernetes API using a JSON patch.
 // It currently (2023-03-02) only supports the "remove" operation.
 func (c *Client) JSONPatchSecret(ctx context.Context, name string, patch []JSONPatch) error {
 	for _, p := range patch {
-		if p.Op != "remove" {
+		if p.Op != "remove" && p.Op != "add" {
 			panic(fmt.Errorf("unsupported JSON patch operation: %q", p.Op))
 		}
 	}
