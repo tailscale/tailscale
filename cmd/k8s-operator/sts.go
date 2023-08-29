@@ -175,15 +175,15 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 			Labels:    stsC.ChildResourceLabels,
 		},
 	}
-	alreadyExists := false
+	var orig *corev1.Secret // unmodified copy of secret
 	if err := a.Get(ctx, client.ObjectKeyFromObject(secret), secret); err == nil {
 		logger.Debugf("secret %s/%s already exists", secret.GetNamespace(), secret.GetName())
-		alreadyExists = true
+		orig = secret.DeepCopy()
 	} else if !apierrors.IsNotFound(err) {
 		return "", err
 	}
 
-	if !alreadyExists {
+	if orig == nil {
 		// Secret doesn't exist yet, create one. Initially it contains
 		// only the Tailscale authkey, but once Tailscale starts it'll
 		// also store the daemon state.
@@ -218,8 +218,8 @@ func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *
 		}
 		mak.Set(&secret.StringData, "serve-config", string(j))
 	}
-	if alreadyExists {
-		if err := a.Update(ctx, secret); err != nil {
+	if orig != nil {
+		if err := a.Patch(ctx, secret, client.MergeFrom(orig)); err != nil {
 			return "", err
 		}
 	} else {
