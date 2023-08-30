@@ -297,8 +297,10 @@ authLoop:
 			log.Fatalf("tailscaled left running state (now in state %q), exiting", *n.State)
 		}
 		if n.NetMap != nil {
-			if cfg.ProxyTo != "" && len(n.NetMap.Addresses) > 0 && deephash.Update(&currentIPs, &n.NetMap.Addresses) {
-				if err := installIPTablesRule(ctx, cfg.ProxyTo, n.NetMap.Addresses); err != nil {
+			addrs := n.NetMap.SelfNode.Addresses().AsSlice()
+			if cfg.ProxyTo != "" && len(addrs) > 0 && deephash.Update(&currentIPs, &addrs) {
+				log.Printf("Installing proxy rules")
+				if err := installIPTablesRule(ctx, cfg.ProxyTo, addrs); err != nil {
 					log.Fatalf("installing proxy rules: %v", err)
 				}
 			}
