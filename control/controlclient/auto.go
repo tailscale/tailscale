@@ -666,8 +666,8 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		URL:            url,
 		Persist:        p,
 		NetMap:         nm,
-		State:          state,
 		Err:            err,
+		state:          state,
 	}
 	c.observer.SetControlClientStatus(new)
 
