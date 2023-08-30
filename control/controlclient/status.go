@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"tailscale.com/types/empty"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/structs"
@@ -62,12 +61,10 @@ func (s State) String() string {
 }
 
 type Status struct {
-	_              structs.Incomparable
-	LoginFinished  *empty.Message // nonempty when login finishes
-	LogoutFinished *empty.Message // nonempty when logout finishes
-	Err            error
-	URL            string             // interactive URL to visit to finish logging in
-	NetMap         *netmap.NetworkMap // server-pushed configuration
+	_      structs.Incomparable
+	Err    error
+	URL    string             // interactive URL to visit to finish logging in
+	NetMap *netmap.NetworkMap // server-pushed configuration
 
 	Persist *persist.PersistView // locally persisted configuration
 
@@ -78,8 +75,23 @@ type Status struct {
 	state State
 }
 
+// LoginFinished reports whether the controlclient is in its "StateAuthenticated"
+// state where it's in a happy register state but not yet in a map poll.
+//
+// TODO(bradfitz): delete this and everything around Status.state.
+func (s *Status) LoginFinished() bool { return s.state == StateAuthenticated }
+
+// LogoutFinished reports whether the controlclient is in its "StateNotAuthenticated"
+// state where we don't want to be logged in.
+//
+// TODO(bradfitz): delete this and everything around Status.state.
+func (s *Status) LogoutFinished() bool { return s.state == StateNotAuthenticated }
+
 // StateForTest returns the internal state of s for tests only.
 func (s *Status) StateForTest() State { return s.state }
+
+// SetStateForTest sets the internal state of s for tests only.
+func (s *Status) SetStateForTest(state State) { s.state = state }
 
 // Equal reports whether s and s2 are equal.
 func (s *Status) Equal(s2 *Status) bool {
@@ -87,13 +99,11 @@ func (s *Status) Equal(s2 *Status) bool {
 		return true
 	}
 	return s != nil && s2 != nil &&
-		(s.LoginFinished == nil) == (s2.LoginFinished == nil) &&
-		(s.LogoutFinished == nil) == (s2.LogoutFinished == nil) &&
 		s.Err == s2.Err &&
 		s.URL == s2.URL &&
+		s.state == s2.state &&
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
-		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
-		s.state == s2.state
+		reflect.DeepEqual(s.NetMap, s2.NetMap)
 }
 
 func (s Status) String() string {

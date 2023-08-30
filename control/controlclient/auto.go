@@ -17,7 +17,6 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
-	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -646,13 +645,6 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	c.logf("[v1] sendStatus: %s: %v", who, state)
 
 	var p *persist.PersistView
-	var loginFin, logoutFin *empty.Message
-	if state == StateAuthenticated {
-		loginFin = new(empty.Message)
-	}
-	if state == StateNotAuthenticated {
-		logoutFin = new(empty.Message)
-	}
 	if nm != nil && loggedIn && synced {
 		p = ptr.To(c.direct.GetPersist())
 	} else {
@@ -661,13 +653,11 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		nm = nil
 	}
 	new := Status{
-		LoginFinished:  loginFin,
-		LogoutFinished: logoutFin,
-		URL:            url,
-		Persist:        p,
-		NetMap:         nm,
-		Err:            err,
-		state:          state,
+		URL:     url,
+		Persist: p,
+		NetMap:  nm,
+		Err:     err,
+		state:   state,
 	}
 	c.observer.SetControlClientStatus(new)
 
