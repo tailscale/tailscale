@@ -57,14 +57,8 @@ func versionToTrack(v string) (string, error) {
 	return "unstable", nil
 }
 
-type updater struct {
-	UpdateArgs
-	track  string
-	update func() error
-}
-
-// UpdateArgs contains arguments needed to run an update.
-type UpdateArgs struct {
+// Arguments contains arguments needed to run an update.
+type Arguments struct {
 	// Version can be a specific version number or one of the predefined track
 	// constants:
 	//
@@ -76,7 +70,7 @@ type UpdateArgs struct {
 	// Leaving this empty is the same as using CurrentTrack.
 	Version string
 	// AppStore forces a local app store check, even if the current binary was
-	// not installed via an app store.
+	// not installed via an app store. TODO(cpalmer): Remove this.
 	AppStore bool
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
@@ -89,30 +83,31 @@ type UpdateArgs struct {
 	PkgsAddr string
 }
 
-func (args UpdateArgs) validate() error {
+func (args Arguments) validate() error {
 	if args.Confirm == nil {
-		return errors.New("missing Confirm callback in UpdateArgs")
+		return errors.New("missing Confirm callback in Arguments")
 	}
 	if args.Logf == nil {
-		return errors.New("missing Logf callback in UpdateArgs")
+		return errors.New("missing Logf callback in Arguments")
 	}
 	return nil
 }
 
-// Update runs a single update attempt using the platform-specific mechanism.
-//
-// On Windows, this copies the calling binary and re-executes it to apply the
-// update. The calling binary should handle an "update" subcommand and call
-// this function again for the re-executed binary to proceed.
-func Update(args UpdateArgs) error {
-	if err := args.validate(); err != nil {
-		return err
+type Updater struct {
+	Arguments
+	track string
+	// Update is a platform-specific method that updates the installation. May be
+	// nil (not all platforms support updates from within Tailscale).
+	Update func() error
+}
+
+func NewUpdater(args Arguments) (*Updater, error) {
+	up := Updater{
+		Arguments: args,
 	}
-	if args.PkgsAddr == "" {
-		args.PkgsAddr = "https://pkgs.tailscale.com"
-	}
-	up := &updater{
-		UpdateArgs: args,
+	up.Update = up.getUpdateFunction()
+	if up.Update == nil {
+		return nil, errors.ErrUnsupported
 	}
 	switch up.Version {
 	case StableTrack, UnstableTrack:
@@ -127,60 +122,82 @@ func Update(args UpdateArgs) error {
 		var err error
 		up.track, err = versionToTrack(args.Version)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
+	if args.PkgsAddr == "" {
+		args.PkgsAddr = "https://pkgs.tailscale.com"
+	}
+	return &up, nil
+}
+
+type updateFunction func() error
+
+func (up *Updater) getUpdateFunction() updateFunction {
 	switch runtime.GOOS {
 	case "windows":
-		up.update = up.updateWindows
+		return up.updateWindows
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
-			up.update = up.updateSynology
+			return up.updateSynology
 		case distro.Debian: // includes Ubuntu
-			up.update = up.updateDebLike
+			return up.updateDebLike
 		case distro.Arch:
-			up.update = up.updateArchLike
+			return up.updateArchLike
 		case distro.Alpine:
-			up.update = up.updateAlpineLike
+			return up.updateAlpineLike
 		}
 		switch {
 		case haveExecutable("pacman"):
-			up.update = up.updateArchLike
+			return up.updateArchLike
 		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
-			up.update = up.updateDebLike
+			return up.updateDebLike
 		case haveExecutable("dnf"):
-			up.update = up.updateFedoraLike("dnf")
+			return up.updateFedoraLike("dnf")
 		case haveExecutable("yum"):
-			up.update = up.updateFedoraLike("yum")
+			return up.updateFedoraLike("yum")
 		case haveExecutable("apk"):
-			up.update = up.updateAlpineLike
+			return up.updateAlpineLike
 		}
 		// If nothing matched, fall back to tarball updates.
-		if up.update == nil {
-			up.update = up.updateLinuxBinary
+		if up.Update == nil {
+			return up.updateLinuxBinary
 		}
 	case "darwin":
 		switch {
-		case !args.AppStore && !version.IsSandboxedMacOS():
-			return errors.ErrUnsupported
-		case !args.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
-			up.update = up.updateMacSys
+		case !up.Arguments.AppStore && !version.IsSandboxedMacOS():
+			return nil
+		case !up.Arguments.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
+			return up.updateMacSys
 		default:
-			up.update = up.updateMacAppStore
+			return up.updateMacAppStore
 		}
 	case "freebsd":
-		up.update = up.updateFreeBSD
+		return up.updateFreeBSD
 	}
-	if up.update == nil {
-		return errors.ErrUnsupported
-	}
-	return up.update()
+	return nil
 }
 
-func (up *updater) confirm(ver string) bool {
+// Update runs a single update attempt using the platform-specific mechanism.
+//
+// On Windows, this copies the calling binary and re-executes it to apply the
+// update. The calling binary should handle an "update" subcommand and call
+// this function again for the re-executed binary to proceed.
+func Update(args Arguments) error {
+	if err := args.validate(); err != nil {
+		return err
+	}
+	up, err := NewUpdater(args)
+	if err != nil {
+		return err
+	}
+	return up.Update()
+}
+
+func (up *Updater) confirm(ver string) bool {
 	if version.Short() == ver {
 		up.Logf("already running %v; no update needed", ver)
 		return false
@@ -193,7 +210,7 @@ func (up *updater) confirm(ver string) bool {
 
 const synoinfoConfPath = "/etc/synoinfo.conf"
 
-func (up *updater) updateSynology() error {
+func (up *Updater) updateSynology() error {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Synology is not supported")
 	}
@@ -303,7 +320,7 @@ func parseSynoinfo(path string) (string, error) {
 	return "", fmt.Errorf(`missing "unique=" field in %q`, path)
 }
 
-func (up *updater) updateDebLike() error {
+func (up *Updater) updateDebLike() error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
@@ -409,7 +426,7 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
-func (up *updater) updateArchLike() error {
+func (up *Updater) updateArchLike() error {
 	if err := exec.Command("pacman", "--query", "tailscale").Run(); err != nil && isExitError(err) {
 		// Tailscale was not installed via pacman, update via tarball download
 		// instead.
@@ -427,7 +444,7 @@ const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
 // updateFedoraLike updates tailscale on any distros in the Fedora family,
 // specifically anything that uses "dnf" or "yum" package managers. The actual
 // package manager is passed via packageManager.
-func (up *updater) updateFedoraLike(packageManager string) func() error {
+func (up *Updater) updateFedoraLike(packageManager string) func() error {
 	return func() (err error) {
 		if err := requireRoot(); err != nil {
 			return err
@@ -508,7 +525,7 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 	return true, os.WriteFile(repoFile, newContent.Bytes(), 0644)
 }
 
-func (up *updater) updateAlpineLike() (err error) {
+func (up *Updater) updateAlpineLike() (err error) {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Alpine-based distros is not supported")
 	}
@@ -570,11 +587,11 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 	return "", errors.New("tailscale version not found in output")
 }
 
-func (up *updater) updateMacSys() error {
+func (up *Updater) updateMacSys() error {
 	return errors.New("NOTREACHED: On MacSys builds, `tailscale update` is handled in Swift to launch the GUI updater")
 }
 
-func (up *updater) updateMacAppStore() error {
+func (up *Updater) updateMacAppStore() error {
 	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
@@ -635,7 +652,7 @@ var (
 	markTempFileFunc   func(string) error // or nil on non-Windows
 )
 
-func (up *updater) updateWindows() error {
+func (up *Updater) updateWindows() error {
 	if msi := os.Getenv(winMSIEnv); msi != "" {
 		up.Logf("installing %v ...", msi)
 		if err := up.installMSI(msi); err != nil {
@@ -705,7 +722,7 @@ func (up *updater) updateWindows() error {
 	panic("unreachable")
 }
 
-func (up *updater) installMSI(msi string) error {
+func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
 		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
@@ -772,7 +789,7 @@ func makeSelfCopy() (tmpPathExe string, err error) {
 	return f2.Name(), f2.Close()
 }
 
-func (up *updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
+func (up *Updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
 	c, err := distsign.NewClient(up.Logf, up.PkgsAddr)
 	if err != nil {
 		return err
@@ -780,7 +797,7 @@ func (up *updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
 	return c.Download(context.Background(), pathSrc, fileDst)
 }
 
-func (up *updater) updateFreeBSD() (err error) {
+func (up *Updater) updateFreeBSD() (err error) {
 	if up.Version != "" {
 		return errors.New("installing a specific version on FreeBSD is not supported")
 	}
@@ -821,7 +838,7 @@ func (up *updater) updateFreeBSD() (err error) {
 	return nil
 }
 
-func (up *updater) updateLinuxBinary() error {
+func (up *Updater) updateLinuxBinary() error {
 	return errors.New("Linux binary updates without a package manager are not supported yet")
 }
 
