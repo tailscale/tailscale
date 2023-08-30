@@ -312,7 +312,7 @@ func TestContainerBoot(t *testing.T) {
 			},
 		},
 		{
-			Name: "proxy",
+			Name: "ingres proxy",
 			Env: map[string]string{
 				"TS_AUTHKEY":   "tskey-key",
 				"TS_DEST_IP":   "1.2.3.4",
@@ -330,6 +330,30 @@ func TestContainerBoot(t *testing.T) {
 					WantCmds: []string{
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
 						"/usr/bin/iptables -t nat -I PREROUTING 1 -d 100.64.0.1 -j DNAT --to-destination 1.2.3.4",
+					},
+				},
+			},
+		},
+		{
+			Name: "egress proxy",
+			Env: map[string]string{
+				"TS_AUTHKEY":           "tskey-key",
+				"TS_TAILNET_TARGET_IP": "100.99.99.99",
+				"TS_USERSPACE":         "false",
+			},
+			Phases: []phase{
+				{
+					WantCmds: []string{
+						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
+					},
+				},
+				{
+					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+						"/usr/bin/iptables -t nat -I PREROUTING 1 ! -i tailscale0 -j DNAT --to-destination 100.99.99.99",
+						"/usr/bin/iptables -t nat -I POSTROUTING 1 --destination 100.99.99.99 -j SNAT --to-source 100.64.0.1",
 					},
 				},
 			},
