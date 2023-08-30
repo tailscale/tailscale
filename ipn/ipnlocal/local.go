@@ -969,7 +969,7 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 		b.blockEngineUpdates(false)
 	}
 
-	if st.LoginFinished != nil && wasBlocked {
+	if st.LoginFinished() && wasBlocked {
 		// Auth completed, unblock the engine
 		b.blockEngineUpdates(false)
 		b.authReconfig()
@@ -979,7 +979,7 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
 
-	if st.LogoutFinished != nil {
+	if st.LogoutFinished() {
 		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().UserProfile().LoginName() == "" {
 			b.mu.Unlock()
 			return
@@ -1017,7 +1017,7 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 		b.authURL = st.URL
 		b.authURLSticky = st.URL
 	}
-	if wasBlocked && st.LoginFinished != nil {
+	if wasBlocked && st.LoginFinished() {
 		// Interactive login finished successfully (URL visited).
 		// After an interactive login, the user always wants
 		// WantRunning.
