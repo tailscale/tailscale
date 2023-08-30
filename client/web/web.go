@@ -456,16 +456,10 @@ var localapiAllowlist = []string{
 // If the server is running in CGI mode, the key is cached to disk and reused between requests.
 // If an error occurs during key storage, the error is logged and the active process terminated.
 func (s *Server) csrfKey() []byte {
-	var csrfFile string
+	csrfFile := filepath.Join(os.TempDir(), "tailscale-web-csrf.key")
 
 	// if running in CGI mode, try to read from disk, but ignore errors
 	if s.cgiMode {
-		confdir, err := os.UserConfigDir()
-		if err != nil {
-			confdir = os.TempDir()
-		}
-
-		csrfFile = filepath.Join(confdir, "tailscale", "web-csrf.key")
 		key, _ := os.ReadFile(csrfFile)
 		if len(key) == 32 {
 			return key
@@ -480,9 +474,6 @@ func (s *Server) csrfKey() []byte {
 
 	// if running in CGI mode, try to write the newly created key to disk, and exit if it fails.
 	if s.cgiMode {
-		if err := os.Mkdir(filepath.Dir(csrfFile), 0700); err != nil && !os.IsExist(err) {
-			log.Fatalf("unable to store CSRF key: %v", err)
-		}
 		if err := os.WriteFile(csrfFile, key, 0600); err != nil {
 			log.Fatalf("unable to store CSRF key: %v", err)
 		}
