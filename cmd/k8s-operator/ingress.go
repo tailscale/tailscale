@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
@@ -21,6 +22,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/ipn"
 	"tailscale.com/types/opt"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 type IngressReconciler struct {
@@ -29,7 +32,19 @@ type IngressReconciler struct {
 	recorder record.EventRecorder
 	ssr      *tailscaleSTSReconciler
 	logger   *zap.SugaredLogger
+
+	mu sync.Mutex // protects following
+
+	// managedIngresses is a set of all ingress resources that we're currently
+	// managing. This is only used for metrics.
+	managedIngresses set.Slice[types.UID]
 }
+
+var (
+	// gaugeIngressResources tracks the number of ingress resources that we're
+	// currently managing.
+	gaugeIngressResources = clientmetric.NewGauge("k8s_ingress_resources")
+)
 
 func (a *IngressReconciler) Reconcile(ctx context.Context, req reconcile.Request) (_ reconcile.Result, err error) {
 	logger := a.logger.With("ingress-ns", req.Namespace, "ingress-name", req.Name)
@@ -57,6 +72,10 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	ix := slices.Index(ing.Finalizers, FinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.managedIngresses.Remove(ing.UID)
+		gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
 		return nil
 	}
 
@@ -77,6 +96,10 @@ func (a *IngressReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	// cleanup removes the tailscale finalizer, which will make all future
 	// reconciles exit early.
 	logger.Infof("unexposed ingress from tailnet")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.managedIngresses.Remove(ing.UID)
+	gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
 	return nil
 }
 
@@ -97,6 +120,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			return fmt.Errorf("failed to add finalizer: %w", err)
 		}
 	}
+	a.mu.Lock()
+	a.managedIngresses.Add(ing.UID)
+	gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
+	a.mu.Unlock()
 
 	// magic443 is a fake hostname that we can use to tell containerboot to swap
 	// out with the real hostname once it's known.

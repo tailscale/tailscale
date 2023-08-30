@@ -25,6 +25,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/set"
 )
 
@@ -41,6 +42,8 @@ func whoIsFromRequest(r *http.Request) *apitype.WhoIsResponse {
 func addWhoIsToRequest(r *http.Request, who *apitype.WhoIsResponse) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), whoIsKey{}, who))
 }
+
+var counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
 
 // launchAuthProxy launches the auth proxy, which is a small HTTP server that
 // authenticates requests using the Tailscale LocalAPI and then proxies them to
@@ -84,6 +87,7 @@ func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to authenticate caller", http.StatusInternalServerError)
 		return
 	}
+	counterNumRequestsProxied.Add(1)
 	h.rp.ServeHTTP(w, addWhoIsToRequest(r, who))
 }
 

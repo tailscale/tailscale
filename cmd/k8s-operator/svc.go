@@ -10,13 +10,17 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/set"
 )
 
 type ServiceReconciler struct {
@@ -24,7 +28,25 @@ type ServiceReconciler struct {
 	ssr                   *tailscaleSTSReconciler
 	logger                *zap.SugaredLogger
 	isDefaultLoadBalancer bool
+
+	mu sync.Mutex // protects following
+
+	// managedIngressProxies is a set of all ingress proxies that we're
+	// currently managing. This is only used for metrics.
+	managedIngressProxies set.Slice[types.UID]
+	// managedEgressProxies is a set of all egress proxies that we're currently
+	// managing. This is only used for metrics.
+	managedEgressProxies set.Slice[types.UID]
 }
+
+var (
+	// gaugeEgressProxies tracks the number of egress proxies that we're
+	// currently managing.
+	gaugeEgressProxies = clientmetric.NewGauge("k8s_egress_proxies")
+	// gaugeIngressProxies tracks the number of ingress proxies that we're
+	// currently managing.
+	gaugeIngressProxies = clientmetric.NewGauge("k8s_ingress_proxies")
+)
 
 func childResourceLabels(name, ns, typ string) map[string]string {
 	// You might wonder why we're using owner references, since they seem to be
@@ -71,6 +93,12 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	ix := slices.Index(svc.Finalizers, FinalizerName)
 	if ix < 0 {
 		logger.Debugf("no finalizer, nothing to do")
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.managedIngressProxies.Remove(svc.UID)
+		a.managedEgressProxies.Remove(svc.UID)
+		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 		return nil
 	}
 
@@ -91,6 +119,13 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	// cleanup removes the tailscale finalizer, which will make all future
 	// reconciles exit early.
 	logger.Infof("unexposed service from tailnet")
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.managedIngressProxies.Remove(svc.UID)
+	a.managedEgressProxies.Remove(svc.UID)
+	gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
+	gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 	return nil
 }
 
@@ -130,11 +165,17 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ChildResourceLabels: crl,
 	}
 
+	a.mu.Lock()
 	if a.shouldExpose(svc) {
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
+		a.managedIngressProxies.Add(svc.UID)
+		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
 	} else if a.hasTailnetTargetAnnotation(svc) {
 		sts.TailnetTargetIP = svc.Annotations[AnnotationTailnetTargetIP]
+		a.managedEgressProxies.Add(svc.UID)
+		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 	}
+	a.mu.Unlock()
 
 	var hsvc *corev1.Service
 	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
