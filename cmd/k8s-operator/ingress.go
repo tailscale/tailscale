@@ -190,7 +190,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ChildResourceLabels: crl,
 	}
 
-	if err := a.ssr.Provision(ctx, logger, sts); err != nil {
+	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 

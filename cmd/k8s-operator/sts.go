@@ -38,17 +38,19 @@ const (
 	FinalizerName = "tailscale.com/finalizer"
 
 	// Annotations settable by users on services.
-	AnnotationExpose   = "tailscale.com/expose"
-	AnnotationTags     = "tailscale.com/tags"
-	AnnotationHostname = "tailscale.com/hostname"
+	AnnotationExpose          = "tailscale.com/expose"
+	AnnotationTags            = "tailscale.com/tags"
+	AnnotationHostname        = "tailscale.com/hostname"
+	AnnotationTailnetTargetIP = "tailscale.com/ts-tailnet-target-ip"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
 
 	// Annotations set by the operator on pods to trigger restarts when the
 	// hostname or IP changes.
-	podAnnotationLastSetIP       = "tailscale.com/operator-last-set-ip"
-	podAnnotationLastSetHostname = "tailscale.com/operator-last-set-hostname"
+	podAnnotationLastSetClusterIP       = "tailscale.com/operator-last-set-cluster-ip"
+	podAnnotationLastSetHostname        = "tailscale.com/operator-last-set-hostname"
+	podAnnotationLastSetTailnetTargetIP = "tailscale.com/operator-last-set-ts-tailnet-target-ip"
 )
 
 type tailscaleSTSConfig struct {
@@ -57,7 +59,11 @@ type tailscaleSTSConfig struct {
 	ChildResourceLabels map[string]string
 
 	ServeConfig *ipn.ServeConfig
-	TargetIP    string
+	// Tailscale target in cluster we are setting up ingress for
+	ClusterTargetIP string
+
+	// Tailscale IP of a Tailscale service we are setting up egress for
+	TailnetTargetIP string
 
 	Hostname string
 	Tags     []string // if empty, use defaultTags
@@ -74,23 +80,23 @@ type tailscaleSTSReconciler struct {
 
 // Provision ensures that the StatefulSet for the given service is running and
 // up to date.
-func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) error {
+func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	// Do full reconcile.
 	hsvc, err := a.reconcileHeadlessService(ctx, logger, sts)
 	if err != nil {
-		return fmt.Errorf("failed to reconcile headless service: %w", err)
+		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
 
 	secretName, err := a.createOrGetSecret(ctx, logger, sts, hsvc)
 	if err != nil {
-		return fmt.Errorf("failed to create or get API key secret: %w", err)
+		return nil, fmt.Errorf("failed to create or get API key secret: %w", err)
 	}
 	_, err = a.reconcileSTS(ctx, logger, sts, hsvc, secretName)
 	if err != nil {
-		return fmt.Errorf("failed to reconcile statefulset: %w", err)
+		return nil, fmt.Errorf("failed to reconcile statefulset: %w", err)
 	}
 
-	return nil
+	return hsvc, nil
 }
 
 // Cleanup removes all resources associated that were created by Provision with
@@ -305,11 +311,17 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
 		})
-	if sts.TargetIP != "" {
+	if sts.ClusterTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEST_IP",
-			Value: sts.TargetIP,
+			Value: sts.ClusterTargetIP,
 		})
+	} else if sts.TailnetTargetIP != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_TAILNET_TARGET_IP",
+			Value: sts.TailnetTargetIP,
+		})
+
 	} else if sts.ServeConfig != nil {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_SERVE_CONFIG",
@@ -350,10 +362,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 	// container when the value changes. We do this by adding an annotation to
 	// the pod template that contains the last value we set.
 	ss.Spec.Template.Annotations = map[string]string{
-		"tailscale.com/operator-last-set-hostname": sts.Hostname,
+		podAnnotationLastSetHostname: sts.Hostname,
 	}
-	if sts.TargetIP != "" {
-		ss.Spec.Template.Annotations["tailscale.com/operator-last-set-ip"] = sts.TargetIP
+	if sts.ClusterTargetIP != "" {
+		ss.Spec.Template.Annotations[podAnnotationLastSetClusterIP] = sts.ClusterTargetIP
+	}
+	if sts.TailnetTargetIP != "" {
+		ss.Spec.Template.Annotations[podAnnotationLastSetTailnetTargetIP] = sts.TailnetTargetIP
 	}
 	ss.Spec.Template.Labels = map[string]string{
 		"app": sts.ParentResourceUID,
