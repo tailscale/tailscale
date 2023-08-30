@@ -14,10 +14,21 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+const (
+	reasonInvalidTailscaleService = "InvalidTailscaleService"
+	conditionTailscaleStatus      = "TailscaleStatus"
+)
+
+// Clock is defined as a package var so it can be stubbed out during tests.
+var Clock clock.Clock = clock.RealClock{}
 
 type ServiceReconciler struct {
 	client.Client
@@ -82,8 +93,14 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 	}
 
 	svc.Finalizers = append(svc.Finalizers[:ix], svc.Finalizers[ix+1:]...)
+
 	if err := a.Update(ctx, svc); err != nil {
 		return fmt.Errorf("failed to remove finalizer: %w", err)
+	}
+
+	removeTailscaleCondition(svc, logger)
+	if err := a.Status().Update(ctx, svc); err != nil {
+		return fmt.Errorf("failed to remove Tailscale condition: %w", err)
 	}
 
 	// Unlike most log entries in the reconcile loop, this will get printed
@@ -116,6 +133,28 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 			return fmt.Errorf("failed to add finalizer: %w", err)
 		}
 	}
+
+	isInvalid, msg := a.isInvalid(svc)
+	if isInvalid {
+		logger.Infof("Service is an invalid Tailscale proxy Service: %s", msg)
+
+		// TODO (irbekrm): Service status conditions update should be a deferred
+		// function -we want to ensure that status gets updated
+		// correctly in both success and failure cases
+		oldSvc := svc.DeepCopy()
+		setServiceCondition(svc, metav1.ConditionFalse, conditionTailscaleStatus, reasonInvalidTailscaleService, msg)
+
+		if !apiequality.Semantic.DeepEqual(oldSvc.Status, svc.Status) {
+			logger.Info("udpating Service status")
+			if err := a.Status().Update(ctx, svc); err != nil {
+				logger.Errorf("Failed to update Service status: %v", err)
+				return err
+			}
+		}
+		// we will reconcile the Service when the user fixes it
+		return nil
+	}
+
 	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
 	var tags []string
 	if tstr, ok := svc.Annotations[AnnotationTags]; ok {
@@ -190,7 +229,39 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	if err := a.Status().Update(ctx, svc); err != nil {
 		return fmt.Errorf("failed to update service status: %w", err)
 	}
+
 	return nil
+}
+
+// hasViolations reports whether the given Service represents an invalid
+// Tailscale egress/ingress service. Also returns a message describing the first
+// found violation.
+func (a *ServiceReconciler) isInvalid(svc *corev1.Service) (isInvalid bool, msg string) {
+	if !a.shouldExpose(svc) && !a.hasTailnetTargetAnnotation(svc) {
+		return false, ""
+	}
+	if a.hasTailnetTargetAnnotation(svc) && a.hasLoadBalancerClass(svc) {
+		return true, "Service has both tailscale.com/tailnet-target-ip annotation and tailscale load balancer class set."
+	}
+	if a.hasTailnetTargetAnnotation(svc) && a.hasExposeAnnotation(svc) {
+		return true, "Service has both tailscale.com/tailnet-target-ip and tailscale.com/expose annotation set."
+	}
+	if a.hasTailnetTargetAnnotation(svc) {
+		if svc.Spec.Type != corev1.ServiceTypeExternalName {
+			return true, fmt.Sprintf("Service has tailscale.com/tailnet-target-ip annotation, but service type is %s. Only Services of type External Name can be used.", svc.Spec.Type)
+		}
+		if a.hasTailnetTargetAnnotation(svc) && len(svc.Spec.Ports) > 0 {
+			return true, "Service has tailscale.com/tailnet-target-ip annotation, and has ports defined. Ports are not allowed."
+		}
+		if a.hasTailnetTargetAnnotation(svc) && len(svc.Spec.Ports) > 0 {
+			return true, "Service has tailscale.com/tailnet-target-ip annotation, and has ports defined. Ports are not allowed."
+		}
+		if a.hasLoadBalancerClass(svc) && svc.Spec.Selector != nil {
+			return true, "Service has tailscale.com/tailnet-target-ip annotation, and has ports defined. Selector is not allowed."
+		}
+
+	}
+	return false, ""
 }
 
 func (a *ServiceReconciler) shouldExpose(svc *corev1.Service) bool {
@@ -220,4 +291,41 @@ func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
 // tailscale.com/ts-tailnet-target-ip annotation set
 func (a *ServiceReconciler) hasTailnetTargetAnnotation(svc *corev1.Service) bool {
 	return svc != nil && svc.Annotations[AnnotationTailnetTargetIP] != ""
+}
+
+// conditon-related logic inspired by
+// https://github.com/cert-manager/cert-manager/blob/v1.12.3/pkg/api/util/conditions.go
+func setServiceCondition(svc *corev1.Service, status metav1.ConditionStatus, typ, reason, msg string) {
+	newCond := metav1.Condition{
+		Type:    typ,
+		Status:  status,
+		Reason:  reason,
+		Message: msg,
+	}
+	nowTime := metav1.NewTime(Clock.Now())
+	newCond.LastTransitionTime = nowTime
+
+	for idx, cond := range svc.Status.Conditions {
+		if cond.Type != typ {
+			continue
+		}
+		if cond.Status == status {
+			newCond.LastTransitionTime = cond.LastTransitionTime
+		}
+		svc.Status.Conditions[idx] = newCond
+		return
+	}
+	svc.Status.Conditions = append(svc.Status.Conditions, newCond)
+}
+
+func removeTailscaleCondition(svc *corev1.Service, logger *zap.SugaredLogger) {
+	newConds := make([]metav1.Condition, 0)
+	for _, cond := range svc.Status.Conditions {
+		if cond.Type == conditionTailscaleStatus {
+			logger.Info("removing %s condition from Service", conditionTailscaleStatus)
+			continue
+		}
+		newConds = append(newConds, cond)
+	}
+	svc.Status.Conditions = newConds
 }
