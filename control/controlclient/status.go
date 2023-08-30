@@ -69,13 +69,17 @@ type Status struct {
 	URL            string             // interactive URL to visit to finish logging in
 	NetMap         *netmap.NetworkMap // server-pushed configuration
 
-	// The internal state should not be exposed outside this
-	// package, but we have some automated tests elsewhere that need to
-	// use them. Please don't use these fields.
-	// TODO(apenwarr): Unexport or remove these.
-	State   State
 	Persist *persist.PersistView // locally persisted configuration
+
+	// state is the internal state. It should not be exposed outside this
+	// package, but we have some automated tests elsewhere that need to
+	// use it via the StateForTest accessor.
+	// TODO(apenwarr): Unexport or remove these.
+	state State
 }
+
+// StateForTest returns the internal state of s for tests only.
+func (s *Status) StateForTest() State { return s.state }
 
 // Equal reports whether s and s2 are equal.
 func (s *Status) Equal(s2 *Status) bool {
@@ -89,7 +93,7 @@ func (s *Status) Equal(s2 *Status) bool {
 		s.URL == s2.URL &&
 		reflect.DeepEqual(s.Persist, s2.Persist) &&
 		reflect.DeepEqual(s.NetMap, s2.NetMap) &&
-		s.State == s2.State
+		s.state == s2.state
 }
 
 func (s Status) String() string {
@@ -97,5 +101,5 @@ func (s Status) String() string {
 	if err != nil {
 		panic(err)
 	}
-	return s.State.String() + " " + string(b)
+	return s.state.String() + " " + string(b)
 }
