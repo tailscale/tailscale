@@ -16,13 +16,13 @@ import (
 	"strconv"
 	"time"
 
+	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/version"
-	"tailscale.com/version/distro"
 )
 
 var c2nLogHeap func(http.ResponseWriter, *http.Request) // non-nil on most platforms (c2n_pprof.go)
@@ -115,15 +115,22 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	// TODO(bradfitz): add some sort of semaphore that prevents two concurrent
 	// updates, or if one happened in the past 5 minutes, or something.
 
-	var res tailcfg.C2NUpdateResponse
-	res.Enabled = envknob.AllowsRemoteUpdate()
-	res.Supported = runtime.GOOS == "windows" || (runtime.GOOS == "linux" && distro.Get() == distro.Debian)
-
-	switch r.Method {
-	case "GET", "POST":
-	default:
+	// GET returns the current status, and POST actually begins an update.
+	if r.Method != "GET" && r.Method != "POST" {
 		http.Error(w, "bad method", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// If NewUpdater does not return an error, we can update the installation.
+	// Exception: When version.IsMacSysExt returns true, we don't support that
+	// yet. TODO(cpalmer, #6995): Implement it.
+	//
+	// Note that we create the Updater solely to check for errors; we do not
+	// invoke it here. For this purpose, it is ok to pass it a zero Arguments.
+	_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+	res := tailcfg.C2NUpdateResponse{
+		Enabled:   envknob.AllowsRemoteUpdate(),
+		Supported: err == nil && !version.IsMacSysExt(),
 	}
 
 	defer func() {
@@ -134,16 +141,15 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		return
 	}
-
 	if !res.Enabled {
 		res.Err = "not enabled"
 		return
 	}
-
 	if !res.Supported {
 		res.Err = "not supported"
 		return
 	}
+
 	cmdTS, err := findCmdTailscale()
 	if err != nil {
 		res.Err = fmt.Sprintf("failed to find cmd/tailscale binary: %v", err)
