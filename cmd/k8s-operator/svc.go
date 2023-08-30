@@ -125,11 +125,15 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	sts := &tailscaleSTSConfig{
 		ParentResourceName:  svc.Name,
 		ParentResourceUID:   string(svc.UID),
-		ClusterTargetIP:     svc.Spec.ClusterIP,
 		Hostname:            hostname,
 		Tags:                tags,
 		ChildResourceLabels: crl,
-		TailnetTargetIP:     svc.Annotations[AnnotationTailnetTargetIP],
+	}
+
+	if a.shouldExpose(svc) {
+		sts.ClusterTargetIP = svc.Spec.ClusterIP
+	} else if a.hasTailnetTargetAnnotation(svc) {
+		sts.TailnetTargetIP = svc.Annotations[AnnotationTailnetTargetIP]
 	}
 
 	var hsvc *corev1.Service
