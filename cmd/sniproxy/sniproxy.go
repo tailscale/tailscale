@@ -74,7 +74,7 @@ func main() {
 		forwards     = fs.String("forwards", "", "comma-separated list of ports to transparently forward, protocol/number/destination. For example, --forwards=tcp/22/github.com,tcp/5432/sql.example.com")
 		wgPort       = fs.Int("wg-listen-port", 0, "UDP port to listen on for WireGuard and peer-to-peer traffic; 0 means automatically select")
 		promoteHTTPS = fs.Bool("promote-https", true, "promote HTTP to HTTPS")
-		debugPort    = fs.Int("debug-port", 8080, "Listening port for debug/metrics endpoint")
+		debugPort    = fs.Int("debug-port", 8893, "Listening port for debug/metrics endpoint")
 	)
 
 	err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("TS_APPC"))
