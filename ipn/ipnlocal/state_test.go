@@ -162,11 +162,10 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 		cc.mu.Unlock()
 	}
 	if cc.opts.Observer != nil {
-		pv := cc.persist.View()
 		s := controlclient.Status{
 			URL:     url,
 			NetMap:  nm,
-			Persist: &pv,
+			Persist: cc.persist.View(),
 			Err:     err,
 		}
 		if loginFinished {
