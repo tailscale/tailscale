@@ -19,7 +19,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
-	"tailscale.com/types/empty"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -171,9 +170,9 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 			Err:     err,
 		}
 		if loginFinished {
-			s.LoginFinished = &empty.Message{}
+			s.SetStateForTest(controlclient.StateAuthenticated)
 		} else if url == "" && err == nil && nm == nil {
-			s.LogoutFinished = &empty.Message{}
+			s.SetStateForTest(controlclient.StateNotAuthenticated)
 		}
 		cc.opts.Observer.SetControlClientStatus(s)
 	}
