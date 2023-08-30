@@ -4,9 +4,14 @@
 package clientupdate
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -500,5 +505,259 @@ unique="synology_88f6281_213air"
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUnpackLinuxTarball(t *testing.T) {
+	oldBinaryPaths := binaryPaths
+	t.Cleanup(func() { binaryPaths = oldBinaryPaths })
+
+	tests := []struct {
+		desc    string
+		tarball map[string]string
+		before  map[string]string
+		after   map[string]string
+		wantErr bool
+	}{
+		{
+			desc: "success",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale":  "v2",
+				"/usr/bin/tailscaled": "v2",
+			},
+			after: map[string]string{
+				"tailscale":  "v2",
+				"tailscaled": "v2",
+			},
+		},
+		{
+			desc: "don't touch unrelated files",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+				"foo":        "bar",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale":  "v2",
+				"/usr/bin/tailscaled": "v2",
+			},
+			after: map[string]string{
+				"tailscale":  "v2",
+				"tailscaled": "v2",
+				"foo":        "bar",
+			},
+		},
+		{
+			desc: "unmodified",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale":  "v1",
+				"/usr/bin/tailscaled": "v1",
+			},
+			after: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+		},
+		{
+			desc: "ignore extra tarball files",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale":          "v2",
+				"/usr/bin/tailscaled":         "v2",
+				"/systemd/tailscaled.service": "v2",
+			},
+			after: map[string]string{
+				"tailscale":  "v2",
+				"tailscaled": "v2",
+			},
+		},
+		{
+			desc: "tarball missing tailscaled",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale": "v2",
+			},
+			after: map[string]string{
+				"tailscale":     "v1",
+				"tailscale.new": "v2",
+				"tailscaled":    "v1",
+			},
+			wantErr: true,
+		},
+		{
+			desc: "duplicate tailscale binary",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{
+				"/usr/bin/tailscale":  "v2",
+				"/usr/sbin/tailscale": "v2",
+				"/usr/bin/tailscaled": "v2",
+			},
+			after: map[string]string{
+				"tailscale":      "v1",
+				"tailscale.new":  "v2",
+				"tailscaled":     "v1",
+				"tailscaled.new": "v2",
+			},
+			wantErr: true,
+		},
+		{
+			desc: "empty archive",
+			before: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			tarball: map[string]string{},
+			after: map[string]string{
+				"tailscale":  "v1",
+				"tailscaled": "v1",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			// Swap out binaryPaths function to point at dummy file paths.
+			tmp := t.TempDir()
+			tailscalePath := filepath.Join(tmp, "tailscale")
+			tailscaledPath := filepath.Join(tmp, "tailscaled")
+			binaryPaths = func() (string, string, error) {
+				return tailscalePath, tailscaledPath, nil
+			}
+			for name, content := range tt.before {
+				if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tarPath := filepath.Join(tmp, "tailscale.tgz")
+			genTarball(t, tarPath, tt.tarball)
+
+			up := &Updater{Arguments: Arguments{Logf: t.Logf}}
+			err := up.unpackLinuxTarball(tarPath)
+			if err != nil {
+				if !tt.wantErr {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else if tt.wantErr {
+				t.Fatalf("unpack succeeded, expected an error")
+			}
+
+			gotAfter := make(map[string]string)
+			err = filepath.WalkDir(tmp, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.Type().IsDir() {
+					return nil
+				}
+				if path == tarPath {
+					return nil
+				}
+				content, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				path = filepath.ToSlash(path)
+				base := filepath.ToSlash(tmp)
+				gotAfter[strings.TrimPrefix(path, base+"/")] = string(content)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !maps.Equal(gotAfter, tt.after) {
+				t.Errorf("files after unpack: %+v, want %+v", gotAfter, tt.after)
+			}
+		})
+	}
+}
+
+func genTarball(t *testing.T, path string, files map[string]string) {
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gw := gzip.NewWriter(f)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+	for file, content := range files {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: file,
+			Size: int64(len(content)),
+			Mode: 0755,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWriteFileOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test")
+	for i := 0; i < 2; i++ {
+		content := fmt.Sprintf("content %d", i)
+		if err := writeFile(strings.NewReader(content), path, 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != content {
+			t.Errorf("got content: %q, want: %q", got, content)
+		}
+	}
+}
+
+func TestWriteFileSymlink(t *testing.T) {
+	// Test for a malicious symlink at the destination path.
+	// f2 points to f1 and writeFile(f2) should not end up overwriting f1.
+	tmp := t.TempDir()
+	f1 := filepath.Join(tmp, "f1")
+	if err := os.WriteFile(f1, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f2 := filepath.Join(tmp, "f2")
+	if err := os.Symlink(f1, f2); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeFile(strings.NewReader("new"), f2, 0600); err != nil {
+		t.Errorf("writeFile(%q) failed: %v", f2, err)
+	}
+	want := map[string]string{
+		f1: "old",
+		f2: "new",
+	}
+	for f, content := range want {
+		got, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != content {
+			t.Errorf("%q: got content %q, want %q", f, got, content)
+		}
 	}
 }
