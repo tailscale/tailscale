@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.36.3
 	github.com/coreos/go-iptables v0.6.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/coreos/go-systemd/v22 v22.4.0
 	github.com/creack/pty v1.1.18
 	github.com/dave/jennifer v1.6.1
 	github.com/dblohm7/wingoes v0.0.0-20230821191801-fc76608aecf0
@@ -26,7 +27,7 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20230321051131-ccbac49a6929
 	github.com/go-logr/zapr v1.2.4
 	github.com/go-ole/go-ole v1.2.6
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golangci/golangci-lint v1.52.2
 	github.com/google/go-cmp v0.5.9
