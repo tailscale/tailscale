@@ -20,6 +20,9 @@ type Slice[T comparable] struct {
 // The returned value is only valid until ss is modified again.
 func (ss *Slice[T]) Slice() views.Slice[T] { return views.SliceOf(ss.slice) }
 
+// Len returns the number of elements in the set.
+func (ss *Slice[T]) Len() int { return len(ss.slice) }
+
 // Contains reports whether v is in the set.
 // The amortized cost is O(1).
 func (ss *Slice[T]) Contains(v T) bool {
