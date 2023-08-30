@@ -34,6 +34,18 @@ type C2NSSHUsernamesResponse struct {
 	Usernames []string
 }
 
+// C2NUpdateRequest is the request (from control to node) to the c2n /update
+// handler. It tells the node what the latest version is. The node may choose
+// to ignore this update, notify the user, or apply it automatically (for POST
+// requests only) based on configuration.
+type C2NUpdateRequest struct {
+	// LatestVersion is the latest released version in the "x.y.z" format.
+	//
+	// The node should not blindly trust this version and perform validation
+	// against downgrades and malformed version strings.
+	LatestVersion string
+}
+
 // C2NUpdateResponse is the response (from node to control) from the /update
 // handler. It tells control the status of its request for the node to update
 // its Tailscale installation.

@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"tailscale.com/clientupdate"
@@ -21,6 +23,7 @@ import (
 	"tailscale.com/net/sockstats"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/cmpver"
 	"tailscale.com/util/goroutines"
 	"tailscale.com/version"
 )
@@ -121,6 +124,15 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req tailcfg.C2NUpdateRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			b.logf("c2n: bad /update request body: %v", err)
+			http.Error(w, "failed to parse request body", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// If NewUpdater does not return an error, we can update the installation.
 	// Exception: When version.IsMacSysExt returns true, we don't support that
 	// yet. TODO(cpalmer, #6995): Implement it.
@@ -139,8 +151,16 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if r.Method == "GET" {
+		if req.LatestVersion != "" {
+			if err := validateUpdateVersion(req.LatestVersion, false); err != nil {
+				res.Err = fmt.Sprintf("LatestVersion is invalid: %v", err)
+				return
+			}
+			// TODO(awly): store req.LatestVersion somewhere to surface in UI.
+		}
 		return
 	}
+
 	if !res.Enabled {
 		res.Err = "not enabled"
 		return
@@ -171,7 +191,17 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 		res.Err = "cmd/tailscale version mismatch"
 		return
 	}
-	cmd := exec.Command(cmdTS, "update", "--yes")
+	var cmd *exec.Cmd
+	if req.LatestVersion != "" {
+		if err := validateUpdateVersion(req.LatestVersion, true); err != nil {
+			res.Err = err.Error()
+			return
+		}
+		b.logf("c2n: update to version %q requested", req.LatestVersion)
+		cmd = exec.Command(cmdTS, "update", "--yes", "--version", req.LatestVersion)
+	} else {
+		cmd = exec.Command(cmdTS, "update", "--yes")
+	}
 	if err := cmd.Start(); err != nil {
 		res.Err = fmt.Sprintf("failed to start cmd/tailscale update: %v", err)
 		return
@@ -187,6 +217,18 @@ func (b *LocalBackend) handleC2NUpdate(w http.ResponseWriter, r *http.Request) {
 	// This seems fairly unlikely, but worth checking.
 	defer cmd.Wait()
 	return
+}
+
+var versionRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\d+\.\d+\.\d+$`) })
+
+func validateUpdateVersion(ver string, expectNewer bool) error {
+	if !versionRe().MatchString(ver) {
+		return fmt.Errorf("requested update version %q is malformed", ver)
+	}
+	if expectNewer && cmpver.Compare(ver, version.Short()) <= 0 {
+		return fmt.Errorf("requested update version %q is older or the same as current version %q", ver, version.Short())
+	}
+	return nil
 }
 
 // findCmdTailscale looks for the cmd/tailscale that corresponds to the
