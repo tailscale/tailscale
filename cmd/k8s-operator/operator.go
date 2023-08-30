@@ -73,7 +73,7 @@ func main() {
 	if shouldRunAuthProxy {
 		launchAuthProxy(zlog, restConfig, s)
 	}
-	startReconcilers(zlog, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	startReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -182,7 +182,7 @@ waitOnline:
 
 // startReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler.
-func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+func startReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -225,6 +225,7 @@ func startReconcilers(zlog *zap.SugaredLogger, tsNamespace string, restConfig *r
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
+		tsnetServer:            s,
 		tsClient:               tsClient,
 		defaultTags:            strings.Split(tags, ","),
 		operatorNamespace:      tsNamespace,
