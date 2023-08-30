@@ -61,12 +61,24 @@ func (s State) String() string {
 }
 
 type Status struct {
-	_      structs.Incomparable
-	Err    error
-	URL    string             // interactive URL to visit to finish logging in
-	NetMap *netmap.NetworkMap // server-pushed configuration
+	_ structs.Incomparable
 
-	Persist *persist.PersistView // locally persisted configuration
+	// Err, if non-nil, is an error that occurred while logging in.
+	//
+	// If it's of type UserVisibleError then it's meant to be shown to users in
+	// their Tailscale client. Otherwise it's just logged to tailscaled's logs.
+	Err error
+
+	// URL, if non-empty, is the interactive URL to visit to finish logging in.
+	URL string
+
+	// NetMap is the latest server-pushed state of the tailnet network.
+	NetMap *netmap.NetworkMap
+
+	// Persist, when Valid, is the locally persisted configuration.
+	//
+	// TODO(bradfitz,maisem): clarify this.
+	Persist persist.PersistView
 
 	// state is the internal state. It should not be exposed outside this
 	// package, but we have some automated tests elsewhere that need to

@@ -893,7 +893,6 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 	// The following do not depend on any data for which we need to lock b.
 	if st.Err != nil {
-		// TODO(crawshaw): display in the UI.
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 			return
@@ -1007,8 +1006,8 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 		prefs.ControlURL = prefs.ControlURLOrDefault()
 		prefsChanged = true
 	}
-	if st.Persist != nil && st.Persist.Valid() {
-		if !prefs.Persist.View().Equals(*st.Persist) {
+	if st.Persist.Valid() {
+		if !prefs.Persist.View().Equals(st.Persist) {
 			prefsChanged = true
 			prefs.Persist = st.Persist.AsStruct()
 		}
