@@ -87,6 +87,62 @@ func TestCompare(t *testing.T) {
 			v2:   "0.96-105",
 			want: 1,
 		},
+
+		// A few specific OS version tests below.
+		{
+			name: "windows version",
+			v1:   "10.0.19045.3324",
+			v2:   "10.0.18362",
+			want: 1,
+		},
+		{
+			name: "windows 11 is everything above 10.0.22000",
+			v1:   "10.0.22631.2262",
+			v2:   "10.0.22000",
+			want: 1,
+		},
+		{
+			name: "android short version",
+			v1:   "10",
+			v2:   "7",
+			want: 1,
+		},
+		{
+			name: "android longer version",
+			v1:   "7.1.2",
+			v2:   "7",
+			want: 1,
+		},
+		{
+			name: "iOS version",
+			v1:   "15.6.1",
+			v2:   "15.6",
+			want: 1,
+		},
+		{
+			name: "Linux short kernel version",
+			v1:   "4.4.302+",
+			v2:   "4.0",
+			want: 1,
+		},
+		{
+			name: "Linux long kernel version",
+			v1:   "4.14.255-311-248.529.amzn2.x86_64",
+			v2:   "4.0",
+			want: 1,
+		},
+		{
+			name: "FreeBSD version",
+			v1:   "14.0-CURRENT",
+			v2:   "14",
+			want: 1,
+		},
+		{
+			name: "Synology version",
+			v1:   "Synology 6.2.4; kernel=3.10.105",
+			v2:   "Synology 6",
+			want: 1,
+		},
 	}
 
 	for _, test := range tests {
@@ -99,6 +155,10 @@ func TestCompare(t *testing.T) {
 			got2 := Compare(test.v2, test.v1)
 			if got2 != -test.want {
 				t.Errorf("Compare(%v, %v) = %v, want %v", test.v2, test.v1, got2, -test.want)
+			}
+			// Check that version comparison does not allocate.
+			if n := testing.AllocsPerRun(100, func() { Compare(test.v1, test.v2) }); n > 0 {
+				t.Errorf("Compare(%v, %v) got %v allocs per run", test.v1, test.v2, n)
 			}
 		})
 	}
