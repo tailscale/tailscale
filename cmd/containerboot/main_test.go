@@ -134,11 +134,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -152,11 +155,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -170,11 +176,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -188,11 +197,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -206,7 +218,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key --advertise-routes=1.2.3.0/24,10.20.30.0/24",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
@@ -214,6 +226,9 @@ func TestContainerBoot(t *testing.T) {
 					WantFiles: map[string]string{
 						"proc/sys/net/ipv4/ip_forward":          "0",
 						"proc/sys/net/ipv6/conf/all/forwarding": "0",
+					},
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-routes=1.2.3.0/24,10.20.30.0/24",
 					},
 				},
 			},
@@ -229,7 +244,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key --advertise-routes=1.2.3.0/24,10.20.30.0/24",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
@@ -237,6 +252,9 @@ func TestContainerBoot(t *testing.T) {
 					WantFiles: map[string]string{
 						"proc/sys/net/ipv4/ip_forward":          "1",
 						"proc/sys/net/ipv6/conf/all/forwarding": "0",
+					},
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-routes=1.2.3.0/24,10.20.30.0/24",
 					},
 				},
 			},
@@ -252,7 +270,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key --advertise-routes=::/64,1::/64",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
@@ -260,6 +278,9 @@ func TestContainerBoot(t *testing.T) {
 					WantFiles: map[string]string{
 						"proc/sys/net/ipv4/ip_forward":          "0",
 						"proc/sys/net/ipv6/conf/all/forwarding": "1",
+					},
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-routes=::/64,1::/64",
 					},
 				},
 			},
@@ -275,7 +296,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key --advertise-routes=::/64,1.2.3.0/24",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
@@ -283,6 +304,9 @@ func TestContainerBoot(t *testing.T) {
 					WantFiles: map[string]string{
 						"proc/sys/net/ipv4/ip_forward":          "1",
 						"proc/sys/net/ipv6/conf/all/forwarding": "1",
+					},
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-routes=::/64,1.2.3.0/24",
 					},
 				},
 			},
@@ -298,12 +322,13 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
 					Notify: runningNotify,
 					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
 						"/usr/bin/iptables -t nat -I PREROUTING 1 -d 100.64.0.1 -j DNAT --to-destination 1.2.3.4",
 					},
 				},
@@ -326,11 +351,14 @@ func TestContainerBoot(t *testing.T) {
 						State: ptr.To(ipn.NeedsLogin),
 					},
 					WantCmds: []string{
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -347,7 +375,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 					WantKubeSecret: map[string]string{
 						"authkey": "tskey-key",
@@ -355,6 +383,9 @@ func TestContainerBoot(t *testing.T) {
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 					WantKubeSecret: map[string]string{
 						"authkey":     "tskey-key",
 						"device_fqdn": "test-node.test.ts.net",
@@ -379,12 +410,15 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 					WantKubeSecret: map[string]string{},
 				},
 				{
-					Notify:         runningNotify,
+					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 					WantKubeSecret: map[string]string{},
 				},
 			},
@@ -402,12 +436,15 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 					WantKubeSecret: map[string]string{},
 				},
 				{
-					Notify:         runningNotify,
+					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 					WantKubeSecret: map[string]string{},
 				},
 			},
@@ -437,7 +474,7 @@ func TestContainerBoot(t *testing.T) {
 						State: ptr.To(ipn.NeedsLogin),
 					},
 					WantCmds: []string{
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 					WantKubeSecret: map[string]string{
 						"authkey": "tskey-key",
@@ -445,6 +482,9 @@ func TestContainerBoot(t *testing.T) {
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 					WantKubeSecret: map[string]string{
 						"device_fqdn": "test-node.test.ts.net",
 						"device_id":   "myID",
@@ -466,7 +506,7 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=kube:tailscale --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --authkey=tskey-key",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
 					},
 					WantKubeSecret: map[string]string{
 						"authkey": "tskey-key",
@@ -474,6 +514,9 @@ func TestContainerBoot(t *testing.T) {
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 					WantKubeSecret: map[string]string{
 						"authkey":     "tskey-key",
 						"device_fqdn": "test-node.test.ts.net",
@@ -511,11 +554,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --socks5-server=localhost:1080 --outbound-http-proxy-listen=localhost:8080",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -528,11 +574,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=true",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login",
 					},
 				},
 				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=true",
+					},
 				},
 			},
 		},
@@ -546,10 +595,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking --experiments=widgets",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --widget=rotated",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --widget=rotated",
 					},
-				}, {
+				},
+				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
+					},
 				},
 			},
 		},
@@ -562,10 +615,14 @@ func TestContainerBoot(t *testing.T) {
 				{
 					WantCmds: []string{
 						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp --tun=userspace-networking",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock up --accept-dns=false --hostname=my-server",
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login",
 					},
-				}, {
+				},
+				{
 					Notify: runningNotify,
+					WantCmds: []string{
+						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --hostname=my-server",
+					},
 				},
 			},
 		},
@@ -606,7 +663,7 @@ func TestContainerBoot(t *testing.T) {
 				t.Fatalf("starting containerboot: %v", err)
 			}
 			defer func() {
-				cmd.Process.Signal(unix.SIGTERM)
+				cmd.Process.Signal(unix.SIGKILL)
 				cmd.Process.Wait()
 			}()
 
@@ -794,10 +851,17 @@ func (l *localAPI) Notify(n *ipn.Notify) {
 }
 
 func (l *localAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		panic(fmt.Sprintf("unsupported method %q", r.Method))
-	}
-	if r.URL.Path != "/localapi/v0/watch-ipn-bus" {
+	switch r.URL.Path {
+	case "/localapi/v0/serve-config":
+		if r.Method != "POST" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+		return
+	case "/localapi/v0/watch-ipn-bus":
+		if r.Method != "GET" {
+			panic(fmt.Sprintf("unsupported method %q", r.Method))
+		}
+	default:
 		panic(fmt.Sprintf("unsupported path %q", r.URL.Path))
 	}
 
