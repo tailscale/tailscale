@@ -76,14 +76,16 @@ func TestQnapAuthnURL(t *testing.T) {
 //  2. localapi proxy allowlist
 func TestServeAPI(t *testing.T) {
 	lal := memnet.Listen("local-tailscaled.sock:80")
-	defer lal.Close()
 
 	// Serve dummy localapi. Just returns "success".
 	go func() {
 		localapi := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "success")
 		})}
+
 		defer localapi.Close()
+		defer lal.Close()
+
 		if err := localapi.Serve(lal); err != nil {
 			t.Error(err)
 		}
