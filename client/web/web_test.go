@@ -77,17 +77,13 @@ func TestQnapAuthnURL(t *testing.T) {
 func TestServeAPI(t *testing.T) {
 	lal := memnet.Listen("local-tailscaled.sock:80")
 	defer lal.Close()
-
 	// Serve dummy localapi. Just returns "success".
-	go func() {
-		localapi := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "success")
-		})}
-		defer localapi.Close()
-		if err := localapi.Serve(lal); err != nil {
-			t.Error(err)
-		}
-	}()
+	localapi := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "success")
+	})}
+	defer localapi.Close()
+
+	go localapi.Serve(lal)
 	s := &Server{lc: &tailscale.LocalClient{Dial: lal.Dial}}
 
 	tests := []struct {
