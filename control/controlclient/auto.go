@@ -702,6 +702,7 @@ func (c *Auto) Logout(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	c.cancelAuth()
+	c.cancelMap()
 
 	timer, timerChannel := c.clock.NewTimer(10 * time.Second)
 	defer timer.Stop()
