@@ -125,6 +125,10 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	gaugeIngressResources.Set(int64(a.managedIngresses.Len()))
 	a.mu.Unlock()
 
+	if !a.ssr.IsHTTPSEnabledOnTailnet() {
+		a.recorder.Event(ing, corev1.EventTypeWarning, "HTTPSNotEnabled", "HTTPS is not enabled on the tailnet; ingress may not work")
+	}
+
 	// magic443 is a fake hostname that we can use to tell containerboot to swap
 	// out with the real hostname once it's known.
 	const magic443 = "${TS_CERT_DOMAIN}:443"

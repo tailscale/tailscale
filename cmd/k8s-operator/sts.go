@@ -24,6 +24,7 @@ import (
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsnet"
 	"tailscale.com/types/opt"
 	"tailscale.com/util/dnsname"
 	"tailscale.com/util/mak"
@@ -71,11 +72,17 @@ type tailscaleSTSConfig struct {
 
 type tailscaleSTSReconciler struct {
 	client.Client
+	tsnetServer            *tsnet.Server
 	tsClient               tsClient
 	defaultTags            []string
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+}
+
+// IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
+func (a *tailscaleSTSReconciler) IsHTTPSEnabledOnTailnet() bool {
+	return len(a.tsnetServer.CertDomains()) > 0
 }
 
 // Provision ensures that the StatefulSet for the given service is running and
