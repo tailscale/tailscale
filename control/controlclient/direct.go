@@ -22,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -736,18 +737,6 @@ func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 	return newSig.Serialize(), nil
 }
 
-func sameEndpoints(a, b []tailcfg.Endpoint) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // newEndpoints acquires c.mu and sets the local port and endpoints and reports
 // whether they've changed.
 //
@@ -757,15 +746,11 @@ func (c *Direct) newEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	defer c.mu.Unlock()
 
 	// Nothing new?
-	if sameEndpoints(c.endpoints, endpoints) {
+	if slices.Equal(c.endpoints, endpoints) {
 		return false // unchanged
 	}
-	var epStrs []string
-	for _, ep := range endpoints {
-		epStrs = append(epStrs, ep.Addr.String())
-	}
-	c.logf("[v2] client.newEndpoints(%v)", epStrs)
-	c.endpoints = append(c.endpoints[:0], endpoints...)
+	c.logf("[v2] client.newEndpoints(%v)", endpoints)
+	c.endpoints = slices.Clone(endpoints)
 	return true // changed
 }
 
