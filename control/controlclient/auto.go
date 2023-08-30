@@ -489,7 +489,6 @@ type mapRoutineState struct {
 
 func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c := mrs.c
-	health.SetInPollNetMap(true)
 
 	c.mu.Lock()
 	ctx := c.mapCtx
@@ -561,11 +560,11 @@ func (c *Auto) mapRoutine() {
 				c.logf("[v1] mapRoutine: new map needed while idle.")
 			}
 		} else {
-			health.SetInPollNetMap(false)
+			health.SetOutOfPollNetMap()
 
 			err := c.direct.PollNetMap(ctx, mrs)
 
-			health.SetInPollNetMap(false)
+			health.SetOutOfPollNetMap()
 			c.mu.Lock()
 			c.synced = false
 			if c.state == StateSynchronized {
