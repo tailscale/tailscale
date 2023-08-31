@@ -58,7 +58,7 @@ type Server struct {
 	devProxy *httputil.ReverseProxy // only filled when devMode is on
 
 	cgiMode    bool
-	cgiPath    string
+	pathPrefix string
 	apiHandler http.Handler // csrf-protected api handler
 }
 
@@ -69,8 +69,8 @@ type ServerOpts struct {
 	// CGIMode indicates if the server is running as a CGI script.
 	CGIMode bool
 
-	// If running in CGIMode, CGIPath is the URL path prefix to the CGI script.
-	CGIPath string
+	// PathPrefix is the URL prefix added to requests by CGI or reverse proxy.
+	PathPrefix string
 
 	// LocalClient is the tailscale.LocalClient to use for this web server.
 	// If nil, a new one will be created.
@@ -84,10 +84,10 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
-		devMode: opts.DevMode,
-		lc:      opts.LocalClient,
-		cgiMode: opts.CGIMode,
-		cgiPath: opts.CGIPath,
+		devMode:    opts.DevMode,
+		lc:         opts.LocalClient,
+		cgiMode:    opts.CGIMode,
+		pathPrefix: opts.PathPrefix,
 	}
 	cleanup = func() {}
 	if s.devMode {
@@ -116,20 +116,9 @@ func init() {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler := s.serve
 
-	// if running in cgi mode, strip the cgi path prefix
-	if s.cgiMode {
-		prefix := s.cgiPath
-		if prefix == "" {
-			switch distro.Get() {
-			case distro.Synology:
-				prefix = synologyPrefix
-			case distro.QNAP:
-				prefix = qnapPrefix
-			}
-		}
-		if prefix != "" {
-			handler = enforcePrefix(prefix, handler)
-		}
+	// if path prefix is defined, strip it from requests.
+	if s.pathPrefix != "" {
+		handler = enforcePrefix(s.pathPrefix, handler)
 	}
 
 	handler(w, r)
@@ -334,7 +323,6 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.WriteString(w, "{}")
 	}
-	return
 }
 
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {
@@ -487,6 +475,19 @@ func (s *Server) csrfKey() []byte {
 // Unlike http.StripPrefix, it does not return a 404 if the prefix is not present.
 // Instead, it returns a redirect to the prefix path.
 func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
+	if prefix == "" {
+		return h
+	}
+
+	// ensure that prefix always has both a leading and trailing slash so
+	// that relative links for JS and CSS assets work correctly.
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, prefix) {
 			http.Redirect(w, r, prefix, http.StatusFound)
