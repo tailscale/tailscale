@@ -78,6 +78,7 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/util/multierr"
 	"tailscale.com/util/osshare"
+	"tailscale.com/util/rands"
 	"tailscale.com/util/set"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/testenv"
@@ -1935,6 +1936,8 @@ func (b *LocalBackend) ResendHostinfoIfNeeded() {
 func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWatchOpt, onWatchAdded func(), fn func(roNotify *ipn.Notify) (keepGoing bool)) {
 	ch := make(chan *ipn.Notify, 128)
 
+	sessionID := rands.HexString(16)
+
 	origFn := fn
 	if mask&ipn.NotifyNoPrivateKeys != 0 {
 		fn = func(n *ipn.Notify) bool {
@@ -1956,10 +1959,12 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	var ini *ipn.Notify
 
 	b.mu.Lock()
+
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
 	if mask&initialBits != 0 {
 		ini = &ipn.Notify{Version: version.Long()}
 		if mask&ipn.NotifyInitialState != 0 {
+			ini.SessionID = sessionID
 			ini.State = ptr.To(b.state)
 			if b.state == ipn.NeedsLogin {
 				ini.BrowseToURL = ptr.To(b.authURLSticky)
