@@ -23,7 +23,7 @@ export function apiFetch(
   const url = `api${endpoint}${search ? `?${search}` : ""}`
 
   var contentType: string
-  if (unraidCsrfToken) {
+  if (unraidCsrfToken && method === "POST") {
     const params = new URLSearchParams()
     params.append("csrf_token", unraidCsrfToken)
     if (body) {
