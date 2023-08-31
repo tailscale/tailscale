@@ -565,7 +565,14 @@ func (b *LocalBackend) Shutdown() {
 		b.mu.Unlock()
 		ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
 		defer cancel()
-		b.LogoutSync(ctx) // best effort
+		t0 := time.Now()
+		err := b.LogoutSync(ctx) // best effort
+		td := time.Since(t0).Round(time.Millisecond)
+		if err != nil {
+			b.logf("failed to log out ephemeral node on shutdown after %v: %v", td, err)
+		} else {
+			b.logf("logged out ephemeral node on shutdown")
+		}
 		b.mu.Lock()
 	}
 	cc := b.cc
@@ -977,6 +984,7 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
+	inShutdown := b.shutdownCalled
 
 	if st.LogoutFinished() {
 		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().UserProfile().LoginName() == "" {
@@ -985,6 +993,10 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 		}
 		if err := b.pm.DeleteProfile(b.pm.CurrentProfile().ID); err != nil {
 			b.logf("error deleting profile: %v", err)
+		}
+		if inShutdown {
+			b.mu.Unlock()
+			return
 		}
 		if err := b.resetForProfileChangeLockedOnEntry(); err != nil {
 			b.logf("resetForProfileChangeLockedOnEntry err: %v", err)
@@ -3872,7 +3884,18 @@ func (b *LocalBackend) resetControlClientLockedAsync() {
 		b.numClientStatusCalls.Add(1)
 	}
 
-	go b.cc.Shutdown()
+	if testenv.InTest() {
+		// From 2021-04-20 to 2023-08-31 we always did this shutdown
+		// asynchronously. But tests flaked on it sometimes, as our
+		// tests often do resource leak checks at the end to make sure
+		// everything's shut down. So do this synchronously in tests
+		// to deflake tests.
+		//
+		// TODO(bradfitz,maisem): do this always?
+		b.cc.Shutdown()
+	} else {
+		go b.cc.Shutdown()
+	}
 	b.cc = nil
 	b.ccAuto = nil
 }
