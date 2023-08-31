@@ -349,15 +349,6 @@ func (s *Server) Close() error {
 		}
 	}()
 
-	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral && s.lb != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Perform a best-effort logout.
-			s.lb.LogoutSync(ctx)
-		}()
-	}
-
 	if s.netstack != nil {
 		s.netstack.Close()
 		s.netstack = nil
