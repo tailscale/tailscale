@@ -94,7 +94,7 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: bench all
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ 
+      run: ./tool/go test ./... ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ 
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
@@ -141,10 +141,12 @@ jobs:
           ${{ github.job }}-${{ runner.os }}-go-2-${{ hashFiles('**/go.sum') }}
           ${{ github.job }}-${{ runner.os }}-go-2-
     - name: test
+      run: go run ./cmd/testwrapper ./...
+    - name: bench all
       # Don't use -bench=. -benchtime=1x.
       # Somewhere in the layers (powershell?)
       # the equals signs cause great confusion.
-      run: go run ./cmd/testwrapper ./... -bench . -benchtime 1x
+      run: go test ./... -bench . -benchtime 1x -run "^$"
 
   vm:
     runs-on: ["self-hosted", "linux", "vm"]
