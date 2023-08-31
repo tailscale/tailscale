@@ -231,7 +231,7 @@ func NewNoStart(opts Options) (_ *Auto, err error) {
 func (c *Auto) SetPaused(paused bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if paused == c.paused {
+	if paused == c.paused || c.closed {
 		return
 	}
 	c.logf("setPaused(%v)", paused)
@@ -239,7 +239,7 @@ func (c *Auto) SetPaused(paused bool) {
 	if paused {
 		// Only cancel the map routine. (The auth routine isn't expensive
 		// so it's fine to keep it running.)
-		c.cancelMapLocked()
+		c.cancelMapCtxLocked()
 	} else {
 		for _, ch := range c.unpauseWaiters {
 			close(ch)
@@ -279,9 +279,16 @@ func (c *Auto) updateControl() {
 	}
 }
 
-func (c *Auto) cancelAuth() {
+// cancelAuthCtx cancels the existing auth goroutine's context
+// & creates a new one, causing it to restart.
+func (c *Auto) cancelAuthCtx() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.cancelAuthCtxLocked()
+}
+
+// cancelAuthCtxLocked is like cancelAuthCtx, but assumes the caller holds c.mu.
+func (c *Auto) cancelAuthCtxLocked() {
 	if c.authCancel != nil {
 		c.authCancel()
 	}
@@ -291,8 +298,16 @@ func (c *Auto) cancelAuth() {
 	}
 }
 
-// cancelMapLocked is like cancelMap, but assumes the caller holds c.mu.
-func (c *Auto) cancelMapLocked() {
+// cancelMapCtx cancels the context for the existing mapPoll and liteUpdates
+// goroutines and creates a new one, causing them to restart.
+func (c *Auto) cancelMapCtx() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cancelMapCtxLocked()
+}
+
+// cancelMapCtxLocked is like cancelMapCtx, but assumes the caller holds c.mu.
+func (c *Auto) cancelMapCtxLocked() {
 	if c.mapCancel != nil {
 		c.mapCancel()
 	}
@@ -302,18 +317,11 @@ func (c *Auto) cancelMapLocked() {
 	}
 }
 
-// cancelMap cancels the existing mapPoll and liteUpdates.
-func (c *Auto) cancelMap() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cancelMapLocked()
-}
-
 // restartMap cancels the existing mapPoll and liteUpdates, and then starts a
 // new one.
 func (c *Auto) restartMap() {
 	c.mu.Lock()
-	c.cancelMapLocked()
+	c.cancelMapCtxLocked()
 	synced := c.synced
 	c.mu.Unlock()
 
@@ -676,7 +684,7 @@ func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	}
 	c.mu.Unlock()
 
-	c.cancelAuth()
+	c.cancelAuthCtx()
 }
 
 func (c *Auto) Logout(ctx context.Context) error {
@@ -690,8 +698,8 @@ func (c *Auto) Logout(ctx context.Context) error {
 		loggedOutResult: errc,
 	}
 	c.mu.Unlock()
-	c.cancelAuth()
-	c.cancelMap()
+	c.cancelAuthCtx()
+	c.cancelMapCtx()
 
 	timer, timerChannel := c.clock.NewTimer(10 * time.Second)
 	defer timer.Stop()
@@ -729,6 +737,8 @@ func (c *Auto) Shutdown() {
 	direct := c.direct
 	if !closed {
 		c.closed = true
+		c.cancelAuthCtxLocked()
+		c.cancelMapCtxLocked()
 	}
 	c.mu.Unlock()
 
@@ -736,9 +746,7 @@ func (c *Auto) Shutdown() {
 	if !closed {
 		c.unregisterHealthWatch()
 		close(c.quit)
-		c.cancelAuth()
 		<-c.authDone
-		c.cancelMap()
 		<-c.mapDone
 		<-c.updateDone
 		if direct != nil {
