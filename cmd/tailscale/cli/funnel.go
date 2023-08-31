@@ -27,7 +27,7 @@ var funnelCmd = func() *ffcli.Command {
 	// implementation of the tailscale funnel command.
 	// See https://github.com/tailscale/tailscale/issues/7844
 	if envknob.UseWIPCode() {
-		return newServeDevCommand(se, "funnel")
+		return newServeDevCommand(se, funnel)
 	}
 	return newFunnelCommand(se)
 }
