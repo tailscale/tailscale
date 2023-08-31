@@ -247,6 +247,48 @@ func (c *Client) Download(ctx context.Context, srcPath, dstPath string) error {
 	return nil
 }
 
+// ValidateLocalBinary fetches the latest signature associated with the binary
+// at srcURLPath and uses it to validate the file located on disk via
+// localFilePath. ValidateLocalBinary returns an error if anything goes wrong
+// with the signature download or with signature validation.
+func (c *Client) ValidateLocalBinary(srcURLPath, localFilePath string) error {
+	// Always fetch a fresh signing key.
+	sigPub, err := c.signingKeys()
+	if err != nil {
+		return err
+	}
+
+	srcURL := c.url(srcURLPath)
+	sigURL := srcURL + ".sig"
+
+	localFile, err := os.Open(localFilePath)
+	if err != nil {
+		return err
+	}
+	defer localFile.Close()
+
+	h := NewPackageHash()
+	_, err = io.Copy(h, localFile)
+	if err != nil {
+		return err
+	}
+	hash, hashLen := h.Sum(nil), h.Len()
+
+	c.logf("Downloading %q", sigURL)
+	sig, err := fetch(sigURL, signatureSizeLimit)
+	if err != nil {
+		return err
+	}
+
+	msg := binary.LittleEndian.AppendUint64(hash, uint64(hashLen))
+	if !VerifyAny(sigPub, msg, sig) {
+		return fmt.Errorf("signature %q for file %q does not validate with the current release signing key; either you are under attack, or attempting to download an old version of Tailscale which was signed with an older signing key", sigURL, localFilePath)
+	}
+	c.logf("Signature OK")
+
+	return nil
+}
+
 // signingKeys fetches current signing keys from the server and validates them
 // against the roots. Should be called before validation of any downloaded file
 // to get the fresh keys.
