@@ -34,10 +34,6 @@ type Client interface {
 	// LoginFinished flag (on success) or an auth URL (if further
 	// interaction is needed).
 	Login(*tailcfg.Oauth2Token, LoginFlags)
-	// StartLogout starts an asynchronous logout process.
-	// When it finishes, the Status callback will be called while
-	// AuthCantContinue()==true.
-	StartLogout()
 	// Logout starts a synchronous logout process. It doesn't return
 	// until the logout operation has been completed.
 	Logout(context.Context) error

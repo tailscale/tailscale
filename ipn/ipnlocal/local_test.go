@@ -826,9 +826,6 @@ type legacyBackend interface {
 	StartLoginInteractive()
 	// Login logs in with an OAuth2 token.
 	Login(token *tailcfg.Oauth2Token)
-	// Logout terminates the current login session and stops the
-	// wireguard engine.
-	Logout()
 	// SetPrefs installs a new set of user preferences, including
 	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.

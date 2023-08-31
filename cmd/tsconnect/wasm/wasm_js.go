@@ -326,7 +326,11 @@ func (i *jsIPN) logout() {
 	if i.lb.State() == ipn.NoState {
 		log.Printf("Backend not running")
 	}
-	go i.lb.Logout()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		i.lb.LogoutSync(ctx)
+	}()
 }
 
 func (i *jsIPN) ssh(host, username string, termConfig js.Value) map[string]any {

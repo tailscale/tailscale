@@ -679,17 +679,6 @@ func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
 	c.cancelAuth()
 }
 
-func (c *Auto) StartLogout() {
-	c.logf("client.StartLogout()")
-
-	c.mu.Lock()
-	c.loginGoal = &LoginGoal{
-		wantLoggedIn: false,
-	}
-	c.mu.Unlock()
-	c.cancelAuth()
-}
-
 func (c *Auto) Logout(ctx context.Context) error {
 	c.logf("client.Logout()")
 

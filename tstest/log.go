@@ -152,7 +152,7 @@ func WhileTestRunningLogger(t testing.TB) logger.Logf {
 		mu   sync.RWMutex
 		done bool
 	)
-
+	tlogf := logger.TestLogger(t)
 	logger := func(format string, args ...any) {
 		t.Helper()
 
@@ -162,7 +162,7 @@ func WhileTestRunningLogger(t testing.TB) logger.Logf {
 		if done {
 			return
 		}
-		t.Logf(format, args...)
+		tlogf(format, args...)
 	}
 
 	// t.Cleanup is run before the test is marked as done, so by acquiring
