@@ -217,11 +217,6 @@ func (cc *mockControl) Login(t *tailcfg.Oauth2Token, flags controlclient.LoginFl
 	cc.authBlocked = interact || newKeys
 }
 
-func (cc *mockControl) StartLogout() {
-	cc.logf("StartLogout")
-	cc.called("StartLogout")
-}
-
 func (cc *mockControl) Logout(ctx context.Context) error {
 	cc.logf("Logout")
 	cc.called("Logout")
@@ -329,10 +324,10 @@ func TestStateMachine(t *testing.T) {
 			(n.Prefs != nil && n.Prefs.Valid()) ||
 			n.BrowseToURL != nil ||
 			n.LoginFinished != nil {
-			logf("\n%v\n\n", n)
+			logf("%v\n\n", n)
 			notifies.put(n)
 		} else {
-			logf("\n(ignored) %v\n\n", n)
+			logf("(ignored) %v\n\n", n)
 		}
 	})
 
@@ -583,12 +578,12 @@ func TestStateMachine(t *testing.T) {
 
 	// User wants to logout.
 	store.awaitWrite()
-	t.Logf("\n\nLogout (async)")
+	t.Logf("\n\nLogout")
 	notifies.expect(2)
-	b.Logout()
+	b.LogoutSync(context.Background())
 	{
 		nn := notifies.drain(2)
-		cc.assertCalls("pause", "StartLogout")
+		cc.assertCalls("pause", "Logout")
 		c.Assert(nn[0].State, qt.IsNotNil)
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
 		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
@@ -599,7 +594,7 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	// Let's make the logout succeed.
-	t.Logf("\n\nLogout (async) - succeed")
+	t.Logf("\n\nLogout - succeed")
 	notifies.expect(3)
 	cc.send(nil, "", false, nil)
 	{
@@ -617,15 +612,15 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	// A second logout should reset all prefs.
-	t.Logf("\n\nLogout2 (async)")
+	t.Logf("\n\nLogout2")
 	notifies.expect(1)
-	b.Logout()
+	b.LogoutSync(context.Background())
 	{
 		nn := notifies.drain(1)
 		c.Assert(nn[0].Prefs, qt.IsNotNil) // emptyPrefs
 		// BUG: the backend has already called StartLogout, and we're
 		// still logged out. So it shouldn't call it again.
-		cc.assertCalls("StartLogout")
+		cc.assertCalls("Logout")
 		cc.assertCalls()
 		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
 		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
@@ -645,7 +640,7 @@ func TestStateMachine(t *testing.T) {
 	}
 
 	// Try the synchronous logout feature.
-	t.Logf("\n\nLogout3 (sync)")
+	t.Logf("\n\nLogout (sync)")
 	notifies.expect(0)
 	b.LogoutSync(context.Background())
 	// NOTE: This returns as soon as cc.Logout() returns, which is okay

@@ -3910,18 +3910,7 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 	return false
 }
 
-// Logout tells the controlclient that we want to log out, and
-// transitions the local engine to the logged-out state without
-// waiting for controlclient to be in that state.
-func (b *LocalBackend) Logout() {
-	b.logout(context.Background(), false)
-}
-
 func (b *LocalBackend) LogoutSync(ctx context.Context) error {
-	return b.logout(ctx, true)
-}
-
-func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 	b.mu.Lock()
 	cc := b.cc
 	b.mu.Unlock()
@@ -3946,13 +3935,7 @@ func (b *LocalBackend) logout(ctx context.Context, sync bool) error {
 		return errors.New("no controlclient")
 	}
 
-	var err error
-	if sync {
-		err = cc.Logout(ctx)
-	} else {
-		cc.StartLogout()
-	}
-
+	err := cc.Logout(ctx)
 	b.stateMachine()
 	return err
 }
