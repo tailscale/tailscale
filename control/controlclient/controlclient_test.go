@@ -50,12 +50,7 @@ func TestStatusEqual(t *testing.T) {
 			true,
 		},
 		{
-			&Status{state: StateNew},
-			&Status{state: StateNew},
-			true,
-		},
-		{
-			&Status{state: StateNew},
+			&Status{},
 			&Status{state: StateAuthenticated},
 			false,
 		},

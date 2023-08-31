@@ -29,8 +29,7 @@ import (
 type State int
 
 const (
-	StateNew = State(iota)
-	StateNotAuthenticated
+	StateNotAuthenticated State = iota + 1
 	StateAuthenticating
 	StateURLVisitRequired
 	StateAuthenticated
@@ -43,8 +42,6 @@ func (s State) MarshalText() ([]byte, error) {
 
 func (s State) String() string {
 	switch s {
-	case StateNew:
-		return "state:new"
 	case StateNotAuthenticated:
 		return "state:not-authenticated"
 	case StateAuthenticating:
