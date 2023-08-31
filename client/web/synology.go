@@ -15,8 +15,6 @@ import (
 	"tailscale.com/util/groupmember"
 )
 
-const synologyPrefix = "/webman/3rdparty/Tailscale/index.cgi/"
-
 // authorizeSynology authenticates the logged-in Synology user and verifies
 // that they are authorized to use the web client.  It returns true if the
 // request was handled and no further processing is required.
