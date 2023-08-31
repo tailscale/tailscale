@@ -159,7 +159,6 @@ type Auto struct {
 	loggedIn       bool       // true if currently logged in
 	loginGoal      *LoginGoal // non-nil if some login activity is desired
 	synced         bool       // true if our netmap is up-to-date
-	inSendStatus   int        // number of sendStatus calls currently in progress
 	state          State
 
 	authCtx    context.Context // context used for auth requests
@@ -646,7 +645,6 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	state := c.state
 	loggedIn := c.loggedIn
 	synced := c.synced
-	c.inSendStatus++
 	c.mu.Unlock()
 
 	c.logf("[v1] sendStatus: %s: %v", who, state)
@@ -666,11 +664,10 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 		Err:     err,
 		state:   state,
 	}
-	c.observer.SetControlClientStatus(new)
 
-	c.mu.Lock()
-	c.inSendStatus--
-	c.mu.Unlock()
+	// Launch a new goroutine to avoid blocking the caller while the observer
+	// does its thing, which may result in a call back into the client.
+	go c.observer.SetControlClientStatus(new)
 }
 
 func (c *Auto) Login(t *tailcfg.Oauth2Token, flags LoginFlags) {
@@ -732,7 +729,6 @@ func (c *Auto) Shutdown() {
 	c.logf("client.Shutdown()")
 
 	c.mu.Lock()
-	inSendStatus := c.inSendStatus
 	closed := c.closed
 	direct := c.direct
 	if !closed {
@@ -742,7 +738,7 @@ func (c *Auto) Shutdown() {
 	}
 	c.mu.Unlock()
 
-	c.logf("client.Shutdown: inSendStatus=%v", inSendStatus)
+	c.logf("client.Shutdown")
 	if !closed {
 		c.unregisterHealthWatch()
 		close(c.quit)

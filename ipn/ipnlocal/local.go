@@ -1396,6 +1396,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	wantRunning := prefs.WantRunning()
 	if wantRunning {
 		if err := b.initMachineKeyLocked(); err != nil {
+			b.mu.Unlock()
 			return fmt.Errorf("initMachineKeyLocked: %w", err)
 		}
 	}
