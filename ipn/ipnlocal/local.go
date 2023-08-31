@@ -4933,16 +4933,19 @@ func (b *LocalBackend) initTKALocked() error {
 }
 
 // resetForProfileChangeLockedOnEntry resets the backend for a profile change.
+//
+// b.mu must held on entry. It is released on exit.
 func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
 	if err := b.initTKALocked(); err != nil {
+		b.mu.Unlock()
 		return err
 	}
 	b.lastServeConfJSON = mem.B(nil)
 	b.serveConfig = ipn.ServeConfigView{}
-	b.enterStateLockedOnEntry(ipn.NoState) // Reset state.
+	b.enterStateLockedOnEntry(ipn.NoState) // Reset state; releases b.mu
 	health.SetLocalLogConfigHealth(nil)
 	return b.Start(ipn.Options{})
 }
