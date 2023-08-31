@@ -74,12 +74,20 @@ func NewImportTracker(thisPkg *types.Package) *ImportTracker {
 // ImportTracker provides a mechanism to track and build import paths.
 type ImportTracker struct {
 	thisPkg  *types.Package
-	packages map[string]bool
+	packages map[string]string // package paths to package names; empty name to use default
 }
 
 func (it *ImportTracker) Import(pkg string) {
-	if pkg != "" && !it.packages[pkg] {
-		mak.Set(&it.packages, pkg, true)
+	_, ok := it.packages[pkg]
+	if pkg != "" && !ok {
+		mak.Set(&it.packages, pkg, "")
+	}
+}
+
+func (it *ImportTracker) ImportNamed(pkg, name string) {
+	_, ok := it.packages[pkg]
+	if pkg != "" && !ok {
+		mak.Set(&it.packages, pkg, name)
 	}
 }
 
@@ -100,8 +108,12 @@ func (it *ImportTracker) QualifiedName(t types.Type) string {
 // Write prints all the tracked imports in a single import block to w.
 func (it *ImportTracker) Write(w io.Writer) {
 	fmt.Fprintf(w, "import (\n")
-	for s := range it.packages {
-		fmt.Fprintf(w, "\t%q\n", s)
+	for pkgPath, pkgName := range it.packages {
+		if pkgName == "" {
+			fmt.Fprintf(w, "\t%q\n", pkgPath)
+		} else {
+			fmt.Fprintf(w, "\t%s %q\n", pkgName, pkgPath)
+		}
 	}
 	fmt.Fprintf(w, ")\n\n")
 }
