@@ -4930,6 +4930,13 @@ func (b *LocalBackend) initTKALocked() error {
 //
 // b.mu must held on entry. It is released on exit.
 func (b *LocalBackend) resetForProfileChangeLockedOnEntry() error {
+	if b.shutdownCalled {
+		// Prevent a call back to Start during Shutdown, which calls Logout for
+		// ephemeral nodes, which can then call back here. But we're shutting
+		// down, so no need to do any work.
+		b.mu.Unlock()
+		return nil
+	}
 	b.setNetMapLocked(nil) // Reset netmap.
 	// Reset the NetworkMap in the engine
 	b.e.SetNetworkMap(new(netmap.NetworkMap))
