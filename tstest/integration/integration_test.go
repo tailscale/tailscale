@@ -945,9 +945,11 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 
 func (n *testNode) MustUp(extraArgs ...string) {
 	t := n.env.t
+	t.Helper()
 	args := []string{
 		"up",
 		"--login-server=" + n.env.ControlServer.URL,
+		"--reset",
 	}
 	args = append(args, extraArgs...)
 	cmd := n.Tailscale(args...)
