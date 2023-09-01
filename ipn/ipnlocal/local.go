@@ -143,9 +143,8 @@ type LocalBackend struct {
 	statsLogf             logger.Logf        // for printing peers stats on change
 	sys                   *tsd.System
 	e                     wgengine.Engine // non-nil; TODO(bradfitz): remove; use sys
-	pm                    *profileManager
-	store                 ipn.StateStore // non-nil; TODO(bradfitz): remove; use sys
-	dialer                *tsdial.Dialer // non-nil; TODO(bradfitz): remove; use sys
+	store                 ipn.StateStore  // non-nil; TODO(bradfitz): remove; use sys
+	dialer                *tsdial.Dialer  // non-nil; TODO(bradfitz): remove; use sys
 	backendLogID          logid.PublicID
 	unregisterNetMon      func()
 	unregisterHealthWatch func()
@@ -188,6 +187,7 @@ type LocalBackend struct {
 
 	// The mutex protects the following elements.
 	mu             sync.Mutex
+	pm             *profileManager // mu guards access
 	filterHash     deephash.Sum
 	httpTestClient *http.Client // for controlclient. nil by default, used by tests.
 	ccGen          clientGen    // function for producing controlclient; lazily populated
@@ -1289,10 +1289,6 @@ func (b *LocalBackend) startIsNoopLocked(opts ipn.Options) bool {
 // actually a supported operation (it should be, but it's very unclear
 // from the following whether or not that is a safe transition).
 func (b *LocalBackend) Start(opts ipn.Options) error {
-	if opts.LegacyMigrationPrefs == nil && !b.pm.CurrentPrefs().Valid() {
-		return errors.New("no prefs provided")
-	}
-
 	if opts.LegacyMigrationPrefs != nil {
 		b.logf("Start: %v", opts.LegacyMigrationPrefs.Pretty())
 	} else {
@@ -1300,6 +1296,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.mu.Lock()
+	if opts.LegacyMigrationPrefs == nil && !b.pm.CurrentPrefs().Valid() {
+		b.mu.Unlock()
+		return errors.New("no prefs provided")
+	}
+
 	if opts.UpdatePrefs != nil {
 		if err := b.checkPrefsLocked(opts.UpdatePrefs); err != nil {
 			b.mu.Unlock()
