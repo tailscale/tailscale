@@ -329,7 +329,7 @@ func (i *jsIPN) logout() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		i.lb.LogoutSync(ctx)
+		i.lb.Logout(ctx)
 	}()
 }
 
