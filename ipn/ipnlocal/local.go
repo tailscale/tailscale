@@ -1440,7 +1440,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
 		Hostinfo:             hostinfo,
-		KeepAlive:            true,
 		NewDecompressor:      b.newDecompressor,
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
