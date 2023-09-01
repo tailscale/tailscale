@@ -69,7 +69,6 @@ type Direct struct {
 	clock                 tstime.Clock
 	lastPrintMap          time.Time
 	newDecompressor       func() (Decompressor, error)
-	keepAlive             bool
 	logf                  logger.Logf
 	netMon                *netmon.Monitor // or nil
 	discoPubKey           key.DiscoPublic
@@ -117,7 +116,6 @@ type Options struct {
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
 	NewDecompressor      func() (Decompressor, error)
-	KeepAlive            bool
 	Logf                 logger.Logf
 	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
 	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
@@ -253,7 +251,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		clock:                 opts.Clock,
 		logf:                  opts.Logf,
 		newDecompressor:       opts.NewDecompressor,
-		keepAlive:             opts.KeepAlive,
 		persist:               opts.Persist.View(),
 		authKey:               opts.AuthKey,
 		discoPubKey:           opts.DiscoPublicKey,
@@ -863,7 +860,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentCapabilityVersion,
-		KeepAlive:     c.keepAlive,
+		KeepAlive:     true,
 		NodeKey:       persist.PublicNodeKey(),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
