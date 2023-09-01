@@ -984,25 +984,6 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 
 	// Lock b once and do only the things that require locking.
 	b.mu.Lock()
-	inShutdown := b.shutdownCalled
-
-	if st.LogoutFinished() {
-		if p := b.pm.CurrentPrefs(); !p.Persist().Valid() || p.Persist().UserProfile().LoginName() == "" {
-			b.mu.Unlock()
-			return
-		}
-		if err := b.pm.DeleteProfile(b.pm.CurrentProfile().ID); err != nil {
-			b.logf("error deleting profile: %v", err)
-		}
-		if inShutdown {
-			b.mu.Unlock()
-			return
-		}
-		if err := b.resetForProfileChangeLockedOnEntry(); err != nil {
-			b.logf("resetForProfileChangeLockedOnEntry err: %v", err)
-		}
-		return
-	}
 
 	prefsChanged := false
 	prefs := b.pm.CurrentPrefs().AsStruct()
@@ -3729,10 +3710,16 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 
 }
 
+// hasNodeKey reports whether a non-zero node key is present in the current
+// prefs.
 func (b *LocalBackend) hasNodeKey() bool {
-	// we can't use b.Prefs(), because it strips the keys, oops!
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.hasNodeKeyLocked()
+}
+
+func (b *LocalBackend) hasNodeKeyLocked() bool {
+	// we can't use b.Prefs(), because it strips the keys, oops!
 	p := b.pm.CurrentPrefs()
 	return p.Valid() && p.Persist().Valid() && !p.Persist().PrivateNodeKey().IsZero()
 }
@@ -3741,13 +3728,10 @@ func (b *LocalBackend) hasNodeKey() bool {
 func (b *LocalBackend) NodeKey() key.NodePublic {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	p := b.pm.CurrentPrefs()
-	if !p.Valid() || !p.Persist().Valid() || p.Persist().PrivateNodeKey().IsZero() {
+	if !b.hasNodeKeyLocked() {
 		return key.NodePublic{}
 	}
-
-	return p.Persist().PublicNodeKey()
+	return b.pm.CurrentPrefs().Persist().PublicNodeKey()
 }
 
 // nextState returns the state the backend seems to be in, based on
@@ -3884,19 +3868,7 @@ func (b *LocalBackend) resetControlClientLockedAsync() {
 		// will abort.
 		b.numClientStatusCalls.Add(1)
 	}
-
-	if testenv.InTest() {
-		// From 2021-04-20 to 2023-08-31 we always did this shutdown
-		// asynchronously. But tests flaked on it sometimes, as our
-		// tests often do resource leak checks at the end to make sure
-		// everything's shut down. So do this synchronously in tests
-		// to deflake tests.
-		//
-		// TODO(bradfitz,maisem): do this always?
-		b.cc.Shutdown()
-	} else {
-		go b.cc.Shutdown()
-	}
+	b.cc.Shutdown()
 	b.cc = nil
 	b.ccAuto = nil
 }
@@ -3936,14 +3908,26 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 
 func (b *LocalBackend) LogoutSync(ctx context.Context) error {
 	b.mu.Lock()
+	if !b.hasNodeKeyLocked() {
+		// Already logged out.
+		b.mu.Unlock()
+		return nil
+	}
 	cc := b.cc
+
+	// Grab the current profile before we unlock the mutex, so that we can
+	// delete it later.
+	profile := b.pm.CurrentProfile()
 	b.mu.Unlock()
 
-	b.EditPrefs(&ipn.MaskedPrefs{
+	_, err := b.EditPrefs(&ipn.MaskedPrefs{
 		WantRunningSet: true,
 		LoggedOutSet:   true,
 		Prefs:          ipn.Prefs{WantRunning: false, LoggedOut: true},
 	})
+	if err != nil {
+		return err
+	}
 
 	// Clear any previous dial plan(s), if set.
 	b.dialPlan.Store(nil)
@@ -3959,9 +3943,16 @@ func (b *LocalBackend) LogoutSync(ctx context.Context) error {
 		return errors.New("no controlclient")
 	}
 
-	err := cc.Logout(ctx)
-	b.stateMachine()
-	return err
+	if err := cc.Logout(ctx); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	if err := b.pm.DeleteProfile(profile.ID); err != nil {
+		b.mu.Unlock()
+		b.logf("error deleting profile: %v", err)
+		return err
+	}
+	return b.resetForProfileChangeLockedOnEntry()
 }
 
 // assertClientLocked crashes if there is no controlclient in this backend.
