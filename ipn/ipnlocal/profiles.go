@@ -28,6 +28,8 @@ var debug = envknob.RegisterBool("TS_DEBUG_PROFILES")
 
 // profileManager is a wrapper around a StateStore that manages
 // multiple profiles and the current profile.
+//
+// It is not safe for concurrent use.
 type profileManager struct {
 	store ipn.StateStore
 	logf  logger.Logf
