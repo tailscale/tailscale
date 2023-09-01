@@ -1056,7 +1056,7 @@ func (h *Handler) serveLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "want POST", 400)
 		return
 	}
-	err := h.b.LogoutSync(r.Context())
+	err := h.b.Logout(r.Context())
 	if err == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return

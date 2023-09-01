@@ -566,7 +566,7 @@ func (b *LocalBackend) Shutdown() {
 		ctx, cancel := context.WithTimeout(b.ctx, 5*time.Second)
 		defer cancel()
 		t0 := time.Now()
-		err := b.LogoutSync(ctx) // best effort
+		err := b.Logout(ctx) // best effort
 		td := time.Since(t0).Round(time.Millisecond)
 		if err != nil {
 			b.logf("failed to log out ephemeral node on shutdown after %v: %v", td, err)
@@ -3907,7 +3907,9 @@ func (b *LocalBackend) ShouldHandleViaIP(ip netip.Addr) bool {
 	return false
 }
 
-func (b *LocalBackend) LogoutSync(ctx context.Context) error {
+// Logout logs out the current profile, if any, and waits for the logout to
+// complete.
+func (b *LocalBackend) Logout(ctx context.Context) error {
 	b.mu.Lock()
 	if !b.hasNodeKeyLocked() {
 		// Already logged out.

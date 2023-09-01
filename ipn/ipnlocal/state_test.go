@@ -580,7 +580,7 @@ func TestStateMachine(t *testing.T) {
 	store.awaitWrite()
 	t.Logf("\n\nLogout")
 	notifies.expect(5)
-	b.LogoutSync(context.Background())
+	b.Logout(context.Background())
 	{
 		nn := notifies.drain(5)
 		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
@@ -610,7 +610,7 @@ func TestStateMachine(t *testing.T) {
 	// A second logout should be a no-op as we are in the NeedsLogin state.
 	t.Logf("\n\nLogout2")
 	notifies.expect(0)
-	b.LogoutSync(context.Background())
+	b.Logout(context.Background())
 	{
 		notifies.drain(0)
 		cc.assertCalls()
@@ -623,7 +623,7 @@ func TestStateMachine(t *testing.T) {
 	// AuthCantContinue state.
 	t.Logf("\n\nLogout3")
 	notifies.expect(3)
-	b.LogoutSync(context.Background())
+	b.Logout(context.Background())
 	{
 		notifies.drain(0)
 		cc.assertCalls()
