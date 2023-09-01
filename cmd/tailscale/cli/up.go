@@ -97,6 +97,8 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	}
 	upf := newFlagSet(cmd)
 
+	// When adding new flags, prefer to put them under "tailscale set" instead
+	// of here. Setting preferences via "tailscale up" is deprecated.
 	upf.BoolVar(&upArgs.qr, "qr", false, "show QR code for login URLs")
 	upf.StringVar(&upArgs.authKeyOrFile, "auth-key", "", `node authorization key; if it begins with "file:", then it's a path to a file containing the authkey`)
 
@@ -712,6 +714,8 @@ func init() {
 	addPrefFlagMapping("operator", "OperatorUser")
 	addPrefFlagMapping("ssh", "RunSSH")
 	addPrefFlagMapping("nickname", "ProfileName")
+	addPrefFlagMapping("update-check", "AutoUpdate")
+	addPrefFlagMapping("auto-update", "AutoUpdate")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
