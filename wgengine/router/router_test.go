@@ -126,12 +126,12 @@ func TestConfigEqual(t *testing.T) {
 
 		{
 			&Config{NetfilterMode: preftype.NetfilterOff},
-			&Config{NetfilterMode: preftype.NetfilterNoDivert},
+			&Config{NetfilterMode: preftype.NetfilterIPTablesNoDivert},
 			false,
 		},
 		{
-			&Config{NetfilterMode: preftype.NetfilterNoDivert},
-			&Config{NetfilterMode: preftype.NetfilterNoDivert},
+			&Config{NetfilterMode: preftype.NetfilterIPTablesNoDivert},
+			&Config{NetfilterMode: preftype.NetfilterIPTablesNoDivert},
 			true,
 		},
 		{

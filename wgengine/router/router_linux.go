@@ -33,8 +33,8 @@ import (
 
 const (
 	netfilterOff      = preftype.NetfilterOff
-	netfilterNoDivert = preftype.NetfilterNoDivert
-	netfilterOn       = preftype.NetfilterOn
+	netfilterNoDivert = preftype.NetfilterIPTablesNoDivert
+	netfilterOn       = preftype.NetfilterIPTablesOn
 )
 
 // netfilterRunner abstracts helpers to run netfilter commands. It is

@@ -458,7 +458,7 @@ func NewPrefs() *Prefs {
 		AllowSingleHosts: true,
 		CorpDNS:          true,
 		WantRunning:      false,
-		NetfilterMode:    preftype.NetfilterOn,
+		NetfilterMode:    preftype.NetfilterIPTablesOn,
 	}
 }
 

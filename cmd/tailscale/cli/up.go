@@ -286,14 +286,36 @@ func prefsFromUpArgs(upArgs upArgsT, warnf logger.Logf, st *ipnstate.Status, goo
 
 		switch upArgs.netfilterMode {
 		case "on":
-			prefs.NetfilterMode = preftype.NetfilterOn
-		case "nodivert":
-			prefs.NetfilterMode = preftype.NetfilterNoDivert
+			switch distro.Get() {
+			case distro.Gokrazy:
+				prefs.NetfilterMode = preftype.NetfilterNFTablesOn
+			default:
+				// Historically "on" always mapped to iptables, so that is
+				// retained here. In a future version the default may switch
+				// from "on" to "auto", but this default should likely remain to
+				// avoid changing the behavior for existing users who pass the
+				// flag.
+				prefs.NetfilterMode = preftype.NetfilterIPTablesOn
+			}
+		case "iptables":
+			prefs.NetfilterMode = preftype.NetfilterIPTablesOn
+		case "nodivert", "iptables-nodivert":
+			prefs.NetfilterMode = preftype.NetfilterIPTablesNoDivert
 			warnf("netfilter=nodivert; add iptables calls to ts-* chains manually.")
+		case "auto":
+			prefs.NetfilterMode = preftype.NetfilterAutoOn
+		case "auto-nodivert":
+			prefs.NetfilterMode = preftype.NetfilterAutoNoDivert
+			warnf("netfilter=auto-nodivert; add iptables/nftables calls to ts-* chains manually.")
+		case "nftables":
+			prefs.NetfilterMode = preftype.NetfilterNFTablesOn
+		case "nftables-nodivert":
+			prefs.NetfilterMode = preftype.NetfilterNFTablesNoDivert
+			warnf("netfilter=nftables-nodivert; add nftables calls to ts-* chains manually.")
 		case "off":
 			prefs.NetfilterMode = preftype.NetfilterOff
 			if defaultNetfilterMode() != "off" {
-				warnf("netfilter=off; configure iptables yourself.")
+				warnf("netfilter=off; configure firewall filters yourself.")
 			}
 		default:
 			return nil, fmt.Errorf("invalid value --netfilter-mode=%q", upArgs.netfilterMode)
@@ -818,7 +840,7 @@ func checkForAccidentalSettingReverts(newPrefs, curPrefs *ipn.Prefs, env upCheck
 			// Issue 3176. Old prefs had 'RouteAll: true' on disk, so ignore that.
 			continue
 		}
-		if flagName == "netfilter-mode" && valNew == preftype.NetfilterOn && env.goos == "linux" && env.distro == distro.Synology {
+		if flagName == "netfilter-mode" && valNew == preftype.NetfilterIPTablesOn && env.goos == "linux" && env.distro == distro.Synology {
 			// Issue 6811. Ignore on Synology.
 			continue
 		}
