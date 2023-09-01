@@ -74,6 +74,7 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: build variant CLIs
+      if: matrix.buildflags == '' # skip on race builder
       run: |
         export TS_USE_TOOLCHAIN=1
         ./build_dist.sh --extra-small ./cmd/tailscaled
@@ -83,7 +84,7 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: get qemu # for tstest/archtest
-      if: matrix.goarch == 'amd64' && matrix.variant == ''
+      if: matrix.goarch == 'amd64' && matrix.buildflags == ''
       run: |
         sudo apt-get -y update
         sudo apt-get -y install qemu-user
@@ -94,7 +95,7 @@ jobs:
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: bench all
-      run: ./tool/go test ./... ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ 
+      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
