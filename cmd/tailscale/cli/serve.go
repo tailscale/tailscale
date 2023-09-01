@@ -25,6 +25,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -32,7 +33,16 @@ import (
 	"tailscale.com/version"
 )
 
-var serveCmd = newServeCommand(&serveEnv{lc: &localClient})
+var serveCmd = func() *ffcli.Command {
+	se := &serveEnv{lc: &localClient}
+	// This flag is used to switch to an in-development
+	// implementation of the tailscale funnel command.
+	// See https://github.com/tailscale/tailscale/issues/7844
+	if envknob.UseWIPCode() {
+		return newServeDevCommand(se, "serve")
+	}
+	return newServeCommand(se)
+}
 
 // newServeCommand returns a new "serve" subcommand using e as its environment.
 func newServeCommand(e *serveEnv) *ffcli.Command {

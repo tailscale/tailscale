@@ -356,10 +356,12 @@ func setHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest) {
 	wsc.Handlers[req.MountPoint] = &ipn.HTTPHandler{
 		Proxy: req.Source,
 	}
-	if sc.AllowFunnel == nil {
-		sc.AllowFunnel = make(map[ipn.HostPort]bool)
+	if req.Funnel {
+		if sc.AllowFunnel == nil {
+			sc.AllowFunnel = make(map[ipn.HostPort]bool)
+		}
+		sc.AllowFunnel[req.HostPort] = true
 	}
-	sc.AllowFunnel[req.HostPort] = true
 }
 
 func deleteHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest, port uint16) {

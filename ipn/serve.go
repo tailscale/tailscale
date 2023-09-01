@@ -93,6 +93,10 @@ type ServeStreamRequest struct {
 	// MountPoint is the path prefix for
 	// the given HostPort.
 	MountPoint string `json:",omitempty"`
+
+	// Funnel indicates whether the request
+	// is a serve request or a funnel one.
+	Funnel bool `json:",omitempty"`
 }
 
 // FunnelRequestLog is the JSON type written out to io.Writers

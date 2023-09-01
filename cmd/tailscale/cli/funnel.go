@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -25,8 +26,8 @@ var funnelCmd = func() *ffcli.Command {
 	// This flag is used to switch to an in-development
 	// implementation of the tailscale funnel command.
 	// See https://github.com/tailscale/tailscale/issues/7844
-	if os.Getenv("TAILSCALE_FUNNEL_DEV") == "on" {
-		return newFunnelDevCommand(se)
+	if envknob.UseWIPCode() {
+		return newServeDevCommand(se, "funnel")
 	}
 	return newFunnelCommand(se)
 }

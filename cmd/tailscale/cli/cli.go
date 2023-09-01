@@ -121,7 +121,7 @@ change in the future.
 			ncCmd,
 			sshCmd,
 			funnelCmd(),
-			serveCmd,
+			serveCmd(),
 			versionCmd,
 			webCmd,
 			fileCmd,
