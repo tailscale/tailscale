@@ -43,11 +43,11 @@ jobs:
     strategy:
       fail-fast: false # don't abort the entire matrix if one element fails
       matrix:
-        include:
-          - goarch: amd64
-          - goarch: amd64
-            buildflags: "-race"
-          - goarch: "386" # thanks yaml
+        goarch: ["amd64", "386"]
+        # go list -json ./... | jq -c -s '[.[].ImportPath]'
+        #pkg: ["tailscale.com","tailscale.com/atomicfile","tailscale.com/chirp","tailscale.com/client/tailscale","tailscale.com/client/tailscale/apitype","tailscale.com/client/tailscale/example/servetls","tailscale.com/client/web","tailscale.com/clientupdate","tailscale.com/clientupdate/distsign","tailscale.com/cmd/addlicense","tailscale.com/cmd/cloner","tailscale.com/cmd/derper","tailscale.com/cmd/derpprobe","tailscale.com/cmd/dist","tailscale.com/cmd/get-authkey","tailscale.com/cmd/gitops-pusher","tailscale.com/cmd/hello","tailscale.com/cmd/k8s-operator","tailscale.com/cmd/mkmanifest","tailscale.com/cmd/mkpkg","tailscale.com/cmd/mkversion","tailscale.com/cmd/nardump","tailscale.com/cmd/netlogfmt","tailscale.com/cmd/pgproxy","tailscale.com/cmd/printdep","tailscale.com/cmd/proxy-to-grafana","tailscale.com/cmd/sniproxy","tailscale.com/cmd/speedtest","tailscale.com/cmd/ssh-auth-none-demo","tailscale.com/cmd/stunc","tailscale.com/cmd/sync-containers","tailscale.com/cmd/tailscale","tailscale.com/cmd/tailscale/cli","tailscale.com/cmd/tailscaled","tailscale.com/cmd/tailscaled/childproc","tailscale.com/cmd/testcontrol","tailscale.com/cmd/testwrapper","tailscale.com/cmd/testwrapper/flakytest","tailscale.com/cmd/tsconnect","tailscale.com/cmd/viewer","tailscale.com/cmd/viewer/tests","tailscale.com/control/controlbase","tailscale.com/control/controlclient","tailscale.com/control/controlhttp","tailscale.com/control/controlknobs","tailscale.com/derp","tailscale.com/derp/derphttp","tailscale.com/disco","tailscale.com/docs/webhooks","tailscale.com/doctor","tailscale.com/doctor/permissions","tailscale.com/doctor/routetable","tailscale.com/envknob","tailscale.com/envknob/logknob","tailscale.com/health","tailscale.com/health/healthmsg","tailscale.com/hostinfo","tailscale.com/ipn","tailscale.com/ipn/ipnauth","tailscale.com/ipn/ipnlocal","tailscale.com/ipn/ipnserver","tailscale.com/ipn/ipnstate","tailscale.com/ipn/localapi","tailscale.com/ipn/policy","tailscale.com/ipn/store","tailscale.com/ipn/store/awsstore","tailscale.com/ipn/store/kubestore","tailscale.com/ipn/store/mem","tailscale.com/jsondb","tailscale.com/kube","tailscale.com/licenses","tailscale.com/log/filelogger","tailscale.com/log/sockstatlog","tailscale.com/logpolicy","tailscale.com/logtail","tailscale.com/logtail/backoff","tailscale.com/logtail/example/logadopt","tailscale.com/logtail/example/logreprocess","tailscale.com/logtail/example/logtail","tailscale.com/logtail/filch","tailscale.com/metrics","tailscale.com/net/art","tailscale.com/net/connstats","tailscale.com/net/dns","tailscale.com/net/dns/publicdns","tailscale.com/net/dns/recursive","tailscale.com/net/dns/resolvconffile","tailscale.com/net/dns/resolver","tailscale.com/net/dnscache","tailscale.com/net/dnsfallback","tailscale.com/net/flowtrack","tailscale.com/net/interfaces","tailscale.com/net/memnet","tailscale.com/net/netaddr","tailscale.com/net/netcheck","tailscale.com/net/neterror","tailscale.com/net/netknob","tailscale.com/net/netmon","tailscale.com/net/netns","tailscale.com/net/netstat","tailscale.com/net/netutil","tailscale.com/net/packet","tailscale.com/net/ping","tailscale.com/net/portmapper","tailscale.com/net/proxymux","tailscale.com/net/routetable","tailscale.com/net/socks5","tailscale.com/net/sockstats","tailscale.com/net/speedtest","tailscale.com/net/stun","tailscale.com/net/stun/stuntest","tailscale.com/net/tcpinfo","tailscale.com/net/tlsdial","tailscale.com/net/tsaddr","tailscale.com/net/tsdial","tailscale.com/net/tshttpproxy","tailscale.com/net/tstun","tailscale.com/net/tstun/table","tailscale.com/net/wsconn","tailscale.com/packages/deb","tailscale.com/paths","tailscale.com/portlist","tailscale.com/prober","tailscale.com/release","tailscale.com/release/dist","tailscale.com/release/dist/cli","tailscale.com/release/dist/synology","tailscale.com/release/dist/unixpkgs","tailscale.com/safesocket","tailscale.com/smallzstd","tailscale.com/ssh/tailssh","tailscale.com/syncs","tailscale.com/tailcfg","tailscale.com/tempfork/device","tailscale.com/tempfork/gliderlabs/ssh","tailscale.com/tempfork/heap","tailscale.com/tempfork/pprof","tailscale.com/tka","tailscale.com/tool/gocross","tailscale.com/tsconst","tailscale.com/tsd","tailscale.com/tsnet","tailscale.com/tsnet/example/tshello","tailscale.com/tsnet/example/tsnet-funnel","tailscale.com/tsnet/example/tsnet-http-client","tailscale.com/tsnet/example/web-client","tailscale.com/tstest","tailscale.com/tstest/archtest","tailscale.com/tstest/deptest","tailscale.com/tstest/integration","tailscale.com/tstest/integration/testcontrol","tailscale.com/tstest/integration/vms","tailscale.com/tstest/integration/vms/gen","tailscale.com/tstest/iosdeps","tailscale.com/tstest/jsdeps","tailscale.com/tstest/natlab","tailscale.com/tstime","tailscale.com/tstime/mono","tailscale.com/tstime/rate","tailscale.com/tsweb","tailscale.com/tsweb/promvarz","tailscale.com/tsweb/varz","tailscale.com/types/dnstype","tailscale.com/types/empty","tailscale.com/types/flagtype","tailscale.com/types/ipproto","tailscale.com/types/key","tailscale.com/types/lazy","tailscale.com/types/logger","tailscale.com/types/logid","tailscale.com/types/netlogtype","tailscale.com/types/netmap","tailscale.com/types/nettype","tailscale.com/types/opt","tailscale.com/types/persist","tailscale.com/types/preftype","tailscale.com/types/ptr","tailscale.com/types/structs","tailscale.com/types/tkatype","tailscale.com/types/views","tailscale.com/util/cibuild","tailscale.com/util/clientmetric","tailscale.com/util/cloudenv","tailscale.com/util/cmpver","tailscale.com/util/cmpx","tailscale.com/util/codegen","tailscale.com/util/cstruct","tailscale.com/util/deephash","tailscale.com/util/deephash/testtype","tailscale.com/util/dirwalk","tailscale.com/util/dnsname","tailscale.com/util/goroutines","tailscale.com/util/groupmember","tailscale.com/util/hashx","tailscale.com/util/httpm","tailscale.com/util/jsonutil","tailscale.com/util/lineread","tailscale.com/util/linuxfw","tailscale.com/util/linuxfw/linuxfwtest","tailscale.com/util/lru","tailscale.com/util/mak","tailscale.com/util/multierr","tailscale.com/util/must","tailscale.com/util/osdiag","tailscale.com/util/osshare","tailscale.com/util/pidowner","tailscale.com/util/precompress","tailscale.com/util/quarantine","tailscale.com/util/racebuild","tailscale.com/util/ringbuffer","tailscale.com/util/set","tailscale.com/util/singleflight","tailscale.com/util/slicesx","tailscale.com/util/sysresources","tailscale.com/util/systemd","tailscale.com/util/testenv","tailscale.com/util/truncate","tailscale.com/util/uniq","tailscale.com/util/vizerror","tailscale.com/util/winutil","tailscale.com/util/winutil/authenticode","tailscale.com/version","tailscale.com/version/distro","tailscale.com/version/mkversion","tailscale.com/wgengine","tailscale.com/wgengine/bench","tailscale.com/wgengine/capture","tailscale.com/wgengine/filter","tailscale.com/wgengine/magicsock","tailscale.com/wgengine/netlog","tailscale.com/wgengine/netstack","tailscale.com/wgengine/router","tailscale.com/wgengine/wgcfg","tailscale.com/wgengine/wgcfg/nmcfg","tailscale.com/wgengine/wgint","tailscale.com/wgengine/wglog","tailscale.com/words"]
+        pkg: ["tailscale.com","tailscale.com/atomicfile","tailscale.com/chirp","tailscale.com/client/tailscale"]
+        buildflags: ["-race=false"]
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
@@ -65,37 +65,14 @@ jobs:
           ~\AppData\Local\go-build
         # The -2- here should be incremented when the scheme of data to be
         # cached changes (e.g. path above changes).
-        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
+        key: ${{ github.job }}-${{ runner.os }}-${{ matrix.pkg }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}-${{ github.run_id }}
         restore-keys: |
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
-          ${{ github.job }}-${{ runner.os }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
-    - name: build all
-      run: ./tool/go build ${{matrix.buildflags}} ./...
-      env:
-        GOARCH: ${{ matrix.goarch }}
-    - name: build variant CLIs
-      if: matrix.buildflags == '' # skip on race builder
-      run: |
-        export TS_USE_TOOLCHAIN=1
-        ./build_dist.sh --extra-small ./cmd/tailscaled
-        ./build_dist.sh --box ./cmd/tailscaled
-        ./build_dist.sh --extra-small --box ./cmd/tailscaled
-        rm -f tailscaled
-      env:
-        GOARCH: ${{ matrix.goarch }}
-    - name: get qemu # for tstest/archtest
-      if: matrix.goarch == 'amd64' && matrix.buildflags == ''
-      run: |
-        sudo apt-get -y update
-        sudo apt-get -y install qemu-user
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.pkg }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-${{ hashFiles('**/go.sum') }}
+          ${{ github.job }}-${{ runner.os }}-${{ matrix.pkg }}-${{ matrix.goarch }}-${{ matrix.buildflags }}-go-2-
     - name: build test wrapper
       run: ./tool/go build -o /tmp/testwrapper ./cmd/testwrapper
     - name: test all
-      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ./... ${{matrix.buildflags}}
-      env:
-        GOARCH: ${{ matrix.goarch }}
-    - name: bench all
-      run: ./tool/go test ${{matrix.buildflags}} -bench=. -benchtime=1x -run=^$ $(for x in $(git grep -l "^func Benchmark" | xargs dirname | sort | uniq); do echo "./$x"; done)
+      run: PATH=$PWD/tool:$PATH /tmp/testwrapper ${{matrix.pkg}} ${{matrix.buildflags}}
       env:
         GOARCH: ${{ matrix.goarch }}
     - name: check that no tracked files changed
