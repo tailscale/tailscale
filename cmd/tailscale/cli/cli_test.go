@@ -556,6 +556,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NetfilterMode:    preftype.NetfilterOn,
 				CorpDNS:          true,
 				AllowSingleHosts: true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
 			},
 		},
 		{
@@ -569,6 +573,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				AllowSingleHosts: true,
 				RouteAll:         true,
 				NetfilterMode:    preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
 			},
 		},
 		{
@@ -584,6 +592,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 					netip.MustParsePrefix("::/0"),
 				},
 				NetfilterMode: preftype.NetfilterOn,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
 			},
 		},
 		{
@@ -670,6 +682,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:   true,
 				NetfilterMode: preftype.NetfilterNoDivert,
 				NoSNAT:        true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
 			},
 		},
 		{
@@ -683,6 +699,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				WantRunning:   true,
 				NetfilterMode: preftype.NetfilterOff,
 				NoSNAT:        true,
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
+				},
 			},
 		},
 		{
@@ -697,6 +717,10 @@ func TestPrefsFromUpArgs(t *testing.T) {
 				NoSNAT:      true,
 				AdvertiseRoutes: []netip.Prefix{
 					netip.MustParsePrefix("fd7a:115c:a1e0:b1a::bb:10.0.0.0/112"),
+				},
+				AutoUpdate: ipn.AutoUpdatePrefs{
+					Check: true,
+					Apply: false,
 				},
 			},
 		},
