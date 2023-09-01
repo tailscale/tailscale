@@ -67,6 +67,21 @@ case "$TARGET" in
       --push="${PUSH}" \
       /usr/local/bin/operator
     ;;
+  k8s-nameserver)
+    DEFAULT_REPOS="tailscale/k8s-nameserver"
+    REPOS="${REPOS:-${DEFAULT_REPOS}}"
+    go run github.com/tailscale/mkctr \
+      --gopaths="tailscale.com/cmd/k8s-nameserver:/usr/local/bin/k8s-nameserver" \
+      --ldflags=" \
+        -X tailscale.com/version.longStamp=${VERSION_LONG} \
+        -X tailscale.com/version.shortStamp=${VERSION_SHORT} \
+        -X tailscale.com/version.gitCommitStamp=${VERSION_GIT_HASH}" \
+      --base="${BASE}" \
+      --tags="${TAGS}" \
+      --repos="${REPOS}" \
+      --push="${PUSH}" \
+      /usr/local/bin/k8s-nameserver
+    ;;
   *)
     echo "unknown target: $TARGET"
     exit 1

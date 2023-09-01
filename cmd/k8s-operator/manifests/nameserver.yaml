@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nameserver
+  namespace: tailscale
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nameserver 
+  namespace: tailscale
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: nameserver 
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: nameserver 
+    spec:
+      containers:
+      - image: tailscale/k8s-nameserver:unstable # TODO: actually publish this image
+        imagePullPolicy: IfNotPresent
+        name: nameserver 
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        ports:
+        - name: udp
+          protocol: UDP 
+          containerPort: 1053
+        volumeMounts:
+        - name: dnsconfig
+          mountPath: /config
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      serviceAccount: nameserver 
+      serviceAccountName: nameserver 
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: dnsconfig
+        configMap:
+          name: dnsconfig
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nameserver
+  namespace: tailscale
+spec:
+  selector:
+    app: nameserver
+  ports:
+  - name: udp 
+    targetPort: 1053
+    port: 53
+    protocol: UDP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dnsconfig
+  namespace: tailscale
+  labels:
+   app.kubernetes.io/name: tailscale
+   app.kubernetes.io/component: nameserver
