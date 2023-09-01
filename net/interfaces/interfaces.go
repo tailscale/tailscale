@@ -364,10 +364,9 @@ func (s *State) HasIP(ip netip.Addr) bool {
 	if s == nil {
 		return false
 	}
-	want := netip.PrefixFrom(ip, ip.BitLen())
 	for _, pv := range s.InterfaceIPs {
 		for _, p := range pv {
-			if p == want {
+			if p.Contains(ip) {
 				return true
 			}
 		}
