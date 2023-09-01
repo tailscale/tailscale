@@ -353,7 +353,7 @@ func TestStateMachine(t *testing.T) {
 		// Note: a totally fresh system has Prefs.LoggedOut=false by
 		// default. We are logged out, but not because the user asked
 		// for it, so it doesn't count as Prefs.LoggedOut==true.
-		c.Assert(prefs.LoggedOut(), qt.IsFalse)
+		c.Assert(prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(prefs.WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -374,7 +374,7 @@ func TestStateMachine(t *testing.T) {
 		cc.assertCalls()
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
 		c.Assert(nn[1].State, qt.IsNotNil)
-		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
+		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, *nn[1].State)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
@@ -412,7 +412,7 @@ func TestStateMachine(t *testing.T) {
 		nn := notifies.drain(1)
 
 		c.Assert(nn[0].Prefs, qt.IsNotNil)
-		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsFalse)
+		c.Assert(nn[0].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[0].Prefs.WantRunning(), qt.IsFalse)
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
@@ -579,58 +579,38 @@ func TestStateMachine(t *testing.T) {
 	// User wants to logout.
 	store.awaitWrite()
 	t.Logf("\n\nLogout")
-	notifies.expect(2)
+	notifies.expect(5)
 	b.LogoutSync(context.Background())
 	{
-		nn := notifies.drain(2)
-		cc.assertCalls("pause", "Logout")
+		nn := notifies.drain(5)
+		previousCC.assertCalls("pause", "Logout", "unpause", "Shutdown")
 		c.Assert(nn[0].State, qt.IsNotNil)
+		c.Assert(*nn[0].State, qt.Equals, ipn.Stopped)
+
 		c.Assert(nn[1].Prefs, qt.IsNotNil)
-		c.Assert(ipn.Stopped, qt.Equals, *nn[0].State)
 		c.Assert(nn[1].Prefs.LoggedOut(), qt.IsTrue)
 		c.Assert(nn[1].Prefs.WantRunning(), qt.IsFalse)
-		c.Assert(ipn.Stopped, qt.Equals, b.State())
+
+		cc.assertCalls("New")
+		c.Assert(nn[2].State, qt.IsNotNil)
+		c.Assert(*nn[2].State, qt.Equals, ipn.NoState)
+
+		c.Assert(nn[3].Prefs, qt.IsNotNil) // emptyPrefs
+		c.Assert(nn[3].Prefs.LoggedOut(), qt.IsTrue)
+		c.Assert(nn[3].Prefs.WantRunning(), qt.IsFalse)
+
+		c.Assert(nn[4].State, qt.IsNotNil)
+		c.Assert(*nn[4].State, qt.Equals, ipn.NeedsLogin)
+
+		c.Assert(b.State(), qt.Equals, ipn.NeedsLogin)
+
 		c.Assert(store.sawWrite(), qt.IsTrue)
 	}
 
-	// Let's make the logout succeed.
-	t.Logf("\n\nLogout - succeed")
-	notifies.expect(3)
-	cc.send(nil, "", false, nil)
-	{
-		previousCC.assertShutdown(true)
-		nn := notifies.drain(3)
-		cc.assertCalls("New")
-		c.Assert(nn[0].State, qt.IsNotNil)
-		c.Assert(*nn[0].State, qt.Equals, ipn.NoState)
-		c.Assert(nn[1].Prefs, qt.IsNotNil) // emptyPrefs
-		c.Assert(nn[2].State, qt.IsNotNil)
-		c.Assert(*nn[2].State, qt.Equals, ipn.NeedsLogin)
-		c.Assert(b.Prefs().LoggedOut(), qt.IsFalse)
-		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(b.State(), qt.Equals, ipn.NeedsLogin)
-	}
-
-	// A second logout should reset all prefs.
+	// A second logout should be a no-op as we are in the NeedsLogin state.
 	t.Logf("\n\nLogout2")
-	notifies.expect(1)
-	b.LogoutSync(context.Background())
-	{
-		nn := notifies.drain(1)
-		c.Assert(nn[0].Prefs, qt.IsNotNil) // emptyPrefs
-		// BUG: the backend has already called StartLogout, and we're
-		// still logged out. So it shouldn't call it again.
-		cc.assertCalls("Logout")
-		cc.assertCalls()
-		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
-	}
-
-	// Let's acknowledge the second logout too.
-	t.Logf("\n\nLogout2 (async) - succeed")
 	notifies.expect(0)
-	cc.send(nil, "", false, nil)
+	b.LogoutSync(context.Background())
 	{
 		notifies.drain(0)
 		cc.assertCalls()
@@ -639,24 +619,11 @@ func TestStateMachine(t *testing.T) {
 		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
 	}
 
-	// Try the synchronous logout feature.
-	t.Logf("\n\nLogout (sync)")
-	notifies.expect(0)
+	// A third logout should also be a no-op as the cc should be in
+	// AuthCantContinue state.
+	t.Logf("\n\nLogout3")
+	notifies.expect(3)
 	b.LogoutSync(context.Background())
-	// NOTE: This returns as soon as cc.Logout() returns, which is okay
-	// I guess, since that's supposed to be synchronous.
-	{
-		notifies.drain(0)
-		cc.assertCalls("Logout")
-		c.Assert(b.Prefs().LoggedOut(), qt.IsTrue)
-		c.Assert(b.Prefs().WantRunning(), qt.IsFalse)
-		c.Assert(ipn.NeedsLogin, qt.Equals, b.State())
-	}
-
-	// Generate the third logout event.
-	t.Logf("\n\nLogout3 (sync) - succeed")
-	notifies.expect(0)
-	cc.send(nil, "", false, nil)
 	{
 		notifies.drain(0)
 		cc.assertCalls()

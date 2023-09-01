@@ -93,12 +93,6 @@ type Status struct {
 // TODO(bradfitz): delete this and everything around Status.state.
 func (s *Status) LoginFinished() bool { return s.state == StateAuthenticated }
 
-// LogoutFinished reports whether the controlclient is in its "StateNotAuthenticated"
-// state where we don't want to be logged in.
-//
-// TODO(bradfitz): delete this and everything around Status.state.
-func (s *Status) LogoutFinished() bool { return s.state == StateNotAuthenticated }
-
 // StateForTest returns the internal state of s for tests only.
 func (s *Status) StateForTest() State { return s.state }
 

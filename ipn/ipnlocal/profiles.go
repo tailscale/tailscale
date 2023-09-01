@@ -439,6 +439,7 @@ func (pm *profileManager) NewProfile() {
 // defaultPrefs is the default prefs for a new profile.
 var defaultPrefs = func() ipn.PrefsView {
 	prefs := ipn.NewPrefs()
+	prefs.LoggedOut = true
 	prefs.WantRunning = false
 
 	prefs.ControlURL = winutil.GetPolicyString("LoginURL", "")
