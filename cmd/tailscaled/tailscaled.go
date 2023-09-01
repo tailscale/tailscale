@@ -202,6 +202,10 @@ func main() {
 		}
 	}
 
+	if fd, ok := envknob.LookupInt("TS_PARENT_DEATH_FD"); ok && fd > 2 {
+		go dieOnPipeReadErrorOfFD(fd)
+	}
+
 	if printVersion {
 		fmt.Println(version.String())
 		os.Exit(0)
@@ -768,4 +772,15 @@ func beChild(args []string) error {
 		return fmt.Errorf("unknown be-child mode %q", typ)
 	}
 	return f(args[1:])
+}
+
+// dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process
+// when the pipe becomes readable. We use this in tests as a somewhat more
+// portable mechanism for the Linux PR_SET_PDEATHSIG, which we wish existed on
+// macOS. This helps us clean up straggler tailscaled processes when the parent
+// test driver dies unexpectedly.
+func dieOnPipeReadErrorOfFD(fd int) {
+	f := os.NewFile(uintptr(fd), "TS_PARENT_DEATH_FD")
+	f.Read(make([]byte, 1))
+	os.Exit(1)
 }

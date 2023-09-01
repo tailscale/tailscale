@@ -934,6 +934,15 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
 	}
+	if runtime.GOOS != "windows" {
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { pw.Close() })
+		cmd.ExtraFiles = append(cmd.ExtraFiles, pr)
+		cmd.Env = append(cmd.Env, "TS_PARENT_DEATH_FD=3")
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
