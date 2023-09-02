@@ -595,7 +595,7 @@ func (c *Auto) sendStatus(who string, err error, url string, nm *netmap.NetworkM
 	// Launch a new goroutine to avoid blocking the caller while the observer
 	// does its thing, which may result in a call back into the client.
 	c.observerQueue.Add(func() {
-		c.observer.SetControlClientStatus(new)
+		c.observer.SetControlClientStatus(c, new)
 	})
 }
 
@@ -667,6 +667,7 @@ func (c *Auto) Shutdown() {
 	direct := c.direct
 	if !closed {
 		c.closed = true
+		c.observerQueue.shutdown()
 		c.cancelAuthCtxLocked()
 		c.cancelMapCtxLocked()
 		for _, w := range c.unpauseWaiters {

@@ -173,7 +173,7 @@ func (cc *mockControl) send(err error, url string, loginFinished bool, nm *netma
 		} else if url == "" && err == nil && nm == nil {
 			s.SetStateForTest(controlclient.StateNotAuthenticated)
 		}
-		cc.opts.Observer.SetControlClientStatus(s)
+		cc.opts.Observer.SetControlClientStatus(cc, s)
 	}
 }
 

@@ -104,7 +104,11 @@ type Direct struct {
 // Observer is implemented by users of the control client (such as LocalBackend)
 // to get notified of changes in the control client's status.
 type Observer interface {
-	SetControlClientStatus(Status)
+	// SetControlClientStatus is called when the client has a new status to
+	// report. The Client is provided to allow the Observer to track which
+	// Client is reporting the status, allowing it to ignore stale status
+	// reports from previous Clients.
+	SetControlClientStatus(Client, Status)
 }
 
 type Options struct {
