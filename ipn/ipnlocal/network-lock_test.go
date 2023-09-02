@@ -31,7 +31,7 @@ import (
 
 type observerFunc func(controlclient.Status)
 
-func (f observerFunc) SetControlClientStatus(s controlclient.Status) {
+func (f observerFunc) SetControlClientStatus(_ controlclient.Client, s controlclient.Status) {
 	f(s)
 }
 

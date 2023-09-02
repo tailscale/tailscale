@@ -897,9 +897,16 @@ func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, er
 
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
-func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
+func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
+	b.mu.Lock()
+	if b.cc != c {
+		b.logf("Ignoring SetControlClientStatus from old client")
+		b.mu.Unlock()
+		return
+	}
 	// The following do not depend on any data for which we need to lock b.
 	if st.Err != nil {
+		b.mu.Unlock()
 		if errors.Is(st.Err, io.EOF) {
 			b.logf("[v1] Received error: EOF")
 			return
@@ -915,8 +922,6 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 
 	// Track the number of calls
 	currCall := b.numClientStatusCalls.Add(1)
-
-	b.mu.Lock()
 
 	// Handle node expiry in the netmap
 	if st.NetMap != nil {
@@ -953,7 +958,7 @@ func (b *LocalBackend) SetControlClientStatus(st controlclient.Status) {
 				// Call ourselves with the current status again; the logic in
 				// setClientStatus will take care of updating the expired field
 				// of peers in the netmap.
-				b.SetControlClientStatus(st)
+				b.SetControlClientStatus(c, st)
 			})
 		}
 	}
@@ -1340,16 +1345,14 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	hostinfo.Userspace.Set(b.sys.IsNetstack())
 	hostinfo.UserspaceRouter.Set(b.sys.IsNetstackRouter())
 
-	if b.cc != nil {
-		// TODO(apenwarr): avoid the need to reinit controlclient.
-		// This will trigger a full relogin/reconfigure cycle every
-		// time a Handle reconnects to the backend. Ideally, we
-		// would send the new Prefs and everything would get back
-		// into sync with the minimal changes. But that's not how it
-		// is right now, which is a sign that the code is still too
-		// complicated.
-		b.resetControlClientLockedAsync()
-	}
+	// TODO(apenwarr): avoid the need to reinit controlclient.
+	// This will trigger a full relogin/reconfigure cycle every
+	// time a Handle reconnects to the backend. Ideally, we
+	// would send the new Prefs and everything would get back
+	// into sync with the minimal changes. But that's not how it
+	// is right now, which is a sign that the code is still too
+	// complicated.
+	prevCC := b.resetControlClientLocked()
 	httpTestClient := b.httpTestClient
 
 	if b.hostinfo != nil {
@@ -1427,6 +1430,10 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	debugFlags := controlDebugFlags
 	if isNetstack {
 		debugFlags = append([]string{"netstack"}, debugFlags...)
+	}
+
+	if prevCC != nil {
+		prevCC.Shutdown()
 	}
 
 	// TODO(apenwarr): The only way to change the ServerURL is to
@@ -3847,12 +3854,12 @@ func (b *LocalBackend) requestEngineStatusAndWait() {
 	b.statusLock.Unlock()
 }
 
-// resetControlClientLockedAsync sets b.cc to nil, and starts a
-// goroutine to Shutdown the old client. It does not wait for the
-// shutdown to complete.
-func (b *LocalBackend) resetControlClientLockedAsync() {
+// resetControlClientLocked sets b.cc to nil and returns the old value. If the
+// returned value is non-nil, the caller must call Shutdown on it after
+// releasing b.mu.
+func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 	if b.cc == nil {
-		return
+		return nil
 	}
 
 	// When we clear the control client, stop any outstanding netmap expiry
@@ -3868,9 +3875,10 @@ func (b *LocalBackend) resetControlClientLockedAsync() {
 		// will abort.
 		b.numClientStatusCalls.Add(1)
 	}
-	b.cc.Shutdown()
+	prev := b.cc
 	b.cc = nil
 	b.ccAuto = nil
+	return prev
 }
 
 // ResetForClientDisconnect resets the backend for GUI clients running
@@ -3881,10 +3889,16 @@ func (b *LocalBackend) resetControlClientLockedAsync() {
 // when they restart the GUI.
 func (b *LocalBackend) ResetForClientDisconnect() {
 	defer b.enterState(ipn.Stopped)
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.logf("LocalBackend.ResetForClientDisconnect")
-	b.resetControlClientLockedAsync()
+
+	b.mu.Lock()
+	prevCC := b.resetControlClientLocked()
+	if prevCC != nil {
+		// Needs to happen without b.mu held.
+		defer prevCC.Shutdown()
+	}
+	defer b.mu.Unlock()
+
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
 	b.keyExpired = false
@@ -4997,7 +5011,10 @@ func (b *LocalBackend) ListProfiles() []ipn.LoginProfile {
 // called to register it as new node.
 func (b *LocalBackend) ResetAuth() error {
 	b.mu.Lock()
-	b.resetControlClientLockedAsync()
+	prevCC := b.resetControlClientLocked()
+	if prevCC != nil {
+		defer prevCC.Shutdown() // call must happen after release b.mu
+	}
 	if err := b.clearMachineKeyLocked(); err != nil {
 		b.mu.Unlock()
 		return err
