@@ -24,6 +24,7 @@ import (
 	"go4.org/mem"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -1644,7 +1645,7 @@ func (c *Conn) SetPreferredPort(port uint16) {
 	c.port.Store(uint32(port))
 
 	if err := c.rebind(dropCurrentPort); err != nil {
-		c.logf("%w", err)
+		c.logf("%v", err)
 		return
 	}
 	c.resetEndpointStates()
@@ -2276,7 +2277,7 @@ func (c *Conn) rebind(curPortFate currentPortFate) error {
 func (c *Conn) Rebind() {
 	metricRebindCalls.Add(1)
 	if err := c.rebind(keepCurrentPort); err != nil {
-		c.logf("%w", err)
+		c.logf("%v", err)
 		return
 	}
 

@@ -186,7 +186,7 @@ func NewNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 
 	v6err := checkIPv6(logf)
 	if v6err != nil {
-		logf("disabling tunneled IPv6 due to system IPv6 config: %w", v6err)
+		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
 	supportsV6NAT := supportsV6 && checkSupportsV6NAT()
