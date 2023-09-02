@@ -203,9 +203,8 @@ type LocalBackend struct {
 	capFileSharing bool // whether netMap contains the file sharing capability
 	capTailnetLock bool // whether netMap contains the tailnet lock capability
 	// hostinfo is mutated in-place while mu is held.
-	hostinfo *tailcfg.Hostinfo
-	// netMap is not mutated in-place once set.
-	netMap           *netmap.NetworkMap
+	hostinfo         *tailcfg.Hostinfo
+	netMap           *netmap.NetworkMap     // not mutated in place once set (except for Peers slice)
 	nmExpiryTimer    tstime.TimerController // for updating netMap on node expiry; can be nil
 	nodeByAddr       map[netip.Addr]tailcfg.NodeView
 	activeLogin      string // last logged LoginName from netMap
@@ -1119,6 +1118,56 @@ func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st control
 	// This is currently (2020-07-28) necessary; conditionally disabling it is fragile!
 	// This is where netmap information gets propagated to router and magicsock.
 	b.authReconfig()
+}
+
+var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
+
+// UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
+func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
+	mc, err := b.magicConn()
+	if err != nil {
+		panic(err) // shouldn't happen
+	}
+	if !mc.UpdateNetmapDelta(muts) {
+		return false
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.updateNetmapDeltaLocked(muts)
+}
+
+func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (handled bool) {
+	if b.netMap == nil {
+		return false
+	}
+	peers := b.netMap.Peers
+
+	for _, m := range muts {
+		// LocalBackend only cares about some types of mutations.
+		// (magicsock cares about different ones.)
+		switch m.(type) {
+		case netmap.NodeMutationOnline, netmap.NodeMutationLastSeen:
+		default:
+			continue
+		}
+
+		nodeID := m.NodeIDBeingMutated()
+		idx := b.netMap.PeerIndexByNodeID(nodeID)
+		if idx == -1 {
+			continue
+		}
+		mut := peers[idx].AsStruct()
+
+		switch m := m.(type) {
+		case netmap.NodeMutationOnline:
+			mut.Online = ptr.To(m.Online)
+		case netmap.NodeMutationLastSeen:
+			mut.LastSeen = ptr.To(m.LastSeen)
+		}
+		peers[idx] = mut.View()
+	}
+	return true
 }
 
 // setExitNodeID updates prefs to reference an exit node by ID, rather
