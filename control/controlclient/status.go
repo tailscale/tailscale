@@ -37,6 +37,10 @@ const (
 	StateSynchronized // connected and received map update
 )
 
+func (s State) AppendText(b []byte) ([]byte, error) {
+	return append(b, s.String()...), nil
+}
+
 func (s State) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
 }

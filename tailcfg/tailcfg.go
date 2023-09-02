@@ -7,7 +7,6 @@ package tailcfg
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -444,6 +443,10 @@ const (
 	MachineAuthorized   // server has approved
 	MachineInvalid      // server has explicitly rejected this machine key
 )
+
+func (m MachineStatus) AppendText(b []byte) ([]byte, error) {
+	return append(b, m.String()...), nil
+}
 
 func (m MachineStatus) MarshalText() ([]byte, error) {
 	return []byte(m.String()), nil
@@ -920,6 +923,10 @@ const (
 	// (rsa.PSSSaltLengthEqualsHash). Device cert is required.
 	SignatureV2
 )
+
+func (st SignatureType) AppendText(b []byte) ([]byte, error) {
+	return append(b, st.String()...), nil
+}
 
 func (st SignatureType) MarshalText() ([]byte, error) {
 	return []byte(st.String()), nil
@@ -1763,18 +1770,6 @@ type Debug struct {
 	// with this code. This is a safety measure in case a client is crash
 	// looping or in an unsafe state and we need to remotely shut it down.
 	Exit *int `json:",omitempty"`
-}
-
-func appendKey(base []byte, prefix string, k [32]byte) []byte {
-	ret := append(base, make([]byte, len(prefix)+64)...)
-	buf := ret[len(base):]
-	copy(buf, prefix)
-	hex.Encode(buf[len(prefix):], k[:])
-	return ret
-}
-
-func keyMarshalText(prefix string, k [32]byte) []byte {
-	return appendKey(nil, prefix, k)
 }
 
 func (id ID) String() string      { return fmt.Sprintf("id:%x", int64(id)) }

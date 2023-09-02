@@ -67,9 +67,14 @@ func (k MachinePrivate) Public() MachinePublic {
 	return ret
 }
 
+// AppendText implements encoding.TextAppender.
+func (k MachinePrivate) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, machinePrivateHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (k MachinePrivate) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], machinePrivateHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // MarshalText implements encoding.TextUnmarshaler.
@@ -243,9 +248,14 @@ func (k MachinePublic) String() string {
 	return string(bs)
 }
 
+// AppendText implements encoding.TextAppender.
+func (k MachinePublic) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, machinePublicHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (k MachinePublic) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], machinePublicHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // MarshalText implements encoding.TextUnmarshaler.
