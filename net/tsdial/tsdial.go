@@ -23,6 +23,7 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 )
 
@@ -138,15 +139,24 @@ func (d *Dialer) SetNetMon(netMon *netmon.Monitor) {
 	d.netMonUnregister = d.netMon.RegisterChangeCallback(d.linkChanged)
 }
 
+var (
+	metricLinkChangeConnClosed = clientmetric.NewCounter("tsdial_linkchange_closes")
+)
+
 func (d *Dialer) linkChanged(delta *netmon.ChangeDelta) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	var anyClosed bool
 	for id, c := range d.activeSysConns {
 		if changeAffectsConn(delta, c) {
+			anyClosed = true
 			d.logf("tsdial: closing system connection %v->%v due to link change", c.LocalAddr(), c.RemoteAddr())
 			go c.Close()
 			delete(d.activeSysConns, id)
 		}
+	}
+	if anyClosed {
+		metricLinkChangeConnClosed.Add(1)
 	}
 }
 
