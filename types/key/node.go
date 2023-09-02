@@ -103,9 +103,14 @@ func (k NodePrivate) Public() NodePublic {
 	return ret
 }
 
+// AppendText implements encoding.TextAppender.
+func (k NodePrivate) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, nodePrivateHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (k NodePrivate) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], nodePrivateHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // MarshalText implements encoding.TextUnmarshaler.
@@ -308,9 +313,14 @@ func (k NodePublic) String() string {
 	return string(bs)
 }
 
+// AppendText implements encoding.TextAppender.
+func (k NodePublic) AppendText(b []byte) ([]byte, error) {
+	return appendHexKey(b, nodePublicHexPrefix, k.k[:]), nil
+}
+
 // MarshalText implements encoding.TextMarshaler.
 func (k NodePublic) MarshalText() ([]byte, error) {
-	return toHex(k.k[:], nodePublicHexPrefix), nil
+	return k.AppendText(nil)
 }
 
 // MarshalText implements encoding.TextUnmarshaler.

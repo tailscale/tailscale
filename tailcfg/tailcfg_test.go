@@ -16,11 +16,9 @@ import (
 	"time"
 
 	. "tailscale.com/tailcfg"
-	"tailscale.com/tstest"
 	"tailscale.com/types/key"
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/must"
-	"tailscale.com/version"
 )
 
 func fieldsOf(t reflect.Type) (fields []string) {
@@ -680,29 +678,6 @@ func TestEndpointTypeMarshal(t *testing.T) {
 	const want = `[0,1,2,3,4]`
 	if string(got) != want {
 		t.Errorf("got %s; want %s", got, want)
-	}
-}
-
-var sinkBytes []byte
-
-func BenchmarkKeyMarshalText(b *testing.B) {
-	b.ReportAllocs()
-	var k [32]byte
-	for i := 0; i < b.N; i++ {
-		sinkBytes = ExportKeyMarshalText("prefix", k)
-	}
-}
-
-func TestAppendKeyAllocs(t *testing.T) {
-	if version.IsRace() {
-		t.Skip("skipping in race detector") // append(b, make([]byte, N)...) not optimized in compiler with race
-	}
-	var k [32]byte
-	err := tstest.MinAllocsPerRun(t, 1, func() {
-		sinkBytes = ExportKeyMarshalText("prefix", k)
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
