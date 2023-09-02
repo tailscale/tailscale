@@ -1995,6 +1995,11 @@ const (
 	// new attempts at UPnP connections.
 	NodeAttrDisableUPnP = "debug-disable-upnp"
 
+	// NodeAttrDisableDeltaUpdates makes the client not process updates via the
+	// delta update mechanism and should instead treat all netmap changes as
+	// "full" ones as tailscaled did in 1.48.x and earlier.
+	NodeAttrDisableDeltaUpdates = "disable-delta-updates"
+
 	// NodeAttrRandomizeClientPort makes magicsock UDP bind to
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.

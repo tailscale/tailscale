@@ -194,6 +194,19 @@ type NetmapUpdater interface {
 	// the diff themselves between the previous full & next full network maps.
 }
 
+// NetmapDeltaUpdater is an optional interface that can be implemented by
+// NetmapUpdater implementations to receive delta updates from the controlclient
+// rather than just full updates.
+type NetmapDeltaUpdater interface {
+	// UpdateNetmapDelta is called with discrete changes to the network map.
+	//
+	// The ok result is whether the implementation was able to apply the
+	// mutations. It might return false if its internal state doesn't
+	// support applying them or a NetmapUpdater it's wrapping doesn't
+	// implement the NetmapDeltaUpdater optional method.
+	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
+}
+
 // NewDirect returns a new Direct client.
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
@@ -1301,6 +1314,7 @@ func (ms *mapSession) setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
 		disableDRPO         bool
 		disableUPnP         bool
 		randomizeClientPort bool
+		disableDeltaUpdates bool
 		oneCGNAT            opt.Bool
 		forceBackgroundSTUN bool
 	)
@@ -1320,6 +1334,8 @@ func (ms *mapSession) setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
 			oneCGNAT.Set(false)
 		case tailcfg.NodeAttrDebugForceBackgroundSTUN:
 			forceBackgroundSTUN = true
+		case tailcfg.NodeAttrDisableDeltaUpdates:
+			disableDeltaUpdates = true
 		}
 	}
 	k.KeepFullWGConfig.Store(keepFullWG)
@@ -1328,6 +1344,7 @@ func (ms *mapSession) setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
 	k.RandomizeClientPort.Store(randomizeClientPort)
 	k.OneCGNAT.Store(oneCGNAT)
 	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
+	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled

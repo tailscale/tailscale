@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
@@ -39,7 +40,7 @@ import (
 // one MapRequest).
 type mapSession struct {
 	// Immutable fields.
-	nu             NetmapUpdater       // called on changes (in addition to the optional hooks below)
+	netmapUpdater  NetmapUpdater       // called on changes (in addition to the optional hooks below)
 	controlKnobs   *controlknobs.Knobs // or nil
 	privateNodeKey key.NodePrivate
 	publicNodeKey  key.NodePublic
@@ -98,7 +99,7 @@ type mapSession struct {
 // It must have its Close method called to release resources.
 func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnobs *controlknobs.Knobs) *mapSession {
 	ms := &mapSession{
-		nu:              nu,
+		netmapUpdater:   nu,
 		controlKnobs:    controlKnobs,
 		privateNodeKey:  privateNodeKey,
 		publicNodeKey:   privateNodeKey.Public(),
@@ -197,8 +198,16 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 
 	ms.updateStateFromResponse(resp)
 
-	nm := ms.netmap()
+	if ms.tryHandleIncrementally(resp) {
+		ms.onConciseNetMapSummary(ms.lastNetmapSummary) // every 5s log
+		return nil
+	}
 
+	// We have to rebuild the whole netmap (lots of garbage & work downstream of
+	// our UpdateFullNetmap call). This is the part we tried to avoid but
+	// some field mutations (especially rare ones) aren't yet handled.
+
+	nm := ms.netmap()
 	ms.lastNetmapSummary = nm.VeryConcise()
 	ms.onConciseNetMapSummary(ms.lastNetmapSummary)
 
@@ -207,8 +216,23 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		ms.onSelfNodeChanged(nm)
 	}
 
-	ms.nu.UpdateFullNetmap(nm)
+	ms.netmapUpdater.UpdateFullNetmap(nm)
 	return nil
+}
+
+func (ms *mapSession) tryHandleIncrementally(res *tailcfg.MapResponse) bool {
+	if ms.controlKnobs != nil && ms.controlKnobs.DisableDeltaUpdates.Load() {
+		return false
+	}
+	nud, ok := ms.netmapUpdater.(NetmapDeltaUpdater)
+	if !ok {
+		return false
+	}
+	mutations, ok := netmap.MutationsFromMapResponse(res, time.Now())
+	if ok && len(mutations) > 0 {
+		return nud.UpdateNetmapDelta(mutations)
+	}
+	return ok
 }
 
 // updateStats are some stats from updateStateFromResponse, primarily for

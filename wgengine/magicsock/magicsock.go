@@ -2588,6 +2588,29 @@ func simpleDur(d time.Duration) time.Duration {
 	return d.Round(time.Minute)
 }
 
+// UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
+func (c *Conn) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, m := range muts {
+		nodeID := m.NodeIDBeingMutated()
+		ep, ok := c.peerMap.endpointForNodeID(nodeID)
+		if !ok {
+			continue
+		}
+		switch m := m.(type) {
+		case netmap.NodeMutationDERPHome:
+			ep.setDERPHome(uint16(m.DERPRegion))
+		case netmap.NodeMutationEndpoints:
+			ep.mu.Lock()
+			ep.setEndpointsLocked(views.SliceOf(m.Endpoints))
+			ep.mu.Unlock()
+		}
+	}
+	return true
+}
+
 // UpdateStatus implements the interface nede by ipnstate.StatusBuilder.
 //
 // This method adds in the magicsock-specific information only. Most
