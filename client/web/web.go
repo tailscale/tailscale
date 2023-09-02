@@ -457,7 +457,7 @@ func (s *Server) csrfKey() []byte {
 	// create a new key
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		log.Fatal("error generating CSRF key: %w", err)
+		log.Fatalf("error generating CSRF key: %v", err)
 	}
 
 	// if running in CGI mode, try to write the newly created key to disk, and exit if it fails.
