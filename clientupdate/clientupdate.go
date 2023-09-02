@@ -863,7 +863,7 @@ func (up *Updater) updateLinuxBinary() error {
 		return err
 	}
 	if err := os.Remove(dlPath); err != nil {
-		up.Logf("failed to clean up %q: %w", dlPath, err)
+		up.Logf("failed to clean up %q: %v", dlPath, err)
 	}
 	if err := restartSystemdUnit(context.Background()); err != nil {
 		if errors.Is(err, errors.ErrUnsupported) {
