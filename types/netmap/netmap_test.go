@@ -280,3 +280,31 @@ func TestConciseDiffFrom(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerIndexByNodeID(t *testing.T) {
+	var nilPtr *NetworkMap
+	if nilPtr.PeerIndexByNodeID(123) != -1 {
+		t.Errorf("nil PeerIndexByNodeID should return -1")
+	}
+	var nm NetworkMap
+	const min = 2
+	const max = 10000
+	const hole = max / 2
+	for nid := tailcfg.NodeID(2); nid <= max; nid++ {
+		if nid == hole {
+			continue
+		}
+		nm.Peers = append(nm.Peers, (&tailcfg.Node{ID: nid}).View())
+	}
+	for want, nv := range nm.Peers {
+		got := nm.PeerIndexByNodeID(nv.ID())
+		if got != want {
+			t.Errorf("PeerIndexByNodeID(%v) = %v; want %v", nv.ID(), got, want)
+		}
+	}
+	for _, miss := range []tailcfg.NodeID{min - 1, hole, max + 1} {
+		if got := nm.PeerIndexByNodeID(miss); got != -1 {
+			t.Errorf("PeerIndexByNodeID(%v) = %v; want -1", miss, got)
+		}
+	}
+}

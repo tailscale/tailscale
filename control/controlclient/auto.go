@@ -432,6 +432,8 @@ type mapRoutineState struct {
 	bo *backoff.Backoff
 }
 
+var _ NetmapDeltaUpdater = mapRoutineState{}
+
 func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	c := mrs.c
 
@@ -451,6 +453,28 @@ func (mrs mapRoutineState) UpdateFullNetmap(nm *netmap.NetworkMap) {
 	}
 	// Reset the backoff timer if we got a netmap.
 	mrs.bo.BackOff(ctx, nil)
+}
+
+func (mrs mapRoutineState) UpdateNetmapDelta(muts []netmap.NodeMutation) bool {
+	c := mrs.c
+
+	c.mu.Lock()
+	goodState := c.loggedIn && c.inMapPoll
+	ndu, canDelta := c.observer.(NetmapDeltaUpdater)
+	c.mu.Unlock()
+
+	if !goodState || !canDelta {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(c.mapCtx, 2*time.Second)
+	defer cancel()
+
+	var ok bool
+	err := c.observerQueue.RunSync(ctx, func() {
+		ok = ndu.UpdateNetmapDelta(muts)
+	})
+	return err == nil && ok
 }
 
 // mapRoutine is responsible for keeping a read-only streaming connection to the
@@ -749,6 +773,27 @@ func (q *execQueue) Add(f func()) {
 	} else {
 		q.inFlight = true
 		go q.run(f)
+	}
+}
+
+// RunSync waits for the queue to be drained and then synchronously runs f.
+// It returns an error if the queue is closed before f is run or ctx expires.
+func (q *execQueue) RunSync(ctx context.Context, f func()) error {
+	for {
+		if err := q.wait(ctx); err != nil {
+			return err
+		}
+		q.mu.Lock()
+		if q.inFlight {
+			q.mu.Unlock()
+			continue
+		}
+		defer q.mu.Unlock()
+		if q.closed {
+			return errors.New("closed")
+		}
+		f()
+		return nil
 	}
 }
 

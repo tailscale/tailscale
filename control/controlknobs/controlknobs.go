@@ -38,6 +38,11 @@ type Knobs struct {
 	// ForceBackgroundSTUN forces netcheck STUN queries to keep
 	// running in magicsock, even when idle.
 	ForceBackgroundSTUN atomic.Bool
+
+	// DisableDeltaUpdates is whether the node should not process
+	// incremental (delta) netmap updates and should treat all netmap
+	// changes as "full" ones as tailscaled did in 1.48.x and earlier.
+	DisableDeltaUpdates atomic.Bool
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -53,5 +58,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"RandomizeClientPort": k.RandomizeClientPort.Load(),
 		"OneCGNAT":            k.OneCGNAT.Load(),
 		"ForceBackgroundSTUN": k.ForceBackgroundSTUN.Load(),
+		"DisableDeltaUpdates": k.DisableDeltaUpdates.Load(),
 	}
 }

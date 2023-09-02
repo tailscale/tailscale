@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/views"
+	"tailscale.com/util/cmpx"
 	"tailscale.com/wgengine/filter"
 )
 
@@ -122,6 +124,23 @@ func (nm *NetworkMap) PeerByTailscaleIP(ip netip.Addr) (peer tailcfg.NodeView, o
 		}
 	}
 	return tailcfg.NodeView{}, false
+}
+
+// PeerIndexByNodeID returns the index of the peer with the given nodeID
+// in nm.Peers, or -1 if nm is nil or not found.
+//
+// It assumes nm.Peers is sorted by Node.ID.
+func (nm *NetworkMap) PeerIndexByNodeID(nodeID tailcfg.NodeID) int {
+	if nm == nil {
+		return -1
+	}
+	idx, ok := sort.Find(len(nm.Peers), func(i int) int {
+		return cmpx.Compare(nodeID, nm.Peers[i].ID())
+	})
+	if !ok {
+		return -1
+	}
+	return idx
 }
 
 // MagicDNSSuffix returns the domain's MagicDNS suffix (even if MagicDNS isn't

@@ -26,6 +26,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -877,5 +878,77 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	defer b.mu.Unlock()
 	if len(b.notifyWatchers) != 0 {
 		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
+	}
+}
+
+// tests LocalBackend.updateNetmapDeltaLocked
+func TestUpdateNetmapDelta(t *testing.T) {
+	var b LocalBackend
+	if b.updateNetmapDeltaLocked(nil) {
+		t.Errorf("updateNetmapDeltaLocked() = true, want false with nil netmap")
+	}
+
+	b.netMap = &netmap.NetworkMap{}
+	for i := 0; i < 5; i++ {
+		b.netMap.Peers = append(b.netMap.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
+	}
+
+	someTime := time.Unix(123, 0)
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:     1,
+				DERPRegion: 1,
+			},
+			{
+				NodeID: 2,
+				Online: ptr.To(true),
+			},
+			{
+				NodeID: 3,
+				Online: ptr.To(false),
+			},
+			{
+				NodeID:   4,
+				LastSeen: ptr.To(someTime),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	if !b.updateNetmapDeltaLocked(muts) {
+		t.Fatalf("updateNetmapDeltaLocked() = false, want true with new netmap")
+	}
+
+	wants := []*tailcfg.Node{
+		{
+			ID:   1,
+			DERP: "", // unmodified by the delta
+		},
+		{
+			ID:     2,
+			Online: ptr.To(true),
+		},
+		{
+			ID:     3,
+			Online: ptr.To(false),
+		},
+		{
+			ID:       4,
+			LastSeen: ptr.To(someTime),
+		},
+	}
+	for _, want := range wants {
+		idx := b.netMap.PeerIndexByNodeID(want.ID)
+		if idx == -1 {
+			t.Errorf("ID %v not found in netmap", want.ID)
+			continue
+		}
+		got := b.netMap.Peers[idx].AsStruct()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
+		}
 	}
 }
