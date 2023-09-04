@@ -1470,6 +1470,13 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 
 	b.mu.Lock()
+	// Even though we reset b.cc above, we might have raced with
+	// another Start() call. If so, shut down the previous one again
+	// as we do not know if it was created with the same options.
+	prevCC = b.resetControlClientLocked()
+	if prevCC != nil {
+		defer prevCC.Shutdown() // must be called after b.mu is unlocked
+	}
 	b.cc = cc
 	b.ccAuto, _ = cc.(*controlclient.Auto)
 	endpoints := b.endpoints
