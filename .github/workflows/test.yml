@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -116,7 +116,7 @@ jobs:
     runs-on: windows-2022
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Install Go
       uses: actions/setup-go@v4
@@ -155,7 +155,7 @@ jobs:
     if: github.repository == 'tailscale/tailscale'
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Run VM tests
       run: ./tool/go test ./tstest/integration/vms -v -no-s3 -run-vm-tests -run=TestRunUbuntu2004
       env:
@@ -204,7 +204,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: build some
       run: ./tool/go build ./ipn/... ./wgengine/ ./types/... ./control/controlclient
       env:
@@ -255,7 +255,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       # Super minimal Android build that doesn't even use CGO and doesn't build everything that's needed
       # and is only arm64. But it's a smoke build: it's not meant to catch everything. But it'll catch
       # some Android breakages early.
@@ -270,7 +270,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: Restore Cache
       uses: actions/cache@v3
       with:
@@ -304,7 +304,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: test tailscale_go
       run: ./tool/go test -tags=tailscale_go,ts_enable_sockstats ./net/sockstats/...
 
@@ -372,7 +372,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check depaware
       run: |
         export PATH=$(./tool/go env GOROOT)/bin:$PATH
@@ -382,7 +382,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check that 'go generate' is clean
       run: |
         pkgs=$(./tool/go list ./... | grep -v dnsfallback)
@@ -395,7 +395,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check that 'go mod tidy' is clean
       run: |
         ./tool/go mod tidy
@@ -407,7 +407,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: check licenses
       run: ./scripts/check_license_headers.sh .
 
@@ -423,7 +423,7 @@ jobs:
             goarch: "386"
     steps:
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: install staticcheck
       run: GOBIN=~/.local/bin ./tool/go install honnef.co/go/tools/cmd/staticcheck
     - name: run staticcheck

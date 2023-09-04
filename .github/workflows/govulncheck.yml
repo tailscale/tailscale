@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install govulncheck
         run: ./tool/go install golang.org/x/vuln/cmd/govulncheck@latest
