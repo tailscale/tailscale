@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tailscale-operator.fullname" . }}
+  labels:
+    {{- include "tailscale-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  revisionHistoryLimit: {{ .Values.operator.revisionHistoryLimit }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tailscale-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.operator.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "tailscale-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.operator.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "tailscale-operator.operator.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.operator.podSecurityContext | nindent 8 }}
+      volumes:
+      - name: oauth
+        secret:
+          secretName: {{ include "tailscale-operator.secretName" . }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.operator.securityContext | nindent 12 }}
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          env:
+            - name: "OPERATOR_HOSTNAME"
+              value: "{{ .Values.operator.hostname | default ( include "tailscale-operator.fullname" . ) }}"
+            - name: "OPERATOR_SECRET"
+              value: "{{ include "tailscale-operator.secretName" . }}"
+            - name: "OPERATOR_LOGGING"
+              value: "{{ .Values.operator.logging }}"
+            - name: "OPERATOR_NAMESPACE"
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: "CLIENT_ID_FILE"
+              value: "/oauth/client_id"
+            - name: "CLIENT_SECRET_FILE"
+              value: "/oauth/client_secret"
+            - name: "PROXY_IMAGE"
+              value: "{{ .Values.proxy.image.repository }}:{{ .Values.proxy.image.tag }}"
+            - name: "PROXY_TAGS"
+              value: "{{ join "," .Values.proxy.tags }}"
+            - name: "AUTH_PROXY"
+              value: "{{ .Values.operator.authProxy }}"
+          {{- if .Values.operator.extraEnvs }}
+            {{- toYaml .Values.operator.extraEnvs | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: oauth
+              mountPath: /oauth
+              readOnly: true
+      {{- with .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.operator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
