@@ -1324,7 +1324,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	// but meanwhile we can make Start cheaper here for such a
 	// case and not restart the world (which takes a few seconds).
 	// Instead, just send a notify with the state that iOS needs.
-	if b.startIsNoopLocked(opts) && profileID == b.lastProfileID {
+	if b.startIsNoopLocked(opts) && profileID == b.lastProfileID && profileID != "" {
 		b.logf("Start: already running; sending notify")
 		nm := b.netMap
 		state := b.state
@@ -4011,6 +4011,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	if login != b.activeLogin {
 		b.logf("active login: %v", login)
 		b.activeLogin = login
+		b.lastProfileID = b.pm.CurrentProfile().ID
 	}
 	b.pauseOrResumeControlClientLocked()
 
