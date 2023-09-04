@@ -29,17 +29,13 @@ import (
 const maxAttempts = 3
 
 type testAttempt struct {
-	name          testName
+	pkg           string // "tailscale.com/types/key"
+	testName      string // "TestFoo"
 	outcome       string // "pass", "fail", "skip"
 	logs          bytes.Buffer
 	isMarkedFlaky bool // set if the test is marked as flaky
 
 	pkgFinished bool
-}
-
-type testName struct {
-	pkg  string // "tailscale.com/types/key"
-	name string // "TestFoo"
 }
 
 type packageTests struct {
@@ -98,7 +94,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 	}()
 
 	jd := json.NewDecoder(r)
-	resultMap := make(map[testName]*testAttempt)
+	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
 	for {
 		var goOutput goTestOutput
 		if err := jd.Decode(&goOutput); err != nil {
@@ -116,27 +112,34 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			}
 			panic(err)
 		}
+		pkg := goOutput.Package
+		pkgTests := resultMap[pkg]
 		if goOutput.Test == "" {
 			switch goOutput.Action {
 			case "fail", "pass", "skip":
+				for _, test := range pkgTests {
+					if test.outcome == "" {
+						test.outcome = "fail"
+						ch <- test
+					}
+				}
 				ch <- &testAttempt{
-					name: testName{
-						pkg: goOutput.Package,
-					},
+					pkg:         goOutput.Package,
 					outcome:     goOutput.Action,
 					pkgFinished: true,
 				}
 			}
 			continue
 		}
-		name := testName{
-			pkg:  goOutput.Package,
-			name: goOutput.Test,
+		if pkgTests == nil {
+			pkgTests = make(map[string]*testAttempt)
+			resultMap[pkg] = pkgTests
 		}
+		testName := goOutput.Test
 		if test, _, isSubtest := strings.Cut(goOutput.Test, "/"); isSubtest {
-			name.name = test
+			testName = test
 			if goOutput.Action == "output" {
-				resultMap[name].logs.WriteString(goOutput.Output)
+				resultMap[pkg][testName].logs.WriteString(goOutput.Output)
 			}
 			continue
 		}
@@ -144,17 +147,18 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		case "start":
 			// ignore
 		case "run":
-			resultMap[name] = &testAttempt{
-				name: name,
+			pkgTests[testName] = &testAttempt{
+				pkg:      pkg,
+				testName: testName,
 			}
 		case "skip", "pass", "fail":
-			resultMap[name].outcome = goOutput.Action
-			ch <- resultMap[name]
+			pkgTests[testName].outcome = goOutput.Action
+			ch <- pkgTests[testName]
 		case "output":
 			if strings.TrimSpace(goOutput.Output) == flakytest.FlakyTestLogMessage {
-				resultMap[name].isMarkedFlaky = true
+				pkgTests[testName].isMarkedFlaky = true
 			} else {
-				resultMap[name].logs.WriteString(goOutput.Output)
+				pkgTests[testName].logs.WriteString(goOutput.Output)
 			}
 		}
 	}
@@ -247,13 +251,13 @@ func main() {
 			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
 			for tr := range ch {
 				if tr.pkgFinished {
-					if tr.outcome == "fail" && len(toRetry[tr.name.pkg]) == 0 {
+					if tr.outcome == "fail" && len(toRetry[tr.pkg]) == 0 {
 						// If a package fails and we don't have any tests to
 						// retry, then we should fail. This typically happens
 						// when a package times out.
 						failed = true
 					}
-					printPkgOutcome(tr.name.pkg, tr.outcome, thisRun.attempt)
+					printPkgOutcome(tr.pkg, tr.outcome, thisRun.attempt)
 					continue
 				}
 				if *v || tr.outcome == "fail" {
@@ -263,7 +267,7 @@ func main() {
 					continue
 				}
 				if tr.isMarkedFlaky {
-					toRetry[tr.name.pkg] = append(toRetry[tr.name.pkg], tr.name.name)
+					toRetry[tr.pkg] = append(toRetry[tr.pkg], tr.testName)
 				} else {
 					failed = true
 				}
