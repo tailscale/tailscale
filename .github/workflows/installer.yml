@@ -91,7 +91,7 @@ jobs:
         || contains(matrix.image, 'parrotsec')
         || contains(matrix.image, 'kalilinux')
     - name: checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     - name: run installer
       run: scripts/installer.sh
       # Package installation can fail in docker because systemd is not running
