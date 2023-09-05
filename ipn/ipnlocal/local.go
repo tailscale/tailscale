@@ -246,9 +246,6 @@ type LocalBackend struct {
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
-	// serveStreamers is a map for those running Funnel in the foreground
-	// and streaming incoming requests.
-	serveStreamers map[uint16]map[uint32]func(ipn.FunnelRequestLog) // serve port => map of stream loggers (key is UUID)
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
@@ -2014,6 +2011,16 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		go b.pollRequestEngineStatus(ctx)
 	}
 
+	if mask&ipn.NotifyServeRequest != 0 {
+		defer func() {
+			sc := b.ServeConfig().AsStruct()
+			if sc != nil {
+				delete(sc.Foreground, sessionID)
+				b.SetServeConfig(sc) // TODO(marwan-at-work): check err
+			}
+		}()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -2344,7 +2351,7 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
 		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(filtered))
-		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
+		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p, true)
 	}
 }
 
@@ -4046,7 +4053,7 @@ func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	netns.SetBindToInterfaceByRoute(hasCapability(nm, tailcfg.CapabilityBindToInterfaceByRoute))
 	netns.SetDisableBindConnToInterface(hasCapability(nm, tailcfg.CapabilityDebugDisableBindConnToInterface))
 
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs(), true)
 	if nm == nil {
 		b.nodeByAddr = nil
 		return
@@ -4093,12 +4100,15 @@ func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 	}
 }
 
-func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
+func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView, changed bool) {
 	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
 		// We're not logged in, so we don't have a profile.
 		// Don't try to load the serve config.
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
+		return
+	}
+	if !changed {
 		return
 	}
 	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
@@ -4127,14 +4137,14 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 // the ports that tailscaled should handle as a function of b.netMap and b.prefs.
 //
 // b.mu must be held.
-func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView) {
+func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.PrefsView, changed bool) {
 	handlePorts := make([]uint16, 0, 4)
 
 	if prefs.Valid() && prefs.RunSSH() && envknob.CanSSHD() {
 		handlePorts = append(handlePorts, 22)
 	}
 
-	b.reloadServeConfigLocked(prefs)
+	b.reloadServeConfigLocked(prefs, changed)
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
 		b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
@@ -4879,7 +4889,7 @@ func (b *LocalBackend) SetDevStateStore(key, value string) error {
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs(), true)
 
 	return nil
 }
