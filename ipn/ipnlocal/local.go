@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -241,8 +242,9 @@ type LocalBackend struct {
 	componentLogUntil       map[string]componentLogState
 
 	// ServeConfig fields. (also guarded by mu)
-	lastServeConfJSON mem.RO              // last JSON that was parsed into serveConfig
-	serveConfig       ipn.ServeConfigView // or !Valid if none
+	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
+	serveConfig         ipn.ServeConfigView // or !Valid if none
+	activeWatchSessions set.Set[string]     // of WatchIPN SessionID
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
@@ -301,23 +303,24 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	clock := tstime.StdClock{}
 
 	b := &LocalBackend{
-		ctx:            ctx,
-		ctxCancel:      cancel,
-		logf:           logf,
-		keyLogf:        logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		statsLogf:      logger.LogOnChange(logf, 5*time.Minute, clock.Now),
-		sys:            sys,
-		e:              e,
-		dialer:         dialer,
-		store:          store,
-		pm:             pm,
-		backendLogID:   logID,
-		state:          ipn.NoState,
-		portpoll:       portpoll,
-		em:             newExpiryManager(logf),
-		gotPortPollRes: make(chan struct{}),
-		loginFlags:     loginFlags,
-		clock:          clock,
+		ctx:                 ctx,
+		ctxCancel:           cancel,
+		logf:                logf,
+		keyLogf:             logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		statsLogf:           logger.LogOnChange(logf, 5*time.Minute, clock.Now),
+		sys:                 sys,
+		e:                   e,
+		dialer:              dialer,
+		store:               store,
+		pm:                  pm,
+		backendLogID:        logID,
+		state:               ipn.NoState,
+		portpoll:            portpoll,
+		em:                  newExpiryManager(logf),
+		gotPortPollRes:      make(chan struct{}),
+		loginFlags:          loginFlags,
+		clock:               clock,
+		activeWatchSessions: make(set.Set[string]),
 	}
 
 	netMon := sys.NetMon.Get()
@@ -1956,6 +1959,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	var ini *ipn.Notify
 
 	b.mu.Lock()
+	b.activeWatchSessions.Add(sessionID)
 
 	const initialBits = ipn.NotifyInitialState | ipn.NotifyInitialPrefs | ipn.NotifyInitialNetMap
 	if mask&initialBits != 0 {
@@ -1981,6 +1985,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 	defer func() {
 		b.mu.Lock()
 		delete(b.notifyWatchers, handle)
+		delete(b.activeWatchSessions, sessionID)
 		b.mu.Unlock()
 	}()
 
@@ -2011,7 +2016,9 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		go b.pollRequestEngineStatus(ctx)
 	}
 
-	defer b.DeleteForegroundSession(sessionID) // TODO(marwan-at-work): check err
+	// TODO(marwan-at-work): check err
+	// TODO(marwan-at-work): streaming background logs?
+	defer b.DeleteForegroundSession(sessionID)
 
 	for {
 		select {
@@ -2776,7 +2783,7 @@ func (b *LocalBackend) SetPrefs(newp *ipn.Prefs) {
 // doesn't affect security or correctness. And we also don't expect people to
 // modify their ServeConfig in raw mode.
 func (b *LocalBackend) wantIngressLocked() bool {
-	return b.serveConfig.Valid() && b.serveConfig.AllowFunnel().Len() > 0
+	return b.serveConfig.Valid() && b.serveConfig.HasAllowFunnel()
 }
 
 // setPrefsLockedOnEntry requires b.mu be held to call it, but it
@@ -4092,6 +4099,10 @@ func (b *LocalBackend) setDebugLogsByCapabilityLocked(nm *netmap.NetworkMap) {
 	}
 }
 
+// reloadServeConfigLocked reloads the serve config from the store or resets the
+// serve config to nil if not logged in. The "changed" parameter, when false, instructs
+// the method to only run the reset-logic and not reload the store from memory to ensure
+// foreground sessions are not removed if they are not saved on disk.
 func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 	if b.netMap == nil || !b.netMap.SelfNode.Valid() || !prefs.Valid() || b.pm.CurrentProfile().ID == "" {
 		// We're not logged in, so we don't have a profile.
@@ -4100,6 +4111,7 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 		b.serveConfig = ipn.ServeConfigView{}
 		return
 	}
+
 	confKey := ipn.ServeConfigKey(b.pm.CurrentProfile().ID)
 	// TODO(maisem,bradfitz): prevent reading the config from disk
 	// if the profile has not changed.
@@ -4119,6 +4131,12 @@ func (b *LocalBackend) reloadServeConfigLocked(prefs ipn.PrefsView) {
 		b.serveConfig = ipn.ServeConfigView{}
 		return
 	}
+
+	// remove inactive sessions
+	maps.DeleteFunc(conf.Foreground, func(s string, sc *ipn.ServeConfig) bool {
+		return !b.activeWatchSessions.Contains(s)
+	})
+
 	b.serveConfig = conf.View()
 }
 
@@ -4136,7 +4154,7 @@ func (b *LocalBackend) setTCPPortsInterceptedFromNetmapAndPrefsLocked(prefs ipn.
 	b.reloadServeConfigLocked(prefs)
 	if b.serveConfig.Valid() {
 		servePorts := make([]uint16, 0, 3)
-		b.serveConfig.TCP().Range(func(port uint16, _ ipn.TCPPortHandlerView) bool {
+		b.serveConfig.RangeOverTCPs(func(port uint16, _ ipn.TCPPortHandlerView) bool {
 			if port > 0 {
 				servePorts = append(servePorts, uint16(port))
 			}
@@ -4169,7 +4187,7 @@ func (b *LocalBackend) setServeProxyHandlersLocked() {
 		return
 	}
 	var backends map[string]bool
-	b.serveConfig.Web().Range(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
+	b.serveConfig.RangeOverWebs(func(_ ipn.HostPort, conf ipn.WebServerConfigView) (cont bool) {
 		conf.Handlers().Range(func(_ string, h ipn.HTTPHandlerView) (cont bool) {
 			backend := h.Proxy()
 			if backend == "" {

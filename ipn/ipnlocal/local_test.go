@@ -26,6 +26,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -843,6 +844,9 @@ var _ legacyBackend = (*LocalBackend)(nil)
 
 func TestWatchNotificationsCallbacks(t *testing.T) {
 	b := new(LocalBackend)
+	// activeWatchSessions is typically set in NewLocalBackend
+	// so WatchNotifications expects it to be non-empty.
+	b.activeWatchSessions = make(set.Set[string])
 	n := new(ipn.Notify)
 	b.WatchNotifications(context.Background(), 0, func() {
 		b.mu.Lock()

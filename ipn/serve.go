@@ -37,12 +37,12 @@ type ServeConfig struct {
 	// traffic is allowed, from trusted ingress peers.
 	AllowFunnel map[HostPort]bool `json:",omitempty"`
 
-	// Foreground is a map of an IPN Bus session id to a
-	// foreground serve config. Note that only TCP and Web
-	// are used inside the Foreground map.
-	//
-	// TODO(marwan-at-work): this is not currently
-	// used. Remove the TODO in the follow up PR.
+	// Foreground is a map of an IPN Bus session ID to an alternate foreground
+	// serve config that's valid for the life of that WatchIPNBus session ID.
+	// This. This allows the config to specify ephemeral configs that are
+	// used in the CLI's foreground mode to ensure ungraceful shutdowns
+	// of either the client or the LocalBackend does not expose ports
+	// that users are not aware of.
 	Foreground map[string]*ServeConfig `json:",omitempty"`
 }
 
@@ -319,4 +319,103 @@ func CheckFunnelPort(wantedPort uint16, nodeAttrs []string) error {
 		}
 	}
 	return deny(portsStr)
+}
+
+// RangeOverTCPs ranges over both background and foreground TCPs.
+// If the returned bool from the given f is false, then this function stops
+// iterating immediately and does not check other foreground configs.
+func (v ServeConfigView) RangeOverTCPs(f func(port uint16, _ TCPPortHandlerView) bool) {
+	parentCont := true
+	v.TCP().Range(func(k uint16, v TCPPortHandlerView) (cont bool) {
+		parentCont = f(k, v)
+		return parentCont
+	})
+	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
+		if !parentCont {
+			return false
+		}
+		v.TCP().Range(func(k uint16, v TCPPortHandlerView) (cont bool) {
+			parentCont = f(k, v)
+			return parentCont
+		})
+		return parentCont
+	})
+}
+
+// RangeOverWebs ranges over both background and foreground Webs.
+// If the returned bool from the given f is false, then this function stops
+// iterating immediately and does not check other foreground configs.
+func (v ServeConfigView) RangeOverWebs(f func(_ HostPort, conf WebServerConfigView) bool) {
+	parentCont := true
+	v.Web().Range(func(k HostPort, v WebServerConfigView) (cont bool) {
+		parentCont = f(k, v)
+		return parentCont
+	})
+	v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
+		if !parentCont {
+			return false
+		}
+		v.Web().Range(func(k HostPort, v WebServerConfigView) (cont bool) {
+			parentCont = f(k, v)
+			return parentCont
+		})
+		return parentCont
+	})
+}
+
+// FindTCP returns the first TCP that matches with the given port. It
+// prefers a foreground match first followed by a background search if none
+// existed.
+func (v ServeConfigView) FindTCP(port uint16) (res TCPPortHandlerView, ok bool) {
+	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
+		res, ok = v.TCP().GetOk(port)
+		return !ok
+	})
+	if ok {
+		return res, ok
+	}
+	return v.TCP().GetOk(port)
+}
+
+// FindWeb returns the first Web that matches with the given HostPort. It
+// prefers a foreground match first followed by a background search if none
+// existed.
+func (v ServeConfigView) FindWeb(hp HostPort) (res WebServerConfigView, ok bool) {
+	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
+		res, ok = v.Web().GetOk(hp)
+		return !ok
+	})
+	if ok {
+		return res, ok
+	}
+	return v.Web().GetOk(hp)
+}
+
+// HasAllowFunnel returns whether this config has at least one AllowFunnel
+// set in the background or foreground configs.
+func (v ServeConfigView) HasAllowFunnel() bool {
+	return v.AllowFunnel().Len() > 0 || func() bool {
+		var exists bool
+		v.Foreground().Range(func(k string, v ServeConfigView) (cont bool) {
+			exists = v.AllowFunnel().Len() > 0
+			return !exists
+		})
+		return exists
+	}()
+}
+
+// FindFunnel reports whether target exists in in either the background AllowFunnel
+// or any of the foreground configs.
+func (v ServeConfigView) HasFunnelForTarget(target HostPort) bool {
+	if v.AllowFunnel().Get(target) {
+		return true
+	}
+	var exists bool
+	v.Foreground().Range(func(_ string, v ServeConfigView) (cont bool) {
+		if exists = v.AllowFunnel().Get(target); exists {
+			return false
+		}
+		return true
+	})
+	return exists
 }
