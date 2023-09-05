@@ -204,9 +204,6 @@ func TestValidateLocalBinary(t *testing.T) {
 			want := []byte("world")
 			srv.addSigned("hello", want)
 			dst := filepath.Join(t.TempDir(), tt.src)
-			t.Cleanup(func() {
-				os.Remove(dst)
-			})
 			err := c.Download(context.Background(), tt.src, dst)
 			if err != nil {
 				t.Fatalf("unexpected error from Download(%q): %v", tt.src, err)
