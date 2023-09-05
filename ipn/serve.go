@@ -37,6 +37,14 @@ type ServeConfig struct {
 	// AllowFunnel is the set of SNI:port values for which funnel
 	// traffic is allowed, from trusted ingress peers.
 	AllowFunnel map[HostPort]bool `json:",omitempty"`
+
+	// Foreground is a map of an IPN Bus session id to a
+	// foreground serve config. Note that only TCP and Web
+	// are used inside the Foreground map.
+	//
+	// TODO(marwan-at-work): this is not currently
+	// used. Remove the TODO in the follow up PR.
+	Foreground map[string]*ServeConfig `json:",omitempty"`
 }
 
 // HostPort is an SNI name and port number, joined by a colon.
