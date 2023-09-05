@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +47,15 @@ func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 	if auth == "" {
 		return 0, "", errors.New("empty auth token in sameuserproof file")
 	}
+
+	// The above files exist forever after the first run. Check that the server
+	// is actually running (though it may still be in a Stopped state).
+	conn, err := net.Dial("tcp", "127.0.0.1:"+portStr)
+	if err != nil {
+		return 0, "", err
+	}
+	conn.Close()
+
 	return port, auth, nil
 }
 
