@@ -7,7 +7,6 @@ package testcontrol
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -34,6 +33,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/rands"
 )
 
 const msgLimit = 1 << 20 // encrypted message length limit
@@ -569,9 +569,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, mkey key.
 
 	authURL := ""
 	if requireAuth {
-		randHex := make([]byte, 10)
-		crand.Read(randHex)
-		authPath := fmt.Sprintf("/auth/%x", randHex)
+		authPath := fmt.Sprintf("/auth/%s", rands.HexString(20))
 		s.addAuthPath(authPath, nk)
 		authURL = s.BaseURL() + authPath
 	}
