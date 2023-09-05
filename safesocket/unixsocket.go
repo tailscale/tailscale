@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build !windows && !js
+//go:build !windows && !js && !plan9
 
 package safesocket
 
