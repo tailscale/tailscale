@@ -31,6 +31,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	var (
 		subcommand = ""
 
+		cc          = "cc"
 		targetOS    = env.Get("GOOS", nativeGOOS)
 		targetArch  = env.Get("GOARCH", nativeGOARCH)
 		buildFlags  = []string{"-trimpath"}
@@ -89,6 +90,22 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 		// quoted in its entirety as a member of -ldflags. Source:
 		// https://github.com/golang/go/issues/6234
 		ldflags = append(ldflags, fmt.Sprintf("'-extldflags=%s'", strings.Join(extldflags, " ")))
+	case "windowsdll":
+		// Fake GOOS that translates to "windows, but building .dlls not .exes"
+		targetOS = "windows"
+		cgo = true
+		buildFlags = append(buildFlags, "-buildmode=c-shared")
+		ldflags = append(ldflags, "-H", "windows", "-s")
+		var mingwArch string
+		switch targetArch {
+		case "amd64":
+			mingwArch = "x86_64"
+		case "386":
+			mingwArch = "i686"
+		default:
+			return nil, nil, fmt.Errorf("unsupported GOARCH=%q when building with cgo", targetArch)
+		}
+		cc = fmt.Sprintf("%s-w64-mingw32-gcc", mingwArch)
 	case "windowsgui":
 		// Fake GOOS that translates to "windows, but building GUI .exes not console .exes"
 		targetOS = "windows"
@@ -166,7 +183,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	env.Set("CGO_ENABLED", boolStr(cgo))
 	env.Set("CGO_CFLAGS", strings.Join(cgoCflags, " "))
 	env.Set("CGO_LDFLAGS", strings.Join(cgoLdflags, " "))
-	env.Set("CC", "cc")
+	env.Set("CC", cc)
 	env.Set("TS_LINK_FAIL_REFLECT", boolStr(failReflect))
 	env.Set("GOROOT", goroot)
 

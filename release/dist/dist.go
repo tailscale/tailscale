@@ -269,7 +269,12 @@ func (b *Build) BuildGoBinaryWithTags(path string, env map[string]string, tags [
 		}
 		sort.Strings(envStrs)
 		buildDir := b.TmpDir()
-		args := []string{"build", "-v", "-o", buildDir}
+		outPath := buildDir
+		if env["GOOS"] == "windowsdll" {
+			// DLL builds fail unless we use a fully-qualified path to the output binary.
+			outPath = filepath.Join(buildDir, filepath.Base(path)+".dll")
+		}
+		args := []string{"build", "-v", "-o", outPath}
 		if len(tags) > 0 {
 			tagsStr := strings.Join(tags, ",")
 			log.Printf("Building %s (with env %s, tags %s)", path, strings.Join(envStrs, " "), tagsStr)
@@ -288,6 +293,8 @@ func (b *Build) BuildGoBinaryWithTags(path string, env map[string]string, tags [
 		out := filepath.Join(buildDir, filepath.Base(path))
 		if env["GOOS"] == "windows" || env["GOOS"] == "windowsgui" {
 			out += ".exe"
+		} else if env["GOOS"] == "windowsdll" {
+			out += ".dll"
 		}
 		return out, nil
 	})
