@@ -3753,10 +3753,11 @@ func (b *LocalBackend) NodeKey() key.NodePublic {
 	return b.pm.CurrentPrefs().Persist().PublicNodeKey()
 }
 
-// nextState returns the state the backend seems to be in, based on
+// nextStateLocked returns the state the backend seems to be in, based on
 // its internal state.
-func (b *LocalBackend) nextState() ipn.State {
-	b.mu.Lock()
+//
+// b.mu must be held
+func (b *LocalBackend) nextStateLocked() ipn.State {
 	var (
 		cc         = b.cc
 		netMap     = b.netMap
@@ -3772,10 +3773,9 @@ func (b *LocalBackend) nextState() ipn.State {
 		wantRunning = p.WantRunning()
 		loggedOut = p.LoggedOut()
 	}
-	b.mu.Unlock()
 
 	switch {
-	case !wantRunning && !loggedOut && !blocked && b.hasNodeKey():
+	case !wantRunning && !loggedOut && !blocked && b.hasNodeKeyLocked():
 		return ipn.Stopped
 	case netMap == nil:
 		if (cc != nil && cc.AuthCantContinue()) || loggedOut {
@@ -3838,7 +3838,8 @@ func (b *LocalBackend) RequestEngineStatus() {
 // TODO(apenwarr): use a channel or something to prevent reentrancy?
 // Or maybe just call the state machine from fewer places.
 func (b *LocalBackend) stateMachine() {
-	b.enterState(b.nextState())
+	b.mu.Lock()
+	b.enterStateLockedOnEntry(b.nextStateLocked())
 }
 
 // stopEngineAndWait deconfigures the local network data plane, and
@@ -3900,7 +3901,6 @@ func (b *LocalBackend) resetControlClientLocked() controlclient.Client {
 // don't want to the user to have to reauthenticate in the future
 // when they restart the GUI.
 func (b *LocalBackend) ResetForClientDisconnect() {
-	defer b.enterState(ipn.Stopped)
 	b.logf("LocalBackend.ResetForClientDisconnect")
 
 	b.mu.Lock()
@@ -3909,7 +3909,6 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 		// Needs to happen without b.mu held.
 		defer prevCC.Shutdown()
 	}
-	defer b.mu.Unlock()
 
 	b.setNetMapLocked(nil)
 	b.pm.Reset()
@@ -3918,6 +3917,7 @@ func (b *LocalBackend) ResetForClientDisconnect() {
 	b.authURLSticky = ""
 	b.activeLogin = ""
 	b.setAtomicValuesFromPrefsLocked(ipn.PrefsView{})
+	b.enterStateLockedOnEntry(ipn.Stopped)
 }
 
 func (b *LocalBackend) ShouldRunSSH() bool { return b.sshAtomicBool.Load() && envknob.CanSSHD() }
