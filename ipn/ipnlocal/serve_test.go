@@ -296,7 +296,7 @@ func TestServeHTTPProxy(t *testing.T) {
 			}))
 
 			w := httptest.NewRecorder()
-			b.serveWebHandler(w, req)
+			b.newServeWebHandlerForSession("")(w, req)
 
 			// Verify the headers.
 			h := w.Result().Header

@@ -38,7 +38,7 @@ type ServeConfig struct {
 	// traffic is allowed, from trusted ingress peers.
 	AllowFunnel map[HostPort]bool `json:",omitempty"`
 
-	// Foreground is a map of an IPN Bus session id to a
+	// Foreground is a map of an IPN Bus session ID to a
 	// foreground serve config. Note that only TCP and Web
 	// are used inside the Foreground map.
 	//
@@ -107,15 +107,19 @@ type ServeStreamRequest struct {
 	Funnel bool `json:",omitempty"`
 }
 
-// FunnelRequestLog is the JSON type written out to io.Writers
-// watching funnel connections via ipnlocal.StreamServe.
+// RequestAccessLog is the JSON type written out to io.Writers
+// watching serve connections via ipnlocal.StreamServe.
 //
 // This structure is in development and subject to change.
-type FunnelRequestLog struct {
+type RequestAccessLog struct {
 	Time time.Time `json:",omitempty"` // time of request forwarding
 
-	// SrcAddr is the address that initiated the Funnel request.
+	// SrcAddr is the address that initiated the serve or funnel request.
 	SrcAddr netip.AddrPort `json:",omitempty"`
+
+	// SessionID, if not empty, means this request was
+	// meant for a specific WatchIPNBus session.
+	SessionID string `json:",omitempty"`
 
 	// The following fields are only populated if the connection
 	// initiated from another node on the client's tailnet.

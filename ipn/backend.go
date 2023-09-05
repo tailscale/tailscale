@@ -66,6 +66,8 @@ const (
 	NotifyInitialNetMap // if set, the first Notify message (sent immediately) will contain the current NetMap
 
 	NotifyNoPrivateKeys // if set, private keys that would normally be sent in updates are zeroed out
+
+	NotifyServeRequest // if set, RequestAccessLog messages will be sent to the watcher
 )
 
 // Notify is a communication from a backend (e.g. tailscaled) to a frontend
@@ -122,6 +124,10 @@ type Notify struct {
 	ClientVersion *tailcfg.ClientVersion `json:",omitempty"`
 
 	// type is mirrored in xcode/Shared/IPN.swift
+
+	// RequestAccessLog is a notification that a request
+	// has been sent via the serve config.
+	RequestAccessLog *RequestAccessLog `json:",omitempty"`
 }
 
 func (n Notify) String() string {

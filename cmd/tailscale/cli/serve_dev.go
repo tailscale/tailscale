@@ -5,9 +5,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -30,14 +31,14 @@ var infoMap = map[string]commandInfo{
 		ShortHelp: "Serve content and local servers on your tailnet",
 		LongHelp: strings.Join([]string{
 			"Serve lets you  share a local server securely within your tailnet.",
-			"To share a local server on the internet, use \"tailscale funnel\"",
+			`To share a local server on the internet, use "tailscale funnel"`,
 		}, "\n"),
 	},
 	"funnel": {
 		ShortHelp: "Serve content and local servers on the internet",
 		LongHelp: strings.Join([]string{
 			"Funnel lets you share a local server on the internet using Tailscale.",
-			"To share only within your tailnet, use \"tailscale serve\"",
+			`To share only within your tailnet, use "tailscale serve"`,
 		}, "\n"),
 	},
 }
@@ -134,14 +135,77 @@ func (e *serveEnv) runServeDev(funnel bool) execFunc {
 }
 
 func (e *serveEnv) streamServe(ctx context.Context, req ipn.ServeStreamRequest) error {
-	stream, err := e.lc.StreamServe(ctx, req)
+	watcher, err := e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyServeRequest)
 	if err != nil {
 		return err
 	}
-	defer stream.Close()
+	defer watcher.Close()
+	n, err := watcher.Next()
+	if err != nil {
+		return err
+	}
+	sessionID := n.SessionID
+	if sessionID == "" {
+		return errors.New("missing SessionID")
+	}
+	sc, err := e.lc.GetServeConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting serve config: %w", err)
+	}
+	if sc == nil {
+		sc = &ipn.ServeConfig{}
+	}
+	setHandler(sc, req, sessionID)
+	err = e.lc.SetServeConfig(ctx, sc)
+	if err != nil {
+		return fmt.Errorf("error setting serve config: %w", err)
+	}
 
-	fmt.Fprintf(os.Stderr, "Serve started on \"https://%s\".\n", strings.TrimSuffix(string(req.HostPort), ":443"))
-	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop.\n\n")
-	_, err = io.Copy(os.Stdout, stream)
-	return err
+	fmt.Fprintf(os.Stderr, "Funnel started on \"https://%s\".\n", strings.TrimSuffix(string(req.HostPort), ":443"))
+	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop Funnel.\n\n")
+
+	for {
+		n, err := watcher.Next()
+		if err != nil {
+			return fmt.Errorf("error calling next: %w", err)
+		}
+		if n.RequestAccessLog == nil || n.RequestAccessLog.SessionID != sessionID {
+			continue
+		}
+		bts, _ := json.Marshal(n.RequestAccessLog)
+		fmt.Printf("%s\n", bts)
+	}
+}
+
+func setHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest, sessionID string) {
+	if sc.Foreground == nil {
+		sc.Foreground = make(map[string]*ipn.ServeConfig)
+	}
+	if sc.Foreground[sessionID] == nil {
+		sc.Foreground[sessionID] = &ipn.ServeConfig{}
+	}
+	if sc.Foreground[sessionID].TCP == nil {
+		sc.Foreground[sessionID].TCP = make(map[uint16]*ipn.TCPPortHandler)
+	}
+	if _, ok := sc.Foreground[sessionID].TCP[443]; !ok {
+		sc.Foreground[sessionID].TCP[443] = &ipn.TCPPortHandler{HTTPS: true}
+	}
+	if sc.Foreground[sessionID].Web == nil {
+		sc.Foreground[sessionID].Web = make(map[ipn.HostPort]*ipn.WebServerConfig)
+	}
+	wsc, ok := sc.Foreground[sessionID].Web[req.HostPort]
+	if !ok {
+		wsc = &ipn.WebServerConfig{}
+		sc.Foreground[sessionID].Web[req.HostPort] = wsc
+	}
+	if wsc.Handlers == nil {
+		wsc.Handlers = make(map[string]*ipn.HTTPHandler)
+	}
+	wsc.Handlers[req.MountPoint] = &ipn.HTTPHandler{
+		Proxy: req.Source,
+	}
+	if sc.AllowFunnel == nil {
+		sc.AllowFunnel = make(map[ipn.HostPort]bool)
+	}
+	sc.AllowFunnel[req.HostPort] = true
 }
