@@ -27,6 +27,9 @@ func DefaultTailscaledSocket() string {
 	if runtime.GOOS == "darwin" {
 		return "/var/run/tailscaled.socket"
 	}
+	if runtime.GOOS == "plan9" {
+		return "/srv/tailscaled.sock"
+	}
 	switch distro.Get() {
 	case distro.Synology:
 		if distro.DSMVersion() == 6 {
