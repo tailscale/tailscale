@@ -218,7 +218,10 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.setServeConfigLocked(config)
+}
 
+func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig) error {
 	prefs := b.pm.CurrentPrefs()
 	if config.IsFunnelOn() && prefs.ShieldsUp() {
 		return errors.New("Unable to turn on Funnel while shields-up is enabled")
@@ -256,6 +259,20 @@ func (b *LocalBackend) ServeConfig() ipn.ServeConfigView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.serveConfig
+}
+
+// DeleteForegroundSession deletes a ServeConfig's foreground session
+// in the LocalBackend if it exists. It also ensures check, delete, and
+// set operations happen within the same mutex lock to avoid any races.
+func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.serveConfig.Valid() || !b.serveConfig.Foreground().Has(sessionID) {
+		return nil
+	}
+	sc := b.serveConfig.AsStruct()
+	delete(sc.Foreground, sessionID)
+	return b.setServeConfigLocked(sc)
 }
 
 // StreamServe opens a stream to write any incoming connections made

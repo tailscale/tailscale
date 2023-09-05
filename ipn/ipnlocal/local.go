@@ -2014,6 +2014,8 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		go b.pollRequestEngineStatus(ctx)
 	}
 
+	defer b.DeleteForegroundSession(sessionID) // TODO(marwan-at-work): check err
+
 	for {
 		select {
 		case <-ctx.Done():
