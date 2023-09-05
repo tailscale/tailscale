@@ -177,11 +177,18 @@ func (v ServeConfigView) AllowFunnel() views.Map[HostPort, bool] {
 	return views.MapOf(v.ж.AllowFunnel)
 }
 
+func (v ServeConfigView) Foreground() views.MapFn[string, *ServeConfig, ServeConfigView] {
+	return views.MapFnOf(v.ж.Foreground, func(t *ServeConfig) ServeConfigView {
+		return t.View()
+	})
+}
+
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	TCP         map[uint16]*TCPPortHandler
 	Web         map[HostPort]*WebServerConfig
 	AllowFunnel map[HostPort]bool
+	Foreground  map[string]*ServeConfig
 }{})
 
 // View returns a readonly view of TCPPortHandler.
