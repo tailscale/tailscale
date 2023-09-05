@@ -38,7 +38,7 @@ var _ Client = (*Auto)(nil)
 // closed).
 func (c *Auto) waitUnpause(routineLogName string) (keepRunning bool) {
 	c.mu.Lock()
-	if !c.paused {
+	if !c.paused || c.closed {
 		defer c.mu.Unlock()
 		return !c.closed
 	}
