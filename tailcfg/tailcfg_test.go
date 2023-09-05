@@ -705,3 +705,53 @@ func TestCurrentCapabilityVersion(t *testing.T) {
 		t.Errorf("CurrentCapabilityVersion = %d; want %d", CurrentCapabilityVersion, max)
 	}
 }
+
+func TestUserUnmarshal_FromString(t *testing.T) {
+	tests := []struct {
+		from    string
+		want    UserID
+		wantErr string
+	}{
+		{
+			// JSON.parse('65132411450146196') => 65132411450146190 :(
+			from: `65132411450146196`,
+			want: 65132411450146196,
+		},
+		{
+			// JSON.parse('"65132411450146196"') => '65132411450146196' :)
+			from: `"65132411450146196"`,
+			want: 65132411450146196,
+		},
+		{
+			// Don't correct invalid JSON.
+			from:    `""123""`,
+			wantErr: "invalid character '1' after top-level value",
+		},
+		{
+			// Empty strings aren't ints.
+			from:    `""`,
+			wantErr: "cannot unmarshal string into Go value of type int64",
+		},
+		{
+			from:    `{}`,
+			wantErr: "cannot unmarshal object into Go value of type int64",
+		},
+	}
+	for _, test := range tests {
+		var got UserID
+		err := json.Unmarshal([]byte(test.from), &got)
+		if test.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("input %q: want error containing %q but got: %v", test.from, test.wantErr, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("input %q: unexpected error: %s", test.from, err)
+			continue
+		}
+		if got != test.want {
+			t.Errorf("input %q: expected %#v but got %#v", test.from, test.want, got)
+		}
+	}
+}

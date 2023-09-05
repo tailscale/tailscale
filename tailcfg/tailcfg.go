@@ -122,6 +122,27 @@ func (u UserID) IsZero() bool {
 	return u == 0
 }
 
+func (u *UserID) UnmarshalJSON(b []byte) error {
+	return json.Unmarshal(unquoteInt(b), (*int64)(u))
+}
+
+// unquoteInt returns b without quotes if it is on the form `"[0-9]+"` or else
+// returns b directly.
+func unquoteInt(b []byte) []byte {
+	if len(b) < 3 {
+		return b
+	}
+	if b[0] != '"' || b[len(b)-1] != '"' {
+		return b
+	}
+	for i := 1; i < len(b)-1; i++ {
+		if b[i] < '0' || b[i] > '9' {
+			return b
+		}
+	}
+	return b[1 : len(b)-1]
+}
+
 type LoginID ID
 
 func (u LoginID) IsZero() bool {
