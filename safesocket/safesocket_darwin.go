@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 func init() {
@@ -48,9 +49,11 @@ func localTCPPortAndTokenMacsys() (port int, token string, err error) {
 		return 0, "", errors.New("empty auth token in sameuserproof file")
 	}
 
-	// The above files exist forever after the first run. Check that the server
-	// is actually running (though it may still be in a Stopped state).
-	conn, err := net.Dial("tcp", "127.0.0.1:"+portStr)
+	// The above files exist forever after the first run of
+	// /Applications/Tailscale.app, so check we can connect to avoid returning a
+	// port nothing is listening on. Connect to "127.0.0.1" rather than
+	// "localhost" due to #7851.
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+portStr, time.Second)
 	if err != nil {
 		return 0, "", err
 	}
