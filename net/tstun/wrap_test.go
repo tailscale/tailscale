@@ -23,7 +23,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun/tuntest"
 	"go4.org/mem"
 	"go4.org/netipx"
-	"gvisor.dev/gvisor/pkg/bufferv2"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/disco"
 	"tailscale.com/net/connstats"
@@ -845,12 +845,12 @@ func TestCaptureHook(t *testing.T) {
 		[]byte("Write2"),
 	}, 0)
 	packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: bufferv2.MakeWithData([]byte("InjectInboundPacketBuffer")),
+		Payload: buffer.MakeWithData([]byte("InjectInboundPacketBuffer")),
 	})
 	w.InjectInboundPacketBuffer(packetBuf)
 
 	packetBuf = stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: bufferv2.MakeWithData([]byte("InjectOutboundPacketBuffer")),
+		Payload: buffer.MakeWithData([]byte("InjectOutboundPacketBuffer")),
 	})
 	w.InjectOutboundPacketBuffer(packetBuf)
 
