@@ -329,13 +329,13 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:       1,
-					Capabilities: ptr.To([]string{"foo"}),
+					Capabilities: ptr.To([]tailcfg.NodeCapability{"foo"}),
 				}},
 			},
 			want: peers(&tailcfg.Node{
 				ID:           1,
 				Name:         "foo",
-				Capabilities: []string{"foo"},
+				Capabilities: []tailcfg.NodeCapability{"foo"},
 			}),
 			wantStats: updateStats{changed: 1},
 		}}
@@ -685,15 +685,15 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "patch-capabilities-to-nonempty",
-			a:    &tailcfg.Node{ID: 1, Capabilities: []string{"foo"}},
-			b:    &tailcfg.Node{ID: 1, Capabilities: []string{"bar"}},
-			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]string{"bar"})},
+			a:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"foo"}},
+			b:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"bar"}},
+			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]tailcfg.NodeCapability{"bar"})},
 		},
 		{
 			name: "patch-capabilities-to-empty",
-			a:    &tailcfg.Node{ID: 1, Capabilities: []string{"foo"}},
+			a:    &tailcfg.Node{ID: 1, Capabilities: []tailcfg.NodeCapability{"foo"}},
 			b:    &tailcfg.Node{ID: 1},
-			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]string(nil))},
+			want: &tailcfg.PeerChange{NodeID: 1, Capabilities: ptr.To([]tailcfg.NodeCapability(nil))},
 		},
 		{
 			name: "patch-online-to-true",

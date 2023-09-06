@@ -147,7 +147,7 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 //
 // verifyFunnelEnabled may refresh the local state and modify the st input.
 func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status, port uint16) error {
-	hasFunnelAttrs := func(attrs []string) bool {
+	hasFunnelAttrs := func(attrs []tailcfg.NodeCapability) bool {
 		hasHTTPS := slices.Contains(attrs, tailcfg.CapabilityHTTPS)
 		hasFunnel := slices.Contains(attrs, tailcfg.NodeAttrFunnel)
 		return hasHTTPS && hasFunnel
