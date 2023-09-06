@@ -165,13 +165,13 @@ func (v NodeView) Online() *bool {
 	return &x
 }
 
-func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthorized }
-func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
-func (v NodeView) UnsignedPeerAPIOnly() bool         { return v.ж.UnsignedPeerAPIOnly }
-func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
-func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
-func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
-func (v NodeView) Expired() bool                     { return v.ж.Expired }
+func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
+func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
+func (v NodeView) UnsignedPeerAPIOnly() bool                 { return v.ж.UnsignedPeerAPIOnly }
+func (v NodeView) ComputedName() string                      { return v.ж.ComputedName }
+func (v NodeView) ComputedNameWithHost() string              { return v.ж.ComputedNameWithHost }
+func (v NodeView) DataPlaneAuditLogID() string               { return v.ж.DataPlaneAuditLogID }
+func (v NodeView) Expired() bool                             { return v.ж.Expired }
 func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
 	if v.ж.SelfNodeV4MasqAddrForThisPeer == nil {
 		return nil
@@ -210,7 +210,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	LastSeen                      *time.Time
 	Online                        *bool
 	MachineAuthorized             bool
-	Capabilities                  []string
+	Capabilities                  []NodeCapability
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string
 	computedHostIfDifferent       string

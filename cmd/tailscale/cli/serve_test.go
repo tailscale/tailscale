@@ -763,7 +763,7 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 		// queryFeatureResponse is the mock response desired from the
 		// call made to lc.QueryFeature by verifyFunnelEnabled.
 		queryFeatureResponse mockQueryFeatureResponse
-		caps                 []string // optionally set at fakeStatus.Capabilities
+		caps                 []tailcfg.NodeCapability // optionally set at fakeStatus.Capabilities
 		wantErr              string
 		wantPanic            string
 	}{
@@ -780,13 +780,13 @@ func TestVerifyFunnelEnabled(t *testing.T) {
 		{
 			name:                 "fallback-flow-missing-acl-rule",
 			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
-			caps:                 []string{tailcfg.CapabilityHTTPS},
+			caps:                 []tailcfg.NodeCapability{tailcfg.CapabilityHTTPS},
 			wantErr:              `Funnel not available; "funnel" node attribute not set. See https://tailscale.com/s/no-funnel.`,
 		},
 		{
 			name:                 "fallback-flow-enabled",
 			queryFeatureResponse: mockQueryFeatureResponse{resp: nil, err: errors.New("not-allowed")},
-			caps:                 []string{tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel},
+			caps:                 []tailcfg.NodeCapability{tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel},
 			wantErr:              "", // no error, success
 		},
 		{
@@ -858,7 +858,7 @@ var fakeStatus = &ipnstate.Status{
 	BackendState: ipn.Running.String(),
 	Self: &ipnstate.PeerStatus{
 		DNSName:      "foo.test.ts.net",
-		Capabilities: []string{tailcfg.NodeAttrFunnel, tailcfg.CapabilityFunnelPorts + "?ports=443,8443"},
+		Capabilities: []tailcfg.NodeCapability{tailcfg.NodeAttrFunnel, tailcfg.CapabilityFunnelPorts + "?ports=443,8443"},
 	},
 }
 

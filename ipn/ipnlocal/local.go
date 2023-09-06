@@ -4093,7 +4093,7 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 	cc.SetNetInfo(ni)
 }
 
-func hasCapability(nm *netmap.NetworkMap, cap string) bool {
+func hasCapability(nm *netmap.NetworkMap, cap tailcfg.NodeCapability) bool {
 	if nm != nil && nm.SelfNode.Valid() {
 		return views.SliceContains(nm.SelfNode.Capabilities(), cap)
 	}

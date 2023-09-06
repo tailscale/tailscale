@@ -256,7 +256,7 @@ type PeerStatus struct {
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
 	//    "funnel"
-	Capabilities []string `json:",omitempty"`
+	Capabilities []tailcfg.NodeCapability `json:",omitempty"`
 
 	// SSH_HostKeys are the node's SSH host keys, if known.
 	SSH_HostKeys []string `json:"sshHostKeys,omitempty"`

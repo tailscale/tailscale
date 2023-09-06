@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -289,7 +290,7 @@ type Node struct {
 	// such as:
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
-	Capabilities []string `json:",omitempty"`
+	Capabilities []NodeCapability `json:",omitempty"`
 
 	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
 	// restrictions. However, in exchange for that privilege, it does not get
@@ -1226,10 +1227,11 @@ type CapGrant struct {
 	CapMap PeerCapMap `json:",omitempty"`
 }
 
-// PeerCapability is a capability granted to a node by a FilterRule.
-// It's a string, but its meaning is application-defined.
-// It must be a URL, like "https://tailscale.com/cap/file-sharing-target" or
-// "https://example.com/cap/read-access".
+// PeerCapability represents a capability granted to a peer by a FilterRule when
+// the peer communicates with the node that has this rule. Its meaning is
+// application-defined.
+//
+// It must be a URL like "https://tailscale.com/cap/file-send".
 type PeerCapability string
 
 const (
@@ -1838,7 +1840,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Created.Equal(n2.Created) &&
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized &&
-		eqStrings(n.Capabilities, n2.Capabilities) &&
+		slices.Equal(n.Capabilities, n2.Capabilities) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
@@ -1911,112 +1913,117 @@ type Oauth2Token struct {
 	Expiry time.Time `json:"expiry,omitempty"`
 }
 
-const (
-	// These are the capabilities that the self node has as listed in
-	// MapResponse.Node.Capabilities.
-	//
-	// We've since started referring to these as "Node Attributes" ("nodeAttrs"
-	// in the ACL policy file).
+// NodeCapability represents a capability granted to the self node as listed in
+// MapResponse.Node.Capabilities.
+//
+// It must be a URL like "https://tailscale.com/cap/file-sharing", or a
+// well-known capability name like "funnel". The latter is only allowed for
+// Tailscale-defined capabilities.
+//
+// Unlike PeerCapability, NodeCapability is not in context of a peer and is
+// granted to the node itself.
+//
+// These are also referred to as "Node Attributes" in the ACL policy file.
+type NodeCapability string
 
-	CapabilityFileSharing        = "https://tailscale.com/cap/file-sharing"
-	CapabilityAdmin              = "https://tailscale.com/cap/is-admin"
-	CapabilitySSH                = "https://tailscale.com/cap/ssh"                   // feature enabled/available
-	CapabilitySSHRuleIn          = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
-	CapabilityDataPlaneAuditLogs = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
-	CapabilityDebug              = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
-	CapabilityHTTPS              = "https"                                           // https cert provisioning enabled on tailnet
+const (
+	CapabilityFileSharing        NodeCapability = "https://tailscale.com/cap/file-sharing"
+	CapabilityAdmin              NodeCapability = "https://tailscale.com/cap/is-admin"
+	CapabilitySSH                NodeCapability = "https://tailscale.com/cap/ssh"                   // feature enabled/available
+	CapabilitySSHRuleIn          NodeCapability = "https://tailscale.com/cap/ssh-rule-in"           // some SSH rule reach this node
+	CapabilityDataPlaneAuditLogs NodeCapability = "https://tailscale.com/cap/data-plane-audit-logs" // feature enabled
+	CapabilityDebug              NodeCapability = "https://tailscale.com/cap/debug"                 // exposes debug endpoints over the PeerAPI
+	CapabilityHTTPS              NodeCapability = "https"                                           // https cert provisioning enabled on tailnet
 
 	// CapabilityBindToInterfaceByRoute changes how Darwin nodes create
 	// sockets (in the net/netns package). See that package for more
 	// details on the behaviour of this capability.
-	CapabilityBindToInterfaceByRoute = "https://tailscale.com/cap/bind-to-interface-by-route"
+	CapabilityBindToInterfaceByRoute NodeCapability = "https://tailscale.com/cap/bind-to-interface-by-route"
 
 	// CapabilityDebugDisableAlternateDefaultRouteInterface changes how Darwin
 	// nodes get the default interface. There is an optional hook (used by the
 	// macOS and iOS clients) to override the default interface, this capability
 	// disables that and uses the default behavior (of parsing the routing
 	// table).
-	CapabilityDebugDisableAlternateDefaultRouteInterface = "https://tailscale.com/cap/debug-disable-alternate-default-route-interface"
+	CapabilityDebugDisableAlternateDefaultRouteInterface NodeCapability = "https://tailscale.com/cap/debug-disable-alternate-default-route-interface"
 
 	// CapabilityDebugDisableBindConnToInterface disables the automatic binding
 	// of connections to the default network interface on Darwin nodes.
-	CapabilityDebugDisableBindConnToInterface = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
+	CapabilityDebugDisableBindConnToInterface NodeCapability = "https://tailscale.com/cap/debug-disable-bind-conn-to-interface"
 
 	// CapabilityTailnetLock indicates the node may initialize tailnet lock.
-	CapabilityTailnetLock = "https://tailscale.com/cap/tailnet-lock"
+	CapabilityTailnetLock NodeCapability = "https://tailscale.com/cap/tailnet-lock"
 
 	// Funnel warning capabilities used for reporting errors to the user.
 
 	// CapabilityWarnFunnelNoInvite indicates whether Funnel is enabled for the tailnet.
 	// This cap is no longer used 2023-08-09 onwards.
-	CapabilityWarnFunnelNoInvite = "https://tailscale.com/cap/warn-funnel-no-invite"
+	CapabilityWarnFunnelNoInvite NodeCapability = "https://tailscale.com/cap/warn-funnel-no-invite"
 
 	// CapabilityWarnFunnelNoHTTPS indicates HTTPS has not been enabled for the tailnet.
 	// This cap is no longer used 2023-08-09 onwards.
-	CapabilityWarnFunnelNoHTTPS = "https://tailscale.com/cap/warn-funnel-no-https"
+	CapabilityWarnFunnelNoHTTPS NodeCapability = "https://tailscale.com/cap/warn-funnel-no-https"
 
 	// Debug logging capabilities
 
 	// CapabilityDebugTSDNSResolution enables verbose debug logging for DNS
 	// resolution for Tailscale-controlled domains (the control server, log
 	// server, DERP servers, etc.)
-	CapabilityDebugTSDNSResolution = "https://tailscale.com/cap/debug-ts-dns-resolution"
+	CapabilityDebugTSDNSResolution NodeCapability = "https://tailscale.com/cap/debug-ts-dns-resolution"
 
 	// CapabilityFunnelPorts specifies the ports that the Funnel is available on.
 	// The ports are specified as a comma-separated list of port numbers or port
 	// ranges (e.g. "80,443,8080-8090") in the ports query parameter.
 	// e.g. https://tailscale.com/cap/funnel-ports?ports=80,443,8080-8090
-	CapabilityFunnelPorts = "https://tailscale.com/cap/funnel-ports"
-)
+	CapabilityFunnelPorts NodeCapability = "https://tailscale.com/cap/funnel-ports"
 
-const (
 	// NodeAttrFunnel grants the ability for a node to host ingress traffic.
-	NodeAttrFunnel = "funnel"
+	NodeAttrFunnel NodeCapability = "funnel"
 	// NodeAttrSSHAggregator grants the ability for a node to collect SSH sessions.
-	NodeAttrSSHAggregator = "ssh-aggregator"
+	NodeAttrSSHAggregator NodeCapability = "ssh-aggregator"
 
 	// NodeAttrDebugForceBackgroundSTUN forces a node to always do background
 	// STUN queries regardless of inactivity.
-	NodeAttrDebugForceBackgroundSTUN = "debug-always-stun"
+	NodeAttrDebugForceBackgroundSTUN NodeCapability = "debug-always-stun"
 
 	// NodeAttrDebugDisableWGTrim disables the lazy WireGuard configuration,
 	// always giving WireGuard the full netmap, even for idle peers.
-	NodeAttrDebugDisableWGTrim = "debug-no-wg-trim"
+	NodeAttrDebugDisableWGTrim NodeCapability = "debug-no-wg-trim"
 
 	// NodeAttrDebugDisableDRPO disables the DERP Return Path Optimization.
 	// See Issue 150.
-	NodeAttrDebugDisableDRPO = "debug-disable-drpo"
+	NodeAttrDebugDisableDRPO NodeCapability = "debug-disable-drpo"
 
 	// NodeAttrDisableSubnetsIfPAC controls whether subnet routers should be
 	// disabled if WPAD is present on the network.
-	NodeAttrDisableSubnetsIfPAC = "debug-disable-subnets-if-pac"
+	NodeAttrDisableSubnetsIfPAC NodeCapability = "debug-disable-subnets-if-pac"
 
 	// NodeAttrDisableUPnP makes the client not perform a UPnP portmapping.
 	// By default, we want to enable it to see if it works on more clients.
 	//
 	// If UPnP catastrophically fails for people, this should be set kill
 	// new attempts at UPnP connections.
-	NodeAttrDisableUPnP = "debug-disable-upnp"
+	NodeAttrDisableUPnP NodeCapability = "debug-disable-upnp"
 
 	// NodeAttrDisableDeltaUpdates makes the client not process updates via the
 	// delta update mechanism and should instead treat all netmap changes as
 	// "full" ones as tailscaled did in 1.48.x and earlier.
-	NodeAttrDisableDeltaUpdates = "disable-delta-updates"
+	NodeAttrDisableDeltaUpdates NodeCapability = "disable-delta-updates"
 
 	// NodeAttrRandomizeClientPort makes magicsock UDP bind to
 	// :0 to get a random local port, ignoring any configured
 	// fixed port.
-	NodeAttrRandomizeClientPort = "randomize-client-port"
+	NodeAttrRandomizeClientPort NodeCapability = "randomize-client-port"
 
 	// NodeAttrOneCGNATEnable makes the client prefer one big CGNAT /10 route
 	// rather than a /32 per peer. At most one of this or
 	// NodeAttrOneCGNATDisable may be set; if neither are, it's automatic.
-	NodeAttrOneCGNATEnable = "one-cgnat?v=true"
+	NodeAttrOneCGNATEnable NodeCapability = "one-cgnat?v=true"
 
 	// NodeAttrOneCGNATDisable makes the client prefer a /32 route per peer
 	// rather than one big /10 CGNAT route. At most one of this or
 	// NodeAttrOneCGNATEnable may be set; if neither are, it's automatic.
-	NodeAttrOneCGNATDisable = "one-cgnat?v=false"
+	NodeAttrOneCGNATDisable NodeCapability = "one-cgnat?v=false"
 )
 
 // SetDNSRequest is a request to add a DNS record.
@@ -2434,7 +2441,7 @@ type PeerChange struct {
 	// Capabilities, if non-nil, means that the NodeID's capabilities changed.
 	// It's a pointer to a slice for "omitempty", to allow differentiating
 	// a change to empty from no change.
-	Capabilities *[]string `json:",omitempty"`
+	Capabilities *[]NodeCapability `json:",omitempty"`
 }
 
 // DerpMagicIP is a fake WireGuard endpoint IP address that means to

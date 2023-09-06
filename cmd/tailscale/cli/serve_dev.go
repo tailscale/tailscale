@@ -233,7 +233,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			// on, enableFeatureInteractive will error. For now, we hide that
 			// error and maintain the previous behavior (prior to 2023-08-15)
 			// of letting them edit the serve config before enabling certs.
-			if err := e.enableFeatureInteractive(ctx, "serve", func(caps []string) bool {
+			if err := e.enableFeatureInteractive(ctx, "serve", func(caps []tailcfg.NodeCapability) bool {
 				return slices.Contains(caps, tailcfg.CapabilityHTTPS)
 			}); err != nil {
 				return fmt.Errorf("error enabling https feature: %w", err)

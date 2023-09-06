@@ -9,20 +9,21 @@ import (
 )
 
 func TestCheckFunnelAccess(t *testing.T) {
-	portAttr := "https://tailscale.com/cap/funnel-ports?ports=443,8080-8090,8443,"
+	caps := func(c ...tailcfg.NodeCapability) []tailcfg.NodeCapability { return c }
+	const portAttr tailcfg.NodeCapability = "https://tailscale.com/cap/funnel-ports?ports=443,8080-8090,8443,"
 	tests := []struct {
 		port    uint16
-		caps    []string
+		caps    []tailcfg.NodeCapability
 		wantErr bool
 	}{
-		{443, []string{portAttr}, true}, // No "funnel" attribute
-		{443, []string{portAttr, tailcfg.NodeAttrFunnel}, true},
-		{443, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
-		{8443, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
-		{8321, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
-		{8083, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, false},
-		{8091, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
-		{3000, []string{portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel}, true},
+		{443, caps(portAttr), true}, // No "funnel" attribute
+		{443, caps(portAttr, tailcfg.NodeAttrFunnel), true},
+		{443, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), false},
+		{8443, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), false},
+		{8321, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), true},
+		{8083, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), false},
+		{8091, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), true},
+		{3000, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), true},
 	}
 	for _, tt := range tests {
 		err := CheckFunnelAccess(tt.port, tt.caps)

@@ -48,7 +48,7 @@ type Knobs struct {
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
 // node attributes (Node.Capabilities).
-func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []string) {
+func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability) {
 	if k == nil {
 		return
 	}
