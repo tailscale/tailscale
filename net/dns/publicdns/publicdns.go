@@ -129,6 +129,11 @@ func addDoH(ipStr, base string) {
 	dohIPsOfBase[base] = append(dohIPsOfBase[base], ip)
 }
 
+const (
+	wikimediaDNSv4 = "185.71.138.138"
+	wikimediaDNSv6 = "2001:67c:930::1"
+)
+
 // populate is called once to initialize the knownDoH and dohIPsOfBase maps.
 func populate() {
 	// Cloudflare
@@ -185,6 +190,10 @@ func populate() {
 	addDoH("194.242.2.3", "https://adblock.doh.mullvad.net/dns-query")
 	addDoH("193.19.108.3", "https://adblock.doh.mullvad.net/dns-query")
 	addDoH("2a07:e340::3", "https://adblock.doh.mullvad.net/dns-query")
+
+	// Wikimedia
+	addDoH(wikimediaDNSv4, "https://wikimedia-dns.org/dns-query")
+	addDoH(wikimediaDNSv6, "https://wikimedia-dns.org/dns-query")
 }
 
 var (
@@ -207,6 +216,10 @@ var (
 	nextDNSv4RangeB = netip.MustParsePrefix("45.90.30.0/24")
 	nextDNSv4One    = nextDNSv4RangeA.Addr()
 	nextDNSv4Two    = nextDNSv4RangeB.Addr()
+
+	// Wikimedia DNS server IPs (anycast)
+	wikimediaDNSv4Addr = netip.MustParseAddr(wikimediaDNSv4)
+	wikimediaDNSv6Addr = netip.MustParseAddr(wikimediaDNSv6)
 )
 
 // nextDNSv6Gen generates a NextDNS IPv6 address from the upper 8 bytes in the
@@ -224,5 +237,6 @@ func nextDNSv6Gen(ip netip.Addr, id []byte) netip.Addr {
 // DNS-over-HTTPS (not regular port 53 DNS).
 func IPIsDoHOnlyServer(ip netip.Addr) bool {
 	return nextDNSv6RangeA.Contains(ip) || nextDNSv6RangeB.Contains(ip) ||
-		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip)
+		nextDNSv4RangeA.Contains(ip) || nextDNSv4RangeB.Contains(ip) ||
+		ip == wikimediaDNSv4Addr || ip == wikimediaDNSv6Addr
 }
