@@ -84,6 +84,20 @@ func (c *Cache[K, V]) GetOk(key K) (value V, ok bool) {
 	return zero, false
 }
 
+// PeekOk looks up the key's value from the cache, also reporting
+// whether it was present.
+//
+// Unlike GetOk, PeekOk does not move key to the front of the
+// LRU. This should mostly be used for non-intrusive debug inspection
+// of the cache.
+func (c *Cache[K, V]) PeekOk(key K) (value V, ok bool) {
+	if ele, hit := c.m[key]; hit {
+		return ele.Value.(*entry[K, V]).value, true
+	}
+	var zero V
+	return zero, false
+}
+
 // Delete removes the provided key from the cache if it was present.
 func (c *Cache[K, V]) Delete(key K) {
 	if e, ok := c.m[key]; ok {
