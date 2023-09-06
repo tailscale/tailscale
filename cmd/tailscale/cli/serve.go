@@ -269,7 +269,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		// on, enableFeatureInteractive will error. For now, we hide that
 		// error and maintain the previous behavior (prior to 2023-08-15)
 		// of letting them edit the serve config before enabling certs.
-		e.enableFeatureInteractive(ctx, "serve", func(caps []string) bool {
+		e.enableFeatureInteractive(ctx, "serve", func(caps []tailcfg.NodeCapability) bool {
 			return slices.Contains(caps, tailcfg.CapabilityHTTPS)
 		})
 	}
@@ -829,7 +829,7 @@ func parseServePort(s string) (uint16, error) {
 //
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
-func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, hasRequiredCapabilities func(caps []string) bool) (err error) {
+func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, hasRequiredCapabilities func(caps []tailcfg.NodeCapability) bool) (err error) {
 	info, err := e.lc.QueryFeature(ctx, feature)
 	if err != nil {
 		return err

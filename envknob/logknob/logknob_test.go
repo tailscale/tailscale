@@ -64,7 +64,7 @@ func TestLogKnob(t *testing.T) {
 
 		testKnob.UpdateFromNetMap(&netmap.NetworkMap{
 			SelfNode: (&tailcfg.Node{
-				Capabilities: []string{
+				Capabilities: []tailcfg.NodeCapability{
 					"https://tailscale.com/cap/testing",
 				},
 			}).View(),

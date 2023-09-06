@@ -203,8 +203,8 @@ func (nm *NetworkMap) MagicDNSSuffix() string {
 // SelfCapabilities returns SelfNode.Capabilities if nm and nm.SelfNode are
 // non-nil. This is a method so we can use it in envknob/logknob without a
 // circular dependency.
-func (nm *NetworkMap) SelfCapabilities() views.Slice[string] {
-	var zero views.Slice[string]
+func (nm *NetworkMap) SelfCapabilities() views.Slice[tailcfg.NodeCapability] {
+	var zero views.Slice[tailcfg.NodeCapability]
 	if nm == nil || !nm.SelfNode.Valid() {
 		return zero
 	}

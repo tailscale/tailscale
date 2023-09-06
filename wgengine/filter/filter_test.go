@@ -873,7 +873,7 @@ func TestMatchesMatchProtoAndIPsOnlyIfAllPorts(t *testing.T) {
 	}
 }
 
-func TestCaps(t *testing.T) {
+func TestPeerCaps(t *testing.T) {
 	mm, err := MatchesFromFilterRules([]tailcfg.FilterRule{
 		{
 			SrcIPs: []string{"*"},
