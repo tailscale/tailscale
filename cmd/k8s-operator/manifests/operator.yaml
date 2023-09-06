@@ -139,6 +139,8 @@ spec:
               value: operator
             - name: OPERATOR_LOGGING
               value: info
+            - name: RUN_IN_RESTRICTED_ENV
+              value: "true"
             - name: OPERATOR_NAMESPACE
               valueFrom:
                 fieldRef:

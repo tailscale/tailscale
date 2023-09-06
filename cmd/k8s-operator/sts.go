@@ -78,6 +78,7 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	runInRestrictedEnv     bool
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -351,6 +352,10 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 				},
 			},
 		})
+	}
+	if a.runInRestrictedEnv {
+		// in run in restricted env remove the sysctl init container
+		ss.Spec.Template.Spec.InitContainers = nil
 	}
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,

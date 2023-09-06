@@ -69,6 +69,7 @@ func TestContainerBoot(t *testing.T) {
 		"usr/bin/tailscaled":                    fakeTailscaled,
 		"usr/bin/tailscale":                     fakeTailscale,
 		"usr/bin/iptables":                      fakeTailscale,
+		"usr/bin/nft":                           fakeTailscale,
 		"usr/bin/ip6tables":                     fakeTailscale,
 		"dev/net/tun":                           []byte(""),
 		"proc/sys/net/ipv4/ip_forward":          []byte("0"),

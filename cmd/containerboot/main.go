@@ -658,9 +658,9 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
+	family := "ip"
 	if dst.Is6() {
-		argv0 = "ip6tables"
+		family = "ip6"
 	}
 	var local string
 	for _, pfx := range tsIPs {
@@ -676,26 +676,54 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 	if local == "" {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	// Set up a rule that ensures that all packets
-	// except for those received on tailscale0 interface is forwarded to
-	// destination address
-	cmdDNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "!", "-i", "tailscale0", "-j", "DNAT", "--to-destination", dstStr)
-	cmdDNAT.Stdout = os.Stdout
-	cmdDNAT.Stderr = os.Stderr
-	if err := cmdDNAT.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+
+	// Ensure a nat table exists. If tailscaled is running in nftables mode
+	// nat table and POSTROUTING chain will already exist. This is fine as
+	// creating those is an idempotent operation.
+	nft := "nft"
+	natTable := "nat"
+	cmdAddTable := exec.CommandContext(ctx, nft, "add", "table", family, natTable)
+	cmdAddTable.Stdout = os.Stdout
+	cmdAddTable.Stderr = os.Stderr
+	if err := cmdAddTable.Run(); err != nil {
+		return fmt.Errorf("adding nat table failed: %w", err)
 	}
-	// Set up a rule that ensures that all packets sent to the destination
-	// address will have the proxy's IP set as source IP
-	cmdSNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "POSTROUTING", "1", "--destination", dstStr, "-j", "SNAT", "--to-source", local)
-	cmdSNAT.Stdout = os.Stdout
-	cmdSNAT.Stderr = os.Stderr
-	if err := cmdSNAT.Run(); err != nil {
-		return fmt.Errorf("setting up SNAT via iptables failed: %w", err)
+	preroutingChain := "PREROUTING"
+	cmdCreatePreroutingChain := exec.CommandContext(ctx, nft, "--", "add", "chain", family, natTable, preroutingChain, "{ type nat hook prerouting priority -100; policy accept; }")
+	cmdCreatePreroutingChain.Stdout = os.Stdout
+	cmdCreatePreroutingChain.Stderr = os.Stderr
+	if err := cmdCreatePreroutingChain.Run(); err != nil {
+		return fmt.Errorf("adding prerouting chain failed: %w", err)
 	}
+
+	// running this multiple times will result in multiple rules, but that
+	// won't affect the functionality and hopefully we'll never run in that
+	// often that it becomes a performance problem
+	cmdCreateDNATRule := exec.CommandContext(ctx, nft, "insert", "rule", family, natTable, preroutingChain, "iifname", "!=", "tailscale0*", "dnat", "to", dstStr)
+	cmdCreateDNATRule.Stdout = os.Stdout
+	cmdCreateDNATRule.Stderr = os.Stderr
+	if err := cmdCreateDNATRule.Run(); err != nil {
+		return fmt.Errorf("adding DNAT rule failed: %w", err)
+	}
+
+	postRoutingChain := "POSTROUTING"
+	cmdCreatePostRoutingChain := exec.CommandContext(ctx, nft, "add", "chain", family, natTable, postRoutingChain, "{ type nat hook postrouting priority srcnat; policy accept; }")
+	cmdCreatePostRoutingChain.Stdout = os.Stdout
+	cmdCreatePostRoutingChain.Stderr = os.Stderr
+	if err := cmdCreatePostRoutingChain.Run(); err != nil {
+		return fmt.Errorf("adding postrouting chain failed: %w", err)
+	}
+
+	// running this multiple times will result in multiple rules, but that
+	// won't affect the functionality and hopefully we'll never run in that
+	// often that it becomes a performance problem
+	cmdCreateSNATRule := exec.CommandContext(ctx, nft, "insert", "rule", family, natTable, postRoutingChain, "ip", "daddr", dstStr, "snat", "to", local)
+	cmdCreateSNATRule.Stdout = os.Stdout
+	cmdCreateSNATRule.Stderr = os.Stderr
+	if err := cmdCreateSNATRule.Run(); err != nil {
+		return fmt.Errorf("adding SNAT rule failed: %w", err)
+	}
+
 	return nil
 }
 
@@ -704,9 +732,9 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
+	family := "ip"
 	if dst.Is6() {
-		argv0 = "ip6tables"
+		family = "ip6"
 	}
 	var local string
 	for _, pfx := range tsIPs {
@@ -722,15 +750,34 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	if local == "" {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-d", local, "-j", "DNAT", "--to-destination", dstStr)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	// Create a nat table
+	nft := "nft"
+	natTable := "nat"
+	// adding a table and a chain are idempotent operations
+	cmdAddTable := exec.CommandContext(ctx, nft, "add", "table", family, natTable)
+	cmdAddTable.Stdout = os.Stdout
+	cmdAddTable.Stderr = os.Stderr
+	if err := cmdAddTable.Run(); err != nil {
+		return fmt.Errorf("adding nat table failed: %w", err)
 	}
+	preroutingChain := "PREROUTING"
+	cmdCreatePreroutingChain := exec.CommandContext(ctx, nft, "--", "add", "chain", family, natTable, preroutingChain, "{ type nat hook prerouting priority -100; policy accept; }")
+	cmdCreatePreroutingChain.Stdout = os.Stdout
+	cmdCreatePreroutingChain.Stderr = os.Stderr
+	if err := cmdAddTable.Run(); err != nil {
+		return fmt.Errorf("adding prerouting chain failed: %w", err)
+	}
+
+	// running this multiple times will result in multiple rules, but that
+	// won't affect the functionality and hopefully we'll never run in that
+	// often that it becomes a performance problem
+	cmdCreateDNATRule := exec.CommandContext(ctx, nft, "insert", "rule", family, natTable, preroutingChain, "ip", "daddr", local, "dnat", "to", dstStr)
+	cmdCreateDNATRule.Stdout = os.Stdout
+	cmdCreateDNATRule.Stderr = os.Stderr
+	if err := cmdAddTable.Run(); err != nil {
+		return fmt.Errorf("adding DNAT rule failed: %w", err)
+	}
+
 	return nil
 }
 

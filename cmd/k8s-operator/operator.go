@@ -53,6 +53,7 @@ func main() {
 		priorityClassName  = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
 		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
 		shouldRunAuthProxy = defaultBool("AUTH_PROXY", false)
+		runInRestrictedEnv = defaultBool("RUN_IN_RESTRICTED_ENV", false)
 	)
 
 	var opts []kzap.Opts
@@ -73,7 +74,7 @@ func main() {
 	if shouldRunAuthProxy {
 		launchAuthProxy(zlog, restConfig, s)
 	}
-	startReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	startReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags, runInRestrictedEnv)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -182,7 +183,7 @@ waitOnline:
 
 // startReconcilers starts the controller-runtime manager and registers the
 // ServiceReconciler.
-func startReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+func startReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string, runInRestrictedEnv bool) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
@@ -231,6 +232,7 @@ func startReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace stri
 		operatorNamespace:      tsNamespace,
 		proxyImage:             image,
 		proxyPriorityClassName: priorityClassName,
+		runInRestrictedEnv:     runInRestrictedEnv,
 	}
 	err = builder.
 		ControllerManagedBy(mgr).

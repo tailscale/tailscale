@@ -31,6 +31,8 @@ spec:
               value: "false"
             - name: TS_AUTH_ONCE
               value: "true"
+            - name: TS_DEBUG_FIREWALL_MODE
+              value: "nftables"
           securityContext:
             capabilities:
               add:
