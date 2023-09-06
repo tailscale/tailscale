@@ -23,6 +23,37 @@ func DebugIptables(logf logger.Logf) error {
 	return nil
 }
 
+// GetIptablesCliVersion tries to display the version of the iptables and
+// iptables commands
+func GetIptablesCliVersion() ([]string, error) {
+	// run "iptables -V" to display the iptables version
+	// exec.Command returns an error if the binary is not found
+	cmd := exec.Command("iptables", "-V")
+	output, err := cmd.Output()
+	ip6cmd := exec.Command("ip6tables", "-V")
+	ip6output, ip6err := ip6cmd.Output()
+	var allLines []string
+	outputStr := strings.TrimSuffix(string(output), "\n")
+	lines := strings.Split(outputStr, "\n")
+	ip6outputStr := strings.TrimSuffix(string(ip6output), "\n")
+	ip6lines := strings.Split(ip6outputStr, "\n")
+	switch {
+	case err == nil && ip6err == nil:
+		allLines = append(lines, ip6lines...)
+	case err == nil && ip6err != nil:
+		allLines = lines
+	case err != nil && ip6err == nil:
+		allLines = ip6lines
+	default:
+		return nil, FWModeNotSupportedError{
+			Mode: FirewallModeIPTables,
+			Err:  fmt.Errorf("iptables command run fail: %w", multierr.New(err, ip6err)),
+		}
+	}
+
+	return allLines, nil
+}
+
 // DetectIptables returns the number of iptables rules that are present in the
 // system, ignoring the default "ACCEPT" rule present in the standard iptables
 // chains.

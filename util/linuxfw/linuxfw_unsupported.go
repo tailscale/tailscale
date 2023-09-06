@@ -34,6 +34,11 @@ func DebugIptables(logf logger.Logf) error {
 	return ErrUnsupported
 }
 
+// GetIptablesCliVersion is not supported on non-Linux platforms.
+func GetIptablesCliVersion() ([]string, error) {
+	return nil, ErrUnsupported
+}
+
 // DetectIptables is not supported on non-Linux platforms.
 func DetectIptables() (int, error) {
 	return 0, ErrUnsupported

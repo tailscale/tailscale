@@ -59,6 +59,7 @@ type netfilterRunner interface {
 // It is implemented for testing purposes.
 type tableDetector interface {
 	iptDetect() (int, error)
+	iptCliVersion() ([]string, error)
 	nftDetect() (int, error)
 }
 
@@ -67,6 +68,11 @@ type linuxFWDetector struct{}
 // iptDetect returns the number of iptables rules in the current namespace.
 func (l *linuxFWDetector) iptDetect() (int, error) {
 	return linuxfw.DetectIptables()
+}
+
+// iptCliVersion returns the version of the iptables and iptables6 commands.
+func (l *linuxFWDetector) iptCliVersion() ([]string, error) {
+	return linuxfw.GetIptablesCliVersion()
 }
 
 // nftDetect returns the number of nftables rules in the current namespace.
@@ -83,6 +89,12 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 		return linuxfw.FirewallModeNfTables
 	}
 	iptAva, nftAva := true, true
+	iptCliVersion, err := det.iptCliVersion()
+	if err == nil {
+		for _, line := range iptCliVersion {
+			logf("detect iptables CLI version: %s", line)
+		}
+	}
 	iptRuleCount, err := det.iptDetect()
 	if err != nil {
 		logf("detect iptables rule: %v", err)
