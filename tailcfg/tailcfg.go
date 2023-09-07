@@ -114,7 +114,8 @@ type CapabilityVersion int
 //   - 72: 2023-08-23: TS-2023-006 UPnP issue fixed; UPnP can now be used again
 //   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
 //   - 74: 2023-09-18: Client understands NodeCapMap
-const CurrentCapabilityVersion CapabilityVersion = 74
+//   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
+const CurrentCapabilityVersion CapabilityVersion = 75
 
 type StableID string
 
@@ -2137,6 +2138,10 @@ const (
 	// NodeAttrPeerMTUEnable makes the client do path MTU discovery to its
 	// peers. If it isn't set, it defaults to the client default.
 	NodeAttrPeerMTUEnable NodeCapability = "peer-mtu-enable"
+
+	// NodeAttrDNSForwarderDisableTCPRetries disables retrying truncated
+	// DNS queries over TCP if the response is truncated.
+	NodeAttrDNSForwarderDisableTCPRetries NodeCapability = "dns-forwarder-disable-tcp-retries"
 )
 
 // SetDNSRequest is a request to add a DNS record.
