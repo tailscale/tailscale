@@ -39,7 +39,7 @@ type C2NSSHUsernamesResponse struct {
 // its Tailscale installation.
 type C2NUpdateResponse struct {
 	// Err is the error message, if any.
-	Err string
+	Err string `json:",omitempty"`
 
 	// Enabled indicates whether the user has opted in to updates triggered from
 	// control.
