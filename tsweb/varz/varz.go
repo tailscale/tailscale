@@ -31,13 +31,14 @@ func init() {
 }
 
 const (
-	gaugePrefix    = "gauge_"
-	counterPrefix  = "counter_"
-	labelMapPrefix = "labelmap_"
+	gaugePrefix     = "gauge_"
+	counterPrefix   = "counter_"
+	labelMapPrefix  = "labelmap_"
+	histogramPrefix = "histogram_"
 )
 
 // prefixesToTrim contains key prefixes to remove when exporting and sorting metrics.
-var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix}
+var prefixesToTrim = []string{gaugePrefix, counterPrefix, labelMapPrefix, histogramPrefix}
 
 var timeStart = time.Now()
 
@@ -71,10 +72,12 @@ func prometheusMetric(prefix string, key string) (string, string, string) {
 	case strings.HasPrefix(key, gaugePrefix):
 		typ = "gauge"
 		key = strings.TrimPrefix(key, gaugePrefix)
-
 	case strings.HasPrefix(key, counterPrefix):
 		typ = "counter"
 		key = strings.TrimPrefix(key, counterPrefix)
+	case strings.HasPrefix(key, histogramPrefix):
+		typ = "histogram"
+		key = strings.TrimPrefix(key, histogramPrefix)
 	}
 	if strings.HasPrefix(key, labelMapPrefix) {
 		key = strings.TrimPrefix(key, labelMapPrefix)
