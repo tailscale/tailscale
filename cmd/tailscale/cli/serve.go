@@ -39,7 +39,7 @@ var serveCmd = func() *ffcli.Command {
 	// implementation of the tailscale funnel command.
 	// See https://github.com/tailscale/tailscale/issues/7844
 	if envknob.UseWIPCode() {
-		return newServeDevCommand(se, "serve")
+		return newServeDevCommand(se, serve)
 	}
 	return newServeCommand(se)
 }
@@ -158,8 +158,17 @@ type localServeClient interface {
 //
 // It also contains the flags, as registered with newServeCommand.
 type serveEnv struct {
-	// flags
+	// v1 flags
 	json bool // output JSON (status only for now)
+
+	// v2 specific flags
+	bg               bool      // background mode
+	setPath          string    // serve path
+	https            string    // HTTP port
+	http             string    // HTTP port
+	tcp              string    // TCP port
+	tlsTerminatedTcp string    // a TLS terminated TCP port
+	subcmd           serveMode // subcommand
 
 	lc localServeClient // localClient interface, specific to serve
 
