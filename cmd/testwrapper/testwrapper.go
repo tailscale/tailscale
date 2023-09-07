@@ -59,9 +59,10 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 
 // runTests runs the tests in pt and sends the results on ch. It sends a
 // testAttempt for each test and a final testAttempt per pkg with pkgFinished
-// set to true.
+// set to true. Package build errors will not emit a testAttempt (as no valid
+// JSON is produced) but the [os/exec.ExitError] will be returned.
 // It calls close(ch) when it's done.
-func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) {
+func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
 	args := []string{"test", "-json", pt.pattern}
 	args = append(args, otherArgs...)
@@ -87,10 +88,10 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		log.Printf("error starting test: %v", err)
 		os.Exit(1)
 	}
-	done := make(chan struct{})
+	cmdErr := make(chan error, 1)
 	go func() {
-		defer close(done)
-		cmd.Wait()
+		defer close(cmdErr)
+		cmdErr <- cmd.Wait()
 	}()
 
 	jd := json.NewDecoder(r)
@@ -162,7 +163,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			}
 		}
 	}
-	<-done
+	return <-cmdErr
 }
 
 func main() {
@@ -244,12 +245,21 @@ func main() {
 			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\n", thisRun.attempt)
 		}
 
-		failed := false
 		toRetry := make(map[string][]string) // pkg -> tests to retry
 		for _, pt := range thisRun.tests {
 			ch := make(chan *testAttempt)
-			go runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
+			runErr := make(chan error, 1)
+			go func() {
+				defer close(runErr)
+				runErr <- runTests(ctx, thisRun.attempt, pt, otherArgs, ch)
+			}()
+
+			var failed bool
 			for tr := range ch {
+				if tr.pkg == "command-line-arguments" {
+					// For passing filenames instead of packages in tests.
+					tr.pkg = pattern
+				}
 				if tr.pkgFinished {
 					if tr.outcome == "fail" && len(toRetry[tr.pkg]) == 0 {
 						// If a package fails and we don't have any tests to
@@ -272,10 +282,21 @@ func main() {
 					failed = true
 				}
 			}
-		}
-		if failed {
-			fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
-			os.Exit(1)
+			if failed {
+				fmt.Println("\n\nNot retrying flaky tests because non-flaky tests failed.")
+				os.Exit(1)
+			}
+
+			// If there's nothing to retry and no non-retryable tests have
+			// failed then we've probably hit a build error.
+			if err := <-runErr; len(toRetry) == 0 && err != nil {
+				var exit *exec.ExitError
+				if errors.As(err, &exit) {
+					if code := exit.ExitCode(); code > -1 {
+						os.Exit(exit.ExitCode())
+					}
+				}
+			}
 		}
 		if len(toRetry) == 0 {
 			continue
