@@ -20,11 +20,12 @@ func _() {
 	_ = x[LabelMagicsockConnUDP6-9]
 	_ = x[LabelNetlogLogger-10]
 	_ = x[LabelSockstatlogLogger-11]
+	_ = x[LabelDNSForwarderTCP-12]
 }
 
-const _Label_name = "ControlClientAutoControlClientDialerDERPHTTPClientLogtailLoggerDNSForwarderDoHDNSForwarderUDPNetcheckClientPortmapperClientMagicsockConnUDP4MagicsockConnUDP6NetlogLoggerSockstatlogLogger"
+const _Label_name = "ControlClientAutoControlClientDialerDERPHTTPClientLogtailLoggerDNSForwarderDoHDNSForwarderUDPNetcheckClientPortmapperClientMagicsockConnUDP4MagicsockConnUDP6NetlogLoggerSockstatlogLoggerDNSForwarderTCP"
 
-var _Label_index = [...]uint8{0, 17, 36, 50, 63, 78, 93, 107, 123, 140, 157, 169, 186}
+var _Label_index = [...]uint8{0, 17, 36, 50, 63, 78, 93, 107, 123, 140, 157, 169, 186, 201}
 
 func (i Label) String() string {
 	if i >= Label(len(_Label_index)-1) {

@@ -1086,7 +1086,7 @@ func (ns *Impl) handleMagicDNSUDP(srcAddr netip.AddrPort, c *gonet.UDPConn) {
 			}
 			return
 		}
-		resp, err := ns.dns.Query(context.Background(), q[:n], srcAddr)
+		resp, err := ns.dns.Query(context.Background(), q[:n], "udp", srcAddr)
 		if err != nil {
 			ns.logf("dns udp query: %v", err)
 			return

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/health"
 	"tailscale.com/net/dns/resolver"
 	"tailscale.com/net/netmon"
@@ -66,14 +67,14 @@ type Manager struct {
 
 // NewManagers created a new manager from the given config.
 // The netMon parameter is optional; if non-nil it's used to do faster interface lookups.
-func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector) *Manager {
+func NewManager(logf logger.Logf, oscfg OSConfigurator, netMon *netmon.Monitor, dialer *tsdial.Dialer, linkSel resolver.ForwardLinkSelector, knobs *controlknobs.Knobs) *Manager {
 	if dialer == nil {
 		panic("nil Dialer")
 	}
 	logf = logger.WithPrefix(logf, "dns: ")
 	m := &Manager{
 		logf:     logf,
-		resolver: resolver.New(logf, netMon, linkSel, dialer),
+		resolver: resolver.New(logf, netMon, linkSel, dialer, knobs),
 		os:       oscfg,
 	}
 	m.ctx, m.ctxCancel = context.WithCancel(context.Background())
@@ -295,7 +296,10 @@ func toIPsOnly(resolvers []*dnstype.Resolver) (ret []netip.Addr) {
 // Query executes a DNS query received from the given address. The query is
 // provided in bs as a wire-encoded DNS query without any transport header.
 // This method is called for requests arriving over UDP and TCP.
-func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]byte, error) {
+//
+// The "family" parameter should indicate what type of DNS query this is:
+// either "tcp" or "udp".
+func (m *Manager) Query(ctx context.Context, bs []byte, family string, from netip.AddrPort) ([]byte, error) {
 	select {
 	case <-m.ctx.Done():
 		return nil, net.ErrClosed
@@ -309,7 +313,7 @@ func (m *Manager) Query(ctx context.Context, bs []byte, from netip.AddrPort) ([]
 		return nil, errFullQueue
 	}
 	defer atomic.AddInt32(&m.activeQueriesAtomic, -1)
-	return m.resolver.Query(ctx, bs, from)
+	return m.resolver.Query(ctx, bs, family, from)
 }
 
 const (
@@ -371,7 +375,7 @@ func (s *dnsTCPSession) handleWrites() {
 }
 
 func (s *dnsTCPSession) handleQuery(q []byte) {
-	resp, err := s.m.Query(s.ctx, q, s.srcAddr)
+	resp, err := s.m.Query(s.ctx, q, "tcp", s.srcAddr)
 	if err != nil {
 		s.m.logf("tcp query: %v", err)
 		return
@@ -466,7 +470,7 @@ func Cleanup(logf logger.Logf, interfaceName string) {
 		logf("creating dns cleanup: %v", err)
 		return
 	}
-	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil)
+	dns := NewManager(logf, oscfg, nil, &tsdial.Dialer{Logf: logf}, nil, nil)
 	if err := dns.Down(); err != nil {
 		logf("dns down: %v", err)
 	}
