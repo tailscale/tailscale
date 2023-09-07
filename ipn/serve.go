@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"tailscale.com/tailcfg"
 )
@@ -105,25 +104,6 @@ type ServeStreamRequest struct {
 	// Funnel indicates whether the request
 	// is a serve request or a funnel one.
 	Funnel bool `json:",omitempty"`
-}
-
-// FunnelRequestLog is the JSON type written out to io.Writers
-// watching funnel connections via ipnlocal.StreamServe.
-//
-// This structure is in development and subject to change.
-type FunnelRequestLog struct {
-	Time time.Time `json:",omitempty"` // time of request forwarding
-
-	// SrcAddr is the address that initiated the Funnel request.
-	SrcAddr netip.AddrPort `json:",omitempty"`
-
-	// The following fields are only populated if the connection
-	// initiated from another node on the client's tailnet.
-
-	NodeName        string   `json:",omitempty"` // src node MagicDNS name
-	NodeTags        []string `json:",omitempty"` // src node tags
-	UserLoginName   string   `json:",omitempty"` // src node's owner login (if not tagged)
-	UserDisplayName string   `json:",omitempty"` // src node's owner name (if not tagged)
 }
 
 // WebServerConfig describes a web server's configuration.
