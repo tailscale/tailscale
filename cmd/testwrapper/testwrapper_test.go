@@ -6,16 +6,46 @@ package main_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
-func TestRetry(t *testing.T) {
-	dir := t.TempDir()
+var (
+	buildPath string
+	buildErr  error
+	buildOnce sync.Once
+)
 
-	testfile := filepath.Join(dir, "retry_test.go")
+func cmdTestwrapper(t *testing.T, args ...string) *exec.Cmd {
+	buildOnce.Do(func() {
+		buildPath, buildErr = buildTestWrapper()
+	})
+	if buildErr != nil {
+		t.Fatalf("building testwrapper: %s", buildErr)
+	}
+	return exec.Command(buildPath, args...)
+}
+
+func buildTestWrapper() (string, error) {
+	dir, err := os.MkdirTemp("", "testwrapper")
+	if err != nil {
+		return "", fmt.Errorf("making temp dir: %w", err)
+	}
+	_, err = exec.Command("go", "build", "-o", dir, ".").Output()
+	if err != nil {
+		return "", fmt.Errorf("go build: %w", err)
+	}
+	return filepath.Join(dir, "testwrapper"), nil
+}
+
+func TestRetry(t *testing.T) {
+	t.Parallel()
+
+	testfile := filepath.Join(t.TempDir(), "retry_test.go")
 	code := []byte(`package retry_test
 
 import (
@@ -41,7 +71,7 @@ func TestFlakeRun(t *testing.T) {
 		t.Fatalf("writing package: %s", err)
 	}
 
-	out, err := exec.Command("go", "run", ".", "-v", testfile).CombinedOutput()
+	out, err := cmdTestwrapper(t, "-v", testfile).CombinedOutput()
 	if err != nil {
 		t.Fatalf("go run . %s: %s with output:\n%s", testfile, err, out)
 	}
@@ -64,9 +94,9 @@ func TestFlakeRun(t *testing.T) {
 }
 
 func TestNoRetry(t *testing.T) {
-	dir := t.TempDir()
+	t.Parallel()
 
-	testfile := filepath.Join(dir, "noretry_test.go")
+	testfile := filepath.Join(t.TempDir(), "noretry_test.go")
 	code := []byte(`package noretry_test
 
 import (
@@ -87,7 +117,7 @@ func TestAlwaysError(t *testing.T) {
 		t.Fatalf("writing package: %s", err)
 	}
 
-	out, err := exec.Command("go", "run", ".", testfile).Output()
+	out, err := cmdTestwrapper(t, "-v", testfile).Output()
 	if err == nil {
 		t.Fatalf("go run . %s: expected error but it succeeded with output:\n%s", testfile, out)
 	}
@@ -99,16 +129,21 @@ func TestAlwaysError(t *testing.T) {
 	if !bytes.Contains(out, want) {
 		t.Fatalf("wanted output containing %q but got:\n%s", want, out)
 	}
+
+	if flakeRuns := bytes.Count(out, []byte("=== RUN   TestFlakeRun")); flakeRuns != 1 {
+		t.Fatalf("expected TestFlakeRun to be run once but was run %d times in output:\n%s", flakeRuns, out)
+	}
+
 	if testing.Verbose() {
 		t.Logf("success - output:\n%s", out)
 	}
 }
 
 func TestBuildError(t *testing.T) {
-	dir := t.TempDir()
+	t.Parallel()
 
 	// Construct our broken package.
-	testfile := filepath.Join(dir, "builderror_test.go")
+	testfile := filepath.Join(t.TempDir(), "builderror_test.go")
 	code := []byte("package builderror_test\n\nderp")
 	err := os.WriteFile(testfile, code, 0o644)
 	if err != nil {
@@ -126,7 +161,7 @@ func TestBuildError(t *testing.T) {
 	}
 
 	// Confirm `testwrapper` exits with code 1.
-	_, err = exec.Command("go", "run", ".", testfile).Output()
+	_, err = cmdTestwrapper(t, testfile).Output()
 	if code, stderr, ok := errExitCode(err); !ok || code != 1 {
 		t.Fatalf("testwrapper %s: expected error with exit code 0 but got: %v", testfile, err)
 	} else if !bytes.Contains(stderr, buildErr) {
