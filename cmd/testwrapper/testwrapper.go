@@ -260,8 +260,11 @@ func main() {
 
 			var failed bool
 			for tr := range ch {
+				// Go assigns the package name "command-line-arguments" when you
+				// `go test FILE` rather than `go test PKG`. It's more
+				// convenient for us to to specify files in tests, so fix tr.pkg
+				// so that subsequent testwrapper attempts run correctly.
 				if tr.pkg == "command-line-arguments" {
-					// For passing filenames instead of packages in tests.
 					tr.pkg = pattern
 				}
 				if tr.pkgFinished {
