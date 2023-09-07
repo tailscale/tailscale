@@ -3,7 +3,10 @@
 
 package lru
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
 
 func TestLRU(t *testing.T) {
 	var c Cache[int, string]
@@ -38,5 +41,19 @@ func TestLRU(t *testing.T) {
 	c.Delete(3)
 	if c.Contains(3) {
 		t.Errorf("contains 3; should not")
+	}
+}
+
+func BenchmarkLRU(b *testing.B) {
+	const lruSize = 10
+	const maxval = 15 // 33% more keys than the LRU can hold
+
+	c := Cache[int, bool]{MaxEntries: lruSize}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		k := rand.Intn(maxval)
+		if !c.Get(k) {
+			c.Set(k, true)
+		}
 	}
 }
