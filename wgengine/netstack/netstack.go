@@ -196,8 +196,14 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	ipstack.SetPromiscuousMode(nicID, true)
 	// Add IPv4 and IPv6 default routes, so all incoming packets from the Tailscale side
 	// are handled by the one fake NIC we use.
-	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFromSlice(bytes.Repeat([]byte{0x00}, 4)), tcpip.MaskFromBytes(bytes.Repeat([]byte{0x00}, 4)))
-	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFromSlice(bytes.Repeat([]byte{0x00}, 16)), tcpip.MaskFromBytes(bytes.Repeat([]byte{0x00}, 16)))
+	ipv4Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 4)), tcpip.MaskFromBytes(make([]byte, 4)))
+	if err != nil {
+		return nil, fmt.Errorf("could not create IPv4 subnet: %v", err)
+	}
+	ipv6Subnet, err := tcpip.NewSubnet(tcpip.AddrFromSlice(make([]byte, 16)), tcpip.MaskFromBytes(make([]byte, 16)))
+	if err != nil {
+		return nil, fmt.Errorf("could not create IPv6 subnet: %v", err)
+	}
 	ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
@@ -240,7 +246,7 @@ func (ns *Impl) Close() error {
 func (ns *Impl) wrapProtoHandler(h func(stack.TransportEndpointID, stack.PacketBufferPtr) bool) func(stack.TransportEndpointID, stack.PacketBufferPtr) bool {
 	return func(tei stack.TransportEndpointID, pb stack.PacketBufferPtr) bool {
 		addr := tei.LocalAddress
-		ip, ok := netip.AddrFromSlice(net.IP(addr.AsSlice()))
+		ip, ok := netip.AddrFromSlice(addr.AsSlice())
 		if !ok {
 			ns.logf("netstack: could not parse local address for incoming connection")
 			return false
@@ -808,9 +814,8 @@ func netaddrIPFromNetstackIP(s tcpip.Address) netip.Addr {
 		s := s.As4()
 		return netaddr.IPv4(s[0], s[1], s[2], s[3])
 	case 16:
-		var a [16]byte
-		copy(a[:], s.AsSlice())
-		return netip.AddrFrom16(a).Unmap()
+		s := s.As16()
+		return netip.AddrFrom16(s).Unmap()
 	}
 	return netip.Addr{}
 }
@@ -1231,17 +1236,8 @@ func stringifyTEI(tei stack.TransportEndpointID) string {
 }
 
 func ipPortOfNetstackAddr(a tcpip.Address, port uint16) (ipp netip.AddrPort, ok bool) {
-	var a16 [16]byte
-	copy(a16[:], a.AsSlice())
-	switch a.Len() {
-	case 4:
-		return netip.AddrPortFrom(
-			netip.AddrFrom4(*(*[4]byte)(a16[:4])).Unmap(),
-			port,
-		), true
-	case 16:
-		return netip.AddrPortFrom(netip.AddrFrom16(a16).Unmap(), port), true
-	default:
-		return ipp, false
+	if addr, ok := netip.AddrFromSlice(a.AsSlice()); ok {
+		return netip.AddrPortFrom(addr, port), true
 	}
+	return netip.AddrPort{}, false
 }
