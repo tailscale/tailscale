@@ -246,9 +246,6 @@ type LocalBackend struct {
 
 	serveListeners     map[netip.AddrPort]*serveListener // addrPort => serveListener
 	serveProxyHandlers sync.Map                          // string (HTTPHandler.Proxy) => *httputil.ReverseProxy
-	// serveStreamers is a map for those running Funnel in the foreground
-	// and streaming incoming requests.
-	serveStreamers map[uint16]map[uint32]func(ipn.FunnelRequestLog) // serve port => map of stream loggers (key is UUID)
 
 	// statusLock must be held before calling statusChanged.Wait() or
 	// statusChanged.Broadcast().
