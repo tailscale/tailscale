@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
@@ -188,99 +189,37 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			mount = "/"
 		}
 
-		if e.bg || turnOff || e.setPath != "" {
-			srvType, srvPort, err := srvTypeAndPortFromFlags(e)
+		if e.setPath != "" {
+			// TODO(marwan-at-work): either
+			// 1. Warn the user that this is a side effect.
+			// 2. Force the user to pass --bg
+			// 3. Allow set-path to be in the foreground.
+			e.bg = true
+		}
+
+		srvType, srvPort, err := srvTypeAndPortFromFlags(e)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
+			return errHelp
+		}
+
+		if turnOff {
+			err := e.unsetServe(ctx, srvType, srvPort, mount)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
 				return errHelp
 			}
-
-			if turnOff {
-				err := e.unsetServe(ctx, srvType, srvPort, mount)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-					return errHelp
-				}
-				return nil
-			}
-
-			err = e.setServe(ctx, st, srvType, srvPort, mount, target, funnel)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-				return errHelp
-			}
-
 			return nil
 		}
 
-		dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
-		hp := ipn.HostPort(dnsName + ":443") // TODO(marwan-at-work): support the 2 other ports
-
-		// TODO(marwan-at-work): combine this with the above setServe code.
-		// Foreground and background should be the same, we just pass
-		// a foreground config instead of the top level background one.
-		return e.streamServe(ctx, ipn.ServeStreamRequest{
-			Funnel:     funnel,
-			HostPort:   hp,
-			Source:     target,
-			MountPoint: mount,
-		})
-	}
-}
-
-func (e *serveEnv) streamServe(ctx context.Context, req ipn.ServeStreamRequest) error {
-	watcher, err := e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
-	n, err := watcher.Next()
-	if err != nil {
-		return err
-	}
-	sessionID := n.SessionID
-	if sessionID == "" {
-		return errors.New("missing SessionID")
-	}
-	sc, err := e.lc.GetServeConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("error getting serve config: %w", err)
-	}
-	if sc == nil {
-		sc = &ipn.ServeConfig{}
-	}
-	setHandler(sc, req, sessionID)
-	err = e.lc.SetServeConfig(ctx, sc)
-	if err != nil {
-		return fmt.Errorf("error setting serve config: %w", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "Funnel started on \"https://%s\".\n", strings.TrimSuffix(string(req.HostPort), ":443"))
-	fmt.Fprintf(os.Stderr, "Press Ctrl-C to stop Funnel.\n\n")
-
-	for {
-		_, err = watcher.Next()
+		err = e.setServe(ctx, st, srvType, srvPort, mount, target, funnel)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-			return err
+			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
+			return errHelp
 		}
+
+		return nil
 	}
-}
-
-// setHandler modifies sc to add a Foreground config (described by req) with the given sessionID.
-func setHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest, sessionID string) {
-	fconf := &ipn.ServeConfig{}
-	mak.Set(&sc.Foreground, sessionID, fconf)
-	mak.Set(&fconf.TCP, 443, &ipn.TCPPortHandler{HTTPS: true})
-
-	wsc := &ipn.WebServerConfig{}
-	mak.Set(&fconf.Web, req.HostPort, wsc)
-	mak.Set(&wsc.Handlers, req.MountPoint, &ipn.HTTPHandler{
-		Proxy: req.Source,
-	})
-	mak.Set(&fconf.AllowFunnel, req.HostPort, true)
 }
 
 func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType string, srvPort uint16, mount string, target string, allowFunnel bool) error {
@@ -305,14 +244,42 @@ func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType st
 		return err
 	}
 
+	// nil if no config
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+
+	// set parent serve config to always be persisted
+	// at the top level, but a nested config might be
+	// the one that gets manipulated depending on
+	// foreground or background.
+	parentSC := sc
+
 	dnsName, err := e.getSelfDNSName(ctx)
 	if err != nil {
 		return err
 	}
 
-	// nil if no config
-	if sc == nil {
-		sc = new(ipn.ServeConfig)
+	// if foreground mode, create a WatchIPNBus session
+	// and use the nested config for all following operations
+	// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
+	var watcher *tailscale.IPNBusWatcher
+	if !e.bg {
+		watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+		if err != nil {
+			return err
+		}
+		defer watcher.Close()
+		n, err := watcher.Next()
+		if err != nil {
+			return err
+		}
+		if n.SessionID == "" {
+			return errors.New("missing SessionID")
+		}
+		fsc := &ipn.ServeConfig{}
+		mak.Set(&sc.Foreground, n.SessionID, fsc)
+		sc = fsc
 	}
 
 	// update serve config based on the type
@@ -340,7 +307,7 @@ func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType st
 	e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 
 	// persist the serve config changes
-	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
+	if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
 		return err
 	}
 
@@ -351,6 +318,18 @@ func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType st
 	}
 
 	fmt.Fprintln(os.Stderr, m)
+
+	if !e.bg {
+		for {
+			_, err = watcher.Next()
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				return err
+			}
+		}
+	}
 
 	return nil
 }
@@ -423,8 +402,12 @@ func (e *serveEnv) messageForPort(ctx context.Context, sc *ipn.ServeConfig, st *
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	output.WriteString("\nServe started and running in the background.\n")
-	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
+	if e.bg {
+		output.WriteString("\nServe started and running in the background.\n")
+		output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
+	} else {
+		// TODO(marwan-at-work): give the user more context on their foreground process.
+	}
 
 	return output.String(), nil
 }
