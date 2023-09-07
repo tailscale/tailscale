@@ -138,8 +138,8 @@ func (h *Histogram) String() string {
 		}
 		first = false
 	})
-	fmt.Fprintf(&b, "\"sum\": %v,", &h.sum)
-	fmt.Fprintf(&b, "\"count\": %v", &h.count)
+	fmt.Fprintf(&b, ",\"sum\": %v", &h.sum)
+	fmt.Fprintf(&b, ",\"count\": %v", &h.count)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }
