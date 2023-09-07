@@ -78,6 +78,7 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	runInRestrictedEnv     bool
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -381,6 +382,15 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 		"app": sts.ParentResourceUID,
 	}
 	ss.Spec.Template.Spec.PriorityClassName = a.proxyPriorityClassName
+
+	// If we run in a restricted env, do not run the privileged syctler init
+	// container that ensures IP forwarding. In most cases this will work
+	// anyway without extra action from users as the forwarding is usually
+	// enabled in kube containers. If it was not, there is an extra check in
+	// containerboot that will error out.
+	if a.runInRestrictedEnv {
+		ss.Spec.Template.Spec.InitContainers = nil
+	}
 	logger.Debugf("reconciling statefulset %s/%s", ss.GetNamespace(), ss.GetName())
 	return createOrUpdate(ctx, a.Client, a.operatorNamespace, &ss, func(s *appsv1.StatefulSet) { s.Spec = ss.Spec })
 }

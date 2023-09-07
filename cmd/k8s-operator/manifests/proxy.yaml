@@ -35,3 +35,4 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+                - NET_RAW

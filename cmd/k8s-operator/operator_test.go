@@ -767,6 +767,54 @@ func TestCustomPriorityClassName(t *testing.T) {
 
 	expectEqual(t, fc, expectedSTS(shortName, fullName, "custom-priority-class-name", "tailscale-critical"))
 }
+func TestRunInRestrictedEnv(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		ssr: &tailscaleSTSReconciler{
+			Client:             fc,
+			tsClient:           ft,
+			defaultTags:        []string{"tag:k8s"},
+			operatorNamespace:  "operator-ns",
+			proxyImage:         "tailscale/tailscale",
+			runInRestrictedEnv: true,
+		},
+		logger: zl.Sugar(),
+	}
+
+	// Create a service that we should manage, and check that the initial round
+	// of objects looks right.
+	mustCreate(t, fc, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				"tailscale.com/expose": "true",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.20.30.40",
+			Type:      corev1.ServiceTypeClusterIP,
+		},
+	})
+
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test")
+	sts := expectedSTS(shortName, fullName, "default-test", "")
+	sts.Spec.Template.Spec.InitContainers = nil
+
+	expectEqual(t, fc, sts)
+}
 
 func TestDefaultLoadBalancer(t *testing.T) {
 	fc := fake.NewFakeClient()
@@ -920,7 +968,7 @@ func expectedSTS(stsName, secretName, hostname, priorityClassName string) *appsv
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
-									Add: []corev1.Capability{"NET_ADMIN"},
+									Add: []corev1.Capability{"NET_ADMIN", "NET_RAW"},
 								},
 							},
 							ImagePullPolicy: "Always",
@@ -989,7 +1037,7 @@ func expectedEgressSTS(stsName, secretName, tailnetTargetIP, hostname, priorityC
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Capabilities: &corev1.Capabilities{
-									Add: []corev1.Capability{"NET_ADMIN"},
+									Add: []corev1.Capability{"NET_ADMIN", "NET_RAW"},
 								},
 							},
 							ImagePullPolicy: "Always",
