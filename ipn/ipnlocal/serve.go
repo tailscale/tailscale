@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"tailscale.com/ipn"
 	"tailscale.com/logtail/backoff"
 	"tailscale.com/net/netutil"
@@ -282,6 +281,9 @@ func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
 // the backend enables it for the duration of the context's lifespan and
 // then turns it back off once the context is closed. If either are already enabled,
 // then they remain that way but logs are still streamed
+//
+// TODO(marwan-at-work): this whole endpoint will be
+// deleted in a follow up PR in favor of WatchIPNBus
 func (b *LocalBackend) StreamServe(ctx context.Context, w io.Writer, req ipn.ServeStreamRequest) (err error) {
 	f, ok := w.(http.Flusher)
 	if !ok {
@@ -310,44 +312,13 @@ func (b *LocalBackend) StreamServe(ctx context.Context, w io.Writer, req ipn.Ser
 		err = errors.Join(err, b.SetServeConfig(sc))
 	}()
 
-	var writeErrs []error
-	writeToStream := func(log ipn.FunnelRequestLog) {
-		jsonLog, err := json.Marshal(log)
-		if err != nil {
-			writeErrs = append(writeErrs, err)
-			return
-		}
-		if _, err := fmt.Fprintf(w, "%s\n", jsonLog); err != nil {
-			writeErrs = append(writeErrs, err)
-			return
-		}
-		f.Flush()
-	}
-
-	// Hook up connections stream.
-	b.mu.Lock()
-	mak.NonNilMapForJSON(&b.serveStreamers)
-	if b.serveStreamers[port] == nil {
-		b.serveStreamers[port] = make(map[uint32]func(ipn.FunnelRequestLog))
-	}
-	id := uuid.New().ID()
-	b.serveStreamers[port][id] = writeToStream
-	b.mu.Unlock()
-
-	// Clean up streamer when done.
-	defer func() {
-		b.mu.Lock()
-		delete(b.serveStreamers[port], id)
-		b.mu.Unlock()
-	}()
-
 	select {
 	case <-ctx.Done():
 		// Triggered by foreground `tailscale funnel` process
 		// (the streamer) getting closed, or by turning off Tailscale.
 	}
 
-	return errors.Join(writeErrs...)
+	return nil
 }
 
 func setHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest) {
@@ -405,33 +376,6 @@ func deleteHandler(sc *ipn.ServeConfig, req ipn.ServeStreamRequest, port uint16)
 	delete(wsc.Handlers, req.MountPoint)
 	if len(wsc.Handlers) == 0 {
 		delete(sc.Web, req.HostPort)
-	}
-}
-
-func (b *LocalBackend) maybeLogServeConnection(destPort uint16, srcAddr netip.AddrPort) {
-	b.mu.Lock()
-	streamers := b.serveStreamers[destPort]
-	b.mu.Unlock()
-	if len(streamers) == 0 {
-		return
-	}
-
-	var log ipn.FunnelRequestLog
-	log.SrcAddr = srcAddr
-	log.Time = b.clock.Now()
-
-	if node, user, ok := b.WhoIs(srcAddr); ok {
-		log.NodeName = node.ComputedName()
-		if node.IsTagged() {
-			log.NodeTags = node.Tags().AsSlice()
-		} else {
-			log.UserLoginName = user.LoginName
-			log.UserDisplayName = user.DisplayName
-		}
-	}
-
-	for _, stream := range streamers {
-		stream(log)
 	}
 }
 
@@ -537,7 +481,6 @@ func (b *LocalBackend) tcpHandlerForServe(dport uint16, srcAddr netip.AddrPort) 
 	if backDst := tcph.TCPForward(); backDst != "" {
 		return func(conn net.Conn) error {
 			defer conn.Close()
-			b.maybeLogServeConnection(dport, srcAddr)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			backConn, err := b.dialer.SystemDial(ctx, "tcp", backDst)
 			cancel()
@@ -705,9 +648,6 @@ func (b *LocalBackend) serveWebHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		http.NotFound(w, r)
 		return
-	}
-	if c, ok := getServeHTTPContext(r); ok {
-		b.maybeLogServeConnection(c.DestPort, c.SrcAddr)
 	}
 	if s := h.Text(); s != "" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
