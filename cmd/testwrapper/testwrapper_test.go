@@ -175,6 +175,40 @@ func TestBuildError(t *testing.T) {
 	}
 }
 
+func TestTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Construct our broken package.
+	testfile := filepath.Join(t.TempDir(), "timeout_test.go")
+	code := []byte(`package noretry_test
+
+import (
+	"testing"
+	"time"
+)
+
+func TestTimeout(t *testing.T) {
+	time.Sleep(500 * time.Millisecond)
+}
+`)
+	err := os.WriteFile(testfile, code, 0o644)
+	if err != nil {
+		t.Fatalf("writing package: %s", err)
+	}
+
+	out, err := cmdTestwrapper(t, testfile, "-timeout=20ms").CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
+		t.Fatalf("testwrapper %s: expected error with exit code 0 but got: %v; output was:\n%s", testfile, err, out)
+	}
+	if want := "panic: test timed out after 20ms"; !bytes.Contains(out, []byte(want)) {
+		t.Fatalf("testwrapper %s: expected build error containing %q but got:\n%s", testfile, buildErr, out)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", out)
+	}
+}
+
 func errExitCode(err error) (int, bool) {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
