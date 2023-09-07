@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -94,11 +95,11 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		cmdErr <- cmd.Wait()
 	}()
 
-	jd := json.NewDecoder(r)
+	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
-	for {
+	for s.Scan() {
 		var goOutput goTestOutput
-		if err := jd.Decode(&goOutput); err != nil {
+		if err := json.Unmarshal(s.Bytes(), &goOutput); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
 				break
 			}
@@ -108,7 +109,7 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			// The build error will be printed to stderr.
 			// See: https://github.com/golang/go/issues/35169
 			if _, ok := err.(*json.SyntaxError); ok {
-				jd = json.NewDecoder(r)
+				fmt.Println(s.Text())
 				continue
 			}
 			panic(err)
@@ -162,6 +163,9 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 				pkgTests[testName].logs.WriteString(goOutput.Output)
 			}
 		}
+	}
+	if err := s.Err(); err != nil {
+		return err
 	}
 	return <-cmdErr
 }

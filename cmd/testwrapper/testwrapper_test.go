@@ -121,7 +121,7 @@ func TestAlwaysError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("go run . %s: expected error but it succeeded with output:\n%s", testfile, out)
 	}
-	if code, _, ok := errExitCode(err); ok && code != 1 {
+	if code, ok := errExitCode(err); ok && code != 1 {
 		t.Fatalf("expected exit code 1 but got %d", code)
 	}
 
@@ -150,29 +150,35 @@ func TestBuildError(t *testing.T) {
 		t.Fatalf("writing package: %s", err)
 	}
 
-	buildErr := []byte(`builderror_test.go:3:1: expected declaration, found derp`)
+	buildErr := []byte("builderror_test.go:3:1: expected declaration, found derp\nFAIL	command-line-arguments [setup failed]")
 
 	// Confirm `go test` exits with code 1.
-	_, err = exec.Command("go", "test", testfile).Output()
-	if code, stderr, ok := errExitCode(err); !ok || code != 1 {
+	goOut, err := exec.Command("go", "test", testfile).CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
 		t.Fatalf("go test %s: expected error with exit code 0 but got: %v", testfile, err)
-	} else if !bytes.Contains(stderr, buildErr) {
-		t.Fatalf("go test %s: expected build error containing %q but got:\n%s", testfile, buildErr, stderr)
+	}
+	if !bytes.Contains(goOut, buildErr) {
+		t.Fatalf("go test %s: expected build error containing %q but got:\n%s", testfile, buildErr, goOut)
 	}
 
 	// Confirm `testwrapper` exits with code 1.
-	_, err = cmdTestwrapper(t, testfile).Output()
-	if code, stderr, ok := errExitCode(err); !ok || code != 1 {
+	twOut, err := cmdTestwrapper(t, testfile).CombinedOutput()
+	if code, ok := errExitCode(err); !ok || code != 1 {
 		t.Fatalf("testwrapper %s: expected error with exit code 0 but got: %v", testfile, err)
-	} else if !bytes.Contains(stderr, buildErr) {
-		t.Fatalf("testwrapper %s: expected build error containing %q but got:\n%s", testfile, buildErr, stderr)
+	}
+	if !bytes.Contains(twOut, buildErr) {
+		t.Fatalf("testwrapper %s: expected build error containing %q but got:\n%s", testfile, buildErr, twOut)
+	}
+
+	if testing.Verbose() {
+		t.Logf("success - output:\n%s", twOut)
 	}
 }
 
-func errExitCode(err error) (int, []byte, bool) {
+func errExitCode(err error) (int, bool) {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		return exit.ExitCode(), exit.Stderr, true
+		return exit.ExitCode(), true
 	}
-	return 0, nil, false
+	return 0, false
 }
