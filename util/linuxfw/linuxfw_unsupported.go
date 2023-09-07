@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// NOTE: linux_{arm64, x86} are the only two currently supported archs due to missing
+// NOTE: linux_{arm64, amd64} are the only two currently supported archs due to missing
 // support in upstream dependencies.
 
 // TODO(#8502): add support for more architectures
