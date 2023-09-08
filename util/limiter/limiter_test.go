@@ -4,8 +4,12 @@
 package limiter
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 const testRefillInterval = time.Second
@@ -111,6 +115,64 @@ func TestLimiterOverdraft(t *testing.T) {
 	allowed(t, l, "foo", 10, now)
 	denied(t, l, "foo", 1, now)
 	hasTokens(t, l, "foo", -1)
+}
+
+func TestDumpHTML(t *testing.T) {
+	l := &Limiter[string]{
+		Size:           3,
+		Max:            10,
+		Overdraft:      10,
+		RefillInterval: testRefillInterval,
+	}
+
+	now := time.Now().Truncate(testRefillInterval).Add(time.Millisecond)
+	allowed(t, l, "foo", 10, now)
+	denied(t, l, "foo", 2, now)
+	allowed(t, l, "bar", 4, now)
+	allowed(t, l, "qux", 1, now)
+
+	var out bytes.Buffer
+	l.DumpHTML(&out, false)
+	want := strings.Join([]string{
+		"<table>",
+		"<tr><th>Key</th><th>Tokens</th></tr>",
+		"<tr><td>qux</td><td>9</td></tr>",
+		"<tr><td>bar</td><td>6</td></tr>",
+		"<tr><td>foo</td><td><b>-2</b></td></tr>",
+		"</table>",
+	}, "")
+	if diff := cmp.Diff(out.String(), want); diff != "" {
+		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
+	}
+
+	out.Reset()
+	l.DumpHTML(&out, true)
+	want = strings.Join([]string{
+		"<table>",
+		"<tr><th>Key</th><th>Tokens</th></tr>",
+		"<tr><td>foo</td><td>-2</td></tr>",
+		"</table>",
+	}, "")
+	if diff := cmp.Diff(out.String(), want); diff != "" {
+		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
+	}
+
+	// Check that DumpHTML updates tokens even if the key wasn't hit
+	// organically.
+	now = now.Add(3 * time.Second)
+	out.Reset()
+	l.dumpHTML(&out, false, now)
+	want = strings.Join([]string{
+		"<table>",
+		"<tr><th>Key</th><th>Tokens</th></tr>",
+		"<tr><td>qux</td><td>10</td></tr>",
+		"<tr><td>bar</td><td>9</td></tr>",
+		"<tr><td>foo</td><td>1</td></tr>",
+		"</table>",
+	}, "")
+	if diff := cmp.Diff(out.String(), want); diff != "" {
+		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
+	}
 }
 
 func allowed(t *testing.T, l *Limiter[string], key string, count int, now time.Time) {
