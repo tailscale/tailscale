@@ -7,14 +7,11 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -31,35 +28,20 @@ import (
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/httpm"
-	"tailscale.com/util/must"
 	"tailscale.com/version/distro"
 )
-
-// This contains all files needed to build the frontend assets.
-// Because we assign this to the blank identifier, it does not actually embed the files.
-// However, this does cause `go mod vendor` to include the files when vendoring the package.
-// External packages that use the web client can `go mod vendor`, run `yarn build` to
-// build the assets, then those asset bundles will be embedded.
-//
-//go:embed yarn.lock index.html *.js *.json src/*
-var _ embed.FS
-
-//go:embed build/*
-var embeddedFS embed.FS
-
-// staticfiles serves static files from the build directory.
-var staticfiles http.Handler
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
 	lc *tailscale.LocalClient
 
-	devMode  bool
-	devProxy *httputil.ReverseProxy // only filled when devMode is on
+	devMode bool
 
 	cgiMode    bool
 	pathPrefix string
-	apiHandler http.Handler // csrf-protected api handler
+
+	assetsHandler http.Handler // serves frontend assets
+	apiHandler    http.Handler // serves api endpoints; csrf-protected
 }
 
 // ServerOpts contains options for constructing a new Server.
@@ -89,11 +71,7 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 		cgiMode:    opts.CGIMode,
 		pathPrefix: opts.PathPrefix,
 	}
-	cleanup = func() {}
-	if s.devMode {
-		cleanup = s.startDevServer()
-		s.addProxyToDevServer()
-	}
+	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
 
 	// Create handler for "/api" requests with CSRF protection.
 	// We don't require secure cookies, since the web client is regularly used
@@ -105,11 +83,6 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 
 	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
-}
-
-func init() {
-	buildFiles := must.Get(fs.Sub(embeddedFS, "build"))
-	staticfiles = http.FileServer(http.FS(buildFiles))
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.
@@ -151,14 +124,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		// Pass API requests through to the API handler.
 		s.apiHandler.ServeHTTP(w, r)
 		return
-	case s.devMode:
-		// When in dev mode, proxy non-api requests to the Vite dev server.
-		s.devProxy.ServeHTTP(w, r)
-		return
 	default:
-		// Otherwise, serve static files from the embedded filesystem.
-		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
-		staticfiles.ServeHTTP(w, r)
+		if !s.devMode {
+			s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
+		}
+		s.assetsHandler.ServeHTTP(w, r)
 		return
 	}
 }
