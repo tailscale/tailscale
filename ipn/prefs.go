@@ -755,6 +755,14 @@ type LoginProfile struct {
 	// It is filled in from the UserProfile.LoginName field.
 	Name string
 
+	// TailnetMagicDNSName is filled with the MagicDNS suffix for this
+	// profile's node (even if MagicDNS isn't necessarily in use).
+	// It will neither start nor end with a period.
+	//
+	// TailnetMagicDNSName is only filled from 2023-09-09 forward,
+	// and will only get backfilled when a profile is the current profile.
+	TailnetMagicDNSName string
+
 	// Key is the StateKey under which the profile is stored.
 	// It is assigned once at profile creation time and never changes.
 	Key StateKey
