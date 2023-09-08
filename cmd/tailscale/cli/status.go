@@ -236,6 +236,9 @@ func runStatus(ctx context.Context, args []string) error {
 		printHealth()
 	}
 	printFunnelStatus(ctx)
+	if cv := st.ClientVersion; cv != nil && !cv.RunningLatest && cv.LatestVersion != "" {
+		printf("# New Tailscale version is available: %q, run `tailscale update` to update.\n", cv.LatestVersion)
+	}
 	return nil
 }
 
