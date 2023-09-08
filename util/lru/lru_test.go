@@ -4,8 +4,12 @@
 package lru
 
 import (
+	"bytes"
 	"math/rand"
+	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestLRU(t *testing.T) {
@@ -41,6 +45,31 @@ func TestLRU(t *testing.T) {
 	c.Delete(3)
 	if c.Contains(3) {
 		t.Errorf("contains 3; should not")
+	}
+}
+
+func TestDumpHTML(t *testing.T) {
+	c := Cache[int, string]{MaxEntries: 3}
+
+	c.Set(1, "foo")
+	c.Set(2, "bar")
+	c.Set(3, "qux")
+	c.Set(4, "wat")
+
+	var out bytes.Buffer
+	c.DumpHTML(&out)
+
+	want := strings.Join([]string{
+		"<table>",
+		"<tr><th>Key</th><th>Value</th></tr>",
+		"<tr><td>4</td><td>wat</td></tr>",
+		"<tr><td>3</td><td>qux</td></tr>",
+		"<tr><td>2</td><td>bar</td></tr>",
+		"</table>",
+	}, "")
+
+	if diff := cmp.Diff(out.String(), want); diff != "" {
+		t.Fatalf("wrong DumpHTML output (-got+want):\n%s", diff)
 	}
 }
 

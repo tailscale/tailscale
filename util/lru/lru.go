@@ -4,6 +4,12 @@
 // Package lru contains a typed Least-Recently-Used cache.
 package lru
 
+import (
+	"fmt"
+	"html"
+	"io"
+)
+
 // Cache is container type keyed by K, storing V, optionally evicting the least
 // recently used items if a maximum size is exceeded.
 //
@@ -170,4 +176,32 @@ func (c *Cache[K, V]) deleteElement(ent *entry[K, V]) {
 		ent.prev.next = ent.next
 	}
 	delete(c.lookup, ent.key)
+}
+
+// ForEach calls fn for each entry in the cache, from most recently
+// used to least recently used.
+func (c *Cache[K, V]) ForEach(fn func(K, V)) {
+	if c.head == nil {
+		return
+	}
+	cur := c.head
+	for {
+		fn(cur.key, cur.value)
+		cur = cur.next
+		if cur == c.head {
+			return
+		}
+	}
+}
+
+// DumpHTML writes the state of the cache to the given writer,
+// formatted as an HTML table.
+func (c *Cache[K, V]) DumpHTML(w io.Writer) {
+	io.WriteString(w, "<table><tr><th>Key</th><th>Value</th></tr>")
+	c.ForEach(func(k K, v V) {
+		kStr := html.EscapeString(fmt.Sprint(k))
+		vStr := html.EscapeString(fmt.Sprint(v))
+		fmt.Fprintf(w, "<tr><td>%s</td><td>%v</td></tr>", kStr, vStr)
+	})
+	io.WriteString(w, "</table>")
 }
