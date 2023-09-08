@@ -4,6 +4,8 @@
 package web
 
 import (
+	"embed"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -12,11 +14,42 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"tailscale.com/util/must"
 )
+
+// This contains all files needed to build the frontend assets.
+// Because we assign this to the blank identifier, it does not actually embed the files.
+// However, this does cause `go mod vendor` to include the files when vendoring the package.
+// External packages that use the web client can `go mod vendor`, run `yarn build` to
+// build the assets, then those asset bundles will be embedded.
+//
+//go:embed yarn.lock index.html *.js *.json src/*
+var _ embed.FS
+
+//go:embed build/*
+var embeddedFS embed.FS
+
+// staticfiles serves static files from the build directory.
+var staticfiles http.Handler
+
+func init() {
+	buildFiles := must.Get(fs.Sub(embeddedFS, "build"))
+	staticfiles = http.FileServer(http.FS(buildFiles))
+}
+
+func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
+	if devMode {
+		// When in dev mode, proxy asset requests to the Vite dev server.
+		cleanup := startDevServer()
+		return devServerProxy(), cleanup
+	}
+	return staticfiles, nil
+}
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
 // and serving of web client JS and CSS resources.
-func (s *Server) startDevServer() (cleanup func()) {
+func startDevServer() (cleanup func()) {
 	root := gitRootDir()
 	webClientPath := filepath.Join(root, "client", "web")
 
@@ -45,10 +78,8 @@ func (s *Server) startDevServer() (cleanup func()) {
 	}
 }
 
-func (s *Server) addProxyToDevServer() {
-	if !s.devMode {
-		return // only using Vite proxy in dev mode
-	}
+// devServerProxy returns a reverse proxy to the vite dev server.
+func devServerProxy() *httputil.ReverseProxy {
 	// We use Vite to develop on the web client.
 	// Vite starts up its own local server for development,
 	// which we proxy requests to from Server.ServeHTTP.
@@ -62,8 +93,9 @@ func (s *Server) addProxyToDevServer() {
 		w.Write([]byte("\n\nError: " + err.Error()))
 	}
 	viteTarget, _ := url.Parse("http://127.0.0.1:4000")
-	s.devProxy = httputil.NewSingleHostReverseProxy(viteTarget)
-	s.devProxy.ErrorHandler = handleErr
+	devProxy := httputil.NewSingleHostReverseProxy(viteTarget)
+	devProxy.ErrorHandler = handleErr
+	return devProxy
 }
 
 func gitRootDir() string {
