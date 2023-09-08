@@ -128,8 +128,8 @@ func NewUpdater(args Arguments) (*Updater, error) {
 			return nil, err
 		}
 	}
-	if args.PkgsAddr == "" {
-		args.PkgsAddr = "https://pkgs.tailscale.com"
+	if up.Arguments.PkgsAddr == "" {
+		up.Arguments.PkgsAddr = "https://pkgs.tailscale.com"
 	}
 	return &up, nil
 }

@@ -240,6 +240,8 @@ type LocalBackend struct {
 	directFileRoot          string
 	directFileDoFinalRename bool // false on macOS, true on several NAS platforms
 	componentLogUntil       map[string]componentLogState
+	// c2nUpdateStatus is the status of c2n-triggered client update.
+	c2nUpdateStatus updateStatus
 
 	// ServeConfig fields. (also guarded by mu)
 	lastServeConfJSON   mem.RO              // last JSON that was parsed into serveConfig
@@ -266,6 +268,10 @@ type LocalBackend struct {
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock sync.Mutex
 	clock       tstime.Clock
+}
+
+type updateStatus struct {
+	started bool
 }
 
 // clientGen is a func that creates a control plane client.
