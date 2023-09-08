@@ -578,7 +578,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 
 	newPrefs := b.pm.CurrentPrefs().AsStruct().Clone() // .Persist should always be initialized here.
 	newPrefs.Persist.DisallowedTKAStateIDs = append(newPrefs.Persist.DisallowedTKAStateIDs, stateID)
-	if err := b.pm.SetPrefs(newPrefs.View()); err != nil {
+	if err := b.pm.SetPrefs(newPrefs.View(), b.netMap.MagicDNSSuffix()); err != nil {
 		return fmt.Errorf("saving prefs: %w", err)
 	}
 
