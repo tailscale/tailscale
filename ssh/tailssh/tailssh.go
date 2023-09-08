@@ -1088,6 +1088,7 @@ func (ss *sshSession) run() {
 				ss.Exit(1)
 				return
 			}
+			ss.logf("startNewRecording: <nil>")
 			if rec != nil {
 				defer rec.Close()
 			}
@@ -1658,6 +1659,7 @@ func (ss *sshSession) startNewRecording() (_ *recording, err error) {
 			err := <-errChan
 			if err == nil {
 				// Success.
+				ss.logf("recording: finished uploading recording")
 				return
 			}
 			if onFailure != nil && onFailure.NotifyURL != "" && len(attempts) > 0 {
