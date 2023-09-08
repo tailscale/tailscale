@@ -4,6 +4,9 @@
 package limiter
 
 import (
+	"fmt"
+	"html"
+	"io"
 	"sync"
 	"time"
 
@@ -146,4 +149,54 @@ func (l *Limiter[K]) tokensForTest(key K) (int64, bool) {
 		return b.cur, true
 	}
 	return 0, false
+}
+
+// DumpHTML writes the state of the limiter to the given writer,
+// formatted as an HTML table. If onlyLimited is true, the output only
+// lists keys that are currently being limited.
+//
+// DumpHTML blocks other callers of the limiter while it collects the
+// state for dumping. It should not be called on large limiters
+// involved in hot codepaths.
+func (l *Limiter[K]) DumpHTML(w io.Writer, onlyLimited bool) {
+	l.dumpHTML(w, onlyLimited, time.Now())
+}
+
+func (l *Limiter[K]) dumpHTML(w io.Writer, onlyLimited bool, now time.Time) {
+	dump := l.collectDump(now)
+	io.WriteString(w, "<table><tr><th>Key</th><th>Tokens</th></tr>")
+	for _, line := range dump {
+		if onlyLimited && line.Tokens > 0 {
+			continue
+		}
+		kStr := html.EscapeString(fmt.Sprint(line.Key))
+		format := "<tr><td>%s</td><td>%d</td></tr>"
+		if !onlyLimited && line.Tokens <= 0 {
+			// Make limited entries stand out when showing
+			// limited+non-limited together
+			format = "<tr><td>%s</td><td><b>%d</b></td></tr>"
+		}
+		fmt.Fprintf(w, format, kStr, line.Tokens)
+	}
+	io.WriteString(w, "</table>")
+}
+
+// collectDump grabs a copy of the limiter state needed by DumpHTML.
+func (l *Limiter[K]) collectDump(now time.Time) []dumpEntry[K] {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ret := make([]dumpEntry[K], 0, l.cache.Len())
+	l.cache.ForEach(func(k K, v *bucket) {
+		l.updateBucketLocked(v, now) // so stats are accurate
+		ret = append(ret, dumpEntry[K]{k, v.cur})
+	})
+	return ret
+}
+
+// dumpEntry is the per-key information that DumpHTML needs to print
+// limiter state.
+type dumpEntry[K comparable] struct {
+	Key    K
+	Tokens int64
 }
