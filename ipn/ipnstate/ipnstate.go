@@ -71,6 +71,8 @@ type Status struct {
 
 	Peer map[key.NodePublic]*PeerStatus
 	User map[tailcfg.UserID]tailcfg.UserProfile
+
+	ClientVersion *tailcfg.ClientVersion
 }
 
 // TKAKey describes a key trusted by network lock.

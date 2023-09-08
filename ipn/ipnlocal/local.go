@@ -268,6 +268,9 @@ type LocalBackend struct {
 	// at the moment that tkaSyncLock is taken).
 	tkaSyncLock sync.Mutex
 	clock       tstime.Clock
+
+	// Last ClientVersion received in MapResponse, guarded by mu.
+	lastClientVersion *tailcfg.ClientVersion
 }
 
 type updateStatus struct {
@@ -671,6 +674,9 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 		s.TUN = !b.sys.IsNetstack()
 		s.BackendState = b.state.String()
 		s.AuthURL = b.authURLSticky
+		if prefs := b.pm.CurrentPrefs(); prefs.Valid() && prefs.AutoUpdate().Check {
+			s.ClientVersion = b.lastClientVersion
+		}
 		if err := health.OverallError(); err != nil {
 			switch e := err.(type) {
 			case multierr.Error:
@@ -2181,6 +2187,9 @@ func (b *LocalBackend) tellClientToBrowseToURL(url string) {
 // onClientVersion is called on MapResponse updates when a MapResponse contains
 // a non-nil ClientVersion message.
 func (b *LocalBackend) onClientVersion(v *tailcfg.ClientVersion) {
+	b.mu.Lock()
+	b.lastClientVersion = v
+	b.mu.Unlock()
 	switch runtime.GOOS {
 	case "darwin", "ios":
 		// These auto-update well enough, and we haven't converted the

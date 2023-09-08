@@ -110,7 +110,8 @@ type CapabilityVersion int
 //   - 70: 2023-08-16: removed most Debug fields; added NodeAttrDisable*, NodeAttrDebug* instead
 //   - 71: 2023-08-17: added NodeAttrOneCGNATEnable, NodeAttrOneCGNATDisable
 //   - 72: 2023-08-23: TS-2023-006 UPnP issue fixed; UPnP can now be used again
-const CurrentCapabilityVersion CapabilityVersion = 72
+//   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
+const CurrentCapabilityVersion CapabilityVersion = 73
 
 type StableID string
 
