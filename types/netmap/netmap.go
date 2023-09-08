@@ -171,6 +171,9 @@ func MagicDNSSuffixOfNodeName(nodeName string) string {
 //
 // It will neither start nor end with a period.
 func (nm *NetworkMap) MagicDNSSuffix() string {
+	if nm == nil {
+		return ""
+	}
 	return MagicDNSSuffixOfNodeName(nm.Name)
 }
 
