@@ -274,8 +274,8 @@ func nodeConciseEqual(a, b tailcfg.NodeView) bool {
 	return a.Key() == b.Key() &&
 		a.DERP() == b.DERP() &&
 		a.DiscoKey() == b.DiscoKey() &&
-		eqViewsIgnoreNil(a.AllowedIPs(), b.AllowedIPs()) &&
-		eqViewsIgnoreNil(a.Endpoints(), b.Endpoints())
+		views.SliceEqual(a.AllowedIPs(), b.AllowedIPs()) &&
+		views.SliceEqual(a.Endpoints(), b.Endpoints())
 }
 
 func (b *NetworkMap) ConciseDiffFrom(a *NetworkMap) string {
@@ -341,21 +341,3 @@ const (
 	AllowSingleHosts WGConfigFlags = 1 << iota
 	AllowSubnetRoutes
 )
-
-// eqViewsIgnoreNil reports whether a and b have the same length and comparably
-// equal values at each index. It's used for comparing views of slices and not
-// caring about whether the slices are nil or not.
-func eqViewsIgnoreNil[T comparable](a, b interface {
-	Len() int
-	At(int) T
-}) bool {
-	if a.Len() != b.Len() {
-		return false
-	}
-	for i, n := 0, a.Len(); i < n; i++ {
-		if a.At(i) != b.At(i) {
-			return false
-		}
-	}
-	return true
-}
