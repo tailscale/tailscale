@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -680,25 +681,29 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 	}
 }
 
-// SortPeers sorts peers by either the DNS name, hostname, Tailscale IP,
-// or current public key.
+// SortPeers sorts peers by either their DNS name, hostname, Tailscale IP,
+// or ultimately their current public key.
 func SortPeers(peers []*PeerStatus) {
-	sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
+	slices.SortStableFunc(peers, (*PeerStatus).compare)
 }
 
-func sortKey(ps *PeerStatus) string {
-	if ps.DNSName != "" {
-		return ps.DNSName
+func (a *PeerStatus) compare(b *PeerStatus) int {
+	if a.DNSName != "" || b.DNSName != "" {
+		if v := strings.Compare(a.DNSName, b.DNSName); v != 0 {
+			return v
+		}
 	}
-	if ps.HostName != "" {
-		return ps.HostName
+	if a.HostName != "" || b.HostName != "" {
+		if v := strings.Compare(a.HostName, b.HostName); v != 0 {
+			return v
+		}
 	}
-	// TODO(bradfitz): add PeerStatus.Less and avoid these allocs in a Less func.
-	if len(ps.TailscaleIPs) > 0 {
-		return ps.TailscaleIPs[0].String()
+	if len(a.TailscaleIPs) > 0 && len(b.TailscaleIPs) > 0 {
+		if v := a.TailscaleIPs[0].Compare(b.TailscaleIPs[0]); v != 0 {
+			return v
+		}
 	}
-	raw := ps.PublicKey.Raw32()
-	return string(raw[:])
+	return a.PublicKey.Compare(b.PublicKey)
 }
 
 // DebugDERPRegionReport is the result of a "tailscale debug derp" command,

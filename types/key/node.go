@@ -168,6 +168,12 @@ func (p NodePublic) Shard() uint8 {
 	return s ^ uint8(p.k[2]+p.k[12])
 }
 
+// Compare returns -1, 0, or 1, depending on whether p orders before p2,
+// using bytes.Compare on the bytes of the public key.
+func (p NodePublic) Compare(p2 NodePublic) int {
+	return bytes.Compare(p.k[:], p2.k[:])
+}
+
 // ParseNodePublicUntyped parses an untyped 64-character hex value
 // as a NodePublic.
 //
