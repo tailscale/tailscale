@@ -69,9 +69,16 @@ type Status struct {
 	// trailing periods, and without any "_acme-challenge." prefix.
 	CertDomains []string
 
+	// Peer is the state of each peer, keyed by each peer's current public key.
 	Peer map[key.NodePublic]*PeerStatus
+
+	// User contains profile information about UserIDs referenced by
+	// PeerStatus.UserID, PeerStatus.AltSharerUserID, etc.
 	User map[tailcfg.UserID]tailcfg.UserProfile
 
+	// ClientVersion, when non-nil, contains information about the latest
+	// version of the Tailscale client that's available. Depending on
+	// the platform and client settings, it may not be available.
 	ClientVersion *tailcfg.ClientVersion
 }
 
@@ -190,6 +197,7 @@ type PeerStatusLite struct {
 	NodeKey key.NodePublic
 }
 
+// PeerStatus describes a peer node and its current state.
 type PeerStatus struct {
 	ID        tailcfg.StableNodeID
 	PublicKey key.NodePublic
@@ -283,6 +291,9 @@ type PeerStatus struct {
 	Location *tailcfg.Location `json:",omitempty"`
 }
 
+// StatusBuilder is a request to construct a Status. A new StatusBuilder is
+// passed to various subsystems which then call methods on it to populate state.
+// Call its Status method to return the final constructed Status.
 type StatusBuilder struct {
 	WantPeers bool // whether caller wants peers
 
@@ -303,6 +314,8 @@ func (sb *StatusBuilder) MutateStatus(f func(*Status)) {
 	f(&sb.st)
 }
 
+// Status returns the status that has been built up so far from previous
+// calls to MutateStatus, MutateSelfStatus, AddPeer, etc.
 func (sb *StatusBuilder) Status() *Status {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
@@ -667,6 +680,8 @@ func (pr *PingResult) ToPingResponse(pingType tailcfg.PingType) *tailcfg.PingRes
 	}
 }
 
+// SortPeers sorts peers by either the DNS name, hostname, Tailscale IP,
+// or current public key.
 func SortPeers(peers []*PeerStatus) {
 	sort.Slice(peers, func(i, j int) bool { return sortKey(peers[i]) < sortKey(peers[j]) })
 }
