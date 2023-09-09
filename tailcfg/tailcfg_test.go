@@ -705,3 +705,24 @@ func TestCurrentCapabilityVersion(t *testing.T) {
 		t.Errorf("CurrentCapabilityVersion = %d; want %d", CurrentCapabilityVersion, max)
 	}
 }
+
+func TestUnmarshalHealth(t *testing.T) {
+	tests := []struct {
+		in   string   // MapResponse JSON
+		want []string // MapResponse.Health wanted value post-unmarshal
+	}{
+		{in: `{}`},
+		{in: `{"Health":null}`},
+		{in: `{"Health":[]}`, want: []string{}},
+		{in: `{"Health":["bad"]}`, want: []string{"bad"}},
+	}
+	for _, tt := range tests {
+		var mr MapResponse
+		if err := json.Unmarshal([]byte(tt.in), &mr); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(mr.Health, tt.want) {
+			t.Errorf("for %#q: got %v; want %v", tt.in, mr.Health, tt.want)
+		}
+	}
+}
