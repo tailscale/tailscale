@@ -14,6 +14,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/set"
 )
 
 // Strict settings for the CBOR decoder.
@@ -260,13 +261,13 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 	var (
 		curs  = topAUM
 		state State
-		path  = make(map[AUMHash]struct{}, 32) // 32 chosen arbitrarily.
+		path  = make(set.Set[AUMHash], 32) // 32 chosen arbitrarily.
 	)
 	for i := 0; true; i++ {
 		if i > maxIter {
 			return State{}, fmt.Errorf("iteration limit exceeded (%d)", maxIter)
 		}
-		path[curs.Hash()] = struct{}{}
+		path.Add(curs.Hash())
 
 		// Checkpoints encapsulate the state at that point, dope.
 		if curs.MessageKind == AUMCheckpoint {
@@ -307,7 +308,7 @@ func computeStateAt(storage Chonk, maxIter int, wantHash AUMHash) (State, error)
 	// such, we use a custom advancer here.
 	advancer := func(state State, candidates []AUM) (next *AUM, out State, err error) {
 		for _, c := range candidates {
-			if _, inPath := path[c.Hash()]; inPath {
+			if path.Contains(c.Hash()) {
 				if state, err = state.applyVerifiedAUM(c); err != nil {
 					return nil, State{}, fmt.Errorf("advancing state: %v", err)
 				}

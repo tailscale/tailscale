@@ -10,6 +10,9 @@ type Set[T comparable] map[T]struct{}
 // Add adds e to the set.
 func (s Set[T]) Add(e T) { s[e] = struct{}{} }
 
+// Delete removes e from the set.
+func (s Set[T]) Delete(e T) { delete(s, e) }
+
 // Contains reports whether s contains e.
 func (s Set[T]) Contains(e T) bool {
 	_, ok := s[e]

@@ -27,7 +27,7 @@ var (
 
 	sysErr    = map[Subsystem]error{}                   // error key => err (or nil for no error)
 	watchers  = set.HandleSet[func(Subsystem, error)]{} // opt func to run if error state changes
-	warnables = map[*Warnable]struct{}{}                // set of warnables
+	warnables = set.Set[*Warnable]{}
 	timer     *time.Timer
 
 	debugHandler = map[string]http.Handler{}
@@ -84,7 +84,7 @@ func NewWarnable(opts ...WarnableOpt) *Warnable {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	warnables[w] = struct{}{}
+	warnables.Add(w)
 	return w
 }
 

@@ -44,6 +44,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/deephash"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/magicsock"
@@ -782,12 +783,12 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.tundev.SetWGConfig(cfg)
 	e.lastDNSConfig = dnsCfg
 
-	peerSet := make(map[key.NodePublic]struct{}, len(cfg.Peers))
+	peerSet := make(set.Set[key.NodePublic], len(cfg.Peers))
 	e.mu.Lock()
 	e.peerSequence = e.peerSequence[:0]
 	for _, p := range cfg.Peers {
 		e.peerSequence = append(e.peerSequence, p.PublicKey)
-		peerSet[p.PublicKey] = struct{}{}
+		peerSet.Add(p.PublicKey)
 	}
 	nm := e.netMap
 	e.mu.Unlock()
