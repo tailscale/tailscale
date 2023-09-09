@@ -58,6 +58,7 @@ import (
 	"tailscale.com/types/ptr"
 	"tailscale.com/util/cibuild"
 	"tailscale.com/util/racebuild"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 	"tailscale.com/wgengine/wgcfg/nmcfg"
@@ -306,9 +307,9 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		for i, m := range ms {
 			nm := buildNetmapLocked(i)
 			m.conn.SetNetworkMap(nm)
-			peerSet := make(map[key.NodePublic]struct{}, len(nm.Peers))
+			peerSet := make(set.Set[key.NodePublic], len(nm.Peers))
 			for _, peer := range nm.Peers {
-				peerSet[peer.Key()] = struct{}{}
+				peerSet.Add(peer.Key())
 			}
 			m.conn.UpdatePeers(peerSet)
 			wg, err := nmcfg.WGCfg(nm, logf, netmap.AllowSingleHosts, "")

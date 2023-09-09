@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -589,7 +590,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	var (
 		rt           table.RoutingTableBuilder
 		dstMasqAddrs map[key.NodePublic]netip.Addr
-		listenAddrs  map[netip.Addr]struct{}
+		listenAddrs  set.Set[netip.Addr]
 	)
 
 	// When using an exit node that requires masquerading, we need to

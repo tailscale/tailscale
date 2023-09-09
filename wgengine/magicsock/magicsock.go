@@ -54,6 +54,7 @@ import (
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
+	"tailscale.com/util/set"
 	"tailscale.com/util/uniq"
 	"tailscale.com/wgengine/capture"
 )
@@ -229,7 +230,7 @@ type Conn struct {
 	// WireGuard. These are not used to filter inbound or outbound
 	// traffic at all, but only to track what state can be cleaned up
 	// in other maps below that are keyed by peer public key.
-	peerSet map[key.NodePublic]struct{}
+	peerSet set.Set[key.NodePublic]
 
 	// nodeOfDisco tracks the networkmap Node entity for each peer
 	// discovery key.
@@ -1708,7 +1709,7 @@ func (c *Conn) SetPrivateKey(privateKey key.NodePrivate) error {
 // then removes any state for old peers.
 //
 // The caller passes ownership of newPeers map to UpdatePeers.
-func (c *Conn) UpdatePeers(newPeers map[key.NodePublic]struct{}) {
+func (c *Conn) UpdatePeers(newPeers set.Set[key.NodePublic]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1718,7 +1719,7 @@ func (c *Conn) UpdatePeers(newPeers map[key.NodePublic]struct{}) {
 	// Clean up any key.NodePublic-keyed maps for peers that no longer
 	// exist.
 	for peer := range oldPeers {
-		if _, ok := newPeers[peer]; !ok {
+		if !newPeers.Contains(peer) {
 			delete(c.derpRoute, peer)
 			delete(c.peerLastDerp, peer)
 		}
