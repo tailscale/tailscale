@@ -66,6 +66,9 @@ type tailscaleSTSConfig struct {
 	// Tailscale IP of a Tailscale service we are setting up egress for
 	TailnetTargetIP string
 
+	// Knob to force the type of firewall used (iptables / nftables)
+	TSDebugFirewallMode string
+
 	Hostname string
 	Tags     []string // if empty, use defaultTags
 }
@@ -352,6 +355,13 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			},
 		})
 	}
+	if sts.TSDebugFirewallMode != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_DEBUG_FIREWALL_MODE",
+			Value: sts.TSDebugFirewallMode,
+		})
+	}
+
 	ss.ObjectMeta = metav1.ObjectMeta{
 		Name:      headlessSvc.Name,
 		Namespace: a.operatorNamespace,
