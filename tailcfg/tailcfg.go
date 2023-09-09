@@ -1077,7 +1077,9 @@ type Endpoint struct {
 	Type EndpointType
 }
 
-// MapRequest is sent by a client to start a long-poll network map updates.
+// MapRequest is sent by a client to either update the control plane
+// about its current state, or to start a long-poll of network map updates.
+//
 // The request includes a copy of the client's current set of WireGuard
 // endpoints and general host information.
 //
@@ -1538,6 +1540,27 @@ type PingResponse struct {
 	IsLocalIP bool `json:",omitempty"`
 }
 
+// MapResponse is the response to a MapRequest. It describes the state of the
+// local node, the peer nodes, the DNS configuration, the packet filter, and
+// more. A MapRequest, depending on its parameters, may result in the control
+// plane coordination server sending 0, 1 or a stream of multiple MapResponse
+// values.
+//
+// When the client sets MapRequest.Stream, the server sends a stream of
+// MapResponses. That long-lived HTTP transaction is called a "map poll". In a
+// map poll, the first MapResponse will be complete and subsequent MapResponses
+// will be incremental updates with only changed information.
+//
+// The zero value for all fields means "unchanged". Unfortunately, several
+// fields were defined before that convention was established, so they use a
+// slice with omitempty, meaning this type can't be used to marshal JSON
+// containing non-nil zero-length slices (meaning explicitly now empty). The
+// control plane uses a separate type to marshal these fields. This type is
+// primarily used for unmarshaling responses so the omitempty annotations are
+// mostly useless, except that this type is also used for the integration test's
+// fake control server. (It's not necessary to marshal a non-nil zero-length
+// slice for the things we've needed to test in the integration tests as of
+// 2023-09-09).
 type MapResponse struct {
 	// MapSessionHandle optionally specifies a unique opaque handle for this
 	// stateful MapResponse session. Servers may choose not to send it, and it's
@@ -1638,6 +1661,10 @@ type MapResponse struct {
 	// previously streamed non-nil MapResponse.PacketFilter within
 	// the same HTTP response. A non-nil but empty list always means
 	// no PacketFilter (that is, to block everything).
+	//
+	// Note that this package's type, due its use of a slice and omitempty, is
+	// unable to marshal a zero-length non-nil slice. The control server needs
+	// to marshal this type using a separate type. See MapResponse docs.
 	PacketFilter []FilterRule `json:",omitempty"`
 
 	// UserProfiles are the user profiles of nodes in the network.
@@ -1645,12 +1672,15 @@ type MapResponse struct {
 	// user profiles only.
 	UserProfiles []UserProfile `json:",omitempty"`
 
-	// Health, if non-nil, sets the health state
-	// of the node from the control plane's perspective.
-	// A nil value means no change from the previous MapResponse.
-	// A non-nil 0-length slice restores the health to good (no known problems).
-	// A non-zero length slice are the list of problems that the control place
-	// sees.
+	// Health, if non-nil, sets the health state of the node from the control
+	// plane's perspective. A nil value means no change from the previous
+	// MapResponse. A non-nil 0-length slice restores the health to good (no
+	// known problems). A non-zero length slice are the list of problems that
+	// the control place sees.
+	//
+	// Note that this package's type, due its use of a slice and omitempty, is
+	// unable to marshal a zero-length non-nil slice. The control server needs
+	// to marshal this type using a separate type. See MapResponse docs.
 	Health []string `json:",omitempty"`
 
 	// SSHPolicy, if non-nil, updates the SSH policy for how incoming
