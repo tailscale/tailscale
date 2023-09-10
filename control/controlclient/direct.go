@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/smallzstd"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
@@ -68,7 +69,6 @@ type Direct struct {
 	serverURL             string // URL of the tailcontrol server
 	clock                 tstime.Clock
 	lastPrintMap          time.Time
-	newDecompressor       func() (Decompressor, error)
 	logf                  logger.Logf
 	netMon                *netmon.Monitor // or nil
 	discoPubKey           key.DiscoPublic
@@ -119,7 +119,6 @@ type Options struct {
 	Clock                tstime.Clock
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
-	NewDecompressor      func() (Decompressor, error)
 	Logf                 logger.Logf
 	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
 	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
@@ -254,7 +253,6 @@ func NewDirect(opts Options) (*Direct, error) {
 		serverURL:             opts.ServerURL,
 		clock:                 opts.Clock,
 		logf:                  opts.Logf,
-		newDecompressor:       opts.NewDecompressor,
 		persist:               opts.Persist.View(),
 		authKey:               opts.AuthKey,
 		discoPubKey:           opts.DiscoPublicKey,
@@ -891,9 +889,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		old := request.DebugFlags
 		request.DebugFlags = append(old[:len(old):len(old)], extraDebugFlags...)
 	}
-	if c.newDecompressor != nil {
-		request.Compress = "zstd"
-	}
+	request.Compress = "zstd"
 
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
@@ -1177,19 +1173,14 @@ func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 	} else {
 		decrypted = msg
 	}
-	var b []byte
-	if c.newDecompressor == nil {
-		b = decrypted
-	} else {
-		decoder, err := c.newDecompressor()
-		if err != nil {
-			return err
-		}
-		defer decoder.Close()
-		b, err = decoder.DecodeAll(decrypted, nil)
-		if err != nil {
-			return err
-		}
+	decoder, err := smallzstd.NewDecoder(nil)
+	if err != nil {
+		return err
+	}
+	defer decoder.Close()
+	b, err := decoder.DecodeAll(decrypted, nil)
+	if err != nil {
+		return err
 	}
 	if debugMap() {
 		var buf bytes.Buffer

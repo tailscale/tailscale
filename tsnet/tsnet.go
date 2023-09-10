@@ -550,9 +550,6 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
 	closePool.addFunc(func() { s.lb.Shutdown() })
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
