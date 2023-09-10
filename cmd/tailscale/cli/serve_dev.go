@@ -203,85 +203,97 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return errHelp
 		}
 
-		if turnOff {
-			err := e.unsetServe(ctx, srvType, srvPort, mount)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
-				return errHelp
-			}
-			return nil
+		sc, err := e.lc.GetServeConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("error getting serve config: %w", err)
 		}
 
-		err = e.setServe(ctx, st, srvType, srvPort, mount, target, funnel)
+		// nil if no config
+		if sc == nil {
+			sc = new(ipn.ServeConfig)
+		}
+		dnsName := strings.TrimSuffix(st.Self.DNSName, ".")
+
+		// set parent serve config to always be persisted
+		// at the top level, but a nested config might be
+		// the one that gets manipulated depending on
+		// foreground or background.
+		parentSC := sc
+
+		if !turnOff && srvType == "https" {
+			// Running serve with https requires that the tailnet has enabled
+			// https cert provisioning. Send users through an interactive flow
+			// to enable this if not already done.
+			//
+			// TODO(sonia,tailscale/corp#10577): The interactive feature flow
+			// is behind a control flag. If the tailnet doesn't have the flag
+			// on, enableFeatureInteractive will error. For now, we hide that
+			// error and maintain the previous behavior (prior to 2023-08-15)
+			// of letting them edit the serve config before enabling certs.
+			if err := e.enableFeatureInteractive(ctx, "serve", func(caps []string) bool {
+				return slices.Contains(caps, tailcfg.CapabilityHTTPS)
+			}); err != nil {
+				return fmt.Errorf("error enabling https feature: %w", err)
+			}
+		}
+
+		var watcher *tailscale.IPNBusWatcher
+		if !e.bg && !turnOff {
+			// if foreground mode, create a WatchIPNBus session
+			// and use the nested config for all following operations
+			// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
+			watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+			if err != nil {
+				return err
+			}
+			defer watcher.Close()
+			n, err := watcher.Next()
+			if err != nil {
+				return err
+			}
+			if n.SessionID == "" {
+				return errors.New("missing SessionID")
+			}
+			fsc := &ipn.ServeConfig{}
+			mak.Set(&sc.Foreground, n.SessionID, fsc)
+			sc = fsc
+		}
+
+		var msg string
+		if turnOff {
+			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
+		} else {
+			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, target, funnel)
+			msg = e.messageForPort(sc, st, dnsName, srvPort)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n\n", err)
 			return errHelp
+		}
+
+		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
+			return err
+		}
+
+		fmt.Fprintln(os.Stderr, msg)
+
+		if watcher != nil {
+			for {
+				_, err = watcher.Next()
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return nil
+					}
+					return err
+				}
+			}
 		}
 
 		return nil
 	}
 }
 
-func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType string, srvPort uint16, mount string, target string, allowFunnel bool) error {
-	if srvType == "https" {
-		// Running serve with https requires that the tailnet has enabled
-		// https cert provisioning. Send users through an interactive flow
-		// to enable this if not already done.
-		//
-		// TODO(sonia,tailscale/corp#10577): The interactive feature flow
-		// is behind a control flag. If the tailnet doesn't have the flag
-		// on, enableFeatureInteractive will error. For now, we hide that
-		// error and maintain the previous behavior (prior to 2023-08-15)
-		// of letting them edit the serve config before enabling certs.
-		e.enableFeatureInteractive(ctx, "serve", func(caps []string) bool {
-			return slices.Contains(caps, tailcfg.CapabilityHTTPS)
-		})
-	}
-
-	// get serve config
-	sc, err := e.lc.GetServeConfig(ctx)
-	if err != nil {
-		return err
-	}
-
-	// nil if no config
-	if sc == nil {
-		sc = new(ipn.ServeConfig)
-	}
-
-	// set parent serve config to always be persisted
-	// at the top level, but a nested config might be
-	// the one that gets manipulated depending on
-	// foreground or background.
-	parentSC := sc
-
-	dnsName, err := e.getSelfDNSName(ctx)
-	if err != nil {
-		return err
-	}
-
-	// if foreground mode, create a WatchIPNBus session
-	// and use the nested config for all following operations
-	// TODO(marwan-at-work): nested-config validations should happen here or previous to this point.
-	var watcher *tailscale.IPNBusWatcher
-	if !e.bg {
-		watcher, err = e.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
-		if err != nil {
-			return err
-		}
-		defer watcher.Close()
-		n, err := watcher.Next()
-		if err != nil {
-			return err
-		}
-		if n.SessionID == "" {
-			return errors.New("missing SessionID")
-		}
-		fsc := &ipn.ServeConfig{}
-		mak.Set(&sc.Foreground, n.SessionID, fsc)
-		sc = fsc
-	}
-
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName, srvType string, srvPort uint16, mount string, target string, allowFunnel bool) error {
 	// update serve config based on the type
 	switch srvType {
 	case "https", "http":
@@ -295,7 +307,7 @@ func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType st
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
 	case "tcp", "tls-terminated-tcp":
-		err = e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
+		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
 		}
@@ -306,35 +318,10 @@ func (e *serveEnv) setServe(ctx context.Context, st *ipnstate.Status, srvType st
 	// update the serve config based on if funnel is enabled
 	e.applyFunnel(sc, dnsName, srvPort, allowFunnel)
 
-	// persist the serve config changes
-	if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
-		return err
-	}
-
-	// notify the user of the change
-	m, err := e.messageForPort(ctx, sc, st, dnsName, srvPort)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintln(os.Stderr, m)
-
-	if !e.bg {
-		for {
-			_, err = watcher.Next()
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 
-func (e *serveEnv) messageForPort(ctx context.Context, sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16) (string, error) {
+func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16) string {
 	var output strings.Builder
 
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
@@ -409,7 +396,7 @@ func (e *serveEnv) messageForPort(ctx context.Context, sc *ipn.ServeConfig, st *
 		// TODO(marwan-at-work): give the user more context on their foreground process.
 	}
 
-	return output.String(), nil
+	return output.String() + "\n"
 }
 
 func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
@@ -550,14 +537,14 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 
 // TODO(tylersmalley) Refactor into setServe so handleWebServeFunnelRemove and handleTCPServeRemove.
 // apply serve config changes and we print a status message.
-func (e *serveEnv) unsetServe(ctx context.Context, srvType string, srvPort uint16, mount string) error {
+func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType string, srvPort uint16, mount string) error {
 	switch srvType {
 	case "https", "http":
 		mount, err := cleanMountPoint(mount)
 		if err != nil {
 			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
-		err = e.handleWebServeFunnelRemove(ctx, srvPort, mount)
+		err = e.handleWebServeFunnelRemove(sc, dnsName, srvPort, mount)
 		if err != nil {
 			return err
 		}
@@ -565,7 +552,7 @@ func (e *serveEnv) unsetServe(ctx context.Context, srvType string, srvPort uint1
 		return nil
 	case "tcp", "tls-terminated-tcp":
 		// TODO(tylersmalley) should remove funnel
-		return e.removeTCPServe(ctx, srvPort)
+		return e.removeTCPServe(sc, srvPort)
 	default:
 		return fmt.Errorf("invalid type %q", srvType)
 	}
@@ -624,17 +611,9 @@ func checkLegacyServeInvocation(subcmd serveMode, args []string) error {
 // The srvPort argument is the serving port and the mount argument is
 // the mount point or registered path to remove.
 // TODO(tylersmalley): fork of handleWebServeRemove, return name once dev work is merged
-func (e *serveEnv) handleWebServeFunnelRemove(ctx context.Context, srvPort uint16, mount string) error {
-	sc, err := e.lc.GetServeConfig(ctx)
-	if err != nil {
-		return err
-	}
+func (e *serveEnv) handleWebServeFunnelRemove(sc *ipn.ServeConfig, dnsName string, srvPort uint16, mount string) error {
 	if sc == nil {
 		return errors.New("error: serve config does not exist")
-	}
-	dnsName, err := e.getSelfDNSName(ctx)
-	if err != nil {
-		return err
 	}
 	if sc.IsTCPForwardingOnPort(srvPort) {
 		return errors.New("cannot remove web handler; currently serving TCP")
@@ -662,34 +641,25 @@ func (e *serveEnv) handleWebServeFunnelRemove(ctx context.Context, srvPort uint1
 		delete(sc.AllowFunnel, hp)
 	}
 
-	if err := e.lc.SetServeConfig(ctx, sc); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 // removeTCPServe removes the TCP forwarding configuration for the
 // given srvPort, or serving port.
-func (e *serveEnv) removeTCPServe(ctx context.Context, src uint16) error {
-	cursc, err := e.lc.GetServeConfig(ctx)
-	if err != nil {
-		return err
-	}
-	sc := cursc.Clone() // nil if no config
+func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 	if sc == nil {
-		sc = new(ipn.ServeConfig)
+		return nil
+	}
+	if sc.GetTCPPortHandler(src) == nil {
+		return errors.New("error: serve config does not exist")
 	}
 	if sc.IsServingWeb(src) {
 		return fmt.Errorf("unable to remove; serving web, not TCP forwarding on serve port %d", src)
 	}
-	if ph := sc.GetTCPPortHandler(src); ph != nil {
-		delete(sc.TCP, src)
-		// clear map mostly for testing
-		if len(sc.TCP) == 0 {
-			sc.TCP = nil
-		}
-		return e.lc.SetServeConfig(ctx, sc)
+	delete(sc.TCP, src)
+	// clear map mostly for testing
+	if len(sc.TCP) == 0 {
+		sc.TCP = nil
 	}
-	return errors.New("error: serve config does not exist")
+	return nil
 }
