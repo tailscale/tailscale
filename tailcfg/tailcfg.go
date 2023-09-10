@@ -1093,11 +1093,10 @@ type MapRequest struct {
 	// For current values and history, see the CapabilityVersion type's docs.
 	Version CapabilityVersion
 
-	Compress    string // "zstd" or "" (no compression)
-	KeepAlive   bool   // whether server should send keep-alives back to us
-	NodeKey     key.NodePublic
-	DiscoKey    key.DiscoPublic
-	IncludeIPv6 bool `json:",omitempty"` // include IPv6 endpoints in returned Node Endpoints (for Version 4 clients)
+	Compress  string // "zstd" or "" (no compression)
+	KeepAlive bool   // whether server should send keep-alives back to us
+	NodeKey   key.NodePublic
+	DiscoKey  key.DiscoPublic
 
 	// Stream is whether the client wants to receive multiple MapResponses over
 	// the same HTTP connection.
