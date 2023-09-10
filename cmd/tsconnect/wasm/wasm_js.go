@@ -35,7 +35,6 @@ import (
 	"tailscale.com/net/netns"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/wgengine"
@@ -133,9 +132,6 @@ func newIPN(jsConfig js.Value) map[string]any {
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
 	}
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
 	srv.SetLocalBackend(lb)
 
 	jsIPN := &jsIPN{

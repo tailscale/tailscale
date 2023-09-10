@@ -153,10 +153,9 @@ type LocalBackend struct {
 	portpoll              *portlist.Poller // may be nil
 	portpollOnce          sync.Once        // guards starting readPoller
 	gotPortPollRes        chan struct{}    // closed upon first readPoller result
-	newDecompressor       func() (controlclient.Decompressor, error)
-	varRoot               string         // or empty if SetVarRoot never called
-	logFlushFunc          func()         // or nil if SetLogFlusher wasn't called
-	em                    *expiryManager // non-nil
+	varRoot               string           // or empty if SetVarRoot never called
+	logFlushFunc          func()           // or nil if SetLogFlusher wasn't called
+	em                    *expiryManager   // non-nil
 	sshAtomicBool         atomic.Bool
 	shutdownCalled        bool // if Shutdown has been called
 	debugSink             *capture.Sink
@@ -898,16 +897,6 @@ func (b *LocalBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	return nil
 }
 
-// SetDecompressor sets a decompression function, which must be a zstd
-// reader.
-//
-// This exists because the iOS/Mac NetworkExtension is very resource
-// constrained, and the zstd package is too heavy to fit in the
-// constrained RSS limit.
-func (b *LocalBackend) SetDecompressor(fn func() (controlclient.Decompressor, error)) {
-	b.newDecompressor = fn
-}
-
 // SetControlClientStatus is the callback invoked by the control client whenever it posts a new status.
 // Among other things, this is where we update the netmap, packet filters, DNS and DERP maps.
 func (b *LocalBackend) SetControlClientStatus(c controlclient.Client, st controlclient.Status) {
@@ -1460,7 +1449,6 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		ServerURL:            serverURL,
 		AuthKey:              opts.AuthKey,
 		Hostinfo:             hostinfo,
-		NewDecompressor:      b.newDecompressor,
 		HTTPTestClient:       httpTestClient,
 		DiscoPublicKey:       discoPublic,
 		DebugFlags:           debugFlags,
