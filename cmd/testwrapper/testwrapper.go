@@ -89,11 +89,6 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 		log.Printf("error starting test: %v", err)
 		os.Exit(1)
 	}
-	cmdErr := make(chan error, 1)
-	go func() {
-		defer close(cmdErr)
-		cmdErr <- cmd.Wait()
-	}()
 
 	s := bufio.NewScanner(r)
 	resultMap := make(map[string]map[string]*testAttempt) // pkg -> test -> testAttempt
@@ -164,10 +159,13 @@ func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []st
 			}
 		}
 	}
-	if err := s.Err(); err != nil {
+	if err := cmd.Wait(); err != nil {
 		return err
 	}
-	return <-cmdErr
+	if err := s.Err(); err != nil {
+		return fmt.Errorf("reading go test stdout: %w", err)
+	}
+	return nil
 }
 
 func main() {
@@ -303,6 +301,8 @@ func main() {
 						os.Exit(exit.ExitCode())
 					}
 				}
+				log.Printf("testwrapper: %s", err)
+				os.Exit(1)
 			}
 		}
 		if len(toRetry) == 0 {
