@@ -607,6 +607,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		NetMon:       sys.NetMon.Get(),
 		Dialer:       sys.Dialer.Get(),
 		SetSubsystem: sys.Set,
+		ControlKnobs: sys.ControlKnobs(),
 	}
 
 	onlyNetstack = name == "userspace-networking"

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/conn"
-	"tailscale.com/control/controlclient"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/health"
@@ -38,11 +37,11 @@ import (
 //
 // By default it's enabled, unless an environment variable
 // or control says to disable it.
-func useDerpRoute() bool {
+func (c *Conn) useDerpRoute() bool {
 	if b, ok := debugUseDerpRoute().Get(); ok {
 		return b
 	}
-	return !controlclient.DisableDRPO()
+	return c.controlKnobs == nil || !c.controlKnobs.DisableDRPO.Load()
 }
 
 // derpRoute is a route entry for a public key, saying that a certain
@@ -294,7 +293,7 @@ func (c *Conn) derpWriteChanOfAddr(addr netip.AddrPort, peer key.NodePublic) cha
 	// perhaps peer's home is Frankfurt, but they dialed our home DERP
 	// node in SF to reach us, so we can reply to them using our
 	// SF connection rather than dialing Frankfurt. (Issue 150)
-	if !peer.IsZero() && useDerpRoute() {
+	if !peer.IsZero() && c.useDerpRoute() {
 		if r, ok := c.derpRoute[peer]; ok {
 			if ad, ok := c.activeDerp[r.derpID]; ok && ad.c == r.dc {
 				c.setPeerLastDerpLocked(peer, r.derpID, regionID)

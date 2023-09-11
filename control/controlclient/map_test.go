@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go4.org/mem"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
@@ -392,7 +393,7 @@ func formatNodes(nodes []*tailcfg.Node) string {
 }
 
 func newTestMapSession(t testing.TB, nu NetmapUpdater) *mapSession {
-	ms := newMapSession(key.NewNode(), nu)
+	ms := newMapSession(key.NewNode(), nu, new(controlknobs.Knobs))
 	t.Cleanup(ms.Close)
 	ms.logf = t.Logf
 	return ms

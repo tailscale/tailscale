@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/types/logger"
 )
@@ -249,7 +250,7 @@ func (d *TestIGD) handlePCPQuery(pkt []byte, src netip.AddrPort) {
 
 func newTestClient(t *testing.T, igd *TestIGD) *Client {
 	var c *Client
-	c = NewClient(t.Logf, nil, nil, func() {
+	c = NewClient(t.Logf, nil, nil, new(controlknobs.Knobs), func() {
 		t.Logf("port map changed")
 		t.Logf("have mapping: %v", c.HaveMapping())
 	})

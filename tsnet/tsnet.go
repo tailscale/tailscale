@@ -501,6 +501,7 @@ func (s *Server) start() (reterr error) {
 		NetMon:       s.netMon,
 		Dialer:       s.dialer,
 		SetSubsystem: sys.Set,
+		ControlKnobs: sys.ControlKnobs(),
 	})
 	if err != nil {
 		return err

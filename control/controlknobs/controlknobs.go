@@ -8,22 +8,30 @@ package controlknobs
 import (
 	"sync/atomic"
 
-	"tailscale.com/envknob"
+	"tailscale.com/syncs"
+	"tailscale.com/types/opt"
 )
 
-// disableUPnP indicates whether to attempt UPnP mapping.
-var disableUPnPControl atomic.Bool
+// Knobs is the set of knobs that the control plane's coordination server can
+// adjust at runtime.
+type Knobs struct {
+	// DisableUPnP indicates whether to attempt UPnP mapping.
+	DisableUPnP atomic.Bool
 
-var disableUPnpEnv = envknob.RegisterBool("TS_DISABLE_UPNP")
+	// DisableDRPO is whether control says to disable the
+	// DERP route optimization (Issue 150).
+	DisableDRPO atomic.Bool
 
-// DisableUPnP reports the last reported value from control
-// whether UPnP portmapping should be disabled.
-func DisableUPnP() bool {
-	return disableUPnPControl.Load() || disableUPnpEnv()
-}
+	// KeepFullWGConfig is whether we should disable the lazy wireguard
+	// programming and instead give WireGuard the full netmap always, even for
+	// idle peers.
+	KeepFullWGConfig atomic.Bool
 
-// SetDisableUPnP sets whether control says that UPnP should be
-// disabled.
-func SetDisableUPnP(v bool) {
-	disableUPnPControl.Store(v)
+	// RandomizeClientPort is whether control says we should randomize
+	// the client port.
+	RandomizeClientPort atomic.Bool
+
+	// OneCGNAT is whether the the node should make one big CGNAT route
+	// in the OS rather than one /32 per peer.
+	OneCGNAT syncs.AtomicValue[opt.Bool]
 }

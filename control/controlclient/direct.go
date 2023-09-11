@@ -25,7 +25,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -44,7 +43,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/smallzstd"
-	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
@@ -66,7 +64,8 @@ type Direct struct {
 	httpc                 *http.Client // HTTP client used to talk to tailcontrol
 	dialer                *tsdial.Dialer
 	dnsCache              *dnscache.Resolver
-	serverURL             string // URL of the tailcontrol server
+	controlKnobs          *controlknobs.Knobs // always non-nil
+	serverURL             string              // URL of the tailcontrol server
 	clock                 tstime.Clock
 	lastPrintMap          time.Time
 	logf                  logger.Logf
@@ -129,6 +128,7 @@ type Options struct {
 	OnControlTime        func(time.Time)              // optional func to notify callers of new time from control
 	Dialer               *tsdial.Dialer               // non-nil
 	C2NHandler           http.Handler                 // or nil
+	ControlKnobs         *controlknobs.Knobs          // or nil to ignore
 
 	// Observer is called when there's a change in status to report
 	// from the control client.
@@ -202,6 +202,9 @@ func NewDirect(opts Options) (*Direct, error) {
 	if opts.GetMachinePrivateKey == nil {
 		return nil, errors.New("controlclient.New: no GetMachinePrivateKey specified")
 	}
+	if opts.ControlKnobs == nil {
+		opts.ControlKnobs = &controlknobs.Knobs{}
+	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
 	serverURL, err := url.Parse(opts.ServerURL)
 	if err != nil {
@@ -249,6 +252,7 @@ func NewDirect(opts Options) (*Direct, error) {
 
 	c := &Direct{
 		httpc:                 httpc,
+		controlKnobs:          opts.ControlKnobs,
 		getMachinePrivKey:     opts.GetMachinePrivateKey,
 		serverURL:             opts.ServerURL,
 		clock:                 opts.Clock,
@@ -946,7 +950,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 	var mapResIdx int // 0 for first message, then 1+ for deltas
 
-	sess := newMapSession(persist.PrivateNodeKey(), nu)
+	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
 	defer sess.Close()
 	sess.cancel = cancel
 	sess.logf = c.logf
@@ -1287,38 +1291,11 @@ func initDevKnob() devKnobs {
 
 var clock tstime.Clock = tstime.StdClock{}
 
-// config from control.
-var (
-	controlDisableDRPO         atomic.Bool
-	controlKeepFullWGConfig    atomic.Bool
-	controlRandomizeClientPort atomic.Bool
-	controlOneCGNAT            syncs.AtomicValue[opt.Bool]
-)
-
-// DisableDRPO reports whether control says to disable the
-// DERP route optimization (Issue 150).
-func DisableDRPO() bool {
-	return controlDisableDRPO.Load()
-}
-
-// KeepFullWGConfig reports whether control says we should disable the lazy
-// wireguard programming and instead give it the full netmap always.
-func KeepFullWGConfig() bool {
-	return controlKeepFullWGConfig.Load()
-}
-
-// RandomizeClientPort reports whether control says we should randomize
-// the client port.
-func RandomizeClientPort() bool {
-	return controlRandomizeClientPort.Load()
-}
-
-// ControlOneCGNATSetting returns control's OneCGNAT setting, if any.
-func ControlOneCGNATSetting() opt.Bool {
-	return controlOneCGNAT.Load()
-}
-
-func setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
+func (ms *mapSession) setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
+	k := ms.controlKnobs
+	if k == nil {
+		return
+	}
 	var (
 		keepFullWG          bool
 		disableDRPO         bool
@@ -1342,11 +1319,11 @@ func setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
 			oneCGNAT.Set(false)
 		}
 	}
-	controlKeepFullWGConfig.Store(keepFullWG)
-	controlDisableDRPO.Store(disableDRPO)
-	controlknobs.SetDisableUPnP(disableUPnP)
-	controlRandomizeClientPort.Store(randomizeClientPort)
-	controlOneCGNAT.Store(oneCGNAT)
+	k.KeepFullWGConfig.Store(keepFullWG)
+	k.DisableDRPO.Store(disableDRPO)
+	k.DisableUPnP.Store(disableUPnP)
+	k.RandomizeClientPort.Store(randomizeClientPort)
+	k.OneCGNAT.Store(oneCGNAT)
 }
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled

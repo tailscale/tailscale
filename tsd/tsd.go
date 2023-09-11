@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/ipn"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
@@ -42,6 +43,7 @@ type System struct {
 	Router         SubSystem[router.Router]
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
+	controlKnobs   controlknobs.Knobs
 }
 
 // Set is a convenience method to set a subsystem value.
@@ -83,6 +85,11 @@ func (s *System) IsNetstackRouter() bool {
 func (s *System) IsNetstack() bool {
 	name, _ := s.Tun.Get().Name()
 	return name == tstun.FakeTUNName
+}
+
+// ControlKnobs returns the control knobs for this node.
+func (s *System) ControlKnobs() *controlknobs.Knobs {
+	return &s.controlKnobs
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

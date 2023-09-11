@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime"
@@ -38,7 +39,8 @@ import (
 // one MapRequest).
 type mapSession struct {
 	// Immutable fields.
-	nu             NetmapUpdater // called on changes (in addition to the optional hooks below)
+	nu             NetmapUpdater       // called on changes (in addition to the optional hooks below)
+	controlKnobs   *controlknobs.Knobs // or nil
 	privateNodeKey key.NodePrivate
 	publicNodeKey  key.NodePublic
 	logf           logger.Logf
@@ -94,9 +96,10 @@ type mapSession struct {
 // Modify its optional fields on the returned value before use.
 //
 // It must have its Close method called to release resources.
-func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater) *mapSession {
+func newMapSession(privateNodeKey key.NodePrivate, nu NetmapUpdater, controlKnobs *controlknobs.Knobs) *mapSession {
 	ms := &mapSession{
 		nu:              nu,
+		controlKnobs:    controlKnobs,
 		privateNodeKey:  privateNodeKey,
 		publicNodeKey:   privateNodeKey.Public(),
 		lastDNSConfig:   new(tailcfg.DNSConfig),
@@ -184,7 +187,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		if DevKnob.StripCaps() {
 			resp.Node.Capabilities = nil
 		}
-		setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
+		ms.setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
