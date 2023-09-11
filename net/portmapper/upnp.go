@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"math/rand"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
+	"github.com/tailscale/goupnp/soap"
 	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
@@ -316,6 +318,7 @@ func (c *Client) getUPnPPortMapping(
 		return netip.AddrPort{}, false
 	}
 
+	// Start by trying to make a temporary lease with a duration.
 	var newPort uint16
 	newPort, err = addAnyPortMapping(
 		ctx,
@@ -323,14 +326,37 @@ func (c *Client) getUPnPPortMapping(
 		prevPort,
 		internal.Port(),
 		internal.Addr().String(),
-		time.Second*pmpMapLifetimeSec,
+		pmpMapLifetimeSec*time.Second,
 	)
 	if c.debug.VerboseLogs {
 		c.logf("addAnyPortMapping: %v, err=%q", newPort, err)
 	}
+
+	// If this is an error and the code is
+	// "OnlyPermanentLeasesSupported", then we retry with no lease
+	// duration; see the following issue for details:
+	//    https://github.com/tailscale/tailscale/issues/9343
+	if err != nil {
+		// From the UPnP spec: http://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
+		//     725: OnlyPermanentLeasesSupported
+		if isUPnPError(err, 725) {
+			newPort, err = addAnyPortMapping(
+				ctx,
+				client,
+				prevPort,
+				internal.Port(),
+				internal.Addr().String(),
+				0, // permanent
+			)
+			if c.debug.VerboseLogs {
+				c.logf("addAnyPortMapping: 725 retry %v, err=%q", newPort, err)
+			}
+		}
+	}
 	if err != nil {
 		return netip.AddrPort{}, false
 	}
+
 	// TODO cache this ip somewhere?
 	extIP, err := client.GetExternalIPAddress(ctx)
 	if c.debug.VerboseLogs {
@@ -346,6 +372,10 @@ func (c *Client) getUPnPPortMapping(
 	}
 
 	upnp.external = netip.AddrPortFrom(externalIP, newPort)
+
+	// NOTE: this time might not technically be accurate if we created a
+	// permanent lease above, but we should still re-check the presence of
+	// the lease on a regular basis so we use it anyway.
 	d := time.Duration(pmpMapLifetimeSec) * time.Second
 	upnp.goodUntil = now.Add(d)
 	upnp.renewAfter = now.Add(d / 2)
@@ -355,6 +385,30 @@ func (c *Client) getUPnPPortMapping(
 	c.mapping = upnp
 	c.localPort = newPort
 	return upnp.external, true
+}
+
+// isUPnPError returns whether the provided error is a UPnP error response with
+// the given error code. It returns false if the error is not a SOAP error, or
+// the inner error details are not a UPnP error.
+func isUPnPError(err error, errCode int) bool {
+	soapErr, ok := err.(*soap.SOAPFaultError)
+	if !ok {
+		return false
+	}
+
+	var upnpErr struct {
+		XMLName     xml.Name
+		Code        int    `xml:"errorCode"`
+		Description string `xml:"errorDescription"`
+	}
+	if err := xml.Unmarshal([]byte(soapErr.Detail.Raw), &upnpErr); err != nil {
+		return false
+	}
+	if upnpErr.XMLName.Local != "UPnPError" {
+		return false
+	}
+
+	return upnpErr.Code == errCode
 }
 
 type uPnPDiscoResponse struct {
