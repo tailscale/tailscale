@@ -303,6 +303,16 @@ func TestHandlePeerAPI(t *testing.T) {
 			),
 		},
 		{
+			name:       "filename_encoded_space",
+			isSelf:     true,
+			capSharing: true,
+			req:        httptest.NewRequest("PUT", "/v0/put/hello"+hexAll(" ")+"world", struct{ io.Reader }{strings.NewReader("contents")}),
+			checks: checks(
+				httpStatus(200),
+				fileHasSize("hello world", len("contents")),
+			),
+		},
+		{
 			name:       "bad_filename_encoded_slash",
 			isSelf:     true,
 			capSharing: true,
@@ -630,7 +640,6 @@ func TestDeletedMarkers(t *testing.T) {
 	} else {
 		rc.Close()
 	}
-
 }
 
 func TestPeerAPIReplyToDNSQueries(t *testing.T) {
