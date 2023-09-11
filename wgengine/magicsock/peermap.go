@@ -6,7 +6,9 @@ package magicsock
 import (
 	"net/netip"
 
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
+	"tailscale.com/util/set"
 )
 
 // peerInfo is all the information magicsock tracks about a particular
@@ -17,39 +19,44 @@ type peerInfo struct {
 	// that when we're deleting this node, we can rapidly find out the
 	// keys that need deleting from peerMap.byIPPort without having to
 	// iterate over every IPPort known for any peer.
-	ipPorts map[netip.AddrPort]bool
+	ipPorts set.Set[netip.AddrPort]
 }
 
 func newPeerInfo(ep *endpoint) *peerInfo {
 	return &peerInfo{
 		ep:      ep,
-		ipPorts: map[netip.AddrPort]bool{},
+		ipPorts: set.Set[netip.AddrPort]{},
 	}
 }
 
 // peerMap is an index of peerInfos by node (WireGuard) key, disco
 // key, and discovered ip:port endpoints.
 //
-// Doesn't do any locking, all access must be done with Conn.mu held.
+// It doesn't do any locking; all access must be done with Conn.mu held.
 type peerMap struct {
 	byNodeKey map[key.NodePublic]*peerInfo
 	byIPPort  map[netip.AddrPort]*peerInfo
+	byNodeID  map[tailcfg.NodeID]*peerInfo
 
 	// nodesOfDisco contains the set of nodes that are using a
 	// DiscoKey. Usually those sets will be just one node.
-	nodesOfDisco map[key.DiscoPublic]map[key.NodePublic]bool
+	nodesOfDisco map[key.DiscoPublic]set.Set[key.NodePublic]
 }
 
 func newPeerMap() peerMap {
 	return peerMap{
 		byNodeKey:    map[key.NodePublic]*peerInfo{},
 		byIPPort:     map[netip.AddrPort]*peerInfo{},
-		nodesOfDisco: map[key.DiscoPublic]map[key.NodePublic]bool{},
+		byNodeID:     map[tailcfg.NodeID]*peerInfo{},
+		nodesOfDisco: map[key.DiscoPublic]set.Set[key.NodePublic]{},
 	}
 }
 
 // nodeCount returns the number of nodes currently in m.
 func (m *peerMap) nodeCount() int {
+	if len(m.byNodeKey) != len(m.byNodeID) {
+		devPanicf("internal error: peerMap.byNodeKey and byNodeID out of sync")
+	}
 	return len(m.byNodeKey)
 }
 
@@ -66,6 +73,15 @@ func (m *peerMap) endpointForNodeKey(nk key.NodePublic) (ep *endpoint, ok bool) 
 		return nil, false
 	}
 	if info, ok := m.byNodeKey[nk]; ok {
+		return info.ep, true
+	}
+	return nil, false
+}
+
+// endpointForNodeID returns the endpoint for nodeID, or nil if
+// nodeID is not known to us.
+func (m *peerMap) endpointForNodeID(nodeID tailcfg.NodeID) (ep *endpoint, ok bool) {
+	if info, ok := m.byNodeID[nodeID]; ok {
 		return info.ep, true
 	}
 	return nil, false
@@ -111,9 +127,16 @@ func (m *peerMap) forEachEndpointWithDiscoKey(dk key.DiscoPublic, f func(*endpoi
 // ep.publicKey, and updates indexes. m must already have a
 // tailcfg.Node for ep.publicKey.
 func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
-	if m.byNodeKey[ep.publicKey] == nil {
-		m.byNodeKey[ep.publicKey] = newPeerInfo(ep)
+	if ep.nodeID == 0 {
+		panic("internal error: upsertEndpoint called with zero NodeID")
 	}
+	pi, ok := m.byNodeKey[ep.publicKey]
+	if !ok {
+		pi = newPeerInfo(ep)
+		m.byNodeKey[ep.publicKey] = pi
+	}
+	m.byNodeID[ep.nodeID] = pi
+
 	epDisco := ep.disco.Load()
 	if epDisco == nil || oldDiscoKey != epDisco.key {
 		delete(m.nodesOfDisco[oldDiscoKey], ep.publicKey)
@@ -129,15 +152,14 @@ func (m *peerMap) upsertEndpoint(ep *endpoint, oldDiscoKey key.DiscoPublic) {
 		for ipp := range ep.endpointState {
 			m.setNodeKeyForIPPort(ipp, ep.publicKey)
 		}
-
 		return
 	}
-	set := m.nodesOfDisco[epDisco.key]
-	if set == nil {
-		set = map[key.NodePublic]bool{}
-		m.nodesOfDisco[epDisco.key] = set
+	discoSet := m.nodesOfDisco[epDisco.key]
+	if discoSet == nil {
+		discoSet = set.Set[key.NodePublic]{}
+		m.nodesOfDisco[epDisco.key] = discoSet
 	}
-	set[ep.publicKey] = true
+	discoSet.Add(ep.publicKey)
 }
 
 // setNodeKeyForIPPort makes future peer lookups by ipp return the
@@ -152,7 +174,7 @@ func (m *peerMap) setNodeKeyForIPPort(ipp netip.AddrPort, nk key.NodePublic) {
 		delete(m.byIPPort, ipp)
 	}
 	if pi, ok := m.byNodeKey[nk]; ok {
-		pi.ipPorts[ipp] = true
+		pi.ipPorts.Add(ipp)
 		m.byIPPort[ipp] = pi
 	}
 }
@@ -172,6 +194,9 @@ func (m *peerMap) deleteEndpoint(ep *endpoint) {
 		delete(m.nodesOfDisco[epDisco.key], ep.publicKey)
 	}
 	delete(m.byNodeKey, ep.publicKey)
+	if was, ok := m.byNodeID[ep.nodeID]; ok && was.ep == ep {
+		delete(m.byNodeID, ep.nodeID)
+	}
 	if pi == nil {
 		// Kneejerk paranoia from earlier issue 2801.
 		// Unexpected. But no logger plumbed here to log so.
