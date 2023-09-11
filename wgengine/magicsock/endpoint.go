@@ -341,6 +341,8 @@ func (de *endpoint) addrForWireGuardSendLocked(now mono.Time) (udpAddr netip.Add
 		// and give it a short trustBestAddrUntil time so we avoid flapping between
 		// addresses while waiting on latency information to be populated.
 		udpAddr = candidates[rand.Intn(len(candidates))]
+
+		de.c.logf("magicsock: addrForWireGuardSendLocked: no valid addr from latency, randomly selected endpoint %v", udpAddr)
 	}
 
 	de.bestAddr.AddrPort = udpAddr
