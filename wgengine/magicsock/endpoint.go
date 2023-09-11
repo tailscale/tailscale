@@ -49,6 +49,7 @@ type endpoint struct {
 
 	// These fields are initialized once and never modified.
 	c            *Conn
+	nodeID       tailcfg.NodeID
 	publicKey    key.NodePublic // peer public key (for WireGuard + DERP)
 	publicKeyHex string         // cached output of publicKey.UntypedHexString
 	fakeWGAddr   netip.AddrPort // the UDP address we tell wireguard-go we're using

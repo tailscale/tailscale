@@ -15,6 +15,8 @@ var (
 	// debugDisco prints verbose logs of active discovery events as
 	// they happen.
 	debugDisco = envknob.RegisterBool("TS_DEBUG_DISCO")
+	// debugPeerMap prints verbose logs of changes to the peermap.
+	debugPeerMap = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_PEERMAP")
 	// debugOmitLocalAddresses removes all local interface addresses
 	// from magicsock's discovered local endpoints. Used in some tests.
 	debugOmitLocalAddresses = envknob.RegisterBool("TS_DEBUG_OMIT_LOCAL_ADDRS")
