@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go4.org/mem"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/neterror"
@@ -66,6 +67,7 @@ const trustServiceStillAvailableDuration = 10 * time.Minute
 type Client struct {
 	logf         logger.Logf
 	netMon       *netmon.Monitor // optional; nil means interfaces will be looked up on-demand
+	controlKnobs *controlknobs.Knobs
 	ipAndGateway func() (gw, ip netip.Addr, ok bool)
 	onChange     func() // or nil
 	debug        DebugKnobs
@@ -166,15 +168,19 @@ func (m *pmpMapping) Release(ctx context.Context) {
 // The debug argument allows configuring the behaviour of the portmapper for
 // debugging; if nil, a sensible set of defaults will be used.
 //
-// The optional onChange argument specifies a func to run in a new
-// goroutine whenever the port mapping status has changed. If nil,
-// it doesn't make a callback.
-func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, onChange func()) *Client {
+// The controlKnobs, if non-nil, specifies the control knobs from the control
+// plane that might disable portmapping.
+//
+// The optional onChange argument specifies a func to run in a new goroutine
+// whenever the port mapping status has changed. If nil, it doesn't make a
+// callback.
+func NewClient(logf logger.Logf, netMon *netmon.Monitor, debug *DebugKnobs, controlKnobs *controlknobs.Knobs, onChange func()) *Client {
 	ret := &Client{
 		logf:         logf,
 		netMon:       netMon,
 		ipAndGateway: interfaces.LikelyHomeRouterIP,
 		onChange:     onChange,
+		controlKnobs: controlKnobs,
 	}
 	if debug != nil {
 		ret.debug = *debug

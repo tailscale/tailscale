@@ -694,7 +694,7 @@ func (h *Handler) serveDebugPortmap(w http.ResponseWriter, r *http.Request) {
 	done := make(chan bool, 1)
 
 	var c *portmapper.Client
-	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), h.netMon, debugKnobs, func() {
+	c = portmapper.NewClient(logger.WithPrefix(logf, "portmapper: "), h.netMon, debugKnobs, h.b.ControlKnobs(), func() {
 		logf("portmapping changed.")
 		logf("have mapping: %v", c.HaveMapping())
 

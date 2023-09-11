@@ -11,6 +11,7 @@ import (
 
 	"go4.org/mem"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
@@ -151,15 +152,16 @@ func TestUserspaceEngineReconfig(t *testing.T) {
 }
 
 func TestUserspaceEnginePortReconfig(t *testing.T) {
-	tstest.Replace(t, &randomizeClientPort, func() bool { return false })
-
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/2855")
 	const defaultPort = 49983
+
+	var knobs controlknobs.Knobs
+
 	// Keep making a wgengine until we find an unused port
 	var ue *userspaceEngine
 	for i := 0; i < 100; i++ {
 		attempt := uint16(defaultPort + i)
-		e, err := NewFakeUserspaceEngine(t.Logf, attempt)
+		e, err := NewFakeUserspaceEngine(t.Logf, attempt, &knobs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +200,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 		t.Errorf("no debug setting changed local port to %d from %d", got, startingPort)
 	}
 
-	randomizeClientPort = func() bool { return true }
+	knobs.RandomizeClientPort.Store(true)
 	if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +209,7 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 
 	lastPort := ue.magicConn.LocalPort()
-	randomizeClientPort = func() bool { return false }
+	knobs.RandomizeClientPort.Store(false)
 	if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil {
 		t.Fatal(err)
 	}

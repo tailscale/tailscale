@@ -34,6 +34,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/doctor"
 	"tailscale.com/doctor/permissions"
 	"tailscale.com/doctor/routetable"
@@ -3084,7 +3085,7 @@ func (b *LocalBackend) authReconfig() {
 		return
 	}
 
-	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, version.OS())
+	oneCGNATRoute := shouldUseOneCGNATRoute(b.logf, b.sys.ControlKnobs(), version.OS())
 	rcfg := b.routerConfig(cfg, prefs, oneCGNATRoute)
 	dcfg := dnsConfigForNetmap(nm, prefs, b.logf, version.OS())
 
@@ -3102,11 +3103,13 @@ func (b *LocalBackend) authReconfig() {
 //
 // The versionOS is a Tailscale-style version ("iOS", "macOS") and not
 // a runtime.GOOS.
-func shouldUseOneCGNATRoute(logf logger.Logf, versionOS string) bool {
-	// Explicit enabling or disabling always take precedence.
-	if v, ok := controlclient.ControlOneCGNATSetting().Get(); ok {
-		logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
-		return v
+func shouldUseOneCGNATRoute(logf logger.Logf, controlKnobs *controlknobs.Knobs, versionOS string) bool {
+	if controlKnobs != nil {
+		// Explicit enabling or disabling always take precedence.
+		if v, ok := controlKnobs.OneCGNAT.Load().Get(); ok {
+			logf("[v1] shouldUseOneCGNATRoute: explicit=%v", v)
+			return v
+		}
 	}
 
 	// Also prefer to do this on the Mac, so that we don't need to constantly
@@ -4661,6 +4664,11 @@ func (b *LocalBackend) DebugReSTUN() error {
 	}
 	mc.ReSTUN("explicit-debug")
 	return nil
+}
+
+// ControlKnobs returns the node's control knobs.
+func (b *LocalBackend) ControlKnobs() *controlknobs.Knobs {
+	return b.sys.ControlKnobs()
 }
 
 func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {

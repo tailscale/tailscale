@@ -19,7 +19,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/device"
 	"github.com/tailscale/wireguard-go/tun"
-	"tailscale.com/control/controlclient"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
@@ -95,9 +95,10 @@ type userspaceEngine struct {
 	dns              *dns.Manager
 	magicConn        *magicsock.Conn
 	netMon           *netmon.Monitor
-	netMonOwned      bool       // whether we created netMon (and thus need to close it)
-	netMonUnregister func()     // unsubscribes from changes; used regardless of netMonOwned
-	birdClient       BIRDClient // or nil
+	netMonOwned      bool                // whether we created netMon (and thus need to close it)
+	netMonUnregister func()              // unsubscribes from changes; used regardless of netMonOwned
+	birdClient       BIRDClient          // or nil
+	controlKnobs     *controlknobs.Knobs // or nil
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -183,6 +184,11 @@ type Config struct {
 	// If nil, a new Dialer is created
 	Dialer *tsdial.Dialer
 
+	// ControlKnobs is the set of control plane-provied knobs
+	// to use.
+	// If nil, defaults are used.
+	ControlKnobs *controlknobs.Knobs
+
 	// ListenPort is the port on which the engine will listen.
 	// If zero, a port is automatically selected.
 	ListenPort uint16
@@ -220,6 +226,8 @@ func NewFakeUserspaceEngine(logf logger.Logf, opts ...any) (Engine, error) {
 			conf.ListenPort = uint16(v)
 		case func(any):
 			conf.SetSubsystem = v
+		case *controlknobs.Knobs:
+			conf.ControlKnobs = v
 		default:
 			return nil, fmt.Errorf("unknown option type %T", v)
 		}
@@ -271,6 +279,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		router:         conf.Router,
 		confListenPort: conf.ListenPort,
 		birdClient:     conf.BIRDClient,
+		controlKnobs:   conf.ControlKnobs,
 	}
 
 	if e.birdClient != nil {
@@ -326,6 +335,7 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		IdleFunc:         e.tundev.IdleDuration,
 		NoteRecvActivity: e.noteRecvActivity,
 		NetMon:           e.netMon,
+		ControlKnobs:     conf.ControlKnobs,
 	}
 
 	var err error
@@ -493,12 +503,12 @@ var debugTrimWireguard = envknob.RegisterOptBool("TS_DEBUG_TRIM_WIREGUARD")
 // That's sad too. Or we get rid of these knobs (lazy wireguard config has been
 // stable!) but I'm worried that a future regression would be easier to debug
 // with these knobs in place.
-func forceFullWireguardConfig(numPeers int) bool {
+func (e *userspaceEngine) forceFullWireguardConfig(numPeers int) bool {
 	// Did the user explicitly enable trimming via the environment variable knob?
 	if b, ok := debugTrimWireguard().Get(); ok {
 		return !b
 	}
-	return controlclient.KeepFullWGConfig()
+	return e.controlKnobs != nil && e.controlKnobs.KeepFullWGConfig.Load()
 }
 
 // isTrimmablePeer reports whether p is a peer that we can trim out of the
@@ -508,8 +518,8 @@ func forceFullWireguardConfig(numPeers int) bool {
 // only non-subnet AllowedIPs (an IPv4 /32 or IPv6 /128), which is the
 // common case for most peers. Subnet router nodes will just always be
 // created in the wireguard-go config.
-func isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
-	if forceFullWireguardConfig(numPeers) {
+func (e *userspaceEngine) isTrimmablePeer(p *wgcfg.Peer, numPeers int) bool {
+	if e.forceFullWireguardConfig(numPeers) {
 		return false
 	}
 
@@ -625,7 +635,7 @@ func (e *userspaceEngine) maybeReconfigWireguardLocked(discoChanged map[key.Node
 	for i := range full.Peers {
 		p := &full.Peers[i]
 		nk := p.PublicKey
-		if !isTrimmablePeer(p, len(full.Peers)) {
+		if !e.isTrimmablePeer(p, len(full.Peers)) {
 			min.Peers = append(min.Peers, *p)
 			if discoChanged[nk] {
 				needRemoveStep = true
@@ -766,8 +776,6 @@ func hasOverlap(aips, rips views.Slice[netip.Prefix]) bool {
 	return false
 }
 
-var randomizeClientPort = controlclient.RandomizeClientPort
-
 func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, dnsCfg *dns.Config) error {
 	if routerCfg == nil {
 		panic("routerCfg must not be nil")
@@ -794,7 +802,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	e.mu.Unlock()
 
 	listenPort := e.confListenPort
-	if randomizeClientPort() {
+	if e.controlKnobs != nil && e.controlKnobs.RandomizeClientPort.Load() {
 		listenPort = 0
 	}
 
