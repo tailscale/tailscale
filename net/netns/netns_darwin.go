@@ -103,7 +103,7 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 		return defaultIdx()
 	}
 
-	idx, err := interfaceIndexFor(addr, true /* canRecurse */)
+	idx, err := interfaceIndexFor(logf, addr, true /* canRecurse */)
 	if err != nil {
 		logf("netns: error in interfaceIndexFor: %v", err)
 		return defaultIdx()
@@ -150,7 +150,12 @@ func tailscaleInterface() (*net.Interface, error) {
 
 // interfaceIndexFor returns the interface index that we should bind to in
 // order to send traffic to the provided address.
-func interfaceIndexFor(addr netip.Addr, canRecurse bool) (int, error) {
+func interfaceIndexFor(logf logger.Logf, addr netip.Addr, canRecurse bool) (retIndex int, retErr error) {
+	logf("interfaceIndexFor(%v, %v) called", addr, canRecurse)
+	defer func() {
+		logf("interfaceIndexFor(%v, %v) = (%d, %v)", addr, canRecurse, retIndex, retErr)
+	}()
+
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
 	if err != nil {
 		return 0, fmt.Errorf("creating AF_ROUTE socket: %w", err)
@@ -218,15 +223,23 @@ func interfaceIndexFor(addr netip.Addr, canRecurse bool) (int, error) {
 		return 0, fmt.Errorf("no messages")
 	}
 
-	for _, msg := range msgs {
+	for i, msg := range msgs {
 		rm, ok := msg.(*route.RouteMessage)
 		if !ok {
+			logf("interfaceIndexFor: got non-RouteMessage: %T", msg)
 			continue
 		}
+
+		logf("interfaceIndexFor:   message %d/%d: Version=%d Type=%d Flags=0x%x Index=%d ID=%d Seq=%d",
+			i+1, len(msgs),
+			rm.Version, rm.Type, rm.Flags, rm.Index, rm.ID, rm.Seq)
+
 		if rm.Version < 3 || rm.Version > 5 || rm.Type != unix.RTM_GET {
+			logf("interfaceIndexFor: invalid Version/Type: Version=%d Type=%d", rm.Version, rm.Type)
 			continue
 		}
 		if len(rm.Addrs) < unix.RTAX_GATEWAY {
+			logf("interfaceIndexFor: not enough Addrs: %d < %d", len(rm.Addrs), unix.RTAX_GATEWAY)
 			continue
 		}
 
@@ -238,15 +251,16 @@ func interfaceIndexFor(addr netip.Addr, canRecurse bool) (int, error) {
 			// (exactly once) to get the link (and thus index) for
 			// the gateway IP.
 			if canRecurse {
-				return interfaceIndexFor(netip.AddrFrom4(addr.IP), false)
+				return interfaceIndexFor(logf, netip.AddrFrom4(addr.IP), false)
 			}
 		case *route.Inet6Addr:
 			// As above.
 			if canRecurse {
-				return interfaceIndexFor(netip.AddrFrom16(addr.IP), false)
+				return interfaceIndexFor(logf, netip.AddrFrom16(addr.IP), false)
 			}
 		default:
 			// Unknown type; skip it
+			logf("interfaceIndexFor: unknown type for rm.Addrs[unix.RTAX_GATEWAY]: %T", addr)
 			continue
 		}
 	}
