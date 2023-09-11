@@ -58,7 +58,12 @@ func controlLogf(logf logger.Logf, netMon *netmon.Monitor, network, address stri
 	return bindConnToInterface(c, network, address, idx, logf)
 }
 
-func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string) (int, error) {
+func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string) (retIf int, retErr error) {
+	logf("getInterfaceIndex(%q) called", address)
+	defer func() {
+		logf("getInterfaceIndex(%q) = (%d, %v)", address, retIf, retErr)
+	}()
+
 	// Helper so we can log errors.
 	defaultIdx := func() (int, error) {
 		if netMon == nil {
