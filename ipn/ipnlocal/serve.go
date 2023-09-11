@@ -5,7 +5,9 @@ package ipnlocal
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +34,11 @@ import (
 	"tailscale.com/util/mak"
 	"tailscale.com/version"
 )
+
+// ErrETagMismatch signals that the given
+// If-Match header does not match with the
+// current etag of a resource.
+var ErrETagMismatch = errors.New("etag mismatch")
 
 // serveHTTPContextKey is the context.Value key for a *serveHTTPContext.
 type serveHTTPContextKey struct{}
@@ -214,13 +221,15 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 }
 
 // SetServeConfig establishes or replaces the current serve config.
-func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig) error {
+// ETag is an optional parameter to enforce Optimistic Concurrency Control.
+// If it is an empty string, then the config will be overwritten.
+func (b *LocalBackend) SetServeConfig(config *ipn.ServeConfig, etag string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.setServeConfigLocked(config)
+	return b.setServeConfigLocked(config, etag)
 }
 
-func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig) error {
+func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string) error {
 	prefs := b.pm.CurrentPrefs()
 	if config.IsFunnelOn() && prefs.ShieldsUp() {
 		return errors.New("Unable to turn on Funnel while shields-up is enabled")
@@ -233,8 +242,24 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig) error {
 	if !nm.SelfNode.Valid() {
 		return errors.New("netMap SelfNode is nil")
 	}
-	profileID := b.pm.CurrentProfile().ID
-	confKey := ipn.ServeConfigKey(profileID)
+
+	// If etag is present, check that it has
+	// not changed from the last config.
+	if etag != "" {
+		// Note that we marshal b.serveConfig
+		// and not use b.lastServeConfJSON as that might
+		// be a Go nil value, which produces a different
+		// checksum from a JSON "null" value.
+		previousCfg, err := json.Marshal(b.serveConfig)
+		if err != nil {
+			return fmt.Errorf("error encoding previous config: %w", err)
+		}
+		sum := sha256.Sum256(previousCfg)
+		previousEtag := hex.EncodeToString(sum[:])
+		if etag != previousEtag {
+			return ErrETagMismatch
+		}
+	}
 
 	var bs []byte
 	if config != nil {
@@ -244,6 +269,9 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig) error {
 		}
 		bs = j
 	}
+
+	profileID := b.pm.CurrentProfile().ID
+	confKey := ipn.ServeConfigKey(profileID)
 	if err := b.store.WriteState(confKey, bs); err != nil {
 		return fmt.Errorf("writing ServeConfig to StateStore: %w", err)
 	}
@@ -271,7 +299,7 @@ func (b *LocalBackend) DeleteForegroundSession(sessionID string) error {
 	}
 	sc := b.serveConfig.AsStruct()
 	delete(sc.Foreground, sessionID)
-	return b.setServeConfigLocked(sc)
+	return b.setServeConfigLocked(sc, "")
 }
 
 func (b *LocalBackend) HandleIngressTCPConn(ingressPeer tailcfg.NodeView, target ipn.HostPort, srcAddr netip.AddrPort, getConnOrReset func() (net.Conn, bool), sendRST func()) {

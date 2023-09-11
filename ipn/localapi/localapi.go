@@ -7,6 +7,8 @@ package localapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -830,9 +832,17 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "serve config denied", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		config := h.b.ServeConfig()
-		json.NewEncoder(w).Encode(config)
+		bts, err := json.Marshal(config)
+		if err != nil {
+			http.Error(w, "error encoding config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sum := sha256.Sum256(bts)
+		etag := hex.EncodeToString(sum[:])
+		w.Header().Set("Etag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(bts)
 	case "POST":
 		if !h.PermitWrite {
 			http.Error(w, "serve config denied", http.StatusForbidden)
@@ -843,7 +853,12 @@ func (h *Handler) serveServeConfig(w http.ResponseWriter, r *http.Request) {
 			writeErrorJSON(w, fmt.Errorf("decoding config: %w", err))
 			return
 		}
-		if err := h.b.SetServeConfig(configIn); err != nil {
+		etag := r.Header.Get("If-Match")
+		if err := h.b.SetServeConfig(configIn, etag); err != nil {
+			if errors.Is(err, ipnlocal.ErrETagMismatch) {
+				http.Error(w, err.Error(), http.StatusPreconditionFailed)
+				return
+			}
 			writeErrorJSON(w, fmt.Errorf("updating config: %w", err))
 			return
 		}

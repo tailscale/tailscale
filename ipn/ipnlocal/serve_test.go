@@ -6,7 +6,11 @@ package ipnlocal
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +28,7 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cmpx"
+	"tailscale.com/util/mak"
 	"tailscale.com/util/must"
 	"tailscale.com/wgengine"
 )
@@ -169,49 +174,81 @@ func TestGetServeHandler(t *testing.T) {
 	}
 }
 
-func TestServeHTTPProxy(t *testing.T) {
-	sys := &tsd.System{}
-	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
+func getEtag(t *testing.T, b any) string {
+	t.Helper()
+	bts, err := json.Marshal(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sys.Set(e)
-	sys.Set(new(mem.Store))
-	b, err := NewLocalBackend(t.Logf, logid.PublicID{}, sys, 0)
+	sum := sha256.Sum256(bts)
+	return hex.EncodeToString(sum[:])
+}
+
+func TestServeConfigETag(t *testing.T) {
+	b := newTestBackend(t)
+
+	// a nil config with initial etag should succeed
+	err := b.SetServeConfig(nil, getEtag(t, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Shutdown()
-	dir := t.TempDir()
-	b.SetVarRoot(dir)
 
-	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
-	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
-	b.pm = pm
+	// a nil config with an invalid etag should fail
+	err = b.SetServeConfig(nil, "abc")
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatal("expected an error but got nil")
+	}
 
-	b.netMap = &netmap.NetworkMap{
-		SelfNode: (&tailcfg.Node{
-			Name: "example.ts.net",
-		}).View(),
-		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
-			tailcfg.UserID(1): {
-				LoginName:     "someone@example.com",
-				DisplayName:   "Some One",
-				ProfilePicURL: "https://example.com/photo.jpg",
-			},
+	// a new config with no etag should succeed
+	conf := &ipn.ServeConfig{
+		Web: map[ipn.HostPort]*ipn.WebServerConfig{
+			"example.ts.net:443": {Handlers: map[string]*ipn.HTTPHandler{
+				"/": {Proxy: "http://127.0.0.1:3000"},
+			}},
 		},
 	}
-	b.nodeByAddr = map[netip.Addr]tailcfg.NodeView{
-		netip.MustParseAddr("100.150.151.152"): (&tailcfg.Node{
-			ComputedName: "some-peer",
-			User:         tailcfg.UserID(1),
-		}).View(),
-		netip.MustParseAddr("100.150.151.153"): (&tailcfg.Node{
-			ComputedName: "some-tagged-peer",
-			Tags:         []string{"tag:server", "tag:test"},
-			User:         tailcfg.UserID(1),
-		}).View(),
+	err = b.SetServeConfig(conf, getEtag(t, nil))
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	confView := b.ServeConfig()
+	etag := getEtag(t, confView)
+	if etag == "" {
+		t.Fatal("expected to get an etag but got an empty string")
+	}
+	conf = confView.AsStruct()
+	mak.Set(&conf.AllowFunnel, "example.ts.net:443", true)
+
+	// replacing an existing config with an invalid etag should fail
+	err = b.SetServeConfig(conf, "invalid etag")
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatalf("expected an etag mismatch error but got %v", err)
+	}
+
+	// replacing an existing config with a valid etag should succeed
+	err = b.SetServeConfig(conf, etag)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// replacing an existing config with a previous etag should fail
+	err = b.SetServeConfig(nil, etag)
+	if !errors.Is(err, ErrETagMismatch) {
+		t.Fatalf("expected an etag mismatch error but got %v", err)
+	}
+
+	// replacing an existing config with the new etag should succeed
+	newCfg := b.ServeConfig()
+	etag = getEtag(t, newCfg)
+	err = b.SetServeConfig(nil, etag)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeHTTPProxy(t *testing.T) {
+	b := newTestBackend(t)
 
 	// Start test serve endpoint.
 	testServ := httptest.NewServer(http.HandlerFunc(
@@ -232,7 +269,7 @@ func TestServeHTTPProxy(t *testing.T) {
 			}},
 		},
 	}
-	if err := b.SetServeConfig(conf); err != nil {
+	if err := b.SetServeConfig(conf, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -307,6 +344,52 @@ func TestServeHTTPProxy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newTestBackend(t *testing.T) *LocalBackend {
+	sys := &tsd.System{}
+	e, err := wgengine.NewUserspaceEngine(t.Logf, wgengine.Config{SetSubsystem: sys.Set})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys.Set(e)
+	sys.Set(new(mem.Store))
+	b, err := NewLocalBackend(t.Logf, logid.PublicID{}, sys, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Shutdown)
+	dir := t.TempDir()
+	b.SetVarRoot(dir)
+
+	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
+	pm.currentProfile = &ipn.LoginProfile{ID: "id0"}
+	b.pm = pm
+
+	b.netMap = &netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			Name: "example.ts.net",
+		}).View(),
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+			tailcfg.UserID(1): {
+				LoginName:     "someone@example.com",
+				DisplayName:   "Some One",
+				ProfilePicURL: "https://example.com/photo.jpg",
+			},
+		},
+	}
+	b.nodeByAddr = map[netip.Addr]tailcfg.NodeView{
+		netip.MustParseAddr("100.150.151.152"): (&tailcfg.Node{
+			ComputedName: "some-peer",
+			User:         tailcfg.UserID(1),
+		}).View(),
+		netip.MustParseAddr("100.150.151.153"): (&tailcfg.Node{
+			ComputedName: "some-tagged-peer",
+			Tags:         []string{"tag:server", "tag:test"},
+			User:         tailcfg.UserID(1),
+		}).View(),
+	}
+	return b
 }
 
 func TestServeFileOrDirectory(t *testing.T) {
