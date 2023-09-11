@@ -418,6 +418,8 @@ func NewConn(opts Options) (*Conn, error) {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
 	c.netMon = opts.NetMon
+	c.pconn4.logf = c.logf
+	c.pconn6.logf = c.logf
 
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err

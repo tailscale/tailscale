@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/net/ipv6"
 	"tailscale.com/net/netaddr"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 )
 
@@ -30,6 +31,8 @@ type RebindingUDPConn struct {
 	mu    sync.Mutex // held while changing pconn (and pconnAtomic)
 	pconn nettype.PacketConn
 	port  uint16
+
+	logf logger.Logf
 }
 
 // setConnLocked sets the provided nettype.PacketConn. It should be called only
@@ -63,14 +66,25 @@ func (c *RebindingUDPConn) readFromWithInitPconn(pconn nettype.PacketConn, b []b
 	}
 }
 
+var testAddr = netip.MustParseAddr("146.70.116.98")
+
 // ReadFromUDPAddrPort reads a packet from c into b.
 // It returns the number of bytes copied and the source address.
 func (c *RebindingUDPConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
-	return c.readFromWithInitPconn(*c.pconnAtomic.Load(), b)
+	n, src, err := c.readFromWithInitPconn(*c.pconnAtomic.Load(), b)
+	if src.Addr() == testAddr {
+		c.logf("RebindingUDPConn.ReadFromUDPAddrPort([]byte{/* %d */}) = (%d, %q, %v)", len(b), n, src, err)
+	}
+	return n, src, err
 }
 
 // WriteBatchTo writes buffs to addr.
-func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) error {
+func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) (retErr error) {
+	if addr.Addr() == testAddr {
+		defer func() {
+			c.logf("RebindingUDPConn.WriteBatchTo([][]byte{/* %d */, %s) = %v", len(buffs), addr, retErr)
+		}()
+	}
 	for {
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(*batchingUDPConn)
