@@ -5,6 +5,7 @@ package portmapper
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"net/netip"
 	"reflect"
 	"regexp"
+	"sync/atomic"
 	"testing"
 
 	"tailscale.com/tstest"
@@ -129,3 +131,217 @@ func TestGetUPnPClient(t *testing.T) {
 		})
 	}
 }
+
+func TestGetUPnPPortMapping(t *testing.T) {
+	igd, err := NewTestIGD(t.Logf, TestIGDOptions{UPnP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer igd.Close()
+
+	c := newTestClient(t, igd)
+	t.Logf("Listening on upnp=%v", c.testUPnPPort)
+	defer c.Close()
+
+	c.debug.VerboseLogs = true
+
+	// This is a very basic fake UPnP server handler.
+	var sawRequestWithLease atomic.Bool
+	igd.SetUPnPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("got UPnP request %s %s", r.Method, r.URL.Path)
+		switch r.URL.Path {
+		case "/rootDesc.xml":
+			io.WriteString(w, testRootDesc)
+		case "/ctl/IPConn":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("error reading request body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+
+			// Decode the request type.
+			var outerRequest struct {
+				Body struct {
+					Request struct {
+						XMLName xml.Name
+					} `xml:",any"`
+					Inner string `xml:",innerxml"`
+				} `xml:"Body"`
+			}
+			if err := xml.Unmarshal(body, &outerRequest); err != nil {
+				t.Errorf("bad request: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+
+			requestType := outerRequest.Body.Request.XMLName.Local
+			upnpRequest := outerRequest.Body.Inner
+			t.Logf("UPnP request: %s", requestType)
+
+			switch requestType {
+			case "AddPortMapping":
+				// Decode a minimal body to determine whether we skip the request or not.
+				var req struct {
+					Protocol       string `xml:"NewProtocol"`
+					InternalPort   string `xml:"NewInternalPort"`
+					ExternalPort   string `xml:"NewExternalPort"`
+					InternalClient string `xml:"NewInternalClient"`
+					LeaseDuration  string `xml:"NewLeaseDuration"`
+				}
+				if err := xml.Unmarshal([]byte(upnpRequest), &req); err != nil {
+					t.Errorf("bad request: %v", err)
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+
+				if req.Protocol != "UDP" {
+					t.Errorf(`got Protocol=%q, want "UDP"`, req.Protocol)
+				}
+				if req.LeaseDuration != "0" {
+					// Return a fake error to ensure that we fall back to a permanent lease.
+					io.WriteString(w, testAddPortMappingPermanentLease)
+					sawRequestWithLease.Store(true)
+				} else {
+					// Success!
+					io.WriteString(w, testAddPortMappingResponse)
+				}
+			case "GetExternalIPAddress":
+				io.WriteString(w, testGetExternalIPAddressResponse)
+
+			case "DeletePortMapping":
+				// Do nothing for test
+
+			default:
+				t.Errorf("unhandled UPnP request type %q", requestType)
+				http.Error(w, "bad request", http.StatusBadRequest)
+			}
+		default:
+			t.Logf("ignoring request")
+			http.NotFound(w, r)
+		}
+	}))
+
+	ctx := context.Background()
+	res, err := c.Probe(ctx)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if !res.UPnP {
+		t.Errorf("didn't detect UPnP")
+	}
+
+	gw, myIP, ok := c.gatewayAndSelfIP()
+	if !ok {
+		t.Fatalf("could not get gateway and self IP")
+	}
+	t.Logf("gw=%v myIP=%v", gw, myIP)
+
+	ext, ok := c.getUPnPPortMapping(ctx, gw, netip.AddrPortFrom(myIP, 12345), 0)
+	if !ok {
+		t.Fatal("could not get UPnP port mapping")
+	}
+	if got, want := ext.Addr(), netip.MustParseAddr("123.123.123.123"); got != want {
+		t.Errorf("bad external address; got %v want %v", got, want)
+	}
+	if !sawRequestWithLease.Load() {
+		t.Errorf("wanted request with lease, but didn't see one")
+	}
+	t.Logf("external IP: %v", ext)
+}
+
+const testRootDesc = `<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0" configId="1337">
+  <specVersion>
+    <major>1</major>
+    <minor>1</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>
+    <friendlyName>Tailscale Test Router</friendlyName>
+    <manufacturer>Tailscale</manufacturer>
+    <manufacturerURL>https://tailscale.com</manufacturerURL>
+    <modelDescription>Tailscale Test Router</modelDescription>
+    <modelName>Tailscale Test Router</modelName>
+    <modelNumber>2.5.0-RELEASE</modelNumber>
+    <modelURL>https://tailscale.com</modelURL>
+    <serialNumber>1234</serialNumber>
+    <UDN>uuid:1974e83b-6dc7-4635-92b3-6a85a4037294</UDN>
+    <deviceList>
+      <device>
+	<deviceType>urn:schemas-upnp-org:device:WANDevice:1</deviceType>
+	<friendlyName>WANDevice</friendlyName>
+	<manufacturer>MiniUPnP</manufacturer>
+	<manufacturerURL>http://miniupnp.free.fr/</manufacturerURL>
+	<modelDescription>WAN Device</modelDescription>
+	<modelName>WAN Device</modelName>
+	<modelNumber>20990102</modelNumber>
+	<modelURL>http://miniupnp.free.fr/</modelURL>
+	<serialNumber>1234</serialNumber>
+	<UDN>uuid:1974e83b-6dc7-4635-92b3-6a85a4037294</UDN>
+	<UPC>000000000000</UPC>
+	<deviceList>
+	  <device>
+	    <deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+	    <friendlyName>WANConnectionDevice</friendlyName>
+	    <manufacturer>MiniUPnP</manufacturer>
+	    <manufacturerURL>http://miniupnp.free.fr/</manufacturerURL>
+	    <modelDescription>MiniUPnP daemon</modelDescription>
+	    <modelName>MiniUPnPd</modelName>
+	    <modelNumber>20210205</modelNumber>
+	    <modelURL>http://miniupnp.free.fr/</modelURL>
+	    <serialNumber>1234</serialNumber>
+	    <UDN>uuid:1974e83b-6dc7-4635-92b3-6a85a4037294</UDN>
+	    <UPC>000000000000</UPC>
+	    <serviceList>
+	      <service>
+		<serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
+		<serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>
+		<SCPDURL>/WANIPCn.xml</SCPDURL>
+		<controlURL>/ctl/IPConn</controlURL>
+		<eventSubURL>/evt/IPConn</eventSubURL>
+	      </service>
+	    </serviceList>
+	  </device>
+	</deviceList>
+      </device>
+    </deviceList>
+    <presentationURL>https://127.0.0.1/</presentationURL>
+  </device>
+</root>
+`
+
+const testAddPortMappingPermanentLease = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <s:Fault>
+      <faultCode>s:Client</faultCode>
+      <faultString>UPnPError</faultString>
+      <detail>
+        <UPnPError xmlns="urn:schemas-upnp-org:control-1-0">
+          <errorCode>725</errorCode>
+          <errorDescription>OnlyPermanentLeasesSupported</errorDescription>
+        </UPnPError>
+      </detail>
+    </s:Fault>
+  </s:Body>
+</s:Envelope>
+`
+
+const testAddPortMappingResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:AddPortMappingResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1"/>
+  </s:Body>
+</s:Envelope>
+`
+
+const testGetExternalIPAddressResponse = `<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body>
+    <u:GetExternalIPAddressResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">
+      <NewExternalIPAddress>123.123.123.123</NewExternalIPAddress>
+    </u:GetExternalIPAddressResponse>
+  </s:Body>
+</s:Envelope>
+`
