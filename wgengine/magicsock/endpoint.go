@@ -234,7 +234,14 @@ func (de *endpoint) noteRecvActivity(ipp netip.AddrPort) {
 		de.bestAddr.AddrPort = ipp
 		de.bestAddrAt = now
 		de.trustBestAddrUntil = now.Add(5 * time.Second)
+
+		shouldLog := de.publicKey.ShortString() == "[TNrdH]"
+
 		de.mu.Unlock()
+
+		if shouldLog {
+			de.c.logf("noteRecvActivity: got activity from node [TNrdH]: %v", ipp)
+		}
 	}
 
 	elapsed := now.Sub(de.lastRecv.LoadAtomic())
