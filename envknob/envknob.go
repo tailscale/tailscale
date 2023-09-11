@@ -389,11 +389,23 @@ func CanTaildrop() bool { return !Bool("TS_DISABLE_TAILDROP") }
 // SSHPolicyFile returns the path, if any, to the SSHPolicy JSON file for development.
 func SSHPolicyFile() string { return String("TS_DEBUG_SSH_POLICY_FILE") }
 
-// SSHIgnoreTailnetPolicy is whether to ignore the Tailnet SSH policy for development.
+// SSHIgnoreTailnetPolicy reports whether to ignore the Tailnet SSH policy for development.
 func SSHIgnoreTailnetPolicy() bool { return Bool("TS_DEBUG_SSH_IGNORE_TAILNET_POLICY") }
 
-// TKASkipSignatureCheck is whether to skip node-key signature checking for development.
+// TKASkipSignatureCheck reports whether to skip node-key signature checking for development.
 func TKASkipSignatureCheck() bool { return Bool("TS_UNSAFE_SKIP_NKS_VERIFICATION") }
+
+// CrashOnUnexpected reports whether the Tailscale client should panic
+// on unexpected conditions. If TS_DEBUG_CRASH_ON_UNEXPECTED is set, that's
+// used. Otherwise the default value is true for unstable builds.
+func CrashOnUnexpected() bool {
+	if v, ok := crashOnUnexpected().Get(); ok {
+		return v
+	}
+	return version.IsUnstableBuild()
+}
+
+var crashOnUnexpected = RegisterOptBool("TS_DEBUG_CRASH_ON_UNEXPECTED")
 
 // NoLogsNoSupport reports whether the client's opted out of log uploads and
 // technical support.

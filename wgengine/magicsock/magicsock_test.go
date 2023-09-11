@@ -1161,6 +1161,7 @@ func TestDiscoMessage(t *testing.T) {
 		DiscoKey: peer1Pub,
 	}
 	ep := &endpoint{
+		nodeID:    1,
 		publicKey: n.Key,
 	}
 	ep.disco.Store(&endpointDisco{
@@ -1257,6 +1258,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
 			{
+				ID:        1,
 				Key:       nodeKey,
 				DiscoKey:  discoKey,
 				Endpoints: []string{sendConn.LocalAddr().String()},
@@ -1461,6 +1463,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 	conn.SetNetworkMap(&netmap.NetworkMap{
 		Peers: nodeViews([]*tailcfg.Node{
 			{
+				ID:        1,
 				Key:       nodeKey1,
 				DiscoKey:  discoKey,
 				Endpoints: []string{"192.168.1.2:345"},
@@ -1476,6 +1479,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 		conn.SetNetworkMap(&netmap.NetworkMap{
 			Peers: nodeViews([]*tailcfg.Node{
 				{
+					ID:        2,
 					Key:       nodeKey2,
 					DiscoKey:  discoKey,
 					Endpoints: []string{"192.168.1.2:345"},
@@ -1767,6 +1771,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 	for i := range allPeers {
 		present[i] = true
 		allPeers[i] = &tailcfg.Node{
+			ID:        tailcfg.NodeID(i) + 1,
 			DiscoKey:  randDiscoKey(),
 			Key:       randNodeKey(),
 			Endpoints: []string{fmt.Sprintf("192.168.1.2:%d", i)},
@@ -1831,18 +1836,26 @@ func (m *peerMap) validate() error {
 			return fmt.Errorf("duplicate endpoint present: %v", pi.ep.publicKey)
 		}
 		seenEps[pi.ep] = true
-		for ipp, v := range pi.ipPorts {
-			if !v {
-				return fmt.Errorf("m.byIPPort[%v] is false, expected map to be set-like", ipp)
-			}
+		for ipp := range pi.ipPorts {
 			if got := m.byIPPort[ipp]; got != pi {
 				return fmt.Errorf("m.byIPPort[%v] = %v, want %v", ipp, got, pi)
 			}
 		}
 	}
+	if len(m.byNodeKey) != len(m.byNodeID) {
+		return fmt.Errorf("len(m.byNodeKey)=%d != len(m.byNodeID)=%d", len(m.byNodeKey), len(m.byNodeID))
+	}
+	for nodeID, pi := range m.byNodeID {
+		ep := pi.ep
+		if pi2, ok := m.byNodeKey[ep.publicKey]; !ok {
+			return fmt.Errorf("nodeID %d in map with publicKey %v that's missing from map", nodeID, ep.publicKey)
+		} else if pi2 != pi {
+			return fmt.Errorf("nodeID %d in map with publicKey %v that points to different endpoint", nodeID, ep.publicKey)
+		}
+	}
 
 	for ipp, pi := range m.byIPPort {
-		if !pi.ipPorts[ipp] {
+		if !pi.ipPorts.Contains(ipp) {
 			return fmt.Errorf("ipPorts[%v] for %v is false", ipp, pi.ep.publicKey)
 		}
 		pi2 := m.byNodeKey[pi.ep.publicKey]
@@ -1853,10 +1866,7 @@ func (m *peerMap) validate() error {
 
 	publicToDisco := make(map[key.NodePublic]key.DiscoPublic)
 	for disco, nodes := range m.nodesOfDisco {
-		for pub, v := range nodes {
-			if !v {
-				return fmt.Errorf("m.nodeOfDisco[%v][%v] is false, expected map to be set-like", disco, pub)
-			}
+		for pub := range nodes {
 			if _, ok := m.byNodeKey[pub]; !ok {
 				return fmt.Errorf("nodesOfDisco refers to public key %v, which is not present in byNodeKey", pub)
 			}
@@ -2254,6 +2264,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 		Addresses:  []netip.Prefix{tsaip},
 		Peers: nodeViews([]*tailcfg.Node{
 			{
+				ID:              1,
 				Key:             wgkey.Public(),
 				Endpoints:       []string{wgEp.String()},
 				IsWireGuardOnly: true,
@@ -2312,6 +2323,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 		Addresses:  []netip.Prefix{tsaip},
 		Peers: nodeViews([]*tailcfg.Node{
 			{
+				ID:                            1,
 				Key:                           wgkey.Public(),
 				Endpoints:                     []string{wgEp.String()},
 				IsWireGuardOnly:               true,
