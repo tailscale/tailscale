@@ -111,7 +111,19 @@ func (c *RebindingUDPConn) WriteBatchTo(buffs [][]byte, addr netip.AddrPort) (re
 // ReadBatch reads messages from c into msgs. It returns the number of messages
 // the caller should evaluate for nonzero len, as a zero len message may fall
 // on either side of a nonzero.
-func (c *RebindingUDPConn) ReadBatch(msgs []ipv6.Message, flags int) (int, error) {
+func (c *RebindingUDPConn) ReadBatch(msgs []ipv6.Message, flags int) (retN int, retErr error) {
+	defer func() {
+		sawTestAddr := false
+		for _, msg := range msgs {
+			if msg.Addr.String() == testAddr.String() {
+				sawTestAddr = true
+				break
+			}
+		}
+		if sawTestAddr {
+			c.logf("RebindingUDPConn.ReadBatch([]ipv6.Message{/* %d */}, 0x%x) = (%d, %v)", len(msgs), flags, retN, retErr)
+		}
+	}()
 	for {
 		pconn := *c.pconnAtomic.Load()
 		b, ok := pconn.(*batchingUDPConn)
@@ -178,5 +190,9 @@ func (c *RebindingUDPConn) writeToUDPAddrPortWithInitPconn(pconn nettype.PacketC
 }
 
 func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
-	return c.writeToUDPAddrPortWithInitPconn(*c.pconnAtomic.Load(), b, addr)
+	n, err := c.writeToUDPAddrPortWithInitPconn(*c.pconnAtomic.Load(), b, addr)
+	if addr.Addr() == testAddr {
+		c.logf("RebindingUDPConn.WriteToUDPAddrPort([]byte{/* %d */}, %v) = (%d, %v)", len(b), addr, n, err)
+	}
+	return n, err
 }
