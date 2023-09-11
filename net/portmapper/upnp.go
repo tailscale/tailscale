@@ -24,7 +24,7 @@ import (
 
 	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
-	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
@@ -192,7 +192,7 @@ func addAnyPortMapping(
 // The provided ctx is not retained in the returned upnpClient, but
 // its associated HTTP client is (if set via goupnp.WithHTTPClient).
 func getUPnPClient(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (client upnpClient, err error) {
-	if controlknobs.DisableUPnP() || debug.DisableUPnP {
+	if debug.DisableUPnP {
 		return nil, nil
 	}
 
@@ -270,6 +270,10 @@ func (c *Client) upnpHTTPClientLocked() *http.Client {
 	return c.uPnPHTTPClient
 }
 
+var (
+	disableUPnpEnv = envknob.RegisterBool("TS_DISABLE_UPNP")
+)
+
 // getUPnPPortMapping attempts to create a port-mapping over the UPnP protocol. On success,
 // it will return the externally exposed IP and port. Otherwise, it will return a zeroed IP and
 // port and an error.
@@ -279,7 +283,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netip.AddrPort,
 	prevPort uint16,
 ) (external netip.AddrPort, ok bool) {
-	if controlknobs.DisableUPnP() || c.debug.DisableUPnP {
+	if disableUPnpEnv() || c.debug.DisableUPnP || (c.controlKnobs != nil && c.controlKnobs.DisableUPnP.Load()) {
 		return netip.AddrPort{}, false
 	}
 

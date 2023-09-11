@@ -53,7 +53,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 		return err
 	}
 	c := &netcheck.Client{
-		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil),
+		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil, nil),
 		UseDNSCache: false, // always resolve, don't cache
 	}
 	if netcheckArgs.verbose {

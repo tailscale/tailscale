@@ -25,6 +25,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
@@ -87,6 +88,7 @@ type Conn struct {
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
 	netMon                 *netmon.Monitor      // or nil
+	controlKnobs           *controlknobs.Knobs  // or nil
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -340,6 +342,10 @@ type Options struct {
 	// NetMon is the network monitor to use.
 	// With one, the portmapper won't be used.
 	NetMon *netmon.Monitor
+
+	// ControlKnobs are the set of control knobs to use.
+	// If nil, they're ignored and not updated.
+	ControlKnobs *controlknobs.Knobs
 }
 
 func (o *Options) logf() logger.Logf {
@@ -400,13 +406,14 @@ func newConn() *Conn {
 func NewConn(opts Options) (*Conn, error) {
 	c := newConn()
 	c.port.Store(uint32(opts.Port))
+	c.controlKnobs = opts.ControlKnobs
 	c.logf = opts.logf()
 	c.epFunc = opts.endpointsFunc()
 	c.derpActiveFunc = opts.derpActiveFunc()
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
-	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, nil, c.onPortMapChanged)
+	c.portMapper = portmapper.NewClient(logger.WithPrefix(c.logf, "portmapper: "), opts.NetMon, nil, opts.ControlKnobs, c.onPortMapChanged)
 	if opts.NetMon != nil {
 		c.portMapper.SetGatewayLookupFunc(opts.NetMon.GatewayAndSelfIP)
 	}
