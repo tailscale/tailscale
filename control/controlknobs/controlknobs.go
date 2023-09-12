@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/opt"
 )
 
@@ -43,6 +44,50 @@ type Knobs struct {
 	// incremental (delta) netmap updates and should treat all netmap
 	// changes as "full" ones as tailscaled did in 1.48.x and earlier.
 	DisableDeltaUpdates atomic.Bool
+}
+
+// UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
+// node attributes (Node.Capabilities).
+func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []string) {
+	if k == nil {
+		return
+	}
+	var (
+		keepFullWG          bool
+		disableDRPO         bool
+		disableUPnP         bool
+		randomizeClientPort bool
+		disableDeltaUpdates bool
+		oneCGNAT            opt.Bool
+		forceBackgroundSTUN bool
+	)
+	for _, attr := range selfNodeAttrs {
+		switch attr {
+		case tailcfg.NodeAttrDebugDisableWGTrim:
+			keepFullWG = true
+		case tailcfg.NodeAttrDebugDisableDRPO:
+			disableDRPO = true
+		case tailcfg.NodeAttrDisableUPnP:
+			disableUPnP = true
+		case tailcfg.NodeAttrRandomizeClientPort:
+			randomizeClientPort = true
+		case tailcfg.NodeAttrOneCGNATEnable:
+			oneCGNAT.Set(true)
+		case tailcfg.NodeAttrOneCGNATDisable:
+			oneCGNAT.Set(false)
+		case tailcfg.NodeAttrDebugForceBackgroundSTUN:
+			forceBackgroundSTUN = true
+		case tailcfg.NodeAttrDisableDeltaUpdates:
+			disableDeltaUpdates = true
+		}
+	}
+	k.KeepFullWGConfig.Store(keepFullWG)
+	k.DisableDRPO.Store(disableDRPO)
+	k.DisableUPnP.Store(disableUPnP)
+	k.RandomizeClientPort.Store(randomizeClientPort)
+	k.OneCGNAT.Store(oneCGNAT)
+	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
+	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
