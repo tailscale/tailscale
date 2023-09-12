@@ -49,7 +49,6 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
@@ -1303,49 +1302,6 @@ func initDevKnob() devKnobs {
 }
 
 var clock tstime.Clock = tstime.StdClock{}
-
-func (ms *mapSession) setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
-	k := ms.controlKnobs
-	if k == nil {
-		return
-	}
-	var (
-		keepFullWG          bool
-		disableDRPO         bool
-		disableUPnP         bool
-		randomizeClientPort bool
-		disableDeltaUpdates bool
-		oneCGNAT            opt.Bool
-		forceBackgroundSTUN bool
-	)
-	for _, attr := range selfNodeAttrs {
-		switch attr {
-		case tailcfg.NodeAttrDebugDisableWGTrim:
-			keepFullWG = true
-		case tailcfg.NodeAttrDebugDisableDRPO:
-			disableDRPO = true
-		case tailcfg.NodeAttrDisableUPnP:
-			disableUPnP = true
-		case tailcfg.NodeAttrRandomizeClientPort:
-			randomizeClientPort = true
-		case tailcfg.NodeAttrOneCGNATEnable:
-			oneCGNAT.Set(true)
-		case tailcfg.NodeAttrOneCGNATDisable:
-			oneCGNAT.Set(false)
-		case tailcfg.NodeAttrDebugForceBackgroundSTUN:
-			forceBackgroundSTUN = true
-		case tailcfg.NodeAttrDisableDeltaUpdates:
-			disableDeltaUpdates = true
-		}
-	}
-	k.KeepFullWGConfig.Store(keepFullWG)
-	k.DisableDRPO.Store(disableDRPO)
-	k.DisableUPnP.Store(disableUPnP)
-	k.RandomizeClientPort.Store(randomizeClientPort)
-	k.OneCGNAT.Store(oneCGNAT)
-	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
-	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
-}
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled
 // and will definitely not work for the routes provided.

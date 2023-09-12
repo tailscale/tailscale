@@ -188,7 +188,7 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 		if DevKnob.StripCaps() {
 			resp.Node.Capabilities = nil
 		}
-		ms.setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
+		ms.controlKnobs.UpdateFromNodeAttributes(resp.Node.Capabilities)
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
