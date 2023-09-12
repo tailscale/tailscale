@@ -219,7 +219,8 @@ func (up *Updater) updateSynology() error {
 	}
 
 	// Get the latest version and list of SPKs from pkgs.tailscale.com.
-	osName := fmt.Sprintf("dsm%d", distro.DSMVersion())
+	dsmVersion := distro.DSMVersion()
+	osName := fmt.Sprintf("dsm%d", dsmVersion)
 	arch, err := synoArch(runtime.GOARCH, synoinfoConfPath)
 	if err != nil {
 		return err
@@ -260,7 +261,19 @@ func (up *Updater) updateSynology() error {
 	// just spits out a JSON result when done.
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if dsmVersion == 6 && bytes.Contains(out, []byte("error = [290]")) {
+			return fmt.Errorf("synopkg install failed: %w\noutput:\n%s\nplease make sure that packages from 'Any publisher' are allowed in the Package Center (Package Center -> Settings -> Trust Level -> Any publisher)", err, out)
+		}
 		return fmt.Errorf("synopkg install failed: %w\noutput:\n%s", err, out)
+	}
+	if dsmVersion == 6 {
+		// DSM6 does not automatically restart the package on install. Do it
+		// manually.
+		cmd := exec.Command("nohup", "synopkg", "start", "Tailscale")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("synopkg start failed: %w\noutput:\n%s", err, out)
+		}
 	}
 	return nil
 }
