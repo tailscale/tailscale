@@ -91,6 +91,7 @@ var _ServeConfigCloneNeedsRegeneration = ServeConfig(struct {
 	Web         map[HostPort]*WebServerConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
+	ETag        string
 }{})
 
 // Clone makes a deep copy of TCPPortHandler.
