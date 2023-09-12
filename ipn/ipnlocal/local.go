@@ -1462,6 +1462,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		Observer:             b,
 		C2NHandler:           http.HandlerFunc(b.handleC2N),
 		DialPlan:             &b.dialPlan, // pointer because it can't be copied
+		ControlKnobs:         b.sys.ControlKnobs(),
 
 		// Don't warn about broken Linux IP forwarding when
 		// netstack is being used.
