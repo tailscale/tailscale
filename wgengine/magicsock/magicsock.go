@@ -657,7 +657,7 @@ func (c *Conn) updateNetInfo(ctx context.Context) (*netcheck.Report, error) {
 	return report, nil
 }
 
-// callNetInfoCallback calls the NetInfo callback (if previously
+// callNetInfoCallback calls the callback (if previously
 // registered with SetNetInfoCallback) if ni has substantially changed
 // since the last state.
 //
@@ -691,6 +691,13 @@ func (c *Conn) addValidDiscoPathForTest(nodeKey key.NodePublic, addr netip.AddrP
 	c.peerMap.setNodeKeyForIPPort(addr, nodeKey)
 }
 
+// SetNetInfoCallback sets the func to be called whenever the network conditions
+// change.
+//
+// At most one func can be registered; the most recent one replaces any previous
+// registration.
+//
+// This is called by LocalBackend.
 func (c *Conn) SetNetInfoCallback(fn func(*tailcfg.NetInfo)) {
 	if fn == nil {
 		panic("nil NetInfoCallback")

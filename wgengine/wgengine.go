@@ -35,9 +35,6 @@ type Status struct {
 // Exactly one of Status or error is non-nil.
 type StatusCallback func(*Status, error)
 
-// NetInfoCallback is the type used by Engine.SetNetInfoCallback.
-type NetInfoCallback func(*tailcfg.NetInfo)
-
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
@@ -124,10 +121,6 @@ type Engine interface {
 	// instead.
 	// The network map should only be read from.
 	SetNetworkMap(*netmap.NetworkMap)
-
-	// SetNetInfoCallback sets the function to call when a
-	// new NetInfo summary is available.
-	SetNetInfoCallback(NetInfoCallback)
 
 	// DiscoPublicKey gets the public key used for path discovery
 	// messages.

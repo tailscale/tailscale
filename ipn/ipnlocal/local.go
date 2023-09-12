@@ -1552,7 +1552,11 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	cc.SetTKAHead(tkaHead)
 
-	b.e.SetNetInfoCallback(b.setNetInfo)
+	if mc, err := b.magicConn(); err != nil {
+		return fmt.Errorf("looking up magicsock: %w", err)
+	} else {
+		mc.SetNetInfoCallback(b.setNetInfo)
+	}
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
