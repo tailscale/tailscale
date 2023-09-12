@@ -1157,10 +1157,6 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	e.magicConn.ReSTUN(why)
 }
 
-func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
-	e.magicConn.SetNetInfoCallback(cb)
-}
-
 func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
 	e.magicConn.SetDERPMap(dm)
 }
