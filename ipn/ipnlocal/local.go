@@ -4077,6 +4077,9 @@ func hasCapability(nm *netmap.NetworkMap, cap string) bool {
 // Tailscale is turned off.
 func (b *LocalBackend) setNetMapLocked(nm *netmap.NetworkMap) {
 	b.dialer.SetNetMap(nm)
+	if ns, ok := b.sys.Netstack.GetOK(); ok {
+		ns.UpdateNetstackIPs(nm)
+	}
 	var login string
 	if nm != nil {
 		login = cmpx.Or(nm.UserProfiles[nm.User()].LoginName, "<missing-profile>")

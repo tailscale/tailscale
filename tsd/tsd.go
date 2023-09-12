@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
@@ -43,7 +44,15 @@ type System struct {
 	Router         SubSystem[router.Router]
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
+	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
 	controlKnobs   controlknobs.Knobs
+}
+
+// NetstackImpl is the interface that *netstack.Impl implements.
+// It's an interface for circular dependency reasons: netstack.Impl
+// references LocalBackend, and LocalBackend has a tsd.System.
+type NetstackImpl interface {
+	UpdateNetstackIPs(*netmap.NetworkMap)
 }
 
 // Set is a convenience method to set a subsystem value.
@@ -67,6 +76,8 @@ func (s *System) Set(v any) {
 		s.MagicSock.Set(v)
 	case ipn.StateStore:
 		s.StateStore.Set(v)
+	case NetstackImpl:
+		s.Netstack.Set(v)
 	default:
 		panic(fmt.Sprintf("unknown type %T", v))
 	}
