@@ -67,7 +67,7 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 	// Helper so we can log errors.
 	defaultIdx := func() (int, error) {
 		if netMon == nil {
-			idx, err := interfaces.DefaultRouteInterfaceIndex()
+			iface, err := interfaces.DefaultRoute()
 			if err != nil {
 				// It's somewhat common for there to be no default gateway route
 				// (e.g. on a phone with no connectivity), don't log those errors
@@ -77,7 +77,8 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 				}
 				return -1, err
 			}
-			return idx, nil
+			logf("getInterfaceIndex(%q): no netMon: returning %d: %+v", address, iface.InterfaceIndex, iface)
+			return iface.InterfaceIndex, nil
 		}
 		state := netMon.InterfaceState()
 		if state == nil {
@@ -85,6 +86,7 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 		}
 
 		if iface, ok := state.Interface[state.DefaultRouteInterface]; ok {
+			logf("getInterfaceIndex(%q): netMon: returning %d: %+v", address, state.DefaultRouteInterface, iface)
 			return iface.Index, nil
 		}
 		return -1, errInterfaceStateInvalid
