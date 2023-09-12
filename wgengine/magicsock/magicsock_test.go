@@ -36,9 +36,11 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"tailscale.com/cmd/testwrapper/flakytest"
+	"tailscale.com/control/controlknobs"
 	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/disco"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/netaddr"
@@ -244,10 +246,10 @@ func (s *magicStack) Status() *ipnstate.Status {
 func (s *magicStack) IP() netip.Addr {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		s.conn.mu.Lock()
-		nm := s.conn.netMap
+		addr := s.conn.firstAddrForTest
 		s.conn.mu.Unlock()
-		if nm != nil && len(nm.Addresses) > 0 {
-			return nm.Addresses[0].Addr()
+		if addr.IsValid() {
+			return addr
 		}
 	}
 	panic("timed out waiting for magicstack to get an IP assigned")
@@ -1941,13 +1943,17 @@ func TestRebindingUDPConn(t *testing.T) {
 // peers didn't change, but the netmap has non-peer info in it too we shouldn't discard)
 func TestSetNetworkMapWithNoPeers(t *testing.T) {
 	var c Conn
+	knobs := &controlknobs.Knobs{}
 	c.logf = logger.Discard
+	c.controlKnobs = knobs // TODO(bradfitz): move silent disco bool to controlknobs
 
 	for i := 1; i <= 3; i++ {
+		v := !debugEnableSilentDisco()
+		envknob.Setenv("TS_DEBUG_ENABLE_SILENT_DISCO", fmt.Sprint(v))
 		nm := &netmap.NetworkMap{}
 		c.SetNetworkMap(nm)
 		t.Logf("ptr %d: %p", i, nm)
-		if c.netMap != nm {
+		if c.lastFlags.heartbeatDisabled != v {
 			t.Fatalf("call %d: didn't store netmap", i)
 		}
 	}
