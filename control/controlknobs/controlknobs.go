@@ -39,3 +39,19 @@ type Knobs struct {
 	// running in magicsock, even when idle.
 	ForceBackgroundSTUN atomic.Bool
 }
+
+// AsDebugJSON returns k as something that can be marshalled with json.Marshal
+// for debug.
+func (k *Knobs) AsDebugJSON() map[string]any {
+	if k == nil {
+		return nil
+	}
+	return map[string]any{
+		"DisableUPnP":         k.DisableUPnP.Load(),
+		"DisableDRPO":         k.DisableDRPO.Load(),
+		"KeepFullWGConfig":    k.KeepFullWGConfig.Load(),
+		"RandomizeClientPort": k.RandomizeClientPort.Load(),
+		"OneCGNAT":            k.OneCGNAT.Load(),
+		"ForceBackgroundSTUN": k.ForceBackgroundSTUN.Load(),
+	}
+}
