@@ -34,4 +34,8 @@ type Knobs struct {
 	// OneCGNAT is whether the the node should make one big CGNAT route
 	// in the OS rather than one /32 per peer.
 	OneCGNAT syncs.AtomicValue[opt.Bool]
+
+	// ForceBackgroundSTUN forces netcheck STUN queries to keep
+	// running in magicsock, even when idle.
+	ForceBackgroundSTUN atomic.Bool
 }
