@@ -134,9 +134,6 @@ func (e *watchdogEngine) SetStatusCallback(cb StatusCallback) {
 func (e *watchdogEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	e.watchdog("UpdateStatus", func() { e.wrap.UpdateStatus(sb) })
 }
-func (e *watchdogEngine) SetNetInfoCallback(cb NetInfoCallback) {
-	e.watchdog("SetNetInfoCallback", func() { e.wrap.SetNetInfoCallback(cb) })
-}
 func (e *watchdogEngine) RequestStatus() {
 	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
 }
