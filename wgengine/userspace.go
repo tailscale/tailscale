@@ -126,15 +126,14 @@ type userspaceEngine struct {
 	statusBufioReader   *bufio.Reader // reusable for UAPI
 	lastStatusPollTime  mono.Time     // last time we polled the engine status
 
-	mu                  sync.Mutex         // guards following; see lock order comment below
-	netMap              *netmap.NetworkMap // or nil
-	closing             bool               // Close was called (even if we're still closing)
-	statusCallback      StatusCallback
-	peerSequence        []key.NodePublic
-	endpoints           []tailcfg.Endpoint
-	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
-	networkMapCallbacks set.HandleSet[NetworkMapCallback]
-	tsIPByIPPort        map[netip.AddrPort]netip.Addr // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
+	mu             sync.Mutex         // guards following; see lock order comment below
+	netMap         *netmap.NetworkMap // or nil
+	closing        bool               // Close was called (even if we're still closing)
+	statusCallback StatusCallback
+	peerSequence   []key.NodePublic
+	endpoints      []tailcfg.Endpoint
+	pendOpen       map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
+	tsIPByIPPort   map[netip.AddrPort]netip.Addr        // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
 	// pong callbacks. The map key is a random slice of bytes.
@@ -1158,20 +1157,6 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	e.magicConn.ReSTUN(why)
 }
 
-func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.networkMapCallbacks == nil {
-		e.networkMapCallbacks = make(set.HandleSet[NetworkMapCallback])
-	}
-	h := e.networkMapCallbacks.Add(cb)
-	return func() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		delete(e.networkMapCallbacks, h)
-	}
-}
-
 func (e *userspaceEngine) SetNetInfoCallback(cb NetInfoCallback) {
 	e.magicConn.SetNetInfoCallback(cb)
 }
@@ -1184,14 +1169,7 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
 	e.netMap = nm
-	callbacks := make([]NetworkMapCallback, 0, 4)
-	for _, fn := range e.networkMapCallbacks {
-		callbacks = append(callbacks, fn)
-	}
 	e.mu.Unlock()
-	for _, fn := range callbacks {
-		fn(nm)
-	}
 }
 
 func (e *userspaceEngine) DiscoPublicKey() key.DiscoPublic {

@@ -44,6 +44,7 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -253,7 +254,6 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 		panic("nil LocalBackend")
 	}
 	ns.lb = lb
-	ns.e.AddNetworkMapCallback(ns.updateIPs)
 	// size = 0 means use default buffer size
 	const tcpReceiveBufferSize = 0
 	const maxInFlightConnectionAttempts = 1024
@@ -310,8 +310,19 @@ func ipPrefixToAddressWithPrefix(ipp netip.Prefix) tcpip.AddressWithPrefix {
 
 var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 
-func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
-	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
+// UpdateNetstackIPs updates the set of local IPs that netstack should handle
+// from nm.
+//
+// TODO(bradfitz): don't pass the whole netmap here; just pass the two
+// address slice views.
+func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
+	var selfNode tailcfg.NodeView
+	if nm != nil {
+		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
+		selfNode = nm.SelfNode
+	} else {
+		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
+	}
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
@@ -328,14 +339,14 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
 	isAddr := map[netip.Prefix]bool{}
-	if nm.SelfNode.Valid() {
-		for i := range nm.SelfNode.Addresses().LenIter() {
-			ipp := nm.SelfNode.Addresses().At(i)
+	if selfNode.Valid() {
+		for i := range selfNode.Addresses().LenIter() {
+			ipp := selfNode.Addresses().At(i)
 			isAddr[ipp] = true
 			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
-		for i := range nm.SelfNode.AllowedIPs().LenIter() {
-			ipp := nm.SelfNode.AllowedIPs().At(i)
+		for i := range selfNode.AllowedIPs().LenIter() {
+			ipp := selfNode.AllowedIPs().At(i)
 			if !isAddr[ipp] && ns.ProcessSubnets {
 				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 			}

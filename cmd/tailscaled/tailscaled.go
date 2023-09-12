@@ -496,6 +496,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if err != nil {
 		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
+	sys.Set(ns)
 	ns.ProcessLocalIPs = onlyNetstack
 	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
