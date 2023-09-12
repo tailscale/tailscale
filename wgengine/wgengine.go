@@ -42,11 +42,6 @@ type NetInfoCallback func(*tailcfg.NetInfo)
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
 
-// someHandle is allocated so its pointer address acts as a unique
-// map key handle. (It needs to have non-zero size for Go to guarantee
-// the pointer is unique.)
-type someHandle struct{ _ byte }
-
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
 
