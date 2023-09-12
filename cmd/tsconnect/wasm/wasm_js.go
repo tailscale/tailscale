@@ -113,6 +113,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	if err != nil {
 		log.Fatalf("netstack.Create: %v", err)
 	}
+	sys.Set(ns)
 	ns.ProcessLocalIPs = true
 	ns.ProcessSubnets = true
 
