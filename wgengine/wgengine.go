@@ -125,12 +125,6 @@ type Engine interface {
 	// The network map should only be read from.
 	SetNetworkMap(*netmap.NetworkMap)
 
-	// AddNetworkMapCallback adds a function to a list of callbacks
-	// that are called when the network map updates. It returns a
-	// function that when called would remove the function from the
-	// list of callbacks.
-	AddNetworkMapCallback(NetworkMapCallback) (removeCallback func())
-
 	// SetNetInfoCallback sets the function to call when a
 	// new NetInfo summary is available.
 	SetNetInfoCallback(NetInfoCallback)

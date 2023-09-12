@@ -149,11 +149,6 @@ func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.watchdog("SetNetworkMap", func() { e.wrap.SetNetworkMap(nm) })
 }
-func (e *watchdogEngine) AddNetworkMapCallback(callback NetworkMapCallback) func() {
-	var fn func()
-	e.watchdog("AddNetworkMapCallback", func() { fn = e.wrap.AddNetworkMapCallback(callback) })
-	return func() { e.watchdog("RemoveNetworkMapCallback", fn) }
-}
 func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
 	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
 	return k

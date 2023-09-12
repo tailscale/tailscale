@@ -41,6 +41,7 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/rands"
 )
 
 var (
@@ -876,7 +877,9 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	dir := t.TempDir()
 	sockFile := filepath.Join(dir, "tailscale.sock")
 	if len(sockFile) >= 104 {
-		t.Fatalf("sockFile path %q (len %v) is too long, must be < 104", sockFile, len(sockFile))
+		// Maximum length for a unix socket on darwin. Try something else.
+		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
+		t.Cleanup(func() { os.Remove(sockFile) })
 	}
 	return &testNode{
 		env:       env,

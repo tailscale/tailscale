@@ -513,6 +513,7 @@ func (s *Server) start() (reterr error) {
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	sys.Set(ns)
 	ns.ProcessLocalIPs = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
