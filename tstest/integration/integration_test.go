@@ -328,6 +328,92 @@ func TestTwoNodes(t *testing.T) {
 	d2.MustCleanShutdown(t)
 }
 
+// tests two nodes where the first gets a incremental MapResponse (with only
+// PeersRemoved set) saying that the second node disappeared.
+func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
+	t.Parallel()
+	env := newTestEnv(t)
+
+	// Create one node:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	all := env.Control.AllNodes()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(all))
+	}
+	tnode1 := all[0]
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon()
+	n2.AwaitListening()
+	n2.MustUp()
+	n2.AwaitRunning()
+
+	all = env.Control.AllNodes()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 node, got %d nodes", len(all))
+	}
+	var tnode2 *tailcfg.Node
+	for _, n := range all {
+		if n.ID != tnode1.ID {
+			tnode2 = n
+			break
+		}
+	}
+	if tnode2 == nil {
+		t.Fatalf("failed to find second node ID (two dups?)")
+	}
+
+	t.Logf("node1=%v, node2=%v", tnode1.ID, tnode2.ID)
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus()
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("node1 saw node2")
+
+	// Now tell node1 that node2 is removed.
+	if !env.Control.AddRawMapResponse(tnode1.Key, &tailcfg.MapResponse{
+		PeersRemoved: []tailcfg.NodeID{tnode2.ID},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+
+	// And see that node1 saw that.
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus()
+		if len(st.Peer) == 0 {
+			return nil
+		}
+		return fmt.Errorf("got %d peers; want 0", len(st.Peer))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("node1 saw node2 disappear")
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}
+
 func TestNodeAddressIPFields(t *testing.T) {
 	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/7008")
 	t.Parallel()
