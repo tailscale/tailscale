@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
+	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
@@ -256,14 +257,16 @@ type Conn struct {
 	// magicsock could do with any complexity reduction it can get.
 	netInfoLast *tailcfg.NetInfo
 
-	derpMap     *tailcfg.DERPMap // nil (or zero regions/nodes) means DERP is disabled
-	netMap      *netmap.NetworkMap
-	privateKey  key.NodePrivate    // WireGuard private key for this node
-	everHadKey  bool               // whether we ever had a non-zero private key
-	myDerp      int                // nearest DERP region ID; 0 means none/unknown
-	derpStarted chan struct{}      // closed on first connection to DERP; for tests & cleaner Close
-	activeDerp  map[int]activeDerp // DERP regionID -> connection to a node in that region
-	prevDerp    map[int]*syncs.WaitGroupChan
+	derpMap          *tailcfg.DERPMap              // nil (or zero regions/nodes) means DERP is disabled
+	peers            views.Slice[tailcfg.NodeView] // from last SetNetworkMap update
+	lastFlags        debugFlags                    // at time of last SetNetworkMap
+	firstAddrForTest netip.Addr                    // from last SetNetworkMap update; for tests only
+	privateKey       key.NodePrivate               // WireGuard private key for this node
+	everHadKey       bool                          // whether we ever had a non-zero private key
+	myDerp           int                           // nearest DERP region ID; 0 means none/unknown
+	derpStarted      chan struct{}                 // closed on first connection to DERP; for tests & cleaner Close
+	activeDerp       map[int]activeDerp            // DERP regionID -> connection to a node in that region
+	prevDerp         map[int]*syncs.WaitGroupChan
 
 	// derpRoute contains optional alternate routes to use as an
 	// optimization instead of contacting a peer via their home
@@ -1737,12 +1740,12 @@ func (c *Conn) UpdatePeers(newPeers set.Set[key.NodePublic]) {
 	}
 }
 
-func nodesEqual(x, y []tailcfg.NodeView) bool {
-	if len(x) != len(y) {
+func nodesEqual(x, y views.Slice[tailcfg.NodeView]) bool {
+	if x.Len() != y.Len() {
 		return false
 	}
-	for i := range x {
-		if !x[i].Equal(y[i]) {
+	for i := range x.LenIter() {
+		if !x.At(i).Equal(y.At(i)) {
 			return false
 		}
 	}
@@ -1773,6 +1776,18 @@ func debugRingBufferSize(numPeers int) int {
 	return max(defaultVal, maxRingBufferSize/(averageRingBufferElemSize*numPeers))
 }
 
+// debugFlags are the debug flags in use by the magicsock package.
+// They might be set by envknob and/or controlknob.
+// The value is comparable.
+type debugFlags struct {
+	heartbeatDisabled bool
+}
+
+func (c *Conn) debugFlagsLocked() (f debugFlags) {
+	f.heartbeatDisabled = debugEnableSilentDisco() // TODO(bradfitz): controlknobs too, later
+	return
+}
+
 // SetNetworkMap is called when the control client gets a new network
 // map from the control server. It must always be non-nil.
 //
@@ -1786,21 +1801,30 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 		return
 	}
 
-	priorNetmap := c.netMap
+	priorPeers := c.peers
 	metricNumPeers.Set(int64(len(nm.Peers)))
 
 	// Update c.netMap regardless, before the following early return.
-	c.netMap = nm
+	curPeers := views.SliceOf(nm.Peers)
+	c.peers = curPeers
 
-	if priorNetmap != nil && nodesEqual(priorNetmap.Peers, nm.Peers) {
+	flags := c.debugFlagsLocked()
+	if len(nm.Addresses) > 0 {
+		c.firstAddrForTest = nm.Addresses[0].Addr()
+	} else {
+		c.firstAddrForTest = netip.Addr{}
+	}
+
+	if nodesEqual(priorPeers, curPeers) && c.lastFlags == flags {
 		// The rest of this function is all adjusting state for peers that have
 		// changed. But if the set of peers is equal and the debug flags (for
 		// silent disco) haven't changed, no need to do anything else.
 		return
 	}
 
+	c.lastFlags = flags
+
 	c.logf("[v1] magicsock: got updated network map; %d peers", len(nm.Peers))
-	heartbeatDisabled := debugEnableSilentDisco()
 
 	entriesPerBuffer := debugRingBufferSize(len(nm.Peers))
 
@@ -1845,7 +1869,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			if epDisco := ep.disco.Load(); epDisco != nil {
 				oldDiscoKey = epDisco.key
 			}
-			ep.updateFromNode(n, heartbeatDisabled)
+			ep.updateFromNode(n, flags.heartbeatDisabled)
 			c.peerMap.upsertEndpoint(ep, oldDiscoKey) // maybe update discokey mappings in peerMap
 			continue
 		}
@@ -1878,7 +1902,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			publicKeyHex:      n.Key().UntypedHexString(),
 			sentPing:          map[stun.TxID]sentPing{},
 			endpointState:     map[netip.AddrPort]*endpointState{},
-			heartbeatDisabled: heartbeatDisabled,
+			heartbeatDisabled: flags.heartbeatDisabled,
 			isWireguardOnly:   n.IsWireGuardOnly(),
 		}
 		if n.Addresses().Len() > 0 {
@@ -1898,7 +1922,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			c.logEndpointCreated(n)
 		}
 
-		ep.updateFromNode(n, heartbeatDisabled)
+		ep.updateFromNode(n, flags.heartbeatDisabled)
 		c.peerMap.upsertEndpoint(ep, key.DiscoPublic{})
 	}
 
