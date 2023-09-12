@@ -133,7 +133,7 @@ type userspaceEngine struct {
 	peerSequence        []key.NodePublic
 	endpoints           []tailcfg.Endpoint
 	pendOpen            map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
-	networkMapCallbacks map[*someHandle]NetworkMapCallback
+	networkMapCallbacks set.HandleSet[NetworkMapCallback]
 	tsIPByIPPort        map[netip.AddrPort]netip.Addr // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
@@ -1162,10 +1162,9 @@ func (e *userspaceEngine) AddNetworkMapCallback(cb NetworkMapCallback) func() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.networkMapCallbacks == nil {
-		e.networkMapCallbacks = make(map[*someHandle]NetworkMapCallback)
+		e.networkMapCallbacks = make(set.HandleSet[NetworkMapCallback])
 	}
-	h := new(someHandle)
-	e.networkMapCallbacks[h] = cb
+	h := e.networkMapCallbacks.Add(cb)
 	return func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
