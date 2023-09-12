@@ -28,6 +28,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+	"tailscale.com/util/mak"
 )
 
 // DebugKnobs contains debug configuration that can be provided when creating a
@@ -1024,3 +1025,22 @@ var (
 	// we received a UPnP response with a new meta.
 	metricUPnPUpdatedMeta = clientmetric.NewCounter("portmap_upnp_updated_meta")
 )
+
+// UPnP error metric that's keyed by code; lazily registered on first read
+var (
+	metricUPnPErrorsByCodeMu sync.Mutex
+	metricUPnPErrorsByCode   map[int]*clientmetric.Metric
+)
+
+func getUPnPErrorsMetric(code int) *clientmetric.Metric {
+	metricUPnPErrorsByCodeMu.Lock()
+	defer metricUPnPErrorsByCodeMu.Unlock()
+	mm := metricUPnPErrorsByCode[code]
+	if mm != nil {
+		return mm
+	}
+
+	mm = clientmetric.NewCounter(fmt.Sprintf("portmap_upnp_errors_with_code_%d", code))
+	mak.Set(&metricUPnPErrorsByCode, code, mm)
+	return mm
+}
