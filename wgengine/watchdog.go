@@ -137,9 +137,6 @@ func (e *watchdogEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 func (e *watchdogEngine) RequestStatus() {
 	e.watchdog("RequestStatus", func() { e.wrap.RequestStatus() })
 }
-func (e *watchdogEngine) LinkChange(isExpensive bool) {
-	e.watchdog("LinkChange", func() { e.wrap.LinkChange(isExpensive) })
-}
 func (e *watchdogEngine) SetDERPMap(m *tailcfg.DERPMap) {
 	e.watchdog("SetDERPMap", func() { e.wrap.SetDERPMap(m) })
 }

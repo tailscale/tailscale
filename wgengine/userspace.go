@@ -1099,13 +1099,6 @@ func (e *userspaceEngine) Wait() {
 	<-e.waitCh
 }
 
-// LinkChange signals a network change event. It's currently
-// (2021-03-03) only called on Android. On other platforms, netMon
-// generates link change events for us.
-func (e *userspaceEngine) LinkChange(_ bool) {
-	e.netMon.InjectEvent()
-}
-
 func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	changed := delta.Major // TODO(bradfitz): ask more specific questions?
 	cur := delta.New
