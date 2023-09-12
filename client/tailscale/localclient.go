@@ -392,6 +392,20 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// DebugResultJSON invokes a debug action and returns its result as something JSON-able.
+// These are development tools and subject to change or removal over time.
+func (lc *LocalClient) DebugResultJSON(ctx context.Context, action string) (any, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	var x any
+	if err := json.Unmarshal(body, &x); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
 // DebugPortmapOpts contains options for the DebugPortmap command.
 type DebugPortmapOpts struct {
 	// Duration is how long the mapping should be created for. It defaults

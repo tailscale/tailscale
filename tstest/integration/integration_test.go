@@ -119,6 +119,36 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	d1.MustCleanShutdown(t)
 }
 
+func TestControlKnobs(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n1 := newTestNode(t, env)
+
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP())
+	n1.AwaitRunning()
+
+	cmd := n1.Tailscale("debug", "control-knobs")
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("control-knobs output:\n%s", out)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m["DisableUPnP"], true; got != want {
+		t.Errorf("control-knobs DisableUPnP = %v; want %v", got, want)
+	}
+}
+
 func TestCollectPanic(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)

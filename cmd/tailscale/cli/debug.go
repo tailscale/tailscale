@@ -139,6 +139,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "break any open DERP connections from the daemon",
 		},
 		{
+			Name:      "control-knobs",
+			Exec:      debugControlKnobs,
+			ShortHelp: "see current control knobs",
+		},
+		{
 			Name:      "prefs",
 			Exec:      runPrefs,
 			ShortHelp: "print prefs",
@@ -913,5 +918,19 @@ func runPeerEndpointChanges(ctx context.Context, args []string) error {
 		dst.WriteByte('\n')
 	}
 	fmt.Printf("%s", dst.String())
+	return nil
+}
+
+func debugControlKnobs(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("unexpected arguments")
+	}
+	v, err := localClient.DebugResultJSON(ctx, "control-knobs")
+	if err != nil {
+		return err
+	}
+	e := json.NewEncoder(os.Stdout)
+	e.SetIndent("", "  ")
+	e.Encode(v)
 	return nil
 }
