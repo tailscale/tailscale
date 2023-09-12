@@ -51,7 +51,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/nettype"
-	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
@@ -2151,8 +2150,7 @@ func (c *Conn) shouldDoPeriodicReSTUNLocked() bool {
 			c.logf("magicsock: periodicReSTUN: idle for %v", idleFor.Round(time.Second))
 		}
 		if idleFor > sessionActiveTimeout {
-			if c.netMap != nil && c.netMap.SelfNode.Valid() &&
-				views.SliceContains(c.netMap.SelfNode.Capabilities(), tailcfg.NodeAttrDebugForceBackgroundSTUN) {
+			if c.controlKnobs != nil && c.controlKnobs.ForceBackgroundSTUN.Load() {
 				// Overridden by control.
 				return true
 			}
