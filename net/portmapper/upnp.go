@@ -337,9 +337,14 @@ func (c *Client) getUPnPPortMapping(
 	// duration; see the following issue for details:
 	//    https://github.com/tailscale/tailscale/issues/9343
 	if err != nil {
+		code, ok := getUPnPErrorCode(err)
+		if ok {
+			getUPnPErrorsMetric(code).Add(1)
+		}
+
 		// From the UPnP spec: http://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
 		//     725: OnlyPermanentLeasesSupported
-		if isUPnPError(err, 725) {
+		if ok && code == 725 {
 			newPort, err = addAnyPortMapping(
 				ctx,
 				client,
@@ -387,13 +392,13 @@ func (c *Client) getUPnPPortMapping(
 	return upnp.external, true
 }
 
-// isUPnPError returns whether the provided error is a UPnP error response with
-// the given error code. It returns false if the error is not a SOAP error, or
-// the inner error details are not a UPnP error.
-func isUPnPError(err error, errCode int) bool {
+// getUPnPErrorCode returns the UPnP error code from the given response, if the
+// error is a SOAP error in the proper format, and a boolean indicating whether
+// the provided error was actually a UPnP error.
+func getUPnPErrorCode(err error) (int, bool) {
 	soapErr, ok := err.(*soap.SOAPFaultError)
 	if !ok {
-		return false
+		return 0, false
 	}
 
 	var upnpErr struct {
@@ -402,13 +407,12 @@ func isUPnPError(err error, errCode int) bool {
 		Description string `xml:"errorDescription"`
 	}
 	if err := xml.Unmarshal([]byte(soapErr.Detail.Raw), &upnpErr); err != nil {
-		return false
+		return 0, false
 	}
 	if upnpErr.XMLName.Local != "UPnPError" {
-		return false
+		return 0, false
 	}
-
-	return upnpErr.Code == errCode
+	return upnpErr.Code, true
 }
 
 type uPnPDiscoResponse struct {
