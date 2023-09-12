@@ -44,6 +44,12 @@ type ServeConfig struct {
 	// of either the client or the LocalBackend does not expose ports
 	// that users are not aware of.
 	Foreground map[string]*ServeConfig `json:",omitempty"`
+
+	// ETag is the checksum of the serve config that's populated
+	// by the LocalClient through the HTTP ETag header during a
+	// GetServeConfig request and is translated to an If-Match header
+	// during a SetServeConfig request.
+	ETag string `json:"-"`
 }
 
 // HostPort is an SNI name and port number, joined by a colon.

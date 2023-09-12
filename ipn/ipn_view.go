@@ -182,6 +182,7 @@ func (v ServeConfigView) Foreground() views.MapFn[string, *ServeConfig, ServeCon
 		return t.View()
 	})
 }
+func (v ServeConfigView) ETag() string { return v.ж.ETag }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
@@ -189,6 +190,7 @@ var _ServeConfigViewNeedsRegeneration = ServeConfig(struct {
 	Web         map[HostPort]*WebServerConfig
 	AllowFunnel map[HostPort]bool
 	Foreground  map[string]*ServeConfig
+	ETag        string
 }{})
 
 // View returns a readonly view of TCPPortHandler.

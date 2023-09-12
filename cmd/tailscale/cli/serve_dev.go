@@ -275,6 +275,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		}
 
 		if err := e.lc.SetServeConfig(ctx, parentSC); err != nil {
+			if tailscale.IsPreconditionsFailedError(err) {
+				fmt.Fprintln(os.Stderr, "Another client is changing the serve config; please try again.")
+			}
 			return err
 		}
 

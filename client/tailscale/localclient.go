@@ -140,6 +140,10 @@ func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Respons
 			all, _ := io.ReadAll(res.Body)
 			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(all))}
 		}
+		if res.StatusCode == http.StatusPreconditionFailed {
+			all, _ := io.ReadAll(res.Body)
+			return nil, &PreconditionsFailedError{errors.New(errorMessageFromBody(all))}
+		}
 		return res, nil
 	}
 	if ue, ok := err.(*url.Error); ok {
@@ -167,6 +171,24 @@ func (e *AccessDeniedError) Unwrap() error { return e.err }
 // IsAccessDeniedError reports whether err is or wraps an AccessDeniedError.
 func IsAccessDeniedError(err error) bool {
 	var ae *AccessDeniedError
+	return errors.As(err, &ae)
+}
+
+// PreconditionsFailedError is returned when the server responds
+// with an HTTP 412 status code.
+type PreconditionsFailedError struct {
+	err error
+}
+
+func (e *PreconditionsFailedError) Error() string {
+	return fmt.Sprintf("Preconditions failed: %v", e.err)
+}
+
+func (e *PreconditionsFailedError) Unwrap() error { return e.err }
+
+// IsPreconditionsFailedError reports whether err is or wraps an PreconditionsFailedError.
+func IsPreconditionsFailedError(err error) bool {
+	var ae *PreconditionsFailedError
 	return errors.As(err, &ae)
 }
 
@@ -198,27 +220,42 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 }
 
 func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
+	slurp, _, err := lc.sendWithHeaders(ctx, method, path, wantStatus, body, nil)
+	return slurp, err
+}
+
+func (lc *LocalClient) sendWithHeaders(
+	ctx context.Context,
+	method,
+	path string,
+	wantStatus int,
+	body io.Reader,
+	h http.Header,
+) ([]byte, http.Header, error) {
 	if jr, ok := body.(jsonReader); ok && jr.err != nil {
-		return nil, jr.err // fail early if there was a JSON marshaling error
+		return nil, nil, jr.err // fail early if there was a JSON marshaling error
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+apitype.LocalAPIHost+path, body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if h != nil {
+		req.Header = h
 	}
 	res, err := lc.doLocalRequestNiceError(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer res.Body.Close()
 	slurp, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if res.StatusCode != wantStatus {
 		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
-		return nil, bestError(err, slurp)
+		return nil, nil, bestError(err, slurp)
 	}
-	return slurp, nil
+	return slurp, res.Header, nil
 }
 
 func (lc *LocalClient) get200(ctx context.Context, path string) ([]byte, error) {
@@ -1093,7 +1130,11 @@ func (lc *LocalClient) NetworkLockSubmitRecoveryAUM(ctx context.Context, aum tka
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
-	_, err := lc.send(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config))
+	h := make(http.Header)
+	if config != nil {
+		h.Set("If-Match", config.ETag)
+	}
+	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config), h)
 	if err != nil {
 		return fmt.Errorf("sending serve config: %w", err)
 	}
@@ -1112,11 +1153,19 @@ func (lc *LocalClient) NetworkLockDisable(ctx context.Context, secret []byte) er
 //
 // If the serve config is empty, it returns (nil, nil).
 func (lc *LocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
-	body, err := lc.send(ctx, "GET", "/localapi/v0/serve-config", 200, nil)
+	body, h, err := lc.sendWithHeaders(ctx, "GET", "/localapi/v0/serve-config", 200, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting serve config: %w", err)
 	}
-	return getServeConfigFromJSON(body)
+	sc, err := getServeConfigFromJSON(body)
+	if err != nil {
+		return nil, err
+	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+	sc.ETag = h.Get("Etag")
+	return sc, nil
 }
 
 func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {
