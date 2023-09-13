@@ -1150,10 +1150,6 @@ func (e *userspaceEngine) linkChange(delta *netmon.ChangeDelta) {
 	e.magicConn.ReSTUN(why)
 }
 
-func (e *userspaceEngine) SetDERPMap(dm *tailcfg.DERPMap) {
-	e.magicConn.SetDERPMap(dm)
-}
-
 func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.magicConn.SetNetworkMap(nm)
 	e.mu.Lock()
