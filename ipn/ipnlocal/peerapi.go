@@ -1234,11 +1234,7 @@ func (h *peerAPIHandler) handleServeMagicsock(w http.ResponseWriter, r *http.Req
 		http.Error(w, "denied; no debug access", http.StatusForbidden)
 		return
 	}
-	if mc, ok := h.ps.b.sys.MagicSock.GetOK(); ok {
-		mc.ServeHTTPDebug(w, r)
-		return
-	}
-	http.Error(w, "miswired", 500)
+	h.ps.b.magicConn().ServeHTTPDebug(w, r)
 }
 
 func (h *peerAPIHandler) handleServeMetrics(w http.ResponseWriter, r *http.Request) {
