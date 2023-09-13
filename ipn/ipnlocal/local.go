@@ -288,6 +288,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	e := sys.Engine.Get()
 	store := sys.StateStore.Get()
 	dialer := sys.Dialer.Get()
+	_ = sys.MagicSock.Get() // or panic
 
 	pm, err := newProfileManager(store, logf)
 	if err != nil {
@@ -404,11 +405,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 	var setEnabled func(bool)
 	switch component {
 	case "magicsock":
-		mc, err := b.magicConn()
-		if err != nil {
-			return err
-		}
-		setEnabled = mc.SetDebugLoggingEnabled
+		setEnabled = b.magicConn().SetDebugLoggingEnabled
 	case "sockstats":
 		if b.sockstatLogger != nil {
 			setEnabled = func(v bool) {
@@ -1124,11 +1121,7 @@ var _ controlclient.NetmapDeltaUpdater = (*LocalBackend)(nil)
 
 // UpdateNetmapDelta implements controlclient.NetmapDeltaUpdater.
 func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bool) {
-	mc, err := b.magicConn()
-	if err != nil {
-		panic(err) // shouldn't happen
-	}
-	if !mc.UpdateNetmapDelta(muts) {
+	if !b.magicConn().UpdateNetmapDelta(muts) {
 		return false
 	}
 
@@ -1552,11 +1545,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 	}
 	cc.SetTKAHead(tkaHead)
 
-	if mc, err := b.magicConn(); err != nil {
-		return fmt.Errorf("looking up magicsock: %w", err)
-	} else {
-		mc.SetNetInfoCallback(b.setNetInfo)
-	}
+	b.magicConn().SetNetInfoCallback(b.setNetInfo)
 
 	blid := b.backendLogID.String()
 	b.logf("Backend: logs: be:%v fe:%v", blid, opts.FrontendLogID)
@@ -4706,20 +4695,12 @@ func peerCanProxyDNS(p tailcfg.NodeView) bool {
 }
 
 func (b *LocalBackend) DebugRebind() error {
-	mc, err := b.magicConn()
-	if err != nil {
-		return err
-	}
-	mc.Rebind()
+	b.magicConn().Rebind()
 	return nil
 }
 
 func (b *LocalBackend) DebugReSTUN() error {
-	mc, err := b.magicConn()
-	if err != nil {
-		return err
-	}
-	mc.ReSTUN("explicit-debug")
+	b.magicConn().ReSTUN("explicit-debug")
 	return nil
 }
 
@@ -4728,12 +4709,8 @@ func (b *LocalBackend) ControlKnobs() *controlknobs.Knobs {
 	return b.sys.ControlKnobs()
 }
 
-func (b *LocalBackend) magicConn() (*magicsock.Conn, error) {
-	mc, ok := b.sys.MagicSock.GetOK()
-	if !ok {
-		return nil, errors.New("failed to get magicsock from sys")
-	}
-	return mc, nil
+func (b *LocalBackend) magicConn() *magicsock.Conn {
+	return b.sys.MagicSock.Get()
 }
 
 type keyProvingNoiseRoundTripper struct {
@@ -5176,12 +5153,7 @@ func (b *LocalBackend) GetPeerEndpointChanges(ctx context.Context, ip netip.Addr
 	}
 	peer := pip.Node
 
-	mc, err := b.magicConn()
-	if err != nil {
-		return nil, fmt.Errorf("getting magicsock conn: %w", err)
-	}
-
-	chs, err := mc.GetEndpointChanges(peer)
+	chs, err := b.magicConn().GetEndpointChanges(peer)
 	if err != nil {
 		return nil, fmt.Errorf("getting endpoint changes: %w", err)
 	}
@@ -5198,9 +5170,5 @@ func (b *LocalBackend) DebugBreakTCPConns() error {
 }
 
 func (b *LocalBackend) DebugBreakDERPConns() error {
-	mc, err := b.magicConn()
-	if err != nil {
-		return err
-	}
-	return mc.DebugBreakDERPConns()
+	return b.magicConn().DebugBreakDERPConns()
 }
