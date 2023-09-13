@@ -40,7 +40,10 @@ type NetworkMap struct {
 
 	// MachineStatus is either tailcfg.MachineAuthorized or tailcfg.MachineUnauthorized,
 	// depending on SelfNode.MachineAuthorized.
-	// TODO(bradfitz): remove this field and make it a method.
+	//
+	// Deprecated: use GetMachineStatus instead. This field exists still
+	// exists (as of 2023-09-13) for some tests in other repos that haven't
+	// yet been migrated. TODO(bradfitz): remove this field.
 	MachineStatus tailcfg.MachineStatus
 
 	MachineKey key.MachinePublic
@@ -104,6 +107,23 @@ func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 		}
 	}
 	return false
+}
+
+// GetMachineStatus returns the MachineStatus of the local node.
+func (nm *NetworkMap) GetMachineStatus() tailcfg.MachineStatus {
+	if nm.MachineStatus != tailcfg.MachineUnknown {
+		// For now (2023-09-13), let the deprecated MachineStatus field take
+		// precedence. This is a migration mechanism while we update tests &
+		// code cross-repo.
+		return nm.MachineStatus
+	}
+	if !nm.SelfNode.Valid() {
+		return tailcfg.MachineUnknown
+	}
+	if nm.SelfNode.MachineAuthorized() {
+		return tailcfg.MachineAuthorized
+	}
+	return tailcfg.MachineUnauthorized
 }
 
 // PeerByTailscaleIP returns a peer's Node based on its Tailscale IP.
@@ -211,7 +231,7 @@ func (nm *NetworkMap) PeerWithStableID(pid tailcfg.StableNodeID) (_ tailcfg.Node
 // in equalConciseHeader in sync.
 func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 	fmt.Fprintf(buf, "netmap: self: %v auth=%v",
-		nm.NodeKey.ShortString(), nm.MachineStatus)
+		nm.NodeKey.ShortString(), nm.GetMachineStatus())
 	login := nm.UserProfiles[nm.User()].LoginName
 	if login == "" {
 		if nm.User().IsZero() {
@@ -229,7 +249,7 @@ func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 // used by printConciseHeader.
 func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
 	if a.NodeKey != b.NodeKey ||
-		a.MachineStatus != b.MachineStatus ||
+		a.GetMachineStatus() != b.GetMachineStatus() ||
 		a.User() != b.User() ||
 		len(a.Addresses) != len(b.Addresses) {
 		return false
