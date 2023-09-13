@@ -95,11 +95,6 @@ type Engine interface {
 	// TODO: return an error?
 	Wait()
 
-	// SetDERPMap controls which (if any) DERP servers are used.
-	// If nil, DERP is disabled. It starts disabled until a DERP map
-	// is configured.
-	SetDERPMap(*tailcfg.DERPMap)
-
 	// SetNetworkMap informs the engine of the latest network map
 	// from the server. The network map's DERPMap field should be
 	// ignored as as it might be disabled; get it from SetDERPMap

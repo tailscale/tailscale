@@ -16,6 +16,7 @@ import (
 
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsd"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -38,11 +39,13 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun1: "),
 		traf: traf,
 	}
+	s1 := new(tsd.System)
 	e1, err := wgengine.NewUserspaceEngine(l1, wgengine.Config{
-		Router:     router.NewFake(l1),
-		NetMon:     nil,
-		ListenPort: 0,
-		Tun:        t1,
+		Router:       router.NewFake(l1),
+		NetMon:       nil,
+		ListenPort:   0,
+		Tun:          t1,
+		SetSubsystem: s1.Set,
 	})
 	if err != nil {
 		log.Fatalf("e1 init: %v", err)
@@ -62,11 +65,13 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 		logf: logger.WithPrefix(logf, "tun2: "),
 		traf: traf,
 	}
+	s2 := new(tsd.System)
 	e2, err := wgengine.NewUserspaceEngine(l2, wgengine.Config{
-		Router:     router.NewFake(l2),
-		NetMon:     nil,
-		ListenPort: 0,
-		Tun:        t2,
+		Router:       router.NewFake(l2),
+		NetMon:       nil,
+		ListenPort:   0,
+		Tun:          t2,
+		SetSubsystem: s2.Set,
 	})
 	if err != nil {
 		log.Fatalf("e2 init: %v", err)
@@ -156,8 +161,8 @@ func setupWGTest(b *testing.B, logf logger.Logf, traf *TrafficGen, a1, a2 netip.
 	})
 
 	// Not using DERP in this test (for now?).
-	e1.SetDERPMap(&tailcfg.DERPMap{})
-	e2.SetDERPMap(&tailcfg.DERPMap{})
+	s1.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
+	s2.MagicSock.Get().SetDERPMap(&tailcfg.DERPMap{})
 
 	wait.Wait()
 }
