@@ -5,9 +5,13 @@
 // in a platform-independent manner.
 package mdm
 
+import "sync/atomic"
+
 type MDMHandler struct {
 	Settings *MDMSettings
 }
+
+var mdmHandler atomic.Value // of MDMHandler type
 
 // MDMSettings gets MDM settings from device.
 type MDMSettings interface {
@@ -17,10 +21,11 @@ type MDMSettings interface {
 	ReadString(key string) (string, error)
 }
 
-func (handler *MDMHandler) ReadBool(key string) (bool, error) {
-	return handler.ReadBool(key)
-}
-
-func (handler *MDMHandler) ReadString(key string) (string, error) {
-	return handler.ReadString(key)
+func RegisterMDMSettings(settings *MDMSettings) *MDMHandler {
+	if e, ok := mdmHandler.Load().(*MDMHandler); ok {
+		return e
+	}
+	e := &MDMHandler{Settings: settings}
+	mdmHandler.Store(e)
+	return e
 }
