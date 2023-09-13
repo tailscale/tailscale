@@ -697,7 +697,7 @@ func TestServeDevConfigMutations(t *testing.T) {
 	})
 	add(step{ // try to start a web handler on the same port
 		command: cmd("serve --https=443 --bg localhost:3000"),
-		wantErr: exactErr(errHelp, "errHelp"),
+		wantErr: anyErr(),
 	})
 	add(step{reset: true})
 	add(step{ // start a web handler on port 443
@@ -779,6 +779,106 @@ func TestServeDevConfigMutations(t *testing.T) {
 			// 	i, st.command, got, st.want)
 		}
 	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	tests := [...]struct {
+		name      string
+		desc      string
+		cfg       *ipn.ServeConfig
+		servePort uint16
+		serveType serveType
+		wantErr   bool
+	}{
+		{
+			name:      "nil_config",
+			desc:      "when config is nil, all requests valid",
+			cfg:       nil,
+			servePort: 3000,
+			serveType: serveTypeHTTPS,
+		},
+		{
+			name: "new_bg_tcp",
+			desc: "no error when config exists but we're adding a new bg tcp port",
+			cfg: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+			},
+			servePort: 10000,
+			serveType: serveTypeHTTPS,
+		},
+		{
+			name: "override_bg_tcp",
+			desc: "no error when overwriting previous port under the same serve type",
+			cfg: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {TCPForward: "http://localhost:4545"},
+				},
+			},
+			servePort: 443,
+			serveType: serveTypeTCP,
+		},
+		{
+			name: "override_bg_tcp",
+			desc: "error when overwriting previous port under a different serve type ",
+			cfg: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+			},
+			servePort: 443,
+			serveType: serveTypeHTTP,
+			wantErr:   true,
+		},
+		{
+			name: "new_fg_port",
+			desc: "no error when serving a new foreground port",
+			cfg: &ipn.ServeConfig{
+				TCP: map[uint16]*ipn.TCPPortHandler{
+					443: {HTTPS: true},
+				},
+				Foreground: map[string]*ipn.ServeConfig{
+					"abc123": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							3000: {HTTPS: true},
+						},
+					},
+				},
+			},
+			servePort: 4040,
+			serveType: serveTypeTCP,
+		},
+		{
+			name: "same_fg_port",
+			desc: "error when overwriting a previous fg port",
+			cfg: &ipn.ServeConfig{
+				Foreground: map[string]*ipn.ServeConfig{
+					"abc123": {
+						TCP: map[uint16]*ipn.TCPPortHandler{
+							3000: {HTTPS: true},
+						},
+					},
+				},
+			},
+			servePort: 3000,
+			serveType: serveTypeTCP,
+			wantErr:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConfig(tc.cfg, tc.servePort, tc.serveType)
+			if err == nil && tc.wantErr {
+				t.Fatal("expected an error but got nil")
+			}
+			if err != nil && !tc.wantErr {
+				t.Fatalf("expected no error but got: %v", err)
+			}
+		})
+	}
+
 }
 
 func TestSrcTypeFromFlags(t *testing.T) {
