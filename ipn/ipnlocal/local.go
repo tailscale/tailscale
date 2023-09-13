@@ -3812,7 +3812,7 @@ func (b *LocalBackend) nextStateLocked() ipn.State {
 		// NetMap must be non-nil for us to get here.
 		// The node key expired, need to relogin.
 		return ipn.NeedsLogin
-	case netMap.MachineStatus != tailcfg.MachineAuthorized:
+	case netMap.GetMachineStatus() != tailcfg.MachineAuthorized:
 		// TODO(crawshaw): handle tailcfg.MachineInvalid
 		return ipn.NeedsMachineAuth
 	case state == ipn.NeedsMachineAuth:

@@ -253,7 +253,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
 					},
-					MachineStatus: jsMachineStatus[nm.MachineStatus],
+					MachineStatus: jsMachineStatus[nm.GetMachineStatus()],
 				},
 				Peers: mapSlice(nm.Peers, func(p tailcfg.NodeView) jsNetMapPeerNode {
 					name := p.Name()
