@@ -142,16 +142,6 @@ func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {
 	e.watchdog("Ping", func() { e.wrap.Ping(ip, pingType, size, cb) })
 }
-func (e *watchdogEngine) RegisterIPPortIdentity(ipp netip.AddrPort, tsIP netip.Addr) {
-	e.watchdog("RegisterIPPortIdentity", func() { e.wrap.RegisterIPPortIdentity(ipp, tsIP) })
-}
-func (e *watchdogEngine) UnregisterIPPortIdentity(ipp netip.AddrPort) {
-	e.watchdog("UnregisterIPPortIdentity", func() { e.wrap.UnregisterIPPortIdentity(ipp) })
-}
-func (e *watchdogEngine) WhoIsIPPort(ipp netip.AddrPort) (tsIP netip.Addr, ok bool) {
-	e.watchdog("UnregisterIPPortIdentity", func() { tsIP, ok = e.wrap.WhoIsIPPort(ipp) })
-	return tsIP, ok
-}
 func (e *watchdogEngine) Close() {
 	e.watchdog("Close", e.wrap.Close)
 }

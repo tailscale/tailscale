@@ -43,6 +43,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/proxymap"
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
@@ -121,6 +122,7 @@ type Impl struct {
 	linkEP    *channel.Endpoint
 	tundev    *tstun.Wrapper
 	e         wgengine.Engine
+	pm        *proxymap.Mapper
 	mc        *magicsock.Conn
 	logf      logger.Logf
 	dialer    *tsdial.Dialer
@@ -154,7 +156,7 @@ const nicID = 1
 const maxUDPPacketSize = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -166,6 +168,9 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	if e == nil {
 		return nil, errors.New("nil Engine")
+	}
+	if pm == nil {
+		return nil, errors.New("nil proxymap.Mapper")
 	}
 	if dialer == nil {
 		return nil, errors.New("nil Dialer")
@@ -209,6 +214,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		linkEP:              linkEP,
 		tundev:              tundev,
 		e:                   e,
+		pm:                  pm,
 		mc:                  mc,
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netip.Addr]int),
@@ -984,8 +990,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
-	defer ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
+	ns.pm.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
+	defer ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(server, client)
@@ -1135,7 +1141,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.e.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
+		ns.pm.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1151,7 +1157,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	}
 	timer := time.AfterFunc(idleTimeout, func() {
 		if isLocal {
-			ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
+			ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
 		}
 		ns.logf("netstack: UDP session between %s and %s timed out", backendListenAddr, backendRemoteAddr)
 		cancel()
