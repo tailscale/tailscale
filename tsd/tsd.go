@@ -27,6 +27,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/proxymap"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
@@ -45,7 +46,9 @@ type System struct {
 	Tun            SubSystem[*tstun.Wrapper]
 	StateStore     SubSystem[ipn.StateStore]
 	Netstack       SubSystem[NetstackImpl] // actually a *netstack.Impl
-	controlKnobs   controlknobs.Knobs
+
+	controlKnobs controlknobs.Knobs
+	proxyMap     proxymap.Mapper
 }
 
 // NetstackImpl is the interface that *netstack.Impl implements.
@@ -101,6 +104,11 @@ func (s *System) IsNetstack() bool {
 // ControlKnobs returns the control knobs for this node.
 func (s *System) ControlKnobs() *controlknobs.Knobs {
 	return &s.controlKnobs
+}
+
+// ProxyMapper returns the ephemeral ip:port mapper.
+func (s *System) ProxyMapper() *proxymap.Mapper {
+	return &s.proxyMap
 }
 
 // SubSystem represents some subsystem of the Tailscale node daemon.

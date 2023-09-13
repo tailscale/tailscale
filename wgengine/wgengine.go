@@ -111,21 +111,6 @@ type Engine interface {
 	// If size is zero too small, it is ignored. See tailscale.PingOpts for details.
 	Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult))
 
-	// RegisterIPPortIdentity registers a given node (identified by its
-	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
-	// The IP:port is generally a localhost IP and an ephemeral port, used
-	// while proxying connections to localhost when tailscaled is running
-	// in netstack mode.
-	RegisterIPPortIdentity(netip.AddrPort, netip.Addr)
-
-	// UnregisterIPPortIdentity removes a temporary IP:port registration
-	// made previously by RegisterIPPortIdentity.
-	UnregisterIPPortIdentity(netip.AddrPort)
-
-	// WhoIsIPPort looks up an IP:port in the temporary registrations,
-	// and returns a matching Tailscale IP, if it exists.
-	WhoIsIPPort(netip.AddrPort) (netip.Addr, bool)
-
 	// InstallCaptureHook registers a function to be called to capture
 	// packets traversing the data path. The hook can be uninstalled by
 	// calling this function with a nil value.

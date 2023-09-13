@@ -851,7 +851,7 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.
 	if !ok {
 		var ip netip.Addr
 		if ipp.Port() != 0 {
-			ip, ok = b.e.WhoIsIPPort(ipp)
+			ip, ok = b.sys.ProxyMapper().WhoIsIPPort(ipp)
 		}
 		if !ok {
 			return zero, u, false
