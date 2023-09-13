@@ -9,8 +9,17 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+
 	"tailscale.com/version"
 )
+
+// MDMSettings gets MDM settings from device.
+type MDMSettings interface {
+	// ReadBool returns a boolean whether the given MDM key exists or not on device settings.
+	ReadBool(key string) (bool, error)
+	// ReadString reads the MDM settings value string given the key.
+	ReadString(key string) (string, error)
+}
 
 func ReadBool(key string) (bool, error) {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
@@ -48,7 +57,7 @@ func readUserDefaultsBool(key string) (bool, error) {
 	} else if asString == "1" {
 		return true, nil
 	} else {
-		return false, fmt.Errorf("unexpected user defaults value for", key, ":", err)
+		return false, fmt.Errorf("unexpected user defaults value for %v: %v", key, err)
 	}
 }
 
