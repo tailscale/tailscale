@@ -27,8 +27,9 @@ jobs:
           payload: >
             {
               "attachments": [{
-                "text": "${{ job.status }}: ${{ github.workflow }} <https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks>
-                        (<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|commit>) of ${{ github.repository }}@${{ github.ref_name }} by ${{ github.event.head_commit.committer.name }}",
+                "title": "${{ job.status }}: ${{ github.workflow }}",
+                "title_link": "https://github.com/${{ github.repository }}/commit/${{ github.sha }}/checks",
+                "text": "${{ github.repository }}@${{ github.sha }}",
                 "color": "danger"
               }]
             }
