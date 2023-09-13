@@ -6,10 +6,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
@@ -783,49 +785,48 @@ func TestSrcTypeFromFlags(t *testing.T) {
 	tests := []struct {
 		name         string
 		env          *serveEnv
-		expectedType string
+		expectedType serveType
 		expectedPort uint16
 		expectedErr  bool
 	}{
 		{
 			name:         "only http set",
 			env:          &serveEnv{http: "80"},
-			expectedType: "http",
+			expectedType: serveTypeHTTP,
 			expectedPort: 80,
 			expectedErr:  false,
 		},
 		{
 			name:         "only https set",
 			env:          &serveEnv{https: "10000"},
-			expectedType: "https",
+			expectedType: serveTypeHTTPS,
 			expectedPort: 10000,
 			expectedErr:  false,
 		},
 		{
 			name:         "only tcp set",
 			env:          &serveEnv{tcp: "8000"},
-			expectedType: "tcp",
+			expectedType: serveTypeTCP,
 			expectedPort: 8000,
 			expectedErr:  false,
 		},
 		{
 			name:         "only tls-terminated-tcp set",
-			env:          &serveEnv{tlsTerminatedTcp: "8080"},
-			expectedType: "tls-terminated-tcp",
+			env:          &serveEnv{tlsTerminatedTCP: "8080"},
+			expectedType: serveTypeTLSTerminatedTCP,
 			expectedPort: 8080,
 			expectedErr:  false,
 		},
 		{
 			name:         "defaults to https, port 443",
 			env:          &serveEnv{},
-			expectedType: "https",
+			expectedType: serveTypeHTTPS,
 			expectedPort: 443,
 			expectedErr:  false,
 		},
 		{
 			name:         "multiple types set",
 			env:          &serveEnv{http: "80", https: "443"},
-			expectedType: "",
 			expectedPort: 0,
 			expectedErr:  true,
 		},
@@ -838,10 +839,116 @@ func TestSrcTypeFromFlags(t *testing.T) {
 				t.Errorf("Expected error: %v, got: %v", tt.expectedErr, err)
 			}
 			if srcType != tt.expectedType {
-				t.Errorf("Expected srcType: %s, got: %s", tt.expectedType, srcType)
+				t.Errorf("Expected srcType: %s, got: %s", tt.expectedType.String(), srcType)
 			}
 			if srcPort != tt.expectedPort {
 				t.Errorf("Expected srcPort: %d, got: %d", tt.expectedPort, srcPort)
+			}
+		})
+	}
+}
+
+func TestExpandProxyTargetDev(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		wantErr  bool
+	}{
+		{input: "8080", expected: "http://127.0.0.1:8080"},
+		{input: "localhost:8080", expected: "http://127.0.0.1:8080"},
+		{input: "http://localhost:8080", expected: "http://127.0.0.1:8080"},
+		{input: "http://127.0.0.1:8080", expected: "http://127.0.0.1:8080"},
+		{input: "http://127.0.0.1:8080/foo", expected: "http://127.0.0.1:8080/foo"},
+		{input: "https://localhost:8080", expected: "https://127.0.0.1:8080"},
+		{input: "https+insecure://localhost:8080", expected: "https+insecure://127.0.0.1:8080"},
+
+		// errors
+		{input: "localhost:9999999", wantErr: true},
+		{input: "ftp://localhost:8080", expected: "", wantErr: true},
+		{input: "https://tailscale.com:8080", expected: "", wantErr: true},
+		{input: "", expected: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual, err := expandProxyTargetDev(tt.input)
+
+			if tt.wantErr == true && err == nil {
+				t.Errorf("Expected an error but got none")
+				return
+			}
+
+			if tt.wantErr == false && err != nil {
+				t.Errorf("Got an error, but didn't expect one: %v", err)
+				return
+			}
+
+			if actual != tt.expected {
+				t.Errorf("Got: %q; expected: %q", actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCleanURLPath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		wantErr  bool
+	}{
+		{input: "", expected: "/"},
+		{input: "/", expected: "/"},
+		{input: "/foo", expected: "/foo"},
+		{input: "/foo/", expected: "/foo/"},
+		{input: "/../bar", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual, err := cleanURLPath(tt.input)
+
+			if tt.wantErr == true && err == nil {
+				t.Errorf("Expected an error but got none")
+				return
+			}
+
+			if tt.wantErr == false && err != nil {
+				t.Errorf("Got an error, but didn't expect one: %v", err)
+				return
+			}
+
+			if actual != tt.expected {
+				t.Errorf("Got: %q; expected: %q", actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsLegacyInvocation(t *testing.T) {
+	tests := []struct {
+		subcmd   serveMode
+		args     []string
+		expected bool
+	}{
+		{subcmd: serve, args: []string{"https", "localhost:3000"}, expected: true},
+		{subcmd: serve, args: []string{"https:8443", "localhost:3000"}, expected: true},
+		{subcmd: serve, args: []string{"http", "localhost:3000"}, expected: true},
+		{subcmd: serve, args: []string{"http:80", "localhost:3000"}, expected: true},
+		{subcmd: serve, args: []string{"tcp:2222", "tcp://localhost:22"}, expected: true},
+		{subcmd: serve, args: []string{"tls-terminated-tcp:443", "tcp://localhost:80"}, expected: true},
+
+		// false
+		{subcmd: serve, args: []string{"3000"}, expected: false},
+		{subcmd: serve, args: []string{"localhost:3000"}, expected: false},
+	}
+
+	for _, tt := range tests {
+		args := strings.Join(tt.args, " ")
+		t.Run(fmt.Sprintf("%v %s", infoMap[tt.subcmd].Name, args), func(t *testing.T) {
+			actual := isLegacyInvocation(tt.subcmd, tt.args)
+
+			if actual != tt.expected {
+				t.Errorf("Got: %v; expected: %v", actual, tt.expected)
 			}
 		})
 	}

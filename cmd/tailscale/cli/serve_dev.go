@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -55,6 +56,15 @@ type serveMode int
 const (
 	serve serveMode = iota
 	funnel
+)
+
+type serveType int
+
+const (
+	serveTypeHTTPS serveType = iota
+	serveTypeHTTP
+	serveTypeTCP
+	serveTypeTLSTerminatedTCP
 )
 
 var infoMap = map[serveMode]commandInfo{
@@ -100,7 +110,7 @@ func newServeDevCommand(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fmt.Sprintf("%s status [--json]", info.Name),
 			fmt.Sprintf("%s reset", info.Name),
 		}, "\n  "),
-		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), subcmd, subcmd),
+		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name, info.Name),
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
@@ -109,7 +119,7 @@ func newServeDevCommand(e *serveEnv, subcmd serveMode) *ffcli.Command {
 			fs.StringVar(&e.https, "https", "", "default; HTTPS listener")
 			fs.StringVar(&e.http, "http", "", "HTTP listener")
 			fs.StringVar(&e.tcp, "tcp", "", "TCP listener")
-			fs.StringVar(&e.tlsTerminatedTcp, "tls-terminated-tcp", "", "TLS terminated TCP listener")
+			fs.StringVar(&e.tlsTerminatedTCP, "tls-terminated-tcp", "", "TLS terminated TCP listener")
 
 		}),
 		UsageFunc: usageFunc,
@@ -134,38 +144,30 @@ func newServeDevCommand(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	}
 }
 
+func validateArgs(subcmd serveMode, args []string) error {
+	switch len(args) {
+	case 0:
+		return flag.ErrHelp
+	case 1, 2:
+		if isLegacyInvocation(subcmd, args) {
+			fmt.Fprintf(os.Stderr, "error: the CLI for serve and funnel has changed.")
+			fmt.Fprintf(os.Stderr, "Please see https://tailscale.com/kb/1242/tailscale-serve for more information.")
+			return errHelp
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "error: invalid number of arguments (%d)", len(args))
+		return errHelp
+	}
+	return nil
+}
+
 // runServeCombined is the entry point for the "tailscale {serve,funnel}" commands.
 func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	e.subcmd = subcmd
 
 	return func(ctx context.Context, args []string) error {
-		if len(args) == 0 {
-			return flag.ErrHelp
-		}
-
-		funnel := subcmd == funnel
-
-		err := checkLegacyServeInvocation(subcmd, args)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: the CLI for serve and funnel has changed.\n")
-			fmt.Fprintf(os.Stderr, "Please see https://tailscale.com/kb/1242/tailscale-serve for more information.\n\n")
-
-			return errHelp
-		}
-
-		if len(args) > 2 {
-			fmt.Fprintf(os.Stderr, "error: invalid number of arguments (%d)\n\n", len(args))
-			return errHelp
-		}
-
-		turnOff := "off" == args[len(args)-1]
-
-		// support passing in a port number as the target
-		// TODO(tylersmalley) move to expandProxyTarget when we remove the legacy serve invocation
-		target := args[0]
-		port, err := strconv.ParseUint(args[0], 10, 16)
-		if err == nil {
-			target = fmt.Sprintf("http://127.0.0.1:%d", port)
+		if err := validateArgs(subcmd, args); err != nil {
+			return err
 		}
 
 		ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
@@ -176,6 +178,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return fmt.Errorf("getting client status: %w", err)
 		}
 
+		funnel := subcmd == funnel
 		if funnel {
 			// verify node has funnel capabilities
 			if err := e.verifyFunnelEnabled(ctx, st, 443); err != nil {
@@ -183,10 +186,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			}
 		}
 
-		// default mount point to "/"
-		mount := e.setPath
-		if mount == "" {
-			mount = "/"
+		mount, err := cleanURLPath(e.setPath)
+		if err != nil {
+			return fmt.Errorf("failed to clean the mount point: %w", err)
 		}
 
 		if e.setPath != "" {
@@ -220,7 +222,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		// foreground or background.
 		parentSC := sc
 
-		if !turnOff && srvType == "https" {
+		turnOff := "off" == args[len(args)-1]
+		if !turnOff && srvType == serveTypeHTTPS {
 			// Running serve with https requires that the tailnet has enabled
 			// https cert provisioning. Send users through an interactive flow
 			// to enable this if not already done.
@@ -263,7 +266,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if turnOff {
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
 		} else {
-			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, target, funnel)
+			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
 			msg = e.messageForPort(sc, st, dnsName, srvPort)
 		}
 		if err != nil {
@@ -275,7 +278,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return err
 		}
 
-		fmt.Fprintln(os.Stderr, msg)
+		if msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 
 		if watcher != nil {
 			for {
@@ -293,20 +298,16 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	}
 }
 
-func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName, srvType string, srvPort uint16, mount string, target string, allowFunnel bool) error {
+func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
 	// update serve config based on the type
 	switch srvType {
-	case "https", "http":
-		mount, err := cleanMountPoint(mount)
-		if err != nil {
-			return fmt.Errorf("failed to clean the mount point: %w", err)
-		}
-		useTLS := srvType == "https"
-		err = e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target)
+	case serveTypeHTTPS, serveTypeHTTP:
+		useTLS := srvType == serveTypeHTTPS
+		err := e.applyWebServe(sc, dnsName, srvPort, useTLS, mount, target)
 		if err != nil {
 			return fmt.Errorf("failed apply web serve: %w", err)
 		}
-	case "tcp", "tls-terminated-tcp":
+	case serveTypeTCP, serveTypeTLSTerminatedTCP:
 		err := e.applyTCPServe(sc, dnsName, srvType, srvPort, target)
 		if err != nil {
 			return fmt.Errorf("failed to apply TCP serve: %w", err)
@@ -321,6 +322,8 @@ func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName, s
 	return nil
 }
 
+// messageForPort returns a message for the given port based on the
+// serve config and status.
 func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvPort uint16) string {
 	var output strings.Builder
 
@@ -344,6 +347,11 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	output.WriteString(fmt.Sprintf("%s://%s%s\n\n", scheme, dnsName, portPart))
+
+	if !e.bg {
+		output.WriteString("Press Ctrl+C to exit.")
+		return output.String()
+	}
 
 	srvTypeAndDesc := func(h *ipn.HTTPHandler) (string, string) {
 		switch {
@@ -389,42 +397,28 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 		output.WriteString(fmt.Sprintf("|--> tcp://%s\n", h.TCPForward))
 	}
 
-	if e.bg {
-		output.WriteString("\nServe started and running in the background.\n")
-		output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
-	} else {
-		// TODO(marwan-at-work): give the user more context on their foreground process.
-	}
+	output.WriteString("\nServe started and running in the background.\n")
+	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
 
-	return output.String() + "\n"
+	return output.String()
 }
 
 func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, useTLS bool, mount, target string) error {
 	h := new(ipn.HTTPHandler)
 
-	// TODO: use strings.Cut as the prefix OR use strings.HasPrefix
-	ts, _, _ := strings.Cut(target, ":")
 	switch {
-	case ts == "text":
+	case strings.HasPrefix(target, "text:"):
 		text := strings.TrimPrefix(target, "text:")
 		if text == "" {
 			return errors.New("unable to serve; text cannot be an empty string")
 		}
 		h.Text = text
-	case isProxyTarget(target):
-		t, err := expandProxyTarget(target)
-		if err != nil {
-			return err
-		}
-		h.Proxy = t
-	default: // assume path
+	case filepath.IsAbs(target):
 		if version.IsSandboxedMacOS() {
 			// don't allow path serving for now on macOS (2022-11-15)
 			return errors.New("path serving is not supported if sandboxed on macOS")
 		}
-		if !filepath.IsAbs(target) {
-			return errors.New("path must be absolute")
-		}
+
 		target = filepath.Clean(target)
 		fi, err := os.Stat(target)
 		if err != nil {
@@ -438,6 +432,12 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 			mount += "/"
 		}
 		h.Path = target
+	default:
+		t, err := expandProxyTargetDev(target)
+		if err != nil {
+			return err
+		}
+		h.Proxy = t
 	}
 
 	// TODO: validation needs to check nested foreground configs
@@ -472,12 +472,12 @@ func (e *serveEnv) applyWebServe(sc *ipn.ServeConfig, dnsName string, srvPort ui
 	return nil
 }
 
-func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType string, srcPort uint16, target string) error {
+func (e *serveEnv) applyTCPServe(sc *ipn.ServeConfig, dnsName string, srcType serveType, srcPort uint16, target string) error {
 	var terminateTLS bool
 	switch srcType {
-	case "tcp":
+	case serveTypeTCP:
 		terminateTLS = false
-	case "tls-terminated-tcp":
+	case serveTypeTLSTerminatedTCP:
 		terminateTLS = true
 	default:
 		return fmt.Errorf("invalid TCP target %q", target)
@@ -535,35 +535,34 @@ func (e *serveEnv) applyFunnel(sc *ipn.ServeConfig, dnsName string, srvPort uint
 	}
 }
 
-// TODO(tylersmalley) Refactor into setServe so handleWebServeFunnelRemove and handleTCPServeRemove.
-// apply serve config changes and we print a status message.
-func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType string, srvPort uint16, mount string) error {
+// unsetServe removes the serve config for the given serve port.
+func (e *serveEnv) unsetServe(sc *ipn.ServeConfig, dnsName string, srvType serveType, srvPort uint16, mount string) error {
 	switch srvType {
-	case "https", "http":
-		mount, err := cleanMountPoint(mount)
+	case serveTypeHTTPS, serveTypeHTTP:
+		err := e.removeWebServe(sc, dnsName, srvPort, mount)
 		if err != nil {
-			return fmt.Errorf("failed to clean the mount point: %w", err)
+			return fmt.Errorf("failed to remove web serve: %w", err)
 		}
-		err = e.handleWebServeFunnelRemove(sc, dnsName, srvPort, mount)
+	case serveTypeTCP, serveTypeTLSTerminatedTCP:
+		err := e.removeTCPServe(sc, srvPort)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove TCP serve: %w", err)
 		}
-
-		return nil
-	case "tcp", "tls-terminated-tcp":
-		// TODO(tylersmalley) should remove funnel
-		return e.removeTCPServe(sc, srvPort)
 	default:
 		return fmt.Errorf("invalid type %q", srvType)
 	}
+
+	// TODO(tylersmalley): remove funnel
+
+	return nil
 }
 
-func srvTypeAndPortFromFlags(e *serveEnv) (srvType string, srvPort uint16, err error) {
-	sourceMap := map[string]string{
-		"http":               e.http,
-		"https":              e.https,
-		"tcp":                e.tcp,
-		"tls-terminated-tcp": e.tlsTerminatedTcp,
+func srvTypeAndPortFromFlags(e *serveEnv) (srvType serveType, srvPort uint16, err error) {
+	sourceMap := map[serveType]string{
+		serveTypeHTTP:             e.http,
+		serveTypeHTTPS:            e.https,
+		serveTypeTCP:              e.tcp,
+		serveTypeTLSTerminatedTCP: e.tlsTerminatedTCP,
 	}
 
 	var srcTypeCount int
@@ -578,60 +577,60 @@ func srvTypeAndPortFromFlags(e *serveEnv) (srvType string, srvPort uint16, err e
 	}
 
 	if srcTypeCount > 1 {
-		return "", 0, fmt.Errorf("cannot serve multiple types for a single mount point")
+		return 0, 0, fmt.Errorf("cannot serve multiple types for a single mount point")
 	} else if srcTypeCount == 0 {
-		srvType = "https"
+		srvType = serveTypeHTTPS
 		srcValue = "443"
 	}
 
 	srvPort, err = parseServePort(srcValue)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid port %q: %w", srcValue, err)
+		return 0, 0, fmt.Errorf("invalid port %q: %w", srcValue, err)
 	}
 
 	return srvType, srvPort, nil
 }
 
-func checkLegacyServeInvocation(subcmd serveMode, args []string) error {
+func isLegacyInvocation(subcmd serveMode, args []string) bool {
 	if subcmd == serve && len(args) == 2 {
-		prefixes := []string{"http:", "https:", "tls:", "tls-terminated-tcp:"}
+		prefixes := []string{"http", "https", "tcp", "tls-terminated-tcp"}
 
 		for _, prefix := range prefixes {
 			if strings.HasPrefix(args[0], prefix) {
-				return errors.New("invalid invocation")
+				return true
 			}
 		}
 	}
 
-	return nil
+	return false
 }
 
-// handleWebServeFunnelRemove removes a web handler from the serve config
+// removeWebServe removes a web handler from the serve config
 // and removes funnel if no remaining mounts exist for the serve port.
 // The srvPort argument is the serving port and the mount argument is
 // the mount point or registered path to remove.
-// TODO(tylersmalley): fork of handleWebServeRemove, return name once dev work is merged
-func (e *serveEnv) handleWebServeFunnelRemove(sc *ipn.ServeConfig, dnsName string, srvPort uint16, mount string) error {
-	if sc == nil {
-		return errors.New("error: serve config does not exist")
-	}
+func (e *serveEnv) removeWebServe(sc *ipn.ServeConfig, dnsName string, srvPort uint16, mount string) error {
 	if sc.IsTCPForwardingOnPort(srvPort) {
 		return errors.New("cannot remove web handler; currently serving TCP")
 	}
+
 	hp := ipn.HostPort(net.JoinHostPort(dnsName, strconv.Itoa(int(srvPort))))
 	if !sc.WebHandlerExists(hp, mount) {
 		return errors.New("error: handler does not exist")
 	}
+
 	// delete existing handler, then cascade delete if empty
 	delete(sc.Web[hp].Handlers, mount)
 	if len(sc.Web[hp].Handlers) == 0 {
 		delete(sc.Web, hp)
 		delete(sc.TCP, srvPort)
 	}
+
 	// clear empty maps mostly for testing
 	if len(sc.Web) == 0 {
 		sc.Web = nil
 	}
+
 	if len(sc.TCP) == 0 {
 		sc.TCP = nil
 	}
@@ -662,4 +661,95 @@ func (e *serveEnv) removeTCPServe(sc *ipn.ServeConfig, src uint16) error {
 		sc.TCP = nil
 	}
 	return nil
+}
+
+// expandProxyTargetDev expands the supported target values to be proxied
+// allowing for input values to be a port number, a partial URL, or a full URL
+// including a path.
+//
+// examples:
+//   - 3000
+//   - localhost:3000
+//   - http://localhost:3000
+//   - https://localhost:3000
+//   - https-insecure://localhost:3000
+//   - https-insecure://localhost:3000/foo
+func expandProxyTargetDev(target string) (string, error) {
+	var (
+		scheme = "http"
+		host   = "127.0.0.1"
+	)
+
+	// support target being a port number
+	if port, err := strconv.ParseUint(target, 10, 16); err == nil {
+		return fmt.Sprintf("%s://%s:%d", scheme, host, port), nil
+	}
+
+	// prepend scheme if not present
+	if !strings.Contains(target, "://") {
+		target = scheme + "://" + target
+	}
+
+	// make sure we can parse the target
+	u, err := url.ParseRequestURI(target)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL %w", err)
+	}
+
+	// ensure a supported scheme
+	switch u.Scheme {
+	case "http", "https", "https+insecure":
+	default:
+		return "", errors.New("must be a URL starting with http://, https://, or https+insecure://")
+	}
+
+	// validate the port
+	port, err := strconv.ParseUint(u.Port(), 10, 16)
+	if err != nil || port == 0 {
+		return "", fmt.Errorf("invalid port %q", u.Port())
+	}
+
+	// validate the host.
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1":
+		u.Host = fmt.Sprintf("%s:%d", host, port)
+	default:
+		return "", errors.New("only localhost or 127.0.0.1 proxies are currently supported")
+	}
+
+	return u.String(), nil
+}
+
+// cleanURLPath ensures the path is clean and has a leading "/".
+func cleanURLPath(urlPath string) (string, error) {
+	if urlPath == "" {
+		return "/", nil
+	}
+
+	// TODO(tylersmalley) verify still needed with path being a flag
+	urlPath = cleanMinGWPathConversionIfNeeded(urlPath)
+	if !strings.HasPrefix(urlPath, "/") {
+		urlPath = "/" + urlPath
+	}
+
+	c := path.Clean(urlPath)
+	if urlPath == c || urlPath == c+"/" {
+		return urlPath, nil
+	}
+	return "", fmt.Errorf("invalid mount point %q", urlPath)
+}
+
+func (s serveType) String() string {
+	switch s {
+	case serveTypeHTTP:
+		return "httpListener"
+	case serveTypeHTTPS:
+		return "httpsListener"
+	case serveTypeTCP:
+		return "tcpListener"
+	case serveTypeTLSTerminatedTCP:
+		return "tlsTerminatedTCPListener"
+	default:
+		return "unknownServeType"
+	}
 }

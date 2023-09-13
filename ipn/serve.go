@@ -85,27 +85,6 @@ type FunnelConn struct {
 	Src netip.AddrPort
 }
 
-// ServeStreamRequest defines the JSON request body
-// for the serve stream endpoint
-type ServeStreamRequest struct {
-	// HostPort is the DNS and port of the tailscale
-	// URL.
-	HostPort HostPort `json:",omitempty"`
-
-	// Source is the user's serve source
-	// as defined in the `tailscale serve`
-	// command such as http://127.0.0.1:3000
-	Source string `json:",omitempty"`
-
-	// MountPoint is the path prefix for
-	// the given HostPort.
-	MountPoint string `json:",omitempty"`
-
-	// Funnel indicates whether the request
-	// is a serve request or a funnel one.
-	Funnel bool `json:",omitempty"`
-}
-
 // WebServerConfig describes a web server's configuration.
 type WebServerConfig struct {
 	Handlers map[string]*HTTPHandler // mountPoint => handler
