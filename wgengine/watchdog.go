@@ -18,7 +18,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
@@ -139,10 +138,6 @@ func (e *watchdogEngine) RequestStatus() {
 }
 func (e *watchdogEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.watchdog("SetNetworkMap", func() { e.wrap.SetNetworkMap(nm) })
-}
-func (e *watchdogEngine) DiscoPublicKey() (k key.DiscoPublic) {
-	e.watchdog("DiscoPublicKey", func() { k = e.wrap.DiscoPublicKey() })
-	return k
 }
 func (e *watchdogEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult)) {
 	e.watchdog("Ping", func() { e.wrap.Ping(ip, pingType, size, cb) })

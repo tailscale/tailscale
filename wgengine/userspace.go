@@ -1157,10 +1157,6 @@ func (e *userspaceEngine) SetNetworkMap(nm *netmap.NetworkMap) {
 	e.mu.Unlock()
 }
 
-func (e *userspaceEngine) DiscoPublicKey() key.DiscoPublic {
-	return e.magicConn.DiscoPublicKey()
-}
-
 func (e *userspaceEngine) UpdateStatus(sb *ipnstate.StatusBuilder) {
 	st, err := e.getStatus()
 	if err != nil {

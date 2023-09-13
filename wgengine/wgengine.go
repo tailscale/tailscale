@@ -11,7 +11,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
@@ -101,10 +100,6 @@ type Engine interface {
 	// instead.
 	// The network map should only be read from.
 	SetNetworkMap(*netmap.NetworkMap)
-
-	// DiscoPublicKey gets the public key used for path discovery
-	// messages.
-	DiscoPublicKey() key.DiscoPublic
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.

@@ -1467,7 +1467,7 @@ func (b *LocalBackend) Start(opts ipn.Options) error {
 		})
 	}
 
-	discoPublic := b.e.DiscoPublicKey()
+	discoPublic := b.magicConn().DiscoPublicKey()
 
 	var err error
 
