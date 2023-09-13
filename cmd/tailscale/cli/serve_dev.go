@@ -266,6 +266,9 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if turnOff {
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
 		} else {
+			if err := validateConfig(sc, srvPort, srvType); err != nil {
+				return err
+			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
 			msg = e.messageForPort(sc, st, dnsName, srvPort)
 		}
@@ -299,6 +302,54 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 
 		return nil
 	}
+}
+
+func validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
+	sc, isFg := findConfig(sc, port)
+	if sc == nil {
+		return nil
+	}
+	if isFg {
+		return errors.New("foreground already exists under this port")
+	}
+	existingServe := serveFromPortHandler(sc.TCP[port])
+	if wantServe != existingServe {
+		return fmt.Errorf("want %q but port is already serving %q", wantServe, existingServe)
+	}
+	return nil
+}
+
+func serveFromPortHandler(tcp *ipn.TCPPortHandler) serveType {
+	switch {
+	case tcp.HTTP:
+		return serveTypeHTTP
+	case tcp.HTTPS:
+		return serveTypeHTTPS
+	case tcp.TerminateTLS != "":
+		return serveTypeTLSTerminatedTCP
+	case tcp.TCPForward != "":
+		return serveTypeTCP
+	default:
+		return -1
+	}
+}
+
+// findConfig finds a config that contains the given port, which can be
+// the top level background config or an inner foreground one. The second
+// result is true if it's foreground
+func findConfig(sc *ipn.ServeConfig, port uint16) (*ipn.ServeConfig, bool) {
+	if sc == nil {
+		return nil, false
+	}
+	if _, ok := sc.TCP[port]; ok {
+		return sc, false
+	}
+	for _, sc := range sc.Foreground {
+		if _, ok := sc.TCP[port]; ok {
+			return sc, true
+		}
+	}
+	return nil, false
 }
 
 func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
@@ -745,13 +796,13 @@ func cleanURLPath(urlPath string) (string, error) {
 func (s serveType) String() string {
 	switch s {
 	case serveTypeHTTP:
-		return "httpListener"
+		return "http"
 	case serveTypeHTTPS:
-		return "httpsListener"
+		return "https"
 	case serveTypeTCP:
-		return "tcpListener"
+		return "tcp"
 	case serveTypeTLSTerminatedTCP:
-		return "tlsTerminatedTCPListener"
+		return "tls-terminated-tcp"
 	default:
 		return "unknownServeType"
 	}
