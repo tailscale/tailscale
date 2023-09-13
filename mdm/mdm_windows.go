@@ -2,6 +2,10 @@
 
 package mdm
 
+func NewWindowsMDMHandler(settings *MDMSettings) *MDMHandler {
+	return &MDMHandler{Settings: settings}
+}
+
 // readRegistryBool reads a boolean value with the given key from the Windows registry.
 func readRegistryBool(key string) (bool, error) {
 	// TODO(angott): Windows support

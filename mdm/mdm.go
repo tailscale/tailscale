@@ -5,10 +5,9 @@
 // in a platform-independent manner.
 package mdm
 
-import (
-	"fmt"
-	"runtime"
-)
+type MDMHandler struct {
+	Settings *MDMSettings
+}
 
 // MDMSettings gets MDM settings from device.
 type MDMSettings interface {
@@ -18,23 +17,10 @@ type MDMSettings interface {
 	ReadString(key string) (string, error)
 }
 
-func ReadBool(key string) (bool, error) {
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		return readUserDefaultsBool(key)
-	} else if runtime.GOOS == "windows" {
-		return readRegistryBool(key)
-	} else {
-		return false, fmt.Errorf("unsupported platform")
-	}
+func (handler *MDMHandler) ReadBool(key string) (bool, error) {
+	return handler.ReadBool(key)
 }
 
-func ReadString(key string) (string, error) {
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		return readUserDefaultsString(key)
-	} else if runtime.GOOS == "windows" {
-		// TODO(angott): Windows
-		return readRegistryString(key)
-	} else {
-		return "", fmt.Errorf("unsupported platform")
-	}
+func (handler *MDMHandler) ReadString(key string) (string, error) {
+	return handler.ReadString(key)
 }
