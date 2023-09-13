@@ -711,7 +711,14 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	return netstack.Create(logf, sys.Tun.Get(), sys.Engine.Get(), sys.MagicSock.Get(), sys.Dialer.Get(), sys.DNSManager.Get())
+	return netstack.Create(logf,
+		sys.Tun.Get(),
+		sys.Engine.Get(),
+		sys.MagicSock.Get(),
+		sys.Dialer.Get(),
+		sys.DNSManager.Get(),
+		sys.ProxyMapper(),
+	)
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP

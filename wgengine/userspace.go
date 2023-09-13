@@ -133,7 +133,6 @@ type userspaceEngine struct {
 	peerSequence   []key.NodePublic
 	endpoints      []tailcfg.Endpoint
 	pendOpen       map[flowtrack.Tuple]*pendingOpenFlow // see pendopen.go
-	tsIPByIPPort   map[netip.AddrPort]netip.Addr        // allows registration of IP:ports as belonging to a certain Tailscale IP for whois lookups
 
 	// pongCallback is the map of response handlers waiting for disco or TSMP
 	// pong callbacks. The map key is a random slice of bytes.
@@ -1339,50 +1338,6 @@ func (e *userspaceEngine) setICMPEchoResponseCallback(idSeq uint32, cb func()) {
 	} else {
 		mak.Set(&e.icmpEchoResponseCallback, idSeq, cb)
 	}
-}
-
-func (e *userspaceEngine) RegisterIPPortIdentity(ipport netip.AddrPort, tsIP netip.Addr) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.tsIPByIPPort == nil {
-		e.tsIPByIPPort = make(map[netip.AddrPort]netip.Addr)
-	}
-	e.tsIPByIPPort[ipport] = tsIP
-}
-
-func (e *userspaceEngine) UnregisterIPPortIdentity(ipport netip.AddrPort) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.tsIPByIPPort == nil {
-		return
-	}
-	delete(e.tsIPByIPPort, ipport)
-}
-
-var whoIsSleeps = [...]time.Duration{
-	0,
-	10 * time.Millisecond,
-	20 * time.Millisecond,
-	50 * time.Millisecond,
-	100 * time.Millisecond,
-}
-
-func (e *userspaceEngine) WhoIsIPPort(ipport netip.AddrPort) (tsIP netip.Addr, ok bool) {
-	// We currently have a registration race,
-	// https://github.com/tailscale/tailscale/issues/1616,
-	// so loop a few times for now waiting for the registration
-	// to appear.
-	// TODO(bradfitz,namansood): remove this once #1616 is fixed.
-	for _, d := range whoIsSleeps {
-		time.Sleep(d)
-		e.mu.Lock()
-		tsIP, ok = e.tsIPByIPPort[ipport]
-		e.mu.Unlock()
-		if ok {
-			return tsIP, true
-		}
-	}
-	return tsIP, false
 }
 
 // PeerForIP returns the Node in the wireguard config
