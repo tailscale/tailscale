@@ -126,7 +126,7 @@ func newIPN(jsConfig js.Value) map[string]any {
 	sys.NetstackRouter.Set(true)
 
 	logid := lpc.PublicID
-	srv := ipnserver.New(logf, logid, nil /* no netMon */)
+	srv := ipnserver.New(logf, logid, sys.NetMon.Get())
 	lb, err := ipnlocal.NewLocalBackend(logf, logid, sys, controlclient.LoginEphemeral)
 	if err != nil {
 		log.Fatalf("ipnlocal.NewLocalBackend: %v", err)
