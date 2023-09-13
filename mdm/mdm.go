@@ -5,10 +5,13 @@
 // in a platform-independent manner.
 package mdm
 
-import "sync/atomic"
+import (
+	"errors"
+	"sync/atomic"
+)
 
 type MDMHandler struct {
-	Settings *MDMSettings
+	Settings MDMSettings
 }
 
 var mdmHandler atomic.Value // of MDMHandler type
@@ -21,11 +24,27 @@ type MDMSettings interface {
 	ReadString(key string) (string, error)
 }
 
-func RegisterMDMSettings(settings *MDMSettings) *MDMHandler {
+func RegisterMDMSettings(settings MDMSettings) *MDMHandler {
 	if e, ok := mdmHandler.Load().(*MDMHandler); ok {
 		return e
 	}
 	e := &MDMHandler{Settings: settings}
 	mdmHandler.Store(e)
 	return e
+}
+
+func ReadBool(key string) (bool, error) {
+	h := mdmHandler.Load().(*MDMHandler)
+	if h == nil {
+		return false, errors.New("nil handler")
+	}
+	return h.Settings.ReadBool(key)
+}
+
+func ReadString(key string) (string, error) {
+	h := mdmHandler.Load().(*MDMHandler)
+	if h == nil {
+		return "", errors.New("nil handler")
+	}
+	return h.Settings.ReadString(key)
 }
