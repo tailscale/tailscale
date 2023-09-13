@@ -30,5 +30,5 @@ func setDontFragment(pconn nettype.PacketConn, network string) (err error) {
 }
 
 func CanPMTUD() bool {
-	return debugPMTUD() // only if the envknob is enabled, for now.
+	return debugEnablePMTUD() // only if the envknob is enabled, for now.
 }
