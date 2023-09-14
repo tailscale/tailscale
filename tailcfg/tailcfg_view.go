@@ -180,7 +180,10 @@ func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
 	return &x
 }
 
-func (v NodeView) IsWireGuardOnly() bool  { return v.ж.IsWireGuardOnly }
+func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
+func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
+	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
+}
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -216,6 +219,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
 // View returns a readonly view of Hostinfo.
