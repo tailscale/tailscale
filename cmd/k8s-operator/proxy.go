@@ -45,12 +45,52 @@ func addWhoIsToRequest(r *http.Request, who *apitype.WhoIsResponse) *http.Reques
 
 var counterNumRequestsProxied = clientmetric.NewCounter("k8s_auth_proxy_requests_proxied")
 
-// launchAuthProxy launches the auth proxy, which is a small HTTP server that
-// authenticates requests using the Tailscale LocalAPI and then proxies them to
-// the kube-apiserver.
-func launchAuthProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server) {
+type apiServerProxyMode int
+
+const (
+	apiserverProxyModeDisabled apiServerProxyMode = iota
+	apiserverProxyModeEnabled
+	apiserverProxyModeNoAuth
+)
+
+func parseAPIProxyMode() apiServerProxyMode {
+	haveAuthProxyEnv := os.Getenv("AUTH_PROXY") != ""
+	haveAPIProxyEnv := os.Getenv("APISERVER_PROXY") != ""
+	switch {
+	case haveAPIProxyEnv && haveAuthProxyEnv:
+		log.Fatal("AUTH_PROXY and APISERVER_PROXY are mutually exclusive")
+	case haveAuthProxyEnv:
+		var authProxyEnv = defaultBool("AUTH_PROXY", false) // deprecated
+		if authProxyEnv {
+			return apiserverProxyModeEnabled
+		}
+		return apiserverProxyModeDisabled
+	case haveAPIProxyEnv:
+		var apiProxyEnv = defaultEnv("APISERVER_PROXY", "") // true, false or "noauth"
+		switch apiProxyEnv {
+		case "true":
+			return apiserverProxyModeEnabled
+		case "false", "":
+			return apiserverProxyModeDisabled
+		case "noauth":
+			return apiserverProxyModeNoAuth
+		default:
+			panic(fmt.Sprintf("unknown APISERVER_PROXY value %q", apiProxyEnv))
+		}
+	}
+	return apiserverProxyModeDisabled
+}
+
+// maybeLaunchAPIServerProxy launches the auth proxy, which is a small HTTP server
+// that authenticates requests using the Tailscale LocalAPI and then proxies
+// them to the kube-apiserver.
+func maybeLaunchAPIServerProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.Server) {
+	mode := parseAPIProxyMode()
+	if mode == apiserverProxyModeDisabled {
+		return
+	}
 	hostinfo.SetApp("k8s-operator-proxy")
-	startlog := zlog.Named("launchAuthProxy")
+	startlog := zlog.Named("launchAPIProxy")
 	cfg, err := restConfig.TransportConfig()
 	if err != nil {
 		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
@@ -69,18 +109,18 @@ func launchAuthProxy(zlog *zap.SugaredLogger, restConfig *rest.Config, s *tsnet.
 	if err != nil {
 		startlog.Fatalf("could not get rest.TransportConfig(): %v", err)
 	}
-	go runAuthProxy(s, rt, zlog.Named("auth-proxy").Infof)
+	go runAPIServerProxy(s, rt, zlog.Named("apiserver-proxy").Infof, mode)
 }
 
-// authProxy is an http.Handler that authenticates requests using the Tailscale
+// apiserverProxy is an http.Handler that authenticates requests using the Tailscale
 // LocalAPI and then proxies them to the Kubernetes API.
-type authProxy struct {
+type apiserverProxy struct {
 	logf logger.Logf
 	lc   *tailscale.LocalClient
 	rp   *httputil.ReverseProxy
 }
 
-func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *apiserverProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	who, err := h.lc.WhoIs(r.Context(), r.RemoteAddr)
 	if err != nil {
 		h.logf("failed to authenticate caller: %v", err)
@@ -91,28 +131,38 @@ func (h *authProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rp.ServeHTTP(w, addWhoIsToRequest(r, who))
 }
 
-// runAuthProxy runs an HTTP server that authenticates requests using the
+// runAPIServerProxy runs an HTTP server that authenticates requests using the
 // Tailscale LocalAPI and then proxies them to the Kubernetes API.
 // It listens on :443 and uses the Tailscale HTTPS certificate.
 // s will be started if it is not already running.
 // rt is used to proxy requests to the Kubernetes API.
 //
+// mode controls how the proxy behaves:
+//   - apiserverProxyModeDisabled: the proxy is not started.
+//   - apiserverProxyModeEnabled: the proxy is started and requests are impersonated using the
+//     caller's identity from the Tailscale LocalAPI.
+//   - apiserverProxyModeNoAuth: the proxy is started and requests are not impersonated and
+//     are passed through to the Kubernetes API.
+//
 // It never returns.
-func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
+func runAPIServerProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf, mode apiServerProxyMode) {
+	if mode == apiserverProxyModeDisabled {
+		return
+	}
 	ln, err := s.Listen("tcp", ":443")
 	if err != nil {
 		log.Fatalf("could not listen on :443: %v", err)
 	}
 	u, err := url.Parse(fmt.Sprintf("https://%s:%s", os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT_HTTPS")))
 	if err != nil {
-		log.Fatalf("runAuthProxy: failed to parse URL %v", err)
+		log.Fatalf("runAPIServerProxy: failed to parse URL %v", err)
 	}
 
 	lc, err := s.LocalClient()
 	if err != nil {
 		log.Fatalf("could not get local client: %v", err)
 	}
-	ap := &authProxy{
+	ap := &apiserverProxy{
 		logf: logf,
 		lc:   lc,
 		rp: &httputil.ReverseProxy{
@@ -120,6 +170,12 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 				// Replace the URL with the Kubernetes APIServer.
 				r.URL.Scheme = u.Scheme
 				r.URL.Host = u.Host
+				if mode == apiserverProxyModeNoAuth {
+					// If we are not providing authentication, then we are just
+					// proxying to the Kubernetes API, so we don't need to do
+					// anything else.
+					return
+				}
 
 				// We want to proxy to the Kubernetes API, but we want to use
 				// the caller's identity to do so. We do this by impersonating
@@ -157,7 +213,7 @@ func runAuthProxy(s *tsnet.Server, rt http.RoundTripper, logf logger.Logf) {
 		Handler:      ap,
 	}
 	if err := hs.ServeTLS(ln, "", ""); err != nil {
-		log.Fatalf("runAuthProxy: failed to serve %v", err)
+		log.Fatalf("runAPIServerProxy: failed to serve %v", err)
 	}
 }
 
@@ -177,7 +233,7 @@ type impersonateRule struct {
 
 // addImpersonationHeaders adds the appropriate headers to r to impersonate the
 // caller when proxying to the Kubernetes API. It uses the WhoIsResponse stashed
-// in the context by the authProxy.
+// in the context by the apiserverProxy.
 func addImpersonationHeaders(r *http.Request) error {
 	who := whoIsFromRequest(r)
 	rules, err := tailcfg.UnmarshalCapJSON[capRule](who.CapMap, capabilityName)

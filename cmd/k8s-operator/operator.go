@@ -47,12 +47,11 @@ func main() {
 	tailscale.I_Acknowledge_This_API_Is_Unstable = true
 
 	var (
-		tsNamespace        = defaultEnv("OPERATOR_NAMESPACE", "")
-		tslogging          = defaultEnv("OPERATOR_LOGGING", "info")
-		image              = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
-		priorityClassName  = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
-		tags               = defaultEnv("PROXY_TAGS", "tag:k8s")
-		shouldRunAuthProxy = defaultBool("AUTH_PROXY", false)
+		tsNamespace       = defaultEnv("OPERATOR_NAMESPACE", "")
+		tslogging         = defaultEnv("OPERATOR_LOGGING", "info")
+		image             = defaultEnv("PROXY_IMAGE", "tailscale/tailscale:latest")
+		priorityClassName = defaultEnv("PROXY_PRIORITY_CLASS_NAME", "")
+		tags              = defaultEnv("PROXY_TAGS", "tag:k8s")
 	)
 
 	var opts []kzap.Opts
@@ -70,10 +69,8 @@ func main() {
 	s, tsClient := initTSNet(zlog)
 	defer s.Close()
 	restConfig := config.GetConfigOrDie()
-	if shouldRunAuthProxy {
-		launchAuthProxy(zlog, restConfig, s)
-	}
-	startReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
+	maybeLaunchAPIServerProxy(zlog, restConfig, s)
+	runReconcilers(zlog, s, tsNamespace, restConfig, tsClient, image, priorityClassName, tags)
 }
 
 // initTSNet initializes the tsnet.Server and logs in to Tailscale. It uses the
@@ -180,9 +177,9 @@ waitOnline:
 	return s, tsClient
 }
 
-// startReconcilers starts the controller-runtime manager and registers the
-// ServiceReconciler.
-func startReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
+// runReconcilers starts the controller-runtime manager and registers the
+// ServiceReconciler. It blocks forever.
+func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string, restConfig *rest.Config, tsClient *tailscale.Client, image, priorityClassName, tags string) {
 	var (
 		isDefaultLoadBalancer = defaultBool("OPERATOR_DEFAULT_LOAD_BALANCER", false)
 	)
