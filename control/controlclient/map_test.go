@@ -20,6 +20,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/tstime"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -834,6 +835,40 @@ func TestPatchifyPeersChanged(t *testing.T) {
 					{NodeID: 3, DERPRegion: 33},
 				},
 			},
+		},
+		{
+			name: "change_exitnodednsresolvers",
+			mr0: &tailcfg.MapResponse{
+				Node: &tailcfg.Node{Name: "foo.bar.ts.net."},
+				Peers: []*tailcfg.Node{
+					{ID: 1, ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.exmaple.com"}}, Hostinfo: hi},
+				},
+			},
+			mr1: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 1, ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns2.exmaple.com"}}, Hostinfo: hi},
+				},
+			},
+			want: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 1, ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns2.exmaple.com"}}, Hostinfo: hi},
+				},
+			},
+		},
+		{
+			name: "same_exitnoderesolvers",
+			mr0: &tailcfg.MapResponse{
+				Node: &tailcfg.Node{Name: "foo.bar.ts.net."},
+				Peers: []*tailcfg.Node{
+					{ID: 1, ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.exmaple.com"}}, Hostinfo: hi},
+				},
+			},
+			mr1: &tailcfg.MapResponse{
+				PeersChanged: []*tailcfg.Node{
+					{ID: 1, ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.exmaple.com"}}, Hostinfo: hi},
+				},
+			},
+			want: &tailcfg.MapResponse{},
 		},
 	}
 	for _, tt := range tests {

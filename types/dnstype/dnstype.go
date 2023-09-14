@@ -8,6 +8,7 @@ package dnstype
 
 import (
 	"net/netip"
+	"slices"
 )
 
 // Resolver is the configuration for one DNS resolver.
@@ -50,4 +51,16 @@ func (r *Resolver) IPPort() (ipp netip.AddrPort, ok bool) {
 		return ipp, true
 	}
 	return
+}
+
+// Equal reports whether r and other are equal.
+func (r *Resolver) Equal(other *Resolver) bool {
+	if r == nil || other == nil {
+		return r == other
+	}
+	if r == other {
+		return true
+	}
+
+	return r.Addr == other.Addr && slices.Equal(r.BootstrapResolution, other.BootstrapResolution)
 }
