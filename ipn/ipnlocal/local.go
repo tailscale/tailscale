@@ -1126,10 +1126,22 @@ func (b *LocalBackend) UpdateNetmapDelta(muts []netmap.NodeMutation) (handled bo
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.updateNetmapDeltaLocked(muts)
+	handled = b.updateNetmapDeltaLocked(muts)
+	b.mu.Unlock()
+	if handled {
+		b.send(ipn.Notify{PeerMutations: muts})
+	}
+	return handled
 }
 
+// updateNetmapDeltaLocked updates the netmap in-place with the given mutations.
+// It returns whether all mutations were handled. The netmap may have been
+// mutated even if false is returned.
+//
+// It panics if it sees an unhandled mutation type. As of 2023-09-16, it is
+// necessary for all mutation types to be handled so that consumers of
+// ipn.Notify (e.g. WatchIPNBus) are able to correctly handle a stream of
+// mutations.
 func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (handled bool) {
 	if b.netMap == nil {
 		return false
@@ -1140,9 +1152,9 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 		// LocalBackend only cares about some types of mutations.
 		// (magicsock cares about different ones.)
 		switch m.(type) {
-		case netmap.NodeMutationOnline, netmap.NodeMutationLastSeen:
+		case netmap.NodeMutationOnline, netmap.NodeMutationLastSeen, netmap.NodeMutationDERPHome, netmap.NodeMutationEndpoints:
 		default:
-			continue
+			panic(fmt.Sprintf("unhandled mutation type: %T", m))
 		}
 
 		nodeID := m.NodeIDBeingMutated()
@@ -1153,10 +1165,17 @@ func (b *LocalBackend) updateNetmapDeltaLocked(muts []netmap.NodeMutation) (hand
 		mut := peers[idx].AsStruct()
 
 		switch m := m.(type) {
+		case netmap.NodeMutationDERPHome:
+			mut.DERP = fmt.Sprintf("%s:%v", tailcfg.DerpMagicIP, m.DERPRegion)
 		case netmap.NodeMutationOnline:
 			mut.Online = ptr.To(m.Online)
 		case netmap.NodeMutationLastSeen:
 			mut.LastSeen = ptr.To(m.LastSeen)
+		case netmap.NodeMutationEndpoints:
+			mut.Endpoints = make([]string, len(m.Endpoints))
+			for i, ep := range m.Endpoints {
+				mut.Endpoints[i] = ep.String()
+			}
 		}
 		peers[idx] = mut.View()
 	}

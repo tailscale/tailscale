@@ -926,7 +926,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	wants := []*tailcfg.Node{
 		{
 			ID:   1,
-			DERP: "", // unmodified by the delta
+			DERP: "127.3.3.40:1",
 		},
 		{
 			ID:     2,

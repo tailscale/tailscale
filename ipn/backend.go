@@ -87,13 +87,14 @@ type Notify struct {
 	// For State InUseOtherUser, ErrMessage is not critical and just contains the details.
 	ErrMessage *string
 
-	LoginFinished *empty.Message     // non-nil when/if the login process succeeded
-	State         *State             // if non-nil, the new or current IPN state
-	Prefs         *PrefsView         // if non-nil && Valid, the new or current preferences
-	NetMap        *netmap.NetworkMap // if non-nil, the new or current netmap
-	Engine        *EngineStatus      // if non-nil, the new or current wireguard stats
-	BrowseToURL   *string            // if non-nil, UI should open a browser right now
-	BackendLogID  *string            // if non-nil, the public logtail ID used by backend
+	LoginFinished *empty.Message        // non-nil when/if the login process succeeded
+	State         *State                // if non-nil, the new or current IPN state
+	Prefs         *PrefsView            // if non-nil && Valid, the new or current preferences
+	NetMap        *netmap.NetworkMap    // if non-nil, the new or current netmap
+	PeerMutations []netmap.NodeMutation // if non-nil, the mutations to apply to NetMap.Peers
+	Engine        *EngineStatus         // if non-nil, the new or current wireguard stats
+	BrowseToURL   *string               // if non-nil, UI should open a browser right now
+	BackendLogID  *string               // if non-nil, the public logtail ID used by backend
 
 	// FilesWaiting if non-nil means that files are buffered in
 	// the Tailscale daemon and ready for local transfer to the
