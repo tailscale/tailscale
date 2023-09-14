@@ -22,6 +22,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
+	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -951,4 +952,110 @@ func TestUpdateNetmapDelta(t *testing.T) {
 			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
 		}
 	}
+}
+
+func TestWireguardExitNodeDNSResolvers(t *testing.T) {
+	type tc struct {
+		name          string
+		id            tailcfg.StableNodeID
+		peers         []*tailcfg.Node
+		wantOK        bool
+		wantResolvers []*dnstype.Resolver
+	}
+
+	tests := []tc{
+		{
+			name:          "no peers",
+			id:            "1",
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "non wireguard peer",
+			id:   "1",
+			peers: []*tailcfg.Node{
+				{
+					StableID:             "1",
+					IsWireGuardOnly:      false,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "no matching IDs",
+			id:   "2",
+			peers: []*tailcfg.Node{
+				{
+					StableID:             "1",
+					IsWireGuardOnly:      true,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        false,
+			wantResolvers: nil,
+		},
+		{
+			name: "wireguard peer",
+			id:   "1",
+			peers: []*tailcfg.Node{
+				{
+					StableID:             "1",
+					IsWireGuardOnly:      true,
+					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+				},
+			},
+			wantOK:        true,
+			wantResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
+		},
+	}
+
+	for _, tc := range tests {
+		peers := nodeViews(tc.peers)
+		nm := &netmap.NetworkMap{
+			Peers: peers,
+		}
+		gotResolvers, gotOK := wireguardExitNodeDNSResolvers(nm, tc.id)
+
+		if gotOK != tc.wantOK || !resolversEqual(gotResolvers, tc.wantResolvers) {
+			t.Errorf("case: %s: got %v, %v, want %v, %v", tc.name, gotOK, gotResolvers, tc.wantOK, tc.wantResolvers)
+		}
+	}
+}
+
+func TestDNSConfigForNetmapForWireguardExitNode(t *testing.T) {
+	resolvers := []*dnstype.Resolver{{Addr: "dns.example.com"}}
+	nm := &netmap.NetworkMap{
+		Peers: nodeViews([]*tailcfg.Node{
+			{
+				StableID:             "1",
+				IsWireGuardOnly:      true,
+				ExitNodeDNSResolvers: resolvers,
+				Hostinfo:             (&tailcfg.Hostinfo{}).View(),
+			},
+		}),
+	}
+
+	prefs := &ipn.Prefs{
+		ExitNodeID: "1",
+		CorpDNS:    true,
+	}
+
+	got := dnsConfigForNetmap(nm, prefs.View(), t.Logf, "")
+	if !resolversEqual(got.DefaultResolvers, resolvers) {
+		t.Errorf("got %v, want %v", got.DefaultResolvers, resolvers)
+	}
+}
+
+func resolversEqual(a, b []*dnstype.Resolver) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].Equal(b[i]) {
+			return false
+		}
+	}
+	return true
 }
