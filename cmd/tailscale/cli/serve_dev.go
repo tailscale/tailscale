@@ -32,9 +32,9 @@ import (
 type execFunc func(ctx context.Context, args []string) error
 
 type commandInfo struct {
-	Name      string
-	ShortHelp string
-	LongHelp  string
+	name      string
+	shortHelp string
+	longHelp  string
 }
 
 var serveHelpCommon = strings.TrimSpace(`
@@ -69,17 +69,17 @@ const (
 
 var infoMap = map[serveMode]commandInfo{
 	serve: {
-		Name:      "serve",
-		ShortHelp: "Serve content and local servers on your tailnet",
-		LongHelp: strings.Join([]string{
+		name:      "serve",
+		shortHelp: "Serve content and local servers on your tailnet",
+		longHelp: strings.Join([]string{
 			"Serve enables you to share a local server securely within your tailnet.\n",
 			"To share a local server on the internet, use `tailscale funnel`\n\n",
 		}, "\n"),
 	},
 	funnel: {
-		Name:      "funnel",
-		ShortHelp: "Serve content and local servers on the internet",
-		LongHelp: strings.Join([]string{
+		name:      "funnel",
+		shortHelp: "Serve content and local servers on the internet",
+		longHelp: strings.Join([]string{
 			"Funnel enables you to share a local server on the internet using Tailscale.\n",
 			"To share only within your tailnet, use `tailscale serve`\n\n",
 		}, "\n"),
@@ -103,14 +103,14 @@ func newServeDevCommand(e *serveEnv, subcmd serveMode) *ffcli.Command {
 	info := infoMap[subcmd]
 
 	return &ffcli.Command{
-		Name:      info.Name,
-		ShortHelp: info.ShortHelp,
+		Name:      info.name,
+		ShortHelp: info.shortHelp,
 		ShortUsage: strings.Join([]string{
-			fmt.Sprintf("%s <target>", info.Name),
-			fmt.Sprintf("%s status [--json]", info.Name),
-			fmt.Sprintf("%s reset", info.Name),
+			fmt.Sprintf("%s <target>", info.name),
+			fmt.Sprintf("%s status [--json]", info.name),
+			fmt.Sprintf("%s reset", info.name),
 		}, "\n  "),
-		LongHelp: info.LongHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.Name, info.Name),
+		LongHelp: info.longHelp + fmt.Sprintf(strings.TrimSpace(serveHelpCommon), info.name, info.name),
 		Exec:     e.runServeCombined(subcmd),
 
 		FlagSet: e.newFlags("serve-set", func(fs *flag.FlagSet) {
@@ -284,6 +284,8 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			return err
 		}
 
+		e.trackMetric(ctx, subcmd, srvType, e.bg, turnOff)
+
 		if msg != "" {
 			fmt.Fprintln(os.Stderr, msg)
 		}
@@ -350,6 +352,25 @@ func findConfig(sc *ipn.ServeConfig, port uint16) (*ipn.ServeConfig, bool) {
 		}
 	}
 	return nil, false
+}
+
+// trackMetric increments a metric based on the serve mode, serve type, and
+// background flag and if it's turning off or on.
+// example: cli_tailscale_funnel_on_bg_https
+func (e *serveEnv) trackMetric(ctx context.Context, mode serveMode, srvType serveType, bg bool, off bool) {
+	visibility := "fg"
+	if bg {
+		visibility = "bg"
+	}
+
+	action := "on"
+	if off {
+		action = "off"
+	}
+
+	name := fmt.Sprintf("cli_tailscale_%s_%s_%s_%s", mode, action, visibility, srvType)
+
+	e.lc.IncrementCounter(ctx, name, 1)
 }
 
 func (e *serveEnv) setServe(sc *ipn.ServeConfig, st *ipnstate.Status, dnsName string, srvType serveType, srvPort uint16, mount string, target string, allowFunnel bool) error {
@@ -452,7 +473,7 @@ func (e *serveEnv) messageForPort(sc *ipn.ServeConfig, st *ipnstate.Status, dnsN
 	}
 
 	output.WriteString("\nServe started and running in the background.\n")
-	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", infoMap[e.subcmd].Name))
+	output.WriteString(fmt.Sprintf("To disable the proxy, run: tailscale %s off", e.subcmd))
 
 	return output.String()
 }
@@ -805,5 +826,16 @@ func (s serveType) String() string {
 		return "tls-terminated-tcp"
 	default:
 		return "unknownServeType"
+	}
+}
+
+func (s serveMode) String() string {
+	switch s {
+	case serve:
+		return "serve"
+	case funnel:
+		return "funnel"
+	default:
+		return "unknownServeMode"
 	}
 }

@@ -1044,7 +1044,7 @@ func TestIsLegacyInvocation(t *testing.T) {
 
 	for _, tt := range tests {
 		args := strings.Join(tt.args, " ")
-		t.Run(fmt.Sprintf("%v %s", infoMap[tt.subcmd].Name, args), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%v %s", tt.subcmd, args), func(t *testing.T) {
 			actual := isLegacyInvocation(tt.subcmd, tt.args)
 
 			if actual != tt.expected {
