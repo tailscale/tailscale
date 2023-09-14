@@ -266,7 +266,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if turnOff {
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
 		} else {
-			if err := validateConfig(sc, srvPort, srvType); err != nil {
+			if err := validateConfig(parentSC, srvPort, srvType); err != nil {
 				return err
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
