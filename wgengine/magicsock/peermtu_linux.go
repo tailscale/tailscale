@@ -21,7 +21,7 @@ func setDontFragment(pconn nettype.PacketConn, network string) (err error) {
 					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
 				}
 				if network == "udp6" {
-					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
+					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
 				}
 			})
 		}
