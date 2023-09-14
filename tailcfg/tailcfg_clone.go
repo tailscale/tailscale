@@ -65,6 +65,12 @@ func (src *Node) Clone() *Node {
 	if dst.SelfNodeV4MasqAddrForThisPeer != nil {
 		dst.SelfNodeV4MasqAddrForThisPeer = ptr.To(*src.SelfNodeV4MasqAddrForThisPeer)
 	}
+	if src.ExitNodeDNSResolvers != nil {
+		dst.ExitNodeDNSResolvers = make([]*dnstype.Resolver, len(src.ExitNodeDNSResolvers))
+		for i := range dst.ExitNodeDNSResolvers {
+			dst.ExitNodeDNSResolvers[i] = src.ExitNodeDNSResolvers[i].Clone()
+		}
+	}
 	return dst
 }
 
@@ -101,6 +107,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
 // Clone makes a deep copy of Hostinfo.

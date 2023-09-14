@@ -693,6 +693,19 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			if va == nil || vb == nil || *va != *vb {
 				return nil, false
 			}
+		case "ExitNodeDNSResolvers":
+			va, vb := was.ExitNodeDNSResolvers(), views.SliceOfViews(n.ExitNodeDNSResolvers)
+
+			if va.Len() != vb.Len() {
+				return nil, false
+			}
+
+			for i := range va.LenIter() {
+				if !va.At(i).Equal(vb.At(i)) {
+					return nil, false
+				}
+			}
+
 		}
 	}
 	if ret != nil {

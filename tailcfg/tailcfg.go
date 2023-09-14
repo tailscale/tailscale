@@ -336,6 +336,10 @@ type Node struct {
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
 	// order to be reachable.
 	IsWireGuardOnly bool `json:",omitempty"`
+
+	// ExitNodeDNSResolvers is the list of DNS servers that should be used when this
+	// node is marked IsWireGuardOnly and being used as an exit node.
+	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
 }
 
 // DisplayName returns the user-facing name for a node which should
