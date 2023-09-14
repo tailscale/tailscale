@@ -3288,6 +3288,13 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, prefs ipn.PrefsView, logf logger.
 		return dcfg
 	}
 
+	// If we're using an exit node and that exit node is IsWireGuardOnly with
+	// ExitNodeDNSResolver set, then add that as the default.
+	if resolvers, ok := wireguardExitNodeDNSResolvers(nm, prefs.ExitNodeID()); ok {
+		addDefault(resolvers)
+		return dcfg
+	}
+
 	addDefault(nm.DNS.Resolvers)
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
@@ -4674,6 +4681,30 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID)
 		}
 	}
 	return "", false
+}
+
+// wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
+// WireGuard-only exit node, if it has resolver addresses.
+func wireguardExitNodeDNSResolvers(nm *netmap.NetworkMap, exitNodeID tailcfg.StableNodeID) ([]*dnstype.Resolver, bool) {
+	if exitNodeID.IsZero() {
+		return nil, false
+	}
+
+	for _, p := range nm.Peers {
+		if p.StableID() == exitNodeID && p.IsWireGuardOnly() {
+			resolvers := p.ExitNodeDNSResolvers()
+			if !resolvers.IsNil() && resolvers.Len() > 0 {
+				copies := make([]*dnstype.Resolver, resolvers.Len())
+				for i := range resolvers.LenIter() {
+					copies[i] = resolvers.At(i).AsStruct()
+				}
+				return copies, true
+			}
+			return nil, false
+		}
+	}
+
+	return nil, false
 }
 
 func peerCanProxyDNS(p tailcfg.NodeView) bool {
