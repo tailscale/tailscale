@@ -334,8 +334,7 @@ type Node struct {
 
 	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
-	// order to be reachable. TODO(#7826): 2023-04-06: only the first parseable
-	// Endpoint is used, see #7826 for updates.
+	// order to be reachable.
 	IsWireGuardOnly bool `json:",omitempty"`
 }
 
