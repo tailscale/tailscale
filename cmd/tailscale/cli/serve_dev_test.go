@@ -788,6 +788,7 @@ func TestValidateConfig(t *testing.T) {
 		cfg       *ipn.ServeConfig
 		servePort uint16
 		serveType serveType
+		bg        bool
 		wantErr   bool
 	}{
 		{
@@ -805,6 +806,7 @@ func TestValidateConfig(t *testing.T) {
 					443: {HTTPS: true},
 				},
 			},
+			bg:        true,
 			servePort: 10000,
 			serveType: serveTypeHTTPS,
 		},
@@ -816,17 +818,19 @@ func TestValidateConfig(t *testing.T) {
 					443: {TCPForward: "http://localhost:4545"},
 				},
 			},
+			bg:        true,
 			servePort: 443,
 			serveType: serveTypeTCP,
 		},
 		{
 			name: "override_bg_tcp",
-			desc: "error when overwriting previous port under a different serve type ",
+			desc: "error when overwriting previous port under a different serve type",
 			cfg: &ipn.ServeConfig{
 				TCP: map[uint16]*ipn.TCPPortHandler{
 					443: {HTTPS: true},
 				},
 			},
+			bg:        true,
 			servePort: 443,
 			serveType: serveTypeHTTP,
 			wantErr:   true,
@@ -869,7 +873,8 @@ func TestValidateConfig(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateConfig(tc.cfg, tc.servePort, tc.serveType)
+			se := serveEnv{bg: tc.bg}
+			err := se.validateConfig(tc.cfg, tc.servePort, tc.serveType)
 			if err == nil && tc.wantErr {
 				t.Fatal("expected an error but got nil")
 			}

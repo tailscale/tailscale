@@ -266,7 +266,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 		if turnOff {
 			err = e.unsetServe(sc, dnsName, srvType, srvPort, mount)
 		} else {
-			if err := validateConfig(parentSC, srvPort, srvType); err != nil {
+			if err := e.validateConfig(parentSC, srvPort, srvType); err != nil {
 				return err
 			}
 			err = e.setServe(sc, st, dnsName, srvType, srvPort, mount, args[0], funnel)
@@ -304,13 +304,16 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 	}
 }
 
-func validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
+func (e *serveEnv) validateConfig(sc *ipn.ServeConfig, port uint16, wantServe serveType) error {
 	sc, isFg := findConfig(sc, port)
 	if sc == nil {
 		return nil
 	}
 	if isFg {
 		return errors.New("foreground already exists under this port")
+	}
+	if !e.bg {
+		return errors.New("background serve already exists under this port")
 	}
 	existingServe := serveFromPortHandler(sc.TCP[port])
 	if wantServe != existingServe {
