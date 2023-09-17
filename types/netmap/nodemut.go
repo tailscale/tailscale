@@ -4,6 +4,7 @@
 package netmap
 
 import (
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"tailscale.com/tailcfg"
+	"tailscale.com/types/ptr"
 	"tailscale.com/util/cmpx"
 )
 
@@ -18,6 +20,7 @@ import (
 // the change of a node's state.
 type NodeMutation interface {
 	NodeIDBeingMutated() tailcfg.NodeID
+	Apply(*tailcfg.Node)
 }
 
 type mutatingNodeID tailcfg.NodeID
@@ -31,10 +34,22 @@ type NodeMutationDERPHome struct {
 	DERPRegion int
 }
 
+func (m NodeMutationDERPHome) Apply(n *tailcfg.Node) {
+	n.DERP = fmt.Sprintf("127.3.3.40:%v", m.DERPRegion)
+}
+
 // NodeMutation is a NodeMutation that says a node's endpoints have changed.
 type NodeMutationEndpoints struct {
 	mutatingNodeID
 	Endpoints []netip.AddrPort
+}
+
+func (m NodeMutationEndpoints) Apply(n *tailcfg.Node) {
+	eps := make([]string, len(m.Endpoints))
+	for i, ep := range m.Endpoints {
+		eps[i] = ep.String()
+	}
+	n.Endpoints = eps
 }
 
 // NodeMutationOnline is a NodeMutation that says a node is now online or
@@ -44,11 +59,19 @@ type NodeMutationOnline struct {
 	Online bool
 }
 
+func (m NodeMutationOnline) Apply(n *tailcfg.Node) {
+	n.Online = ptr.To(m.Online)
+}
+
 // NodeMutationLastSeen is a NodeMutation that says a node's LastSeen
 // value should be set to the current time.
 type NodeMutationLastSeen struct {
 	mutatingNodeID
 	LastSeen time.Time
+}
+
+func (m NodeMutationLastSeen) Apply(n *tailcfg.Node) {
+	n.LastSeen = ptr.To(m.LastSeen)
 }
 
 var peerChangeFields = sync.OnceValue(func() []reflect.StructField {
