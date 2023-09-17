@@ -378,16 +378,22 @@ func newTestBackend(t *testing.T) *LocalBackend {
 			},
 		},
 	}
-	b.nodeByAddr = map[netip.Addr]tailcfg.NodeView{
-		netip.MustParseAddr("100.150.151.152"): (&tailcfg.Node{
+	b.peers = map[tailcfg.NodeID]tailcfg.NodeView{
+		152: (&tailcfg.Node{
+			ID:           152,
 			ComputedName: "some-peer",
 			User:         tailcfg.UserID(1),
 		}).View(),
-		netip.MustParseAddr("100.150.151.153"): (&tailcfg.Node{
+		153: (&tailcfg.Node{
+			ID:           153,
 			ComputedName: "some-tagged-peer",
 			Tags:         []string{"tag:server", "tag:test"},
 			User:         tailcfg.UserID(1),
 		}).View(),
+	}
+	b.nodeByAddr = map[netip.Addr]tailcfg.NodeID{
+		netip.MustParseAddr("100.150.151.152"): 152,
+		netip.MustParseAddr("100.150.151.153"): 153,
 	}
 	return b
 }
