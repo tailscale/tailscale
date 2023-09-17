@@ -35,14 +35,15 @@ func dnsMapFromNetworkMap(nm *netmap.NetworkMap) dnsMap {
 	ret := make(dnsMap)
 	suffix := nm.MagicDNSSuffix()
 	have4 := false
-	if nm.Name != "" && len(nm.Addresses) > 0 {
-		ip := nm.Addresses[0].Addr()
+	addrs := nm.GetAddresses()
+	if nm.Name != "" && addrs.Len() > 0 {
+		ip := addrs.At(0).Addr()
 		ret[canonMapKey(nm.Name)] = ip
 		if dnsname.HasSuffix(nm.Name, suffix) {
 			ret[canonMapKey(dnsname.TrimSuffix(nm.Name, suffix))] = ip
 		}
-		for _, a := range nm.Addresses {
-			if a.Addr().Is4() {
+		for i := range addrs.LenIter() {
+			if addrs.At(i).Addr().Is4() {
 				have4 = true
 			}
 		}

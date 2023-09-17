@@ -408,7 +408,9 @@ func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	if nm == nil {
 		return
 	}
-	for _, addr := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		addr := addrs.At(i)
 		ip := addr.Addr()
 		if ip.Is6() {
 			ip6 = ip

@@ -541,7 +541,7 @@ func (b *LocalBackend) linkChange(delta *netmon.ChangeDelta) {
 	b.updateFilterLocked(b.netMap, b.pm.CurrentPrefs())
 
 	if peerAPIListenAsync && b.netMap != nil && b.state == ipn.Running {
-		want := len(b.netMap.Addresses)
+		want := b.netMap.GetAddresses().Len()
 		if len(b.peerAPIListeners) < want {
 			b.logf("linkChange: peerAPIListeners too low; trying again")
 			go b.initPeerAPIListener()
@@ -711,8 +711,9 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 
 	var tailscaleIPs []netip.Addr
 	if b.netMap != nil {
-		for _, addr := range b.netMap.Addresses {
-			if addr.IsSingleIP() {
+		addrs := b.netMap.GetAddresses()
+		for i := range addrs.LenIter() {
+			if addr := addrs.At(i); addr.IsSingleIP() {
 				sb.AddTailscaleIP(addr.Addr())
 				tailscaleIPs = append(tailscaleIPs, addr.Addr())
 			}
@@ -872,7 +873,9 @@ func (b *LocalBackend) peerCapsLocked(src netip.Addr) tailcfg.PeerCapMap {
 	if filt == nil {
 		return nil
 	}
-	for _, a := range b.netMap.Addresses {
+	addrs := b.netMap.GetAddresses()
+	for i := range addrs.LenIter() {
+		a := addrs.At(i)
 		if !a.IsSingleIP() {
 			continue
 		}
@@ -1566,7 +1569,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	// quite hard to debug, so save yourself the trouble.
 	var (
 		haveNetmap   = netMap != nil
-		addrs        []netip.Prefix
+		addrs        views.Slice[netip.Prefix]
 		packetFilter []filter.Match
 		localNetsB   netipx.IPSetBuilder
 		logNetsB     netipx.IPSetBuilder
@@ -1577,9 +1580,9 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 	logNetsB.AddPrefix(tsaddr.TailscaleULARange())
 	logNetsB.RemovePrefix(tsaddr.ChromeOSVMRange())
 	if haveNetmap {
-		addrs = netMap.Addresses
-		for _, p := range addrs {
-			localNetsB.AddPrefix(p)
+		addrs = netMap.GetAddresses()
+		for i := range addrs.LenIter() {
+			localNetsB.AddPrefix(addrs.At(i))
 		}
 		packetFilter = netMap.PacketFilter
 
@@ -1631,7 +1634,7 @@ func (b *LocalBackend) updateFilterLocked(netMap *netmap.NetworkMap, prefs ipn.P
 
 	changed := deephash.Update(&b.filterHash, &struct {
 		HaveNetmap  bool
-		Addrs       []netip.Prefix
+		Addrs       views.Slice[netip.Prefix]
 		FilterMatch []filter.Match
 		LocalNets   []netipx.IPRange
 		LogNets     []netipx.IPRange
@@ -2893,7 +2896,7 @@ func (b *LocalBackend) handlePeerAPIConn(remote, local netip.AddrPort, c net.Con
 
 func (b *LocalBackend) isLocalIP(ip netip.Addr) bool {
 	nm := b.NetMap()
-	return nm != nil && slices.Contains(nm.Addresses, netip.PrefixFrom(ip, ip.BitLen()))
+	return nm != nil && views.SliceContains(nm.GetAddresses(), netip.PrefixFrom(ip, ip.BitLen()))
 }
 
 var (
@@ -3399,10 +3402,11 @@ func (b *LocalBackend) initPeerAPIListener() {
 		return
 	}
 
-	if len(b.netMap.Addresses) == len(b.peerAPIListeners) {
+	addrs := b.netMap.GetAddresses()
+	if addrs.Len() == len(b.peerAPIListeners) {
 		allSame := true
 		for i, pln := range b.peerAPIListeners {
-			if pln.ip != b.netMap.Addresses[i].Addr() {
+			if pln.ip != addrs.At(i).Addr() {
 				allSame = false
 				break
 			}
@@ -3416,7 +3420,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.closePeerAPIListenersLocked()
 
 	selfNode := b.netMap.SelfNode
-	if len(b.netMap.Addresses) == 0 || !selfNode.Valid() {
+	if !selfNode.Valid() || b.netMap.GetAddresses().Len() == 0 {
 		return
 	}
 
@@ -3437,7 +3441,8 @@ func (b *LocalBackend) initPeerAPIListener() {
 	b.peerAPIServer = ps
 
 	isNetstack := b.sys.IsNetstack()
-	for i, a := range b.netMap.Addresses {
+	for i := range addrs.LenIter() {
+		a := addrs.At(i)
 		var ln net.Listener
 		var err error
 		skipListen := i > 0 && isNetstack
@@ -3721,11 +3726,12 @@ func (b *LocalBackend) enterStateLockedOnEntry(newState ipn.State) {
 		// Needed so that UpdateEndpoints can run
 		b.e.RequestStatus()
 	case ipn.Running:
-		var addrs []string
-		for _, addr := range netMap.Addresses {
-			addrs = append(addrs, addr.Addr().String())
+		var addrStrs []string
+		addrs := netMap.GetAddresses()
+		for i := range addrs.LenIter() {
+			addrStrs = append(addrStrs, addrs.At(i).Addr().String())
 		}
-		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrs, " "))
+		systemd.Status("Connected; %s; %s", activeLogin, strings.Join(addrStrs, " "))
 	case ipn.NoState:
 		// Do nothing.
 	default:
@@ -4838,13 +4844,14 @@ func (b *LocalBackend) handleQuad100Port80Conn(w http.ResponseWriter, r *http.Re
 		io.WriteString(w, "No netmap.\n")
 		return
 	}
-	if len(b.netMap.Addresses) == 0 {
+	addrs := b.netMap.GetAddresses()
+	if addrs.Len() == 0 {
 		io.WriteString(w, "No local addresses.\n")
 		return
 	}
 	io.WriteString(w, "<p>Local addresses:</p><ul>\n")
-	for _, ipp := range b.netMap.Addresses {
-		fmt.Fprintf(w, "<li>%v</li>\n", ipp.Addr())
+	for i := range addrs.LenIter() {
+		fmt.Fprintf(w, "<li>%v</li>\n", addrs.At(i).Addr())
 	}
 	io.WriteString(w, "</ul>\n")
 }

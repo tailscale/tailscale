@@ -205,7 +205,9 @@ func (b *LocalBackend) updateServeTCPPortNetMapAddrListenersLocked(ports []uint1
 		return
 	}
 
-	for _, a := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		a := addrs.At(i)
 		for _, p := range ports {
 			addrPort := netip.AddrPortFrom(a.Addr(), p)
 			if _, ok := b.serveListeners[addrPort]; ok {
