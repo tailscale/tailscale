@@ -35,7 +35,8 @@ type NetworkMap struct {
 
 	// Addresses is SelfNode.Addresses. (IP addresses of this Node directly)
 	//
-	// TODO(bradfitz): remove this field and make this a method.
+	// Deprecated: use GetAddresses instead. As of 2023-09-17, this field
+	// is being phased out.
 	Addresses []netip.Prefix
 
 	// MachineStatus is either tailcfg.MachineAuthorized or tailcfg.MachineUnauthorized,
@@ -97,6 +98,22 @@ func (nm *NetworkMap) User() tailcfg.UserID {
 		return nm.SelfNode.User()
 	}
 	return 0
+}
+
+// GetAddresses returns the self node's addresses, or the zero value
+// if SelfNode is invalid.
+func (nm *NetworkMap) GetAddresses() views.Slice[netip.Prefix] {
+	var zero views.Slice[netip.Prefix]
+	if nm.Addresses != nil {
+		// For now (2023-09-17), let the deprecated Addressees field take
+		// precedence. This is a migration mechanism while we update tests &
+		// code cross-repo.
+		return views.SliceOf(nm.Addresses)
+	}
+	if !nm.SelfNode.Valid() {
+		return zero
+	}
+	return nm.SelfNode.Addresses()
 }
 
 // AnyPeersAdvertiseRoutes reports whether any peer is advertising non-exit node routes.

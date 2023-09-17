@@ -1816,8 +1816,8 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 	c.peers = curPeers
 
 	flags := c.debugFlagsLocked()
-	if len(nm.Addresses) > 0 {
-		c.firstAddrForTest = nm.Addresses[0].Addr()
+	if addrs := nm.GetAddresses(); addrs.Len() > 0 {
+		c.firstAddrForTest = addrs.At(0).Addr()
 	} else {
 		c.firstAddrForTest = netip.Addr{}
 	}
