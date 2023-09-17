@@ -31,6 +31,7 @@ import (
 
 	"go4.org/mem"
 	"go4.org/netipx"
+	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/control/controlclient"
@@ -1333,6 +1334,27 @@ func (b *LocalBackend) SetControlClientGetterForTesting(newControlClient func(co
 		panic("invalid use of SetControlClientGetterForTesting after Start")
 	}
 	b.ccGen = newControlClient
+}
+
+// NodeViewByIDForTest returns the state of the node with the given ID
+// for integration tests in another repo.
+func (b *LocalBackend) NodeViewByIDForTest(id tailcfg.NodeID) (_ tailcfg.NodeView, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, ok := b.peers[id]
+	return n, ok
+}
+
+// PeersForTest returns all the current peers, sorted by Node.ID,
+// for integration tests in another repo.
+func (b *LocalBackend) PeersForTest() []tailcfg.NodeView {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ret := xmaps.Values(b.peers)
+	slices.SortFunc(ret, func(a, b tailcfg.NodeView) int {
+		return cmpx.Compare(a.ID(), b.ID())
+	})
+	return ret
 }
 
 func (b *LocalBackend) getNewControlClientFunc() clientGen {
