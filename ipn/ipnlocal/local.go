@@ -650,18 +650,8 @@ func (b *LocalBackend) StatusWithoutPeers() *ipnstate.Status {
 
 // UpdateStatus implements ipnstate.StatusUpdater.
 func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
-	b.e.UpdateStatus(sb)
-	var extraLocked func(*ipnstate.StatusBuilder)
-	if sb.WantPeers {
-		extraLocked = b.populatePeerStatusLocked
-	}
-	b.updateStatus(sb, extraLocked)
-}
+	b.e.UpdateStatus(sb) // does wireguard + magicsock status
 
-// updateStatus populates sb with status.
-//
-// extraLocked, if non-nil, is called while b.mu is still held.
-func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func(*ipnstate.StatusBuilder)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -759,8 +749,8 @@ func (b *LocalBackend) updateStatus(sb *ipnstate.StatusBuilder, extraLocked func
 	// TODO: hostinfo, and its networkinfo
 	// TODO: EngineStatus copy (and deprecate it?)
 
-	if extraLocked != nil {
-		extraLocked(sb)
+	if sb.WantPeers {
+		b.populatePeerStatusLocked(sb)
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"tailscale.com/tailcfg"
@@ -298,7 +297,6 @@ type PeerStatus struct {
 type StatusBuilder struct {
 	WantPeers bool // whether caller wants peers
 
-	mu     sync.Mutex
 	locked bool
 	st     Status
 }
@@ -307,19 +305,13 @@ type StatusBuilder struct {
 //
 // It may not assume other fields of status are already populated, and
 // may not retain or write to the Status after f returns.
-//
-// MutateStatus acquires a lock so f must not call back into sb.
 func (sb *StatusBuilder) MutateStatus(f func(*Status)) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	f(&sb.st)
 }
 
 // Status returns the status that has been built up so far from previous
 // calls to MutateStatus, MutateSelfStatus, AddPeer, etc.
 func (sb *StatusBuilder) Status() *Status {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	sb.locked = true
 	return &sb.st
 }
@@ -331,8 +323,6 @@ func (sb *StatusBuilder) Status() *Status {
 //
 // MutateStatus acquires a lock so f must not call back into sb.
 func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.st.Self == nil {
 		sb.st.Self = new(PeerStatus)
 	}
@@ -341,8 +331,6 @@ func (sb *StatusBuilder) MutateSelfStatus(f func(*PeerStatus)) {
 
 // AddUser adds a user profile to the status.
 func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddUser after Locked")
 		return
@@ -357,8 +345,6 @@ func (sb *StatusBuilder) AddUser(id tailcfg.UserID, up tailcfg.UserProfile) {
 
 // AddIP adds a Tailscale IP address to the status.
 func (sb *StatusBuilder) AddTailscaleIP(ip netip.Addr) {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddIP after Locked")
 		return
@@ -375,8 +361,6 @@ func (sb *StatusBuilder) AddPeer(peer key.NodePublic, st *PeerStatus) {
 		panic("nil PeerStatus")
 	}
 
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
 	if sb.locked {
 		log.Printf("[unexpected] ipnstate: AddPeer after Locked")
 		return
