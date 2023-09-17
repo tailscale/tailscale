@@ -1833,53 +1833,6 @@ func shrinkDefaultRoute(route netip.Prefix, localInterfaceRoutes *netipx.IPSet, 
 	return b.IPSet()
 }
 
-// dnsCIDRsEqual determines whether two CIDR lists are equal
-// for DNS map construction purposes (that is, only the first entry counts).
-func dnsCIDRsEqual(newAddr, oldAddr views.Slice[netip.Prefix]) bool {
-	if newAddr.Len() != oldAddr.Len() {
-		return false
-	}
-	if newAddr.Len() == 0 || newAddr.At(0) == oldAddr.At(0) {
-		return true
-	}
-	return false
-}
-
-// dnsMapsEqual determines whether the new and the old network map
-// induce the same DNS map. It does so without allocating memory,
-// at the expense of giving false negatives if peers are reordered.
-func dnsMapsEqual(new, old *netmap.NetworkMap) bool {
-	if (old == nil) != (new == nil) {
-		return false
-	}
-	if old == nil && new == nil {
-		return true
-	}
-
-	if len(new.Peers) != len(old.Peers) {
-		return false
-	}
-
-	if new.Name != old.Name {
-		return false
-	}
-	if !dnsCIDRsEqual(views.SliceOf(new.Addresses), views.SliceOf(old.Addresses)) {
-		return false
-	}
-
-	for i, newPeer := range new.Peers {
-		oldPeer := old.Peers[i]
-		if newPeer.Name() != oldPeer.Name() {
-			return false
-		}
-		if !dnsCIDRsEqual(newPeer.Addresses(), oldPeer.Addresses()) {
-			return false
-		}
-	}
-
-	return true
-}
-
 // readPoller is a goroutine that receives service lists from
 // b.portpoll and propagates them into the controlclient's HostInfo.
 func (b *LocalBackend) readPoller() {
