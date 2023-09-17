@@ -654,7 +654,7 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := packetFilterPermitsUnlockedNodes(nodeViews(tt.peers), tt.filter); got != tt.want {
+			if got := packetFilterPermitsUnlockedNodes(peersMap(nodeViews(tt.peers)), tt.filter); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
@@ -786,6 +786,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		b.netMap.Peers = append(b.netMap.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
 	}
+	b.updatePeersFromNetmapLocked(b.netMap)
 
 	someTime := time.Unix(123, 0)
 	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
@@ -819,7 +820,7 @@ func TestUpdateNetmapDelta(t *testing.T) {
 	wants := []*tailcfg.Node{
 		{
 			ID:   1,
-			DERP: "", // unmodified by the delta
+			DERP: "127.3.3.40:1",
 		},
 		{
 			ID:     2,
@@ -835,12 +836,12 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		},
 	}
 	for _, want := range wants {
-		idx := b.netMap.PeerIndexByNodeID(want.ID)
-		if idx == -1 {
-			t.Errorf("ID %v not found in netmap", want.ID)
+		gotv, ok := b.peers[want.ID]
+		if !ok {
+			t.Errorf("netmap.Peer %v missing from b.peers", want.ID)
 			continue
 		}
-		got := b.netMap.Peers[idx].AsStruct()
+		got := gotv.AsStruct()
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
 		}
@@ -868,6 +869,7 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 			id:   "1",
 			peers: []*tailcfg.Node{
 				{
+					ID:                   1,
 					StableID:             "1",
 					IsWireGuardOnly:      false,
 					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
@@ -881,6 +883,7 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 			id:   "2",
 			peers: []*tailcfg.Node{
 				{
+					ID:                   1,
 					StableID:             "1",
 					IsWireGuardOnly:      true,
 					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
@@ -894,6 +897,7 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 			id:   "1",
 			peers: []*tailcfg.Node{
 				{
+					ID:                   1,
 					StableID:             "1",
 					IsWireGuardOnly:      true,
 					ExitNodeDNSResolvers: []*dnstype.Resolver{{Addr: "dns.example.com"}},
@@ -905,11 +909,9 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		peers := nodeViews(tc.peers)
-		nm := &netmap.NetworkMap{
-			Peers: peers,
-		}
-		gotResolvers, gotOK := wireguardExitNodeDNSResolvers(nm, tc.id)
+		peers := peersMap(nodeViews(tc.peers))
+		nm := &netmap.NetworkMap{}
+		gotResolvers, gotOK := wireguardExitNodeDNSResolvers(nm, peers, tc.id)
 
 		if gotOK != tc.wantOK || !resolversEqual(gotResolvers, tc.wantResolvers) {
 			t.Errorf("case: %s: got %v, %v, want %v, %v", tc.name, gotOK, gotResolvers, tc.wantOK, tc.wantResolvers)
@@ -919,23 +921,22 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 
 func TestDNSConfigForNetmapForWireguardExitNode(t *testing.T) {
 	resolvers := []*dnstype.Resolver{{Addr: "dns.example.com"}}
-	nm := &netmap.NetworkMap{
-		Peers: nodeViews([]*tailcfg.Node{
-			{
-				StableID:             "1",
-				IsWireGuardOnly:      true,
-				ExitNodeDNSResolvers: resolvers,
-				Hostinfo:             (&tailcfg.Hostinfo{}).View(),
-			},
-		}),
+	nm := &netmap.NetworkMap{}
+	peers := map[tailcfg.NodeID]tailcfg.NodeView{
+		1: (&tailcfg.Node{
+			ID:                   1,
+			StableID:             "1",
+			IsWireGuardOnly:      true,
+			ExitNodeDNSResolvers: resolvers,
+			Hostinfo:             (&tailcfg.Hostinfo{}).View(),
+		}).View(),
 	}
-
 	prefs := &ipn.Prefs{
 		ExitNodeID: "1",
 		CorpDNS:    true,
 	}
 
-	got := dnsConfigForNetmap(nm, prefs.View(), t.Logf, "")
+	got := dnsConfigForNetmap(nm, peers, prefs.View(), t.Logf, "")
 	if !resolversEqual(got.DefaultResolvers, resolvers) {
 		t.Errorf("got %v, want %v", got.DefaultResolvers, resolvers)
 	}
