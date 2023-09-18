@@ -32,6 +32,7 @@ export default defineConfig({
   ],
   build: {
     outDir: "build",
+    emptyOutDir: false,
     sourcemap: true,
   },
   esbuild: {

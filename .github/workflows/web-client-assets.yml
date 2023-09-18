@@ -1,0 +1,33 @@
+# When the web client is updated, make sure that we have checked in the build/index.html
+# that points to the correct asset files. Even though we don't check the asset files
+# into version control, the index.html file must be kept up-to-date to prevent "dirty"
+# client builds.
+name: Web Client Assets
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "client/web/**"
+  pull_request:
+    branches:
+      - "*"
+    paths:
+      - "client/web/**"
+
+concurrency:
+  group: ${{ github.workflow }}-$${{ github.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  yarn_build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: check that 'yarn --cwd client/web build' is clean
+        run: |
+          ./tool/yarn --cwd client/web install
+          ./tool/yarn --cwd client/web build
+          git diff --name-only --exit-code || (echo "client/web/build/index.html needs updating. Please run 'yarn --cwd client/web build'."; exit 1)

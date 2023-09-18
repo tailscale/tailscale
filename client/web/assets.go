@@ -5,7 +5,6 @@ package web
 
 import (
 	"embed"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -15,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tailscale.com/util/must"
+	"tailscale.com/client/web/build"
 )
 
 // This contains all files needed to build the frontend assets.
@@ -27,24 +26,14 @@ import (
 //go:embed yarn.lock index.html *.js *.json src/*
 var _ embed.FS
 
-//go:embed build/*
-var embeddedFS embed.FS
-
-// staticfiles serves static files from the build directory.
-var staticfiles http.Handler
-
-func init() {
-	buildFiles := must.Get(fs.Sub(embeddedFS, "build"))
-	staticfiles = http.FileServer(http.FS(buildFiles))
-}
-
 func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	if devMode {
 		// When in dev mode, proxy asset requests to the Vite dev server.
 		cleanup := startDevServer()
 		return devServerProxy(), cleanup
 	}
-	return staticfiles, nil
+
+	return http.FileServer(http.FS(build.FS)), nil
 }
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
