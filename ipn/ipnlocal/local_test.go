@@ -752,9 +752,9 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 		}
 		// Send a notification. Range over notifyWatchers to get the channel
 		// because WatchNotifications doesn't expose the handle for it.
-		for _, c := range b.notifyWatchers {
+		for _, sess := range b.notifyWatchers {
 			select {
-			case c <- n:
+			case sess.ch <- n:
 			default:
 				t.Fatalf("could not send notification")
 			}
