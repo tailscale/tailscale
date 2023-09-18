@@ -368,6 +368,16 @@ type Node struct {
 	ExitNodeDNSResolvers []*dnstype.Resolver `json:",omitempty"`
 }
 
+// HasCap reports whether the node has the given capability.
+func (v NodeView) HasCap(cap NodeCapability) bool {
+	return v.ж.HasCap(cap)
+}
+
+// HasCap reports whether the node has the given capability.
+func (v *Node) HasCap(cap NodeCapability) bool {
+	return v != nil && slices.Contains(v.Capabilities, cap)
+}
+
 // DisplayName returns the user-facing name for a node which should
 // be shown in client UIs.
 //
