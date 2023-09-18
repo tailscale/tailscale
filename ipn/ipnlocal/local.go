@@ -4094,8 +4094,8 @@ func (b *LocalBackend) setNetInfo(ni *tailcfg.NetInfo) {
 }
 
 func hasCapability(nm *netmap.NetworkMap, cap tailcfg.NodeCapability) bool {
-	if nm != nil && nm.SelfNode.Valid() {
-		return views.SliceContains(nm.SelfNode.Capabilities(), cap)
+	if nm != nil {
+		return nm.SelfNode.HasCap(cap)
 	}
 	return false
 }

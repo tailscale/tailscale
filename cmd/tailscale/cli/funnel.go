@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -147,15 +146,13 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 //
 // verifyFunnelEnabled may refresh the local state and modify the st input.
 func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status, port uint16) error {
-	hasFunnelAttrs := func(attrs []tailcfg.NodeCapability) bool {
-		hasHTTPS := slices.Contains(attrs, tailcfg.CapabilityHTTPS)
-		hasFunnel := slices.Contains(attrs, tailcfg.NodeAttrFunnel)
-		return hasHTTPS && hasFunnel
+	hasFunnelAttrs := func(selfNode *ipnstate.PeerStatus) bool {
+		return selfNode.HasCap(tailcfg.CapabilityHTTPS) && selfNode.HasCap(tailcfg.NodeAttrFunnel)
 	}
-	if hasFunnelAttrs(st.Self.Capabilities) {
+	if hasFunnelAttrs(st.Self) {
 		return nil // already enabled
 	}
-	enableErr := e.enableFeatureInteractive(ctx, "funnel", hasFunnelAttrs)
+	enableErr := e.enableFeatureInteractive(ctx, "funnel", tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel)
 	st, statusErr := e.getLocalClientStatusWithoutPeers(ctx) // get updated status; interactive flow may block
 	switch {
 	case statusErr != nil:

@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,9 +268,7 @@ func (e *serveEnv) runServe(ctx context.Context, args []string) error {
 		// on, enableFeatureInteractive will error. For now, we hide that
 		// error and maintain the previous behavior (prior to 2023-08-15)
 		// of letting them edit the serve config before enabling certs.
-		e.enableFeatureInteractive(ctx, "serve", func(caps []tailcfg.NodeCapability) bool {
-			return slices.Contains(caps, tailcfg.CapabilityHTTPS)
-		})
+		e.enableFeatureInteractive(ctx, "serve", tailcfg.CapabilityHTTPS)
 	}
 
 	srcPort, err := parseServePort(srcPortStr)
@@ -829,7 +826,7 @@ func parseServePort(s string) (uint16, error) {
 //
 // 2023-08-09: The only valid feature values are "serve" and "funnel".
 // This can be moved to some CLI lib when expanded past serve/funnel.
-func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, hasRequiredCapabilities func(caps []tailcfg.NodeCapability) bool) (err error) {
+func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string, caps ...tailcfg.NodeCapability) (err error) {
 	info, err := e.lc.QueryFeature(ctx, feature)
 	if err != nil {
 		return err
@@ -875,7 +872,16 @@ func (e *serveEnv) enableFeatureInteractive(ctx context.Context, feature string,
 			return err
 		}
 		if nm := n.NetMap; nm != nil && nm.SelfNode.Valid() {
-			if hasRequiredCapabilities(nm.SelfNode.Capabilities().AsSlice()) {
+			gotAll := true
+			for _, c := range caps {
+				if !nm.SelfNode.HasCap(c) {
+					// The feature is not yet enabled.
+					// Continue blocking until it is.
+					gotAll = false
+					break
+				}
+			}
+			if gotAll {
 				e.lc.IncrementCounter(ctx, fmt.Sprintf("%s_enabled", feature), 1)
 				fmt.Fprintln(os.Stdout, "Success.")
 				return nil
