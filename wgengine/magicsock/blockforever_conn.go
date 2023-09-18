@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -48,6 +49,7 @@ func (c *blockForeverConn) Close() error {
 	return nil
 }
 
-func (c *blockForeverConn) SetDeadline(t time.Time) error      { return errors.New("unimplemented") }
-func (c *blockForeverConn) SetReadDeadline(t time.Time) error  { return errors.New("unimplemented") }
-func (c *blockForeverConn) SetWriteDeadline(t time.Time) error { return errors.New("unimplemented") }
+func (c *blockForeverConn) SetDeadline(t time.Time) error         { return errors.New("unimplemented") }
+func (c *blockForeverConn) SetReadDeadline(t time.Time) error     { return errors.New("unimplemented") }
+func (c *blockForeverConn) SetWriteDeadline(t time.Time) error    { return errors.New("unimplemented") }
+func (c *blockForeverConn) SyscallConn() (syscall.RawConn, error) { return nil, errUnsupportedConnType }

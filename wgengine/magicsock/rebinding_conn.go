@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"golang.org/x/net/ipv6"
 	"tailscale.com/net/netaddr"
@@ -165,4 +166,14 @@ func (c *RebindingUDPConn) writeToUDPAddrPortWithInitPconn(pconn nettype.PacketC
 
 func (c *RebindingUDPConn) WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error) {
 	return c.writeToUDPAddrPortWithInitPconn(*c.pconnAtomic.Load(), b, addr)
+}
+
+func (c *RebindingUDPConn) SyscallConn() (syscall.RawConn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sc, ok := c.pconn.(syscall.Conn)
+	if !ok {
+		return nil, errUnsupportedConnType
+	}
+	return sc.SyscallConn()
 }

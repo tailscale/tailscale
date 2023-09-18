@@ -7,15 +7,27 @@ package magicsock
 
 import (
 	"errors"
-
-	"tailscale.com/types/nettype"
 )
 
-// setDontFragment sets the dontfragment sockopt on pconn on the platforms that support it,
-// for both IPv4 and IPv6.
-// (C.f. https://datatracker.ietf.org/doc/html/rfc3542#section-11.2 for IPv6 fragmentation)
-func setDontFragment(pconn nettype.PacketConn, network string) (err error) {
-	return errors.New("setting don't fragment bit not supported on this OS")
+// setDontFragment sets the don't fragment sockopt on the underlying connection
+// specified by network, which must be "udp4" or "udp6". See
+// https://datatracker.ietf.org/doc/html/rfc3542#section-11.2 for details on
+// IPv6 fragmentation.
+//
+// Return values:
+// - an error if peer MTU is not supported on this OS
+// - errNoActiveUDP if the underlying connection is not UDP
+// - otherwise, the result of setting the don't fragment bit
+func (c *Conn) setDontFragment(network string, enable bool) error {
+	return errors.New("peer path MTU discovery not supported on this OS")
+}
+
+// getDontFragment gets the don't fragment setting on the underlying connection
+// specified by network, which must be "udp4" or "udp6". Returns true if the
+// underlying connection is UDP and the don't fragment bit is set, otherwise
+// false.
+func (c *Conn) getDontFragment(network string) (bool, error) {
+	return false, nil
 }
 
 // CanPMTUD returns whether this platform supports performing peet path MTU discovery.
