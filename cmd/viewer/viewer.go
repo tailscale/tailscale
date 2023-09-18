@@ -237,9 +237,10 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 				slice := u
 				sElem := slice.Elem()
 				switch x := sElem.(type) {
-				case *types.Basic:
+				case *types.Basic, *types.Named:
+					sElem := it.QualifiedName(sElem)
 					args.MapValueView = fmt.Sprintf("views.Slice[%v]", sElem)
-					args.MapValueType = "[]" + sElem.String()
+					args.MapValueType = "[]" + sElem
 					args.MapFn = "views.SliceOf(t)"
 					template = "mapFnField"
 				case *types.Pointer:

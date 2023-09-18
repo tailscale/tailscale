@@ -746,6 +746,13 @@ func (b *LocalBackend) UpdateStatus(sb *ipnstate.StatusBuilder) {
 				if c := sn.Capabilities(); c.Len() > 0 {
 					ss.Capabilities = c.AsSlice()
 				}
+				if cm := sn.CapMap(); cm.Len() > 0 {
+					ss.CapMap = make(tailcfg.NodeCapMap, sn.CapMap().Len())
+					cm.Range(func(k tailcfg.NodeCapability, v views.Slice[tailcfg.RawMessage]) bool {
+						ss.CapMap[k] = v.AsSlice()
+						return true
+					})
+				}
 			}
 			for _, addr := range tailscaleIPs {
 				ss.TailscaleIPs = append(ss.TailscaleIPs, addr)
