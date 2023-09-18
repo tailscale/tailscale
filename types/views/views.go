@@ -276,6 +276,16 @@ func SliceContains[T comparable](v Slice[T], e T) bool {
 	return false
 }
 
+// SliceContainsFunc reports whether f reports true for any element in v.
+func SliceContainsFunc[T any](v Slice[T], f func(T) bool) bool {
+	for i := 0; i < v.Len(); i++ {
+		if f(v.At(i)) {
+			return true
+		}
+	}
+	return false
+}
+
 // SliceEqual is like the standard library's slices.Equal, but for two views.
 func SliceEqual[T comparable](a, b Slice[T]) bool {
 	return slices.Equal(a.ж, b.ж)
