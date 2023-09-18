@@ -6,6 +6,7 @@
 package controlknobs
 
 import (
+	"slices"
 	"sync/atomic"
 
 	"tailscale.com/syncs"
@@ -48,39 +49,30 @@ type Knobs struct {
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
 // node attributes (Node.Capabilities).
-func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability) {
+func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability, capMap tailcfg.NodeCapMap) {
 	if k == nil {
 		return
 	}
-	var (
-		keepFullWG          bool
-		disableDRPO         bool
-		disableUPnP         bool
-		randomizeClientPort bool
-		disableDeltaUpdates bool
-		oneCGNAT            opt.Bool
-		forceBackgroundSTUN bool
-	)
-	for _, attr := range selfNodeAttrs {
-		switch attr {
-		case tailcfg.NodeAttrDebugDisableWGTrim:
-			keepFullWG = true
-		case tailcfg.NodeAttrDebugDisableDRPO:
-			disableDRPO = true
-		case tailcfg.NodeAttrDisableUPnP:
-			disableUPnP = true
-		case tailcfg.NodeAttrRandomizeClientPort:
-			randomizeClientPort = true
-		case tailcfg.NodeAttrOneCGNATEnable:
-			oneCGNAT.Set(true)
-		case tailcfg.NodeAttrOneCGNATDisable:
-			oneCGNAT.Set(false)
-		case tailcfg.NodeAttrDebugForceBackgroundSTUN:
-			forceBackgroundSTUN = true
-		case tailcfg.NodeAttrDisableDeltaUpdates:
-			disableDeltaUpdates = true
-		}
+	has := func(attr tailcfg.NodeCapability) bool {
+		_, ok := capMap[attr]
+		return ok || slices.Contains(selfNodeAttrs, attr)
 	}
+	var (
+		keepFullWG          = has(tailcfg.NodeAttrDebugDisableWGTrim)
+		disableDRPO         = has(tailcfg.NodeAttrDebugDisableDRPO)
+		disableUPnP         = has(tailcfg.NodeAttrDisableUPnP)
+		randomizeClientPort = has(tailcfg.NodeAttrRandomizeClientPort)
+		disableDeltaUpdates = has(tailcfg.NodeAttrDisableDeltaUpdates)
+		oneCGNAT            opt.Bool
+		forceBackgroundSTUN = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
+	)
+
+	if has(tailcfg.NodeAttrOneCGNATEnable) {
+		oneCGNAT.Set(true)
+	} else if has(tailcfg.NodeAttrOneCGNATDisable) {
+		oneCGNAT.Set(false)
+	}
+
 	k.KeepFullWGConfig.Store(keepFullWG)
 	k.DisableDRPO.Store(disableDRPO)
 	k.DisableUPnP.Store(disableUPnP)

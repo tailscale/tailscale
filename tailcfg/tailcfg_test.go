@@ -346,7 +346,7 @@ func TestNodeEqual(t *testing.T) {
 		"Addresses", "AllowedIPs", "Endpoints", "DERP", "Hostinfo",
 		"Created", "Cap", "Tags", "PrimaryRoutes",
 		"LastSeen", "Online", "MachineAuthorized",
-		"Capabilities",
+		"Capabilities", "CapMap",
 		"UnsignedPeerAPIOnly",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
@@ -544,6 +544,45 @@ func TestNodeEqual(t *testing.T) {
 			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			true,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"foo"`},
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"foo"`},
+				},
+			},
+			true,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"bar": []RawMessage{`"foo"`},
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"bar"`},
+				},
+			},
+			false,
+		},
+		{
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": nil,
+				},
+			},
+			&Node{
+				CapMap: NodeCapMap{
+					"foo": []RawMessage{`"bar"`},
+				},
+			},
+			false,
 		},
 	}
 	for i, tt := range tests {

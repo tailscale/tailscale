@@ -62,6 +62,12 @@ func (src *Node) Clone() *Node {
 		dst.Online = ptr.To(*src.Online)
 	}
 	dst.Capabilities = append(src.Capabilities[:0:0], src.Capabilities...)
+	if dst.CapMap != nil {
+		dst.CapMap = map[NodeCapability][]RawMessage{}
+		for k := range src.CapMap {
+			dst.CapMap[k] = append([]RawMessage{}, src.CapMap[k]...)
+		}
+	}
 	if dst.SelfNodeV4MasqAddrForThisPeer != nil {
 		dst.SelfNodeV4MasqAddrForThisPeer = ptr.To(*src.SelfNodeV4MasqAddrForThisPeer)
 	}
@@ -99,6 +105,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	Online                        *bool
 	MachineAuthorized             bool
 	Capabilities                  []NodeCapability
+	CapMap                        NodeCapMap
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string
 	computedHostIfDifferent       string

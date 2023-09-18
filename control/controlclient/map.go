@@ -187,8 +187,9 @@ func (ms *mapSession) HandleNonKeepAliveMapResponse(ctx context.Context, resp *t
 	if resp.Node != nil {
 		if DevKnob.StripCaps() {
 			resp.Node.Capabilities = nil
+			resp.Node.CapMap = nil
 		}
-		ms.controlKnobs.UpdateFromNodeAttributes(resp.Node.Capabilities)
+		ms.controlKnobs.UpdateFromNodeAttributes(resp.Node.Capabilities, resp.Node.CapMap)
 	}
 
 	// Call Node.InitDisplayNames on any changed nodes.
@@ -324,6 +325,7 @@ var (
 	patchLastSeen     = clientmetric.NewCounter("controlclient_patch_lastseen")
 	patchKeyExpiry    = clientmetric.NewCounter("controlclient_patch_keyexpiry")
 	patchCapabilities = clientmetric.NewCounter("controlclient_patch_capabilities")
+	patchCapMap       = clientmetric.NewCounter("controlclient_patch_capmap")
 	patchKeySignature = clientmetric.NewCounter("controlclient_patch_keysig")
 
 	patchifiedPeer      = clientmetric.NewCounter("controlclient_patchified_peer")
@@ -451,6 +453,10 @@ func (ms *mapSession) updatePeersStateFromResponse(resp *tailcfg.MapResponse) (s
 		if v := pc.KeySignature; v != nil {
 			mut.KeySignature = v
 			patchKeySignature.Add(1)
+		}
+		if v := pc.CapMap; v != nil {
+			mut.CapMap = v
+			patchCapMap.Add(1)
 		}
 		*vp = mut.View()
 	}
@@ -646,6 +652,10 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 		case "Cap":
 			if was.Cap() != n.Cap {
 				pc().Cap = n.Cap
+			}
+		case "CapMap":
+			if n.CapMap != nil {
+				pc().CapMap = n.CapMap
 			}
 		case "Tags":
 			if !views.SliceEqual(was.Tags(), views.SliceOf(n.Tags)) {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/exp/maps"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -112,7 +113,8 @@ type CapabilityVersion int
 //   - 71: 2023-08-17: added NodeAttrOneCGNATEnable, NodeAttrOneCGNATDisable
 //   - 72: 2023-08-23: TS-2023-006 UPnP issue fixed; UPnP can now be used again
 //   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
-const CurrentCapabilityVersion CapabilityVersion = 73
+//   - 74: 2023-09-18: Client understands NodeCapMap
+const CurrentCapabilityVersion CapabilityVersion = 74
 
 type StableID string
 
@@ -315,7 +317,21 @@ type Node struct {
 	// such as:
 	//    "https://tailscale.com/cap/is-admin"
 	//    "https://tailscale.com/cap/file-sharing"
+	//
+	// Deprecated: use CapMap instead.
 	Capabilities []NodeCapability `json:",omitempty"`
+
+	// CapMap is a map of capabilities to their optional argument/data values.
+	//
+	// It is valid for a capability to not have any argument/data values; such
+	// capabilities can be tested for using the HasCap method. These type of
+	// capabilities are used to indicate that a node has a capability, but there
+	// is no additional data associated with it. These were previously
+	// represented by the Capabilities field, but can now be represented by
+	// CapMap with an empty value.
+	//
+	// See NodeCapability for more information on keys.
+	CapMap NodeCapMap `json:",omitempty"`
 
 	// UnsignedPeerAPIOnly means that this node is not signed nor subject to TKA
 	// restrictions. However, in exchange for that privilege, it does not get
@@ -369,13 +385,15 @@ type Node struct {
 }
 
 // HasCap reports whether the node has the given capability.
+// It is safe to call on an invalid NodeView.
 func (v NodeView) HasCap(cap NodeCapability) bool {
 	return v.ж.HasCap(cap)
 }
 
 // HasCap reports whether the node has the given capability.
+// It is safe to call on a nil Node.
 func (v *Node) HasCap(cap NodeCapability) bool {
-	return v != nil && slices.Contains(v.Capabilities, cap)
+	return v != nil && (v.CapMap.Contains(cap) || slices.Contains(v.Capabilities, cap))
 }
 
 // DisplayName returns the user-facing name for a node which should
@@ -1285,6 +1303,45 @@ const (
 	PeerCapabilityIngress PeerCapability = "https://tailscale.com/cap/ingress"
 )
 
+// NodeCapMap is a map of capabilities to their optional values. It is valid for
+// a capability to have no values (nil slice); such capabilities can be tested
+// for by using the Contains method.
+//
+// See [NodeCapability] for more information on keys.
+type NodeCapMap map[NodeCapability][]RawMessage
+
+// Equal reports whether c and c2 are equal.
+func (c NodeCapMap) Equal(c2 NodeCapMap) bool {
+	return maps.EqualFunc(c, c2, slices.Equal)
+}
+
+// UnmarshalNodeCapJSON unmarshals each JSON value in cm[cap] as T.
+// If cap does not exist in cm, it returns (nil, nil).
+// It returns an error if the values cannot be unmarshaled into the provided type.
+func UnmarshalNodeCapJSON[T any](cm NodeCapMap, cap NodeCapability) ([]T, error) {
+	vals, ok := cm[cap]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]T, 0, len(vals))
+	for _, v := range vals {
+		var t T
+		if err := json.Unmarshal([]byte(v), &t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// Contains reports whether c has the capability cap. This is used to test for
+// the existence of a capability, especially when the capability has no
+// associated argument/data values.
+func (c NodeCapMap) Contains(cap NodeCapability) bool {
+	_, ok := c[cap]
+	return ok
+}
+
 // PeerCapMap is a map of capabilities to their optional values. It is valid for
 // a capability to have no values (nil slice); such capabilities can be tested
 // for by using the HasCapability method.
@@ -1312,9 +1369,9 @@ func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
 	return out, nil
 }
 
-// HasCapability reports whether c has the capability cap.
-// This is used to test for the existence of a capability, especially
-// when the capability has no values.
+// HasCapability reports whether c has the capability cap. This is used to test
+// for the existence of a capability, especially when the capability has no
+// associated argument/data values.
 func (c PeerCapMap) HasCapability(cap PeerCapability) bool {
 	_, ok := c[cap]
 	return ok
@@ -1876,6 +1933,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqTimePtr(n.LastSeen, n2.LastSeen) &&
 		n.MachineAuthorized == n2.MachineAuthorized &&
 		slices.Equal(n.Capabilities, n2.Capabilities) &&
+		n.CapMap.Equal(n2.CapMap) &&
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
@@ -2449,6 +2507,9 @@ type PeerChange struct {
 
 	// Cap, if non-zero, means that NodeID's capability version has changed.
 	Cap CapabilityVersion `json:",omitempty"`
+
+	// CapMap, if non-nil, means that NodeID's capability map has changed.
+	CapMap NodeCapMap `json:",omitempty"`
 
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.

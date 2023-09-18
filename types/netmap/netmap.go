@@ -185,8 +185,13 @@ func (nm *NetworkMap) SelfCapabilities() views.Slice[tailcfg.NodeCapability] {
 	if nm == nil || !nm.SelfNode.Valid() {
 		return zero
 	}
+	out := nm.SelfNode.Capabilities().AsSlice()
+	nm.SelfNode.CapMap().Range(func(k tailcfg.NodeCapability, _ views.Slice[tailcfg.RawMessage]) (cont bool) {
+		out = append(out, k)
+		return true
+	})
 
-	return nm.SelfNode.Capabilities()
+	return views.SliceOf(out)
 }
 
 func (nm *NetworkMap) String() string {
