@@ -752,12 +752,6 @@ func (ms *mapSession) netmap() *netmap.NetworkMap {
 		nm.SelfNode = node
 		nm.Expiry = node.KeyExpiry()
 		nm.Name = node.Name()
-		nm.Addresses = filterSelfAddresses(node.Addresses().AsSlice())
-		if node.MachineAuthorized() {
-			nm.MachineStatus = tailcfg.MachineAuthorized
-		} else {
-			nm.MachineStatus = tailcfg.MachineUnauthorized
-		}
 	}
 
 	ms.addUserProfile(nm, nm.User())

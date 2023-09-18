@@ -37,6 +37,7 @@ import (
 	"tailscale.com/safesocket"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/types/views"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/words"
@@ -249,7 +250,7 @@ func (i *jsIPN) run(jsCallbacks js.Value) {
 				Self: jsNetMapSelfNode{
 					jsNetMapNode: jsNetMapNode{
 						Name:       nm.Name,
-						Addresses:  mapSlice(nm.Addresses, func(a netip.Prefix) string { return a.Addr().String() }),
+						Addresses:  mapSliceView(nm.GetAddresses(), func(a netip.Prefix) string { return a.Addr().String() }),
 						NodeKey:    nm.NodeKey.String(),
 						MachineKey: nm.MachineKey.String(),
 					},
@@ -574,6 +575,14 @@ func mapSlice[T any, M any](a []T, f func(T) M) []M {
 	n := make([]M, len(a))
 	for i, e := range a {
 		n[i] = f(e)
+	}
+	return n
+}
+
+func mapSliceView[T any, M any](a views.Slice[T], f func(T) M) []M {
+	n := make([]M, a.Len())
+	for i := range a.LenIter() {
+		n[i] = f(a.At(i))
 	}
 	return n
 }

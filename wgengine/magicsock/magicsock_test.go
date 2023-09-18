@@ -274,7 +274,9 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 		nm := &netmap.NetworkMap{
 			PrivateKey: me.privateKey,
 			NodeKey:    me.privateKey.Public(),
-			Addresses:  []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
+			SelfNode: (&tailcfg.Node{
+				Addresses: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(1, 0, 0, byte(myIdx+1)), 32)},
+			}).View(),
 		}
 		for i, peer := range ms {
 			if i == myIdx {
@@ -2267,7 +2269,9 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 		Name:       "ts",
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
-		Addresses:  []netip.Prefix{tsaip},
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{tsaip},
+		}).View(),
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				ID:              1,
@@ -2326,7 +2330,9 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 		Name:       "ts",
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
-		Addresses:  []netip.Prefix{tsaip},
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{tsaip},
+		}).View(),
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				ID:                            1,
@@ -2453,7 +2459,9 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 		Name:       "ts",
 		PrivateKey: m.privateKey,
 		NodeKey:    m.privateKey.Public(),
-		Addresses:  []netip.Prefix{tsaip},
+		SelfNode: (&tailcfg.Node{
+			Addresses: []netip.Prefix{tsaip},
+		}).View(),
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:             wgkey.Public(),

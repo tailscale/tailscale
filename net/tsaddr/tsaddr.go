@@ -161,6 +161,11 @@ type oncePrefix struct {
 	v netip.Prefix
 }
 
+// FalseContainsIPFunc is shorthand for NewContainsIPFunc(views.Slice[netip.Prefix]{}).
+func FalseContainsIPFunc() func(ip netip.Addr) bool {
+	return func(ip netip.Addr) bool { return false }
+}
+
 // NewContainsIPFunc returns a func that reports whether ip is in addrs.
 //
 // It's optimized for the cases of addrs being empty and addrs
@@ -168,20 +173,17 @@ type oncePrefix struct {
 // one IPv6 address).
 //
 // Otherwise the implementation is somewhat slow.
-func NewContainsIPFunc(addrs []netip.Prefix) func(ip netip.Addr) bool {
+func NewContainsIPFunc(addrs views.Slice[netip.Prefix]) func(ip netip.Addr) bool {
 	// Specialize the three common cases: no address, just IPv4
 	// (or just IPv6), and both IPv4 and IPv6.
-	if len(addrs) == 0 {
+	if addrs.Len() == 0 {
 		return func(netip.Addr) bool { return false }
 	}
 	// If any addr is more than a single IP, then just do the slow
 	// linear thing until
 	// https://github.com/inetaf/netaddr/issues/139 is done.
-	for _, a := range addrs {
-		if a.IsSingleIP() {
-			continue
-		}
-		acopy := append([]netip.Prefix(nil), addrs...)
+	if views.SliceContainsFunc(addrs, func(p netip.Prefix) bool { return !p.IsSingleIP() }) {
+		acopy := addrs.AsSlice()
 		return func(ip netip.Addr) bool {
 			for _, a := range acopy {
 				if a.Contains(ip) {
@@ -192,18 +194,18 @@ func NewContainsIPFunc(addrs []netip.Prefix) func(ip netip.Addr) bool {
 		}
 	}
 	// Fast paths for 1 and 2 IPs:
-	if len(addrs) == 1 {
-		a := addrs[0]
+	if addrs.Len() == 1 {
+		a := addrs.At(0)
 		return func(ip netip.Addr) bool { return ip == a.Addr() }
 	}
-	if len(addrs) == 2 {
-		a, b := addrs[0], addrs[1]
+	if addrs.Len() == 2 {
+		a, b := addrs.At(0), addrs.At(1)
 		return func(ip netip.Addr) bool { return ip == a.Addr() || ip == b.Addr() }
 	}
 	// General case:
 	m := map[netip.Addr]bool{}
-	for _, a := range addrs {
-		m[a.Addr()] = true
+	for i := range addrs.LenIter() {
+		m[addrs.At(i).Addr()] = true
 	}
 	return func(ip netip.Addr) bool { return m[ip] }
 }

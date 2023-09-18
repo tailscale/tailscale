@@ -501,7 +501,7 @@ func TestStateMachine(t *testing.T) {
 	// (ie. I suspect it would be better to change false->true in send()
 	// below, and do the same in the real controlclient.)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(1)
@@ -665,7 +665,7 @@ func TestStateMachine(t *testing.T) {
 	cc.persist.UserProfile.LoginName = "user2"
 	cc.persist.NodeID = "node2"
 	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(3)
@@ -732,7 +732,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nStart4 -> netmap")
 	notifies.expect(0)
 	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		notifies.drain(0)
@@ -801,7 +801,7 @@ func TestStateMachine(t *testing.T) {
 	cc.persist.UserProfile.LoginName = "user3"
 	cc.persist.NodeID = "node3"
 	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(3)
@@ -845,7 +845,7 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nLoginFinished5")
 	notifies.expect(2)
 	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(2)
@@ -862,8 +862,8 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nExpireKey")
 	notifies.expect(1)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		Expiry:        time.Now().Add(-time.Minute),
-		MachineStatus: tailcfg.MachineAuthorized,
+		Expiry:   time.Now().Add(-time.Minute),
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(1)
@@ -877,8 +877,8 @@ func TestStateMachine(t *testing.T) {
 	t.Logf("\n\nExtendKey")
 	notifies.expect(1)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		Expiry:        time.Now().Add(time.Minute),
-		MachineStatus: tailcfg.MachineAuthorized,
+		Expiry:   time.Now().Add(time.Minute),
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	{
 		nn := notifies.drain(1)
@@ -1023,7 +1023,7 @@ func TestWGEngineStatusRace(t *testing.T) {
 
 	// Assert that we are logged in and authorized.
 	cc.send(nil, "", true, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
+		SelfNode: (&tailcfg.Node{MachineAuthorized: true}).View(),
 	})
 	wantState(ipn.Starting)
 
