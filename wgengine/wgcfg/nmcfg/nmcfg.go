@@ -15,7 +15,6 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/views"
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -63,7 +62,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	// Setup log IDs for data plane audit logging.
 	if nm.SelfNode.Valid() {
 		cfg.NodeID = nm.SelfNode.StableID()
-		canNetworkLog := views.SliceContains(nm.SelfNode.Capabilities(), tailcfg.CapabilityDataPlaneAuditLogs)
+		canNetworkLog := nm.SelfNode.HasCap(tailcfg.CapabilityDataPlaneAuditLogs)
 		if canNetworkLog && nm.SelfNode.DataPlaneAuditLogID() != "" && nm.DomainAuditLogID != "" {
 			nodeID, errNode := logid.ParsePrivateID(nm.SelfNode.DataPlaneAuditLogID())
 			if errNode != nil {

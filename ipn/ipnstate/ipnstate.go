@@ -291,6 +291,11 @@ type PeerStatus struct {
 	Location *tailcfg.Location `json:",omitempty"`
 }
 
+// HasCap reports whether ps has the given capability.
+func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
+	return slices.Contains(ps.Capabilities, cap)
+}
+
 // StatusBuilder is a request to construct a Status. A new StatusBuilder is
 // passed to various subsystems which then call methods on it to populate state.
 // Call its Status method to return the final constructed Status.

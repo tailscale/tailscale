@@ -1035,7 +1035,7 @@ func (h *peerAPIHandler) canPutFile() bool {
 // canDebug reports whether h can debug this node (goroutines, metrics,
 // magicsock internal state, etc).
 func (h *peerAPIHandler) canDebug() bool {
-	if !views.SliceContains(h.selfNode.Capabilities(), tailcfg.CapabilityDebug) {
+	if !h.selfNode.HasCap(tailcfg.CapabilityDebug) {
 		// This node does not expose debug info.
 		return false
 	}
