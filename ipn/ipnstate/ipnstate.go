@@ -258,6 +258,9 @@ type PeerStatus struct {
 	//    "funnel"
 	Capabilities []tailcfg.NodeCapability `json:",omitempty"`
 
+	// CapMap is a map of capabilities to their values.
+	CapMap tailcfg.NodeCapMap `json:",omitempty"`
+
 	// SSH_HostKeys are the node's SSH host keys, if known.
 	SSH_HostKeys []string `json:"sshHostKeys,omitempty"`
 
@@ -293,7 +296,7 @@ type PeerStatus struct {
 
 // HasCap reports whether ps has the given capability.
 func (ps *PeerStatus) HasCap(cap tailcfg.NodeCapability) bool {
-	return slices.Contains(ps.Capabilities, cap)
+	return ps.CapMap.Contains(cap) || slices.Contains(ps.Capabilities, cap)
 }
 
 // StatusBuilder is a request to construct a Status. A new StatusBuilder is
