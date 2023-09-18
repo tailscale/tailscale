@@ -216,6 +216,31 @@ func (emptyStructJSONSlice) MarshalJSON() ([]byte, error) {
 
 func (emptyStructJSONSlice) UnmarshalJSON([]byte) error { return nil }
 
+// RawMessage is a raw encoded JSON value. It implements Marshaler and
+// Unmarshaler and can be used to delay JSON decoding or precompute a JSON
+// encoding.
+//
+// It is like json.RawMessage but is a string instead of a []byte to better
+// portray immutable data.
+type RawMessage string
+
+// MarshalJSON returns m as the JSON encoding of m.
+func (m RawMessage) MarshalJSON() ([]byte, error) {
+	if m == "" {
+		return []byte("null"), nil
+	}
+	return []byte(m), nil
+}
+
+// UnmarshalJSON sets *m to a copy of data.
+func (m *RawMessage) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return errors.New("RawMessage: UnmarshalJSON on nil pointer")
+	}
+	*m = RawMessage(data)
+	return nil
+}
+
 type Node struct {
 	ID       NodeID
 	StableID StableNodeID
@@ -1256,7 +1281,7 @@ const (
 //
 // The values are opaque to Tailscale, but are passed through from the ACLs to
 // the application via the WhoIs API.
-type PeerCapMap map[PeerCapability][]json.RawMessage
+type PeerCapMap map[PeerCapability][]RawMessage
 
 // UnmarshalCapJSON unmarshals each JSON value in cm[cap] as T.
 // If cap does not exist in cm, it returns (nil, nil).
@@ -1269,7 +1294,7 @@ func UnmarshalCapJSON[T any](cm PeerCapMap, cap PeerCapability) ([]T, error) {
 	out := make([]T, 0, len(vals))
 	for _, v := range vals {
 		var t T
-		if err := json.Unmarshal(v, &t); err != nil {
+		if err := json.Unmarshal([]byte(v), &t); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
