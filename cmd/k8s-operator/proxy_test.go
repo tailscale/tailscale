@@ -45,15 +45,15 @@ func TestImpersonationHeaders(t *testing.T) {
 			emailish: "foo@example.com",
 			capMap: tailcfg.PeerCapMap{
 				capabilityName: {
-					[]byte(`{"impersonate":{"groups":["group1","group2"]}}`),
-					[]byte(`{"impersonate":{"groups":["group1","group3"]}}`), // One group is duplicated.
-					[]byte(`{"impersonate":{"groups":["group4"]}}`),
-					[]byte(`{"impersonate":{"groups":["group2"]}}`), // duplicate
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group2"]}}`),
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1","group3"]}}`), // One group is duplicated.
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group4"]}}`),
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group2"]}}`), // duplicate
 
 					// These should be ignored, but should parse correctly.
-					[]byte(`{}`),
-					[]byte(`{"impersonate":{}}`),
-					[]byte(`{"impersonate":{"groups":[]}}`),
+					tailcfg.RawMessage(`{}`),
+					tailcfg.RawMessage(`{"impersonate":{}}`),
+					tailcfg.RawMessage(`{"impersonate":{"groups":[]}}`),
 				},
 			},
 			wantHeaders: http.Header{
@@ -67,7 +67,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			tags:     []string{"tag:foo", "tag:bar"},
 			capMap: tailcfg.PeerCapMap{
 				capabilityName: {
-					[]byte(`{"impersonate":{"groups":["group1"]}}`),
+					tailcfg.RawMessage(`{"impersonate":{"groups":["group1"]}}`),
 				},
 			},
 			wantHeaders: http.Header{
@@ -81,7 +81,7 @@ func TestImpersonationHeaders(t *testing.T) {
 			tags:     []string{"tag:foo", "tag:bar"},
 			capMap: tailcfg.PeerCapMap{
 				capabilityName: {
-					[]byte(`[]`),
+					tailcfg.RawMessage(`[]`),
 				},
 			},
 			wantHeaders: http.Header{},

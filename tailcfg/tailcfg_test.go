@@ -726,3 +726,82 @@ func TestUnmarshalHealth(t *testing.T) {
 		}
 	}
 }
+
+func TestRawMessage(t *testing.T) {
+	// Create a few types of json.RawMessages and then marshal them back and
+	// forth to make sure they round-trip.
+
+	type rule struct {
+		Ports []int `json:",omitempty"`
+	}
+	tests := []struct {
+		name string
+		val  map[string][]rule
+		wire map[string][]RawMessage
+	}{
+		{
+			name: "nil",
+			val:  nil,
+			wire: nil,
+		},
+		{
+			name: "empty",
+			val:  map[string][]rule{},
+			wire: map[string][]RawMessage{},
+		},
+		{
+			name: "one",
+			val: map[string][]rule{
+				"foo": {{Ports: []int{1, 2, 3}}},
+			},
+			wire: map[string][]RawMessage{
+				"foo": {
+					`{"Ports":[1,2,3]}`,
+				},
+			},
+		},
+		{
+			name: "many",
+			val: map[string][]rule{
+				"foo": {{Ports: []int{1, 2, 3}}},
+				"bar": {{Ports: []int{4, 5, 6}}, {Ports: []int{7, 8, 9}}},
+				"baz": nil,
+				"abc": {},
+				"def": {{}},
+			},
+			wire: map[string][]RawMessage{
+				"foo": {
+					`{"Ports":[1,2,3]}`,
+				},
+				"bar": {
+					`{"Ports":[4,5,6]}`,
+					`{"Ports":[7,8,9]}`,
+				},
+				"baz": nil,
+				"abc": {},
+				"def": {"{}"},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			j := must.Get(json.Marshal(tc.val))
+			var gotWire map[string][]RawMessage
+			if err := json.Unmarshal(j, &gotWire); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(gotWire, tc.wire) {
+				t.Errorf("got %#v; want %#v", gotWire, tc.wire)
+			}
+
+			j = must.Get(json.Marshal(tc.wire))
+			var gotVal map[string][]rule
+			if err := json.Unmarshal(j, &gotVal); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(gotVal, tc.val) {
+				t.Errorf("got %#v; want %#v", gotVal, tc.val)
+			}
+		})
+	}
+}
