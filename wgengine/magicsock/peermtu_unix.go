@@ -40,7 +40,3 @@ func (c *Conn) connControl(network string, fn func(fd uintptr)) error {
 	}
 	return rc.Control(fn)
 }
-
-func CanPMTUD() bool {
-	return debugEnablePMTUD()
-}
