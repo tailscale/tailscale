@@ -221,7 +221,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		dns:                 dns,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
-	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
+	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	return ns, nil
@@ -324,10 +324,10 @@ var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
 	var selfNode tailcfg.NodeView
 	if nm != nil {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
+		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.GetAddresses()))
 		selfNode = nm.SelfNode
 	} else {
-		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
+		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	}
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)

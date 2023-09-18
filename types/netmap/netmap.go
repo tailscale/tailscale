@@ -33,20 +33,6 @@ type NetworkMap struct {
 	// It is the MapResponse.Node.Name value and ends with a period.
 	Name string
 
-	// Addresses is SelfNode.Addresses. (IP addresses of this Node directly)
-	//
-	// Deprecated: use GetAddresses instead. As of 2023-09-17, this field
-	// is being phased out.
-	Addresses []netip.Prefix
-
-	// MachineStatus is either tailcfg.MachineAuthorized or tailcfg.MachineUnauthorized,
-	// depending on SelfNode.MachineAuthorized.
-	//
-	// Deprecated: use GetMachineStatus instead. This field exists still
-	// exists (as of 2023-09-13) for some tests in other repos that haven't
-	// yet been migrated. TODO(bradfitz): remove this field.
-	MachineStatus tailcfg.MachineStatus
-
 	MachineKey key.MachinePublic
 
 	Peers []tailcfg.NodeView // sorted by Node.ID
@@ -104,12 +90,6 @@ func (nm *NetworkMap) User() tailcfg.UserID {
 // if SelfNode is invalid.
 func (nm *NetworkMap) GetAddresses() views.Slice[netip.Prefix] {
 	var zero views.Slice[netip.Prefix]
-	if nm.Addresses != nil {
-		// For now (2023-09-17), let the deprecated Addressees field take
-		// precedence. This is a migration mechanism while we update tests &
-		// code cross-repo.
-		return views.SliceOf(nm.Addresses)
-	}
 	if !nm.SelfNode.Valid() {
 		return zero
 	}
@@ -128,12 +108,6 @@ func (nm *NetworkMap) AnyPeersAdvertiseRoutes() bool {
 
 // GetMachineStatus returns the MachineStatus of the local node.
 func (nm *NetworkMap) GetMachineStatus() tailcfg.MachineStatus {
-	if nm.MachineStatus != tailcfg.MachineUnknown {
-		// For now (2023-09-13), let the deprecated MachineStatus field take
-		// precedence. This is a migration mechanism while we update tests &
-		// code cross-repo.
-		return nm.MachineStatus
-	}
 	if !nm.SelfNode.Valid() {
 		return tailcfg.MachineUnknown
 	}
@@ -258,25 +232,17 @@ func (nm *NetworkMap) printConciseHeader(buf *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(buf, " u=%s", login)
-	fmt.Fprintf(buf, " %v", nm.Addresses)
+	fmt.Fprintf(buf, " %v", nm.GetAddresses().AsSlice())
 	buf.WriteByte('\n')
 }
 
 // equalConciseHeader reports whether a and b are equal for the fields
 // used by printConciseHeader.
 func (a *NetworkMap) equalConciseHeader(b *NetworkMap) bool {
-	if a.NodeKey != b.NodeKey ||
-		a.GetMachineStatus() != b.GetMachineStatus() ||
-		a.User() != b.User() ||
-		len(a.Addresses) != len(b.Addresses) {
-		return false
-	}
-	for i, a := range a.Addresses {
-		if b.Addresses[i] != a {
-			return false
-		}
-	}
-	return true
+	return a.NodeKey == b.NodeKey &&
+		a.GetMachineStatus() == b.GetMachineStatus() &&
+		a.User() == b.User() &&
+		views.SliceEqual(a.GetAddresses(), b.GetAddresses())
 }
 
 // printPeerConcise appends to buf a line representing the peer p.

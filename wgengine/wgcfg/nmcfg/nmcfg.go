@@ -56,7 +56,7 @@ func WGCfg(nm *netmap.NetworkMap, logf logger.Logf, flags netmap.WGConfigFlags, 
 	cfg := &wgcfg.Config{
 		Name:       "tailscale",
 		PrivateKey: nm.PrivateKey,
-		Addresses:  nm.Addresses,
+		Addresses:  nm.GetAddresses().AsSlice(),
 		Peers:      make([]wgcfg.Peer, 0, len(nm.Peers)),
 	}
 
