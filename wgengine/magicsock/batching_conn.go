@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/ipv6"
@@ -191,4 +192,12 @@ retry:
 		return neterror.ErrUDPGSODisabled{OnLaddr: c.pc.LocalAddr().String(), RetryErr: err}
 	}
 	return err
+}
+
+func (c *batchingUDPConn) SyscallConn() (syscall.RawConn, error) {
+	sc, ok := c.pc.(syscall.Conn)
+	if !ok {
+		return nil, errUnsupportedConnType
+	}
+	return sc.SyscallConn()
 }

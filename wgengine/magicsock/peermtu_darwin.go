@@ -6,30 +6,46 @@
 package magicsock
 
 import (
-	"net"
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"tailscale.com/types/nettype"
 )
 
-func setDontFragment(pconn nettype.PacketConn, network string) (err error) {
-	if c, ok := pconn.(*net.UDPConn); ok {
-		rc, err := c.SyscallConn()
-		if err == nil {
-			rc.Control(func(fd uintptr) {
-				if network == "udp4" {
-					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, unix.IP_DONTFRAG, 1)
-				}
-				if network == "udp6" {
-					err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, unix.IPV6_DONTFRAG, 1)
-				}
-			})
-		}
+func getDontFragOpt(network string) int {
+	if network == "udp4" {
+		return unix.IP_DONTFRAG
+	}
+	return unix.IPV6_DONTFRAG
+}
+
+func (c *Conn) setDontFragment(network string, enable bool) error {
+	optArg := 1
+	if enable == false {
+		optArg = 0
+	}
+	var err error
+	rcErr := c.connControl(network, func(fd uintptr) {
+		err = syscall.SetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network), optArg)
+	})
+
+	if rcErr != nil {
+		return rcErr
 	}
 	return err
 }
 
-func CanPMTUD() bool {
-	return debugEnablePMTUD() // only if the envknob is for now.
+func (c *Conn) getDontFragment(network string) (bool, error) {
+	var v int
+	var err error
+	rcErr := c.connControl(network, func(fd uintptr) {
+		v, err = syscall.GetsockoptInt(int(fd), getIPProto(network), getDontFragOpt(network))
+	})
+
+	if rcErr != nil {
+		return false, rcErr
+	}
+	if v == 1 {
+		return true, err
+	}
+	return false, err
 }
