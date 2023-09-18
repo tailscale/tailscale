@@ -286,8 +286,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 			return nil, err
 		}
 	}
-	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(nil))
-	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(nil))
+	e.isLocalAddr.Store(tsaddr.FalseContainsIPFunc())
+	e.isDNSIPOverTailscale.Store(tsaddr.FalseContainsIPFunc())
 
 	if conf.NetMon != nil {
 		e.netMon = conf.NetMon
@@ -782,7 +782,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 		panic("dnsCfg must not be nil")
 	}
 
-	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(routerCfg.LocalAddrs))
+	e.isLocalAddr.Store(tsaddr.NewContainsIPFunc(views.SliceOf(routerCfg.LocalAddrs)))
 
 	e.wgLock.Lock()
 	defer e.wgLock.Unlock()
@@ -836,7 +836,7 @@ func (e *userspaceEngine) Reconfig(cfg *wgcfg.Config, routerCfg *router.Config, 
 	// instead have ipnlocal populate a map of DNS IP => linkName and
 	// put that in the *dns.Config instead, and plumb it down to the
 	// dns.Manager. Maybe also with isLocalAddr above.
-	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(dnsIPsOverTailscale(dnsCfg, routerCfg)))
+	e.isDNSIPOverTailscale.Store(tsaddr.NewContainsIPFunc(views.SliceOf(dnsIPsOverTailscale(dnsCfg, routerCfg))))
 
 	// See if any peers have changed disco keys, which means they've restarted.
 	// If so, we need to update the wireguard-go/device.Device in two phases:
@@ -1205,20 +1205,22 @@ func (e *userspaceEngine) Ping(ip netip.Addr, pingType tailcfg.PingType, size in
 }
 
 func (e *userspaceEngine) mySelfIPMatchingFamily(dst netip.Addr) (src netip.Addr, err error) {
+	var zero netip.Addr
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.netMap == nil {
-		return netip.Addr{}, errors.New("no netmap")
+		return zero, errors.New("no netmap")
 	}
-	for _, a := range e.netMap.Addresses {
-		if a.IsSingleIP() && a.Addr().BitLen() == dst.BitLen() {
+	addrs := e.netMap.GetAddresses()
+	if addrs.Len() == 0 {
+		return zero, errors.New("no self address in netmap")
+	}
+	for i := range addrs.LenIter() {
+		if a := addrs.At(i); a.IsSingleIP() && a.Addr().BitLen() == dst.BitLen() {
 			return a.Addr(), nil
 		}
 	}
-	if len(e.netMap.Addresses) == 0 {
-		return netip.Addr{}, errors.New("no self address in netmap")
-	}
-	return netip.Addr{}, errors.New("no self address in netmap matching address family")
+	return zero, errors.New("no self address in netmap matching address family")
 }
 
 func (e *userspaceEngine) sendICMPEchoRequest(destIP netip.Addr, peer tailcfg.NodeView, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
@@ -1366,8 +1368,9 @@ func (e *userspaceEngine) PeerForIP(ip netip.Addr) (ret PeerForIP, ok bool) {
 			}
 		}
 	}
-	for _, a := range nm.Addresses {
-		if a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		if a := addrs.At(i); a.Addr() == ip && a.IsSingleIP() && tsaddr.IsTailscaleIP(ip) {
 			return PeerForIP{Node: nm.SelfNode, IsSelf: true, Route: a}, true
 		}
 	}

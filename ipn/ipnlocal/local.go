@@ -2411,13 +2411,13 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
 
 	if !p.Valid() {
-		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(nil))
+		b.containsViaIPFuncAtomic.Store(tsaddr.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
 		b.lastServeConfJSON = mem.B(nil)
 		b.serveConfig = ipn.ServeConfigView{}
 	} else {
 		filtered := tsaddr.FilterPrefixesCopy(p.AdvertiseRoutes(), tsaddr.IsViaPrefix)
-		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(filtered))
+		b.containsViaIPFuncAtomic.Store(tsaddr.NewContainsIPFunc(views.SliceOf(filtered)))
 		b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(p)
 	}
 }
@@ -3211,8 +3211,8 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	// selfV6Only is whether we only have IPv6 addresses ourselves.
-	selfV6Only := slices.ContainsFunc(nm.Addresses, tsaddr.PrefixIs6) &&
-		!slices.ContainsFunc(nm.Addresses, tsaddr.PrefixIs4)
+	selfV6Only := views.SliceContainsFunc(nm.GetAddresses(), tsaddr.PrefixIs6) &&
+		!views.SliceContainsFunc(nm.GetAddresses(), tsaddr.PrefixIs4)
 	dcfg.OnlyIPv6 = selfV6Only
 
 	// Populate MagicDNS records. We do this unconditionally so that
@@ -3259,7 +3259,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		}
 		dcfg.Hosts[fqdn] = ips
 	}
-	set(nm.Name, views.SliceOf(nm.Addresses))
+	set(nm.Name, nm.GetAddresses())
 	for _, peer := range peers {
 		set(peer.Name(), peer.Addresses())
 	}
@@ -4595,7 +4595,9 @@ func peerAPIBase(nm *netmap.NetworkMap, peer tailcfg.NodeView) string {
 	}
 
 	var have4, have6 bool
-	for _, a := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		a := addrs.At(i)
 		if !a.IsSingleIP() {
 			continue
 		}

@@ -279,9 +279,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_4_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -300,9 +302,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_6_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -321,10 +325,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_4",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -342,10 +348,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_6",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -363,10 +371,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_no_peerapi_service",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -689,10 +699,9 @@ func TestStatusWithoutPeers(t *testing.T) {
 	b.Start(ipn.Options{})
 	b.Login(nil)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
-		Addresses:     ipps("100.101.101.101"),
 		SelfNode: (&tailcfg.Node{
-			Addresses: ipps("100.101.101.101"),
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
 		}).View(),
 	})
 	got := b.StatusWithoutPeers()

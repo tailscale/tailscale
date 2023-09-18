@@ -69,8 +69,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "self_name_and_peers",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("100.101.101.101"),
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -106,8 +108,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			// even if they have IPv4.
 			name: "v6_only_self",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("fe75::1"),
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("fe75::1"),
+				}).View(),
 			},
 			peers: nodeViews([]*tailcfg.Node{
 				{
@@ -141,8 +145,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "extra_records",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("100.101.101.101"),
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
 				DNS: tailcfg.DNSConfig{
 					ExtraRecords: []tailcfg.DNSRecord{
 						{Name: "foo.com", Value: "1.2.3.4"},
