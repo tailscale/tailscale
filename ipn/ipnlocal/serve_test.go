@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
@@ -182,6 +183,105 @@ func getEtag(t *testing.T, b any) string {
 	}
 	sum := sha256.Sum256(bts)
 	return hex.EncodeToString(sum[:])
+}
+
+// TestServeConfigForeground tests the inter-dependency
+// between a ServeConfig and a WatchIPNBus:
+// 1. Creating a WatchIPNBus returns a sessionID, that
+// 2. ServeConfig sets it as the key of the Foreground field.
+// 3. ServeConfig expects the WatchIPNBus to clean up the Foreground
+// config when the session is done.
+// 4. WatchIPNBus expects the ServeConfig to send a signal (close the channel)
+// if an incoming SetServeConfig removes previous foregrounds.
+func TestServeConfigForeground(t *testing.T) {
+	b := newTestBackend(t)
+
+	ch1 := make(chan string, 1)
+	go func() {
+		defer close(ch1)
+		b.WatchNotifications(context.Background(), ipn.NotifyInitialState, nil, func(roNotify *ipn.Notify) (keepGoing bool) {
+			if roNotify.SessionID != "" {
+				ch1 <- roNotify.SessionID
+			}
+			return true
+		})
+	}()
+
+	ch2 := make(chan string, 1)
+	go func() {
+		b.WatchNotifications(context.Background(), ipn.NotifyInitialState, nil, func(roNotify *ipn.Notify) (keepGoing bool) {
+			if roNotify.SessionID != "" {
+				ch2 <- roNotify.SessionID
+				return true
+			}
+			ch2 <- "again" // let channel know fn was called again
+			return true
+		})
+	}()
+
+	var session1 string
+	select {
+	case session1 = <-ch1:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications session id")
+	}
+
+	var session2 string
+	select {
+	case session2 = <-ch2:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications session id")
+	}
+
+	err := b.SetServeConfig(&ipn.ServeConfig{
+		Foreground: map[string]*ipn.ServeConfig{
+			session1: {TCP: map[uint16]*ipn.TCPPortHandler{
+				443: {TCPForward: "http://localhost:3000"}},
+			},
+			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
+				999: {TCPForward: "http://localhost:4000"}},
+			},
+		},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Setting a new serve config should shut down WatchNotifications
+	// whose session IDs are no longer found: session1 goes, session2 stays.
+	err = b.SetServeConfig(&ipn.ServeConfig{
+		TCP: map[uint16]*ipn.TCPPortHandler{
+			5000: {TCPForward: "http://localhost:5000"},
+		},
+		Foreground: map[string]*ipn.ServeConfig{
+			session2: {TCP: map[uint16]*ipn.TCPPortHandler{
+				999: {TCPForward: "http://localhost:4000"}},
+			},
+		},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case _, ok := <-ch1:
+		if ok {
+			t.Fatal("expected channel to be closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on watch notifications closing")
+	}
+
+	// check that the second session is still running
+	b.send(ipn.Notify{})
+	select {
+	case _, ok := <-ch2:
+		if !ok {
+			t.Fatal("expected second session to remain open")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting on second session")
+	}
 }
 
 func TestServeConfigETag(t *testing.T) {

@@ -247,16 +247,17 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 
 	// If etag is present, check that it has
 	// not changed from the last config.
+	prevConfig := b.serveConfig
 	if etag != "" {
 		// Note that we marshal b.serveConfig
 		// and not use b.lastServeConfJSON as that might
 		// be a Go nil value, which produces a different
 		// checksum from a JSON "null" value.
-		previousCfg, err := json.Marshal(b.serveConfig)
+		prevBytes, err := json.Marshal(prevConfig)
 		if err != nil {
 			return fmt.Errorf("error encoding previous config: %w", err)
 		}
-		sum := sha256.Sum256(previousCfg)
+		sum := sha256.Sum256(prevBytes)
 		previousEtag := hex.EncodeToString(sum[:])
 		if etag != previousEtag {
 			return ErrETagMismatch
@@ -279,6 +280,26 @@ func (b *LocalBackend) setServeConfigLocked(config *ipn.ServeConfig, etag string
 	}
 
 	b.setTCPPortsInterceptedFromNetmapAndPrefsLocked(b.pm.CurrentPrefs())
+
+	// clean up and close all previously open foreground sessions
+	// if the current ServeConfig has overwritten them.
+	if prevConfig.Valid() {
+		has := func(string) bool { return false }
+		if b.serveConfig.Valid() {
+			has = b.serveConfig.Foreground().Has
+		}
+		prevConfig.Foreground().Range(func(k string, v ipn.ServeConfigView) (cont bool) {
+			if !has(k) {
+				for _, sess := range b.notifyWatchers {
+					if sess.sessionID == k {
+						close(sess.ch)
+					}
+				}
+			}
+			return true
+		})
+	}
+
 	return nil
 }
 
