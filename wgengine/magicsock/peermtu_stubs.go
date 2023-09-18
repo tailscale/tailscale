@@ -30,7 +30,17 @@ func (c *Conn) getDontFragment(network string) (bool, error) {
 	return false, nil
 }
 
-// CanPMTUD returns whether this platform supports performing peet path MTU discovery.
-func CanPMTUD() bool {
+func (c *Conn) DontFragSetting() (bool, error) {
+	return false, nil
+}
+
+func (c *Conn) ShouldPMTUD() bool {
 	return false
+}
+
+func (c *Conn) PeerMTUEnabled() bool {
+	return false
+}
+
+func (c *Conn) UpdatePMTUD() {
 }

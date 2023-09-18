@@ -53,9 +53,11 @@ var (
 	// discovery on UDP connections between peers. Currently (2023-09-05)
 	// this only turns on the don't fragment bit for the magicsock UDP
 	// sockets.
-	debugEnablePMTUD = envknob.RegisterBool("TS_DEBUG_ENABLE_PMTUD")
-	// Hey you! Adding a new debugknob? Make sure to stub it out in the debugknob_stubs.go
-	// file too.
+	debugEnablePMTUD = envknob.RegisterOptBool("TS_DEBUG_ENABLE_PMTUD")
+	// debugPMTUD prints extra debugging about peer MTU path discovery.
+	debugPMTUD = envknob.RegisterBool("TS_DEBUG_PMTUD")
+	// Hey you! Adding a new debugknob? Make sure to stub it out in the
+	// debugknobs_stubs.go file too.
 )
 
 // inTest reports whether the running program is a test that set the
