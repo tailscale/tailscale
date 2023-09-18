@@ -983,6 +983,8 @@ var errDropDerpPacket = errors.New("too many DERP packets queued; dropping")
 
 var errNoUDP = errors.New("no UDP available on platform")
 
+var errUnsupportedConnType = errors.New("unsupported connection type")
+
 var (
 	// This acts as a compile-time check for our usage of ipv6.Message in
 	// batchingUDPConn for both IPv6 and IPv4 operations.
@@ -2309,7 +2311,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 		trySetSocketBuffer(pconn, c.logf)
 
 		if CanPMTUD() {
-			err = setDontFragment(pconn, network)
+			err = c.setDontFragment(network, true)
 			if err != nil {
 				c.logf("magicsock: set dontfragment failed for %v port %d: %v", network, port, err)
 				// TODO disable PMTUD in this case. We don't expect the setsockopt to fail on
