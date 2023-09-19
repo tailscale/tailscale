@@ -186,6 +186,14 @@ func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
 	return &x
 }
 
+func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
+	if v.ж.SelfNodeV6MasqAddrForThisPeer == nil {
+		return nil
+	}
+	x := *v.ж.SelfNodeV6MasqAddrForThisPeer
+	return &x
+}
+
 func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
 func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
 	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
@@ -225,6 +233,7 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})

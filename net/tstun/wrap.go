@@ -98,7 +98,7 @@ type Wrapper struct {
 	// timeNow, if non-nil, will be used to obtain the current time.
 	timeNow func() time.Time
 
-	// natV4Config stores the current NAT configuration.
+	// natV4Config stores the current IPv4 NAT configuration.
 	natV4Config atomic.Pointer[natV4Config]
 
 	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
@@ -577,9 +577,9 @@ func (c *natV4Config) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	return oldSrc
 }
 
-// natConfigFromWireGuardConfig generates a natV4Config from nm.
+// natV4ConfigFromWGConfig generates a natV4Config from nm.
 // If v4 NAT is not required, it returns nil.
-func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
+func natV4ConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	if wcfg == nil {
 		return nil
 	}
@@ -632,7 +632,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 // SetNetMap is called when a new NetworkMap is received.
 // It currently (2023-03-01) only updates the IPv4 NAT configuration.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
-	cfg := natConfigFromWGConfig(wcfg)
+	cfg := natV4ConfigFromWGConfig(wcfg)
 	old := t.natV4Config.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
 		t.logf("nat config: %+v", cfg)
