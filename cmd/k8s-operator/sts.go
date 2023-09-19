@@ -78,6 +78,7 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	UseDNS                 bool
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -89,7 +90,7 @@ func (a *tailscaleSTSReconciler) IsHTTPSEnabledOnTailnet() bool {
 // up to date.
 func (a *tailscaleSTSReconciler) Provision(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
 	// Do full reconcile.
-	hsvc, err := a.reconcileHeadlessService(ctx, logger, sts)
+	hsvc, err := a.reconcileProxyService(ctx, logger, sts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile headless service: %w", err)
 	}
@@ -159,22 +160,46 @@ func (a *tailscaleSTSReconciler) Cleanup(ctx context.Context, logger *zap.Sugare
 	return true, nil
 }
 
-func (a *tailscaleSTSReconciler) reconcileHeadlessService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
-	hsvc := &corev1.Service{
+func (a *tailscaleSTSReconciler) reconcileProxyService(ctx context.Context, logger *zap.SugaredLogger, sts *tailscaleSTSConfig) (*corev1.Service, error) {
+	proxysvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "ts-" + sts.ParentResourceName + "-",
 			Namespace:    a.operatorNamespace,
 			Labels:       sts.ChildResourceLabels,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: "None",
 			Selector: map[string]string{
 				"app": sts.ParentResourceUID,
 			},
 		},
 	}
-	logger.Debugf("reconciling headless service for StatefulSet")
-	return createOrUpdate(ctx, a.Client, a.operatorNamespace, hsvc, func(svc *corev1.Service) { svc.Spec = hsvc.Spec })
+	if sts.ClusterTargetIP != "" || sts.ChildResourceLabels[LabelParentType] == "ingress" {
+		logger.Debugf("reconciling headless service for StatefulSet")
+		proxysvc.Spec.ClusterIP = corev1.ClusterIPNone
+		return createOrUpdate(ctx, a.Client, a.operatorNamespace, proxysvc, func(svc *corev1.Service) {
+			svc.Spec.Selector = proxysvc.Spec.Selector
+			svc.Spec.ClusterIP = proxysvc.Spec.ClusterIP
+
+		})
+	} else if sts.TailnetTargetIP != "" {
+		logger.Debugf("reconciling ClusterIP service for StatefulSet")
+		proxysvc.Spec.Ports = []corev1.ServicePort{
+			{
+				Name:     "https",
+				Protocol: "TCP",
+				Port:     443,
+			},
+			{
+				Name:     "http",
+				Protocol: "TCP",
+				Port:     80,
+			},
+		}
+	}
+	return createOrUpdate(ctx, a.Client, a.operatorNamespace, proxysvc, func(svc *corev1.Service) {
+		svc.Spec.Selector = proxysvc.Spec.Selector
+		svc.Spec.Ports = proxysvc.Spec.Ports
+	})
 }
 
 func (a *tailscaleSTSReconciler) createOrGetSecret(ctx context.Context, logger *zap.SugaredLogger, stsC *tailscaleSTSConfig, hsvc *corev1.Service) (string, error) {

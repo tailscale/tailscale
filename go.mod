@@ -2,6 +2,9 @@ module tailscale.com
 
 go 1.21
 
+// v0.10+ of this library is currently breaks on plan9, see https://github.com/prometheus/procfs/issues/554
+replace github.com/prometheus/procfs => github.com/prometheus/procfs v0.9.0
+
 require (
 	filippo.io/mkcert v1.4.4
 	github.com/Microsoft/go-winio v0.6.1
@@ -16,7 +19,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.36.3
 	github.com/coreos/go-iptables v0.6.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
-	github.com/coreos/go-systemd/v22 v22.4.0
+	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/creack/pty v1.1.18
 	github.com/dave/jennifer v1.6.1
 	github.com/dblohm7/wingoes v0.0.0-20230821191801-fc76608aecf0
@@ -54,8 +57,8 @@ require (
 	github.com/peterbourgon/ff/v3 v3.3.0
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.5
-	github.com/prometheus/client_golang v1.15.1
-	github.com/prometheus/common v0.42.0
+	github.com/prometheus/client_golang v1.16.0
+	github.com/prometheus/common v0.44.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tailscale/certstore v0.1.1-0.20220316223106-78d6e1c49d8d
 	github.com/tailscale/depaware v0.0.0-20210622194025-720c4b409502
@@ -73,19 +76,19 @@ require (
 	github.com/u-root/u-root v0.11.0
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/vishvananda/netns v0.0.4
-	go.uber.org/zap v1.24.0
+	go.uber.org/zap v1.25.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
 	go4.org/netipx v0.0.0-20230728180743-ad4cb58a6516
 	golang.org/x/crypto v0.12.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/mod v0.11.0
 	golang.org/x/net v0.14.0
-	golang.org/x/oauth2 v0.7.0
-	golang.org/x/sync v0.2.0
+	golang.org/x/oauth2 v0.8.0
+	golang.org/x/sync v0.3.0
 	golang.org/x/sys v0.11.0
 	golang.org/x/term v0.11.0
 	golang.org/x/time v0.3.0
-	golang.org/x/tools v0.9.1
+	golang.org/x/tools v0.9.3
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gvisor.dev/gvisor v0.0.0-20230504175454-7b0a1988a28f
@@ -93,16 +96,19 @@ require (
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/tcpproxy v0.0.0-20221017015627-91f861402626
 	inet.af/wf v0.0.0-20221017222439-36129f591884
-	k8s.io/api v0.27.2
-	k8s.io/apimachinery v0.27.2
-	k8s.io/client-go v0.27.2
+	k8s.io/api v0.28.0
+	k8s.io/apimachinery v0.28.0
+	k8s.io/client-go v0.28.0
 	nhooyr.io/websocket v1.8.7
-	sigs.k8s.io/controller-runtime v0.15.0
+	sigs.k8s.io/controller-runtime v0.16.0
 	sigs.k8s.io/yaml v1.3.0
 	software.sslmate.com/src/go-pkcs12 v0.2.0
 )
 
-require github.com/gorilla/securecookie v1.1.1 // indirect
+require (
+	github.com/google/gnostic-models v0.6.8 // indirect
+	github.com/gorilla/securecookie v1.1.1 // indirect
+)
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.2.1 // indirect
@@ -205,7 +211,6 @@ require (
 	github.com/golangci/revgrep v0.0.0-20220804021717-745bb2f7c2e6 // indirect
 	github.com/golangci/unconvert v0.0.0-20180507085042-28b1c447d1f4 // indirect
 	github.com/google/btree v1.1.2 // indirect
-	github.com/google/gnostic v0.6.9 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/goterm v0.0.0-20200907032337-555d40f16ae2 // indirect
 	github.com/google/rpmpack v0.5.0 // indirect
@@ -283,7 +288,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/polyfloyd/go-errorlint v1.4.1 // indirect
 	github.com/prometheus/client_model v0.4.0 // indirect
-	github.com/prometheus/procfs v0.9.0 // indirect
+	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/quasilyte/go-ruleguard v0.3.19 // indirect
 	github.com/quasilyte/gogrep v0.5.0 // indirect
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
@@ -315,7 +320,7 @@ require (
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.1.1 // indirect
 	github.com/stretchr/objx v0.5.0 // indirect
-	github.com/stretchr/testify v1.8.4 // indirect
+	github.com/stretchr/testify v1.8.4
 	github.com/subosito/gotenv v1.4.2 // indirect
 	github.com/t-yuki/gocover-cobertura v0.0.0-20180217150009-aaee18c8195c // indirect
 	github.com/tdakkota/asciicheck v0.2.0 // indirect
@@ -336,12 +341,11 @@ require (
 	github.com/yeya24/promlinter v0.2.0 // indirect
 	gitlab.com/bosi/decorder v0.2.3 // indirect
 	gitlab.com/digitalxero/go-conventional-commit v1.0.7 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20230425010034-47ecfdc1ba53 // indirect
 	golang.org/x/image v0.7.0 // indirect
 	golang.org/x/text v0.12.0 // indirect
-	gomodules.xyz/jsonpatch/v2 v2.3.0 // indirect
+	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
@@ -350,10 +354,10 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect
-	k8s.io/apiextensions-apiserver v0.27.2 // indirect
-	k8s.io/component-base v0.27.2 // indirect
+	k8s.io/apiextensions-apiserver v0.28.0 // indirect
+	k8s.io/component-base v0.28.0 // indirect
 	k8s.io/klog/v2 v2.100.1 // indirect
-	k8s.io/kube-openapi v0.0.0-20230501164219-8b0f38b5fd1f // indirect
+	k8s.io/kube-openapi v0.0.0-20230717233707-2695361300d9 // indirect
 	k8s.io/utils v0.0.0-20230406110748-d93618cff8a2 // indirect
 	mvdan.cc/gofumpt v0.5.0 // indirect
 	mvdan.cc/interfacer v0.0.0-20180901003855-c20040233aed // indirect

@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ptr"
 )
 
@@ -189,10 +191,8 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			},
 		},
 		Spec: corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{
-				"foo": "bar",
-			},
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "foo",
 		},
 	})
 
@@ -201,7 +201,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	fullName, shortName := findGenName(t, fc, "default", "test")
 
 	expectEqual(t, fc, expectedSecret(fullName))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedClusterIPService(shortName))
 	expectEqual(t, fc, expectedEgressSTS(shortName, fullName, tailnetTargetIP, "default-test", ""))
 	want := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -225,7 +225,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 	}
 	expectEqual(t, fc, want)
 	expectEqual(t, fc, expectedSecret(fullName))
-	expectEqual(t, fc, expectedHeadlessService(shortName))
+	expectEqual(t, fc, expectedClusterIPService(shortName))
 	expectEqual(t, fc, expectedEgressSTS(shortName, fullName, tailnetTargetIP, "default-test", ""))
 
 	// Change the tailscale-target-ip annotation which should update the
@@ -814,6 +814,93 @@ func TestDefaultLoadBalancer(t *testing.T) {
 	expectEqual(t, fc, expectedSTS(shortName, fullName, "default-test", ""))
 }
 
+func TestDNSEnabledMode(t *testing.T) {
+	fc := fake.NewFakeClient()
+	ft := &fakeTSClient{}
+	zl, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fooIP := "100.99.99.99"
+	fooProxyIP := "10.99.99.99"
+	fooFQDN := "foo.ts.net"
+	flc := fakeLocalClient{
+		whois: map[string]string{
+			fmt.Sprintf("%s:0", fooIP): fooFQDN,
+		},
+	}
+	sr := &ServiceReconciler{
+		Client: fc,
+		hostProvisioner: &hostsCMProvisioner{
+			localAPIClient: &flc,
+			Client:         fc,
+			tsNamespace:    "operator-ns",
+		},
+		ssr: &tailscaleSTSReconciler{
+			Client:            fc,
+			tsClient:          ft,
+			defaultTags:       []string{"tag:k8s"},
+			operatorNamespace: "operator-ns",
+			proxyImage:        "tailscale/tailscale",
+			UseDNS:            true,
+		},
+		logger: zl.Sugar(),
+		useDNS: true,
+	}
+	// pre-create nameserver config configmap
+	mustCreate(t, fc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dnsconfig",
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "nameserver",
+				"app.kubernetes.io/name":      "tailscale",
+			},
+			UID: types.UID("1234-UID"),
+		},
+	})
+	// create a Service specifying egress
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			// The apiserver is supposed to set the UID, but the fake client
+			// doesn't. So, set it explicitly because other code later depends
+			// on it being set.
+			UID: types.UID("1234-UID"),
+			Annotations: map[string]string{
+				AnnotationTailnetTargetIP: fooIP,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ExternalName: "foo",
+			Type:         corev1.ServiceTypeExternalName,
+		},
+	}
+	mustCreate(t, fc, svc)
+	expectReconciled(t, sr, "default", "test")
+
+	fullName, shortName := findGenName(t, fc, "default", "test")
+
+	expectEqual(t, fc, expectedSecret(fullName))
+	expectEqual(t, fc, expectedEgressSTS(shortName, fullName, fooIP, "default-test", ""))
+	expectEqual(t, fc, expectedClusterIPService(shortName))
+
+	// add cluster IP to the proxy service so that the nameserver config update can proceed..
+	mustUpdate(t, fc, "operator-ns", shortName, func(svc *corev1.Service) {
+		svc.Spec.ClusterIP = fooProxyIP
+	})
+	expectReconciled(t, sr, "default", "test")
+
+	expectEqual(t, fc, expectedConfigmap(fmt.Sprintf("{\"%s\":\"%s\"}", fooFQDN, fooProxyIP)))
+
+	// Delete service, observe that nameserver config gets updated accordingly
+	mustDelete(t, fc, svc)
+	// cleanup post-deletion requires a couple reconciles
+	expectEventuallyEqual(t, fc, expectedConfigmap("{}"), 3, time.Second, func() { expectReconciled(t, sr, "default", "test") })
+}
+
 func expectedSecret(name string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
@@ -858,6 +945,63 @@ func expectedHeadlessService(name string) *corev1.Service {
 				"app": "1234-UID",
 			},
 			ClusterIP: "None",
+		},
+	}
+}
+func expectedClusterIPService(name string) *corev1.Service {
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Service",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:         name,
+			GenerateName: "ts-test-",
+			Namespace:    "operator-ns",
+			Labels: map[string]string{
+				"tailscale.com/managed":              "true",
+				"tailscale.com/parent-resource":      "test",
+				"tailscale.com/parent-resource-ns":   "default",
+				"tailscale.com/parent-resource-type": "svc",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app": "1234-UID",
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "https",
+					Protocol: "TCP",
+					Port:     443,
+				},
+				{
+					Name:     "http",
+					Protocol: "TCP",
+					Port:     80,
+				},
+			},
+		},
+	}
+}
+
+func expectedConfigmap(hosts string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ConfigMap",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dnsconfig",
+			Namespace: "operator-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "nameserver",
+				"app.kubernetes.io/name":      "tailscale",
+			},
+			UID: "1234-UID",
+		},
+		Data: map[string]string{
+			"dns.json": fmt.Sprintf(`{"hosts":%s}`, hosts),
 		},
 	}
 }
@@ -1026,6 +1170,13 @@ func mustCreate(t *testing.T, client client.Client, obj client.Object) {
 	}
 }
 
+func mustDelete(t *testing.T, client client.Client, obj client.Object) {
+	t.Helper()
+	if err := client.Delete(context.Background(), obj); err != nil {
+		t.Fatalf("deleting %q: %v", obj.GetName(), err)
+	}
+}
+
 func mustUpdate[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string, update func(O)) {
 	t.Helper()
 	obj := O(new(T))
@@ -1073,6 +1224,30 @@ func expectEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Fatalf("unexpected object (-got +want):\n%s", diff)
 	}
+}
+func expectEventuallyEqual[T any, O ptrObject[T]](t *testing.T, client client.Client, want O, retries int, period time.Duration, f func()) {
+	var diff string
+	for range make([]int, retries) {
+		f()
+		t.Helper()
+		got := O(new(T))
+		if err := client.Get(context.Background(), types.NamespacedName{
+			Name:      want.GetName(),
+			Namespace: want.GetNamespace(),
+		}, got); err != nil {
+			t.Fatalf("getting %q: %v", want.GetName(), err)
+		}
+		// The resource version changes eagerly whenever the operator does even a
+		// no-op update. Asserting a specific value leads to overly brittle tests,
+		// so just remove it from both got and want.
+		got.SetResourceVersion("")
+		want.SetResourceVersion("")
+		if diff = cmp.Diff(got, want); diff == "" {
+			return // success
+		}
+		time.Sleep(period)
+	}
+	t.Fatalf("unexpected object (-got +want):\n%s", diff)
 }
 
 func expectMissing[T any, O ptrObject[T]](t *testing.T, client client.Client, ns, name string) {
@@ -1161,4 +1336,19 @@ func (c *fakeTSClient) Deleted() []string {
 	c.Lock()
 	defer c.Unlock()
 	return c.deleted
+}
+
+type fakeLocalClient struct {
+	whois map[string]string
+}
+
+func (lc *fakeLocalClient) WhoIs(_ context.Context, ip string) (*apitype.WhoIsResponse, error) {
+	if _, ok := lc.whois[ip]; !ok {
+		return nil, fmt.Errorf("don't know who is %s", ip)
+	}
+	return &apitype.WhoIsResponse{
+		Node: &tailcfg.Node{
+			Name: lc.whois[ip],
+		},
+	}, nil
 }

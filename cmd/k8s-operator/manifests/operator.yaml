@@ -79,6 +79,17 @@ rules:
 - apiGroups: ["apps"]
   resources: ["statefulsets"]
   verbs: ["*"]
+- apiGroups:
+  - ""
+  resourceNames:
+  - dnsconfig
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - watch
+  - list
+  - update
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -132,6 +143,9 @@ spec:
             requests:
               cpu: 500m
               memory: 100Mi
+          command:
+          - /usr/local/bin/operator
+          - --enable-dns=false
           env:
             - name: OPERATOR_HOSTNAME
               value: tailscale-operator

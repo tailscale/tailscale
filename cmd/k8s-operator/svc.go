@@ -26,6 +26,8 @@ import (
 type ServiceReconciler struct {
 	client.Client
 	ssr                   *tailscaleSTSReconciler
+	hostProvisioner       *hostsCMProvisioner
+	useDNS                bool
 	logger                *zap.SugaredLogger
 	isDefaultLoadBalancer bool
 
@@ -102,11 +104,28 @@ func (a *ServiceReconciler) maybeCleanup(ctx context.Context, logger *zap.Sugare
 		return nil
 	}
 
-	if done, err := a.ssr.Cleanup(ctx, logger, childResourceLabels(svc.Name, svc.Namespace, "svc")); err != nil {
+	crl := childResourceLabels(svc.Name, svc.Namespace, "svc")
+
+	if done, err := a.ssr.Cleanup(ctx, logger, crl); err != nil {
 		return fmt.Errorf("failed to cleanup: %w", err)
 	} else if !done {
 		logger.Debugf("cleanup not done yet, waiting for next reconcile")
 		return nil
+	}
+
+	// ensure that ts.net nameserver record for the MagicDNS name of the
+	//service has been deleted
+	if a.hasTailnetTargetAnnotation(svc) && a.useDNS {
+		a.logger.Info("remove hosts record")
+		hostsConfig := &hostsCMConfig{
+			targetIP:      svc.Annotations[AnnotationTailnetTargetIP],
+			serviceLabels: crl,
+		}
+		if err := a.hostProvisioner.Cleanup(ctx, a.logger, hostsConfig); err != nil {
+			return fmt.Errorf("error provisioning ts.net config: %v", err)
+		}
+	} else {
+		a.logger.Info("no need to remove hosts record")
 	}
 
 	svc.Finalizers = append(svc.Finalizers[:ix], svc.Finalizers[ix+1:]...)
@@ -177,15 +196,33 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 	a.mu.Unlock()
 
-	var hsvc *corev1.Service
-	if hsvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
+	var proxysvc *corev1.Service
+	if proxysvc, err = a.ssr.Provision(ctx, logger, sts); err != nil {
 		return fmt.Errorf("failed to provision: %w", err)
+	}
+	// Only used for egress proxy. If operator has been configured to use
+	// DNS this will be the MagicDNS name of the egress service. If the
+	// operator has not been configured to use DNS, this will be the
+	// Kubernetes DNS name of the proxy Service.
+	inClusterFQDN := fmt.Sprintf("%s.%s.svc", proxysvc.Name, proxysvc.Namespace)
+
+	// ensure that ts.net nameserver has a record for the new egress service
+	if a.hasTailnetTargetAnnotation(svc) && a.useDNS {
+		// update hosts
+		hostsConfig := &hostsCMConfig{
+			targetIP:      svc.Annotations[AnnotationTailnetTargetIP],
+			serviceLabels: crl,
+		}
+		fqdn, err := a.hostProvisioner.Provision(ctx, logger, hostsConfig)
+		if err != nil {
+			return fmt.Errorf("error provisioning ts.net config: %v", err)
+		}
+		inClusterFQDN = fqdn
 	}
 
 	if a.hasTailnetTargetAnnotation(svc) {
-		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc"
-		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
-			svc.Spec.ExternalName = headlessSvcName
+		if svc.Spec.ExternalName != inClusterFQDN || svc.Spec.Type != corev1.ServiceTypeExternalName {
+			svc.Spec.ExternalName = inClusterFQDN
 			svc.Spec.Selector = nil
 			svc.Spec.Type = corev1.ServiceTypeExternalName
 			if err := a.Update(ctx, svc); err != nil {
