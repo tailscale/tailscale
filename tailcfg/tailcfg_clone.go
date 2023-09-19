@@ -71,6 +71,9 @@ func (src *Node) Clone() *Node {
 	if dst.SelfNodeV4MasqAddrForThisPeer != nil {
 		dst.SelfNodeV4MasqAddrForThisPeer = ptr.To(*src.SelfNodeV4MasqAddrForThisPeer)
 	}
+	if dst.SelfNodeV6MasqAddrForThisPeer != nil {
+		dst.SelfNodeV6MasqAddrForThisPeer = ptr.To(*src.SelfNodeV6MasqAddrForThisPeer)
+	}
 	if src.ExitNodeDNSResolvers != nil {
 		dst.ExitNodeDNSResolvers = make([]*dnstype.Resolver, len(src.ExitNodeDNSResolvers))
 		for i := range dst.ExitNodeDNSResolvers {
@@ -113,6 +116,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
 	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})

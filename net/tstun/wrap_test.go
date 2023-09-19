@@ -780,7 +780,7 @@ func TestNATCfg(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ncfg := natConfigFromWGConfig(tc.wcfg)
+			ncfg := natV4ConfigFromWGConfig(tc.wcfg)
 			for peer, want := range tc.snatMap {
 				if got := ncfg.selectSrcIP(selfNativeIP, peer); got != want {
 					t.Errorf("selectSrcIP[%v]: got %v; want %v", peer, got, want)

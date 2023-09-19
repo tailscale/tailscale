@@ -612,6 +612,9 @@ func (h *peerAPIHandler) isAddressValid(addr netip.Addr) bool {
 	if v := h.peerNode.SelfNodeV4MasqAddrForThisPeer(); v != nil {
 		return *v == addr
 	}
+	if v := h.peerNode.SelfNodeV6MasqAddrForThisPeer(); v != nil {
+		return *v == addr
+	}
 	pfx := netip.PrefixFrom(addr, addr.BitLen())
 	return views.SliceContains(h.selfNode.Addresses(), pfx)
 }

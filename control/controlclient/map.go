@@ -703,6 +703,14 @@ func peerChangeDiff(was tailcfg.NodeView, n *tailcfg.Node) (_ *tailcfg.PeerChang
 			if va == nil || vb == nil || *va != *vb {
 				return nil, false
 			}
+		case "SelfNodeV6MasqAddrForThisPeer":
+			va, vb := was.SelfNodeV6MasqAddrForThisPeer(), n.SelfNodeV6MasqAddrForThisPeer
+			if va == nil && vb == nil {
+				continue
+			}
+			if va == nil || vb == nil || *va != *vb {
+				return nil, false
+			}
 		case "ExitNodeDNSResolvers":
 			va, vb := was.ExitNodeDNSResolvers(), views.SliceOfViews(n.ExitNodeDNSResolvers)
 

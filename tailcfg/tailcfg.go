@@ -374,6 +374,21 @@ type Node struct {
 	// not be masqueraded (e.g. in case of --snat-subnet-routes).
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
 
+	// SelfNodeV6MasqAddrForThisPeer is the IPv6 that this peer knows the current node as.
+	// It may be empty if the peer knows the current node by its native
+	// IPv6 address.
+	// This field is only populated in a MapResponse for peers and not
+	// for the current node.
+	//
+	// If set, it should be used to masquerade traffic originating from the
+	// current node to this peer. The masquerade address is only relevant
+	// for this peer and not for other peers.
+	//
+	// This only applies to traffic originating from the current node to the
+	// peer or any of its subnets. Traffic originating from subnet routes will
+	// not be masqueraded (e.g. in case of --snat-subnet-routes).
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr `json:",omitempty"`
+
 	// IsWireGuardOnly indicates that this is a non-Tailscale WireGuard peer, it
 	// is not expected to speak Disco or DERP, and it must have Endpoints in
 	// order to be reachable.
@@ -1940,6 +1955,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		eqStrings(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
+		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
 		n.IsWireGuardOnly == n2.IsWireGuardOnly
 }
 

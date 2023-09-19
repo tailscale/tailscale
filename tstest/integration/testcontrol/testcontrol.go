@@ -66,7 +66,7 @@ type Server struct {
 	// MapResponses sent to clients. It is keyed by the requesting nodes
 	// public key, and then the peer node's public key. The value is the
 	// masquerade address to use for that peer.
-	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV4MasqAddrForThisPeer IP
+	masquerades map[key.NodePublic]map[key.NodePublic]netip.Addr // node => peer => SelfNodeV{4,6}MasqAddrForThisPeer IP
 
 	// suppressAutoMapResponses is the set of nodes that should not be sent
 	// automatic map responses from serveMap. (They should only get manually sent ones)
@@ -330,7 +330,7 @@ func (s *Server) serveMachine(w http.ResponseWriter, r *http.Request) {
 // Node masquerades as for the Peer.
 //
 // Setting this will have future MapResponses for Node to have
-// Peer.SelfNodeV4MasqAddrForThisPeer set to NodeMasqueradesAs.
+// Peer.SelfNodeV{4,6}MasqAddrForThisPeer set to NodeMasqueradesAs.
 // MapResponses for the Peer will now see Node.Addresses as
 // NodeMasqueradesAs.
 type MasqueradePair struct {
@@ -889,7 +889,11 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 			continue
 		}
 		if masqIP := nodeMasqs[p.Key]; masqIP.IsValid() {
-			p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			if masqIP.Is6() {
+				p.SelfNodeV6MasqAddrForThisPeer = ptr.To(masqIP)
+			} else {
+				p.SelfNodeV4MasqAddrForThisPeer = ptr.To(masqIP)
+			}
 		}
 
 		s.mu.Lock()
