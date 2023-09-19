@@ -41,16 +41,6 @@ We always require the latest Go release, currently Go 1.21. (While we build
 releases with our [Go fork](https://github.com/tailscale/go/), its use is not
 required.)
 
-To include the embedded web client (accessed via the `tailscale web` command),
-first build the client assets using:
-
-```
-./tool/yarn --cwd client/web install
-./tool/yarn --cwd client/web build
-```
-
-Build the `tailscale` and `tailscaled` binaries:
-
 ```
 go install tailscale.com/cmd/tailscale{,d}
 ```
