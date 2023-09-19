@@ -174,6 +174,9 @@ func (c *Cache[K, V]) deleteElement(ent *entry[K, V]) {
 	} else {
 		ent.next.prev = ent.prev
 		ent.prev.next = ent.next
+		if c.head == ent {
+			c.head = ent.next
+		}
 	}
 	delete(c.lookup, ent.key)
 }
