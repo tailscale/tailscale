@@ -736,6 +736,18 @@ func TestPeerChangeDiff(t *testing.T) {
 			a:    &tailcfg.Node{ID: 1, User: 1},
 			b:    &tailcfg.Node{ID: 1, User: 2},
 			want: nil,
+		},
+		{
+			name: "miss-change-masq-v4",
+			a:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
+			b:    &tailcfg.Node{ID: 1, SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.2"))},
+			want: nil,
+		},
+		{
+			name: "miss-change-masq-v6",
+			a:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			b:    &tailcfg.Node{ID: 1, SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3006"))},
+			want: nil,
 		}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

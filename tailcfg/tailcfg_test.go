@@ -350,7 +350,7 @@ func TestNodeEqual(t *testing.T) {
 		"UnsignedPeerAPIOnly",
 		"ComputedName", "computedHostIfDifferent", "ComputedNameWithHost",
 		"DataPlaneAuditLogID", "Expired", "SelfNodeV4MasqAddrForThisPeer",
-		"IsWireGuardOnly", "ExitNodeDNSResolvers",
+		"SelfNodeV6MasqAddrForThisPeer", "IsWireGuardOnly", "ExitNodeDNSResolvers",
 	}
 	if have := fieldsOf(reflect.TypeOf(Node{})); !reflect.DeepEqual(have, nodeHandles) {
 		t.Errorf("Node.Equal check might be out of sync\nfields: %q\nhandled: %q\n",
@@ -543,6 +543,16 @@ func TestNodeEqual(t *testing.T) {
 		{
 			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
 			&Node{SelfNodeV4MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("100.64.0.1"))},
+			true,
+		},
+		{
+			&Node{},
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			false,
+		},
+		{
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
+			&Node{SelfNodeV6MasqAddrForThisPeer: ptr.To(netip.MustParseAddr("2001::3456"))},
 			true,
 		},
 		{
