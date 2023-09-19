@@ -531,6 +531,13 @@ func (h *Handler) serveDebugExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if cmds[0] == ".serial" {
+		r := posture.GetSerialNumber()
+		response := fmt.Sprintf("serial %+v", r)
+		w.Write([]byte(response))
+		return
+	}
+
 	var out bytes.Buffer
 	c := exec.Command(cmds[0], cmds[1:]...)
 	c.Stdout = &out
