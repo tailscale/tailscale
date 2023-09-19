@@ -545,6 +545,44 @@ type natV4Config struct {
 	dstAddrToPeerKeyMapper *table.RoutingTable
 }
 
+func (c *natV4Config) String() string {
+	if c == nil {
+		return "<nil>"
+	}
+	var b strings.Builder
+	b.WriteString("natV4Config{")
+	fmt.Fprintf(&b, "nativeAddr: %v, ", c.nativeAddr)
+	fmt.Fprint(&b, "listenAddrs: [")
+
+	i := 0
+	c.listenAddrs.Range(func(k netip.Addr, _ struct{}) bool {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(k.String())
+		i++
+		return true
+	})
+	count := map[netip.Addr]int{}
+	c.dstMasqAddrs.Range(func(_ key.NodePublic, v netip.Addr) bool {
+		count[v]++
+		return true
+	})
+
+	i = 0
+	b.WriteString("], dstMasqAddrs: [")
+	for k, v := range count {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%v: %v peers", k, v)
+		i++
+	}
+	b.WriteString("]}")
+
+	return b.String()
+}
+
 // mapDstIP returns the destination IP to use for a packet to dst.
 // If dst is not one of the listen addresses, it is returned as-is,
 // otherwise the native address is returned.
@@ -635,7 +673,7 @@ func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
 	cfg := natV4ConfigFromWGConfig(wcfg)
 	old := t.natV4Config.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
-		t.logf("nat config: %+v", cfg)
+		t.logf("nat config: %v", cfg)
 	}
 }
 
