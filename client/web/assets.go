@@ -4,8 +4,6 @@
 package web
 
 import (
-	"embed"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -15,28 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"tailscale.com/util/must"
+	prebuilt "github.com/tailscale/web-client-prebuilt"
 )
-
-// This contains all files needed to build the frontend assets.
-// Because we assign this to the blank identifier, it does not actually embed the files.
-// However, this does cause `go mod vendor` to include the files when vendoring the package.
-// External packages that use the web client can `go mod vendor`, run `yarn build` to
-// build the assets, then those asset bundles will be embedded.
-//
-//go:embed yarn.lock index.html *.js *.json src/*
-var _ embed.FS
-
-//go:embed build/*
-var embeddedFS embed.FS
-
-// staticfiles serves static files from the build directory.
-var staticfiles http.Handler
-
-func init() {
-	buildFiles := must.Get(fs.Sub(embeddedFS, "build"))
-	staticfiles = http.FileServer(http.FS(buildFiles))
-}
 
 func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 	if devMode {
@@ -44,7 +22,7 @@ func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
 		cleanup := startDevServer()
 		return devServerProxy(), cleanup
 	}
-	return staticfiles, nil
+	return http.FileServer(http.FS(prebuilt.FS())), nil
 }
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
