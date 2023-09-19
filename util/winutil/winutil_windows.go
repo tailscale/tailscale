@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/user"
 	"runtime"
 	"strings"
@@ -246,84 +245,6 @@ func EnableCurrentThreadPrivilege(name string) error {
 	tp.PrivilegeCount = 1
 	tp.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
 	return windows.AdjustTokenPrivileges(t, false, &tp, 0, nil, nil)
-}
-
-// StartProcessAsChild starts exePath process as a child of parentPID.
-// StartProcessAsChild copies parentPID's environment variables into
-// the new process, along with any optional environment variables in extraEnv.
-func StartProcessAsChild(parentPID uint32, exePath string, extraEnv []string) error {
-	// The rest of this function requires SeDebugPrivilege to be held.
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	err := windows.ImpersonateSelf(windows.SecurityImpersonation)
-	if err != nil {
-		return err
-	}
-	defer windows.RevertToSelf()
-
-	// According to https://docs.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights
-	//
-	// ... To open a handle to another process and obtain full access rights,
-	// you must enable the SeDebugPrivilege privilege. ...
-	//
-	// But we only need PROCESS_CREATE_PROCESS. So perhaps SeDebugPrivilege is too much.
-	//
-	// https://devblogs.microsoft.com/oldnewthing/20080314-00/?p=23113
-	//
-	// TODO: try look for something less than SeDebugPrivilege
-
-	err = EnableCurrentThreadPrivilege("SeDebugPrivilege")
-	if err != nil {
-		return err
-	}
-
-	ph, err := windows.OpenProcess(
-		windows.PROCESS_CREATE_PROCESS|windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_DUP_HANDLE,
-		false, parentPID)
-	if err != nil {
-		return err
-	}
-	defer windows.CloseHandle(ph)
-
-	var pt windows.Token
-	err = windows.OpenProcessToken(ph, windows.TOKEN_QUERY, &pt)
-	if err != nil {
-		return err
-	}
-	defer pt.Close()
-
-	env, err := pt.Environ(false)
-	if err != nil {
-		return err
-
-	}
-	env = append(env, extraEnv...)
-
-	sys := &syscall.SysProcAttr{ParentProcess: syscall.Handle(ph)}
-
-	cmd := exec.Command(exePath)
-	cmd.Env = env
-	cmd.SysProcAttr = sys
-
-	return cmd.Start()
-}
-
-// StartProcessAsCurrentGUIUser is like StartProcessAsChild, but if finds
-// current logged in user desktop process (normally explorer.exe),
-// and passes found PID to StartProcessAsChild.
-func StartProcessAsCurrentGUIUser(exePath string, extraEnv []string) error {
-	// as described in https://devblogs.microsoft.com/oldnewthing/20190425-00/?p=102443
-	desktop, err := GetDesktopPID()
-	if err != nil {
-		return fmt.Errorf("failed to find desktop: %v", err)
-	}
-	err = StartProcessAsChild(desktop, exePath, extraEnv)
-	if err != nil {
-		return fmt.Errorf("failed to start executable: %v", err)
-	}
-	return nil
 }
 
 // CreateAppMutex creates a named Windows mutex, returning nil if the mutex

@@ -43,12 +43,22 @@ var (
 	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 	procQueryServiceConfig2W       = modadvapi32.NewProc("QueryServiceConfig2W")
+	procGetProcessMitigationPolicy = modkernel32.NewProc("GetProcessMitigationPolicy")
 	procRegisterApplicationRestart = modkernel32.NewProc("RegisterApplicationRestart")
+	procSetProcessMitigationPolicy = modkernel32.NewProc("SetProcessMitigationPolicy")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
 	r1, _, e1 := syscall.Syscall6(procQueryServiceConfig2W.Addr(), 5, uintptr(hService), uintptr(infoLevel), uintptr(unsafe.Pointer(buf)), uintptr(bufLen), uintptr(unsafe.Pointer(bytesNeeded)), 0)
-	if r1 == 0 {
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func getProcessMitigationPolicy(hProcess windows.Handle, mitigationPolicy _PROCESS_MITIGATION_POLICY, buf unsafe.Pointer, bufLen uintptr) (err error) {
+	r1, _, e1 := syscall.Syscall6(procGetProcessMitigationPolicy.Addr(), 4, uintptr(hProcess), uintptr(mitigationPolicy), uintptr(buf), uintptr(bufLen), 0, 0)
+	if int32(r1) == 0 {
 		err = errnoErr(e1)
 	}
 	return
@@ -57,5 +67,13 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
 	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
 	ret = wingoes.HRESULT(r0)
+	return
+}
+
+func setProcessMitigationPolicy(mitigationPolicy _PROCESS_MITIGATION_POLICY, buf unsafe.Pointer, bufLen uintptr) (err error) {
+	r1, _, e1 := syscall.Syscall(procSetProcessMitigationPolicy.Addr(), 3, uintptr(mitigationPolicy), uintptr(buf), uintptr(bufLen))
+	if int32(r1) == 0 {
+		err = errnoErr(e1)
+	}
 	return
 }
