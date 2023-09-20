@@ -402,10 +402,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	panic("unexpected HTTP request")
 }
 
-// Issue 1573: don't generate a machine key if we don't want to be running.
-func TestLazyMachineKeyGeneration(t *testing.T) {
-	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
-
+func newTestLocalBackend(t testing.TB) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	sys := new(tsd.System)
 	store := new(mem.Store)
@@ -420,7 +417,14 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	return lb
+}
 
+// Issue 1573: don't generate a machine key if we don't want to be running.
+func TestLazyMachineKeyGeneration(t *testing.T) {
+	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
+
+	lb := newTestLocalBackend(t)
 	lb.SetHTTPTestClient(&http.Client{
 		Transport: panicOnUseTransport{}, // validate we don't send HTTP requests
 	})
@@ -672,21 +676,8 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
-	logf := tstest.WhileTestRunningLogger(t)
-	store := new(testStateStorage)
-	sys := new(tsd.System)
-	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
-	}
-	sys.Set(e)
-	t.Cleanup(e.Close)
+	b := newTestLocalBackend(t)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
-	}
 	var cc *mockControl
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
@@ -853,5 +844,58 @@ func TestUpdateNetmapDelta(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
 		}
+	}
+}
+
+// tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.
+func TestWhoIs(t *testing.T) {
+	b := newTestLocalBackend(t)
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:        2,
+				User:      20,
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+			10: {
+				DisplayName: "Myself",
+			},
+			20: {
+				DisplayName: "Peer",
+			},
+		},
+	})
+	tests := []struct {
+		q        string
+		want     tailcfg.NodeID // 0 means want ok=false
+		wantName string
+	}{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 2, "Peer"},
+		{"100.200.200.200:123", 2, "Peer"},
+		{"100.4.0.4:404", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.q, func(t *testing.T) {
+			nv, up, ok := b.WhoIs(netip.MustParseAddrPort(tt.q))
+			var got tailcfg.NodeID
+			if ok {
+				got = nv.ID()
+			}
+			if got != tt.want {
+				t.Errorf("got nodeID %v; want %v", got, tt.want)
+			}
+			if up.DisplayName != tt.wantName {
+				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+		})
 	}
 }
