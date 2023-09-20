@@ -28,7 +28,6 @@ import (
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
-	"tailscale.com/util/dnsname"
 	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -923,191 +922,41 @@ func TestWireguardExitNodeDNSResolvers(t *testing.T) {
 		nm := &netmap.NetworkMap{}
 		gotResolvers, gotOK := wireguardExitNodeDNSResolvers(nm, peers, tc.id)
 
-		if gotOK != tc.wantOK || !resolversEqual(t, gotResolvers, tc.wantResolvers) {
+		if gotOK != tc.wantOK || !resolversEqual(gotResolvers, tc.wantResolvers) {
 			t.Errorf("case: %s: got %v, %v, want %v, %v", tc.name, gotOK, gotResolvers, tc.wantOK, tc.wantResolvers)
 		}
 	}
 }
 
-func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
-	type tc struct {
-		name                 string
-		exitNode             tailcfg.StableNodeID
-		peers                []tailcfg.NodeView
-		dnsConfig            *tailcfg.DNSConfig
-		wantDefaultResolvers []*dnstype.Resolver
-		wantRoutes           map[dnsname.FQDN][]*dnstype.Resolver
-	}
-
-	defaultResolvers := []*dnstype.Resolver{{Addr: "default.example.com"}}
-	wgResolvers := []*dnstype.Resolver{{Addr: "wg.example.com"}}
-	peers := []tailcfg.NodeView{
-		(&tailcfg.Node{
+func TestDNSConfigForNetmapForWireguardExitNode(t *testing.T) {
+	resolvers := []*dnstype.Resolver{{Addr: "dns.example.com"}}
+	nm := &netmap.NetworkMap{}
+	peers := map[tailcfg.NodeID]tailcfg.NodeView{
+		1: (&tailcfg.Node{
 			ID:                   1,
-			StableID:             "wg",
+			StableID:             "1",
 			IsWireGuardOnly:      true,
-			ExitNodeDNSResolvers: wgResolvers,
+			ExitNodeDNSResolvers: resolvers,
 			Hostinfo:             (&tailcfg.Hostinfo{}).View(),
 		}).View(),
-		// regular tailscale exit node with DNS capabilities
-		(&tailcfg.Node{
-			Cap:      26,
-			ID:       2,
-			StableID: "ts",
-			Hostinfo: (&tailcfg.Hostinfo{}).View(),
-		}).View(),
 	}
-	exitDOH := peerAPIBase(&netmap.NetworkMap{Peers: peers}, peers[0]) + "/dns-query"
-	routes := map[dnsname.FQDN][]*dnstype.Resolver{
-		"route.example.com.": {{Addr: "route.example.com"}},
-	}
-	stringifyRoutes := func(routes map[dnsname.FQDN][]*dnstype.Resolver) map[string][]*dnstype.Resolver {
-		if routes == nil {
-			return nil
-		}
-		m := make(map[string][]*dnstype.Resolver)
-		for k, v := range routes {
-			m[string(k)] = v
-		}
-		return m
+	prefs := &ipn.Prefs{
+		ExitNodeID: "1",
+		CorpDNS:    true,
 	}
 
-	tests := []tc{
-		{
-			name:                 "noExit/noRoutes/noResolver",
-			exitNode:             "",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{},
-			wantDefaultResolvers: nil,
-			wantRoutes:           nil,
-		},
-		{
-			name:                 "tsExit/noRoutes/noResolver",
-			exitNode:             "ts",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
-			wantRoutes:           nil,
-		},
-		{
-			name:                 "tsExit/noRoutes/defaultResolver",
-			exitNode:             "ts",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
-			wantRoutes:           nil,
-		},
-
-		// The following two cases may need to be revisited. For a shared-in
-		// exit node split-DNS may effectively break, furthermore in the future
-		// if different nodes observe different DNS configurations, even a
-		// tailnet local exit node may present a different DNS configuration,
-		// which may not meet expectations in some use cases.
-		// In the case where a default resolver is set, the default resolver
-		// should also perhaps take precedence also.
-		{
-			name:                 "tsExit/routes/noResolver",
-			exitNode:             "ts",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
-			wantRoutes:           nil,
-		},
-		{
-			name:                 "tsExit/routes/defaultResolver",
-			exitNode:             "ts",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
-			wantDefaultResolvers: []*dnstype.Resolver{{Addr: exitDOH}},
-			wantRoutes:           nil,
-		},
-
-		// WireGuard exit nodes with DNS capabilities provide a "fallback" type
-		// behavior, they have a lower precedence than a default resolver, but
-		// otherwise allow split-DNS to operate as normal, and are used when
-		// there is no default resolver.
-		{
-			name:                 "wgExit/noRoutes/noResolver",
-			exitNode:             "wg",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{},
-			wantDefaultResolvers: wgResolvers,
-			wantRoutes:           nil,
-		},
-		{
-			name:                 "wgExit/noRoutes/defaultResolver",
-			exitNode:             "wg",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Resolvers: defaultResolvers},
-			wantDefaultResolvers: defaultResolvers,
-			wantRoutes:           nil,
-		},
-		{
-			name:                 "wgExit/routes/defaultResolver",
-			exitNode:             "wg",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes), Resolvers: defaultResolvers},
-			wantDefaultResolvers: defaultResolvers,
-			wantRoutes:           routes,
-		},
-		{
-			name:                 "wgExit/routes/noResolver",
-			exitNode:             "wg",
-			peers:                peers,
-			dnsConfig:            &tailcfg.DNSConfig{Routes: stringifyRoutes(routes)},
-			wantDefaultResolvers: wgResolvers,
-			wantRoutes:           routes,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			nm := &netmap.NetworkMap{
-				Peers: tc.peers,
-				DNS:   *tc.dnsConfig,
-			}
-
-			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
-			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), t.Logf, "")
-			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
-				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
-			}
-			if !routesEqual(t, got.Routes, tc.wantRoutes) {
-				t.Errorf("Routes: got %#v, want %#v", got.Routes, tc.wantRoutes)
-			}
-		})
+	got := dnsConfigForNetmap(nm, peers, prefs.View(), t.Logf, "")
+	if !resolversEqual(got.DefaultResolvers, resolvers) {
+		t.Errorf("got %v, want %v", got.DefaultResolvers, resolvers)
 	}
 }
 
-func resolversEqual(t *testing.T, a, b []*dnstype.Resolver) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		t.Errorf("resolversEqual: a == nil || b == nil : %#v != %#v", a, b)
-		return false
-	}
+func resolversEqual(a, b []*dnstype.Resolver) bool {
 	if len(a) != len(b) {
-		t.Errorf("resolversEqual: len(a) != len(b) : %#v != %#v", a, b)
 		return false
 	}
 	for i := range a {
 		if !a[i].Equal(b[i]) {
-			t.Errorf("resolversEqual: a != b [%d]: %v != %v", i, *a[i], *b[i])
-			return false
-		}
-	}
-	return true
-}
-
-func routesEqual(t *testing.T, a, b map[dnsname.FQDN][]*dnstype.Resolver) bool {
-	if len(a) != len(b) {
-		t.Logf("routes: len(a) != len(b): %d != %d", len(a), len(b))
-		return false
-	}
-	for name := range a {
-		if !resolversEqual(t, a[name], b[name]) {
-			t.Logf("routes: a != b [%s]: %v != %v", name, a[name], b[name])
 			return false
 		}
 	}

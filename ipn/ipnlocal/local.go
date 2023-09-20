@@ -3308,7 +3308,9 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	addDefault := func(resolvers []*dnstype.Resolver) {
-		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
+		for _, r := range resolvers {
+			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, r)
+		}
 	}
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
@@ -3318,17 +3320,14 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		return dcfg
 	}
 
-	// If the user has set default resolvers ("override local DNS"), prefer to
-	// use those resolvers as the default, otherwise if there are WireGuard exit
-	// node resolvers, use those as the default.
-	if len(nm.DNS.Resolvers) > 0 {
-		addDefault(nm.DNS.Resolvers)
-	} else {
-		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
-			addDefault(resolvers)
-		}
+	// If we're using an exit node and that exit node is IsWireGuardOnly with
+	// ExitNodeDNSResolver set, then add that as the default.
+	if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
+		addDefault(resolvers)
+		return dcfg
 	}
 
+	addDefault(nm.DNS.Resolvers)
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
 		if err != nil {
@@ -3343,7 +3342,11 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		//
 		// While we're already populating it, might as well size the
 		// slice appropriately.
-		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
+		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
+
+		for _, r := range resolvers {
+			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], r)
+		}
 	}
 
 	// Set FallbackResolvers as the default resolvers in the
