@@ -696,6 +696,13 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 	if err := cmdSNAT.Run(); err != nil {
 		return fmt.Errorf("setting up SNAT via iptables failed: %w", err)
 	}
+
+	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+	cmdClamp.Stdout = os.Stdout
+	cmdClamp.Stderr = os.Stderr
+	if err := cmdClamp.Run(); err != nil {
+		return fmt.Errorf("executing iptables failed: %w", err)
+	}
 	return nil
 }
 
@@ -729,6 +736,12 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("executing iptables failed: %w", err)
+	}
+	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+	cmdClamp.Stdout = os.Stdout
+	cmdClamp.Stderr = os.Stderr
+	if err := cmdClamp.Run(); err != nil {
 		return fmt.Errorf("executing iptables failed: %w", err)
 	}
 	return nil
