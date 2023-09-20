@@ -77,7 +77,8 @@ func (a *ServiceReconciler) Reconcile(ctx context.Context, req reconcile.Request
 	} else if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get svc: %w", err)
 	}
-	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && !a.hasTailnetTargetAnnotation(svc) {
+	targetIP := a.tailnetTargetAnnotation(svc)
+	if !svc.DeletionTimestamp.IsZero() || !a.shouldExpose(svc) && targetIP == "" {
 		logger.Debugf("service is being deleted or is (no longer) referring to Tailscale ingress/egress, ensuring any created resources are cleaned up")
 		return reconcile.Result{}, a.maybeCleanup(ctx, logger, svc)
 	}
@@ -170,8 +171,8 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		sts.ClusterTargetIP = svc.Spec.ClusterIP
 		a.managedIngressProxies.Add(svc.UID)
 		gaugeIngressProxies.Set(int64(a.managedIngressProxies.Len()))
-	} else if a.hasTailnetTargetAnnotation(svc) {
-		sts.TailnetTargetIP = svc.Annotations[AnnotationTailnetTargetIP]
+	} else if ip := a.tailnetTargetAnnotation(svc); ip != "" {
+		sts.TailnetTargetIP = ip
 		a.managedEgressProxies.Add(svc.UID)
 		gaugeEgressProxies.Set(int64(a.managedEgressProxies.Len()))
 	}
@@ -182,7 +183,7 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		return fmt.Errorf("failed to provision: %w", err)
 	}
 
-	if a.hasTailnetTargetAnnotation(svc) {
+	if sts.TailnetTargetIP != "" {
 		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc"
 		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
 			svc.Spec.ExternalName = headlessSvcName
@@ -261,8 +262,16 @@ func (a *ServiceReconciler) hasExposeAnnotation(svc *corev1.Service) bool {
 	return svc != nil && svc.Annotations[AnnotationExpose] == "true"
 }
 
-// hasTailnetTargetAnnotation reports whether Service has a
-// tailscale.com/ts-tailnet-target-ip annotation set
-func (a *ServiceReconciler) hasTailnetTargetAnnotation(svc *corev1.Service) bool {
-	return svc != nil && svc.Annotations[AnnotationTailnetTargetIP] != ""
+// hasTailnetTargetAnnotation returns the value of tailscale.com/tailnet-ip
+// annotation or of the deprecated tailscale.com/ts-tailnet-target-ip
+// annotation. If neither is set, it returns an empty string. If both are set,
+// it returns the value of the new annotation.
+func (a *ServiceReconciler) tailnetTargetAnnotation(svc *corev1.Service) string {
+	if svc == nil {
+		return ""
+	}
+	if ip := svc.Annotations[AnnotationTailnetTargetIP]; ip != "" {
+		return ip
+	}
+	return svc.Annotations[annotationTailnetTargetIPOld]
 }
