@@ -115,7 +115,8 @@ type CapabilityVersion int
 //   - 73: 2023-09-01: Non-Windows clients expect to receive ClientVersion
 //   - 74: 2023-09-18: Client understands NodeCapMap
 //   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
-const CurrentCapabilityVersion CapabilityVersion = 75
+//   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
+const CurrentCapabilityVersion CapabilityVersion = 76
 
 type StableID string
 
