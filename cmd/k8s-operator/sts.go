@@ -39,10 +39,11 @@ const (
 	FinalizerName = "tailscale.com/finalizer"
 
 	// Annotations settable by users on services.
-	AnnotationExpose          = "tailscale.com/expose"
-	AnnotationTags            = "tailscale.com/tags"
-	AnnotationHostname        = "tailscale.com/hostname"
-	AnnotationTailnetTargetIP = "tailscale.com/ts-tailnet-target-ip"
+	AnnotationExpose             = "tailscale.com/expose"
+	AnnotationTags               = "tailscale.com/tags"
+	AnnotationHostname           = "tailscale.com/hostname"
+	annotationTailnetTargetIPOld = "tailscale.com/ts-tailnet-target-ip"
+	AnnotationTailnetTargetIP    = "tailscale.com/tailnet-ip"
 
 	// Annotations settable by users on ingresses.
 	AnnotationFunnel = "tailscale.com/funnel"
