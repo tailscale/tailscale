@@ -218,7 +218,7 @@ func TestTailnetTargetIPAnnotation(t *testing.T) {
 			},
 		},
 		Spec: corev1.ServiceSpec{
-			ExternalName: fmt.Sprintf("%s.operator-ns.svc", shortName),
+			ExternalName: fmt.Sprintf("%s.operator-ns.svc.cluster.local", shortName),
 			Type:         corev1.ServiceTypeExternalName,
 			Selector:     nil,
 		},

@@ -184,7 +184,10 @@ func (a *ServiceReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 	}
 
 	if sts.TailnetTargetIP != "" {
-		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc"
+		// TODO (irbekrm): cluster.local is the default DNS name, but
+		// can be changed by users. Make this configurable or figure out
+		// how to discover the DNS name from within operator
+		headlessSvcName := hsvc.Name + "." + hsvc.Namespace + ".svc.cluster.local"
 		if svc.Spec.ExternalName != headlessSvcName || svc.Spec.Type != corev1.ServiceTypeExternalName {
 			svc.Spec.ExternalName = headlessSvcName
 			svc.Spec.Selector = nil
