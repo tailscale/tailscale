@@ -868,9 +868,16 @@ func (b *LocalBackend) WhoIs(ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.
 			return zero, u, false
 		}
 	}
+	if b.netMap == nil {
+		return zero, u, false
+	}
 	n, ok = b.peers[nid]
 	if !ok {
-		return zero, u, false
+		// Check if this the self-node, which would not appear in peers.
+		if !b.netMap.SelfNode.Valid() || nid != b.netMap.SelfNode.ID() {
+			return zero, u, false
+		}
+		n = b.netMap.SelfNode
 	}
 	u, ok = b.netMap.UserProfiles[n.User()]
 	if !ok {
