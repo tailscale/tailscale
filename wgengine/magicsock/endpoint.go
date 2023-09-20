@@ -65,7 +65,7 @@ type endpoint struct {
 	lastFullPing   mono.Time      // last time we pinged all disco or wireguard only endpoints
 	derpAddr       netip.AddrPort // fallback/bootstrap path, if non-zero (non-zero for well-behaved clients)
 
-	bestAddr           addrLatency // best non-DERP path; zero if none
+	bestAddr           addrQuality // best non-DERP path; zero if none
 	bestAddrAt         mono.Time   // time best address re-confirmed
 	trustBestAddrUntil mono.Time   // time when bestAddr expires
 	sentPing           map[stun.TxID]sentPing
@@ -207,7 +207,7 @@ func (de *endpoint) deleteEndpointLocked(why string, ep netip.AddrPort) {
 			What: "deleteEndpointLocked-bestAddr-" + why,
 			From: de.bestAddr,
 		})
-		de.bestAddr = addrLatency{}
+		de.bestAddr = addrQuality{}
 	}
 }
 
@@ -906,7 +906,7 @@ func (de *endpoint) addCandidateEndpoint(ep netip.AddrPort, forRxPingTxID stun.T
 //
 // de.mu must be held.
 func (de *endpoint) clearBestAddrLocked() {
-	de.bestAddr = addrLatency{}
+	de.bestAddr = addrQuality{}
 	de.bestAddrAt = 0
 	de.trustBestAddrUntil = 0
 }
@@ -996,7 +996,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrLatency{sp.to, latency}
+		thisPong := addrQuality{sp.to, latency, 0}
 		if betterAddr(thisPong, de.bestAddr) {
 			de.c.logf("magicsock: disco: node %v %v now using %v", de.publicKey.ShortString(), de.discoShort(), sp.to)
 			de.debugUpdates.Add(EndpointChange{
@@ -1022,19 +1022,28 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	return
 }
 
-// addrLatency is an IPPort with an associated latency.
-type addrLatency struct {
+// addrQuality is an IPPort with an associated latency and path mtu.
+type addrQuality struct {
 	netip.AddrPort
 	latency time.Duration
+	wireMTU tstun.WireMTU
 }
 
-func (a addrLatency) String() string {
-	return a.AddrPort.String() + "@" + a.latency.String()
+func (a addrQuality) String() string {
+	return fmt.Sprintf("%v@%v+%v", a.AddrPort, a.latency, a.wireMTU)
 }
 
 // betterAddr reports whether a is a better addr to use than b.
-func betterAddr(a, b addrLatency) bool {
+func betterAddr(a, b addrQuality) bool {
 	if a.AddrPort == b.AddrPort {
+		if a.wireMTU > b.wireMTU {
+			// TODO(val): Think harder about the case of lower
+			// latency and smaller or unknown MTU, and higher
+			// latency but larger MTU. Probably in most cases the
+			// largest MTU will also be the lowest latency but we
+			// can't depend on that.
+			return true
+		}
 		return false
 	}
 	if !b.IsValid() {
