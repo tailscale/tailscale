@@ -3339,9 +3339,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 	}
 
 	addDefault := func(resolvers []*dnstype.Resolver) {
-		for _, r := range resolvers {
-			dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, r)
-		}
+		dcfg.DefaultResolvers = append(dcfg.DefaultResolvers, resolvers...)
 	}
 
 	// If we're using an exit node and that exit node is new enough (1.19.x+)
@@ -3351,7 +3349,17 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		return dcfg
 	}
 
-	addDefault(nm.DNS.Resolvers)
+	// If the user has set default resolvers ("override local DNS"), prefer to
+	// use those resolvers as the default, otherwise if there are WireGuard exit
+	// node resolvers, use those as the default.
+	if len(nm.DNS.Resolvers) > 0 {
+		addDefault(nm.DNS.Resolvers)
+	} else {
+		if resolvers, ok := wireguardExitNodeDNSResolvers(nm, peers, prefs.ExitNodeID()); ok {
+			addDefault(resolvers)
+		}
+	}
+
 	for suffix, resolvers := range nm.DNS.Routes {
 		fqdn, err := dnsname.ToFQDN(suffix)
 		if err != nil {
@@ -3366,11 +3374,10 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		//
 		// While we're already populating it, might as well size the
 		// slice appropriately.
+		// Per #9498 the exact requirements of nil vs empty slice remain
+		// unclear, this is a haunted graveyard to be resolved.
 		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
-
-		for _, r := range resolvers {
-			dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], r)
-		}
+		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
 	}
 
 	// Set FallbackResolvers as the default resolvers in the
@@ -4766,6 +4773,32 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
 		}
 	}
 	return "", false
+}
+
+// wireguardExitNodeDNSResolvers returns the DNS resolvers to use for a
+// WireGuard-only exit node, if it has resolver addresses.
+func wireguardExitNodeDNSResolvers(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.NodeView, exitNodeID tailcfg.StableNodeID) ([]*dnstype.Resolver, bool) {
+	if exitNodeID.IsZero() {
+		return nil, false
+	}
+
+	for _, p := range peers {
+		if p.StableID() == exitNodeID {
+			if p.IsWireGuardOnly() {
+				resolvers := p.ExitNodeDNSResolvers()
+				if !resolvers.IsNil() && resolvers.Len() > 0 {
+					copies := make([]*dnstype.Resolver, resolvers.Len())
+					for i := range resolvers.LenIter() {
+						copies[i] = resolvers.At(i).AsStruct()
+					}
+					return copies, true
+				}
+			}
+			return nil, false
+		}
+	}
+
+	return nil, false
 }
 
 func peerCanProxyDNS(p tailcfg.NodeView) bool {
