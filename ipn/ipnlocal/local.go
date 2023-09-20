@@ -3343,6 +3343,7 @@ func dnsConfigForNetmap(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg.
 		//
 		// While we're already populating it, might as well size the
 		// slice appropriately.
+		dcfg.Routes[fqdn] = make([]*dnstype.Resolver, 0, len(resolvers))
 		dcfg.Routes[fqdn] = append(dcfg.Routes[fqdn], resolvers...)
 	}
 
