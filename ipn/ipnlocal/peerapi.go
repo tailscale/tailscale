@@ -136,6 +136,9 @@ func (s *peerAPIServer) diskPath(baseName string) (fullPath string, ok bool) {
 			return "", false
 		}
 	}
+	if !filepath.IsLocal(baseName) {
+		return "", false
+	}
 	return filepath.Join(s.rootDir, baseName), true
 }
 
