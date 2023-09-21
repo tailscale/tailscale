@@ -1434,6 +1434,18 @@ The response is a JSON object with information about the key supplied.
 }
 ```
 
+Response for a revoked (deleted) or expired key will have an `invalid` field set to `true`:
+
+``` jsonc
+{
+  "id": "abc123456CNTRL",
+  "created": "2022-05-05T18:55:44Z",
+  "expires": "2022-08-03T18:55:44Z",
+  "revoked": "2023-04-01T20:50:00Z",
+  "invalid": true
+}
+```
+
 <a href="tailnet-keys-key-delete"></a>
 
 ## Delete key
