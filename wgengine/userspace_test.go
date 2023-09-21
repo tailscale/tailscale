@@ -6,12 +6,15 @@ package wgengine
 import (
 	"fmt"
 	"net/netip"
+	"os"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"go4.org/mem"
 	"tailscale.com/cmd/testwrapper/flakytest"
 	"tailscale.com/control/controlknobs"
+	"tailscale.com/envknob"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netaddr"
 	"tailscale.com/net/tstun"
@@ -20,6 +23,7 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/opt"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 )
@@ -224,6 +228,86 @@ func TestUserspaceEnginePortReconfig(t *testing.T) {
 	}
 	if got := ue.magicConn.LocalPort(); got == lastPort {
 		t.Errorf("Reconfig did not change local port from %d", lastPort)
+	}
+}
+
+// Test that enabling and disabling peer path MTU discovery works correctly.
+func TestUserspaceEnginePeerMTUReconfig(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("skipping on %q; peer MTU not supported", runtime.GOOS)
+	}
+
+	defer os.Setenv("TS_DEBUG_ENABLE_PMTUD", os.Getenv("TS_DEBUG_ENABLE_PMTUD"))
+	envknob.Setenv("TS_DEBUG_ENABLE_PMTUD", "")
+	// Turn on debugging to help diagnose problems.
+	defer os.Setenv("TS_DEBUG_PMTUD", os.Getenv("TS_DEBUG_PMTUD"))
+	envknob.Setenv("TS_DEBUG_PMTUD", "true")
+
+	var knobs controlknobs.Knobs
+
+	e, err := NewFakeUserspaceEngine(t.Logf, 0, &knobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	ue := e.(*userspaceEngine)
+
+	if ue.magicConn.PeerMTUEnabled() != false {
+		t.Error("peer MTU enabled by default, should not be")
+	}
+	osDefaultDF, err := ue.magicConn.DontFragSetting()
+	if err != nil {
+		t.Errorf("get don't fragment bit failed: %v", err)
+	}
+	t.Logf("Info: OS default don't fragment bit(s) setting: %v", osDefaultDF)
+
+	// Build a set of configs to use as we change the peer MTU settings.
+	nodeKey, err := key.ParseNodePublicUntyped(mem.S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &wgcfg.Config{
+		Peers: []wgcfg.Peer{
+			{
+				PublicKey: nodeKey,
+				AllowedIPs: []netip.Prefix{
+					netip.PrefixFrom(netaddr.IPv4(100, 100, 99, 1), 32),
+				},
+			},
+		},
+	}
+	routerCfg := &router.Config{}
+
+	tests := []struct {
+		desc    string   // test description
+		wantP   bool     // desired value of PMTUD setting
+		wantDF  bool     // desired value of don't fragment bits
+		shouldP opt.Bool // if set, force peer MTU to this value
+	}{
+		{desc: "after_first_reconfig", wantP: false, wantDF: osDefaultDF, shouldP: ""},
+		{desc: "enabling_PMTUD_first_time", wantP: true, wantDF: true, shouldP: "true"},
+		{desc: "disabling_PMTUD", wantP: false, wantDF: false, shouldP: "false"},
+		{desc: "enabling_PMTUD_second_time", wantP: true, wantDF: true, shouldP: "true"},
+		{desc: "returning_to_default_PMTUD", wantP: false, wantDF: false, shouldP: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			if v, ok := tt.shouldP.Get(); ok {
+				knobs.PeerMTUEnable.Store(v)
+			} else {
+				knobs.PeerMTUEnable.Store(false)
+			}
+			if err := ue.Reconfig(cfg, routerCfg, &dns.Config{}); err != nil {
+				t.Fatal(err)
+			}
+			if v := ue.magicConn.PeerMTUEnabled(); v != tt.wantP {
+				t.Errorf("peer MTU set to %v, want %v", v, tt.wantP)
+			}
+			if v, err := ue.magicConn.DontFragSetting(); v != tt.wantDF || err != nil {
+				t.Errorf("don't fragment bit set to %v, want %v, err %v", v, tt.wantP, err)
+			}
+		})
 	}
 }
 

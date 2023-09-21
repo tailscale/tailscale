@@ -45,6 +45,9 @@ type Knobs struct {
 	// incremental (delta) netmap updates and should treat all netmap
 	// changes as "full" ones as tailscaled did in 1.48.x and earlier.
 	DisableDeltaUpdates atomic.Bool
+
+	// PeerMTUEnable is whether the node should do peer path MTU discovery.
+	PeerMTUEnable atomic.Bool
 }
 
 // UpdateFromNodeAttributes updates k (if non-nil) based on the provided self
@@ -65,6 +68,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 		disableDeltaUpdates = has(tailcfg.NodeAttrDisableDeltaUpdates)
 		oneCGNAT            opt.Bool
 		forceBackgroundSTUN = has(tailcfg.NodeAttrDebugForceBackgroundSTUN)
+		peerMTUEnable       = has(tailcfg.NodeAttrPeerMTUEnable)
 	)
 
 	if has(tailcfg.NodeAttrOneCGNATEnable) {
@@ -80,6 +84,7 @@ func (k *Knobs) UpdateFromNodeAttributes(selfNodeAttrs []tailcfg.NodeCapability,
 	k.OneCGNAT.Store(oneCGNAT)
 	k.ForceBackgroundSTUN.Store(forceBackgroundSTUN)
 	k.DisableDeltaUpdates.Store(disableDeltaUpdates)
+	k.PeerMTUEnable.Store(peerMTUEnable)
 }
 
 // AsDebugJSON returns k as something that can be marshalled with json.Marshal
@@ -96,5 +101,6 @@ func (k *Knobs) AsDebugJSON() map[string]any {
 		"OneCGNAT":            k.OneCGNAT.Load(),
 		"ForceBackgroundSTUN": k.ForceBackgroundSTUN.Load(),
 		"DisableDeltaUpdates": k.DisableDeltaUpdates.Load(),
+		"PeerMTUEnable":       k.PeerMTUEnable.Load(),
 	}
 }
