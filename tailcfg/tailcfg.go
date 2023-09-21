@@ -2133,6 +2133,10 @@ const (
 	// rather than one big /10 CGNAT route. At most one of this or
 	// NodeAttrOneCGNATEnable may be set; if neither are, it's automatic.
 	NodeAttrOneCGNATDisable NodeCapability = "one-cgnat?v=false"
+
+	// NodeAttrPeerMTUEnable makes the client do path MTU discovery to its
+	// peers. If it isn't set, it defaults to the client default.
+	NodeAttrPeerMTUEnable NodeCapability = "peer-mtu-enable"
 )
 
 // SetDNSRequest is a request to add a DNS record.

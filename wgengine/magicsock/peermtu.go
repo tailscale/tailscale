@@ -34,6 +34,14 @@ func (c *Conn) ShouldPMTUD() bool {
 		}
 		return v
 	}
+	if c.controlKnobs != nil {
+		if v := c.controlKnobs.PeerMTUEnable.Load(); v {
+			if debugPMTUD() {
+				c.logf("magicsock: peermtu: peer path MTU discovery enabled by control")
+			}
+			return v
+		}
+	}
 	if debugPMTUD() {
 		c.logf("magicsock: peermtu: peer path MTU discovery set by default to false")
 	}
