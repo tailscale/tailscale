@@ -11,6 +11,8 @@ import (
 	"net/netip"
 	"time"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -60,6 +62,28 @@ func (v *UserView) UnmarshalJSON(b []byte) error {
 	}
 	var x User
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that UserView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*UserView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*UserView)(nil)
+)
+
+func (v UserView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *UserView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x User
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -122,6 +146,28 @@ func (v *NodeView) UnmarshalJSON(b []byte) error {
 	}
 	var x Node
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that NodeView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*NodeView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*NodeView)(nil)
+)
+
+func (v NodeView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *NodeView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Node
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -283,6 +329,28 @@ func (v *HostinfoView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that HostinfoView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*HostinfoView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*HostinfoView)(nil)
+)
+
+func (v HostinfoView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *HostinfoView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Hostinfo
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v HostinfoView) IPNVersion() string                     { return v.ж.IPNVersion }
 func (v HostinfoView) FrontendLogID() string                  { return v.ж.FrontendLogID }
 func (v HostinfoView) BackendLogID() string                   { return v.ж.BackendLogID }
@@ -409,6 +477,28 @@ func (v *NetInfoView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that NetInfoView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*NetInfoView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*NetInfoView)(nil)
+)
+
+func (v NetInfoView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *NetInfoView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x NetInfo
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v NetInfoView) MappingVariesByDestIP() opt.Bool { return v.ж.MappingVariesByDestIP }
 func (v NetInfoView) HairPinning() opt.Bool           { return v.ж.HairPinning }
 func (v NetInfoView) WorkingIPv6() opt.Bool           { return v.ж.WorkingIPv6 }
@@ -489,6 +579,28 @@ func (v *LoginView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that LoginView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*LoginView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*LoginView)(nil)
+)
+
+func (v LoginView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *LoginView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Login
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v LoginView) ID() LoginID           { return v.ж.ID }
 func (v LoginView) Provider() string      { return v.ж.Provider }
 func (v LoginView) LoginName() string     { return v.ж.LoginName }
@@ -544,6 +656,28 @@ func (v *DNSConfigView) UnmarshalJSON(b []byte) error {
 	}
 	var x DNSConfig
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that DNSConfigView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*DNSConfigView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*DNSConfigView)(nil)
+)
+
+func (v DNSConfigView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *DNSConfigView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x DNSConfig
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -631,6 +765,28 @@ func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that RegisterResponseView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*RegisterResponseView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*RegisterResponseView)(nil)
+)
+
+func (v RegisterResponseView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *RegisterResponseView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x RegisterResponse
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v RegisterResponseView) User() UserView          { return v.ж.User.View() }
 func (v RegisterResponseView) Login() Login            { return v.ж.Login }
 func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
@@ -697,6 +853,28 @@ func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that RegisterResponseAuthView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*RegisterResponseAuthView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*RegisterResponseAuthView)(nil)
+)
+
+func (v RegisterResponseAuthView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *RegisterResponseAuthView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x RegisterResponseAuth
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v RegisterResponseAuthView) Provider() string  { return v.ж.Provider }
 func (v RegisterResponseAuthView) LoginName() string { return v.ж.LoginName }
 func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
@@ -757,6 +935,28 @@ func (v *RegisterRequestView) UnmarshalJSON(b []byte) error {
 	}
 	var x RegisterRequest
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that RegisterRequestView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*RegisterRequestView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*RegisterRequestView)(nil)
+)
+
+func (v RegisterRequestView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *RegisterRequestView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x RegisterRequest
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -855,6 +1055,28 @@ func (v *DERPHomeParamsView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that DERPHomeParamsView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*DERPHomeParamsView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*DERPHomeParamsView)(nil)
+)
+
+func (v DERPHomeParamsView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *DERPHomeParamsView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x DERPHomeParams
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v DERPHomeParamsView) RegionScore() views.Map[int, float64] {
 	return views.MapOf(v.ж.RegionScore)
 }
@@ -903,6 +1125,28 @@ func (v *DERPRegionView) UnmarshalJSON(b []byte) error {
 	}
 	var x DERPRegion
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that DERPRegionView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*DERPRegionView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*DERPRegionView)(nil)
+)
+
+func (v DERPRegionView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *DERPRegionView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x DERPRegion
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -971,6 +1215,28 @@ func (v *DERPMapView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that DERPMapView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*DERPMapView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*DERPMapView)(nil)
+)
+
+func (v DERPMapView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *DERPMapView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x DERPMap
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v DERPMapView) HomeParams() DERPHomeParamsView { return v.ж.HomeParams.View() }
 
 func (v DERPMapView) Regions() views.MapFn[int, *DERPRegion, DERPRegionView] {
@@ -1026,6 +1292,28 @@ func (v *DERPNodeView) UnmarshalJSON(b []byte) error {
 	}
 	var x DERPNode
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that DERPNodeView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*DERPNodeView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*DERPNodeView)(nil)
+)
+
+func (v DERPNodeView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *DERPNodeView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x DERPNode
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -1106,6 +1394,28 @@ func (v *SSHRuleView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that SSHRuleView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*SSHRuleView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*SSHRuleView)(nil)
+)
+
+func (v SSHRuleView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *SSHRuleView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x SSHRule
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v SSHRuleView) RuleExpires() *time.Time {
 	if v.ж.RuleExpires == nil {
 		return nil
@@ -1168,6 +1478,28 @@ func (v *SSHActionView) UnmarshalJSON(b []byte) error {
 	}
 	var x SSHAction
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that SSHActionView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*SSHActionView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*SSHActionView)(nil)
+)
+
+func (v SSHActionView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *SSHActionView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x SSHAction
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -1250,6 +1582,28 @@ func (v *SSHPrincipalView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that SSHPrincipalView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*SSHPrincipalView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*SSHPrincipalView)(nil)
+)
+
+func (v SSHPrincipalView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *SSHPrincipalView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x SSHPrincipal
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v SSHPrincipalView) Node() StableNodeID           { return v.ж.Node }
 func (v SSHPrincipalView) NodeIP() string               { return v.ж.NodeIP }
 func (v SSHPrincipalView) UserLogin() string            { return v.ж.UserLogin }
@@ -1310,6 +1664,28 @@ func (v *ControlDialPlanView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Verify that ControlDialPlanView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*ControlDialPlanView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*ControlDialPlanView)(nil)
+)
+
+func (v ControlDialPlanView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *ControlDialPlanView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x ControlDialPlan
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
 func (v ControlDialPlanView) Candidates() views.Slice[ControlIPCandidate] {
 	return views.SliceOf(v.ж.Candidates)
 }
@@ -1358,6 +1734,28 @@ func (v *LocationView) UnmarshalJSON(b []byte) error {
 	}
 	var x Location
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that LocationView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*LocationView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*LocationView)(nil)
+)
+
+func (v LocationView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *LocationView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x Location
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x
@@ -1418,6 +1816,28 @@ func (v *UserProfileView) UnmarshalJSON(b []byte) error {
 	}
 	var x UserProfile
 	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+// Verify that UserProfileView implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*UserProfileView)(nil)
+	_ (jsonv2.UnmarshalerV2) = (*UserProfileView)(nil)
+)
+
+func (v UserProfileView) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *UserProfileView) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x UserProfile
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
 		return err
 	}
 	v.ж = &x

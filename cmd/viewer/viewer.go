@@ -64,6 +64,30 @@ func (v *{{.ViewName}}) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+{{if .SupportJSONV2}}
+// Verify that {{.ViewName}} implements jsonv2 interfaces.
+var (
+	_ (jsonv2.MarshalerV2)   = (*{{.ViewName}})(nil)
+	_ (jsonv2.UnmarshalerV2) = (*{{.ViewName}})(nil)
+)
+
+func (v {{.ViewName}}) MarshalJSONV2(enc *jsontext.Encoder, opts jsonv2.Options) error {
+	return jsonv2.MarshalEncode(enc, v.ж, opts)
+}
+
+func (v *{{.ViewName}}) UnmarshalJSONV2(dec *jsontext.Decoder, opts jsonv2.Options) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	var x {{.StructName}}
+	if err := jsonv2.UnmarshalDecode(dec, &x, opts); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+{{end}}
+
 {{end}}
 {{define "valueField"}}func (v {{.ViewName}}) {{.FieldName}}() {{.FieldType}} { return v.ж.{{.FieldName}} }
 {{end}}
@@ -126,6 +150,10 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 	}
 	it.Import("encoding/json")
 	it.Import("errors")
+	if *jsonv2Methods {
+		it.ImportNamed("github.com/go-json-experiment/json", "jsonv2")
+		it.Import("github.com/go-json-experiment/json/jsontext")
+	}
 
 	args := struct {
 		StructName    string
@@ -138,9 +166,12 @@ func genView(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named, thi
 		MapValueType string
 		MapValueView string
 		MapFn        string
+
+		SupportJSONV2 bool
 	}{
-		StructName: typ.Obj().Name(),
-		ViewName:   typ.Obj().Name() + "View",
+		StructName:    typ.Obj().Name(),
+		ViewName:      typ.Obj().Name() + "View",
+		SupportJSONV2: *jsonv2Methods,
 	}
 
 	writeTemplate := func(name string) {
@@ -322,6 +353,7 @@ var (
 	flagTypes     = flag.String("type", "", "comma-separated list of types; required")
 	flagBuildTags = flag.String("tags", "", "compiler build tags to apply")
 	flagCloneFunc = flag.Bool("clonefunc", false, "add a top-level Clone func")
+	jsonv2Methods = flag.Bool("jsonv2method", false, "add marshal/unmarshal methods for JSONv2")
 
 	flagCloneOnlyTypes = flag.String("clone-only-type", "", "comma-separated list of types (a subset of --type) that should only generate a go:generate clone line and not actual views")
 )

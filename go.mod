@@ -24,7 +24,7 @@ require (
 	github.com/evanw/esbuild v0.14.53
 	github.com/frankban/quicktest v1.14.5
 	github.com/fxamacker/cbor/v2 v2.4.0
-	github.com/go-json-experiment/json v0.0.0-20230321051131-ccbac49a6929
+	github.com/go-json-experiment/json v0.0.0-20230831193458-5df0a50228ea
 	github.com/go-logr/zapr v1.2.4
 	github.com/go-ole/go-ole v1.2.6
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
