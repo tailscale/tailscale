@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# This is a fake tailscale CLI that records its arguments, symlinks a
+# This is a fake tailscale daemon that records its arguments, symlinks a
 # fake LocalAPI socket into place, and does nothing until terminated.
 #
 # It is used by main_test.go to test the behavior of containerboot.
@@ -33,5 +33,6 @@ if [[ -z "$socket" ]]; then
 fi
 
 ln -s "$TS_TEST_SOCKET" "$socket"
+trap 'rm -f "$socket"' EXIT
 
-while true; do sleep 1; done
+while sleep 10; do :; done
