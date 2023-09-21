@@ -299,8 +299,8 @@ github.com/go-git/go-git/v5 v5.7.0/go.mod h1:coJHKEOk5kUClpsNlXrUvPrDxY3w3gjHvhc
 github.com/go-gl/glfw v0.0.0-20190409004039-e6da0acd62b1/go.mod h1:vR7hzQXu2zJy9AVAgeJqvqgH9Q5CA+iKCZ2gyEVpxRU=
 github.com/go-gl/glfw/v3.3/glfw v0.0.0-20191125211704-12ad95a8df72/go.mod h1:tQ2UAYgL5IevRw8kRxooKSPJfGvJ9fJQFa0TUsXzTg8=
 github.com/go-gl/glfw/v3.3/glfw v0.0.0-20200222043503-6f7a984d4dc4/go.mod h1:tQ2UAYgL5IevRw8kRxooKSPJfGvJ9fJQFa0TUsXzTg8=
-github.com/go-json-experiment/json v0.0.0-20230321051131-ccbac49a6929 h1:GdbUZo0+623j+pKRhwwdf1q28IUgRc7asx3TjF9b7VQ=
-github.com/go-json-experiment/json v0.0.0-20230321051131-ccbac49a6929/go.mod h1:AHV+bpNGVGD0DCHMBhhTYtT7yeBYD9Yk92XAjB7vOgo=
+github.com/go-json-experiment/json v0.0.0-20230908182459-f320be06fe37 h1:JFXgl/SzxYP9ULDFS97xkKB/Bfdywrc3rre1nYEwMj8=
+github.com/go-json-experiment/json v0.0.0-20230908182459-f320be06fe37/go.mod h1:6daplAwHHGbUGib4990V3Il26O0OC4aRyvewaaAihaA=
 github.com/go-kit/kit v0.8.0/go.mod h1:xBxKIO96dXMWWy0MnWVtmwkA9/13aqxPnvrjFYMA2as=
 github.com/go-kit/kit v0.9.0/go.mod h1:xBxKIO96dXMWWy0MnWVtmwkA9/13aqxPnvrjFYMA2as=
 github.com/go-kit/log v0.1.0/go.mod h1:zbhenjAZHb184qTLMA9ZjW7ThYL0H2mk7Q6pNt4vbaY=
