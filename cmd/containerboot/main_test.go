@@ -689,7 +689,7 @@ func TestContainerBoot(t *testing.T) {
 				t.Fatalf("starting containerboot: %v", err)
 			}
 			defer func() {
-				cmd.Process.Signal(unix.SIGKILL)
+				cmd.Process.Signal(unix.SIGTERM)
 				cmd.Process.Wait()
 			}()
 
