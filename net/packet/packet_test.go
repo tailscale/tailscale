@@ -13,6 +13,9 @@ import (
 	"testing"
 	"unicode"
 
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/checksum"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"tailscale.com/tstest"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/util/must"
@@ -45,7 +48,7 @@ func fullHeaderChecksumV4(b []byte) uint16 {
 	return ^uint16(s)
 }
 
-func TestHeaderChecksums(t *testing.T) {
+func TestHeaderChecksumsV4(t *testing.T) {
 	// This is not a good enough test, because it doesn't
 	// check the various packet types or the many edge cases
 	// of the checksum algorithm. But it's a start.
@@ -106,6 +109,108 @@ func TestHeaderChecksums(t *testing.T) {
 				t.Fatalf("got %x want %x", got, want)
 			}
 		})
+	}
+}
+
+func TestNatChecksumsV6UDP(t *testing.T) {
+	a1, a2 := netip.MustParseAddr("a::1"), netip.MustParseAddr("b::1")
+
+	// Make a fake UDP packet with 32 bytes of zeros as the datagram payload.
+	b := header.IPv6(make([]byte, header.IPv6MinimumSize+header.UDPMinimumSize+32))
+	b.Encode(&header.IPv6Fields{
+		PayloadLength:     header.UDPMinimumSize + 32,
+		TransportProtocol: header.UDPProtocolNumber,
+		HopLimit:          16,
+		SrcAddr:           tcpip.AddrFrom16Slice(a1.AsSlice()),
+		DstAddr:           tcpip.AddrFrom16Slice(a2.AsSlice()),
+	})
+	udp := header.UDP(b[header.IPv6MinimumSize:])
+	udp.Encode(&header.UDPFields{
+		SrcPort: 42,
+		DstPort: 43,
+		Length:  header.UDPMinimumSize + 32,
+	})
+	xsum := header.PseudoHeaderChecksum(
+		header.UDPProtocolNumber,
+		tcpip.AddrFrom16Slice(a1.AsSlice()),
+		tcpip.AddrFrom16Slice(a2.AsSlice()),
+		uint16(header.UDPMinimumSize+32),
+	)
+	xsum = checksum.Checksum(b.Payload()[header.UDPMinimumSize:], xsum)
+	udp.SetChecksum(^udp.CalculateChecksum(xsum))
+	if !udp.IsChecksumValid(tcpip.AddrFrom16Slice(a1.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), checksum.Checksum(b.Payload()[header.UDPMinimumSize:], 0)) {
+		t.Fatal("test broken; initial packet has incorrect checksum")
+	}
+
+	// Parse the packet.
+	var p Parsed
+	p.Decode(b)
+	t.Log(p.String())
+
+	// Update the source address of the packet to be the same as the dest.
+	p.UpdateSrcAddr(a2)
+	if !udp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), checksum.Checksum(b.Payload()[header.UDPMinimumSize:], 0)) {
+		t.Fatal("incorrect checksum after updating source address")
+	}
+
+	// Update the dest address of the packet to be the original source address.
+	p.UpdateDstAddr(a1)
+	if !udp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a1.AsSlice()), checksum.Checksum(b.Payload()[header.UDPMinimumSize:], 0)) {
+		t.Fatal("incorrect checksum after updating destination address")
+	}
+}
+
+func TestNatChecksumsV6TCP(t *testing.T) {
+	a1, a2 := netip.MustParseAddr("a::1"), netip.MustParseAddr("b::1")
+
+	// Make a fake TCP packet with no payload.
+	b := header.IPv6(make([]byte, header.IPv6MinimumSize+header.TCPMinimumSize))
+	b.Encode(&header.IPv6Fields{
+		PayloadLength:     header.TCPMinimumSize,
+		TransportProtocol: header.TCPProtocolNumber,
+		HopLimit:          16,
+		SrcAddr:           tcpip.AddrFrom16Slice(a1.AsSlice()),
+		DstAddr:           tcpip.AddrFrom16Slice(a2.AsSlice()),
+	})
+	tcp := header.TCP(b[header.IPv6MinimumSize:])
+	tcp.Encode(&header.TCPFields{
+		SrcPort:       42,
+		DstPort:       43,
+		SeqNum:        1,
+		AckNum:        2,
+		DataOffset:    header.TCPMinimumSize,
+		Flags:         3,
+		WindowSize:    4,
+		Checksum:      0,
+		UrgentPointer: 5,
+	})
+	xsum := header.PseudoHeaderChecksum(
+		header.TCPProtocolNumber,
+		tcpip.AddrFrom16Slice(a1.AsSlice()),
+		tcpip.AddrFrom16Slice(a2.AsSlice()),
+		uint16(header.TCPMinimumSize),
+	)
+	tcp.SetChecksum(^tcp.CalculateChecksum(xsum))
+
+	if !tcp.IsChecksumValid(tcpip.AddrFrom16Slice(a1.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), 0, 0) {
+		t.Fatal("test broken; initial packet has incorrect checksum")
+	}
+
+	// Parse the packet.
+	var p Parsed
+	p.Decode(b)
+	t.Log(p.String())
+
+	// Update the source address of the packet to be the same as the dest.
+	p.UpdateSrcAddr(a2)
+	if !tcp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a2.AsSlice()), 0, 0) {
+		t.Fatal("incorrect checksum after updating source address")
+	}
+
+	// Update the dest address of the packet to be the original source address.
+	p.UpdateDstAddr(a1)
+	if !tcp.IsChecksumValid(tcpip.AddrFrom16Slice(a2.AsSlice()), tcpip.AddrFrom16Slice(a1.AsSlice()), 0, 0) {
+		t.Fatal("incorrect checksum after updating destination address")
 	}
 }
 
