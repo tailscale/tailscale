@@ -141,12 +141,6 @@ func DefaultTUNMTU() TUNMTU {
 	return safeTUNMTU
 }
 
-// Temporary workaround for code on corp that uses this function name.
-// TODO(val): Remove as soon as corp OSS is updated.
-func DefaultMTU() uint32 {
-	return uint32(DefaultTUNMTU())
-}
-
 // DefaultWireMTU returns the default TUN MTU, adjusted for wireguard
 // overhead.
 func DefaultWireMTU() WireMTU {
