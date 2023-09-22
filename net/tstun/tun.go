@@ -44,7 +44,7 @@ func New(logf logger.Logf, tunName string) (tun.Device, string, error) {
 		}
 		dev, err = createTAP(tapName, bridgeName)
 	} else {
-		dev, err = tun.CreateTUN(tunName, int(DefaultTUNMTU()))
+		dev, err = tun.CreateTUN(tunName, int(DefaultMTU()))
 	}
 	if err != nil {
 		return nil, "", err

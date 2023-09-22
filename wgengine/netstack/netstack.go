@@ -150,11 +150,10 @@ type Impl struct {
 
 const nicID = 1
 
-// maxUDPPacketSize is the maximum size of a UDP packet we copy in
-// startPacketCopy when relaying UDP packets. The user can configure
-// the tailscale MTU to anything up to this size so we can potentially
-// have a UDP packet as big as the MTU.
-const maxUDPPacketSize = tstun.MaxPacketSize
+// maxUDPPacketSize is the maximum size of a UDP packet we copy in startPacketCopy
+// when relaying UDP packets. We don't use the 'mtu' const in anticipation of
+// one day making the MTU more dynamic.
+const maxUDPPacketSize = 1500
 
 // Create creates and populates a new Impl.
 func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
@@ -185,7 +184,7 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	if tcpipErr != nil {
 		return nil, fmt.Errorf("could not enable TCP SACK: %v", tcpipErr)
 	}
-	linkEP := channel.New(512, uint32(tstun.DefaultTUNMTU()), "")
+	linkEP := channel.New(512, tstun.DefaultMTU(), "")
 	if tcpipProblem := ipstack.CreateNIC(nicID, linkEP); tcpipProblem != nil {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
@@ -1060,9 +1059,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	go ns.forwardUDP(c, srcAddr, dstAddr)
 }
 
-// Buffer pool for forwarding UDP packets. Implementations are advised not to
-// exceed 512 bytes per DNS request due to fragmenting but in reality can and do
-// send much larger packets, so use the maximum possible UDP packet size.
+// Buffer pool for forwarding UDP packets.
 var udpBufPool = &sync.Pool{
 	New: func() any {
 		b := make([]byte, maxUDPPacketSize)
