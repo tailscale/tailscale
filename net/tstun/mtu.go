@@ -5,8 +5,8 @@ package tstun
 import "tailscale.com/envknob"
 
 const (
-	maxMTU     uint32 = 65536
-	defaultMTU uint32 = 1280
+	maxMTU     = 65536
+	defaultMTU = 1280
 )
 
 // DefaultMTU returns either the constant default MTU of 1280, or the value set
@@ -21,13 +21,8 @@ func DefaultMTU() uint32 {
 	// 1280 is the smallest MTU allowed for IPv6, which is a sensible
 	// "probably works everywhere" setting until we develop proper PMTU
 	// discovery.
-	tunMTU := defaultMTU
 	if mtu, ok := envknob.LookupUintSized("TS_DEBUG_MTU", 10, 32); ok {
-		mtu := uint32(mtu)
-		if mtu > maxMTU {
-			mtu = maxMTU
-		}
-		tunMTU = mtu
+		return min(uint32(mtu), maxMTU)
 	}
-	return tunMTU
+	return defaultMTU
 }
