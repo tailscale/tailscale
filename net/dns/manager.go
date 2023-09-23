@@ -97,7 +97,9 @@ func (m *Manager) Set(cfg Config) error {
 	m.logf("Resolvercfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
 		rcfg.WriteToBufioWriter(w)
 	}))
-	m.logf("OScfg: %+v", ocfg)
+	m.logf("OScfg: %v", logger.ArgWriter(func(w *bufio.Writer) {
+		ocfg.WriteToBufioWriter(w)
+	}))
 
 	if err := m.resolver.SetConfig(rcfg); err != nil {
 		return err
