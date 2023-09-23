@@ -1501,7 +1501,7 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.logf("creating new noise client")
+		c.logf("[v1] creating new noise client")
 		nc, err := NewNoiseClient(NoiseOpts{
 			PrivKey:      k,
 			ServerPubKey: serverNoiseKey,

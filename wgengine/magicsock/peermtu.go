@@ -48,12 +48,12 @@ func (c *Conn) ShouldPMTUD() bool {
 	return false // Until we feel confident PMTUD is solid.
 }
 
-// PeerMTUEnabled returns true if this Conn is has peer path MTU discovery enabled.
+// PeerMTUEnabled reports whether peer path MTU discovery is enabled.
 func (c *Conn) PeerMTUEnabled() bool {
 	return c.peerMTUEnabled.Load()
 }
 
-// UpdatePMTUD configures underlying sockets of this Conn to enable or disable
+// UpdatePMTUD configures the underlying sockets of this Conn to enable or disable
 // peer path MTU discovery according to the current configuration.
 //
 // Enabling or disabling peer path MTU discovery requires setting the don't
@@ -84,7 +84,7 @@ func (c *Conn) UpdatePMTUD() {
 
 	enable := c.ShouldPMTUD()
 	if c.peerMTUEnabled.Load() == enable {
-		c.logf("magicsock: peermtu: peer MTU status is %v", enable)
+		c.logf("[v1] magicsock: peermtu: peer MTU status is %v", enable)
 		return
 	}
 
