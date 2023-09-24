@@ -2133,6 +2133,23 @@ func (b *LocalBackend) DebugNotify(n ipn.Notify) {
 	b.send(n)
 }
 
+// DebugForceNetmapUpdate forces a full no-op netmap update of the current
+// netmap in all the various subsystems (wireguard, magicsock, LocalBackend).
+//
+// It exists for load testing reasons (for issue 1909), doing what would happen
+// if a new MapResponse came in from the control server that couldn't be handled
+// incrementally.
+func (b *LocalBackend) DebugForceNetmapUpdate() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	nm := b.netMap
+	b.e.SetNetworkMap(nm)
+	if nm != nil {
+		b.magicConn().SetDERPMap(nm.DERPMap)
+	}
+	b.setNetMapLocked(nm)
+}
+
 // send delivers n to the connected frontend and any API watchers from
 // LocalBackend.WatchNotifications (via the LocalAPI).
 //
