@@ -139,6 +139,11 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "break any open DERP connections from the daemon",
 		},
 		{
+			Name:      "force-netmap-update",
+			Exec:      localAPIAction("force-netmap-update"),
+			ShortHelp: "force a full no-op netmap update (for load testing)",
+		},
+		{
 			Name:      "control-knobs",
 			Exec:      debugControlKnobs,
 			ShortHelp: "see current control knobs",
