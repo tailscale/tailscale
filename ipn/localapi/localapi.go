@@ -557,6 +557,8 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 		err = h.b.DebugBreakTCPConns()
 	case "break-derp-conns":
 		err = h.b.DebugBreakDERPConns()
+	case "force-netmap-update":
+		h.b.DebugForceNetmapUpdate()
 	case "control-knobs":
 		k := h.b.ControlKnobs()
 		w.Header().Set("Content-Type", "application/json")
