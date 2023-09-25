@@ -22,9 +22,9 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go4.org/mem"
@@ -42,14 +42,13 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tshttpproxy"
-	"tailscale.com/syncs"
+	"tailscale.com/smallzstd"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tka"
 	"tailscale.com/tstime"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
-	"tailscale.com/types/opt"
 	"tailscale.com/types/persist"
 	"tailscale.com/types/ptr"
 	"tailscale.com/types/tkatype"
@@ -61,26 +60,24 @@ import (
 
 // Direct is the client that connects to a tailcontrol server for a node.
 type Direct struct {
-	httpc                  *http.Client // HTTP client used to talk to tailcontrol
-	dialer                 *tsdial.Dialer
-	dnsCache               *dnscache.Resolver
-	serverURL              string // URL of the tailcontrol server
-	clock                  tstime.Clock
-	lastPrintMap           time.Time
-	newDecompressor        func() (Decompressor, error)
-	keepAlive              bool
-	logf                   logger.Logf
-	netMon                 *netmon.Monitor // or nil
-	discoPubKey            key.DiscoPublic
-	getMachinePrivKey      func() (key.MachinePrivate, error)
-	debugFlags             []string
-	keepSharerAndUserSplit bool
-	skipIPForwardingCheck  bool
-	pinger                 Pinger
-	popBrowser             func(url string)             // or nil
-	c2nHandler             http.Handler                 // or nil
-	onClientVersion        func(*tailcfg.ClientVersion) // or nil
-	onControlTime          func(time.Time)              // or nil
+	httpc                 *http.Client // HTTP client used to talk to tailcontrol
+	dialer                *tsdial.Dialer
+	dnsCache              *dnscache.Resolver
+	controlKnobs          *controlknobs.Knobs // always non-nil
+	serverURL             string              // URL of the tailcontrol server
+	clock                 tstime.Clock
+	lastPrintMap          time.Time
+	logf                  logger.Logf
+	netMon                *netmon.Monitor // or nil
+	discoPubKey           key.DiscoPublic
+	getMachinePrivKey     func() (key.MachinePrivate, error)
+	debugFlags            []string
+	skipIPForwardingCheck bool
+	pinger                Pinger
+	popBrowser            func(url string)             // or nil
+	c2nHandler            http.Handler                 // or nil
+	onClientVersion       func(*tailcfg.ClientVersion) // or nil
+	onControlTime         func(time.Time)              // or nil
 
 	dialPlan ControlDialPlanner // can be nil
 
@@ -94,12 +91,22 @@ type Direct struct {
 	persist      persist.PersistView
 	authKey      string
 	tryingNewKey key.NodePrivate
-	expiry       *time.Time
+	expiry       time.Time         // or zero value if none/unknown
 	hostinfo     *tailcfg.Hostinfo // always non-nil
 	netinfo      *tailcfg.NetInfo
 	endpoints    []tailcfg.Endpoint
 	tkaHead      string
 	lastPingURL  string // last PingRequest.URL received, for dup suppression
+}
+
+// Observer is implemented by users of the control client (such as LocalBackend)
+// to get notified of changes in the control client's status.
+type Observer interface {
+	// SetControlClientStatus is called when the client has a new status to
+	// report. The Client is provided to allow the Observer to track which
+	// Client is reporting the status, allowing it to ignore stale status
+	// reports from previous Clients.
+	SetControlClientStatus(Client, Status)
 }
 
 type Options struct {
@@ -110,8 +117,6 @@ type Options struct {
 	Clock                tstime.Clock
 	Hostinfo             *tailcfg.Hostinfo // non-nil passes ownership, nil means to use default using os.Hostname, etc
 	DiscoPublicKey       key.DiscoPublic
-	NewDecompressor      func() (Decompressor, error)
-	KeepAlive            bool
 	Logf                 logger.Logf
 	HTTPTestClient       *http.Client                 // optional HTTP client to use (for tests only)
 	NoiseTestClient      *http.Client                 // optional HTTP client to use for noise RPCs (tests only)
@@ -122,13 +127,11 @@ type Options struct {
 	OnControlTime        func(time.Time)              // optional func to notify callers of new time from control
 	Dialer               *tsdial.Dialer               // non-nil
 	C2NHandler           http.Handler                 // or nil
+	ControlKnobs         *controlknobs.Knobs          // or nil to ignore
 
-	// Status is called when there's a change in status.
-	Status func(Status)
-
-	// KeepSharerAndUserSplit controls whether the client
-	// understands Node.Sharer. If false, the Sharer is mapped to the User.
-	KeepSharerAndUserSplit bool
+	// Observer is called when there's a change in status to report
+	// from the control client.
+	Observer Observer
 
 	// SkipIPForwardingCheck declares that the host's IP
 	// forwarding works and should not be double-checked by the
@@ -190,6 +193,19 @@ type NetmapUpdater interface {
 	// the diff themselves between the previous full & next full network maps.
 }
 
+// NetmapDeltaUpdater is an optional interface that can be implemented by
+// NetmapUpdater implementations to receive delta updates from the controlclient
+// rather than just full updates.
+type NetmapDeltaUpdater interface {
+	// UpdateNetmapDelta is called with discrete changes to the network map.
+	//
+	// The ok result is whether the implementation was able to apply the
+	// mutations. It might return false if its internal state doesn't
+	// support applying them or a NetmapUpdater it's wrapping doesn't
+	// implement the NetmapDeltaUpdater optional method.
+	UpdateNetmapDelta([]netmap.NodeMutation) (ok bool)
+}
+
 // NewDirect returns a new Direct client.
 func NewDirect(opts Options) (*Direct, error) {
 	if opts.ServerURL == "" {
@@ -197,6 +213,9 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 	if opts.GetMachinePrivateKey == nil {
 		return nil, errors.New("controlclient.New: no GetMachinePrivateKey specified")
+	}
+	if opts.ControlKnobs == nil {
+		opts.ControlKnobs = &controlknobs.Knobs{}
 	}
 	opts.ServerURL = strings.TrimRight(opts.ServerURL, "/")
 	serverURL, err := url.Parse(opts.ServerURL)
@@ -244,28 +263,26 @@ func NewDirect(opts Options) (*Direct, error) {
 	}
 
 	c := &Direct{
-		httpc:                  httpc,
-		getMachinePrivKey:      opts.GetMachinePrivateKey,
-		serverURL:              opts.ServerURL,
-		clock:                  opts.Clock,
-		logf:                   opts.Logf,
-		newDecompressor:        opts.NewDecompressor,
-		keepAlive:              opts.KeepAlive,
-		persist:                opts.Persist.View(),
-		authKey:                opts.AuthKey,
-		discoPubKey:            opts.DiscoPublicKey,
-		debugFlags:             opts.DebugFlags,
-		keepSharerAndUserSplit: opts.KeepSharerAndUserSplit,
-		netMon:                 opts.NetMon,
-		skipIPForwardingCheck:  opts.SkipIPForwardingCheck,
-		pinger:                 opts.Pinger,
-		popBrowser:             opts.PopBrowserURL,
-		onClientVersion:        opts.OnClientVersion,
-		onControlTime:          opts.OnControlTime,
-		c2nHandler:             opts.C2NHandler,
-		dialer:                 opts.Dialer,
-		dnsCache:               dnsCache,
-		dialPlan:               opts.DialPlan,
+		httpc:                 httpc,
+		controlKnobs:          opts.ControlKnobs,
+		getMachinePrivKey:     opts.GetMachinePrivateKey,
+		serverURL:             opts.ServerURL,
+		clock:                 opts.Clock,
+		logf:                  opts.Logf,
+		persist:               opts.Persist.View(),
+		authKey:               opts.AuthKey,
+		discoPubKey:           opts.DiscoPublicKey,
+		debugFlags:            opts.DebugFlags,
+		netMon:                opts.NetMon,
+		skipIPForwardingCheck: opts.SkipIPForwardingCheck,
+		pinger:                opts.Pinger,
+		popBrowser:            opts.PopBrowserURL,
+		onClientVersion:       opts.OnClientVersion,
+		onControlTime:         opts.OnControlTime,
+		c2nHandler:            opts.C2NHandler,
+		dialer:                opts.Dialer,
+		dnsCache:              dnsCache,
+		dialPlan:              opts.DialPlan,
 	}
 	if opts.Hostinfo == nil {
 		c.SetHostinfo(hostinfo.New())
@@ -444,7 +461,7 @@ func (c *Direct) doLogin(ctx context.Context, opt loginOpt) (mustRegen bool, new
 	authKey, isWrapped, wrappedSig, wrappedKey := decodeWrappedAuthkey(c.authKey, c.logf)
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
-	expired := c.expiry != nil && !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
+	expired := !c.expiry.IsZero() && c.expiry.Before(c.clock.Now())
 	c.mu.Unlock()
 
 	machinePrivKey, err := c.getMachinePrivKey()
@@ -735,18 +752,6 @@ func resignNKS(priv key.NLPrivate, nodeKey key.NodePublic, oldNKS tkatype.Marsha
 	return newSig.Serialize(), nil
 }
 
-func sameEndpoints(a, b []tailcfg.Endpoint) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // newEndpoints acquires c.mu and sets the local port and endpoints and reports
 // whether they've changed.
 //
@@ -756,15 +761,11 @@ func (c *Direct) newEndpoints(endpoints []tailcfg.Endpoint) (changed bool) {
 	defer c.mu.Unlock()
 
 	// Nothing new?
-	if sameEndpoints(c.endpoints, endpoints) {
+	if slices.Equal(c.endpoints, endpoints) {
 		return false // unchanged
 	}
-	var epStrs []string
-	for _, ep := range endpoints {
-		epStrs = append(epStrs, ep.Addr.String())
-	}
-	c.logf("[v2] client.newEndpoints(%v)", epStrs)
-	c.endpoints = append(c.endpoints[:0], endpoints...)
+	c.logf("[v2] client.newEndpoints(%v)", endpoints)
+	c.endpoints = slices.Clone(endpoints)
 	return true // changed
 }
 
@@ -811,10 +812,10 @@ func (c *Direct) SendUpdate(ctx context.Context) error {
 	return c.sendMapRequest(ctx, false, nil)
 }
 
-// If we go more than pollTimeout without hearing from the server,
+// If we go more than watchdogTimeout without hearing from the server,
 // end the long poll. We should be receiving a keep alive ping
 // every minute.
-const pollTimeout = 120 * time.Second
+const watchdogTimeout = 120 * time.Second
 
 // sendMapRequest makes a /map request to download the network map, calling cb
 // with each new netmap. If isStreaming, it will poll forever and only returns
@@ -877,7 +878,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 
 	request := &tailcfg.MapRequest{
 		Version:       tailcfg.CurrentCapabilityVersion,
-		KeepAlive:     c.keepAlive,
+		KeepAlive:     true,
 		NodeKey:       persist.PublicNodeKey(),
 		DiscoKey:      c.discoPubKey,
 		Endpoints:     epStrs,
@@ -904,9 +905,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		old := request.DebugFlags
 		request.DebugFlags = append(old[:len(old):len(old)], extraDebugFlags...)
 	}
-	if c.newDecompressor != nil {
-		request.Compress = "zstd"
-	}
+	request.Compress = "zstd"
 
 	bodyData, err := encode(request, serverKey, serverNoiseKey, machinePrivKey)
 	if err != nil {
@@ -961,40 +960,48 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		return nil
 	}
 
-	timeout, timeoutChannel := c.clock.NewTimer(pollTimeout)
-	timeoutReset := make(chan struct{})
-	pollDone := make(chan struct{})
-	defer close(pollDone)
-	go func() {
-		for {
-			select {
-			case <-pollDone:
-				vlogf("netmap: ending timeout goroutine")
-				return
-			case <-timeoutChannel:
-				c.logf("map response long-poll timed out!")
-				cancel()
-				return
-			case <-timeoutReset:
-				if !timeout.Stop() {
-					select {
-					case <-timeoutChannel:
-					case <-pollDone:
-						vlogf("netmap: ending timeout goroutine")
-						return
-					}
-				}
-				vlogf("netmap: reset timeout timer")
-				timeout.Reset(pollTimeout)
-			}
-		}
-	}()
+	var mapResIdx int // 0 for first message, then 1+ for deltas
 
-	sess := newMapSession(persist.PrivateNodeKey())
+	sess := newMapSession(persist.PrivateNodeKey(), nu, c.controlKnobs)
+	defer sess.Close()
+	sess.cancel = cancel
 	sess.logf = c.logf
 	sess.vlogf = vlogf
+	sess.altClock = c.clock
 	sess.machinePubKey = machinePubKey
-	sess.keepSharerAndUserSplit = c.keepSharerAndUserSplit
+	sess.onDebug = c.handleDebugMessage
+	sess.onConciseNetMapSummary = func(summary string) {
+		// Occasionally print the netmap header.
+		// This is handy for debugging, and our logs processing
+		// pipeline depends on it. (TODO: Remove this dependency.)
+		now := c.clock.Now()
+		if now.Sub(c.lastPrintMap) < 5*time.Minute {
+			return
+		}
+		c.lastPrintMap = now
+		c.logf("[v1] new network map[%d]:\n%s", mapResIdx, summary)
+	}
+	sess.onSelfNodeChanged = func(nm *netmap.NetworkMap) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// If we are the ones who last updated persist, then we can update it
+		// again. Otherwise, we should not touch it. Also, it's only worth
+		// change it if the Node info changed.
+		if persist == c.persist {
+			newPersist := persist.AsStruct()
+			newPersist.NodeID = nm.SelfNode.StableID()
+			newPersist.UserProfile = nm.UserProfiles[nm.User()]
+
+			c.persist = newPersist.View()
+			persist = c.persist
+		}
+		c.expiry = nm.Expiry
+	}
+	sess.StartWatchdog()
+
+	// gotNonKeepAliveMessage is whether we've yet received a MapResponse message without
+	// KeepAlive set.
+	var gotNonKeepAliveMessage bool
 
 	// If allowStream, then the server will use an HTTP long poll to
 	// return incremental results. There is always one response right
@@ -1003,8 +1010,8 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	// the same format before just closing the connection.
 	// We can use this same read loop either way.
 	var msg []byte
-	for i := 0; i == 0 || isStreaming; i++ {
-		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), i)
+	for ; mapResIdx == 0 || isStreaming; mapResIdx++ {
+		vlogf("netmap: starting size read after %v (poll %v)", time.Since(t0).Round(time.Millisecond), mapResIdx)
 		var siz [4]byte
 		if _, err := io.ReadFull(res.Body, siz[:]); err != nil {
 			vlogf("netmap: size read error after %v: %v", time.Since(t0).Round(time.Millisecond), err)
@@ -1068,7 +1075,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 
 		select {
-		case timeoutReset <- struct{}{}:
+		case sess.watchdogReset <- struct{}{}:
 			vlogf("netmap: sent timer reset")
 		case <-ctx.Done():
 			c.logf("[v1] netmap: not resetting timer; context done: %v", ctx.Err())
@@ -1080,76 +1087,63 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		}
 
 		metricMapResponseMap.Add(1)
-		if i > 0 {
+		if gotNonKeepAliveMessage {
+			// If we've already seen a non-keep-alive message, this is a delta update.
 			metricMapResponseMapDelta.Add(1)
+		} else if resp.Node == nil {
+			// The very first non-keep-alive message should have Node populated.
+			c.logf("initial MapResponse lacked Node")
+			return errors.New("initial MapResponse lacked node")
 		}
+		gotNonKeepAliveMessage = true
 
-		hasDebug := resp.Debug != nil
-		if hasDebug {
-			if code := resp.Debug.Exit; code != nil {
-				c.logf("exiting process with status %v per controlplane", *code)
-				os.Exit(*code)
-			}
-			if resp.Debug.DisableLogTail {
-				logtail.Disable()
-				envknob.SetNoLogsNoSupport()
-			}
-			if sleep := time.Duration(resp.Debug.SleepSeconds * float64(time.Second)); sleep > 0 {
-				if err := sleepAsRequested(ctx, c.logf, timeoutReset, sleep, c.clock); err != nil {
-					return err
-				}
-			}
+		if err := sess.HandleNonKeepAliveMapResponse(ctx, &resp); err != nil {
+			return err
 		}
-
-		// For responses that mutate the self node, check for updated nodeAttrs.
-		if resp.Node != nil {
-			setControlKnobsFromNodeAttrs(resp.Node.Capabilities)
-		}
-
-		nm := sess.netmapForResponse(&resp)
-		if nm.SelfNode == nil {
-			c.logf("MapResponse lacked node")
-			return errors.New("MapResponse lacked node")
-		}
-
-		if DevKnob.StripEndpoints() {
-			for _, p := range resp.Peers {
-				p.Endpoints = nil
-			}
-		}
-		if DevKnob.StripCaps() {
-			nm.SelfNode.Capabilities = nil
-		}
-
-		// Occasionally print the netmap header.
-		// This is handy for debugging, and our logs processing
-		// pipeline depends on it. (TODO: Remove this dependency.)
-		// Code elsewhere prints netmap diffs every time they are received.
-		now := c.clock.Now()
-		if now.Sub(c.lastPrintMap) >= 5*time.Minute {
-			c.lastPrintMap = now
-			c.logf("[v1] new network map[%d]:\n%s", i, nm.VeryConcise())
-		}
-		newPersist := persist.AsStruct()
-		newPersist.NodeID = nm.SelfNode.StableID
-		newPersist.UserProfile = nm.UserProfiles[nm.User]
-
-		c.mu.Lock()
-		// If we are the ones who last updated persist, then we can update it
-		// again. Otherwise, we should not touch it.
-		if persist == c.persist {
-			c.persist = newPersist.View()
-			persist = c.persist
-		}
-		c.expiry = &nm.Expiry
-		c.mu.Unlock()
-
-		nu.UpdateFullNetmap(nm)
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return nil
+}
+
+func (c *Direct) handleDebugMessage(ctx context.Context, debug *tailcfg.Debug, watchdogReset chan<- struct{}) error {
+	if code := debug.Exit; code != nil {
+		c.logf("exiting process with status %v per controlplane", *code)
+		os.Exit(*code)
+	}
+	if debug.DisableLogTail {
+		logtail.Disable()
+		envknob.SetNoLogsNoSupport()
+	}
+	if sleep := time.Duration(debug.SleepSeconds * float64(time.Second)); sleep > 0 {
+		if err := sleepAsRequested(ctx, c.logf, watchdogReset, sleep, c.clock); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// initDisplayNames mutates any tailcfg.Nodes in resp to populate their display names,
+// calling InitDisplayNames on each.
+//
+// The magicDNSSuffix used is based on selfNode.
+func initDisplayNames(selfNode tailcfg.NodeView, resp *tailcfg.MapResponse) {
+	if resp.Node == nil && len(resp.Peers) == 0 && len(resp.PeersChanged) == 0 {
+		// Fast path for a common case (delta updates). No need to compute
+		// magicDNSSuffix.
+		return
+	}
+	magicDNSSuffix := netmap.MagicDNSSuffixOfNodeName(selfNode.Name())
+	if resp.Node != nil {
+		resp.Node.InitDisplayNames(magicDNSSuffix)
+	}
+	for _, n := range resp.Peers {
+		n.InitDisplayNames(magicDNSSuffix)
+	}
+	for _, n := range resp.PeersChanged {
+		n.InitDisplayNames(magicDNSSuffix)
+	}
 }
 
 // decode JSON decodes the res.Body into v. If serverNoiseKey is not specified,
@@ -1195,19 +1189,14 @@ func (c *Direct) decodeMsg(msg []byte, v any, mkey key.MachinePrivate) error {
 	} else {
 		decrypted = msg
 	}
-	var b []byte
-	if c.newDecompressor == nil {
-		b = decrypted
-	} else {
-		decoder, err := c.newDecompressor()
-		if err != nil {
-			return err
-		}
-		defer decoder.Close()
-		b, err = decoder.DecodeAll(decrypted, nil)
-		if err != nil {
-			return err
-		}
+	decoder, err := smallzstd.NewDecoder(nil)
+	if err != nil {
+		return err
+	}
+	defer decoder.Close()
+	b, err := decoder.DecodeAll(decrypted, nil)
+	if err != nil {
+		return err
 	}
 	if debugMap() {
 		var buf bytes.Buffer
@@ -1313,68 +1302,6 @@ func initDevKnob() devKnobs {
 }
 
 var clock tstime.Clock = tstime.StdClock{}
-
-// config from control.
-var (
-	controlDisableDRPO         atomic.Bool
-	controlKeepFullWGConfig    atomic.Bool
-	controlRandomizeClientPort atomic.Bool
-	controlOneCGNAT            syncs.AtomicValue[opt.Bool]
-)
-
-// DisableDRPO reports whether control says to disable the
-// DERP route optimization (Issue 150).
-func DisableDRPO() bool {
-	return controlDisableDRPO.Load()
-}
-
-// KeepFullWGConfig reports whether control says we should disable the lazy
-// wireguard programming and instead give it the full netmap always.
-func KeepFullWGConfig() bool {
-	return controlKeepFullWGConfig.Load()
-}
-
-// RandomizeClientPort reports whether control says we should randomize
-// the client port.
-func RandomizeClientPort() bool {
-	return controlRandomizeClientPort.Load()
-}
-
-// ControlOneCGNATSetting returns control's OneCGNAT setting, if any.
-func ControlOneCGNATSetting() opt.Bool {
-	return controlOneCGNAT.Load()
-}
-
-func setControlKnobsFromNodeAttrs(selfNodeAttrs []string) {
-	var (
-		keepFullWG          bool
-		disableDRPO         bool
-		disableUPnP         bool
-		randomizeClientPort bool
-		oneCGNAT            opt.Bool
-	)
-	for _, attr := range selfNodeAttrs {
-		switch attr {
-		case tailcfg.NodeAttrDebugDisableWGTrim:
-			keepFullWG = true
-		case tailcfg.NodeAttrDebugDisableDRPO:
-			disableDRPO = true
-		case tailcfg.NodeAttrDisableUPnP:
-			disableUPnP = true
-		case tailcfg.NodeAttrRandomizeClientPort:
-			randomizeClientPort = true
-		case tailcfg.NodeAttrOneCGNATEnable:
-			oneCGNAT.Set(true)
-		case tailcfg.NodeAttrOneCGNATDisable:
-			oneCGNAT.Set(false)
-		}
-	}
-	controlKeepFullWGConfig.Store(keepFullWG)
-	controlDisableDRPO.Store(disableDRPO)
-	controlknobs.SetDisableUPnP(disableUPnP)
-	controlRandomizeClientPort.Store(randomizeClientPort)
-	controlOneCGNAT.Store(oneCGNAT)
-}
 
 // ipForwardingBroken reports whether the system's IP forwarding is disabled
 // and will definitely not work for the routes provided.
@@ -1518,7 +1445,11 @@ func answerC2NPing(logf logger.Logf, c2nHandler http.Handler, c *http.Client, pr
 	}
 }
 
-func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<- struct{}, d time.Duration, clock tstime.Clock) error {
+// sleepAsRequest implements the sleep for a tailcfg.Debug message requesting
+// that the client sleep. The complication is that while we're sleeping (if for
+// a long time), we need to periodically reset the watchdog timer before it
+// expires.
+func sleepAsRequested(ctx context.Context, logf logger.Logf, watchdogReset chan<- struct{}, d time.Duration, clock tstime.Clock) error {
 	const maxSleep = 5 * time.Minute
 	if d > maxSleep {
 		logf("sleeping for %v, capped from server-requested %v ...", maxSleep, d)
@@ -1527,7 +1458,7 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 		logf("sleeping for server-requested %v ...", d)
 	}
 
-	ticker, tickerChannel := clock.NewTicker(pollTimeout / 2)
+	ticker, tickerChannel := clock.NewTicker(watchdogTimeout / 2)
 	defer ticker.Stop()
 	timer, timerChannel := clock.NewTimer(d)
 	defer timer.Stop()
@@ -1539,7 +1470,7 @@ func sleepAsRequested(ctx context.Context, logf logger.Logf, timeoutReset chan<-
 			return nil
 		case <-tickerChannel:
 			select {
-			case timeoutReset <- struct{}{}:
+			case watchdogReset <- struct{}{}:
 			case <-timerChannel:
 				return nil
 			case <-ctx.Done():
@@ -1570,7 +1501,7 @@ func (c *Direct) getNoiseClient() (*NoiseClient, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.logf("creating new noise client")
+		c.logf("[v1] creating new noise client")
 		nc, err := NewNoiseClient(NoiseOpts{
 			PrivKey:      k,
 			ServerPubKey: serverNoiseKey,

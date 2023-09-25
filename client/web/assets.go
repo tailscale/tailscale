@@ -12,11 +12,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	prebuilt "github.com/tailscale/web-client-prebuilt"
 )
+
+func assetsHandler(devMode bool) (_ http.Handler, cleanup func()) {
+	if devMode {
+		// When in dev mode, proxy asset requests to the Vite dev server.
+		cleanup := startDevServer()
+		return devServerProxy(), cleanup
+	}
+	return http.FileServer(http.FS(prebuilt.FS())), nil
+}
 
 // startDevServer starts the JS dev server that does on-demand rebuilding
 // and serving of web client JS and CSS resources.
-func (s *Server) startDevServer() (cleanup func()) {
+func startDevServer() (cleanup func()) {
 	root := gitRootDir()
 	webClientPath := filepath.Join(root, "client", "web")
 
@@ -45,10 +56,8 @@ func (s *Server) startDevServer() (cleanup func()) {
 	}
 }
 
-func (s *Server) addProxyToDevServer() {
-	if !s.devMode {
-		return // only using Vite proxy in dev mode
-	}
+// devServerProxy returns a reverse proxy to the vite dev server.
+func devServerProxy() *httputil.ReverseProxy {
 	// We use Vite to develop on the web client.
 	// Vite starts up its own local server for development,
 	// which we proxy requests to from Server.ServeHTTP.
@@ -62,8 +71,9 @@ func (s *Server) addProxyToDevServer() {
 		w.Write([]byte("\n\nError: " + err.Error()))
 	}
 	viteTarget, _ := url.Parse("http://127.0.0.1:4000")
-	s.devProxy = httputil.NewSingleHostReverseProxy(viteTarget)
-	s.devProxy.ErrorHandler = handleErr
+	devProxy := httputil.NewSingleHostReverseProxy(viteTarget)
+	devProxy.ErrorHandler = handleErr
+	return devProxy
 }
 
 func gitRootDir() string {

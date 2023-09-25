@@ -6,7 +6,10 @@
 package tests
 
 import (
+	"maps"
 	"net/netip"
+
+	"tailscale.com/types/ptr"
 )
 
 // Clone makes a deep copy of StructWithPtrs.
@@ -18,12 +21,10 @@ func (src *StructWithPtrs) Clone() *StructWithPtrs {
 	dst := new(StructWithPtrs)
 	*dst = *src
 	if dst.Value != nil {
-		dst.Value = new(StructWithoutPtrs)
-		*dst.Value = *src.Value
+		dst.Value = ptr.To(*src.Value)
 	}
 	if dst.Int != nil {
-		dst.Int = new(int)
-		*dst.Int = *src.Int
+		dst.Int = ptr.To(*src.Int)
 	}
 	return dst
 }
@@ -60,12 +61,7 @@ func (src *Map) Clone() *Map {
 	}
 	dst := new(Map)
 	*dst = *src
-	if dst.Int != nil {
-		dst.Int = map[string]int{}
-		for k, v := range src.Int {
-			dst.Int[k] = v
-		}
-	}
+	dst.Int = maps.Clone(src.Int)
 	if dst.SliceInt != nil {
 		dst.SliceInt = map[string][]int{}
 		for k := range src.SliceInt {
@@ -84,12 +80,7 @@ func (src *Map) Clone() *Map {
 			dst.StructPtrWithoutPtr[k] = v.Clone()
 		}
 	}
-	if dst.StructWithoutPtr != nil {
-		dst.StructWithoutPtr = map[string]StructWithoutPtrs{}
-		for k, v := range src.StructWithoutPtr {
-			dst.StructWithoutPtr[k] = v
-		}
-	}
+	dst.StructWithoutPtr = maps.Clone(src.StructWithoutPtr)
 	if dst.SlicesWithPtrs != nil {
 		dst.SlicesWithPtrs = map[string][]*StructWithPtrs{}
 		for k := range src.SlicesWithPtrs {
@@ -102,35 +93,19 @@ func (src *Map) Clone() *Map {
 			dst.SlicesWithoutPtrs[k] = append([]*StructWithoutPtrs{}, src.SlicesWithoutPtrs[k]...)
 		}
 	}
-	if dst.StructWithoutPtrKey != nil {
-		dst.StructWithoutPtrKey = map[StructWithoutPtrs]int{}
-		for k, v := range src.StructWithoutPtrKey {
-			dst.StructWithoutPtrKey[k] = v
-		}
-	}
+	dst.StructWithoutPtrKey = maps.Clone(src.StructWithoutPtrKey)
 	if dst.SliceIntPtr != nil {
 		dst.SliceIntPtr = map[string][]*int{}
 		for k := range src.SliceIntPtr {
 			dst.SliceIntPtr[k] = append([]*int{}, src.SliceIntPtr[k]...)
 		}
 	}
-	if dst.PointerKey != nil {
-		dst.PointerKey = map[*string]int{}
-		for k, v := range src.PointerKey {
-			dst.PointerKey[k] = v
-		}
-	}
-	if dst.StructWithPtrKey != nil {
-		dst.StructWithPtrKey = map[StructWithPtrs]int{}
-		for k, v := range src.StructWithPtrKey {
-			dst.StructWithPtrKey[k] = v
-		}
-	}
+	dst.PointerKey = maps.Clone(src.PointerKey)
+	dst.StructWithPtrKey = maps.Clone(src.StructWithPtrKey)
 	if dst.StructWithPtr != nil {
 		dst.StructWithPtr = map[string]StructWithPtrs{}
 		for k, v := range src.StructWithPtr {
-			v2 := v.Clone()
-			dst.StructWithPtr[k] = *v2
+			dst.StructWithPtr[k] = *(v.Clone())
 		}
 	}
 	return dst
@@ -161,22 +136,29 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 	dst := new(StructWithSlices)
 	*dst = *src
 	dst.Values = append(src.Values[:0:0], src.Values...)
-	dst.ValuePointers = make([]*StructWithoutPtrs, len(src.ValuePointers))
-	for i := range dst.ValuePointers {
-		dst.ValuePointers[i] = src.ValuePointers[i].Clone()
+	if src.ValuePointers != nil {
+		dst.ValuePointers = make([]*StructWithoutPtrs, len(src.ValuePointers))
+		for i := range dst.ValuePointers {
+			dst.ValuePointers[i] = src.ValuePointers[i].Clone()
+		}
 	}
-	dst.StructPointers = make([]*StructWithPtrs, len(src.StructPointers))
-	for i := range dst.StructPointers {
-		dst.StructPointers[i] = src.StructPointers[i].Clone()
+	if src.StructPointers != nil {
+		dst.StructPointers = make([]*StructWithPtrs, len(src.StructPointers))
+		for i := range dst.StructPointers {
+			dst.StructPointers[i] = src.StructPointers[i].Clone()
+		}
 	}
-	dst.Structs = make([]StructWithPtrs, len(src.Structs))
-	for i := range dst.Structs {
-		dst.Structs[i] = *src.Structs[i].Clone()
+	if src.Structs != nil {
+		dst.Structs = make([]StructWithPtrs, len(src.Structs))
+		for i := range dst.Structs {
+			dst.Structs[i] = *src.Structs[i].Clone()
+		}
 	}
-	dst.Ints = make([]*int, len(src.Ints))
-	for i := range dst.Ints {
-		x := *src.Ints[i]
-		dst.Ints[i] = &x
+	if src.Ints != nil {
+		dst.Ints = make([]*int, len(src.Ints))
+		for i := range dst.Ints {
+			dst.Ints[i] = ptr.To(*src.Ints[i])
+		}
 	}
 	dst.Slice = append(src.Slice[:0:0], src.Slice...)
 	dst.Prefixes = append(src.Prefixes[:0:0], src.Prefixes...)

@@ -4,7 +4,6 @@
 package ipnlocal
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/user"
 	"strconv"
@@ -42,7 +41,7 @@ func TestProfileCurrentUserSwitch(t *testing.T) {
 				LoginName: loginName,
 			},
 		}
-		if err := pm.SetPrefs(p.View()); err != nil {
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -97,7 +96,7 @@ func TestProfileList(t *testing.T) {
 				LoginName: loginName,
 			},
 		}
-		if err := pm.SetPrefs(p.View()); err != nil {
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -158,7 +157,7 @@ func TestProfileDupe(t *testing.T) {
 	reauth := func(pm *profileManager, p *persist.Persist) {
 		prefs := ipn.NewPrefs()
 		prefs.Persist = p
-		must.Do(pm.SetPrefs(prefs.View()))
+		must.Do(pm.SetPrefs(prefs.View(), ""))
 	}
 	login := func(pm *profileManager, p *persist.Persist) {
 		pm.NewProfile()
@@ -312,10 +311,6 @@ func TestProfileDupe(t *testing.T) {
 	}
 }
 
-func asJSON(v any) []byte {
-	return must.Get(json.MarshalIndent(v, "", "  "))
-}
-
 // TestProfileManagement tests creating, loading, and switching profiles.
 func TestProfileManagement(t *testing.T) {
 	store := new(mem.Store)
@@ -384,7 +379,7 @@ func TestProfileManagement(t *testing.T) {
 			},
 			NodeID: nid,
 		}
-		if err := pm.SetPrefs(p.View()); err != nil {
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()
@@ -511,7 +506,7 @@ func TestProfileManagementWindows(t *testing.T) {
 			},
 			NodeID: tailcfg.StableNodeID(strconv.Itoa(int(id))),
 		}
-		if err := pm.SetPrefs(p.View()); err != nil {
+		if err := pm.SetPrefs(p.View(), ""); err != nil {
 			t.Fatal(err)
 		}
 		return p.View()

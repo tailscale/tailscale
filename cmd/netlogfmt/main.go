@@ -42,6 +42,7 @@ import (
 
 	"github.com/dsnet/try"
 	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/cmpx"
@@ -75,13 +76,13 @@ func main() {
 
 func processStream(r io.Reader) (err error) {
 	defer try.Handle(&err)
-	dec := jsonv2.NewDecoder(os.Stdin)
+	dec := jsontext.NewDecoder(os.Stdin)
 	for {
 		processValue(dec)
 	}
 }
 
-func processValue(dec *jsonv2.Decoder) {
+func processValue(dec *jsontext.Decoder) {
 	switch dec.PeekKind() {
 	case '[':
 		processArray(dec)
@@ -92,7 +93,7 @@ func processValue(dec *jsonv2.Decoder) {
 	}
 }
 
-func processArray(dec *jsonv2.Decoder) {
+func processArray(dec *jsontext.Decoder) {
 	try.E1(dec.ReadToken()) // parse '['
 	for dec.PeekKind() != ']' {
 		processValue(dec)
@@ -100,7 +101,7 @@ func processArray(dec *jsonv2.Decoder) {
 	try.E1(dec.ReadToken()) // parse ']'
 }
 
-func processObject(dec *jsonv2.Decoder) {
+func processObject(dec *jsontext.Decoder) {
 	var hasTraffic bool
 	var rawMsg []byte
 	try.E1(dec.ReadToken()) // parse '{'

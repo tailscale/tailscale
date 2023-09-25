@@ -6,6 +6,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 )
 
@@ -39,8 +40,10 @@ func errnoErr(e syscall.Errno) error {
 
 var (
 	modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
+	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procQueryServiceConfig2W = modadvapi32.NewProc("QueryServiceConfig2W")
+	procQueryServiceConfig2W       = modadvapi32.NewProc("QueryServiceConfig2W")
+	procRegisterApplicationRestart = modkernel32.NewProc("RegisterApplicationRestart")
 )
 
 func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, bufLen uint32, bytesNeeded *uint32) (err error) {
@@ -48,5 +51,11 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 	if r1 == 0 {
 		err = errnoErr(e1)
 	}
+	return
+}
+
+func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
+	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
+	ret = wingoes.HRESULT(r0)
 	return
 }

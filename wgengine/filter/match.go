@@ -4,7 +4,6 @@
 package filter
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -60,7 +59,7 @@ type CapMatch struct {
 
 	// Values are the raw JSON values of the capability.
 	// See tailcfg.PeerCapability and tailcfg.PeerCapMap for details.
-	Values []json.RawMessage
+	Values []tailcfg.RawMessage
 }
 
 // Match matches packets from any IP address in Srcs to any ip:port in

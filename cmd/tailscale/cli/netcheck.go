@@ -21,6 +21,7 @@ import (
 	"tailscale.com/net/netcheck"
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/portmapper"
+	"tailscale.com/net/tlsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/logger"
 )
@@ -52,7 +53,7 @@ func runNetcheck(ctx context.Context, args []string) error {
 		return err
 	}
 	c := &netcheck.Client{
-		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil),
+		PortMapper:  portmapper.NewClient(logf, netMon, nil, nil, nil),
 		UseDNSCache: false, // always resolve, don't cache
 	}
 	if netcheckArgs.verbose {
@@ -76,7 +77,8 @@ func runNetcheck(ctx context.Context, args []string) error {
 		log.Printf("No DERP map from tailscaled; using default.")
 	}
 	if err != nil || noRegions {
-		dm, err = prodDERPMap(ctx, http.DefaultClient)
+		hc := &http.Client{Transport: tlsdial.NewTransport()}
+		dm, err = prodDERPMap(ctx, hc)
 		if err != nil {
 			return err
 		}
@@ -151,7 +153,11 @@ func printReport(dm *tailcfg.DERPMap, report *netcheck.Report) error {
 	if len(report.RegionLatency) == 0 {
 		printf("\t* Nearest DERP: unknown (no response to latency probes)\n")
 	} else {
-		printf("\t* Nearest DERP: %v\n", dm.Regions[report.PreferredDERP].RegionName)
+		if report.PreferredDERP != 0 {
+			printf("\t* Nearest DERP: %v\n", dm.Regions[report.PreferredDERP].RegionName)
+		} else {
+			printf("\t* Nearest DERP: [none]\n")
+		}
 		printf("\t* DERP latency:\n")
 		var rids []int
 		for rid := range dm.Regions {

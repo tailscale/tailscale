@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -29,6 +30,24 @@ type Target interface {
 	Build(build *Build) ([]string, error)
 }
 
+// Signer is pluggable signer for a Target.
+type Signer func(io.Reader) ([]byte, error)
+
+// SignFile signs the file at filePath with s and writes the signature to
+// sigPath.
+func (s Signer) SignFile(filePath, sigPath string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sig, err := s(f)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(sigPath, sig, 0644)
+}
+
 // A Build is a build context for Targets.
 type Build struct {
 	// Repo is a path to the root Go module for the build.
@@ -38,11 +57,16 @@ type Build struct {
 	// Verbose is whether to print all command output, rather than just failed
 	// commands.
 	Verbose bool
+	// WebClientSource is a path to the source for the web client.
+	// If non-empty, web client assets will be built.
+	WebClientSource string
 
 	// Tmp is a temporary directory that gets deleted when the Builder is closed.
 	Tmp string
 	// Go is the path to the Go binary to use for building.
 	Go string
+	// Yarn is the path to the yarn binary to use for building the web client assets.
+	Yarn string
 	// Version is the version info of the build.
 	Version mkversion.VersionInfo
 	// Time is the timestamp of the build.
@@ -79,15 +103,20 @@ func NewBuild(repo, out string) (*Build, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finding module root: %w", err)
 	}
-	goTool, err := findGo(repo)
+	goTool, err := findTool(repo, "go")
 	if err != nil {
 		return nil, fmt.Errorf("finding go binary: %w", err)
+	}
+	yarnTool, err := findTool(repo, "yarn")
+	if err != nil {
+		return nil, fmt.Errorf("finding yarn binary: %w", err)
 	}
 	b := &Build{
 		Repo:         repo,
 		Tmp:          tmp,
 		Out:          out,
 		Go:           goTool,
+		Yarn:         yarnTool,
 		Version:      mkversion.Info(),
 		Time:         time.Now().UTC(),
 		extra:        map[any]any{},
@@ -180,6 +209,27 @@ func (b *Build) TmpDir() string {
 	return ret
 }
 
+// BuildWebClientAssets builds the JS and CSS assets used by the web client.
+// If b.WebClientSource is non-empty, assets are built in a "build" sub-directory of that path.
+// Otherwise, no assets are built.
+func (b *Build) BuildWebClientAssets() error {
+	// Nothing in the web client assets is platform-specific,
+	// so we only need to build it once.
+	return b.Once("build-web-client-assets", func() error {
+		if b.WebClientSource == "" {
+			return nil
+		}
+		dir := b.WebClientSource
+		if err := b.Command(dir, b.Yarn, "install").Run(); err != nil {
+			return err
+		}
+		if err := b.Command(dir, b.Yarn, "build").Run(); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 // BuildGoBinary builds the Go binary at path and returns the path to the
 // binary. Builds are cached by path and env, so each build only happens once
 // per process execution.
@@ -219,7 +269,12 @@ func (b *Build) BuildGoBinaryWithTags(path string, env map[string]string, tags [
 		}
 		sort.Strings(envStrs)
 		buildDir := b.TmpDir()
-		args := []string{"build", "-v", "-o", buildDir}
+		outPath := buildDir
+		if env["GOOS"] == "windowsdll" {
+			// DLL builds fail unless we use a fully-qualified path to the output binary.
+			outPath = filepath.Join(buildDir, filepath.Base(path)+".dll")
+		}
+		args := []string{"build", "-v", "-o", outPath}
 		if len(tags) > 0 {
 			tagsStr := strings.Join(tags, ",")
 			log.Printf("Building %s (with env %s, tags %s)", path, strings.Join(envStrs, " "), tagsStr)
@@ -238,6 +293,8 @@ func (b *Build) BuildGoBinaryWithTags(path string, env map[string]string, tags [
 		out := filepath.Join(buildDir, filepath.Base(path))
 		if env["GOOS"] == "windows" || env["GOOS"] == "windowsgui" {
 			out += ".exe"
+		} else if env["GOOS"] == "windowsdll" {
+			out += ".dll"
 		}
 		return out, nil
 	})
@@ -303,16 +360,19 @@ func findModRoot(path string) (string, error) {
 	}
 }
 
-func findGo(path string) (string, error) {
-	toolGo := filepath.Join(path, "tool/go")
-	if _, err := os.Stat(toolGo); err == nil {
-		return toolGo, nil
+// findTool returns the path to the specified named tool.
+// It first looks in the "tool" directory in the provided path,
+// then in the $PATH environment variable.
+func findTool(path, name string) (string, error) {
+	tool := filepath.Join(path, "tool", name)
+	if _, err := os.Stat(tool); err == nil {
+		return tool, nil
 	}
-	toolGo, err := exec.LookPath("go")
+	tool, err := exec.LookPath(name)
 	if err != nil {
 		return "", err
 	}
-	return toolGo, nil
+	return tool, nil
 }
 
 // FilterTargets returns the subset of targets that match any of the filters.

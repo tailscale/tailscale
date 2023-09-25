@@ -41,6 +41,7 @@ import (
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/rands"
 )
 
 var (
@@ -117,6 +118,36 @@ func TestOneNodeExpiredKey(t *testing.T) {
 	n1.AwaitRunning()
 
 	d1.MustCleanShutdown(t)
+}
+
+func TestControlKnobs(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	n1 := newTestNode(t, env)
+
+	d1 := n1.StartDaemon()
+	defer d1.MustCleanShutdown(t)
+	n1.AwaitResponding()
+	n1.MustUp()
+
+	t.Logf("Got IP: %v", n1.AwaitIP())
+	n1.AwaitRunning()
+
+	cmd := n1.Tailscale("debug", "control-knobs")
+	cmd.Stdout = nil // in case --verbose-tailscale was set
+	cmd.Stderr = nil // in case --verbose-tailscale was set
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("control-knobs output:\n%s", out)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m["DisableUPnP"], true; got != want {
+		t.Errorf("control-knobs DisableUPnP = %v; want %v", got, want)
+	}
 }
 
 func TestCollectPanic(t *testing.T) {
@@ -293,6 +324,92 @@ func TestTwoNodes(t *testing.T) {
 	}); err != nil {
 		t.Error(err)
 	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}
+
+// tests two nodes where the first gets a incremental MapResponse (with only
+// PeersRemoved set) saying that the second node disappeared.
+func TestIncrementalMapUpdatePeersRemoved(t *testing.T) {
+	flakytest.Mark(t, "https://github.com/tailscale/tailscale/issues/3598")
+	t.Parallel()
+	env := newTestEnv(t)
+
+	// Create one node:
+	n1 := newTestNode(t, env)
+	d1 := n1.StartDaemon()
+	n1.AwaitListening()
+	n1.MustUp()
+	n1.AwaitRunning()
+
+	all := env.Control.AllNodes()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 node, got %d nodes", len(all))
+	}
+	tnode1 := all[0]
+
+	n2 := newTestNode(t, env)
+	d2 := n2.StartDaemon()
+	n2.AwaitListening()
+	n2.MustUp()
+	n2.AwaitRunning()
+
+	all = env.Control.AllNodes()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 node, got %d nodes", len(all))
+	}
+	var tnode2 *tailcfg.Node
+	for _, n := range all {
+		if n.ID != tnode1.ID {
+			tnode2 = n
+			break
+		}
+	}
+	if tnode2 == nil {
+		t.Fatalf("failed to find second node ID (two dups?)")
+	}
+
+	t.Logf("node1=%v, node2=%v", tnode1.ID, tnode2.ID)
+
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus()
+		if len(st.Peer) == 0 {
+			return errors.New("no peers")
+		}
+		if len(st.Peer) > 1 {
+			return fmt.Errorf("got %d peers; want 1", len(st.Peer))
+		}
+		peer := st.Peer[st.Peers()[0]]
+		if peer.ID == st.Self.ID {
+			return errors.New("peer is self")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("node1 saw node2")
+
+	// Now tell node1 that node2 is removed.
+	if !env.Control.AddRawMapResponse(tnode1.Key, &tailcfg.MapResponse{
+		PeersRemoved: []tailcfg.NodeID{tnode2.ID},
+	}) {
+		t.Fatalf("failed to add map response")
+	}
+
+	// And see that node1 saw that.
+	if err := tstest.WaitFor(2*time.Second, func() error {
+		st := n1.MustStatus()
+		if len(st.Peer) == 0 {
+			return nil
+		}
+		return fmt.Errorf("got %d peers; want 0", len(st.Peer))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("node1 saw node2 disappear")
 
 	d1.MustCleanShutdown(t)
 	d2.MustCleanShutdown(t)
@@ -760,7 +877,9 @@ func newTestNode(t *testing.T, env *testEnv) *testNode {
 	dir := t.TempDir()
 	sockFile := filepath.Join(dir, "tailscale.sock")
 	if len(sockFile) >= 104 {
-		t.Fatalf("sockFile path %q (len %v) is too long, must be < 104", sockFile, len(sockFile))
+		// Maximum length for a unix socket on darwin. Try something else.
+		sockFile = filepath.Join(os.TempDir(), rands.HexString(8)+".sock")
+		t.Cleanup(func() { os.Remove(sockFile) })
 	}
 	return &testNode{
 		env:       env,
@@ -934,6 +1053,15 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(cmd.Stderr, os.Stderr)
 	}
+	if runtime.GOOS != "windows" {
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { pw.Close() })
+		cmd.ExtraFiles = append(cmd.ExtraFiles, pr)
+		cmd.Env = append(cmd.Env, "TS_PARENT_DEATH_FD=3")
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting tailscaled: %v", err)
 	}
@@ -945,9 +1073,11 @@ func (n *testNode) StartDaemonAsIPNGOOS(ipnGOOS string) *Daemon {
 
 func (n *testNode) MustUp(extraArgs ...string) {
 	t := n.env.t
+	t.Helper()
 	args := []string{
 		"up",
 		"--login-server=" + n.env.ControlServer.URL,
+		"--reset",
 	}
 	args = append(args, extraArgs...)
 	cmd := n.Tailscale(args...)

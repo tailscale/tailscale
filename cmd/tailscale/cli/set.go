@@ -11,10 +11,12 @@ import (
 	"net/netip"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/clientupdate"
 	"tailscale.com/ipn"
 	"tailscale.com/net/netutil"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/safesocket"
+	"tailscale.com/types/views"
 )
 
 var setCmd = &ffcli.Command{
@@ -45,6 +47,8 @@ type setArgsT struct {
 	acceptedRisks          string
 	profileName            string
 	forceDaemon            bool
+	updateCheck            bool
+	updateApply            bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -60,6 +64,8 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	setf.StringVar(&setArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	setf.BoolVar(&setArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "HIDDEN: notify about available Tailscale updates")
+	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "HIDDEN: automatically update to the latest available version")
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -98,6 +104,10 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			Hostname:               setArgs.hostname,
 			OperatorUser:           setArgs.opUser,
 			ForceDaemon:            setArgs.forceDaemon,
+			AutoUpdate: ipn.AutoUpdatePrefs{
+				Check: setArgs.updateCheck,
+				Apply: setArgs.updateApply,
+			},
 		},
 	}
 
@@ -142,6 +152,12 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			return err
 		}
 	}
+	if maskedPrefs.AutoUpdateSet {
+		_, err := clientupdate.NewUpdater(clientupdate.Arguments{})
+		if errors.Is(err, errors.ErrUnsupported) {
+			return errors.New("automatic updates are not supported on this platform")
+		}
+	}
 	checkPrefs := curPrefs.Clone()
 	checkPrefs.ApplyEdits(maskedPrefs)
 	if err := localClient.CheckPrefs(ctx, checkPrefs); err != nil {
@@ -171,7 +187,7 @@ func calcAdvertiseRoutesForSet(advertiseExitNodeSet, advertiseRoutesSet bool, cu
 		if alreadyAdvertisesExitNode == setArgs.advertiseDefaultRoute {
 			return curPrefs.AdvertiseRoutes, nil
 		}
-		routes = tsaddr.FilterPrefixesCopy(curPrefs.AdvertiseRoutes, func(p netip.Prefix) bool {
+		routes = tsaddr.FilterPrefixesCopy(views.SliceOf(curPrefs.AdvertiseRoutes), func(p netip.Prefix) bool {
 			return p.Bits() != 0
 		})
 		if setArgs.advertiseDefaultRoute {

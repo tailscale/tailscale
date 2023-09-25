@@ -545,3 +545,13 @@ prawn
 lobster
 chipmunk
 tails
+talpidae
+shrew
+talpa
+mogera
+scaptonyx
+dymecodon
+neurotrichini
+uropsilus
+desmana
+fynbos

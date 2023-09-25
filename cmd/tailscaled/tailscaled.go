@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:build go1.19
+//go:build go1.21
 
 // The tailscaled program is the Tailscale client daemon. It's configured
 // and controlled via the tailscale CLI program.
@@ -48,7 +48,6 @@ import (
 	"tailscale.com/net/tstun"
 	"tailscale.com/paths"
 	"tailscale.com/safesocket"
-	"tailscale.com/smallzstd"
 	"tailscale.com/syncs"
 	"tailscale.com/tsd"
 	"tailscale.com/tsweb/varz"
@@ -76,6 +75,8 @@ func defaultTunName() string {
 		// "utun" is recognized by wireguard-go/tun/tun_darwin.go
 		// as a magic value that uses/creates any free number.
 		return "utun"
+	case "plan9":
+		return "userspace-networking"
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
@@ -198,6 +199,10 @@ func main() {
 		if runtime.GOOS != "windows" || (flag.Arg(0) != "/subproc" && flag.Arg(0) != "/firewall") {
 			log.Fatalf("tailscaled does not take non-flag arguments: %q", flag.Args())
 		}
+	}
+
+	if fd, ok := envknob.LookupInt("TS_PARENT_DEATH_FD"); ok && fd > 2 {
+		go dieOnPipeReadErrorOfFD(fd)
 	}
 
 	if printVersion {
@@ -394,6 +399,8 @@ func run() error {
 	return startIPNServer(context.Background(), logf, pol.PublicID, sys)
 }
 
+var sigPipe os.Signal // set by sigpipe.go
+
 func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID, sys *tsd.System) error {
 	ln, err := safesocket.Listen(args.socketpath)
 	if err != nil {
@@ -409,7 +416,9 @@ func startIPNServer(ctx context.Context, logf logger.Logf, logID logid.PublicID,
 	// SIGPIPE sometimes gets generated when CLIs disconnect from
 	// tailscaled. The default action is to terminate the process, we
 	// want to keep running.
-	signal.Ignore(syscall.SIGPIPE)
+	if sigPipe != nil {
+		signal.Ignore(sigPipe)
+	}
 	go func() {
 		select {
 		case s := <-interrupt:
@@ -487,6 +496,7 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if err != nil {
 		return nil, fmt.Errorf("newNetstack: %w", err)
 	}
+	sys.Set(ns)
 	ns.ProcessLocalIPs = onlyNetstack
 	ns.ProcessSubnets = onlyNetstack || handleSubnetsInNetstack()
 
@@ -541,9 +551,6 @@ func getLocalBackend(ctx context.Context, logf logger.Logf, logID logid.PublicID
 	if root := lb.TailscaleVarRoot(); root != "" {
 		dnsfallback.SetCachePath(filepath.Join(root, "derpmap.cached.json"), logf)
 	}
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
 	configureTaildrop(logf, lb)
 	if err := ns.Start(lb); err != nil {
 		log.Fatalf("failed to start netstack: %v", err)
@@ -601,6 +608,7 @@ func tryEngine(logf logger.Logf, sys *tsd.System, name string) (onlyNetstack boo
 		NetMon:       sys.NetMon.Get(),
 		Dialer:       sys.Dialer.Get(),
 		SetSubsystem: sys.Set,
+		ControlKnobs: sys.ControlKnobs(),
 	}
 
 	onlyNetstack = name == "userspace-networking"
@@ -703,7 +711,14 @@ func runDebugServer(mux *http.ServeMux, addr string) {
 }
 
 func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
-	return netstack.Create(logf, sys.Tun.Get(), sys.Engine.Get(), sys.MagicSock.Get(), sys.Dialer.Get(), sys.DNSManager.Get())
+	return netstack.Create(logf,
+		sys.Tun.Get(),
+		sys.Engine.Get(),
+		sys.MagicSock.Get(),
+		sys.Dialer.Get(),
+		sys.DNSManager.Get(),
+		sys.ProxyMapper(),
+	)
 }
 
 // mustStartProxyListeners creates listeners for local SOCKS and HTTP
@@ -762,4 +777,15 @@ func beChild(args []string) error {
 		return fmt.Errorf("unknown be-child mode %q", typ)
 	}
 	return f(args[1:])
+}
+
+// dieOnPipeReadErrorOfFD reads from the pipe named by fd and exit the process
+// when the pipe becomes readable. We use this in tests as a somewhat more
+// portable mechanism for the Linux PR_SET_PDEATHSIG, which we wish existed on
+// macOS. This helps us clean up straggler tailscaled processes when the parent
+// test driver dies unexpectedly.
+func dieOnPipeReadErrorOfFD(fd int) {
+	f := os.NewFile(uintptr(fd), "TS_PARENT_DEATH_FD")
+	f.Read(make([]byte, 1))
+	os.Exit(1)
 }

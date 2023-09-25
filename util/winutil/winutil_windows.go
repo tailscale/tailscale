@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"os/user"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -550,4 +552,59 @@ func findHomeDirInRegistry(uid string) (dir string, err error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+const (
+	_RESTART_NO_CRASH  = 1
+	_RESTART_NO_HANG   = 2
+	_RESTART_NO_PATCH  = 4
+	_RESTART_NO_REBOOT = 8
+)
+
+func registerForRestart(opts RegisterForRestartOpts) error {
+	var flags uint32
+
+	if !opts.RestartOnCrash {
+		flags |= _RESTART_NO_CRASH
+	}
+	if !opts.RestartOnHang {
+		flags |= _RESTART_NO_HANG
+	}
+	if !opts.RestartOnUpgrade {
+		flags |= _RESTART_NO_PATCH
+	}
+	if !opts.RestartOnReboot {
+		flags |= _RESTART_NO_REBOOT
+	}
+
+	var cmdLine *uint16
+	if opts.UseCmdLineArgs {
+		if len(opts.CmdLineArgs) == 0 {
+			// re-use our current args, excluding the exe name itself
+			opts.CmdLineArgs = os.Args[1:]
+		}
+
+		var b strings.Builder
+		for _, arg := range opts.CmdLineArgs {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(windows.EscapeArg(arg))
+		}
+
+		if b.Len() > 0 {
+			var err error
+			cmdLine, err = windows.UTF16PtrFromString(b.String())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	hr := registerApplicationRestart(cmdLine, flags)
+	if e := wingoes.ErrorFromHRESULT(hr); e.Failed() {
+		return e
+	}
+
+	return nil
 }

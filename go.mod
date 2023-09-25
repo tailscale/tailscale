@@ -16,17 +16,18 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.36.3
 	github.com/coreos/go-iptables v0.6.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
+	github.com/coreos/go-systemd/v22 v22.4.0
 	github.com/creack/pty v1.1.18
 	github.com/dave/jennifer v1.6.1
-	github.com/dblohm7/wingoes v0.0.0-20230803162905-5c6286bb8c6e
+	github.com/dblohm7/wingoes v0.0.0-20230821191801-fc76608aecf0
 	github.com/dsnet/try v0.0.3
 	github.com/evanw/esbuild v0.14.53
 	github.com/frankban/quicktest v1.14.5
 	github.com/fxamacker/cbor/v2 v2.4.0
-	github.com/go-json-experiment/json v0.0.0-20230321051131-ccbac49a6929
+	github.com/go-json-experiment/json v0.0.0-20230908182459-f320be06fe37
 	github.com/go-logr/zapr v1.2.4
 	github.com/go-ole/go-ole v1.2.6
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golangci/golangci-lint v1.52.2
 	github.com/google/go-cmp v0.5.9
@@ -64,7 +65,8 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/tailscale/mkctr v0.0.0-20220601142259-c0b937af2e89
 	github.com/tailscale/netlink v1.1.1-0.20211101221916-cabfb018fe85
-	github.com/tailscale/wireguard-go v0.0.0-20230710185534-bb2c8f22eccf
+	github.com/tailscale/web-client-prebuilt v0.0.0-20230919163828-68bd39ee4109
+	github.com/tailscale/wireguard-go v0.0.0-20230824215414-93bd5cbf7fd8
 	github.com/tc-hib/winres v0.2.0
 	github.com/tcnksm/go-httpstat v0.2.0
 	github.com/toqueteos/webbrowser v1.2.0
@@ -74,14 +76,14 @@ require (
 	go.uber.org/zap v1.24.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
 	go4.org/netipx v0.0.0-20230728180743-ad4cb58a6516
-	golang.org/x/crypto v0.11.0
+	golang.org/x/crypto v0.12.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/mod v0.11.0
-	golang.org/x/net v0.10.0
+	golang.org/x/net v0.14.0
 	golang.org/x/oauth2 v0.7.0
 	golang.org/x/sync v0.2.0
-	golang.org/x/sys v0.10.0
-	golang.org/x/term v0.10.0
+	golang.org/x/sys v0.11.0
+	golang.org/x/term v0.11.0
 	golang.org/x/time v0.3.0
 	golang.org/x/tools v0.9.1
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
@@ -99,6 +101,8 @@ require (
 	sigs.k8s.io/yaml v1.3.0
 	software.sslmate.com/src/go-pkcs12 v0.2.0
 )
+
+require github.com/gorilla/securecookie v1.1.1 // indirect
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.2.1 // indirect
@@ -169,7 +173,7 @@ require (
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/firefart/nonamedreturns v1.0.4 // indirect
-	github.com/fsnotify/fsnotify v1.6.0 // indirect
+	github.com/fsnotify/fsnotify v1.6.0
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/go-critic/go-critic v0.8.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -208,6 +212,7 @@ require (
 	github.com/gordonklaus/ineffassign v0.0.0-20230107090616-13ace0543b28 // indirect
 	github.com/goreleaser/chglog v0.5.0 // indirect
 	github.com/goreleaser/fileglob v1.3.0 // indirect
+	github.com/gorilla/csrf v1.7.1
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.4.2 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.1.0 // indirect
@@ -335,7 +340,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20230425010034-47ecfdc1ba53 // indirect
 	golang.org/x/image v0.7.0 // indirect
-	golang.org/x/text v0.11.0 // indirect
+	golang.org/x/text v0.12.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.3.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect

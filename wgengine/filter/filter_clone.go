@@ -6,7 +6,6 @@
 package filter
 
 import (
-	"encoding/json"
 	"net/netip"
 
 	"tailscale.com/tailcfg"
@@ -24,9 +23,11 @@ func (src *Match) Clone() *Match {
 	dst.IPProto = append(src.IPProto[:0:0], src.IPProto...)
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
 	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
-	dst.Caps = make([]CapMatch, len(src.Caps))
-	for i := range dst.Caps {
-		dst.Caps[i] = *src.Caps[i].Clone()
+	if src.Caps != nil {
+		dst.Caps = make([]CapMatch, len(src.Caps))
+		for i := range dst.Caps {
+			dst.Caps[i] = *src.Caps[i].Clone()
+		}
 	}
 	return dst
 }
@@ -47,10 +48,7 @@ func (src *CapMatch) Clone() *CapMatch {
 	}
 	dst := new(CapMatch)
 	*dst = *src
-	dst.Values = make([]json.RawMessage, len(src.Values))
-	for i := range dst.Values {
-		dst.Values[i] = append(src.Values[i][:0:0], src.Values[i]...)
-	}
+	dst.Values = append(src.Values[:0:0], src.Values...)
 	return dst
 }
 
@@ -58,5 +56,5 @@ func (src *CapMatch) Clone() *CapMatch {
 var _CapMatchCloneNeedsRegeneration = CapMatch(struct {
 	Dst    netip.Prefix
 	Cap    tailcfg.PeerCapability
-	Values []json.RawMessage
+	Values []tailcfg.RawMessage
 }{})

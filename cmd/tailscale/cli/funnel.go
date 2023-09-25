@@ -9,18 +9,27 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
+	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/mak"
 )
 
-var funnelCmd = newFunnelCommand(&serveEnv{lc: &localClient})
+var funnelCmd = func() *ffcli.Command {
+	se := &serveEnv{lc: &localClient}
+	// This flag is used to switch to an in-development
+	// implementation of the tailscale funnel command.
+	// See https://github.com/tailscale/tailscale/issues/7844
+	if envknob.UseWIPCode() {
+		return newServeDevCommand(se, funnel)
+	}
+	return newFunnelCommand(se)
+}
 
 // newFunnelCommand returns a new "funnel" subcommand using e as its environment.
 // The funnel subcommand is used to turn on/off the Funnel service.
@@ -137,15 +146,13 @@ func (e *serveEnv) runFunnel(ctx context.Context, args []string) error {
 //
 // verifyFunnelEnabled may refresh the local state and modify the st input.
 func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status, port uint16) error {
-	hasFunnelAttrs := func(attrs []string) bool {
-		hasHTTPS := slices.Contains(attrs, tailcfg.CapabilityHTTPS)
-		hasFunnel := slices.Contains(attrs, tailcfg.NodeAttrFunnel)
-		return hasHTTPS && hasFunnel
+	hasFunnelAttrs := func(selfNode *ipnstate.PeerStatus) bool {
+		return selfNode.HasCap(tailcfg.CapabilityHTTPS) && selfNode.HasCap(tailcfg.NodeAttrFunnel)
 	}
-	if hasFunnelAttrs(st.Self.Capabilities) {
+	if hasFunnelAttrs(st.Self) {
 		return nil // already enabled
 	}
-	enableErr := e.enableFeatureInteractive(ctx, "funnel", hasFunnelAttrs)
+	enableErr := e.enableFeatureInteractive(ctx, "funnel", tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel)
 	st, statusErr := e.getLocalClientStatusWithoutPeers(ctx) // get updated status; interactive flow may block
 	switch {
 	case statusErr != nil:

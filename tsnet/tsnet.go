@@ -51,6 +51,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/nettype"
+	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/testenv"
 	"tailscale.com/wgengine"
@@ -348,15 +349,6 @@ func (s *Server) Close() error {
 		}
 	}()
 
-	if _, isMemStore := s.Store.(*mem.Store); isMemStore && s.Ephemeral && s.lb != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Perform a best-effort logout.
-			s.lb.LogoutSync(ctx)
-		}()
-	}
-
 	if s.netstack != nil {
 		s.netstack.Close()
 		s.netstack = nil
@@ -416,7 +408,9 @@ func (s *Server) TailscaleIPs() (ip4, ip6 netip.Addr) {
 	if nm == nil {
 		return
 	}
-	for _, addr := range nm.Addresses {
+	addrs := nm.GetAddresses()
+	for i := range addrs.LenIter() {
+		addr := addrs.At(i)
 		ip := addr.Addr()
 		if ip.Is6() {
 			ip6 = ip
@@ -509,6 +503,7 @@ func (s *Server) start() (reterr error) {
 		NetMon:       s.netMon,
 		Dialer:       s.dialer,
 		SetSubsystem: sys.Set,
+		ControlKnobs: sys.ControlKnobs(),
 	})
 	if err != nil {
 		return err
@@ -516,10 +511,11 @@ func (s *Server) start() (reterr error) {
 	closePool.add(s.dialer)
 	sys.Set(eng)
 
-	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get())
+	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), s.dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {
 		return fmt.Errorf("netstack.Create: %w", err)
 	}
+	sys.Set(ns)
 	ns.ProcessLocalIPs = true
 	ns.GetTCPHandlerForFlow = s.getTCPHandlerForFlow
 	ns.GetUDPHandlerForFlow = s.getUDPHandlerForFlow
@@ -558,9 +554,6 @@ func (s *Server) start() (reterr error) {
 		return fmt.Errorf("failed to start netstack: %w", err)
 	}
 	closePool.addFunc(func() { s.lb.Shutdown() })
-	lb.SetDecompressor(func() (controlclient.Decompressor, error) {
-		return smallzstd.NewDecoder(nil)
-	})
 	prefs := ipn.NewPrefs()
 	prefs.Hostname = s.hostname
 	prefs.WantRunning = true
@@ -639,7 +632,8 @@ func (s *Server) startLogger(closePool *closeOnErrorPool) error {
 			}
 			return w
 		},
-		HTTPC: &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		HTTPC:        &http.Client{Transport: logpolicy.NewLogtailTransport(logtail.DefaultHost, s.netMon, s.logf)},
+		MetricsDelta: clientmetric.EncodeLogTailMetricsDelta,
 	}
 	s.logtail = logtail.NewLogger(c, s.logf)
 	closePool.addFunc(func() { s.logtail.Shutdown(context.Background()) })

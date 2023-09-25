@@ -43,7 +43,9 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/net/tstun"
+	"tailscale.com/proxymap"
 	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
@@ -120,6 +122,7 @@ type Impl struct {
 	linkEP    *channel.Endpoint
 	tundev    *tstun.Wrapper
 	e         wgengine.Engine
+	pm        *proxymap.Mapper
 	mc        *magicsock.Conn
 	logf      logger.Logf
 	dialer    *tsdial.Dialer
@@ -153,7 +156,7 @@ const nicID = 1
 const maxUDPPacketSize = 1500
 
 // Create creates and populates a new Impl.
-func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager) (*Impl, error) {
+func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magicsock.Conn, dialer *tsdial.Dialer, dns *dns.Manager, pm *proxymap.Mapper) (*Impl, error) {
 	if mc == nil {
 		return nil, errors.New("nil magicsock.Conn")
 	}
@@ -165,6 +168,9 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 	}
 	if e == nil {
 		return nil, errors.New("nil Engine")
+	}
+	if pm == nil {
+		return nil, errors.New("nil proxymap.Mapper")
 	}
 	if dialer == nil {
 		return nil, errors.New("nil Dialer")
@@ -208,13 +214,14 @@ func Create(logf logger.Logf, tundev *tstun.Wrapper, e wgengine.Engine, mc *magi
 		linkEP:              linkEP,
 		tundev:              tundev,
 		e:                   e,
+		pm:                  pm,
 		mc:                  mc,
 		dialer:              dialer,
 		connsOpenBySubnetIP: make(map[netip.Addr]int),
 		dns:                 dns,
 	}
 	ns.ctx, ns.ctxCancel = context.WithCancel(context.Background())
-	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nil))
+	ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
 	ns.tundev.PostFilterPacketInboundFromWireGaurd = ns.injectInbound
 	ns.tundev.PreFilterPacketOutboundToWireGuardNetstackIntercept = ns.handleLocalPackets
 	return ns, nil
@@ -253,7 +260,6 @@ func (ns *Impl) Start(lb *ipnlocal.LocalBackend) error {
 		panic("nil LocalBackend")
 	}
 	ns.lb = lb
-	ns.e.AddNetworkMapCallback(ns.updateIPs)
 	// size = 0 means use default buffer size
 	const tcpReceiveBufferSize = 0
 	const maxInFlightConnectionAttempts = 1024
@@ -310,8 +316,19 @@ func ipPrefixToAddressWithPrefix(ipp netip.Prefix) tcpip.AddressWithPrefix {
 
 var v4broadcast = netaddr.IPv4(255, 255, 255, 255)
 
-func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
-	ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.Addresses))
+// UpdateNetstackIPs updates the set of local IPs that netstack should handle
+// from nm.
+//
+// TODO(bradfitz): don't pass the whole netmap here; just pass the two
+// address slice views.
+func (ns *Impl) UpdateNetstackIPs(nm *netmap.NetworkMap) {
+	var selfNode tailcfg.NodeView
+	if nm != nil {
+		ns.atomicIsLocalIPFunc.Store(tsaddr.NewContainsIPFunc(nm.GetAddresses()))
+		selfNode = nm.SelfNode
+	} else {
+		ns.atomicIsLocalIPFunc.Store(tsaddr.FalseContainsIPFunc())
+	}
 
 	oldIPs := make(map[tcpip.AddressWithPrefix]bool)
 	for _, protocolAddr := range ns.ipstack.AllAddresses()[nicID] {
@@ -328,12 +345,14 @@ func (ns *Impl) updateIPs(nm *netmap.NetworkMap) {
 	newIPs := make(map[tcpip.AddressWithPrefix]bool)
 
 	isAddr := map[netip.Prefix]bool{}
-	if nm.SelfNode != nil {
-		for _, ipp := range nm.SelfNode.Addresses {
+	if selfNode.Valid() {
+		for i := range selfNode.Addresses().LenIter() {
+			ipp := selfNode.Addresses().At(i)
 			isAddr[ipp] = true
 			newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 		}
-		for _, ipp := range nm.SelfNode.AllowedIPs {
+		for i := range selfNode.AllowedIPs().LenIter() {
+			ipp := selfNode.AllowedIPs().At(i)
 			if !isAddr[ipp] && ns.ProcessSubnets {
 				newIPs[ipPrefixToAddressWithPrefix(ipp)] = true
 			}
@@ -971,8 +990,8 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 
 	backendLocalAddr := server.LocalAddr().(*net.TCPAddr)
 	backendLocalIPPort := netaddr.Unmap(backendLocalAddr.AddrPort())
-	ns.e.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
-	defer ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
+	ns.pm.RegisterIPPortIdentity(backendLocalIPPort, clientRemoteIP)
+	defer ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
 	connClosed := make(chan error, 2)
 	go func() {
 		_, err := io.Copy(server, client)
@@ -1122,7 +1141,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 		ns.logf("could not get backend local IP:port from %v:%v", backendLocalAddr.IP, backendLocalAddr.Port)
 	}
 	if isLocal {
-		ns.e.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
+		ns.pm.RegisterIPPortIdentity(backendLocalIPPort, dstAddr.Addr())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1138,7 +1157,7 @@ func (ns *Impl) forwardUDP(client *gonet.UDPConn, clientAddr, dstAddr netip.Addr
 	}
 	timer := time.AfterFunc(idleTimeout, func() {
 		if isLocal {
-			ns.e.UnregisterIPPortIdentity(backendLocalIPPort)
+			ns.pm.UnregisterIPPortIdentity(backendLocalIPPort)
 		}
 		ns.logf("netstack: UDP session between %s and %s timed out", backendListenAddr, backendRemoteAddr)
 		cancel()

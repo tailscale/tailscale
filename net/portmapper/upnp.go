@@ -11,18 +11,22 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/goupnp"
 	"github.com/tailscale/goupnp/dcps/internetgateway2"
-	"tailscale.com/control/controlknobs"
+	"github.com/tailscale/goupnp/soap"
+	"tailscale.com/envknob"
 	"tailscale.com/net/netns"
 	"tailscale.com/types/logger"
 )
@@ -106,11 +110,13 @@ type upnpClient interface {
 // It is not used for anything other than labelling.
 const tsPortMappingDesc = "tailscale-portmap"
 
-// addAnyPortMapping abstracts over different UPnP client connections, calling the available
-// AddAnyPortMapping call if available for WAN IP connection v2, otherwise defaulting to the old
-// behavior of calling AddPortMapping with port = 0 to specify a wildcard port.
-// It returns the new external port (which may not be identical to the external port specified),
-// or an error.
+// addAnyPortMapping abstracts over different UPnP client connections, calling
+// the available AddAnyPortMapping call if available for WAN IP connection v2,
+// otherwise picking either the previous port (if one is present) or a random
+// port and trying to obtain a mapping using AddPortMapping.
+//
+// It returns the new external port (which may not be identical to the external
+// port specified), or an error.
 //
 // TODO(bradfitz): also returned the actual lease duration obtained. and check it regularly.
 func addAnyPortMapping(
@@ -121,6 +127,31 @@ func addAnyPortMapping(
 	internalClient string,
 	leaseDuration time.Duration,
 ) (newPort uint16, err error) {
+	// Some devices don't let clients add a port mapping for privileged
+	// ports (ports below 1024). Additionally, per section 2.3.18 of the
+	// UPnP spec, regarding the ExternalPort field:
+	//
+	//    If this value is specified as a wildcard (i.e. 0), connection
+	//    request on all external ports (that are not otherwise mapped)
+	//    will be forwarded to InternalClient. In the wildcard case, the
+	//    value(s) of InternalPort on InternalClient are ignored by the IGD
+	//    for those connections that are forwarded to InternalClient.
+	//    Obviously only one such entry can exist in the NAT at any time
+	//    and conflicts are handled with a “first write wins” behavior.
+	//
+	// We obviously do not want to open all ports on the user's device to
+	// the internet, so we want to do this prior to calling either
+	// AddAnyPortMapping or AddPortMapping.
+	//
+	// Pick an external port that's greater than 1024 by getting a random
+	// number in [0, 65535 - 1024] and then adding 1024 to it, shifting the
+	// range to [1024, 65535].
+	if externalPort < 1024 {
+		externalPort = uint16(rand.Intn(65535-1024) + 1024)
+	}
+
+	// First off, try using AddAnyPortMapping; if there's a conflict, the
+	// router will pick another port and return it.
 	if upnp, ok := upnp.(*internetgateway2.WANIPConnection2); ok {
 		return upnp.AddAnyPortMapping(
 			ctx,
@@ -135,15 +166,8 @@ func addAnyPortMapping(
 		)
 	}
 
-	// Some devices don't let clients add a port mapping for privileged
-	// ports (ports below 1024).
-	//
-	// Pick an external port that's greater than 1024 by getting a random
-	// number in [0, 65535 - 1024] and then adding 1024 to it, shifting the
-	// range to [1024, 65535].
-	if externalPort < 1024 {
-		externalPort = uint16(rand.Intn(65535-1024) + 1024)
-	}
+	// Fall back to using AddPortMapping, which requests a mapping to/from
+	// a specific external port.
 	err = upnp.AddPortMapping(
 		ctx,
 		"",
@@ -170,7 +194,7 @@ func addAnyPortMapping(
 // The provided ctx is not retained in the returned upnpClient, but
 // its associated HTTP client is (if set via goupnp.WithHTTPClient).
 func getUPnPClient(ctx context.Context, logf logger.Logf, debug DebugKnobs, gw netip.Addr, meta uPnPDiscoResponse) (client upnpClient, err error) {
-	if controlknobs.DisableUPnP() || debug.DisableUPnP {
+	if debug.DisableUPnP {
 		return nil, nil
 	}
 
@@ -241,9 +265,16 @@ func (c *Client) upnpHTTPClientLocked() *http.Client {
 				IdleConnTimeout: 2 * time.Second, // LAN is cheap
 			},
 		}
+		if c.debug.LogHTTP {
+			c.uPnPHTTPClient = requestLogger(c.logf, c.uPnPHTTPClient)
+		}
 	}
 	return c.uPnPHTTPClient
 }
+
+var (
+	disableUPnpEnv = envknob.RegisterBool("TS_DISABLE_UPNP")
+)
 
 // getUPnPPortMapping attempts to create a port-mapping over the UPnP protocol. On success,
 // it will return the externally exposed IP and port. Otherwise, it will return a zeroed IP and
@@ -254,7 +285,7 @@ func (c *Client) getUPnPPortMapping(
 	internal netip.AddrPort,
 	prevPort uint16,
 ) (external netip.AddrPort, ok bool) {
-	if controlknobs.DisableUPnP() || c.debug.DisableUPnP {
+	if disableUPnpEnv() || c.debug.DisableUPnP || (c.controlKnobs != nil && c.controlKnobs.DisableUPnP.Load()) {
 		return netip.AddrPort{}, false
 	}
 
@@ -287,6 +318,7 @@ func (c *Client) getUPnPPortMapping(
 		return netip.AddrPort{}, false
 	}
 
+	// Start by trying to make a temporary lease with a duration.
 	var newPort uint16
 	newPort, err = addAnyPortMapping(
 		ctx,
@@ -294,14 +326,42 @@ func (c *Client) getUPnPPortMapping(
 		prevPort,
 		internal.Port(),
 		internal.Addr().String(),
-		time.Second*pmpMapLifetimeSec,
+		pmpMapLifetimeSec*time.Second,
 	)
 	if c.debug.VerboseLogs {
 		c.logf("addAnyPortMapping: %v, err=%q", newPort, err)
 	}
+
+	// If this is an error and the code is
+	// "OnlyPermanentLeasesSupported", then we retry with no lease
+	// duration; see the following issue for details:
+	//    https://github.com/tailscale/tailscale/issues/9343
+	if err != nil {
+		code, ok := getUPnPErrorCode(err)
+		if ok {
+			getUPnPErrorsMetric(code).Add(1)
+		}
+
+		// From the UPnP spec: http://upnp.org/specs/gw/UPnP-gw-WANIPConnection-v2-Service.pdf
+		//     725: OnlyPermanentLeasesSupported
+		if ok && code == 725 {
+			newPort, err = addAnyPortMapping(
+				ctx,
+				client,
+				prevPort,
+				internal.Port(),
+				internal.Addr().String(),
+				0, // permanent
+			)
+			if c.debug.VerboseLogs {
+				c.logf("addAnyPortMapping: 725 retry %v, err=%q", newPort, err)
+			}
+		}
+	}
 	if err != nil {
 		return netip.AddrPort{}, false
 	}
+
 	// TODO cache this ip somewhere?
 	extIP, err := client.GetExternalIPAddress(ctx)
 	if c.debug.VerboseLogs {
@@ -317,6 +377,10 @@ func (c *Client) getUPnPPortMapping(
 	}
 
 	upnp.external = netip.AddrPortFrom(externalIP, newPort)
+
+	// NOTE: this time might not technically be accurate if we created a
+	// permanent lease above, but we should still re-check the presence of
+	// the lease on a regular basis so we use it anyway.
 	d := time.Duration(pmpMapLifetimeSec) * time.Second
 	upnp.goodUntil = now.Add(d)
 	upnp.renewAfter = now.Add(d / 2)
@@ -326,6 +390,29 @@ func (c *Client) getUPnPPortMapping(
 	c.mapping = upnp
 	c.localPort = newPort
 	return upnp.external, true
+}
+
+// getUPnPErrorCode returns the UPnP error code from the given response, if the
+// error is a SOAP error in the proper format, and a boolean indicating whether
+// the provided error was actually a UPnP error.
+func getUPnPErrorCode(err error) (int, bool) {
+	soapErr, ok := err.(*soap.SOAPFaultError)
+	if !ok {
+		return 0, false
+	}
+
+	var upnpErr struct {
+		XMLName     xml.Name
+		Code        int    `xml:"errorCode"`
+		Description string `xml:"errorDescription"`
+	}
+	if err := xml.Unmarshal([]byte(soapErr.Detail.Raw), &upnpErr); err != nil {
+		return 0, false
+	}
+	if upnpErr.XMLName.Local != "UPnPError" {
+		return 0, false
+	}
+	return upnpErr.Code, true
 }
 
 type uPnPDiscoResponse struct {
@@ -348,4 +435,61 @@ func parseUPnPDiscoResponse(body []byte) (uPnPDiscoResponse, error) {
 	r.Server = res.Header.Get("Server")
 	r.USN = res.Header.Get("Usn")
 	return r, nil
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (r roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return r(req)
+}
+
+func requestLogger(logf logger.Logf, client *http.Client) *http.Client {
+	// Clone the HTTP client, and override the Transport to log to the
+	// provided logger.
+	ret := *client
+	oldTransport := ret.Transport
+
+	var requestCounter atomic.Uint64
+	loggingTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		ctr := requestCounter.Add(1)
+
+		// Read the body and re-set it.
+		var (
+			body []byte
+			err  error
+		)
+		if req.Body != nil {
+			body, err = io.ReadAll(req.Body)
+			req.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		logf("request[%d]: %s %q body=%q", ctr, req.Method, req.URL, body)
+
+		resp, err := oldTransport.RoundTrip(req)
+		if err != nil {
+			logf("response[%d]: err=%v", err)
+			return nil, err
+		}
+
+		// Read the response body
+		if resp.Body != nil {
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				logf("response[%d]: %d bodyErr=%v", resp.StatusCode, err)
+				return nil, err
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		logf("response[%d]: %d body=%q", ctr, resp.StatusCode, body)
+		return resp, nil
+	})
+	ret.Transport = loggingTransport
+
+	return &ret
 }

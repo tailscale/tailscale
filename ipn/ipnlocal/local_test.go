@@ -26,117 +26,12 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/ptr"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
 )
-
-func TestNetworkMapCompare(t *testing.T) {
-	prefix1, err := netip.ParsePrefix("192.168.0.0/24")
-	if err != nil {
-		t.Fatal(err)
-	}
-	node1 := &tailcfg.Node{Addresses: []netip.Prefix{prefix1}}
-
-	prefix2, err := netip.ParsePrefix("10.0.0.0/8")
-	if err != nil {
-		t.Fatal(err)
-	}
-	node2 := &tailcfg.Node{Addresses: []netip.Prefix{prefix2}}
-
-	tests := []struct {
-		name string
-		a, b *netmap.NetworkMap
-		want bool
-	}{
-		{
-			"both nil",
-			nil,
-			nil,
-			true,
-		},
-		{
-			"b nil",
-			&netmap.NetworkMap{},
-			nil,
-			false,
-		},
-		{
-			"a nil",
-			nil,
-			&netmap.NetworkMap{},
-			false,
-		},
-		{
-			"both default",
-			&netmap.NetworkMap{},
-			&netmap.NetworkMap{},
-			true,
-		},
-		{
-			"names identical",
-			&netmap.NetworkMap{Name: "map1"},
-			&netmap.NetworkMap{Name: "map1"},
-			true,
-		},
-		{
-			"names differ",
-			&netmap.NetworkMap{Name: "map1"},
-			&netmap.NetworkMap{Name: "map2"},
-			false,
-		},
-		{
-			"Peers identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			true,
-		},
-		{
-			"Peer list length",
-			// length of Peers list differs
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{}},
-			false,
-		},
-		{
-			"Node names identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			true,
-		},
-		{
-			"Node names differ",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "A"}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{Name: "B"}}},
-			false,
-		},
-		{
-			"Node lists identical",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			true,
-		},
-		{
-			"Node lists differ",
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node1}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{node1, node2}},
-			false,
-		},
-		{
-			"Node Users differ",
-			// User field is not checked.
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 0}}},
-			&netmap.NetworkMap{Peers: []*tailcfg.Node{{User: 1}}},
-			true,
-		},
-	}
-	for _, tt := range tests {
-		got := dnsMapsEqual(tt.a, tt.b)
-		if got != tt.want {
-			t.Errorf("%s: Equal = %v; want %v", tt.name, got, tt.want)
-		}
-	}
-}
 
 func inRemove(ip netip.Addr) bool {
 	for _, pfx := range removeFromDefaultRoute {
@@ -383,9 +278,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_4_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -404,9 +301,11 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_only_6_them_both",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -425,10 +324,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_4",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -446,10 +347,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_only_6",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -467,10 +370,12 @@ func TestPeerAPIBase(t *testing.T) {
 		{
 			name: "self_both_them_no_peerapi_service",
 			nm: &netmap.NetworkMap{
-				Addresses: []netip.Prefix{
-					netip.MustParsePrefix("100.64.1.1/32"),
-					netip.MustParsePrefix("fe70::1/128"),
-				},
+				SelfNode: (&tailcfg.Node{
+					Addresses: []netip.Prefix{
+						netip.MustParsePrefix("100.64.1.1/32"),
+						netip.MustParsePrefix("fe70::1/128"),
+					},
+				}).View(),
 			},
 			peer: &tailcfg.Node{
 				Addresses: []netip.Prefix{
@@ -483,7 +388,7 @@ func TestPeerAPIBase(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := peerAPIBase(tt.nm, tt.peer)
+			got := peerAPIBase(tt.nm, tt.peer.View())
 			if got != tt.want {
 				t.Errorf("got %q; want %q", got, tt.want)
 			}
@@ -497,10 +402,7 @@ func (panicOnUseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	panic("unexpected HTTP request")
 }
 
-// Issue 1573: don't generate a machine key if we don't want to be running.
-func TestLazyMachineKeyGeneration(t *testing.T) {
-	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
-
+func newTestLocalBackend(t testing.TB) *LocalBackend {
 	var logf logger.Logf = logger.Discard
 	sys := new(tsd.System)
 	store := new(mem.Store)
@@ -515,7 +417,14 @@ func TestLazyMachineKeyGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalBackend: %v", err)
 	}
+	return lb
+}
 
+// Issue 1573: don't generate a machine key if we don't want to be running.
+func TestLazyMachineKeyGeneration(t *testing.T) {
+	tstest.Replace(t, &panicOnMachineKeyGeneration, func() bool { return true })
+
+	lb := newTestLocalBackend(t)
 	lb.SetHTTPTestClient(&http.Client{
 		Transport: panicOnUseTransport{}, // validate we don't send HTTP requests
 	})
@@ -758,7 +667,7 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := packetFilterPermitsUnlockedNodes(tt.peers, tt.filter); got != tt.want {
+			if got := packetFilterPermitsUnlockedNodes(peersMap(nodeViews(tt.peers)), tt.filter); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
@@ -767,21 +676,8 @@ func TestPacketFilterPermitsUnlockedNodes(t *testing.T) {
 }
 
 func TestStatusWithoutPeers(t *testing.T) {
-	logf := tstest.WhileTestRunningLogger(t)
-	store := new(testStateStorage)
-	sys := new(tsd.System)
-	sys.Set(store)
-	e, err := wgengine.NewFakeUserspaceEngine(logf, sys.Set)
-	if err != nil {
-		t.Fatalf("NewFakeUserspaceEngine: %v", err)
-	}
-	sys.Set(e)
-	t.Cleanup(e.Close)
+	b := newTestLocalBackend(t)
 
-	b, err := NewLocalBackend(logf, logid.PublicID{}, sys, 0)
-	if err != nil {
-		t.Fatalf("NewLocalBackend: %v", err)
-	}
 	var cc *mockControl
 	b.SetControlClientGetterForTesting(func(opts controlclient.Options) (controlclient.Client, error) {
 		cc = newClient(t, opts)
@@ -793,11 +689,10 @@ func TestStatusWithoutPeers(t *testing.T) {
 	b.Start(ipn.Options{})
 	b.Login(nil)
 	cc.send(nil, "", false, &netmap.NetworkMap{
-		MachineStatus: tailcfg.MachineAuthorized,
-		Addresses:     ipps("100.101.101.101"),
-		SelfNode: &tailcfg.Node{
-			Addresses: ipps("100.101.101.101"),
-		},
+		SelfNode: (&tailcfg.Node{
+			MachineAuthorized: true,
+			Addresses:         ipps("100.101.101.101"),
+		}).View(),
 	})
 	got := b.StatusWithoutPeers()
 	if got.TailscaleIPs == nil {
@@ -826,9 +721,6 @@ type legacyBackend interface {
 	StartLoginInteractive()
 	// Login logs in with an OAuth2 token.
 	Login(token *tailcfg.Oauth2Token)
-	// Logout terminates the current login session and stops the
-	// wireguard engine.
-	Logout()
 	// SetPrefs installs a new set of user preferences, including
 	// WantRunning. This may cause the wireguard engine to
 	// reconfigure or stop.
@@ -846,6 +738,9 @@ var _ legacyBackend = (*LocalBackend)(nil)
 
 func TestWatchNotificationsCallbacks(t *testing.T) {
 	b := new(LocalBackend)
+	// activeWatchSessions is typically set in NewLocalBackend
+	// so WatchNotifications expects it to be non-empty.
+	b.activeWatchSessions = make(set.Set[string])
 	n := new(ipn.Notify)
 	b.WatchNotifications(context.Background(), 0, func() {
 		b.mu.Lock()
@@ -876,5 +771,131 @@ func TestWatchNotificationsCallbacks(t *testing.T) {
 	defer b.mu.Unlock()
 	if len(b.notifyWatchers) != 0 {
 		t.Fatalf("unexpected number of watchers in new LocalBackend, want: 0 got: %v", len(b.notifyWatchers))
+	}
+}
+
+// tests LocalBackend.updateNetmapDeltaLocked
+func TestUpdateNetmapDelta(t *testing.T) {
+	var b LocalBackend
+	if b.updateNetmapDeltaLocked(nil) {
+		t.Errorf("updateNetmapDeltaLocked() = true, want false with nil netmap")
+	}
+
+	b.netMap = &netmap.NetworkMap{}
+	for i := 0; i < 5; i++ {
+		b.netMap.Peers = append(b.netMap.Peers, (&tailcfg.Node{ID: (tailcfg.NodeID(i) + 1)}).View())
+	}
+	b.updatePeersFromNetmapLocked(b.netMap)
+
+	someTime := time.Unix(123, 0)
+	muts, ok := netmap.MutationsFromMapResponse(&tailcfg.MapResponse{
+		PeersChangedPatch: []*tailcfg.PeerChange{
+			{
+				NodeID:     1,
+				DERPRegion: 1,
+			},
+			{
+				NodeID: 2,
+				Online: ptr.To(true),
+			},
+			{
+				NodeID: 3,
+				Online: ptr.To(false),
+			},
+			{
+				NodeID:   4,
+				LastSeen: ptr.To(someTime),
+			},
+		},
+	}, someTime)
+	if !ok {
+		t.Fatal("netmap.MutationsFromMapResponse failed")
+	}
+
+	if !b.updateNetmapDeltaLocked(muts) {
+		t.Fatalf("updateNetmapDeltaLocked() = false, want true with new netmap")
+	}
+
+	wants := []*tailcfg.Node{
+		{
+			ID:   1,
+			DERP: "127.3.3.40:1",
+		},
+		{
+			ID:     2,
+			Online: ptr.To(true),
+		},
+		{
+			ID:     3,
+			Online: ptr.To(false),
+		},
+		{
+			ID:       4,
+			LastSeen: ptr.To(someTime),
+		},
+	}
+	for _, want := range wants {
+		gotv, ok := b.peers[want.ID]
+		if !ok {
+			t.Errorf("netmap.Peer %v missing from b.peers", want.ID)
+			continue
+		}
+		got := gotv.AsStruct()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("netmap.Peer %v wrong.\n got: %v\nwant: %v", want.ID, logger.AsJSON(got), logger.AsJSON(want))
+		}
+	}
+}
+
+// tests WhoIs and indirectly that setNetMapLocked updates b.nodeByAddr correctly.
+func TestWhoIs(t *testing.T) {
+	b := newTestLocalBackend(t)
+	b.setNetMapLocked(&netmap.NetworkMap{
+		SelfNode: (&tailcfg.Node{
+			ID:        1,
+			User:      10,
+			Addresses: []netip.Prefix{netip.MustParsePrefix("100.101.102.103/32")},
+		}).View(),
+		Peers: []tailcfg.NodeView{
+			(&tailcfg.Node{
+				ID:        2,
+				User:      20,
+				Addresses: []netip.Prefix{netip.MustParsePrefix("100.200.200.200/32")},
+			}).View(),
+		},
+		UserProfiles: map[tailcfg.UserID]tailcfg.UserProfile{
+			10: {
+				DisplayName: "Myself",
+			},
+			20: {
+				DisplayName: "Peer",
+			},
+		},
+	})
+	tests := []struct {
+		q        string
+		want     tailcfg.NodeID // 0 means want ok=false
+		wantName string
+	}{
+		{"100.101.102.103:0", 1, "Myself"},
+		{"100.101.102.103:123", 1, "Myself"},
+		{"100.200.200.200:0", 2, "Peer"},
+		{"100.200.200.200:123", 2, "Peer"},
+		{"100.4.0.4:404", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.q, func(t *testing.T) {
+			nv, up, ok := b.WhoIs(netip.MustParseAddrPort(tt.q))
+			var got tailcfg.NodeID
+			if ok {
+				got = nv.ID()
+			}
+			if got != tt.want {
+				t.Errorf("got nodeID %v; want %v", got, tt.want)
+			}
+			if up.DisplayName != tt.wantName {
+				t.Errorf("got name %q; want %q", up.DisplayName, tt.wantName)
+			}
+		})
 	}
 }

@@ -1,14 +1,22 @@
+import cx from "classnames"
 import React from "react"
-import { NodeData } from "src/hooks/node-data"
+import { apiFetch } from "src/api"
+import { NodeData, NodeUpdate } from "src/hooks/node-data"
 
 // TODO(tailscale/corp#13775): legacy.tsx contains a set of components
 // that (crudely) implement the pre-2023 web client. These are implemented
 // purely to ease migration to the new React-based web client, and will
 // eventually be completely removed.
 
-export function Header(props: { data: NodeData }) {
-  const { data } = props
-
+export function Header({
+  data,
+  refreshData,
+  updateNode,
+}: {
+  data: NodeData
+  refreshData: () => void
+  updateNode: (update: NodeUpdate) => void
+}) {
   return (
     <header className="flex justify-between items-center min-width-0 py-2 mb-8">
       <svg
@@ -60,41 +68,56 @@ export function Header(props: { data: NodeData }) {
         ></circle>
       </svg>
       <div className="flex items-center justify-end space-x-2 w-2/3">
-        {data.Profile && (
-          <>
-            <div className="text-right w-full leading-4">
-              <h4 className="truncate leading-normal">
-                {data.Profile.LoginName}
-              </h4>
-              <div className="text-xs text-gray-500 text-right">
-                <a href="#" className="hover:text-gray-700 js-loginButton">
-                  Switch account
-                </a>{" "}
-                |{" "}
-                <a href="#" className="hover:text-gray-700 js-loginButton">
-                  Reauthenticate
-                </a>{" "}
-                |{" "}
-                <a href="#" className="hover:text-gray-700 js-logoutButton">
-                  Logout
-                </a>
+        {data.Profile &&
+          data.Status !== "NoState" &&
+          data.Status !== "NeedsLogin" && (
+            <>
+              <div className="text-right w-full leading-4">
+                <h4 className="truncate leading-normal">
+                  {data.Profile.LoginName}
+                </h4>
+                <div className="text-xs text-gray-500 text-right">
+                  <button
+                    onClick={() => updateNode({ Reauthenticate: true })}
+                    className="hover:text-gray-700"
+                  >
+                    Switch account
+                  </button>{" "}
+                  |{" "}
+                  <button
+                    onClick={() => updateNode({ Reauthenticate: true })}
+                    className="hover:text-gray-700"
+                  >
+                    Reauthenticate
+                  </button>{" "}
+                  |{" "}
+                  <button
+                    onClick={() =>
+                      apiFetch("/local/v0/logout", "POST")
+                        .then(refreshData)
+                        .catch((err) => alert("Logout failed: " + err.message))
+                    }
+                    className="hover:text-gray-700"
+                  >
+                    Logout
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
-              {data.Profile.ProfilePicURL ? (
-                <div
-                  className="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
-                  style={{
-                    backgroundImage: `url(${data.Profile.ProfilePicURL})`,
-                    backgroundSize: "cover",
-                  }}
-                />
-              ) : (
-                <div className="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
-              )}
-            </div>
-          </>
-        )}
+              <div className="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
+                {data.Profile.ProfilePicURL ? (
+                  <div
+                    className="w-8 h-8 flex pointer-events-none rounded-full bg-gray-200"
+                    style={{
+                      backgroundImage: `url(${data.Profile.ProfilePicURL})`,
+                      backgroundSize: "cover",
+                    }}
+                  />
+                ) : (
+                  <div className="w-8 h-8 flex pointer-events-none rounded-full border border-gray-400 border-dashed" />
+                )}
+              </div>
+            </>
+          )}
       </div>
     </header>
   )
@@ -128,9 +151,9 @@ export function IP(props: { data: NodeData }) {
             <line x1="6" y1="6" x2="6.01" y2="6"></line>
             <line x1="6" y1="18" x2="6.01" y2="18"></line>
           </svg>
-          <div>
-            <h4 className="font-semibold truncate mr-2">{data.DeviceName}</h4>
-          </div>
+          <h4 className="font-semibold truncate mr-2">
+            {data.DeviceName || "Your device"}
+          </h4>
         </div>
         <h5>{data.IP}</h5>
       </div>
@@ -162,9 +185,13 @@ export function IP(props: { data: NodeData }) {
   )
 }
 
-export function State(props: { data: NodeData }) {
-  const { data } = props
-
+export function State({
+  data,
+  updateNode,
+}: {
+  data: NodeData
+  updateNode: (update: NodeUpdate) => void
+}) {
   switch (data.Status) {
     case "NeedsLogin":
     case "NoState":
@@ -185,11 +212,12 @@ export function State(props: { data: NodeData }) {
                 .
               </p>
             </div>
-            <a href="#" className="mb-4 js-loginButton" target="_blank">
-              <button className="button button-blue w-full">
-                Reauthenticate
-              </button>
-            </a>
+            <button
+              onClick={() => updateNode({ Reauthenticate: true })}
+              className="button button-blue w-full mb-4"
+            >
+              Reauthenticate
+            </button>
           </>
         )
       } else {
@@ -210,9 +238,12 @@ export function State(props: { data: NodeData }) {
                 .
               </p>
             </div>
-            <a href="#" className="mb-4 js-loginButton" target="_blank">
-              <button className="button button-blue w-full">Log In</button>
-            </a>
+            <button
+              onClick={() => updateNode({ Reauthenticate: true })}
+              className="button button-blue w-full mb-4"
+            >
+              Log In
+            </button>
           </>
         )
       }
@@ -232,25 +263,20 @@ export function State(props: { data: NodeData }) {
               device name or IP address above.
             </p>
           </div>
-          <div className="mb-4">
-            <a href="#" className="mb-4 js-advertiseExitNode">
-              {data.AdvertiseExitNode ? (
-                <button
-                  className="button button-red button-medium"
-                  id="enabled"
-                >
-                  Stop advertising Exit Node
-                </button>
-              ) : (
-                <button
-                  className="button button-blue button-medium"
-                  id="enabled"
-                >
-                  Advertise as Exit Node
-                </button>
-              )}
-            </a>
-          </div>
+          <button
+            className={cx("button button-medium mb-4", {
+              "button-red": data.AdvertiseExitNode,
+              "button-blue": !data.AdvertiseExitNode,
+            })}
+            id="enabled"
+            onClick={() =>
+              updateNode({ AdvertiseExitNode: !data.AdvertiseExitNode })
+            }
+          >
+            {data.AdvertiseExitNode
+              ? "Stop advertising Exit Node"
+              : "Advertise as Exit Node"}
+          </button>
         </>
       )
   }

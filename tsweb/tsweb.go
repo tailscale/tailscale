@@ -51,6 +51,9 @@ func IsProd443(addr string) bool {
 // AllowDebugAccess reports whether r should be permitted to access
 // various debug endpoints.
 func AllowDebugAccess(r *http.Request) bool {
+	if allowDebugAccessWithKey(r) {
+		return true
+	}
 	if r.Header.Get("X-Forwarded-For") != "" {
 		// TODO if/when needed. For now, conservative:
 		return false
@@ -66,14 +69,19 @@ func AllowDebugAccess(r *http.Request) bool {
 	if tsaddr.IsTailscaleIP(ip) || ip.IsLoopback() || ipStr == envknob.String("TS_ALLOW_DEBUG_IP") {
 		return true
 	}
-	if r.Method == "GET" {
-		urlKey := r.FormValue("debugkey")
-		keyPath := envknob.String("TS_DEBUG_KEY_PATH")
-		if urlKey != "" && keyPath != "" {
-			slurp, err := os.ReadFile(keyPath)
-			if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
-				return true
-			}
+	return false
+}
+
+func allowDebugAccessWithKey(r *http.Request) bool {
+	if r.Method != "GET" {
+		return false
+	}
+	urlKey := r.FormValue("debugkey")
+	keyPath := envknob.String("TS_DEBUG_KEY_PATH")
+	if urlKey != "" && keyPath != "" {
+		slurp, err := os.ReadFile(keyPath)
+		if err == nil && string(bytes.TrimSpace(slurp)) == urlKey {
+			return true
 		}
 	}
 	return false

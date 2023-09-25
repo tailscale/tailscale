@@ -7,15 +7,16 @@
 package clientupdate
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,12 +26,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
-	"tailscale.com/net/tshttpproxy"
+	"tailscale.com/clientupdate/distsign"
 	"tailscale.com/types/logger"
-	"tailscale.com/util/must"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
 	"tailscale.com/version/distro"
@@ -61,14 +60,8 @@ func versionToTrack(v string) (string, error) {
 	return "unstable", nil
 }
 
-type updater struct {
-	UpdateArgs
-	track  string
-	update func() error
-}
-
-// UpdateArgs contains arguments needed to run an update.
-type UpdateArgs struct {
+// Arguments contains arguments needed to run an update.
+type Arguments struct {
 	// Version can be a specific version number or one of the predefined track
 	// constants:
 	//
@@ -80,7 +73,7 @@ type UpdateArgs struct {
 	// Leaving this empty is the same as using CurrentTrack.
 	Version string
 	// AppStore forces a local app store check, even if the current binary was
-	// not installed via an app store.
+	// not installed via an app store. TODO(cpalmer): Remove this.
 	AppStore bool
 	// Logf is a logger for update progress messages.
 	Logf logger.Logf
@@ -88,29 +81,36 @@ type UpdateArgs struct {
 	// if this new version should be installed. When Confirm returns false, the
 	// update is aborted.
 	Confirm func(newVer string) bool
+	// PkgsAddr is the address of the pkgs server to fetch updates from.
+	// Defaults to "https://pkgs.tailscale.com".
+	PkgsAddr string
 }
 
-func (args UpdateArgs) validate() error {
+func (args Arguments) validate() error {
 	if args.Confirm == nil {
-		return errors.New("missing Confirm callback in UpdateArgs")
+		return errors.New("missing Confirm callback in Arguments")
 	}
 	if args.Logf == nil {
-		return errors.New("missing Logf callback in UpdateArgs")
+		return errors.New("missing Logf callback in Arguments")
 	}
 	return nil
 }
 
-// Update runs a single update attempt using the platform-specific mechanism.
-//
-// On Windows, this copies the calling binary and re-executes it to apply the
-// update. The calling binary should handle an "update" subcommand and call
-// this function again for the re-executed binary to proceed.
-func Update(args UpdateArgs) error {
-	if err := args.validate(); err != nil {
-		return err
+type Updater struct {
+	Arguments
+	track string
+	// Update is a platform-specific method that updates the installation. May be
+	// nil (not all platforms support updates from within Tailscale).
+	Update func() error
+}
+
+func NewUpdater(args Arguments) (*Updater, error) {
+	up := Updater{
+		Arguments: args,
 	}
-	up := &updater{
-		UpdateArgs: args,
+	up.Update = up.getUpdateFunction()
+	if up.Update == nil {
+		return nil, errors.ErrUnsupported
 	}
 	switch up.Version {
 	case StableTrack, UnstableTrack:
@@ -125,56 +125,82 @@ func Update(args UpdateArgs) error {
 		var err error
 		up.track, err = versionToTrack(args.Version)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
+	if up.Arguments.PkgsAddr == "" {
+		up.Arguments.PkgsAddr = "https://pkgs.tailscale.com"
+	}
+	return &up, nil
+}
+
+type updateFunction func() error
+
+func (up *Updater) getUpdateFunction() updateFunction {
 	switch runtime.GOOS {
 	case "windows":
-		up.update = up.updateWindows
+		return up.updateWindows
 	case "linux":
 		switch distro.Get() {
 		case distro.Synology:
-			up.update = up.updateSynology
+			return up.updateSynology
 		case distro.Debian: // includes Ubuntu
-			up.update = up.updateDebLike
+			return up.updateDebLike
 		case distro.Arch:
-			up.update = up.updateArchLike
+			return up.updateArchLike
 		case distro.Alpine:
-			up.update = up.updateAlpineLike
+			return up.updateAlpineLike
 		}
 		switch {
 		case haveExecutable("pacman"):
-			up.update = up.updateArchLike
+			return up.updateArchLike
 		case haveExecutable("apt-get"): // TODO(awly): add support for "apt"
 			// The distro.Debian switch case above should catch most apt-based
 			// systems, but add this fallback just in case.
-			up.update = up.updateDebLike
+			return up.updateDebLike
 		case haveExecutable("dnf"):
-			up.update = up.updateFedoraLike("dnf")
+			return up.updateFedoraLike("dnf")
 		case haveExecutable("yum"):
-			up.update = up.updateFedoraLike("yum")
+			return up.updateFedoraLike("yum")
 		case haveExecutable("apk"):
-			up.update = up.updateAlpineLike
+			return up.updateAlpineLike
+		}
+		// If nothing matched, fall back to tarball updates.
+		if up.Update == nil {
+			return up.updateLinuxBinary
 		}
 	case "darwin":
 		switch {
-		case !args.AppStore && !version.IsSandboxedMacOS():
-			return errors.ErrUnsupported
-		case !args.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
-			up.update = up.updateMacSys
+		case !up.Arguments.AppStore && !version.IsSandboxedMacOS():
+			return nil
+		case !up.Arguments.AppStore && strings.HasSuffix(os.Getenv("HOME"), "/io.tailscale.ipn.macsys/Data"):
+			return up.updateMacSys
 		default:
-			up.update = up.updateMacAppStore
+			return up.updateMacAppStore
 		}
 	case "freebsd":
-		up.update = up.updateFreeBSD
+		return up.updateFreeBSD
 	}
-	if up.update == nil {
-		return errors.ErrUnsupported
-	}
-	return up.update()
+	return nil
 }
 
-func (up *updater) confirm(ver string) bool {
+// Update runs a single update attempt using the platform-specific mechanism.
+//
+// On Windows, this copies the calling binary and re-executes it to apply the
+// update. The calling binary should handle an "update" subcommand and call
+// this function again for the re-executed binary to proceed.
+func Update(args Arguments) error {
+	if err := args.validate(); err != nil {
+		return err
+	}
+	up, err := NewUpdater(args)
+	if err != nil {
+		return err
+	}
+	return up.Update()
+}
+
+func (up *Updater) confirm(ver string) bool {
 	if version.Short() == ver {
 		up.Logf("already running %v; no update needed", ver)
 		return false
@@ -187,13 +213,14 @@ func (up *updater) confirm(ver string) bool {
 
 const synoinfoConfPath = "/etc/synoinfo.conf"
 
-func (up *updater) updateSynology() error {
+func (up *Updater) updateSynology() error {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Synology is not supported")
 	}
 
 	// Get the latest version and list of SPKs from pkgs.tailscale.com.
-	osName := fmt.Sprintf("dsm%d", distro.DSMVersion())
+	dsmVersion := distro.DSMVersion()
+	osName := fmt.Sprintf("dsm%d", dsmVersion)
 	arch, err := synoArch(runtime.GOARCH, synoinfoConfPath)
 	if err != nil {
 		return err
@@ -202,15 +229,12 @@ func (up *updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	if latest.Version == "" {
-		return fmt.Errorf("no latest version found for %q track", up.track)
-	}
 	spkName := latest.SPKs[osName][arch]
 	if spkName == "" {
 		return fmt.Errorf("cannot find Synology package for os=%s arch=%s, please report a bug with your device model", osName, arch)
 	}
 
-	if !up.confirm(latest.Version) {
+	if !up.confirm(latest.SPKsVersion) {
 		return nil
 	}
 	if err := requireRoot(); err != nil {
@@ -222,10 +246,9 @@ func (up *updater) updateSynology() error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/%s", up.track, spkName)
-	spkPath := filepath.Join(spkDir, path.Base(url))
-	// TODO(awly): we should sign SPKs and validate signatures here too.
-	if err := up.downloadURLToFile(url, spkPath); err != nil {
+	pkgsPath := fmt.Sprintf("%s/%s", up.track, spkName)
+	spkPath := filepath.Join(spkDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, spkPath); err != nil {
 		return err
 	}
 
@@ -238,7 +261,19 @@ func (up *updater) updateSynology() error {
 	// just spits out a JSON result when done.
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if dsmVersion == 6 && bytes.Contains(out, []byte("error = [290]")) {
+			return fmt.Errorf("synopkg install failed: %w\noutput:\n%s\nplease make sure that packages from 'Any publisher' are allowed in the Package Center (Package Center -> Settings -> Trust Level -> Any publisher)", err, out)
+		}
 		return fmt.Errorf("synopkg install failed: %w\noutput:\n%s", err, out)
+	}
+	if dsmVersion == 6 {
+		// DSM6 does not automatically restart the package on install. Do it
+		// manually.
+		cmd := exec.Command("nohup", "synopkg", "start", "Tailscale")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("synopkg start failed: %w\noutput:\n%s", err, out)
+		}
 	}
 	return nil
 }
@@ -301,17 +336,21 @@ func parseSynoinfo(path string) (string, error) {
 	return "", fmt.Errorf(`missing "unique=" field in %q`, path)
 }
 
-func (up *updater) updateDebLike() error {
+func (up *Updater) updateDebLike() error {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	if err := exec.Command("dpkg", "--status", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via apt, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
+	}
 	ver, err := requestedTailscaleVersion(up.Version, up.track)
 	if err != nil {
 		return err
 	}
 	if !up.confirm(ver) {
 		return nil
-	}
-
-	if err := requireRoot(); err != nil {
-		return err
 	}
 
 	if updated, err := updateDebianAptSourcesList(up.track); err != nil {
@@ -403,61 +442,17 @@ func updateDebianAptSourcesListBytes(was []byte, dstTrack string) (newContent []
 	return buf.Bytes(), nil
 }
 
-func (up *updater) updateArchLike() (err error) {
-	if up.Version != "" {
-		return errors.New("installing a specific version on Arch-based distros is not supported")
+func (up *Updater) updateArchLike() error {
+	if err := exec.Command("pacman", "--query", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via pacman, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
 	}
-	if err := requireRoot(); err != nil {
-		return err
-	}
-
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf(`%w; you can try updating using "pacman --sync --refresh tailscale"`, err)
-		}
-	}()
-
-	out, err := exec.Command("pacman", "--sync", "--refresh", "--info", "tailscale").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed checking pacman for latest tailscale version: %w, output: %q", err, out)
-	}
-	ver, err := parsePacmanVersion(out)
-	if err != nil {
-		return err
-	}
-	if !up.confirm(ver) {
-		return nil
-	}
-
-	cmd := exec.Command("pacman", "--sync", "--noconfirm", "tailscale")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed tailscale update using pacman: %w", err)
-	}
-	return nil
-}
-
-func parsePacmanVersion(out []byte) (string, error) {
-	for _, line := range strings.Split(string(out), "\n") {
-		// The line we're looking for looks like this:
-		// Version         : 1.44.2-1
-		if !strings.HasPrefix(line, "Version") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
-		}
-		ver := strings.TrimSpace(parts[1])
-		// Trim the Arch patch version.
-		ver = strings.Split(ver, "-")[0]
-		if ver == "" {
-			return "", fmt.Errorf("version output from pacman is malformed: %q, cannot determine upgrade version", line)
-		}
-		return ver, nil
-	}
-	return "", fmt.Errorf("could not find latest version of tailscale via pacman")
+	// Arch maintainer asked us not to implement "tailscale update" or
+	// auto-updates on Arch-based distros:
+	// https://github.com/tailscale/tailscale/issues/6995#issuecomment-1687080106
+	return errors.New(`individual package updates are not supported on Arch-based distros, only full-system updates are: https://wiki.archlinux.org/title/System_maintenance#Partial_upgrades_are_unsupported.
+you can use "pacman --sync --refresh --sysupgrade" or "pacman -Syu" to upgrade the system, including Tailscale.`)
 }
 
 const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
@@ -465,10 +460,15 @@ const yumRepoConfigFile = "/etc/yum.repos.d/tailscale.repo"
 // updateFedoraLike updates tailscale on any distros in the Fedora family,
 // specifically anything that uses "dnf" or "yum" package managers. The actual
 // package manager is passed via packageManager.
-func (up *updater) updateFedoraLike(packageManager string) func() error {
+func (up *Updater) updateFedoraLike(packageManager string) func() error {
 	return func() (err error) {
 		if err := requireRoot(); err != nil {
 			return err
+		}
+		if err := exec.Command(packageManager, "info", "--installed", "tailscale").Run(); err != nil && isExitError(err) {
+			// Tailscale was not installed via yum/dnf, update via tarball
+			// download instead.
+			return up.updateLinuxBinary()
 		}
 		defer func() {
 			if err != nil {
@@ -541,12 +541,17 @@ func updateYUMRepoTrack(repoFile, dstTrack string) (rewrote bool, err error) {
 	return true, os.WriteFile(repoFile, newContent.Bytes(), 0644)
 }
 
-func (up *updater) updateAlpineLike() (err error) {
+func (up *Updater) updateAlpineLike() (err error) {
 	if up.Version != "" {
 		return errors.New("installing a specific version on Alpine-based distros is not supported")
 	}
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if err := exec.Command("apk", "info", "--installed", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via apk, update via tarball download
+		// instead.
+		return up.updateLinuxBinary()
 	}
 
 	defer func() {
@@ -598,11 +603,11 @@ func parseAlpinePackageVersion(out []byte) (string, error) {
 	return "", errors.New("tailscale version not found in output")
 }
 
-func (up *updater) updateMacSys() error {
+func (up *Updater) updateMacSys() error {
 	return errors.New("NOTREACHED: On MacSys builds, `tailscale update` is handled in Swift to launch the GUI updater")
 }
 
-func (up *updater) updateMacAppStore() error {
+func (up *Updater) updateMacAppStore() error {
 	out, err := exec.Command("defaults", "read", "/Library/Preferences/com.apple.commerce.plist", "AutoUpdate").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("can't check App Store auto-update setting: %w, output: %q", err, string(out))
@@ -663,7 +668,7 @@ var (
 	markTempFileFunc   func(string) error // or nil on non-Windows
 )
 
-func (up *updater) updateWindows() error {
+func (up *Updater) updateWindows() error {
 	if msi := os.Getenv(winMSIEnv); msi != "" {
 		up.Logf("installing %v ...", msi)
 		if err := up.installMSI(msi); err != nil {
@@ -699,9 +704,9 @@ func (up *updater) updateWindows() error {
 	if err := os.MkdirAll(msiDir, 0700); err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://pkgs.tailscale.com/%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
-	msiTarget := filepath.Join(msiDir, path.Base(url))
-	if err := up.downloadURLToFile(url, msiTarget); err != nil {
+	pkgsPath := fmt.Sprintf("%s/tailscale-setup-%s-%s.msi", up.track, ver, arch)
+	msiTarget := filepath.Join(msiDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, msiTarget); err != nil {
 		return err
 	}
 
@@ -733,7 +738,7 @@ func (up *updater) updateWindows() error {
 	panic("unreachable")
 }
 
-func (up *updater) installMSI(msi string) error {
+func (up *Updater) installMSI(msi string) error {
 	var err error
 	for tries := 0; tries < 2; tries++ {
 		cmd := exec.Command("msiexec.exe", "/i", filepath.Base(msi), "/quiet", "/promptrestart", "/qn")
@@ -800,114 +805,25 @@ func makeSelfCopy() (tmpPathExe string, err error) {
 	return f2.Name(), f2.Close()
 }
 
-func (up *updater) downloadURLToFile(urlSrc, fileDst string) (ret error) {
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = tshttpproxy.ProxyFromEnvironment
-	defer tr.CloseIdleConnections()
-	c := &http.Client{Transport: tr}
-
-	quickCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	headReq := must.Get(http.NewRequestWithContext(quickCtx, "HEAD", urlSrc, nil))
-
-	res, err := c.Do(headReq)
+func (up *Updater) downloadURLToFile(pathSrc, fileDst string) (ret error) {
+	c, err := distsign.NewClient(up.Logf, up.PkgsAddr)
 	if err != nil {
 		return err
 	}
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("HEAD %s: %v", urlSrc, res.Status)
-	}
-	if res.ContentLength <= 0 {
-		return fmt.Errorf("HEAD %s: unexpected Content-Length %v", urlSrc, res.ContentLength)
-	}
-	up.Logf("Download size: %v", res.ContentLength)
-
-	hashReq := must.Get(http.NewRequestWithContext(quickCtx, "GET", urlSrc+".sha256", nil))
-	hashRes, err := c.Do(hashReq)
-	if err != nil {
-		return err
-	}
-	hashHex, err := io.ReadAll(io.LimitReader(hashRes.Body, 100))
-	hashRes.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s.sha256: %v", urlSrc, res.Status)
-	}
-	if err != nil {
-		return err
-	}
-	wantHash, err := hex.DecodeString(string(strings.TrimSpace(string(hashHex))))
-	if err != nil {
-		return err
-	}
-	hash := sha256.New()
-
-	dlReq := must.Get(http.NewRequestWithContext(context.Background(), "GET", urlSrc, nil))
-	dlRes, err := c.Do(dlReq)
-	if err != nil {
-		return err
-	}
-	// TODO(bradfitz): resume from existing partial file on disk
-	if dlRes.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %v", urlSrc, dlRes.Status)
-	}
-
-	of, err := os.Create(fileDst)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if ret != nil {
-			of.Close()
-			// TODO(bradfitz): os.Remove(fileDst) too? or keep it to resume from/debug later.
-		}
-	}()
-	pw := &progressWriter{total: res.ContentLength, logf: up.Logf}
-	n, err := io.Copy(io.MultiWriter(hash, of, pw), io.LimitReader(dlRes.Body, res.ContentLength))
-	if err != nil {
-		return err
-	}
-	if n != res.ContentLength {
-		return fmt.Errorf("downloaded %v; want %v", n, res.ContentLength)
-	}
-	if err := of.Close(); err != nil {
-		return err
-	}
-	pw.print()
-
-	if !bytes.Equal(hash.Sum(nil), wantHash) {
-		return fmt.Errorf("SHA-256 of downloaded MSI didn't match expected value")
-	}
-	up.Logf("hash matched")
-
-	return nil
+	return c.Download(context.Background(), pathSrc, fileDst)
 }
 
-type progressWriter struct {
-	done      int64
-	total     int64
-	lastPrint time.Time
-	logf      logger.Logf
-}
-
-func (pw *progressWriter) Write(p []byte) (n int, err error) {
-	pw.done += int64(len(p))
-	if time.Since(pw.lastPrint) > 2*time.Second {
-		pw.print()
-	}
-	return len(p), nil
-}
-
-func (pw *progressWriter) print() {
-	pw.lastPrint = time.Now()
-	pw.logf("Downloaded %v/%v (%.1f%%)", pw.done, pw.total, float64(pw.done)/float64(pw.total)*100)
-}
-
-func (up *updater) updateFreeBSD() (err error) {
+func (up *Updater) updateFreeBSD() (err error) {
 	if up.Version != "" {
 		return errors.New("installing a specific version on FreeBSD is not supported")
 	}
 	if err := requireRoot(); err != nil {
 		return err
+	}
+	if err := exec.Command("pkg", "query", "%n", "tailscale").Run(); err != nil && isExitError(err) {
+		// Tailscale was not installed via pkg and we don't pre-compile
+		// binaries for it.
+		return errors.New("Tailscale was not installed via pkg, binary updates on FreeBSD are not supported; please reinstall Tailscale using pkg or update manually")
 	}
 
 	defer func() {
@@ -936,6 +852,165 @@ func (up *updater) updateFreeBSD() (err error) {
 		return fmt.Errorf("failed tailscale update using pkg: %w", err)
 	}
 	return nil
+}
+
+func (up *Updater) updateLinuxBinary() error {
+	ver, err := requestedTailscaleVersion(up.Version, up.track)
+	if err != nil {
+		return err
+	}
+	if !up.confirm(ver) {
+		return nil
+	}
+	// Root is needed to overwrite binaries and restart systemd unit.
+	if err := requireRoot(); err != nil {
+		return err
+	}
+
+	dlPath, err := up.downloadLinuxTarball(ver)
+	if err != nil {
+		return err
+	}
+	up.Logf("Extracting %q", dlPath)
+	if err := up.unpackLinuxTarball(dlPath); err != nil {
+		return err
+	}
+	if err := os.Remove(dlPath); err != nil {
+		up.Logf("failed to clean up %q: %v", dlPath, err)
+	}
+	if err := restartSystemdUnit(context.Background()); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			up.Logf("Tailscale binaries updated successfully.\nPlease restart tailscaled to finish the update.")
+		} else {
+			up.Logf("Tailscale binaries updated successfully, but failed to restart tailscaled: %s.\nPlease restart tailscaled to finish the update.", err)
+		}
+	} else {
+		up.Logf("Success")
+	}
+
+	return nil
+}
+
+func (up *Updater) downloadLinuxTarball(ver string) (string, error) {
+	dlDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dlDir = filepath.Join(dlDir, "tailscale-update")
+	if err := os.MkdirAll(dlDir, 0700); err != nil {
+		return "", err
+	}
+	pkgsPath := fmt.Sprintf("%s/tailscale_%s_%s.tgz", up.track, ver, runtime.GOARCH)
+	dlPath := filepath.Join(dlDir, path.Base(pkgsPath))
+	if err := up.downloadURLToFile(pkgsPath, dlPath); err != nil {
+		return "", err
+	}
+	return dlPath, nil
+}
+
+func (up *Updater) unpackLinuxTarball(path string) error {
+	tailscale, tailscaled, err := binaryPaths()
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	files := make(map[string]int)
+	wantFiles := map[string]int{
+		"tailscale":  1,
+		"tailscaled": 1,
+	}
+	for {
+		th, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed extracting %q: %w", path, err)
+		}
+		// TODO(awly): try to also extract tailscaled.service. The tricky part
+		// is fixing up binary paths in that file if they differ from where
+		// local tailscale/tailscaled are installed. Also, this may not be a
+		// systemd distro.
+		switch filepath.Base(th.Name) {
+		case "tailscale":
+			files["tailscale"]++
+			if err := writeFile(tr, tailscale+".new", 0755); err != nil {
+				return fmt.Errorf("failed extracting the new tailscale binary from %q: %w", path, err)
+			}
+		case "tailscaled":
+			files["tailscaled"]++
+			if err := writeFile(tr, tailscaled+".new", 0755); err != nil {
+				return fmt.Errorf("failed extracting the new tailscaled binary from %q: %w", path, err)
+			}
+		}
+	}
+	if !maps.Equal(files, wantFiles) {
+		return fmt.Errorf("%q has missing or duplicate files: got %v, want %v", path, files, wantFiles)
+	}
+
+	// Only place the files in final locations after everything extracted correctly.
+	if err := os.Rename(tailscale+".new", tailscale); err != nil {
+		return err
+	}
+	up.Logf("Updated %s", tailscale)
+	if err := os.Rename(tailscaled+".new", tailscaled); err != nil {
+		return err
+	}
+	up.Logf("Updated %s", tailscaled)
+	return nil
+}
+
+func writeFile(r io.Reader, path string, perm os.FileMode) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove existing file at %q: %w", path, err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, r); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// Var allows overriding this in tests.
+var binaryPaths = func() (tailscale, tailscaled string, err error) {
+	// This can be either tailscale or tailscaled.
+	this, err := os.Executable()
+	if err != nil {
+		return "", "", err
+	}
+	otherName := "tailscaled"
+	if filepath.Base(this) == "tailscaled" {
+		otherName = "tailscale"
+	}
+	// Try to find the other binary in the same directory.
+	other := filepath.Join(filepath.Dir(this), otherName)
+	_, err = os.Stat(other)
+	if os.IsNotExist(err) {
+		// If it's not in the same directory, try to find it in $PATH.
+		other, err = exec.LookPath(otherName)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("cannot find %q in neither %q nor $PATH: %w", otherName, filepath.Dir(this), err)
+	}
+	if otherName == "tailscaled" {
+		return this, other, nil
+	} else {
+		return other, this, nil
+	}
 }
 
 func haveExecutable(name string) bool {
@@ -972,12 +1047,17 @@ func LatestTailscaleVersion(track string) (string, error) {
 }
 
 type trackPackages struct {
-	Version  string
-	Tarballs map[string]string
-	Exes     []string
-	MSIs     map[string]string
-	MacZips  map[string]string
-	SPKs     map[string]map[string]string
+	Version         string
+	Tarballs        map[string]string
+	TarballsVersion string
+	Exes            []string
+	ExesVersion     string
+	MSIs            map[string]string
+	MSIsVersion     string
+	MacZips         map[string]string
+	MacZipsVersion  string
+	SPKs            map[string]map[string]string
+	SPKsVersion     string
 }
 
 func latestPackages(track string) (*trackPackages, error) {
@@ -1006,4 +1086,9 @@ func requireRoot() error {
 	default:
 		return errors.New("must be root")
 	}
+}
+
+func isExitError(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
 }

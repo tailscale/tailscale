@@ -14,10 +14,12 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/dblohm7/wingoes/com"
 	"github.com/dblohm7/wingoes/pe"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/osdiag/internal/wsc"
 	"tailscale.com/util/winutil"
 	"tailscale.com/util/winutil/authenticode"
 )
@@ -43,7 +45,9 @@ func logSupportInfo(logf logger.Logf, reason LogSupportInfoReason) {
 
 const (
 	supportInfoKeyModules    = "modules"
+	supportInfoKeyPageFile   = "pageFile"
 	supportInfoKeyRegistry   = "registry"
+	supportInfoKeySecurity   = "securitySoftware"
 	supportInfoKeyWinsockLSP = "winsockLSP"
 )
 
@@ -57,6 +61,13 @@ func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 		output[supportInfoKeyRegistry] = err
 	}
 
+	pageFileInfo, err := getPageFileInfo()
+	if err == nil {
+		output[supportInfoKeyPageFile] = pageFileInfo
+	} else {
+		output[supportInfoKeyPageFile] = err
+	}
+
 	if reason == LogSupportInfoReasonBugReport {
 		modInfo, err := getModuleInfo()
 		if err == nil {
@@ -64,6 +75,8 @@ func getSupportInfo(w io.Writer, reason LogSupportInfoReason) error {
 		} else {
 			output[supportInfoKeyModules] = err
 		}
+
+		output[supportInfoKeySecurity] = getSecurityInfo()
 
 		lspInfo, err := getWinsockLSPInfo()
 		if err == nil {
@@ -481,4 +494,175 @@ func enumWinsockProtocols() ([]wsaProtocolInfo, error) {
 	}
 
 	return buf, nil
+}
+
+type providerKey struct {
+	provType wsc.WSC_SECURITY_PROVIDER
+	provKey  string
+}
+
+var providerKeys = []providerKey{
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_ANTIVIRUS,
+		"av",
+	},
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_ANTISPYWARE,
+		"antispy",
+	},
+	providerKey{
+		wsc.WSC_SECURITY_PROVIDER_FIREWALL,
+		"firewall",
+	},
+}
+
+const (
+	maxProvCount = 100
+)
+
+type secProductInfo struct {
+	Name     string `json:"name,omitempty"`
+	NameErr  error  `json:"nameErr,omitempty"`
+	State    string `json:"state,omitempty"`
+	StateErr error  `json:"stateErr,omitempty"`
+}
+
+func getSecurityInfo() map[string]any {
+	result := make(map[string]any)
+
+	for _, prov := range providerKeys {
+		// Note that we need to obtain a new product list for each provider type;
+		// the docs clearly state that we cannot reuse objects.
+		productList, err := com.CreateInstance[wsc.WSCProductList](wsc.CLSID_WSCProductList)
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+
+		err = productList.Initialize(prov.provType)
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+
+		n, err := productList.GetCount()
+		if err != nil {
+			result[prov.provKey] = err
+			continue
+		}
+		if n == 0 {
+			continue
+		}
+
+		n = min(n, maxProvCount)
+		values := make([]any, 0, n)
+
+		for i := int32(0); i < n; i++ {
+			product, err := productList.GetItem(uint32(i))
+			if err != nil {
+				values = append(values, err)
+				continue
+			}
+
+			var value secProductInfo
+
+			value.Name, err = product.GetProductName()
+			if err != nil {
+				value.NameErr = err
+			}
+
+			state, err := product.GetProductState()
+			if err == nil {
+				switch state {
+				case wsc.WSC_SECURITY_PRODUCT_STATE_ON:
+					value.State = "on"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_OFF:
+					value.State = "off"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_SNOOZED:
+					value.State = "snoozed"
+				case wsc.WSC_SECURITY_PRODUCT_STATE_EXPIRED:
+					value.State = "expired"
+				default:
+					value.State = fmt.Sprintf("<unknown state value %d>", state)
+				}
+			} else {
+				value.StateErr = err
+			}
+
+			values = append(values, value)
+		}
+
+		result[prov.provKey] = values
+	}
+
+	return result
+}
+
+type _MEMORYSTATUSEX struct {
+	Length               uint32
+	MemoryLoad           uint32
+	TotalPhys            uint64
+	AvailPhys            uint64
+	TotalPageFile        uint64
+	AvailPageFile        uint64
+	TotalVirtual         uint64
+	AvailVirtual         uint64
+	AvailExtendedVirtual uint64
+}
+
+func getPageFileInfo() (map[string]any, error) {
+	memStatus := _MEMORYSTATUSEX{
+		Length: uint32(unsafe.Sizeof(_MEMORYSTATUSEX{})),
+	}
+	if err := globalMemoryStatusEx(&memStatus); err != nil {
+		return nil, err
+	}
+
+	result := map[string]any{
+		"bytesAvailable": memStatus.AvailPageFile,
+		"bytesTotal":     memStatus.TotalPageFile,
+	}
+
+	if entries, err := getEffectivePageFileValue(); err == nil {
+		// autoManaged is set to true when there is at least one page file that
+		// is automatically managed.
+		autoManaged := false
+
+		// If there is only one entry that consists of only one part, then
+		// the page files are 100% managed by the system.
+		// If there are multiple entries, then each one must be checked.
+		// Each entry then consists of three components, deliminated by spaces.
+		// If the latter two components are both "0", then that entry is auto-managed.
+		for _, entry := range entries {
+			if parts := strings.Split(entry, " "); (len(parts) == 1 && len(entries) == 1) ||
+				(len(parts) == 3 && parts[1] == "0" && parts[2] == "0") {
+				autoManaged = true
+				break
+			}
+		}
+
+		result["autoManaged"] = autoManaged
+	}
+
+	return result, nil
+}
+
+func getEffectivePageFileValue() ([]string, error) {
+	const subKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management`
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.QUERY_VALUE)
+	if err != nil {
+		return nil, err
+	}
+	defer key.Close()
+
+	// Rare but possible case: the user has updated their page file config but
+	// they haven't yet rebooted for the change to take effect. This is the
+	// current setting that the machine is still operating with.
+	if entries, _, err := key.GetStringsValue("ExistingPageFiles"); err == nil {
+		return entries, nil
+	}
+
+	// Otherwise we use this value (yes, the above value uses "Page" and this one uses "Paging").
+	entries, _, err := key.GetStringsValue("PagingFiles")
+	return entries, err
 }

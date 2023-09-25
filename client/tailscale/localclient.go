@@ -37,6 +37,7 @@ import (
 	"tailscale.com/tka"
 	"tailscale.com/types/key"
 	"tailscale.com/types/tkatype"
+	"tailscale.com/util/cmpx"
 )
 
 // defaultLocalClient is the default LocalClient when using the legacy
@@ -139,6 +140,10 @@ func (lc *LocalClient) doLocalRequestNiceError(req *http.Request) (*http.Respons
 			all, _ := io.ReadAll(res.Body)
 			return nil, &AccessDeniedError{errors.New(errorMessageFromBody(all))}
 		}
+		if res.StatusCode == http.StatusPreconditionFailed {
+			all, _ := io.ReadAll(res.Body)
+			return nil, &PreconditionsFailedError{errors.New(errorMessageFromBody(all))}
+		}
 		return res, nil
 	}
 	if ue, ok := err.(*url.Error); ok {
@@ -166,6 +171,24 @@ func (e *AccessDeniedError) Unwrap() error { return e.err }
 // IsAccessDeniedError reports whether err is or wraps an AccessDeniedError.
 func IsAccessDeniedError(err error) bool {
 	var ae *AccessDeniedError
+	return errors.As(err, &ae)
+}
+
+// PreconditionsFailedError is returned when the server responds
+// with an HTTP 412 status code.
+type PreconditionsFailedError struct {
+	err error
+}
+
+func (e *PreconditionsFailedError) Error() string {
+	return fmt.Sprintf("Preconditions failed: %v", e.err)
+}
+
+func (e *PreconditionsFailedError) Unwrap() error { return e.err }
+
+// IsPreconditionsFailedError reports whether err is or wraps an PreconditionsFailedError.
+func IsPreconditionsFailedError(err error) bool {
+	var ae *PreconditionsFailedError
 	return errors.As(err, &ae)
 }
 
@@ -197,27 +220,42 @@ func SetVersionMismatchHandler(f func(clientVer, serverVer string)) {
 }
 
 func (lc *LocalClient) send(ctx context.Context, method, path string, wantStatus int, body io.Reader) ([]byte, error) {
+	slurp, _, err := lc.sendWithHeaders(ctx, method, path, wantStatus, body, nil)
+	return slurp, err
+}
+
+func (lc *LocalClient) sendWithHeaders(
+	ctx context.Context,
+	method,
+	path string,
+	wantStatus int,
+	body io.Reader,
+	h http.Header,
+) ([]byte, http.Header, error) {
 	if jr, ok := body.(jsonReader); ok && jr.err != nil {
-		return nil, jr.err // fail early if there was a JSON marshaling error
+		return nil, nil, jr.err // fail early if there was a JSON marshaling error
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+apitype.LocalAPIHost+path, body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if h != nil {
+		req.Header = h
 	}
 	res, err := lc.doLocalRequestNiceError(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer res.Body.Close()
 	slurp, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if res.StatusCode != wantStatus {
 		err = fmt.Errorf("%v: %s", res.Status, bytes.TrimSpace(slurp))
-		return nil, bestError(err, slurp)
+		return nil, nil, bestError(err, slurp)
 	}
-	return slurp, nil
+	return slurp, res.Header, nil
 }
 
 func (lc *LocalClient) get200(ctx context.Context, path string) ([]byte, error) {
@@ -391,15 +429,65 @@ func (lc *LocalClient) DebugAction(ctx context.Context, action string) error {
 	return nil
 }
 
+// DebugResultJSON invokes a debug action and returns its result as something JSON-able.
+// These are development tools and subject to change or removal over time.
+func (lc *LocalClient) DebugResultJSON(ctx context.Context, action string) (any, error) {
+	body, err := lc.send(ctx, "POST", "/localapi/v0/debug?action="+url.QueryEscape(action), 200, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error %w: %s", err, body)
+	}
+	var x any
+	if err := json.Unmarshal(body, &x); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// DebugPortmapOpts contains options for the DebugPortmap command.
+type DebugPortmapOpts struct {
+	// Duration is how long the mapping should be created for. It defaults
+	// to 5 seconds if not set.
+	Duration time.Duration
+
+	// Type is the kind of portmap to debug. The empty string instructs the
+	// portmap client to perform all known types. Other valid options are
+	// "pmp", "pcp", and "upnp".
+	Type string
+
+	// GatewayAddr specifies the gateway address used during portmapping.
+	// If set, SelfAddr must also be set. If unset, it will be
+	// autodetected.
+	GatewayAddr netip.Addr
+
+	// SelfAddr specifies the gateway address used during portmapping. If
+	// set, GatewayAddr must also be set. If unset, it will be
+	// autodetected.
+	SelfAddr netip.Addr
+
+	// LogHTTP instructs the debug-portmap endpoint to print all HTTP
+	// requests and responses made to the logs.
+	LogHTTP bool
+}
+
 // DebugPortmap invokes the debug-portmap endpoint, and returns an
 // io.ReadCloser that can be used to read the logs that are printed during this
 // process.
-func (lc *LocalClient) DebugPortmap(ctx context.Context, duration time.Duration, ty, gwSelf string) (io.ReadCloser, error) {
+//
+// opts can be nil; if so, default values will be used.
+func (lc *LocalClient) DebugPortmap(ctx context.Context, opts *DebugPortmapOpts) (io.ReadCloser, error) {
 	vals := make(url.Values)
-	vals.Set("duration", duration.String())
-	vals.Set("type", ty)
-	if gwSelf != "" {
-		vals.Set("gateway_and_self", gwSelf)
+	if opts == nil {
+		opts = &DebugPortmapOpts{}
+	}
+
+	vals.Set("duration", cmpx.Or(opts.Duration, 5*time.Second).String())
+	vals.Set("type", opts.Type)
+	vals.Set("log_http", strconv.FormatBool(opts.LogHTTP))
+
+	if opts.GatewayAddr.IsValid() != opts.SelfAddr.IsValid() {
+		return nil, fmt.Errorf("both GatewayAddr and SelfAddr must be provided if one is")
+	} else if opts.GatewayAddr.IsValid() {
+		vals.Set("gateway_and_self", fmt.Sprintf("%s/%s", opts.GatewayAddr, opts.SelfAddr))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+apitype.LocalAPIHost+"/localapi/v0/debug-portmap?"+vals.Encode(), nil)
@@ -1042,7 +1130,11 @@ func (lc *LocalClient) NetworkLockSubmitRecoveryAUM(ctx context.Context, aum tka
 // SetServeConfig sets or replaces the serving settings.
 // If config is nil, settings are cleared and serving is disabled.
 func (lc *LocalClient) SetServeConfig(ctx context.Context, config *ipn.ServeConfig) error {
-	_, err := lc.send(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config))
+	h := make(http.Header)
+	if config != nil {
+		h.Set("If-Match", config.ETag)
+	}
+	_, _, err := lc.sendWithHeaders(ctx, "POST", "/localapi/v0/serve-config", 200, jsonBody(config), h)
 	if err != nil {
 		return fmt.Errorf("sending serve config: %w", err)
 	}
@@ -1061,11 +1153,19 @@ func (lc *LocalClient) NetworkLockDisable(ctx context.Context, secret []byte) er
 //
 // If the serve config is empty, it returns (nil, nil).
 func (lc *LocalClient) GetServeConfig(ctx context.Context) (*ipn.ServeConfig, error) {
-	body, err := lc.send(ctx, "GET", "/localapi/v0/serve-config", 200, nil)
+	body, h, err := lc.sendWithHeaders(ctx, "GET", "/localapi/v0/serve-config", 200, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting serve config: %w", err)
 	}
-	return getServeConfigFromJSON(body)
+	sc, err := getServeConfigFromJSON(body)
+	if err != nil {
+		return nil, err
+	}
+	if sc == nil {
+		sc = new(ipn.ServeConfig)
+	}
+	sc.ETag = h.Get("Etag")
+	return sc, nil
 }
 
 func getServeConfigFromJSON(body []byte) (sc *ipn.ServeConfig, err error) {

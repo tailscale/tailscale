@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"time"
 
-	"go4.org/mem"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/key"
 	"tailscale.com/types/opt"
@@ -20,7 +19,7 @@ import (
 	"tailscale.com/types/views"
 )
 
-//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
+//go:generate go run tailscale.com/cmd/cloner  -clonefunc=true -type=User,Node,Hostinfo,NetInfo,Login,DNSConfig,RegisterResponse,RegisterResponseAuth,RegisterRequest,DERPHomeParams,DERPRegion,DERPMap,DERPNode,SSHRule,SSHAction,SSHPrincipal,ControlDialPlan,Location,UserProfile
 
 // View returns a readonly view of User.
 func (p *User) View() UserView {
@@ -71,7 +70,6 @@ func (v UserView) ID() UserID                   { return v.ж.ID }
 func (v UserView) LoginName() string            { return v.ж.LoginName }
 func (v UserView) DisplayName() string          { return v.ж.DisplayName }
 func (v UserView) ProfilePicURL() string        { return v.ж.ProfilePicURL }
-func (v UserView) Domain() string               { return v.ж.Domain }
 func (v UserView) Logins() views.Slice[LoginID] { return views.SliceOf(v.ж.Logins) }
 func (v UserView) Created() time.Time           { return v.ж.Created }
 
@@ -81,7 +79,6 @@ var _UserViewNeedsRegeneration = User(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 	Logins        []LoginID
 	Created       time.Time
 }{})
@@ -131,27 +128,27 @@ func (v *NodeView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v NodeView) ID() NodeID                      { return v.ж.ID }
-func (v NodeView) StableID() StableNodeID          { return v.ж.StableID }
-func (v NodeView) Name() string                    { return v.ж.Name }
-func (v NodeView) User() UserID                    { return v.ж.User }
-func (v NodeView) Sharer() UserID                  { return v.ж.Sharer }
-func (v NodeView) Key() key.NodePublic             { return v.ж.Key }
-func (v NodeView) KeyExpiry() time.Time            { return v.ж.KeyExpiry }
-func (v NodeView) KeySignature() mem.RO            { return mem.B(v.ж.KeySignature) }
-func (v NodeView) Machine() key.MachinePublic      { return v.ж.Machine }
-func (v NodeView) DiscoKey() key.DiscoPublic       { return v.ж.DiscoKey }
-func (v NodeView) Addresses() views.IPPrefixSlice  { return views.IPPrefixSliceOf(v.ж.Addresses) }
-func (v NodeView) AllowedIPs() views.IPPrefixSlice { return views.IPPrefixSliceOf(v.ж.AllowedIPs) }
-func (v NodeView) Endpoints() views.Slice[string]  { return views.SliceOf(v.ж.Endpoints) }
-func (v NodeView) DERP() string                    { return v.ж.DERP }
-func (v NodeView) Hostinfo() HostinfoView          { return v.ж.Hostinfo }
-func (v NodeView) Created() time.Time              { return v.ж.Created }
-func (v NodeView) Cap() CapabilityVersion          { return v.ж.Cap }
-func (v NodeView) Tags() views.Slice[string]       { return views.SliceOf(v.ж.Tags) }
-func (v NodeView) PrimaryRoutes() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.PrimaryRoutes)
+func (v NodeView) ID() NodeID             { return v.ж.ID }
+func (v NodeView) StableID() StableNodeID { return v.ж.StableID }
+func (v NodeView) Name() string           { return v.ж.Name }
+func (v NodeView) User() UserID           { return v.ж.User }
+func (v NodeView) Sharer() UserID         { return v.ж.Sharer }
+func (v NodeView) Key() key.NodePublic    { return v.ж.Key }
+func (v NodeView) KeyExpiry() time.Time   { return v.ж.KeyExpiry }
+func (v NodeView) KeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.KeySignature)
 }
+func (v NodeView) Machine() key.MachinePublic               { return v.ж.Machine }
+func (v NodeView) DiscoKey() key.DiscoPublic                { return v.ж.DiscoKey }
+func (v NodeView) Addresses() views.Slice[netip.Prefix]     { return views.SliceOf(v.ж.Addresses) }
+func (v NodeView) AllowedIPs() views.Slice[netip.Prefix]    { return views.SliceOf(v.ж.AllowedIPs) }
+func (v NodeView) Endpoints() views.Slice[string]           { return views.SliceOf(v.ж.Endpoints) }
+func (v NodeView) DERP() string                             { return v.ж.DERP }
+func (v NodeView) Hostinfo() HostinfoView                   { return v.ж.Hostinfo }
+func (v NodeView) Created() time.Time                       { return v.ж.Created }
+func (v NodeView) Cap() CapabilityVersion                   { return v.ж.Cap }
+func (v NodeView) Tags() views.Slice[string]                { return views.SliceOf(v.ж.Tags) }
+func (v NodeView) PrimaryRoutes() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.PrimaryRoutes) }
 func (v NodeView) LastSeen() *time.Time {
 	if v.ж.LastSeen == nil {
 		return nil
@@ -168,13 +165,19 @@ func (v NodeView) Online() *bool {
 	return &x
 }
 
-func (v NodeView) MachineAuthorized() bool           { return v.ж.MachineAuthorized }
-func (v NodeView) Capabilities() views.Slice[string] { return views.SliceOf(v.ж.Capabilities) }
-func (v NodeView) UnsignedPeerAPIOnly() bool         { return v.ж.UnsignedPeerAPIOnly }
-func (v NodeView) ComputedName() string              { return v.ж.ComputedName }
-func (v NodeView) ComputedNameWithHost() string      { return v.ж.ComputedNameWithHost }
-func (v NodeView) DataPlaneAuditLogID() string       { return v.ж.DataPlaneAuditLogID }
-func (v NodeView) Expired() bool                     { return v.ж.Expired }
+func (v NodeView) MachineAuthorized() bool                   { return v.ж.MachineAuthorized }
+func (v NodeView) Capabilities() views.Slice[NodeCapability] { return views.SliceOf(v.ж.Capabilities) }
+
+func (v NodeView) CapMap() views.MapFn[NodeCapability, []RawMessage, views.Slice[RawMessage]] {
+	return views.MapFnOf(v.ж.CapMap, func(t []RawMessage) views.Slice[RawMessage] {
+		return views.SliceOf(t)
+	})
+}
+func (v NodeView) UnsignedPeerAPIOnly() bool    { return v.ж.UnsignedPeerAPIOnly }
+func (v NodeView) ComputedName() string         { return v.ж.ComputedName }
+func (v NodeView) ComputedNameWithHost() string { return v.ж.ComputedNameWithHost }
+func (v NodeView) DataPlaneAuditLogID() string  { return v.ж.DataPlaneAuditLogID }
+func (v NodeView) Expired() bool                { return v.ж.Expired }
 func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
 	if v.ж.SelfNodeV4MasqAddrForThisPeer == nil {
 		return nil
@@ -183,7 +186,18 @@ func (v NodeView) SelfNodeV4MasqAddrForThisPeer() *netip.Addr {
 	return &x
 }
 
-func (v NodeView) IsWireGuardOnly() bool  { return v.ж.IsWireGuardOnly }
+func (v NodeView) SelfNodeV6MasqAddrForThisPeer() *netip.Addr {
+	if v.ж.SelfNodeV6MasqAddrForThisPeer == nil {
+		return nil
+	}
+	x := *v.ж.SelfNodeV6MasqAddrForThisPeer
+	return &x
+}
+
+func (v NodeView) IsWireGuardOnly() bool { return v.ж.IsWireGuardOnly }
+func (v NodeView) ExitNodeDNSResolvers() views.SliceView[*dnstype.Resolver, dnstype.ResolverView] {
+	return views.SliceOfViews[*dnstype.Resolver, dnstype.ResolverView](v.ж.ExitNodeDNSResolvers)
+}
 func (v NodeView) Equal(v2 NodeView) bool { return v.ж.Equal(v2.ж) }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -210,7 +224,8 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	LastSeen                      *time.Time
 	Online                        *bool
 	MachineAuthorized             bool
-	Capabilities                  []string
+	Capabilities                  []NodeCapability
+	CapMap                        NodeCapMap
 	UnsignedPeerAPIOnly           bool
 	ComputedName                  string
 	computedHostIfDifferent       string
@@ -218,7 +233,9 @@ var _NodeViewNeedsRegeneration = Node(struct {
 	DataPlaneAuditLogID           string
 	Expired                       bool
 	SelfNodeV4MasqAddrForThisPeer *netip.Addr
+	SelfNodeV6MasqAddrForThisPeer *netip.Addr
 	IsWireGuardOnly               bool
+	ExitNodeDNSResolvers          []*dnstype.Resolver
 }{})
 
 // View returns a readonly view of Hostinfo.
@@ -266,41 +283,39 @@ func (v *HostinfoView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v HostinfoView) IPNVersion() string      { return v.ж.IPNVersion }
-func (v HostinfoView) FrontendLogID() string   { return v.ж.FrontendLogID }
-func (v HostinfoView) BackendLogID() string    { return v.ж.BackendLogID }
-func (v HostinfoView) OS() string              { return v.ж.OS }
-func (v HostinfoView) OSVersion() string       { return v.ж.OSVersion }
-func (v HostinfoView) Container() opt.Bool     { return v.ж.Container }
-func (v HostinfoView) Env() string             { return v.ж.Env }
-func (v HostinfoView) Distro() string          { return v.ж.Distro }
-func (v HostinfoView) DistroVersion() string   { return v.ж.DistroVersion }
-func (v HostinfoView) DistroCodeName() string  { return v.ж.DistroCodeName }
-func (v HostinfoView) App() string             { return v.ж.App }
-func (v HostinfoView) Desktop() opt.Bool       { return v.ж.Desktop }
-func (v HostinfoView) Package() string         { return v.ж.Package }
-func (v HostinfoView) DeviceModel() string     { return v.ж.DeviceModel }
-func (v HostinfoView) PushDeviceToken() string { return v.ж.PushDeviceToken }
-func (v HostinfoView) Hostname() string        { return v.ж.Hostname }
-func (v HostinfoView) ShieldsUp() bool         { return v.ж.ShieldsUp }
-func (v HostinfoView) ShareeNode() bool        { return v.ж.ShareeNode }
-func (v HostinfoView) NoLogsNoSupport() bool   { return v.ж.NoLogsNoSupport }
-func (v HostinfoView) WireIngress() bool       { return v.ж.WireIngress }
-func (v HostinfoView) AllowsUpdate() bool      { return v.ж.AllowsUpdate }
-func (v HostinfoView) Machine() string         { return v.ж.Machine }
-func (v HostinfoView) GoArch() string          { return v.ж.GoArch }
-func (v HostinfoView) GoArchVar() string       { return v.ж.GoArchVar }
-func (v HostinfoView) GoVersion() string       { return v.ж.GoVersion }
-func (v HostinfoView) RoutableIPs() views.IPPrefixSlice {
-	return views.IPPrefixSliceOf(v.ж.RoutableIPs)
-}
-func (v HostinfoView) RequestTags() views.Slice[string]  { return views.SliceOf(v.ж.RequestTags) }
-func (v HostinfoView) Services() views.Slice[Service]    { return views.SliceOf(v.ж.Services) }
-func (v HostinfoView) NetInfo() NetInfoView              { return v.ж.NetInfo.View() }
-func (v HostinfoView) SSH_HostKeys() views.Slice[string] { return views.SliceOf(v.ж.SSH_HostKeys) }
-func (v HostinfoView) Cloud() string                     { return v.ж.Cloud }
-func (v HostinfoView) Userspace() opt.Bool               { return v.ж.Userspace }
-func (v HostinfoView) UserspaceRouter() opt.Bool         { return v.ж.UserspaceRouter }
+func (v HostinfoView) IPNVersion() string                     { return v.ж.IPNVersion }
+func (v HostinfoView) FrontendLogID() string                  { return v.ж.FrontendLogID }
+func (v HostinfoView) BackendLogID() string                   { return v.ж.BackendLogID }
+func (v HostinfoView) OS() string                             { return v.ж.OS }
+func (v HostinfoView) OSVersion() string                      { return v.ж.OSVersion }
+func (v HostinfoView) Container() opt.Bool                    { return v.ж.Container }
+func (v HostinfoView) Env() string                            { return v.ж.Env }
+func (v HostinfoView) Distro() string                         { return v.ж.Distro }
+func (v HostinfoView) DistroVersion() string                  { return v.ж.DistroVersion }
+func (v HostinfoView) DistroCodeName() string                 { return v.ж.DistroCodeName }
+func (v HostinfoView) App() string                            { return v.ж.App }
+func (v HostinfoView) Desktop() opt.Bool                      { return v.ж.Desktop }
+func (v HostinfoView) Package() string                        { return v.ж.Package }
+func (v HostinfoView) DeviceModel() string                    { return v.ж.DeviceModel }
+func (v HostinfoView) PushDeviceToken() string                { return v.ж.PushDeviceToken }
+func (v HostinfoView) Hostname() string                       { return v.ж.Hostname }
+func (v HostinfoView) ShieldsUp() bool                        { return v.ж.ShieldsUp }
+func (v HostinfoView) ShareeNode() bool                       { return v.ж.ShareeNode }
+func (v HostinfoView) NoLogsNoSupport() bool                  { return v.ж.NoLogsNoSupport }
+func (v HostinfoView) WireIngress() bool                      { return v.ж.WireIngress }
+func (v HostinfoView) AllowsUpdate() bool                     { return v.ж.AllowsUpdate }
+func (v HostinfoView) Machine() string                        { return v.ж.Machine }
+func (v HostinfoView) GoArch() string                         { return v.ж.GoArch }
+func (v HostinfoView) GoArchVar() string                      { return v.ж.GoArchVar }
+func (v HostinfoView) GoVersion() string                      { return v.ж.GoVersion }
+func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
+func (v HostinfoView) RequestTags() views.Slice[string]       { return views.SliceOf(v.ж.RequestTags) }
+func (v HostinfoView) Services() views.Slice[Service]         { return views.SliceOf(v.ж.Services) }
+func (v HostinfoView) NetInfo() NetInfoView                   { return v.ж.NetInfo.View() }
+func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.SliceOf(v.ж.SSH_HostKeys) }
+func (v HostinfoView) Cloud() string                          { return v.ж.Cloud }
+func (v HostinfoView) Userspace() opt.Bool                    { return v.ж.Userspace }
+func (v HostinfoView) UserspaceRouter() opt.Bool              { return v.ж.UserspaceRouter }
 func (v HostinfoView) Location() *Location {
 	if v.ж.Location == nil {
 		return nil
@@ -479,7 +494,6 @@ func (v LoginView) Provider() string      { return v.ж.Provider }
 func (v LoginView) LoginName() string     { return v.ж.LoginName }
 func (v LoginView) DisplayName() string   { return v.ж.DisplayName }
 func (v LoginView) ProfilePicURL() string { return v.ж.ProfilePicURL }
-func (v LoginView) Domain() string        { return v.ж.Domain }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _LoginViewNeedsRegeneration = Login(struct {
@@ -489,7 +503,6 @@ var _LoginViewNeedsRegeneration = Login(struct {
 	LoginName     string
 	DisplayName   string
 	ProfilePicURL string
-	Domain        string
 }{})
 
 // View returns a readonly view of DNSConfig.
@@ -618,13 +631,15 @@ func (v *RegisterResponseView) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (v RegisterResponseView) User() UserView           { return v.ж.User.View() }
-func (v RegisterResponseView) Login() Login             { return v.ж.Login }
-func (v RegisterResponseView) NodeKeyExpired() bool     { return v.ж.NodeKeyExpired }
-func (v RegisterResponseView) MachineAuthorized() bool  { return v.ж.MachineAuthorized }
-func (v RegisterResponseView) AuthURL() string          { return v.ж.AuthURL }
-func (v RegisterResponseView) NodeKeySignature() mem.RO { return mem.B(v.ж.NodeKeySignature) }
-func (v RegisterResponseView) Error() string            { return v.ж.Error }
+func (v RegisterResponseView) User() UserView          { return v.ж.User.View() }
+func (v RegisterResponseView) Login() Login            { return v.ж.Login }
+func (v RegisterResponseView) NodeKeyExpired() bool    { return v.ж.NodeKeyExpired }
+func (v RegisterResponseView) MachineAuthorized() bool { return v.ж.MachineAuthorized }
+func (v RegisterResponseView) AuthURL() string         { return v.ж.AuthURL }
+func (v RegisterResponseView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.NodeKeySignature)
+}
+func (v RegisterResponseView) Error() string { return v.ж.Error }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
 var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
@@ -635,6 +650,164 @@ var _RegisterResponseViewNeedsRegeneration = RegisterResponse(struct {
 	AuthURL           string
 	NodeKeySignature  tkatype.MarshaledSignature
 	Error             string
+}{})
+
+// View returns a readonly view of RegisterResponseAuth.
+func (p *RegisterResponseAuth) View() RegisterResponseAuthView {
+	return RegisterResponseAuthView{ж: p}
+}
+
+// RegisterResponseAuthView provides a read-only view over RegisterResponseAuth.
+//
+// Its methods should only be called if `Valid()` returns true.
+type RegisterResponseAuthView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *RegisterResponseAuth
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v RegisterResponseAuthView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v RegisterResponseAuthView) AsStruct() *RegisterResponseAuth {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v RegisterResponseAuthView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *RegisterResponseAuthView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x RegisterResponseAuth
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v RegisterResponseAuthView) Provider() string  { return v.ж.Provider }
+func (v RegisterResponseAuthView) LoginName() string { return v.ж.LoginName }
+func (v RegisterResponseAuthView) Oauth2Token() *Oauth2Token {
+	if v.ж.Oauth2Token == nil {
+		return nil
+	}
+	x := *v.ж.Oauth2Token
+	return &x
+}
+
+func (v RegisterResponseAuthView) AuthKey() string { return v.ж.AuthKey }
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterResponseAuthViewNeedsRegeneration = RegisterResponseAuth(struct {
+	_           structs.Incomparable
+	Provider    string
+	LoginName   string
+	Oauth2Token *Oauth2Token
+	AuthKey     string
+}{})
+
+// View returns a readonly view of RegisterRequest.
+func (p *RegisterRequest) View() RegisterRequestView {
+	return RegisterRequestView{ж: p}
+}
+
+// RegisterRequestView provides a read-only view over RegisterRequest.
+//
+// Its methods should only be called if `Valid()` returns true.
+type RegisterRequestView struct {
+	// ж is the underlying mutable value, named with a hard-to-type
+	// character that looks pointy like a pointer.
+	// It is named distinctively to make you think of how dangerous it is to escape
+	// to callers. You must not let callers be able to mutate it.
+	ж *RegisterRequest
+}
+
+// Valid reports whether underlying value is non-nil.
+func (v RegisterRequestView) Valid() bool { return v.ж != nil }
+
+// AsStruct returns a clone of the underlying value which aliases no memory with
+// the original.
+func (v RegisterRequestView) AsStruct() *RegisterRequest {
+	if v.ж == nil {
+		return nil
+	}
+	return v.ж.Clone()
+}
+
+func (v RegisterRequestView) MarshalJSON() ([]byte, error) { return json.Marshal(v.ж) }
+
+func (v *RegisterRequestView) UnmarshalJSON(b []byte) error {
+	if v.ж != nil {
+		return errors.New("already initialized")
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var x RegisterRequest
+	if err := json.Unmarshal(b, &x); err != nil {
+		return err
+	}
+	v.ж = &x
+	return nil
+}
+
+func (v RegisterRequestView) Version() CapabilityVersion     { return v.ж.Version }
+func (v RegisterRequestView) NodeKey() key.NodePublic        { return v.ж.NodeKey }
+func (v RegisterRequestView) OldNodeKey() key.NodePublic     { return v.ж.OldNodeKey }
+func (v RegisterRequestView) NLKey() key.NLPublic            { return v.ж.NLKey }
+func (v RegisterRequestView) Auth() RegisterResponseAuthView { return v.ж.Auth.View() }
+func (v RegisterRequestView) Expiry() time.Time              { return v.ж.Expiry }
+func (v RegisterRequestView) Followup() string               { return v.ж.Followup }
+func (v RegisterRequestView) Hostinfo() HostinfoView         { return v.ж.Hostinfo.View() }
+func (v RegisterRequestView) Ephemeral() bool                { return v.ж.Ephemeral }
+func (v RegisterRequestView) NodeKeySignature() views.ByteSlice[tkatype.MarshaledSignature] {
+	return views.ByteSliceOf(v.ж.NodeKeySignature)
+}
+func (v RegisterRequestView) SignatureType() SignatureType { return v.ж.SignatureType }
+func (v RegisterRequestView) Timestamp() *time.Time {
+	if v.ж.Timestamp == nil {
+		return nil
+	}
+	x := *v.ж.Timestamp
+	return &x
+}
+
+func (v RegisterRequestView) DeviceCert() views.ByteSlice[[]byte] {
+	return views.ByteSliceOf(v.ж.DeviceCert)
+}
+func (v RegisterRequestView) Signature() views.ByteSlice[[]byte] {
+	return views.ByteSliceOf(v.ж.Signature)
+}
+
+// A compilation failure here means this code must be regenerated, with the command at the top of this file.
+var _RegisterRequestViewNeedsRegeneration = RegisterRequest(struct {
+	_                structs.Incomparable
+	Version          CapabilityVersion
+	NodeKey          key.NodePublic
+	OldNodeKey       key.NodePublic
+	NLKey            key.NLPublic
+	Auth             RegisterResponseAuth
+	Expiry           time.Time
+	Followup         string
+	Hostinfo         *Hostinfo
+	Ephemeral        bool
+	NodeKeySignature tkatype.MarshaledSignature
+	SignatureType    SignatureType
+	Timestamp        *time.Time
+	DeviceCert       []byte
+	Signature        []byte
 }{})
 
 // View returns a readonly view of DERPHomeParams.

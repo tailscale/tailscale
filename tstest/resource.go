@@ -22,11 +22,11 @@ func ResourceCheck(tb testing.TB) {
 			return
 		}
 		// Goroutines might be still exiting.
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 300; i++ {
 			if runtime.NumGoroutine() <= startN {
 				return
 			}
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 		endN, endStacks := goroutines()
 		if endN <= startN {

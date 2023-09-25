@@ -456,15 +456,15 @@ func TestHandlePeerAPI(t *testing.T) {
 			lb := &LocalBackend{
 				logf:           e.logBuf.Logf,
 				capFileSharing: tt.capSharing,
-				netMap:         &netmap.NetworkMap{SelfNode: selfNode},
+				netMap:         &netmap.NetworkMap{SelfNode: selfNode.View()},
 				clock:          &tstest.Clock{},
 			}
 			e.ph = &peerAPIHandler{
 				isSelf:   tt.isSelf,
-				selfNode: selfNode,
-				peerNode: &tailcfg.Node{
+				selfNode: selfNode.View(),
+				peerNode: (&tailcfg.Node{
 					ComputedName: "some-peer-name",
-				},
+				}).View(),
 				ps: &peerAPIServer{
 					b: lb,
 				},
@@ -513,12 +513,12 @@ func TestFileDeleteRace(t *testing.T) {
 	}
 	ph := &peerAPIHandler{
 		isSelf: true,
-		peerNode: &tailcfg.Node{
+		peerNode: (&tailcfg.Node{
 			ComputedName: "some-peer-name",
-		},
-		selfNode: &tailcfg.Node{
+		}).View(),
+		selfNode: (&tailcfg.Node{
 			Addresses: []netip.Prefix{netip.MustParsePrefix("100.100.100.101/32")},
-		},
+		}).View(),
 		ps: ps,
 	}
 	buf := make([]byte, 2<<20)
@@ -660,7 +660,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 			netip.MustParsePrefix("0.0.0.0/0"),
 			netip.MustParsePrefix("::/0"),
 		},
-	}).View())
+	}).View(), "")
 	if !h.ps.b.OfferingExitNode() {
 		t.Fatal("unexpectedly not offering exit node")
 	}

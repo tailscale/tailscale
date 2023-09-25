@@ -8,22 +8,19 @@
     <link rel="stylesheet" type="text/css" href="/src/index.css" />
   </head>
   <body>
-    <div class="min-h-screen py-10 flex justify-center items-center" style="display: none">
-      <div class="max-w-md">
-        <h3 class="font-semibold text-lg mb-4">Your web browser is unsupported.</h3>
-        <p class="mb-2">
-          Update to a modern browser to access the Tailscale web client. You can use
-          <a class="link" href="https://www.mozilla.org/en-US/firefox/new/" target="_blank">Firefox</a>,
-          <a class="link" href="https://www.microsoft.com/en-us/edge" target="_blank">Edge</a>,
-          <a class="link" href="https://www.apple.com/safari/" target="_blank">Safari</a>,
-          or <a class="link" href="https://www.google.com/chrome/" target="_blank">Chrome</a>.</p>
-        <p>If you need any help, feel free to <a href="mailto:support+webclient@tailscale.com" class="link">contact us</a></p>
-      </div>
-    </div>
     <noscript>
       <p class="mb-2">You need to enable Javascript to access the Tailscale web client.</p>
       <p>If you need any help, feel free to <a href="mailto:support+webclient@tailscale.com" class="link">contact us</a>.</p>
     </noscript>
     <script type="module" src="/src/index.tsx"></script>
+    <script>
+      window.addEventListener("load", () => {
+        if (!window.Tailscale) {
+          const rootEl = document.createElement("p")
+          rootEl.innerHTML = 'Tailscale was built without the web client. See <a href="https://github.com/tailscale/tailscale#building-the-web-client">Building the web client</a> for more information.'
+          document.body.append(rootEl)
+        }
+      });
+    </script>
   </body>
 </html>

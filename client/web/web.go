@@ -5,317 +5,160 @@
 package web
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
-	_ "embed"
+	"crypto/rand"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
-	"html/template"
 	"io"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/netip"
-	"net/url"
 	"os"
-	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/licenses"
 	"tailscale.com/net/netutil"
 	"tailscale.com/tailcfg"
-	"tailscale.com/util/groupmember"
 	"tailscale.com/util/httpm"
 	"tailscale.com/version/distro"
 )
-
-//go:embed web.html
-var webHTML string
-
-//go:embed web.css
-var webCSS string
-
-//go:embed auth-redirect.html
-var authenticationRedirectHTML string
-
-var tmpl *template.Template
 
 // Server is the backend server for a Tailscale web client.
 type Server struct {
 	lc *tailscale.LocalClient
 
-	devMode  bool
-	devProxy *httputil.ReverseProxy // only filled when devMode is on
+	devMode bool
+
+	cgiMode    bool
+	pathPrefix string
+
+	assetsHandler http.Handler // serves frontend assets
+	apiHandler    http.Handler // serves api endpoints; csrf-protected
+}
+
+// ServerOpts contains options for constructing a new Server.
+type ServerOpts struct {
+	DevMode bool
+
+	// CGIMode indicates if the server is running as a CGI script.
+	CGIMode bool
+
+	// PathPrefix is the URL prefix added to requests by CGI or reverse proxy.
+	PathPrefix string
+
+	// LocalClient is the tailscale.LocalClient to use for this web server.
+	// If nil, a new one will be created.
+	LocalClient *tailscale.LocalClient
 }
 
 // NewServer constructs a new Tailscale web client server.
-//
-// lc is an optional parameter. When not filled, NewServer
-// initializes its own tailscale.LocalClient.
-func NewServer(devMode bool, lc *tailscale.LocalClient) (s *Server, cleanup func()) {
-	if lc == nil {
-		lc = &tailscale.LocalClient{}
+// The provided context should live for the duration of the Server's lifetime.
+func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func()) {
+	if opts.LocalClient == nil {
+		opts.LocalClient = &tailscale.LocalClient{}
 	}
 	s = &Server{
-		devMode: devMode,
-		lc:      lc,
+		devMode:    opts.DevMode,
+		lc:         opts.LocalClient,
+		cgiMode:    opts.CGIMode,
+		pathPrefix: opts.PathPrefix,
 	}
-	cleanup = func() {}
-	if s.devMode {
-		cleanup = s.startDevServer()
-		s.addProxyToDevServer()
-	}
+	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
+
+	// Create handler for "/api" requests with CSRF protection.
+	// We don't require secure cookies, since the web client is regularly used
+	// on network appliances that are served on local non-https URLs.
+	// The client is secured by limiting the interface it listens on,
+	// or by authenticating requests before they reach the web client.
+	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
+	s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+
+	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
 }
 
-func init() {
-	tmpl = template.Must(template.New("web.html").Parse(webHTML))
-	template.Must(tmpl.New("web.css").Parse(webCSS))
+// ServeHTTP processes all requests for the Tailscale web client.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	handler := s.serve
+
+	// if path prefix is defined, strip it from requests.
+	if s.pathPrefix != "" {
+		handler = enforcePrefix(s.pathPrefix, handler)
+	}
+
+	handler(w, r)
 }
 
-// authorize returns the name of the user accessing the web UI after verifying
-// whether the user has access to the web UI. The function will write the
-// error to the provided http.ResponseWriter.
-// Note: This is different from a tailscale user, and is typically the local
-// user on the node.
-func authorize(w http.ResponseWriter, r *http.Request) (string, error) {
+// authorize checks if the request is authorized to access the web client for those platforms that support it.
+func authorize(w http.ResponseWriter, r *http.Request) (handled bool) {
+	if strings.HasPrefix(r.URL.Path, "/assets/") {
+		// don't require authorization for static assets
+		return false
+	}
+
 	switch distro.Get() {
 	case distro.Synology:
-		user, err := synoAuthn()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return "", err
-		}
-		if err := authorizeSynology(user); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return "", err
-		}
-		return user, nil
+		return authorizeSynology(w, r)
 	case distro.QNAP:
-		user, resp, err := qnapAuthn(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return "", err
-		}
-		if resp.IsAdmin == 0 {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return "", err
-		}
-		return user, nil
-	}
-	return "", nil
-}
-
-// authorizeSynology checks whether the provided user has access to the web UI
-// by consulting the membership of the "administrators" group.
-func authorizeSynology(name string) error {
-	yes, err := groupmember.IsMemberOfGroup("administrators", name)
-	if err != nil {
-		return err
-	}
-	if !yes {
-		return fmt.Errorf("not a member of administrators group")
-	}
-	return nil
-}
-
-type qnapAuthResponse struct {
-	AuthPassed int    `xml:"authPassed"`
-	IsAdmin    int    `xml:"isAdmin"`
-	AuthSID    string `xml:"authSid"`
-	ErrorValue int    `xml:"errorValue"`
-}
-
-func qnapAuthn(r *http.Request) (string, *qnapAuthResponse, error) {
-	user, err := r.Cookie("NAS_USER")
-	if err != nil {
-		return "", nil, err
-	}
-	token, err := r.Cookie("qtoken")
-	if err == nil {
-		return qnapAuthnQtoken(r, user.Value, token.Value)
-	}
-	sid, err := r.Cookie("NAS_SID")
-	if err == nil {
-		return qnapAuthnSid(r, user.Value, sid.Value)
-	}
-	return "", nil, fmt.Errorf("not authenticated by any mechanism")
-}
-
-// qnapAuthnURL returns the auth URL to use by inferring where the UI is
-// running based on the request URL. This is necessary because QNAP has so
-// many options, see https://github.com/tailscale/tailscale/issues/7108
-// and https://github.com/tailscale/tailscale/issues/6903
-func qnapAuthnURL(requestUrl string, query url.Values) string {
-	in, err := url.Parse(requestUrl)
-	scheme := ""
-	host := ""
-	if err != nil || in.Scheme == "" {
-		log.Printf("Cannot parse QNAP login URL %v", err)
-
-		// try localhost and hope for the best
-		scheme = "http"
-		host = "localhost"
-	} else {
-		scheme = in.Scheme
-		host = in.Host
+		return authorizeQNAP(w, r)
 	}
 
-	u := url.URL{
-		Scheme:   scheme,
-		Host:     host,
-		Path:     "/cgi-bin/authLogin.cgi",
-		RawQuery: query.Encode(),
-	}
-
-	return u.String()
-}
-
-func qnapAuthnQtoken(r *http.Request, user, token string) (string, *qnapAuthResponse, error) {
-	query := url.Values{
-		"qtoken": []string{token},
-		"user":   []string{user},
-	}
-	return qnapAuthnFinish(user, qnapAuthnURL(r.URL.String(), query))
-}
-
-func qnapAuthnSid(r *http.Request, user, sid string) (string, *qnapAuthResponse, error) {
-	query := url.Values{
-		"sid": []string{sid},
-	}
-	return qnapAuthnFinish(user, qnapAuthnURL(r.URL.String(), query))
-}
-
-func qnapAuthnFinish(user, url string) (string, *qnapAuthResponse, error) {
-	// QNAP Force HTTPS mode uses a self-signed certificate. Even importing
-	// the QNAP root CA isn't enough, the cert doesn't have a usable CN nor
-	// SAN. See https://github.com/tailscale/tailscale/issues/6903
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	client := &http.Client{Transport: tr}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", nil, err
-	}
-	authResp := &qnapAuthResponse{}
-	if err := xml.Unmarshal(out, authResp); err != nil {
-		return "", nil, err
-	}
-	if authResp.AuthPassed == 0 {
-		return "", nil, fmt.Errorf("not authenticated")
-	}
-	return user, authResp, nil
-}
-
-func synoAuthn() (string, error) {
-	cmd := exec.Command("/usr/syno/synoman/webman/modules/authenticate.cgi")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("auth: %v: %s", err, out)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func authRedirect(w http.ResponseWriter, r *http.Request) bool {
-	if distro.Get() == distro.Synology {
-		return synoTokenRedirect(w, r)
-	}
 	return false
 }
 
-func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {
-	if r.Header.Get("X-Syno-Token") != "" {
-		return false
-	}
-	if r.URL.Query().Get("SynoToken") != "" {
-		return false
-	}
-	if r.Method == "POST" && r.FormValue("SynoToken") != "" {
-		return false
-	}
-	// We need a SynoToken for authenticate.cgi.
-	// So we tell the client to get one.
-	_, _ = fmt.Fprint(w, synoTokenRedirectHTML)
-	return true
-}
-
-const synoTokenRedirectHTML = `<html><body>
-Redirecting with session token...
-<script>
-var serverURL = window.location.protocol + "//" + window.location.host;
-var req = new XMLHttpRequest();
-req.overrideMimeType("application/json");
-req.open("GET", serverURL + "/webman/login.cgi", true);
-req.onload = function() {
-	var jsonResponse = JSON.parse(req.responseText);
-	var token = jsonResponse["SynoToken"];
-	document.location.href = serverURL + "/webman/3rdparty/Tailscale/?SynoToken=" + token;
-};
-req.send(null);
-</script>
-</body></html>
-`
-
-// ServeHTTP processes all requests for the Tailscale web client.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.devMode {
-		if r.URL.Path == "/api/data" {
-			user, err := authorize(w, r)
-			if err != nil {
-				return
-			}
-			switch r.Method {
-			case httpm.GET:
-				s.serveGetNodeDataJSON(w, r, user)
-			case httpm.POST:
-				s.servePostNodeUpdate(w, r)
-			default:
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			}
-			return
-		}
-		// When in dev mode, proxy to the Vite dev server.
-		s.devProxy.ServeHTTP(w, r)
-		return
-	}
-
-	if authRedirect(w, r) {
-		return
-	}
-
-	user, err := authorize(w, r)
-	if err != nil {
-		return
-	}
-
+func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.URL.Path == "/redirect" || r.URL.Path == "/redirect/":
-		io.WriteString(w, authenticationRedirectHTML)
+	case authorize(w, r):
+		// Authenticate and authorize the request for platforms that support it.
+		// Return if the request was processed.
 		return
-	case r.Method == "POST":
-		s.servePostNodeUpdate(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/"):
+		// Pass API requests through to the API handler.
+		s.apiHandler.ServeHTTP(w, r)
 		return
 	default:
-		s.serveGetNodeData(w, r, user)
+		if !s.devMode {
+			s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
+		}
+		s.assetsHandler.ServeHTTP(w, r)
 		return
 	}
+}
+
+// serveAPI serves requests for the web client api.
+// It should only be called by Server.ServeHTTP, via Server.apiHandler,
+// which protects the handler using gorilla csrf.
+func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-CSRF-Token", csrf.Token(r))
+	path := strings.TrimPrefix(r.URL.Path, "/api")
+	switch {
+	case path == "/data":
+		switch r.Method {
+		case httpm.GET:
+			s.serveGetNodeDataJSON(w, r)
+		case httpm.POST:
+			s.servePostNodeUpdate(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case strings.HasPrefix(path, "/local/"):
+		s.proxyRequestToLocalAPI(w, r)
+		return
+	}
+	http.Error(w, "invalid endpoint", http.StatusNotFound)
 }
 
 type nodeData struct {
 	Profile           tailcfg.UserProfile
-	SynologyUser      string
 	Status            string
 	DeviceName        string
 	IP                string
@@ -330,7 +173,7 @@ type nodeData struct {
 	IPNVersion        string
 }
 
-func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error) {
+func (s *Server) getNodeData(ctx context.Context) (*nodeData, error) {
 	st, err := s.lc.Status(ctx)
 	if err != nil {
 		return nil, err
@@ -343,17 +186,16 @@ func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error
 	deviceName := strings.Split(st.Self.DNSName, ".")[0]
 	versionShort := strings.Split(st.Version, "-")[0]
 	data := &nodeData{
-		SynologyUser: user,
-		Profile:      profile,
-		Status:       st.BackendState,
-		DeviceName:   deviceName,
-		LicensesURL:  licenses.LicensesURL(),
-		TUNMode:      st.TUN,
-		IsSynology:   distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
-		DSMVersion:   distro.DSMVersion(),
-		IsUnraid:     distro.Get() == distro.Unraid,
-		UnraidToken:  os.Getenv("UNRAID_CSRF_TOKEN"),
-		IPNVersion:   versionShort,
+		Profile:     profile,
+		Status:      st.BackendState,
+		DeviceName:  deviceName,
+		LicensesURL: licenses.LicensesURL(),
+		TUNMode:     st.TUN,
+		IsSynology:  distro.Get() == distro.Synology || envknob.Bool("TS_FAKE_SYNOLOGY"),
+		DSMVersion:  distro.DSMVersion(),
+		IsUnraid:    distro.Get() == distro.Unraid,
+		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
+		IPNVersion:  versionShort,
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")
@@ -373,22 +215,8 @@ func (s *Server) getNodeData(ctx context.Context, user string) (*nodeData, error
 	return data, nil
 }
 
-func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request, user string) {
-	data, err := s.getNodeData(r.Context(), user)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	buf := new(bytes.Buffer)
-	if err := tmpl.Execute(buf, *data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Write(buf.Bytes())
-}
-
-func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request, user string) {
-	data, err := s.getNodeData(r.Context(), user)
+func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request) {
+	data, err := s.getNodeData(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -398,7 +226,6 @@ func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	return
 }
 
 type nodeUpdate struct {
@@ -466,7 +293,6 @@ func (s *Server) servePostNodeUpdate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		io.WriteString(w, "{}")
 	}
-	return
 }
 
 func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData nodeUpdate) (authURL string, retErr error) {
@@ -525,5 +351,119 @@ func (s *Server) tailscaleUp(ctx context.Context, st *ipnstate.Status, postData 
 		if url := n.BrowseToURL; url != nil && printAuthURL(*url) {
 			return *url, nil
 		}
+	}
+}
+
+// proxyRequestToLocalAPI proxies the web API request to the localapi.
+//
+// The web API request path is expected to exactly match a localapi path,
+// with prefix /api/local/ rather than /localapi/.
+//
+// If the localapi path is not included in localapiAllowlist,
+// the request is rejected.
+func (s *Server) proxyRequestToLocalAPI(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/local")
+	if r.URL.Path == path { // missing prefix
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if !slices.Contains(localapiAllowlist, path) {
+		http.Error(w, fmt.Sprintf("%s not allowed from localapi proxy", path), http.StatusForbidden)
+		return
+	}
+
+	localAPIURL := "http://" + apitype.LocalAPIHost + "/localapi" + path
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, localAPIURL, r.Body)
+	if err != nil {
+		http.Error(w, "failed to construct request", http.StatusInternalServerError)
+		return
+	}
+
+	// Make request to tailscaled localapi.
+	resp, err := s.lc.DoLocalRequest(req)
+	if err != nil {
+		http.Error(w, err.Error(), resp.StatusCode)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Send response back to web frontend.
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// localapiAllowlist is an allowlist of localapi endpoints the
+// web client is allowed to proxy to the client's localapi.
+//
+// Rather than exposing all localapi endpoints over the proxy,
+// this limits to just the ones actually used from the web
+// client frontend.
+//
+// TODO(sonia,will): Shouldn't expand this beyond the existing
+// localapi endpoints until the larger web client auth story
+// is worked out (tailscale/corp#14335).
+var localapiAllowlist = []string{
+	"/v0/logout",
+}
+
+// csrfKey returns a key that can be used for CSRF protection.
+// If an error occurs during key creation, the error is logged and the active process terminated.
+// If the server is running in CGI mode, the key is cached to disk and reused between requests.
+// If an error occurs during key storage, the error is logged and the active process terminated.
+func (s *Server) csrfKey() []byte {
+	csrfFile := filepath.Join(os.TempDir(), "tailscale-web-csrf.key")
+
+	// if running in CGI mode, try to read from disk, but ignore errors
+	if s.cgiMode {
+		key, _ := os.ReadFile(csrfFile)
+		if len(key) == 32 {
+			return key
+		}
+	}
+
+	// create a new key
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		log.Fatalf("error generating CSRF key: %v", err)
+	}
+
+	// if running in CGI mode, try to write the newly created key to disk, and exit if it fails.
+	if s.cgiMode {
+		if err := os.WriteFile(csrfFile, key, 0600); err != nil {
+			log.Fatalf("unable to store CSRF key: %v", err)
+		}
+	}
+
+	return key
+}
+
+// enforcePrefix returns a HandlerFunc that enforces a given path prefix is used in requests,
+// then strips it before invoking h.
+// Unlike http.StripPrefix, it does not return a 404 if the prefix is not present.
+// Instead, it returns a redirect to the prefix path.
+func enforcePrefix(prefix string, h http.HandlerFunc) http.HandlerFunc {
+	if prefix == "" {
+		return h
+	}
+
+	// ensure that prefix always has both a leading and trailing slash so
+	// that relative links for JS and CSS assets work correctly.
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			http.Redirect(w, r, prefix, http.StatusFound)
+			return
+		}
+		prefix = strings.TrimSuffix(prefix, "/")
+		http.StripPrefix(prefix, h).ServeHTTP(w, r)
 	}
 }

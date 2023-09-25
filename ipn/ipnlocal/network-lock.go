@@ -69,16 +69,16 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 
 	var toDelete map[int]bool // peer index => true
 	for i, p := range nm.Peers {
-		if p.UnsignedPeerAPIOnly {
+		if p.UnsignedPeerAPIOnly() {
 			// Not subject to tailnet lock.
 			continue
 		}
-		if len(p.KeySignature) == 0 {
-			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID, p.StableID)
+		if p.KeySignature().Len() == 0 {
+			b.logf("Network lock is dropping peer %v(%v) due to missing signature", p.ID(), p.StableID())
 			mak.Set(&toDelete, i, true)
 		} else {
-			if err := b.tka.authority.NodeKeyAuthorized(p.Key, p.KeySignature); err != nil {
-				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID, p.StableID, err)
+			if err := b.tka.authority.NodeKeyAuthorized(p.Key(), p.KeySignature().AsSlice()); err != nil {
+				b.logf("Network lock is dropping peer %v(%v) due to failed signature check: %v", p.ID(), p.StableID(), err)
 				mak.Set(&toDelete, i, true)
 			}
 		}
@@ -86,7 +86,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 
 	// nm.Peers is ordered, so deletion must be order-preserving.
 	if len(toDelete) > 0 {
-		peers := make([]*tailcfg.Node, 0, len(nm.Peers))
+		peers := make([]tailcfg.NodeView, 0, len(nm.Peers))
 		filtered := make([]ipnstate.TKAFilteredPeer, 0, len(toDelete))
 		for i, p := range nm.Peers {
 			if !toDelete[i] {
@@ -94,13 +94,14 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 			} else {
 				// Record information about the node we filtered out.
 				fp := ipnstate.TKAFilteredPeer{
-					Name:         p.Name,
-					ID:           p.ID,
-					StableID:     p.StableID,
-					TailscaleIPs: make([]netip.Addr, len(p.Addresses)),
-					NodeKey:      p.Key,
+					Name:         p.Name(),
+					ID:           p.ID(),
+					StableID:     p.StableID(),
+					TailscaleIPs: make([]netip.Addr, p.Addresses().Len()),
+					NodeKey:      p.Key(),
 				}
-				for i, addr := range p.Addresses {
+				for i := range p.Addresses().LenIter() {
+					addr := p.Addresses().At(i)
 					if addr.IsSingleIP() && tsaddr.IsTailscaleIP(addr.Addr()) {
 						fp.TailscaleIPs[i] = addr.Addr()
 					}
@@ -115,7 +116,7 @@ func (b *LocalBackend) tkaFilterNetmapLocked(nm *netmap.NetworkMap) {
 	}
 
 	// Check that we ourselves are not locked out, report a health issue if so.
-	if nm.SelfNode != nil && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key, nm.SelfNode.KeySignature) != nil {
+	if nm.SelfNode.Valid() && b.tka.authority.NodeKeyAuthorized(nm.SelfNode.Key(), nm.SelfNode.KeySignature().AsSlice()) != nil {
 		health.SetTKAHealth(errors.New(healthmsg.LockedOut))
 	} else {
 		health.SetTKAHealth(nil)
@@ -424,7 +425,7 @@ func (b *LocalBackend) NetworkLockStatus() *ipnstate.NetworkLockStatus {
 
 	var selfAuthorized bool
 	if b.netMap != nil {
-		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key, b.netMap.SelfNode.KeySignature) == nil
+		selfAuthorized = b.tka.authority.NodeKeyAuthorized(b.netMap.SelfNode.Key(), b.netMap.SelfNode.KeySignature().AsSlice()) == nil
 	}
 
 	keys := b.tka.authority.Keys()
@@ -577,7 +578,7 @@ func (b *LocalBackend) NetworkLockForceLocalDisable() error {
 
 	newPrefs := b.pm.CurrentPrefs().AsStruct().Clone() // .Persist should always be initialized here.
 	newPrefs.Persist.DisallowedTKAStateIDs = append(newPrefs.Persist.DisallowedTKAStateIDs, stateID)
-	if err := b.pm.SetPrefs(newPrefs.View()); err != nil {
+	if err := b.pm.SetPrefs(newPrefs.View(), b.netMap.MagicDNSSuffix()); err != nil {
 		return fmt.Errorf("saving prefs: %w", err)
 	}
 

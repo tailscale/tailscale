@@ -41,7 +41,6 @@ import (
 	_ "tailscale.com/net/tstun"
 	_ "tailscale.com/paths"
 	_ "tailscale.com/safesocket"
-	_ "tailscale.com/smallzstd"
 	_ "tailscale.com/syncs"
 	_ "tailscale.com/tailcfg"
 	_ "tailscale.com/tsd"

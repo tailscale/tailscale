@@ -2,7 +2,7 @@
 # at build time and then uses to construct Tailscale proxy pods.
 apiVersion: apps/v1
 kind: StatefulSet
-metadata:
+metadata: {}
 spec:
   replicas: 1
   template:

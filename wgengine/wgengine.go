@@ -11,7 +11,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
@@ -35,26 +34,18 @@ type Status struct {
 // Exactly one of Status or error is non-nil.
 type StatusCallback func(*Status, error)
 
-// NetInfoCallback is the type used by Engine.SetNetInfoCallback.
-type NetInfoCallback func(*tailcfg.NetInfo)
-
 // NetworkMapCallback is the type used by callbacks that hook
 // into network map updates.
 type NetworkMapCallback func(*netmap.NetworkMap)
-
-// someHandle is allocated so its pointer address acts as a unique
-// map key handle. (It needs to have non-zero size for Go to guarantee
-// the pointer is unique.)
-type someHandle struct{ _ byte }
 
 // ErrNoChanges is returned by Engine.Reconfig if no changes were made.
 var ErrNoChanges = errors.New("no changes made to Engine config")
 
 // PeerForIP is the type returned by Engine.PeerForIP.
 type PeerForIP struct {
-	// Node is the matched node. It's always non-nil when
+	// Node is the matched node. It's always a valid value when
 	// Engine.PeerForIP returns ok==true.
-	Node *tailcfg.Node
+	Node tailcfg.NodeView
 
 	// IsSelf is whether the Node is the local process.
 	IsSelf bool
@@ -103,46 +94,12 @@ type Engine interface {
 	// TODO: return an error?
 	Wait()
 
-	// LinkChange informs the engine that the system network
-	// link has changed.
-	//
-	// The isExpensive parameter is not used.
-	//
-	// LinkChange should be called whenever something changed with
-	// the network, no matter how minor.
-	//
-	// Deprecated: don't use this method. It was removed shortly
-	// before the Tailscale 1.6 release when we remembered that
-	// Android doesn't use the Linux-based network monitor and has
-	// its own mechanism that uses LinkChange. Android is the only
-	// caller of this method now. Don't add more.
-	LinkChange(isExpensive bool)
-
-	// SetDERPMap controls which (if any) DERP servers are used.
-	// If nil, DERP is disabled. It starts disabled until a DERP map
-	// is configured.
-	SetDERPMap(*tailcfg.DERPMap)
-
 	// SetNetworkMap informs the engine of the latest network map
 	// from the server. The network map's DERPMap field should be
 	// ignored as as it might be disabled; get it from SetDERPMap
 	// instead.
 	// The network map should only be read from.
 	SetNetworkMap(*netmap.NetworkMap)
-
-	// AddNetworkMapCallback adds a function to a list of callbacks
-	// that are called when the network map updates. It returns a
-	// function that when called would remove the function from the
-	// list of callbacks.
-	AddNetworkMapCallback(NetworkMapCallback) (removeCallback func())
-
-	// SetNetInfoCallback sets the function to call when a
-	// new NetInfo summary is available.
-	SetNetInfoCallback(NetInfoCallback)
-
-	// DiscoPublicKey gets the public key used for path discovery
-	// messages.
-	DiscoPublicKey() key.DiscoPublic
 
 	// UpdateStatus populates the network state using the provided
 	// status builder.
@@ -153,21 +110,6 @@ type Engine interface {
 	//
 	// If size is zero too small, it is ignored. See tailscale.PingOpts for details.
 	Ping(ip netip.Addr, pingType tailcfg.PingType, size int, cb func(*ipnstate.PingResult))
-
-	// RegisterIPPortIdentity registers a given node (identified by its
-	// Tailscale IP) as temporarily having the given IP:port for whois lookups.
-	// The IP:port is generally a localhost IP and an ephemeral port, used
-	// while proxying connections to localhost when tailscaled is running
-	// in netstack mode.
-	RegisterIPPortIdentity(netip.AddrPort, netip.Addr)
-
-	// UnregisterIPPortIdentity removes a temporary IP:port registration
-	// made previously by RegisterIPPortIdentity.
-	UnregisterIPPortIdentity(netip.AddrPort)
-
-	// WhoIsIPPort looks up an IP:port in the temporary registrations,
-	// and returns a matching Tailscale IP, if it exists.
-	WhoIsIPPort(netip.AddrPort) (netip.Addr, bool)
 
 	// InstallCaptureHook registers a function to be called to capture
 	// packets traversing the data path. The hook can be uninstalled by

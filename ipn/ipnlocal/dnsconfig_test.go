@@ -38,10 +38,19 @@ func ips(ss ...string) (ips []netip.Addr) {
 	return
 }
 
+func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
+	nv := make([]tailcfg.NodeView, len(v))
+	for i, n := range v {
+		nv[i] = n.View()
+	}
+	return nv
+}
+
 func TestDNSConfigForNetmap(t *testing.T) {
 	tests := []struct {
 		name    string
 		nm      *netmap.NetworkMap
+		peers   []tailcfg.NodeView
 		os      string // version.OS value; empty means linux
 		cloud   cloudenv.Cloud
 		prefs   *ipn.Prefs
@@ -60,23 +69,28 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "self_name_and_peers",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("100.101.101.101"),
-				Peers: []*tailcfg.Node{
-					{
-						Name:      "peera.net",
-						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
-					},
-					{
-						Name:      "b.net",
-						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
-					},
-					{
-						Name:      "v6-only.net",
-						Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
-					},
-				},
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
 			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+				{
+					ID:        2,
+					Name:      "b.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
+				},
+				{
+					ID:        3,
+					Name:      "v6-only.net",
+					Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
+				},
+			}),
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
@@ -94,23 +108,28 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			// even if they have IPv4.
 			name: "v6_only_self",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("fe75::1"),
-				Peers: []*tailcfg.Node{
-					{
-						Name:      "peera.net",
-						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001"),
-					},
-					{
-						Name:      "b.net",
-						Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
-					},
-					{
-						Name:      "v6-only.net",
-						Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
-					},
-				},
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("fe75::1"),
+				}).View(),
 			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001"),
+				},
+				{
+					ID:        2,
+					Name:      "b.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::2"),
+				},
+				{
+					ID:        3,
+					Name:      "v6-only.net",
+					Addresses: ipps("fe75::3"), // no IPv4, so we don't ignore IPv6
+				},
+			}),
 			prefs: &ipn.Prefs{},
 			want: &dns.Config{
 				OnlyIPv6: true,
@@ -126,8 +145,10 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		{
 			name: "extra_records",
 			nm: &netmap.NetworkMap{
-				Name:      "myname.net",
-				Addresses: ipps("100.101.101.101"),
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
 				DNS: tailcfg.DNSConfig{
 					ExtraRecords: []tailcfg.DNSRecord{
 						{Name: "foo.com", Value: "1.2.3.4"},
@@ -311,7 +332,7 @@ func TestDNSConfigForNetmap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			verOS := cmpx.Or(tt.os, "linux")
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, tt.prefs.View(), log.Logf, verOS)
+			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), log.Logf, verOS)
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
@@ -322,6 +343,17 @@ func TestDNSConfigForNetmap(t *testing.T) {
 			}
 		})
 	}
+}
+
+func peersMap(s []tailcfg.NodeView) map[tailcfg.NodeID]tailcfg.NodeView {
+	m := make(map[tailcfg.NodeID]tailcfg.NodeView)
+	for _, n := range s {
+		if n.ID() == 0 {
+			panic("zero Node.ID")
+		}
+		m[n.ID()] = n
+	}
+	return m
 }
 
 func TestAllowExitNodeDNSProxyToServeName(t *testing.T) {

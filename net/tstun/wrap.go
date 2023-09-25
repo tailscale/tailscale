@@ -35,6 +35,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/mak"
+	"tailscale.com/util/set"
 	"tailscale.com/wgengine/capture"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/wgcfg"
@@ -97,7 +98,7 @@ type Wrapper struct {
 	// timeNow, if non-nil, will be used to obtain the current time.
 	timeNow func() time.Time
 
-	// natV4Config stores the current NAT configuration.
+	// natV4Config stores the current IPv4 NAT configuration.
 	natV4Config atomic.Pointer[natV4Config]
 
 	// vectorBuffer stores the oldest unconsumed packet vector from tdev. It is
@@ -544,6 +545,44 @@ type natV4Config struct {
 	dstAddrToPeerKeyMapper *table.RoutingTable
 }
 
+func (c *natV4Config) String() string {
+	if c == nil {
+		return "<nil>"
+	}
+	var b strings.Builder
+	b.WriteString("natV4Config{")
+	fmt.Fprintf(&b, "nativeAddr: %v, ", c.nativeAddr)
+	fmt.Fprint(&b, "listenAddrs: [")
+
+	i := 0
+	c.listenAddrs.Range(func(k netip.Addr, _ struct{}) bool {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(k.String())
+		i++
+		return true
+	})
+	count := map[netip.Addr]int{}
+	c.dstMasqAddrs.Range(func(_ key.NodePublic, v netip.Addr) bool {
+		count[v]++
+		return true
+	})
+
+	i = 0
+	b.WriteString("], dstMasqAddrs: [")
+	for k, v := range count {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%v: %v peers", k, v)
+		i++
+	}
+	b.WriteString("]}")
+
+	return b.String()
+}
+
 // mapDstIP returns the destination IP to use for a packet to dst.
 // If dst is not one of the listen addresses, it is returned as-is,
 // otherwise the native address is returned.
@@ -576,9 +615,9 @@ func (c *natV4Config) selectSrcIP(oldSrc, dst netip.Addr) netip.Addr {
 	return oldSrc
 }
 
-// natConfigFromWireGuardConfig generates a natV4Config from nm.
+// natV4ConfigFromWGConfig generates a natV4Config from nm.
 // If v4 NAT is not required, it returns nil.
-func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
+func natV4ConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	if wcfg == nil {
 		return nil
 	}
@@ -589,7 +628,7 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 	var (
 		rt           table.RoutingTableBuilder
 		dstMasqAddrs map[key.NodePublic]netip.Addr
-		listenAddrs  map[netip.Addr]struct{}
+		listenAddrs  set.Set[netip.Addr]
 	)
 
 	// When using an exit node that requires masquerading, we need to
@@ -631,10 +670,10 @@ func natConfigFromWGConfig(wcfg *wgcfg.Config) *natV4Config {
 // SetNetMap is called when a new NetworkMap is received.
 // It currently (2023-03-01) only updates the IPv4 NAT configuration.
 func (t *Wrapper) SetWGConfig(wcfg *wgcfg.Config) {
-	cfg := natConfigFromWGConfig(wcfg)
+	cfg := natV4ConfigFromWGConfig(wcfg)
 	old := t.natV4Config.Swap(cfg)
 	if !reflect.DeepEqual(old, cfg) {
-		t.logf("nat config: %+v", cfg)
+		t.logf("nat config: %v", cfg)
 	}
 }
 

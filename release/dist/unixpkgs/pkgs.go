@@ -7,9 +7,6 @@ package unixpkgs
 import (
 	"archive/tar"
 	"compress/gzip"
-	"crypto"
-	"crypto/rand"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -26,7 +23,7 @@ import (
 type tgzTarget struct {
 	filenameArch string // arch to use in filename instead of deriving from goEnv["GOARCH"]
 	goEnv        map[string]string
-	signer       crypto.Signer
+	signer       dist.Signer
 }
 
 func (t *tgzTarget) arch() string {
@@ -53,6 +50,9 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	} else {
 		filename = fmt.Sprintf("tailscale_%s_%s_%s.tgz", b.Version.Short, t.os(), t.arch())
 	}
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
@@ -70,11 +70,7 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	// Hash the final output we're writing to the file, after tar and gzip
-	// writers did their thing.
-	h := sha512.New()
-	hw := io.MultiWriter(f, h)
-	gw := gzip.NewWriter(hw)
+	gw := gzip.NewWriter(f)
 	defer gw.Close()
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
@@ -158,15 +154,11 @@ func (t *tgzTarget) Build(b *dist.Build) ([]string, error) {
 	files := []string{filename}
 
 	if t.signer != nil {
-		sig, err := t.signer.Sign(rand.Reader, h.Sum(nil), crypto.SHA512)
-		if err != nil {
+		outSig := out + ".sig"
+		if err := t.signer.SignFile(out, outSig); err != nil {
 			return nil, err
 		}
-		sigFilename := out + ".sig"
-		if err := os.WriteFile(sigFilename, sig, 0644); err != nil {
-			return nil, err
-		}
-		files = append(files, filename+".sig")
+		files = append(files, filepath.Base(outSig))
 	}
 
 	return files, nil
@@ -193,6 +185,9 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("deb only supported on linux")
 	}
 
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
@@ -255,10 +250,25 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 				PreRemove:   filepath.Join(repoDir, "release/deb/debian.prerm.sh"),
 				PostRemove:  filepath.Join(repoDir, "release/deb/debian.postrm.sh"),
 			},
-			Depends:    []string{"iptables", "iproute2"},
-			Recommends: []string{"tailscale-archive-keyring (>= 1.35.181)"},
-			Replaces:   []string{"tailscale-relay"},
-			Conflicts:  []string{"tailscale-relay"},
+			Depends: []string{},
+			Recommends: []string{
+				"tailscale-archive-keyring (>= 1.35.181)",
+				// iptables is often required but not strictly needed; see
+				// https://github.com/tailscale/tailscale/issues/9236.
+				// We want to let people be able to install without it
+				// or remove it after the fact if they want.
+				"iptables",
+				// The "ip" command isn't needed since 2021-11-01 in
+				// 408b0923a61972ed but kept as an option as of
+				// 2021-11-18 in d24ed3f68e35e802d531371.  See
+				// https://github.com/tailscale/tailscale/issues/391.
+				// We keep it recommended because it's usually
+				// installed anyway and it's useful for debugging. But
+				// we can live without it, so it's not Depends.
+				"iproute2",
+			},
+			Replaces:  []string{"tailscale-relay"},
+			Conflicts: []string{"tailscale-relay"},
 		},
 	})
 	pkg, err := nfpm.Get("deb")
@@ -285,7 +295,7 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 
 type rpmTarget struct {
 	goEnv  map[string]string
-	signFn func(io.Reader) ([]byte, error)
+	signer dist.Signer
 }
 
 func (t *rpmTarget) os() string {
@@ -305,6 +315,9 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 		return nil, errors.New("rpm only supported on linux")
 	}
 
+	if err := b.BuildWebClientAssets(); err != nil {
+		return nil, err
+	}
 	ts, err := b.BuildGoBinary("tailscale.com/cmd/tailscale", t.goEnv)
 	if err != nil {
 		return nil, err
@@ -378,7 +391,7 @@ func (t *rpmTarget) Build(b *dist.Build) ([]string, error) {
 				Group: "Network",
 				Signature: nfpm.RPMSignature{
 					PackageSignature: nfpm.PackageSignature{
-						SignFn: t.signFn,
+						SignFn: t.signer,
 					},
 				},
 			},

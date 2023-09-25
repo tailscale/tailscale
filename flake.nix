@@ -70,7 +70,7 @@
     # So really, this flake is for tailscale devs to dogfood with, if
     # you're an end user you should be prepared for this flake to not
     # build periodically.
-    tailscale = pkgs: pkgs.buildGo120Module rec {
+    tailscale = pkgs: pkgs.buildGo121Module rec {
       name = "tailscale";
 
       src = ./.;
@@ -107,7 +107,7 @@
           gotools
           graphviz
           perl
-          go_1_20
+          go_1_21
           yarn
         ];
       };
@@ -115,4 +115,4 @@
   in
     flake-utils.lib.eachDefaultSystem (system: flakeForSystem nixpkgs system);
 }
-# nix-direnv cache busting line: sha256-Fr4VZcKrXnT1PZuEG110KBefjcZzRsQRBSvByELKAy4=
+# nix-direnv cache busting line: sha256-aVtlDzC+sbEWlUAzPkAryA/+dqSzoAFc02xikh6yhf8=
