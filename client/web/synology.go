@@ -16,11 +16,13 @@ import (
 )
 
 // authorizeSynology authenticates the logged-in Synology user and verifies
-// that they are authorized to use the web client.  It returns true if the
-// request was handled and no further processing is required.
-func authorizeSynology(w http.ResponseWriter, r *http.Request) (handled bool) {
+// that they are authorized to use the web client.
+// It reports true if the request is authorized to continue, and false otherwise.
+// authorizeSynology manages writing out any relevant authorization errors to the
+// ResponseWriter itself.
+func authorizeSynology(w http.ResponseWriter, r *http.Request) (ok bool) {
 	if synoTokenRedirect(w, r) {
-		return true
+		return false
 	}
 
 	// authenticate the Synology user
@@ -28,7 +30,7 @@ func authorizeSynology(w http.ResponseWriter, r *http.Request) (handled bool) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("auth: %v: %s", err, out), http.StatusUnauthorized)
-		return true
+		return false
 	}
 	user := strings.TrimSpace(string(out))
 
@@ -36,14 +38,14 @@ func authorizeSynology(w http.ResponseWriter, r *http.Request) (handled bool) {
 	isAdmin, err := groupmember.IsMemberOfGroup("administrators", user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
-		return true
+		return false
 	}
 	if !isAdmin {
 		http.Error(w, "not a member of administrators group", http.StatusForbidden)
-		return true
+		return false
 	}
 
-	return false
+	return true
 }
 
 func synoTokenRedirect(w http.ResponseWriter, r *http.Request) bool {

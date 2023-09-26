@@ -35,7 +35,8 @@ import (
 type Server struct {
 	lc *tailscale.LocalClient
 
-	devMode bool
+	devMode   bool
+	loginOnly bool
 
 	cgiMode    bool
 	pathPrefix string
@@ -47,6 +48,10 @@ type Server struct {
 // ServerOpts contains options for constructing a new Server.
 type ServerOpts struct {
 	DevMode bool
+
+	// LoginOnly indicates that the server should only serve the minimal
+	// login client and not the full web client.
+	LoginOnly bool
 
 	// CGIMode indicates if the server is running as a CGI script.
 	CGIMode bool
@@ -67,8 +72,8 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	}
 	s = &Server{
 		devMode:    opts.DevMode,
+		loginOnly:  opts.LoginOnly,
 		lc:         opts.LocalClient,
-		cgiMode:    opts.CGIMode,
 		pathPrefix: opts.PathPrefix,
 	}
 	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
@@ -79,9 +84,16 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	// The client is secured by limiting the interface it listens on,
 	// or by authenticating requests before they reach the web client.
 	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-	s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+	if opts.LoginOnly {
+		// For the login client, we don't serve the full web client API,
+		// only the login endpoints.
+		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
+		s.lc.IncrementCounter(context.Background(), "web_login_client_initialization", 1)
+	} else {
+		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveAPI))
+		s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
+	}
 
-	s.lc.IncrementCounter(context.Background(), "web_client_initialization", 1)
 	return s, cleanup
 }
 
@@ -97,46 +109,69 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler(w, r)
 }
 
-// authorize checks if the request is authorized to access the web client for those platforms that support it.
-func authorize(w http.ResponseWriter, r *http.Request) (handled bool) {
-	if strings.HasPrefix(r.URL.Path, "/assets/") {
-		// don't require authorization for static assets
-		return false
+func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		// Pass API requests through to the API handler.
+		s.apiHandler.ServeHTTP(w, r)
+		return
 	}
+	if !s.devMode {
+		s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
+	}
+	s.assetsHandler.ServeHTTP(w, r)
+}
 
+// authorizePlatformRequest reports whether the request from the web client
+// is authorized to access the client for those platforms that support it.
+// It reports true if the request is authorized, and false otherwise.
+// authorizePlatformRequest manages writing out any relevant authorization
+// errors to the ResponseWriter itself.
+func authorizePlatformRequest(w http.ResponseWriter, r *http.Request) (ok bool) {
 	switch distro.Get() {
 	case distro.Synology:
 		return authorizeSynology(w, r)
 	case distro.QNAP:
 		return authorizeQNAP(w, r)
 	}
-
-	return false
+	return true
 }
 
-func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case authorize(w, r):
-		// Authenticate and authorize the request for platforms that support it.
-		// Return if the request was processed.
-		return
-	case strings.HasPrefix(r.URL.Path, "/api/"):
-		// Pass API requests through to the API handler.
-		s.apiHandler.ServeHTTP(w, r)
-		return
-	default:
-		if !s.devMode {
-			s.lc.IncrementCounter(context.Background(), "web_client_page_load", 1)
-		}
-		s.assetsHandler.ServeHTTP(w, r)
+// serveLoginAPI serves requests for the web login client.
+// It should only be called by Server.ServeHTTP, via Server.apiHandler,
+// which protects the handler using gorilla csrf.
+func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
+	// The login client is run directly from client plugins,
+	// so first authenticate and authorize the request for the host platform.
+	if ok := authorizePlatformRequest(w, r); !ok {
 		return
 	}
+
+	w.Header().Set("X-CSRF-Token", csrf.Token(r))
+	if r.URL.Path != "/api/data" { // only endpoint allowed for login client
+		http.Error(w, "invalid endpoint", http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case httpm.GET:
+		// TODO(soniaappasamy): implement
+	case httpm.POST:
+		// TODO(soniaappasamy): implement
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+	return
 }
 
 // serveAPI serves requests for the web client api.
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
+	// TODO(sonia,2023-09-26): Currently the full web client is served
+	// directly from platform plugins, so uses platform native auth.
+	if ok := authorizePlatformRequest(w, r); !ok {
+		return
+	}
+
 	w.Header().Set("X-CSRF-Token", csrf.Token(r))
 	path := strings.TrimPrefix(r.URL.Path, "/api")
 	switch {
