@@ -1122,6 +1122,13 @@ func (h *peerAPIHandler) handlePeerPut(w http.ResponseWriter, r *http.Request) {
 	}
 	t0 := h.ps.b.clock.Now()
 	// TODO(bradfitz): prevent same filename being sent by two peers at once
+
+	// prevent same filename being sent twice
+	if _, err := os.Stat(dstFile); err == nil {
+		http.Error(w, "file exists", http.StatusConflict)
+		return
+	}
+
 	partialFile := dstFile + partialSuffix
 	f, err := os.Create(partialFile)
 	if err != nil {
