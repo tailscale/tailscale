@@ -49,7 +49,10 @@ func (p PreferenceOptionPolicy) ShouldEnable(userChoice bool) bool {
 // "always" and "never" remove the user's ability to make a selection. If not
 // present or set to a different value, "user-decides" is the default.
 func GetPreferenceOptionPolicy(name string) PreferenceOptionPolicy {
-	opt := winutil.GetPolicyString(name, "user-decides")
+	opt, err := winutil.GetPolicyString(name)
+	if opt == "" || err != nil {
+		return showChoiceByPolicy
+	}
 	switch opt {
 	case "always":
 		return alwaysByPolicy
@@ -81,7 +84,10 @@ func (p VisibilityPolicy) Show() bool {
 // true) or "hide" (return true). If not present or set to a different value,
 // "show" (return false) is the default.
 func GetVisibilityPolicy(name string) VisibilityPolicy {
-	opt := winutil.GetPolicyString(name, "show")
+	opt, err := winutil.GetPolicyString(name)
+	if opt == "" || err != nil {
+		return visibleByPolicy
+	}
 	switch opt {
 	case "hide":
 		return hiddenByPolicy
@@ -96,8 +102,8 @@ func GetVisibilityPolicy(name string) VisibilityPolicy {
 // understands. If the registry value is "" or can not be processed,
 // defaultValue is returned instead.
 func GetDurationPolicy(name string, defaultValue time.Duration) time.Duration {
-	opt := winutil.GetPolicyString(name, "")
-	if opt == "" {
+	opt, err := winutil.GetPolicyString(name)
+	if opt == "" || err != nil {
 		return defaultValue
 	}
 	v, err := time.ParseDuration(opt)
