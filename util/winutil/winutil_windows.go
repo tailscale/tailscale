@@ -29,6 +29,9 @@ const (
 // ErrNoShell is returned when the shell process is not found.
 var ErrNoShell = errors.New("no Shell process is present")
 
+// ErrNoValue is returned when the value doesn't exist in the registry.
+var ErrNoValue = registry.ErrNotExist
+
 // GetDesktopPID searches the PID of the process that's running the
 // currently active desktop. Returns ErrNoShell if the shell is not present.
 // Usually the PID will be for explorer.exe.
@@ -47,44 +50,44 @@ func GetDesktopPID() (uint32, error) {
 	return pid, nil
 }
 
-func getPolicyString(name, defval string) string {
+func getPolicyString(name string) (string, error) {
 	s, err := getRegStringInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegString(name, defval)
+		return getRegString(name)
 	}
-	return s
+	return s, err
 }
 
-func getPolicyInteger(name string, defval uint64) uint64 {
+func getRegString(name string) (string, error) {
+	s, err := getRegStringInternal(regBase, name)
+	if err != nil {
+		return "", err
+	}
+	return s, err
+}
+
+func getPolicyInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regPolicyBase, name)
 	if err != nil {
 		// Fall back to the legacy path
-		return getRegInteger(name, defval)
+		return getRegInteger(name)
 	}
-	return i
+	return i, err
 }
 
-func getRegString(name, defval string) string {
-	s, err := getRegStringInternal(regBase, name)
-	if err != nil {
-		return defval
-	}
-	return s
-}
-
-func getRegInteger(name string, defval uint64) uint64 {
+func getRegInteger(name string) (uint64, error) {
 	i, err := getRegIntegerInternal(regBase, name)
 	if err != nil {
-		return defval
+		return 0, err
 	}
-	return i
+	return i, err
 }
 
 func getRegStringInternal(subKey, name string) (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return "", err
@@ -93,7 +96,7 @@ func getRegStringInternal(subKey, name string) (string, error) {
 
 	val, _, err := key.GetStringValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return "", err
@@ -114,7 +117,7 @@ func GetRegStrings(name string, defval []string) []string {
 func getRegStringsInternal(subKey, name string) ([]string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return nil, err
@@ -123,7 +126,7 @@ func getRegStringsInternal(subKey, name string) ([]string, error) {
 
 	val, _, err := key.GetStringsValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetStringValue(%v): %v", name, err)
 		}
 		return nil, err
@@ -154,7 +157,7 @@ func DeleteRegValue(name string) error {
 
 func deleteRegValueInternal(subKey, name string) error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.SET_VALUE)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		return nil
 	}
 	if err != nil {
@@ -164,7 +167,7 @@ func deleteRegValueInternal(subKey, name string) error {
 	defer key.Close()
 
 	err = key.DeleteValue(name)
-	if err == registry.ErrNotExist {
+	if err == ErrNoValue {
 		err = nil
 	}
 	return err
@@ -173,7 +176,7 @@ func deleteRegValueInternal(subKey, name string) error {
 func getRegIntegerInternal(subKey, name string) (uint64, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.READ)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.OpenKey(%v): %v", subKey, err)
 		}
 		return 0, err
@@ -182,7 +185,7 @@ func getRegIntegerInternal(subKey, name string) (uint64, error) {
 
 	val, _, err := key.GetIntegerValue(name)
 	if err != nil {
-		if err != registry.ErrNotExist {
+		if err != ErrNoValue {
 			log.Printf("registry.GetIntegerValue(%v): %v", name, err)
 		}
 		return 0, err

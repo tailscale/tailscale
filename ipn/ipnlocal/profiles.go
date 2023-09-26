@@ -452,20 +452,24 @@ var defaultPrefs = func() ipn.PrefsView {
 	prefs.LoggedOut = true
 	prefs.WantRunning = false
 
-	prefs.ControlURL = winutil.GetPolicyString("LoginURL", "")
+	controlURL, _ := winutil.GetPolicyString("LoginURL")
+	prefs.ControlURL = controlURL
+
 	prefs.ExitNodeIP = resolveExitNodeIP(netip.Addr{})
 
 	// Allow Incoming (used by the UI) is the negation of ShieldsUp (used by the
 	// backend), so this has to convert between the two conventions.
-	prefs.ShieldsUp = winutil.GetPolicyString("AllowIncomingConnections", "") == "never"
-	prefs.ForceDaemon = winutil.GetPolicyString("UnattendedMode", "") == "always"
+	shieldsUp, _ := winutil.GetPolicyString("AllowIncomingConnections")
+	prefs.ShieldsUp = shieldsUp == "never"
+	forceDaemon, _ := winutil.GetPolicyString("UnattendedMode")
+	prefs.ForceDaemon = forceDaemon == "always"
 
 	return prefs.View()
 }()
 
 func resolveExitNodeIP(defIP netip.Addr) (ret netip.Addr) {
 	ret = defIP
-	if exitNode := winutil.GetPolicyString("ExitNodeIP", ""); exitNode != "" {
+	if exitNode, _ := winutil.GetPolicyString("ExitNodeIP"); exitNode != "" {
 		if ip, err := netip.ParseAddr(exitNode); err == nil {
 			ret = ip
 		}

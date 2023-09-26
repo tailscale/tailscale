@@ -13,45 +13,49 @@ import (
 const RegBase = regBase
 
 // GetPolicyString looks up a registry value in the local machine's path for
-// system policies, or returns the given default if it can't.
+// system policies, or returns empty string and the error.
 // Use this function to read values that may be set by sysadmins via the MSI
 // installer or via GPO. For registry settings that you do *not* want to be
 // visible to sysadmin tools, use GetRegString instead.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetPolicyString(name, defval string) string {
-	return getPolicyString(name, defval)
+// OS will always return an empty string and ErrNoValue.
+// If value does not exist or another error happens, returns empty string and error.
+func GetPolicyString(name string) (string, error) {
+	return getPolicyString(name)
 }
 
 // GetPolicyInteger looks up a registry value in the local machine's path for
-// system policies, or returns the given default if it can't.
+// system policies, or returns 0 and the associated error.
 // Use this function to read values that may be set by sysadmins via the MSI
 // installer or via GPO. For registry settings that you do *not* want to be
 // visible to sysadmin tools, use GetRegInteger instead.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetPolicyInteger(name string, defval uint64) uint64 {
-	return getPolicyInteger(name, defval)
+// OS will always return 0 and ErrNoValue.
+// If value does not exist or another error happens, returns 0 and error.
+func GetPolicyInteger(name string) (uint64, error) {
+	return getPolicyInteger(name)
 }
 
 // GetRegString looks up a registry path in the local machine path, or returns
-// the given default if it can't.
+// an empty string and error.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetRegString(name, defval string) string {
-	return getRegString(name, defval)
+// OS will always return an empty string and ErrNoValue.
+// If value does not exist or another error happens, returns empty string and error.
+func GetRegString(name string) (string, error) {
+	return getRegString(name)
 }
 
 // GetRegInteger looks up a registry path in the local machine path, or returns
-// the given default if it can't.
+// 0 and the error.
 //
 // This function will only work on GOOS=windows. Trying to run it on any other
-// OS will always return the default value.
-func GetRegInteger(name string, defval uint64) uint64 {
-	return getRegInteger(name, defval)
+// OS will always return 0 and ErrNoValue.
+// If value does not exist or another error happens, returns 0 and error.
+func GetRegInteger(name string) (uint64, error) {
+	return getRegInteger(name)
 }
 
 // IsSIDValidPrincipal determines whether the SID contained in uid represents a
