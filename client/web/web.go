@@ -35,8 +35,8 @@ import (
 type Server struct {
 	lc *tailscale.LocalClient
 
-	devMode   bool
-	loginOnly bool
+	devMode     bool
+	tsDebugMode string
 
 	cgiMode    bool
 	pathPrefix string
@@ -72,10 +72,10 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	}
 	s = &Server{
 		devMode:    opts.DevMode,
-		loginOnly:  opts.LoginOnly,
 		lc:         opts.LocalClient,
 		pathPrefix: opts.PathPrefix,
 	}
+	s.tsDebugMode = s.debugMode()
 	s.assetsHandler, cleanup = assetsHandler(opts.DevMode)
 
 	// Create handler for "/api" requests with CSRF protection.
@@ -84,7 +84,7 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	// The client is secured by limiting the interface it listens on,
 	// or by authenticating requests before they reach the web client.
 	csrfProtect := csrf.Protect(s.csrfKey(), csrf.Secure(false))
-	if opts.LoginOnly {
+	if s.tsDebugMode == "login" {
 		// For the login client, we don't serve the full web client API,
 		// only the login endpoints.
 		s.apiHandler = csrfProtect(http.HandlerFunc(s.serveLoginAPI))
@@ -95,6 +95,20 @@ func NewServer(ctx context.Context, opts ServerOpts) (s *Server, cleanup func())
 	}
 
 	return s, cleanup
+}
+
+// debugMode returns the debug mode the web client is being run in.
+// The empty string is returned in the case that this instance is
+// not running in any debug mode.
+func (s *Server) debugMode() string {
+	if !s.devMode {
+		return "" // debug modes only available in dev
+	}
+	switch mode := os.Getenv("TS_DEBUG_WEB_CLIENT_MODE"); mode {
+	case "login", "full": // valid debug modes
+		return mode
+	}
+	return ""
 }
 
 // ServeHTTP processes all requests for the Tailscale web client.
@@ -153,7 +167,8 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case httpm.GET:
-		// TODO(soniaappasamy): implement
+		// TODO(soniaappasamy): we may want a minimal node data response here
+		s.serveGetNodeData(w, r)
 	case httpm.POST:
 		// TODO(soniaappasamy): implement
 	default:
@@ -206,6 +221,7 @@ type nodeData struct {
 	IsUnraid          bool
 	UnraidToken       string
 	IPNVersion        string
+	DebugMode         string // empty when not running in any debug mode
 }
 
 func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +249,7 @@ func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
 		IsUnraid:    distro.Get() == distro.Unraid,
 		UnraidToken: os.Getenv("UNRAID_CSRF_TOKEN"),
 		IPNVersion:  versionShort,
+		DebugMode:   s.tsDebugMode,
 	}
 	exitNodeRouteV4 := netip.MustParsePrefix("0.0.0.0/0")
 	exitNodeRouteV6 := netip.MustParsePrefix("::/0")

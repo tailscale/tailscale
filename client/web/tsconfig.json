@@ -10,6 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "allowSyntheticDefaultImports": true,
     "jsx": "react",
+    "types": ["vite-plugin-svgr/client", "vite/client"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
