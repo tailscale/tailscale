@@ -205,20 +205,8 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 		startlog.Fatalf("could not create manager: %v", err)
 	}
 
-	reconcileFilter := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
-		ls := o.GetLabels()
-		if ls[LabelManaged] != "true" {
-			return nil
-		}
-		return []reconcile.Request{
-			{
-				NamespacedName: types.NamespacedName{
-					Namespace: ls[LabelParentNamespace],
-					Name:      ls[LabelParentName],
-				},
-			},
-		}
-	})
+	svcFilter := handler.EnqueueRequestsFromMapFunc(serviceHandler)
+	svcChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("svc"))
 	eventRecorder := mgr.GetEventRecorderFor("tailscale-operator")
 	ssr := &tailscaleSTSReconciler{
 		Client:                 mgr.GetClient(),
@@ -231,9 +219,10 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	}
 	err = builder.
 		ControllerManagedBy(mgr).
-		For(&corev1.Service{}).
-		Watches(&appsv1.StatefulSet{}, reconcileFilter).
-		Watches(&corev1.Secret{}, reconcileFilter).
+		Named("service-reconciler").
+		Watches(&corev1.Service{}, svcFilter).
+		Watches(&appsv1.StatefulSet{}, svcChildFilter).
+		Watches(&corev1.Secret{}, svcChildFilter).
 		Complete(&ServiceReconciler{
 			ssr:                   ssr,
 			Client:                mgr.GetClient(),
@@ -243,11 +232,13 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 	if err != nil {
 		startlog.Fatalf("could not create controller: %v", err)
 	}
+	ingressChildFilter := handler.EnqueueRequestsFromMapFunc(managedResourceHandlerForType("ingress"))
 	err = builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
-		Watches(&appsv1.StatefulSet{}, reconcileFilter).
-		Watches(&corev1.Secret{}, reconcileFilter).
+		Watches(&appsv1.StatefulSet{}, ingressChildFilter).
+		Watches(&corev1.Secret{}, ingressChildFilter).
+		Watches(&corev1.Service{}, ingressChildFilter).
 		Complete(&IngressReconciler{
 			ssr:      ssr,
 			recorder: eventRecorder,
@@ -267,4 +258,55 @@ func runReconcilers(zlog *zap.SugaredLogger, s *tsnet.Server, tsNamespace string
 type tsClient interface {
 	CreateKey(ctx context.Context, caps tailscale.KeyCapabilities) (string, *tailscale.Key, error)
 	DeleteDevice(ctx context.Context, nodeStableID string) error
+}
+
+func isManagedResource(o client.Object) bool {
+	ls := o.GetLabels()
+	return ls[LabelManaged] == "true"
+}
+
+func isManagedByType(o client.Object, typ string) bool {
+	ls := o.GetLabels()
+	return isManagedResource(o) && ls[LabelParentType] == typ
+}
+
+func parentFromObjectLabels(o client.Object) types.NamespacedName {
+	ls := o.GetLabels()
+	return types.NamespacedName{
+		Namespace: ls[LabelParentNamespace],
+		Name:      ls[LabelParentName],
+	}
+}
+func managedResourceHandlerForType(typ string) handler.MapFunc {
+	return func(_ context.Context, o client.Object) []reconcile.Request {
+		if !isManagedByType(o, typ) {
+			return nil
+		}
+		return []reconcile.Request{
+			{NamespacedName: parentFromObjectLabels(o)},
+		}
+	}
+
+}
+
+func serviceHandler(_ context.Context, o client.Object) []reconcile.Request {
+	if isManagedByType(o, "svc") {
+		// If this is a Service managed by a Service we want to enqueue its parent
+		return []reconcile.Request{{NamespacedName: parentFromObjectLabels(o)}}
+
+	}
+	if isManagedResource(o) {
+		// If this is a Servce managed by a resource that is not a Service, we leave it alone
+		return nil
+	}
+	// If this is not a managed Service we want to enqueue it
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Namespace: o.GetNamespace(),
+				Name:      o.GetName(),
+			},
+		},
+	}
+
 }
