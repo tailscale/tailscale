@@ -128,6 +128,13 @@ func RegisterNewSSHServer(fn newSSHServerFunc) {
 	newSSHServer = fn
 }
 
+// watchSession represents a WatchNotifications channel
+// and sessionID as required to close targeted buses.
+type watchSession struct {
+	ch        chan *ipn.Notify
+	sessionID string
+}
+
 // LocalBackend is the glue between the major pieces of the Tailscale
 // network software: the cloud control plane (via controlclient), the
 // network data plane (via wgengine), and the user-facing UIs and CLIs
@@ -233,7 +240,7 @@ type LocalBackend struct {
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
 	fileWaiters      set.HandleSet[context.CancelFunc] // of wake-up funcs
-	notifyWatchers   set.HandleSet[chan *ipn.Notify]
+	notifyWatchers   set.HandleSet[*watchSession]
 	lastStatusTime   time.Time // status.AsOf value of the last processed status update
 	// directFileRoot, if non-empty, means to write received files
 	// directly to this directory, without staging them in an
@@ -2058,7 +2065,7 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		}
 	}
 
-	handle := b.notifyWatchers.Add(ch)
+	handle := b.notifyWatchers.Add(&watchSession{ch, sessionID})
 	b.mu.Unlock()
 
 	defer func() {
@@ -2103,8 +2110,8 @@ func (b *LocalBackend) WatchNotifications(ctx context.Context, mask ipn.NotifyWa
 		select {
 		case <-ctx.Done():
 			return
-		case n := <-ch:
-			if !fn(n) {
+		case n, ok := <-ch:
+			if !ok || !fn(n) {
 				return
 			}
 		}
@@ -2174,9 +2181,9 @@ func (b *LocalBackend) send(n ipn.Notify) {
 		n.FilesWaiting = &empty.Message{}
 	}
 
-	for _, ch := range b.notifyWatchers {
+	for _, sess := range b.notifyWatchers {
 		select {
-		case ch <- &n:
+		case sess.ch <- &n:
 		default:
 			// Drop the notification if the channel is full.
 		}

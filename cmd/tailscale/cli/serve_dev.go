@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -289,7 +290,7 @@ func (e *serveEnv) runServeCombined(subcmd serveMode) execFunc {
 			for {
 				_, err = watcher.Next()
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
+					if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 						return nil
 					}
 					return err
