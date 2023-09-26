@@ -15,6 +15,8 @@ export type NodeData = {
   IsUnraid: boolean
   UnraidToken: string
   IPNVersion: string
+
+  DebugMode: "" | "login" | "full" // empty when not running in any debug mode
 }
 
 export type UserProfile = {
