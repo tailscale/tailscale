@@ -282,14 +282,14 @@ export function State({
   }
 }
 
-export function Footer(props: { data: NodeData }) {
-  const { data } = props
-
+export function Footer(props: { licensesURL: string; className?: string }) {
   return (
-    <footer className="container max-w-lg mx-auto text-center">
+    <footer
+      className={cx("container max-w-lg mx-auto text-center", props.className)}
+    >
       <a
         className="text-xs text-gray-500 hover:text-gray-600"
-        href={data.LicensesURL}
+        href={props.licensesURL}
       >
         Open Source Licenses
       </a>
