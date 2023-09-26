@@ -70,6 +70,10 @@ const (
 	// (e.g. how long to wait to query Google's 8.8.4.4 after 8.8.8.8).
 	wellKnownHostBackupDelay = 200 * time.Millisecond
 
+	// udpRaceTimeout is the timeout after which we will start a DNS query
+	// over TCP while waiting for the UDP query to complete.
+	udpRaceTimeout = 2 * time.Second
+
 	// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
 	// It matches the default 5sec timeout of the 'dig' utility.
 	tcpQueryTimeout = 5 * time.Second
@@ -488,45 +492,127 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
 
-	ret, err = f.sendUDP(ctx, fq, rr)
-	if err != nil {
-		return nil, err
+	type queryResult struct {
+		ty   string
+		resp []byte
+		err  error
 	}
 
-	if !truncatedFlagSet(ret) {
-		// Successful, non-truncated response; return it.
-		return ret, nil
-	}
-	if fq.family == "udp" {
-		// If this is a UDP query, return it regardless of whether the
-		// response is truncated or not; the client can retry
-		// communicating with tailscaled over TCP. There's no point
-		// falling back to TCP for a truncated query if we can't return
-		// the results to the client.
-		return ret, nil
-	}
-	if skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load()) {
-		// Envknob or control knob disabled the TCP retry behaviour;
-		// just return what we have.
-		return ret, nil
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan queryResult, 2)
 
-	// Don't retry if our context is done.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+	// Start both the UDP and TCP queries, but wait at least a few seconds
+	// for the UDP query to complete before we start the TCP query.
+	// However, also start immediately if we get a truncated response,
+	// since we know that we need to start it.
+	startTCP := make(chan struct{}) // close to signal
+	skipTCP := skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load())
 
-	// Retry over TCP, best-effort; return the truncated UDP response if we
-	// cannot query via TCP.
-	if ret2, err2 := f.sendTCP(ctx, fq, rr); err2 == nil {
-		if verboseDNSForward() {
-			f.logf("forwarder.send(%q): successfully retried via TCP", rr.name.Addr)
+	go func() {
+		ret, err := f.sendUDP(ctx, fq, rr)
+		results <- queryResult{"udp", ret, err}
+	}()
+	go func() {
+		// Only start the race for TCP if it's not disabled.
+		var timeoutCh <-chan time.Time
+		if !skipTCP {
+			wait := time.NewTimer(udpRaceTimeout)
+			defer wait.Stop()
+			timeoutCh = wait.C
+		} else {
+			blockForever := make(chan time.Time)
+			defer close(blockForever)
+			timeoutCh = blockForever
 		}
-		return ret2, nil
-	} else if verboseDNSForward() {
-		f.logf("forwarder.send(%q): could not retry via TCP: %v", rr.name.Addr, err2)
+
+		// Wait for our timeout, trigger, or context to finish.
+		select {
+		case <-ctx.Done():
+			// Nothing to do; we're done
+			results <- queryResult{"tcp", nil, ctx.Err()}
+			return
+		case <-startTCP:
+		case <-timeoutCh:
+		}
+
+		ret, err := f.sendTCP(ctx, fq, rr)
+		results <- queryResult{"tcp", ret, err}
+	}()
+
+	var (
+		errs          []error
+		explicitRetry bool // true if truncated UDP response retried
+	)
+	defer func() {
+		// Print logs about retries if this was because of a truncated response.
+		if !explicitRetry {
+			return
+		}
+		if err == nil {
+			f.logf("forwarder.send(%q): successfully retried via TCP", rr.name.Addr)
+		} else {
+			f.logf("forwarder.send(%q): could not retry via TCP: %v", rr.name.Addr, err)
+		}
+	}()
+	for i := 0; i < 2; i++ {
+		res := <-results
+
+		// If this was an error, store it and hope that the other
+		// result gives us something.
+		if res.err != nil {
+			errs = append(errs, res.err)
+
+			// Start the TCP fallback immediately if this is a UDP
+			// error, to avoid having to wait.
+			if res.ty == "udp" {
+				close(startTCP)
+			}
+			continue
+		}
+
+		if !truncatedFlagSet(res.resp) {
+			// Successful, non-truncated response; return it.
+			return res.resp, nil
+		}
+		if fq.family == "udp" {
+			// If this is a UDP query, return it regardless of whether the
+			// response is truncated or not; the client can retry
+			// communicating with tailscaled over TCP. There's no point
+			// falling back to TCP for a truncated query if we can't return
+			// the results to the client.
+			return res.resp, nil
+		}
+
+		// If we get here, we have a truncated response and the client
+		// is connecting to us via TCP. If this is from a TCP query to
+		// our upstream server and the response is truncated, then
+		// that's an error; just return what we have.
+		if res.ty == "tcp" {
+			return res.resp, nil
+		}
+
+		// Now we know that this query response was from UDP, see if
+		// we're allowed to try it over TCP.
+		if skipTCP {
+			// Envknob or control knob disabled the TCP retry behaviour;
+			// just return what we have.
+			return res.resp, nil
+		}
+
+		// Don't retry if our context is done.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		// Explicitly close the "start TCP query" channel to kick it
+		// off as a retry.
+		close(startTCP)
+		explicitRetry = true
 	}
-	return ret, nil
+
+	// If we get here, both TCP and UDP queries failed. Return whatever errors we have.
+	return nil, errors.Join(errs...)
 }
 
 var errServerFailure = errors.New("response code indicates server issue")
@@ -875,7 +961,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			numErr++
 			if numErr == len(resolvers) {
-				if firstErr == errServerFailure {
+				if errors.Is(firstErr, errServerFailure) {
 					res, err := servfailResponse(query)
 					if err != nil {
 						f.logf("building servfail response: %v", err)
