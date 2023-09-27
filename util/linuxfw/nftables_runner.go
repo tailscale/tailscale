@@ -1109,7 +1109,9 @@ func (n *nftablesRunner) DelSNATRule() error {
 			return fmt.Errorf("find SNAT rule v4: %w", err)
 		}
 
-		_ = conn.DelRule(SNATRule)
+		if SNATRule != nil {
+			_ = conn.DelRule(SNATRule)
+		}
 	}
 
 	if err := conn.Flush(); err != nil {
