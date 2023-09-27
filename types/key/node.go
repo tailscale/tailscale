@@ -310,7 +310,7 @@ func (k NodePublic) UntypedHexString() string {
 	return hex.EncodeToString(k.k[:])
 }
 
-// String returns the output of MarshalText as a string.
+// String returns k as a hex-encoded string with a type prefix.
 func (k NodePublic) String() string {
 	bs, err := k.MarshalText()
 	if err != nil {
@@ -319,17 +319,20 @@ func (k NodePublic) String() string {
 	return string(bs)
 }
 
-// AppendText implements encoding.TextAppender.
+// AppendText implements encoding.TextAppender. It appends a typed prefix
+// followed by hex encoded represtation of k to b.
 func (k NodePublic) AppendText(b []byte) ([]byte, error) {
 	return appendHexKey(b, nodePublicHexPrefix, k.k[:]), nil
 }
 
-// MarshalText implements encoding.TextMarshaler.
+// MarshalText implements encoding.TextMarshaler. It returns a typed prefix
+// followed by a hex encoded representation of k.
 func (k NodePublic) MarshalText() ([]byte, error) {
 	return k.AppendText(nil)
 }
 
-// MarshalText implements encoding.TextUnmarshaler.
+// UnmarshalText implements encoding.TextUnmarshaler. It expects a typed prefix
+// followed by a hex encoded representation of k.
 func (k *NodePublic) UnmarshalText(b []byte) error {
 	return parseHex(k.k[:], mem.B(b), mem.S(nodePublicHexPrefix))
 }
