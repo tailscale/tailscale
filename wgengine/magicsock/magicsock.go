@@ -1893,7 +1893,7 @@ func (c *Conn) SetNetworkMap(nm *netmap.NetworkMap) {
 			// that differs from the one the NodeID had. But double check.
 			if ep.nodeID != n.ID() {
 				// Server error.
-				devPanicf("public key moved between nodeIDs")
+				devPanicf("public key moved between nodeIDs (old=%v new=%v, key=%s)", ep.nodeID, n.ID(), n.Key().String())
 			} else {
 				// Internal data structures out of sync.
 				devPanicf("public key found in peerMap but not by nodeID")
