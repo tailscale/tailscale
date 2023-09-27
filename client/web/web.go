@@ -143,7 +143,7 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/data":
 		switch r.Method {
 		case httpm.GET:
-			s.serveGetNodeDataJSON(w, r)
+			s.serveGetNodeData(w, r)
 		case httpm.POST:
 			s.servePostNodeUpdate(w, r)
 		default:
@@ -173,14 +173,16 @@ type nodeData struct {
 	IPNVersion        string
 }
 
-func (s *Server) getNodeData(ctx context.Context) (*nodeData, error) {
-	st, err := s.lc.Status(ctx)
+func (s *Server) serveGetNodeData(w http.ResponseWriter, r *http.Request) {
+	st, err := s.lc.Status(r.Context())
 	if err != nil {
-		return nil, err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	prefs, err := s.lc.GetPrefs(ctx)
+	prefs, err := s.lc.GetPrefs(r.Context())
 	if err != nil {
-		return nil, err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	profile := st.User[st.Self.UserID]
 	deviceName := strings.Split(st.Self.DNSName, ".")[0]
@@ -211,15 +213,6 @@ func (s *Server) getNodeData(ctx context.Context) (*nodeData, error) {
 	}
 	if len(st.TailscaleIPs) != 0 {
 		data.IP = st.TailscaleIPs[0].String()
-	}
-	return data, nil
-}
-
-func (s *Server) serveGetNodeDataJSON(w http.ResponseWriter, r *http.Request) {
-	data, err := s.getNodeData(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
 	if err := json.NewEncoder(w).Encode(*data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
