@@ -1040,7 +1040,16 @@ func getUPnPErrorsMetric(code int) *clientmetric.Metric {
 		return mm
 	}
 
-	mm = clientmetric.NewCounter(fmt.Sprintf("portmap_upnp_errors_with_code_%d", code))
+	// Metric names cannot contain a hyphen, so we handle negative numbers
+	// by prefixing the name with a "minus_".
+	var codeStr string
+	if code < 0 {
+		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_minus_%d", -code)
+	} else {
+		codeStr = fmt.Sprintf("portmap_upnp_errors_with_code_%d", code)
+	}
+
+	mm = clientmetric.NewCounter(codeStr)
 	mak.Set(&metricUPnPErrorsByCode, code, mm)
 	return mm
 }
