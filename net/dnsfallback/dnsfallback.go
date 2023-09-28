@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go4.org/netipx"
 	"tailscale.com/atomicfile"
 	"tailscale.com/envknob"
 	"tailscale.com/net/dns/recursive"
@@ -77,11 +76,13 @@ func MakeLookupFunc(logf logger.Logf, netMon *netmon.Monitor) func(ctx context.C
 				metricRecursiveErrors.Add(1)
 				return
 			}
-			slices.SortFunc(addrs, netipx.CompareAddr)
+
+			compareAddr := func(a, b netip.Addr) int { return a.Compare(b) }
+			slices.SortFunc(addrs, compareAddr)
 
 			// Wait for a response from the main function
 			oldAddrs := <-addrsCh
-			slices.SortFunc(oldAddrs, netipx.CompareAddr)
+			slices.SortFunc(oldAddrs, compareAddr)
 
 			matches := slices.Equal(addrs, oldAddrs)
 
