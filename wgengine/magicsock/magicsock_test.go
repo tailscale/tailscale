@@ -2893,3 +2893,112 @@ func TestAddrForSendLockedForWireGuardOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestAddrForPingSizeLocked(t *testing.T) {
+	testTime := mono.Now()
+
+	validUdpAddr := netip.MustParseAddrPort("1.1.1.1:111")
+	validDerpAddr := netip.MustParseAddrPort("2.2.2.2:222")
+
+	pingTests := []struct {
+		desc            string
+		size            int           // size of ping payload
+		mtu             tstun.WireMTU // The MTU of the path to bestAddr, if any
+		bestAddr        bool          // If the endpoint should have a valid bestAddr
+		bestAddrTrusted bool          // If the bestAddr has not yet expired
+		wantUDP         bool          // Non-zero UDP addr means send to UDP; zero means start discovery
+		wantDERP        bool          // Non-zero DERP addr means send to DERP
+	}{
+		{
+			desc:            "ping_size_0_and_invalid_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            0,
+			bestAddr:        false,
+			bestAddrTrusted: false,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_0_and_valid_trusted_UDP_addr_should_send_to_UDP_and_not_send_to_DERP",
+			size:            0,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			desc:            "ping_size_0_and_valid_but_expired_UDP_addr_should_send_to_both_UDP_and_DERP",
+			size:            0,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_too_big_for_trusted_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_too_big_for_untrusted_UDP_addr_should_start_discovery_and_send_to_DERP",
+			size:            pktLenToPingSize(1501, validUdpAddr.Addr()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         false,
+			wantDERP:        true,
+		},
+		{
+			desc:            "ping_size_small_enough_for_trusted_UDP_addr_should_send_to_UDP_and_not_DERP",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: true,
+			wantUDP:         true,
+			wantDERP:        false,
+		},
+		{
+			desc:            "ping_size_small_enough_for_untrusted_UDP_addr_should_send_to_UDP_and_DERP",
+			size:            pktLenToPingSize(1500, validUdpAddr.Addr()),
+			mtu:             1500,
+			bestAddr:        true,
+			bestAddrTrusted: false,
+			wantUDP:         true,
+			wantDERP:        true,
+		},
+	}
+
+	for _, test := range pingTests {
+		t.Run(test.desc, func(t *testing.T) {
+			bestAddr := addrQuality{wireMTU: test.mtu}
+			if test.bestAddr {
+				bestAddr.AddrPort = validUdpAddr
+			}
+			ep := &endpoint{
+				derpAddr: validDerpAddr,
+				bestAddr: bestAddr,
+			}
+			if test.bestAddrTrusted {
+				ep.trustBestAddrUntil = testTime.Add(1 * time.Second)
+			}
+
+			udpAddr, derpAddr := ep.addrForPingSizeLocked(testTime, test.size)
+
+			if test.wantUDP && !udpAddr.IsValid() {
+				t.Errorf("%s: udpAddr returned is not valid, won't be sent to UDP address", test.desc)
+			}
+			if !test.wantUDP && udpAddr.IsValid() {
+				t.Errorf("%s: udpAddr returned is valid, discovery will not start", test.desc)
+			}
+			if test.wantDERP && !derpAddr.IsValid() {
+				t.Errorf("%s: derpAddr returned is not valid, won't be sent to DERP", test.desc)
+			}
+			if !test.wantDERP && derpAddr.IsValid() {
+				t.Errorf("%s: derpAddr returned is valid, will be sent to DERP", test.desc)
+			}
+		})
+	}
+}
