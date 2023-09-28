@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"tailscale.com/version/mkversion"
@@ -62,6 +63,9 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 
 	switch targetOS {
 	case "linux":
+		if v, _ := strconv.ParseBool(env.Get("GOCROSS_STATIC", "1")); !v {
+			break
+		}
 		// Getting Go to build a static binary with cgo enabled is a
 		// minor ordeal. The incantations you apparently need are
 		// documented at: https://github.com/golang/go/issues/26492
