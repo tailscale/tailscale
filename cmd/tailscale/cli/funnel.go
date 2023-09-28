@@ -164,12 +164,12 @@ func (e *serveEnv) verifyFunnelEnabled(ctx context.Context, st *ipnstate.Status,
 		// the feature flag on.
 		// TODO(sonia,tailscale/corp#10577): Remove this fallback once the
 		// control flag is turned on for all domains.
-		if err := ipn.CheckFunnelAccess(port, st.Self.Capabilities); err != nil {
+		if err := ipn.CheckFunnelAccess(port, st.Self); err != nil {
 			return err
 		}
 	default:
 		// Done with enablement, make sure the requested port is allowed.
-		if err := ipn.CheckFunnelPort(port, st.Self.Capabilities); err != nil {
+		if err := ipn.CheckFunnelPort(port, st.Self); err != nil {
 			return err
 		}
 	}
