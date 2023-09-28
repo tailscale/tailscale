@@ -38,7 +38,7 @@ func Mark(t testing.TB, issue string) {
 		// We're being run under cmd/testwrapper so send our sentinel message
 		// to stderr. (We avoid doing this when the env is absent to avoid
 		// spamming people running tests without the wrapper)
-		fmt.Fprintln(os.Stderr, FlakyTestLogMessage)
+		fmt.Fprintf(os.Stderr, "%s: %s\n", FlakyTestLogMessage, issue)
 	}
 	t.Logf("flakytest: issue tracking this flaky test: %s", issue)
 }
