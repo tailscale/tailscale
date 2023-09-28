@@ -40,12 +40,12 @@ type testAttempt struct {
 }
 
 type packageTests struct {
-	// pattern is the package pattern to run.
-	// Must be a single pattern, not a list of patterns.
-	pattern string // "./...", "./types/key"
-	// tests is a list of tests to run. If empty, all tests in the package are
+	// Pattern is the package Pattern to run.
+	// Must be a single Pattern, not a list of patterns.
+	Pattern string // "./...", "./types/key"
+	// Tests is a list of Tests to run. If empty, all Tests in the package are
 	// run.
-	tests []string // ["TestFoo", "TestBar"]
+	Tests []string // ["TestFoo", "TestBar"]
 }
 
 type goTestOutput struct {
@@ -65,10 +65,10 @@ var debug = os.Getenv("TS_TESTWRAPPER_DEBUG") != ""
 // It calls close(ch) when it's done.
 func runTests(ctx context.Context, attempt int, pt *packageTests, otherArgs []string, ch chan<- *testAttempt) error {
 	defer close(ch)
-	args := []string{"test", "-json", pt.pattern}
+	args := []string{"test", "-json", pt.Pattern}
 	args = append(args, otherArgs...)
-	if len(pt.tests) > 0 {
-		runArg := strings.Join(pt.tests, "|")
+	if len(pt.Tests) > 0 {
+		runArg := strings.Join(pt.Tests, "|")
 		args = append(args, "-run", runArg)
 	}
 	if debug {
@@ -208,12 +208,12 @@ func main() {
 
 	type nextRun struct {
 		tests   []*packageTests
-		attempt int
+		attempt int // starting at 1
 	}
 
 	toRun := []*nextRun{
 		{
-			tests:   []*packageTests{{pattern: pattern}},
+			tests:   []*packageTests{{Pattern: pattern}},
 			attempt: 1,
 		},
 	}
@@ -245,6 +245,8 @@ func main() {
 		}
 		if thisRun.attempt > 1 {
 			fmt.Printf("\n\nAttempt #%d: Retrying flaky tests:\n\n", thisRun.attempt)
+			j, _ := json.Marshal(thisRun.tests)
+			fmt.Printf("\n\nflakytest failures JSON: %s\n\n", j)
 		}
 
 		toRetry := make(map[string][]string) // pkg -> tests to retry
@@ -317,8 +319,8 @@ func main() {
 			tests := toRetry[pkg]
 			sort.Strings(tests)
 			nextRun.tests = append(nextRun.tests, &packageTests{
-				pattern: pkg,
-				tests:   tests,
+				Pattern: pkg,
+				Tests:   tests,
 			})
 		}
 		toRun = append(toRun, nextRun)
