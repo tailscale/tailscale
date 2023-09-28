@@ -1112,7 +1112,14 @@ func TestDNSConfigForNetmapForExitNodeConfigs(t *testing.T) {
 			}
 
 			prefs := &ipn.Prefs{ExitNodeID: tc.exitNode, CorpDNS: true}
-			got := dnsConfigForNetmap(nm, peersMap(tc.peers), prefs.View(), t.Logf, "")
+			b := &LocalBackend{
+				netMap: nm,
+				logf:   t.Logf,
+				peers:  peersMap(tc.peers),
+			}
+			b.mu.Lock()
+			got := b.dnsConfigForNetmapLocked(prefs.View(), "")
+			b.mu.Unlock()
 			if !resolversEqual(t, got.DefaultResolvers, tc.wantDefaultResolvers) {
 				t.Errorf("DefaultResolvers: got %#v, want %#v", got.DefaultResolvers, tc.wantDefaultResolvers)
 			}

@@ -14,10 +14,13 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest"
 	"tailscale.com/types/dnstype"
+	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
 )
 
 func ipps(ippStrs ...string) (ipps []netip.Prefix) {
@@ -327,12 +330,70 @@ func TestDNSConfigForNetmap(t *testing.T) {
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
 			},
 		},
+		{
+			name: "ipv6_os_support",
+			nm: &netmap.NetworkMap{
+				Name: "myname.net",
+				SelfNode: (&tailcfg.Node{
+					Addresses: ipps("100.101.101.101"),
+				}).View(),
+				PacketFilter: []filter.Match{{
+					// TODO(andrew): this looks backwards?
+					Srcs: []netip.Prefix{netip.MustParsePrefix("100.102.0.1/32")},
+					Caps: []filter.CapMatch{
+						{
+							Dst: netip.MustParsePrefix("100.101.101.101/32"),
+							Cap: tailcfg.PeerCapabilityOSIPv6,
+						},
+					},
+				}},
+			},
+			peers: nodeViews([]*tailcfg.Node{
+				{
+					ID:        1,
+					Name:      "peera.net",
+					Addresses: ipps("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+				{
+					ID:        2,
+					Name:      "b.net",
+					Addresses: ipps("100.102.0.3", "100.102.0.4", "fe75::2"),
+				},
+			}),
+			prefs: &ipn.Prefs{},
+			want: &dns.Config{
+				Routes: map[dnsname.FQDN][]*dnstype.Resolver{},
+				Hosts: map[dnsname.FQDN][]netip.Addr{
+					"b.net.":      ips("100.102.0.3", "100.102.0.4"),
+					"myname.net.": ips("100.101.101.101"),
+					"peera.net.":  ips("100.102.0.1", "100.102.0.2", "fe75::1001", "fe75::1002"),
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			verOS := cmpx.Or(tt.os, "linux")
+
+			eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
+
 			var log tstest.MemLogger
-			got := dnsConfigForNetmap(tt.nm, peersMap(tt.peers), tt.prefs.View(), log.Logf, verOS)
+			b := &LocalBackend{
+				e:      eng,
+				netMap: tt.nm,
+				logf:   log.Logf,
+				peers:  peersMap(tt.peers),
+			}
+			b.mu.Lock()
+			b.updateFilterLocked(b.netMap, tt.prefs.View())
+
+			// the updateFilterLocked function logs something; clear it
+			log.Lock()
+			log.Reset()
+			log.Unlock()
+
+			got := b.dnsConfigForNetmapLocked(tt.prefs.View(), verOS)
+			b.mu.Unlock()
 			if !reflect.DeepEqual(got, tt.want) {
 				gotj, _ := json.MarshalIndent(got, "", "\t")
 				wantj, _ := json.MarshalIndent(tt.want, "", "\t")
