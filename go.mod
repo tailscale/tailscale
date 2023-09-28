@@ -75,7 +75,7 @@ require (
 	github.com/vishvananda/netns v0.0.4
 	go.uber.org/zap v1.24.0
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13
-	go4.org/netipx v0.0.0-20230728180743-ad4cb58a6516
+	go4.org/netipx v0.0.0-20230824141953-6213f710f925
 	golang.org/x/crypto v0.13.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/mod v0.12.0
@@ -89,7 +89,7 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
-	honnef.co/go/tools v0.4.3
+	honnef.co/go/tools v0.4.5
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a
 	inet.af/tcpproxy v0.0.0-20221017015627-91f861402626
 	inet.af/wf v0.0.0-20221017222439-36129f591884
