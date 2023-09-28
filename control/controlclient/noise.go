@@ -177,6 +177,7 @@ type NoiseClient struct {
 
 	// mu only protects the following variables.
 	mu       sync.Mutex
+	closed   bool
 	last     *noiseConn // or nil
 	nextID   int
 	connPool map[int]*noiseConn // active connections not yet closed; see noiseConn.Close
@@ -373,6 +374,7 @@ func (nc *NoiseClient) connClosed(id int) {
 // It is a no-op and returns nil if the connection is already closed.
 func (nc *NoiseClient) Close() error {
 	nc.mu.Lock()
+	nc.closed = true
 	conns := nc.connPool
 	nc.connPool = nil
 	nc.mu.Unlock()
@@ -472,6 +474,10 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseConn, error) {
 
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
+	if nc.closed {
+		ncc.Close()
+		return nil, errors.New("noise client closed")
+	}
 	mak.Set(&nc.connPool, ncc.id, ncc)
 	nc.last = ncc
 	return ncc, nil
