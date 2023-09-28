@@ -5,6 +5,7 @@ package ipn
 import (
 	"testing"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
@@ -26,7 +27,11 @@ func TestCheckFunnelAccess(t *testing.T) {
 		{3000, caps(portAttr, tailcfg.CapabilityHTTPS, tailcfg.NodeAttrFunnel), true},
 	}
 	for _, tt := range tests {
-		err := CheckFunnelAccess(tt.port, tt.caps)
+		cm := tailcfg.NodeCapMap{}
+		for _, c := range tt.caps {
+			cm[c] = nil
+		}
+		err := CheckFunnelAccess(tt.port, &ipnstate.PeerStatus{CapMap: cm})
 		switch {
 		case err != nil && tt.wantErr,
 			err == nil && !tt.wantErr:

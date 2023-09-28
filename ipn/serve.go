@@ -9,10 +9,10 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
 
@@ -237,23 +237,21 @@ func (sc *ServeConfig) IsFunnelOn() bool {
 //  2. the node has the "funnel" nodeAttr
 //  3. the port is allowed for Funnel
 //
-// The nodeAttrs arg should be the node's Self.Capabilities which should contain
-// the attribute we're checking for and possibly warning-capabilities for
-// Funnel.
-func CheckFunnelAccess(port uint16, nodeAttrs []tailcfg.NodeCapability) error {
-	if !slices.Contains(nodeAttrs, tailcfg.CapabilityHTTPS) {
+// The node arg should be the ipnstate.Status.Self node.
+func CheckFunnelAccess(port uint16, node *ipnstate.PeerStatus) error {
+	if !node.HasCap(tailcfg.CapabilityHTTPS) {
 		return errors.New("Funnel not available; HTTPS must be enabled. See https://tailscale.com/s/https.")
 	}
-	if !slices.Contains(nodeAttrs, tailcfg.NodeAttrFunnel) {
+	if !node.HasCap(tailcfg.NodeAttrFunnel) {
 		return errors.New("Funnel not available; \"funnel\" node attribute not set. See https://tailscale.com/s/no-funnel.")
 	}
-	return CheckFunnelPort(port, nodeAttrs)
+	return CheckFunnelPort(port, node)
 }
 
 // CheckFunnelPort checks whether the given port is allowed for Funnel.
 // It uses the tailcfg.CapabilityFunnelPorts nodeAttr to determine the allowed
 // ports.
-func CheckFunnelPort(wantedPort uint16, nodeAttrs []tailcfg.NodeCapability) error {
+func CheckFunnelPort(wantedPort uint16, node *ipnstate.PeerStatus) error {
 	deny := func(allowedPorts string) error {
 		if allowedPorts == "" {
 			return fmt.Errorf("port %d is not allowed for funnel", wantedPort)
@@ -261,23 +259,49 @@ func CheckFunnelPort(wantedPort uint16, nodeAttrs []tailcfg.NodeCapability) erro
 		return fmt.Errorf("port %d is not allowed for funnel; allowed ports are: %v", wantedPort, allowedPorts)
 	}
 	var portsStr string
-	for _, attr := range nodeAttrs {
+	parseAttr := func(attr string) (string, error) {
+		u, err := url.Parse(attr)
+		if err != nil {
+			return "", deny("")
+		}
+		portsStr := u.Query().Get("ports")
+		if portsStr == "" {
+			return "", deny("")
+		}
+		u.RawQuery = ""
+		if u.String() != string(tailcfg.CapabilityFunnelPorts) {
+			return "", deny("")
+		}
+		return portsStr, nil
+	}
+	for attr := range node.CapMap {
 		attr := string(attr)
 		if !strings.HasPrefix(attr, string(tailcfg.CapabilityFunnelPorts)) {
 			continue
 		}
-		u, err := url.Parse(attr)
+		var err error
+		portsStr, err = parseAttr(attr)
 		if err != nil {
-			return deny("")
+			return err
 		}
-		portsStr = u.Query().Get("ports")
-		if portsStr == "" {
-			return deny("")
+		break
+	}
+	if portsStr == "" {
+		for _, attr := range node.Capabilities {
+			attr := string(attr)
+			if !strings.HasPrefix(attr, string(tailcfg.CapabilityFunnelPorts)) {
+				continue
+			}
+			var err error
+			portsStr, err = parseAttr(attr)
+			if err != nil {
+				return err
+			}
+			break
 		}
-		u.RawQuery = ""
-		if u.String() != string(tailcfg.CapabilityFunnelPorts) {
-			return deny("")
-		}
+	}
+	if portsStr == "" {
+		return deny("")
 	}
 	wantedPortString := strconv.Itoa(int(wantedPort))
 	for _, ps := range strings.Split(portsStr, ",") {

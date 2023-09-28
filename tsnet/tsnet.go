@@ -926,7 +926,7 @@ func (s *Server) ListenFunnel(network, addr string, opts ...FunnelOption) (net.L
 	// flow here instead of CheckFunnelAccess to allow the user to turn on Funnel
 	// if not already on. Specifically when running from a terminal.
 	// See cli.serveEnv.verifyFunnelEnabled.
-	if err := ipn.CheckFunnelAccess(uint16(port), st.Self.Capabilities); err != nil {
+	if err := ipn.CheckFunnelAccess(uint16(port), st.Self); err != nil {
 		return nil, err
 	}
 
