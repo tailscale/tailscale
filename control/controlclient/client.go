@@ -14,12 +14,20 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// LoginFlags is a bitmask of options to change the behavior of Client.Login
+// and LocalBackend.
 type LoginFlags int
 
 const (
 	LoginDefault     = LoginFlags(0)
 	LoginInteractive = LoginFlags(1 << iota) // force user login and key refresh
 	LoginEphemeral                           // set RegisterRequest.Ephemeral
+
+	// LocalBackendStartKeyOSNeutral instructs NewLocalBackend to start the
+	// LocalBackend without any OS-dependent StateStore StartKey behavior.
+	//
+	// See https://github.com/tailscale/tailscale/issues/6973.
+	LocalBackendStartKeyOSNeutral
 )
 
 // Client represents a client connection to the control server.

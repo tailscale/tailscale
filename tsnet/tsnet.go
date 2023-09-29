@@ -542,7 +542,7 @@ func (s *Server) start() (reterr error) {
 	if s.Ephemeral {
 		loginFlags = controlclient.LoginEphemeral
 	}
-	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, sys, loginFlags)
+	lb, err := ipnlocal.NewLocalBackend(logf, s.logid, sys, loginFlags|controlclient.LocalBackendStartKeyOSNeutral)
 	if err != nil {
 		return fmt.Errorf("NewLocalBackend: %v", err)
 	}

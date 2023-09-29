@@ -23,6 +23,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -467,6 +468,57 @@ func TestListenerCleanup(t *testing.T) {
 
 	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("second ln.Close error: %v, want net.ErrClosed", err)
+	}
+}
+
+// tests https://github.com/tailscale/tailscale/issues/6973 -- that we can start a tsnet server,
+// stop it, and restart it, even on Windows.
+func TestStartStopStartGetsSameIP(t *testing.T) {
+	controlURL := startControl(t)
+
+	tmp := t.TempDir()
+	tmps1 := filepath.Join(tmp, "s1")
+	os.MkdirAll(tmps1, 0755)
+
+	newServer := func() *Server {
+		return &Server{
+			Dir:        tmps1,
+			ControlURL: controlURL,
+			Hostname:   "s1",
+			Logf:       logger.TestLogger(t),
+		}
+	}
+	s1 := newServer()
+	defer s1.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s1status, err := s1.Up(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstIPs := s1status.TailscaleIPs
+	t.Logf("IPs: %v", firstIPs)
+
+	if err := s1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s2 := newServer()
+	defer s2.Close()
+
+	s2status, err := s2.Up(ctx)
+	if err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+
+	secondIPs := s2status.TailscaleIPs
+	t.Logf("IPs: %v", secondIPs)
+
+	if !reflect.DeepEqual(firstIPs, secondIPs) {
+		t.Fatalf("got %v but later %v", firstIPs, secondIPs)
 	}
 }
 
