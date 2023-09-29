@@ -15,7 +15,7 @@ type Slice[T comparable] struct {
 	set   map[T]bool // nil until/unless slice is large enough
 }
 
-// Slice returns the a view of the underlying slice.
+// Slice returns a view of the underlying slice.
 // The elements are in order of insertion.
 // The returned value is only valid until ss is modified again.
 func (ss *Slice[T]) Slice() views.Slice[T] { return views.SliceOf(ss.slice) }
