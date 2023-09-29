@@ -258,10 +258,13 @@ authLoop:
 	if err := tailscaleSet(ctx, cfg); err != nil {
 		log.Fatalf("failed to auth tailscale: %v", err)
 	}
-	// Remove any serve config that may have been set by a previous
-	// run of containerboot.
-	if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
-		log.Fatalf("failed to unset serve config: %v", err)
+
+	if cfg.ServeConfigPath != "" {
+		// Remove any serve config that may have been set by a previous run of
+		// containerboot, but only if we're providing a new one.
+		if err := client.SetServeConfig(ctx, new(ipn.ServeConfig)); err != nil {
+			log.Fatalf("failed to unset serve config: %v", err)
+		}
 	}
 
 	if cfg.InKubernetes && cfg.KubeSecret != "" && cfg.KubernetesCanPatch && cfg.AuthOnce {
