@@ -308,7 +308,11 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 	dialer := sys.Dialer.Get()
 	_ = sys.MagicSock.Get() // or panic
 
-	pm, err := newProfileManager(store, logf)
+	goos := envknob.GOOS()
+	if loginFlags&controlclient.LocalBackendStartKeyOSNeutral != 0 {
+		goos = ""
+	}
+	pm, err := newProfileManagerWithGOOS(store, logf, goos)
 	if err != nil {
 		return nil, err
 	}
