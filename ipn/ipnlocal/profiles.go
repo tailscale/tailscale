@@ -19,6 +19,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/cmpx"
+	"tailscale.com/util/syspolicy"
 	"tailscale.com/util/winutil"
 )
 
@@ -463,6 +464,10 @@ var defaultPrefs = func() ipn.PrefsView {
 	prefs.ShieldsUp = shieldsUp == "never"
 	forceDaemon, _ := winutil.GetPolicyString("UnattendedMode")
 	prefs.ForceDaemon = forceDaemon == "always"
+	corpDNS, _ := syspolicy.GetPreferenceOption(syspolicy.EnableTailscaleDNS)
+	prefs.CorpDNS = corpDNS.ShouldEnable(false)
+	routeAll, _ := syspolicy.GetPreferenceOption(syspolicy.EnableTailscaleSubnets)
+	prefs.RouteAll = routeAll.ShouldEnable(false)
 
 	return prefs.View()
 }()
