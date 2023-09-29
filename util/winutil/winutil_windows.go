@@ -604,8 +604,8 @@ func registerForRestart(opts RegisterForRestartOpts) error {
 		}
 	}
 
-	hr := registerApplicationRestart(cmdLine, flags)
-	if e := wingoes.ErrorFromHRESULT(hr); e.Failed() {
+	r := registerApplicationRestart(cmdLine, flags)
+	if e := wingoes.ErrorFromHRESULT(wingoes.HRESULT(r)); e.Failed() {
 		return e
 	}
 

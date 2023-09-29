@@ -6,7 +6,6 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/dblohm7/wingoes"
 	"golang.org/x/sys/windows"
 )
 
@@ -54,8 +53,8 @@ func queryServiceConfig2(hService windows.Handle, infoLevel uint32, buf *byte, b
 	return
 }
 
-func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret wingoes.HRESULT) {
+func registerApplicationRestart(cmdLineExclExeName *uint16, flags uint32) (ret int32) {
 	r0, _, _ := syscall.Syscall(procRegisterApplicationRestart.Addr(), 2, uintptr(unsafe.Pointer(cmdLineExclExeName)), uintptr(flags), 0)
-	ret = wingoes.HRESULT(r0)
+	ret = int32(r0)
 	return
 }
