@@ -384,8 +384,9 @@ jobs:
     - name: checkout
       uses: actions/checkout@v4
     - name: check that 'go generate' is clean
+      # util/winutil is excluded because of #9579
       run: |
-        pkgs=$(./tool/go list ./... | grep -v dnsfallback)
+        pkgs=$(./tool/go list ./... | grep -v dnsfallback | grep -v util/winutil)
         ./tool/go generate $pkgs
         echo
         echo
