@@ -27,6 +27,15 @@ func GetUint64(key Key, defaultValue uint64) (uint64, error) {
 	return v, err
 }
 
+func GetBoolean(key Key, defaultValue bool) (bool, error) {
+	markHandlerInUse()
+	v, err := handler.ReadBoolean(string(key))
+	if errors.Is(err, ErrNoSuchKey) {
+		return defaultValue, nil
+	}
+	return v, err
+}
+
 // PreferenceOption is a policy that governs whether a boolean variable
 // is forcibly assigned an administrator-defined value, or allowed to receive
 // a user-defined value.
