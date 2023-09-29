@@ -318,13 +318,6 @@ func trySetSocketBuffer(pconn nettype.PacketConn, logf logger.Logf) {
 	}
 }
 
-const (
-	// TODO(jwhited): upstream to unix?
-	socketOptionLevelUDP   = 17
-	socketOptionUDPSegment = 103
-	socketOptionUDPGRO     = 104
-)
-
 // tryEnableUDPOffload attempts to enable the UDP_GRO socket option on pconn,
 // and returns two booleans indicating TX and RX UDP offload support.
 func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
@@ -334,13 +327,13 @@ func tryEnableUDPOffload(pconn nettype.PacketConn) (hasTX bool, hasRX bool) {
 			return
 		}
 		err = rc.Control(func(fd uintptr) {
-			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPSegment)
+			_, errSyscall := syscall.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
 			if errSyscall != nil {
 				// no point in checking RX, TX support was added first.
 				return
 			}
 			hasTX = true
-			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, socketOptionUDPGRO, 1)
+			errSyscall = syscall.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
 			hasRX = errSyscall == nil
 		})
 		if err != nil {
@@ -367,7 +360,7 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("error parsing socket control message: %w", err)
 		}
-		if hdr.Level == socketOptionLevelUDP && hdr.Type == socketOptionUDPGRO && len(data) >= 2 {
+		if hdr.Level == unix.SOL_UDP && hdr.Type == unix.UDP_GRO && len(data) >= 2 {
 			var gso uint16
 			// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
 			copy(unsafe.Slice((*byte)(unsafe.Pointer(&gso)), 2), data[:2])
@@ -389,8 +382,8 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	}
 	*control = (*control)[:cap(*control)]
 	hdr := (*unix.Cmsghdr)(unsafe.Pointer(&(*control)[0]))
-	hdr.Level = socketOptionLevelUDP
-	hdr.Type = socketOptionUDPSegment
+	hdr.Level = unix.SOL_UDP
+	hdr.Type = unix.UDP_SEGMENT
 	hdr.SetLen(unix.CmsgLen(2))
 	// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
 	copy((*control)[unix.SizeofCmsghdr:], unsafe.Slice((*byte)(unsafe.Pointer(&gsoSize)), 2))
