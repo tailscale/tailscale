@@ -11,34 +11,13 @@ import (
 	"net/netip"
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
-	"github.com/mdlayher/netlink"
 	"github.com/vishvananda/netns"
 	"tailscale.com/net/tsaddr"
 )
-
-// nfdump returns a hexdump of 4 bytes per line (like nft --debug=all), allowing
-// users to make sense of large byte literals more easily.
-func nfdump(b []byte) string {
-	var buf bytes.Buffer
-	i := 0
-	for ; i < len(b); i += 4 {
-		// TODO: show printable characters as ASCII
-		fmt.Fprintf(&buf, "%02x %02x %02x %02x\n",
-			b[i],
-			b[i+1],
-			b[i+2],
-			b[i+3])
-	}
-	for ; i < len(b); i++ {
-		fmt.Fprintf(&buf, "%02x ", b[i])
-	}
-	return buf.String()
-}
 
 func TestMaskof(t *testing.T) {
 	pfx, err := netip.ParsePrefix("192.168.1.0/24")
@@ -49,56 +28,6 @@ func TestMaskof(t *testing.T) {
 	if got := maskof(pfx); !bytes.Equal(got, want) {
 		t.Errorf("got %v; want %v", got, want)
 	}
-}
-
-// linediff returns a side-by-side diff of two nfdump() return values, flagging
-// lines which are not equal with an exclamation point prefix.
-func linediff(a, b string) string {
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "got -- want\n")
-	linesA := strings.Split(a, "\n")
-	linesB := strings.Split(b, "\n")
-	for idx, lineA := range linesA {
-		if idx >= len(linesB) {
-			break
-		}
-		lineB := linesB[idx]
-		prefix := "! "
-		if lineA == lineB {
-			prefix = "  "
-		}
-		fmt.Fprintf(&buf, "%s%s -- %s\n", prefix, lineA, lineB)
-	}
-	return buf.String()
-}
-
-func newTestConn(t *testing.T, want [][]byte) *nftables.Conn {
-	conn, err := nftables.New(nftables.WithTestDial(
-		func(req []netlink.Message) ([]netlink.Message, error) {
-			for idx, msg := range req {
-				b, err := msg.MarshalBinary()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(b) < 16 {
-					continue
-				}
-				b = b[16:]
-				if len(want) == 0 {
-					t.Errorf("no want entry for message %d: %x", idx, b)
-					continue
-				}
-				if got, want := b, want[0]; !bytes.Equal(got, want) {
-					t.Errorf("message %d: %s", idx, linediff(nfdump(got), nfdump(want)))
-				}
-				want = want[1:]
-			}
-			return req, nil
-		}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return conn
 }
 
 func TestInsertHookRule(t *testing.T) {
@@ -112,12 +41,12 @@ func TestInsertHookRule(t *testing.T) {
 		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x03\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x14\x00\x04\x80\x08\x00\x01\x00\x00\x00\x00\x01\x08\x00\x02\x00\x00\x00\x00\x00\x0b\x00\x07\x00\x66\x69\x6c\x74\x65\x72\x00\x00"),
 		// nft add chain ip ts-filter-test ts-jumpto
 		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x0e\x00\x03\x00\x74\x73\x2d\x6a\x75\x6d\x70\x74\x6f\x00\x00\x00"),
-		// nft add rule ip ts-filter-test ts-input-test counter jump ts-jumptp
+		// nft add rule ip ts-filter-test ts-input-test counter jump ts-jumpto
 		[]byte("\x02\x00\x00\x00\x13\x00\x01\x00\x74\x73\x2d\x66\x69\x6c\x74\x65\x72\x2d\x74\x65\x73\x74\x00\x00\x12\x00\x02\x00\x74\x73\x2d\x69\x6e\x70\x75\x74\x2d\x74\x65\x73\x74\x00\x00\x00\x70\x00\x04\x80\x2c\x00\x01\x80\x0c\x00\x01\x00\x63\x6f\x75\x6e\x74\x65\x72\x00\x1c\x00\x02\x80\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x40\x00\x01\x80\x0e\x00\x01\x00\x69\x6d\x6d\x65\x64\x69\x61\x74\x65\x00\x00\x00\x2c\x00\x02\x80\x08\x00\x01\x00\x00\x00\x00\x00\x20\x00\x02\x80\x1c\x00\x02\x80\x08\x00\x01\x00\xff\xff\xff\xfd\x0e\x00\x02\x00\x74\x73\x2d\x6a\x75\x6d\x70\x74\x6f\x00\x00\x00"),
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -157,7 +86,7 @@ func TestInsertLoopbackRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -193,7 +122,7 @@ func TestInsertLoopbackRuleV6(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	tableV6 := testConn.AddTable(&nftables.Table{
 		Family: protoV6,
 		Name:   "ts-filter-test",
@@ -229,7 +158,7 @@ func TestAddReturnChromeOSVMRangeRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -261,7 +190,7 @@ func TestAddDropCGNATRangeRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -293,7 +222,7 @@ func TestAddSetSubnetRouteMarkRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -325,7 +254,7 @@ func TestAddDropOutgoingPacketFromCGNATRangeRuleWithTunname(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -357,7 +286,7 @@ func TestAddAcceptOutgoingPacketRule(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -389,7 +318,7 @@ func TestAddMatchSubnetRouteMarkRuleMasq(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-nat-test",
@@ -421,7 +350,7 @@ func TestAddMatchSubnetRouteMarkRuleAccept(t *testing.T) {
 		// batch end
 		[]byte("\x00\x00\x00\x0a"),
 	}
-	testConn := newTestConn(t, want)
+	testConn := NewTestConn(t, want)
 	table := testConn.AddTable(&nftables.Table{
 		Family: proto,
 		Name:   "ts-filter-test",
@@ -456,14 +385,6 @@ func newSysConn(t *testing.T) *nftables.Conn {
 	t.Cleanup(func() { cleanupSysConn(t, ns) })
 
 	return c
-}
-
-func cleanupSysConn(t *testing.T, ns netns.NsHandle) {
-	defer runtime.UnlockOSThread()
-
-	if err := ns.Close(); err != nil {
-		t.Fatalf("newNS.Close() failed: %v", err)
-	}
 }
 
 func newFakeNftablesRunner(t *testing.T, conn *nftables.Conn) *nftablesRunner {
@@ -843,7 +764,7 @@ func TestNFTAddAndDelHookRule(t *testing.T) {
 	defer runner.DelChains()
 	runner.AddHooks()
 
-	forwardChain, err := getChainFromTable(conn, runner.nft4.Filter, "FORWARD")
+	forwardChain, err := GetChainFromTable(conn, runner.nft4.Filter, "FORWARD")
 	if err != nil {
 		t.Fatalf("failed to get forwardChain: %v", err)
 	}
@@ -857,7 +778,7 @@ func TestNFTAddAndDelHookRule(t *testing.T) {
 		t.Fatalf("expected 1 rule in FORWARD chain, got %v", len(forwardChainRules))
 	}
 
-	inputChain, err := getChainFromTable(conn, runner.nft4.Filter, "INPUT")
+	inputChain, err := GetChainFromTable(conn, runner.nft4.Filter, "INPUT")
 	if err != nil {
 		t.Fatalf("failed to get inputChain: %v", err)
 	}
@@ -871,7 +792,7 @@ func TestNFTAddAndDelHookRule(t *testing.T) {
 		t.Fatalf("expected 1 rule in INPUT chain, got %v", len(inputChainRules))
 	}
 
-	postroutingChain, err := getChainFromTable(conn, runner.nft4.Nat, "POSTROUTING")
+	postroutingChain, err := GetChainFromTable(conn, runner.nft4.Nat, "POSTROUTING")
 	if err != nil {
 		t.Fatalf("failed to get postroutingChain: %v", err)
 	}

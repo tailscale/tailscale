@@ -30,19 +30,34 @@ const (
 // chainTypeRegular is an nftables chain that does not apply to a hook.
 const chainTypeRegular = ""
 
-type chainInfo struct {
-	table         *nftables.Table
-	name          string
-	chainType     nftables.ChainType
-	chainHook     *nftables.ChainHook
-	chainPriority *nftables.ChainPriority
-	chainPolicy   *nftables.ChainPolicy
+type ChainInfo struct {
+	Table         *nftables.Table
+	Name          string
+	ChainType     nftables.ChainType
+	ChainHook     *nftables.ChainHook
+	ChainPriority *nftables.ChainPriority
+	ChainPolicy   *nftables.ChainPolicy
 }
 
 type nftable struct {
 	Proto  nftables.TableFamily
 	Filter *nftables.Table
 	Nat    *nftables.Table
+}
+
+type Conn interface {
+	ListChainsOfTableFamily(nftables.TableFamily) ([]*nftables.Chain, error)
+	ListTables() ([]*nftables.Table, error)
+	AddTable(*nftables.Table) *nftables.Table
+	DelTable(*nftables.Table)
+	AddChain(*nftables.Chain) *nftables.Chain
+	DelChain(*nftables.Chain)
+	FlushChain(*nftables.Chain)
+	GetRules(*nftables.Table, *nftables.Chain) ([]*nftables.Rule, error)
+	InsertRule(*nftables.Rule) *nftables.Rule
+	AddRule(*nftables.Rule) *nftables.Rule
+	DelRule(*nftables.Rule) error
+	Flush() error
 }
 
 // nftablesRunner implements a netfilterRunner using the netlink based nftables
@@ -70,7 +85,7 @@ type nftablesRunner struct {
 }
 
 // createTableIfNotExist creates a nftables table via connection c if it does not exist within the given family.
-func createTableIfNotExist(c *nftables.Conn, family nftables.TableFamily, name string) (*nftables.Table, error) {
+func CreateTableIfNotExist(c Conn, family nftables.TableFamily, name string) (*nftables.Table, error) {
 	tables, err := c.ListTables()
 	if err != nil {
 		return nil, fmt.Errorf("get tables: %w", err)
@@ -102,7 +117,7 @@ func (e errorChainNotFound) Error() string {
 
 // getChainFromTable returns the chain with the given name from the given table.
 // Note that a chain name is unique within a table.
-func getChainFromTable(c *nftables.Conn, table *nftables.Table, name string) (*nftables.Chain, error) {
+func GetChainFromTable(c Conn, table *nftables.Table, name string) (*nftables.Chain, error) {
 	chains, err := c.ListChainsOfTableFamily(table.Family)
 	if err != nil {
 		return nil, fmt.Errorf("list chains: %w", err)
@@ -144,35 +159,35 @@ func isTSChain(name string) bool {
 
 // createChainIfNotExist creates a chain with the given name in the given table
 // if it does not exist.
-func createChainIfNotExist(c *nftables.Conn, cinfo chainInfo) error {
-	chain, err := getChainFromTable(c, cinfo.table, cinfo.name)
-	if err != nil && !errors.Is(err, errorChainNotFound{cinfo.table.Name, cinfo.name}) {
-		return fmt.Errorf("get chain: %w", err)
+func CreateChainIfNotExist(c Conn, cinfo ChainInfo) (*nftables.Chain, error) {
+	chain, err := GetChainFromTable(c, cinfo.Table, cinfo.Name)
+	if err != nil && !errors.Is(err, errorChainNotFound{cinfo.Table.Name, cinfo.Name}) {
+		return nil, fmt.Errorf("get chain: %w", err)
 	} else if err == nil {
 		// The chain already exists. If it is a TS chain, check the
 		// type/hook/priority, but for "conventional chains" assume they're what
 		// we expect (in case iptables-nft/ufw make minor behavior changes in
 		// the future).
-		if isTSChain(chain.Name) && (chain.Type != cinfo.chainType || chain.Hooknum != cinfo.chainHook || chain.Priority != cinfo.chainPriority) {
-			return fmt.Errorf("chain %s already exists with different type/hook/priority", cinfo.name)
+		if isTSChain(chain.Name) && (chain.Type != cinfo.ChainType || chain.Hooknum != cinfo.ChainHook || chain.Priority != cinfo.ChainPriority) {
+			return nil, fmt.Errorf("chain %s already exists with different type/hook/priority", cinfo.Name)
 		}
-		return nil
+		return chain, nil
 	}
 
-	_ = c.AddChain(&nftables.Chain{
-		Name:     cinfo.name,
-		Table:    cinfo.table,
-		Type:     cinfo.chainType,
-		Hooknum:  cinfo.chainHook,
-		Priority: cinfo.chainPriority,
-		Policy:   cinfo.chainPolicy,
+	chain = c.AddChain(&nftables.Chain{
+		Name:     cinfo.Name,
+		Table:    cinfo.Table,
+		Type:     cinfo.ChainType,
+		Hooknum:  cinfo.ChainHook,
+		Priority: cinfo.ChainPriority,
+		Policy:   cinfo.ChainPolicy,
 	})
 
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("add chain: %w", err)
+		return nil, fmt.Errorf("add chain: %w", err)
 	}
 
-	return nil
+	return chain, nil
 }
 
 // NewNfTablesRunner creates a new nftablesRunner without guaranteeing
@@ -184,12 +199,12 @@ func NewNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	}
 	nft4 := &nftable{Proto: nftables.TableFamilyIPv4}
 
-	v6err := checkIPv6(logf)
+	v6err := CheckIPv6(logf)
 	if v6err != nil {
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
 	}
 	supportsV6 := v6err == nil
-	supportsV6NAT := supportsV6 && checkSupportsV6NAT()
+	supportsV6NAT := supportsV6 && CheckSupportsV6NAT()
 
 	var nft6 *nftable
 	if supportsV6 {
@@ -208,7 +223,7 @@ func NewNfTablesRunner(logf logger.Logf) (*nftablesRunner, error) {
 	}, nil
 }
 
-// newLoadSaddrExpr creates a new nftables expression that loads the source
+// NewLoadSaddrExpr creates a new nftables expression that loads the source
 // address of the packet into the given register.
 func newLoadSaddrExpr(proto nftables.TableFamily, destReg uint32) (expr.Any, error) {
 	switch proto {
@@ -358,7 +373,7 @@ func (n *nftablesRunner) getNFTByAddr(addr netip.Addr) *nftable {
 func (n *nftablesRunner) AddLoopbackRule(addr netip.Addr) error {
 	nf := n.getNFTByAddr(addr)
 
-	inputChain, err := getChainFromTable(n.conn, nf.Filter, chainNameInput)
+	inputChain, err := GetChainFromTable(n.conn, nf.Filter, chainNameInput)
 	if err != nil {
 		return fmt.Errorf("get input chain: %w", err)
 	}
@@ -375,7 +390,7 @@ func (n *nftablesRunner) AddLoopbackRule(addr netip.Addr) error {
 func (n *nftablesRunner) DelLoopbackRule(addr netip.Addr) error {
 	nf := n.getNFTByAddr(addr)
 
-	inputChain, err := getChainFromTable(n.conn, nf.Filter, chainNameInput)
+	inputChain, err := GetChainFromTable(n.conn, nf.Filter, chainNameInput)
 	if err != nil {
 		return fmt.Errorf("get input chain: %w", err)
 	}
@@ -428,23 +443,23 @@ func (n *nftablesRunner) AddChains() error {
 		// as the name used by iptables-nft and ufw. We install rules into the
 		// same conventional table so that `accept` verdicts from our jump
 		// chains are conclusive.
-		filter, err := createTableIfNotExist(n.conn, table.Proto, "filter")
+		filter, err := CreateTableIfNotExist(n.conn, table.Proto, "filter")
 		if err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
 		table.Filter = filter
 		// Adding the "conventional chains" that are used by iptables-nft and ufw.
-		if err = createChainIfNotExist(n.conn, chainInfo{filter, "FORWARD", nftables.ChainTypeFilter, nftables.ChainHookForward, nftables.ChainPriorityFilter, &polAccept}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{filter, "FORWARD", nftables.ChainTypeFilter, nftables.ChainHookForward, nftables.ChainPriorityFilter, &polAccept}); err != nil {
 			return fmt.Errorf("create forward chain: %w", err)
 		}
-		if err = createChainIfNotExist(n.conn, chainInfo{filter, "INPUT", nftables.ChainTypeFilter, nftables.ChainHookInput, nftables.ChainPriorityFilter, &polAccept}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{filter, "INPUT", nftables.ChainTypeFilter, nftables.ChainHookInput, nftables.ChainPriorityFilter, &polAccept}); err != nil {
 			return fmt.Errorf("create input chain: %w", err)
 		}
 		// Adding the tailscale chains that contain our rules.
-		if err = createChainIfNotExist(n.conn, chainInfo{filter, chainNameForward, chainTypeRegular, nil, nil, nil}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{filter, chainNameForward, chainTypeRegular, nil, nil, nil}); err != nil {
 			return fmt.Errorf("create forward chain: %w", err)
 		}
-		if err = createChainIfNotExist(n.conn, chainInfo{filter, chainNameInput, chainTypeRegular, nil, nil, nil}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{filter, chainNameInput, chainTypeRegular, nil, nil, nil}); err != nil {
 			return fmt.Errorf("create input chain: %w", err)
 		}
 	}
@@ -454,17 +469,17 @@ func (n *nftablesRunner) AddChains() error {
 		// as the name used by iptables-nft and ufw. We install rules into the
 		// same conventional table so that `accept` verdicts from our jump
 		// chains are conclusive.
-		nat, err := createTableIfNotExist(n.conn, table.Proto, "nat")
+		nat, err := CreateTableIfNotExist(n.conn, table.Proto, "nat")
 		if err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
 		table.Nat = nat
 		// Adding the "conventional chains" that are used by iptables-nft and ufw.
-		if err = createChainIfNotExist(n.conn, chainInfo{nat, "POSTROUTING", nftables.ChainTypeNAT, nftables.ChainHookPostrouting, nftables.ChainPriorityNATSource, &polAccept}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{nat, "POSTROUTING", nftables.ChainTypeNAT, nftables.ChainHookPostrouting, nftables.ChainPriorityNATSource, &polAccept}); err != nil {
 			return fmt.Errorf("create postrouting chain: %w", err)
 		}
 		// Adding the tailscale chain that contains our rules.
-		if err = createChainIfNotExist(n.conn, chainInfo{nat, chainNamePostrouting, chainTypeRegular, nil, nil, nil}); err != nil {
+		if _, err = CreateChainIfNotExist(n.conn, ChainInfo{nat, chainNamePostrouting, chainTypeRegular, nil, nil, nil}); err != nil {
 			return fmt.Errorf("create postrouting chain: %w", err)
 		}
 	}
@@ -474,7 +489,7 @@ func (n *nftablesRunner) AddChains() error {
 
 // deleteChainIfExists deletes a chain if it exists.
 func deleteChainIfExists(c *nftables.Conn, table *nftables.Table, name string) error {
-	chain, err := getChainFromTable(c, table, name)
+	chain, err := GetChainFromTable(c, table, name)
 	if err != nil && !errors.Is(err, errorChainNotFound{table.Name, name}) {
 		return fmt.Errorf("get chain: %w", err)
 	} else if err != nil {
@@ -557,7 +572,7 @@ func (n *nftablesRunner) AddHooks() error {
 	conn := n.conn
 
 	for _, table := range n.getTables() {
-		inputChain, err := getChainFromTable(conn, table.Filter, "INPUT")
+		inputChain, err := GetChainFromTable(conn, table.Filter, "INPUT")
 		if err != nil {
 			return fmt.Errorf("get INPUT chain: %w", err)
 		}
@@ -565,7 +580,7 @@ func (n *nftablesRunner) AddHooks() error {
 		if err != nil {
 			return fmt.Errorf("Addhook: %w", err)
 		}
-		forwardChain, err := getChainFromTable(conn, table.Filter, "FORWARD")
+		forwardChain, err := GetChainFromTable(conn, table.Filter, "FORWARD")
 		if err != nil {
 			return fmt.Errorf("get FORWARD chain: %w", err)
 		}
@@ -576,7 +591,7 @@ func (n *nftablesRunner) AddHooks() error {
 	}
 
 	for _, table := range n.getNATTables() {
-		postroutingChain, err := getChainFromTable(conn, table.Nat, "POSTROUTING")
+		postroutingChain, err := GetChainFromTable(conn, table.Nat, "POSTROUTING")
 		if err != nil {
 			return fmt.Errorf("get INPUT chain: %w", err)
 		}
@@ -613,7 +628,7 @@ func (n *nftablesRunner) DelHooks(logf logger.Logf) error {
 	conn := n.conn
 
 	for _, table := range n.getTables() {
-		inputChain, err := getChainFromTable(conn, table.Filter, "INPUT")
+		inputChain, err := GetChainFromTable(conn, table.Filter, "INPUT")
 		if err != nil {
 			return fmt.Errorf("get INPUT chain: %w", err)
 		}
@@ -621,7 +636,7 @@ func (n *nftablesRunner) DelHooks(logf logger.Logf) error {
 		if err != nil {
 			return fmt.Errorf("delhook: %w", err)
 		}
-		forwardChain, err := getChainFromTable(conn, table.Filter, "FORWARD")
+		forwardChain, err := GetChainFromTable(conn, table.Filter, "FORWARD")
 		if err != nil {
 			return fmt.Errorf("get FORWARD chain: %w", err)
 		}
@@ -632,7 +647,7 @@ func (n *nftablesRunner) DelHooks(logf logger.Logf) error {
 	}
 
 	for _, table := range n.getNATTables() {
-		postroutingChain, err := getChainFromTable(conn, table.Nat, "POSTROUTING")
+		postroutingChain, err := GetChainFromTable(conn, table.Nat, "POSTROUTING")
 		if err != nil {
 			return fmt.Errorf("get INPUT chain: %w", err)
 		}
@@ -894,7 +909,7 @@ func (n *nftablesRunner) AddBase(tunname string) error {
 func (n *nftablesRunner) addBase4(tunname string) error {
 	conn := n.conn
 
-	inputChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameInput)
+	inputChain, err := GetChainFromTable(conn, n.nft4.Filter, chainNameInput)
 	if err != nil {
 		return fmt.Errorf("get input chain v4: %v", err)
 	}
@@ -905,7 +920,7 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 		return fmt.Errorf("add drop cgnat range rule v4: %w", err)
 	}
 
-	forwardChain, err := getChainFromTable(conn, n.nft4.Filter, chainNameForward)
+	forwardChain, err := GetChainFromTable(conn, n.nft4.Filter, chainNameForward)
 	if err != nil {
 		return fmt.Errorf("get forward chain v4: %v", err)
 	}
@@ -937,7 +952,7 @@ func (n *nftablesRunner) addBase4(tunname string) error {
 func (n *nftablesRunner) addBase6(tunname string) error {
 	conn := n.conn
 
-	forwardChain, err := getChainFromTable(conn, n.nft6.Filter, chainNameForward)
+	forwardChain, err := GetChainFromTable(conn, n.nft6.Filter, chainNameForward)
 	if err != nil {
 		return fmt.Errorf("get forward chain v6: %w", err)
 	}
@@ -967,12 +982,12 @@ func (n *nftablesRunner) DelBase() error {
 	conn := n.conn
 
 	for _, table := range n.getTables() {
-		inputChain, err := getChainFromTable(conn, table.Filter, chainNameInput)
+		inputChain, err := GetChainFromTable(conn, table.Filter, chainNameInput)
 		if err != nil {
 			return fmt.Errorf("get input chain: %v", err)
 		}
 		conn.FlushChain(inputChain)
-		forwardChain, err := getChainFromTable(conn, table.Filter, chainNameForward)
+		forwardChain, err := GetChainFromTable(conn, table.Filter, chainNameForward)
 		if err != nil {
 			return fmt.Errorf("get forward chain: %v", err)
 		}
@@ -980,7 +995,7 @@ func (n *nftablesRunner) DelBase() error {
 	}
 
 	for _, table := range n.getNATTables() {
-		postrouteChain, err := getChainFromTable(conn, table.Nat, chainNamePostrouting)
+		postrouteChain, err := GetChainFromTable(conn, table.Nat, chainNamePostrouting)
 		if err != nil {
 			return fmt.Errorf("get postrouting chain v4: %v", err)
 		}
@@ -1050,7 +1065,7 @@ func (n *nftablesRunner) AddSNATRule() error {
 	conn := n.conn
 
 	for _, table := range n.getNATTables() {
-		chain, err := getChainFromTable(conn, table.Nat, chainNamePostrouting)
+		chain, err := GetChainFromTable(conn, table.Nat, chainNamePostrouting)
 		if err != nil {
 			return fmt.Errorf("get postrouting chain v4: %w", err)
 		}
@@ -1093,7 +1108,7 @@ func (n *nftablesRunner) DelSNATRule() error {
 	}
 
 	for _, table := range n.getNATTables() {
-		chain, err := getChainFromTable(conn, table.Nat, chainNamePostrouting)
+		chain, err := GetChainFromTable(conn, table.Nat, chainNamePostrouting)
 		if err != nil {
 			return fmt.Errorf("get postrouting chain v4: %w", err)
 		}
@@ -1126,7 +1141,7 @@ func (n *nftablesRunner) DelSNATRule() error {
 // the jump rule and chain continue even if one errors.
 func cleanupChain(logf logger.Logf, conn *nftables.Conn, table *nftables.Table, hookChainName, tsChainName string) {
 	// remove the jump first, before removing the jump destination.
-	defaultChain, err := getChainFromTable(conn, table, hookChainName)
+	defaultChain, err := GetChainFromTable(conn, table, hookChainName)
 	if err != nil && !errors.Is(err, errorChainNotFound{table.Name, hookChainName}) {
 		logf("cleanup: did not find default chain: %s", err)
 	}
@@ -1135,7 +1150,7 @@ func cleanupChain(logf logger.Logf, conn *nftables.Conn, table *nftables.Table, 
 		_ = delHookRule(conn, table, defaultChain, tsChainName)
 	}
 
-	tsChain, err := getChainFromTable(conn, table, tsChainName)
+	tsChain, err := GetChainFromTable(conn, table, tsChainName)
 	if err != nil && !errors.Is(err, errorChainNotFound{table.Name, tsChainName}) {
 		logf("cleanup: did not find ts-chain: %s", err)
 	}

@@ -62,21 +62,21 @@ type tableDetector interface {
 	nftDetect() (int, error)
 }
 
-type linuxFWDetector struct{}
+type LinuxFWDetector struct{}
 
 // iptDetect returns the number of iptables rules in the current namespace.
-func (l *linuxFWDetector) iptDetect() (int, error) {
+func (l *LinuxFWDetector) iptDetect() (int, error) {
 	return linuxfw.DetectIptables()
 }
 
 // nftDetect returns the number of nftables rules in the current namespace.
-func (l *linuxFWDetector) nftDetect() (int, error) {
+func (l *LinuxFWDetector) nftDetect() (int, error) {
 	return linuxfw.DetectNetfilter()
 }
 
 // chooseFireWallMode returns the firewall mode to use based on the
 // environment and the system's capabilities.
-func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMode {
+func ChooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMode {
 	if distro.Get() == distro.Gokrazy {
 		// Reduce startup logging on gokrazy. There's no way to do iptables on
 		// gokrazy anyway.
@@ -126,7 +126,7 @@ func chooseFireWallMode(logf logger.Logf, det tableDetector) linuxfw.FirewallMod
 // newNetfilterRunner creates a netfilterRunner using either nftables or iptables.
 // As nftables is still experimental, iptables will be used unless TS_DEBUG_USE_NETLINK_NFTABLES is set.
 func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
-	tableDetector := &linuxFWDetector{}
+	tableDetector := &LinuxFWDetector{}
 	var mode linuxfw.FirewallMode
 
 	// We now use iptables as default and have "auto" and "nftables" as
@@ -143,7 +143,7 @@ func newNetfilterRunner(logf logger.Logf) (netfilterRunner, error) {
 		hostinfo.SetFirewallMode("nft-forced")
 		mode = linuxfw.FirewallModeNfTables
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "auto":
-		mode = chooseFireWallMode(logf, tableDetector)
+		mode = ChooseFireWallMode(logf, tableDetector)
 	case envknob.String("TS_DEBUG_FIREWALL_MODE") == "iptables":
 		logf("envknob TS_DEBUG_FIREWALL_MODE=iptables set")
 		hostinfo.SetFirewallMode("ipt-forced")
