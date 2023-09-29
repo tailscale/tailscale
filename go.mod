@@ -19,7 +19,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.4.0
 	github.com/creack/pty v1.1.18
 	github.com/dave/jennifer v1.6.1
-	github.com/dblohm7/wingoes v0.0.0-20230821191801-fc76608aecf0
+	github.com/dblohm7/wingoes v0.0.0-20230929194252-e994401fc077
 	github.com/dsnet/try v0.0.3
 	github.com/evanw/esbuild v0.14.53
 	github.com/frankban/quicktest v1.14.5
