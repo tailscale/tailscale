@@ -854,3 +854,28 @@ func TestRawMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestUserIDIsBelowFiftyThreeBits(t *testing.T) {
+	tests := []struct {
+		in  UserID
+		out string
+	}{
+		{UserID(0), "0"},
+		{UserID(9223372036854775807), "-9223372036854775808"},
+		{UserID(555555555555555600), "555555555555555584"},
+		{UserID(6000), "6000"},
+		{UserID(-70000), "-70000"},
+		{UserID(9007199254740991), "9007199254740991"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.out, func(t *testing.T) {
+			jsonData, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("error while marshalling %s: %v", tc.in, err)
+			}
+			if string(jsonData) != tc.out {
+				t.Errorf("got %#v; want %#v", string(jsonData), tc.out)
+			}
+		})
+	}
+}
