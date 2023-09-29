@@ -6,7 +6,6 @@
 package linuxfw
 
 import (
-	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -14,136 +13,9 @@ import (
 	"tailscale.com/net/tsaddr"
 )
 
-var errExec = errors.New("execution failed")
-
-type fakeIPTables struct {
-	t *testing.T
-	n map[string][]string
-}
-
-type fakeRule struct {
-	table, chain string
-	args         []string
-}
-
-func newIPTables(t *testing.T) *fakeIPTables {
-	return &fakeIPTables{
-		t: t,
-		n: map[string][]string{
-			"filter/INPUT":    nil,
-			"filter/OUTPUT":   nil,
-			"filter/FORWARD":  nil,
-			"nat/PREROUTING":  nil,
-			"nat/OUTPUT":      nil,
-			"nat/POSTROUTING": nil,
-		},
-	}
-}
-
-func (n *fakeIPTables) Insert(table, chain string, pos int, args ...string) error {
-	k := table + "/" + chain
-	if rules, ok := n.n[k]; ok {
-		if pos > len(rules)+1 {
-			n.t.Errorf("bad position %d in %s", pos, k)
-			return errExec
-		}
-		rules = append(rules, "")
-		copy(rules[pos:], rules[pos-1:])
-		rules[pos-1] = strings.Join(args, " ")
-		n.n[k] = rules
-	} else {
-		n.t.Errorf("unknown table/chain %s", k)
-		return errExec
-	}
-	return nil
-}
-
-func (n *fakeIPTables) Append(table, chain string, args ...string) error {
-	k := table + "/" + chain
-	return n.Insert(table, chain, len(n.n[k])+1, args...)
-}
-
-func (n *fakeIPTables) Exists(table, chain string, args ...string) (bool, error) {
-	k := table + "/" + chain
-	if rules, ok := n.n[k]; ok {
-		for _, rule := range rules {
-			if rule == strings.Join(args, " ") {
-				return true, nil
-			}
-		}
-		return false, nil
-	} else {
-		n.t.Logf("unknown table/chain %s", k)
-		return false, errExec
-	}
-}
-
-func hasChain(n *fakeIPTables, table, chain string) bool {
-	k := table + "/" + chain
-	if _, ok := n.n[k]; ok {
-		return true
-	} else {
-		return false
-	}
-}
-
-func (n *fakeIPTables) Delete(table, chain string, args ...string) error {
-	k := table + "/" + chain
-	if rules, ok := n.n[k]; ok {
-		for i, rule := range rules {
-			if rule == strings.Join(args, " ") {
-				rules = append(rules[:i], rules[i+1:]...)
-				n.n[k] = rules
-				return nil
-			}
-		}
-		n.t.Errorf("delete of unknown rule %q from %s", strings.Join(args, " "), k)
-		return errExec
-	} else {
-		n.t.Errorf("unknown table/chain %s", k)
-		return errExec
-	}
-}
-
-func (n *fakeIPTables) ClearChain(table, chain string) error {
-	k := table + "/" + chain
-	if _, ok := n.n[k]; ok {
-		n.n[k] = nil
-		return nil
-	} else {
-		n.t.Logf("note: ClearChain: unknown table/chain %s", k)
-		return errors.New("exitcode:1")
-	}
-}
-
-func (n *fakeIPTables) NewChain(table, chain string) error {
-	k := table + "/" + chain
-	if _, ok := n.n[k]; ok {
-		n.t.Errorf("table/chain %s already exists", k)
-		return errExec
-	}
-	n.n[k] = nil
-	return nil
-}
-
-func (n *fakeIPTables) DeleteChain(table, chain string) error {
-	k := table + "/" + chain
-	if rules, ok := n.n[k]; ok {
-		if len(rules) != 0 {
-			n.t.Errorf("%s is not empty", k)
-			return errExec
-		}
-		delete(n.n, k)
-		return nil
-	} else {
-		n.t.Errorf("%s does not exist", k)
-		return errExec
-	}
-}
-
 func newFakeIPTablesRunner(t *testing.T) *iptablesRunner {
-	ipt4 := newIPTables(t)
-	ipt6 := newIPTables(t)
+	ipt4 := NewIPTables(t)
+	ipt6 := NewIPTables(t)
 
 	iptr := &iptablesRunner{ipt4, ipt6, true, true}
 	return iptr

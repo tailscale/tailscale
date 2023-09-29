@@ -37,7 +37,7 @@ type iptablesRunner struct {
 	v6NATAvailable bool
 }
 
-func checkIP6TablesExists() error {
+func CheckIP6TablesExists() error {
 	// Some distros ship ip6tables separately from iptables.
 	if _, err := exec.LookPath("ip6tables"); err != nil {
 		return fmt.Errorf("path not found: %w", err)
@@ -56,8 +56,8 @@ func NewIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 	}
 
 	supportsV6, supportsV6NAT := false, false
-	v6err := checkIPv6(logf)
-	ip6terr := checkIP6TablesExists()
+	v6err := CheckIPv6(logf)
+	ip6terr := CheckIP6TablesExists()
 	switch {
 	case v6err != nil:
 		logf("disabling tunneled IPv6 due to system IPv6 config: %v", v6err)
@@ -65,7 +65,7 @@ func NewIPTablesRunner(logf logger.Logf) (*iptablesRunner, error) {
 		logf("disabling tunneled IPv6 due to missing ip6tables: %v", ip6terr)
 	default:
 		supportsV6 = true
-		supportsV6NAT = supportsV6 && checkSupportsV6NAT()
+		supportsV6NAT = supportsV6 && CheckSupportsV6NAT()
 		logf("v6nat = %v", supportsV6NAT)
 	}
 
