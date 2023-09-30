@@ -74,9 +74,11 @@ func (src *Node) Clone() *Node {
 	if dst.SelfNodeV6MasqAddrForThisPeer != nil {
 		dst.SelfNodeV6MasqAddrForThisPeer = ptr.To(*src.SelfNodeV6MasqAddrForThisPeer)
 	}
-	dst.ExitNodeDNSResolvers = append([]*dnstype.Resolver(nil), make([]*dnstype.Resolver, len(src.ExitNodeDNSResolvers))...)
-	for i := range dst.ExitNodeDNSResolvers {
-		dst.ExitNodeDNSResolvers[i] = src.ExitNodeDNSResolvers[i].Clone()
+	if src.ExitNodeDNSResolvers != nil {
+		dst.ExitNodeDNSResolvers = make([]*dnstype.Resolver, len(src.ExitNodeDNSResolvers))
+		for i := range dst.ExitNodeDNSResolvers {
+			dst.ExitNodeDNSResolvers[i] = src.ExitNodeDNSResolvers[i].Clone()
+		}
 	}
 	return dst
 }
@@ -235,9 +237,11 @@ func (src *DNSConfig) Clone() *DNSConfig {
 	}
 	dst := new(DNSConfig)
 	*dst = *src
-	dst.Resolvers = append([]*dnstype.Resolver(nil), make([]*dnstype.Resolver, len(src.Resolvers))...)
-	for i := range dst.Resolvers {
-		dst.Resolvers[i] = src.Resolvers[i].Clone()
+	if src.Resolvers != nil {
+		dst.Resolvers = make([]*dnstype.Resolver, len(src.Resolvers))
+		for i := range dst.Resolvers {
+			dst.Resolvers[i] = src.Resolvers[i].Clone()
+		}
 	}
 	if dst.Routes != nil {
 		dst.Routes = map[string][]*dnstype.Resolver{}
@@ -245,9 +249,11 @@ func (src *DNSConfig) Clone() *DNSConfig {
 			dst.Routes[k] = append([]*dnstype.Resolver{}, src.Routes[k]...)
 		}
 	}
-	dst.FallbackResolvers = append([]*dnstype.Resolver(nil), make([]*dnstype.Resolver, len(src.FallbackResolvers))...)
-	for i := range dst.FallbackResolvers {
-		dst.FallbackResolvers[i] = src.FallbackResolvers[i].Clone()
+	if src.FallbackResolvers != nil {
+		dst.FallbackResolvers = make([]*dnstype.Resolver, len(src.FallbackResolvers))
+		for i := range dst.FallbackResolvers {
+			dst.FallbackResolvers[i] = src.FallbackResolvers[i].Clone()
+		}
 	}
 	dst.Domains = append(src.Domains[:0:0], src.Domains...)
 	dst.Nameservers = append(src.Nameservers[:0:0], src.Nameservers...)
@@ -381,9 +387,11 @@ func (src *DERPRegion) Clone() *DERPRegion {
 	}
 	dst := new(DERPRegion)
 	*dst = *src
-	dst.Nodes = append([]*DERPNode(nil), make([]*DERPNode, len(src.Nodes))...)
-	for i := range dst.Nodes {
-		dst.Nodes[i] = src.Nodes[i].Clone()
+	if src.Nodes != nil {
+		dst.Nodes = make([]*DERPNode, len(src.Nodes))
+		for i := range dst.Nodes {
+			dst.Nodes[i] = src.Nodes[i].Clone()
+		}
 	}
 	return dst
 }
@@ -460,9 +468,11 @@ func (src *SSHRule) Clone() *SSHRule {
 	if dst.RuleExpires != nil {
 		dst.RuleExpires = ptr.To(*src.RuleExpires)
 	}
-	dst.Principals = append([]*SSHPrincipal(nil), make([]*SSHPrincipal, len(src.Principals))...)
-	for i := range dst.Principals {
-		dst.Principals[i] = src.Principals[i].Clone()
+	if src.Principals != nil {
+		dst.Principals = make([]*SSHPrincipal, len(src.Principals))
+		for i := range dst.Principals {
+			dst.Principals[i] = src.Principals[i].Clone()
+		}
 	}
 	dst.SSHUsers = maps.Clone(src.SSHUsers)
 	dst.Action = src.Action.Clone()
