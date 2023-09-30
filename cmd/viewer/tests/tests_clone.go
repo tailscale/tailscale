@@ -157,7 +157,11 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 	if src.Ints != nil {
 		dst.Ints = make([]*int, len(src.Ints))
 		for i := range dst.Ints {
-			dst.Ints[i] = ptr.To(*src.Ints[i])
+			if src.Ints[i] == nil {
+				dst.Ints[i] = nil
+			} else {
+				dst.Ints[i] = ptr.To(*src.Ints[i])
+			}
 		}
 	}
 	dst.Slice = append(src.Slice[:0:0], src.Slice...)
