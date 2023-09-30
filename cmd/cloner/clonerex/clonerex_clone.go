@@ -9,13 +9,13 @@ import (
 	"tailscale.com/types/ptr"
 )
 
-// Clone makes a deep copy of SliceContianer.
+// Clone makes a deep copy of SliceContainer.
 // The result aliases no memory with the original.
-func (src *SliceContianer) Clone() *SliceContianer {
+func (src *SliceContainer) Clone() *SliceContainer {
 	if src == nil {
 		return nil
 	}
-	dst := new(SliceContianer)
+	dst := new(SliceContainer)
 	*dst = *src
 	if src.Slice != nil {
 		dst.Slice = make([]*int, len(src.Slice))
@@ -31,21 +31,21 @@ func (src *SliceContianer) Clone() *SliceContianer {
 }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
-var _SliceContianerCloneNeedsRegeneration = SliceContianer(struct {
+var _SliceContainerCloneNeedsRegeneration = SliceContainer(struct {
 	Slice []*int
 }{})
 
 // Clone duplicates src into dst and reports whether it succeeded.
 // To succeed, <src, dst> must be of types <*T, *T> or <*T, **T>,
-// where T is one of SliceContianer.
+// where T is one of SliceContainer.
 func Clone(dst, src any) bool {
 	switch src := src.(type) {
-	case *SliceContianer:
+	case *SliceContainer:
 		switch dst := dst.(type) {
-		case *SliceContianer:
+		case *SliceContainer:
 			*dst = *src.Clone()
 			return true
-		case **SliceContianer:
+		case **SliceContainer:
 			*dst = src.Clone()
 			return true
 		}
