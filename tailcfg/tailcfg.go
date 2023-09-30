@@ -24,6 +24,7 @@ import (
 	"tailscale.com/types/tkatype"
 	"tailscale.com/util/cmpx"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/slicesx"
 )
 
 // CapabilityVersion represents the client's capability level. That
@@ -1939,10 +1940,10 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.Machine == n2.Machine &&
 		n.DiscoKey == n2.DiscoKey &&
 		eqPtr(n.Online, n2.Online) &&
-		eqCIDRs(n.Addresses, n2.Addresses) &&
-		eqCIDRs(n.AllowedIPs, n2.AllowedIPs) &&
-		eqCIDRs(n.PrimaryRoutes, n2.PrimaryRoutes) &&
-		eqStrings(n.Endpoints, n2.Endpoints) &&
+		slicesx.EqualSameNil(n.Addresses, n2.Addresses) &&
+		slicesx.EqualSameNil(n.AllowedIPs, n2.AllowedIPs) &&
+		slicesx.EqualSameNil(n.PrimaryRoutes, n2.PrimaryRoutes) &&
+		slicesx.EqualSameNil(n.Endpoints, n2.Endpoints) &&
 		n.DERP == n2.DERP &&
 		n.Cap == n2.Cap &&
 		n.Hostinfo.Equal(n2.Hostinfo) &&
@@ -1954,7 +1955,7 @@ func (n *Node) Equal(n2 *Node) bool {
 		n.ComputedName == n2.ComputedName &&
 		n.computedHostIfDifferent == n2.computedHostIfDifferent &&
 		n.ComputedNameWithHost == n2.ComputedNameWithHost &&
-		eqStrings(n.Tags, n2.Tags) &&
+		slicesx.EqualSameNil(n.Tags, n2.Tags) &&
 		n.Expired == n2.Expired &&
 		eqPtr(n.SelfNodeV4MasqAddrForThisPeer, n2.SelfNodeV4MasqAddrForThisPeer) &&
 		eqPtr(n.SelfNodeV6MasqAddrForThisPeer, n2.SelfNodeV6MasqAddrForThisPeer) &&
@@ -1969,30 +1970,6 @@ func eqPtr[T comparable](a, b *T) bool {
 		return false
 	}
 	return *a == *b
-}
-
-func eqStrings(a, b []string) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqCIDRs(a, b []netip.Prefix) bool {
-	if len(a) != len(b) || ((a == nil) != (b == nil)) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func eqTimePtr(a, b *time.Time) bool {
