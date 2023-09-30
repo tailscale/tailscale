@@ -24,9 +24,11 @@ func (src *Config) Clone() *Config {
 	*dst = *src
 	dst.Addresses = append(src.Addresses[:0:0], src.Addresses...)
 	dst.DNS = append(src.DNS[:0:0], src.DNS...)
-	dst.Peers = append([]Peer(nil), make([]Peer, len(src.Peers))...)
-	for i := range dst.Peers {
-		dst.Peers[i] = *src.Peers[i].Clone()
+	if src.Peers != nil {
+		dst.Peers = make([]Peer, len(src.Peers))
+		for i := range dst.Peers {
+			dst.Peers[i] = *src.Peers[i].Clone()
+		}
 	}
 	return dst
 }
