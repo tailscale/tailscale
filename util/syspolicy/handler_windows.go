@@ -30,3 +30,11 @@ func (windowsHandler) ReadUInt64(key string) (uint64, error) {
 	}
 	return value, err
 }
+
+func (windowsHandler) ReadBoolean(key string) (bool, error) {
+	value, err := winutil.GetPolicyInteger(key)
+	if errors.Is(err, winutil.ErrNoValue) {
+		err = ErrNoSuchKey
+	}
+	return value != 0, err
+}

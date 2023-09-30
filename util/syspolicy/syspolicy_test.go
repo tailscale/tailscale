@@ -17,6 +17,7 @@ type testHandler struct {
 	key Key
 	s   string
 	u64 uint64
+	b   bool
 	err error
 }
 
@@ -41,6 +42,13 @@ func (th *testHandler) ReadUInt64(key string) (uint64, error) {
 		th.t.Errorf("ReadUint64(%q) want %q", key, th.key)
 	}
 	return th.u64, th.err
+}
+
+func (th *testHandler) ReadBoolean(key string) (bool, error) {
+	if key != string(th.key) {
+		th.t.Errorf("ReadBool(%q) want %q", key, th.key)
+	}
+	return th.b, th.err
 }
 
 func TestGetString(t *testing.T) {
@@ -147,6 +155,58 @@ func TestGetUint64(t *testing.T) {
 				err: tt.handlerError,
 			})
 			value, err := GetUint64(tt.key, tt.defaultValue)
+			if err != tt.wantError {
+				t.Errorf("err=%q, want %q", err, tt.wantError)
+			}
+			if value != tt.wantValue {
+				t.Errorf("value=%v, want %v", value, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestGetBoolean(t *testing.T) {
+	tests := []struct {
+		name         string
+		key          Key
+		handlerValue bool
+		handlerError error
+		defaultValue bool
+		wantValue    bool
+		wantError    error
+	}{
+		{
+			name:         "read existing value",
+			key:          FlushDNSOnSessionUnlock,
+			handlerValue: true,
+			wantValue:    true,
+		},
+		{
+			name:         "read non-existing value",
+			key:          LogSCMInteractions,
+			handlerValue: false,
+			handlerError: ErrNoSuchKey,
+			wantValue:    false,
+		},
+		{
+			name:         "reading value returns other error",
+			key:          FlushDNSOnSessionUnlock,
+			handlerError: someOtherError,
+			wantError:    someOtherError,
+			defaultValue: true,
+			wantValue:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setHandlerForTest(t, &testHandler{
+				t:   t,
+				key: tt.key,
+				b:   tt.handlerValue,
+				err: tt.handlerError,
+			})
+			value, err := GetBoolean(tt.key, tt.defaultValue)
 			if err != tt.wantError {
 				t.Errorf("err=%q, want %q", err, tt.wantError)
 			}

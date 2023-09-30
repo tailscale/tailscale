@@ -19,6 +19,8 @@ type Handler interface {
 	ReadString(key string) (string, error)
 	// ReadUInt64 reads the policy settings uint64 value given the key.
 	ReadUInt64(key string) (uint64, error)
+	// ReadBool reads the policy setting's boolean value, given the key.
+	ReadBoolean(key string) (bool, error)
 }
 
 // ErrNoSuchKey is returned when the specified key does not have a value set.
@@ -33,6 +35,10 @@ func (defaultHandler) ReadString(_ string) (string, error) {
 
 func (defaultHandler) ReadUInt64(_ string) (uint64, error) {
 	return 0, ErrNoSuchKey
+}
+
+func (defaultHandler) ReadBoolean(_ string) (bool, error) {
+	return false, ErrNoSuchKey
 }
 
 // markHandlerInUse is called before handler methods are called.
