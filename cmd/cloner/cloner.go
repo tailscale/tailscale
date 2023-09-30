@@ -122,8 +122,7 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 		case *types.Slice:
 			if codegen.ContainsPointers(ft.Elem()) {
 				n := it.QualifiedName(ft.Elem())
-				writef("if src.%s != nil {", fname)
-				writef("dst.%s = make([]%s, len(src.%s))", fname, n, fname)
+				writef("dst.%s = append([]%s(nil), make([]%s, len(src.%s))...)", fname, n, n, fname)
 				writef("for i := range dst.%s {", fname)
 				if ptr, isPtr := ft.Elem().(*types.Pointer); isPtr {
 					if _, isBasic := ptr.Elem().Underlying().(*types.Basic); isBasic {
@@ -137,7 +136,6 @@ func gen(buf *bytes.Buffer, it *codegen.ImportTracker, typ *types.Named) {
 				} else {
 					writef("\tdst.%s[i] = *src.%s[i].Clone()", fname, fname)
 				}
-				writef("}")
 				writef("}")
 			} else {
 				writef("dst.%s = append(src.%s[:0:0], src.%s...)", fname, fname, fname)
