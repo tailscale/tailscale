@@ -13,7 +13,7 @@ func TestSliceContainer(t *testing.T) {
 	num := 5
 	examples := []struct {
 		name string
-		in   *clonerex.SliceContianer
+		in   *clonerex.SliceContainer
 	}{
 		{
 			name: "nil",
@@ -21,29 +21,29 @@ func TestSliceContainer(t *testing.T) {
 		},
 		{
 			name: "zero",
-			in:   &clonerex.SliceContianer{},
+			in:   &clonerex.SliceContainer{},
 		},
 		{
 			name: "empty",
-			in: &clonerex.SliceContianer{
+			in: &clonerex.SliceContainer{
 				Slice: []*int{},
 			},
 		},
 		{
 			name: "nils",
-			in: &clonerex.SliceContianer{
+			in: &clonerex.SliceContainer{
 				Slice: []*int{nil, nil, nil, nil, nil},
 			},
 		},
 		{
 			name: "one",
-			in: &clonerex.SliceContianer{
+			in: &clonerex.SliceContainer{
 				Slice: []*int{&num},
 			},
 		},
 		{
 			name: "several",
-			in: &clonerex.SliceContianer{
+			in: &clonerex.SliceContainer{
 				Slice: []*int{&num, &num, &num, &num, &num},
 			},
 		},
