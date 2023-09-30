@@ -23,11 +23,9 @@ func (src *Match) Clone() *Match {
 	dst.IPProto = append(src.IPProto[:0:0], src.IPProto...)
 	dst.Srcs = append(src.Srcs[:0:0], src.Srcs...)
 	dst.Dsts = append(src.Dsts[:0:0], src.Dsts...)
-	if src.Caps != nil {
-		dst.Caps = make([]CapMatch, len(src.Caps))
-		for i := range dst.Caps {
-			dst.Caps[i] = *src.Caps[i].Clone()
-		}
+	dst.Caps = append([]CapMatch(nil), make([]CapMatch, len(src.Caps))...)
+	for i := range dst.Caps {
+		dst.Caps[i] = *src.Caps[i].Clone()
 	}
 	return dst
 }

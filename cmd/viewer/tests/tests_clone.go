@@ -136,29 +136,21 @@ func (src *StructWithSlices) Clone() *StructWithSlices {
 	dst := new(StructWithSlices)
 	*dst = *src
 	dst.Values = append(src.Values[:0:0], src.Values...)
-	if src.ValuePointers != nil {
-		dst.ValuePointers = make([]*StructWithoutPtrs, len(src.ValuePointers))
-		for i := range dst.ValuePointers {
-			dst.ValuePointers[i] = src.ValuePointers[i].Clone()
-		}
+	dst.ValuePointers = append([]*StructWithoutPtrs(nil), make([]*StructWithoutPtrs, len(src.ValuePointers))...)
+	for i := range dst.ValuePointers {
+		dst.ValuePointers[i] = src.ValuePointers[i].Clone()
 	}
-	if src.StructPointers != nil {
-		dst.StructPointers = make([]*StructWithPtrs, len(src.StructPointers))
-		for i := range dst.StructPointers {
-			dst.StructPointers[i] = src.StructPointers[i].Clone()
-		}
+	dst.StructPointers = append([]*StructWithPtrs(nil), make([]*StructWithPtrs, len(src.StructPointers))...)
+	for i := range dst.StructPointers {
+		dst.StructPointers[i] = src.StructPointers[i].Clone()
 	}
-	if src.Structs != nil {
-		dst.Structs = make([]StructWithPtrs, len(src.Structs))
-		for i := range dst.Structs {
-			dst.Structs[i] = *src.Structs[i].Clone()
-		}
+	dst.Structs = append([]StructWithPtrs(nil), make([]StructWithPtrs, len(src.Structs))...)
+	for i := range dst.Structs {
+		dst.Structs[i] = *src.Structs[i].Clone()
 	}
-	if src.Ints != nil {
-		dst.Ints = make([]*int, len(src.Ints))
-		for i := range dst.Ints {
-			dst.Ints[i] = ptr.To(*src.Ints[i])
-		}
+	dst.Ints = append([]*int(nil), make([]*int, len(src.Ints))...)
+	for i := range dst.Ints {
+		dst.Ints[i] = ptr.To(*src.Ints[i])
 	}
 	dst.Slice = append(src.Slice[:0:0], src.Slice...)
 	dst.Prefixes = append(src.Prefixes[:0:0], src.Prefixes...)
