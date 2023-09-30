@@ -1,10 +1,13 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-//go:generate go run update-dns-fallbacks.go
-
 // Package dnsfallback contains a DNS fallback mechanism
 // for starting up Tailscale when the system DNS is broken or otherwise unavailable.
+//
+// The data is backed by a JSON file `dns-fallback-servers.json` that is updated
+// by `update-dns-fallbacks.go`:
+//
+//	(cd net/dnsfallback; go run update-dns-fallbacks.go)
 package dnsfallback
 
 import (
