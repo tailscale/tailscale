@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -196,7 +197,7 @@ func (ft *firewallTweaker) doAsyncSet() {
 	ft.mu.Lock()
 	for { // invariant: ft.mu must be locked when beginning this block
 		val := ft.wantLocal
-		if ft.known && strsEqual(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch && routesEqual(ft.localRoutes, ft.lastLocalRoutes) {
+		if ft.known && slices.Equal(ft.lastLocal, val) && ft.wantKillswitch == ft.lastKillswitch && slices.Equal(ft.localRoutes, ft.lastLocalRoutes) {
 			ft.running = false
 			ft.logf("ending netsh goroutine")
 			ft.mu.Unlock()
@@ -340,29 +341,4 @@ func (ft *firewallTweaker) doSet(local []string, killswitch bool, clear bool, pr
 	// firewall to let the local routes through. The set of routes is passed
 	// in via stdin encoded in json.
 	return ft.fwProcEncoder.Encode(allowedRoutes)
-}
-
-func routesEqual(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	// Routes are pre-sorted.
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func strsEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
