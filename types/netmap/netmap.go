@@ -267,7 +267,7 @@ func printPeerConcise(buf *strings.Builder, p tailcfg.NodeView) {
 
 	ep := make([]string, p.Endpoints().Len())
 	for i := range ep {
-		e := p.Endpoints().At(i)
+		e := p.Endpoints().At(i).String()
 		// Align vertically on the ':' between IP and port
 		colon := strings.IndexByte(e, ':')
 		spaces := 0

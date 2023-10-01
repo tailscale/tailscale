@@ -845,8 +845,10 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 	hi := c.hostInfoLocked()
 	backendLogID := hi.BackendLogID
 	var epStrs []string
+	var eps []netip.AddrPort
 	var epTypes []tailcfg.EndpointType
 	for _, ep := range c.endpoints {
+		eps = append(eps, ep.Addr)
 		epStrs = append(epStrs, ep.Addr.String())
 		epTypes = append(epTypes, ep.Type)
 	}
@@ -881,7 +883,7 @@ func (c *Direct) sendMapRequest(ctx context.Context, isStreaming bool, nu Netmap
 		KeepAlive:     true,
 		NodeKey:       persist.PublicNodeKey(),
 		DiscoKey:      c.discoPubKey,
-		Endpoints:     epStrs,
+		Endpoints:     eps,
 		EndpointTypes: epTypes,
 		Stream:        isStreaming,
 		Hostinfo:      hi,

@@ -42,6 +42,14 @@ func nodeViews(v []*tailcfg.Node) []tailcfg.NodeView {
 	return nv
 }
 
+func eps(s ...string) []netip.AddrPort {
+	var eps []netip.AddrPort
+	for _, ep := range s {
+		eps = append(eps, netip.MustParseAddrPort(ep))
+	}
+	return eps
+}
+
 func TestNetworkMapConcise(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -56,12 +64,12 @@ func TestNetworkMapConcise(t *testing.T) {
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:4",
-						Endpoints: []string{"10.2.0.100:12", "10.1.0.100:12345"},
+						Endpoints: eps("10.2.0.100:12", "10.1.0.100:12345"),
 					},
 				}),
 			},
@@ -95,7 +103,7 @@ func TestConciseDiffFrom(t *testing.T) {
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -105,7 +113,7 @@ func TestConciseDiffFrom(t *testing.T) {
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -119,7 +127,7 @@ func TestConciseDiffFrom(t *testing.T) {
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -129,7 +137,7 @@ func TestConciseDiffFrom(t *testing.T) {
 					{
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -144,7 +152,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -155,19 +163,19 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        1,
 						Key:       testNodeKey(1),
 						DERP:      "127.3.3.40:1",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        3,
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:3",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -182,19 +190,19 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        1,
 						Key:       testNodeKey(1),
 						DERP:      "127.3.3.40:1",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 					{
 						ID:        3,
 						Key:       testNodeKey(3),
 						DERP:      "127.3.3.40:3",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -205,7 +213,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "192.168.0.100:12354"},
+						Endpoints: eps("192.168.0.100:12", "192.168.0.100:12354"),
 					},
 				}),
 			},
@@ -220,7 +228,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:1"},
+						Endpoints: eps("192.168.0.100:12", "1.1.1.1:1"),
 					},
 				}),
 			},
@@ -231,7 +239,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:        2,
 						Key:       testNodeKey(2),
 						DERP:      "127.3.3.40:2",
-						Endpoints: []string{"192.168.0.100:12", "1.1.1.1:2"},
+						Endpoints: eps("192.168.0.100:12", "1.1.1.1:2"),
 					},
 				}),
 			},
@@ -246,7 +254,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:         2,
 						Key:        testNodeKey(2),
 						DERP:       "127.3.3.40:2",
-						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						Endpoints:  eps("192.168.0.100:41641", "1.1.1.1:41641"),
 						DiscoKey:   testDiscoKey("f00f00f00f"),
 						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
@@ -259,7 +267,7 @@ func TestConciseDiffFrom(t *testing.T) {
 						ID:         2,
 						Key:        testNodeKey(2),
 						DERP:       "127.3.3.40:2",
-						Endpoints:  []string{"192.168.0.100:41641", "1.1.1.1:41641"},
+						Endpoints:  eps("192.168.0.100:41641", "1.1.1.1:41641"),
 						DiscoKey:   testDiscoKey("ba4ba4ba4b"),
 						AllowedIPs: []netip.Prefix{netip.PrefixFrom(netaddr.IPv4(100, 102, 103, 104), 32)},
 					},
