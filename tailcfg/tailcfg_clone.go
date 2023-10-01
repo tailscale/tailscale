@@ -97,7 +97,7 @@ var _NodeCloneNeedsRegeneration = Node(struct {
 	DiscoKey                      key.DiscoPublic
 	Addresses                     []netip.Prefix
 	AllowedIPs                    []netip.Prefix
-	Endpoints                     []string
+	Endpoints                     []netip.AddrPort
 	DERP                          string
 	Hostinfo                      HostinfoView
 	Created                       time.Time

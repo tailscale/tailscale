@@ -290,7 +290,7 @@ func meshStacks(logf logger.Logf, mutateNetmap func(idx int, nm *netmap.NetworkM
 				DiscoKey:   peer.conn.DiscoPublicKey(),
 				Addresses:  addrs,
 				AllowedIPs: addrs,
-				Endpoints:  epStrings(eps[i]),
+				Endpoints:  epFromTyped(eps[i]),
 				DERP:       "127.3.3.40:1",
 			}
 			nm.Peers = append(nm.Peers, peer.View())
@@ -1265,7 +1265,7 @@ func addTestEndpoint(tb testing.TB, conn *Conn, sendConn net.PacketConn) (key.No
 				ID:        1,
 				Key:       nodeKey,
 				DiscoKey:  discoKey,
-				Endpoints: []string{sendConn.LocalAddr().String()},
+				Endpoints: eps(sendConn.LocalAddr().String()),
 			},
 		}),
 	})
@@ -1470,7 +1470,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 				ID:        1,
 				Key:       nodeKey1,
 				DiscoKey:  discoKey,
-				Endpoints: []string{"192.168.1.2:345"},
+				Endpoints: eps("192.168.1.2:345"),
 			},
 		}),
 	})
@@ -1486,7 +1486,7 @@ func TestSetNetworkMapChangingNodeKey(t *testing.T) {
 					ID:        2,
 					Key:       nodeKey2,
 					DiscoKey:  discoKey,
-					Endpoints: []string{"192.168.1.2:345"},
+					Endpoints: eps("192.168.1.2:345"),
 				},
 			}),
 		})
@@ -1752,11 +1752,19 @@ func TestBetterAddr(t *testing.T) {
 
 }
 
-func epStrings(eps []tailcfg.Endpoint) (ret []string) {
+func epFromTyped(eps []tailcfg.Endpoint) (ret []netip.AddrPort) {
 	for _, ep := range eps {
-		ret = append(ret, ep.Addr.String())
+		ret = append(ret, ep.Addr)
 	}
 	return
+}
+
+func eps(s ...string) []netip.AddrPort {
+	var eps []netip.AddrPort
+	for _, ep := range s {
+		eps = append(eps, netip.MustParseAddrPort(ep))
+	}
+	return eps
 }
 
 func TestStressSetNetworkMap(t *testing.T) {
@@ -1778,7 +1786,7 @@ func TestStressSetNetworkMap(t *testing.T) {
 			ID:        tailcfg.NodeID(i) + 1,
 			DiscoKey:  randDiscoKey(),
 			Key:       randNodeKey(),
-			Endpoints: []string{fmt.Sprintf("192.168.1.2:%d", i)},
+			Endpoints: eps(fmt.Sprintf("192.168.1.2:%d", i)),
 		}
 	}
 
@@ -2276,7 +2284,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 			{
 				ID:              1,
 				Key:             wgkey.Public(),
-				Endpoints:       []string{wgEp.String()},
+				Endpoints:       []netip.AddrPort{wgEp},
 				IsWireGuardOnly: true,
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
@@ -2337,7 +2345,7 @@ func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
 			{
 				ID:                            1,
 				Key:                           wgkey.Public(),
-				Endpoints:                     []string{wgEp.String()},
+				Endpoints:                     []netip.AddrPort{wgEp},
 				IsWireGuardOnly:               true,
 				Addresses:                     []netip.Prefix{wgaip},
 				AllowedIPs:                    []netip.Prefix{wgaip},
@@ -2465,7 +2473,7 @@ func TestIsWireGuardOnlyPickEndpointByPing(t *testing.T) {
 		Peers: nodeViews([]*tailcfg.Node{
 			{
 				Key:             wgkey.Public(),
-				Endpoints:       []string{wgEp.String(), wgEp2.String(), wgEpV6.String()},
+				Endpoints:       []netip.AddrPort{wgEp, wgEp2, wgEpV6},
 				IsWireGuardOnly: true,
 				Addresses:       []netip.Prefix{wgaip},
 				AllowedIPs:      []netip.Prefix{wgaip},
