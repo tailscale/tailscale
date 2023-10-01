@@ -29,7 +29,6 @@ import (
 	"tailscale.com/tstime/mono"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
-	"tailscale.com/types/views"
 	"tailscale.com/util/mak"
 	"tailscale.com/util/ringbuffer"
 )
@@ -812,19 +811,7 @@ func (de *endpoint) updateFromNode(n tailcfg.NodeView, heartbeatDisabled bool) {
 		de.derpAddr = newDerp
 	}
 
-	de.setEndpointsLocked(addrPortsFromStringsView{n.Endpoints()})
-}
-
-// addrPortsFromStringsView converts a view of AddrPort strings
-// to a view-like thing of netip.AddrPort.
-// TODO(bradfitz): change the type of tailcfg.Node.Endpoint.
-type addrPortsFromStringsView struct {
-	views.Slice[string]
-}
-
-func (a addrPortsFromStringsView) At(i int) netip.AddrPort {
-	ap, _ := netip.ParseAddrPort(a.Slice.At(i))
-	return ap // or the zero value on error
+	de.setEndpointsLocked(n.Endpoints())
 }
 
 func (de *endpoint) setEndpointsLocked(eps interface {

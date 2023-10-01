@@ -45,11 +45,7 @@ type NodeMutationEndpoints struct {
 }
 
 func (m NodeMutationEndpoints) Apply(n *tailcfg.Node) {
-	eps := make([]string, len(m.Endpoints))
-	for i, ep := range m.Endpoints {
-		eps[i] = ep.String()
-	}
-	n.Endpoints = eps
+	n.Endpoints = slices.Clone(m.Endpoints)
 }
 
 // NodeMutationOnline is a NodeMutation that says a node is now online or
@@ -105,15 +101,7 @@ func NodeMutationsFromPatch(p *tailcfg.PeerChange) (_ []NodeMutation, ok bool) {
 		case "DERPRegion":
 			ret = append(ret, NodeMutationDERPHome{mutatingNodeID(p.NodeID), p.DERPRegion})
 		case "Endpoints":
-			eps := make([]netip.AddrPort, len(p.Endpoints))
-			for i, epStr := range p.Endpoints {
-				var err error
-				eps[i], err = netip.ParseAddrPort(epStr)
-				if err != nil {
-					return nil, false
-				}
-			}
-			ret = append(ret, NodeMutationEndpoints{mutatingNodeID(p.NodeID), eps})
+			ret = append(ret, NodeMutationEndpoints{mutatingNodeID(p.NodeID), slices.Clone(p.Endpoints)})
 		case "Online":
 			ret = append(ret, NodeMutationOnline{mutatingNodeID(p.NodeID), *p.Online})
 		case "LastSeen":

@@ -29,6 +29,14 @@ import (
 	"tailscale.com/util/must"
 )
 
+func eps(s ...string) []netip.AddrPort {
+	var eps []netip.AddrPort
+	for _, ep := range s {
+		eps = append(eps, netip.MustParseAddrPort(ep))
+	}
+	return eps
+}
+
 func TestUpdatePeersStateFromResponse(t *testing.T) {
 	var curTime time.Time
 
@@ -49,7 +57,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 	}
 	withEP := func(ep string) func(*tailcfg.Node) {
 		return func(n *tailcfg.Node) {
-			n.Endpoints = []string{ep}
+			n.Endpoints = []netip.AddrPort{netip.MustParseAddrPort(ep)}
 		}
 	}
 	n := func(id tailcfg.NodeID, name string, mod ...func(*tailcfg.Node)) *tailcfg.Node {
@@ -197,7 +205,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:    1,
-					Endpoints: []string{"1.2.3.4:56"},
+					Endpoints: eps("1.2.3.4:56"),
 				}},
 			},
 			want:      peers(n(1, "foo", withEP("1.2.3.4:56"))),
@@ -209,7 +217,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 			mapRes: &tailcfg.MapResponse{
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:    1,
-					Endpoints: []string{"1.2.3.4:56"},
+					Endpoints: eps("1.2.3.4:56"),
 				}},
 			},
 			want:      peers(n(1, "foo", withDERP("127.3.3.40:3"), withEP("1.2.3.4:56"))),
@@ -222,7 +230,7 @@ func TestUpdatePeersStateFromResponse(t *testing.T) {
 				PeersChangedPatch: []*tailcfg.PeerChange{{
 					NodeID:     1,
 					DERPRegion: 2,
-					Endpoints:  []string{"1.2.3.4:56"},
+					Endpoints:  eps("1.2.3.4:56"),
 				}},
 			},
 			want:      peers(n(1, "foo", withDERP("127.3.3.40:2"), withEP("1.2.3.4:56"))),
@@ -667,9 +675,9 @@ func TestPeerChangeDiff(t *testing.T) {
 		},
 		{
 			name: "patch-endpoints",
-			a:    &tailcfg.Node{ID: 1, Endpoints: []string{"10.0.0.1:1"}},
-			b:    &tailcfg.Node{ID: 1, Endpoints: []string{"10.0.0.2:2"}},
-			want: &tailcfg.PeerChange{NodeID: 1, Endpoints: []string{"10.0.0.2:2"}},
+			a:    &tailcfg.Node{ID: 1, Endpoints: eps("10.0.0.1:1")},
+			b:    &tailcfg.Node{ID: 1, Endpoints: eps("10.0.0.2:2")},
+			want: &tailcfg.PeerChange{NodeID: 1, Endpoints: eps("10.0.0.2:2")},
 		},
 		{
 			name: "patch-cap",
@@ -809,13 +817,13 @@ func TestPatchifyPeersChanged(t *testing.T) {
 			},
 			mr1: &tailcfg.MapResponse{
 				PeersChanged: []*tailcfg.Node{
-					{ID: 1, Endpoints: []string{"10.0.0.1:1111"}, Hostinfo: hi},
+					{ID: 1, Endpoints: eps("10.0.0.1:1111"), Hostinfo: hi},
 				},
 			},
 			want: &tailcfg.MapResponse{
 				PeersChanged: nil,
 				PeersChangedPatch: []*tailcfg.PeerChange{
-					{NodeID: 1, Endpoints: []string{"10.0.0.1:1111"}},
+					{NodeID: 1, Endpoints: eps("10.0.0.1:1111")},
 				},
 			},
 		},
@@ -891,7 +899,10 @@ func TestPatchifyPeersChanged(t *testing.T) {
 			mr1 := new(tailcfg.MapResponse)
 			must.Do(json.Unmarshal(must.Get(json.Marshal(tt.mr1)), mr1))
 			ms.patchifyPeersChanged(mr1)
-			if diff := cmp.Diff(tt.want, mr1); diff != "" {
+			opts := []cmp.Option{
+				cmp.Comparer(func(a, b netip.AddrPort) bool { return a == b }),
+			}
+			if diff := cmp.Diff(tt.want, mr1, opts...); diff != "" {
 				t.Errorf("wrong result (-want +got):\n%s", diff)
 			}
 		})
@@ -917,7 +928,7 @@ func BenchmarkMapSessionDelta(b *testing.B) {
 					DERP:       "127.3.3.40:10",
 					Addresses:  []netip.Prefix{netip.MustParsePrefix("100.100.2.3/32"), netip.MustParsePrefix("fd7a:115c:a1e0::123/128")},
 					AllowedIPs: []netip.Prefix{netip.MustParsePrefix("100.100.2.3/32"), netip.MustParsePrefix("fd7a:115c:a1e0::123/128")},
-					Endpoints:  []string{"192.168.1.2:345", "192.168.1.3:678"},
+					Endpoints:  eps("192.168.1.2:345", "192.168.1.3:678"),
 					Hostinfo: (&tailcfg.Hostinfo{
 						OS:       "fooOS",
 						Hostname: "MyHostname",

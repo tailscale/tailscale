@@ -269,9 +269,9 @@ type Node struct {
 	KeySignature tkatype.MarshaledSignature `json:",omitempty"`
 	Machine      key.MachinePublic
 	DiscoKey     key.DiscoPublic
-	Addresses    []netip.Prefix // IP addresses of this Node directly
-	AllowedIPs   []netip.Prefix // range of IP addresses to route to this node
-	Endpoints    []string       `json:",omitempty"` // IP+port (public via STUN, and local LANs)
+	Addresses    []netip.Prefix   // IP addresses of this Node directly
+	AllowedIPs   []netip.Prefix   // range of IP addresses to route to this node
+	Endpoints    []netip.AddrPort `json:",omitempty"` // IP+port (public via STUN, and local LANs)
 
 	// DERP is this node's home DERP region ID integer, but shoved into an
 	// IP:port string for legacy reasons. The IP address is always "127.3.3.40"
@@ -1211,7 +1211,7 @@ type MapRequest struct {
 
 	// Endpoints are the client's magicsock UDP ip:port endpoints (IPv4 or IPv6).
 	// These can be ignored if Stream is true and Version >= 68.
-	Endpoints []string
+	Endpoints []netip.AddrPort `json:",omitempty"`
 	// EndpointTypes are the types of the corresponding endpoints in Endpoints.
 	EndpointTypes []EndpointType `json:",omitempty"`
 
@@ -2516,7 +2516,7 @@ type PeerChange struct {
 
 	// Endpoints, if non-empty, means that NodeID's UDP Endpoints
 	// have changed to these.
-	Endpoints []string `json:",omitempty"`
+	Endpoints []netip.AddrPort `json:",omitempty"`
 
 	// Key, if non-nil, means that the NodeID's wireguard public key changed.
 	Key *key.NodePublic `json:",omitempty"`
