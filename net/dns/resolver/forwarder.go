@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/race"
 	"tailscale.com/version"
 )
 
@@ -492,61 +494,16 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
 
-	type queryResult struct {
-		ty   string
-		resp []byte
-		err  error
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make(chan queryResult, 2)
 
-	// Start both the UDP and TCP queries, but wait at least a few seconds
-	// for the UDP query to complete before we start the TCP query.
-	// However, also start immediately if we get a truncated response,
-	// since we know that we need to start it.
-	startTCP := make(chan struct{}) // close to signal
+	isUDPQuery := fq.family == "udp"
 	skipTCP := skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load())
 
-	go func() {
-		ret, err := f.sendUDP(ctx, fq, rr)
-		results <- queryResult{"udp", ret, err}
-	}()
-	go func() {
-		// Only start the race for TCP if it's not disabled.
-		var timeoutCh <-chan time.Time
-		if !skipTCP {
-			wait := time.NewTimer(udpRaceTimeout)
-			defer wait.Stop()
-			timeoutCh = wait.C
-		} else {
-			blockForever := make(chan time.Time)
-			defer close(blockForever)
-			timeoutCh = blockForever
-		}
-
-		// Wait for our timeout, trigger, or context to finish.
-		select {
-		case <-ctx.Done():
-			// Nothing to do; we're done
-			results <- queryResult{"tcp", nil, ctx.Err()}
-			return
-		case <-startTCP:
-		case <-timeoutCh:
-		}
-
-		ret, err := f.sendTCP(ctx, fq, rr)
-		results <- queryResult{"tcp", ret, err}
-	}()
-
-	var (
-		errs          []error
-		explicitRetry bool // true if truncated UDP response retried
-	)
+	// Print logs about retries if this was because of a truncated response.
+	var explicitRetry atomic.Bool // true if truncated UDP response retried
 	defer func() {
-		// Print logs about retries if this was because of a truncated response.
-		if !explicitRetry {
+		if !explicitRetry.Load() {
 			return
 		}
 		if err == nil {
@@ -555,65 +512,78 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 			f.logf("forwarder.send(%q): could not retry via TCP: %v", rr.name.Addr, err)
 		}
 	}()
-	for i := 0; i < 2; i++ {
-		res := <-results
 
-		// If this was an error, store it and hope that the other
-		// result gives us something.
-		if res.err != nil {
-			errs = append(errs, res.err)
-
-			// Start the TCP fallback immediately if this is a UDP
-			// error, to avoid having to wait.
-			if res.ty == "udp" {
-				close(startTCP)
-			}
-			continue
+	firstUDP := func(ctx context.Context) ([]byte, error) {
+		resp, err := f.sendUDP(ctx, fq, rr)
+		if err != nil {
+			return nil, err
+		}
+		if !truncatedFlagSet(resp) {
+			// Successful, non-truncated response; no retry.
+			return resp, nil
 		}
 
-		if !truncatedFlagSet(res.resp) {
-			// Successful, non-truncated response; return it.
-			return res.resp, nil
-		}
-		if fq.family == "udp" {
-			// If this is a UDP query, return it regardless of whether the
-			// response is truncated or not; the client can retry
-			// communicating with tailscaled over TCP. There's no point
-			// falling back to TCP for a truncated query if we can't return
-			// the results to the client.
-			return res.resp, nil
+		// If this is a UDP query, return it regardless of whether the
+		// response is truncated or not; the client can retry
+		// communicating with tailscaled over TCP. There's no point
+		// falling back to TCP for a truncated query if we can't return
+		// the results to the client.
+		if isUDPQuery {
+			return resp, nil
 		}
 
-		// If we get here, we have a truncated response and the client
-		// is connecting to us via TCP. If this is from a TCP query to
-		// our upstream server and the response is truncated, then
-		// that's an error; just return what we have.
-		if res.ty == "tcp" {
-			return res.resp, nil
-		}
-
-		// Now we know that this query response was from UDP, see if
-		// we're allowed to try it over TCP.
 		if skipTCP {
 			// Envknob or control knob disabled the TCP retry behaviour;
 			// just return what we have.
-			return res.resp, nil
+			return resp, nil
 		}
 
-		// Don't retry if our context is done.
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		// This is a TCP query from the client, and the UDP response
+		// from the upstream DNS server is truncated; map this to an
+		// error to cause our retry helper to immediately kick off the
+		// TCP retry.
+		explicitRetry.Store(true)
+		return nil, truncatedResponseError{resp}
+	}
+	thenTCP := func(ctx context.Context) ([]byte, error) {
+		// If we're skipping the TCP fallback, then wait until the
+		// context is canceled and return that error (i.e. not
+		// returning anything).
+		if skipTCP {
+			<-ctx.Done()
+			return nil, ctx.Err()
 		}
 
-		// Explicitly close the "start TCP query" channel to kick it
-		// off as a retry.
-		close(startTCP)
-		explicitRetry = true
+		return f.sendTCP(ctx, fq, rr)
 	}
 
-	// If we get here, both TCP and UDP queries failed. Return whatever errors we have.
-	return nil, errors.Join(errs...)
+	// If the input query is TCP, then don't have a timeout between
+	// starting UDP and TCP.
+	timeout := udpRaceTimeout
+	if !isUDPQuery {
+		timeout = 0
+	}
+
+	// Kick off the race between the UDP and TCP queries.
+	rh := race.New[[]byte](timeout, firstUDP, thenTCP)
+	resp, err := rh.Start(ctx)
+	if err == nil {
+		return resp, nil
+	}
+
+	// If we got a truncated UDP response, return that instead of an error.
+	var trErr truncatedResponseError
+	if errors.As(err, &trErr) {
+		return trErr.res, nil
+	}
+	return nil, err
 }
+
+type truncatedResponseError struct {
+	res []byte
+}
+
+func (tr truncatedResponseError) Error() string { return "response truncated" }
 
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")

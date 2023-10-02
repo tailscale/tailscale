@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -437,7 +438,7 @@ func makeLargeResponse(tb testing.TB, domain string) (request, response []byte) 
 	return
 }
 
-func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwarder)) []byte {
+func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwarder)) ([]byte, error) {
 	netMon, err := netmon.New(tb.Logf)
 	if err != nil {
 		tb.Fatal(err)
@@ -462,7 +463,11 @@ func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwa
 		name: &dnstype.Resolver{Addr: fmt.Sprintf("127.0.0.1:%d", port)},
 	}
 
-	resp, err := fwd.send(context.Background(), fq, rr)
+	return fwd.send(context.Background(), fq, rr)
+}
+
+func mustRunTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwarder)) []byte {
+	resp, err := runTestQuery(tb, port, request, modify)
 	if err != nil {
 		tb.Fatalf("error making request: %v", err)
 	}
@@ -492,7 +497,7 @@ func TestForwarderTCPFallback(t *testing.T) {
 		}
 	})
 
-	resp := runTestQuery(t, port, request, nil)
+	resp := mustRunTestQuery(t, port, request, nil)
 	if !bytes.Equal(resp, largeResponse) {
 		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, largeResponse)
 	}
@@ -529,7 +534,7 @@ func TestForwarderTCPFallbackTimeout(t *testing.T) {
 		}
 	})
 
-	resp := runTestQuery(t, port, request, nil)
+	resp := mustRunTestQuery(t, port, request, nil)
 	if !bytes.Equal(resp, largeResponse) {
 		t.Errorf("invalid response\ngot: %+v\nwant: %+v", resp, largeResponse)
 	}
@@ -560,7 +565,7 @@ func TestForwarderTCPFallbackDisabled(t *testing.T) {
 		}
 	})
 
-	resp := runTestQuery(t, port, request, func(fwd *forwarder) {
+	resp := mustRunTestQuery(t, port, request, func(fwd *forwarder) {
 		// Disable retries for this test.
 		fwd.controlKnobs = &controlknobs.Knobs{}
 		fwd.controlKnobs.DisableDNSForwarderTCPRetries.Store(true)
@@ -578,5 +583,66 @@ func TestForwarderTCPFallbackDisabled(t *testing.T) {
 	}
 	if !sawUDPRequest.Load() {
 		t.Errorf("DNS server never saw UDP request")
+	}
+}
+
+// Test to ensure that we propagate DNS errors
+func TestForwarderTCPFallbackError(t *testing.T) {
+	enableDebug(t)
+
+	const domain = "error-response.tailscale.com."
+
+	// Our response is a SERVFAIL
+	response := func() []byte {
+		name := dns.MustNewName(domain)
+
+		builder := dns.NewBuilder(nil, dns.Header{
+			RCode: dns.RCodeServerFailure,
+		})
+		builder.StartQuestions()
+		builder.Question(dns.Question{
+			Name:  name,
+			Type:  dns.TypeA,
+			Class: dns.ClassINET,
+		})
+		response, err := builder.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}()
+
+	// Our request is a single A query for the domain in the answer, above.
+	request := func() []byte {
+		builder := dns.NewBuilder(nil, dns.Header{})
+		builder.StartQuestions()
+		builder.Question(dns.Question{
+			Name:  dns.MustNewName(domain),
+			Type:  dns.TypeA,
+			Class: dns.ClassINET,
+		})
+		request, err := builder.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}()
+
+	var sawRequest atomic.Bool
+	port := runDNSServer(t, nil, response, func(isTCP bool, gotRequest []byte) {
+		sawRequest.Store(true)
+		if !bytes.Equal(request, gotRequest) {
+			t.Errorf("invalid request\ngot: %+v\nwant: %+v", gotRequest, request)
+		}
+	})
+
+	_, err := runTestQuery(t, port, request, nil)
+	if !sawRequest.Load() {
+		t.Error("did not see DNS request")
+	}
+	if err == nil {
+		t.Error("wanted error, got nil")
+	} else if !errors.Is(err, errServerFailure) {
+		t.Errorf("wanted errServerFailure, got: %v", err)
 	}
 }
