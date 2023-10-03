@@ -200,6 +200,10 @@ type Prefs struct {
 	// AutoUpdatePrefs docs for more details.
 	AutoUpdate AutoUpdatePrefs
 
+	// PostureChecking enables the collection of information used for device
+	// posture checks.
+	PostureChecking bool
+
 	// The Persist field is named 'Config' in the file for backward
 	// compatibility with earlier versions.
 	// TODO(apenwarr): We should move this out of here, it's not a pref.
@@ -246,6 +250,7 @@ type MaskedPrefs struct {
 	OperatorUserSet           bool `json:",omitempty"`
 	ProfileNameSet            bool `json:",omitempty"`
 	AutoUpdateSet             bool `json:",omitempty"`
+	PostureCheckingSet        bool `json:",omitempty"`
 }
 
 // ApplyEdits mutates p, assigning fields from m.Prefs for each MaskedPrefs
@@ -439,7 +444,8 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 		compareStrings(p.AdvertiseTags, p2.AdvertiseTags) &&
 		p.Persist.Equals(p2.Persist) &&
 		p.ProfileName == p2.ProfileName &&
-		p.AutoUpdate == p2.AutoUpdate
+		p.AutoUpdate == p2.AutoUpdate &&
+		p.PostureChecking == p2.PostureChecking
 }
 
 func (au AutoUpdatePrefs) Pretty() string {
