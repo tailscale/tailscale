@@ -1,14 +1,14 @@
 // Copyright (c) Tailscale Inc & AUTHORS
 // SPDX-License-Identifier: BSD-3-Clause
 
-// darwin: not implemented
-// andoird: not implemented
+// ios: Apple does not allow getting serials on iOS
+// android: not implemented
 // js: not implemented
 // plan9: not implemented
 // solaris: currently unsupported by go-smbios:
 // https://github.com/digitalocean/go-smbios/pull/21
 
-//go:build darwin || android || js || plan9 || solaris
+//go:build ios || android || solaris || plan9 || js || wasm || (darwin && !cgo)
 
 package posture
 
