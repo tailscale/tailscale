@@ -32,7 +32,7 @@ import (
 )
 
 type peerAPITestEnv struct {
-	ph     *peerAPIHandler
+	ph     *PeerAPIHandler
 	rr     *httptest.ResponseRecorder
 	logBuf tstest.MemLogger
 }
@@ -479,13 +479,13 @@ func TestHandlePeerAPI(t *testing.T) {
 				netMap:         &netmap.NetworkMap{SelfNode: selfNode.View()},
 				clock:          &tstest.Clock{},
 			}
-			e.ph = &peerAPIHandler{
+			e.ph = &PeerAPIHandler{
 				isSelf:   tt.isSelf,
 				selfNode: selfNode.View(),
 				peerNode: (&tailcfg.Node{
 					ComputedName: "some-peer-name",
 				}).View(),
-				ps: &peerAPIServer{
+				ps: &PeerAPIServer{
 					b: lb,
 				},
 			}
@@ -525,7 +525,7 @@ func TestHandlePeerAPI(t *testing.T) {
 // a bit. So test that we work around that sufficiently.
 func TestFileDeleteRace(t *testing.T) {
 	dir := t.TempDir()
-	ps := &peerAPIServer{
+	ps := &PeerAPIServer{
 		b: &LocalBackend{
 			logf:           t.Logf,
 			capFileSharing: true,
@@ -533,7 +533,7 @@ func TestFileDeleteRace(t *testing.T) {
 		},
 		rootDir: dir,
 	}
-	ph := &peerAPIHandler{
+	ph := &PeerAPIHandler{
 		isSelf: true,
 		peerNode: (&tailcfg.Node{
 			ComputedName: "some-peer-name",
@@ -574,7 +574,7 @@ func TestFileDeleteRace(t *testing.T) {
 // Tests "foo.jpg.deleted" marks (for Windows).
 func TestDeletedMarkers(t *testing.T) {
 	dir := t.TempDir()
-	ps := &peerAPIServer{
+	ps := &PeerAPIServer{
 		b: &LocalBackend{
 			logf:           t.Logf,
 			capFileSharing: true,
@@ -656,7 +656,7 @@ func TestDeletedMarkers(t *testing.T) {
 }
 
 func TestPeerAPIReplyToDNSQueries(t *testing.T) {
-	var h peerAPIHandler
+	var h PeerAPIHandler
 
 	h.isSelf = true
 	if !h.replyToDNSQueries() {
@@ -667,7 +667,7 @@ func TestPeerAPIReplyToDNSQueries(t *testing.T) {
 
 	eng, _ := wgengine.NewFakeUserspaceEngine(logger.Discard, 0)
 	pm := must.Get(newProfileManager(new(mem.Store), t.Logf))
-	h.ps = &peerAPIServer{
+	h.ps = &PeerAPIServer{
 		b: &LocalBackend{
 			e:     eng,
 			pm:    pm,

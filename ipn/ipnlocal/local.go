@@ -235,7 +235,7 @@ type LocalBackend struct {
 	interact         bool
 	egg              bool
 	prevIfState      *interfaces.State
-	peerAPIServer    *peerAPIServer // or nil
+	peerAPIServer    *PeerAPIServer // or nil
 	peerAPIListeners []*peerAPIListener
 	loginFlags       controlclient.LoginFlags
 	incomingFiles    map[*incomingFile]bool
@@ -3545,7 +3545,7 @@ func (b *LocalBackend) initPeerAPIListener() {
 		b.logf("peerapi starting without Taildrop directory configured")
 	}
 
-	ps := &peerAPIServer{
+	ps := &PeerAPIServer{
 		b:                       b,
 		rootDir:                 fileRoot,
 		directFileMode:          b.directFileRoot != "",
