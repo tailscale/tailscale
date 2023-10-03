@@ -63,9 +63,10 @@ var debugCmd = &ffcli.Command{
 			ShortHelp: "print DERP map",
 		},
 		{
-			Name:      "component-logs",
-			Exec:      runDebugComponentLogs,
-			ShortHelp: "enable/disable debug logs for a component",
+			Name:       "component-logs",
+			Exec:       runDebugComponentLogs,
+			ShortHelp:  "enable/disable debug logs for a component",
+			ShortUsage: "tailscale debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]",
 			FlagSet: (func() *flag.FlagSet {
 				fs := newFlagSet("component-logs")
 				fs.DurationVar(&debugComponentLogsArgs.forDur, "for", time.Hour, "how long to enable debug logs for; zero or negative means to disable")
@@ -724,7 +725,7 @@ var debugComponentLogsArgs struct {
 
 func runDebugComponentLogs(ctx context.Context, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: debug component-logs <component>")
+		return errors.New("usage: debug component-logs [" + strings.Join(ipn.DebuggableComponents, "|") + "]")
 	}
 	component := args[0]
 	dur := debugComponentLogsArgs.forDur
