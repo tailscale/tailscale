@@ -49,6 +49,7 @@ type setArgsT struct {
 	forceDaemon            bool
 	updateCheck            bool
 	updateApply            bool
+	postureChecking        bool
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -66,6 +67,8 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.BoolVar(&setArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
 	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "HIDDEN: notify about available Tailscale updates")
 	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "HIDDEN: automatically update to the latest available version")
+	setf.BoolVar(&setArgs.postureChecking, "posture-checking", false, "HIDDEN: allow management plane to gather device posture information")
+
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -108,6 +111,7 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 				Check: setArgs.updateCheck,
 				Apply: setArgs.updateApply,
 			},
+			PostureChecking: setArgs.postureChecking,
 		},
 	}
 

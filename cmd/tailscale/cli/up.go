@@ -114,6 +114,7 @@ func newUpFlagSet(goos string, upArgs *upArgsT, cmd string) *flag.FlagSet {
 	upf.StringVar(&upArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
 	upf.StringVar(&upArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	upf.BoolVar(&upArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
+
 	if safesocket.GOOSUsesPeerCreds(goos) {
 		upf.StringVar(&upArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
@@ -725,6 +726,7 @@ func init() {
 	addPrefFlagMapping("nickname", "ProfileName")
 	addPrefFlagMapping("update-check", "AutoUpdate")
 	addPrefFlagMapping("auto-update", "AutoUpdate")
+	addPrefFlagMapping("posture-checking", "PostureChecking")
 }
 
 func addPrefFlagMapping(flagName string, prefNames ...string) {
