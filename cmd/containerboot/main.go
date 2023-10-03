@@ -182,7 +182,10 @@ func main() {
 
 	// determine firewall mode once here to ensure that tailscaled and proxy
 	// code use the same
-	mode := determineProxyFirewallMode()
+	mode, err := determineProxyFirewallMode()
+	if err != nil {
+		log.Fatalf("error determining firewall mode: %v", err)
+	}
 	if err := os.Setenv("TS_DEBUG_FIREWALL_MODE", string(mode)); err != nil {
 		log.Fatalf("error setting TS_DEBUG_FIREWALL_MODE: %v", err)
 	}

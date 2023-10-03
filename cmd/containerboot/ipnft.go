@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -19,7 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/linuxfw"
-	"tailscale.com/wgengine/router"
 )
 
 // The contents of this file are partially adapted from util/linuxfw/iptables_runner.go
@@ -45,25 +45,26 @@ type netfilterRunner interface {
 	addClamping(netip.Addr) error
 }
 
-// TODO (irbekrm): these heuristics aren't going to be useful in container env-
-// make them actually attempt to create some fake rules and decide on basis of
-// whether that succeeds
-func determineProxyFirewallMode() linuxfw.FirewallMode {
-	tableDetector := &router.LinuxFWDetector{}
+func determineProxyFirewallMode() (linuxfw.FirewallMode, error) {
+	// check if either iptables or nftables are functional
+	defaultFirewallMode, err := chooseFirewallMode(log.Printf)
+	if err != nil {
+		return "", err
+	}
+
 	switch {
 	case os.Getenv("TS_FIREWALL_MODE") == "nftables":
 		log.Print("TS_FIREWALL_MODE set to nftables; proxy will use nftables")
-		return linuxfw.FirewallModeNfTables
+		return linuxfw.FirewallModeNfTables, nil
 	case os.Getenv("TS_FIREWALL_MODE") == "auto":
-		m := router.ChooseFireWallMode(logger.FromContext(context.Background()), tableDetector)
-		log.Printf("TS_FIREWALL_MODE set to auto; proxy will use %s", m)
-		return m
+		log.Printf("TS_FIREWALL_MODE set to auto; proxy will use %s", defaultFirewallMode)
+		return defaultFirewallMode, nil
 	case os.Getenv("TS_FIREWALL_MODE") == "iptables":
 		log.Print("TS_FIREWALL_MODE set to iptables; proxy will use iptables")
-		return linuxfw.FirewallModeIPTables
+		return linuxfw.FirewallModeIPTables, nil
 	default:
 		log.Print("TS_FIREWALL_MODE is not set; proxy will use iptables")
-		return linuxfw.FirewallModeIPTables
+		return linuxfw.FirewallModeIPTables, nil
 	}
 }
 
@@ -121,6 +122,145 @@ func newIPTablesRunner(logf logger.Logf) (netfilterRunner, error) {
 		}
 	}
 	return &iptablesRunner{ipt4, ipt6, supportsV6, supportsV6NAT}, nil
+}
+
+// chooseFirewallMode chooses between iptables and nftables depending on which
+// ones are functional on the system. Prefers iptables.
+func chooseFirewallMode(logf logger.Logf) (linuxfw.FirewallMode, error) {
+	hasIptables, msg := iptablesFunctional()
+	if !hasIptables {
+		logf("iptables do not appear functional: %s", msg)
+	}
+	hasNftables, msg := nftablesFunctional()
+	if !hasNftables {
+		logf("nftables do not appear to be functional: %s", msg)
+	}
+
+	if hasIptables && hasNftables {
+		logf("both iptables and nftables are functional, choosing iptables")
+		return linuxfw.FirewallModeIPTables, nil
+	}
+	if hasIptables {
+		logf("choosing iptables")
+		return linuxfw.FirewallModeIPTables, nil
+	}
+	if hasNftables {
+		logf("choosing firewall mode nftables")
+		return linuxfw.FirewallModeNfTables, nil
+	}
+	return "", errors.New("neither iptables nor nftables are avaible: proxy cannot function. Ensure that host has the right kernel modules to be able to configure netlink either via iptables or nftables.")
+}
+
+func iptablesFunctional() (bool, string) {
+	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return false, fmt.Sprintf("error creating ")
+	}
+
+	// anything received on the non-existant foo interface gets routed to 1.2.3.4
+	testRuleArgs := []string{"-i", "foo", "-j", "DNAT", "--to-destination", "1.2.3.4"}
+
+	// check that a new rule can be added to nat table
+	err = ipt4.Insert("nat", preroutingChain, 1, testRuleArgs...)
+	if err != nil {
+		return false, fmt.Sprintf("error inserting a rule into nat table: %v", err)
+	}
+
+	//check that the newly created rule exists
+	exists, err := ipt4.Exists("nat", preroutingChain, testRuleArgs...)
+	if err != nil {
+		return false, fmt.Sprintf("error retrieving rule: %v", err)
+	}
+	if !exists {
+		return false, fmt.Sprintf("newly created test rule not found")
+	}
+	// delete the rule
+	err = ipt4.Delete("nat", preroutingChain, testRuleArgs...)
+	if err != nil {
+		// we don't strictly need the ability for deletion to not error
+		// to use iptables, but if we do error out here something must
+		// be wrong
+		return false, fmt.Sprintf("error deleting a rule from the nat table: %v", err)
+	}
+
+	// TODO (irbekrm): do we need to also verify that IPv6 rules can be created?
+
+	return true, "iptables seem to be functional"
+}
+
+func nftablesFunctional() (bool, string) {
+	conn, err := nftables.New()
+	if err != nil {
+		return false, fmt.Sprintf("error creating a new netlink connection: %v", err)
+	}
+
+	// ensure nat table exists
+	natT, err := linuxfw.CreateTableIfNotExist(conn, nftables.TableFamilyIPv4, "nat")
+	if err != nil {
+		return false, fmt.Sprintf("error ensuring nat table exists: %v", err)
+	}
+
+	// ensure prerouting chain exists
+	preroutingCh, err := linuxfw.CreateChainIfNotExist(conn, linuxfw.ChainInfo{
+		Table:         natT,
+		Name:          preroutingChain,
+		ChainType:     nftables.ChainTypeNAT,
+		ChainHook:     nftables.ChainHookPrerouting,
+		ChainPriority: nftables.ChainPriorityNATDest,
+		ChainPolicy:   func(n nftables.ChainPolicy) *nftables.ChainPolicy { return &n }(nftables.ChainPolicyAccept),
+	})
+	if err != nil {
+		return false, fmt.Sprintf("error ensuring prerouting chain: %v", err)
+	}
+
+	// anything received on the non-existant foo interface gets routed to 1.2.3.4
+	dnatRule := &nftables.Rule{
+		Table: natT,
+		Chain: preroutingCh,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     ifname("foo"),
+			},
+			&expr.Immediate{
+				Register: 1,
+				Data:     []byte{1, 2, 3, 4},
+			},
+			&expr.NAT{
+				Type:       expr.NATTypeDestNAT,
+				Family:     uint32(nftables.TableFamilyIPv4),
+				RegAddrMin: 1,
+			},
+		},
+	}
+	conn.AddRule(dnatRule)
+	conn.Flush()
+
+	// verify that rule exists
+	rules, err := conn.GetRules(natT, preroutingCh)
+	if err != nil {
+		return false, fmt.Sprintf("error retrieving nftables rules: %v", err)
+	}
+	// this is good enough- no other rules can exist in the container at
+	// this point
+	if len(rules) < 1 {
+		return false, fmt.Sprintf("created nftables rule was not found")
+	}
+
+	// delete the rule
+	dnatRule.Handle = rules[0].Handle
+	if err := conn.DelRule(dnatRule); err != nil {
+		return false, fmt.Sprintf("error deleting nftables rule: %v", err)
+	}
+
+	// It's fine to leave the nat table and the prerouting chain- even if we
+	// don't use them they should be harmless
+
+	// TODO (irbekrm): do we need to also verify that IPv6 rules can be created?
+
+	return true, "nftables seem to be functional"
 }
 
 type iptablesI interface {
