@@ -6,6 +6,26 @@ package ipproto
 
 import "fmt"
 
+// IPProtoVersion describes the IP address version.
+type IPProtoVersion uint8
+
+// Valid IPProtoVersion values.
+const (
+	IPProtoVersion4 = 4
+	IPProtoVersion6 = 6
+)
+
+func (p IPProtoVersion) String() string {
+	switch p {
+	case IPProtoVersion4:
+		return "IPv4"
+	case IPProtoVersion6:
+		return "IPv6"
+	default:
+		return fmt.Sprintf("IPProtoVersion-%d", int(p))
+	}
+}
+
 // Proto is an IP subprotocol as defined by the IANA protocol
 // numbers list
 // (https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml),
