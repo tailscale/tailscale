@@ -169,14 +169,18 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	// Finished computing the settings we want. Generate the modified
 	// commandline and environment modifications.
 	newArgv = append(newArgv, argv[:2]...) // Program name and `go` tool subcommand
+
+	filteredArgvPostSubcmd, originalTags := extractTags(argv[2:])
+
 	newArgv = append(newArgv, buildFlags...)
+	tags = append(tags, originalTags...)
 	if len(tags) > 0 {
 		newArgv = append(newArgv, fmt.Sprintf("-tags=%s", strings.Join(tags, ",")))
 	}
 	if len(ldflags) > 0 {
 		newArgv = append(newArgv, "-ldflags", strings.Join(ldflags, " "))
 	}
-	newArgv = append(newArgv, argv[2:]...)
+	newArgv = append(newArgv, filteredArgvPostSubcmd...)
 
 	env.Set("GOOS", targetOS)
 	env.Set("GOARCH", targetArch)
@@ -196,6 +200,39 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	}
 
 	return newArgv, env, nil
+}
+
+// extractTags parses out "-tags=foo,bar" (or double hyphen or "-tags",
+// "foo,bar") in its various forms and returns v filtered to remove the 0, 1 or
+// 2 build tag elements, then the tags parsed, split on commas ("foo", "bar").
+func extractTags(v []string) (filtered, tags []string) {
+	for len(v) > 0 {
+		e := v[0]
+		if strings.HasPrefix(e, "--tags=") {
+			e = e[1:] // remove one of the hyphens for the next line
+		}
+		if suf, ok := strings.CutPrefix(e, "-tags="); ok {
+			v = v[1:]
+			if suf != "" {
+				tags = strings.Split(suf, ",")
+			}
+			continue
+		}
+		if e == "-tags" || e == "--tags" {
+			v = v[1:]
+			if len(v) > 0 {
+				tagStr := v[0]
+				v = v[1:]
+				if tagStr != "" {
+					tags = strings.Split(tagStr, ",")
+				}
+			}
+			continue
+		}
+		filtered = append(filtered, e)
+		v = v[1:]
+	}
+	return filtered, tags
 }
 
 // boolStr formats v as a string 0 or 1.

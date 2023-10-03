@@ -437,3 +437,67 @@ TS_LINK_FAIL_REFLECT=0 (was <nil>)`,
 		})
 	}
 }
+
+func TestExtractTags(t *testing.T) {
+	s := func(ss ...string) []string { return ss }
+	tests := []struct {
+		name string
+		in   []string
+		filt []string // want filtered
+		tags []string // want tags
+	}{
+		{
+			name: "one_hyphen_tags",
+			in:   s("foo", "-tags=a,b", "bar"),
+			filt: s("foo", "bar"),
+			tags: s("a", "b"),
+		},
+		{
+			name: "two_hyphen_tags",
+			in:   s("foo", "--tags=a,b", "bar"),
+			filt: s("foo", "bar"),
+			tags: s("a", "b"),
+		},
+		{
+			name: "one_hypen_separate_arg",
+			in:   s("foo", "-tags", "a,b", "bar"),
+			filt: s("foo", "bar"),
+			tags: s("a", "b"),
+		},
+		{
+			name: "two_hypen_separate_arg",
+			in:   s("foo", "--tags", "a,b", "bar"),
+			filt: s("foo", "bar"),
+			tags: s("a", "b"),
+		},
+		{
+			name: "equal_empty",
+			in:   s("foo", "--tags=", "bar"),
+			filt: s("foo", "bar"),
+			tags: s(),
+		},
+		{
+			name: "arg_empty",
+			in:   s("foo", "--tags", "", "bar"),
+			filt: s("foo", "bar"),
+			tags: s(),
+		},
+		{
+			name: "arg_empty_truncated",
+			in:   s("foo", "--tags"),
+			filt: s("foo"),
+			tags: s(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filt, tags := extractTags(tt.in)
+			if !reflect.DeepEqual(filt, tt.filt) {
+				t.Errorf("extractTags(%q) filtered = %q; want %q", tt.in, filt, tt.filt)
+			}
+			if !reflect.DeepEqual(tags, tt.tags) {
+				t.Errorf("extractTags(%q) tags = %q; want %q", tt.in, tags, tt.tags)
+			}
+		})
+	}
+}
