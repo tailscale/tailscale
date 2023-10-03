@@ -79,6 +79,7 @@ type tailscaleSTSReconciler struct {
 	operatorNamespace      string
 	proxyImage             string
 	proxyPriorityClassName string
+	firewallMode           string
 }
 
 // IsHTTPSEnabledOnTailnet reports whether HTTPS is enabled on the tailnet.
@@ -319,6 +320,12 @@ func (a *tailscaleSTSReconciler) reconcileSTS(ctx context.Context, logger *zap.S
 			Name:  "TS_HOSTNAME",
 			Value: sts.Hostname,
 		})
+	if a.firewallMode != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "TS_FIREWALL_MODE",
+			Value: a.firewallMode,
+		})
+	}
 	if sts.ClusterTargetIP != "" {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "TS_DEST_IP",

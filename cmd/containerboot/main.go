@@ -111,6 +111,7 @@ func main() {
 		Socket:          defaultEnv("TS_SOCKET", "/tmp/tailscaled.sock"),
 		AuthOnce:        defaultBool("TS_AUTH_ONCE", true),
 		Root:            defaultEnv("TS_TEST_ONLY_ROOT", "/"),
+		FirewallMode:    defaultEnv("TS_FIREWALL_MODE", ""),
 	}
 
 	if cfg.ProxyTo != "" && cfg.UserspaceMode {
@@ -177,6 +178,13 @@ func main() {
 				log.Print("No authkey found in kube secret and TS_AUTHKEY not provided, login will be interactive if needed.")
 			}
 		}
+	}
+
+	// determine firewall mode once here to ensure that tailscaled and proxy
+	// code use the same
+	mode := determineProxyFirewallMode()
+	if err := os.Setenv("TS_DEBUG_FIREWALL_MODE", string(mode)); err != nil {
+		log.Fatalf("error setting TS_DEBUG_FIREWALL_MODE: %v", err)
 	}
 
 	client, daemonPid, err := startTailscaled(bootCtx, cfg)
@@ -295,6 +303,13 @@ authLoop:
 	if cfg.ServeConfigPath != "" {
 		go watchServeConfigChanges(ctx, cfg.ServeConfigPath, certDomainChanged, certDomain, client)
 	}
+	var nfr netfilterRunner
+	if wantProxy {
+		nfr, err = newNetFilterRunner(mode)
+		if err != nil {
+			log.Fatalf("error creating new netfilter runner: %v", err)
+		}
+	}
 	for {
 		n, err := w.Next()
 		if err != nil {
@@ -314,8 +329,8 @@ authLoop:
 			newCurrentIPs := deephash.Hash(&addrs)
 			ipsHaveChanged := newCurrentIPs != currentIPs
 			if cfg.ProxyTo != "" && len(addrs) > 0 && ipsHaveChanged {
-				log.Printf("Installing proxy rules")
-				if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs); err != nil {
+				log.Printf("Installing ingress proxy rules")
+				if err := installIngressForwardingRule(ctx, cfg.ProxyTo, addrs, nfr); err != nil {
 					log.Fatalf("installing ingress proxy rules: %v", err)
 				}
 			}
@@ -330,7 +345,8 @@ authLoop:
 				}
 			}
 			if cfg.TailnetTargetIP != "" && ipsHaveChanged && len(addrs) > 0 {
-				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs); err != nil {
+				log.Printf("Installing egress proxy rules")
+				if err := installEgressForwardingRule(ctx, cfg.TailnetTargetIP, addrs, nfr); err != nil {
 					log.Fatalf("installing egress proxy rules: %v", err)
 				}
 			}
@@ -662,16 +678,13 @@ func ensureIPForwarding(root, clusterProxyTarget, tailnetTargetiP, routes string
 	return nil
 }
 
-func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+// TODO (irbekrm): get rid of unnecessary tsIPs arg
+func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr netfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
-	if dst.Is6() {
-		argv0 = "ip6tables"
-	}
-	var local string
+	var local netip.Addr
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
@@ -679,52 +692,34 @@ func installEgressForwardingRule(ctx context.Context, dstStr string, tsIPs []net
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
-		local = pfx.Addr().String()
+		local = pfx.Addr()
 		break
 	}
-	if local == "" {
+
+	if local.String() == "" || local.String() == "invalid IP" {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	// Set up a rule that ensures that all packets
-	// except for those received on tailscale0 interface is forwarded to
-	// destination address
-	cmdDNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "!", "-i", "tailscale0", "-j", "DNAT", "--to-destination", dstStr)
-	cmdDNAT.Stdout = os.Stdout
-	cmdDNAT.Stderr = os.Stderr
-	if err := cmdDNAT.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	err = nfr.addEgressDNAT(dst)
+	if err != nil {
+		return fmt.Errorf("error setting up egress DNAT: %w", err)
 	}
-	// Set up a rule that ensures that all packets sent to the destination
-	// address will have the proxy's IP set as source IP
-	cmdSNAT := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "POSTROUTING", "1", "--destination", dstStr, "-j", "SNAT", "--to-source", local)
-	cmdSNAT.Stdout = os.Stdout
-	cmdSNAT.Stderr = os.Stderr
-	if err := cmdSNAT.Run(); err != nil {
-		return fmt.Errorf("setting up SNAT via iptables failed: %w", err)
+	err = nfr.addEgressSNAT(local, dst)
+	if err != nil {
+		return fmt.Errorf("error setting up egress SNAT: %w", err)
+	}
+	if err := nfr.addClamping(dst); err != nil {
+		return fmt.Errorf("error setting up clamping rule: %w", err)
 	}
 
-	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
-	cmdClamp.Stdout = os.Stdout
-	cmdClamp.Stderr = os.Stderr
-	if err := cmdClamp.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
-	}
 	return nil
 }
 
-func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix) error {
+func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []netip.Prefix, nfr netfilterRunner) error {
 	dst, err := netip.ParseAddr(dstStr)
 	if err != nil {
 		return err
 	}
-	argv0 := "iptables"
-	if dst.Is6() {
-		argv0 = "ip6tables"
-	}
-	var local string
+	var local netip.Addr
 	for _, pfx := range tsIPs {
 		if !pfx.IsSingleIP() {
 			continue
@@ -732,26 +727,18 @@ func installIngressForwardingRule(ctx context.Context, dstStr string, tsIPs []ne
 		if pfx.Addr().Is4() != dst.Is4() {
 			continue
 		}
-		local = pfx.Addr().String()
+		local = pfx.Addr()
 		break
 	}
-	if local == "" {
+	if local.String() == "" || local.String() == "invalid IP" {
 		return fmt.Errorf("no tailscale IP matching family of %s found in %v", dstStr, tsIPs)
 	}
-	// Technically, if the control server ever changes the IPs assigned to this
-	// node, we'll slowly accumulate iptables rules. This shouldn't happen, so
-	// for now we'll live with it.
-	cmd := exec.CommandContext(ctx, argv0, "-t", "nat", "-I", "PREROUTING", "1", "-d", local, "-j", "DNAT", "--to-destination", dstStr)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	err = nfr.addIngressDNAT(dst, local)
+	if err != nil {
+		return fmt.Errorf("error setting up ingress dnat: %w", err)
 	}
-	cmdClamp := exec.CommandContext(ctx, argv0, "-t", "mangle", "-A", "FORWARD", "-o", "tailscale0", "-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
-	cmdClamp.Stdout = os.Stdout
-	cmdClamp.Stderr = os.Stderr
-	if err := cmdClamp.Run(); err != nil {
-		return fmt.Errorf("executing iptables failed: %w", err)
+	if err = nfr.addClamping(dst); err != nil {
+		return fmt.Errorf("error setting clamping rule: %w", err)
 	}
 	return nil
 }
@@ -783,6 +770,7 @@ type settings struct {
 	AuthOnce           bool
 	Root               string
 	KubernetesCanPatch bool
+	FirewallMode       string
 }
 
 // defaultEnv returns the value of the given envvar name, or defVal if

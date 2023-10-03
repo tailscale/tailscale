@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/tstest"
 	"tailscale.com/types/netmap"
 	"tailscale.com/types/ptr"
+	"tailscale.com/util/linuxfw"
 )
 
 func TestContainerBoot(t *testing.T) {
@@ -68,8 +70,6 @@ func TestContainerBoot(t *testing.T) {
 	files := map[string][]byte{
 		"usr/bin/tailscaled":                    fakeTailscaled,
 		"usr/bin/tailscale":                     fakeTailscale,
-		"usr/bin/iptables":                      fakeTailscale,
-		"usr/bin/ip6tables":                     fakeTailscale,
 		"dev/net/tun":                           []byte(""),
 		"proc/sys/net/ipv4/ip_forward":          []byte("0"),
 		"proc/sys/net/ipv6/conf/all/forwarding": []byte("0"),
@@ -317,57 +317,6 @@ func TestContainerBoot(t *testing.T) {
 					},
 					WantCmds: []string{
 						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false --advertise-routes=::/64,1.2.3.0/24",
-					},
-				},
-			},
-		},
-		{
-			Name: "ingres proxy",
-			Env: map[string]string{
-				"TS_AUTHKEY":   "tskey-key",
-				"TS_DEST_IP":   "1.2.3.4",
-				"TS_USERSPACE": "false",
-				"TS_AUTH_ONCE": "false",
-			},
-			Phases: []phase{
-				{
-					WantCmds: []string{
-						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
-					},
-				},
-				{
-					Notify: runningNotify,
-					WantCmds: []string{
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
-						"/usr/bin/iptables -t nat -I PREROUTING 1 -d 100.64.0.1 -j DNAT --to-destination 1.2.3.4",
-						"/usr/bin/iptables -t mangle -A FORWARD -o tailscale0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
-					},
-				},
-			},
-		},
-		{
-			Name: "egress proxy",
-			Env: map[string]string{
-				"TS_AUTHKEY":           "tskey-key",
-				"TS_TAILNET_TARGET_IP": "100.99.99.99",
-				"TS_USERSPACE":         "false",
-				"TS_AUTH_ONCE":         "false",
-			},
-			Phases: []phase{
-				{
-					WantCmds: []string{
-						"/usr/bin/tailscaled --socket=/tmp/tailscaled.sock --state=mem: --statedir=/tmp",
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock login --authkey=tskey-key",
-					},
-				},
-				{
-					Notify: runningNotify,
-					WantCmds: []string{
-						"/usr/bin/tailscale --socket=/tmp/tailscaled.sock set --accept-dns=false",
-						"/usr/bin/iptables -t nat -I PREROUTING 1 ! -i tailscale0 -j DNAT --to-destination 100.99.99.99",
-						"/usr/bin/iptables -t nat -I POSTROUTING 1 --destination 100.99.99.99 -j SNAT --to-source 100.64.0.1",
-						"/usr/bin/iptables -t mangle -A FORWARD -o tailscale0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu",
 					},
 				},
 			},
@@ -756,6 +705,65 @@ func TestContainerBoot(t *testing.T) {
 	}
 }
 
+func TestSetupProxiesWithIptables(t *testing.T) {
+	ipt4 := linuxfw.NewIPTables(t)
+	ipt6 := linuxfw.NewIPTables(t)
+	iptr := iptablesRunner{ipt4: ipt4, ipt6: ipt6, v6Available: true, v6NATAvailable: true}
+
+	// Test installing egress proxy iptables rules
+
+	tailnetIP := "100.88.88.88"
+	proxyTailnetIP := "100.99.99.99"
+	ip, err := netip.ParseAddr(proxyTailnetIP)
+	if err != nil {
+		t.Fatalf("error parsing ip: %v", err)
+	}
+	localAddrs := []netip.Prefix{netip.PrefixFrom(ip, 32)}
+	wantedEgressRules := []fakeRule{
+		{"nat", "PREROUTING", []string{"!", "-i", "tailscale0*", "-j", "DNAT", "--to-destination", "100.88.88.88"}},
+		{"nat", "POSTROUTING", []string{"--destination", "100.88.88.88", "-j", "MASQUERADE"}},
+		{"mangle", "FORWARD", []string{"-o", "tailscale0*", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"}},
+	}
+
+	if err = installEgressForwardingRule(context.Background(), tailnetIP, localAddrs, &iptr); err != nil {
+		t.Fatalf("error installing egress rule: %v", err)
+	}
+
+	for _, rule := range wantedEgressRules {
+		if exists, err := iptr.ipt4.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatalf("error checking if egress rule exists: %v", err)
+		} else if !exists {
+			hasRules, _ := iptr.ipt4.List(rule.table, rule.chain)
+			t.Errorf("egress rule %s/%s/%s doesn't exist, has rules %#+v", rule.table, rule.chain, rule.args, hasRules)
+		}
+	}
+
+	// Test installing ingress proxy iptables rules
+
+	clusterIP := "10.0.0.0"
+	wantedIngressRules := []fakeRule{
+		{"nat", "PREROUTING", []string{"--destination", proxyTailnetIP, "-j", "DNAT", "--to-destination", clusterIP}},
+		{"mangle", "FORWARD", []string{"-o", "tailscale0*", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"}},
+	}
+	if err = installIngressForwardingRule(context.Background(), clusterIP, localAddrs, &iptr); err != nil {
+		t.Fatalf("error installing ingress proxy rules: %v", err)
+	}
+
+	for _, rule := range wantedIngressRules {
+		if exists, err := iptr.ipt4.Exists(rule.table, rule.chain, rule.args...); err != nil {
+			t.Fatalf("error checking if ingress rule exists: %v", err)
+		} else if !exists {
+			hasRules, _ := iptr.ipt4.List(rule.table, rule.chain)
+			t.Errorf("ingress rule %s/%s/%s doesn't exist, has rules %#+v", rule.table, rule.chain, rule.args, hasRules)
+		}
+	}
+}
+
+type fakeRule struct {
+	table, chain string
+	args         []string
+}
+
 type lockingBuffer struct {
 	sync.Mutex
 	b bytes.Buffer
@@ -1112,3 +1120,5 @@ func (k *kubeServer) serveSecret(w http.ResponseWriter, r *http.Request) {
 		panic(fmt.Sprintf("unhandled HTTP method %q", r.Method))
 	}
 }
+
+// TODO (irbekrm): add separate tests for installIngressForwardingRule/installEgressForwardingRule
