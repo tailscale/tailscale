@@ -900,8 +900,13 @@ func (s *Server) MapResponse(req *tailcfg.MapRequest) (res *tailcfg.MapResponse,
 		peerAddress := s.masquerades[p.Key][node.Key]
 		s.mu.Unlock()
 		if peerAddress.IsValid() {
-			p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
-			p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			if peerAddress.Is6() {
+				p.Addresses[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[1] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			} else {
+				p.Addresses[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+				p.AllowedIPs[0] = netip.PrefixFrom(peerAddress, peerAddress.BitLen())
+			}
 		}
 		res.Peers = append(res.Peers, p)
 	}
