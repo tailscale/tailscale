@@ -386,7 +386,7 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 		b.logf("[unexpected] failed to wire up PeerAPI port for engine %T", e)
 	}
 
-	for _, component := range debuggableComponents {
+	for _, component := range ipn.DebuggableComponents {
 		key := componentStateKey(component)
 		if ut, err := ipn.ReadStoreInt(pm.Store(), key); err == nil {
 			if until := time.Unix(ut, 0); until.After(b.clock.Now()) {
@@ -402,11 +402,6 @@ func NewLocalBackend(logf logger.Logf, logID logid.PublicID, sys *tsd.System, lo
 type componentLogState struct {
 	until time.Time
 	timer tstime.TimerController // if non-nil, the AfterFunc to disable it
-}
-
-var debuggableComponents = []string{
-	"magicsock",
-	"sockstats",
 }
 
 func componentStateKey(component string) ipn.StateKey {
@@ -440,7 +435,7 @@ func (b *LocalBackend) SetComponentDebugLogging(component string, until time.Tim
 			}
 		}
 	}
-	if setEnabled == nil || !slices.Contains(debuggableComponents, component) {
+	if setEnabled == nil || !slices.Contains(ipn.DebuggableComponents, component) {
 		return fmt.Errorf("unknown component %q", component)
 	}
 	timeUnixOrZero := func(t time.Time) int64 {

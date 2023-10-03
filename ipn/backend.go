@@ -192,6 +192,13 @@ type PartialFile struct {
 //   - "_debug_<component>_until" with value being a unix timestamp stringified
 type StateKey string
 
+// DebuggableComponents is a list of components whose debugging can be turned on
+// and off individually using the tailscale debug command.
+var DebuggableComponents = []string{
+	"magicsock",
+	"sockstats",
+}
+
 type Options struct {
 	// FrontendLogID is the public logtail id used by the frontend.
 	FrontendLogID string
