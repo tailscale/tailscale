@@ -1449,7 +1449,7 @@ func TestServfail(t *testing.T) {
 	r.SetConfig(cfg)
 
 	pkt, err := syncRespond(r, dnspacket("test.site.", dns.TypeA, noEdns))
-	if err != errServerFailure {
+	if !errors.Is(err, errServerFailure) {
 		t.Errorf("err = %v, want %v", err, errServerFailure)
 	}
 
