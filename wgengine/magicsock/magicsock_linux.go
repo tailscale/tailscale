@@ -361,10 +361,7 @@ func getGSOSizeFromControl(control []byte) (int, error) {
 			return 0, fmt.Errorf("error parsing socket control message: %w", err)
 		}
 		if hdr.Level == unix.SOL_UDP && hdr.Type == unix.UDP_GRO && len(data) >= 2 {
-			var gso uint16
-			// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
-			copy(unsafe.Slice((*byte)(unsafe.Pointer(&gso)), 2), data[:2])
-			return int(gso), nil
+			return int(binary.NativeEndian.Uint16(data[:2])), nil
 		}
 	}
 	return 0, nil
@@ -385,8 +382,7 @@ func setGSOSizeInControl(control *[]byte, gsoSize uint16) {
 	hdr.Level = unix.SOL_UDP
 	hdr.Type = unix.UDP_SEGMENT
 	hdr.SetLen(unix.CmsgLen(2))
-	// TODO(jwhited): replace with encoding/binary.NativeEndian when it's available
-	copy((*control)[unix.SizeofCmsghdr:], unsafe.Slice((*byte)(unsafe.Pointer(&gsoSize)), 2))
+	binary.NativeEndian.PutUint16((*control)[unix.SizeofCmsghdr:], gsoSize)
 	*control = (*control)[:unix.CmsgSpace(2)]
 }
 
