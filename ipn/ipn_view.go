@@ -87,6 +87,7 @@ func (v PrefsView) NetfilterMode() preftype.NetfilterMode { return v.ж.Netfilte
 func (v PrefsView) OperatorUser() string                  { return v.ж.OperatorUser }
 func (v PrefsView) ProfileName() string                   { return v.ж.ProfileName }
 func (v PrefsView) AutoUpdate() AutoUpdatePrefs           { return v.ж.AutoUpdate }
+func (v PrefsView) PostureChecking() bool                 { return v.ж.PostureChecking }
 func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
 // A compilation failure here means this code must be regenerated, with the command at the top of this file.
@@ -113,6 +114,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	OperatorUser           string
 	ProfileName            string
 	AutoUpdate             AutoUpdatePrefs
+	PostureChecking        bool
 	Persist                *persist.Persist
 }{})
 
