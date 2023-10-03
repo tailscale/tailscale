@@ -8,9 +8,13 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"tailscale.com/tstest"
 )
 
 func TestRaceSuccess1(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	const want = "success"
 	rh := New[string](
 		10*time.Second,
@@ -30,6 +34,8 @@ func TestRaceSuccess1(t *testing.T) {
 }
 
 func TestRaceRetry(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	const want = "fallback"
 	rh := New[string](
 		10*time.Second,
@@ -48,6 +54,8 @@ func TestRaceRetry(t *testing.T) {
 }
 
 func TestRaceTimeout(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	const want = "fallback"
 	rh := New[string](
 		100*time.Millisecond,
@@ -68,6 +76,8 @@ func TestRaceTimeout(t *testing.T) {
 }
 
 func TestRaceError(t *testing.T) {
+	tstest.ResourceCheck(t)
+
 	err1 := errors.New("error 1")
 	err2 := errors.New("error 2")
 
