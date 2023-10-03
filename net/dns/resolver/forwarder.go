@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dns "golang.org/x/net/dns/dnsmessage"
@@ -35,6 +36,7 @@ import (
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/cloudenv"
 	"tailscale.com/util/dnsname"
+	"tailscale.com/util/race"
 	"tailscale.com/version"
 )
 
@@ -69,6 +71,10 @@ const (
 	// DNS queries to the "fallback" DNS server IP for a known provider
 	// (e.g. how long to wait to query Google's 8.8.4.4 after 8.8.8.8).
 	wellKnownHostBackupDelay = 200 * time.Millisecond
+
+	// udpRaceTimeout is the timeout after which we will start a DNS query
+	// over TCP while waiting for the UDP query to complete.
+	udpRaceTimeout = 2 * time.Second
 
 	// tcpQueryTimeout is the timeout for a DNS query performed over TCP.
 	// It matches the default 5sec timeout of the 'dig' utility.
@@ -488,46 +494,96 @@ func (f *forwarder) send(ctx context.Context, fq *forwardQuery, rr resolverAndDe
 		return nil, fmt.Errorf("tls:// resolvers not supported yet")
 	}
 
-	ret, err = f.sendUDP(ctx, fq, rr)
-	if err != nil {
-		return nil, err
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	if !truncatedFlagSet(ret) {
-		// Successful, non-truncated response; return it.
-		return ret, nil
-	}
-	if fq.family == "udp" {
+	isUDPQuery := fq.family == "udp"
+	skipTCP := skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load())
+
+	// Print logs about retries if this was because of a truncated response.
+	var explicitRetry atomic.Bool // true if truncated UDP response retried
+	defer func() {
+		if !explicitRetry.Load() {
+			return
+		}
+		if err == nil {
+			f.logf("forwarder.send(%q): successfully retried via TCP", rr.name.Addr)
+		} else {
+			f.logf("forwarder.send(%q): could not retry via TCP: %v", rr.name.Addr, err)
+		}
+	}()
+
+	firstUDP := func(ctx context.Context) ([]byte, error) {
+		resp, err := f.sendUDP(ctx, fq, rr)
+		if err != nil {
+			return nil, err
+		}
+		if !truncatedFlagSet(resp) {
+			// Successful, non-truncated response; no retry.
+			return resp, nil
+		}
+
 		// If this is a UDP query, return it regardless of whether the
 		// response is truncated or not; the client can retry
 		// communicating with tailscaled over TCP. There's no point
 		// falling back to TCP for a truncated query if we can't return
 		// the results to the client.
-		return ret, nil
-	}
-	if skipTCPRetry() || (f.controlKnobs != nil && f.controlKnobs.DisableDNSForwarderTCPRetries.Load()) {
-		// Envknob or control knob disabled the TCP retry behaviour;
-		// just return what we have.
-		return ret, nil
-	}
-
-	// Don't retry if our context is done.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// Retry over TCP, best-effort; return the truncated UDP response if we
-	// cannot query via TCP.
-	if ret2, err2 := f.sendTCP(ctx, fq, rr); err2 == nil {
-		if verboseDNSForward() {
-			f.logf("forwarder.send(%q): successfully retried via TCP", rr.name.Addr)
+		if isUDPQuery {
+			return resp, nil
 		}
-		return ret2, nil
-	} else if verboseDNSForward() {
-		f.logf("forwarder.send(%q): could not retry via TCP: %v", rr.name.Addr, err2)
+
+		if skipTCP {
+			// Envknob or control knob disabled the TCP retry behaviour;
+			// just return what we have.
+			return resp, nil
+		}
+
+		// This is a TCP query from the client, and the UDP response
+		// from the upstream DNS server is truncated; map this to an
+		// error to cause our retry helper to immediately kick off the
+		// TCP retry.
+		explicitRetry.Store(true)
+		return nil, truncatedResponseError{resp}
 	}
-	return ret, nil
+	thenTCP := func(ctx context.Context) ([]byte, error) {
+		// If we're skipping the TCP fallback, then wait until the
+		// context is canceled and return that error (i.e. not
+		// returning anything).
+		if skipTCP {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+
+		return f.sendTCP(ctx, fq, rr)
+	}
+
+	// If the input query is TCP, then don't have a timeout between
+	// starting UDP and TCP.
+	timeout := udpRaceTimeout
+	if !isUDPQuery {
+		timeout = 0
+	}
+
+	// Kick off the race between the UDP and TCP queries.
+	rh := race.New[[]byte](timeout, firstUDP, thenTCP)
+	resp, err := rh.Start(ctx)
+	if err == nil {
+		return resp, nil
+	}
+
+	// If we got a truncated UDP response, return that instead of an error.
+	var trErr truncatedResponseError
+	if errors.As(err, &trErr) {
+		return trErr.res, nil
+	}
+	return nil, err
 }
+
+type truncatedResponseError struct {
+	res []byte
+}
+
+func (tr truncatedResponseError) Error() string { return "response truncated" }
 
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
@@ -875,7 +931,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			}
 			numErr++
 			if numErr == len(resolvers) {
-				if firstErr == errServerFailure {
+				if errors.Is(firstErr, errServerFailure) {
 					res, err := servfailResponse(query)
 					if err != nil {
 						f.logf("building servfail response: %v", err)
