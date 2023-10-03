@@ -117,7 +117,8 @@ type CapabilityVersion int
 //   - 74: 2023-09-18: Client understands NodeCapMap
 //   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
 //   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
-const CurrentCapabilityVersion CapabilityVersion = 76
+//   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
+const CurrentCapabilityVersion CapabilityVersion = 77
 
 type StableID string
 
