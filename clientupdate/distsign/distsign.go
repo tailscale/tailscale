@@ -57,6 +57,7 @@ import (
 	"golang.org/x/crypto/blake2s"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/httpm"
 	"tailscale.com/util/must"
 )
 
@@ -335,7 +336,7 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 
 	quickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	headReq := must.Get(http.NewRequestWithContext(quickCtx, http.MethodHead, url, nil))
+	headReq := must.Get(http.NewRequestWithContext(quickCtx, httpm.HEAD, url, nil))
 
 	res, err := hc.Do(headReq)
 	if err != nil {
@@ -349,7 +350,7 @@ func (c *Client) download(ctx context.Context, url, dst string, limit int64) ([]
 	}
 	c.logf("Download size: %v", res.ContentLength)
 
-	dlReq := must.Get(http.NewRequestWithContext(ctx, http.MethodGet, url, nil))
+	dlReq := must.Get(http.NewRequestWithContext(ctx, httpm.GET, url, nil))
 	dlRes, err := hc.Do(dlReq)
 	if err != nil {
 		return nil, 0, err
