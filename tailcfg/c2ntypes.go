@@ -52,3 +52,15 @@ type C2NUpdateResponse struct {
 	// Started indicates whether the update has started.
 	Started bool
 }
+
+// C2NPostureIdentityResponse contains either a set of identifying serial number
+// from the client or a boolean indicating that the machine has opted out of
+// posture collection.
+type C2NPostureIdentityResponse struct {
+	// SerialNumbers is a list of serial numbers of the client machine.
+	SerialNumbers []string `json:",omitempty"`
+
+	// PostureDisabled indicates if the machine has opted out of
+	// device posture collection.
+	PostureDisabled bool `json:",omitempty"`
+}

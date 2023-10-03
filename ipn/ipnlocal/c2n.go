@@ -24,6 +24,7 @@ import (
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/net/sockstats"
+	"tailscale.com/posture"
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
@@ -66,6 +67,14 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		} else {
 			http.Error(w, "no log flusher wired up", http.StatusInternalServerError)
+		}
+	case "/posture/identity":
+		switch r.Method {
+		case httpm.GET:
+			b.handleC2NPostureIdentityGet(w, r)
+		default:
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
 		}
 	case "/debug/goroutines":
 		w.Header().Set("Content-Type", "text/plain")
@@ -213,6 +222,29 @@ func (b *LocalBackend) handleC2NUpdatePost(w http.ResponseWriter, r *http.Reques
 		}
 		b.setC2NUpdateStarted(false)
 	}()
+}
+
+func (b *LocalBackend) handleC2NPostureIdentityGet(w http.ResponseWriter, r *http.Request) {
+	b.logf("c2n: GET /posture/identity received")
+
+	res := tailcfg.C2NPostureIdentityResponse{}
+
+	// TODO(kradalby): Use syspolicy + envknob to allow Win registry,
+	// macOS defaults and env to override this setting.
+	if b.Prefs().PostureChecking() {
+		sns, err := posture.GetSerialNumbers()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		res.SerialNumbers = sns
+	} else {
+		res.PostureDisabled = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(res)
 }
 
 func (b *LocalBackend) newC2NUpdateResponse() tailcfg.C2NUpdateResponse {
