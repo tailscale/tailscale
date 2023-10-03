@@ -24,6 +24,7 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/util/clientmetric"
 	"tailscale.com/util/goroutines"
+	"tailscale.com/util/httpm"
 	"tailscale.com/version"
 )
 
@@ -41,9 +42,9 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		w.Write(body)
 	case "/update":
 		switch r.Method {
-		case http.MethodGet:
+		case httpm.GET:
 			b.handleC2NUpdateGet(w, r)
-		case http.MethodPost:
+		case httpm.POST:
 			b.handleC2NUpdatePost(w, r)
 		default:
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
