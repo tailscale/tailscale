@@ -17,8 +17,8 @@ import (
 type Port struct {
 	Proto   string // "tcp" or "udp"
 	Port    uint16 // port number
-	Process string // optional process name, if found
-	Pid     int    // process id, if known
+	Process string // optional process name, if found (requires suitable permissions)
+	Pid     int    // process ID, if known (requires suitable permissions)
 }
 
 // List is a list of Ports.
