@@ -473,11 +473,12 @@ func (nc *NoiseClient) dial(ctx context.Context) (*noiseConn, error) {
 	ncc.h2cc = h2cc
 
 	nc.mu.Lock()
-	defer nc.mu.Unlock()
 	if nc.closed {
-		ncc.Close()
+		nc.mu.Unlock()
+		ncc.Close() // Needs to be called without holding the lock.
 		return nil, errors.New("noise client closed")
 	}
+	defer nc.mu.Unlock()
 	mak.Set(&nc.connPool, ncc.id, ncc)
 	nc.last = ncc
 	return ncc, nil
