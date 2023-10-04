@@ -250,14 +250,21 @@ func (t *debTarget) Build(b *dist.Build) ([]string, error) {
 				PreRemove:   filepath.Join(repoDir, "release/deb/debian.prerm.sh"),
 				PostRemove:  filepath.Join(repoDir, "release/deb/debian.postrm.sh"),
 			},
-			Depends: []string{},
+			Depends: []string{
+				// iptables is almost always required but not strictly needed.
+				// Even if you can technically run Tailscale without it (by
+				// manually configuring nftables or userspace mode), we still
+				// mark this as "Depends" because our previous experiment in
+				// https://github.com/tailscale/tailscale/issues/9236 of making
+				// it only Recommends caused too many problems. Until our
+				// nftables table is more mature, we'd rather err on the side of
+				// wasting a little disk by including iptables for people who
+				// might not need it rather than handle reports of it being
+				// missing.
+				"iptables",
+			},
 			Recommends: []string{
 				"tailscale-archive-keyring (>= 1.35.181)",
-				// iptables is often required but not strictly needed; see
-				// https://github.com/tailscale/tailscale/issues/9236.
-				// We want to let people be able to install without it
-				// or remove it after the fact if they want.
-				"iptables",
 				// The "ip" command isn't needed since 2021-11-01 in
 				// 408b0923a61972ed but kept as an option as of
 				// 2021-11-18 in d24ed3f68e35e802d531371.  See
