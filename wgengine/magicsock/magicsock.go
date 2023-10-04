@@ -31,6 +31,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/metrics"
 	"tailscale.com/net/connstats"
 	"tailscale.com/net/interfaces"
 	"tailscale.com/net/netcheck"
@@ -2780,6 +2781,11 @@ var (
 	metricReSTUNCalls     = clientmetric.NewCounter("magicsock_restun_calls")
 	metricUpdateEndpoints = clientmetric.NewCounter("magicsock_update_endpoints")
 
+	metricMaxPeerMTU = clientmetric.NewGauge("magicsock_max_peer_mtu")
+	// metricPeerMTUsProbed collects the number of times we received an peer MTU
+	// probe response for a given MTU size.
+	metricPeerMTUsProbed = &metrics.LabelMap{Label: "MTU"}
+
 	// Sends (data or disco)
 	metricSendDERPQueued      = clientmetric.NewCounter("magicsock_send_derp_queued")
 	metricSendDERPErrorChan   = clientmetric.NewCounter("magicsock_send_derp_error_chan")
@@ -2798,16 +2804,18 @@ var (
 	metricRecvDataIPv6        = clientmetric.NewCounter("magicsock_recv_data_ipv6")
 
 	// Disco packets
-	metricSendDiscoUDP         = clientmetric.NewCounter("magicsock_disco_send_udp")
-	metricSendDiscoDERP        = clientmetric.NewCounter("magicsock_disco_send_derp")
-	metricSentDiscoUDP         = clientmetric.NewCounter("magicsock_disco_sent_udp")
-	metricSentDiscoDERP        = clientmetric.NewCounter("magicsock_disco_sent_derp")
-	metricSentDiscoPing        = clientmetric.NewCounter("magicsock_disco_sent_ping")
-	metricSentDiscoPong        = clientmetric.NewCounter("magicsock_disco_sent_pong")
-	metricSentDiscoCallMeMaybe = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
-	metricRecvDiscoBadPeer     = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
-	metricRecvDiscoBadKey      = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
-	metricRecvDiscoBadParse    = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
+	metricSendDiscoUDP               = clientmetric.NewCounter("magicsock_disco_send_udp")
+	metricSendDiscoDERP              = clientmetric.NewCounter("magicsock_disco_send_derp")
+	metricSentDiscoUDP               = clientmetric.NewCounter("magicsock_disco_sent_udp")
+	metricSentDiscoDERP              = clientmetric.NewCounter("magicsock_disco_sent_derp")
+	metricSentDiscoPing              = clientmetric.NewCounter("magicsock_disco_sent_ping")
+	metricSentDiscoPong              = clientmetric.NewCounter("magicsock_disco_sent_pong")
+	metricSentDiscoPeerMTUProbe      = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probe")
+	metricSentDiscoPeerMTUProbeBytes = clientmetric.NewCounter("magicsock_disco_sent_peer_mtu_probe_bytes")
+	metricSentDiscoCallMeMaybe       = clientmetric.NewCounter("magicsock_disco_sent_callmemaybe")
+	metricRecvDiscoBadPeer           = clientmetric.NewCounter("magicsock_disco_recv_bad_peer")
+	metricRecvDiscoBadKey            = clientmetric.NewCounter("magicsock_disco_recv_bad_key")
+	metricRecvDiscoBadParse          = clientmetric.NewCounter("magicsock_disco_recv_bad_parse")
 
 	metricRecvDiscoUDP                 = clientmetric.NewCounter("magicsock_disco_recv_udp")
 	metricRecvDiscoDERP                = clientmetric.NewCounter("magicsock_disco_recv_derp")

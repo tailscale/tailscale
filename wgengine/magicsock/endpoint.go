@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -640,6 +641,9 @@ func (de *endpoint) sendDiscoPing(ep netip.AddrPort, discoKey key.DiscoPublic, t
 	}, logLevel)
 	if !sent {
 		de.forgetDiscoPing(txid)
+	} else {
+		metricSentDiscoPeerMTUProbe.Add(1)
+		metricSentDiscoPeerMTUProbeBytes.Add(int64(pingSizeToPktLen(size, ep.Addr())))
 	}
 }
 
@@ -1069,6 +1073,12 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	knownTxID = true // for naked returns below
 	de.removeSentDiscoPingLocked(m.TxID, sp)
 
+	pktLen := int(pingSizeToPktLen(sp.size, sp.to.Addr()))
+	metricPeerMTUsProbed.Add(strconv.Itoa(pktLen), 1)
+	if metricMaxPeerMTU.Value() < int64(pktLen) {
+		metricMaxPeerMTU.Set(int64(pktLen))
+	}
+
 	now := mono.Now()
 	latency := now.Sub(sp.at)
 
@@ -1090,7 +1100,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToPktLen(sp.size, sp.to.Addr()), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pktLen, m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -1108,7 +1118,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrQuality{sp.to, latency, pingSizeToPktLen(sp.size, sp.to.Addr())}
+		thisPong := addrQuality{sp.to, latency, tstun.WireMTU(pktLen)}
 		if betterAddr(thisPong, de.bestAddr) {
 			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
