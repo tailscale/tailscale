@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/csrf"
 	"tailscale.com/client/tailscale"
@@ -43,6 +45,33 @@ type Server struct {
 
 	assetsHandler http.Handler // serves frontend assets
 	apiHandler    http.Handler // serves api endpoints; csrf-protected
+
+	// browserSessions is an in-memory cache of browser sessions for the
+	// full management web client, which is only accessible over Tailscale.
+	//
+	// Users obtain a valid browser session by connecting to the web client
+	// over Tailscale and verifying their identity by authenticating on the
+	// control server.
+	//
+	// browserSessions get reset on every Server restart.
+	//
+	// The map provides a lookup of the session by cookie value
+	// (browserSession.ID => browserSession).
+	browserSessions sync.Map
+}
+
+const tsWebCookieName = "TS-Web-Session"
+
+// browserSession holds data about a user's browser session
+// on the full management web client.
+type browserSession struct {
+	// ID is the unique identifier for the session.
+	// It is passed in the user's "TS-Web-Session" browser cookie.
+	ID            string
+	SrcNode       tailcfg.StableNodeID
+	SrcUser       tailcfg.UserID
+	AuthPath      string    // control server path for user to authenticate the session
+	Authenticated time.Time // when zero, authentication not complete
 }
 
 // ServerOpts contains options for constructing a new Server.
