@@ -456,6 +456,7 @@ func runTestQuery(tb testing.TB, port uint16, request []byte, modify func(*forwa
 		txid:           getTxID(request),
 		packet:         request,
 		closeOnCtxDone: new(closePool),
+		family:         "tcp",
 	}
 	defer fq.closeOnCtxDone.Close()
 
@@ -482,14 +483,13 @@ func TestForwarderTCPFallback(t *testing.T) {
 	// Make a response that's very large, containing a bunch of localhost addresses.
 	request, largeResponse := makeLargeResponse(t, domain)
 
-	var sawUDPRequest, sawTCPRequest atomic.Bool
+	var sawTCPRequest atomic.Bool
 	port := runDNSServer(t, nil, largeResponse, func(isTCP bool, gotRequest []byte) {
 		if isTCP {
 			t.Logf("saw TCP request")
 			sawTCPRequest.Store(true)
 		} else {
 			t.Logf("saw UDP request")
-			sawUDPRequest.Store(true)
 		}
 
 		if !bytes.Equal(request, gotRequest) {
@@ -504,9 +504,10 @@ func TestForwarderTCPFallback(t *testing.T) {
 	if !sawTCPRequest.Load() {
 		t.Errorf("DNS server never saw TCP request")
 	}
-	if !sawUDPRequest.Load() {
-		t.Errorf("DNS server never saw UDP request")
-	}
+
+	// NOTE: can't assert that we see a UDP request here since we might
+	// race and run the TCP query first. We test the UDP codepath in
+	// TestForwarderTCPFallbackDisabled below, though.
 }
 
 // Test to ensure that if the UDP listener is unresponsive, we always make a
