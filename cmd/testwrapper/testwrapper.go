@@ -19,12 +19,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	xmaps "golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 	"tailscale.com/cmd/testwrapper/flakytest"
 )
 

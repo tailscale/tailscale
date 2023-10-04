@@ -10,7 +10,10 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +55,30 @@ func (c DepChecker) Check(t *testing.T) {
 		}
 	}
 	t.Logf("got %d dependencies", len(res.Deps))
+}
 
+// ImportAliasCheck checks that all packages are imported according to Tailscale
+// conventions.
+func ImportAliasCheck(t testing.TB, relDir string) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = filepath.Join(dir, relDir)
+
+	cmd := exec.Command("git", "grep", "-n", "-F", `"golang.org/x/exp/`)
+	cmd.Dir = dir
+	matches, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("ignoring error: %v, %s", err, matches)
+		return
+	}
+	badRx := regexp.MustCompile(`^([^:]+:\d+):\s+"golang.org/x/exp/(slices|maps)"`)
+	if s := strings.TrimSpace(string(matches)); s != "" {
+		for _, line := range strings.Split(s, "\n") {
+			if m := badRx.FindStringSubmatch(line); m != nil {
+				t.Errorf("%s: the x/exp/%s package should be imported as x%s", m[1], m[2], m[2])
+			}
+		}
+	}
 }
