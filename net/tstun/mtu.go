@@ -79,14 +79,34 @@ const (
 	safeTUNMTU TUNMTU = 1280
 )
 
-// MaxProbedWireMTU is the largest MTU we will test for path MTU
-// discovery.
-var MaxProbedWireMTU WireMTU = 9000
+// WireMTUsToProbe is a list of the on-the-wire MTUs we want to
+// probe.
+var WireMTUsToProbe = []WireMTU{
+	WireMTU(WireToTUNMTU(WireMTU(safeTUNMTU))), // Tailscale over Tailscale :)
+	TUNToWireMTU(safeTUNMTU),                   // Smallest MTU allowed for IPv6, current default
+	1400,                                       // Most common MTU minus a few bytes for tunnels
+	1500,                                       // Most common MTU
+	8000,                                       // Should fit inside all jumbo frame sizes
+	9000,                                       // Most jumbo frames are this size or larger
+}
 
-func init() {
-	if MaxProbedWireMTU > WireMTU(maxTUNMTU) {
-		MaxProbedWireMTU = WireMTU(maxTUNMTU)
+// maxProbedWireMTU is the largest MTU we will test for path MTU discovery. The
+// MTU of the tailscale TUN must be large enough to accommodate this value.
+var maxProbedWireMTU = findMaxProbedWireMTU()
+
+func findMaxProbedWireMTU() (maxWireMTU WireMTU) {
+	for _, m := range WireMTUsToProbe {
+		// See maxTUNMTU comment for why this may be very small
+		if m > WireMTU(maxTUNMTU) {
+			continue
+		}
+		maxWireMTU = max(m, maxWireMTU)
 	}
+	return
+}
+
+func MaxProbedWireMTU() WireMTU {
+	return maxProbedWireMTU
 }
 
 // wgHeaderLen is the length of all the headers Wireguard adds to a packet
@@ -125,7 +145,7 @@ func WireToTUNMTU(w WireMTU) TUNMTU {
 // MTU. It is also the path MTU that we default to if we have no
 // information about the path to a peer.
 //
-// 1. If set, the value of TS_DEBUG_MTU clamped to a maximum of MaxTunMTU
+// 1. If set, the value of TS_DEBUG_MTU clamped to a maximum of MaxTUNMTU
 // 2. If TS_DEBUG_ENABLE_PMTUD is set, the maximum size MTU we probe, minus wg overhead
 // 3. If TS_DEBUG_ENABLE_PMTUD is not set, the Safe MTU
 func DefaultTUNMTU() TUNMTU {
@@ -135,7 +155,12 @@ func DefaultTUNMTU() TUNMTU {
 
 	debugPMTUD, _ := envknob.LookupBool("TS_DEBUG_ENABLE_PMTUD")
 	if debugPMTUD {
-		return WireToTUNMTU(MaxProbedWireMTU)
+		// TODO: While we are just probing MTU but not generating PTB, this
+		// has to continue to return the safe MTU. When we add
+		// the code to generate PTB, this will be:
+		//
+		// return WireToTUNMTU(maxProbedWireMTU) Until then,
+		return safeTUNMTU
 	}
 
 	return safeTUNMTU

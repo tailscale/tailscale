@@ -35,6 +35,23 @@ import (
 	"tailscale.com/util/ringbuffer"
 )
 
+var mtuProbePingSizesV4 []int
+var mtuProbePingSizesV6 []int
+
+func init() {
+	v4 := netip.MustParseAddr("1.1.1.1")
+	v6 := netip.MustParseAddr("2001::3456")
+	for _, m := range tstun.WireMTUsToProbe {
+		// XXX one init() relying on another init()
+		if m > tstun.WireMTU(tstun.MaxProbedWireMTU()) {
+			continue
+		}
+		fmt.Printf("mtu %v v4 %v v6 %v\n", m, pktLenToPingSize(m, v4), pktLenToPingSize(m, v6))
+		mtuProbePingSizesV4 = append(mtuProbePingSizesV4, pktLenToPingSize(m, v4))
+		mtuProbePingSizesV6 = append(mtuProbePingSizesV4, pktLenToPingSize(m, v6))
+	}
+}
+
 // endpoint is a wireguard/conn.Endpoint. In wireguard-go and kernel WireGuard
 // there is only one endpoint for a peer, but in Tailscale we distribute a
 // number of possible endpoints for a peer which would include the all the
@@ -666,21 +683,41 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		st.lastPing = now
 	}
 
-	txid := stun.NewTxID()
-	de.sentPing[txid] = sentPing{
-		to:      ep,
-		at:      now,
-		timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
-		purpose: purpose,
-		res:     res,
-		cb:      cb,
+	// If we are doing a discovery ping or a CLI ping with no specified size
+	// to a non DERP address, then probe the MTU. Otherwise just send the
+	// one specified ping.
+
+	// Default to sending a single ping of the specified size
+	sizes := []int{size}
+	if de.c.PeerMTUEnabled() {
+		isDerp := ep.Addr() == tailcfg.DerpMagicIPAddr
+		if !isDerp && ((purpose == pingDiscovery) || (purpose == pingCLI && size == 0)) {
+			de.c.dlogf("[v1] magicsock: starting MTU probe")
+			sizes = mtuProbePingSizesV4
+			if ep.Addr().Is6() {
+				sizes = mtuProbePingSizesV6
+			}
+		}
 	}
 
 	logLevel := discoLog
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
 	}
-	go de.sendDiscoPing(ep, epDisco.key, txid, size, logLevel)
+	for _, s := range sizes {
+		txid := stun.NewTxID()
+		de.sentPing[txid] = sentPing{
+			to:      ep,
+			at:      now,
+			timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
+			purpose: purpose,
+			res:     res,
+			cb:      cb,
+			size:    s,
+		}
+		go de.sendDiscoPing(ep, epDisco.key, txid, s, logLevel)
+	}
+
 }
 
 // sendDiscoPingsLocked starts pinging all of ep's endpoints.
@@ -1073,7 +1110,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	if !isDerp {
 		thisPong := addrQuality{sp.to, latency, pingSizeToPktLen(sp.size, sp.to.Addr())}
 		if betterAddr(thisPong, de.bestAddr) {
-			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU)
+			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
 				What: "handlePingLocked-bestAddr-update",
