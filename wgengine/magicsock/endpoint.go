@@ -35,6 +35,16 @@ import (
 	"tailscale.com/util/ringbuffer"
 )
 
+var mtuProbePingSizesV4 []int
+var mtuProbePingSizesV6 []int
+
+func init() {
+	for _, m := range tstun.WireMTUsToProbe {
+		mtuProbePingSizesV4 = append(mtuProbePingSizesV4, pktLenToPingSize(m, false))
+		mtuProbePingSizesV6 = append(mtuProbePingSizesV6, pktLenToPingSize(m, true))
+	}
+}
+
 // endpoint is a wireguard/conn.Endpoint. In wireguard-go and kernel WireGuard
 // there is only one endpoint for a peer, but in Tailscale we distribute a
 // number of possible endpoints for a peer which would include the all the
@@ -374,7 +384,7 @@ func (de *endpoint) addrForPingSizeLocked(now mono.Time, size int) (udpAddr, der
 
 	udpAddr = de.bestAddr.AddrPort
 	pathMTU := de.bestAddr.wireMTU
-	requestedMTU := pingSizeToPktLen(size, udpAddr.Addr())
+	requestedMTU := pingSizeToPktLen(size, udpAddr.Addr().Is6())
 	mtuOk := requestedMTU <= pathMTU
 
 	if udpAddr.IsValid() && mtuOk {
@@ -666,21 +676,41 @@ func (de *endpoint) startDiscoPingLocked(ep netip.AddrPort, now mono.Time, purpo
 		st.lastPing = now
 	}
 
-	txid := stun.NewTxID()
-	de.sentPing[txid] = sentPing{
-		to:      ep,
-		at:      now,
-		timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
-		purpose: purpose,
-		res:     res,
-		cb:      cb,
+	// If we are doing a discovery ping or a CLI ping with no specified size
+	// to a non DERP address, then probe the MTU. Otherwise just send the
+	// one specified ping.
+
+	// Default to sending a single ping of the specified size
+	sizes := []int{size}
+	if de.c.PeerMTUEnabled() {
+		isDerp := ep.Addr() == tailcfg.DerpMagicIPAddr
+		if !isDerp && ((purpose == pingDiscovery) || (purpose == pingCLI && size == 0)) {
+			de.c.dlogf("[v1] magicsock: starting MTU probe")
+			sizes = mtuProbePingSizesV4
+			if ep.Addr().Is6() {
+				sizes = mtuProbePingSizesV6
+			}
+		}
 	}
 
 	logLevel := discoLog
 	if purpose == pingHeartbeat {
 		logLevel = discoVerboseLog
 	}
-	go de.sendDiscoPing(ep, epDisco.key, txid, size, logLevel)
+	for _, s := range sizes {
+		txid := stun.NewTxID()
+		de.sentPing[txid] = sentPing{
+			to:      ep,
+			at:      now,
+			timer:   time.AfterFunc(pingTimeoutDuration, func() { de.discoPingTimeout(txid) }),
+			purpose: purpose,
+			res:     res,
+			cb:      cb,
+			size:    s,
+		}
+		go de.sendDiscoPing(ep, epDisco.key, txid, s, logLevel)
+	}
+
 }
 
 // sendDiscoPingsLocked starts pinging all of ep's endpoints.
@@ -982,13 +1012,13 @@ func (de *endpoint) noteConnectivityChange() {
 // pingSizeToPktLen calculates the minimum path MTU that would permit
 // a disco ping message of length size to reach its target at
 // addr. size is the length of the entire disco message including
-// disco headers. If size is zero, assume it is the default MTU.
-func pingSizeToPktLen(size int, addr netip.Addr) tstun.WireMTU {
+// disco headers. If size is zero, assume it is the safe wire MTU.
+func pingSizeToPktLen(size int, is6 bool) tstun.WireMTU {
 	if size == 0 {
-		return tstun.DefaultWireMTU()
+		return tstun.SafeWireMTU()
 	}
 	headerLen := ipv4.HeaderLen
-	if addr.Is6() {
+	if is6 {
 		headerLen = ipv6.HeaderLen
 	}
 	headerLen += 8 // UDP header length
@@ -999,12 +1029,12 @@ func pingSizeToPktLen(size int, addr netip.Addr) tstun.WireMTU {
 // create a disco ping message whose on-the-wire length is exactly mtu
 // bytes long. If mtu is zero or less than the minimum ping size, then
 // no MTU probe is desired and return zero for an unpadded ping.
-func pktLenToPingSize(mtu tstun.WireMTU, addr netip.Addr) int {
+func pktLenToPingSize(mtu tstun.WireMTU, is6 bool) int {
 	if mtu == 0 {
 		return 0
 	}
 	headerLen := ipv4.HeaderLen
-	if addr.Is6() {
+	if is6 {
 		headerLen = ipv6.HeaderLen
 	}
 	headerLen += 8 // UDP header length
@@ -1053,7 +1083,7 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	}
 
 	if sp.purpose != pingHeartbeat {
-		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToPktLen(sp.size, sp.to.Addr()), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
+		de.c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got pong tx=%x latency=%v pktlen=%v pong.src=%v%v", de.c.discoShort, de.discoShort(), de.publicKey.ShortString(), src, m.TxID[:6], latency.Round(time.Millisecond), pingSizeToPktLen(sp.size, sp.to.Addr().Is6()), m.Src, logger.ArgWriter(func(bw *bufio.Writer) {
 			if sp.to != src {
 				fmt.Fprintf(bw, " ping.to=%v", sp.to)
 			}
@@ -1071,9 +1101,9 @@ func (de *endpoint) handlePongConnLocked(m *disco.Pong, di *discoInfo, src netip
 	// Promote this pong response to our current best address if it's lower latency.
 	// TODO(bradfitz): decide how latency vs. preference order affects decision
 	if !isDerp {
-		thisPong := addrQuality{sp.to, latency, pingSizeToPktLen(sp.size, sp.to.Addr())}
+		thisPong := addrQuality{sp.to, latency, tstun.WireMTU(pingSizeToPktLen(sp.size, sp.to.Addr().Is6()))}
 		if betterAddr(thisPong, de.bestAddr) {
-			de.c.logf("magicsock: disco: node %v %v now using %v mtu %v", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU)
+			de.c.logf("magicsock: disco: node %v %v now using %v mtu=%v tx=%x", de.publicKey.ShortString(), de.discoShort(), sp.to, thisPong.wireMTU, m.TxID[:6])
 			de.debugUpdates.Add(EndpointChange{
 				When: time.Now(),
 				What: "handlePingLocked-bestAddr-update",

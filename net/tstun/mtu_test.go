@@ -39,15 +39,18 @@ func TestDefaultTunMTU(t *testing.T) {
 		t.Errorf("default TUN MTU = %d, want %d, clamping failed", DefaultTUNMTU(), maxTUNMTU)
 	}
 
-	// If PMTUD is enabled, the MTU should default to the largest probed
-	// MTU, but only if the user hasn't requested a specific MTU.
+	// If PMTUD is enabled, the MTU should default to the safe MTU, but only
+	// if the user hasn't requested a specific MTU.
+	//
+	// TODO: When PMTUD is generating PTB responses, this will become the
+	// largest MTU we probe.
 	os.Setenv("TS_DEBUG_MTU", "")
 	os.Setenv("TS_DEBUG_ENABLE_PMTUD", "true")
-	if DefaultTUNMTU() != WireToTUNMTU(MaxProbedWireMTU) {
-		t.Errorf("default TUN MTU = %d, want %d", DefaultTUNMTU(), WireToTUNMTU(MaxProbedWireMTU))
+	if DefaultTUNMTU() != safeTUNMTU {
+		t.Errorf("default TUN MTU = %d, want %d", DefaultTUNMTU(), safeTUNMTU)
 	}
 	// TS_DEBUG_MTU should take precedence over TS_DEBUG_ENABLE_PMTUD.
-	mtu = WireToTUNMTU(MaxProbedWireMTU - 1)
+	mtu = WireToTUNMTU(MaxPacketSize - 1)
 	os.Setenv("TS_DEBUG_MTU", strconv.Itoa(int(mtu)))
 	if DefaultTUNMTU() != mtu {
 		t.Errorf("default TUN MTU = %d, want %d", DefaultTUNMTU(), mtu)

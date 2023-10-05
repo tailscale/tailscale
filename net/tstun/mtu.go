@@ -79,14 +79,16 @@ const (
 	safeTUNMTU TUNMTU = 1280
 )
 
-// MaxProbedWireMTU is the largest MTU we will test for path MTU
-// discovery.
-var MaxProbedWireMTU WireMTU = 9000
-
-func init() {
-	if MaxProbedWireMTU > WireMTU(maxTUNMTU) {
-		MaxProbedWireMTU = WireMTU(maxTUNMTU)
-	}
+// WireMTUsToProbe is a list of the on-the-wire MTUs we want to probe. Each time
+// magicsock discovery begins, it will send a set of pings, one of each size
+// listed below.
+var WireMTUsToProbe = []WireMTU{
+	WireMTU(safeTUNMTU),      // Tailscale over Tailscale :)
+	TUNToWireMTU(safeTUNMTU), // Smallest MTU allowed for IPv6, current default
+	1400,                     // Most common MTU minus a few bytes for tunnels
+	1500,                     // Most common MTU
+	8000,                     // Should fit inside all jumbo frame sizes
+	9000,                     // Most jumbo frames are this size or larger
 }
 
 // wgHeaderLen is the length of all the headers Wireguard adds to a packet
@@ -125,7 +127,7 @@ func WireToTUNMTU(w WireMTU) TUNMTU {
 // MTU. It is also the path MTU that we default to if we have no
 // information about the path to a peer.
 //
-// 1. If set, the value of TS_DEBUG_MTU clamped to a maximum of MaxTunMTU
+// 1. If set, the value of TS_DEBUG_MTU clamped to a maximum of MaxTUNMTU
 // 2. If TS_DEBUG_ENABLE_PMTUD is set, the maximum size MTU we probe, minus wg overhead
 // 3. If TS_DEBUG_ENABLE_PMTUD is not set, the Safe MTU
 func DefaultTUNMTU() TUNMTU {
@@ -135,10 +137,21 @@ func DefaultTUNMTU() TUNMTU {
 
 	debugPMTUD, _ := envknob.LookupBool("TS_DEBUG_ENABLE_PMTUD")
 	if debugPMTUD {
-		return WireToTUNMTU(MaxProbedWireMTU)
+		// TODO: While we are just probing MTU but not generating PTB,
+		// this has to continue to return the safe MTU. When we add the
+		// code to generate PTB, this will be:
+		//
+		// return WireToTUNMTU(maxProbedWireMTU)
+		return safeTUNMTU
 	}
 
 	return safeTUNMTU
+}
+
+// SafeWireMTU returns the wire MTU that is safe to use if we have no
+// information about the path MTU to this peer.
+func SafeWireMTU() WireMTU {
+	return TUNToWireMTU(safeTUNMTU)
 }
 
 // DefaultWireMTU returns the default TUN MTU, adjusted for wireguard

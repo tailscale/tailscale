@@ -5,6 +5,8 @@
 
 package magicsock
 
+import "tailscale.com/net/tstun"
+
 // Peer path MTU routines shared by platforms that implement it.
 
 // DontFragSetting returns true if at least one of the underlying sockets of
@@ -101,6 +103,9 @@ func (c *Conn) UpdatePMTUD() {
 		_ = c.setDontFragment("udp4", false)
 		_ = c.setDontFragment("udp6", false)
 		newStatus = false
+	}
+	if debugPMTUD() {
+		c.logf("magicsock: peermtu: peer MTU probes are %v", tstun.WireMTUsToProbe)
 	}
 	c.peerMTUEnabled.Store(newStatus)
 	c.resetEndpointStates()
