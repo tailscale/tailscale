@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -60,7 +61,10 @@ type Server struct {
 	browserSessions sync.Map
 }
 
-const tsWebCookieName = "TS-Web-Session"
+const (
+	sessionCookieName   = "TS-Web-Session"
+	sessionCookieExpiry = time.Hour * 24 * 30 // 30 days
+)
 
 // browserSession holds data about a user's browser session
 // on the full management web client.
@@ -70,8 +74,35 @@ type browserSession struct {
 	ID            string
 	SrcNode       tailcfg.StableNodeID
 	SrcUser       tailcfg.UserID
-	AuthPath      string    // control server path for user to authenticate the session
+	AuthURL       string    // control server URL for user to authenticate the session
 	Authenticated time.Time // when zero, authentication not complete
+}
+
+// isAuthorized reports true if the given session is authorized
+// to be used by its associated user to access the full management
+// web client.
+//
+// isAuthorized is true only when s.Authenticated is non-zero
+// (i.e. the user has authenticated the session) and the session
+// is not expired.
+// 2023-10-05: Sessions expire by default after 30 days.
+func (s *browserSession) isAuthorized() bool {
+	switch {
+	case s == nil:
+		return false
+	case s.Authenticated.IsZero():
+		return false // awaiting auth
+	case s.isExpired(): // TODO: add time field to server?
+		return false // expired
+	}
+	return true
+}
+
+// isExpired reports true if s is expired.
+// 2023-10-05: Sessions expire by default after 30 days.
+// If s.Authenticated is zero, isExpired reports false.
+func (s *browserSession) isExpired() bool {
+	return !s.Authenticated.IsZero() && s.Authenticated.Before(time.Now().Add(-sessionCookieExpiry)) // TODO: add time field to server?
 }
 
 // ServerOpts contains options for constructing a new Server.
@@ -206,13 +237,130 @@ func (s *Server) serveLoginAPI(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+var (
+	errNoSession         = errors.New("no-browser-session")
+	errNotUsingTailscale = errors.New("not-using-tailscale")
+	errTaggedSource      = errors.New("tagged-source")
+	errNotOwner          = errors.New("not-owner")
+)
+
+// getTailscaleBrowserSession retrieves the browser session associated with
+// the request, if one exists.
+//
+// An error is returned in any of the following cases:
+//
+//   - (errNotUsingTailscale) The request was not made over tailscale.
+//
+//   - (errNoSession) The request does not have a session.
+//
+//   - (errTaggedSource) The source is a tagged node. Users must use their
+//     own user-owned devices to manage other nodes' web clients.
+//
+//   - (errNotOwner) The source is not the owner of this client (if the
+//     client is user-owned). Only the owner is allowed to manage the
+//     node via the web client.
+//
+// If no error is returned, the browserSession is always non-nil.
+// getTailscaleBrowserSession does not check whether the session has been
+// authorized by the user. Callers can use browserSession.isAuthorized.
+func (s *Server) getTailscaleBrowserSession(r *http.Request) (*browserSession, error) {
+	whoIs, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+	switch {
+	case err != nil:
+		return nil, errNotUsingTailscale
+	case whoIs.Node.IsTagged():
+		return nil, errTaggedSource
+	}
+	srcNode := whoIs.Node.StableID
+	srcUser := whoIs.UserProfile.ID
+
+	status, err := s.lc.StatusWithoutPeers(r.Context())
+	switch {
+	case err != nil:
+		return nil, err
+	case status.Self == nil:
+		return nil, errors.New("missing self node in tailscale status")
+	case !status.Self.IsTagged() && status.Self.UserID != srcUser:
+		return nil, errNotOwner
+	}
+
+	cookie, err := r.Cookie(sessionCookieName)
+	if errors.Is(err, http.ErrNoCookie) {
+		return nil, errNoSession
+	} else if err != nil {
+		return nil, err
+	}
+	v, ok := s.browserSessions.Load(cookie.Value)
+	if !ok {
+		return nil, errNoSession
+	}
+	session := v.(*browserSession)
+	if session.SrcNode != srcNode || session.SrcUser != srcUser {
+		// In this case the browser cookie is associated with another tailscale node.
+		// Maybe the source browser's machine was logged out and then back in as a different node.
+		// Return errNoSession because there is no session for this user.
+		return nil, errNoSession
+	} else if session.isExpired() {
+		// Session expired, remove from session map and return errNoSession.
+		s.browserSessions.Delete(session.ID)
+		return nil, errNoSession
+	}
+	return session, nil
+}
+
+type authResponse struct {
+	OK      bool   `json:"ok"`                // true when user has valid auth session
+	AuthURL string `json:"authUrl,omitempty"` // filled when user has control auth action to take
+	Error   string `json:"error,omitempty"`   // filled when Ok is false
+}
+
+func (s *Server) serveTailscaleAuth(w http.ResponseWriter, r *http.Request) {
+	var resp authResponse
+
+	session, err := s.getTailscaleBrowserSession(r)
+	switch {
+	case err != nil && !errors.Is(err, errNoSession):
+		resp = authResponse{OK: false, Error: err.Error()}
+	case session == nil:
+		// TODO(tailscale/corp#14335): Create a new auth path from control,
+		// and store back to s.browserSessions and request cookie.
+	case !session.isAuthorized():
+		// TODO(tailscale/corp#14335): Check on the session auth path status from control,
+		// and store back to s.browserSessions.
+	default:
+		resp = authResponse{OK: true}
+	}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+}
+
 // serveAPI serves requests for the web client api.
 // It should only be called by Server.ServeHTTP, via Server.apiHandler,
 // which protects the handler using gorilla csrf.
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
-	// TODO(sonia,2023-09-26): Currently the full web client is served
-	// directly from platform plugins, so uses platform native auth.
-	if ok := authorizePlatformRequest(w, r); !ok {
+	if s.tsDebugMode == "full" {
+		// tailscale/corp#14335: Only restrict to tailscale auth in debug "full" web client mode.
+		// TODO(sonia,will): Switch serveAPI over to always require TS auth when we're ready
+		// to remove the debug flags.
+		// For now, existing client uses platform auth (else case below).
+
+		if r.URL.Path == "/api/auth" {
+			// Serve auth, which creates a new session for the user to authenticate,
+			// in the case that the request doesn't already have one.
+			s.serveTailscaleAuth(w, r)
+			return
+		}
+		// For all other endpoints, require a valid session to proceed.
+		session, err := s.getTailscaleBrowserSession(r)
+		if err != nil || !session.isAuthorized() {
+			http.Error(w, "no valid session", http.StatusUnauthorized)
+			return
+		}
+	} else if ok := authorizePlatformRequest(w, r); !ok {
 		return
 	}
 
