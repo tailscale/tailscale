@@ -1291,7 +1291,7 @@ func (h *peerAPIHandler) handleWakeOnLAN(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "bad 'mac' param", http.StatusBadRequest)
 		return
 	}
-	var password []byte // TODO(bradfitz): support?
+	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
 	st := h.ps.b.sys.NetMon.Get().InterfaceState()
 	if st == nil {
 		http.Error(w, "failed to get interfaces state", http.StatusInternalServerError)

@@ -310,6 +310,7 @@ func (v HostinfoView) GoArchVar() string                      { return v.ж.GoAr
 func (v HostinfoView) GoVersion() string                      { return v.ж.GoVersion }
 func (v HostinfoView) RoutableIPs() views.Slice[netip.Prefix] { return views.SliceOf(v.ж.RoutableIPs) }
 func (v HostinfoView) RequestTags() views.Slice[string]       { return views.SliceOf(v.ж.RequestTags) }
+func (v HostinfoView) WoLMACs() views.Slice[string]           { return views.SliceOf(v.ж.WoLMACs) }
 func (v HostinfoView) Services() views.Slice[Service]         { return views.SliceOf(v.ж.Services) }
 func (v HostinfoView) NetInfo() NetInfoView                   { return v.ж.NetInfo.View() }
 func (v HostinfoView) SSH_HostKeys() views.Slice[string]      { return views.SliceOf(v.ж.SSH_HostKeys) }
@@ -355,6 +356,7 @@ var _HostinfoViewNeedsRegeneration = Hostinfo(struct {
 	GoVersion       string
 	RoutableIPs     []netip.Prefix
 	RequestTags     []string
+	WoLMACs         []string
 	Services        []Service
 	NetInfo         *NetInfo
 	SSH_HostKeys    []string

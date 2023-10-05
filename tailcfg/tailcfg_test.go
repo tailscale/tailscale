@@ -57,6 +57,7 @@ func TestHostinfoEqual(t *testing.T) {
 		"GoVersion",
 		"RoutableIPs",
 		"RequestTags",
+		"WoLMACs",
 		"Services",
 		"NetInfo",
 		"SSH_HostKeys",
