@@ -219,6 +219,7 @@ func (a *IngressReconciler) maybeProvision(ctx context.Context, logger *zap.Suga
 		ServeConfig:         sc,
 		Tags:                tags,
 		ChildResourceLabels: crl,
+		TSDebugFirewallMode: defaultEnv("TS_DEBUG_FIREWALL_MODE", ""),
 	}
 
 	if _, err := a.ssr.Provision(ctx, logger, sts); err != nil {
