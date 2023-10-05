@@ -350,7 +350,7 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		// but for now that's probably good enough. Later we'll
 		// want to blend in everything from scutil --dns.
 		fallthrough
-	case "linux", "freebsd", "openbsd", "illumos":
+	case "linux", "freebsd", "openbsd", "illumos", "ios":
 		nameserver, err := stubResolverForOS()
 		if err != nil {
 			r.logf("stubResolverForOS: %v", err)
@@ -360,12 +360,15 @@ func (r *Resolver) HandleExitNodeDNSQuery(ctx context.Context, q []byte, from ne
 		// TODO: more than 1 resolver from /etc/resolv.conf?
 
 		var resolvers []resolverAndDelay
-		if nameserver == tsaddr.TailscaleServiceIP() || nameserver == tsaddr.TailscaleServiceIPv6() {
+		switch nameserver {
+		case tsaddr.TailscaleServiceIP(), tsaddr.TailscaleServiceIPv6():
 			// If resolv.conf says 100.100.100.100, it's coming right back to us anyway
 			// so avoid the loop through the kernel and just do what we
 			// would've done anyway. By not passing any resolvers, the forwarder
 			// will use its default ones from our DNS config.
-		} else {
+		case netip.Addr{}:
+			// Likewise, if the platform has no resolv.conf, just use our defaults.
+		default:
 			resolvers = []resolverAndDelay{{
 				name: &dnstype.Resolver{Addr: net.JoinHostPort(nameserver.String(), "53")},
 			}}
@@ -392,7 +395,7 @@ var debugExitNodeDNSNetPkg = envknob.RegisterBool("TS_DEBUG_EXIT_NODE_DNS_NET_PK
 
 // handleExitNodeDNSQueryWithNetPkg takes a DNS query message in q and
 // return a reply (for the ExitDNS DoH service) using the net package's
-// native APIs. This is only used on Windows for now.
+// native APIs.
 //
 // If resolver is nil, the net.Resolver zero value is used.
 //
@@ -531,7 +534,13 @@ var errEmptyResolvConf = errors.New("resolv.conf has no nameservers")
 
 // stubResolverForOS returns the IP address of the first nameserver in
 // /etc/resolv.conf.
+//
+// It may also return the netip.Addr zero value and a nil error to mean
+// that the platform has no resolv.conf.
 func stubResolverForOS() (ip netip.Addr, err error) {
+	if runtime.GOOS == "ios" {
+		return netip.Addr{}, nil // no resolv.conf on iOS
+	}
 	fi, err := os.Stat(resolvconffile.Path)
 	if err != nil {
 		return netip.Addr{}, err
