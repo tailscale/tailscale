@@ -9,15 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/kortschak/wol"
 	"tailscale.com/clientupdate"
 	"tailscale.com/envknob"
 	"tailscale.com/net/sockstats"
@@ -30,11 +33,12 @@ import (
 
 var c2nLogHeap func(http.ResponseWriter, *http.Request) // non-nil on most platforms (c2n_pprof.go)
 
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
 func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
-	writeJSON := func(v any) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(v)
-	}
 	switch r.URL.Path {
 	case "/echo":
 		// Test handler.
@@ -50,6 +54,9 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
 			return
 		}
+	case "/wol":
+		b.handleC2NWoL(w, r)
+		return
 	case "/logtail/flush":
 		if r.Method != "POST" {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
@@ -64,7 +71,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write(goroutines.ScrubbedGoroutineDump(true))
 	case "/debug/prefs":
-		writeJSON(b.Prefs())
+		writeJSON(w, b.Prefs())
 	case "/debug/metrics":
 		w.Header().Set("Content-Type", "text/plain")
 		clientmetric.WritePrometheusExpositionFormat(w)
@@ -82,7 +89,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			res.Error = err.Error()
 		}
-		writeJSON(res)
+		writeJSON(w, res)
 	case "/debug/logheap":
 		if c2nLogHeap != nil {
 			c2nLogHeap(w, r)
@@ -103,7 +110,7 @@ func (b *LocalBackend) handleC2N(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		writeJSON(res)
+		writeJSON(w, res)
 	case "/sockstats":
 		if r.Method != "POST" {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
@@ -269,4 +276,57 @@ func findCmdTailscale() (string, error) {
 		return "", errors.New("tailscale.exe not found in expected place")
 	}
 	return "", fmt.Errorf("unsupported OS %v", runtime.GOOS)
+}
+
+func (b *LocalBackend) handleC2NWoL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "bad method", http.StatusMethodNotAllowed)
+		return
+	}
+	r.ParseForm()
+	var macs []net.HardwareAddr
+	for _, macStr := range r.Form["mac"] {
+		mac, err := net.ParseMAC(macStr)
+		if err != nil {
+			http.Error(w, "bad 'mac' param", http.StatusBadRequest)
+			return
+		}
+		macs = append(macs, mac)
+	}
+	var res struct {
+		SentTo []string
+		Errors []string
+	}
+	st := b.sys.NetMon.Get().InterfaceState()
+	if st == nil {
+		res.Errors = append(res.Errors, "no interface state")
+		writeJSON(w, &res)
+		return
+	}
+	var password []byte // TODO(bradfitz): support? does anything use WoL passwords?
+	for _, mac := range macs {
+		for ifName, ips := range st.InterfaceIPs {
+			for _, ip := range ips {
+				if ip.Addr().IsLoopback() || ip.Addr().Is6() {
+					continue
+				}
+				local := &net.UDPAddr{
+					IP:   ip.Addr().AsSlice(),
+					Port: 0,
+				}
+				remote := &net.UDPAddr{
+					IP:   net.IPv4bcast,
+					Port: 0,
+				}
+				if err := wol.Wake(mac, password, local, remote); err != nil {
+					res.Errors = append(res.Errors, err.Error())
+				} else {
+					res.SentTo = append(res.SentTo, ifName)
+				}
+				break // one per interface is enough
+			}
+		}
+	}
+	sort.Strings(res.SentTo)
+	writeJSON(w, &res)
 }
