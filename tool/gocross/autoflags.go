@@ -166,7 +166,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 	// commandline and environment modifications.
 	newArgv = append(newArgv, argv[:2]...) // Program name and `go` tool subcommand
 
-	filteredArgvPostSubcmd, originalTags := extractTags(argv[2:])
+	filteredArgvPostSubcmd, originalTags := extractTags(argv[1], argv[2:])
 
 	newArgv = append(newArgv, buildFlags...)
 	tags = append(tags, originalTags...)
@@ -201,7 +201,7 @@ func autoflagsForTest(argv []string, env *Environment, goroot, nativeGOOS, nativ
 // extractTags parses out "-tags=foo,bar" (or double hyphen or "-tags",
 // "foo,bar") in its various forms and returns v filtered to remove the 0, 1 or
 // 2 build tag elements, then the tags parsed, split on commas ("foo", "bar").
-func extractTags(v []string) (filtered, tags []string) {
+func extractTags(gocmd string, v []string) (filtered, tags []string) {
 	for len(v) > 0 {
 		e := v[0]
 		if strings.HasPrefix(e, "--tags=") {
@@ -224,6 +224,15 @@ func extractTags(v []string) (filtered, tags []string) {
 				}
 			}
 			continue
+		}
+		if gocmd == "run" && !strings.HasPrefix(e, "-") {
+			// go run can include arguments to pass to the program
+			// being run. They all appear after the name of the
+			// package or Go file to run, so when we hit the first
+			// non-flag positional argument, stop extracting tags and
+			// wrap up.
+			filtered = append(filtered, v...)
+			break
 		}
 		filtered = append(filtered, e)
 		v = v[1:]
