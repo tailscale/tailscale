@@ -118,7 +118,8 @@ type CapabilityVersion int
 //   - 75: 2023-09-12: Client understands NodeAttrDNSForwarderDisableTCPRetries
 //   - 76: 2023-09-20: Client understands ExitNodeDNSResolvers for IsWireGuardOnly nodes
 //   - 77: 2023-10-03: Client understands Peers[].SelfNodeV6MasqAddrForThisPeer
-const CurrentCapabilityVersion CapabilityVersion = 77
+//   - 78: 2023-10-05: can handle c2n Wake-on-LAN sending
+const CurrentCapabilityVersion CapabilityVersion = 78
 
 type StableID string
 
@@ -735,6 +736,7 @@ type Hostinfo struct {
 	GoVersion       string         `json:",omitempty"` // Go version binary was built with
 	RoutableIPs     []netip.Prefix `json:",omitempty"` // set of IP ranges this client can route
 	RequestTags     []string       `json:",omitempty"` // set of ACL tags this node wants to claim
+	WoLMACs         []string       `json:",omitempty"` // MAC address(es) to send Wake-on-LAN packets to wake this node (lowercase hex w/ colons)
 	Services        []Service      `json:",omitempty"` // services advertised by this machine
 	NetInfo         *NetInfo       `json:",omitempty"`
 	SSH_HostKeys    []string       `json:"sshHostKeys,omitempty"` // if advertised
